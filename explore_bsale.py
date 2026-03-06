@@ -1,26 +1,18 @@
 import requests
 import os
 
-# ----------------------
 # TOKENS
-# ----------------------
 
 BSALE_TOKEN = os.getenv("BSALE_TOKEN_Mini")
 
 NOCODB_TOKEN = "R3EhSD8si-WSVdsPxlQVGAfiHRRcDR9cHGHJdBJL"
 NOCODB_URL = "https://db.quillotana.cl"
 
-# ----------------------
-# TABLE IDS
-# ----------------------
+# TABLE IDs
 
 TABLE_OFFICES = "m878eot7j6fi5v7"
 TABLE_PRICELIST = "m8zibme0z28jls6"
 TABLE_TAXES = "mary3rk9y5rwviu"
-
-# ----------------------
-# HEADERS
-# ----------------------
 
 headers_bsale = {
     "access_token": BSALE_TOKEN
@@ -36,14 +28,10 @@ BASE_BSALE = "https://api.bsale.io/v1"
 limit = 50
 
 
-# ----------------------
-# PAGINACION BSALE
-# ----------------------
-
 def fetch_all(endpoint):
 
     offset = 0
-    items_all = []
+    results = []
 
     while True:
 
@@ -57,70 +45,78 @@ def fetch_all(endpoint):
         if not items:
             break
 
-        items_all.extend(items)
+        results.extend(items)
+
         offset += limit
 
-    return items_all
+    return results
 
 
-# ----------------------
-# INSERTAR EN NOCO
-# ----------------------
+def upsert_noco(table_id, bsale_id, payload):
 
-def insert_noco(table_id, payload):
+    search_url = f"{NOCODB_URL}/api/v2/tables/{table_id}/records?where=(bsale_id,eq,{bsale_id})"
 
-    url = f"{NOCODB_URL}/api/v2/tables/{table_id}/records"
+    r = requests.get(search_url, headers=headers_noco)
+    data = r.json()
 
-    r = requests.post(url, json=payload, headers=headers_noco)
+    if data["list"]:
 
-    if r.status_code not in [200, 201]:
-        print("ERROR:", r.text)
+        record_id = data["list"][0]["Id"]
+
+        payload["Id"] = record_id
+
+        update_url = f"{NOCODB_URL}/api/v2/tables/{table_id}/records"
+
+        requests.patch(update_url, json=payload, headers=headers_noco)
+
+    else:
+
+        insert_url = f"{NOCODB_URL}/api/v2/tables/{table_id}/records"
+
+        requests.post(insert_url, json=payload, headers=headers_noco)
 
 
-# ----------------------
 # OFFICES
-# ----------------------
 
 print("SYNC OFFICES")
 
 for o in fetch_all("offices.json"):
 
-    insert_noco(TABLE_OFFICES, {
-        "id": o["id"],
-        "name": o.get("name"),
-        "state": o.get("state")
+    upsert_noco(TABLE_OFFICES, o["id"], {
+
+        "bsale_id": o["id"],
+        "name": o.get("name")
+
     })
 
 
-# ----------------------
 # TAXES
-# ----------------------
 
 print("SYNC TAXES")
 
 for t in fetch_all("taxes.json"):
 
-    insert_noco(TABLE_TAXES, {
-        "id": t["id"],
+    upsert_noco(TABLE_TAXES, t["id"], {
+
+        "bsale_id": t["id"],
         "name": t.get("name"),
-        "percentage": t.get("percentage"),
-        "state": t.get("state")
+        "percentage": t.get("percentage")
+
     })
 
 
-# ----------------------
-# PRICE LISTS
-# ----------------------
+# PRICE LIST
 
-print("SYNC PRICE LISTS")
+print("SYNC PRICE LIST")
 
 for p in fetch_all("price_lists.json"):
 
-    insert_noco(TABLE_PRICELIST, {
-        "id": p["id"],
+    upsert_noco(TABLE_PRICELIST, p["id"], {
+
+        "bsale_id": p["id"],
         "name": p.get("name"),
-        "description": p.get("description"),
-        "state": p.get("state")
+        "description": p.get("description")
+
     })
 
 
