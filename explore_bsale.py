@@ -7,7 +7,7 @@ import os
 
 BSALE_TOKEN = os.getenv("BSALE_TOKEN_Mini")
 
-NOCODB_TOKEN = "TU_TOKEN_NOCO"
+NOCODB_TOKEN = "R3EhSD8si-WSVdsPxlQVGAfiHRRcDR9cHGHJdBJL"
 NOCODB_URL = "https://db.quillotana.cl"
 
 # ----------------------
