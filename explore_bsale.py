@@ -4,12 +4,16 @@ import sys
 
 print("START SYNC")
 
+# ----------------------------
+# TOKENS
+# ----------------------------
+
 BSALE_TOKEN = os.getenv("BSALE_TOKEN_Mini")
-
 NOCODB_TOKEN = "R3EhSD8si-WSVdsPxlQVGAfiHRRcDR9cHGHJdBJL"
-NOCODB_URL = "https://db.quillotana.cl"
 
+NOCODB_URL = "https://db.quillotana.cl"
 BASE_BSALE = "https://api.bsale.io/v1"
+
 LIMIT = 50
 
 headers_bsale = {
@@ -22,7 +26,7 @@ headers_noco = {
 }
 
 # ----------------------------
-# TABLE IDS
+# TABLE IDS (NocoDB)
 # ----------------------------
 
 TABLE_PRODUCTS = "meke3fsng90uspe"
@@ -33,7 +37,7 @@ TABLE_STOCKS = "mxs2lyz86cnxd23"
 
 
 # ----------------------------
-# PAGINACION BSALE
+# FETCH PAGINADO BSALE
 # ----------------------------
 
 def fetch_all(endpoint):
@@ -46,7 +50,6 @@ def fetch_all(endpoint):
         url = f"{BASE_BSALE}/{endpoint}?limit={LIMIT}&offset={offset}"
 
         r = requests.get(url, headers=headers_bsale)
-
         data = r.json()
 
         items = data.get("items", [])
@@ -71,8 +74,7 @@ def insert_noco(table_id, payload):
 
     r = requests.post(url, json=payload, headers=headers_noco)
 
-    if r.status_code not in [200,201]:
-
+    if r.status_code not in [200, 201]:
         print("ERROR:", r.text)
 
 
@@ -86,8 +88,8 @@ products = fetch_all("products.json")
 
 for p in products:
 
-    insert_noco(TABLE_PRODUCTS,{
-        "bsale_id": p["id"],
+    insert_noco(TABLE_PRODUCTS, {
+        "bsale_id": p.get("id"),
         "name": p.get("name"),
         "classification": str(p.get("classification")),
         "brand": str(p.get("brand"))
@@ -104,9 +106,16 @@ variants = fetch_all("variants.json")
 
 for v in variants:
 
-    insert_noco(TABLE_VARIANTS,{
-        "bsale_id": v["id"],
-        "product_id": v["product"]["id"],
+    product = v.get("product")
+
+    product_id = None
+
+    if isinstance(product, dict):
+        product_id = product.get("id")
+
+    insert_noco(TABLE_VARIANTS, {
+        "bsale_id": v.get("id"),
+        "product_id": product_id,
         "code": v.get("code"),
         "bar_code": v.get("barCode"),
         "description": v.get("description")
@@ -121,14 +130,21 @@ print("SYNC COSTS")
 
 for v in variants:
 
-    variant_id = v["id"]
+    variant_id = v.get("id")
 
-    for cost in v.get("costs",[]):
+    for cost in v.get("costs", []):
 
-        insert_noco(TABLE_COSTS,{
+        office = cost.get("office")
+
+        office_id = None
+
+        if isinstance(office, dict):
+            office_id = office.get("id")
+
+        insert_noco(TABLE_COSTS, {
             "variant_id": variant_id,
-            "office_id": cost["office"]["id"],
-            "cost": cost["cost"]
+            "office_id": office_id,
+            "cost": cost.get("cost")
         })
 
 
@@ -140,14 +156,21 @@ print("SYNC PRICES")
 
 for v in variants:
 
-    variant_id = v["id"]
+    variant_id = v.get("id")
 
-    for price in v.get("prices",[]):
+    for price in v.get("prices", []):
 
-        insert_noco(TABLE_PRICES,{
+        price_list = price.get("priceList")
+
+        price_list_id = None
+
+        if isinstance(price_list, dict):
+            price_list_id = price_list.get("id")
+
+        insert_noco(TABLE_PRICES, {
             "variant_id": variant_id,
-            "price_list_id": price["priceList"]["id"],
-            "price": price["price"]
+            "price_list_id": price_list_id,
+            "price": price.get("price")
         })
 
 
@@ -161,11 +184,23 @@ stocks = fetch_all("stocks.json")
 
 for s in stocks:
 
-    insert_noco(TABLE_STOCKS,{
-        "variant_id": s["variant"]["id"],
-        "office_id": s["office"]["id"],
-        "quantity_available": s["quantityAvailable"],
-        "quantity_reserved": s["quantityReserved"]
+    variant = s.get("variant")
+    office = s.get("office")
+
+    variant_id = None
+    office_id = None
+
+    if isinstance(variant, dict):
+        variant_id = variant.get("id")
+
+    if isinstance(office, dict):
+        office_id = office.get("id")
+
+    insert_noco(TABLE_STOCKS, {
+        "variant_id": variant_id,
+        "office_id": office_id,
+        "quantity_available": s.get("quantityAvailable"),
+        "quantity_reserved": s.get("quantityReserved")
     })
 
 
