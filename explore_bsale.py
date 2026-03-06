@@ -1,7 +1,7 @@
 import requests
 import json
 
-TOKEN = "TU_TOKEN_BSALE"
+TOKEN = os.getenv("BSALE_TOKEN_Mini")
 
 headers = {
 "access_token": TOKEN
