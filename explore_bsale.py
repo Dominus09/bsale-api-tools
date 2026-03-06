@@ -1,10 +1,16 @@
 import requests
 import os
+import sys
+
 print("START SYNC")
+
 BSALE_TOKEN = os.getenv("BSALE_TOKEN_Mini")
 
 NOCODB_TOKEN = "R3EhSD8si-WSVdsPxlQVGAfiHRRcDR9cHGHJdBJL"
 NOCODB_URL = "https://db.quillotana.cl"
+
+BASE_BSALE = "https://api.bsale.io/v1"
+LIMIT = 50
 
 headers_bsale = {
     "access_token": BSALE_TOKEN
@@ -15,17 +21,20 @@ headers_noco = {
     "Content-Type": "application/json"
 }
 
-BASE_BSALE = "https://api.bsale.io/v1"
+# ----------------------------
+# TABLE IDS
+# ----------------------------
 
-limit = 50
+TABLE_PRODUCTS = "meke3fsng90uspe"
+TABLE_VARIANTS = "msd4vvijzk9pre9"
+TABLE_COSTS = "mdjjvdlwev2o76u"
+TABLE_PRICES = "mcby3npgc3ig042"
+TABLE_STOCKS = "mxs2lyz86cnxd23"
 
 
-TABLE_PRODUCTS = "products"
-TABLE_VARIANTS = "variants"
-TABLE_COSTS = "variant_costs"
-TABLE_PRICES = "variant_prices"
-TABLE_STOCKS = "stocks"
-
+# ----------------------------
+# PAGINACION BSALE
+# ----------------------------
 
 def fetch_all(endpoint):
 
@@ -34,9 +43,10 @@ def fetch_all(endpoint):
 
     while True:
 
-        url = f"{BASE_BSALE}/{endpoint}?limit={limit}&offset={offset}"
+        url = f"{BASE_BSALE}/{endpoint}?limit={LIMIT}&offset={offset}"
 
         r = requests.get(url, headers=headers_bsale)
+
         data = r.json()
 
         items = data.get("items", [])
@@ -46,14 +56,18 @@ def fetch_all(endpoint):
 
         results.extend(items)
 
-        offset += limit
+        offset += LIMIT
 
     return results
 
 
-def insert_noco(table, payload):
+# ----------------------------
+# INSERT NOCO
+# ----------------------------
 
-    url = f"{NOCODB_URL}/api/v2/tables/{table}/records"
+def insert_noco(table_id, payload):
+
+    url = f"{NOCODB_URL}/api/v2/tables/{table_id}/records"
 
     r = requests.post(url, json=payload, headers=headers_noco)
 
@@ -62,9 +76,9 @@ def insert_noco(table, payload):
         print("ERROR:", r.text)
 
 
-# -------------------------
+# ----------------------------
 # PRODUCTS
-# -------------------------
+# ----------------------------
 
 print("SYNC PRODUCTS")
 
@@ -80,9 +94,9 @@ for p in products:
     })
 
 
-# -------------------------
+# ----------------------------
 # VARIANTS
-# -------------------------
+# ----------------------------
 
 print("SYNC VARIANTS")
 
@@ -99,9 +113,9 @@ for v in variants:
     })
 
 
-# -------------------------
+# ----------------------------
 # COSTS
-# -------------------------
+# ----------------------------
 
 print("SYNC COSTS")
 
@@ -118,9 +132,9 @@ for v in variants:
         })
 
 
-# -------------------------
+# ----------------------------
 # PRICES
-# -------------------------
+# ----------------------------
 
 print("SYNC PRICES")
 
@@ -137,9 +151,9 @@ for v in variants:
         })
 
 
-# -------------------------
+# ----------------------------
 # STOCKS
-# -------------------------
+# ----------------------------
 
 print("SYNC STOCKS")
 
@@ -156,4 +170,5 @@ for s in stocks:
 
 
 print("SYNC COMPLETADO")
-Exit()
+
+sys.exit(0)
