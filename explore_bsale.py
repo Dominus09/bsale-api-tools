@@ -13,7 +13,9 @@ endpoints = [
     "products.json",
     "variants.json",
     "price_lists.json",
-    "stocks.json"
+    "stocks.json",
+    "offices.json",
+    "taxes.json"
 ]
 
 limit = 50
