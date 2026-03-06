@@ -1,14 +1,23 @@
 import requests
 import os
-import json
 
-TOKEN = os.getenv("BSALE_TOKEN_Mini")
+BSALE_TOKEN = os.getenv("BSALE_TOKEN_Mini")
 
-headers = {
-    "access_token": TOKEN
+NOCODB_URL = "https://db.quillotana.cl"
+NOCODB_TOKEN = "R3EhSD8si-WSVdsPxlQVGAfiHRRcDR9cHGHJdBJL"
+
+BASE_ID = "pbgqx7nu11fz6wz"
+
+headers_bsale = {
+    "access_token": BSALE_TOKEN
 }
 
-BASE = "https://api.bsale.io/v1"
+headers_noco = {
+    "xc-token": NOCODB_TOKEN,
+    "Content-Type": "application/json"
+}
+
+BASE_BSALE = "https://api.bsale.io/v1"
 
 limit = 50
 
@@ -20,9 +29,9 @@ def fetch_all(endpoint):
 
     while True:
 
-        url = f"{BASE}/{endpoint}?limit={limit}&offset={offset}"
+        url = f"{BASE_BSALE}/{endpoint}?limit={limit}&offset={offset}"
 
-        r = requests.get(url, headers=headers)
+        r = requests.get(url, headers=headers_bsale)
         data = r.json()
 
         items = data.get("items", [])
@@ -37,64 +46,61 @@ def fetch_all(endpoint):
     return all_items
 
 
-print("\n==============================")
-print("OFFICES")
-print("==============================")
+def insert_noco(table, payload):
+
+    url = f"{NOCODB_URL}/api/v2/tables/{table}/records"
+
+    r = requests.post(url, json=payload, headers=headers_noco)
+
+    if r.status_code != 200:
+        print("ERROR:", r.text)
+
+
+print("\nSYNC OFFICES")
 
 offices = fetch_all("offices.json")
 
-print("TOTAL:", len(offices))
-
 for o in offices:
-    print(o)
+
+    payload = {
+        "id": o["id"],
+        "name": o.get("name"),
+        "state": o.get("state")
+    }
+
+    insert_noco("offices", payload)
 
 
-print("\n==============================")
-print("TAXES")
-print("==============================")
+print("\nSYNC TAXES")
 
 taxes = fetch_all("taxes.json")
 
-print("TOTAL:", len(taxes))
-
 for t in taxes:
-    print(t)
+
+    payload = {
+        "id": t["id"],
+        "name": t.get("name"),
+        "percentage": t.get("percentage"),
+        "state": t.get("state")
+    }
+
+    insert_noco("taxes", payload)
 
 
-print("\n==============================")
-print("PRICE LISTS")
-print("==============================")
+print("\nSYNC PRICE LISTS")
 
 price_lists = fetch_all("price_lists.json")
 
-print("TOTAL:", len(price_lists))
-
 for p in price_lists:
-    print(p)
+
+    payload = {
+        "id": p["id"],
+        "name": p.get("name"),
+        "description": p.get("description"),
+        "state": p.get("state")
+    }
+
+    insert_noco("price_lists", payload)
 
 
-print("\n==============================")
-print("VARIANTS (EJEMPLO DETALLADO)")
-print("==============================")
-
-variants = fetch_all("variants.json")
-
-print("TOTAL VARIANTS:", len(variants))
-
-example = variants[0]
-
-print("\nVARIANT EJEMPLO:\n")
-
-print(json.dumps(example, indent=2))
-
-
-print("\nCOSTOS DETECTADOS\n")
-
-for c in example.get("costs", []):
-    print(c)
-
-
-print("\nPRECIOS DETECTADOS\n")
-
-for p in example.get("prices", []):
-    print(p)
+print("\nSYNC COMPLETADO")
