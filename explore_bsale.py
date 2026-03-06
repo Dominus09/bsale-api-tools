@@ -1,3 +1,4 @@
+print("START SYNC")
 import requests
 import os
 
@@ -121,3 +122,4 @@ for p in fetch_all("price_lists.json"):
 
 
 print("SYNC COMPLETADO")
+exit()
