@@ -1,12 +1,26 @@
 import requests
 import os
 
+# -----------------------------
+# TOKENS
+# -----------------------------
+
 BSALE_TOKEN = os.getenv("BSALE_TOKEN_Mini")
 
-NOCODB_URL = "https://db.quillotana.cl"
 NOCODB_TOKEN = "R3EhSD8si-WSVdsPxlQVGAfiHRRcDR9cHGHJdBJL"
+NOCODB_URL = "https://db.quillotana.cl"
 
-BASE_ID = "pbgqx7nu11fz6wz"
+# -----------------------------
+# TABLE IDs
+# -----------------------------
+
+TABLE_OFFICES = "vw2fhxbbf0iy2w3y"
+TABLE_PRICELISTS = "vw0prq57ai2ov1b4"
+TABLE_TAXES = "vwtcuh3t7gdl1r1x"
+
+# -----------------------------
+# HEADERS
+# -----------------------------
 
 headers_bsale = {
     "access_token": BSALE_TOKEN
@@ -21,6 +35,10 @@ BASE_BSALE = "https://api.bsale.io/v1"
 
 limit = 50
 
+
+# -----------------------------
+# FUNCION PAGINACION BSALE
+# -----------------------------
 
 def fetch_all(endpoint):
 
@@ -46,15 +64,23 @@ def fetch_all(endpoint):
     return all_items
 
 
-def insert_noco(table, payload):
+# -----------------------------
+# INSERTAR EN NOCO
+# -----------------------------
 
-    url = f"{NOCODB_URL}/api/v2/tables/{table}/records"
+def insert_noco(table_id, payload):
+
+    url = f"{NOCODB_URL}/api/v2/tables/{table_id}/records"
 
     r = requests.post(url, json=payload, headers=headers_noco)
 
-    if r.status_code != 200:
+    if r.status_code not in [200, 201]:
         print("ERROR:", r.text)
 
+
+# -----------------------------
+# SYNC OFFICES
+# -----------------------------
 
 print("\nSYNC OFFICES")
 
@@ -68,8 +94,12 @@ for o in offices:
         "state": o.get("state")
     }
 
-    insert_noco("offices", payload)
+    insert_noco(TABLE_OFFICES, payload)
 
+
+# -----------------------------
+# SYNC TAXES
+# -----------------------------
 
 print("\nSYNC TAXES")
 
@@ -84,8 +114,12 @@ for t in taxes:
         "state": t.get("state")
     }
 
-    insert_noco("taxes", payload)
+    insert_noco(TABLE_TAXES, payload)
 
+
+# -----------------------------
+# SYNC PRICE LISTS
+# -----------------------------
 
 print("\nSYNC PRICE LISTS")
 
@@ -100,7 +134,7 @@ for p in price_lists:
         "state": p.get("state")
     }
 
-    insert_noco("price_lists", payload)
+    insert_noco(TABLE_PRICELISTS, payload)
 
 
 print("\nSYNC COMPLETADO")
