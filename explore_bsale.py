@@ -1,5 +1,4 @@
 import requests
-import json
 import os
 
 TOKEN = os.getenv("BSALE_TOKEN_Mini")
@@ -18,32 +17,41 @@ endpoints = [
 ]
 
 limit = 50
-offset = 0
+
 
 for endpoint in endpoints:
 
-    print("\n====================")
+    print("\n==============================")
     print("ENDPOINT:", endpoint)
-    print("====================")
+    print("==============================")
 
-    url = f"{BASE}/{endpoint}?limit={limit}&offset={offset}"
+    offset = 0
+    total = 0
+    fields = set()
 
-    r = requests.get(url, headers=headers)
+    while True:
 
-    data = r.json()
+        url = f"{BASE}/{endpoint}?limit={limit}&offset={offset}"
 
-    items = data.get("items", [])
+        r = requests.get(url, headers=headers)
+        data = r.json()
 
-    if len(items) == 0:
-        print("No data")
-        continue
+        items = data.get("items", [])
 
-    item = items[0]
+        if len(items) == 0:
+            break
 
-    print("\nCampos detectados:\n")
+        total += len(items)
 
-    for key in item.keys():
-        print(key)
+        for item in items:
+            for key in item.keys():
+                fields.add(key)
 
-    print("\nEjemplo registro:\n")
-    print(json.dumps(item, indent=2))
+        offset += limit
+
+    print("TOTAL REGISTROS:", total)
+
+    print("\nCAMPOS DETECTADOS:")
+
+    for f in sorted(fields):
+        print("-", f)
