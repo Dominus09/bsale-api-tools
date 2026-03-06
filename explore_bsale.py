@@ -1,26 +1,20 @@
 import requests
 import os
 
-# -----------------------------
+# ------------------------
 # TOKENS
-# -----------------------------
+# ------------------------
 
 BSALE_TOKEN = os.getenv("BSALE_TOKEN_Mini")
 
 NOCODB_TOKEN = "R3EhSD8si-WSVdsPxlQVGAfiHRRcDR9cHGHJdBJL"
 NOCODB_URL = "https://db.quillotana.cl"
 
-# -----------------------------
-# TABLE IDs
-# -----------------------------
+BASE_NAME = "Bsale_Control"
 
-TABLE_OFFICES = "vw2fhxbbf0iy2w3y"
-TABLE_PRICELISTS = "vw0prq57ai2ov1b4"
-TABLE_TAXES = "vwtcuh3t7gdl1r1x"
-
-# -----------------------------
+# ------------------------
 # HEADERS
-# -----------------------------
+# ------------------------
 
 headers_bsale = {
     "access_token": BSALE_TOKEN
@@ -36,9 +30,9 @@ BASE_BSALE = "https://api.bsale.io/v1"
 limit = 50
 
 
-# -----------------------------
-# FUNCION PAGINACION BSALE
-# -----------------------------
+# ------------------------
+# FETCH PAGINADO BSALE
+# ------------------------
 
 def fetch_all(endpoint):
 
@@ -64,13 +58,13 @@ def fetch_all(endpoint):
     return all_items
 
 
-# -----------------------------
-# INSERTAR EN NOCO
-# -----------------------------
+# ------------------------
+# INSERT NOCO
+# ------------------------
 
-def insert_noco(table_id, payload):
+def insert_noco(table, payload):
 
-    url = f"{NOCODB_URL}/api/v2/tables/{table_id}/records"
+    url = f"{NOCODB_URL}/api/v2/db/data/v1/{BASE_NAME}/{table}"
 
     r = requests.post(url, json=payload, headers=headers_noco)
 
@@ -78,11 +72,11 @@ def insert_noco(table_id, payload):
         print("ERROR:", r.text)
 
 
-# -----------------------------
-# SYNC OFFICES
-# -----------------------------
+# ------------------------
+# OFFICES
+# ------------------------
 
-print("\nSYNC OFFICES")
+print("SYNC OFFICES")
 
 offices = fetch_all("offices.json")
 
@@ -94,14 +88,14 @@ for o in offices:
         "state": o.get("state")
     }
 
-    insert_noco(TABLE_OFFICES, payload)
+    insert_noco("offices", payload)
 
 
-# -----------------------------
-# SYNC TAXES
-# -----------------------------
+# ------------------------
+# TAXES
+# ------------------------
 
-print("\nSYNC TAXES")
+print("SYNC TAXES")
 
 taxes = fetch_all("taxes.json")
 
@@ -114,14 +108,14 @@ for t in taxes:
         "state": t.get("state")
     }
 
-    insert_noco(TABLE_TAXES, payload)
+    insert_noco("taxes", payload)
 
 
-# -----------------------------
-# SYNC PRICE LISTS
-# -----------------------------
+# ------------------------
+# PRICE LIST
+# ------------------------
 
-print("\nSYNC PRICE LISTS")
+print("SYNC PRICE LISTS")
 
 price_lists = fetch_all("price_lists.json")
 
@@ -134,7 +128,7 @@ for p in price_lists:
         "state": p.get("state")
     }
 
-    insert_noco(TABLE_PRICELISTS, payload)
+    insert_noco("price_list", payload)
 
 
-print("\nSYNC COMPLETADO")
+print("SYNC COMPLETADO")
