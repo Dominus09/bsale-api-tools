@@ -1,19 +1,10 @@
-print("START SYNC")
 import requests
 import os
-
-# TOKENS
-
+print("START SYNC")
 BSALE_TOKEN = os.getenv("BSALE_TOKEN_Mini")
 
 NOCODB_TOKEN = "R3EhSD8si-WSVdsPxlQVGAfiHRRcDR9cHGHJdBJL"
 NOCODB_URL = "https://db.quillotana.cl"
-
-# TABLE IDs
-
-TABLE_OFFICES = "m878eot7j6fi5v7"
-TABLE_PRICELIST = "m8zibme0z28jls6"
-TABLE_TAXES = "mary3rk9y5rwviu"
 
 headers_bsale = {
     "access_token": BSALE_TOKEN
@@ -27,6 +18,13 @@ headers_noco = {
 BASE_BSALE = "https://api.bsale.io/v1"
 
 limit = 50
+
+
+TABLE_PRODUCTS = "products"
+TABLE_VARIANTS = "variants"
+TABLE_COSTS = "variant_costs"
+TABLE_PRICES = "variant_prices"
+TABLE_STOCKS = "stocks"
 
 
 def fetch_all(endpoint):
@@ -53,73 +51,109 @@ def fetch_all(endpoint):
     return results
 
 
-def upsert_noco(table_id, bsale_id, payload):
+def insert_noco(table, payload):
 
-    search_url = f"{NOCODB_URL}/api/v2/tables/{table_id}/records?where=(bsale_id,eq,{bsale_id})"
+    url = f"{NOCODB_URL}/api/v2/tables/{table}/records"
 
-    r = requests.get(search_url, headers=headers_noco)
-    data = r.json()
+    r = requests.post(url, json=payload, headers=headers_noco)
 
-    if data["list"]:
+    if r.status_code not in [200,201]:
 
-        record_id = data["list"][0]["Id"]
-
-        payload["Id"] = record_id
-
-        update_url = f"{NOCODB_URL}/api/v2/tables/{table_id}/records"
-
-        requests.patch(update_url, json=payload, headers=headers_noco)
-
-    else:
-
-        insert_url = f"{NOCODB_URL}/api/v2/tables/{table_id}/records"
-
-        requests.post(insert_url, json=payload, headers=headers_noco)
+        print("ERROR:", r.text)
 
 
-# OFFICES
+# -------------------------
+# PRODUCTS
+# -------------------------
 
-print("SYNC OFFICES")
+print("SYNC PRODUCTS")
 
-for o in fetch_all("offices.json"):
+products = fetch_all("products.json")
 
-    upsert_noco(TABLE_OFFICES, o["id"], {
+for p in products:
 
-        "bsale_id": o["id"],
-        "name": o.get("name")
-
-    })
-
-
-# TAXES
-
-print("SYNC TAXES")
-
-for t in fetch_all("taxes.json"):
-
-    upsert_noco(TABLE_TAXES, t["id"], {
-
-        "bsale_id": t["id"],
-        "name": t.get("name"),
-        "percentage": t.get("percentage")
-
-    })
-
-
-# PRICE LIST
-
-print("SYNC PRICE LIST")
-
-for p in fetch_all("price_lists.json"):
-
-    upsert_noco(TABLE_PRICELIST, p["id"], {
-
+    insert_noco(TABLE_PRODUCTS,{
         "bsale_id": p["id"],
         "name": p.get("name"),
-        "description": p.get("description")
+        "classification": str(p.get("classification")),
+        "brand": str(p.get("brand"))
+    })
 
+
+# -------------------------
+# VARIANTS
+# -------------------------
+
+print("SYNC VARIANTS")
+
+variants = fetch_all("variants.json")
+
+for v in variants:
+
+    insert_noco(TABLE_VARIANTS,{
+        "bsale_id": v["id"],
+        "product_id": v["product"]["id"],
+        "code": v.get("code"),
+        "bar_code": v.get("barCode"),
+        "description": v.get("description")
+    })
+
+
+# -------------------------
+# COSTS
+# -------------------------
+
+print("SYNC COSTS")
+
+for v in variants:
+
+    variant_id = v["id"]
+
+    for cost in v.get("costs",[]):
+
+        insert_noco(TABLE_COSTS,{
+            "variant_id": variant_id,
+            "office_id": cost["office"]["id"],
+            "cost": cost["cost"]
+        })
+
+
+# -------------------------
+# PRICES
+# -------------------------
+
+print("SYNC PRICES")
+
+for v in variants:
+
+    variant_id = v["id"]
+
+    for price in v.get("prices",[]):
+
+        insert_noco(TABLE_PRICES,{
+            "variant_id": variant_id,
+            "price_list_id": price["priceList"]["id"],
+            "price": price["price"]
+        })
+
+
+# -------------------------
+# STOCKS
+# -------------------------
+
+print("SYNC STOCKS")
+
+stocks = fetch_all("stocks.json")
+
+for s in stocks:
+
+    insert_noco(TABLE_STOCKS,{
+        "variant_id": s["variant"]["id"],
+        "office_id": s["office"]["id"],
+        "quantity_available": s["quantityAvailable"],
+        "quantity_reserved": s["quantityReserved"]
     })
 
 
 print("SYNC COMPLETADO")
-exit()
+Exit()
