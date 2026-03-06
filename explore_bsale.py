@@ -1,19 +1,20 @@
 import requests
 import json
+import os
 
 TOKEN = os.getenv("BSALE_TOKEN_Mini")
 
 headers = {
-"access_token": TOKEN
+    "access_token": TOKEN
 }
 
 BASE = "https://api.bsale.io/v1"
 
 endpoints = [
-"products.json",
-"variants.json",
-"price_lists.json",
-"stocks.json"
+    "products.json",
+    "variants.json",
+    "price_lists.json",
+    "stocks.json"
 ]
 
 limit = 50
@@ -21,31 +22,28 @@ offset = 0
 
 for endpoint in endpoints:
 
-```
-print("\n=======================")
-print("ENDPOINT:", endpoint)
-print("=======================")
+    print("\n====================")
+    print("ENDPOINT:", endpoint)
+    print("====================")
 
-url = f"{BASE}/{endpoint}?limit={limit}&offset={offset}"
+    url = f"{BASE}/{endpoint}?limit={limit}&offset={offset}"
 
-r = requests.get(url, headers=headers)
+    r = requests.get(url, headers=headers)
 
-data = r.json()
+    data = r.json()
 
-items = data.get("items", [])
+    items = data.get("items", [])
 
-if len(items) == 0:
-    print("No data")
-    continue
+    if len(items) == 0:
+        print("No data")
+        continue
 
-item = items[0]
+    item = items[0]
 
-print("\nCampos detectados:\n")
+    print("\nCampos detectados:\n")
 
-for key in item.keys():
-    print(key)
+    for key in item.keys():
+        print(key)
 
-print("\nEjemplo registro:\n")
-
-print(json.dumps(item, indent=2))
-```
+    print("\nEjemplo registro:\n")
+    print(json.dumps(item, indent=2))
