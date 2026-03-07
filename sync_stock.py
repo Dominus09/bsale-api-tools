@@ -60,7 +60,7 @@ def api(url,params=None):
     else:
 
         print("TABLE CLEARED")
-            )
+            
 
 
 def insert_batch(rows):
