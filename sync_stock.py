@@ -40,30 +40,26 @@ def api(url,params=None):
         return r.json()
 
 
-def clear_table():
 
-    print("CLEAR STOCK TABLE")
 
-    url=f"{NOCODB}/api/v2/tables/{TABLE}/records"
+  def clear_table():
 
-    while True:
+    print("TRUNCATE STOCK TABLE")
 
-        r=requests.get(
-            url,
-            headers=HEADNOCO,
-            params={"limit":200}
-        )
+    url=f"{NOCODB}/api/v2/tables/{TABLE}/truncate"
 
-        rows=r.json()["list"]
+    r=requests.delete(
+        url,
+        headers=HEADNOCO
+    )
 
-        if not rows:
-            break
+    if r.status_code not in [200,201]:
 
-        for row in rows:
+        print("TRUNCATE ERROR", r.text)
 
-            requests.delete(
-                f"{url}/{row['Id']}",
-                headers=HEADNOCO
+    else:
+
+        print("TABLE CLEARED")
             )
 
 
