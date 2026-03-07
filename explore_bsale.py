@@ -24,14 +24,11 @@ headers_noco = {
     "Content-Type": "application/json"
 }
 
-# ----------------------------
-# TABLE IDS
-# ----------------------------
-
 TABLE_PRODUCTS = "meke3fsng90uspe"
 TABLE_PRODUCT_TYPES = "mcir9ile6id3813"
 
 LIMIT = 50
+
 
 # ----------------------------
 # HELPERS
@@ -81,6 +78,7 @@ def insert_noco(table_id, payload):
     if r.status_code not in [200, 201]:
         print("INSERT ERROR:", r.text)
 
+
 # ----------------------------
 # LOAD TAXES
 # ----------------------------
@@ -99,6 +97,7 @@ for t in taxes:
     }
 
 print("TAXES:", len(tax_map))
+
 
 # ----------------------------
 # PRODUCT TYPES
@@ -120,6 +119,7 @@ for pt in product_types:
 
 print("PRODUCT TYPES:", len(product_types))
 
+
 # ----------------------------
 # PRODUCTS
 # ----------------------------
@@ -134,14 +134,19 @@ for p in products:
 
     product_id = p["id"]
 
-    # ----------------------------
     # PRODUCT TYPE
-    # ----------------------------
 
     product_type_id = None
 
     if p.get("product_type"):
         product_type_id = p["product_type"]["id"]
+
+    # BRAND FIX
+
+    brand = None
+
+    if isinstance(p.get("brand"), dict):
+        brand = p["brand"].get("name")
 
     # ----------------------------
     # TAXES
@@ -153,15 +158,15 @@ for p in products:
 
     product_taxes = p.get("product_taxes")
 
-    try:
+    if isinstance(product_taxes, dict) and "href" in product_taxes:
 
-        if isinstance(product_taxes, dict) and "href" in product_taxes:
+        try:
 
             tax_data = bsale_get(product_taxes["href"])
 
-            tax_items = tax_data.get("items", [])
+            items = tax_data.get("items", [])
 
-            for item in tax_items:
+            for item in items:
 
                 tax_id = int(item["tax"]["id"])
 
@@ -171,11 +176,11 @@ for p in products:
 
                     tax_names.append(tax_map[tax_id]["name"])
 
-                    tax_factor *= 1 + (tax_map[tax_id]["percentage"] / 100)
+                    tax_factor *= (1 + tax_map[tax_id]["percentage"] / 100)
 
-    except Exception as e:
+        except Exception as e:
 
-        print("TAX ERROR PRODUCT:", product_id, e)
+            print("TAX ERROR PRODUCT:", product_id, e)
 
     # ----------------------------
     # INSERT PRODUCT
@@ -185,8 +190,9 @@ for p in products:
 
         "bsale_id": product_id,
         "name": p.get("name"),
+
         "classification": p.get("classification"),
-        "brand": p.get("brand"),
+        "brand": brand,
 
         "product_type_id": product_type_id,
 
@@ -199,7 +205,6 @@ for p in products:
     counter += 1
 
     if counter % 100 == 0:
-
         print("PRODUCTS PROGRESS:", counter)
 
 print("PRODUCTS:", len(products))
