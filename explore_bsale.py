@@ -8,15 +8,21 @@ headers = {
     "access_token": BSALE_TOKEN
 }
 
-url = "https://api.bsale.io/v1/variants.json?limit=5"
+variant_id = 5547
 
-r = requests.get(url, headers=headers)
+print("TEST COSTS")
 
-data = r.json()
+costs_url = f"https://api.bsale.io/v1/variants/{variant_id}/costs.json"
 
-for v in data["items"]:
+r = requests.get(costs_url, headers=headers)
 
-    print("\nVARIANT ID:", v["id"])
+print(json.dumps(r.json(), indent=2))
 
-    print("\nFULL DATA:")
-    print(json.dumps(v, indent=2))
+
+print("\nTEST PRICES")
+
+prices_url = f"https://api.bsale.io/v1/price_lists/details.json?variantid={variant_id}"
+
+r = requests.get(prices_url, headers=headers)
+
+print(json.dumps(r.json(), indent=2))
