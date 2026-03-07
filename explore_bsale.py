@@ -4,6 +4,10 @@ import json
 
 print("SYNC PRODUCT TYPES + TAXES")
 
+# ----------------------------
+# CONFIG
+# ----------------------------
+
 BSALE_TOKEN = os.getenv("BSALE_TOKEN_Mini")
 NOCODB_TOKEN = "R3EhSD8si-WSVdsPxlQVGAfiHRRcDR9cHGHJdBJL"
 NOCODB_URL = "https://db.quillotana.cl"
@@ -18,12 +22,19 @@ headers_noco = {
     "Content-Type": "application/json"
 }
 
+# ----------------------------
+# TABLE IDS
+# ----------------------------
+
 TABLE_PRODUCTS = "meke3fsng90uspe"
 TABLE_PRODUCT_TYPES = "mcir9ile6id3813"
 TABLE_TAXES = "mary3rk9y5rwviu"
 
 LIMIT = 50
 
+# ----------------------------
+# HELPERS
+# ----------------------------
 
 def bsale_get(url, params=None):
     r = requests.get(url, headers=headers_bsale, params=params)
@@ -32,6 +43,7 @@ def bsale_get(url, params=None):
 
 
 def fetch_all(endpoint):
+
     offset = 0
     results = []
 
@@ -60,12 +72,12 @@ def insert_noco(table_id, payload):
     r = requests.post(url, json=payload, headers=headers_noco)
 
     if r.status_code not in [200, 201]:
-        print("INSERT ERROR", r.text)
+        print("INSERT ERROR:", r.text)
 
 
-# -------------------------
+# ----------------------------
 # LOAD TAXES
-# -------------------------
+# ----------------------------
 
 print("LOADING TAXES")
 
@@ -83,9 +95,9 @@ for t in taxes:
 print("TAXES:", len(tax_map))
 
 
-# -------------------------
+# ----------------------------
 # PRODUCT TYPES
-# -------------------------
+# ----------------------------
 
 print("SYNC PRODUCT TYPES")
 
@@ -102,9 +114,9 @@ for pt in product_types:
 print("PRODUCT TYPES:", len(product_types))
 
 
-# -------------------------
+# ----------------------------
 # PRODUCTS
-# -------------------------
+# ----------------------------
 
 print("SYNC PRODUCTS")
 
@@ -114,47 +126,67 @@ for p in products:
 
     product_id = p["id"]
 
-    # product type
+    # ----------------------------
+    # PRODUCT TYPE
+    # ----------------------------
+
     product_type_id = None
 
     if p.get("product_type"):
         product_type_id = p["product_type"]["id"]
 
-    # taxes
-   tax_ids = []
-tax_names = []
-tax_factor = 1
+    # ----------------------------
+    # TAXES
+    # ----------------------------
 
-product_taxes = p.get("product_taxes")
+    tax_ids = []
+    tax_names = []
+    tax_factor = 1
 
-# Caso 1: lista directa
-if isinstance(product_taxes, list):
+    product_taxes = p.get("product_taxes")
 
-    for pt in product_taxes:
+    # caso lista directa
+    if isinstance(product_taxes, list):
 
-        tax_id = pt["tax"]["id"]
+        for pt in product_taxes:
 
-        tax_ids.append(tax_id)
+            tax_id = pt["tax"]["id"]
 
-        if tax_id in tax_map:
-            tax_names.append(tax_map[tax_id]["name"])
-            tax_factor *= 1 + (tax_map[tax_id]["percentage"] / 100)
+            tax_ids.append(tax_id)
 
+            if tax_id in tax_map:
+                tax_names.append(tax_map[tax_id]["name"])
+                tax_factor *= 1 + (tax_map[tax_id]["percentage"] / 100)
 
-# Caso 2: href (lo normal en Bsale)
-elif isinstance(product_taxes, dict) and "href" in product_taxes:
+    # caso href
+    elif isinstance(product_taxes, dict) and "href" in product_taxes:
 
-    tax_data = bsale_get(product_taxes["href"])
+        tax_data = bsale_get(product_taxes["href"])
 
-    for pt in tax_data.get("items", []):
+        for pt in tax_data.get("items", []):
 
-        tax_id = pt["tax"]["id"]
+            tax_id = pt["tax"]["id"]
 
-        tax_ids.append(tax_id)
+            tax_ids.append(tax_id)
 
-        if tax_id in tax_map:
-            tax_names.append(tax_map[tax_id]["name"])
-            tax_factor *= 1 + (tax_map[tax_id]["percentage"] / 100)
+            if tax_id in tax_map:
+                tax_names.append(tax_map[tax_id]["name"])
+                tax_factor *= 1 + (tax_map[tax_id]["percentage"] / 100)
+
+    # ----------------------------
+    # INSERT PRODUCT
+    # ----------------------------
+
+    insert_noco(TABLE_PRODUCTS, {
+
+        "bsale_id": product_id,
+        "name": p["name"],
+        "product_type_id": product_type_id,
+        "tax_ids_json": json.dumps(tax_ids),
+        "tax_names_json": json.dumps(tax_names),
+        "tax_factor": tax_factor
+
+    })
 
 
 print("PRODUCTS:", len(products))
