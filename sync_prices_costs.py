@@ -2,91 +2,68 @@ import requests
 import os
 import time
 
-print("SYNC PRICES COSTS")
+print("SYNC STOCK START")
 
-BASE="https://api.bsale.io/v1"
-NOCODB="https://db.quillotana.cl"
+BASE = "https://api.bsale.io/v1"
+NOCODB = "https://db.quillotana.cl"
 
-TOKEN=os.getenv("BSALE_TOKEN_Mini")
-NOCOTOKEN=os.getenv("NocoDB_token")
+TOKEN = os.getenv("BSALE_TOKEN_Mini")
+NOCOTOKEN = os.getenv("NocoDB_token")
 
-HEAD={"access_token":TOKEN}
+HEAD = {"access_token": TOKEN}
 
-HEADNOCO={
-"xc-token":NOCOTOKEN,
-"Content-Type":"application/json"
+HEADNOCO = {
+    "xc-token": NOCOTOKEN,
+    "Content-Type": "application/json"
 }
 
-LIMIT=50
+LIMIT = 50
+TABLE = "mxs2lyz86cnxd23"
 
-TABLE_COSTS="mdjjvdlwev2o76u"
-TABLE_PRICES="mcby3npgc3ig042"
 
-def api(url,params=None):
+def api(url, params=None):
 
     while True:
 
-        r=requests.get(url,headers=HEAD,params=params)
+        r = requests.get(url, headers=HEAD, params=params)
 
-        if r.status_code==429:
-
-            retry=int(r.json().get("retry_after",60))
-            print("RATE LIMIT",retry)
+        if r.status_code == 429:
+            retry = int(r.json().get("retry_after", 60))
+            print("RATE LIMIT", retry)
             time.sleep(retry)
             continue
 
         r.raise_for_status()
-        time.sleep(0.15)
-
         return r.json()
 
-def fetch(endpoint):
 
-    offset=0
-    data=[]
+def upsert_stock(variant_id, office_id, available, reserved):
 
-    while True:
+    url = f"{NOCODB}/api/v2/tables/{TABLE}/records"
 
-        j=api(
-            f"{BASE}/{endpoint}",
-            {"limit":LIMIT,"offset":offset}
-        )
-
-        items=j.get("items",[])
-
-        if not items:
-            break
-
-        data.extend(items)
-        offset+=LIMIT
-
-    return data
-
-def upsert_price(variant_id,price_list_id,net,gross):
-
-    url=f"{NOCODB}/api/v2/tables/{TABLE_PRICES}/records"
-
-    r=requests.get(
+    r = requests.get(
         url,
         headers=HEADNOCO,
-        params={"where":f"(variant_id,eq,{variant_id})~and(price_list_id,eq,{price_list_id})"}
+        params={
+            "where": f"(variant_id,eq,{variant_id})~and(office_id,eq,{office_id})"
+        }
     )
 
-    data=r.json()
+    data = r.json()
 
-    payload={
-        "variant_id":variant_id,
-        "price_list_id":price_list_id,
-        "price_net":net,
-        "price_gross":gross
+    payload = {
+        "variant_id": variant_id,
+        "office_id": office_id,
+        "quantity_available": available,
+        "quantity_reserved": reserved
     }
 
     if data["list"]:
 
-        row=data["list"][0]["Id"]
+        row_id = data["list"][0]["Id"]
 
         requests.patch(
-            f"{url}/{row}",
+            f"{url}/{row_id}",
             json=payload,
             headers=HEADNOCO
         )
@@ -99,37 +76,30 @@ def upsert_price(variant_id,price_list_id,net,gross):
             headers=HEADNOCO
         )
 
-print("SYNC PRICES")
 
-variants=fetch("variants.json")
-lists=fetch("price_lists.json")
+offset = 0
 
-for pl in lists:
+while True:
 
-    lid=pl["id"]
-    offset=0
+    j = api(
+        f"{BASE}/stocks.json",
+        {"limit": LIMIT, "offset": offset}
+    )
 
-    while True:
+    items = j.get("items", [])
 
-        j=api(
-            f"{BASE}/price_lists/{lid}/details.json",
-            {"limit":LIMIT,"offset":offset}
+    if not items:
+        break
+
+    for s in items:
+
+        upsert_stock(
+            s["variant"]["id"],
+            s["office"]["id"],
+            s["quantityAvailable"],
+            s["quantityReserved"]
         )
 
-        items=j.get("items",[])
+    offset += LIMIT
 
-        if not items:
-            break
-
-        for d in items:
-
-            upsert_price(
-                d["variant"]["id"],
-                lid,
-                d["variantValue"],
-                d["variantValueWithTaxes"]
-            )
-
-        offset+=LIMIT
-
-print("PRICES DONE")
+print("SYNC STOCK DONE")
