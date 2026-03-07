@@ -43,19 +43,42 @@ def api(url, params=None):
 
 def clear_table():
 
-    print("TRUNCATE STOCK TABLE")
+    def clear_table():
 
-    url = f"{NOCODB}/api/v2/tables/{TABLE}/truncate"
+    print("CLEAR STOCK TABLE")
 
-    r = requests.delete(
-        url,
-        headers=HEADNOCO
-    )
+    url = f"{NOCODB}/api/v2/tables/{TABLE}/records"
 
-    if r.status_code not in [200, 201]:
-        print("TRUNCATE ERROR", r.text)
-    else:
-        print("TABLE CLEARED")
+    deleted = 0
+
+    while True:
+
+        r = requests.get(
+            url,
+            headers=HEADNOCO,
+            params={"limit": 200}
+        )
+
+        rows = r.json().get("list", [])
+
+        if not rows:
+            break
+
+        ids = [row["Id"] for row in rows]
+
+        delete_url = f"{url}/bulk"
+
+        r = requests.delete(
+            delete_url,
+            headers=HEADNOCO,
+            json={"ids": ids}
+        )
+
+        deleted += len(ids)
+
+        print("DELETED", deleted)
+
+    print("TABLE CLEARED")
 
 
 def insert_batch(rows):
