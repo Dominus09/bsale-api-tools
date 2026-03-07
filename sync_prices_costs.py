@@ -5,6 +5,7 @@ import time
 print("SYNC PRICES COSTS")
 
 BASE="https://api.bsale.io/v1"
+NOCODB="https://db.quillotana.cl"
 
 TOKEN=os.getenv("BSALE_TOKEN_Mini")
 NOCOTOKEN=os.getenv("NocoDB_token")
@@ -16,8 +17,6 @@ HEADNOCO={
 "Content-Type":"application/json"
 }
 
-NOCODB="https://db.quillotana.cl"
-
 LIMIT=50
 
 TABLE_COSTS="mdjjvdlwev2o76u"
@@ -25,91 +24,112 @@ TABLE_PRICES="mcby3npgc3ig042"
 
 def api(url,params=None):
 
- while True:
+    while True:
 
-  r=requests.get(url,headers=HEAD,params=params)
+        r=requests.get(url,headers=HEAD,params=params)
 
-  if r.status_code==429:
+        if r.status_code==429:
 
-   retry=int(r.json().get("retry_after",60))
-   print("RATE LIMIT",retry)
-   time.sleep(retry)
-   continue
+            retry=int(r.json().get("retry_after",60))
+            print("RATE LIMIT",retry)
+            time.sleep(retry)
+            continue
 
-  r.raise_for_status()
-  time.sleep(0.2)
+        r.raise_for_status()
+        time.sleep(0.15)
 
-  return r.json()
+        return r.json()
 
 def fetch(endpoint):
 
- offset=0
- data=[]
+    offset=0
+    data=[]
 
- while True:
+    while True:
 
-  j=api(f"{BASE}/{endpoint}",{"limit":LIMIT,"offset":offset})
+        j=api(
+            f"{BASE}/{endpoint}",
+            {"limit":LIMIT,"offset":offset}
+        )
 
-  items=j.get("items",[])
+        items=j.get("items",[])
 
-  if not items:
-   break
+        if not items:
+            break
 
-  data.extend(items)
-  offset+=LIMIT
+        data.extend(items)
+        offset+=LIMIT
 
- return data
+    return data
 
-def insert(table,data):
+def upsert_price(variant_id,price_list_id,net,gross):
 
- url=f"{NOCODB}/api/v2/tables/{table}/records"
+    url=f"{NOCODB}/api/v2/tables/{TABLE_PRICES}/records"
 
- requests.post(url,json=data,headers=HEADNOCO)
+    r=requests.get(
+        url,
+        headers=HEADNOCO,
+        params={"where":f"(variant_id,eq,{variant_id})~and(price_list_id,eq,{price_list_id})"}
+    )
+
+    data=r.json()
+
+    payload={
+        "variant_id":variant_id,
+        "price_list_id":price_list_id,
+        "price_net":net,
+        "price_gross":gross
+    }
+
+    if data["list"]:
+
+        row=data["list"][0]["Id"]
+
+        requests.patch(
+            f"{url}/{row}",
+            json=payload,
+            headers=HEADNOCO
+        )
+
+    else:
+
+        requests.post(
+            url,
+            json=payload,
+            headers=HEADNOCO
+        )
+
+print("SYNC PRICES")
 
 variants=fetch("variants.json")
-
-print("COSTS")
-
-for v in variants:
-
- vid=v["id"]
-
- j=api(f"{BASE}/variants/{vid}/costs.json")
-
- insert(TABLE_COSTS,{
- "variant_id":vid,
- "average_cost":j.get("averageCost"),
- "total_cost":j.get("totalCost")
- })
-
-print("PRICES")
-
 lists=fetch("price_lists.json")
 
 for pl in lists:
 
- lid=pl["id"]
+    lid=pl["id"]
+    offset=0
 
- offset=0
+    while True:
 
- while True:
+        j=api(
+            f"{BASE}/price_lists/{lid}/details.json",
+            {"limit":LIMIT,"offset":offset}
+        )
 
-  j=api(f"{BASE}/price_lists/{lid}/details.json",{"limit":LIMIT,"offset":offset})
+        items=j.get("items",[])
 
-  items=j.get("items",[])
+        if not items:
+            break
 
-  if not items:
-   break
+        for d in items:
 
-  for d in items:
+            upsert_price(
+                d["variant"]["id"],
+                lid,
+                d["variantValue"],
+                d["variantValueWithTaxes"]
+            )
 
-   insert(TABLE_PRICES,{
-   "variant_id":d["variant"]["id"],
-   "price_list_id":lid,
-   "price_net":d["variantValue"],
-   "price_gross":d["variantValueWithTaxes"]
-   })
+        offset+=LIMIT
 
-  offset+=LIMIT
-
-print("PRICES COSTS DONE")
+print("PRICES DONE")
