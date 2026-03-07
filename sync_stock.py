@@ -69,10 +69,10 @@ def noco_post(url, payload):
 
 def noco_patch(url, payload):
 
-    r = requests.patch(url, headers=HEAD_NOCO, json=payload, timeout=90)
+    r = requests.put(url, headers=HEAD_NOCO, json=payload, timeout=90)
 
     if r.status_code not in [200, 201]:
-        print("PATCH ERROR", r.status_code, r.text)
+        print("UPDATE ERROR", r.status_code, r.text)
 
     return r
 
