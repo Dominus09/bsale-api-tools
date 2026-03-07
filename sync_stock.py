@@ -4,36 +4,43 @@ import time
 
 print("FAST STOCK SYNC")
 
+# -----------------------------
+# CONFIG
+# -----------------------------
+
 BASE = "https://api.bsale.io/v1"
 NOCODB = "https://db.quillotana.cl"
 
-TOKEN = os.getenv("BSALE_TOKEN_Mini")
-NOCOTOKEN = os.getenv("NocoDB_token")
-
-HEAD = {
-    "access_token": TOKEN
-}
-
-HEADNOCO = {
-    "xc-token": NOCOTOKEN,
-    "Content-Type": "application/json"
-}
+BSALE_TOKEN = os.getenv("BSALE_TOKEN_Mini")
+NOCODB_TOKEN = os.getenv("NocoDB_token")
 
 TABLE = "mxs2lyz86cnxd23"
 
 LIMIT = 50
 BATCH = 100
 
+HEAD_BSALE = {
+    "access_token": BSALE_TOKEN
+}
 
-def api(url, params=None):
+HEAD_NOCO = {
+    "xc-token": NOCODB_TOKEN,
+    "Content-Type": "application/json"
+}
+
+# -----------------------------
+# API HELPER
+# -----------------------------
+
+def bsale_get(url, params=None):
 
     while True:
 
-        r = requests.get(url, headers=HEAD, params=params)
+        r = requests.get(url, headers=HEAD_BSALE, params=params)
 
         if r.status_code == 429:
             retry = int(r.json().get("retry_after", 60))
-            print("RATE LIMIT", retry)
+            print("RATE LIMIT HIT, WAIT", retry)
             time.sleep(retry)
             continue
 
@@ -41,21 +48,23 @@ def api(url, params=None):
         return r.json()
 
 
-def clear_table():
+# -----------------------------
+# CLEAR TABLE (bulk delete)
+# -----------------------------
 
-    def clear_table():
+def clear_table():
 
     print("CLEAR STOCK TABLE")
 
     url = f"{NOCODB}/api/v2/tables/{TABLE}/records"
 
-    deleted = 0
+    total_deleted = 0
 
     while True:
 
         r = requests.get(
             url,
-            headers=HEADNOCO,
+            headers=HEAD_NOCO,
             params={"limit": 200}
         )
 
@@ -70,16 +79,23 @@ def clear_table():
 
         r = requests.delete(
             delete_url,
-            headers=HEADNOCO,
+            headers=HEAD_NOCO,
             json={"ids": ids}
         )
 
-        deleted += len(ids)
+        if r.status_code not in [200, 201]:
+            print("DELETE ERROR", r.text)
+            break
 
-        print("DELETED", deleted)
+        total_deleted += len(ids)
+        print("DELETED", total_deleted)
 
     print("TABLE CLEARED")
 
+
+# -----------------------------
+# INSERT BATCH
+# -----------------------------
 
 def insert_batch(rows):
 
@@ -87,30 +103,32 @@ def insert_batch(rows):
 
     r = requests.post(
         url,
-        json=rows,
-        headers=HEADNOCO
+        headers=HEAD_NOCO,
+        json=rows
     )
 
     if r.status_code not in [200, 201]:
         print("INSERT ERROR", r.text)
 
 
-# limpiar tabla
+# -----------------------------
+# MAIN
+# -----------------------------
+
 clear_table()
 
 offset = 0
 buffer = []
-total = 0
-
+total_inserted = 0
 
 while True:
 
-    j = api(
+    data = bsale_get(
         f"{BASE}/stocks.json",
         {"limit": LIMIT, "offset": offset}
     )
 
-    items = j.get("items", [])
+    items = data.get("items", [])
 
     if not items:
         break
@@ -128,21 +146,22 @@ while True:
 
             insert_batch(buffer)
 
-            total += len(buffer)
-
-            print("INSERTED", total)
+            total_inserted += len(buffer)
+            print("INSERTED", total_inserted)
 
             buffer = []
 
     offset += LIMIT
 
 
+# insertar resto
+
 if buffer:
 
     insert_batch(buffer)
 
-    total += len(buffer)
+    total_inserted += len(buffer)
 
 
-print("TOTAL STOCK:", total)
+print("TOTAL STOCK:", total_inserted)
 print("STOCK SYNC DONE")
