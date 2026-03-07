@@ -121,32 +121,40 @@ for p in products:
         product_type_id = p["product_type"]["id"]
 
     # taxes
-    tax_ids = []
-    tax_names = []
-    tax_factor = 1
+   tax_ids = []
+tax_names = []
+tax_factor = 1
 
-    for pt in p.get("product_taxes", []):
+product_taxes = p.get("product_taxes")
+
+# Caso 1: lista directa
+if isinstance(product_taxes, list):
+
+    for pt in product_taxes:
 
         tax_id = pt["tax"]["id"]
 
         tax_ids.append(tax_id)
 
         if tax_id in tax_map:
-
             tax_names.append(tax_map[tax_id]["name"])
-
             tax_factor *= 1 + (tax_map[tax_id]["percentage"] / 100)
 
-    insert_noco(TABLE_PRODUCTS, {
 
-        "bsale_id": product_id,
-        "name": p["name"],
-        "product_type_id": product_type_id,
-        "tax_ids_json": json.dumps(tax_ids),
-        "tax_names_json": json.dumps(tax_names),
-        "tax_factor": tax_factor
+# Caso 2: href (lo normal en Bsale)
+elif isinstance(product_taxes, dict) and "href" in product_taxes:
 
-    })
+    tax_data = bsale_get(product_taxes["href"])
+
+    for pt in tax_data.get("items", []):
+
+        tax_id = pt["tax"]["id"]
+
+        tax_ids.append(tax_id)
+
+        if tax_id in tax_map:
+            tax_names.append(tax_map[tax_id]["name"])
+            tax_factor *= 1 + (tax_map[tax_id]["percentage"] / 100)
 
 
 print("PRODUCTS:", len(products))
