@@ -2,7 +2,7 @@ import requests
 import os
 import time
 
-print("FAST STOCK SYNC TEST")
+print("FAST STOCK SYNC")
 
 BASE="https://api.bsale.io/v1"
 NOCODB="https://db.quillotana.cl"
@@ -40,6 +40,33 @@ def api(url,params=None):
         return r.json()
 
 
+def clear_table():
+
+    print("CLEAR STOCK TABLE")
+
+    url=f"{NOCODB}/api/v2/tables/{TABLE}/records"
+
+    while True:
+
+        r=requests.get(
+            url,
+            headers=HEADNOCO,
+            params={"limit":200}
+        )
+
+        rows=r.json()["list"]
+
+        if not rows:
+            break
+
+        for row in rows:
+
+            requests.delete(
+                f"{url}/{row['Id']}",
+                headers=HEADNOCO
+            )
+
+
 def insert_batch(rows):
 
     url=f"{NOCODB}/api/v2/tables/{TABLE}/records"
@@ -51,7 +78,11 @@ def insert_batch(rows):
     )
 
     if r.status_code not in [200,201]:
+
         print("INSERT ERROR",r.text)
+
+
+clear_table()
 
 
 offset=0
@@ -94,8 +125,11 @@ while True:
 
 
 if buffer:
+
     insert_batch(buffer)
+
     total+=len(buffer)
 
-print("TOTAL INSERTED:",total)
+
+print("TOTAL STOCK:",total)
 print("STOCK SYNC DONE")
