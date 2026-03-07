@@ -2,7 +2,7 @@ import requests
 import os
 import time
 
-print("SYNC STOCK START")
+print("SYNC PRICES START")
 
 BASE = "https://api.bsale.io/v1"
 NOCODB = "https://db.quillotana.cl"
@@ -18,7 +18,8 @@ HEADNOCO = {
 }
 
 LIMIT = 50
-TABLE = "mxs2lyz86cnxd23"
+
+TABLE_PRICES = "mcby3npgc3ig042"
 
 
 def api(url, params=None):
@@ -37,15 +38,15 @@ def api(url, params=None):
         return r.json()
 
 
-def upsert_stock(variant_id, office_id, available, reserved):
+def upsert_price(variant_id, price_list_id, net, gross):
 
-    url = f"{NOCODB}/api/v2/tables/{TABLE}/records"
+    url = f"{NOCODB}/api/v2/tables/{TABLE_PRICES}/records"
 
     r = requests.get(
         url,
         headers=HEADNOCO,
         params={
-            "where": f"(variant_id,eq,{variant_id})~and(office_id,eq,{office_id})"
+            "where": f"(variant_id,eq,{variant_id})~and(price_list_id,eq,{price_list_id})"
         }
     )
 
@@ -53,9 +54,9 @@ def upsert_stock(variant_id, office_id, available, reserved):
 
     payload = {
         "variant_id": variant_id,
-        "office_id": office_id,
-        "quantity_available": available,
-        "quantity_reserved": reserved
+        "price_list_id": price_list_id,
+        "price_net": net,
+        "price_gross": gross
     }
 
     if data["list"]:
@@ -77,29 +78,35 @@ def upsert_stock(variant_id, office_id, available, reserved):
         )
 
 
-offset = 0
+price_lists = api(f"{BASE}/price_lists.json")["items"]
 
-while True:
+for pl in price_lists:
 
-    j = api(
-        f"{BASE}/stocks.json",
-        {"limit": LIMIT, "offset": offset}
-    )
+    lid = pl["id"]
 
-    items = j.get("items", [])
+    offset = 0
 
-    if not items:
-        break
+    while True:
 
-    for s in items:
-
-        upsert_stock(
-            s["variant"]["id"],
-            s["office"]["id"],
-            s["quantityAvailable"],
-            s["quantityReserved"]
+        j = api(
+            f"{BASE}/price_lists/{lid}/details.json",
+            {"limit": LIMIT, "offset": offset}
         )
 
-    offset += LIMIT
+        items = j.get("items", [])
 
-print("SYNC STOCK DONE")
+        if not items:
+            break
+
+        for d in items:
+
+            upsert_price(
+                d["variant"]["id"],
+                lid,
+                d["variantValue"],
+                d["variantValueWithTaxes"]
+            )
+
+        offset += LIMIT
+
+print("SYNC PRICES DONE")
