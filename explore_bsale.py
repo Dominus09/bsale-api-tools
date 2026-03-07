@@ -9,6 +9,7 @@ print("SYNC PRODUCT TYPES + TAXES")
 # ----------------------------
 
 BSALE_TOKEN = os.getenv("BSALE_TOKEN_Mini")
+
 NOCODB_TOKEN = "R3EhSD8si-WSVdsPxlQVGAfiHRRcDR9cHGHJdBJL"
 NOCODB_URL = "https://db.quillotana.cl"
 BASE_BSALE = "https://api.bsale.io/v1"
@@ -23,22 +24,28 @@ headers_noco = {
 }
 
 # ----------------------------
-# TABLE IDS
+# TABLE IDs
 # ----------------------------
 
 TABLE_PRODUCTS = "meke3fsng90uspe"
 TABLE_PRODUCT_TYPES = "mcir9ile6id3813"
-TABLE_TAXES = "mary3rk9y5rwviu"
 
 LIMIT = 50
 
+
 # ----------------------------
-# HELPERS
+# API HELPERS
 # ----------------------------
 
 def bsale_get(url, params=None):
+
     r = requests.get(url, headers=headers_bsale, params=params)
+
+    if r.status_code != 200:
+        print("BSALE ERROR:", r.text)
+
     r.raise_for_status()
+
     return r.json()
 
 
@@ -71,8 +78,13 @@ def insert_noco(table_id, payload):
 
     r = requests.post(url, json=payload, headers=headers_noco)
 
-    if r.status_code not in [200, 201]:
-        print("INSERT ERROR:", r.text)
+    if r.status_code not in [200,201]:
+
+        print("INSERT ERROR:", r.status_code, r.text)
+
+    else:
+
+        return r.json()
 
 
 # ----------------------------
@@ -106,9 +118,11 @@ product_types = fetch_all("product_types.json")
 for pt in product_types:
 
     insert_noco(TABLE_PRODUCT_TYPES, {
+
         "bsale_id": pt["id"],
         "name": pt["name"],
         "state": pt["state"]
+
     })
 
 print("PRODUCT TYPES:", len(product_types))
@@ -122,80 +136,81 @@ print("SYNC PRODUCTS")
 
 products = fetch_all("products.json")
 
+counter = 0
+
 for p in products:
 
     product_id = p["id"]
 
-    # ----------------------------
     # PRODUCT TYPE
-    # ----------------------------
 
     product_type_id = None
 
     if p.get("product_type"):
         product_type_id = p["product_type"]["id"]
 
-    # ----------------------------
     # TAXES
-    # ----------------------------
-# ----------------------------
-# TAXES
-# ----------------------------
 
-tax_ids = []
-tax_names = []
-tax_factor = 1
+    tax_ids = []
+    tax_names = []
+    tax_factor = 1
 
-product_taxes = p.get("product_taxes")
+    product_taxes = p.get("product_taxes")
 
-try:
+    try:
 
-    # CASO 1: lista directa
-    if isinstance(product_taxes, list):
+        if isinstance(product_taxes, list):
 
-        tax_items = product_taxes
+            tax_items = product_taxes
 
-    # CASO 2: href (lo más común en Bsale)
-    elif isinstance(product_taxes, dict) and "href" in product_taxes:
+        elif isinstance(product_taxes, dict) and "href" in product_taxes:
 
-        tax_data = bsale_get(product_taxes["href"])
-        tax_items = tax_data.get("items", [])
+            tax_data = bsale_get(product_taxes["href"])
 
-    else:
-        tax_items = []
+            tax_items = tax_data.get("items", [])
 
-    # procesar impuestos
-    for item in tax_items:
+        else:
 
-        tax_id = item["tax"]["id"]
+            tax_items = []
 
-        tax_ids.append(tax_id)
+        for item in tax_items:
 
-        if tax_id in tax_map:
+            tax_id = item["tax"]["id"]
 
-            tax_names.append(tax_map[tax_id]["name"])
+            tax_ids.append(tax_id)
 
-            tax_factor *= 1 + (tax_map[tax_id]["percentage"] / 100)
+            if tax_id in tax_map:
 
-except Exception as e:
+                tax_names.append(tax_map[tax_id]["name"])
 
-    print("TAX ERROR PRODUCT:", product_id, e)
+                tax_factor *= 1 + (tax_map[tax_id]["percentage"] / 100)
 
+    except Exception as e:
 
-    # ----------------------------
+        print("TAX ERROR PRODUCT:", product_id, e)
+
     # INSERT PRODUCT
-    # ----------------------------
 
     insert_noco(TABLE_PRODUCTS, {
 
         "bsale_id": product_id,
-        "name": p["name"],
+        "name": p.get("name"),
+        "classification": p.get("classification"),
+        "brand": p.get("brand"),
+
         "product_type_id": product_type_id,
+
         "tax_ids_json": json.dumps(tax_ids),
         "tax_names_json": json.dumps(tax_names),
         "tax_factor": tax_factor
 
     })
+
+    counter += 1
+
+    if counter % 100 == 0:
+
+        print("PRODUCTS PROGRESS:", counter)
 
 
 print("PRODUCTS:", len(products))
