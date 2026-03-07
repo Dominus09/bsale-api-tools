@@ -4,35 +4,36 @@ import time
 
 print("FAST STOCK SYNC")
 
-BASE="https://api.bsale.io/v1"
-NOCODB="https://db.quillotana.cl"
+BASE = "https://api.bsale.io/v1"
+NOCODB = "https://db.quillotana.cl"
 
-TOKEN=os.getenv("BSALE_TOKEN_Mini")
-NOCOTOKEN=os.getenv("NocoDB_token")
+TOKEN = os.getenv("BSALE_TOKEN_Mini")
+NOCOTOKEN = os.getenv("NocoDB_token")
 
-HEAD={"access_token":TOKEN}
-
-HEADNOCO={
-"xc-token":NOCOTOKEN,
-"Content-Type":"application/json"
+HEAD = {
+    "access_token": TOKEN
 }
 
-TABLE="mxs2lyz86cnxd23"
+HEADNOCO = {
+    "xc-token": NOCOTOKEN,
+    "Content-Type": "application/json"
+}
 
-LIMIT=50
-BATCH=100
+TABLE = "mxs2lyz86cnxd23"
+
+LIMIT = 50
+BATCH = 100
 
 
-def api(url,params=None):
+def api(url, params=None):
 
     while True:
 
-        r=requests.get(url,headers=HEAD,params=params)
+        r = requests.get(url, headers=HEAD, params=params)
 
-        if r.status_code==429:
-
-            retry=int(r.json().get("retry_after",60))
-            print("RATE LIMIT",retry)
+        if r.status_code == 429:
+            retry = int(r.json().get("retry_after", 60))
+            print("RATE LIMIT", retry)
             time.sleep(retry)
             continue
 
@@ -40,60 +41,53 @@ def api(url,params=None):
         return r.json()
 
 
-
-
-  def clear_table():
+def clear_table():
 
     print("TRUNCATE STOCK TABLE")
 
-    url=f"{NOCODB}/api/v2/tables/{TABLE}/truncate"
+    url = f"{NOCODB}/api/v2/tables/{TABLE}/truncate"
 
-    r=requests.delete(
+    r = requests.delete(
         url,
         headers=HEADNOCO
     )
 
-    if r.status_code not in [200,201]:
-
+    if r.status_code not in [200, 201]:
         print("TRUNCATE ERROR", r.text)
-
     else:
-
         print("TABLE CLEARED")
-            
 
 
 def insert_batch(rows):
 
-    url=f"{NOCODB}/api/v2/tables/{TABLE}/records"
+    url = f"{NOCODB}/api/v2/tables/{TABLE}/records"
 
-    r=requests.post(
+    r = requests.post(
         url,
         json=rows,
         headers=HEADNOCO
     )
 
-    if r.status_code not in [200,201]:
+    if r.status_code not in [200, 201]:
+        print("INSERT ERROR", r.text)
 
-        print("INSERT ERROR",r.text)
 
-
+# limpiar tabla
 clear_table()
 
-
-offset=0
-buffer=[]
-total=0
+offset = 0
+buffer = []
+total = 0
 
 
 while True:
 
-    j=api(
+    j = api(
         f"{BASE}/stocks.json",
-        {"limit":LIMIT,"offset":offset}
+        {"limit": LIMIT, "offset": offset}
     )
 
-    items=j.get("items",[])
+    items = j.get("items", [])
 
     if not items:
         break
@@ -101,31 +95,31 @@ while True:
     for s in items:
 
         buffer.append({
-            "variant_id":s["variant"]["id"],
-            "office_id":s["office"]["id"],
-            "quantity_available":s["quantityAvailable"],
-            "quantity_reserved":s["quantityReserved"]
+            "variant_id": s["variant"]["id"],
+            "office_id": s["office"]["id"],
+            "quantity_available": s["quantityAvailable"],
+            "quantity_reserved": s["quantityReserved"]
         })
 
-        if len(buffer)>=BATCH:
+        if len(buffer) >= BATCH:
 
             insert_batch(buffer)
 
-            total+=len(buffer)
+            total += len(buffer)
 
-            print("INSERTED",total)
+            print("INSERTED", total)
 
-            buffer=[]
+            buffer = []
 
-    offset+=LIMIT
+    offset += LIMIT
 
 
 if buffer:
 
     insert_batch(buffer)
 
-    total+=len(buffer)
+    total += len(buffer)
 
 
-print("TOTAL STOCK:",total)
+print("TOTAL STOCK:", total)
 print("STOCK SYNC DONE")
