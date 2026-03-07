@@ -4,7 +4,6 @@ import json
 
 print("SYNC PRODUCT TYPES + TAXES")
 
-# CONFIG
 BSALE_TOKEN = os.getenv("BSALE_TOKEN_Mini")
 NOCODB_TOKEN = "R3EhSD8si-WSVdsPxlQVGAfiHRRcDR9cHGHJdBJL"
 NOCODB_URL = "https://db.quillotana.cl"
@@ -19,17 +18,12 @@ headers_noco = {
     "Content-Type": "application/json"
 }
 
-# TABLE IDs
 TABLE_PRODUCTS = "meke3fsng90uspe"
-TABLE_PRODUCT_TYPES = "vwz6ecoxd9543brk"
+TABLE_PRODUCT_TYPES = "mcir9ile6id3813"
 TABLE_TAXES = "mary3rk9y5rwviu"
 
 LIMIT = 50
 
-
-# -------------------------
-# helpers
-# -------------------------
 
 def bsale_get(url, params=None):
     r = requests.get(url, headers=headers_bsale, params=params)
@@ -42,12 +36,11 @@ def fetch_all(endpoint):
     results = []
 
     while True:
-        url = f"{BASE_BSALE}/{endpoint}"
 
-        data = bsale_get(url, {
-            "limit": LIMIT,
-            "offset": offset
-        })
+        data = bsale_get(
+            f"{BASE_BSALE}/{endpoint}",
+            {"limit": LIMIT, "offset": offset}
+        )
 
         items = data.get("items", [])
 
@@ -64,18 +57,14 @@ def insert_noco(table_id, payload):
 
     url = f"{NOCODB_URL}/api/v2/tables/{table_id}/records"
 
-    r = requests.post(
-        url,
-        json=payload,
-        headers=headers_noco
-    )
+    r = requests.post(url, json=payload, headers=headers_noco)
 
     if r.status_code not in [200, 201]:
         print("INSERT ERROR", r.text)
 
 
 # -------------------------
-# TAXES MAP
+# LOAD TAXES
 # -------------------------
 
 print("LOADING TAXES")
@@ -85,6 +74,7 @@ taxes = fetch_all("taxes.json")
 tax_map = {}
 
 for t in taxes:
+
     tax_map[t["id"]] = {
         "name": t["name"],
         "percentage": t["percentage"]
@@ -124,23 +114,20 @@ for p in products:
 
     product_id = p["id"]
 
-    # PRODUCT TYPE
+    # product type
     product_type_id = None
+
     if p.get("product_type"):
         product_type_id = p["product_type"]["id"]
 
-    # PRODUCT TAXES
-    tax_url = f"{BASE_BSALE}/products/{product_id}/taxes.json"
-
-    tax_data = bsale_get(tax_url)
-
+    # taxes
     tax_ids = []
     tax_names = []
     tax_factor = 1
 
-    for item in tax_data.get("items", []):
+    for pt in p.get("product_taxes", []):
 
-        tax_id = item["tax"]["id"]
+        tax_id = pt["tax"]["id"]
 
         tax_ids.append(tax_id)
 
