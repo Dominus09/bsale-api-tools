@@ -2,7 +2,7 @@ import requests
 import os
 import time
 
-print("FAST STOCK SYNC")
+print("STOCK UPSERT FAST")
 
 # -----------------------------
 # CONFIG
@@ -16,8 +16,9 @@ NOCODB_TOKEN = os.getenv("NocoDB_token")
 
 TABLE = "mxs2lyz86cnxd23"
 
-LIMIT = 50
-BATCH = 100
+LIMIT_BSALE = 50
+LIMIT_NOCO = 200
+BATCH_INSERT = 100
 
 HEAD_BSALE = {
     "access_token": BSALE_TOKEN
@@ -29,14 +30,12 @@ HEAD_NOCO = {
 }
 
 # -----------------------------
-# API HELPER
+# HELPERS
 # -----------------------------
 
 def bsale_get(url, params=None):
-
     while True:
-
-        r = requests.get(url, headers=HEAD_BSALE, params=params)
+        r = requests.get(url, headers=HEAD_BSALE, params=params, timeout=90)
 
         if r.status_code == 429:
             retry = int(r.json().get("retry_after", 60))
@@ -48,49 +47,65 @@ def bsale_get(url, params=None):
         return r.json()
 
 
+def noco_get(url, params=None):
+    r = requests.get(url, headers=HEAD_NOCO, params=params, timeout=90)
+    r.raise_for_status()
+    return r.json()
+
+
+def noco_post(url, payload):
+    r = requests.post(url, headers=HEAD_NOCO, json=payload, timeout=90)
+    if r.status_code not in [200, 201]:
+        print("POST ERROR", r.status_code, r.text)
+    return r
+
+
+def noco_patch(url, payload):
+    r = requests.patch(url, headers=HEAD_NOCO, json=payload, timeout=90)
+    if r.status_code not in [200, 201]:
+        print("PATCH ERROR", r.status_code, r.text)
+    return r
+
+
 # -----------------------------
-# CLEAR TABLE (bulk delete)
+# CARGAR STOCK EXISTENTE DE NOCO UNA SOLA VEZ
 # -----------------------------
 
-def clear_table():
-
-    print("CLEAR STOCK TABLE")
+def load_existing_stock():
+    print("LOADING EXISTING STOCK FROM NOCO")
 
     url = f"{NOCODB}/api/v2/tables/{TABLE}/records"
-
-    total_deleted = 0
+    offset = 0
+    existing = {}
 
     while True:
-
-        r = requests.get(
+        data = noco_get(
             url,
-            headers=HEAD_NOCO,
-            params={"limit": 200}
+            params={"limit": LIMIT_NOCO, "offset": offset}
         )
 
-        rows = r.json().get("list", [])
+        rows = data.get("list", [])
 
         if not rows:
             break
 
-        ids = [row["Id"] for row in rows]
+        for row in rows:
+            variant_id = row.get("variant_id")
+            office_id = row.get("office_id")
+            row_id = row.get("Id")
 
-        delete_url = f"{url}/bulk"
+            if variant_id is not None and office_id is not None and row_id is not None:
+                key = f"{variant_id}-{office_id}"
+                existing[key] = {
+                    "Id": row_id,
+                    "quantity_available": row.get("quantity_available"),
+                    "quantity_reserved": row.get("quantity_reserved")
+                }
 
-        r = requests.delete(
-            delete_url,
-            headers=HEAD_NOCO,
-            json={"ids": ids}
-        )
+        offset += LIMIT_NOCO
 
-        if r.status_code not in [200, 201]:
-            print("DELETE ERROR", r.text)
-            break
-
-        total_deleted += len(ids)
-        print("DELETED", total_deleted)
-
-    print("TABLE CLEARED")
+    print("EXISTING STOCK ROWS:", len(existing))
+    return existing
 
 
 # -----------------------------
@@ -98,34 +113,29 @@ def clear_table():
 # -----------------------------
 
 def insert_batch(rows):
+    if not rows:
+        return
 
     url = f"{NOCODB}/api/v2/tables/{TABLE}/records"
-
-    r = requests.post(
-        url,
-        headers=HEAD_NOCO,
-        json=rows
-    )
-
-    if r.status_code not in [200, 201]:
-        print("INSERT ERROR", r.text)
+    noco_post(url, rows)
 
 
 # -----------------------------
 # MAIN
 # -----------------------------
 
-clear_table()
+existing_map = load_existing_stock()
 
 offset = 0
-buffer = []
-total_inserted = 0
+insert_buffer = []
+inserted = 0
+updated = 0
+processed = 0
 
 while True:
-
     data = bsale_get(
         f"{BASE}/stocks.json",
-        {"limit": LIMIT, "offset": offset}
+        {"limit": LIMIT_BSALE, "offset": offset}
     )
 
     items = data.get("items", [])
@@ -134,34 +144,54 @@ while True:
         break
 
     for s in items:
+        variant_id = s["variant"]["id"]
+        office_id = s["office"]["id"]
+        quantity_available = s["quantityAvailable"]
+        quantity_reserved = s["quantityReserved"]
 
-        buffer.append({
-            "variant_id": s["variant"]["id"],
-            "office_id": s["office"]["id"],
-            "quantity_available": s["quantityAvailable"],
-            "quantity_reserved": s["quantityReserved"]
-        })
+        key = f"{variant_id}-{office_id}"
 
-        if len(buffer) >= BATCH:
+        payload = {
+            "variant_id": variant_id,
+            "office_id": office_id,
+            "quantity_available": quantity_available,
+            "quantity_reserved": quantity_reserved
+        }
 
-            insert_batch(buffer)
+        if key in existing_map:
+            current = existing_map[key]
 
-            total_inserted += len(buffer)
-            print("INSERTED", total_inserted)
+            # solo actualiza si cambió algo
+            if (
+                current.get("quantity_available") != quantity_available
+                or current.get("quantity_reserved") != quantity_reserved
+            ):
+                row_id = current["Id"]
+                noco_patch(
+                    f"{NOCODB}/api/v2/tables/{TABLE}/records/{row_id}",
+                    payload
+                )
+                updated += 1
+        else:
+            insert_buffer.append(payload)
 
-            buffer = []
+            if len(insert_buffer) >= BATCH_INSERT:
+                insert_batch(insert_buffer)
+                inserted += len(insert_buffer)
+                print("INSERTED", inserted, "| UPDATED", updated)
+                insert_buffer = []
 
-    offset += LIMIT
+        processed += 1
 
+    offset += LIMIT_BSALE
+    print("PROCESSED", processed, "| INSERTED", inserted, "| UPDATED", updated)
 
-# insertar resto
+# insertar remanente
+if insert_buffer:
+    insert_batch(insert_buffer)
+    inserted += len(insert_buffer)
 
-if buffer:
-
-    insert_batch(buffer)
-
-    total_inserted += len(buffer)
-
-
-print("TOTAL STOCK:", total_inserted)
-print("STOCK SYNC DONE")
+print("FINAL PROCESSED:", processed)
+print("FINAL INSERTED:", inserted)
+print("FINAL UPDATED:", updated)
+print("STOCK UPSERT DONE")
