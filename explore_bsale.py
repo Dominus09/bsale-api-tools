@@ -138,40 +138,49 @@ for p in products:
     # ----------------------------
     # TAXES
     # ----------------------------
+# ----------------------------
+# TAXES
+# ----------------------------
 
-    tax_ids = []
-    tax_names = []
-    tax_factor = 1
+tax_ids = []
+tax_names = []
+tax_factor = 1
 
-    product_taxes = p.get("product_taxes")
+product_taxes = p.get("product_taxes")
 
-    # caso lista directa
+try:
+
+    # CASO 1: lista directa
     if isinstance(product_taxes, list):
 
-        for pt in product_taxes:
+        tax_items = product_taxes
 
-            tax_id = pt["tax"]["id"]
-
-            tax_ids.append(tax_id)
-
-            if tax_id in tax_map:
-                tax_names.append(tax_map[tax_id]["name"])
-                tax_factor *= 1 + (tax_map[tax_id]["percentage"] / 100)
-
-    # caso href
+    # CASO 2: href (lo más común en Bsale)
     elif isinstance(product_taxes, dict) and "href" in product_taxes:
 
         tax_data = bsale_get(product_taxes["href"])
+        tax_items = tax_data.get("items", [])
 
-        for pt in tax_data.get("items", []):
+    else:
+        tax_items = []
 
-            tax_id = pt["tax"]["id"]
+    # procesar impuestos
+    for item in tax_items:
 
-            tax_ids.append(tax_id)
+        tax_id = item["tax"]["id"]
 
-            if tax_id in tax_map:
-                tax_names.append(tax_map[tax_id]["name"])
-                tax_factor *= 1 + (tax_map[tax_id]["percentage"] / 100)
+        tax_ids.append(tax_id)
+
+        if tax_id in tax_map:
+
+            tax_names.append(tax_map[tax_id]["name"])
+
+            tax_factor *= 1 + (tax_map[tax_id]["percentage"] / 100)
+
+except Exception as e:
+
+    print("TAX ERROR PRODUCT:", product_id, e)
+
 
     # ----------------------------
     # INSERT PRODUCT
