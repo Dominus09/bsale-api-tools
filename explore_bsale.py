@@ -2,7 +2,7 @@ import requests
 import os
 import json
 
-print("SYNC PRODUCT TYPES + TAXES")
+print("TEST PRODUCT TAXES")
 
 # ----------------------------
 # CONFIG
@@ -10,9 +10,12 @@ print("SYNC PRODUCT TYPES + TAXES")
 
 BSALE_TOKEN = os.getenv("BSALE_TOKEN_Mini")
 
-NOCODB_TOKEN = "R3EhSD8si-WSVdsPxlQVGAfiHRRcDR9cHGHJdBJL"
+NOCODB_TOKEN = os.getenv("NocoDB_token")
 NOCODB_URL = "https://db.quillotana.cl"
+
 BASE_BSALE = "https://api.bsale.io/v1"
+
+TABLE_TEST = "m2u5fw9fhgu2pj8"
 
 headers_bsale = {
     "access_token": BSALE_TOKEN
@@ -23,18 +26,11 @@ headers_noco = {
     "Content-Type": "application/json"
 }
 
-# ----------------------------
-# TABLE IDs
-# ----------------------------
-
-TABLE_PRODUCTS = "meke3fsng90uspe"
-TABLE_PRODUCT_TYPES = "mcir9ile6id3813"
-
 LIMIT = 50
 
 
 # ----------------------------
-# API HELPERS
+# HELPERS
 # ----------------------------
 
 def bsale_get(url, params=None):
@@ -49,170 +45,70 @@ def bsale_get(url, params=None):
     return r.json()
 
 
-def fetch_all(endpoint):
+def insert_test(payload):
 
-    offset = 0
-    results = []
-
-    while True:
-
-        data = bsale_get(
-            f"{BASE_BSALE}/{endpoint}",
-            {"limit": LIMIT, "offset": offset}
-        )
-
-        items = data.get("items", [])
-
-        if not items:
-            break
-
-        results.extend(items)
-        offset += LIMIT
-
-    return results
-
-
-def insert_noco(table_id, payload):
-
-    url = f"{NOCODB_URL}/api/v2/tables/{table_id}/records"
+    url = f"{NOCODB_URL}/api/v2/tables/{TABLE_TEST}/records"
 
     r = requests.post(url, json=payload, headers=headers_noco)
 
     if r.status_code not in [200,201]:
-
-        print("INSERT ERROR:", r.status_code, r.text)
-
-    else:
-
-        return r.json()
+        print("INSERT ERROR:", r.text)
 
 
 # ----------------------------
-# LOAD TAXES
+# GET PRODUCTS
 # ----------------------------
 
-print("LOADING TAXES")
+print("LOADING PRODUCTS")
 
-taxes = fetch_all("taxes.json")
+products = bsale_get(
+    f"{BASE_BSALE}/products.json",
+    {"limit": 10, "offset": 0}
+)
 
-tax_map = {}
+products = products.get("items", [])
 
-for t in taxes:
-
-    tax_map[t["id"]] = {
-        "name": t["name"],
-        "percentage": t["percentage"]
-    }
-
-print("TAXES:", len(tax_map))
+print("PRODUCTS FOUND:", len(products))
 
 
 # ----------------------------
-# PRODUCT TYPES
+# TEST TAXES
 # ----------------------------
-
-print("SYNC PRODUCT TYPES")
-
-product_types = fetch_all("product_types.json")
-
-for pt in product_types:
-
-    insert_noco(TABLE_PRODUCT_TYPES, {
-
-        "bsale_id": pt["id"],
-        "name": pt["name"],
-        "state": pt["state"]
-
-    })
-
-print("PRODUCT TYPES:", len(product_types))
-
-
-# ----------------------------
-# PRODUCTS
-# ----------------------------
-
-print("SYNC PRODUCTS")
-
-products = fetch_all("products.json")
-
-counter = 0
 
 for p in products:
 
     product_id = p["id"]
 
-    # PRODUCT TYPE
-
-    product_type_id = None
-
-    if p.get("product_type"):
-        product_type_id = p["product_type"]["id"]
-
-    # TAXES
-
-    tax_ids = []
-    tax_names = []
-    tax_factor = 1
+    print("PRODUCT:", product_id)
 
     product_taxes = p.get("product_taxes")
 
-    try:
+    if isinstance(product_taxes, dict) and "href" in product_taxes:
 
-        if isinstance(product_taxes, list):
+        tax_url = product_taxes["href"]
 
-            tax_items = product_taxes
+        print("TAX URL:", tax_url)
 
-        elif isinstance(product_taxes, dict) and "href" in product_taxes:
+        try:
 
-            tax_data = bsale_get(product_taxes["href"])
+            tax_data = bsale_get(tax_url)
 
-            tax_items = tax_data.get("items", [])
+            print("TAX RESPONSE:", tax_data)
 
-        else:
+            insert_test({
 
-            tax_items = []
+                "product_id": product_id,
+                "tax_url": tax_url,
+                "tax_response_json": json.dumps(tax_data)
 
-        for item in tax_items:
+            })
 
-            tax_id = item["tax"]["id"]
+        except Exception as e:
 
-            tax_ids.append(tax_id)
+            print("TAX ERROR:", e)
 
-            if tax_id in tax_map:
+    else:
 
-                tax_names.append(tax_map[tax_id]["name"])
+        print("NO TAX LINK")
 
-                tax_factor *= 1 + (tax_map[tax_id]["percentage"] / 100)
-
-    except Exception as e:
-
-        print("TAX ERROR PRODUCT:", product_id, e)
-
-    # INSERT PRODUCT
-
-    insert_noco(TABLE_PRODUCTS, {
-
-        "bsale_id": product_id,
-        "name": p.get("name"),
-        "classification": p.get("classification"),
-        "brand": p.get("brand"),
-
-        "product_type_id": product_type_id,
-
-        "tax_ids_json": json.dumps(tax_ids),
-        "tax_names_json": json.dumps(tax_names),
-        "tax_factor": tax_factor
-
-    })
-
-    counter += 1
-
-    if counter % 100 == 0:
-
-        print("PRODUCTS PROGRESS:", counter)
-
-
-print("PRODUCTS:", len(products))
-
-print("SYNC COMPLETADO")
+print("TEST COMPLETADO")
