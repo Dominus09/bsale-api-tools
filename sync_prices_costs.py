@@ -1,86 +1,75 @@
 import requests
 import os
-import time
+from datetime import datetime
 
-print("SYNC PRICES + COSTS")
+print("SYNC FAST COST + PRICES")
 
-BASE="https://api.bsale.io/v1"
-NOCODB="https://db.quillotana.cl"
+BASE = "https://api.bsale.io/v1"
+NOCODB = "https://db.quillotana.cl"
 
-BSALE_TOKEN=os.getenv("BSALE_TOKEN_Mini")
-NOCODB_TOKEN=os.getenv("NocoDB_token")
+BSALE_TOKEN = os.getenv("BSALE_TOKEN_Mini")
+NOCODB_TOKEN = os.getenv("NocoDB_token")
 
-HEAD_BSALE={"access_token":BSALE_TOKEN}
+HEAD_BSALE = {"access_token": BSALE_TOKEN}
+HEAD_NOCO = {"xc-token": NOCODB_TOKEN,"Content-Type":"application/json"}
 
-HEAD_NOCO={
-    "xc-token":NOCODB_TOKEN,
-    "Content-Type":"application/json"
-}
+LIMIT = 50
 
-TABLE_PRICES="mcby3npgc3ig042"
+TABLE_VARIANTS="msd4vvijzk9pre9"
+TABLE_PRODUCTS="meke3fsng90uspe"
 TABLE_COSTS="mdjjvdlwev2o76u"
+TABLE_PRICES="mcby3npgc3ig042"
 
-LIMIT=50
-
-
-# ------------------
-# HELPERS
-# ------------------
+# --------------------------------------------------
 
 def bsale_get(url,params=None):
 
-    while True:
+    r=requests.get(url,headers=HEAD_BSALE,params=params)
 
-        r=requests.get(url,headers=HEAD_BSALE,params=params)
+    if r.status_code==429:
+        print("RATE LIMIT")
+        return None
 
-        if r.status_code==429:
-            retry=int(r.json().get("retry_after",60))
-            print("RATE LIMIT",retry)
-            time.sleep(retry)
-            continue
+    r.raise_for_status()
+    return r.json()
 
-        r.raise_for_status()
-        return r.json()
+# --------------------------------------------------
 
-
-def noco_load_map(table,key_fields):
+def noco_get_all(table):
 
     url=f"{NOCODB}/api/v2/tables/{table}/records"
 
     offset=0
-    mapping={}
+    rows=[]
 
     while True:
 
-        r=requests.get(
-            url,
-            headers=HEAD_NOCO,
-            params={"limit":200,"offset":offset}
-        )
-
+        r=requests.get(url,headers=HEAD_NOCO,params={"limit":200,"offset":offset})
         data=r.json()
-        rows=data.get("list",[])
 
-        if not rows:
+        batch=data.get("list",[])
+
+        if not batch:
             break
 
-        for row in rows:
-
-            key=tuple(row[k] for k in key_fields)
-
-            mapping[key]=row["Id"]
+        rows.extend(batch)
 
         offset+=200
 
-    return mapping
+    return rows
 
+# --------------------------------------------------
 
 def insert(table,payload):
 
     url=f"{NOCODB}/api/v2/tables/{table}/records"
 
-    requests.post(url,headers=HEAD_NOCO,json=payload)
+    r=requests.post(url,headers=HEAD_NOCO,json=payload)
 
+    if r.status_code not in [200,201]:
+        print("INSERT ERROR",r.text)
+
+# --------------------------------------------------
 
 def update(table,row_id,payload):
 
@@ -88,24 +77,52 @@ def update(table,row_id,payload):
 
     payload["Id"]=row_id
 
-    requests.patch(url,headers=HEAD_NOCO,json=payload)
+    r=requests.patch(url,headers=HEAD_NOCO,json=payload)
 
+    if r.status_code not in [200,201]:
+        print("UPDATE ERROR",r.text)
 
-# ------------------
-# VARIANTS
-# ------------------
+# --------------------------------------------------
+# LOAD PRODUCTS TAX FACTOR
+# --------------------------------------------------
+
+print("LOAD PRODUCTS")
+
+products=noco_get_all(TABLE_PRODUCTS)
+
+tax_map={}
+
+for p in products:
+
+    tax_map[p["bsale_id"]]=p.get("tax_factor",1)
+
+# --------------------------------------------------
+# LOAD EXISTING COSTS
+# --------------------------------------------------
+
+print("LOAD EXISTING COSTS")
+
+cost_rows=noco_get_all(TABLE_COSTS)
+
+cost_map={}
+
+for r in cost_rows:
+
+    cost_map[r["variant_id"]]=r["Id"]
+
+# --------------------------------------------------
+# LOAD VARIANTS
+# --------------------------------------------------
 
 print("LOAD VARIANTS")
 
 variants=[]
+
 offset=0
 
 while True:
 
-    data=bsale_get(
-        f"{BASE}/variants.json",
-        {"limit":LIMIT,"offset":offset}
-    )
+    data=bsale_get(f"{BASE}/variants.json",{"limit":LIMIT,"offset":offset})
 
     items=data.get("items",[])
 
@@ -118,87 +135,82 @@ while True:
 
 print("VARIANTS",len(variants))
 
-
-# ------------------
-# EXISTING MAPS
-# ------------------
-
-print("LOAD NOCO MAPS")
-
-price_map=noco_load_map(TABLE_PRICES,["variant_id","price_list_id"])
-cost_map=noco_load_map(TABLE_COSTS,["variant_id"])
-
-
-# ------------------
-# COSTS
-# ------------------
-
-print("SYNC COSTS")
+# --------------------------------------------------
+# COST AVERAGE
+# --------------------------------------------------
 
 for v in variants:
 
     variant_id=int(v["id"])
 
-    cost=bsale_get(f"{BASE}/variants/{variant_id}/costs.json")
+    cost_data=bsale_get(f"{BASE}/variants/{variant_id}/costs.json")
+
+    if not cost_data:
+        continue
+
+    avg_cost=cost_data.get("averageCost")
+
+    product_id=int(v["product"]["id"])
+
+    tax_factor=tax_map.get(product_id,1)
+
+    cost_gross=None
+
+    if avg_cost:
+        cost_gross=avg_cost*tax_factor
 
     payload={
         "variant_id":variant_id,
-        "average_cost_net":cost.get("averageCost"),
-        "total_cost_net":cost.get("totalCost")
+        "average_cost_net":avg_cost,
+        "average_cost_gross":cost_gross,
+        "tax_factor":tax_factor,
+        "last_update":datetime.utcnow().isoformat()
     }
 
-    key=(variant_id,)
+    if variant_id in cost_map:
 
-    if key in cost_map:
-        update(TABLE_COSTS,cost_map[key],payload)
+        update(TABLE_COSTS,cost_map[variant_id],payload)
+
     else:
+
         insert(TABLE_COSTS,payload)
 
+print("COSTS DONE")
 
-# ------------------
+# --------------------------------------------------
 # PRICES
-# ------------------
+# --------------------------------------------------
 
 print("SYNC PRICES")
 
-lists=bsale_get(f"{BASE}/price_lists.json")["items"]
+price_lists=bsale_get(f"{BASE}/price_lists.json")["items"]
 
-for pl in lists:
+for pl in price_lists:
 
-    price_list_id=int(pl["id"])
+    pl_id=pl["id"]
 
     offset=0
 
     while True:
 
-        data=bsale_get(
-            f"{BASE}/price_lists/{price_list_id}/details.json",
-            {"limit":LIMIT,"offset":offset}
-        )
+        data=bsale_get(f"{BASE}/price_lists/{pl_id}/details.json",{"limit":LIMIT,"offset":offset})
 
         items=data.get("items",[])
 
         if not items:
             break
 
-        for p in items:
+        for d in items:
 
-            variant_id=int(p["variant"]["id"])
-
-            payload={
-                "variant_id":variant_id,
-                "price_list_id":price_list_id,
-                "price_net":p["variantValue"],
-                "price_gross":p["variantValueWithTaxes"]
-            }
-
-            key=(variant_id,price_list_id)
-
-            if key in price_map:
-                update(TABLE_PRICES,price_map[key],payload)
-            else:
-                insert(TABLE_PRICES,payload)
+            insert(TABLE_PRICES,{
+                "variant_id":d["variant"]["id"],
+                "price_list_id":pl_id,
+                "price_net":d["variantValue"],
+                "price_gross":d["variantValueWithTaxes"]
+            })
 
         offset+=LIMIT
 
 print("PRICES DONE")
+
+print("SYNC COMPLETE")
