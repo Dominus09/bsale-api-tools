@@ -1,254 +1,140 @@
-
 import requests
 import os
-import time
 import json
 
-print("SYNC CATALOG START")
+print("SYNC CATALOG")
 
-BASE="https://api.bsale.io/v1"
-NOCODB="https://db.quillotana.cl"
+BASE = "https://api.bsale.io/v1"
+NOCODB = "https://db.quillotana.cl"
 
-TOKEN=os.getenv("BSALE_TOKEN_Mini")
-NOCOTOKEN=os.getenv("NocoDB_token")
+BSALE_TOKEN = os.getenv("BSALE_TOKEN_Mini")
+NOCODB_TOKEN = os.getenv("NocoDB_token")
 
-LIMIT=50
+HEAD_BSALE = {"access_token": BSALE_TOKEN}
 
-HEAD={"access_token":TOKEN}
-
-HEADNOCO={
-"xc-token":NOCOTOKEN,
-"Content-Type":"application/json"
+HEAD_NOCO = {
+    "xc-token": NOCODB_TOKEN,
+    "Content-Type": "application/json"
 }
 
-TABLE_TAXES="mary3rk9y5rwviu"
-TABLE_PRODUCT_TYPES="mcir9ile6id3813"
-TABLE_PRODUCTS="meke3fsng90uspe"
-TABLE_VARIANTS="msd4vvijzk9pre9"
-TABLE_OFFICES="m878eot7j6fi5v7"
-TABLE_PRICELIST="m8zibme0z28jls6"
+TABLE_PRODUCTS = "meke3fsng90uspe"
+TABLE_PRODUCT_TYPES = "mcir9ile6id3813"
+TABLE_TAXES = "mary3rk9y5rwviu"
+
+LIMIT = 50
 
 
-def api(url,params=None):
+def bsale_get(url, params=None):
 
-    while True:
+    r = requests.get(url, headers=HEAD_BSALE, params=params)
 
-        r=requests.get(url,headers=HEAD,params=params)
+    r.raise_for_status()
 
-        if r.status_code==429:
-            retry=int(r.json().get("retry_after",60))
-            print("RATE LIMIT",retry)
-            time.sleep(retry)
-            continue
-
-        r.raise_for_status()
-        return r.json()
+    return r.json()
 
 
-def fetch(endpoint):
+def insert(table, payload):
 
-    offset=0
-    results=[]
+    url = f"{NOCODB}/api/v2/tables/{table}/records"
 
-    while True:
+    r = requests.post(url, headers=HEAD_NOCO, json=payload)
 
-        j=api(
-        f"{BASE}/{endpoint}",
-        {"limit":LIMIT,"offset":offset}
-        )
-
-        items=j.get("items",[])
-
-        if not items:
-            break
-
-        results.extend(items)
-        offset+=LIMIT
-
-    return results
+    if r.status_code not in [200, 201]:
+        print("INSERT ERROR", r.text)
 
 
-def upsert(table,field,value,payload):
+# -----------------
+# TAXES
+# -----------------
 
-    url=f"{NOCODB}/api/v2/tables/{table}/records"
+print("LOAD TAXES")
 
-    r=requests.get(
-        url,
-        headers=HEADNOCO,
-        params={"where":f"({field},eq,{value})"}
-    )
+taxes = bsale_get(f"{BASE}/taxes.json")
 
-    data=r.json()
+tax_map = {}
 
-    if data["list"]:
+for t in taxes["items"]:
 
-        row=data["list"][0]["Id"]
-
-        requests.patch(
-            f"{url}/{row}",
-            json=payload,
-            headers=HEADNOCO
-        )
-
-    else:
-
-        requests.post(
-            url,
-            json=payload,
-            headers=HEADNOCO
-        )
-
-
-print("SYNC TAXES")
-
-taxes=fetch("taxes.json")
-
-tax_map={}
-
-for t in taxes:
-
-    tax_id=int(t["id"])
-    pct=float(t["percentage"])
-
-    tax_map[tax_id]={
-        "name":t["name"],
-        "percentage":pct
+    tax_map[int(t["id"])] = {
+        "name": t["name"],
+        "percentage": float(t["percentage"])
     }
 
-    upsert(
-        TABLE_TAXES,
-        "bsale_id",
-        tax_id,
-        {
-            "bsale_id":tax_id,
-            "name":t["name"],
-            "percentage":pct
-        }
+    insert(TABLE_TAXES, {
+        "bsale_id": t["id"],
+        "name": t["name"],
+        "percentage": t["percentage"]
+    })
+
+
+# -----------------
+# PRODUCT TYPES
+# -----------------
+
+print("LOAD PRODUCT TYPES")
+
+types = bsale_get(f"{BASE}/product_types.json")
+
+for pt in types["items"]:
+
+    insert(TABLE_PRODUCT_TYPES, {
+        "bsale_id": pt["id"],
+        "name": pt["name"],
+        "state": pt["state"]
+    })
+
+
+# -----------------
+# PRODUCTS
+# -----------------
+
+print("LOAD PRODUCTS")
+
+offset = 0
+
+while True:
+
+    data = bsale_get(
+        f"{BASE}/products.json",
+        {"limit": LIMIT, "offset": offset}
     )
 
+    items = data.get("items", [])
 
-print("SYNC PRODUCT TYPES")
+    if not items:
+        break
 
-for pt in fetch("product_types.json"):
+    for p in items:
 
-    upsert(
-        TABLE_PRODUCT_TYPES,
-        "bsale_id",
-        pt["id"],
-        {
-            "bsale_id":pt["id"],
-            "name":pt["name"],
-            "state":pt["state"]
-        }
-    )
+        tax_ids = []
+        tax_names = []
+        tax_total = 0
 
+        if "product_taxes" in p and "href" in p["product_taxes"]:
 
-print("SYNC PRODUCTS")
+            tax_data = bsale_get(p["product_taxes"]["href"])
 
-products=fetch("products.json")
+            for t in tax_data["items"]:
 
-for p in products:
+                tax_id = int(t["tax"]["id"])
 
-    product_id=p["id"]
-
-    product_type_id=None
-    if p.get("product_type"):
-        product_type_id=p["product_type"]["id"]
-
-    brand=None
-    if isinstance(p.get("brand"),dict):
-        brand=p["brand"].get("name")
-
-    classification=p.get("classification")
-
-    tax_ids=[]
-    tax_names=[]
-    tax_total=0
-
-    if p.get("product_taxes") and "href" in p["product_taxes"]:
-
-        tax_data=api(p["product_taxes"]["href"])
-
-        for item in tax_data.get("items",[]):
-
-            tax_id=int(item["tax"]["id"])
-
-            tax_ids.append(tax_id)
-
-            if tax_id in tax_map:
+                tax_ids.append(tax_id)
 
                 tax_names.append(tax_map[tax_id]["name"])
-                tax_total+=tax_map[tax_id]["percentage"]
 
-    tax_factor=1+(tax_total/100)
+                tax_total += tax_map[tax_id]["percentage"]
 
-    upsert(
-        TABLE_PRODUCTS,
-        "bsale_id",
-        product_id,
-        {
-            "bsale_id":product_id,
-            "name":p["name"],
-            "classification":classification,
-            "brand":brand,
-            "product_type_id":product_type_id,
-            "tax_ids_json":json.dumps(tax_ids),
-            "tax_names_json":json.dumps(tax_names),
-            "tax_factor":round(tax_factor,3)
-        }
-    )
+        tax_factor = 1 + (tax_total / 100)
 
+        insert(TABLE_PRODUCTS, {
+            "bsale_id": p["id"],
+            "name": p["name"],
+            "product_type_id": p["product_type"]["id"] if p.get("product_type") else None,
+            "tax_ids_json": json.dumps(tax_ids),
+            "tax_names_json": json.dumps(tax_names),
+            "tax_factor": round(tax_factor, 3)
+        })
 
-print("SYNC VARIANTS")
+    offset += LIMIT
 
-variants=fetch("variants.json")
-
-for v in variants:
-
-    upsert(
-        TABLE_VARIANTS,
-        "bsale_id",
-        v["id"],
-        {
-            "bsale_id":v["id"],
-            "product_id":v["product"]["id"],
-            "description":v.get("description"),
-            "code":v.get("code"),
-            "bar_code":v.get("barCode"),
-            "state":v.get("state")
-        }
-    )
-
-
-print("SYNC OFFICES")
-
-for o in fetch("offices.json"):
-
-    upsert(
-        TABLE_OFFICES,
-        "bsale_id",
-        o["id"],
-        {
-            "bsale_id":o["id"],
-            "name":o["name"]
-        }
-    )
-
-
-print("SYNC PRICE LISTS")
-
-for p in fetch("price_lists.json"):
-
-    upsert(
-        TABLE_PRICELIST,
-        "bsale_id",
-        p["id"],
-        {
-            "bsale_id":p["id"],
-            "name":p["name"],
-            "description":p.get("description")
-        }
-    )
-
-
-print("SYNC CATALOG DONE")
+print("CATALOG DONE")
