@@ -4,10 +4,6 @@ import time
 
 print("STOCK UPSERT FAST")
 
-# -----------------------------
-# CONFIG
-# -----------------------------
-
 BASE = "https://api.bsale.io/v1"
 NOCODB = "https://db.quillotana.cl"
 
@@ -29,6 +25,7 @@ HEAD_NOCO = {
     "Content-Type": "application/json"
 }
 
+
 # -----------------------------
 # BSALE API
 # -----------------------------
@@ -37,16 +34,17 @@ def bsale_get(url, params=None):
 
     while True:
 
-        r = requests.get(url, headers=HEAD_BSALE, params=params, timeout=90)
+        r = requests.get(url, headers=HEAD_BSALE, params=params)
 
         if r.status_code == 429:
             retry = int(r.json().get("retry_after", 60))
-            print("RATE LIMIT HIT, WAIT", retry)
+            print("RATE LIMIT WAIT", retry)
             time.sleep(retry)
             continue
 
         r.raise_for_status()
         return r.json()
+
 
 # -----------------------------
 # NOCO HELPERS
@@ -54,27 +52,32 @@ def bsale_get(url, params=None):
 
 def noco_get(url, params=None):
 
-    r = requests.get(url, headers=HEAD_NOCO, params=params, timeout=90)
+    r = requests.get(url, headers=HEAD_NOCO, params=params)
     r.raise_for_status()
     return r.json()
 
-def noco_post(url, payload):
 
-    r = requests.post(url, headers=HEAD_NOCO, json=payload, timeout=90)
+def noco_insert(rows):
 
-    if r.status_code not in [200, 201]:
-        print("POST ERROR", r.status_code, r.text)
+    url = f"{NOCODB}/api/v2/tables/{TABLE}/records"
 
-    return r
-
-def noco_patch(url, payload):
-
-    r = requests.put(url, headers=HEAD_NOCO, json=payload, timeout=90)
+    r = requests.post(url, headers=HEAD_NOCO, json=rows)
 
     if r.status_code not in [200, 201]:
-        print("UPDATE ERROR", r.status_code, r.text)
+        print("INSERT ERROR", r.text)
 
-    return r
+
+def noco_update(row_id, payload):
+
+    url = f"{NOCODB}/api/v2/tables/{TABLE}/records"
+
+    payload["Id"] = row_id
+
+    r = requests.patch(url, headers=HEAD_NOCO, json=payload)
+
+    if r.status_code not in [200, 201]:
+        print("UPDATE ERROR", r.text)
+
 
 # -----------------------------
 # LOAD EXISTING STOCK
@@ -111,15 +114,13 @@ def load_existing_stock():
             office_id = row.get("office_id")
             row_id = row.get("Id")
 
-            if variant_id and office_id and row_id:
+            key = f"{variant_id}-{office_id}"
 
-                key = f"{variant_id}-{office_id}"
-
-                existing[key] = {
-                    "Id": row_id,
-                    "quantity_available": row.get("quantity_available"),
-                    "quantity_reserved": row.get("quantity_reserved")
-                }
+            existing[key] = {
+                "Id": row_id,
+                "quantity_available": row.get("quantity_available"),
+                "quantity_reserved": row.get("quantity_reserved")
+            }
 
         offset += LIMIT_NOCO
 
@@ -130,18 +131,6 @@ def load_existing_stock():
 
     return existing
 
-# -----------------------------
-# INSERT BATCH
-# -----------------------------
-
-def insert_batch(rows):
-
-    if not rows:
-        return
-
-    url = f"{NOCODB}/api/v2/tables/{TABLE}/records"
-
-    noco_post(url, rows)
 
 # -----------------------------
 # MAIN
@@ -160,10 +149,7 @@ while True:
 
     data = bsale_get(
         f"{BASE}/stocks.json",
-        {
-            "limit": LIMIT_BSALE,
-            "offset": offset
-        }
+        {"limit": LIMIT_BSALE, "offset": offset}
     )
 
     items = data.get("items", [])
@@ -193,16 +179,11 @@ while True:
             current = existing_map[key]
 
             if (
-                current.get("quantity_available") != quantity_available
-                or current.get("quantity_reserved") != quantity_reserved
+                current["quantity_available"] != quantity_available
+                or current["quantity_reserved"] != quantity_reserved
             ):
 
-                row_id = current["Id"]
-
-                noco_patch(
-                    f"{NOCODB}/api/v2/tables/{TABLE}/records/{row_id}",
-                    payload
-                )
+                noco_update(current["Id"], payload)
 
                 updated += 1
 
@@ -212,7 +193,7 @@ while True:
 
             if len(insert_buffer) >= BATCH_INSERT:
 
-                insert_batch(insert_buffer)
+                noco_insert(insert_buffer)
 
                 inserted += len(insert_buffer)
 
@@ -224,20 +205,12 @@ while True:
 
     offset += LIMIT_BSALE
 
-    print(
-        "PROCESSED",
-        processed,
-        "| INSERTED",
-        inserted,
-        "| UPDATED",
-        updated
-    )
+    print("PROCESSED", processed, "| INSERTED", inserted, "| UPDATED", updated)
 
-# insertar remanente
 
 if insert_buffer:
 
-    insert_batch(insert_buffer)
+    noco_insert(insert_buffer)
 
     inserted += len(insert_buffer)
 
