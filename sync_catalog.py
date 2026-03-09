@@ -21,7 +21,7 @@ TABLE_PRODUCTS = "meke3fsng90uspe"
 TABLE_PRODUCT_TYPES = "mcir9ile6id3813"
 TABLE_TAXES = "mary3rk9y5rwviu"
 TABLE_VARIANTS = "msd4vvijzk9pre9"
-TABLE_COMPANIES = "companies"
+TABLE_COMPANIES = "m27za58sg6ustui"
 
 
 # ----------------------------------------------------
