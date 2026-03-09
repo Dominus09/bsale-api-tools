@@ -12,7 +12,11 @@ BSALE_TOKEN = os.getenv("BSALE_TOKEN_Mini")
 NOCODB_TOKEN = os.getenv("NocoDB_token")
 
 HEAD_BSALE = {"access_token": BSALE_TOKEN}
-HEAD_NOCO = {"xc-token": NOCODB_TOKEN, "Content-Type": "application/json"}
+
+HEAD_NOCO = {
+    "xc-token": NOCODB_TOKEN,
+    "Content-Type": "application/json"
+}
 
 BSALE_LIMIT = 50
 NOCO_LIMIT = 200
@@ -23,9 +27,9 @@ TABLE_COSTS = "mdjjvdlwev2o76u"
 TABLE_PRICES = "mcby3npgc3ig042"
 
 
-# -----------------------------------------------------
+# ---------------------------------------------------
 # SAFE REQUEST BSALE
-# -----------------------------------------------------
+# ---------------------------------------------------
 
 def bsale_get(url, params=None):
 
@@ -55,9 +59,9 @@ def bsale_get(url, params=None):
         return r.json()
 
 
-# -----------------------------------------------------
+# ---------------------------------------------------
 # NOCO GET ALL
-# -----------------------------------------------------
+# ---------------------------------------------------
 
 def noco_get_all(table):
 
@@ -88,41 +92,47 @@ def noco_get_all(table):
     return rows
 
 
-# -----------------------------------------------------
-# INSERT
-# -----------------------------------------------------
+# ---------------------------------------------------
+# BATCH INSERT
+# ---------------------------------------------------
 
-def insert(table, payload):
-
-    url = f"{NOCODB}/api/v2/tables/{table}/records"
-
-    r = requests.post(url, headers=HEAD_NOCO, json=payload)
-
-    if r.status_code not in [200, 201]:
-        print("INSERT ERROR", r.text)
-
-
-# -----------------------------------------------------
-# UPDATE
-# -----------------------------------------------------
-
-def update(table, row_id, payload):
+def batch_insert(table, rows):
 
     url = f"{NOCODB}/api/v2/tables/{table}/records"
 
-    payload["Id"] = row_id
+    for i in range(0, len(rows), NOCO_LIMIT):
 
-    r = requests.patch(url, headers=HEAD_NOCO, json=payload)
+        chunk = rows[i:i+NOCO_LIMIT]
 
-    if r.status_code not in [200, 201]:
-        print("UPDATE ERROR", r.text)
+        r = requests.post(url, headers=HEAD_NOCO, json=chunk)
+
+        if r.status_code not in [200, 201]:
+            print("BATCH INSERT ERROR", r.text)
 
 
-# -----------------------------------------------------
-# LOAD PRODUCTS (solo tax_factor)
-# -----------------------------------------------------
+# ---------------------------------------------------
+# BATCH UPDATE
+# ---------------------------------------------------
 
-print("LOAD TAX FACTOR")
+def batch_update(table, rows):
+
+    url = f"{NOCODB}/api/v2/tables/{table}/records"
+
+    for i in range(0, len(rows), NOCO_LIMIT):
+
+        chunk = rows[i:i+NOCO_LIMIT]
+
+        r = requests.patch(url, headers=HEAD_NOCO, json=chunk)
+
+        if r.status_code not in [200, 201]:
+            print("BATCH UPDATE ERROR", r.text)
+
+
+# ---------------------------------------------------
+# LOAD TAX FACTOR
+# ---------------------------------------------------
+
+print("LOAD PRODUCTS TAX FACTOR")
 
 products = noco_get_all(TABLE_PRODUCTS)
 
@@ -132,9 +142,9 @@ for p in products:
     tax_map[p["bsale_id"]] = p.get("tax_factor", 1)
 
 
-# -----------------------------------------------------
-# LOAD VARIANTS (desde NOCO)
-# -----------------------------------------------------
+# ---------------------------------------------------
+# LOAD VARIANTS
+# ---------------------------------------------------
 
 print("LOAD VARIANTS")
 
@@ -143,9 +153,9 @@ variants = noco_get_all(TABLE_VARIANTS)
 print("VARIANTS:", len(variants))
 
 
-# -----------------------------------------------------
+# ---------------------------------------------------
 # LOAD EXISTING COSTS
-# -----------------------------------------------------
+# ---------------------------------------------------
 
 print("LOAD EXISTING COSTS")
 
@@ -157,9 +167,9 @@ for r in cost_rows:
     cost_map[r["variant_id"]] = r["Id"]
 
 
-# -----------------------------------------------------
+# ---------------------------------------------------
 # LOAD EXISTING PRICES
-# -----------------------------------------------------
+# ---------------------------------------------------
 
 print("LOAD EXISTING PRICES")
 
@@ -174,11 +184,14 @@ for r in price_rows:
     price_map[key] = r["Id"]
 
 
-# -----------------------------------------------------
+# ---------------------------------------------------
 # SYNC COSTS
-# -----------------------------------------------------
+# ---------------------------------------------------
 
 print("SYNC COSTS")
+
+insert_costs = []
+update_costs = []
 
 for v in variants:
 
@@ -205,23 +218,31 @@ for v in variants:
     }
 
     if variant_id in cost_map:
-        update(TABLE_COSTS, cost_map[variant_id], payload)
-    else:
-        insert(TABLE_COSTS, payload)
 
+        payload["Id"] = cost_map[variant_id]
+        update_costs.append(payload)
+
+    else:
+
+        insert_costs.append(payload)
+
+
+batch_insert(TABLE_COSTS, insert_costs)
+batch_update(TABLE_COSTS, update_costs)
 
 print("COSTS DONE")
 
 
-# -----------------------------------------------------
+# ---------------------------------------------------
 # SYNC PRICES
-# -----------------------------------------------------
+# ---------------------------------------------------
 
 print("SYNC PRICES")
 
-data = bsale_get(f"{BASE}/price_lists.json")
+price_lists = bsale_get(f"{BASE}/price_lists.json").get("items", [])
 
-price_lists = data.get("items", [])
+insert_prices = []
+update_prices = []
 
 for pl in price_lists:
 
@@ -255,12 +276,20 @@ for pl in price_lists:
             }
 
             if key in price_map:
-                update(TABLE_PRICES, price_map[key], payload)
+
+                payload["Id"] = price_map[key]
+                update_prices.append(payload)
+
             else:
-                insert(TABLE_PRICES, payload)
+
+                insert_prices.append(payload)
 
         offset += BSALE_LIMIT
 
 
+batch_insert(TABLE_PRICES, insert_prices)
+batch_update(TABLE_PRICES, update_prices)
+
 print("PRICES DONE")
+
 print("SYNC COMPLETED")
