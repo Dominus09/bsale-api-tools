@@ -3,7 +3,7 @@ import os
 import time
 from datetime import datetime
 
-print("SYNC COSTS + PRICES")
+print("SYNC COSTS + PRICES OPTIMIZED")
 
 BASE = "https://api.bsale.io/v1"
 NOCODB = "https://db.quillotana.cl"
@@ -12,21 +12,22 @@ BSALE_TOKEN = os.getenv("BSALE_TOKEN_Mini")
 NOCODB_TOKEN = os.getenv("NocoDB_token")
 
 HEAD_BSALE = {"access_token": BSALE_TOKEN}
+
 HEAD_NOCO = {
     "xc-token": NOCODB_TOKEN,
     "Content-Type": "application/json"
 }
 
-LIMIT = 50
+LIMIT = 200
 
 TABLE_VARIANTS = "msd4vvijzk9pre9"
 TABLE_PRODUCTS = "meke3fsng90uspe"
 TABLE_COSTS = "mdjjvdlwev2o76u"
 TABLE_PRICES = "mcby3npgc3ig042"
 
-# ---------------------------------------------------
-# BSALE REQUEST SAFE
-# ---------------------------------------------------
+# -------------------------------------------------
+# SAFE BSALE REQUEST
+# -------------------------------------------------
 
 def bsale_get(url, params=None):
 
@@ -41,23 +42,23 @@ def bsale_get(url, params=None):
             try:
                 retry = int(r.json().get("retry_after", 60))
             except:
-                retry = 60
+                pass
 
-            print(f"RATE LIMIT — esperando {retry}s")
+            print(f"RATE LIMIT WAIT {retry}s")
             time.sleep(retry)
             continue
 
         if r.status_code != 200:
 
-            print("BSALE ERROR:", r.text)
+            print("BSALE ERROR", r.text)
             time.sleep(5)
             continue
 
         return r.json()
 
-# ---------------------------------------------------
-# NOCO HELPERS
-# ---------------------------------------------------
+# -------------------------------------------------
+# NOCO GET ALL
+# -------------------------------------------------
 
 def noco_get_all(table):
 
@@ -71,7 +72,7 @@ def noco_get_all(table):
         r = requests.get(
             url,
             headers=HEAD_NOCO,
-            params={"limit": 200, "offset": offset}
+            params={"limit": LIMIT, "offset": offset}
         )
 
         data = r.json()
@@ -81,12 +82,13 @@ def noco_get_all(table):
             break
 
         rows.extend(batch)
-
-        offset += 200
+        offset += LIMIT
 
     return rows
 
-# ---------------------------------------------------
+# -------------------------------------------------
+# NOCO INSERT
+# -------------------------------------------------
 
 def insert(table, payload):
 
@@ -94,10 +96,12 @@ def insert(table, payload):
 
     r = requests.post(url, headers=HEAD_NOCO, json=payload)
 
-    if r.status_code not in [200, 201]:
-        print("INSERT ERROR:", r.text)
+    if r.status_code not in [200,201]:
+        print("INSERT ERROR", r.text)
 
-# ---------------------------------------------------
+# -------------------------------------------------
+# NOCO UPDATE
+# -------------------------------------------------
 
 def update(table, row_id, payload):
 
@@ -107,12 +111,12 @@ def update(table, row_id, payload):
 
     r = requests.patch(url, headers=HEAD_NOCO, json=payload)
 
-    if r.status_code not in [200, 201]:
-        print("UPDATE ERROR:", r.text)
+    if r.status_code not in [200,201]:
+        print("UPDATE ERROR", r.text)
 
-# ---------------------------------------------------
-# LOAD PRODUCTS (tax_factor)
-# ---------------------------------------------------
+# -------------------------------------------------
+# LOAD PRODUCTS TAX FACTOR
+# -------------------------------------------------
 
 print("LOAD PRODUCTS")
 
@@ -121,12 +125,21 @@ products = noco_get_all(TABLE_PRODUCTS)
 tax_map = {}
 
 for p in products:
+    tax_map[p["bsale_id"]] = p.get("tax_factor",1)
 
-    tax_map[p["bsale_id"]] = p.get("tax_factor", 1)
+# -------------------------------------------------
+# LOAD VARIANTS FROM NOCO
+# -------------------------------------------------
 
-# ---------------------------------------------------
+print("LOAD VARIANTS FROM NOCO")
+
+variants = noco_get_all(TABLE_VARIANTS)
+
+print("VARIANTS:", len(variants))
+
+# -------------------------------------------------
 # LOAD EXISTING COSTS
-# ---------------------------------------------------
+# -------------------------------------------------
 
 print("LOAD EXISTING COSTS")
 
@@ -135,57 +148,43 @@ cost_rows = noco_get_all(TABLE_COSTS)
 cost_map = {}
 
 for r in cost_rows:
-
     cost_map[r["variant_id"]] = r["Id"]
 
-# ---------------------------------------------------
-# LOAD VARIANTS
-# ---------------------------------------------------
+# -------------------------------------------------
+# LOAD EXISTING PRICES
+# -------------------------------------------------
 
-print("LOAD VARIANTS")
+print("LOAD EXISTING PRICES")
 
-variants = []
+price_rows = noco_get_all(TABLE_PRICES)
 
-offset = 0
+price_map = {}
 
-while True:
+for r in price_rows:
 
-    data = bsale_get(
-        f"{BASE}/variants.json",
-        {"limit": LIMIT, "offset": offset}
-    )
+    key = f"{r['variant_id']}_{r['price_list_id']}"
 
-    items = data.get("items", [])
+    price_map[key] = r["Id"]
 
-    if not items:
-        break
-
-    variants.extend(items)
-
-    offset += LIMIT
-
-print("VARIANTS:", len(variants))
-
-# ---------------------------------------------------
-# COSTS
-# ---------------------------------------------------
+# -------------------------------------------------
+# COST AVERAGE
+# -------------------------------------------------
 
 print("SYNC COSTS")
 
 for v in variants:
 
-    variant_id = int(v["id"])
+    variant_id = v["bsale_id"]
+    product_id = v["product_id"]
 
-    cost_data = bsale_get(f"{BASE}/variants/{variant_id}/costs.json")
+    data = bsale_get(f"{BASE}/variants/{variant_id}/costs.json")
 
-    if not cost_data:
+    if not data:
         continue
 
-    avg_cost = cost_data.get("averageCost")
+    avg_cost = data.get("averageCost")
 
-    product_id = int(v["product"]["id"])
-
-    tax_factor = tax_map.get(product_id, 1)
+    tax_factor = tax_map.get(product_id,1)
 
     cost_gross = None
 
@@ -210,9 +209,9 @@ for v in variants:
 
 print("COSTS DONE")
 
-# ---------------------------------------------------
+# -------------------------------------------------
 # PRICES
-# ---------------------------------------------------
+# -------------------------------------------------
 
 print("SYNC PRICES")
 
@@ -230,7 +229,7 @@ for pl in price_lists:
 
         data = bsale_get(
             f"{BASE}/price_lists/{price_list_id}/details.json",
-            {"limit": LIMIT, "offset": offset}
+            {"limit":50,"offset":offset}
         )
 
         items = data.get("items", [])
@@ -240,15 +239,27 @@ for pl in price_lists:
 
         for d in items:
 
-            insert(TABLE_PRICES, {
-                "variant_id": d["variant"]["id"],
+            variant_id = d["variant"]["id"]
+
+            key = f"{variant_id}_{price_list_id}"
+
+            payload = {
+                "variant_id": variant_id,
                 "price_list_id": price_list_id,
                 "price_net": d["variantValue"],
                 "price_gross": d["variantValueWithTaxes"]
-            })
+            }
 
-        offset += LIMIT
+            if key in price_map:
+
+                update(TABLE_PRICES, price_map[key], payload)
+
+            else:
+
+                insert(TABLE_PRICES, payload)
+
+        offset += 50
 
 print("PRICES DONE")
 
-print("SYNC COMPLETO")
+print("SYNC COMPLETE")
