@@ -7,18 +7,14 @@ print("STOCK UPSERT FAST")
 BASE = "https://api.bsale.io/v1"
 NOCODB = "https://db.quillotana.cl"
 
-BSALE_TOKEN = os.getenv("BSALE_TOKEN_Mini")
 NOCODB_TOKEN = os.getenv("NocoDB_token")
 
-TABLE = "mxs2lyz86cnxd23"
+TABLE_STOCK = "mxs2lyz86cnxd23"
+TABLE_COMPANIES = "m27za58sg6ustui"
 
 LIMIT_BSALE = 50
 LIMIT_NOCO = 200
 BATCH_INSERT = 100
-
-HEAD_BSALE = {
-    "access_token": BSALE_TOKEN
-}
 
 HEAD_NOCO = {
     "xc-token": NOCODB_TOKEN,
@@ -27,18 +23,52 @@ HEAD_NOCO = {
 
 
 # -----------------------------
+# GET COMPANIES
+# -----------------------------
+
+def get_companies():
+
+    url = f"{NOCODB}/api/v2/tables/{TABLE_COMPANIES}/records"
+
+    r = requests.get(url, headers=HEAD_NOCO, params={"limit":100})
+
+    data = r.json()
+
+    companies = []
+
+    for row in data.get("list", []):
+
+        if row.get("active"):
+
+            token = os.getenv(row["bsale_token"])
+
+            if not token:
+                print("TOKEN NOT FOUND:", row["bsale_token"])
+                continue
+
+            companies.append({
+                "company_id": row["company_id"],
+                "name": row["name"],
+                "token": token.strip()
+            })
+
+    return companies
+
+
+# -----------------------------
 # BSALE API
 # -----------------------------
 
-def bsale_get(url, params=None):
+def bsale_get(url, headers, params=None):
 
     while True:
 
-        r = requests.get(url, headers=HEAD_BSALE, params=params)
+        r = requests.get(url, headers=headers, params=params)
 
         if r.status_code == 429:
-            retry = int(r.json().get("retry_after", 60))
-            print("RATE LIMIT WAIT", retry)
+
+            retry = int(r.json().get("retry_after",60))
+            print("RATE LIMIT WAIT",retry)
             time.sleep(retry)
             continue
 
@@ -53,29 +83,31 @@ def bsale_get(url, params=None):
 def noco_get(url, params=None):
 
     r = requests.get(url, headers=HEAD_NOCO, params=params)
+
     r.raise_for_status()
+
     return r.json()
 
 
 def noco_insert(rows):
 
-    url = f"{NOCODB}/api/v2/tables/{TABLE}/records"
+    url = f"{NOCODB}/api/v2/tables/{TABLE_STOCK}/records"
 
     r = requests.post(url, headers=HEAD_NOCO, json=rows)
 
-    if r.status_code not in [200, 201]:
+    if r.status_code not in [200,201]:
         print("INSERT ERROR", r.text)
 
 
 def noco_update(row_id, payload):
 
-    url = f"{NOCODB}/api/v2/tables/{TABLE}/records"
+    url = f"{NOCODB}/api/v2/tables/{TABLE_STOCK}/records"
 
     payload["Id"] = row_id
 
     r = requests.patch(url, headers=HEAD_NOCO, json=payload)
 
-    if r.status_code not in [200, 201]:
+    if r.status_code not in [200,201]:
         print("UPDATE ERROR", r.text)
 
 
@@ -83,11 +115,11 @@ def noco_update(row_id, payload):
 # LOAD EXISTING STOCK
 # -----------------------------
 
-def load_existing_stock():
+def load_existing_stock(company_id):
 
     print("LOADING EXISTING STOCK FROM NOCO")
 
-    url = f"{NOCODB}/api/v2/tables/{TABLE}/records"
+    url = f"{NOCODB}/api/v2/tables/{TABLE_STOCK}/records"
 
     offset = 0
     existing = {}
@@ -99,7 +131,8 @@ def load_existing_stock():
             url,
             params={
                 "limit": LIMIT_NOCO,
-                "offset": offset
+                "offset": offset,
+                "where": f"(company_id,eq,{company_id})"
             }
         )
 
@@ -112,6 +145,7 @@ def load_existing_stock():
 
             variant_id = row.get("variant_id")
             office_id = row.get("office_id")
+
             row_id = row.get("Id")
 
             key = f"{variant_id}-{office_id}"
@@ -136,85 +170,102 @@ def load_existing_stock():
 # MAIN
 # -----------------------------
 
-existing_map = load_existing_stock()
+companies = get_companies()
 
-offset = 0
-insert_buffer = []
+for company in companies:
 
-inserted = 0
-updated = 0
-processed = 0
+    company_id = company["company_id"]
+    token = company["token"]
 
-while True:
+    print("\n======================")
+    print("SYNC COMPANY:", company["name"])
+    print("======================")
 
-    data = bsale_get(
-        f"{BASE}/stocks.json",
-        {"limit": LIMIT_BSALE, "offset": offset}
-    )
+    HEAD_BSALE = {
+        "access_token": token
+    }
 
-    items = data.get("items", [])
+    existing_map = load_existing_stock(company_id)
 
-    if not items:
-        break
+    offset = 0
+    insert_buffer = []
 
-    for s in items:
+    inserted = 0
+    updated = 0
+    processed = 0
 
-        variant_id = s["variant"]["id"]
-        office_id = s["office"]["id"]
+    while True:
 
-        quantity_available = s["quantityAvailable"]
-        quantity_reserved = s["quantityReserved"]
+        data = bsale_get(
+            f"{BASE}/stocks.json",
+            HEAD_BSALE,
+            {"limit": LIMIT_BSALE, "offset": offset}
+        )
 
-        key = f"{variant_id}-{office_id}"
+        items = data.get("items", [])
 
-        payload = {
-            "variant_id": variant_id,
-            "office_id": office_id,
-            "quantity_available": quantity_available,
-            "quantity_reserved": quantity_reserved
-        }
+        if not items:
+            break
 
-        if key in existing_map:
+        for s in items:
 
-            current = existing_map[key]
+            variant_id = s["variant"]["id"]
+            office_id = s["office"]["id"]
 
-            if (
-                current["quantity_available"] != quantity_available
-                or current["quantity_reserved"] != quantity_reserved
-            ):
+            quantity_available = s["quantityAvailable"]
+            quantity_reserved = s["quantityReserved"]
 
-                noco_update(current["Id"], payload)
+            key = f"{variant_id}-{office_id}"
 
-                updated += 1
+            payload = {
+                "company_id": company_id,
+                "variant_id": variant_id,
+                "office_id": office_id,
+                "quantity_available": quantity_available,
+                "quantity_reserved": quantity_reserved
+            }
 
-        else:
+            if key in existing_map:
 
-            insert_buffer.append(payload)
+                current = existing_map[key]
 
-            if len(insert_buffer) >= BATCH_INSERT:
+                if (
+                    current["quantity_available"] != quantity_available
+                    or current["quantity_reserved"] != quantity_reserved
+                ):
 
-                noco_insert(insert_buffer)
+                    noco_update(current["Id"], payload)
 
-                inserted += len(insert_buffer)
+                    updated += 1
 
-                print("INSERTED", inserted, "| UPDATED", updated)
+            else:
 
-                insert_buffer = []
+                insert_buffer.append(payload)
 
-        processed += 1
+                if len(insert_buffer) >= BATCH_INSERT:
 
-    offset += LIMIT_BSALE
+                    noco_insert(insert_buffer)
 
-    print("PROCESSED", processed, "| INSERTED", inserted, "| UPDATED", updated)
+                    inserted += len(insert_buffer)
 
+                    print("INSERTED", inserted, "| UPDATED", updated)
 
-if insert_buffer:
+                    insert_buffer = []
 
-    noco_insert(insert_buffer)
+            processed += 1
 
-    inserted += len(insert_buffer)
+        offset += LIMIT_BSALE
 
-print("FINAL PROCESSED:", processed)
-print("FINAL INSERTED:", inserted)
-print("FINAL UPDATED:", updated)
+        print("PROCESSED", processed, "| INSERTED", inserted, "| UPDATED", updated)
+
+    if insert_buffer:
+
+        noco_insert(insert_buffer)
+
+        inserted += len(insert_buffer)
+
+    print("FINAL PROCESSED:", processed)
+    print("FINAL INSERTED:", inserted)
+    print("FINAL UPDATED:", updated)
+
 print("STOCK UPSERT DONE")
