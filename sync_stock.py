@@ -148,7 +148,7 @@ def load_existing_stock(company_id):
 
             row_id = row.get("Id")
 
-            key = f"{variant_id}-{office_id}"
+            key = f"{company_id}-{variant_id}-{office_id}"
 
             existing[key] = {
                 "Id": row_id,
