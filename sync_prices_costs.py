@@ -1,348 +1,95 @@
-import requests
-import os
-import time
-from datetime import datetime
+# -----------------------------------------------
+# LOAD EXISTING PRICES
+# -----------------------------------------------
 
-print("SYNC COSTS + PRICES")
+existing_price_rows = noco_get_all(
+    TABLE_PRICES,
+    where=f"(company_id,eq,{company_id})"
+)
 
-BASE = "https://api.bsale.io/v1"
-NOCODB = "https://db.quillotana.cl"
+price_map = {}
 
-NOCODB_TOKEN = os.getenv("NocoDB_token")
+for r in existing_price_rows:
 
-HEAD_NOCO = {
-    "xc-token": NOCODB_TOKEN,
-    "Content-Type": "application/json"
-}
+    key = f"{r['variant_id']}_{r['price_list_id']}"
 
-TABLE_VARIANTS = "msd4vvijzk9pre9"
-TABLE_PRODUCTS = "meke3fsng90uspe"
-TABLE_COSTS = "mdjjvdlwev2o76u"
-TABLE_PRICES = "mcby3npgc3ig042"
-TABLE_COMPANIES = "m27za58sg6ustui"
+    price_map[key] = {
+        "Id": r["Id"],
+        "price_net": r.get("price_net"),
+        "price_gross": r.get("price_gross")
+    }
 
-BSALE_LIMIT = 50
-NOCO_LIMIT = 200
+print("EXISTING PRICE ROWS:", len(existing_price_rows))
 
 
-# ---------------------------------------------------
-# SAFE REQUEST
-# ---------------------------------------------------
+# -----------------------------------------------
+# SYNC PRICES
+# -----------------------------------------------
 
-def safe_get(url, headers, params=None):
+insert_prices = []
+update_prices = []
 
-    while True:
+for pl in price_lists:
 
-        try:
+    price_list_id = pl["id"]
 
-            r = requests.get(
-                url,
-                headers=headers,
-                params=params,
-                timeout=30
-            )
+    print("SYNC PRICE LIST:", price_list_id)
 
-        except requests.exceptions.Timeout:
-
-            print("TIMEOUT RETRY")
-            time.sleep(5)
-            continue
-
-        except requests.exceptions.ConnectionError:
-
-            print("CONNECTION ERROR RETRY")
-            time.sleep(5)
-            continue
-
-        if r.status_code == 429:
-
-            wait = 60
-
-            try:
-                wait = int(r.json().get("retry_after",60))
-            except:
-                pass
-
-            print("RATE LIMIT WAIT",wait)
-            time.sleep(wait)
-            continue
-
-        if r.status_code != 200:
-
-            print("BSALE ERROR",r.text)
-            time.sleep(5)
-            continue
-
-        return r.json()
-
-
-# ---------------------------------------------------
-# GET COMPANIES
-# ---------------------------------------------------
-
-def get_companies():
-
-    url=f"{NOCODB}/api/v2/tables/{TABLE_COMPANIES}/records"
-
-    r=requests.get(url,headers=HEAD_NOCO,params={"limit":100})
-
-    data=r.json()
-
-    companies=[]
-
-    for row in data.get("list",[]):
-
-        if row.get("active"):
-
-            token=os.getenv(row["bsale_token"])
-
-            if not token:
-                continue
-
-            companies.append({
-
-                "company_id":row["company_id"],
-                "name":row["name"],
-                "token":token.strip()
-
-            })
-
-    return companies
-
-
-# ---------------------------------------------------
-# NOCO HELPERS
-# ---------------------------------------------------
-
-def noco_insert(table,rows):
-
-    if not rows:
-        return
-
-    url=f"{NOCODB}/api/v2/tables/{table}/records"
-
-    r=requests.post(url,headers=HEAD_NOCO,json=rows)
-
-    if r.status_code not in [200,201]:
-
-        print("INSERT ERROR",r.text)
-
-
-def noco_update(table,rows):
-
-    if not rows:
-        return
-
-    url=f"{NOCODB}/api/v2/tables/{table}/records"
-
-    r=requests.patch(url,headers=HEAD_NOCO,json=rows)
-
-    if r.status_code not in [200,201]:
-
-        print("UPDATE ERROR",r.text)
-
-
-# ---------------------------------------------------
-# LOAD TABLE
-# ---------------------------------------------------
-
-def noco_get_all(table):
-
-    url=f"{NOCODB}/api/v2/tables/{table}/records"
-
-    offset=0
-    rows=[]
+    offset = 0
 
     while True:
 
-        r=requests.get(
-
-            url,
-            headers=HEAD_NOCO,
-            params={"limit":NOCO_LIMIT,"offset":offset}
-
+        data = safe_get(
+            f"{BASE}/price_lists/{price_list_id}/details.json",
+            HEAD_BSALE,
+            {"limit": BSALE_LIMIT, "offset": offset}
         )
 
-        data=r.json()
+        items = data.get("items", [])
 
-        batch=data.get("list",[])
-
-        if not batch:
+        if not items:
             break
 
-        rows.extend(batch)
+        for d in items:
 
-        offset+=NOCO_LIMIT
+            variant_id = d["variant"]["id"]
 
-    return rows
+            price_net = d.get("variantValue")
+            price_gross = d.get("variantValueWithTaxes")
 
+            key = f"{variant_id}_{price_list_id}"
 
-# ---------------------------------------------------
-# MAIN
-# ---------------------------------------------------
+            payload = {
+                "company_id": company_id,
+                "variant_id": variant_id,
+                "price_list_id": price_list_id,
+                "price_net": price_net,
+                "price_gross": price_gross
+            }
 
-companies=get_companies()
+            if key in price_map:
 
-for company in companies:
+                current = price_map[key]
 
-    company_id=company["company_id"]
+                if (
+                    current["price_net"] != price_net
+                    or current["price_gross"] != price_gross
+                ):
 
-    token=company["token"]
+                    payload["Id"] = current["Id"]
+                    update_prices.append(payload)
 
-    print("\nSYNC COMPANY:",company["name"])
+            else:
 
-    HEAD_BSALE={"access_token":token}
+                insert_prices.append(payload)
 
-    products=noco_get_all(TABLE_PRODUCTS)
+        offset += BSALE_LIMIT
 
-    tax_map={}
+        print("PRICE OFFSET", offset)
 
-    for p in products:
+# write batches
+batch_insert(TABLE_PRICES, insert_prices)
+batch_update(TABLE_PRICES, update_prices)
 
-        if p["company_id"]==company_id:
-
-            tax_map[p["bsale_id"]]=p.get("tax_factor",1)
-
-
-    variants=noco_get_all(TABLE_VARIANTS)
-
-    print("VARIANTS LOADED:",len(variants))
-
-
-    insert_costs=[]
-    update_costs=[]
-
-    processed=0
-
-
-    for v in variants:
-
-        if v["company_id"]!=company_id:
-            continue
-
-        variant_id=v["bsale_id"]
-        product_id=v["product_id"]
-
-        try:
-
-            cost_data=safe_get(
-
-                f"{BASE}/variants/{variant_id}/costs.json",
-                HEAD_BSALE
-
-            )
-
-        except Exception as e:
-
-            print("VARIANT COST ERROR",variant_id,e)
-            continue
-
-        avg_cost=cost_data.get("averageCost")
-
-        tax_factor=tax_map.get(product_id,1)
-
-        cost_gross=None
-
-        if avg_cost:
-
-            cost_gross=avg_cost*tax_factor
-
-
-        insert_costs.append({
-
-            "company_id":company_id,
-            "variant_id":variant_id,
-            "average_cost_net":avg_cost,
-            "average_cost_gross":cost_gross,
-            "tax_factor":tax_factor,
-            "last_update":datetime.utcnow().isoformat()
-
-        })
-
-
-        if len(insert_costs)>=100:
-
-            noco_insert(TABLE_COSTS,insert_costs)
-
-            print("COST INSERT:",len(insert_costs))
-
-            insert_costs=[]
-
-
-        processed+=1
-
-        if processed%200==0:
-
-            print("PROCESSED VARIANTS:",processed)
-
-
-        time.sleep(0.03)
-
-
-    if insert_costs:
-
-        noco_insert(TABLE_COSTS,insert_costs)
-
-
-    print("COST SYNC DONE")
-
-
-    # ---------------------------------------------------
-    # PRICES
-    # ---------------------------------------------------
-
-    price_lists=safe_get(
-
-        f"{BASE}/price_lists.json",
-        HEAD_BSALE
-
-    ).get("items",[])
-
-    for pl in price_lists:
-
-        price_list_id=pl["id"]
-
-        print("SYNC PRICE LIST:",price_list_id)
-
-        offset=0
-
-        while True:
-
-            data=safe_get(
-
-                f"{BASE}/price_lists/{price_list_id}/details.json",
-                HEAD_BSALE,
-                {"limit":BSALE_LIMIT,"offset":offset}
-
-            )
-
-            items=data.get("items",[])
-
-            if not items:
-                break
-
-            rows=[]
-
-            for d in items:
-
-                rows.append({
-
-                    "company_id":company_id,
-                    "variant_id":d["variant"]["id"],
-                    "price_list_id":price_list_id,
-                    "price_net":d["variantValue"],
-                    "price_gross":d["variantValueWithTaxes"]
-
-                })
-
-
-            noco_insert(TABLE_PRICES,rows)
-
-            print("PRICE ROWS:",len(rows),"OFFSET:",offset)
-
-            offset+=BSALE_LIMIT
-
-            time.sleep(0.1)
-
-
-print("SYNC COMPLETED")
+print("PRICE INSERTED:", len(insert_prices))
+print("PRICE UPDATED:", len(update_prices))
