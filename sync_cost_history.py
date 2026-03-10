@@ -1,7 +1,7 @@
 import requests
 import os
 import time
-from datetime import datetime, timedelta
+from datetime import datetime,timedelta
 
 print("SYNC COST HISTORY")
 
@@ -24,6 +24,57 @@ NOCO_LIMIT=200
 
 CUT_DATE=datetime.utcnow()-timedelta(days=90)
 
+
+# ---------------------------------------------------
+# SAFE REQUEST
+# ---------------------------------------------------
+
+def safe_get(url,headers,params=None):
+
+    while True:
+
+        try:
+
+            r=requests.get(
+
+                url,
+                headers=headers,
+                params=params,
+                timeout=30
+
+            )
+
+        except requests.exceptions.Timeout:
+
+            print("TIMEOUT RETRY")
+            time.sleep(5)
+            continue
+
+        except requests.exceptions.ConnectionError:
+
+            print("CONNECTION ERROR RETRY")
+            time.sleep(5)
+            continue
+
+
+        if r.status_code==429:
+
+            print("RATE LIMIT WAIT")
+            time.sleep(60)
+            continue
+
+        if r.status_code!=200:
+
+            print("BSALE ERROR",r.text)
+            time.sleep(5)
+            continue
+
+        return r.json()
+
+
+# ---------------------------------------------------
+# GET COMPANIES
+# ---------------------------------------------------
 
 def get_companies():
 
@@ -55,22 +106,9 @@ def get_companies():
     return companies
 
 
-def bsale_get(url,headers,params=None):
-
-    while True:
-
-        r=requests.get(url,headers=headers,params=params)
-
-        if r.status_code==429:
-
-            print("RATE LIMIT WAIT")
-            time.sleep(60)
-            continue
-
-        r.raise_for_status()
-
-        return r.json()
-
+# ---------------------------------------------------
+# LOAD PRODUCTS
+# ---------------------------------------------------
 
 def noco_get_all(table):
 
@@ -103,18 +141,15 @@ def noco_get_all(table):
     return rows
 
 
-def batch_insert(rows):
+def insert(rows):
 
     url=f"{NOCODB}/api/v2/tables/{TABLE_HISTORY}/records"
 
-    for i in range(0,len(rows),NOCO_LIMIT):
+    r=requests.post(url,headers=HEAD_NOCO,json=rows)
 
-        chunk=rows[i:i+NOCO_LIMIT]
+    if r.status_code not in [200,201]:
 
-        r=requests.post(url,headers=HEAD_NOCO,json=chunk)
-
-        if r.status_code not in [200,201]:
-            print("INSERT ERROR",r.text)
+        print("INSERT ERROR",r.text)
 
 
 companies=get_companies()
@@ -142,9 +177,11 @@ for company in companies:
 
     offset=0
 
+    processed=0
+
     while True:
 
-        data=bsale_get(
+        data=safe_get(
 
             f"{BASE}/variants.json",
             HEAD_BSALE,
@@ -160,9 +197,10 @@ for company in companies:
         for v in items:
 
             variant_id=v["id"]
+
             product_id=v["product"]["id"]
 
-            costs=bsale_get(
+            costs=safe_get(
 
                 f"{BASE}/variants/{variant_id}/costs.json",
                 HEAD_BSALE
@@ -181,7 +219,7 @@ for company in companies:
 
                 )
 
-                if entry < CUT_DATE:
+                if entry<CUT_DATE:
                     continue
 
                 cost_net=h.get("cost")
@@ -189,7 +227,9 @@ for company in companies:
                 cost_gross=None
 
                 if cost_net:
+
                     cost_gross=cost_net*tax_factor
+
 
                 insert_rows.append({
 
@@ -203,12 +243,32 @@ for company in companies:
 
                 })
 
+
+                if len(insert_rows)>=200:
+
+                    insert(insert_rows)
+
+                    print("INSERT HISTORY:",len(insert_rows))
+
+                    insert_rows=[]
+
+
+            processed+=1
+
+            if processed%200==0:
+
+                print("PROCESSED VARIANTS:",processed)
+
             time.sleep(0.03)
+
 
         offset+=LIMIT
 
-    batch_insert(insert_rows)
 
-    print("INSERTED",len(insert_rows))
+    if insert_rows:
+
+        insert(insert_rows)
+
+    print("COMPANY DONE")
 
 print("COST HISTORY DONE")
