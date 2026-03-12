@@ -1,12 +1,9 @@
 import requests
 import os
-import time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
 print("SYNC CLIENTS")
-
-# ---------------- CONFIG ----------------
 
 BASE = "https://api.bsale.io/v1"
 NOCODB = "https://db.quillotana.cl"
@@ -15,8 +12,6 @@ BSALE_TOKEN = os.getenv("BSALE_TOKEN_SPA")
 NOCODB_TOKEN = os.getenv("NocoDB_token")
 
 TABLE_CLIENTS = "mmauyzswrd2hi1b"
-
-# ---------------- HEADERS ----------------
 
 HEAD_BSALE = {
     "access_token": BSALE_TOKEN,
@@ -28,23 +23,26 @@ HEAD_NOCO = {
     "Content-Type": "application/json"
 }
 
-# ---------------- UPSERT ----------------
+# -------- UPSERT --------
 
 def upsert_client(row):
 
-    url = f"{NOCODB}/api/v2/tables/{TABLE_CLIENTS}/records?bulk=true"
+    bsale_id = row["bsale_id"]
+
+    url = f"{NOCODB}/api/v2/tables/{TABLE_CLIENTS}/records"
 
     payload = {
+        "where": f"(bsale_id,eq,{bsale_id})",
         "records": [row]
     }
 
-    r = requests.post(url, headers=HEAD_NOCO, json=payload)
+    r = requests.patch(url, headers=HEAD_NOCO, json=payload)
 
     if r.status_code not in [200,201]:
         print("NOCODB ERROR")
         print(r.text)
 
-# ---------------- GET ATTRIBUTES ----------------
+# -------- ATTRIBUTES --------
 
 def get_attributes(bsale_id):
 
@@ -63,7 +61,7 @@ def get_attributes(bsale_id):
 
     for attr in attr_data.get("items", []):
 
-        name = attr.get("name", "").strip()
+        name = attr.get("name","").strip()
         value = attr.get("value")
 
         if name == "Dia Atencion":
@@ -77,8 +75,7 @@ def get_attributes(bsale_id):
 
     return attrs
 
-
-# ---------------- PROCESS CLIENT ----------------
+# -------- PROCESS CLIENT --------
 
 def process_client(client):
 
@@ -112,12 +109,10 @@ def process_client(client):
 
     upsert_client(row)
 
-
-# ---------------- MAIN SYNC ----------------
+# -------- MAIN --------
 
 limit = 50
 offset = 0
-total = 0
 
 while True:
 
@@ -139,15 +134,11 @@ while True:
     if not clients:
         break
 
-    print(f"LOTE {offset} → {len(clients)} clientes")
+    print("CLIENTS:", len(clients))
 
-    # THREADS PARALELOS
     with ThreadPoolExecutor(max_workers=10) as executor:
         executor.map(process_client, clients)
 
-    total += len(clients)
-
     offset += limit
 
-print("CLIENTES SINCRONIZADOS:", total)
 print("SYNC CLIENTS DONE")
