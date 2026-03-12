@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 print("SYNC ANALYTICS MARGIN")
 
 NOCODB = "https://db.quillotana.cl"
-TOKEN = "R3EhSD8si-WSVdsPxlQVGAfiHRRcDR9cHGHJdBJL"
+TOKEN = os.getenv("NocoDB_token")
 
 HEAD = {
     "xc-token": TOKEN,
