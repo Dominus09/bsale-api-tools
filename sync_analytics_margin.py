@@ -47,14 +47,12 @@ def get_all(table):
         )
 
         data = r.json()
-
         batch = data.get("list", [])
 
         if not batch:
             break
 
         rows.extend(batch)
-
         offset += LIMIT
 
     return rows
@@ -104,13 +102,15 @@ print("rules active:", len(rules))
 
 
 # ---------------------------------------------------
-# MAPS (MULTI EMPRESA)
+# MAPS
 # ---------------------------------------------------
 
 variant_map = {
     f"{v['company_id']}_{v['bsale_id']}": {
         "product_id": v["product_id"],
-        "variant_name": v.get("description")
+        "variant_name": v.get("description"),
+        "sku": v.get("code"),
+        "barcode": v.get("bar_code")
     }
     for v in variants
 }
@@ -169,6 +169,9 @@ for p in prices:
     product_id = variant["product_id"]
     variant_name = variant["variant_name"]
 
+    sku = variant["sku"]
+    barcode = variant["barcode"]
+
     product_key = f"{company_id}_{product_id}"
 
     product = product_map.get(product_key)
@@ -204,8 +207,6 @@ for p in prices:
 
     tax_factor = float(product.get("tax_factor") or 1)
 
-    # COSTO BRUTO
-
     if cost_gross:
         cost = float(cost_gross)
     else:
@@ -214,13 +215,19 @@ for p in prices:
     if cost <= 0:
         continue
 
+
+    # ---------------------------------------------------
     # PRECIO NO EXISTENTE
+    # ---------------------------------------------------
 
     if price <= 1:
 
         rows.append({
 
             "company_id": company_id,
+
+            "sku": sku,
+            "barcode": barcode,
 
             "variant_id": variant_id,
             "variant_name": variant_name,
@@ -240,8 +247,7 @@ for p in prices:
             "margin": 0,
             "margin_percent": 0,
 
-            "min_margin": None,
-            "max_margin": None,
+            "suggested_price": None,
 
             "status": "NO_PRICE",
 
@@ -251,7 +257,10 @@ for p in prices:
 
         continue
 
+
+    # ---------------------------------------------------
     # MARGEN
+    # ---------------------------------------------------
 
     margin = price - cost
     margin_percent = (margin / price) * 100
@@ -269,9 +278,22 @@ for p in prices:
     elif margin_percent > rule["max_margin"]:
         status = "HIGH"
 
+
+    # ---------------------------------------------------
+    # PRECIO SUGERIDO
+    # ---------------------------------------------------
+
+    target_margin = rule["min_margin"] / 100
+
+    suggested_price = cost / (1 - target_margin)
+
+
     rows.append({
 
         "company_id": company_id,
+
+        "sku": sku,
+        "barcode": barcode,
 
         "variant_id": variant_id,
         "variant_name": variant_name,
@@ -293,6 +315,8 @@ for p in prices:
 
         "min_margin": rule["min_margin"],
         "max_margin": rule["max_margin"],
+
+        "suggested_price": round(suggested_price,2),
 
         "status": status,
 
