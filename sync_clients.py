@@ -1,45 +1,52 @@
 import requests
+import os
 import time
 from datetime import datetime
 
-# -------- BSALE --------
+print("SYNC CLIENTS")
 
-BSALE_TOKEN = "TU_TOKEN"
+# -------- CONFIG --------
 
-BSALE_HEADERS = {
+BASE = "https://api.bsale.io/v1"
+NOCODB = "https://db.quillotana.cl"
+
+BSALE_TOKEN = os.getenv("Bsale_token")
+NOCODB_TOKEN = os.getenv("NocoDB_token")
+
+TABLE_CLIENTS = "mmauyzswrd2hi1b"
+
+
+# -------- HEADERS --------
+
+HEAD_BSALE = {
     "access_token": BSALE_TOKEN,
     "Content-Type": "application/json"
 }
 
-BSALE_URL = "https://api.bsale.cl/v1/clients.json"
-
-
-# -------- NOCODB --------
-
-NOCODB = "https://db.quillotana.cl"
-NOCODB_TOKEN = "TU_TOKEN"
-TABLE = "TABLE_ID_CLIENTS"
-
-NOCODB_HEADERS = {
+HEAD_NOCO = {
     "xc-token": NOCODB_TOKEN,
     "Content-Type": "application/json"
 }
 
 
+# -------- UPSERT NOCODB --------
+
 def upsert_client(row):
 
-    url = f"{NOCODB}/api/v2/tables/{TABLE}/records"
+    url = f"{NOCODB}/api/v2/tables/{TABLE_CLIENTS}/records"
 
     payload = {
         "records": [row]
     }
 
-    r = requests.post(url, headers=NOCODB_HEADERS, json=payload)
+    r = requests.post(url, headers=HEAD_NOCO, json=payload)
 
     if r.status_code not in [200, 201]:
-        print("ERROR NOCODB")
+        print("NOCODB ERROR")
         print(r.text)
 
+
+# -------- SYNC CLIENTS --------
 
 limit = 50
 offset = 0
@@ -51,13 +58,16 @@ while True:
         "offset": offset
     }
 
-    r = requests.get(BSALE_URL, headers=BSALE_HEADERS, params=params)
+    r = requests.get(f"{BASE}/clients.json", headers=HEAD_BSALE, params=params)
+
     data = r.json()
 
     clients = data.get("items", [])
 
     if not clients:
         break
+
+    print("CLIENTS:", len(clients))
 
     for client in clients:
 
@@ -69,7 +79,7 @@ while True:
         created = datetime.fromtimestamp(int(created_raw)).strftime("%Y-%m-%d %H:%M:%S") if created_raw else None
         updated = datetime.fromtimestamp(int(updated_raw)).strftime("%Y-%m-%d %H:%M:%S") if updated_raw else None
 
-        client_data = {
+        row = {
             "bsale_id": bsale_id,
             "first_name": client.get("firstName"),
             "last_name": client.get("lastName"),
@@ -87,9 +97,13 @@ while True:
             "vendedor": None
         }
 
-        attr_url = f"https://api.bsale.cl/v1/clients/{bsale_id}/attributes.json"
+        # -------- ATRIBUTOS --------
 
-        r_attr = requests.get(attr_url, headers=BSALE_HEADERS)
+        r_attr = requests.get(
+            f"{BASE}/clients/{bsale_id}/attributes.json",
+            headers=HEAD_BSALE
+        )
+
         attr_data = r_attr.json()
 
         for attr in attr_data.get("items", []):
@@ -98,16 +112,18 @@ while True:
             value = attr.get("value")
 
             if name == "Dia Atencion":
-                client_data["dia_atencion"] = value
+                row["dia_atencion"] = value
 
             elif name == "NOMBRE DE FANTASÍA":
-                client_data["nombre_fantasia"] = value
+                row["nombre_fantasia"] = value
 
             elif name == "Vendedor":
-                client_data["vendedor"] = value
+                row["vendedor"] = value
 
-        upsert_client(client_data)
+        upsert_client(row)
 
         time.sleep(0.15)
 
     offset += limit
+
+print("SYNC CLIENTS DONE")
