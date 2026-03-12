@@ -26,11 +26,12 @@ def export_margin(company_id:int):
     writer = csv.writer(output)
 
     writer.writerow([
-        "variant_id",
-        "price_list_id",
-        "variant_name",
-        "price_gross",
-        "cost_gross",
+        "product_type",
+        "product",
+        "variant",
+        "price_list",
+        "price",
+        "cost",
         "margin_percent",
         "status"
     ])
@@ -38,13 +39,14 @@ def export_margin(company_id:int):
     for r in rows:
 
         writer.writerow([
-            r["variant_id"],
-            r["price_list_id"],
-            r["variant_name"],
-            r["price_gross"],
-            r["cost_gross"],
-            r["margin_percent"],
-            r["status"]
+            r.get("product_type_name"),
+            r.get("product_name"),
+            r.get("variant_name"),
+            r.get("price_list_name"),
+            r.get("price_gross"),
+            r.get("cost_gross"),
+            r.get("margin_percent"),
+            r.get("status")
         ])
 
     output.seek(0)
