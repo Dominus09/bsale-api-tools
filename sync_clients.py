@@ -2,10 +2,11 @@ import requests
 import os
 import time
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 print("SYNC CLIENTS")
 
-# -------- CONFIG --------
+# ---------------- CONFIG ----------------
 
 BASE = "https://api.bsale.io/v1"
 NOCODB = "https://db.quillotana.cl"
@@ -15,8 +16,7 @@ NOCODB_TOKEN = os.getenv("NocoDB_token")
 
 TABLE_CLIENTS = "mmauyzswrd2hi1b"
 
-
-# -------- HEADERS --------
+# ---------------- HEADERS ----------------
 
 HEAD_BSALE = {
     "access_token": BSALE_TOKEN,
@@ -28,12 +28,11 @@ HEAD_NOCO = {
     "Content-Type": "application/json"
 }
 
-
-# -------- UPSERT NOCODB --------
+# ---------------- UPSERT ----------------
 
 def upsert_client(row):
 
-    url = f"{NOCODB}/api/v2/tables/{TABLE_CLIENTS}/records"
+    url = f"{NOCODB}/api/v2/tables/{TABLE_CLIENTS}/records?bulk=true"
 
     payload = {
         "records": [row]
@@ -41,15 +40,84 @@ def upsert_client(row):
 
     r = requests.post(url, headers=HEAD_NOCO, json=payload)
 
-    if r.status_code not in [200, 201]:
+    if r.status_code not in [200,201]:
         print("NOCODB ERROR")
         print(r.text)
 
+# ---------------- GET ATTRIBUTES ----------------
 
-# -------- SYNC CLIENTS --------
+def get_attributes(bsale_id):
+
+    r = requests.get(
+        f"{BASE}/clients/{bsale_id}/attributes.json",
+        headers=HEAD_BSALE
+    )
+
+    attr_data = r.json()
+
+    attrs = {
+        "dia_atencion": None,
+        "nombre_fantasia": None,
+        "vendedor": None
+    }
+
+    for attr in attr_data.get("items", []):
+
+        name = attr.get("name", "").strip()
+        value = attr.get("value")
+
+        if name == "Dia Atencion":
+            attrs["dia_atencion"] = value
+
+        elif name == "NOMBRE DE FANTASÍA":
+            attrs["nombre_fantasia"] = value
+
+        elif name == "Vendedor":
+            attrs["vendedor"] = value
+
+    return attrs
+
+
+# ---------------- PROCESS CLIENT ----------------
+
+def process_client(client):
+
+    bsale_id = client["id"]
+
+    created_raw = client.get("createdAt")
+    updated_raw = client.get("updatedAt")
+
+    created = datetime.fromtimestamp(int(created_raw)).strftime("%Y-%m-%d %H:%M:%S") if created_raw else None
+    updated = datetime.fromtimestamp(int(updated_raw)).strftime("%Y-%m-%d %H:%M:%S") if updated_raw else None
+
+    attrs = get_attributes(bsale_id)
+
+    row = {
+        "bsale_id": bsale_id,
+        "first_name": client.get("firstName"),
+        "last_name": client.get("lastName"),
+        "code": client.get("code"),
+        "phone": client.get("phone"),
+        "company": client.get("company"),
+        "facebook": client.get("facebook"),
+        "city": client.get("city"),
+        "municipality": client.get("municipality"),
+        "address": client.get("address"),
+        "created": created,
+        "updated": updated,
+        "dia_atencion": attrs["dia_atencion"],
+        "nombre_fantasia": attrs["nombre_fantasia"],
+        "vendedor": attrs["vendedor"]
+    }
+
+    upsert_client(row)
+
+
+# ---------------- MAIN SYNC ----------------
 
 limit = 50
 offset = 0
+total = 0
 
 while True:
 
@@ -58,7 +126,11 @@ while True:
         "offset": offset
     }
 
-    r = requests.get(f"{BASE}/clients.json", headers=HEAD_BSALE, params=params)
+    r = requests.get(
+        f"{BASE}/clients.json",
+        headers=HEAD_BSALE,
+        params=params
+    )
 
     data = r.json()
 
@@ -67,63 +139,15 @@ while True:
     if not clients:
         break
 
-    print("CLIENTS:", len(clients))
+    print(f"LOTE {offset} → {len(clients)} clientes")
 
-    for client in clients:
+    # THREADS PARALELOS
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        executor.map(process_client, clients)
 
-        bsale_id = client["id"]
-
-        created_raw = client.get("createdAt")
-        updated_raw = client.get("updatedAt")
-
-        created = datetime.fromtimestamp(int(created_raw)).strftime("%Y-%m-%d %H:%M:%S") if created_raw else None
-        updated = datetime.fromtimestamp(int(updated_raw)).strftime("%Y-%m-%d %H:%M:%S") if updated_raw else None
-
-        row = {
-            "bsale_id": bsale_id,
-            "first_name": client.get("firstName"),
-            "last_name": client.get("lastName"),
-            "code": client.get("code"),
-            "phone": client.get("phone"),
-            "company": client.get("company"),
-            "facebook": client.get("facebook"),
-            "city": client.get("city"),
-            "municipality": client.get("municipality"),
-            "address": client.get("address"),
-            "created": created,
-            "updated": updated,
-            "dia_atencion": None,
-            "nombre_fantasia": None,
-            "vendedor": None
-        }
-
-        # -------- ATRIBUTOS --------
-
-        r_attr = requests.get(
-            f"{BASE}/clients/{bsale_id}/attributes.json",
-            headers=HEAD_BSALE
-        )
-
-        attr_data = r_attr.json()
-
-        for attr in attr_data.get("items", []):
-
-            name = attr.get("name", "").strip()
-            value = attr.get("value")
-
-            if name == "Dia Atencion":
-                row["dia_atencion"] = value
-
-            elif name == "NOMBRE DE FANTASÍA":
-                row["nombre_fantasia"] = value
-
-            elif name == "Vendedor":
-                row["vendedor"] = value
-
-        upsert_client(row)
-
-        time.sleep(0.15)
+    total += len(clients)
 
     offset += limit
 
+print("CLIENTES SINCRONIZADOS:", total)
 print("SYNC CLIENTS DONE")
