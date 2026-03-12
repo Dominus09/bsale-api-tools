@@ -2,7 +2,7 @@ import os
 import requests
 
 NOCODB_URL = os.getenv("NOCODB_URL", "https://db.quillotana.cl")
-NOCODB_TOKEN = "R3EhSD8si-WSVdsPxlQVGAfiHRRcDR9cHGHJdBJL"
+NOCODB_TOKEN = os.getenv("NocoDB_token")
 
 HEADERS = {
     "xc-token": NOCODB_TOKEN
