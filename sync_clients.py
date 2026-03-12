@@ -10,7 +10,7 @@ print("SYNC CLIENTS")
 BASE = "https://api.bsale.io/v1"
 NOCODB = "https://db.quillotana.cl"
 
-BSALE_TOKEN = os.getenv("Bsale_token")
+BSALE_TOKEN = os.getenv("BSALE_TOKEN_SPA")
 NOCODB_TOKEN = os.getenv("NocoDB_token")
 
 TABLE_CLIENTS = "mmauyzswrd2hi1b"
