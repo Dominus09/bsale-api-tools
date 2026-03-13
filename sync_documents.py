@@ -2,7 +2,6 @@ import requests
 import os
 import time
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 print("SYNC DOCUMENTS START")
 
@@ -16,7 +15,7 @@ TABLE_DOCUMENTS = "mc73age2tnhq3dd"
 
 LIMIT_BSALE = 50
 LIMIT_NOCO = 200
-BATCH = 100
+BATCH = 200
 
 START_DATE = 1767225600
 END_DATE = int(time.time())
@@ -29,6 +28,10 @@ HEAD_NOCO = {
 HEAD_BSALE = {
     "access_token": BSALE_TOKEN
 }
+
+# -------------------------------------------------
+# SAFE GET
+# -------------------------------------------------
 
 def bsale_get(params):
 
@@ -44,15 +47,13 @@ def bsale_get(params):
             )
 
             if r.status_code == 429:
-
                 wait = int(r.json().get("retry_after",60))
-                print("RATE LIMIT WAIT",wait)
+                print("RATE LIMIT WAIT", wait)
                 time.sleep(wait)
                 continue
 
             if r.status_code in [500,502,503,504]:
-
-                print("BSALE SERVER ERROR", r.status_code)
+                print("BSALE ERROR", r.status_code)
                 time.sleep(3)
                 continue
 
@@ -62,8 +63,13 @@ def bsale_get(params):
 
         except requests.exceptions.RequestException as e:
 
-            print("REQUEST ERROR RETRY:", e)
+            print("RETRY:", e)
             time.sleep(3)
+
+
+# -------------------------------------------------
+# EXISTING DOCUMENTS
+# -------------------------------------------------
 
 def noco_get_all():
 
@@ -81,7 +87,7 @@ def noco_get_all():
         )
 
         data = r.json()
-        rows = data.get("list",[])
+        rows = data.get("list", [])
 
         if not rows:
             break
@@ -93,7 +99,37 @@ def noco_get_all():
 
     return existing
 
-def process_offset(offset):
+
+# -------------------------------------------------
+# INSERT / UPDATE
+# -------------------------------------------------
+
+def batch_insert(rows):
+
+    url = f"{NOCODB}/api/v2/tables/{TABLE_DOCUMENTS}/records"
+
+    requests.post(url, headers=HEAD_NOCO, json=rows)
+
+
+def batch_update(rows):
+
+    url = f"{NOCODB}/api/v2/tables/{TABLE_DOCUMENTS}/records"
+
+    requests.patch(url, headers=HEAD_NOCO, json=rows)
+
+
+# -------------------------------------------------
+# MAIN
+# -------------------------------------------------
+
+existing = noco_get_all()
+
+insert_rows = []
+update_rows = []
+
+offset = 0
+
+while True:
 
     params = {
         "limit": LIMIT_BSALE,
@@ -106,10 +142,10 @@ def process_offset(offset):
     items = data["items"]
 
     if not items:
-        return None
+        print("NO MORE DOCUMENTS")
+        break
 
-    inserts = []
-    updates = []
+    print("OFFSET", offset, "DOCS", len(items))
 
     for d in items:
 
@@ -144,74 +180,24 @@ def process_offset(offset):
         if bsale_id in existing:
 
             payload["Id"] = existing[bsale_id]["Id"]
-            updates.append(payload)
+            update_rows.append(payload)
 
         else:
 
-            inserts.append(payload)
+            insert_rows.append(payload)
 
-    return inserts, updates
+    if len(insert_rows) >= BATCH:
 
-def batch_insert(rows):
+        batch_insert(insert_rows)
+        insert_rows = []
 
-    url = f"{NOCODB}/api/v2/tables/{TABLE_DOCUMENTS}/records"
+    if len(update_rows) >= BATCH:
 
-    requests.post(url, headers=HEAD_NOCO, json=rows)
+        batch_update(update_rows)
+        update_rows = []
 
-def batch_update(rows):
+    offset += LIMIT_BSALE
 
-    url = f"{NOCODB}/api/v2/tables/{TABLE_DOCUMENTS}/records"
-
-    requests.patch(url, headers=HEAD_NOCO, json=rows)
-
-existing = noco_get_all()
-
-insert_rows = []
-update_rows = []
-
-offset = 0
-workers = 5
-
-with ThreadPoolExecutor(max_workers=workers) as executor:
-
-    futures = []
-
-    while True:
-
-        for i in range(workers):
-
-            futures.append(executor.submit(process_offset, offset))
-            offset += LIMIT_BSALE
-
-        stop = False
-
-        for future in as_completed(futures):
-
-            result = future.result()
-
-            if result is None:
-                stop = True
-                break
-
-            ins, upd = result
-
-            insert_rows.extend(ins)
-            update_rows.extend(upd)
-
-            if len(insert_rows) >= BATCH:
-
-                batch_insert(insert_rows)
-                insert_rows = []
-
-            if len(update_rows) >= BATCH:
-
-                batch_update(update_rows)
-                update_rows = []
-
-        futures.clear()
-
-        if stop:
-            break
 
 if insert_rows:
     batch_insert(insert_rows)
