@@ -2,7 +2,7 @@ import requests
 import os
 import time
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 print("SYNC DOCUMENTS START")
 
@@ -18,7 +18,7 @@ LIMIT_BSALE = 50
 LIMIT_NOCO = 200
 BATCH = 100
 
-START_DATE = 1767225600   # 01-01-2026
+START_DATE = 1767225600
 END_DATE = int(time.time())
 
 HEAD_NOCO = {
@@ -29,10 +29,6 @@ HEAD_NOCO = {
 HEAD_BSALE = {
     "access_token": BSALE_TOKEN
 }
-
-# -------------------------------------------------
-# SAFE GET BSALE
-# -------------------------------------------------
 
 def bsale_get(params):
 
@@ -50,19 +46,14 @@ def bsale_get(params):
             if r.status_code == 429:
 
                 wait = int(r.json().get("retry_after",60))
-
                 print("RATE LIMIT WAIT",wait)
-
                 time.sleep(wait)
-
                 continue
 
             if r.status_code in [500,502,503,504]:
 
                 print("BSALE SERVER ERROR", r.status_code)
-
                 time.sleep(3)
-
                 continue
 
             r.raise_for_status()
@@ -71,13 +62,8 @@ def bsale_get(params):
 
         except requests.exceptions.RequestException as e:
 
-            print("REQUEST ERROR RETRYING:", e)
-
+            print("REQUEST ERROR RETRY:", e)
             time.sleep(3)
-
-# -------------------------------------------------
-# GET EXISTING DOCUMENTS
-# -------------------------------------------------
 
 def noco_get_all():
 
@@ -95,24 +81,17 @@ def noco_get_all():
         )
 
         data = r.json()
-
         rows = data.get("list",[])
 
         if not rows:
             break
 
         for row in rows:
-
             existing[row["bsale_id"]] = row
 
         offset += LIMIT_NOCO
 
     return existing
-
-
-# -------------------------------------------------
-# PROCESS OFFSET
-# -------------------------------------------------
 
 def process_offset(offset):
 
@@ -124,15 +103,13 @@ def process_offset(offset):
 
     data = bsale_get(params)
 
-    rows_insert = []
-    rows_update = []
-
     items = data["items"]
 
     if not items:
-        return [], []
+        return None
 
-    print("OFFSET", offset, "DOCS", len(items))
+    inserts = []
+    updates = []
 
     for d in items:
 
@@ -143,7 +120,6 @@ def process_offset(offset):
         emission_date = None
 
         if emission_raw:
-
             emission_date = datetime.fromtimestamp(
                 int(emission_raw)
             ).strftime("%Y-%m-%d %H:%M:%S")
@@ -168,67 +144,74 @@ def process_offset(offset):
         if bsale_id in existing:
 
             payload["Id"] = existing[bsale_id]["Id"]
-
-            rows_update.append(payload)
+            updates.append(payload)
 
         else:
 
-            rows_insert.append(payload)
+            inserts.append(payload)
 
-    return rows_insert, rows_update
-
-
-# -------------------------------------------------
-# INSERT / UPDATE
-# -------------------------------------------------
+    return inserts, updates
 
 def batch_insert(rows):
 
     url = f"{NOCODB}/api/v2/tables/{TABLE_DOCUMENTS}/records"
 
-    requests.post(url,headers=HEAD_NOCO,json=rows)
-
+    requests.post(url, headers=HEAD_NOCO, json=rows)
 
 def batch_update(rows):
 
     url = f"{NOCODB}/api/v2/tables/{TABLE_DOCUMENTS}/records"
 
-    requests.patch(url,headers=HEAD_NOCO,json=rows)
-
-
-# -------------------------------------------------
-# MAIN
-# -------------------------------------------------
+    requests.patch(url, headers=HEAD_NOCO, json=rows)
 
 existing = noco_get_all()
 
 insert_rows = []
 update_rows = []
 
-MAX_OFFSETS = 200000
+offset = 0
+workers = 5
 
-offsets = list(range(0, MAX_OFFSETS, LIMIT_BSALE))
+with ThreadPoolExecutor(max_workers=workers) as executor:
 
-with ThreadPoolExecutor(max_workers=5) as executor:
+    futures = []
 
-    results = executor.map(process_offset, offsets)
+    while True:
 
-    for ins, upd in results:
+        for i in range(workers):
 
-        insert_rows.extend(ins)
-        update_rows.extend(upd)
+            futures.append(executor.submit(process_offset, offset))
+            offset += LIMIT_BSALE
 
-        if len(insert_rows) >= BATCH:
+        stop = False
 
-            batch_insert(insert_rows)
+        for future in as_completed(futures):
 
-            insert_rows = []
+            result = future.result()
 
-        if len(update_rows) >= BATCH:
+            if result is None:
+                stop = True
+                break
 
-            batch_update(update_rows)
+            ins, upd = result
 
-            update_rows = []
+            insert_rows.extend(ins)
+            update_rows.extend(upd)
+
+            if len(insert_rows) >= BATCH:
+
+                batch_insert(insert_rows)
+                insert_rows = []
+
+            if len(update_rows) >= BATCH:
+
+                batch_update(update_rows)
+                update_rows = []
+
+        futures.clear()
+
+        if stop:
+            break
 
 if insert_rows:
     batch_insert(insert_rows)
