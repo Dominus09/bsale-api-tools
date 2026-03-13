@@ -148,3 +148,11 @@ function Card({title,value,color}:any){
   </div>
 
 )
+const th={
+  padding:"12px",
+  fontWeight:"600"
+}
+
+const td={
+  padding:"12px"
+}
