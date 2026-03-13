@@ -5,6 +5,7 @@ from backend.routers import dashboard
 from backend.routers import margin
 from backend.routers import margin_problems
 from backend.routers import margin_export
+from backend.routers import auth
 
 app = FastAPI(
     title="Quillotana Analytics API",
@@ -24,6 +25,7 @@ app.include_router(dashboard.router)
 app.include_router(margin.router)
 app.include_router(margin_problems.router)
 app.include_router(margin_export.router)
+app.include_router(auth.router)
 
 @app.get("/")
 def root():
