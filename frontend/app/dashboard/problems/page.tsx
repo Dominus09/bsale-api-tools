@@ -53,23 +53,98 @@ export default function Dashboard(){
 
 function Card({title,value,color}:any){
 
-  return(
+ return(
+
+  <div>
+
+    <h1 style={{
+      marginBottom:"20px",
+      fontSize:"24px"
+    }}>
+      Productos con problemas de margen
+    </h1>
 
     <div style={{
-      width:"160px",
-      height:"120px",
-      background:color,
-      borderRadius:"12px",
-      padding:"20px",
-      color:"#020617"
+      overflowX:"auto",
+      background:"#020617",
+      borderRadius:"10px"
     }}>
 
-      <h4>{title}</h4>
+      <table style={{
+        width:"100%",
+        borderCollapse:"collapse",
+        fontSize:"14px"
+      }}>
 
-      <h2>{value}</h2>
+        <thead>
+
+          <tr style={{
+            background:"#1e293b",
+            textAlign:"left"
+          }}>
+
+            <th style={th}>SKU</th>
+            <th style={th}>Producto</th>
+            <th style={th}>Variante</th>
+            <th style={th}>Lista</th>
+            <th style={th}>Costo</th>
+            <th style={th}>Precio</th>
+            <th style={th}>Margen</th>
+            <th style={th}>Estado</th>
+
+          </tr>
+
+        </thead>
+
+        <tbody>
+
+          {rows.map((r,i)=>(
+
+            <tr
+              key={i}
+              style={{
+                borderBottom:"1px solid #1e293b"
+              }}
+            >
+
+              <td style={td}>{r.code}</td>
+
+              <td style={td}>{r.product_name}</td>
+
+              <td style={td}>{r.variant_name}</td>
+
+              <td style={td}>{r.price_list_name}</td>
+
+              <td style={td}>
+                ${Number(r.cost_gross).toLocaleString()}
+              </td>
+
+              <td style={td}>
+                ${Number(r.price_gross).toLocaleString()}
+              </td>
+
+              <td style={td}>
+                {Number(r.margin_percent).toFixed(1)}%
+              </td>
+
+              <td style={{
+                ...td,
+                fontWeight:"bold",
+                color:statusColor(r.status)
+              }}>
+                {r.status}
+              </td>
+
+            </tr>
+
+          ))}
+
+        </tbody>
+
+      </table>
 
     </div>
 
-  )
+  </div>
 
-}
+)
