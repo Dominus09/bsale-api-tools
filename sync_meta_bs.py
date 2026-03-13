@@ -12,6 +12,8 @@ BSALE_TOKEN = os.getenv("BSALE_TOKEN_SPA")
 TABLE_DOC_TYPES = "msj3xk5f1yqpfzk"
 TABLE_USERS = "mpqkni6mwrxie44"
 
+LIMIT_BSALE = 50
+
 HEAD_NOCO = {
     "xc-token": NOCODB_TOKEN,
     "Content-Type": "application/json"
@@ -22,7 +24,7 @@ HEAD_BSALE = {
 }
 
 # -------------------------------------------------
-# GENERIC NOCO GET
+# NOCO GET
 # -------------------------------------------------
 
 def noco_get_all(table_id):
@@ -42,7 +44,7 @@ def noco_get_all(table_id):
 
 
 # -------------------------------------------------
-# GENERIC INSERT
+# INSERT / UPDATE
 # -------------------------------------------------
 
 def batch_insert(table_id, rows):
@@ -54,10 +56,6 @@ def batch_insert(table_id, rows):
 
     requests.post(url, headers=HEAD_NOCO, json=rows)
 
-
-# -------------------------------------------------
-# GENERIC UPDATE
-# -------------------------------------------------
 
 def batch_update(table_id, rows):
 
@@ -82,33 +80,48 @@ def sync_document_types():
     insert_rows = []
     update_rows = []
 
-    r = requests.get(
-        f"{BASE}/document_types.json",
-        headers=HEAD_BSALE
-    )
+    offset = 0
 
-    data = r.json()
+    while True:
 
-    for d in data.get("items", []):
+        r = requests.get(
+            f"{BASE}/document_types.json",
+            headers=HEAD_BSALE,
+            params={
+                "limit": LIMIT_BSALE,
+                "offset": offset
+            }
+        )
 
-        bsale_id = d["id"]
+        data = r.json()
 
-        payload = {
+        items = data.get("items", [])
 
-            "bsale_id": bsale_id,
-            "name": d.get("name"),
-            "code_sii": d.get("codeSii")
+        if not items:
+            break
 
-        }
+        for d in items:
 
-        if bsale_id in existing:
+            bsale_id = d["id"]
 
-            payload["Id"] = existing[bsale_id]["Id"]
-            update_rows.append(payload)
+            payload = {
 
-        else:
+                "bsale_id": bsale_id,
+                "name": d.get("name"),
+                "code_sii": d.get("codeSii")
 
-            insert_rows.append(payload)
+            }
+
+            if bsale_id in existing:
+
+                payload["Id"] = existing[bsale_id]["Id"]
+                update_rows.append(payload)
+
+            else:
+
+                insert_rows.append(payload)
+
+        offset += LIMIT_BSALE
 
     batch_insert(TABLE_DOC_TYPES, insert_rows)
     batch_update(TABLE_DOC_TYPES, update_rows)
@@ -129,35 +142,50 @@ def sync_users():
     insert_rows = []
     update_rows = []
 
-    r = requests.get(
-        f"{BASE}/users.json",
-        headers=HEAD_BSALE
-    )
+    offset = 0
 
-    data = r.json()
+    while True:
 
-    for u in data.get("items", []):
+        r = requests.get(
+            f"{BASE}/users.json",
+            headers=HEAD_BSALE,
+            params={
+                "limit": LIMIT_BSALE,
+                "offset": offset
+            }
+        )
 
-        bsale_id = u["id"]
+        data = r.json()
 
-        payload = {
+        items = data.get("items", [])
 
-            "bsale_id": bsale_id,
-            "first_name": u.get("firstName"),
-            "last_name": u.get("lastName"),
-            "email": u.get("email"),
-            "active": u.get("active")
+        if not items:
+            break
 
-        }
+        for u in items:
 
-        if bsale_id in existing:
+            bsale_id = u["id"]
 
-            payload["Id"] = existing[bsale_id]["Id"]
-            update_rows.append(payload)
+            payload = {
 
-        else:
+                "bsale_id": bsale_id,
+                "first_name": u.get("firstName"),
+                "last_name": u.get("lastName"),
+                "email": u.get("email"),
+                "active": u.get("active")
 
-            insert_rows.append(payload)
+            }
+
+            if bsale_id in existing:
+
+                payload["Id"] = existing[bsale_id]["Id"]
+                update_rows.append(payload)
+
+            else:
+
+                insert_rows.append(payload)
+
+        offset += LIMIT_BSALE
 
     batch_insert(TABLE_USERS, insert_rows)
     batch_update(TABLE_USERS, update_rows)
