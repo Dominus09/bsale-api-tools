@@ -1,8 +1,9 @@
 import requests
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-print("SYNC DOCUMENT DETAILS START")
+print("SYNC DOCUMENT DETAILS FAST START")
 
 BASE = "https://api.bsale.io/v1"
 NOCODB = "https://db.quillotana.cl"
@@ -15,6 +16,7 @@ TABLE_DETAILS = "mox0eode1i5flz5"
 
 LIMIT_NOCO = 200
 BATCH = 200
+WORKERS = 8
 
 HEAD_NOCO = {
     "xc-token": NOCODB_TOKEN,
@@ -51,21 +53,20 @@ def bsale_get(url):
             if r.status_code in [500,502,503,504]:
 
                 print("BSALE ERROR",r.status_code)
-                time.sleep(3)
+                time.sleep(2)
                 continue
 
             r.raise_for_status()
 
             return r.json()
 
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.RequestException:
 
-            print("RETRY",e)
-            time.sleep(3)
+            time.sleep(2)
 
 
 # -------------------------------------------------
-# GET DOCUMENT IDS FROM NOCO
+# GET DOCUMENTS FROM NOCO
 # -------------------------------------------------
 
 def get_documents():
@@ -86,14 +87,12 @@ def get_documents():
         )
 
         data = r.json()
-
         rows = data.get("list",[])
 
         if not rows:
             break
 
         for row in rows:
-
             docs.append(row["bsale_id"])
 
         offset += LIMIT_NOCO
@@ -132,7 +131,6 @@ def get_existing_details():
             break
 
         for row in rows:
-
             existing.add(row["bsale_detail_id"])
 
         offset += LIMIT_NOCO
@@ -143,7 +141,18 @@ def get_existing_details():
 
 
 # -------------------------------------------------
-# INSERT BATCH
+# FETCH DETAILS FOR ONE DOCUMENT
+# -------------------------------------------------
+
+def fetch_details(doc_id):
+
+    data = bsale_get(f"{BASE}/documents/{doc_id}/details.json")
+
+    return doc_id, data.get("items",[])
+
+
+# -------------------------------------------------
+# BATCH INSERT
 # -------------------------------------------------
 
 def batch_insert(rows):
@@ -168,49 +177,51 @@ insert_rows = []
 
 count = 0
 
-for doc_id in documents:
+with ThreadPoolExecutor(max_workers=WORKERS) as executor:
 
-    data = bsale_get(f"{BASE}/documents/{doc_id}/details.json")
+    futures = [executor.submit(fetch_details, doc) for doc in documents]
 
-    items = data.get("items",[])
+    for future in as_completed(futures):
 
-    for d in items:
+        doc_id, items = future.result()
 
-        detail_id = d["id"]
+        for d in items:
 
-        if detail_id in existing_details:
-            continue
+            detail_id = d["id"]
 
-        payload = {
+            if detail_id in existing_details:
+                continue
 
-            "bsale_detail_id": detail_id,
-            "document_id": doc_id,
-            "line_number": d.get("lineNumber"),
-            "variant_id": d.get("variant",{}).get("id"),
-            "variant_code": d.get("variant",{}).get("code"),
-            "variant_description": d.get("variant",{}).get("description"),
-            "quantity": d.get("quantity"),
-            "net_unit_value": d.get("netUnitValue"),
-            "total_unit_value": d.get("totalUnitValue"),
-            "net_amount": d.get("netAmount"),
-            "tax_amount": d.get("taxAmount"),
-            "total_amount": d.get("totalAmount"),
-            "net_discount": d.get("netDiscount"),
-            "discount_percentage": d.get("discountPercentage")
+            payload = {
 
-        }
+                "bsale_detail_id": detail_id,
+                "document_id": doc_id,
+                "line_number": d.get("lineNumber"),
+                "variant_id": d.get("variant",{}).get("id"),
+                "variant_code": d.get("variant",{}).get("code"),
+                "variant_description": d.get("variant",{}).get("description"),
+                "quantity": d.get("quantity"),
+                "net_unit_value": d.get("netUnitValue"),
+                "total_unit_value": d.get("totalUnitValue"),
+                "net_amount": d.get("netAmount"),
+                "tax_amount": d.get("taxAmount"),
+                "total_amount": d.get("totalAmount"),
+                "net_discount": d.get("netDiscount"),
+                "discount_percentage": d.get("discountPercentage")
 
-        insert_rows.append(payload)
+            }
 
-        count += 1
+            insert_rows.append(payload)
 
-        if len(insert_rows) >= BATCH:
+            count += 1
 
-            batch_insert(insert_rows)
+            if len(insert_rows) >= BATCH:
 
-            print("INSERTED",count)
+                batch_insert(insert_rows)
 
-            insert_rows = []
+                print("INSERTED",count)
+
+                insert_rows = []
 
 if insert_rows:
     batch_insert(insert_rows)
