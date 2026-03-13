@@ -9,6 +9,7 @@ from backend.routers import margin_export
 app = FastAPI(
     title="Quillotana Analytics API",
     version="1.0"
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # permite llamadas desde cualquier frontend
