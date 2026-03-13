@@ -38,7 +38,7 @@ export default function LoginPage() {
         localStorage.setItem("qa_user",data.user.username)
         localStorage.setItem("qa_role",data.user.role)
 
-        router.push("/dashboard")
+        router.push("/select-company")
 
       }else{
 
