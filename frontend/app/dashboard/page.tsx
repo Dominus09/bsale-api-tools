@@ -1,20 +1,22 @@
 "use client"
 
 import { useEffect,useState } from "react"
+import { useRouter } from "next/navigation"
 
-export default function Dashboard(){
+export default function SelectCompany(){
 
-  const [data,setData] = useState<any>(null)
+  const [companies,setCompanies] = useState<any[]>([])
+  const router = useRouter()
 
   useEffect(()=>{
 
     async function load(){
 
-      const res = await fetch("https://api.quillotana.cl/dashboard/1")
+      const res = await fetch("https://api.quillotana.cl/companies/")
 
-      const json = await res.json()
+      const data = await res.json()
 
-      setData(json)
+      setCompanies(data)
 
     }
 
@@ -22,53 +24,62 @@ export default function Dashboard(){
 
   },[])
 
-  if(!data) return <p>Cargando...</p>
+  function chooseCompany(id:number){
+
+    localStorage.setItem("company_id",String(id))
+
+    router.push("/dashboard")
+
+  }
 
   return(
 
-    <div>
-
-      <h1 style={{marginBottom:"30px"}}>
-        Dashboard empresa 1
-      </h1>
+    <main style={{
+      height:"100vh",
+      display:"flex",
+      justifyContent:"center",
+      alignItems:"center",
+      background:"#0f172a",
+      color:"white"
+    }}>
 
       <div style={{
-        display:"flex",
-        gap:"20px"
+        background:"#1e293b",
+        padding:"40px",
+        borderRadius:"12px",
+        width:"400px"
       }}>
 
-        <Card title="LOW" value={data.low} color="#fecaca"/>
+        <h2 style={{marginBottom:"20px"}}>
+          Seleccionar empresa
+        </h2>
 
-        <Card title="HIGH" value={data.high} color="#bfdbfe"/>
+        {companies.map(c=>(
+          
+          <button
+            key={c.id}
+            onClick={()=>chooseCompany(c.id)}
+            style={{
+              width:"100%",
+              padding:"12px",
+              marginBottom:"10px",
+              borderRadius:"8px",
+              border:"none",
+              background:"#334155",
+              color:"white",
+              cursor:"pointer"
+            }}
+          >
 
-        <Card title="ULTRA HIGH" value={data.ultra_high} color="#e9d5ff"/>
+            {c.name}
+
+          </button>
+
+        ))}
 
       </div>
 
-    </div>
-
-  )
-
-}
-
-function Card({title,value,color}:any){
-
-  return(
-
-    <div style={{
-      width:"160px",
-      height:"120px",
-      background:color,
-      borderRadius:"12px",
-      padding:"20px",
-      color:"#020617"
-    }}>
-
-      <h4>{title}</h4>
-
-      <h2>{value}</h2>
-
-    </div>
+    </main>
 
   )
 
