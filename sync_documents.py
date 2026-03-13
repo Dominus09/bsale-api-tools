@@ -17,6 +17,9 @@ LIMIT_BSALE = 50
 LIMIT_NOCO = 200
 BATCH = 100
 
+START_DATE = 1767225600   # 01-01-2026
+END_DATE = int(time.time())
+
 HEAD_NOCO = {
     "xc-token": NOCODB_TOKEN,
     "Content-Type": "application/json"
@@ -26,6 +29,29 @@ HEAD_BSALE = {
     "access_token": BSALE_TOKEN
 }
 
+# -------------------------------------------------
+# SAFE GET BSALE
+# -------------------------------------------------
+
+def bsale_get(url, headers, params=None):
+
+    while True:
+
+        r = requests.get(url, headers=headers, params=params, timeout=30)
+
+        if r.status_code == 429:
+
+            wait = int(r.json().get("retry_after",60))
+
+            print("RATE LIMIT WAIT",wait)
+
+            time.sleep(wait)
+
+            continue
+
+        r.raise_for_status()
+
+        return r.json()
 
 # -------------------------------------------------
 # GET EXISTING DOCUMENTS
@@ -50,12 +76,14 @@ def noco_get_all():
         )
 
         data = r.json()
-        rows = data.get("list", [])
+
+        rows = data.get("list",[])
 
         if not rows:
             break
 
         for row in rows:
+
             existing[row["bsale_id"]] = row
 
         offset += LIMIT_NOCO
@@ -71,14 +99,14 @@ def batch_insert(rows):
 
     url = f"{NOCODB}/api/v2/tables/{TABLE_DOCUMENTS}/records"
 
-    requests.post(url, headers=HEAD_NOCO, json=rows)
+    requests.post(url,headers=HEAD_NOCO,json=rows)
 
 
 def batch_update(rows):
 
     url = f"{NOCODB}/api/v2/tables/{TABLE_DOCUMENTS}/records"
 
-    requests.patch(url, headers=HEAD_NOCO, json=rows)
+    requests.patch(url,headers=HEAD_NOCO,json=rows)
 
 
 # -------------------------------------------------
@@ -94,20 +122,24 @@ offset = 0
 
 while True:
 
-    r = requests.get(
-        f"{BASE}/documents.json",
-        headers=HEAD_BSALE,
-        params={"limit": LIMIT_BSALE, "offset": offset}
-    )
+    data = bsale_get(
 
-    data = r.json()
+        f"{BASE}/documents.json",
+        HEAD_BSALE,
+        {
+            "limit": LIMIT_BSALE,
+            "offset": offset,
+            "emissiondaterange": f"[{START_DATE},{END_DATE}]"
+        }
+
+    )
 
     items = data["items"]
 
     if not items:
         break
 
-    print("DOCUMENTS:", len(items))
+    print("DOCUMENTS:",len(items))
 
     for d in items:
 
@@ -118,7 +150,10 @@ while True:
         emission_date = None
 
         if emission_raw:
-            emission_date = datetime.fromtimestamp(int(emission_raw)).strftime("%Y-%m-%d %H:%M:%S")
+
+            emission_date = datetime.fromtimestamp(
+                int(emission_raw)
+            ).strftime("%Y-%m-%d %H:%M:%S")
 
         payload = {
 
@@ -152,11 +187,13 @@ while True:
         if len(insert_rows) >= BATCH:
 
             batch_insert(insert_rows)
+
             insert_rows = []
 
         if len(update_rows) >= BATCH:
 
             batch_update(update_rows)
+
             update_rows = []
 
     offset += LIMIT_BSALE
