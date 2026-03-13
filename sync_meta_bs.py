@@ -172,7 +172,7 @@ def sync_users():
                 "first_name": u.get("firstName"),
                 "last_name": u.get("lastName"),
                 "email": u.get("email"),
-                "active": u.get("active")
+                "state": u.get("state")
 
             }
 
