@@ -29,14 +29,36 @@ def upsert_client(row):
 
     bsale_id = row["bsale_id"]
 
-    url = f"{NOCODB}/api/v2/tables/{TABLE_CLIENTS}/records"
-
-    payload = {
-        "where": f"(bsale_id,eq,{bsale_id})",
-        "records": [row]
+    # 1️⃣ buscar registro
+    url_find = f"{NOCODB}/api/v2/tables/{TABLE_CLIENTS}/records"
+    params = {
+        "where": f"(bsale_id,eq,{bsale_id})"
     }
 
-    r = requests.patch(url, headers=HEAD_NOCO, json=payload)
+    r = requests.get(url_find, headers=HEAD_NOCO, params=params)
+    data = r.json()
+
+    records = data.get("list", [])
+
+    # 2️⃣ si existe → UPDATE
+    if records:
+
+        record_id = records[0]["Id"]
+
+        url_update = f"{NOCODB}/api/v2/tables/{TABLE_CLIENTS}/records/{record_id}"
+
+        r = requests.patch(url_update, headers=HEAD_NOCO, json=row)
+
+    # 3️⃣ si no existe → INSERT
+    else:
+
+        url_insert = f"{NOCODB}/api/v2/tables/{TABLE_CLIENTS}/records"
+
+        payload = {
+            "records": [row]
+        }
+
+        r = requests.post(url_insert, headers=HEAD_NOCO, json=payload)
 
     if r.status_code not in [200,201]:
         print("NOCODB ERROR")
