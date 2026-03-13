@@ -34,7 +34,7 @@ export default function LoginPage() {
 
       if(data.ok){
 
-        localStorage.setItem("qa_auth","1")
+        document.cookie = "qa_auth=1; path=/"
         localStorage.setItem("qa_user",data.user.username)
         localStorage.setItem("qa_role",data.user.role)
 
