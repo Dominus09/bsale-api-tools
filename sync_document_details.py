@@ -3,7 +3,7 @@ import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-print("SYNC DOCUMENT DETAILS FAST START")
+print("SYNC DOCUMENT DETAILS FAST V2 START")
 
 BASE = "https://api.bsale.io/v1"
 NOCODB = "https://db.quillotana.cl"
@@ -14,9 +14,9 @@ BSALE_TOKEN = os.getenv("BSALE_TOKEN_SPA")
 TABLE_DOCUMENTS = "mc73age2tnhq3dd"
 TABLE_DETAILS = "mox0eode1i5flz5"
 
-LIMIT_NOCO = 200
-BATCH = 200
-WORKERS = 8
+LIMIT_NOCO = 500
+BATCH = 800
+WORKERS = 6
 
 HEAD_NOCO = {
     "xc-token": NOCODB_TOKEN,
@@ -37,22 +37,15 @@ def bsale_get(url):
 
         try:
 
-            r = requests.get(
-                url,
-                headers=HEAD_BSALE,
-                timeout=30
-            )
+            r = requests.get(url, headers=HEAD_BSALE, timeout=30)
 
             if r.status_code == 429:
-
                 wait = int(r.json().get("retry_after",60))
                 print("RATE LIMIT WAIT",wait)
                 time.sleep(wait)
                 continue
 
             if r.status_code in [500,502,503,504]:
-
-                print("BSALE ERROR",r.status_code)
                 time.sleep(2)
                 continue
 
@@ -60,18 +53,16 @@ def bsale_get(url):
 
             return r.json()
 
-        except requests.exceptions.RequestException:
-
+        except:
             time.sleep(2)
 
-
 # -------------------------------------------------
-# GET DOCUMENTS FROM NOCO
+# GET DOCUMENTS FAST
 # -------------------------------------------------
 
 def get_documents():
 
-    print("LOADING DOCUMENTS")
+    print("LOADING DOCUMENTS FAST")
 
     url = f"{NOCODB}/api/v2/tables/{TABLE_DOCUMENTS}/records"
 
@@ -83,87 +74,45 @@ def get_documents():
         r = requests.get(
             url,
             headers=HEAD_NOCO,
-            params={"limit":LIMIT_NOCO,"offset":offset}
+            params={"limit": LIMIT_NOCO, "offset": offset}
         )
 
         data = r.json()
-        rows = data.get("list",[])
+        rows = data.get("list", [])
 
         if not rows:
             break
 
-        for row in rows:
-            docs.append(row["bsale_id"])
+        docs.extend([row["bsale_id"] for row in rows])
 
         offset += LIMIT_NOCO
 
-    print("DOCUMENTS FOUND",len(docs))
+    print("DOCUMENTS FOUND:", len(docs))
 
     return docs
 
-
 # -------------------------------------------------
-# GET EXISTING DETAILS
-# -------------------------------------------------
-
-def get_existing_details():
-
-    print("LOADING EXISTING DETAILS")
-
-    url = f"{NOCODB}/api/v2/tables/{TABLE_DETAILS}/records"
-
-    offset = 0
-    existing = set()
-
-    while True:
-
-        r = requests.get(
-            url,
-            headers=HEAD_NOCO,
-            params={"limit":LIMIT_NOCO,"offset":offset}
-        )
-
-        data = r.json()
-
-        rows = data.get("list",[])
-
-        if not rows:
-            break
-
-        for row in rows:
-            existing.add(row["bsale_detail_id"])
-
-        offset += LIMIT_NOCO
-
-    print("DETAILS FOUND",len(existing))
-
-    return existing
-
-
-# -------------------------------------------------
-# FETCH DETAILS FOR ONE DOCUMENT
+# FETCH DETAILS
 # -------------------------------------------------
 
 def fetch_details(doc_id):
 
     data = bsale_get(f"{BASE}/documents/{doc_id}/details.json")
 
-    return doc_id, data.get("items",[])
-
+    return doc_id, data.get("items", [])
 
 # -------------------------------------------------
-# BATCH INSERT
+# INSERT BATCH
 # -------------------------------------------------
 
 def batch_insert(rows):
 
-    if not rows:
-        return
-
     url = f"{NOCODB}/api/v2/tables/{TABLE_DETAILS}/records"
 
-    requests.post(url,headers=HEAD_NOCO,json=rows)
-
+    try:
+        requests.post(url, headers=HEAD_NOCO, json=rows)
+    except:
+        pass
 
 # -------------------------------------------------
 # MAIN
@@ -171,10 +120,7 @@ def batch_insert(rows):
 
 documents = get_documents()
 
-existing_details = get_existing_details()
-
 insert_rows = []
-
 count = 0
 
 with ThreadPoolExecutor(max_workers=WORKERS) as executor:
@@ -187,14 +133,9 @@ with ThreadPoolExecutor(max_workers=WORKERS) as executor:
 
         for d in items:
 
-            detail_id = d["id"]
-
-            if detail_id in existing_details:
-                continue
-
             payload = {
 
-                "bsale_detail_id": detail_id,
+                "bsale_detail_id": d["id"],
                 "document_id": doc_id,
                 "line_number": d.get("lineNumber"),
                 "variant_id": d.get("variant",{}).get("id"),
@@ -212,16 +153,15 @@ with ThreadPoolExecutor(max_workers=WORKERS) as executor:
             }
 
             insert_rows.append(payload)
-
             count += 1
 
-            if len(insert_rows) >= BATCH:
+        if len(insert_rows) >= BATCH:
 
-                batch_insert(insert_rows)
+            batch_insert(insert_rows)
 
-                print("INSERTED",count)
+            print("INSERTED:", count)
 
-                insert_rows = []
+            insert_rows = []
 
 if insert_rows:
     batch_insert(insert_rows)
