@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect,useState } from "react"
 
 export default function Problems(){
 
@@ -11,7 +11,11 @@ export default function Problems(){
 
     async function load(){
 
-      const res = await fetch("https://api.quillotana.cl/margin/problems/1")
+      const company = localStorage.getItem("company_id")
+
+      const res = await fetch(
+        `https://api.quillotana.cl/margin/problems/?company_id=${company}`
+      )
 
       const data = await res.json()
 
@@ -130,8 +134,11 @@ export default function Problems(){
 function statusColor(status:string){
 
   if(status==="LOW") return "#f87171"
+
   if(status==="HIGH") return "#60a5fa"
+
   if(status==="ULTRA_HIGH") return "#c084fc"
+
   if(status==="NO_PRICE") return "#fbbf24"
 
   return "white"
