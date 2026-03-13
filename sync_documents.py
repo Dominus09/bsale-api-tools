@@ -1,7 +1,7 @@
 import requests
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 print("SYNC DOCUMENTS START")
 
@@ -17,8 +17,8 @@ LIMIT_BSALE = 50
 LIMIT_NOCO = 200
 BATCH = 200
 
-START_DATE = 1767225600
-END_DATE = int(time.time())
+START_DATE = datetime(2026,1,1)
+END_DATE = datetime.now()
 
 HEAD_NOCO = {
     "xc-token": NOCODB_TOKEN,
@@ -30,7 +30,7 @@ HEAD_BSALE = {
 }
 
 # -------------------------------------------------
-# SAFE GET
+# SAFE GET BSALE
 # -------------------------------------------------
 
 def bsale_get(params):
@@ -47,13 +47,15 @@ def bsale_get(params):
             )
 
             if r.status_code == 429:
+
                 wait = int(r.json().get("retry_after",60))
-                print("RATE LIMIT WAIT", wait)
+                print("RATE LIMIT WAIT",wait)
                 time.sleep(wait)
                 continue
 
             if r.status_code in [500,502,503,504]:
-                print("BSALE ERROR", r.status_code)
+
+                print("BSALE ERROR",r.status_code)
                 time.sleep(3)
                 continue
 
@@ -63,12 +65,11 @@ def bsale_get(params):
 
         except requests.exceptions.RequestException as e:
 
-            print("RETRY:", e)
+            print("RETRY",e)
             time.sleep(3)
 
-
 # -------------------------------------------------
-# EXISTING DOCUMENTS
+# GET EXISTING DOCUMENTS
 # -------------------------------------------------
 
 def noco_get_all():
@@ -83,11 +84,11 @@ def noco_get_all():
         r = requests.get(
             url,
             headers=HEAD_NOCO,
-            params={"limit": LIMIT_NOCO, "offset": offset}
+            params={"limit":LIMIT_NOCO,"offset":offset}
         )
 
         data = r.json()
-        rows = data.get("list", [])
+        rows = data.get("list",[])
 
         if not rows:
             break
@@ -99,24 +100,28 @@ def noco_get_all():
 
     return existing
 
-
 # -------------------------------------------------
-# INSERT / UPDATE
+# INSERT UPDATE
 # -------------------------------------------------
 
 def batch_insert(rows):
 
+    if not rows:
+        return
+
     url = f"{NOCODB}/api/v2/tables/{TABLE_DOCUMENTS}/records"
 
-    requests.post(url, headers=HEAD_NOCO, json=rows)
+    requests.post(url,headers=HEAD_NOCO,json=rows)
 
 
 def batch_update(rows):
 
+    if not rows:
+        return
+
     url = f"{NOCODB}/api/v2/tables/{TABLE_DOCUMENTS}/records"
 
-    requests.patch(url, headers=HEAD_NOCO, json=rows)
-
+    requests.patch(url,headers=HEAD_NOCO,json=rows)
 
 # -------------------------------------------------
 # MAIN
@@ -127,77 +132,84 @@ existing = noco_get_all()
 insert_rows = []
 update_rows = []
 
-offset = 0
+current_day = START_DATE
 
-while True:
+while current_day <= END_DATE:
 
-    params = {
-        "limit": LIMIT_BSALE,
-        "offset": offset,
-        "emissiondaterange": f"[{START_DATE},{END_DATE}]"
-    }
+    start_ts = int(current_day.timestamp())
+    end_ts = int((current_day + timedelta(days=1)).timestamp()) - 1
 
-    data = bsale_get(params)
+    print("SYNC DAY",current_day.strftime("%Y-%m-%d"))
 
-    items = data["items"]
+    offset = 0
 
-    if not items:
-        print("NO MORE DOCUMENTS")
-        break
+    while True:
 
-    print("OFFSET", offset, "DOCS", len(items))
-
-    for d in items:
-
-        bsale_id = d["id"]
-
-        emission_raw = d.get("emissionDate")
-
-        emission_date = None
-
-        if emission_raw:
-            emission_date = datetime.fromtimestamp(
-                int(emission_raw)
-            ).strftime("%Y-%m-%d %H:%M:%S")
-
-        payload = {
-
-            "bsale_id": bsale_id,
-            "number": d.get("number"),
-            "emission_date": emission_date,
-            "document_type_id": d.get("document_type",{}).get("id"),
-            "client_id": d.get("client",{}).get("id"),
-            "office_id": d.get("office",{}).get("id"),
-            "user_id": d.get("user",{}).get("id"),
-            "total_amount": d.get("totalAmount"),
-            "state": d.get("state"),
-            "url_public": d.get("urlPublicView"),
-            "url_pdf": d.get("urlPdf"),
-            "token": d.get("token")
-
+        params = {
+            "limit":LIMIT_BSALE,
+            "offset":offset,
+            "emissiondaterange":f"[{start_ts},{end_ts}]"
         }
 
-        if bsale_id in existing:
+        data = bsale_get(params)
 
-            payload["Id"] = existing[bsale_id]["Id"]
-            update_rows.append(payload)
+        items = data["items"]
 
-        else:
+        if not items:
+            break
 
-            insert_rows.append(payload)
+        for d in items:
 
-    if len(insert_rows) >= BATCH:
+            bsale_id = d["id"]
 
-        batch_insert(insert_rows)
-        insert_rows = []
+            emission_raw = d.get("emissionDate")
 
-    if len(update_rows) >= BATCH:
+            emission_date = None
 
-        batch_update(update_rows)
-        update_rows = []
+            if emission_raw:
+                emission_date = datetime.fromtimestamp(
+                    int(emission_raw)
+                ).strftime("%Y-%m-%d %H:%M:%S")
 
-    offset += LIMIT_BSALE
+            payload = {
 
+                "bsale_id":bsale_id,
+                "number":d.get("number"),
+                "emission_date":emission_date,
+                "document_type_id":d.get("document_type",{}).get("id"),
+                "client_id":d.get("client",{}).get("id"),
+                "office_id":d.get("office",{}).get("id"),
+                "user_id":d.get("user",{}).get("id"),
+                "total_amount":d.get("totalAmount"),
+                "state":d.get("state"),
+                "url_public":d.get("urlPublicView"),
+                "url_pdf":d.get("urlPdf"),
+                "token":d.get("token")
+
+            }
+
+            if bsale_id in existing:
+
+                payload["Id"] = existing[bsale_id]["Id"]
+                update_rows.append(payload)
+
+            else:
+
+                insert_rows.append(payload)
+
+        if len(insert_rows) >= BATCH:
+
+            batch_insert(insert_rows)
+            insert_rows = []
+
+        if len(update_rows) >= BATCH:
+
+            batch_update(update_rows)
+            update_rows = []
+
+        offset += LIMIT_BSALE
+
+    current_day += timedelta(days=1)
 
 if insert_rows:
     batch_insert(insert_rows)
