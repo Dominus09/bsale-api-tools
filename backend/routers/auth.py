@@ -1,7 +1,10 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from backend.database import noco_get
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+router = APIRouter(
+    prefix="/auth",
+    tags=["Auth"]
+)
 
 TABLE_USERS = "mu1cx8k25nmqmox"
 
@@ -9,29 +12,31 @@ TABLE_USERS = "mu1cx8k25nmqmox"
 @router.post("/login")
 def login(data: dict):
 
-    username = data.get("username")
-    password = data.get("password")
-
-    if not username or not password:
-        raise HTTPException(status_code=400, detail="missing credentials")
+    username = str(data.get("username","")).strip()
+    password = str(data.get("password","")).strip()
 
     rows = noco_get(
         TABLE_USERS,
-        params={"where": f"(username,eq,{username})"}
+        params={
+            "where": f"(username,eq,{username})"
+        }
     )
 
     if not rows:
-        raise HTTPException(status_code=401, detail="user not found")
+        return {"ok": False}
 
     user = rows[0]
 
     if not user.get("active"):
-        raise HTTPException(status_code=403, detail="user disabled")
+        return {"ok": False}
 
     if user["password"] != password:
-        raise HTTPException(status_code=401, detail="wrong password")
+        return {"ok": False}
 
     return {
-        "username": user["username"],
-        "role": user["role"]
+        "ok": True,
+        "user": {
+            "username": user["username"],
+            "role": user["role"]
+        }
     }
