@@ -2,435 +2,293 @@ import requests
 import os
 import json
 import time
+import psycopg2
+from psycopg2.extras import execute_batch
 
 print("SYNC CATALOG START")
 
 BASE = "https://api.bsale.io/v1"
-NOCODB = "https://db.quillotana.cl"
-
-NOCODB_TOKEN = os.getenv("NocoDB_token")
-
-HEAD_NOCO = {
-    "xc-token": NOCODB_TOKEN,
-    "Content-Type": "application/json"
-}
 
 LIMIT = 50
 
-TABLE_PRODUCTS = "meke3fsng90uspe"
-TABLE_PRODUCT_TYPES = "mcir9ile6id3813"
-TABLE_TAXES = "mary3rk9y5rwviu"
-TABLE_VARIANTS = "msd4vvijzk9pre9"
-TABLE_PRICE_LISTS = "m8zibme0z28jls6"
-TABLE_OFFICES = "m878eot7j6fi5v7"
-TABLE_COMPANIES = "m27za58sg6ustui"
+# -------------------------------
 
+# POSTGRES CONNECTION
 
-# ----------------------------------------------------
-# GET COMPANIES
-# ----------------------------------------------------
+# -------------------------------
 
-def get_companies():
+conn = psycopg2.connect(
+host=os.getenv("PG_HOST"),
+database=os.getenv("PG_DB"),
+user=os.getenv("PG_USER"),
+password=os.getenv("PG_PASSWORD")
+)
 
-    url = f"{NOCODB}/api/v2/tables/{TABLE_COMPANIES}/records"
+cur = conn.cursor()
 
-    r = requests.get(url, headers=HEAD_NOCO, params={"limit":100})
+# -------------------------------
 
-    data = r.json()
-
-    companies = []
-
-    for row in data.get("list", []):
-
-        if row.get("active"):
-
-            token = os.getenv(row["bsale_token"])
-
-            if not token:
-                print("TOKEN NOT FOUND:", row["bsale_token"])
-                continue
-
-            companies.append({
-                "company_id": row["company_id"],
-                "name": row["name"],
-                "token": token
-            })
-
-    return companies
-
-
-# ----------------------------------------------------
 # BSALE REQUEST
-# ----------------------------------------------------
+
+# -------------------------------
 
 def bsale_get(url, headers, params=None):
 
-    while True:
+```
+while True:
 
-        r = requests.get(url, headers=headers, params=params)
+    r = requests.get(url, headers=headers, params=params)
 
-        if r.status_code == 429:
+    if r.status_code == 429:
 
-            retry = int(r.json().get("retry_after",60))
-            print("RATE LIMIT WAIT", retry)
-            time.sleep(retry)
-            continue
+        retry = int(r.json().get("retry_after",60))
+        print("RATE LIMIT WAIT", retry)
+        time.sleep(retry)
+        continue
 
-        r.raise_for_status()
+    r.raise_for_status()
 
-        return r.json()
+    return r.json()
+```
 
+# -------------------------------
 
-# ----------------------------------------------------
-# NOCO HELPERS
-# ----------------------------------------------------
+# GET COMPANIES FROM POSTGRES
 
-def noco_get_all(table, company_id):
+# -------------------------------
 
-    url = f"{NOCODB}/api/v2/tables/{table}/records"
+def get_companies():
 
-    offset = 0
+```
+cur.execute("""
+    SELECT company_id,name,bsale_token
+    FROM bsale.companies
+    WHERE active = true
+""")
 
-    mapping = {}
+rows = cur.fetchall()
 
-    while True:
+companies = []
 
-        r = requests.get(
-            url,
-            headers=HEAD_NOCO,
-            params={
-                "limit":200,
-                "offset":offset,
-                "where": f"(company_id,eq,{company_id})"
-            }
-        )
+for r in rows:
 
-        data = r.json()
+    token = os.getenv(r[2])
 
-        rows = data.get("list",[])
+    if not token:
+        print("TOKEN NOT FOUND:", r[2])
+        continue
 
-        if not rows:
-            break
+    companies.append({
+        "company_id": r[0],
+        "name": r[1],
+        "token": token
+    })
 
-        for row in rows:
+return companies
+```
 
-            mapping[row["bsale_id"]] = row["Id"]
+# -------------------------------
 
-        offset += 200
+# UPSERT HELPERS
 
-    return mapping
+# -------------------------------
 
+def upsert(query, data):
 
-def insert(table,payload):
+```
+execute_batch(cur, query, data)
+conn.commit()
+```
 
-    url = f"{NOCODB}/api/v2/tables/{table}/records"
+# -------------------------------
 
-    r = requests.post(url,headers=HEAD_NOCO,json=payload)
-
-    if r.status_code not in [200,201]:
-
-        print("INSERT ERROR",r.text)
-
-
-def update(table,row_id,payload):
-
-    url = f"{NOCODB}/api/v2/tables/{table}/records"
-
-    payload["Id"] = row_id
-
-    r = requests.patch(url,headers=HEAD_NOCO,json=payload)
-
-    if r.status_code not in [200,201]:
-
-        print("UPDATE ERROR",r.text)
-
-
-# ----------------------------------------------------
 # MAIN
-# ----------------------------------------------------
+
+# -------------------------------
 
 companies = get_companies()
 
 for company in companies:
 
-    company_id = company["company_id"]
+```
+company_id = company["company_id"]
+token = company["token"]
 
-    token = company["token"]
+print("\nSYNC COMPANY:",company["name"])
 
-    print("\n==============================")
-    print("SYNC COMPANY:",company["name"])
-    print("==============================")
+HEAD_BSALE = {
+    "access_token": token
+}
 
-    HEAD_BSALE = {
-        "access_token": token
+# -----------------------
+# TAXES
+# -----------------------
+
+print("LOAD TAXES")
+
+taxes = bsale_get(f"{BASE}/taxes.json",HEAD_BSALE)["items"]
+
+tax_rows = []
+
+tax_map = {}
+
+for t in taxes:
+
+    tax_id = int(t["id"])
+
+    tax_map[tax_id] = {
+        "name": t["name"],
+        "percentage": float(t["percentage"])
     }
 
-    # ----------------------------------------------------
-    # TAXES
-    # ----------------------------------------------------
+    tax_rows.append((
+        company_id,
+        tax_id,
+        t["name"],
+        float(t["percentage"])
+    ))
 
-    print("LOAD TAXES")
+upsert("""
 
-    taxes = bsale_get(f"{BASE}/taxes.json",HEAD_BSALE)["items"]
+INSERT INTO bsale.taxes
+(company_id, bsale_id, name, percentage)
 
-    existing_taxes = noco_get_all(TABLE_TAXES,company_id)
+VALUES (%s,%s,%s,%s)
 
-    tax_map = {}
+ON CONFLICT (company_id, bsale_id)
+DO UPDATE SET
 
-    for t in taxes:
+name = EXCLUDED.name,
+percentage = EXCLUDED.percentage
 
-        tax_id = int(t["id"])
+""", tax_rows)
 
-        tax_map[tax_id] = {
-            "name": t["name"],
-            "percentage": float(t["percentage"])
-        }
+print("TAXES DONE")
 
-        payload = {
-            "company_id": company_id,
-            "bsale_id": tax_id,
-            "name": t["name"],
-            "percentage": t["percentage"]
-        }
+# -----------------------
+# PRODUCT TYPES
+# -----------------------
 
-        if tax_id in existing_taxes:
+print("LOAD PRODUCT TYPES")
 
-            update(TABLE_TAXES,existing_taxes[tax_id],payload)
+rows = []
 
-        else:
+offset = 0
 
-            insert(TABLE_TAXES,payload)
+while True:
 
-    print("TAXES DONE")
+    data = bsale_get(
+        f"{BASE}/product_types.json",
+        HEAD_BSALE,
+        {"limit":LIMIT,"offset":offset}
+    )
 
-    # ----------------------------------------------------
-    # PRODUCT TYPES
-    # ----------------------------------------------------
+    items = data.get("items",[])
 
-    print("LOAD PRODUCT TYPES")
+    if not items:
+        break
 
-    existing_types = noco_get_all(TABLE_PRODUCT_TYPES,company_id)
+    for pt in items:
 
-    offset = 0
+        rows.append((
+            company_id,
+            int(pt["id"]),
+            pt["name"],
+            pt["state"]
+        ))
 
-    while True:
+    offset += LIMIT
 
-        data = bsale_get(
-            f"{BASE}/product_types.json",
-            HEAD_BSALE,
-            {"limit":LIMIT,"offset":offset}
-        )
+upsert("""
 
-        items = data.get("items",[])
+INSERT INTO bsale.product_types
+(company_id, bsale_id, name, state)
 
-        if not items:
-            break
+VALUES (%s,%s,%s,%s)
 
-        for pt in items:
+ON CONFLICT (company_id, bsale_id)
+DO UPDATE SET
 
-            pt_id = int(pt["id"])
+name = EXCLUDED.name,
+state = EXCLUDED.state
 
-            payload = {
-                "company_id":company_id,
-                "bsale_id":pt_id,
-                "name":pt["name"],
-                "state":pt["state"]
-            }
+""", rows)
 
-            if pt_id in existing_types:
+print("PRODUCT TYPES DONE")
 
-                update(TABLE_PRODUCT_TYPES,existing_types[pt_id],payload)
 
-            else:
+# -----------------------
+# PRICE LISTS
+# -----------------------
 
-                insert(TABLE_PRODUCT_TYPES,payload)
+print("LOAD PRICE LISTS")
 
-        offset += LIMIT
+lists = bsale_get(f"{BASE}/price_lists.json",HEAD_BSALE)["items"]
 
-    print("PRODUCT TYPES DONE")
+rows = []
 
+for pl in lists:
 
-    # ----------------------------------------------------
-    # PRICE LISTS
-    # ----------------------------------------------------
+    rows.append((
+        company_id,
+        int(pl["id"]),
+        pl["name"],
+        pl["state"]
+    ))
 
-    print("LOAD PRICE LISTS")
+upsert("""
 
-    existing_lists = noco_get_all(TABLE_PRICE_LISTS,company_id)
+INSERT INTO bsale.price_lists
+(company_id, bsale_id, name, state)
 
-    lists = bsale_get(f"{BASE}/price_lists.json",HEAD_BSALE)["items"]
+VALUES (%s,%s,%s,%s)
 
-    for pl in lists:
+ON CONFLICT (company_id, bsale_id)
+DO UPDATE SET
 
-        pl_id = int(pl["id"])
+name = EXCLUDED.name,
+state = EXCLUDED.state
 
-        payload = {
-            "company_id":company_id,
-            "bsale_id":pl_id,
-            "name":pl["name"],
-            "state":pl["state"]
-        }
+""", rows)
 
-        if pl_id in existing_lists:
+print("PRICE LISTS DONE")
 
-            update(TABLE_PRICE_LISTS,existing_lists[pl_id],payload)
 
-        else:
+# -----------------------
+# OFFICES
+# -----------------------
 
-            insert(TABLE_PRICE_LISTS,payload)
+print("LOAD OFFICES")
 
-    print("PRICE LISTS DONE")
+offices = bsale_get(f"{BASE}/offices.json",HEAD_BSALE)["items"]
 
+rows = []
 
-    # ----------------------------------------------------
-    # OFFICES
-    # ----------------------------------------------------
+for o in offices:
 
-    print("LOAD OFFICES")
+    rows.append((
+        company_id,
+        int(o["id"]),
+        o["name"],
+        o["state"]
+    ))
 
-    existing_offices = noco_get_all(TABLE_OFFICES,company_id)
+upsert("""
 
-    offices = bsale_get(f"{BASE}/offices.json",HEAD_BSALE)["items"]
+INSERT INTO bsale.offices
+(company_id, bsale_id, name, state)
 
-    for o in offices:
+VALUES (%s,%s,%s,%s)
 
-        office_id = int(o["id"])
+ON CONFLICT (company_id, bsale_id)
+DO UPDATE SET
 
-        payload = {
-            "company_id":company_id,
-            "bsale_id":office_id,
-            "name":o["name"],
-            "state":o["state"]
-        }
+name = EXCLUDED.name,
+state = EXCLUDED.state
 
-        if office_id in existing_offices:
+""", rows)
 
-            update(TABLE_OFFICES,existing_offices[office_id],payload)
-
-        else:
-
-            insert(TABLE_OFFICES,payload)
-
-    print("OFFICES DONE")
-
-
-    # ----------------------------------------------------
-    # PRODUCTS
-    # ----------------------------------------------------
-
-    print("LOAD PRODUCTS")
-
-    existing_products = noco_get_all(TABLE_PRODUCTS,company_id)
-
-    offset = 0
-
-    while True:
-
-        data = bsale_get(
-            f"{BASE}/products.json",
-            HEAD_BSALE,
-            {"limit":LIMIT,"offset":offset}
-        )
-
-        items = data.get("items",[])
-
-        if not items:
-            break
-
-        for p in items:
-
-            product_id = int(p["id"])
-
-            tax_ids = []
-            tax_names = []
-            tax_total = 0
-
-            if "product_taxes" in p and "href" in p["product_taxes"]:
-
-                tax_data = bsale_get(p["product_taxes"]["href"],HEAD_BSALE)
-
-                for t in tax_data.get("items",[]):
-
-                    tax_id = int(t["tax"]["id"])
-
-                    tax_ids.append(tax_id)
-
-                    tax_names.append(tax_map[tax_id]["name"])
-
-                    tax_total += tax_map[tax_id]["percentage"]
-
-            tax_factor = 1 + (tax_total/100)
-
-            payload = {
-                "company_id":company_id,
-                "bsale_id":product_id,
-                "name":p["name"],
-                "product_type_id":p["product_type"]["id"] if p.get("product_type") else None,
-                "tax_ids_json":json.dumps(tax_ids),
-                "tax_names_json":json.dumps(tax_names),
-                "tax_factor":round(tax_factor,3)
-            }
-
-            if product_id in existing_products:
-
-                update(TABLE_PRODUCTS,existing_products[product_id],payload)
-
-            else:
-
-                insert(TABLE_PRODUCTS,payload)
-
-        offset += LIMIT
-
-    print("PRODUCTS DONE")
-
-
-    # ----------------------------------------------------
-    # VARIANTS
-    # ----------------------------------------------------
-
-    print("LOAD VARIANTS")
-
-    existing_variants = noco_get_all(TABLE_VARIANTS,company_id)
-
-    offset = 0
-
-    while True:
-
-        data = bsale_get(
-            f"{BASE}/variants.json",
-            HEAD_BSALE,
-            {"limit":LIMIT,"offset":offset}
-        )
-
-        items = data.get("items",[])
-
-        if not items:
-            break
-
-        for v in items:
-
-            variant_id = int(v["id"])
-
-            payload = {
-                "company_id":company_id,
-                "bsale_id":variant_id,
-                "product_id":int(v["product"]["id"]),
-                "code":v.get("code"),
-                "bar_code":v.get("barCode"),
-                "description":v.get("description")
-            }
-
-            if variant_id in existing_variants:
-
-                update(TABLE_VARIANTS,existing_variants[variant_id],payload)
-
-            else:
-
-                insert(TABLE_VARIANTS,payload)
-
-        offset += LIMIT
-
-    print("VARIANTS DONE")
-
+print("OFFICES DONE")
+```
 
 print("\nSYNC CATALOG COMPLETE")
