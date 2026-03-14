@@ -6,7 +6,8 @@ from backend.routers import margin
 from backend.routers import margin_problems
 from backend.routers import margin_export
 from backend.routers import auth
-from routers.catalog import router as catalog_router
+from backend.routers.catalog import router as catalog_router
+
 
 
 app = FastAPI(
