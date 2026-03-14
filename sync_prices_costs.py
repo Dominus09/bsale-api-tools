@@ -2,33 +2,34 @@ import requests
 import os
 import time
 from datetime import datetime
+import psycopg2
+from psycopg2.extras import execute_batch
 
-print("SYNC COSTS + PRICES")
+print("SYNC COSTS + PRICES START")
 
 BASE = "https://api.bsale.io/v1"
-NOCODB = "https://db.quillotana.cl"
 
-NOCODB_TOKEN = os.getenv("NocoDB_token")
-
-HEAD_NOCO = {
-    "xc-token": NOCODB_TOKEN,
-    "Content-Type": "application/json"
-}
-
-TABLE_VARIANTS = "msd4vvijzk9pre9"
-TABLE_PRODUCTS = "meke3fsng90uspe"
-TABLE_COSTS = "mdjjvdlwev2o76u"
-TABLE_PRICES = "mcby3npgc3ig042"
-TABLE_COMPANIES = "m27za58sg6ustui"
-
-BSALE_LIMIT = 50
-NOCO_LIMIT = 200
-BATCH = 100
+LIMIT = 50
+BATCH = 500
 
 
-# -------------------------------------------------
-# SAFE REQUEST
-# -------------------------------------------------
+# ---------------------------------
+# POSTGRES CONNECTION
+# ---------------------------------
+
+conn = psycopg2.connect(
+    host=os.getenv("PG_HOST"),
+    database=os.getenv("PG_DB"),
+    user=os.getenv("PG_USER"),
+    password=os.getenv("PG_PASSWORD")
+)
+
+cur = conn.cursor()
+
+
+# ---------------------------------
+# SAFE BSALE REQUEST
+# ---------------------------------
 
 def bsale_get(url, headers, params=None):
 
@@ -39,11 +40,8 @@ def bsale_get(url, headers, params=None):
         if r.status_code == 429:
 
             wait = int(r.json().get("retry_after",60))
-
             print("RATE LIMIT WAIT",wait)
-
             time.sleep(wait)
-
             continue
 
         r.raise_for_status()
@@ -51,94 +49,92 @@ def bsale_get(url, headers, params=None):
         return r.json()
 
 
-# -------------------------------------------------
-# NOCO HELPERS
-# -------------------------------------------------
-
-def noco_get_all(table, company_id):
-
-    url = f"{NOCODB}/api/v2/tables/{table}/records"
-
-    offset = 0
-    rows = []
-
-    while True:
-
-        r = requests.get(
-
-            url,
-            headers=HEAD_NOCO,
-            params={
-                "limit":NOCO_LIMIT,
-                "offset":offset,
-                "where":f"(company_id,eq,{company_id})"
-            }
-
-        )
-
-        data = r.json()
-
-        batch = data.get("list",[])
-
-        if not batch:
-            break
-
-        rows.extend(batch)
-
-        offset += NOCO_LIMIT
-
-    return rows
-
-
-def batch_insert(table,rows):
-
-    url = f"{NOCODB}/api/v2/tables/{table}/records"
-
-    requests.post(url,headers=HEAD_NOCO,json=rows)
-
-
-def batch_update(table,rows):
-
-    url = f"{NOCODB}/api/v2/tables/{table}/records"
-
-    requests.patch(url,headers=HEAD_NOCO,json=rows)
-
-
-# -------------------------------------------------
+# ---------------------------------
 # GET COMPANIES
-# -------------------------------------------------
+# ---------------------------------
 
 def get_companies():
 
-    url = f"{NOCODB}/api/v2/tables/{TABLE_COMPANIES}/records"
+    cur.execute("""
 
-    r = requests.get(url,headers=HEAD_NOCO,params={"limit":100})
+        SELECT company_id,name,bsale_token
+        FROM bsale.companies
+        WHERE active = true
 
-    data = r.json()
+    """)
+
+    rows = cur.fetchall()
 
     companies = []
 
-    for row in data["list"]:
+    for r in rows:
 
-        if not row["active"]:
+        token = os.getenv(r[2])
+
+        if not token:
+            print("TOKEN NOT FOUND:", r[2])
             continue
 
-        token = os.getenv(row["bsale_token"])
-
         companies.append({
-
-            "company_id":row["company_id"],
-            "name":row["name"],
-            "token":token
-
+            "company_id": r[0],
+            "name": r[1],
+            "token": token
         })
 
     return companies
 
 
-# -------------------------------------------------
+# ---------------------------------
+# UPSERT COSTS
+# ---------------------------------
+
+def upsert_costs(rows):
+
+    execute_batch(cur, """
+
+        INSERT INTO bsale.variant_cost
+        (company_id, variant_id, average_cost_net, last_update)
+
+        VALUES (%s,%s,%s,%s)
+
+        ON CONFLICT (company_id, variant_id)
+        DO UPDATE SET
+
+        average_cost_net = EXCLUDED.average_cost_net,
+        last_update = EXCLUDED.last_update
+
+    """, rows)
+
+    conn.commit()
+
+
+# ---------------------------------
+# UPSERT PRICES
+# ---------------------------------
+
+def upsert_prices(rows):
+
+    execute_batch(cur, """
+
+        INSERT INTO bsale.variant_prices
+        (company_id, variant_id, price_list_id, price_net, price_gross)
+
+        VALUES (%s,%s,%s,%s,%s)
+
+        ON CONFLICT (company_id, variant_id, price_list_id)
+        DO UPDATE SET
+
+        price_net = EXCLUDED.price_net,
+        price_gross = EXCLUDED.price_gross
+
+    """, rows)
+
+    conn.commit()
+
+
+# ---------------------------------
 # MAIN
-# -------------------------------------------------
+# ---------------------------------
 
 companies = get_companies()
 
@@ -150,30 +146,26 @@ for company in companies:
 
     HEAD_BSALE = {"access_token":company["token"]}
 
-    variants = noco_get_all(TABLE_VARIANTS,company_id)
 
-    costs_existing = {
+    # -----------------------------
+    # COSTS
+    # -----------------------------
 
-        r["variant_id"]:r
+    cur.execute("""
 
-        for r in noco_get_all(TABLE_COSTS,company_id)
+        SELECT bsale_id
+        FROM bsale.variants
+        WHERE company_id = %s
 
-    }
+    """,(company_id,))
 
-    prices_existing = {
+    variants = cur.fetchall()
 
-        f"{r['variant_id']}_{r['price_list_id']}":r
-
-        for r in noco_get_all(TABLE_PRICES,company_id)
-
-    }
-
-    insert_costs = []
-    update_costs = []
+    rows = []
 
     for v in variants:
 
-        variant_id = v["bsale_id"]
+        variant_id = v[0]
 
         cost_data = bsale_get(
 
@@ -184,32 +176,25 @@ for company in companies:
 
         avg_cost = cost_data.get("averageCost")
 
-        payload = {
+        rows.append((
+            company_id,
+            variant_id,
+            avg_cost,
+            datetime.utcnow()
+        ))
 
-            "company_id":company_id,
-            "variant_id":variant_id,
-            "average_cost_net":avg_cost,
-            "last_update":datetime.utcnow().isoformat()
+        if len(rows) >= BATCH:
 
-        }
+            upsert_costs(rows)
+            rows = []
 
-        if variant_id in costs_existing:
-
-            payload["Id"] = costs_existing[variant_id]["Id"]
-
-            update_costs.append(payload)
-
-        else:
-
-            insert_costs.append(payload)
-
-    batch_insert(TABLE_COSTS,insert_costs)
-    batch_update(TABLE_COSTS,update_costs)
+    if rows:
+        upsert_costs(rows)
 
 
-    # ---------------------------
+    # -----------------------------
     # PRICES
-    # ---------------------------
+    # -----------------------------
 
     price_lists = bsale_get(
 
@@ -218,8 +203,7 @@ for company in companies:
 
     )["items"]
 
-    insert_prices = []
-    update_prices = []
+    rows = []
 
     for pl in price_lists:
 
@@ -233,7 +217,7 @@ for company in companies:
 
                 f"{BASE}/price_lists/{price_list_id}/details.json",
                 HEAD_BSALE,
-                {"limit":BSALE_LIMIT,"offset":offset}
+                {"limit":LIMIT,"offset":offset}
 
             )
 
@@ -244,33 +228,22 @@ for company in companies:
 
             for d in items:
 
-                variant_id = d["variant"]["id"]
+                rows.append((
+                    company_id,
+                    d["variant"]["id"],
+                    price_list_id,
+                    d["variantValue"],
+                    d["variantValueWithTaxes"]
+                ))
 
-                key = f"{variant_id}_{price_list_id}"
+                if len(rows) >= BATCH:
 
-                payload = {
+                    upsert_prices(rows)
+                    rows = []
 
-                    "company_id":company_id,
-                    "variant_id":variant_id,
-                    "price_list_id":price_list_id,
-                    "price_net":d["variantValue"],
-                    "price_gross":d["variantValueWithTaxes"]
+            offset += LIMIT
 
-                }
-
-                if key in prices_existing:
-
-                    payload["Id"] = prices_existing[key]["Id"]
-
-                    update_prices.append(payload)
-
-                else:
-
-                    insert_prices.append(payload)
-
-            offset += BSALE_LIMIT
-
-    batch_insert(TABLE_PRICES,insert_prices)
-    batch_update(TABLE_PRICES,update_prices)
+    if rows:
+        upsert_prices(rows)
 
 print("SYNC COSTS + PRICES COMPLETE")
