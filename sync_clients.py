@@ -2,195 +2,243 @@ import requests
 import os
 import time
 from datetime import datetime
+import psycopg2
+from psycopg2.extras import execute_batch
 
 print("SYNC CLIENTS START")
 
 BASE = "https://api.bsale.io/v1"
-NOCODB = "https://db.quillotana.cl"
 
-NOCODB_TOKEN = os.getenv("NocoDB_token")
-BSALE_TOKEN = os.getenv("BSALE_TOKEN_SPA")
+LIMIT = 50
+BATCH = 500
 
-TABLE_CLIENTS = "mmauyzswrd2hi1b"
 
-LIMIT_BSALE = 50
-LIMIT_NOCO = 200
-BATCH = 100
+# -----------------------------
+# POSTGRES CONNECTION
+# -----------------------------
 
-HEAD_NOCO = {
-    "xc-token": NOCODB_TOKEN,
-    "Content-Type": "application/json"
-}
+conn = psycopg2.connect(
+    host=os.getenv("PG_HOST"),
+    database=os.getenv("PG_DB"),
+    user=os.getenv("PG_USER"),
+    password=os.getenv("PG_PASSWORD")
+)
 
-HEAD_BSALE = {
-    "access_token": BSALE_TOKEN
-}
+cur = conn.cursor()
 
-# -------------------------------------------------
-# NOCO GET EXISTING
-# -------------------------------------------------
 
-def noco_get_all():
+# -----------------------------
+# SAFE BSALE REQUEST
+# -----------------------------
 
-    url = f"{NOCODB}/api/v2/tables/{TABLE_CLIENTS}/records"
-
-    offset = 0
-    existing = {}
+def bsale_get(url, headers, params=None):
 
     while True:
 
-        r = requests.get(
-            url,
-            headers=HEAD_NOCO,
-            params={
-                "limit": LIMIT_NOCO,
-                "offset": offset
-            }
+        r = requests.get(url, headers=headers, params=params, timeout=30)
+
+        if r.status_code == 429:
+
+            wait = int(r.json().get("retry_after",60))
+            print("RATE LIMIT WAIT",wait)
+            time.sleep(wait)
+            continue
+
+        r.raise_for_status()
+
+        return r.json()
+
+
+# -----------------------------
+# GET COMPANIES
+# -----------------------------
+
+def get_companies():
+
+    cur.execute("""
+
+        SELECT company_id,name,bsale_token
+        FROM bsale.companies
+        WHERE active = true
+
+    """)
+
+    rows = cur.fetchall()
+
+    companies = []
+
+    for r in rows:
+
+        token = os.getenv(r[2])
+
+        if not token:
+            print("TOKEN NOT FOUND:", r[2])
+            continue
+
+        companies.append({
+            "company_id": r[0],
+            "name": r[1],
+            "token": token
+        })
+
+    return companies
+
+
+# -----------------------------
+# UPSERT CLIENTS
+# -----------------------------
+
+def upsert(rows):
+
+    execute_batch(cur, """
+
+        INSERT INTO bsale.clients
+        (
+            company_id,
+            bsale_id,
+            first_name,
+            last_name,
+            code,
+            phone,
+            company,
+            facebook,
+            city,
+            municipality,
+            address,
+            created,
+            updated,
+            dia_atencion,
+            nombre_fantasia,
+            vendedor
         )
 
-        data = r.json()
-        rows = data.get("list", [])
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
 
-        if not rows:
+        ON CONFLICT (company_id, bsale_id)
+        DO UPDATE SET
+
+        first_name = EXCLUDED.first_name,
+        last_name = EXCLUDED.last_name,
+        code = EXCLUDED.code,
+        phone = EXCLUDED.phone,
+        company = EXCLUDED.company,
+        facebook = EXCLUDED.facebook,
+        city = EXCLUDED.city,
+        municipality = EXCLUDED.municipality,
+        address = EXCLUDED.address,
+        updated = EXCLUDED.updated,
+        dia_atencion = EXCLUDED.dia_atencion,
+        nombre_fantasia = EXCLUDED.nombre_fantasia,
+        vendedor = EXCLUDED.vendedor
+
+    """, rows)
+
+    conn.commit()
+
+
+# -----------------------------
+# MAIN
+# -----------------------------
+
+companies = get_companies()
+
+for company in companies:
+
+    company_id = company["company_id"]
+
+    print("\nSYNC COMPANY:",company["name"])
+
+    HEAD_BSALE = {"access_token":company["token"]}
+
+    offset = 0
+    rows = []
+
+    while True:
+
+        data = bsale_get(
+            f"{BASE}/clients.json",
+            HEAD_BSALE,
+            {"limit":LIMIT,"offset":offset}
+        )
+
+        items = data["items"]
+
+        if not items:
             break
 
-        for row in rows:
+        for client in items:
 
-            existing[row["bsale_id"]] = row
+            bsale_id = client["id"]
 
-        offset += LIMIT_NOCO
+            created = None
+            updated = None
 
-    return existing
+            if client.get("createdAt"):
+                created = datetime.fromtimestamp(
+                    int(client["createdAt"])
+                )
 
-
-# -------------------------------------------------
-# INSERT / UPDATE
-# -------------------------------------------------
-
-def batch_insert(rows):
-
-    url = f"{NOCODB}/api/v2/tables/{TABLE_CLIENTS}/records"
-
-    requests.post(url, headers=HEAD_NOCO, json=rows)
+            if client.get("updatedAt"):
+                updated = datetime.fromtimestamp(
+                    int(client["updatedAt"])
+                )
 
 
-def batch_update(rows):
+            # ---------------------
+            # CLIENT ATTRIBUTES
+            # ---------------------
 
-    url = f"{NOCODB}/api/v2/tables/{TABLE_CLIENTS}/records"
+            attr_data = bsale_get(
+                f"{BASE}/clients/{bsale_id}/attributes.json",
+                HEAD_BSALE
+            )
 
-    requests.patch(url, headers=HEAD_NOCO, json=rows)
+            dia_atencion = None
+            nombre_fantasia = None
+            vendedor = None
+
+            for attr in attr_data.get("items", []):
+
+                name = attr.get("name","").strip()
+                value = attr.get("value")
+
+                if name == "Dia Atencion":
+                    dia_atencion = value
+
+                elif name == "NOMBRE DE FANTASÍA":
+                    nombre_fantasia = value
+
+                elif name == "Vendedor":
+                    vendedor = value
 
 
-# -------------------------------------------------
-# MAIN
-# -------------------------------------------------
+            rows.append((
+                company_id,
+                bsale_id,
+                client.get("firstName"),
+                client.get("lastName"),
+                client.get("code"),
+                client.get("phone"),
+                client.get("company"),
+                client.get("facebook"),
+                client.get("city"),
+                client.get("municipality"),
+                client.get("address"),
+                created,
+                updated,
+                dia_atencion,
+                nombre_fantasia,
+                vendedor
+            ))
 
-existing = noco_get_all()
+            if len(rows) >= BATCH:
 
-insert_rows = []
-update_rows = []
+                upsert(rows)
+                rows = []
 
-offset = 0
+        offset += LIMIT
 
-while True:
-
-    r = requests.get(
-        f"{BASE}/clients.json",
-        headers=HEAD_BSALE,
-        params={"limit": LIMIT_BSALE, "offset": offset}
-    )
-
-    data = r.json()
-
-    items = data["items"]
-
-    if not items:
-        break
-
-    for client in items:
-
-        bsale_id = client["id"]
-
-        created_raw = client.get("createdAt")
-        updated_raw = client.get("updatedAt")
-
-        created = datetime.fromtimestamp(int(created_raw)).strftime("%Y-%m-%d %H:%M:%S") if created_raw else None
-        updated = datetime.fromtimestamp(int(updated_raw)).strftime("%Y-%m-%d %H:%M:%S") if updated_raw else None
-
-        # attributes
-        r_attr = requests.get(
-            f"{BASE}/clients/{bsale_id}/attributes.json",
-            headers=HEAD_BSALE
-        )
-
-        attr_data = r_attr.json()
-
-        dia_atencion = None
-        nombre_fantasia = None
-        vendedor = None
-
-        for attr in attr_data.get("items", []):
-
-            name = attr.get("name", "").strip()
-            value = attr.get("value")
-
-            if name == "Dia Atencion":
-                dia_atencion = value
-
-            elif name == "NOMBRE DE FANTASÍA":
-                nombre_fantasia = value
-
-            elif name == "Vendedor":
-                vendedor = value
-
-        payload = {
-
-            "bsale_id": bsale_id,
-            "first_name": client.get("firstName"),
-            "last_name": client.get("lastName"),
-            "code": client.get("code"),
-            "phone": client.get("phone"),
-            "company": client.get("company"),
-            "facebook": client.get("facebook"),
-            "city": client.get("city"),
-            "municipality": client.get("municipality"),
-            "address": client.get("address"),
-            "created": created,
-            "updated": updated,
-            "dia_atencion": dia_atencion,
-            "nombre_fantasia": nombre_fantasia,
-            "vendedor": vendedor
-
-        }
-
-        if bsale_id in existing:
-
-            row = existing[bsale_id]
-
-            payload["Id"] = row["Id"]
-
-            update_rows.append(payload)
-
-        else:
-
-            insert_rows.append(payload)
-
-        if len(insert_rows) >= BATCH:
-
-            batch_insert(insert_rows)
-            insert_rows = []
-
-        if len(update_rows) >= BATCH:
-
-            batch_update(update_rows)
-            update_rows = []
-
-    offset += LIMIT_BSALE
-
-if insert_rows:
-    batch_insert(insert_rows)
-
-if update_rows:
-    batch_update(update_rows)
+    if rows:
+        upsert(rows)
 
 print("SYNC CLIENTS COMPLETE")
