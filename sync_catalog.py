@@ -10,9 +10,10 @@ print("SYNC CATALOG START")
 BASE = "https://api.bsale.io/v1"
 LIMIT = 50
 
-# -------------------------------
+
+# ----------------------------------
 # POSTGRES CONNECTION
-# -------------------------------
+# ----------------------------------
 
 conn = psycopg2.connect(
     host=os.getenv("PG_HOST"),
@@ -24,9 +25,9 @@ conn = psycopg2.connect(
 cur = conn.cursor()
 
 
-# -------------------------------
+# ----------------------------------
 # BSALE REQUEST
-# -------------------------------
+# ----------------------------------
 
 def bsale_get(url, headers, params=None):
 
@@ -46,9 +47,9 @@ def bsale_get(url, headers, params=None):
         return r.json()
 
 
-# -------------------------------
-# GET COMPANIES FROM POSTGRES
-# -------------------------------
+# ----------------------------------
+# GET COMPANIES
+# ----------------------------------
 
 def get_companies():
 
@@ -79,9 +80,9 @@ def get_companies():
     return companies
 
 
-# -------------------------------
-# UPSERT HELPER
-# -------------------------------
+# ----------------------------------
+# UPSERT FUNCTION
+# ----------------------------------
 
 def upsert(query, data):
 
@@ -89,9 +90,9 @@ def upsert(query, data):
     conn.commit()
 
 
-# -------------------------------
+# ----------------------------------
 # MAIN
-# -------------------------------
+# ----------------------------------
 
 companies = get_companies()
 
@@ -108,15 +109,16 @@ for company in companies:
         "access_token": token
     }
 
-    # -----------------------
+    # ----------------------------------
     # TAXES
-    # -----------------------
+    # ----------------------------------
 
     print("LOAD TAXES")
 
     taxes = bsale_get(f"{BASE}/taxes.json",HEAD_BSALE)["items"]
 
-    tax_rows = []
+    rows = []
+
     tax_map = {}
 
     for t in taxes:
@@ -128,7 +130,7 @@ for company in companies:
             "percentage": float(t["percentage"])
         }
 
-        tax_rows.append((
+        rows.append((
             company_id,
             tax_id,
             t["name"],
@@ -144,18 +146,17 @@ for company in companies:
 
         ON CONFLICT (company_id, bsale_id)
         DO UPDATE SET
-
         name = EXCLUDED.name,
         percentage = EXCLUDED.percentage
 
-    """, tax_rows)
+    """, rows)
 
     print("TAXES DONE")
 
 
-    # -----------------------
+    # ----------------------------------
     # PRODUCT TYPES
-    # -----------------------
+    # ----------------------------------
 
     print("LOAD PRODUCT TYPES")
 
@@ -196,7 +197,6 @@ for company in companies:
 
         ON CONFLICT (company_id, bsale_id)
         DO UPDATE SET
-
         name = EXCLUDED.name,
         state = EXCLUDED.state
 
@@ -205,9 +205,9 @@ for company in companies:
     print("PRODUCT TYPES DONE")
 
 
-    # -----------------------
+    # ----------------------------------
     # PRICE LISTS
-    # -----------------------
+    # ----------------------------------
 
     print("LOAD PRICE LISTS")
 
@@ -233,7 +233,6 @@ for company in companies:
 
         ON CONFLICT (company_id, bsale_id)
         DO UPDATE SET
-
         name = EXCLUDED.name,
         state = EXCLUDED.state
 
@@ -242,9 +241,9 @@ for company in companies:
     print("PRICE LISTS DONE")
 
 
-    # -----------------------
+    # ----------------------------------
     # OFFICES
-    # -----------------------
+    # ----------------------------------
 
     print("LOAD OFFICES")
 
@@ -270,7 +269,6 @@ for company in companies:
 
         ON CONFLICT (company_id, bsale_id)
         DO UPDATE SET
-
         name = EXCLUDED.name,
         state = EXCLUDED.state
 
@@ -279,9 +277,9 @@ for company in companies:
     print("OFFICES DONE")
 
 
-    # -----------------------
+    # ----------------------------------
     # PRODUCTS
-    # -----------------------
+    # ----------------------------------
 
     print("LOAD PRODUCTS")
 
@@ -346,7 +344,6 @@ for company in companies:
 
         ON CONFLICT (company_id, bsale_id)
         DO UPDATE SET
-
         name = EXCLUDED.name,
         product_type_id = EXCLUDED.product_type_id,
         tax_ids_json = EXCLUDED.tax_ids_json,
@@ -358,9 +355,9 @@ for company in companies:
     print("PRODUCTS DONE")
 
 
-    # -----------------------
+    # ----------------------------------
     # VARIANTS
-    # -----------------------
+    # ----------------------------------
 
     print("LOAD VARIANTS")
 
@@ -403,7 +400,6 @@ for company in companies:
 
         ON CONFLICT (company_id, bsale_id)
         DO UPDATE SET
-
         product_id = EXCLUDED.product_id,
         code = EXCLUDED.code,
         bar_code = EXCLUDED.bar_code,
