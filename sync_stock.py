@@ -1,30 +1,34 @@
 import requests
 import os
 import time
+import psycopg2
+from psycopg2.extras import execute_batch
 
 print("SYNC STOCK START")
 
 BASE = "https://api.bsale.io/v1"
-NOCODB = "https://db.quillotana.cl"
 
-NOCODB_TOKEN = os.getenv("NocoDB_token")
-
-TABLE_STOCK = "mxs2lyz86cnxd23"
-TABLE_COMPANIES = "m27za58sg6ustui"
-
-LIMIT_BSALE = 50
-LIMIT_NOCO = 200
-BATCH = 100
-
-HEAD_NOCO = {
-    "xc-token": NOCODB_TOKEN,
-    "Content-Type": "application/json"
-}
+LIMIT = 50
+BATCH = 500
 
 
-# -------------------------------------------------
-# SAFE GET BSALE
-# -------------------------------------------------
+# ----------------------------
+# POSTGRES CONNECTION
+# ----------------------------
+
+conn = psycopg2.connect(
+    host=os.getenv("PG_HOST"),
+    database=os.getenv("PG_DB"),
+    user=os.getenv("PG_USER"),
+    password=os.getenv("PG_PASSWORD")
+)
+
+cur = conn.cursor()
+
+
+# ----------------------------
+# SAFE BSALE REQUEST
+# ----------------------------
 
 def bsale_get(url, headers, params=None):
 
@@ -35,11 +39,8 @@ def bsale_get(url, headers, params=None):
         if r.status_code == 429:
 
             wait = int(r.json().get("retry_after",60))
-
             print("RATE LIMIT WAIT",wait)
-
             time.sleep(wait)
-
             continue
 
         r.raise_for_status()
@@ -47,96 +48,68 @@ def bsale_get(url, headers, params=None):
         return r.json()
 
 
-# -------------------------------------------------
+# ----------------------------
 # GET COMPANIES
-# -------------------------------------------------
+# ----------------------------
 
 def get_companies():
 
-    url = f"{NOCODB}/api/v2/tables/{TABLE_COMPANIES}/records"
+    cur.execute("""
 
-    r = requests.get(url,headers=HEAD_NOCO,params={"limit":100})
+        SELECT company_id,name,bsale_token
+        FROM bsale.companies
+        WHERE active = true
 
-    data = r.json()
+    """)
+
+    rows = cur.fetchall()
 
     companies = []
 
-    for row in data["list"]:
+    for r in rows:
 
-        if not row["active"]:
+        token = os.getenv(r[2])
+
+        if not token:
+            print("TOKEN NOT FOUND:", r[2])
             continue
 
-        token = os.getenv(row["bsale_token"])
-
         companies.append({
-            "company_id": row["company_id"],
-            "name": row["name"],
+            "company_id": r[0],
+            "name": r[1],
             "token": token
         })
 
     return companies
 
 
-# -------------------------------------------------
-# NOCO HELPERS
-# -------------------------------------------------
+# ----------------------------
+# UPSERT
+# ----------------------------
 
-def noco_get_all(company_id):
+def upsert(rows):
 
-    url = f"{NOCODB}/api/v2/tables/{TABLE_STOCK}/records"
+    execute_batch(cur, """
 
-    offset = 0
-    existing = {}
+        INSERT INTO bsale.stocks
+        (company_id, variant_id, office_id, quantity_available, quantity_reserved)
 
-    while True:
+        VALUES (%s,%s,%s,%s,%s)
 
-        r = requests.get(
+        ON CONFLICT (company_id, variant_id, office_id)
+        DO UPDATE SET
 
-            url,
-            headers=HEAD_NOCO,
-            params={
-                "limit": LIMIT_NOCO,
-                "offset": offset,
-                "where": f"(company_id,eq,{company_id})"
-            }
+        quantity_available = EXCLUDED.quantity_available,
+        quantity_reserved = EXCLUDED.quantity_reserved
 
-        )
+    """, rows)
 
-        data = r.json()
-
-        rows = data.get("list",[])
-
-        if not rows:
-            break
-
-        for row in rows:
-
-            key = f"{row['variant_id']}_{row['office_id']}"
-
-            existing[key] = row
-
-        offset += LIMIT_NOCO
-
-    return existing
+    conn.commit()
 
 
-def batch_insert(rows):
-
-    url = f"{NOCODB}/api/v2/tables/{TABLE_STOCK}/records"
-
-    requests.post(url,headers=HEAD_NOCO,json=rows)
-
-
-def batch_update(rows):
-
-    url = f"{NOCODB}/api/v2/tables/{TABLE_STOCK}/records"
-
-    requests.patch(url,headers=HEAD_NOCO,json=rows)
-
-
-# -------------------------------------------------
+# ----------------------------
 # MAIN
-# -------------------------------------------------
+# ----------------------------
 
 companies = get_companies()
 
@@ -148,12 +121,8 @@ for company in companies:
 
     HEAD_BSALE = {"access_token":company["token"]}
 
-    existing = noco_get_all(company_id)
-
-    insert_rows = []
-    update_rows = []
-
     offset = 0
+    rows = []
 
     while True:
 
@@ -161,7 +130,7 @@ for company in companies:
 
             f"{BASE}/stocks.json",
             HEAD_BSALE,
-            {"limit":LIMIT_BSALE,"offset":offset}
+            {"limit":LIMIT,"offset":offset}
 
         )
 
@@ -172,61 +141,22 @@ for company in companies:
 
         for s in items:
 
-            variant_id = s["variant"]["id"]
-            office_id = s["office"]["id"]
+            rows.append((
+                company_id,
+                s["variant"]["id"],
+                s["office"]["id"],
+                s["quantityAvailable"],
+                s["quantityReserved"]
+            ))
 
-            quantity_available = s["quantityAvailable"]
-            quantity_reserved = s["quantityReserved"]
+        if len(rows) >= BATCH:
 
-            key = f"{variant_id}_{office_id}"
+            upsert(rows)
+            rows = []
 
-            payload = {
+        offset += LIMIT
 
-                "company_id":company_id,
-                "variant_id":variant_id,
-                "office_id":office_id,
-                "quantity_available":quantity_available,
-                "quantity_reserved":quantity_reserved
-
-            }
-
-            if key in existing:
-
-                row = existing[key]
-
-                if (
-
-                    row["quantity_available"] != quantity_available
-                    or row["quantity_reserved"] != quantity_reserved
-
-                ):
-
-                    payload["Id"] = row["Id"]
-
-                    update_rows.append(payload)
-
-            else:
-
-                insert_rows.append(payload)
-
-            if len(insert_rows) >= BATCH:
-
-                batch_insert(insert_rows)
-
-                insert_rows = []
-
-            if len(update_rows) >= BATCH:
-
-                batch_update(update_rows)
-
-                update_rows = []
-
-        offset += LIMIT_BSALE
-
-    if insert_rows:
-        batch_insert(insert_rows)
-
-    if update_rows:
-        batch_update(update_rows)
+    if rows:
+        upsert(rows)
 
 print("SYNC STOCK COMPLETE")
