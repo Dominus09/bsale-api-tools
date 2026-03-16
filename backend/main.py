@@ -7,7 +7,7 @@ from backend.routers import margin_problems
 from backend.routers import margin_export
 from backend.routers import auth
 from backend.routers.catalog import router as catalog_router
-
+from backend.routers.erp import router as erp_router
 
 
 app = FastAPI(
@@ -30,6 +30,7 @@ app.include_router(margin_problems.router)
 app.include_router(margin_export.router)
 app.include_router(auth.router)
 app.include_router(catalog_router, prefix="/api")
+app.include_router(erp_router)
 
 @app.get("/")
 def root():
