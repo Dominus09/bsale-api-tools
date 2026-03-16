@@ -2,7 +2,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from backend.routers import companies
 from backend.routers import dashboard
-from backend.routers import margin, alerts
+from backend.routers import margins
+from backend.routers import alerts
+from backend.routers import summary
+from backend.routers import products
 from backend.routers import margin_problems
 from backend.routers import margin_export
 from backend.routers import auth
@@ -25,8 +28,10 @@ app.add_middleware(
 
 app.include_router(companies.router)
 app.include_router(dashboard.router)
-app.include_router(margin.router)
+app.include_router(margins.router)
 app.include_router(alerts.router)
+app.include_router(summary.router)
+app.include_router(products.router)
 app.include_router(margin_problems.router)
 app.include_router(margin_export.router)
 app.include_router(auth.router)
