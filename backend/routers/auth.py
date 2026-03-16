@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from backend.db import get_connection
 from passlib.context import CryptContext
-import jwt
+from jose import jwt
 import datetime
 
 router = APIRouter()
