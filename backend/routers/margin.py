@@ -1,19 +1,44 @@
 from fastapi import APIRouter
-from backend.database import noco_get
+from db import get_connection
 
-router = APIRouter(
-    prefix="/margin",
-    tags=["margin"]
-)
+router = APIRouter()
 
-TABLE_ANALYTICS = "m777i9qvqgbvpuk"
 
-@router.get("/")
-def margin(company_id: int):
+@router.get("/margin-analysis")
+def margin_analysis(company_id: int):
 
-    rows = noco_get(
-        TABLE_ANALYTICS,
-        params={"where": f"(company_id,eq,{company_id})"}
-    )
+    conn = get_connection()
+    cur = conn.cursor()
 
-    return rows
+    cur.execute("""
+        SELECT
+            product_name,
+            bar_code,
+            price_list_name,
+            product_type_name,
+            cost_gross,
+            price_gross,
+            margin_percent,
+            min_margin,
+            max_margin,
+            margin_status,
+            suggested_price_min,
+            suggested_price_max
+        FROM bsale.erp_margin_dashboard
+        WHERE company_id = %s
+        ORDER BY margin_percent ASC
+    """, (company_id,))
+
+    rows = cur.fetchall()
+
+    columns = [desc[0] for desc in cur.description]
+
+    result = [
+        dict(zip(columns, row))
+        for row in rows
+    ]
+
+    cur.close()
+    conn.close()
+
+    return result
