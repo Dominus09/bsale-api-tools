@@ -1,50 +1,51 @@
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 from backend.db import get_connection
 from passlib.context import CryptContext
-from jose import jwt
-import datetime
+import jwt
+import os
 
 router = APIRouter()
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-SECRET = "QUILLOTANA_SECRET_KEY"
+SECRET = "quillotana_secret_key"
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
 
 
 @router.post("/login")
-def login(email: str, password: str):
+def login(data: LoginRequest):
 
     conn = get_connection()
     cur = conn.cursor()
 
-    cur.execute("""
-        SELECT id, email, password_hash, role
-        FROM bsale.users
-        WHERE email = %s
-        AND active = true
-    """, (email,))
+    cur.execute(
+        "SELECT password_hash, role FROM bsale.users WHERE email = %s AND active = true",
+        (data.email,)
+    )
 
     user = cur.fetchone()
 
     if not user:
-        raise HTTPException(status_code=401, detail="Usuario no existe")
+        raise HTTPException(status_code=401, detail="Credenciales inválidas")
 
-    user_id, email_db, password_hash, role = user
+    password_hash, role = user
 
-    if not pwd_context.verify(password, password_hash):
+    if not pwd_context.verify(data.password, password_hash):
         raise HTTPException(status_code=401, detail="Password incorrecta")
 
-    payload = {
-        "user_id": user_id,
-        "email": email_db,
-        "role": role,
-        "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=8)
-    }
-
-    token = jwt.encode(payload, SECRET, algorithm="HS256")
+    token = jwt.encode(
+        {"email": data.email, "role": role},
+        SECRET,
+        algorithm="HS256"
+    )
 
     return {
         "token": token,
-        "email": email_db,
+        "email": data.email,
         "role": role
     }
