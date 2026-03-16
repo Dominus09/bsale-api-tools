@@ -1,42 +1,53 @@
-from fastapi import APIRouter
-from backend.database import noco_get
+from fastapi import APIRouter, HTTPException
+from backend.db import get_connection
+from passlib.context import CryptContext
+import jwt
+import datetime
 
-router = APIRouter(
-    prefix="/auth",
-    tags=["Auth"]
-)
+router = APIRouter()
 
-TABLE_USERS = "mu1cx8k25nmqmox"
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+SECRET = "QUILLOTANA_SECRET_KEY"
 
 
 @router.post("/login")
-def login(data: dict):
+def login(email: str, password: str):
 
-    username = str(data.get("username","")).strip()
-    password = str(data.get("password","")).strip()
+    conn = get_connection()
+    cur = conn.cursor()
 
-    rows = noco_get(
-        TABLE_USERS,
-        params={
-            "where": f"(username,eq,{username})"
-        }
-    )
+    cur.execute("""
+        SELECT id, email, password_hash, role
+        FROM bsale.users
+        WHERE email = %s
+        AND active = true
+    """, (email,))
 
-    if not rows:
-        return {"ok": False}
+    user = cur.fetchone()
 
-    user = rows[0]
+    cur.close()
+    conn.close()
 
-    if not user.get("active"):
-        return {"ok": False}
+    if not user:
+        raise HTTPException(status_code=401, detail="Usuario no encontrado")
 
-    if user["password"] != password:
-        return {"ok": False}
+    user_id, email, password_hash, role = user
+
+    if not pwd_context.verify(password, password_hash):
+        raise HTTPException(status_code=401, detail="Password incorrecta")
+
+    payload = {
+        "user_id": user_id,
+        "email": email,
+        "role": role,
+        "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+    }
+
+    token = jwt.encode(payload, SECRET, algorithm="HS256")
 
     return {
-        "ok": True,
-        "user": {
-            "username": user["username"],
-            "role": user["role"]
-        }
+        "token": token,
+        "role": role,
+        "email": email
     }
