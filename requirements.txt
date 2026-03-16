@@ -4,5 +4,6 @@ requests
 psycopg2-binary
 python-dotenv
 passlib[bcrypt]
+bcrypt
 python-jose[cryptography]
 python-multipart
