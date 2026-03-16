@@ -1,25 +1,28 @@
 from fastapi import APIRouter
-from backend.database import noco_get
+from backend.db import get_connection
 
-router = APIRouter(
-    prefix="/companies",
-    tags=["companies"]
-)
+router = APIRouter()
 
-TABLE_COMPANIES = "m27za58sg6ustui"
+@router.get("/companies")
+def companies():
 
-@router.get("/")
-def get_companies():
+    conn = get_connection()
+    cur = conn.cursor()
 
-    rows = noco_get(TABLE_COMPANIES)
+    cur.execute("""
+        SELECT company_id, name
+        FROM bsale.companies
+        ORDER BY company_id
+    """)
 
-    result = []
+    rows = cur.fetchall()
 
-    for r in rows:
-        if r.get("active"):
-            result.append({
-                "company_id": r["company_id"],
-                "name": r["name"]
-            })
+    result = [
+        {"company_id": r[0], "name": r[1]}
+        for r in rows
+    ]
+
+    cur.close()
+    conn.close()
 
     return result
