@@ -26,20 +26,17 @@ def login(email: str, password: str):
 
     user = cur.fetchone()
 
-    cur.close()
-    conn.close()
-
     if not user:
-        raise HTTPException(status_code=401, detail="Usuario no encontrado")
+        raise HTTPException(status_code=401, detail="Usuario no existe")
 
-    user_id, email, password_hash, role = user
+    user_id, email_db, password_hash, role = user
 
     if not pwd_context.verify(password, password_hash):
         raise HTTPException(status_code=401, detail="Password incorrecta")
 
     payload = {
         "user_id": user_id,
-        "email": email,
+        "email": email_db,
         "role": role,
         "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=8)
     }
@@ -48,6 +45,6 @@ def login(email: str, password: str):
 
     return {
         "token": token,
-        "role": role,
-        "email": email
+        "email": email_db,
+        "role": role
     }
