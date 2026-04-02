@@ -12,14 +12,22 @@ _CATALOG_QUERY = """
 SELECT
     variant_id AS id,
     TRIM(product || ' ' || COALESCE(variant, '')) AS name,
+    product_type,
+    product,
+    variant,
     bar_code AS barcode,
     stock,
+    image_url,
     CASE
         WHEN %s = 'factura' THEN price_13
         WHEN %s = 'comoditi' THEN price_14
         WHEN %s = 'melinka' THEN price_16
     END AS price
 FROM bsale.catalog_view
+ORDER BY
+    product_type ASC,
+    product ASC,
+    variant ASC
 """
 
 
@@ -37,11 +45,13 @@ def get_catalog(
     in_stock: bool | None = Query(default=None),
 ):
     key = (price_list or "").strip().lower()
+
     if not key:
         raise HTTPException(
             status_code=400,
             detail="price_list es obligatorio",
         )
+
     if key not in _ALLOWED_PRICE_LISTS:
         raise HTTPException(
             status_code=400,
@@ -49,10 +59,12 @@ def get_catalog(
         )
 
     query = _CATALOG_QUERY.strip()
+
     if in_stock is True:
         query += "\nWHERE COALESCE(stock, 0) > 0"
 
     conn = get_connection()
+
     try:
         cur = conn.cursor()
         cur.execute(query, (key, key, key))
@@ -62,17 +74,33 @@ def get_catalog(
         conn.close()
 
     out = []
+
     for r in rows:
-        _id, name, barcode, stock_raw, price_raw = r
+        (
+            _id,
+            name,
+            product_type,
+            product,
+            variant,
+            barcode,
+            stock_raw,
+            image_url,
+            price_raw,
+        ) = r
+
         stock = 0 if stock_raw is None else int(stock_raw)
         price_val = _to_float(price_raw)
+
         out.append(
             {
                 "id": _id,
                 "name": (name or "").strip(),
+                "type": product_type,
                 "barcode": barcode,
                 "price": price_val,
                 "stock": stock,
+                "image": image_url if image_url else "/placeholder.png",
             }
         )
+
     return out
