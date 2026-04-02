@@ -41,3 +41,23 @@ app.include_router(erp_router)
 @app.get("/")
 def root():
     return {"status": "API funcionando"}
+    from backend.db import get_connection
+
+@app.get("/test-db")
+def test_db():
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT 1;")
+        result = cursor.fetchone()
+
+        conn.close()
+
+        return {
+            "status": "ok",
+            "db_response": result
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
