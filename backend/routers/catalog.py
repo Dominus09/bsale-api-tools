@@ -12,12 +12,12 @@ _CATALOG_QUERY = """
 SELECT
     variant_id AS id,
     TRIM(product || ' ' || COALESCE(variant, '')) AS name,
-    product_type,
+    product_type AS type,
     product,
     variant,
     bar_code AS barcode,
-    stock,
-    image_url,
+    COALESCE(stock, 0) AS stock,
+    image_url AS image,
     CASE
         WHEN %s = 'factura' THEN price_13
         WHEN %s = 'comoditi' THEN price_14
@@ -37,6 +37,10 @@ def _to_float(value) -> float:
     if isinstance(value, Decimal):
         return float(value)
     return float(value)
+
+
+def _clean_name(name: str | None) -> str:
+    return " ".join((name or "").split())
 
 
 @router.get("/catalog")
@@ -61,7 +65,10 @@ def get_catalog(
     query = _CATALOG_QUERY.strip()
 
     if in_stock is True:
-        query += "\nWHERE COALESCE(stock, 0) > 0"
+        query = query.replace(
+            "FROM bsale.catalog_view",
+            "FROM bsale.catalog_view WHERE COALESCE(stock, 0) > 0",
+        )
 
     conn = get_connection()
 
@@ -79,27 +86,30 @@ def get_catalog(
         (
             _id,
             name,
-            product_type,
-            product,
-            variant,
+            type_val,
+            _product,
+            _variant,
             barcode,
             stock_raw,
-            image_url,
+            image_val,
             price_raw,
         ) = r
 
-        stock = 0 if stock_raw is None else int(stock_raw)
-        price_val = _to_float(price_raw)
+         # TEMP: quitar tras validar product_type en producción
+
+        image_out = (str(image_val).strip() if image_val is not None else "") or None
+        if image_out == "":
+            image_out = None
 
         out.append(
             {
-                "id": _id,
-                "name": (name or "").strip(),
-                "type": product_type,
-                "barcode": barcode,
-                "price": price_val,
-                "stock": stock,
-                "image": image_url if image_url else "/placeholder.png",
+                "id": int(_id) if _id is not None else 0,
+                "name": _clean_name(name),
+                "type": "" if type_val is None else str(type_val).strip(),
+                "barcode": "" if barcode is None else str(barcode).strip(),
+                "price": _to_float(price_raw),
+                "stock": int(stock_raw) if stock_raw is not None else 0,
+                "image": image_out,
             }
         )
 
