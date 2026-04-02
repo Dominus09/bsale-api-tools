@@ -20,10 +20,13 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # permite llamadas desde cualquier frontend
+    allow_origins=[
+        "https://cat.quillotana.cl"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+
     
 )
 
