@@ -40,4 +40,4 @@ app.include_router(erp_router)
 
 @app.get("/")
 def root():
-    return {"status": "API running"}
+    return {"status": "API funcionando"}
