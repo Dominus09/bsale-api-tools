@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from backend.client_rut import require_valid_rut, city_is_melinka
 from backend.db import get_connection
 from passlib.context import CryptContext
 import jwt
@@ -22,19 +23,9 @@ class LoginClientRequest(BaseModel):
     rut: str
 
 
-def _clean_rut_for_lookup(rut: str) -> str:
-    return rut.replace(".", "").lower()
-
-
 @router.post("/login-client")
 def login_client(body: LoginClientRequest):
-    raw = body.rut.strip() if body.rut else ""
-    if not raw:
-        raise HTTPException(status_code=400, detail="RUT vacío")
-    if "-" not in raw:
-        raise HTTPException(status_code=400, detail="RUT debe incluir guion")
-
-    rut_clean = _clean_rut_for_lookup(raw)
+    rut_clean = require_valid_rut(body.rut)
 
     conn = get_connection()
     try:
@@ -61,14 +52,13 @@ def login_client(body: LoginClientRequest):
         )
 
     bsale_id, first_name, last_name, city = row
-    city_val = city or ""
     name = f"{first_name or ''} {last_name or ''}".strip()
 
     return {
         "id": bsale_id,
         "name": name,
         "city": city,
-        "is_melinka": "melinka" in city_val.lower(),
+        "is_melinka": city_is_melinka(city),
     }
 
 
