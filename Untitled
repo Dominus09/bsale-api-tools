@@ -1,1 +1,3 @@
-pip install -r backend/requirements.txt
+git add .
+git commit -m "fix import db"
+git push

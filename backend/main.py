@@ -11,6 +11,7 @@ from backend.routers import margin_export
 from backend.routers import auth
 from backend.routers.catalog import router as catalog_router
 from backend.routers.erp import router as erp_router
+from backend.db import get_connection
 
 
 app = FastAPI(
@@ -41,7 +42,7 @@ app.include_router(erp_router)
 @app.get("/")
 def root():
     return {"status": "API funcionando"}
-    from backend.db import get_connection
+    
 
 @app.get("/test-db")
 def test_db():
