@@ -2,11 +2,13 @@ from datetime import date
 from decimal import Decimal
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from backend.db import get_connection
 
 router = APIRouter(tags=["Pedidos"])
+
+_ALLOWED_ORDER_STATUSES = frozenset({"pendiente", "generado", "anulado", "revisar"})
 
 
 class OrderClient(BaseModel):
@@ -39,6 +41,22 @@ class CreateOrderBody(BaseModel):
     contact_phone: str
     delivery_date: str | None = None
     notes: str | None = None
+
+
+class UpdateOrderStatusBody(BaseModel):
+    status: str
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: object) -> str:
+        if not isinstance(v, str):
+            raise ValueError("status debe ser texto")
+        s = v.strip().lower()
+        if s not in _ALLOWED_ORDER_STATUSES:
+            raise ValueError(
+                "status debe ser pendiente, generado, anulado o revisar"
+            )
+        return s
 
 
 def _delivery_date_value(raw: str | None) -> date | None:
@@ -204,6 +222,37 @@ def get_order(order_id: int):
         "created_at": created_str,
         "items": items,
     }
+
+
+@router.put("/orders/{order_id}/status")
+def update_order_status(order_id: int, body: UpdateOrderStatusBody):
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE app.orders
+            SET status = %s
+            WHERE id = %s
+            RETURNING id, status
+            """,
+            (body.status, order_id),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Order not found")
+        conn.commit()
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+    return {"id": row[0], "status": row[1]}
 
 
 @router.post("/orders")
