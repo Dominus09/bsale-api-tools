@@ -57,15 +57,17 @@ function StatusBadge({ status, className }: { status: string | null; className?:
 
 function DefList({
   items,
+  columnsClass = "sm:grid-cols-2",
 }: {
   items: { label: string; value: ReactNode }[]
+  columnsClass?: string
 }) {
   return (
-    <dl className="grid gap-4 sm:grid-cols-2">
+    <dl className={`grid gap-x-6 gap-y-5 ${columnsClass}`}>
       {items.map(({ label, value }) => (
-        <div key={label}>
+        <div key={label} className="min-w-0">
           <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</dt>
-          <dd className="mt-1 text-sm text-foreground">{value}</dd>
+          <dd className="mt-1.5 break-words text-sm text-foreground">{value}</dd>
         </div>
       ))}
     </dl>
@@ -140,92 +142,108 @@ export default function OrderDetailPage() {
   const notesText = (order.notes ?? "").trim()
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center gap-4">
-        <Button variant="ghost" size="sm" asChild>
-          <Link href="/orders" className="gap-2">
-            <ArrowLeft className="h-4 w-4" />
-            Volver
-          </Link>
-        </Button>
+    <div className="mx-auto max-w-5xl space-y-6 px-1 pb-8 sm:px-0">
+      <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
         <div className="flex flex-wrap items-center gap-3">
+          <Button variant="ghost" size="sm" className="-ml-2 shrink-0" asChild>
+            <Link href="/orders" className="gap-2">
+              <ArrowLeft className="h-4 w-4" />
+              Volver
+            </Link>
+          </Button>
           <div>
-            <h1 className="text-2xl font-bold text-foreground">
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">
               Pedido {formatOrderId(order.id)}
             </h1>
-            <p className="text-muted-foreground">Detalle del pedido</p>
+            <p className="text-sm text-muted-foreground">Detalle del pedido</p>
           </div>
-          <StatusBadge status={order.status} className="shrink-0 px-3 py-1 text-sm" />
         </div>
       </div>
 
-      <Card className="border-l-4 border-l-primary">
-        <CardHeader className="pb-2">
-          <CardTitle className="flex items-center gap-2 text-lg">
-            <ClipboardList className="h-5 w-5 text-primary" />
+      <Card className="border-l-4 border-l-primary shadow-sm">
+        <CardHeader className="space-y-1 pb-4">
+          <CardTitle className="flex items-center gap-2 text-lg font-semibold">
+            <ClipboardList className="h-5 w-5 shrink-0 text-primary" />
             Información del pedido
           </CardTitle>
-          <CardDescription>Identificación, fechas y condiciones comerciales</CardDescription>
+          <CardDescription className="text-sm">Identificación, fechas y condiciones comerciales</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="pt-0">
           <DefList
+            columnsClass="sm:grid-cols-2 lg:grid-cols-3"
             items={[
-              { label: "ID", value: <span className="font-mono font-medium">{formatOrderId(order.id)}</span> },
+              { label: "ID", value: <span className="font-mono font-semibold">{formatOrderId(order.id)}</span> },
               {
                 label: "Estado",
-                value: <StatusBadge status={order.status} className="px-2.5 py-0.5" />,
+                value: <StatusBadge status={order.status} className="px-2.5 py-0.5 text-xs font-medium" />,
               },
               { label: "Fecha creación", value: formatDate(order.created_at) },
               { label: "Fecha entrega", value: formatDate(order.delivery_date) },
               { label: "Lista de precios", value: formatPriceList(order.price_list) },
               { label: "Forma de pago", value: order.payment_method?.trim() || "—" },
-              { label: "Total", value: <span className="font-semibold">{formatMoney(Number(order.total))}</span> },
             ]}
           />
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-lg">
-            <User className="h-5 w-5 text-primary" />
+      <Card className="shadow-sm">
+        <CardHeader className="space-y-1 pb-4">
+          <CardTitle className="flex items-center gap-2 text-lg font-semibold">
+            <User className="h-5 w-5 shrink-0 text-primary" />
             Cliente
           </CardTitle>
-          <CardDescription>Datos de facturación y contacto del pedido</CardDescription>
+          <CardDescription className="text-sm">Datos del cliente y contacto del pedido</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="pt-0">
           <DefList
             items={[
-              { label: "Nombre", value: order.client_name ?? "—" },
+              { label: "Nombre cliente", value: order.client_name ?? "—" },
               { label: "RUT", value: <span className="text-muted-foreground">{rut ?? "—"}</span> },
-              { label: "Contacto", value: order.contact_name?.trim() || "—" },
-              { label: "Teléfono", value: order.contact_phone?.trim() || "—" },
+              { label: "Nombre contacto", value: order.contact_name?.trim() || "—" },
+              { label: "Teléfono contacto", value: order.contact_phone?.trim() || "—" },
             ]}
           />
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-lg">
-            <Package className="h-5 w-5 text-primary" />
+      {notesText ? (
+        <Card className="shadow-sm">
+          <CardHeader className="space-y-1 pb-4">
+            <CardTitle className="flex items-center gap-2 text-lg font-semibold">
+              <StickyNote className="h-5 w-5 shrink-0 text-primary" />
+              Observaciones
+            </CardTitle>
+            <CardDescription className="text-sm">Notas asociadas al pedido</CardDescription>
+          </CardHeader>
+          <CardContent className="pt-0">
+            <p className="rounded-md border border-border bg-muted/30 px-4 py-3 text-sm leading-relaxed text-foreground whitespace-pre-wrap">
+              {notesText}
+            </p>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      <Card className="shadow-sm">
+        <CardHeader className="space-y-1 pb-4">
+          <CardTitle className="flex items-center gap-2 text-lg font-semibold">
+            <Package className="h-5 w-5 shrink-0 text-primary" />
             Productos
           </CardTitle>
-          <CardDescription>Líneas del pedido</CardDescription>
+          <CardDescription className="text-sm">Líneas del pedido</CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="pt-0">
           {!order.items?.length ? (
-            <p className="py-6 text-center text-muted-foreground">Sin ítems registrados</p>
+            <p className="py-8 text-center text-sm text-muted-foreground">Sin ítems registrados</p>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
+            <div className="-mx-1 overflow-x-auto sm:mx-0">
+              <table className="w-full min-w-[640px] text-sm">
                 <thead>
                   <tr className="border-b border-border">
-                    <th className="pb-3 text-left text-sm font-medium text-muted-foreground">Producto</th>
-                    <th className="pb-3 text-left text-sm font-medium text-muted-foreground">Código barra</th>
-                    <th className="pb-3 text-right text-sm font-medium text-muted-foreground">Cantidad</th>
-                    <th className="pb-3 text-right text-sm font-medium text-muted-foreground">Precio</th>
-                    <th className="pb-3 text-right text-sm font-medium text-muted-foreground">Subtotal</th>
+                    <th className="pb-3 pr-4 text-left font-medium text-muted-foreground">Nombre producto</th>
+                    <th className="pb-3 pr-4 text-left font-medium text-muted-foreground">Código barra</th>
+                    <th className="pb-3 pr-4 text-right font-medium text-muted-foreground">Cantidad</th>
+                    <th className="pb-3 pr-4 text-right font-medium text-muted-foreground">Precio</th>
+                    <th className="pb-3 text-right font-medium text-muted-foreground">Subtotal</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -234,36 +252,34 @@ export default function OrderDetailPage() {
                     const price = Number(line.price)
                     const sub = qty * price
                     return (
-                      <tr key={`${line.barcode ?? "x"}-${idx}`} className="border-b border-border last:border-0">
-                        <td className="py-3 font-medium">{line.product_name ?? "—"}</td>
-                        <td className="py-3 text-muted-foreground">{line.barcode ?? "—"}</td>
-                        <td className="py-3 text-right">{qty}</td>
-                        <td className="py-3 text-right">{formatMoney(price)}</td>
-                        <td className="py-3 text-right font-medium">{formatMoney(sub)}</td>
+                      <tr
+                        key={`${line.barcode ?? "x"}-${idx}`}
+                        className="border-b border-border last:border-0 hover:bg-muted/40"
+                      >
+                        <td className="py-3 pr-4 font-medium">{line.product_name ?? "—"}</td>
+                        <td className="py-3 pr-4 font-mono text-muted-foreground">{line.barcode ?? "—"}</td>
+                        <td className="py-3 pr-4 text-right tabular-nums">{qty}</td>
+                        <td className="py-3 pr-4 text-right tabular-nums">{formatMoney(price)}</td>
+                        <td className="py-3 text-right font-medium tabular-nums">{formatMoney(sub)}</td>
                       </tr>
                     )
                   })}
                 </tbody>
+                <tfoot>
+                  <tr className="border-t-2 border-border bg-muted/20">
+                    <td colSpan={4} className="py-3 pr-4 text-right text-sm font-semibold text-foreground">
+                      Total pedido
+                    </td>
+                    <td className="py-3 text-right text-base font-bold tabular-nums text-foreground">
+                      {formatMoney(Number(order.total))}
+                    </td>
+                  </tr>
+                </tfoot>
               </table>
             </div>
           )}
         </CardContent>
       </Card>
-
-      {notesText ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <StickyNote className="h-5 w-5 text-primary" />
-              Observaciones
-            </CardTitle>
-            <CardDescription>Notas asociadas al pedido</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">{notesText}</p>
-          </CardContent>
-        </Card>
-      ) : null}
     </div>
   )
 }
