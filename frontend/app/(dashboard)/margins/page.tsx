@@ -1,9 +1,14 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
-import { AlertTriangle, Loader2, Percent } from "lucide-react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { useCallback, useEffect, useMemo, useState } from "react"
+import { AlertTriangle, ChevronDown, Loader2, Percent } from "lucide-react"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Label } from "@/components/ui/label"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Switch } from "@/components/ui/switch"
 import {
   getCompanies,
   getMarginAnalysisView,
@@ -12,6 +17,10 @@ import {
   type MarginAnalysisViewRow,
   type PriceListRef,
 } from "@/lib/api"
+import { cn } from "@/lib/utils"
+
+const PRODUCT_TYPE_NULL = "__null__"
+const PROBLEM_STATUSES = new Set(["LOW", "PLACEHOLDER_PRICE"])
 
 function num(v: number | string | null | undefined): number | null {
   if (v === null || v === undefined || v === "") return null
@@ -19,18 +28,26 @@ function num(v: number | string | null | undefined): number | null {
   return Number.isFinite(n) ? n : null
 }
 
+/** Formato tipo $4.154 (CLP, sin decimales) */
 function formatMoney(value: number | null) {
   if (value === null) return "—"
   return new Intl.NumberFormat("es-CL", {
     style: "currency",
     currency: "CLP",
     minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
   }).format(value)
 }
 
 function formatPct(value: number | null) {
   if (value === null) return "—"
   return `${value.toFixed(2)}%`
+}
+
+function formatMarginDiff(value: number | null) {
+  if (value === null) return "—"
+  const sign = value > 0 ? "+" : ""
+  return `${sign}${value.toFixed(2)}%`
 }
 
 const statusBadgeClass: Record<string, string> = {
@@ -44,25 +61,117 @@ function StatusBadge({ status }: { status: string | null }) {
   const cls =
     statusBadgeClass[key] ?? "bg-muted/80 text-muted-foreground border-border"
   return (
-    <Badge variant="outline" className={cls}>
+    <Badge variant="outline" className={cn("text-xs", cls)}>
       {key || "—"}
     </Badge>
   )
 }
 
-/** Valores de status en bsale.margin_analysis_view */
+function rowStatusClass(status: string | null): string {
+  const s = (status ?? "").trim()
+  if (s === "LOW") return "bg-red-500/[0.07] dark:bg-red-950/25"
+  if (s === "PLACEHOLDER_PRICE") return "bg-amber-400/[0.12] dark:bg-amber-950/20"
+  if (s === "NO_STOCK") return "bg-muted/60 dark:bg-muted/30"
+  return ""
+}
+
 const STATUS_FILTER_OPTIONS = [
-  { value: "TODOS", label: "TODOS" },
+  { value: "TODOS", label: "Todos" },
   { value: "LOW", label: "LOW" },
-  { value: "PLACEHOLDER_PRICE", label: "PLACEHOLDER_PRICE" },
+  { value: "PLACEHOLDER_PRICE", label: "PLACEHOLDER" },
   { value: "OK", label: "OK" },
   { value: "NO_STOCK", label: "NO_STOCK" },
   { value: "NO_COST", label: "NO_COST" },
   { value: "NO_RULE", label: "NO_RULE" },
 ] as const
 
-const PRODUCT_TYPE_ALL = "all"
-const PRODUCT_TYPE_NULL = "__null__"
+type TypeOption = { key: string; label: string }
+
+function ProductTypeMultiSelect({
+  options,
+  selectedKeys,
+  onChange,
+  disabled,
+}: {
+  options: TypeOption[]
+  selectedKeys: string[]
+  onChange: (keys: string[]) => void
+  disabled?: boolean
+}) {
+  const [open, setOpen] = useState(false)
+  const selectedSet = useMemo(() => new Set(selectedKeys), [selectedKeys])
+  const allKeys = useMemo(() => options.map((o) => o.key), [options])
+
+  const toggle = useCallback(
+    (key: string) => {
+      const next = new Set(selectedKeys)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      onChange([...next])
+    },
+    [selectedKeys, onChange],
+  )
+
+  const selectAll = useCallback(() => {
+    onChange([...allKeys])
+  }, [allKeys, onChange])
+
+  const clear = useCallback(() => {
+    onChange([])
+  }, [onChange])
+
+  const summary =
+    selectedKeys.length === 0
+      ? "Todos los tipos"
+      : selectedKeys.length === 1
+        ? options.find((o) => o.key === selectedKeys[0])?.label ?? "1 tipo"
+        : `${selectedKeys.length} tipos`
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={disabled}
+          className="h-8 min-w-[10rem] justify-between px-2 text-xs font-normal"
+        >
+          <span className="truncate">{summary}</span>
+          <ChevronDown className="size-3.5 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-64 p-0" align="start">
+        <div className="flex gap-1 border-b border-border p-1.5">
+          <Button type="button" variant="ghost" size="sm" className="h-7 flex-1 text-xs" onClick={selectAll}>
+            Seleccionar todos
+          </Button>
+          <Button type="button" variant="ghost" size="sm" className="h-7 flex-1 text-xs" onClick={clear}>
+            Limpiar
+          </Button>
+        </div>
+        <div className="max-h-56 overflow-y-auto p-1.5">
+          {options.length === 0 ? (
+            <p className="px-2 py-2 text-xs text-muted-foreground">Sin tipos en los datos</p>
+          ) : (
+            <ul className="space-y-1">
+              {options.map((o) => (
+                <li key={o.key}>
+                  <label className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs hover:bg-muted/80">
+                    <Checkbox
+                      checked={selectedSet.has(o.key)}
+                      onCheckedChange={() => toggle(o.key)}
+                    />
+                    <span className="leading-tight">{o.label}</span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
 
 export default function MarginsPage() {
   const [companies, setCompanies] = useState<Company[]>([])
@@ -70,8 +179,9 @@ export default function MarginsPage() {
   const [priceListOptions, setPriceListOptions] = useState<PriceListRef[]>([])
   const [priceListId, setPriceListId] = useState<string>("")
   const [rows, setRows] = useState<MarginAnalysisViewRow[]>([])
-  const [productTypeFilter, setProductTypeFilter] = useState<string>(PRODUCT_TYPE_ALL)
+  const [selectedTypeKeys, setSelectedTypeKeys] = useState<string[]>([])
   const [statusFilter, setStatusFilter] = useState<string>("TODOS")
+  const [problemsOnly, setProblemsOnly] = useState(true)
   const [listsLoading, setListsLoading] = useState(false)
   const [marginsLoading, setMarginsLoading] = useState(false)
   const [companiesLoading, setCompaniesLoading] = useState(true)
@@ -146,7 +256,7 @@ export default function MarginsPage() {
   }, [companyId])
 
   useEffect(() => {
-    setProductTypeFilter(PRODUCT_TYPE_ALL)
+    setSelectedTypeKeys([])
   }, [priceListId])
 
   useEffect(() => {
@@ -187,7 +297,7 @@ export default function MarginsPage() {
 
   const productTypeOptions = useMemo(() => {
     const seen = new Set<string>()
-    const opts: { key: string; label: string }[] = []
+    const opts: TypeOption[] = []
     for (const r of rows) {
       const id = r.product_type_id
       const key = id == null || id === undefined ? PRODUCT_TYPE_NULL : String(id)
@@ -202,24 +312,38 @@ export default function MarginsPage() {
     return opts
   }, [rows])
 
+  const optionKeysSet = useMemo(() => new Set(productTypeOptions.map((o) => o.key)), [productTypeOptions])
+
+  useEffect(() => {
+    setSelectedTypeKeys((prev) => prev.filter((k) => optionKeysSet.has(k)))
+  }, [optionKeysSet])
+
   const filteredRows = useMemo(() => {
     let out = rows
-    if (productTypeFilter !== PRODUCT_TYPE_ALL) {
-      if (productTypeFilter === PRODUCT_TYPE_NULL) {
-        out = out.filter((r) => r.product_type_id == null)
-      } else {
-        const want = parseInt(productTypeFilter, 10)
-        out = out.filter((r) => num(r.product_type_id) === want)
-      }
+    if (problemsOnly) {
+      out = out.filter((r) => PROBLEM_STATUSES.has((r.status ?? "").trim()))
+    }
+    if (selectedTypeKeys.length > 0) {
+      const want = new Set(selectedTypeKeys)
+      out = out.filter((r) => {
+        const key = r.product_type_id == null ? PRODUCT_TYPE_NULL : String(r.product_type_id)
+        return want.has(key)
+      })
     }
     if (statusFilter !== "TODOS") {
-      out = out.filter((r) => r.status === statusFilter)
+      out = out.filter((r) => (r.status ?? "").trim() === statusFilter)
     }
     return out
-  }, [rows, productTypeFilter, statusFilter])
+  }, [rows, problemsOnly, selectedTypeKeys, statusFilter])
 
-  const selectClass =
-    "h-10 w-full max-w-xs rounded-md border border-input bg-background px-3 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:w-auto"
+  const stats = useMemo(() => {
+    const low = filteredRows.filter((r) => (r.status ?? "").trim() === "LOW").length
+    const ph = filteredRows.filter((r) => (r.status ?? "").trim() === "PLACEHOLDER_PRICE").length
+    return { low, placeholder: ph, total: filteredRows.length }
+  }, [filteredRows])
+
+  const filterSelectClass =
+    "h-8 min-w-[9.5rem] rounded-md border border-input bg-background px-2 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 
   const tableBusy = marginsLoading || listsLoading
 
@@ -245,38 +369,43 @@ export default function MarginsPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Análisis de márgenes</h1>
-        <p className="text-muted-foreground">
-          Por empresa, lista activa y tipo de producto (vista SQL)
-        </p>
+        <h1 className="text-xl font-bold text-foreground">Análisis de márgenes</h1>
+        <p className="text-xs text-muted-foreground">Revisión rápida de precios y márgenes por lista</p>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Percent className="h-5 w-5 text-primary" />
+      <Card className="py-0">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 border-b border-border py-2.5">
+          <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+            <Percent className="size-4 text-primary" />
             Filtros
           </CardTitle>
-          <CardDescription>
-            Empresa → lista de precios (activas) → tipo de producto → estado
-          </CardDescription>
+          <div className="flex items-center gap-2">
+            <Switch
+              id="problems-only"
+              checked={problemsOnly}
+              onCheckedChange={setProblemsOnly}
+            />
+            <Label htmlFor="problems-only" className="cursor-pointer text-xs font-medium">
+              Solo problemas
+            </Label>
+          </div>
         </CardHeader>
-        <CardContent className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end">
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="margins-company" className="text-xs font-medium text-muted-foreground">
+        <CardContent className="flex flex-wrap items-end gap-2 py-2.5">
+          <div className="flex flex-col gap-0.5">
+            <label htmlFor="margins-company" className="text-[11px] font-medium text-muted-foreground">
               Empresa
             </label>
             <select
               id="margins-company"
-              className={selectClass}
+              className={filterSelectClass}
               value={companyId}
               onChange={(e) => {
                 setCompanyId(e.target.value)
                 setPriceListId("")
                 setPriceListOptions([])
-                setProductTypeFilter(PRODUCT_TYPE_ALL)
+                setSelectedTypeKeys([])
                 setRows([])
               }}
             >
@@ -289,13 +418,13 @@ export default function MarginsPage() {
             </select>
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="margins-price-list" className="text-xs font-medium text-muted-foreground">
+          <div className="flex flex-col gap-0.5">
+            <label htmlFor="margins-price-list" className="text-[11px] font-medium text-muted-foreground">
               Lista de precios
             </label>
             <select
               id="margins-price-list"
-              className={selectClass}
+              className={filterSelectClass}
               value={priceListId}
               onChange={(e) => setPriceListId(e.target.value)}
               disabled={!companyId || listsLoading || priceListOptions.length === 0}
@@ -311,33 +440,23 @@ export default function MarginsPage() {
             </select>
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="margins-product-type" className="text-xs font-medium text-muted-foreground">
-              Tipo de producto
-            </label>
-            <select
-              id="margins-product-type"
-              className={selectClass}
-              value={productTypeFilter}
-              onChange={(e) => setProductTypeFilter(e.target.value)}
-              disabled={marginsLoading}
-            >
-              <option value={PRODUCT_TYPE_ALL}>Todos</option>
-              {productTypeOptions.map((o) => (
-                <option key={o.key} value={o.key}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[11px] font-medium text-muted-foreground">Tipo de producto</span>
+            <ProductTypeMultiSelect
+              options={productTypeOptions}
+              selectedKeys={selectedTypeKeys}
+              onChange={setSelectedTypeKeys}
+              disabled={marginsLoading || rows.length === 0}
+            />
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="margins-status" className="text-xs font-medium text-muted-foreground">
+          <div className="flex flex-col gap-0.5">
+            <label htmlFor="margins-status" className="text-[11px] font-medium text-muted-foreground">
               Estado
             </label>
             <select
               id="margins-status"
-              className={selectClass}
+              className={filterSelectClass}
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
             >
@@ -351,78 +470,116 @@ export default function MarginsPage() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Detalle ({filteredRows.length})</CardTitle>
-          <CardDescription>GET /margin-analysis-view</CardDescription>
+      <Card className="py-0">
+        <CardHeader className="border-b border-border py-2">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <CardTitle className="text-sm font-semibold">Detalle</CardTitle>
+            {!tableBusy && companyId && priceListOptions.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                <span className="font-medium text-red-600 dark:text-red-400">
+                  🔴 {stats.low} con margen bajo
+                </span>
+                <span className="font-medium text-amber-700 dark:text-amber-400">
+                  🟡 {stats.placeholder} precios placeholder
+                </span>
+                <span className="font-medium text-foreground">
+                  📦 {stats.total} productos visibles
+                </span>
+              </div>
+            ) : null}
+          </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-2 pb-2 pt-2 sm:px-3">
           {tableBusy ? (
-            <div className="flex justify-center py-12">
-              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <div className="flex justify-center py-10">
+              <Loader2 className="h-7 w-7 animate-spin text-primary" />
             </div>
           ) : error ? (
-            <p className="py-8 text-center text-destructive">{error}</p>
+            <p className="py-6 text-center text-sm text-destructive">{error}</p>
           ) : !companyId ? (
-            <p className="py-8 text-center text-muted-foreground">Selecciona una empresa</p>
+            <p className="py-6 text-center text-xs text-muted-foreground">Selecciona una empresa</p>
           ) : priceListOptions.length === 0 ? (
-            <p className="py-8 text-center text-muted-foreground">
-              No hay listas de precio activas (state = 0) para esta empresa
+            <p className="py-6 text-center text-xs text-muted-foreground">
+              No hay listas de precio activas para esta empresa
             </p>
           ) : filteredRows.length === 0 ? (
-            <p className="py-8 text-center text-muted-foreground">Sin filas para los filtros actuales</p>
+            <p className="py-6 text-center text-xs text-muted-foreground">Sin filas para los filtros actuales</p>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
+            <div className="overflow-x-auto rounded-md border border-border">
+              <table className="w-full text-xs">
                 <thead>
-                  <tr className="border-b border-border">
-                    <th className="pb-3 text-left text-sm font-medium text-muted-foreground">
-                      Producto
-                    </th>
-                    <th className="pb-3 text-left text-sm font-medium text-muted-foreground">
-                      Tipo de producto
-                    </th>
-                    <th className="pb-3 text-left text-sm font-medium text-muted-foreground">
-                      Variante
-                    </th>
-                    <th className="pb-3 text-left text-sm font-medium text-muted-foreground">SKU</th>
-                    <th className="pb-3 text-right text-sm font-medium text-muted-foreground">Stock</th>
-                    <th className="pb-3 text-right text-sm font-medium text-muted-foreground">Costo</th>
-                    <th className="pb-3 text-right text-sm font-medium text-muted-foreground">Precio</th>
-                    <th className="pb-3 text-right text-sm font-medium text-muted-foreground">
-                      Margen %
-                    </th>
-                    <th className="pb-3 text-right text-sm font-medium text-muted-foreground">
-                      Mín. %
-                    </th>
-                    <th className="pb-3 text-center text-sm font-medium text-muted-foreground">Estado</th>
+                  <tr className="border-b border-border bg-muted/40">
+                    <th className="px-2 py-1.5 text-left font-medium text-muted-foreground">Producto</th>
+                    <th className="px-2 py-1.5 text-left font-medium text-muted-foreground">Tipo</th>
+                    <th className="px-2 py-1.5 text-left font-medium text-muted-foreground">Variante</th>
+                    <th className="px-2 py-1.5 text-left font-medium text-muted-foreground">SKU</th>
+                    <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Stock</th>
+                    <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Costo</th>
+                    <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Precio</th>
+                    <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Margen %</th>
+                    <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Mín. %</th>
+                    <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Δ vs regla</th>
+                    <th className="px-2 py-1.5 text-center font-medium text-muted-foreground">Estado</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredRows.map((r) => (
-                    <tr
-                      key={`${r.variant_id}-${r.price_list_id}`}
-                      className="border-b border-border last:border-0 hover:bg-muted/50"
-                    >
-                      <td className="py-3 text-sm">{r.product_name ?? "—"}</td>
-                      <td className="py-3 text-sm text-muted-foreground">
-                        {r.product_type_name?.trim() ||
-                          (r.product_type_id != null ? `Tipo #${r.product_type_id}` : "—")}
-                      </td>
-                      <td className="py-3 text-sm text-muted-foreground">{r.variant_name ?? "—"}</td>
-                      <td className="py-3 font-mono text-sm">{r.sku ?? "—"}</td>
-                      <td className="py-3 text-right text-sm">{num(r.stock_quantity) ?? "—"}</td>
-                      <td className="py-3 text-right text-sm">{formatMoney(num(r.cost))}</td>
-                      <td className="py-3 text-right text-sm">{formatMoney(num(r.price))}</td>
-                      <td className="py-3 text-right text-sm">{formatPct(num(r.margin_percent))}</td>
-                      <td className="py-3 text-right text-sm">
-                        {formatPct(num(r.min_margin_percent))}
-                      </td>
-                      <td className="py-3 text-center">
-                        <StatusBadge status={r.status} />
-                      </td>
-                    </tr>
-                  ))}
+                  {filteredRows.map((r) => {
+                    const st = num(r.stock_quantity)
+                    const lowStock = st !== null && st < 3 && st >= 0
+                    const mp = num(r.margin_percent)
+                    return (
+                      <tr
+                        key={`${r.variant_id}-${r.price_list_id}`}
+                        className={cn(
+                          "border-b border-border last:border-0",
+                          rowStatusClass(r.status),
+                          "hover:bg-muted/40",
+                        )}
+                      >
+                        <td className="max-w-[10rem] truncate px-2 py-1">{r.product_name ?? "—"}</td>
+                        <td className="max-w-[7rem] truncate px-2 py-1 text-muted-foreground">
+                          {r.product_type_name?.trim() ||
+                            (r.product_type_id != null ? `#${r.product_type_id}` : "—")}
+                        </td>
+                        <td className="max-w-[8rem] truncate px-2 py-1 text-muted-foreground">
+                          {r.variant_name ?? "—"}
+                        </td>
+                        <td className="whitespace-nowrap px-2 py-1 font-mono">{r.sku ?? "—"}</td>
+                        <td
+                          className={cn(
+                            "whitespace-nowrap px-2 py-1 text-right tabular-nums",
+                            lowStock && "font-medium text-orange-600 dark:text-orange-400",
+                          )}
+                        >
+                          {st ?? "—"}
+                        </td>
+                        <td className="whitespace-nowrap px-2 py-1 text-right tabular-nums">
+                          {formatMoney(num(r.cost))}
+                        </td>
+                        <td className="whitespace-nowrap px-2 py-1 text-right tabular-nums">
+                          {formatMoney(num(r.price))}
+                        </td>
+                        <td
+                          className={cn(
+                            "whitespace-nowrap px-2 py-1 text-right tabular-nums font-medium",
+                            mp !== null && mp < 0 && "text-red-600 dark:text-red-400",
+                            mp !== null && mp > 0 && "text-green-600 dark:text-green-500",
+                          )}
+                        >
+                          {formatPct(mp)}
+                        </td>
+                        <td className="whitespace-nowrap px-2 py-1 text-right tabular-nums text-muted-foreground">
+                          {formatPct(num(r.min_margin_percent))}
+                        </td>
+                        <td className="whitespace-nowrap px-2 py-1 text-right tabular-nums text-muted-foreground">
+                          {formatMarginDiff(num(r.margin_diff))}
+                        </td>
+                        <td className="px-2 py-1 text-center">
+                          <StatusBadge status={r.status} />
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
