@@ -38,7 +38,8 @@ export default function RootLayout({
     <html lang="en">
       <body className="font-sans antialiased">
         {children}
-        <Analytics />
+        {/* Solo en Vercel: evita scripts / CSP innecesarios en Cloudflare u otros hosts */}
+        {process.env.VERCEL ? <Analytics /> : null}
       </body>
     </html>
   )
