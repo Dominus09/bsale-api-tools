@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS app.orders (
     id SERIAL PRIMARY KEY,
     client_id BIGINT,
     client_name TEXT,
+    client_rut TEXT,
     price_list TEXT,
     payment_method TEXT,
     document_type TEXT,
@@ -13,8 +14,13 @@ CREATE TABLE IF NOT EXISTS app.orders (
     delivery_date DATE,
     notes TEXT,
     total NUMERIC,
+    status TEXT DEFAULT 'pendiente',
     created_at TIMESTAMP DEFAULT NOW()
 );
+
+-- Bases ya creadas: ejecutar solo si faltan las columnas.
+ALTER TABLE app.orders ADD COLUMN IF NOT EXISTS client_rut TEXT;
+ALTER TABLE app.orders ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pendiente';
 
 CREATE TABLE IF NOT EXISTS app.order_items (
     id SERIAL PRIMARY KEY,

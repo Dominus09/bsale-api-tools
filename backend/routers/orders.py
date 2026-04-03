@@ -12,6 +12,7 @@ router = APIRouter()
 class OrderClient(BaseModel):
     id: int
     name: str
+    rut: str
 
 
 class OrderItemIn(BaseModel):
@@ -72,6 +73,7 @@ def create_order(body: CreateOrderBody):
             INSERT INTO app.orders (
                 client_id,
                 client_name,
+                client_rut,
                 price_list,
                 payment_method,
                 document_type,
@@ -79,14 +81,16 @@ def create_order(body: CreateOrderBody):
                 contact_phone,
                 delivery_date,
                 notes,
-                total
+                total,
+                status
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
                 body.client.id,
                 (body.client.name or "").strip() or None,
+                (body.client.rut or "").strip() or None,
                 (body.price_list or "").strip() or None,
                 pay,
                 doc,
@@ -95,6 +99,7 @@ def create_order(body: CreateOrderBody):
                 delivery,
                 (body.notes or "").strip() or None,
                 Decimal(str(body.total)),
+                "pendiente",
             ),
         )
         row = cur.fetchone()
