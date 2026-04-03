@@ -24,16 +24,54 @@ class OrderItemIn(BaseModel):
 
 
 class CreateOrderBody(BaseModel):
-    client: OrderClient
+    """Cuerpo nuevo: client_name, client_rut, … Legacy: client { id, name, rut }."""
+
+    client: OrderClient | None = None
+    client_id: int | None = None
+    client_name: str | None = None
+    client_rut: str | None = None
     items: list[OrderItemIn]
     total: float
     price_list: str
     payment_method: str
-    document_type: str
+    document_type: str | None = None
     contact_name: str
     contact_phone: str
     delivery_date: str | None = None
     notes: str | None = None
+
+
+def _delivery_date_value(raw: str | None) -> date | None:
+    if not raw:
+        return None
+    s = raw.strip()
+    if not s:
+        return None
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="delivery_date debe ser YYYY-MM-DD",
+        )
+
+
+def _resolve_client(body: CreateOrderBody) -> tuple[int | None, str | None, str | None]:
+    if body.client is not None:
+        return (
+            body.client.id,
+            (body.client.name or "").strip() or None,
+            (body.client.rut or "").strip() or None,
+        )
+    cid = body.client_id
+    name = (body.client_name or "").strip() or None
+    rut = (body.client_rut or "").strip() or None
+    if not name or not rut:
+        raise HTTPException(
+            status_code=400,
+            detail="Indique client { id, name, rut } o client_name y client_rut",
+        )
+    return cid, name, rut
 
 
 @router.get("/orders")
@@ -47,6 +85,9 @@ def get_orders():
                 id,
                 client_name,
                 client_rut,
+                payment_method,
+                price_list,
+                delivery_date,
                 total,
                 status,
                 created_at
@@ -61,17 +102,22 @@ def get_orders():
 
     out = []
     for r in rows:
-        total_raw = r[3]
+        total_raw = r[6]
         total_f = float(total_raw) if total_raw is not None else 0.0
-        created = r[5]
+        created = r[8]
         created_str = created.isoformat() if created is not None else ""
+        dd = r[5]
+        delivery_str = dd.isoformat() if dd is not None else None
         out.append(
             {
                 "id": r[0],
                 "client_name": r[1],
                 "rut": r[2],
+                "payment_method": r[3],
+                "price_list": r[4],
+                "delivery_date": delivery_str,
                 "total": total_f,
-                "status": r[4],
+                "status": r[7],
                 "created_at": created_str,
             }
         )
@@ -89,6 +135,12 @@ def get_order(order_id: int):
                 id,
                 client_name,
                 client_rut,
+                payment_method,
+                price_list,
+                delivery_date,
+                notes,
+                contact_name,
+                contact_phone,
                 total,
                 status,
                 created_at
@@ -115,10 +167,13 @@ def get_order(order_id: int):
     finally:
         conn.close()
 
-    total_raw = row[3]
+    total_raw = row[9]
     total_f = float(total_raw) if total_raw is not None else 0.0
-    created = row[5]
+    created = row[11]
     created_str = created.isoformat() if created is not None else ""
+    dd = row[5]
+    delivery_str = dd.isoformat() if dd is not None else None
+    client_rut_val = row[2]
 
     items = []
     for ir in item_rows:
@@ -136,9 +191,16 @@ def get_order(order_id: int):
     return {
         "id": row[0],
         "client_name": row[1],
-        "rut": row[2],
+        "client_rut": client_rut_val,
+        "rut": client_rut_val,
+        "payment_method": row[3],
+        "price_list": row[4],
+        "delivery_date": delivery_str,
+        "notes": row[6],
+        "contact_name": row[7],
+        "contact_phone": row[8],
         "total": total_f,
-        "status": row[4],
+        "status": row[10],
         "created_at": created_str,
         "items": items,
     }
@@ -157,21 +219,11 @@ def create_order(body: CreateOrderBody):
     if not pay:
         raise HTTPException(status_code=400, detail="payment_method es obligatorio")
 
-    doc = (body.document_type or "").strip()
-    if not doc:
-        raise HTTPException(status_code=400, detail="document_type es obligatorio")
+    doc = (body.document_type or "").strip() or None
 
-    delivery: date | None = None
-    if body.delivery_date:
-        raw = body.delivery_date.strip()
-        if raw:
-            try:
-                delivery = date.fromisoformat(raw)
-            except ValueError:
-                raise HTTPException(
-                    status_code=400,
-                    detail="delivery_date debe ser YYYY-MM-DD",
-                )
+    delivery = _delivery_date_value(body.delivery_date)
+
+    client_id, client_name, client_rut = _resolve_client(body)
 
     conn = get_connection()
     cur = conn.cursor()
@@ -196,9 +248,9 @@ def create_order(body: CreateOrderBody):
             RETURNING id
             """,
             (
-                body.client.id,
-                (body.client.name or "").strip() or None,
-                (body.client.rut or "").strip() or None,
+                client_id,
+                client_name,
+                client_rut,
                 (body.price_list or "").strip() or None,
                 pay,
                 doc,

@@ -2,6 +2,9 @@ export type OrderRow = {
   id: number
   client_name: string | null
   rut: string | null
+  payment_method: string | null
+  price_list: string | null
+  delivery_date: string | null
   total: number
   status: string | null
   created_at: string
@@ -17,7 +20,14 @@ export type OrderItemDetail = {
 export type OrderDetail = {
   id: number
   client_name: string | null
+  client_rut: string | null
   rut: string | null
+  payment_method: string | null
+  price_list: string | null
+  delivery_date: string | null
+  notes: string | null
+  contact_name: string | null
+  contact_phone: string | null
   total: number
   status: string | null
   created_at: string

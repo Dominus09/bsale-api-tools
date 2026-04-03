@@ -1,9 +1,18 @@
 "use client"
 
+import type { ReactNode } from "react"
 import { useEffect, useState } from "react"
 import Link from "next/link"
 import { useParams } from "next/navigation"
-import { AlertTriangle, ArrowLeft, Loader2, Package } from "lucide-react"
+import {
+  AlertTriangle,
+  ArrowLeft,
+  ClipboardList,
+  Loader2,
+  Package,
+  StickyNote,
+  User,
+} from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -13,7 +22,7 @@ function formatOrderId(id: number) {
   return `#${String(id).padStart(4, "0")}`
 }
 
-function formatDate(iso: string) {
+function formatDate(iso: string | null | undefined) {
   if (!iso) return "—"
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return "—"
@@ -24,6 +33,11 @@ function formatMoney(n: number) {
   return `$${n.toLocaleString("es-CL")}`
 }
 
+function formatPriceList(value: string | null | undefined) {
+  if (!value?.trim()) return "—"
+  return value.trim().charAt(0).toUpperCase() + value.trim().slice(1).toLowerCase()
+}
+
 const statusStyles: Record<string, string> = {
   pendiente: "bg-yellow-500/15 text-yellow-800 dark:text-yellow-200 border-yellow-500/40",
   generado: "bg-green-500/15 text-green-800 dark:text-green-200 border-green-500/40",
@@ -31,13 +45,30 @@ const statusStyles: Record<string, string> = {
   revisar: "bg-blue-500/15 text-blue-800 dark:text-blue-200 border-blue-500/40",
 }
 
-function StatusBadge({ status }: { status: string | null }) {
+function StatusBadge({ status, className }: { status: string | null; className?: string }) {
   const key = (status ?? "").toLowerCase().trim()
   const cls = statusStyles[key] ?? "bg-muted text-muted-foreground border-border"
   return (
-    <Badge variant="outline" className={cls}>
+    <Badge variant="outline" className={`${cls} ${className ?? ""}`}>
       {status?.trim() || "—"}
     </Badge>
+  )
+}
+
+function DefList({
+  items,
+}: {
+  items: { label: string; value: ReactNode }[]
+}) {
+  return (
+    <dl className="grid gap-4 sm:grid-cols-2">
+      {items.map(({ label, value }) => (
+        <div key={label}>
+          <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{label}</dt>
+          <dd className="mt-1 text-sm text-foreground">{value}</dd>
+        </div>
+      ))}
+    </dl>
   )
 }
 
@@ -105,6 +136,9 @@ export default function OrderDetailPage() {
     )
   }
 
+  const rut = order.client_rut ?? order.rut
+  const notesText = (order.notes ?? "").trim()
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-4">
@@ -114,57 +148,69 @@ export default function OrderDetailPage() {
             Volver
           </Link>
         </Button>
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">
-            Pedido {formatOrderId(order.id)}
-          </h1>
-          <p className="text-muted-foreground">Detalle del pedido</p>
+        <div className="flex flex-wrap items-center gap-3">
+          <div>
+            <h1 className="text-2xl font-bold text-foreground">
+              Pedido {formatOrderId(order.id)}
+            </h1>
+            <p className="text-muted-foreground">Detalle del pedido</p>
+          </div>
+          <StatusBadge status={order.status} className="shrink-0 px-3 py-1 text-sm" />
         </div>
       </div>
 
-      <Card>
-        <CardHeader>
+      <Card className="border-l-4 border-l-primary">
+        <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 text-lg">
-            <Package className="h-5 w-5 text-primary" />
-            Datos del pedido
+            <ClipboardList className="h-5 w-5 text-primary" />
+            Información del pedido
           </CardTitle>
-          <CardDescription>Cliente y totales</CardDescription>
+          <CardDescription>Identificación, fechas y condiciones comerciales</CardDescription>
         </CardHeader>
         <CardContent>
-          <dl className="grid gap-3 sm:grid-cols-2">
-            <div>
-              <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">ID</dt>
-              <dd className="font-mono text-sm font-medium">{formatOrderId(order.id)}</dd>
-            </div>
-            <div>
-              <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Estado</dt>
-              <dd className="pt-0.5">
-                <StatusBadge status={order.status} />
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Cliente</dt>
-              <dd className="text-sm">{order.client_name ?? "—"}</dd>
-            </div>
-            <div>
-              <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">RUT</dt>
-              <dd className="text-sm text-muted-foreground">{order.rut ?? "—"}</dd>
-            </div>
-            <div>
-              <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Fecha</dt>
-              <dd className="text-sm text-muted-foreground">{formatDate(order.created_at)}</dd>
-            </div>
-            <div>
-              <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Total</dt>
-              <dd className="text-sm font-semibold">{formatMoney(Number(order.total))}</dd>
-            </div>
-          </dl>
+          <DefList
+            items={[
+              { label: "ID", value: <span className="font-mono font-medium">{formatOrderId(order.id)}</span> },
+              {
+                label: "Estado",
+                value: <StatusBadge status={order.status} className="px-2.5 py-0.5" />,
+              },
+              { label: "Fecha creación", value: formatDate(order.created_at) },
+              { label: "Fecha entrega", value: formatDate(order.delivery_date) },
+              { label: "Lista de precios", value: formatPriceList(order.price_list) },
+              { label: "Forma de pago", value: order.payment_method?.trim() || "—" },
+              { label: "Total", value: <span className="font-semibold">{formatMoney(Number(order.total))}</span> },
+            ]}
+          />
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Productos</CardTitle>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <User className="h-5 w-5 text-primary" />
+            Cliente
+          </CardTitle>
+          <CardDescription>Datos de facturación y contacto del pedido</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <DefList
+            items={[
+              { label: "Nombre", value: order.client_name ?? "—" },
+              { label: "RUT", value: <span className="text-muted-foreground">{rut ?? "—"}</span> },
+              { label: "Contacto", value: order.contact_name?.trim() || "—" },
+              { label: "Teléfono", value: order.contact_phone?.trim() || "—" },
+            ]}
+          />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <Package className="h-5 w-5 text-primary" />
+            Productos
+          </CardTitle>
           <CardDescription>Líneas del pedido</CardDescription>
         </CardHeader>
         <CardContent>
@@ -203,6 +249,21 @@ export default function OrderDetailPage() {
           )}
         </CardContent>
       </Card>
+
+      {notesText ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <StickyNote className="h-5 w-5 text-primary" />
+              Observaciones
+            </CardTitle>
+            <CardDescription>Notas asociadas al pedido</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">{notesText}</p>
+          </CardContent>
+        </Card>
+      ) : null}
     </div>
   )
 }

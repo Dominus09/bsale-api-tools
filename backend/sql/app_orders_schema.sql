@@ -21,6 +21,13 @@ CREATE TABLE IF NOT EXISTS app.orders (
 -- Bases ya creadas: ejecutar solo si faltan las columnas.
 ALTER TABLE app.orders ADD COLUMN IF NOT EXISTS client_rut TEXT;
 ALTER TABLE app.orders ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pendiente';
+ALTER TABLE app.orders ADD COLUMN IF NOT EXISTS payment_method TEXT;
+ALTER TABLE app.orders ADD COLUMN IF NOT EXISTS price_list TEXT;
+ALTER TABLE app.orders ADD COLUMN IF NOT EXISTS delivery_date DATE;
+ALTER TABLE app.orders ADD COLUMN IF NOT EXISTS notes TEXT;
+ALTER TABLE app.orders ADD COLUMN IF NOT EXISTS contact_name TEXT;
+ALTER TABLE app.orders ADD COLUMN IF NOT EXISTS contact_phone TEXT;
+ALTER TABLE app.orders ADD COLUMN IF NOT EXISTS document_type TEXT;
 
 CREATE TABLE IF NOT EXISTS app.order_items (
     id SERIAL PRIMARY KEY,
