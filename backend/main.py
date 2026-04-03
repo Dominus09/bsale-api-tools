@@ -25,8 +25,9 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://cat.quillotana.cl",
         "http://localhost:3000",
+        "https://cat.quillotana.cl",
+        "https://work.quillotana.cl",
     ],
     allow_credentials=True,
     allow_methods=["*"],
