@@ -34,8 +34,20 @@ export type OrderDetail = {
   items: OrderItemDetail[]
 }
 
-export async function getOrders(): Promise<OrderRow[]> {
-  const res = await fetch("https://api.quillotana.cl/orders")
+const ORDERS_PAGE_SIZE = 20
+
+export async function getOrders(params: {
+  page: number
+  limit?: number
+  status: string
+}): Promise<OrderRow[]> {
+  const limit = params.limit ?? ORDERS_PAGE_SIZE
+  const qs = new URLSearchParams({
+    page: String(params.page),
+    limit: String(limit),
+    status: params.status,
+  })
+  const res = await fetch(`https://api.quillotana.cl/orders?${qs.toString()}`)
 
   if (!res.ok) {
     throw new Error("Error cargando pedidos")
@@ -43,6 +55,8 @@ export async function getOrders(): Promise<OrderRow[]> {
 
   return res.json()
 }
+
+export { ORDERS_PAGE_SIZE }
 
 export async function getOrderById(id: number): Promise<OrderDetail> {
   const res = await fetch(`https://api.quillotana.cl/orders/${id}`)

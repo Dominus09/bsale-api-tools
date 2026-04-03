@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 
 from backend.db import get_connection
@@ -93,26 +93,49 @@ def _resolve_client(body: CreateOrderBody) -> tuple[int | None, str | None, str 
 
 
 @router.get("/orders")
-def get_orders():
+def get_orders(
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    status: str | None = Query(None),
+):
+    status_filter: str | None = None
+    if status is not None and status.strip():
+        s = status.strip().lower()
+        if s not in _ALLOWED_ORDER_STATUSES:
+            raise HTTPException(
+                status_code=400,
+                detail="status debe ser pendiente, generado, anulado o revisar",
+            )
+        status_filter = s
+
+    offset = (page - 1) * limit
+
+    query = """
+        SELECT
+            id,
+            client_name,
+            client_rut,
+            payment_method,
+            price_list,
+            delivery_date,
+            total,
+            status,
+            created_at
+        FROM app.orders
+    """
+    params: list = []
+
+    if status_filter is not None:
+        query += " WHERE status = %s"
+        params.append(status_filter)
+
+    query += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
+    params.extend([limit, offset])
+
     conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT
-                id,
-                client_name,
-                client_rut,
-                payment_method,
-                price_list,
-                delivery_date,
-                total,
-                status,
-                created_at
-            FROM app.orders
-            ORDER BY created_at DESC
-            """
-        )
+        cur.execute(query, tuple(params))
         rows = cur.fetchall()
         cur.close()
     finally:

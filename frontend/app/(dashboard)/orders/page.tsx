@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation"
 import { AlertTriangle, Loader2, Package } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { getOrders, type OrderRow } from "@/services/orders"
+import { Button } from "@/components/ui/button"
+import { getOrders, ORDERS_PAGE_SIZE, type OrderRow } from "@/services/orders"
 
 function formatOrderId(id: number) {
   return `#${String(id).padStart(4, "0")}`
@@ -39,11 +40,20 @@ function StatusBadge({ status }: { status: string | null }) {
   )
 }
 
+const STATUS_OPTIONS = [
+  { value: "pendiente", label: "Pendiente" },
+  { value: "generado", label: "Generado" },
+  { value: "anulado", label: "Anulado" },
+  { value: "revisar", label: "Revisar" },
+] as const
+
 export default function OrdersPage() {
   const router = useRouter()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [orders, setOrders] = useState<OrderRow[]>([])
+  const [selectedStatus, setSelectedStatus] = useState<string>("pendiente")
+  const [page, setPage] = useState(1)
 
   useEffect(() => {
     let cancelled = false
@@ -51,7 +61,11 @@ export default function OrdersPage() {
       setLoading(true)
       setError(null)
       try {
-        const data = await getOrders()
+        const data = await getOrders({
+          page,
+          limit: ORDERS_PAGE_SIZE,
+          status: selectedStatus,
+        })
         if (!cancelled) setOrders(Array.isArray(data) ? data : [])
       } catch {
         if (!cancelled) setError("Error cargando pedidos")
@@ -63,7 +77,10 @@ export default function OrdersPage() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [page, selectedStatus])
+
+  const canGoPrev = page > 1
+  const canGoNext = orders.length >= ORDERS_PAGE_SIZE
 
   if (loading) {
     return (
@@ -102,6 +119,52 @@ export default function OrdersPage() {
           <CardDescription>Pedidos ordenados por fecha (más recientes primero)</CardDescription>
         </CardHeader>
         <CardContent>
+          <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-1.5 sm:min-w-[200px]">
+              <label htmlFor="orders-status" className="text-xs font-medium text-muted-foreground">
+                Estado
+              </label>
+              <select
+                id="orders-status"
+                value={selectedStatus}
+                onChange={(e) => {
+                  setSelectedStatus(e.target.value)
+                  setPage(1)
+                }}
+                className="h-10 w-full max-w-xs rounded-md border border-input bg-background px-3 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:w-auto"
+              >
+                {STATUS_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!canGoPrev || loading}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
+                Anterior
+              </Button>
+              <span className="min-w-[5.5rem] text-center text-sm text-muted-foreground">
+                Página {page}
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!canGoNext || loading}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                Siguiente
+              </Button>
+            </div>
+          </div>
+
           {orders.length === 0 ? (
             <p className="py-8 text-center text-muted-foreground">No hay pedidos</p>
           ) : (
