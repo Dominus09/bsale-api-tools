@@ -39,14 +39,16 @@ const ORDERS_PAGE_SIZE = 20
 export async function getOrders(params: {
   page: number
   limit?: number
-  status: string
+  status?: string
 }): Promise<OrderRow[]> {
   const limit = params.limit ?? ORDERS_PAGE_SIZE
   const qs = new URLSearchParams({
     page: String(params.page),
     limit: String(limit),
-    status: params.status,
   })
+  if (params.status && params.status !== "all") {
+    qs.set("status", params.status)
+  }
   const res = await fetch(`https://api.quillotana.cl/orders?${qs.toString()}`)
 
   if (!res.ok) {

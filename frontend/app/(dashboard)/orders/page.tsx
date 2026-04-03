@@ -41,6 +41,7 @@ function StatusBadge({ status }: { status: string | null }) {
 }
 
 const STATUS_OPTIONS = [
+  { value: "all", label: "Todos" },
   { value: "pendiente", label: "Pendiente" },
   { value: "generado", label: "Generado" },
   { value: "anulado", label: "Anulado" },
@@ -52,7 +53,7 @@ export default function OrdersPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [orders, setOrders] = useState<OrderRow[]>([])
-  const [selectedStatus, setSelectedStatus] = useState<string>("pendiente")
+  const [selectedStatus, setSelectedStatus] = useState<string>("all")
   const [page, setPage] = useState(1)
 
   useEffect(() => {
@@ -64,7 +65,7 @@ export default function OrdersPage() {
         const data = await getOrders({
           page,
           limit: ORDERS_PAGE_SIZE,
-          status: selectedStatus,
+          ...(selectedStatus !== "all" ? { status: selectedStatus } : {}),
         })
         if (!cancelled) setOrders(Array.isArray(data) ? data : [])
       } catch {
