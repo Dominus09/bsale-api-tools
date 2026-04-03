@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { AlertTriangle, ChevronDown, Loader2, Percent } from "lucide-react"
+import { AlertTriangle, ChevronDown, Loader2, Percent, Search, X } from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -9,6 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Switch } from "@/components/ui/switch"
+import { Input } from "@/components/ui/input"
 import {
   getCompanies,
   getMarginAnalysisView,
@@ -73,6 +74,15 @@ function rowStatusClass(status: string | null): string {
   if (s === "PLACEHOLDER_PRICE") return "bg-amber-400/[0.12] dark:bg-amber-950/20"
   if (s === "NO_STOCK") return "bg-muted/60 dark:bg-muted/30"
   return ""
+}
+
+/** Color del margen % según status (no según signo del valor). */
+function marginPercentClassByStatus(status: string | null): string {
+  const s = (status ?? "").trim()
+  if (s === "LOW") return "text-red-600 dark:text-red-400"
+  if (s === "PLACEHOLDER_PRICE") return "text-amber-600 dark:text-amber-500"
+  if (s === "OK") return "text-green-600 dark:text-green-500"
+  return "text-foreground"
 }
 
 const STATUS_FILTER_OPTIONS = [
@@ -186,6 +196,13 @@ export default function MarginsPage() {
   const [marginsLoading, setMarginsLoading] = useState(false)
   const [companiesLoading, setCompaniesLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [searchInput, setSearchInput] = useState("")
+  const [debouncedSearch, setDebouncedSearch] = useState("")
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedSearch(searchInput), 300)
+    return () => window.clearTimeout(t)
+  }, [searchInput])
 
   useEffect(() => {
     let cancelled = false
@@ -333,8 +350,16 @@ export default function MarginsPage() {
     if (statusFilter !== "TODOS") {
       out = out.filter((r) => (r.status ?? "").trim() === statusFilter)
     }
+    const q = debouncedSearch.trim().toLowerCase()
+    if (q) {
+      out = out.filter((r) => {
+        const pn = (r.product_name ?? "").toLowerCase()
+        const vn = (r.variant_name ?? "").toLowerCase()
+        return pn.includes(q) || vn.includes(q)
+      })
+    }
     return out
-  }, [rows, problemsOnly, selectedTypeKeys, statusFilter])
+  }, [rows, problemsOnly, selectedTypeKeys, statusFilter, debouncedSearch])
 
   const stats = useMemo(() => {
     const low = filteredRows.filter((r) => (r.status ?? "").trim() === "LOW").length
@@ -406,6 +431,8 @@ export default function MarginsPage() {
                 setPriceListId("")
                 setPriceListOptions([])
                 setSelectedTypeKeys([])
+                setSearchInput("")
+                setDebouncedSearch("")
                 setRows([])
               }}
             >
@@ -502,87 +529,116 @@ export default function MarginsPage() {
             <p className="py-6 text-center text-xs text-muted-foreground">
               No hay listas de precio activas para esta empresa
             </p>
-          ) : filteredRows.length === 0 ? (
-            <p className="py-6 text-center text-xs text-muted-foreground">Sin filas para los filtros actuales</p>
+          ) : rows.length === 0 ? (
+            <p className="py-6 text-center text-xs text-muted-foreground">Sin datos para esta lista</p>
           ) : (
-            <div className="overflow-x-auto rounded-md border border-border">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-border bg-muted/40">
-                    <th className="px-2 py-1.5 text-left font-medium text-muted-foreground">Producto</th>
-                    <th className="px-2 py-1.5 text-left font-medium text-muted-foreground">Tipo</th>
-                    <th className="px-2 py-1.5 text-left font-medium text-muted-foreground">Variante</th>
-                    <th className="px-2 py-1.5 text-left font-medium text-muted-foreground">SKU</th>
-                    <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Stock</th>
-                    <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Costo</th>
-                    <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Precio</th>
-                    <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Margen %</th>
-                    <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Mín. %</th>
-                    <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Δ vs regla</th>
-                    <th className="px-2 py-1.5 text-center font-medium text-muted-foreground">Estado</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredRows.map((r) => {
-                    const st = num(r.stock_quantity)
-                    const lowStock = st !== null && st < 3 && st >= 0
-                    const mp = num(r.margin_percent)
-                    return (
-                      <tr
-                        key={`${r.variant_id}-${r.price_list_id}`}
-                        className={cn(
-                          "border-b border-border last:border-0",
-                          rowStatusClass(r.status),
-                          "hover:bg-muted/40",
-                        )}
-                      >
-                        <td className="max-w-[10rem] truncate px-2 py-1">{r.product_name ?? "—"}</td>
-                        <td className="max-w-[7rem] truncate px-2 py-1 text-muted-foreground">
-                          {r.product_type_name?.trim() ||
-                            (r.product_type_id != null ? `#${r.product_type_id}` : "—")}
-                        </td>
-                        <td className="max-w-[8rem] truncate px-2 py-1 text-muted-foreground">
-                          {r.variant_name ?? "—"}
-                        </td>
-                        <td className="whitespace-nowrap px-2 py-1 font-mono">{r.sku ?? "—"}</td>
-                        <td
-                          className={cn(
-                            "whitespace-nowrap px-2 py-1 text-right tabular-nums",
-                            lowStock && "font-medium text-orange-600 dark:text-orange-400",
-                          )}
-                        >
-                          {st ?? "—"}
-                        </td>
-                        <td className="whitespace-nowrap px-2 py-1 text-right tabular-nums">
-                          {formatMoney(num(r.cost))}
-                        </td>
-                        <td className="whitespace-nowrap px-2 py-1 text-right tabular-nums">
-                          {formatMoney(num(r.price))}
-                        </td>
-                        <td
-                          className={cn(
-                            "whitespace-nowrap px-2 py-1 text-right tabular-nums font-medium",
-                            mp !== null && mp < 0 && "text-red-600 dark:text-red-400",
-                            mp !== null && mp > 0 && "text-green-600 dark:text-green-500",
-                          )}
-                        >
-                          {formatPct(mp)}
-                        </td>
-                        <td className="whitespace-nowrap px-2 py-1 text-right tabular-nums text-muted-foreground">
-                          {formatPct(num(r.min_margin_percent))}
-                        </td>
-                        <td className="whitespace-nowrap px-2 py-1 text-right tabular-nums text-muted-foreground">
-                          {formatMarginDiff(num(r.margin_diff))}
-                        </td>
-                        <td className="px-2 py-1 text-center">
-                          <StatusBadge status={r.status} />
-                        </td>
+            <>
+              <div className="relative mb-2">
+                <Search
+                  className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+                  aria-hidden
+                />
+                <Input
+                  type="search"
+                  className="h-8 pl-7 pr-8 text-xs"
+                  placeholder="Buscar producto o variante..."
+                  value={searchInput}
+                  onChange={(e) => setSearchInput(e.target.value)}
+                  autoComplete="off"
+                />
+                {searchInput ? (
+                  <button
+                    type="button"
+                    className="absolute right-1 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                    onClick={() => {
+                      setSearchInput("")
+                      setDebouncedSearch("")
+                    }}
+                    aria-label="Limpiar búsqueda"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                ) : null}
+              </div>
+              {filteredRows.length === 0 ? (
+                <p className="py-6 text-center text-xs text-muted-foreground">
+                  Sin filas para los filtros o la búsqueda actuales
+                </p>
+              ) : (
+                <div className="overflow-x-auto rounded-md border border-border">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-border bg-muted/40">
+                        <th className="px-2 py-1.5 text-left font-medium text-muted-foreground">Producto</th>
+                        <th className="px-2 py-1.5 text-left font-medium text-muted-foreground">Variante</th>
+                        <th className="px-2 py-1.5 text-left font-medium text-muted-foreground">SKU</th>
+                        <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Stock</th>
+                        <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Costo</th>
+                        <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Precio</th>
+                        <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Margen %</th>
+                        <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Mín. %</th>
+                        <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Δ vs regla</th>
+                        <th className="px-2 py-1.5 text-center font-medium text-muted-foreground">Estado</th>
                       </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
+                    </thead>
+                    <tbody>
+                      {filteredRows.map((r) => {
+                        const st = num(r.stock_quantity)
+                        const lowStock = st !== null && st < 3 && st >= 0
+                        const mp = num(r.margin_percent)
+                        return (
+                          <tr
+                            key={`${r.variant_id}-${r.price_list_id}`}
+                            className={cn(
+                              "border-b border-border last:border-0",
+                              rowStatusClass(r.status),
+                              "hover:bg-muted/40",
+                            )}
+                          >
+                            <td className="max-w-[12rem] truncate px-2 py-1">{r.product_name ?? "—"}</td>
+                            <td className="max-w-[10rem] truncate px-2 py-1 text-muted-foreground">
+                              {r.variant_name ?? "—"}
+                            </td>
+                            <td className="whitespace-nowrap px-2 py-1 font-mono">{r.sku ?? "—"}</td>
+                            <td
+                              className={cn(
+                                "whitespace-nowrap px-2 py-1 text-right tabular-nums",
+                                lowStock && "font-medium text-orange-600 dark:text-orange-400",
+                              )}
+                            >
+                              {st ?? "—"}
+                            </td>
+                            <td className="whitespace-nowrap px-2 py-1 text-right tabular-nums">
+                              {formatMoney(num(r.cost))}
+                            </td>
+                            <td className="whitespace-nowrap px-2 py-1 text-right tabular-nums">
+                              {formatMoney(num(r.price))}
+                            </td>
+                            <td
+                              className={cn(
+                                "whitespace-nowrap px-2 py-1 text-right tabular-nums font-medium",
+                                marginPercentClassByStatus(r.status),
+                              )}
+                            >
+                              {formatPct(mp)}
+                            </td>
+                            <td className="whitespace-nowrap px-2 py-1 text-right tabular-nums text-muted-foreground">
+                              {formatPct(num(r.min_margin_percent))}
+                            </td>
+                            <td className="whitespace-nowrap px-2 py-1 text-right tabular-nums text-muted-foreground">
+                              {formatMarginDiff(num(r.margin_diff))}
+                            </td>
+                            <td className="px-2 py-1 text-center">
+                              <StatusBadge status={r.status} />
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
           )}
         </CardContent>
       </Card>
