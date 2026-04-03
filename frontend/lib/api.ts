@@ -121,6 +121,12 @@ export interface ProductWithoutCost {
   category?: string
 }
 
+/** Lista de precios activa (GET /price-lists) */
+export interface PriceListRef {
+  id: number
+  name: string
+}
+
 /** Fila de bsale.margin_analysis_view (GET /margin-analysis-view) */
 export interface MarginAnalysisViewRow {
   company_id: number
@@ -275,6 +281,18 @@ export async function getMarginAnalysis(): Promise<MarginProduct[]> {
     }
     throw error
   }
+}
+
+export async function getPriceLists(companyId: number): Promise<PriceListRef[]> {
+  const res = await fetch(
+    `${API_URL}/price-lists?company_id=${encodeURIComponent(String(companyId))}`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) {
+    throw new Error("Error al cargar listas de precios")
+  }
+  const data = await res.json()
+  return Array.isArray(data) ? data : []
 }
 
 export async function getMarginAnalysisView(
