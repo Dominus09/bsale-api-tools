@@ -12,6 +12,7 @@ from backend.routers import dashboard
 from backend.routers import margin_export
 from backend.routers import margin_problems
 from backend.routers import margins
+from backend.routers import price_lists
 from backend.routers import products
 from backend.routers import summary
 
@@ -46,6 +47,7 @@ app.include_router(catalog_router, prefix="/api")
 # --- Analytics / empresas (no mezclar con /erp: URLs distintas) ---
 app.include_router(companies.router)
 app.include_router(dashboard.router)
+app.include_router(price_lists.router)
 app.include_router(margins.router)
 app.include_router(alerts.router)
 app.include_router(summary.router)

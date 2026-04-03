@@ -6,30 +6,6 @@ from backend.db import get_connection
 router = APIRouter()
 
 
-@router.get("/price-lists")
-def price_lists(company_id: int):
-    """
-    Listas de precio Bsale activas (state = 0) para la empresa.
-    id = bsale_id (mismo valor que variant_prices.price_list_id).
-    """
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT bsale_id AS id, name
-        FROM bsale.price_lists
-        WHERE company_id = %s AND state = 0
-        ORDER BY name
-        """,
-        (company_id,),
-    )
-    rows = cur.fetchall()
-    result = [{"id": r[0], "name": r[1]} for r in rows]
-    cur.close()
-    conn.close()
-    return result
-
-
 def _fetch_margin_analysis_view_rows(
     company_id: int,
     price_list_id: Optional[int] = None,

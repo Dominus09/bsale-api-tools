@@ -283,9 +283,19 @@ export async function getMarginAnalysis(): Promise<MarginProduct[]> {
   }
 }
 
-export async function getPriceLists(companyId: number): Promise<PriceListRef[]> {
+export async function getPriceLists(
+  companyId: number | null | undefined,
+): Promise<PriceListRef[]> {
+  if (companyId == null) {
+    return []
+  }
+  const id = typeof companyId === "number" ? companyId : Number(companyId)
+  if (!Number.isFinite(id) || id <= 0) {
+    return []
+  }
+
   const res = await fetch(
-    `${API_URL}/price-lists?company_id=${encodeURIComponent(String(companyId))}`,
+    `${API_URL}/price-lists?company_id=${encodeURIComponent(String(id))}`,
     { headers: getAuthHeaders() },
   )
   if (!res.ok) {
