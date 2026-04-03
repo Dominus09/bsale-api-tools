@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from backend.db import get_connection
 
-router = APIRouter()
+router = APIRouter(tags=["Pedidos"])
 
 
 class OrderClient(BaseModel):
@@ -34,6 +34,48 @@ class CreateOrderBody(BaseModel):
     contact_phone: str
     delivery_date: str | None = None
     notes: str | None = None
+
+
+@router.get("/orders")
+def get_orders():
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                id,
+                client_name,
+                client_rut,
+                total,
+                status,
+                created_at
+            FROM app.orders
+            ORDER BY created_at DESC
+            """
+        )
+        rows = cur.fetchall()
+        cur.close()
+    finally:
+        conn.close()
+
+    out = []
+    for r in rows:
+        total_raw = r[3]
+        total_f = float(total_raw) if total_raw is not None else 0.0
+        created = r[5]
+        created_str = created.isoformat() if created is not None else ""
+        out.append(
+            {
+                "id": r[0],
+                "client_name": r[1],
+                "rut": r[2],
+                "total": total_f,
+                "status": r[4],
+                "created_at": created_str,
+            }
+        )
+    return out
 
 
 @router.post("/orders")
