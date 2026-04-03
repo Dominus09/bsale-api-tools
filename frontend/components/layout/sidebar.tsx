@@ -57,6 +57,7 @@ const navSections: { title: string; items: NavItem[] }[] = [
   {
     title: "Operaciones",
     items: [
+      { href: "/orders", label: "Pedidos", icon: Package },
       { href: "#", label: "Stock", icon: Warehouse, disabled: true },
       { href: "#", label: "Compras", icon: ShoppingCart, disabled: true },
       { href: "#", label: "Ventas", icon: DollarSign, disabled: true },
