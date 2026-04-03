@@ -1,7 +1,16 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { AlertTriangle, ChevronDown, Loader2, Percent, Search, X } from "lucide-react"
+import {
+  AlertTriangle,
+  ChevronDown,
+  FileSpreadsheet,
+  Loader2,
+  PencilLine,
+  Percent,
+  Search,
+  X,
+} from "lucide-react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -49,6 +58,33 @@ function formatMarginDiff(value: number | null) {
   if (value === null) return "—"
   const sign = value > 0 ? "+" : ""
   return `${sign}${value.toFixed(2)}%`
+}
+
+function rowKey(r: Pick<MarginAnalysisViewRow, "variant_id" | "price_list_id">) {
+  return `${r.variant_id}-${r.price_list_id}`
+}
+
+/** Redondeo entero: cost * (1 + min_margin_percent / 100) */
+function suggestedPriceFromRule(cost: number | null, minMarginPercent: number | null): number | null {
+  if (cost == null || cost <= 0) return null
+  if (minMarginPercent == null || !Number.isFinite(minMarginPercent)) return null
+  return Math.round(cost * (1 + minMarginPercent / 100))
+}
+
+function newMarginPercentPreview(cost: number | null, newPrice: number | null): number | null {
+  if (cost == null || cost <= 0 || newPrice == null || !Number.isFinite(newPrice)) return null
+  return ((newPrice - cost) / cost) * 100
+}
+
+/** Color del margen simulado vs mínimo (solo vista previa de edición). */
+function previewMarginClass(
+  newPct: number | null,
+  minMargin: number | null,
+): string {
+  if (newPct == null) return "text-muted-foreground"
+  if (minMargin == null || !Number.isFinite(minMargin)) return "text-foreground"
+  if (newPct < minMargin) return "text-red-600 dark:text-red-400"
+  return "text-green-600 dark:text-green-500"
 }
 
 const statusBadgeClass: Record<string, string> = {
@@ -198,11 +234,17 @@ export default function MarginsPage() {
   const [error, setError] = useState<string | null>(null)
   const [searchInput, setSearchInput] = useState("")
   const [debouncedSearch, setDebouncedSearch] = useState("")
+  /** Solo claves explícitamente editadas o sugeridas (no muta `rows`). */
+  const [editedPrices, setEditedPrices] = useState<Record<string, number>>({})
 
   useEffect(() => {
     const t = window.setTimeout(() => setDebouncedSearch(searchInput), 300)
     return () => window.clearTimeout(t)
   }, [searchInput])
+
+  useEffect(() => {
+    setEditedPrices({})
+  }, [companyId, priceListId])
 
   useEffect(() => {
     let cancelled = false
@@ -367,6 +409,81 @@ export default function MarginsPage() {
     return { low, placeholder: ph, total: filteredRows.length }
   }, [filteredRows])
 
+  const rowByKey = useMemo(() => {
+    const m = new Map<string, MarginAnalysisViewRow>()
+    for (const r of rows) {
+      m.set(rowKey(r), r)
+    }
+    return m
+  }, [rows])
+
+  const editedCount = useMemo(() => Object.keys(editedPrices).length, [editedPrices])
+
+  const lowVisibleCount = useMemo(
+    () => filteredRows.filter((r) => (r.status ?? "").trim() === "LOW").length,
+    [filteredRows],
+  )
+
+  const setPriceForRow = useCallback((key: string, raw: string) => {
+    setEditedPrices((prev) => {
+      const next = { ...prev }
+      if (raw === "" || raw === "-") {
+        delete next[key]
+        return next
+      }
+      const n = Number(raw)
+      if (!Number.isFinite(n)) return prev
+      next[key] = n
+      return next
+    })
+  }, [])
+
+  const suggestRow = useCallback((r: MarginAnalysisViewRow) => {
+    const k = rowKey(r)
+    const s = suggestedPriceFromRule(num(r.cost), num(r.min_margin_percent))
+    if (s == null) return
+    setEditedPrices((prev) => ({ ...prev, [k]: s }))
+  }, [])
+
+  const suggestAllLowVisible = useCallback(() => {
+    setEditedPrices((prev) => {
+      const next = { ...prev }
+      for (const r of filteredRows) {
+        if ((r.status ?? "").trim() !== "LOW") continue
+        const k = rowKey(r)
+        const s = suggestedPriceFromRule(num(r.cost), num(r.min_margin_percent))
+        if (s != null) next[k] = s
+      }
+      return next
+    })
+  }, [filteredRows])
+
+  const resetEdits = useCallback(() => setEditedPrices({}), [])
+
+  const exportExcel = useCallback(async () => {
+    const keys = Object.keys(editedPrices)
+    if (keys.length === 0) return
+    const XLSX = await import("xlsx")
+    const sheetRows: Record<string, string | number>[] = []
+    for (const k of keys) {
+      const r = rowByKey.get(k)
+      if (!r) continue
+      sheetRows.push({
+        product_name: r.product_name ?? "",
+        variant_name: r.variant_name ?? "",
+        sku: r.sku ?? "",
+        barcode: r.barcode ?? "",
+        price_actual: num(r.price) ?? "",
+        nuevo_precio: editedPrices[k],
+      })
+    }
+    if (sheetRows.length === 0) return
+    const ws = XLSX.utils.json_to_sheet(sheetRows)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, "Margenes")
+    XLSX.writeFile(wb, `margenes_${companyId}_${priceListId}.xlsx`)
+  }, [editedPrices, rowByKey, companyId, priceListId])
+
   const filterSelectClass =
     "h-8 min-w-[9.5rem] rounded-md border border-input bg-background px-2 text-xs ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 
@@ -433,6 +550,7 @@ export default function MarginsPage() {
                 setSelectedTypeKeys([])
                 setSearchInput("")
                 setDebouncedSearch("")
+                setEditedPrices({})
                 setRows([])
               }}
             >
@@ -560,6 +678,41 @@ export default function MarginsPage() {
                   </button>
                 ) : null}
               </div>
+              <div className="mb-2 flex flex-wrap items-center gap-2 border-b border-border pb-2">
+                <span className="text-xs text-muted-foreground">
+                  <span className="font-semibold text-foreground">{editedCount}</span> productos modificados
+                </span>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={suggestAllLowVisible}
+                  disabled={lowVisibleCount === 0 || tableBusy}
+                >
+                  Sugerir todos
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  className="h-7 gap-1 text-xs"
+                  onClick={() => void exportExcel()}
+                  disabled={editedCount === 0 || tableBusy}
+                >
+                  <FileSpreadsheet className="size-3.5" />
+                  Exportar Excel
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={resetEdits}
+                  disabled={editedCount === 0}
+                >
+                  Reset
+                </Button>
+              </div>
               {filteredRows.length === 0 ? (
                 <p className="py-6 text-center text-xs text-muted-foreground">
                   Sin filas para los filtros o la búsqueda actuales
@@ -578,6 +731,12 @@ export default function MarginsPage() {
                         <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Margen %</th>
                         <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Mín. %</th>
                         <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">Δ vs regla</th>
+                        <th className="px-2 py-1.5 text-center font-medium text-muted-foreground">
+                          Nuevo precio
+                        </th>
+                        <th className="px-2 py-1.5 text-right font-medium text-muted-foreground">
+                          Nuevo margen %
+                        </th>
                         <th className="px-2 py-1.5 text-center font-medium text-muted-foreground">Estado</th>
                       </tr>
                     </thead>
@@ -586,9 +745,18 @@ export default function MarginsPage() {
                         const st = num(r.stock_quantity)
                         const lowStock = st !== null && st < 3 && st >= 0
                         const mp = num(r.margin_percent)
+                        const k = rowKey(r)
+                        const editedVal = editedPrices[k]
+                        const isEdited = editedVal !== undefined
+                        const suggestVal = suggestedPriceFromRule(num(r.cost), num(r.min_margin_percent))
+                        const previewPct = isEdited
+                          ? newMarginPercentPreview(num(r.cost), editedVal)
+                          : null
+                        const minM = num(r.min_margin_percent)
+                        const currentPrice = num(r.price)
                         return (
                           <tr
-                            key={`${r.variant_id}-${r.price_list_id}`}
+                            key={k}
                             className={cn(
                               "border-b border-border last:border-0",
                               rowStatusClass(r.status),
@@ -612,7 +780,7 @@ export default function MarginsPage() {
                               {formatMoney(num(r.cost))}
                             </td>
                             <td className="whitespace-nowrap px-2 py-1 text-right tabular-nums">
-                              {formatMoney(num(r.price))}
+                              {formatMoney(currentPrice)}
                             </td>
                             <td
                               className={cn(
@@ -623,10 +791,57 @@ export default function MarginsPage() {
                               {formatPct(mp)}
                             </td>
                             <td className="whitespace-nowrap px-2 py-1 text-right tabular-nums text-muted-foreground">
-                              {formatPct(num(r.min_margin_percent))}
+                              {formatPct(minM)}
                             </td>
                             <td className="whitespace-nowrap px-2 py-1 text-right tabular-nums text-muted-foreground">
                               {formatMarginDiff(num(r.margin_diff))}
+                            </td>
+                            <td
+                              className={cn(
+                                "px-1 py-0.5 align-middle",
+                                isEdited && "bg-blue-500/15 dark:bg-blue-950/30",
+                              )}
+                            >
+                              <div className="flex flex-col items-stretch gap-0.5">
+                                <div className="flex items-center gap-0.5">
+                                  {isEdited ? (
+                                    <PencilLine
+                                      className="size-3 shrink-0 text-blue-600 dark:text-blue-400"
+                                      aria-hidden
+                                    />
+                                  ) : null}
+                                  <Input
+                                    type="number"
+                                    inputMode="numeric"
+                                    min={0}
+                                    step={1}
+                                    className="h-7 min-w-[4.5rem] flex-1 px-1.5 text-right text-xs tabular-nums"
+                                    placeholder={
+                                      currentPrice != null ? String(Math.round(currentPrice)) : ""
+                                    }
+                                    value={isEdited ? String(editedVal) : ""}
+                                    onChange={(e) => setPriceForRow(k, e.target.value)}
+                                  />
+                                </div>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-6 px-1 text-[10px] leading-none"
+                                  disabled={suggestVal == null}
+                                  onClick={() => suggestRow(r)}
+                                >
+                                  Sugerir
+                                </Button>
+                              </div>
+                            </td>
+                            <td
+                              className={cn(
+                                "whitespace-nowrap px-2 py-1 text-right tabular-nums font-medium",
+                                isEdited ? previewMarginClass(previewPct, minM) : "text-muted-foreground",
+                              )}
+                            >
+                              {isEdited ? formatPct(previewPct) : "—"}
                             </td>
                             <td className="px-2 py-1 text-center">
                               <StatusBadge status={r.status} />
