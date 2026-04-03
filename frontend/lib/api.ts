@@ -121,6 +121,28 @@ export interface ProductWithoutCost {
   category?: string
 }
 
+/** Fila de bsale.margin_analysis_view (GET /margin-analysis-view) */
+export interface MarginAnalysisViewRow {
+  company_id: number
+  product_type_id?: number | null
+  product_type_name?: string | null
+  product_name: string | null
+  variant_id: number
+  variant_name: string | null
+  barcode?: string | null
+  sku: string | null
+  price_list_id: number
+  price_list_name?: string | null
+  stock_quantity?: number | string | null
+  price: number | string | null
+  cost: number | string | null
+  margin_value?: number | string | null
+  margin_percent: number | string | null
+  min_margin_percent: number | string | null
+  margin_diff?: number | string | null
+  status: string
+}
+
 function getAuthHeaders(): HeadersInit {
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : null
   return {
@@ -253,6 +275,24 @@ export async function getMarginAnalysis(): Promise<MarginProduct[]> {
     }
     throw error
   }
+}
+
+export async function getMarginAnalysisView(
+  companyId: number,
+  priceListId?: number | null,
+): Promise<MarginAnalysisViewRow[]> {
+  const qs = new URLSearchParams({ company_id: String(companyId) })
+  if (priceListId != null && !Number.isNaN(priceListId)) {
+    qs.set("price_list_id", String(priceListId))
+  }
+  const res = await fetch(`${API_URL}/margin-analysis-view?${qs.toString()}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    throw new Error("Error al cargar análisis de márgenes (vista)")
+  }
+  const data = await res.json()
+  return Array.isArray(data) ? data : []
 }
 
 export async function getProductsWithoutCost(): Promise<ProductWithoutCost[]> {
