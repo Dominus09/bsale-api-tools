@@ -53,3 +53,27 @@ export async function getOrderById(id: number): Promise<OrderDetail> {
 
   return res.json()
 }
+
+export type UpdateOrderStatusResponse = {
+  id: number
+  status: string
+}
+
+export async function updateOrderStatus(
+  id: number,
+  status: string,
+): Promise<UpdateOrderStatusResponse> {
+  const res = await fetch(`https://api.quillotana.cl/orders/${id}/status`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ status }),
+  })
+
+  if (!res.ok) {
+    throw new Error("Error actualizando estado")
+  }
+
+  return res.json()
+}

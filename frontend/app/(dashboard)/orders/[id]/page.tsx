@@ -7,16 +7,20 @@ import { useParams } from "next/navigation"
 import {
   AlertTriangle,
   ArrowLeft,
+  Ban,
+  CheckCircle2,
   ClipboardList,
   Loader2,
   Package,
+  Eye,
   StickyNote,
   User,
 } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { getOrderById, type OrderDetail } from "@/services/orders"
+import { cn } from "@/lib/utils"
+import { getOrderById, updateOrderStatus, type OrderDetail } from "@/services/orders"
 
 function formatOrderId(id: number) {
   return `#${String(id).padStart(4, "0")}`
@@ -82,6 +86,8 @@ export default function OrderDetailPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [order, setOrder] = useState<OrderDetail | null>(null)
+  const [updatingStatus, setUpdatingStatus] = useState(false)
+  const [statusError, setStatusError] = useState<string | null>(null)
 
   useEffect(() => {
     if (!Number.isFinite(orderId) || orderId < 1) {
@@ -140,6 +146,24 @@ export default function OrderDetailPage() {
 
   const rut = order.client_rut ?? order.rut
   const notesText = (order.notes ?? "").trim()
+  const currentStatus = (order.status ?? "").toLowerCase().trim()
+
+  const disableGenerar = currentStatus === "generado" || currentStatus === "anulado"
+  const disableAnular = currentStatus === "anulado"
+  const disableRevisar = currentStatus === "anulado"
+
+  async function handleStatusChange(next: "generado" | "anulado" | "revisar") {
+    setStatusError(null)
+    setUpdatingStatus(true)
+    try {
+      const res = await updateOrderStatus(order.id, next)
+      setOrder((prev) => (prev ? { ...prev, status: res.status } : prev))
+    } catch {
+      setStatusError("Error actualizando estado")
+    } finally {
+      setUpdatingStatus(false)
+    }
+  }
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 px-1 pb-8 sm:px-0">
@@ -183,6 +207,60 @@ export default function OrderDetailPage() {
               { label: "Forma de pago", value: order.payment_method?.trim() || "—" },
             ]}
           />
+          <div className="mt-6 border-t border-border pt-6">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Cambiar estado
+              </p>
+              {updatingStatus ? (
+                <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  Actualizando…
+                </span>
+              ) : null}
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+              <Button
+                type="button"
+                disabled={updatingStatus || disableGenerar}
+                className={cn(
+                  "gap-2 bg-green-600 text-white hover:bg-green-700",
+                  (updatingStatus || disableGenerar) && "opacity-50",
+                )}
+                onClick={() => handleStatusChange("generado")}
+              >
+                <CheckCircle2 className="h-4 w-4" />
+                Generar
+              </Button>
+              <Button
+                type="button"
+                disabled={updatingStatus || disableAnular}
+                variant="destructive"
+                className="gap-2"
+                onClick={() => handleStatusChange("anulado")}
+              >
+                <Ban className="h-4 w-4" />
+                Anular
+              </Button>
+              <Button
+                type="button"
+                disabled={updatingStatus || disableRevisar}
+                className={cn(
+                  "gap-2 bg-blue-600 text-white hover:bg-blue-700",
+                  (updatingStatus || disableRevisar) && "opacity-50",
+                )}
+                onClick={() => handleStatusChange("revisar")}
+              >
+                <Eye className="h-4 w-4" />
+                Revisar
+              </Button>
+            </div>
+            {statusError ? (
+              <p className="mt-2 text-sm text-destructive" role="alert">
+                {statusError}
+              </p>
+            ) : null}
+          </div>
         </CardContent>
       </Card>
 
