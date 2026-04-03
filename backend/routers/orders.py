@@ -78,6 +78,72 @@ def get_orders():
     return out
 
 
+@router.get("/orders/{order_id}")
+def get_order(order_id: int):
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                id,
+                client_name,
+                client_rut,
+                total,
+                status,
+                created_at
+            FROM app.orders
+            WHERE id = %s
+            """,
+            (order_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Pedido no encontrado")
+
+        cur.execute(
+            """
+            SELECT product_name, barcode, quantity, price
+            FROM app.order_items
+            WHERE order_id = %s
+            ORDER BY id ASC
+            """,
+            (order_id,),
+        )
+        item_rows = cur.fetchall()
+        cur.close()
+    finally:
+        conn.close()
+
+    total_raw = row[3]
+    total_f = float(total_raw) if total_raw is not None else 0.0
+    created = row[5]
+    created_str = created.isoformat() if created is not None else ""
+
+    items = []
+    for ir in item_rows:
+        p_name, bc, qty, price_raw = ir
+        price_f = float(price_raw) if price_raw is not None else 0.0
+        items.append(
+            {
+                "product_name": p_name,
+                "barcode": bc,
+                "quantity": int(qty) if qty is not None else 0,
+                "price": price_f,
+            }
+        )
+
+    return {
+        "id": row[0],
+        "client_name": row[1],
+        "rut": row[2],
+        "total": total_f,
+        "status": row[4],
+        "created_at": created_str,
+        "items": items,
+    }
+
+
 @router.post("/orders")
 def create_order(body: CreateOrderBody):
     if not body.items:

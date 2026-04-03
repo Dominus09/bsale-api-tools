@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import { useRouter } from "next/navigation"
 import { AlertTriangle, Loader2, Package } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -39,6 +40,7 @@ function StatusBadge({ status }: { status: string | null }) {
 }
 
 export default function OrdersPage() {
+  const router = useRouter()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [orders, setOrders] = useState<OrderRow[]>([])
@@ -119,7 +121,16 @@ export default function OrdersPage() {
                   {orders.map((order) => (
                     <tr
                       key={order.id}
-                      className="border-b border-border last:border-0 hover:bg-muted/50"
+                      role="link"
+                      tabIndex={0}
+                      className="cursor-pointer border-b border-border last:border-0 hover:bg-muted/50"
+                      onClick={() => router.push(`/orders/${order.id}`)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault()
+                          router.push(`/orders/${order.id}`)
+                        }
+                      }}
                     >
                       <td className="py-4 font-mono text-sm font-medium">{formatOrderId(order.id)}</td>
                       <td className="py-4">{order.client_name ?? "—"}</td>
