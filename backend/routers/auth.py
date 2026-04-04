@@ -1,17 +1,48 @@
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
-from backend.client_rut import require_valid_rut, city_is_melinka
-from backend.db import get_connection
-from passlib.context import CryptContext
-import jwt
+from __future__ import annotations
+
+import hmac
+import logging
 import os
 
+import jwt
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
+from passlib.context import CryptContext
+from pydantic import BaseModel
+
+from backend.client_rut import require_valid_rut, city_is_melinka
+from backend.db import get_connection
+
 router = APIRouter()
+
+logger = logging.getLogger(__name__)
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 SECRET = "quillotana_secret_key"
+
+_LOGIN_DEBUG = os.getenv("AUTH_LOGIN_DEBUG", "").strip().lower() in ("1", "true", "yes")
+
+
+def _looks_like_bcrypt_hash(value: str) -> bool:
+    return value.startswith(("$2a$", "$2b$", "$2y$"))
+
+
+def _password_matches(plain: str, stored: str | None) -> bool:
+    if not stored or not stored.strip():
+        return False
+    s = stored.strip()
+    if _looks_like_bcrypt_hash(s):
+        try:
+            return pwd_context.verify(plain, s)
+        except Exception:
+            if _LOGIN_DEBUG:
+                logger.exception("bcrypt verify raised for stored hash")
+            return False
+    pe, se = plain.encode("utf-8"), s.encode("utf-8")
+    if len(pe) != len(se):
+        return False
+    return hmac.compare_digest(pe, se)
 
 
 class LoginRequest(BaseModel):
@@ -64,23 +95,43 @@ def login_client(body: LoginClientRequest):
 
 @router.post("/login")
 def login(data: LoginRequest):
+    email_key = data.email.strip().lower()
 
     conn = get_connection()
     cur = conn.cursor()
 
     cur.execute(
-        "SELECT password_hash, role FROM bsale.users WHERE email = %s AND active = true",
-        (data.email,)
+        """
+        SELECT password_hash, role
+        FROM bsale.users
+        WHERE lower(trim(email)) = %s AND active = true
+        """,
+        (email_key,),
     )
 
     user = cur.fetchone()
+    cur.close()
+    conn.close()
+
+    if _LOGIN_DEBUG:
+        logger.info(
+            "login attempt email_norm=%s user_found=%s",
+            email_key,
+            user is not None,
+        )
 
     if not user:
         raise HTTPException(status_code=401, detail="Credenciales inválidas")
 
     password_hash, role = user
+    stored = password_hash
+    ok = _password_matches(data.password, stored)
 
-    if not pwd_context.verify(data.password, password_hash):
+    if _LOGIN_DEBUG:
+        kind = "bcrypt" if stored and _looks_like_bcrypt_hash(stored.strip()) else "legacy_plain"
+        logger.info("login password check ok=%s storage_kind=%s", ok, kind)
+
+    if not ok:
         raise HTTPException(status_code=401, detail="Password incorrecta")
 
     token = jwt.encode(
