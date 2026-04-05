@@ -94,9 +94,6 @@ def get_catalog(
             image_val,
             price_raw,
         ) = r
-
-         # TEMP: quitar tras validar product_type en producción
-
         image_out = (str(image_val).strip() if image_val is not None else "") or None
         if image_out == "":
             image_out = None
