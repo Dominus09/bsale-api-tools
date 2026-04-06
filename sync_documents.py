@@ -8,7 +8,10 @@ Mismo patrón que sync_prices_costs.py:
 Ejecución del Job (sin argumentos):
   python sync_documents.py
 
-Editar SYNC_FROM_DATE / SYNC_TO_DATE abajo para cambiar el rango (YYYY-MM-DD, inclusive).
+Rango configurable por env (sin editar código):
+  SYNC_FROM_DATE=YYYY-MM-DD
+  SYNC_TO_DATE=YYYY-MM-DD
+Si no existen en entorno, usa las constantes SYNC_FROM_DATE / SYNC_TO_DATE del script.
 """
 
 from __future__ import annotations
@@ -237,6 +240,33 @@ def parse_date_const(s: str, label: str) -> date:
         die(f"{label} inválida (YYYY-MM-DD): {s!r}", 1)
 
 
+def resolve_sync_range() -> tuple[date, date]:
+    """
+    Prioridad:
+      1) Variables de entorno SYNC_FROM_DATE / SYNC_TO_DATE
+      2) Constantes del script SYNC_FROM_DATE / SYNC_TO_DATE
+    """
+    env_from = (os.getenv("SYNC_FROM_DATE") or "").strip()
+    env_to = (os.getenv("SYNC_TO_DATE") or "").strip()
+
+    raw_from = env_from if env_from else SYNC_FROM_DATE
+    raw_to = env_to if env_to else SYNC_TO_DATE
+    source = "env" if (env_from or env_to) else "constantes"
+
+    start_d = parse_date_const(raw_from, "SYNC_FROM_DATE")
+    end_d = parse_date_const(raw_to, "SYNC_TO_DATE")
+    if end_d < start_d:
+        die("SYNC_TO_DATE debe ser >= SYNC_FROM_DATE", 1)
+
+    log.info(
+        "Rango de sync (%s): SYNC_FROM_DATE=%s SYNC_TO_DATE=%s",
+        source,
+        start_d,
+        end_d,
+    )
+    return start_d, end_d
+
+
 def iter_days(start: date, end: date):
     d = start
     while d <= end:
@@ -344,10 +374,7 @@ def sync_company_documents(
 def main() -> None:
     log.info("SYNC DOCUMENTS START")
 
-    start_d = parse_date_const(SYNC_FROM_DATE, "SYNC_FROM_DATE")
-    end_d = parse_date_const(SYNC_TO_DATE, "SYNC_TO_DATE")
-    if end_d < start_d:
-        die("SYNC_TO_DATE debe ser >= SYNC_FROM_DATE", 1)
+    start_d, end_d = resolve_sync_range()
 
     num_days = (end_d - start_d).days + 1
     if num_days > WARN_RANGE_DAYS:
