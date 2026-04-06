@@ -73,6 +73,28 @@ def list_products_master(
     return result
 
 
+@router.get("/products-master/count-without-supplier")
+def count_products_master_without_supplier() -> Dict[str, Any]:
+    """Cuenta filas en bsale.products_master con supplier_id IS NULL."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT COUNT(*)::bigint
+            FROM bsale.products_master
+            WHERE supplier_id IS NULL
+            """
+        )
+        row = cur.fetchone()
+        cur.close()
+    finally:
+        conn.close()
+
+    total = int(row[0]) if row and row[0] is not None else 0
+    return {"count": total}
+
+
 @router.patch("/products-master/{barcode}")
 def patch_product_master(barcode: str, body: PatchProductMasterBody):
     clean_barcode = (barcode or "").strip()

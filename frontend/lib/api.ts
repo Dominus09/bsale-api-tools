@@ -128,6 +128,8 @@ export interface Supplier {
   phone: string | null
   email: string | null
   notes: string | null
+  payment_method: string | null
+  visit_day: string | null
   is_active: boolean
   created_at?: string
   updated_at?: string
@@ -139,6 +141,8 @@ export interface CreateSupplierPayload {
   phone?: string | null
   email?: string | null
   notes?: string | null
+  payment_method?: string | null
+  visit_day?: string | null
 }
 
 export interface UpdateSupplierPayload {
@@ -147,7 +151,20 @@ export interface UpdateSupplierPayload {
   phone?: string | null
   email?: string | null
   notes?: string | null
+  payment_method?: string | null
+  visit_day?: string | null
   is_active?: boolean
+}
+
+export interface ProductMasterRow {
+  id: number
+  barcode: string
+  sku: string | null
+  product_name: string | null
+  variant_name: string | null
+  product_type: string | null
+  supplier_id: number | null
+  is_active: boolean
 }
 
 /** Lista de precios activa (GET /price-lists) */
@@ -434,6 +451,34 @@ export async function updateSupplier(
     throw new Error(msg || "Error al actualizar proveedor")
   }
   return res.json()
+}
+
+export async function getProductsMasterWithoutSupplier(search?: string): Promise<ProductMasterRow[]> {
+  const qs = new URLSearchParams()
+  qs.set("supplier_id", "null")
+  if (search && search.trim()) {
+    qs.set("search", search.trim())
+  }
+  const res = await fetch(`${API_URL}/products-master?${qs.toString()}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    throw new Error("Error al cargar productos sin proveedor")
+  }
+  const data = await res.json()
+  return Array.isArray(data) ? data : []
+}
+
+export async function getProductsMasterWithoutSupplierCount(): Promise<number> {
+  const res = await fetch(`${API_URL}/products-master/count-without-supplier`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    throw new Error("Error al contar productos sin proveedor")
+  }
+  const data = await res.json()
+  const n = typeof data?.count === "number" ? data.count : Number(data?.count)
+  return Number.isFinite(n) ? n : 0
 }
 
 export function logout() {

@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import { Edit, Plus, Search, Upload } from "lucide-react"
+import { Edit, Package, Plus, Search, Upload } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -17,7 +17,10 @@ import {
 import { Input } from "@/components/ui/input"
 import {
   createSupplier,
+  getProductsMasterWithoutSupplier,
+  getProductsMasterWithoutSupplierCount,
   getSuppliers,
+  type ProductMasterRow,
   type Supplier,
   updateSupplier,
 } from "@/lib/api"
@@ -47,10 +50,14 @@ const featureFlags = {
 
 export default function Page() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
+  const [productsWithoutSupplier, setProductsWithoutSupplier] = useState<ProductMasterRow[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
   const [searchTerm, setSearchTerm] = useState("")
+  const [showWithoutSupplier, setShowWithoutSupplier] = useState(false)
+  const [withoutSupplierCount, setWithoutSupplierCount] = useState<number | null>(null)
+  const [countLoading, setCountLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null)
   const [form, setForm] = useState<FormState>(emptyForm)
@@ -74,9 +81,39 @@ export default function Page() {
     }
   }
 
+  async function refreshWithoutSupplierCount() {
+    setCountLoading(true)
+    try {
+      const n = await getProductsMasterWithoutSupplierCount()
+      setWithoutSupplierCount(n)
+    } catch {
+      setWithoutSupplierCount(null)
+    } finally {
+      setCountLoading(false)
+    }
+  }
+
+  async function loadProductsWithoutSupplier(search?: string) {
+    setLoading(true)
+    setError("")
+    try {
+      const data = await getProductsMasterWithoutSupplier(search)
+      setProductsWithoutSupplier(data)
+    } catch {
+      setError("No se pudieron cargar los productos sin proveedor")
+    } finally {
+      setLoading(false)
+    }
+  }
+
   useEffect(() => {
-    loadSuppliers()
-  }, [])
+    if (showWithoutSupplier) {
+      loadProductsWithoutSupplier(searchTerm)
+      return
+    }
+    loadSuppliers(searchTerm)
+    refreshWithoutSupplierCount()
+  }, [showWithoutSupplier])
 
   function openCreateDialog() {
     setEditingSupplier(null)
@@ -153,6 +190,10 @@ export default function Page() {
   }
 
   async function handleBackendSearch() {
+    if (showWithoutSupplier) {
+      await loadProductsWithoutSupplier(searchTerm)
+      return
+    }
     await loadSuppliers(searchTerm)
   }
 
@@ -234,6 +275,24 @@ export default function Page() {
         </div>
       ) : null}
 
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card>
+          <CardContent className="flex items-center gap-4 p-4">
+            <div className="rounded-lg bg-amber-100 p-2 dark:bg-amber-950/40">
+              <Package className="h-5 w-5 text-amber-700 dark:text-amber-400" />
+            </div>
+            <div>
+              <p className="text-sm text-muted-foreground">
+                Productos sin proveedor:{" "}
+                <span className="text-2xl font-semibold text-foreground">
+                  {countLoading ? "—" : withoutSupplierCount ?? "—"}
+                </span>
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -251,6 +310,12 @@ export default function Page() {
               <Button variant="outline" onClick={handleBackendSearch} disabled={loading}>
                 Buscar
               </Button>
+              <Button
+                variant={showWithoutSupplier ? "default" : "outline"}
+                onClick={() => setShowWithoutSupplier((prev) => !prev)}
+              >
+                Sin proveedor
+              </Button>
             </div>
           </div>
         </CardHeader>
@@ -258,23 +323,56 @@ export default function Page() {
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
-                <tr className="border-b border-border text-left text-sm font-medium text-muted-foreground">
-                  <th className="pb-3">ID</th>
-                  <th className="pb-3">Nombre</th>
-                  <th className="pb-3">Contacto</th>
-                  <th className="pb-3">Teléfono</th>
-                  <th className="pb-3">Email</th>
-                  <th className="pb-3 text-center">Activo</th>
-                  <th className="pb-3 text-right">Acciones</th>
-                </tr>
+                {showWithoutSupplier ? (
+                  <tr className="border-b border-border text-left text-sm font-medium text-muted-foreground">
+                    <th className="pb-3">Barcode</th>
+                    <th className="pb-3">Producto</th>
+                    <th className="pb-3">Variante</th>
+                    <th className="pb-3">Tipo</th>
+                    <th className="pb-3">SKU</th>
+                  </tr>
+                ) : (
+                  <tr className="border-b border-border text-left text-sm font-medium text-muted-foreground">
+                    <th className="pb-3">ID</th>
+                    <th className="pb-3">Nombre</th>
+                    <th className="pb-3">Contacto</th>
+                    <th className="pb-3">Teléfono</th>
+                    <th className="pb-3">Email</th>
+                    <th className="pb-3 text-center">Activo</th>
+                    <th className="pb-3 text-right">Acciones</th>
+                  </tr>
+                )}
               </thead>
               <tbody>
                 {loading ? (
                   <tr>
-                    <td colSpan={7} className="py-6 text-center text-sm text-muted-foreground">
-                      Cargando proveedores...
+                    <td
+                      colSpan={showWithoutSupplier ? 5 : 7}
+                      className="py-6 text-center text-sm text-muted-foreground"
+                    >
+                      {showWithoutSupplier
+                        ? "Cargando productos sin proveedor..."
+                        : "Cargando proveedores..."}
                     </td>
                   </tr>
+                ) : showWithoutSupplier ? (
+                  productsWithoutSupplier.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="py-6 text-center text-sm text-muted-foreground">
+                        No hay productos sin proveedor
+                      </td>
+                    </tr>
+                  ) : (
+                    productsWithoutSupplier.map((product) => (
+                      <tr key={product.barcode} className="border-b border-border last:border-0 hover:bg-muted/50">
+                        <td className="py-3 font-mono text-xs">{product.barcode}</td>
+                        <td className="py-3 font-medium">{product.product_name || "-"}</td>
+                        <td className="py-3">{product.variant_name || "-"}</td>
+                        <td className="py-3">{product.product_type || "-"}</td>
+                        <td className="py-3">{product.sku || "-"}</td>
+                      </tr>
+                    ))
+                  )
                 ) : filteredSuppliers.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="py-6 text-center text-sm text-muted-foreground">

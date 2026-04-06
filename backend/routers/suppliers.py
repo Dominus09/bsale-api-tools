@@ -7,6 +7,62 @@ from backend.db import get_connection
 
 router = APIRouter()
 
+_ALLOWED_PAYMENT_METHODS = frozenset(
+    {
+        "transferencia",
+        "efectivo",
+        "cheque_dia",
+        "cheque_30",
+        "cheque_45",
+        "cheque_60",
+    }
+)
+
+_ALLOWED_VISIT_DAYS = frozenset(
+    {
+        "lunes",
+        "martes",
+        "miércoles",
+        "jueves",
+        "viernes",
+        "sábado",
+        "domingo",
+    }
+)
+
+
+def _normalize_payment_method(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    s = raw.strip().lower()
+    if not s:
+        return None
+    if s not in _ALLOWED_PAYMENT_METHODS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "payment_method debe ser: transferencia, efectivo, cheque_dia, "
+                "cheque_30, cheque_45 o cheque_60"
+            ),
+        )
+    return s
+
+
+def _normalize_visit_day(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    s = raw.strip().lower()
+    if not s:
+        return None
+    aliases = {"miercoles": "miércoles", "sabado": "sábado"}
+    s = aliases.get(s, s)
+    if s not in _ALLOWED_VISIT_DAYS:
+        raise HTTPException(
+            status_code=400,
+            detail="visit_day debe ser un día de lunes a domingo",
+        )
+    return s
+
 
 class SupplierCreateBody(BaseModel):
     name: str
@@ -14,6 +70,8 @@ class SupplierCreateBody(BaseModel):
     phone: str | None = None
     email: str | None = None
     notes: str | None = None
+    payment_method: str | None = None
+    visit_day: str | None = None
 
 
 class SupplierPatchBody(BaseModel):
@@ -22,6 +80,8 @@ class SupplierPatchBody(BaseModel):
     phone: str | None = None
     email: str | None = None
     notes: str | None = None
+    payment_method: str | None = None
+    visit_day: str | None = None
     is_active: bool | None = None
 
 
@@ -30,7 +90,18 @@ def list_suppliers(
     name: Optional[str] = Query(None),
 ) -> List[Dict[str, Any]]:
     sql = """
-        SELECT id, name, contact_name, phone, email, notes, is_active, created_at, updated_at
+        SELECT
+            id,
+            name,
+            contact_name,
+            phone,
+            email,
+            notes,
+            payment_method,
+            visit_day,
+            is_active,
+            created_at,
+            updated_at
         FROM bsale.suppliers
     """
     params: list[Any] = []
@@ -61,6 +132,9 @@ def create_supplier(body: SupplierCreateBody):
     if not clean_name:
         raise HTTPException(status_code=400, detail="name es obligatorio")
 
+    payment_method = _normalize_payment_method(body.payment_method)
+    visit_day = _normalize_visit_day(body.visit_day)
+
     conn = get_connection()
     cur = conn.cursor()
     try:
@@ -71,10 +145,23 @@ def create_supplier(body: SupplierCreateBody):
                 contact_name,
                 phone,
                 email,
-                notes
+                notes,
+                payment_method,
+                visit_day
             )
-            VALUES (%s, %s, %s, %s, %s)
-            RETURNING id, name, contact_name, phone, email, notes, is_active, created_at, updated_at
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            RETURNING
+                id,
+                name,
+                contact_name,
+                phone,
+                email,
+                notes,
+                payment_method,
+                visit_day,
+                is_active,
+                created_at,
+                updated_at
             """,
             (
                 clean_name,
@@ -82,10 +169,15 @@ def create_supplier(body: SupplierCreateBody):
                 (body.phone or "").strip() or None,
                 (body.email or "").strip() or None,
                 (body.notes or "").strip() or None,
+                payment_method,
+                visit_day,
             ),
         )
         row = cur.fetchone()
         conn.commit()
+    except HTTPException:
+        conn.rollback()
+        raise
     except Exception:
         conn.rollback()
         raise HTTPException(status_code=500, detail="Error creando proveedor")
@@ -100,9 +192,11 @@ def create_supplier(body: SupplierCreateBody):
         "phone": row[3],
         "email": row[4],
         "notes": row[5],
-        "is_active": row[6],
-        "created_at": row[7],
-        "updated_at": row[8],
+        "payment_method": row[6],
+        "visit_day": row[7],
+        "is_active": row[8],
+        "created_at": row[9],
+        "updated_at": row[10],
     }
 
 
@@ -134,6 +228,14 @@ def patch_supplier(supplier_id: int, body: SupplierPatchBody):
         updates.append("notes = %s")
         params.append(body.notes.strip() or None)
 
+    if body.payment_method is not None:
+        updates.append("payment_method = %s")
+        params.append(_normalize_payment_method(body.payment_method))
+
+    if body.visit_day is not None:
+        updates.append("visit_day = %s")
+        params.append(_normalize_visit_day(body.visit_day))
+
     if body.is_active is not None:
         updates.append("is_active = %s")
         params.append(body.is_active)
@@ -148,7 +250,18 @@ def patch_supplier(supplier_id: int, body: SupplierPatchBody):
         UPDATE bsale.suppliers
         SET {", ".join(updates)}
         WHERE id = %s
-        RETURNING id, name, contact_name, phone, email, notes, is_active, created_at, updated_at
+        RETURNING
+            id,
+            name,
+            contact_name,
+            phone,
+            email,
+            notes,
+            payment_method,
+            visit_day,
+            is_active,
+            created_at,
+            updated_at
     """
 
     conn = get_connection()
@@ -176,7 +289,9 @@ def patch_supplier(supplier_id: int, body: SupplierPatchBody):
         "phone": row[3],
         "email": row[4],
         "notes": row[5],
-        "is_active": row[6],
-        "created_at": row[7],
-        "updated_at": row[8],
+        "payment_method": row[6],
+        "visit_day": row[7],
+        "is_active": row[8],
+        "created_at": row[9],
+        "updated_at": row[10],
     }

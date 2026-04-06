@@ -7,10 +7,12 @@ CREATE TABLE IF NOT EXISTS bsale.suppliers (
     contact_name TEXT,
     phone        TEXT,
     email        TEXT,
-    notes        TEXT,
-    is_active    BOOLEAN NOT NULL DEFAULT TRUE,
-    created_at   TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
-    updated_at   TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW()
+    notes          TEXT,
+    payment_method TEXT,
+    visit_day      TEXT,
+    is_active      BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at     TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_suppliers_name
