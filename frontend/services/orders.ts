@@ -1,3 +1,5 @@
+import { getApiBaseUrl } from "@/lib/api-base"
+
 export type OrderRow = {
   id: number
   client_name: string | null
@@ -49,7 +51,7 @@ export async function getOrders(params: {
   if (params.status && params.status !== "all") {
     qs.set("status", params.status)
   }
-  const res = await fetch(`https://api.quillotana.cl/orders?${qs.toString()}`)
+  const res = await fetch(`${getApiBaseUrl()}/orders?${qs.toString()}`)
 
   if (!res.ok) {
     throw new Error("Error cargando pedidos")
@@ -79,7 +81,7 @@ export async function updateOrderStatus(
   id: number,
   status: string,
 ): Promise<UpdateOrderStatusResponse> {
-  const res = await fetch(`https://api.quillotana.cl/orders/${id}/status`, {
+  const res = await fetch(`${getApiBaseUrl()}/orders/${id}/status`, {
     method: "PUT",
     headers: {
       "Content-Type": "application/json",

@@ -1,4 +1,6 @@
-const API_URL = "https://api.quillotana.cl"
+import { getApiBaseUrl } from "@/lib/api-base"
+
+const API_URL = getApiBaseUrl()
 
 // Demo mode state - tracks if we're using fallback data
 let isDemoMode = false

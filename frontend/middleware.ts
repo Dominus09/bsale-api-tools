@@ -1,22 +1,19 @@
 import type { NextRequest } from "next/server"
 import { NextResponse } from "next/server"
 
+import { buildContentSecurityPolicy } from "@/lib/csp"
+
 /**
- * CSP aplicada solo a respuestas HTML para no interferir con chunks / RSC.
- * Si Cloudflare (u otro proxy) añade otra cabecera CSP, el navegador exige cumplir
- * ambas: en ese caso relajar o quitar la CSP del panel de Cloudflare.
+ * CSP en documentos y navegación same-origin.
+ * No aplica a /_next/* ni a estáticos con extensión (evita interferir con chunks).
+ *
+ * Si un proxy (Cloudflare, Traefik/Coolify) envía OTRA cabecera CSP (p. ej. default-src 'none'),
+ * el navegador exige cumplir TODAS las políticas: hay que quitar o relajar la del proxy.
  */
-const CONTENT_SECURITY_POLICY = [
-  "default-src 'self'",
-  "base-uri 'self'",
-  "form-action 'self'",
-  "frame-ancestors 'self'",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com https://va.vercel-scripts.com",
-  "connect-src 'self' https://static.cloudflareinsights.com https://api.quillotana.cl https://vitals.vercel-insights.com https://va.vercel-scripts.com",
-  "img-src 'self' data: blob: https://hebbkx1anhila5yf.public.blob.vercel-storage.com",
-  "style-src 'self' 'unsafe-inline'",
-  "font-src 'self' data:",
-].join("; ")
+function isStaticAssetPath(pathname: string): boolean {
+  if (pathname === "/favicon.ico") return true
+  return /\.(?:ico|png|jpg|jpeg|svg|gif|webp|woff2?)$/i.test(pathname)
+}
 
 export function middleware(request: NextRequest) {
   if (process.env.NODE_ENV !== "production") {
@@ -24,21 +21,21 @@ export function middleware(request: NextRequest) {
   }
 
   const { pathname } = request.nextUrl
-  if (
-    pathname.startsWith("/_next/") ||
-    pathname === "/favicon.ico" ||
-    /\.(?:ico|png|jpg|jpeg|svg|gif|webp|woff2?)$/i.test(pathname)
-  ) {
+  if (pathname.startsWith("/_next/")) {
+    return NextResponse.next()
+  }
+  if (isStaticAssetPath(pathname)) {
     return NextResponse.next()
   }
 
-  const accept = request.headers.get("accept") ?? ""
-  if (!accept.includes("text/html")) {
+  // Sin rutas /api locales: GET fuera de estáticos son páginas o RSC; CSP aquí es segura.
+  // Antes se exigía Accept: text/html; algunos proxies lo cambian y la app no enviaba CSP.
+  if (request.method !== "GET") {
     return NextResponse.next()
   }
 
   const res = NextResponse.next()
-  res.headers.set("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+  res.headers.set("Content-Security-Policy", buildContentSecurityPolicy())
   return res
 }
 
