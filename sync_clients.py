@@ -13,6 +13,29 @@ LIMIT = 50
 BATCH = 500
 
 
+def parse_coords_from_facebook(fb):
+    """
+    Espera texto tipo "lat,lon". Devuelve (lat, lon, error_parseo).
+    error_parseo es True si había coma pero no se pudo validar.
+    """
+    if fb is None:
+        return None, None, False
+    s = str(fb).strip()
+    if not s or "," not in s:
+        return None, None, False
+    try:
+        lat_str, lon_str = s.split(",", 1)
+        lat = float(lat_str.strip())
+        lon = float(lon_str.strip())
+    except (ValueError, TypeError) as e:
+        print(f"Error parsing facebook coords: {fb!r} -> {e}")
+        return None, None, True
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        print(f"Error parsing facebook coords (fuera de rango): {fb!r} -> lat={lat} lon={lon}")
+        return None, None, True
+    return lat, lon, False
+
+
 # -----------------------------
 # POSTGRES CONNECTION
 # -----------------------------
@@ -25,6 +48,15 @@ conn = psycopg2.connect(
 )
 
 cur = conn.cursor()
+
+cur.execute(
+    """
+    ALTER TABLE bsale.clients
+      ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION,
+      ADD COLUMN IF NOT EXISTS lon DOUBLE PRECISION
+    """
+)
+conn.commit()
 
 
 # -----------------------------
@@ -109,10 +141,12 @@ def upsert(rows):
             updated,
             dia_atencion,
             nombre_fantasia,
-            vendedor
+            vendedor,
+            lat,
+            lon
         )
 
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
 
         ON CONFLICT (company_id, bsale_id)
         DO UPDATE SET
@@ -129,7 +163,17 @@ def upsert(rows):
         updated = EXCLUDED.updated,
         dia_atencion = EXCLUDED.dia_atencion,
         nombre_fantasia = EXCLUDED.nombre_fantasia,
-        vendedor = EXCLUDED.vendedor
+        vendedor = EXCLUDED.vendedor,
+        lat = CASE
+            WHEN EXCLUDED.lat IS NOT NULL AND EXCLUDED.lon IS NOT NULL
+            THEN EXCLUDED.lat
+            ELSE bsale.clients.lat
+        END,
+        lon = CASE
+            WHEN EXCLUDED.lat IS NOT NULL AND EXCLUDED.lon IS NOT NULL
+            THEN EXCLUDED.lon
+            ELSE bsale.clients.lon
+        END
 
     """, rows)
 
@@ -142,6 +186,10 @@ def upsert(rows):
 
 companies = get_companies()
 
+total_clients = 0
+total_georef_ok = 0
+total_georef_error = 0
+
 for company in companies:
 
     company_id = company["company_id"]
@@ -152,6 +200,9 @@ for company in companies:
 
     offset = 0
     rows = []
+    contador_ok = 0
+    contador_error = 0
+    contador_procesados = 0
 
     while True:
 
@@ -169,6 +220,7 @@ for company in companies:
         for client in items:
 
             bsale_id = client["id"]
+            contador_procesados += 1
 
             created = None
             updated = None
@@ -211,6 +263,12 @@ for company in companies:
                 elif name == "Vendedor":
                     vendedor = value
 
+            fb = client.get("facebook")
+            lat, lon, parse_err = parse_coords_from_facebook(fb)
+            if lat is not None and lon is not None:
+                contador_ok += 1
+            elif parse_err:
+                contador_error += 1
 
             rows.append((
                 company_id,
@@ -220,7 +278,7 @@ for company in companies:
                 client.get("code"),
                 client.get("phone"),
                 client.get("company"),
-                client.get("facebook"),
+                fb,
                 client.get("city"),
                 client.get("municipality"),
                 client.get("address"),
@@ -228,7 +286,9 @@ for company in companies:
                 updated,
                 dia_atencion,
                 nombre_fantasia,
-                vendedor
+                vendedor,
+                lat,
+                lon
             ))
 
             if len(rows) >= BATCH:
@@ -241,4 +301,16 @@ for company in companies:
     if rows:
         upsert(rows)
 
+    print(f"  Clientes procesados: {contador_procesados}")
+    print(f"  Clientes con georef: {contador_ok}")
+    print(f"  Errores georef: {contador_error}")
+
+    total_clients += contador_procesados
+    total_georef_ok += contador_ok
+    total_georef_error += contador_error
+
+print("")
 print("SYNC CLIENTS COMPLETE")
+print(f"Total clientes procesados: {total_clients}")
+print(f"Clientes con georef: {total_georef_ok}")
+print(f"Errores georef: {total_georef_error}")
