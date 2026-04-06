@@ -73,22 +73,25 @@ const VISIT_DAY_OPTIONS: { value: string; label: string }[] = [
 
 const NONE_SELECT = "__none__"
 
+/** Solo para mostrar en tabla; no modifica lo guardado en BD. */
 function paymentMethodLabel(value: string | null | undefined): string {
-  if (!value) return "—"
-  const found = PAYMENT_OPTIONS.find((o) => o.value === value)
-  return found?.label ?? value
+  if (value == null || !String(value).trim()) return "—"
+  const key = String(value).trim().toLowerCase()
+  const found = PAYMENT_OPTIONS.find((o) => o.value === key)
+  return found?.label ?? String(value).trim()
 }
 
+/** Solo para mostrar en tabla; no modifica lo guardado en BD. */
 function visitDayLabel(value: string | null | undefined): string {
-  if (!value) return "—"
-  const normalized = value.trim().toLowerCase()
+  if (value == null || !String(value).trim()) return "—"
+  const normalized = String(value).trim().toLowerCase()
   const aliases: Record<string, string> = {
     miercoles: "miércoles",
     sabado: "sábado",
   }
   const key = aliases[normalized] ?? normalized
   const found = VISIT_DAY_OPTIONS.find((o) => o.value === key)
-  return found?.label ?? value
+  return found?.label ?? String(value).trim()
 }
 
 function visitDayValueForForm(value: string | null | undefined): string {

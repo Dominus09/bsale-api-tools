@@ -22,6 +22,7 @@ import {
   Printer,
   BarChart3,
   Building2,
+  Boxes,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -56,7 +57,10 @@ const navSections: { title: string; items: NavItem[] }[] = [
   },
   {
     title: "Compras",
-    items: [{ href: "/compras/proveedores", label: "Proveedores", icon: Store }],
+    items: [
+      { href: "/compras/proveedores", label: "Proveedores", icon: Store },
+      { href: "/compras/productos", label: "Productos", icon: Boxes },
+    ],
   },
   {
     title: "Operaciones",

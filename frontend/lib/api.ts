@@ -453,6 +453,72 @@ export async function updateSupplier(
   return res.json()
 }
 
+export interface GetProductsMasterParams {
+  without_supplier?: boolean
+  supplier_id?: number
+  search?: string
+}
+
+export async function getProductsMaster(
+  params?: GetProductsMasterParams,
+): Promise<ProductMasterRow[]> {
+  const qs = new URLSearchParams()
+  if (params?.without_supplier) {
+    qs.set("without_supplier", "true")
+  }
+  if (params?.supplier_id != null && Number.isFinite(params.supplier_id)) {
+    qs.set("supplier_id", String(Math.trunc(params.supplier_id)))
+  }
+  if (params?.search != null && params.search.trim()) {
+    qs.set("search", params.search.trim())
+  }
+  const suffix = qs.toString() ? `?${qs.toString()}` : ""
+  const res = await fetch(`${API_URL}/products-master${suffix}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    throw new Error("Error al cargar productos maestros")
+  }
+  const data = await res.json()
+  return Array.isArray(data) ? data : []
+}
+
+/** GET /products-master?supplier_id=null — total de filas (supplier_id IS NULL). */
+export async function getProductsMasterUnassignedCount(): Promise<number> {
+  const res = await fetch(`${API_URL}/products-master?supplier_id=null`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    throw new Error("Error al contar productos sin proveedor")
+  }
+  const data = await res.json()
+  return Array.isArray(data) ? data.length : 0
+}
+
+export interface PatchProductMasterResponse {
+  barcode: string
+  supplier_id: number | null
+  is_active: boolean
+  updated_at: string | null
+}
+
+export async function patchProductMaster(
+  barcode: string,
+  payload: { supplier_id: number | null },
+): Promise<PatchProductMasterResponse> {
+  const encoded = encodeURIComponent(barcode)
+  const res = await fetch(`${API_URL}/products-master/${encoded}`, {
+    method: "PATCH",
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ supplier_id: payload.supplier_id }),
+  })
+  if (!res.ok) {
+    const msg = await res.text()
+    throw new Error(msg || "Error al actualizar producto")
+  }
+  return res.json()
+}
+
 export async function getProductsMasterWithoutSupplier(search?: string): Promise<ProductMasterRow[]> {
   const qs = new URLSearchParams()
   qs.set("supplier_id", "null")

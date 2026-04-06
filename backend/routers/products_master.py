@@ -1,21 +1,34 @@
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, Body, HTTPException, Query
 
 from backend.db import get_connection
 
 router = APIRouter()
 
 
-class PatchProductMasterBody(BaseModel):
-    supplier_id: int | None = None
-    is_active: bool | None = None
+def _parse_supplier_id_query(supplier_id: Optional[str]) -> tuple[bool, Optional[int]]:
+    """Devuelve (filtrar_solo_null, id_numérico). Solo uno aplica."""
+    if supplier_id is None:
+        return False, None
+    raw = supplier_id.strip()
+    if raw == "":
+        return False, None
+    if raw.lower() in ("null", "none"):
+        return True, None
+    try:
+        n = int(raw)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="supplier_id inválido")
+    return False, n
 
 
 @router.get("/products-master")
 def list_products_master(
-    supplier_id: Optional[int] = Query(None),
+    supplier_id: Optional[str] = Query(
+        None,
+        description="ID numérico del proveedor, o la cadena null para supplier_id IS NULL",
+    ),
     without_supplier: bool = Query(False),
     product_type: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
@@ -38,9 +51,12 @@ def list_products_master(
     where_parts: list[str] = []
     params: list[Any] = []
 
-    if supplier_id is not None:
+    filter_null, filter_sid = _parse_supplier_id_query(supplier_id)
+    if filter_null:
+        where_parts.append("supplier_id IS NULL")
+    elif filter_sid is not None:
         where_parts.append("supplier_id = %s")
-        params.append(supplier_id)
+        params.append(filter_sid)
 
     if without_supplier:
         where_parts.append("supplier_id IS NULL")
@@ -96,7 +112,7 @@ def count_products_master_without_supplier() -> Dict[str, Any]:
 
 
 @router.patch("/products-master/{barcode}")
-def patch_product_master(barcode: str, body: PatchProductMasterBody):
+def patch_product_master(barcode: str, body: Dict[str, Any] = Body(...)):
     clean_barcode = (barcode or "").strip()
     if not clean_barcode:
         raise HTTPException(status_code=400, detail="barcode es obligatorio")
@@ -104,13 +120,25 @@ def patch_product_master(barcode: str, body: PatchProductMasterBody):
     updates: list[str] = []
     params: list[Any] = []
 
-    if body.supplier_id is not None:
+    if "supplier_id" in body:
+        sid = body["supplier_id"]
+        if sid is not None and not isinstance(sid, int):
+            raise HTTPException(
+                status_code=400,
+                detail="supplier_id debe ser un entero o null",
+            )
         updates.append("supplier_id = %s")
-        params.append(body.supplier_id)
+        params.append(sid)
 
-    if body.is_active is not None:
+    if "is_active" in body:
+        active = body["is_active"]
+        if not isinstance(active, bool):
+            raise HTTPException(
+                status_code=400,
+                detail="is_active debe ser booleano",
+            )
         updates.append("is_active = %s")
-        params.append(body.is_active)
+        params.append(active)
 
     if not updates:
         raise HTTPException(
