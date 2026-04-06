@@ -5,7 +5,8 @@ Uso exacto:
   python sync_documents.py <from_date> <to_date>
 
 Env obligatorias: COMPANY_ID, BSALE_TOKEN_SPA, PG_HOST, PG_DB, PG_USER, PG_PASSWORD
-Opcional: PG_PORT (default 5432), PG_DOCUMENTS_SCHEMA (default bsale)
+PostgreSQL: misma conexión que sync_prices_costs.py (os.getenv PG_HOST, PG_DB, PG_USER, PG_PASSWORD).
+Opcional: PG_DOCUMENTS_SCHEMA (default bsale)
 
 Requiere UNIQUE (company_id, bsale_id) en la tabla destino.
 """
@@ -83,7 +84,7 @@ def validate_env() -> None:
 
 
 def company_id_from_env() -> int:
-    raw = os.environ["COMPANY_ID"].strip()
+    raw = (os.getenv("COMPANY_ID") or "").strip()
     try:
         return int(raw)
     except ValueError:
@@ -91,15 +92,15 @@ def company_id_from_env() -> int:
 
 
 def connect_pg():
+    """Igual criterio que sync_prices_costs.py (variables PG_* vía os.getenv)."""
     import psycopg2
 
     try:
         return psycopg2.connect(
-            host=os.environ["PG_HOST"].strip(),
-            database=os.environ["PG_DB"].strip(),
-            user=os.environ["PG_USER"].strip(),
-            password=os.environ["PG_PASSWORD"].strip(),
-            port=int(os.getenv("PG_PORT", "5432")),
+            host=os.getenv("PG_HOST"),
+            database=os.getenv("PG_DB"),
+            user=os.getenv("PG_USER"),
+            password=os.getenv("PG_PASSWORD"),
         )
     except Exception as e:
         die(f"PostgreSQL: no se pudo conectar ({type(e).__name__}): {e}", 1)
@@ -296,7 +297,7 @@ def main() -> None:
     company_id = company_id_from_env()
     schema = os.getenv("PG_DOCUMENTS_SCHEMA", "bsale").strip() or "bsale"
     table = "documents"
-    token = os.environ["BSALE_TOKEN_SPA"].strip()
+    token = (os.getenv("BSALE_TOKEN_SPA") or "").strip()
 
     log.info(
         "SYNC DOCUMENTS START company_id=%s rango=%s..%s (%s días) schema=%s.%s",
