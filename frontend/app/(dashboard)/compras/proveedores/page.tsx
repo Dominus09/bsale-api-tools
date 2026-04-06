@@ -16,6 +16,13 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
   createSupplier,
   getProductsMasterWithoutSupplier,
   getProductsMasterWithoutSupplierCount,
@@ -31,6 +38,8 @@ type FormState = {
   phone: string
   email: string
   notes: string
+  payment_method: string
+  visit_day: string
 }
 
 const emptyForm: FormState = {
@@ -39,6 +48,57 @@ const emptyForm: FormState = {
   phone: "",
   email: "",
   notes: "",
+  payment_method: "",
+  visit_day: "",
+}
+
+const PAYMENT_OPTIONS: { value: string; label: string }[] = [
+  { value: "transferencia", label: "Transferencia" },
+  { value: "efectivo", label: "Efectivo" },
+  { value: "cheque_dia", label: "Cheque al día" },
+  { value: "cheque_30", label: "Cheque 30 días" },
+  { value: "cheque_45", label: "Cheque 45 días" },
+  { value: "cheque_60", label: "Cheque 60 días" },
+]
+
+const VISIT_DAY_OPTIONS: { value: string; label: string }[] = [
+  { value: "lunes", label: "Lunes" },
+  { value: "martes", label: "Martes" },
+  { value: "miércoles", label: "Miércoles" },
+  { value: "jueves", label: "Jueves" },
+  { value: "viernes", label: "Viernes" },
+  { value: "sábado", label: "Sábado" },
+  { value: "domingo", label: "Domingo" },
+]
+
+const NONE_SELECT = "__none__"
+
+function paymentMethodLabel(value: string | null | undefined): string {
+  if (!value) return "—"
+  const found = PAYMENT_OPTIONS.find((o) => o.value === value)
+  return found?.label ?? value
+}
+
+function visitDayLabel(value: string | null | undefined): string {
+  if (!value) return "—"
+  const normalized = value.trim().toLowerCase()
+  const aliases: Record<string, string> = {
+    miercoles: "miércoles",
+    sabado: "sábado",
+  }
+  const key = aliases[normalized] ?? normalized
+  const found = VISIT_DAY_OPTIONS.find((o) => o.value === key)
+  return found?.label ?? value
+}
+
+function visitDayValueForForm(value: string | null | undefined): string {
+  if (!value) return ""
+  const normalized = value.trim().toLowerCase()
+  const aliases: Record<string, string> = {
+    miercoles: "miércoles",
+    sabado: "sábado",
+  }
+  return aliases[normalized] ?? value.trim()
 }
 
 // Feature flags locales para habilitar módulos futuros sin rehacer la pantalla.
@@ -129,6 +189,8 @@ export default function Page() {
       phone: supplier.phone ?? "",
       email: supplier.email ?? "",
       notes: supplier.notes ?? "",
+      payment_method: supplier.payment_method?.trim() ?? "",
+      visit_day: visitDayValueForForm(supplier.visit_day),
     })
     setDialogOpen(true)
   }
@@ -150,6 +212,9 @@ export default function Page() {
     setSaving(true)
     setError("")
     try {
+      const paymentPayload = form.payment_method.trim() || null
+      const visitPayload = form.visit_day.trim() || null
+
       if (editingSupplier) {
         const updated = await updateSupplier(editingSupplier.id, {
           name: cleanName,
@@ -157,6 +222,8 @@ export default function Page() {
           phone: form.phone.trim() || null,
           email: form.email.trim() || null,
           notes: form.notes.trim() || null,
+          payment_method: paymentPayload,
+          visit_day: visitPayload,
         })
         setSuppliers((prev) => prev.map((s) => (s.id === updated.id ? updated : s)))
       } else {
@@ -166,6 +233,8 @@ export default function Page() {
           phone: form.phone.trim() || null,
           email: form.email.trim() || null,
           notes: form.notes.trim() || null,
+          payment_method: paymentPayload,
+          visit_day: visitPayload,
         })
         setSuppliers((prev) => [created, ...prev])
       }
@@ -255,6 +324,54 @@ export default function Page() {
                   value={form.notes}
                   onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value }))}
                 />
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Forma de pago</label>
+                  <Select
+                    value={form.payment_method ? form.payment_method : NONE_SELECT}
+                    onValueChange={(v) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        payment_method: v === NONE_SELECT ? "" : v,
+                      }))
+                    }
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Sin especificar" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={NONE_SELECT}>Sin especificar</SelectItem>
+                      {PAYMENT_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Día de atención</label>
+                  <Select
+                    value={form.visit_day ? form.visit_day : NONE_SELECT}
+                    onValueChange={(v) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        visit_day: v === NONE_SELECT ? "" : v,
+                      }))
+                    }
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Sin especificar" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={NONE_SELECT}>Sin especificar</SelectItem>
+                      {VISIT_DAY_OPTIONS.map((opt) => (
+                        <SelectItem key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={closeDialog} disabled={saving}>
@@ -338,6 +455,8 @@ export default function Page() {
                     <th className="pb-3">Contacto</th>
                     <th className="pb-3">Teléfono</th>
                     <th className="pb-3">Email</th>
+                    <th className="pb-3">Forma de pago</th>
+                    <th className="pb-3">Día atención</th>
                     <th className="pb-3 text-center">Activo</th>
                     <th className="pb-3 text-right">Acciones</th>
                   </tr>
@@ -347,7 +466,7 @@ export default function Page() {
                 {loading ? (
                   <tr>
                     <td
-                      colSpan={showWithoutSupplier ? 5 : 7}
+                      colSpan={showWithoutSupplier ? 5 : 9}
                       className="py-6 text-center text-sm text-muted-foreground"
                     >
                       {showWithoutSupplier
@@ -375,7 +494,7 @@ export default function Page() {
                   )
                 ) : filteredSuppliers.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="py-6 text-center text-sm text-muted-foreground">
+                    <td colSpan={9} className="py-6 text-center text-sm text-muted-foreground">
                       No hay proveedores para mostrar
                     </td>
                   </tr>
@@ -387,6 +506,8 @@ export default function Page() {
                       <td className="py-3">{supplier.contact_name || "-"}</td>
                       <td className="py-3">{supplier.phone || "-"}</td>
                       <td className="py-3">{supplier.email || "-"}</td>
+                      <td className="py-3 text-sm">{paymentMethodLabel(supplier.payment_method)}</td>
+                      <td className="py-3 text-sm">{visitDayLabel(supplier.visit_day)}</td>
                       <td className="py-3 text-center">
                         <span
                           className={
