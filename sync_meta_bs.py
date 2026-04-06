@@ -124,6 +124,23 @@ def _state_text(value):
     return str(value)
 
 
+def _code_sii_to_int(value):
+    """Bsale puede mandar codeSii vacío (''); PostgreSQL INTEGER no acepta ''."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    s = str(value).strip()
+    if not s:
+        return None
+    try:
+        return int(s)
+    except ValueError:
+        return None
+
+
 # ---------------------------------
 # SYNC DOCUMENT TYPES
 # ---------------------------------
@@ -151,7 +168,7 @@ def sync_document_types(company_id, token):
                     company_id,
                     d["id"],
                     d.get("name"),
-                    d.get("codeSii"),
+                    _code_sii_to_int(d.get("codeSii")),
                 )
             )
             if len(rows) >= BATCH:

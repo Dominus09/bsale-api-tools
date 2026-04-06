@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS bsale.document_types (
     company_id  INTEGER NOT NULL,
     bsale_id    BIGINT NOT NULL,
     name        TEXT,
-    code_sii    TEXT,
+    code_sii    INTEGER,
     CONSTRAINT document_types_company_bsale_unique UNIQUE (company_id, bsale_id)
 );
 
