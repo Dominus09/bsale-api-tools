@@ -1,203 +1,226 @@
-import requests
 import os
+import time
+
+import psycopg2
+import requests
+from psycopg2.extras import execute_batch
 
 print("SYNC META BSALE START")
 
 BASE = "https://api.bsale.io/v1"
-NOCODB = "https://db.quillotana.cl"
-
-NOCODB_TOKEN = os.getenv("NocoDB_token")
-BSALE_TOKEN = os.getenv("BSALE_TOKEN_SPA")
-
-TABLE_DOC_TYPES = "msj3xk5f1yqpfzk"
-TABLE_USERS = "mpqkni6mwrxie44"
-
 LIMIT_BSALE = 50
+BATCH = 500
 
-HEAD_NOCO = {
-    "xc-token": NOCODB_TOKEN,
-    "Content-Type": "application/json"
-}
+# ---------------------------------
+# POSTGRES (igual que sync_prices_costs.py)
+# ---------------------------------
 
-HEAD_BSALE = {
-    "access_token": BSALE_TOKEN
-}
+conn = psycopg2.connect(
+    host=os.getenv("PG_HOST"),
+    database=os.getenv("PG_DB"),
+    user=os.getenv("PG_USER"),
+    password=os.getenv("PG_PASSWORD"),
+)
 
-# -------------------------------------------------
-# NOCO GET
-# -------------------------------------------------
-
-def noco_get_all(table_id):
-
-    url = f"{NOCODB}/api/v2/tables/{table_id}/records"
-
-    r = requests.get(url, headers=HEAD_NOCO, params={"limit":200})
-
-    data = r.json()
-
-    existing = {}
-
-    for row in data.get("list", []):
-        existing[row["bsale_id"]] = row
-
-    return existing
+cur = conn.cursor()
 
 
-# -------------------------------------------------
-# INSERT / UPDATE
-# -------------------------------------------------
+# ---------------------------------
+# SAFE BSALE REQUEST (igual criterio que sync_prices_costs.py)
+# ---------------------------------
 
-def batch_insert(table_id, rows):
 
+def bsale_get(url, headers, params=None):
+    while True:
+        r = requests.get(url, headers=headers, params=params, timeout=30)
+        if r.status_code == 429:
+            wait = int(r.json().get("retry_after", 60))
+            print("RATE LIMIT WAIT", wait)
+            time.sleep(wait)
+            continue
+        r.raise_for_status()
+        return r.json()
+
+
+# ---------------------------------
+# GET COMPANIES (igual que sync_prices_costs.py)
+# ---------------------------------
+
+
+def get_companies():
+    cur.execute(
+        """
+        SELECT company_id, name, bsale_token
+        FROM bsale.companies
+        WHERE active = true
+        """
+    )
+    rows = cur.fetchall()
+    companies = []
+    for r in rows:
+        token = os.getenv(r[2])
+        if not token:
+            print("TOKEN NOT FOUND:", r[2])
+            continue
+        companies.append({"company_id": r[0], "name": r[1], "token": token})
+    return companies
+
+
+# ---------------------------------
+# UPSERT DOCUMENT TYPES
+# ---------------------------------
+
+
+def upsert_document_types(rows):
     if not rows:
         return
+    execute_batch(
+        cur,
+        """
+        INSERT INTO bsale.document_types
+            (company_id, bsale_id, name, code_sii)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (company_id, bsale_id)
+        DO UPDATE SET
+            name = EXCLUDED.name,
+            code_sii = EXCLUDED.code_sii
+        """,
+        rows,
+    )
+    conn.commit()
 
-    url = f"{NOCODB}/api/v2/tables/{table_id}/records"
 
-    requests.post(url, headers=HEAD_NOCO, json=rows)
+# ---------------------------------
+# UPSERT BSALE USERS (API /users.json)
+# ---------------------------------
 
 
-def batch_update(table_id, rows):
-
+def upsert_bsale_users(rows):
     if not rows:
         return
+    execute_batch(
+        cur,
+        """
+        INSERT INTO bsale.bsale_users
+            (company_id, bsale_id, first_name, last_name, email, state)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        ON CONFLICT (company_id, bsale_id)
+        DO UPDATE SET
+            first_name = EXCLUDED.first_name,
+            last_name = EXCLUDED.last_name,
+            email = EXCLUDED.email,
+            state = EXCLUDED.state
+        """,
+        rows,
+    )
+    conn.commit()
 
-    url = f"{NOCODB}/api/v2/tables/{table_id}/records"
 
-    requests.patch(url, headers=HEAD_NOCO, json=rows)
+def _state_text(value):
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
 
 
-# -------------------------------------------------
+# ---------------------------------
 # SYNC DOCUMENT TYPES
-# -------------------------------------------------
+# ---------------------------------
 
-def sync_document_types():
 
-    print("SYNC DOCUMENT TYPES")
-
-    existing = noco_get_all(TABLE_DOC_TYPES)
-
-    insert_rows = []
-    update_rows = []
-
+def sync_document_types(company_id, token):
+    print("SYNC DOCUMENT TYPES", company_id)
+    head = {"access_token": token}
     offset = 0
+    rows = []
 
     while True:
-
-        r = requests.get(
+        data = bsale_get(
             f"{BASE}/document_types.json",
-            headers=HEAD_BSALE,
-            params={
-                "limit": LIMIT_BSALE,
-                "offset": offset
-            }
+            head,
+            {"limit": LIMIT_BSALE, "offset": offset},
         )
-
-        data = r.json()
-
         items = data.get("items", [])
-
         if not items:
             break
 
         for d in items:
-
-            bsale_id = d["id"]
-
-            payload = {
-
-                "bsale_id": bsale_id,
-                "name": d.get("name"),
-                "code_sii": d.get("codeSii")
-
-            }
-
-            if bsale_id in existing:
-
-                payload["Id"] = existing[bsale_id]["Id"]
-                update_rows.append(payload)
-
-            else:
-
-                insert_rows.append(payload)
+            rows.append(
+                (
+                    company_id,
+                    d["id"],
+                    d.get("name"),
+                    d.get("codeSii"),
+                )
+            )
+            if len(rows) >= BATCH:
+                upsert_document_types(rows)
+                rows = []
 
         offset += LIMIT_BSALE
 
-    batch_insert(TABLE_DOC_TYPES, insert_rows)
-    batch_update(TABLE_DOC_TYPES, update_rows)
+    if rows:
+        upsert_document_types(rows)
 
-    print("DOCUMENT TYPES DONE")
+    print("DOCUMENT TYPES DONE", company_id)
 
 
-# -------------------------------------------------
-# SYNC USERS
-# -------------------------------------------------
+# ---------------------------------
+# SYNC USERS (API)
+# ---------------------------------
 
-def sync_users():
 
-    print("SYNC USERS")
-
-    existing = noco_get_all(TABLE_USERS)
-
-    insert_rows = []
-    update_rows = []
-
+def sync_bsale_users(company_id, token):
+    print("SYNC USERS", company_id)
+    head = {"access_token": token}
     offset = 0
+    rows = []
 
     while True:
-
-        r = requests.get(
+        data = bsale_get(
             f"{BASE}/users.json",
-            headers=HEAD_BSALE,
-            params={
-                "limit": LIMIT_BSALE,
-                "offset": offset
-            }
+            head,
+            {"limit": LIMIT_BSALE, "offset": offset},
         )
-
-        data = r.json()
-
         items = data.get("items", [])
-
         if not items:
             break
 
         for u in items:
-
-            bsale_id = u["id"]
-
-            payload = {
-
-                "bsale_id": bsale_id,
-                "first_name": u.get("firstName"),
-                "last_name": u.get("lastName"),
-                "email": u.get("email"),
-                "state": u.get("state")
-
-            }
-
-            if bsale_id in existing:
-
-                payload["Id"] = existing[bsale_id]["Id"]
-                update_rows.append(payload)
-
-            else:
-
-                insert_rows.append(payload)
+            rows.append(
+                (
+                    company_id,
+                    u["id"],
+                    u.get("firstName"),
+                    u.get("lastName"),
+                    u.get("email"),
+                    _state_text(u.get("state")),
+                )
+            )
+            if len(rows) >= BATCH:
+                upsert_bsale_users(rows)
+                rows = []
 
         offset += LIMIT_BSALE
 
-    batch_insert(TABLE_USERS, insert_rows)
-    batch_update(TABLE_USERS, update_rows)
+    if rows:
+        upsert_bsale_users(rows)
 
-    print("USERS DONE")
+    print("USERS DONE", company_id)
 
 
-# -------------------------------------------------
+# ---------------------------------
 # MAIN
-# -------------------------------------------------
+# ---------------------------------
 
-sync_document_types()
-sync_users()
+companies = get_companies()
 
+for company in companies:
+    cid = company["company_id"]
+    print("\nSYNC COMPANY:", company["name"])
+    sync_document_types(cid, company["token"])
+    sync_bsale_users(cid, company["token"])
+
+conn.close()
 print("SYNC META BSALE COMPLETE")
