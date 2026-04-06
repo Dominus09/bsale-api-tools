@@ -55,6 +55,10 @@ const navSections: { title: string; items: NavItem[] }[] = [
     ],
   },
   {
+    title: "Compras",
+    items: [{ href: "/compras/proveedores", label: "Proveedores", icon: Store }],
+  },
+  {
     title: "Operaciones",
     items: [
       { href: "/orders", label: "Pedidos", icon: Package },

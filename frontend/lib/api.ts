@@ -121,6 +121,35 @@ export interface ProductWithoutCost {
   category?: string
 }
 
+export interface Supplier {
+  id: number
+  name: string
+  contact_name: string | null
+  phone: string | null
+  email: string | null
+  notes: string | null
+  is_active: boolean
+  created_at?: string
+  updated_at?: string
+}
+
+export interface CreateSupplierPayload {
+  name: string
+  contact_name?: string | null
+  phone?: string | null
+  email?: string | null
+  notes?: string | null
+}
+
+export interface UpdateSupplierPayload {
+  name?: string
+  contact_name?: string | null
+  phone?: string | null
+  email?: string | null
+  notes?: string | null
+  is_active?: boolean
+}
+
 /** Lista de precios activa (GET /price-lists) */
 export interface PriceListRef {
   id: number
@@ -342,6 +371,69 @@ export async function getProductsWithoutCost(): Promise<ProductWithoutCost[]> {
     }
     throw error
   }
+}
+
+export async function getSuppliers(name?: string): Promise<Supplier[]> {
+  const qs = new URLSearchParams()
+  const companyId = getCompanyId()
+  if (companyId != null && Number.isFinite(companyId) && companyId > 0) {
+    qs.set("company_id", String(companyId))
+  }
+  if (name && name.trim()) {
+    qs.set("name", name.trim())
+  }
+
+  const url = qs.toString() ? `${API_URL}/suppliers?${qs.toString()}` : `${API_URL}/suppliers`
+  const res = await fetch(url, { headers: getAuthHeaders() })
+  if (!res.ok) {
+    throw new Error("Error al cargar proveedores")
+  }
+  const data = await res.json()
+  return Array.isArray(data) ? data : []
+}
+
+export async function createSupplier(payload: CreateSupplierPayload): Promise<Supplier> {
+  const qs = new URLSearchParams()
+  const companyId = getCompanyId()
+  if (companyId != null && Number.isFinite(companyId) && companyId > 0) {
+    qs.set("company_id", String(companyId))
+  }
+  const url = qs.toString() ? `${API_URL}/suppliers?${qs.toString()}` : `${API_URL}/suppliers`
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const msg = await res.text()
+    throw new Error(msg || "Error al crear proveedor")
+  }
+  return res.json()
+}
+
+export async function updateSupplier(
+  supplierId: number,
+  payload: UpdateSupplierPayload,
+): Promise<Supplier> {
+  const qs = new URLSearchParams()
+  const companyId = getCompanyId()
+  if (companyId != null && Number.isFinite(companyId) && companyId > 0) {
+    qs.set("company_id", String(companyId))
+  }
+  const base = `${API_URL}/suppliers/${supplierId}`
+  const url = qs.toString() ? `${base}?${qs.toString()}` : base
+
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const msg = await res.text()
+    throw new Error(msg || "Error al actualizar proveedor")
+  }
+  return res.json()
 }
 
 export function logout() {
