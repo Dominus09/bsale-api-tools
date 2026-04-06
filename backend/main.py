@@ -18,6 +18,7 @@ from backend.routers import products
 from backend.routers import products_master
 from backend.routers import suppliers
 from backend.routers import summary
+from backend.routers import uploads
 
 # ERP (prefijo /erp: dashboard, alertas, márgenes internos)
 from backend.routers.erp import router as erp_router
@@ -58,6 +59,7 @@ app.include_router(summary.router)
 app.include_router(products.router)
 app.include_router(products_master.router)
 app.include_router(suppliers.router)
+app.include_router(uploads.router)
 app.include_router(margin_problems.router)
 app.include_router(margin_export.router)
 
