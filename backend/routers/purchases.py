@@ -43,6 +43,11 @@ def _parse_office_state(raw: Any) -> Optional[int]:
         return None
 
 
+def _office_state_is_active(st: Optional[int]) -> bool:
+    """Sucursal habilitada: state 0 (convención local) o 1 (típico API Bsale)."""
+    return st is not None and st in (0, 1)
+
+
 def _to_santiago(dt: Any) -> Optional[datetime]:
     if dt is None or not isinstance(dt, datetime):
         return None
@@ -163,9 +168,9 @@ def purchase_data_freshness(company_id: int) -> Dict[str, Any]:
 @router.get("/purchase-offices")
 def list_purchase_offices(company_id: int) -> List[Dict[str, Any]]:
     """
-    Sucursales activas en análisis de compra: solo filas con bsale.offices.state = 0
-    (convención de este proyecto / Bsale para sucursal habilitada).
-    Orden por nombre de sucursal; sin sufijos de estado en label.
+    Sucursales habilitadas en análisis: bsale.offices.state IN (0, 1).
+    0 = activa en datos locales; 1 = típico valor activo desde API Bsale en sync.
+    Orden por nombre; sin sufijos de estado en label.
     """
     sql = """
         SELECT DISTINCT
@@ -176,7 +181,7 @@ def list_purchase_offices(company_id: int) -> List[Dict[str, Any]]:
         INNER JOIN bsale.offices ofc
             ON ofc.company_id = pa.company_id
            AND ofc.bsale_id = pa.office_id
-           AND ofc.state = 0
+           AND ofc.state IN (0, 1)
         WHERE pa.company_id = %s
         ORDER BY
             NULLIF(TRIM(ofc.name), '') ASC NULLS LAST,
@@ -199,7 +204,7 @@ def list_purchase_offices(company_id: int) -> List[Dict[str, Any]]:
                     "office_id": oid,
                     "office_name": name or None,
                     "office_state": st,
-                    "is_active": True,
+                    "is_active": _office_state_is_active(st),
                     "label": label,
                 }
             )

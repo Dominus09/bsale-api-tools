@@ -189,7 +189,7 @@ export interface PurchaseOrderHeader {
   office_id: number
   /** Nombre desde bsale.offices (sync Bsale); null si no hay fila */
   office_name?: string | null
-  /** Bsale offices.state; activa en listados de compra = 0 */
+  /** Bsale offices.state; habilitada en compras = 0 o 1 */
   office_state?: number | null
   supplier_id: number
   supplier_name: string | null
@@ -226,9 +226,9 @@ export interface PurchaseOfficeRef {
   office_id: number
   /** Nombre desde bsale.offices (sync Bsale); null si no hay fila */
   office_name: string | null
-  /** Bsale offices.state; en /purchase-offices solo se devuelven activas (state = 0) */
+  /** Bsale offices.state; listado compras solo incluye state 0 o 1 (habilitadas) */
   office_state: number | null
-  /** Siempre true en respuesta de purchase-offices (solo activas) */
+  /** true si state es 0 o 1 en respuesta de purchase-offices */
   is_active: boolean | null
   /** Texto para mostrar en UI */
   label: string
@@ -671,7 +671,7 @@ export async function getPurchaseOffices(companyId: number): Promise<PurchaseOff
       const office_state =
         rawSt == null || !Number.isFinite(Number(rawSt)) ? null : Number(rawSt)
       const is_active =
-        office_state === null ? null : office_state === 0
+        office_state === null ? null : office_state === 0 || office_state === 1
       const label =
         typeof o.label === "string" && o.label.trim() ? o.label.trim() : `Sucursal ${id}`
       return {

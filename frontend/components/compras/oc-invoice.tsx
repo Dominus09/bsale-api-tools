@@ -45,7 +45,7 @@ export function OcInvoicePrint({ header, details }: OcInvoiceProps) {
               ) : (
                 <span className="font-medium text-slate-800">Sucursal {header.office_id}</span>
               )}
-              {header.office_state != null && header.office_state !== 0 ? (
+              {header.office_state != null && header.office_state !== 0 && header.office_state !== 1 ? (
                 <span className="ml-1 font-medium text-amber-800">· Inactiva en Bsale</span>
               ) : null}
             </p>
