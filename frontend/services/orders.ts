@@ -63,7 +63,7 @@ export async function getOrders(params: {
 export { ORDERS_PAGE_SIZE }
 
 export async function getOrderById(id: number): Promise<OrderDetail> {
-  const res = await fetch(`https://api.quillotana.cl/orders/${id}`)
+  const res = await fetch(`${getApiBaseUrl()}/orders/${id}`)
 
   if (!res.ok) {
     throw new Error("Error cargando pedido")

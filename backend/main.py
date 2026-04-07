@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -23,19 +25,28 @@ from backend.routers import uploads
 # ERP (prefijo /erp: dashboard, alertas, márgenes internos)
 from backend.routers.erp import router as erp_router
 
+def _cors_allow_origins() -> list[str]:
+    """Orígenes permitidos para el front (subdominios quillotana + local)."""
+    base = [
+        "http://localhost:3000",
+        "https://cat.quillotana.cl",
+        "https://work.quillotana.cl",
+        "https://test.quillotana.cl",
+        "https://erp.quillotana.cl",
+    ]
+    extra = os.getenv("CORS_EXTRA_ORIGINS", "").strip()
+    if extra:
+        base.extend(o.strip() for o in extra.split(",") if o.strip())
+    return base
+
+
 app = FastAPI(
     title="Quillotana Analytics API",
     version="1.0",
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "https://cat.quillotana.cl",
-        "https://work.quillotana.cl",
-        "https://test.quillotana.cl",
-        "https://erp.quillotana.cl",
-    ],
+    allow_origins=_cors_allow_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

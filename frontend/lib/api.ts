@@ -235,7 +235,11 @@ export async function login(email: string, password: string): Promise<LoginRespo
     return res.json()
   } catch (error) {
     if (isNetworkError(error)) {
-      console.warn("[API] Network error on login, falling back to demo mode")
+      console.warn("[API] Network error on login, falling back to demo mode", {
+        apiUrl: API_URL,
+        origin: typeof window !== "undefined" ? window.location.origin : "(ssr)",
+        hint: "Revisa CORS en el API (incl. este origin), CSP en Cloudflare y NEXT_PUBLIC_API_URL en Coolify.",
+      })
       setDemoMode(true)
       // Allow demo login with specific credentials or any credentials
       if ((email === DEMO_EMAIL && password === DEMO_PASSWORD) || (email && password)) {
