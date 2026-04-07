@@ -61,12 +61,34 @@ function fmtNum(n: number | null | undefined, d = 0): string {
   })
 }
 
-/** Unidades por caja efectivas a partir de la fila del análisis */
-function initialUnitsPerBox(r: PurchaseAnalysisRow): number {
-  const raw = r.units_per_box != null && Number(r.units_per_box) > 0 ? Number(r.units_per_box) : null
-  const eff =
-    r.units_per_box_eff != null && Number(r.units_per_box_eff) > 0 ? Number(r.units_per_box_eff) : null
-  return raw ?? eff ?? 1
+/** Texto de catálogo: trim y un solo espacio entre palabras (solo presentación). */
+function cleanDisplayName(s: string | null | undefined): string {
+  if (s == null) return ""
+  const t = String(s).trim().replace(/\s+/g, " ")
+  return t
+}
+
+/** Valor mostrado en inputs numéricos: máx. 2 decimales, sin recalcular el estado interno. */
+function fmtInputMax2(n: number): string {
+  if (!Number.isFinite(n)) return ""
+  const x = Math.round(n * 100) / 100
+  if (Number.isInteger(x)) return String(x)
+  const s = x.toFixed(2)
+  return s.replace(/0+$/, "").replace(/\.$/, "")
+}
+
+/** Costo bruto en input: máx. 2 decimales en pantalla (mismo criterio que unidades/cajas). */
+function fmtCostoInput(n: number): string {
+  return fmtInputMax2(n)
+}
+
+/**
+ * CxC = units_per_box del backend; NULL o ≤0 se muestra/edita como 1 (sin usar units_per_box_eff).
+ */
+function cxcFromAnalysisRow(r: PurchaseAnalysisRow): number {
+  const v = r.units_per_box
+  if (v != null && Number(v) > 0) return Number(v)
+  return 1
 }
 
 function effectiveUpb(stored: number | undefined): number {
@@ -196,7 +218,7 @@ export default function GenerarOcPage() {
         const k = rowKey(r)
         q[k] = Number(r.unidades_a_comprar) || 0
         c[k] = Number(r.costo_bruto) || 0
-        u[k] = initialUnitsPerBox(r)
+        u[k] = cxcFromAnalysisRow(r)
       }
       setQtyByKey(q)
       setCostoByKey(c)
@@ -520,8 +542,8 @@ export default function GenerarOcPage() {
         <div className="border-b border-slate-100 px-5 py-3">
           <h2 className="text-sm font-medium text-slate-800">Líneas</h2>
           <p className="text-xs text-slate-500">
-            COMPRAR · verde · REVISAR · amarillo · NO_COMPRAR · rojo. Unidades y cajas se sincronizan según unid/caja
-            (mín. 1).
+            COMPRAR · verde · REVISAR · amarillo · NO_COMPRAR · rojo. CxC = cantidad por caja (units_per_box del
+            catálogo). Unidades y cajas se sincronizan según CxC (mín. 1).
           </p>
         </div>
         <div className="overflow-x-auto p-2">
@@ -536,10 +558,12 @@ export default function GenerarOcPage() {
                 <TableHead className="text-right">Stock</TableHead>
                 <TableHead className="text-right">Venta</TableHead>
                 <TableHead className="text-right">Costo bruto</TableHead>
-                <TableHead className="text-right">Unid/caja</TableHead>
+                <TableHead className="text-right" title="Cantidad por caja (units_per_box)">
+                  CxC
+                </TableHead>
                 <TableHead className="text-right">Unidades</TableHead>
                 <TableHead className="text-right">Cajas</TableHead>
-                <TableHead className="text-right">Total</TableHead>
+                <TableHead className="text-right tabular-nums">Total</TableHead>
                 <TableHead className="w-14" />
               </TableRow>
             </TableHeader>
@@ -556,44 +580,65 @@ export default function GenerarOcPage() {
                         Manual
                       </span>
                     </TableCell>
-                    <TableCell className="max-w-[100px] truncate">{m.product_type_name || "—"}</TableCell>
-                    <TableCell className="max-w-[140px] font-medium">{m.product_name}</TableCell>
-                    <TableCell className="max-w-[140px] truncate">{m.variant_name || "—"}</TableCell>
+                    <TableCell
+                      className="min-w-[6.5rem] max-w-[min(200px,24vw)] align-top text-slate-600"
+                      title={cleanDisplayName(m.product_type_name) || undefined}
+                    >
+                      <span className="line-clamp-3 whitespace-normal break-words text-sm leading-snug">
+                        {cleanDisplayName(m.product_type_name) || "—"}
+                      </span>
+                    </TableCell>
+                    <TableCell
+                      className="min-w-[7rem] max-w-[min(220px,26vw)] align-top font-medium"
+                      title={cleanDisplayName(m.product_name) || undefined}
+                    >
+                      <span className="line-clamp-3 whitespace-normal break-words text-sm leading-snug">
+                        {cleanDisplayName(m.product_name) || "—"}
+                      </span>
+                    </TableCell>
+                    <TableCell
+                      className="min-w-[7rem] max-w-[min(240px,28vw)] align-top text-slate-600"
+                      title={cleanDisplayName(m.variant_name) || undefined}
+                    >
+                      <span className="line-clamp-3 whitespace-normal break-words text-sm leading-snug">
+                        {cleanDisplayName(m.variant_name) || "—"}
+                      </span>
+                    </TableCell>
                     <TableCell className="text-right">—</TableCell>
                     <TableCell className="text-right">—</TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="text-right align-middle">
                       <Input
-                        className="h-8 w-[5.5rem] tabular-nums text-right"
-                        inputMode="decimal"
-                        value={String(m.costo_bruto)}
+                        className="ml-auto h-8 w-[6.5rem] tabular-nums text-right"
+                        inputMode="numeric"
+                        value={fmtCostoInput(m.costo_bruto)}
                         onChange={(e) => updateManualCosto(m.key, e.target.value)}
                       />
                     </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="text-right align-middle">
                       <Input
-                        className="h-8 w-14 tabular-nums text-right"
+                        className="ml-auto h-8 w-14 tabular-nums text-right"
                         inputMode="numeric"
                         value={String(upb)}
                         onChange={(e) => updateManualUpb(m.key, e.target.value)}
                       />
                     </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="text-right align-middle">
                       <Input
-                        className="h-8 w-[5.5rem] tabular-nums text-right"
+                        className="ml-auto h-8 w-[6.5rem] tabular-nums text-right"
                         inputMode="decimal"
-                        value={String(m.cantidad)}
+                        value={fmtInputMax2(m.cantidad)}
                         onChange={(e) => updateManualUnidades(m.key, e.target.value)}
                       />
                     </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="text-right align-middle">
                       <Input
-                        className="h-8 w-[5.5rem] tabular-nums text-right"
+                        className="ml-auto h-8 w-[6.5rem] tabular-nums text-right"
                         inputMode="decimal"
-                        value={Number.isFinite(cajas) ? String(Math.round(cajas * 1e6) / 1e6) : ""}
+                        value={Number.isFinite(cajas) ? fmtInputMax2(cajas) : ""}
                         onChange={(e) => updateManualCajas(m.key, e.target.value)}
                       />
                     </TableCell>
-                    <TableCell className="text-right tabular-nums font-medium">{fmtNum(total, 0)}</TableCell>
+                    <TableCell className="text-right tabular-nums font-medium align-middle">{fmtNum(total, 0)}</TableCell>
                     <TableCell>
                       <Button
                         type="button"
@@ -648,50 +693,73 @@ export default function GenerarOcPage() {
                         {r.status}
                       </span>
                     </TableCell>
-                    <TableCell className="max-w-[100px] truncate text-slate-600">{r.product_type_name ?? "—"}</TableCell>
-                    <TableCell className="max-w-[140px] font-medium text-slate-900">{r.product_name ?? "—"}</TableCell>
-                    <TableCell className="max-w-[160px] truncate text-slate-600">{r.variant_name ?? "—"}</TableCell>
-                    <TableCell className="text-right tabular-nums">{fmtNum(r.stock_actual, 0)}</TableCell>
-                    <TableCell className="text-right tabular-nums text-xs text-slate-600">
+                    <TableCell
+                      className="min-w-[6.5rem] max-w-[min(200px,24vw)] align-top text-slate-600"
+                      title={cleanDisplayName(r.product_type_name) || undefined}
+                    >
+                      <span className="line-clamp-3 whitespace-normal break-words text-sm leading-snug">
+                        {cleanDisplayName(r.product_type_name) || "—"}
+                      </span>
+                    </TableCell>
+                    <TableCell
+                      className="min-w-[7rem] max-w-[min(220px,26vw)] align-top font-medium text-slate-900"
+                      title={cleanDisplayName(r.product_name) || undefined}
+                    >
+                      <span className="line-clamp-3 whitespace-normal break-words text-sm leading-snug">
+                        {cleanDisplayName(r.product_name) || "—"}
+                      </span>
+                    </TableCell>
+                    <TableCell
+                      className="min-w-[7rem] max-w-[min(240px,28vw)] align-top text-slate-600"
+                      title={cleanDisplayName(r.variant_name) || undefined}
+                    >
+                      <span className="line-clamp-3 whitespace-normal break-words text-sm leading-snug">
+                        {cleanDisplayName(r.variant_name) || "—"}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums align-middle">{fmtNum(r.stock_actual, 0)}</TableCell>
+                    <TableCell className="text-right tabular-nums text-xs text-slate-600 align-middle">
                       {fmtNum(r.ventas_7_dias, 0)} / {fmtNum(r.ventas_30_dias, 0)}
                     </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="text-right align-middle">
                       <Input
-                        className="h-8 w-[5.5rem] tabular-nums text-right"
-                        inputMode="decimal"
-                        value={String(unit)}
+                        className="ml-auto h-8 w-[6.5rem] tabular-nums text-right"
+                        inputMode="numeric"
+                        value={fmtCostoInput(unit)}
                         disabled={ex}
                         onChange={(e) => updateCostoAnalysis(k, e.target.value)}
                       />
                     </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="text-right align-middle">
                       <Input
-                        className="h-8 w-14 tabular-nums text-right"
+                        className="ml-auto h-8 w-14 tabular-nums text-right"
                         inputMode="numeric"
                         value={String(upb)}
                         disabled={ex}
                         onChange={(e) => updateUpbAnalysis(k, e.target.value)}
                       />
                     </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="text-right align-middle">
                       <Input
-                        className="h-8 w-[5.5rem] tabular-nums text-right"
+                        className="ml-auto h-8 w-[6.5rem] tabular-nums text-right"
                         inputMode="decimal"
-                        value={String(qty)}
+                        value={fmtInputMax2(qty)}
                         disabled={ex}
                         onChange={(e) => updateUnidadesAnalysis(k, e.target.value, ex)}
                       />
                     </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="text-right align-middle">
                       <Input
-                        className="h-8 w-[5.5rem] tabular-nums text-right"
+                        className="ml-auto h-8 w-[6.5rem] tabular-nums text-right"
                         inputMode="decimal"
-                        value={Number.isFinite(cajas) ? String(Math.round(cajas * 1e6) / 1e6) : ""}
+                        value={Number.isFinite(cajas) ? fmtInputMax2(cajas) : ""}
                         disabled={ex}
                         onChange={(e) => updateCajasAnalysis(k, e.target.value, ex)}
                       />
                     </TableCell>
-                    <TableCell className="text-right tabular-nums font-medium text-slate-900">{fmtNum(total, 0)}</TableCell>
+                    <TableCell className="text-right tabular-nums font-medium text-slate-900 align-middle">
+                      {fmtNum(total, 0)}
+                    </TableCell>
                     <TableCell />
                   </TableRow>
                 )

@@ -163,9 +163,9 @@ def purchase_data_freshness(company_id: int) -> Dict[str, Any]:
 @router.get("/purchase-offices")
 def list_purchase_offices(company_id: int) -> List[Dict[str, Any]]:
     """
-    Sucursales presentes en vw_purchase_analysis con nombre y state desde bsale.offices
-    (sync Bsale en sync_catalog.py). Bsale: state 1 = activa, 0 = inactiva.
-    Sin fila en offices: office_state e is_active null.
+    Sucursales activas en análisis de compra: solo filas con bsale.offices.state = 0
+    (convención de este proyecto / Bsale para sucursal habilitada).
+    Orden por nombre de sucursal; sin sufijos de estado en label.
     """
     sql = """
         SELECT DISTINCT
@@ -173,11 +173,14 @@ def list_purchase_offices(company_id: int) -> List[Dict[str, Any]]:
             COALESCE(NULLIF(TRIM(ofc.name), ''), '') AS office_name,
             ofc.state AS office_state
         FROM bsale.vw_purchase_analysis pa
-        LEFT JOIN bsale.offices ofc
+        INNER JOIN bsale.offices ofc
             ON ofc.company_id = pa.company_id
            AND ofc.bsale_id = pa.office_id
+           AND ofc.state = 0
         WHERE pa.company_id = %s
-        ORDER BY pa.office_id
+        ORDER BY
+            NULLIF(TRIM(ofc.name), '') ASC NULLS LAST,
+            pa.office_id ASC
     """
     conn = get_connection()
     try:
@@ -190,16 +193,13 @@ def list_purchase_offices(company_id: int) -> List[Dict[str, Any]]:
             oid = int(r["office_id"])
             name = (r.get("office_name") or "").strip()
             st = _parse_office_state(r.get("office_state"))
-            is_active = None if st is None else (st == 1)
             label = name if name else f"Sucursal {oid}"
-            if st is not None and st != 1:
-                label = f"{label} (inactiva)"
             out.append(
                 {
                     "office_id": oid,
                     "office_name": name or None,
                     "office_state": st,
-                    "is_active": is_active,
+                    "is_active": True,
                     "label": label,
                 }
             )
