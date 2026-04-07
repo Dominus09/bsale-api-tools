@@ -1,0 +1,15 @@
+# Next.js en modo servidor (SSR / App Router). Requiere `pnpm start` → `next start`, NO nginx estático.
+#
+# En Coolify (recurso "front erp"):
+# - Desactiva "Is it a static site?" / sitio estático.
+# - Deja "Publish Directory" VACÍO (no uses "/" si eso activa solo archivos estáticos).
+# - Puerto expuesto: 3000 (o el que use tu proxy hacia el contenedor).
+# - Base Directory: frontend (como ya tienes).
+
+[variables]
+NODE_ENV = "production"
+HOSTNAME = "0.0.0.0"
+PORT = "3000"
+
+[start]
+cmd = "pnpm start"

@@ -7,12 +7,9 @@
  */
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  output: "standalone",
   typescript: {
     ignoreBuildErrors: true,
-  },
-  eslint: {
-    // Evita que eslint bloquee o alargue el build en CI/producción
-    ignoreDuringBuilds: true,
   },
   images: {
     unoptimized: true,
