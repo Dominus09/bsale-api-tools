@@ -1,15 +1,36 @@
 import type { NextRequest } from "next/server"
 import { NextResponse } from "next/server"
 
-import { buildContentSecurityPolicy } from "@/lib/csp"
+import { getApiOrigin } from "@/lib/api-base"
 
 /**
- * CSP en documentos y navegación same-origin.
- * No aplica a /_next/* ni a estáticos con extensión (evita interferir con chunks).
+ * ÚNICA fuente de Content-Security-Policy en esta app: este archivo hace un solo setHeader.
+ * No hay CSP en next.config, ni en lib/csp.ts (eliminado), ni cabecera CSP en public/_headers.
  *
- * Si un proxy (Cloudflare, Traefik/Coolify) envía OTRA cabecera CSP (p. ej. default-src 'none'),
- * el navegador exige cumplir TODAS las políticas: hay que quitar o relajar la del proxy.
+ * Política base (pedida):
+ *   default-src 'self'; script-src ... static.cloudflareinsights.com; connect-src 'self' https://static.cloudflareinsights.com;
+ *   img-src 'self' data: blob:; style-src ...; font-src ...
+ *
+ * connect-src se amplía con https://cloudflareinsights.com (RUM/beacon) y el origin del API
+ * (NEXT_PUBLIC_API_URL / default), si no los fetch del front fallan.
+ *
+ * img-src incluye el host del logo en Vercel Blob usado en la home.
+ *
+ * default-src 'none' NO sale de este repo. Si el navegador lo muestra, lo añade el proxy
+ * (p. ej. Cloudflare Transform Rules): hay que quitar esa regla; varias CSP se aplican todas.
  */
+function contentSecurityPolicy(): string {
+  const apiOrigin = getApiOrigin()
+  return [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com",
+    `connect-src 'self' https://static.cloudflareinsights.com https://cloudflareinsights.com ${apiOrigin}`,
+    "img-src 'self' data: blob: https://hebbkx1anhila5yf.public.blob.vercel-storage.com",
+    "style-src 'self' 'unsafe-inline'",
+    "font-src 'self' data:",
+  ].join("; ")
+}
+
 function isStaticAssetPath(pathname: string): boolean {
   if (pathname === "/favicon.ico") return true
   return /\.(?:ico|png|jpg|jpeg|svg|gif|webp|woff2?)$/i.test(pathname)
@@ -21,7 +42,6 @@ export function middleware(request: NextRequest) {
   }
 
   const { pathname } = request.nextUrl
-  // Healthcheck sin CSP: ver si el contenedor Next responde cuando /login falla en el proxy
   if (pathname === "/health") {
     return NextResponse.next()
   }
@@ -32,14 +52,12 @@ export function middleware(request: NextRequest) {
     return NextResponse.next()
   }
 
-  // Sin rutas /api locales: GET fuera de estáticos son páginas o RSC; CSP aquí es segura.
-  // Antes se exigía Accept: text/html; algunos proxies lo cambian y la app no enviaba CSP.
   if (request.method !== "GET") {
     return NextResponse.next()
   }
 
   const res = NextResponse.next()
-  res.headers.set("Content-Security-Policy", buildContentSecurityPolicy())
+  res.headers.set("Content-Security-Policy", contentSecurityPolicy())
   return res
 }
 

@@ -1,8 +1,7 @@
 /**
  * Producción (p. ej. work.quillotana.cl):
  * - Raíz: app/page.tsx + force-dynamic + home-client (evita 404 si el host espera HTML dinámico).
- * - CSP: middleware.ts + lib/csp.ts (solo NODE_ENV=production). Si el proxy añade otra CSP
- *   (p. ej. default-src 'none'), el navegador aplica ambas: quitar/ajustar en Cloudflare/Coolify.
+ * - CSP: solo middleware.ts (NODE_ENV=production). Si el proxy añade otra CSP, quitarla allí.
  * - Producción con output "standalone": usar `pnpm start` → node .next/standalone/server.js
  *   (Next 16+ no soporta `next start` con standalone). Ver scripts/copy-standalone-assets.cjs.
  * - _headers en public/: útil en Cloudflare Pages; no lo usa el servidor standalone.
