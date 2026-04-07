@@ -21,6 +21,10 @@ export function middleware(request: NextRequest) {
   }
 
   const { pathname } = request.nextUrl
+  // Healthcheck sin CSP: ver si el contenedor Next responde cuando /login falla en el proxy
+  if (pathname === "/health") {
+    return NextResponse.next()
+  }
   if (pathname.startsWith("/_next/")) {
     return NextResponse.next()
   }

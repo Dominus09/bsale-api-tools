@@ -33,6 +33,8 @@ app.add_middleware(
         "http://localhost:3000",
         "https://cat.quillotana.cl",
         "https://work.quillotana.cl",
+        "https://test.quillotana.cl",
+        "https://erp.quillotana.cl",
     ],
     allow_credentials=True,
     allow_methods=["*"],

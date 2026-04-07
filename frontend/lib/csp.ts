@@ -18,7 +18,8 @@ export function buildContentSecurityPolicy(): string {
     "form-action 'self'",
     "frame-ancestors 'self'",
     `script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com${vercelScript}`,
-    `connect-src 'self' https://static.cloudflareinsights.com ${apiOrigin}${vercelConnect}`,
+    // RUM/Web Analytics envía beacons a cloudflareinsights.com/cdn-cgi/rum (no solo static.*)
+    `connect-src 'self' https://static.cloudflareinsights.com https://cloudflareinsights.com ${apiOrigin}${vercelConnect}`,
     "img-src 'self' data: blob: https://hebbkx1anhila5yf.public.blob.vercel-storage.com",
     "style-src 'self' 'unsafe-inline'",
     "font-src 'self' data:",
