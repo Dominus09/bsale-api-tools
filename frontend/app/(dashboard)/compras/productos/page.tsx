@@ -30,6 +30,7 @@ import {
   getProductsMasterUnassignedCount,
   getSuppliers,
   patchProductMaster,
+  PRODUCTS_MASTER_PAGE_SIZE,
   type GetProductsMasterParams,
   type ProductMasterRow,
   type Supplier,
@@ -53,6 +54,8 @@ export default function Page() {
   const [filterSupplierId, setFilterSupplierId] = useState<string>(FILTER_ALL_SUPPLIERS)
   const [searchInput, setSearchInput] = useState("")
   const [debouncedSearch, setDebouncedSearch] = useState("")
+  const [page, setPage] = useState(0)
+  const [total, setTotal] = useState(0)
 
   const [unassignedCount, setUnassignedCount] = useState<number | null>(null)
   const [unassignedLoading, setUnassignedLoading] = useState(true)
@@ -134,7 +137,7 @@ export default function Page() {
     return () => window.clearTimeout(t)
   }, [searchInput])
 
-  const queryParams = useMemo((): GetProductsMasterParams | undefined => {
+  const filterQueryParams = useMemo((): GetProductsMasterParams => {
     const p: GetProductsMasterParams = {}
     if (debouncedSearch) p.search = debouncedSearch
     if (filterWithoutSupplier) {
@@ -143,7 +146,11 @@ export default function Page() {
       const id = Number.parseInt(filterSupplierId, 10)
       if (Number.isFinite(id)) p.supplier_id = id
     }
-    return Object.keys(p).length > 0 ? p : undefined
+    return p
+  }, [debouncedSearch, filterWithoutSupplier, filterSupplierId])
+
+  useEffect(() => {
+    setPage(0)
   }, [debouncedSearch, filterWithoutSupplier, filterSupplierId])
 
   useEffect(() => {
@@ -152,12 +159,20 @@ export default function Page() {
       setLoading(true)
       setError("")
       try {
-        const data = await getProductsMaster(queryParams)
-        if (!cancelled) setRows(data)
+        const data = await getProductsMaster({
+          ...filterQueryParams,
+          limit: PRODUCTS_MASTER_PAGE_SIZE,
+          offset: page * PRODUCTS_MASTER_PAGE_SIZE,
+        })
+        if (!cancelled) {
+          setRows(data.items)
+          setTotal(data.total)
+        }
       } catch {
         if (!cancelled) {
           setError("No se pudieron cargar los productos")
           setRows([])
+          setTotal(0)
         }
       } finally {
         if (!cancelled) setLoading(false)
@@ -167,7 +182,7 @@ export default function Page() {
     return () => {
       cancelled = true
     }
-  }, [queryParams])
+  }, [filterQueryParams, page])
 
   useEffect(() => {
     let cancelled = false
@@ -232,8 +247,13 @@ export default function Page() {
         await patchProductMaster(row.barcode, {
           supplier_id: nextId,
         })
-        const refreshed = await getProductsMaster(queryParams)
-        setRows(refreshed)
+        const refreshed = await getProductsMaster({
+          ...filterQueryParams,
+          limit: PRODUCTS_MASTER_PAGE_SIZE,
+          offset: page * PRODUCTS_MASTER_PAGE_SIZE,
+        })
+        setRows(refreshed.items)
+        setTotal(refreshed.total)
         void loadUnassignedCount()
         flashSaveSuccess(row.barcode)
       } catch {
@@ -251,13 +271,19 @@ export default function Page() {
       }
     },
     [
-      queryParams,
+      filterQueryParams,
+      page,
       setPending,
       loadUnassignedCount,
       clearSaveSuccessFlash,
       flashSaveSuccess,
     ],
   )
+
+  const pageFrom = total === 0 ? 0 : page * PRODUCTS_MASTER_PAGE_SIZE + 1
+  const pageTo = Math.min((page + 1) * PRODUCTS_MASTER_PAGE_SIZE, total)
+  const canPrev = page > 0 && !loading
+  const canNext = !loading && (page + 1) * PRODUCTS_MASTER_PAGE_SIZE < total
 
   const selectDisabled = suppliersLoading || !!suppliersError || suppliers.length === 0
 
@@ -564,6 +590,37 @@ export default function Page() {
                 )}
               </tbody>
             </table>
+          </div>
+
+          <div className="flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-muted-foreground">
+              Mostrando{" "}
+              <span className="font-medium tabular-nums text-foreground">
+                {pageFrom}–{pageTo}
+              </span>{" "}
+              de <span className="font-medium tabular-nums text-foreground">{total}</span> ·{" "}
+              {PRODUCTS_MASTER_PAGE_SIZE} por página
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!canPrev}
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+              >
+                Anterior
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!canNext}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                Siguiente
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>

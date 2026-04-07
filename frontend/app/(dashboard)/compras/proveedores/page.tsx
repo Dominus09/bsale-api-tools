@@ -27,6 +27,7 @@ import {
   getProductsMasterWithoutSupplier,
   getProductsMasterWithoutSupplierCount,
   getSuppliers,
+  PRODUCTS_MASTER_PAGE_SIZE,
   type ProductMasterRow,
   type Supplier,
   updateSupplier,
@@ -114,6 +115,9 @@ const featureFlags = {
 export default function Page() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [productsWithoutSupplier, setProductsWithoutSupplier] = useState<ProductMasterRow[]>([])
+  const [withoutSupplierPage, setWithoutSupplierPage] = useState(0)
+  const [withoutSupplierTotal, setWithoutSupplierTotal] = useState(0)
+  const [withoutSupplierSearchCommitted, setWithoutSupplierSearchCommitted] = useState("")
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState("")
@@ -156,13 +160,19 @@ export default function Page() {
     }
   }
 
-  async function loadProductsWithoutSupplier(search?: string) {
+  async function loadProductsWithoutSupplierPage(search: string, pageNum: number) {
     setLoading(true)
     setError("")
     try {
-      const data = await getProductsMasterWithoutSupplier(search)
-      setProductsWithoutSupplier(data)
+      const data = await getProductsMasterWithoutSupplier(search, {
+        limit: PRODUCTS_MASTER_PAGE_SIZE,
+        offset: pageNum * PRODUCTS_MASTER_PAGE_SIZE,
+      })
+      setProductsWithoutSupplier(data.items)
+      setWithoutSupplierTotal(data.total)
     } catch {
+      setProductsWithoutSupplier([])
+      setWithoutSupplierTotal(0)
       setError("No se pudieron cargar los productos sin proveedor")
     } finally {
       setLoading(false)
@@ -171,12 +181,14 @@ export default function Page() {
 
   useEffect(() => {
     if (showWithoutSupplier) {
-      loadProductsWithoutSupplier(searchTerm)
+      void loadProductsWithoutSupplierPage(withoutSupplierSearchCommitted, withoutSupplierPage)
       return
     }
-    loadSuppliers(searchTerm)
-    refreshWithoutSupplierCount()
-  }, [showWithoutSupplier])
+    void loadSuppliers(searchTerm)
+    void refreshWithoutSupplierCount()
+    // Lista "sin proveedor" usa búsqueda confirmada (Botón Buscar o al activar la vista).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showWithoutSupplier, withoutSupplierPage, withoutSupplierSearchCommitted])
 
   function openCreateDialog() {
     setEditingSupplier(null)
@@ -263,11 +275,33 @@ export default function Page() {
 
   async function handleBackendSearch() {
     if (showWithoutSupplier) {
-      await loadProductsWithoutSupplier(searchTerm)
+      setWithoutSupplierSearchCommitted(searchTerm)
+      setWithoutSupplierPage(0)
       return
     }
     await loadSuppliers(searchTerm)
   }
+
+  function toggleWithoutSupplierView() {
+    setShowWithoutSupplier((prev) => {
+      const next = !prev
+      if (next) {
+        setWithoutSupplierSearchCommitted(searchTerm)
+        setWithoutSupplierPage(0)
+      }
+      return next
+    })
+  }
+
+  const withoutFrom =
+    withoutSupplierTotal === 0 ? 0 : withoutSupplierPage * PRODUCTS_MASTER_PAGE_SIZE + 1
+  const withoutTo = Math.min(
+    (withoutSupplierPage + 1) * PRODUCTS_MASTER_PAGE_SIZE,
+    withoutSupplierTotal,
+  )
+  const withoutCanPrev = withoutSupplierPage > 0 && !loading
+  const withoutCanNext =
+    !loading && (withoutSupplierPage + 1) * PRODUCTS_MASTER_PAGE_SIZE < withoutSupplierTotal
 
   return (
     <div className="space-y-6">
@@ -432,7 +466,7 @@ export default function Page() {
               </Button>
               <Button
                 variant={showWithoutSupplier ? "default" : "outline"}
-                onClick={() => setShowWithoutSupplier((prev) => !prev)}
+                onClick={toggleWithoutSupplierView}
               >
                 Sin proveedor
               </Button>
@@ -547,6 +581,40 @@ export default function Page() {
               </tbody>
             </table>
           </div>
+
+          {showWithoutSupplier ? (
+            <div className="mt-4 flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-muted-foreground">
+                Mostrando{" "}
+                <span className="font-medium tabular-nums text-foreground">
+                  {withoutFrom}–{withoutTo}
+                </span>{" "}
+                de{" "}
+                <span className="font-medium tabular-nums text-foreground">{withoutSupplierTotal}</span> ·{" "}
+                {PRODUCTS_MASTER_PAGE_SIZE} por página
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!withoutCanPrev}
+                  onClick={() => setWithoutSupplierPage((p) => Math.max(0, p - 1))}
+                >
+                  Anterior
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!withoutCanNext}
+                  onClick={() => setWithoutSupplierPage((p) => p + 1)}
+                >
+                  Siguiente
+                </Button>
+              </div>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
     </div>

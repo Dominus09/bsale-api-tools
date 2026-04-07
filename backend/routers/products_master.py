@@ -1,10 +1,15 @@
-from typing import Any, Dict, List, Optional
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Body, HTTPException, Query
 
 from backend.db import get_connection
 
 router = APIRouter()
+
+_DEFAULT_PAGE_SIZE = 500
+_MAX_PAGE_SIZE = 1000
 
 
 def _parse_supplier_id_query(supplier_id: Optional[str]) -> tuple[bool, Optional[int]]:
@@ -23,31 +28,12 @@ def _parse_supplier_id_query(supplier_id: Optional[str]) -> tuple[bool, Optional
     return False, n
 
 
-@router.get("/products-master")
-def list_products_master(
-    supplier_id: Optional[str] = Query(
-        None,
-        description="ID numérico del proveedor, o la cadena null para supplier_id IS NULL",
-    ),
-    without_supplier: bool = Query(False),
-    product_type: Optional[str] = Query(None),
-    search: Optional[str] = Query(None),
-) -> List[Dict[str, Any]]:
-    sql = """
-        SELECT
-            id,
-            barcode,
-            sku,
-            product_name,
-            variant_name,
-            product_type,
-            companies,
-            supplier_id,
-            is_active,
-            created_at,
-            updated_at
-        FROM bsale.products_master
-    """
+def _products_master_where(
+    supplier_id: Optional[str],
+    without_supplier: bool,
+    product_type: Optional[str],
+    search: Optional[str],
+) -> Tuple[str, List[Any]]:
     where_parts: list[str] = []
     params: list[Any] = []
 
@@ -70,23 +56,89 @@ def list_products_master(
         where_parts.append("(product_name ILIKE %s OR barcode ILIKE %s)")
         params.extend([term, term])
 
-    if where_parts:
-        sql += " WHERE " + " AND ".join(where_parts)
+    where_sql = " WHERE " + " AND ".join(where_parts) if where_parts else ""
+    return where_sql, params
 
-    sql += " ORDER BY product_name ASC NULLS LAST, barcode ASC"
+
+def _serialize_pm_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for k, v in row.items():
+        if isinstance(v, Decimal):
+            out[k] = float(v)
+        elif isinstance(v, (datetime, date)):
+            out[k] = v.isoformat()
+        else:
+            out[k] = v
+    return out
+
+
+@router.get("/products-master")
+def list_products_master(
+    supplier_id: Optional[str] = Query(
+        None,
+        description="ID numérico del proveedor, o la cadena null para supplier_id IS NULL",
+    ),
+    without_supplier: bool = Query(False),
+    product_type: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    limit: int = Query(
+        _DEFAULT_PAGE_SIZE,
+        ge=1,
+        le=_MAX_PAGE_SIZE,
+        description="Tamaño de página (máx. 1000)",
+    ),
+    offset: int = Query(0, ge=0, description="Desplazamiento para paginación"),
+) -> Dict[str, Any]:
+    """
+    Lista paginada de bsale.products_master.
+    Siempre devuelve { items, total, limit, offset }.
+    """
+    where_sql, params = _products_master_where(
+        supplier_id, without_supplier, product_type, search
+    )
+    base = "FROM bsale.products_master"
+
+    count_sql = f"SELECT COUNT(*)::bigint {base}{where_sql}"
+    data_sql = f"""
+        SELECT
+            id,
+            barcode,
+            sku,
+            product_name,
+            variant_name,
+            product_type,
+            companies,
+            supplier_id,
+            is_active,
+            created_at,
+            updated_at
+        {base}{where_sql}
+        ORDER BY product_name ASC NULLS LAST, barcode ASC
+        LIMIT %s OFFSET %s
+    """
+    data_params = list(params) + [limit, offset]
 
     conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute(sql, tuple(params))
+        cur.execute(count_sql, tuple(params))
+        total_row = cur.fetchone()
+        total = int(total_row[0]) if total_row and total_row[0] is not None else 0
+
+        cur.execute(data_sql, tuple(data_params))
         rows = cur.fetchall()
         columns = [desc[0] for desc in cur.description]
-        result = [dict(zip(columns, row)) for row in rows]
+        result = [_serialize_pm_row(dict(zip(columns, row))) for row in rows]
         cur.close()
     finally:
         conn.close()
 
-    return result
+    return {
+        "items": result,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.get("/products-master/count-without-supplier")

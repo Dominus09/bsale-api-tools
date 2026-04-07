@@ -695,15 +695,27 @@ export async function deletePurchaseManualItem(itemId: number): Promise<void> {
   }
 }
 
+/** Tamaño de página por defecto (alineado con el backend). */
+export const PRODUCTS_MASTER_PAGE_SIZE = 500
+
+export interface ProductsMasterPage {
+  items: ProductMasterRow[]
+  total: number
+  limit: number
+  offset: number
+}
+
 export interface GetProductsMasterParams {
   without_supplier?: boolean
   supplier_id?: number
   search?: string
+  limit?: number
+  offset?: number
 }
 
 export async function getProductsMaster(
   params?: GetProductsMasterParams,
-): Promise<ProductMasterRow[]> {
+): Promise<ProductsMasterPage> {
   const qs = new URLSearchParams()
   if (params?.without_supplier) {
     qs.set("without_supplier", "true")
@@ -714,6 +726,10 @@ export async function getProductsMaster(
   if (params?.search != null && params.search.trim()) {
     qs.set("search", params.search.trim())
   }
+  const limit = params?.limit ?? PRODUCTS_MASTER_PAGE_SIZE
+  const offset = params?.offset ?? 0
+  qs.set("limit", String(limit))
+  qs.set("offset", String(offset))
   const suffix = qs.toString() ? `?${qs.toString()}` : ""
   const res = await fetch(`${API_URL}/products-master${suffix}`, {
     headers: getAuthHeaders(),
@@ -722,19 +738,20 @@ export async function getProductsMaster(
     throw new Error("Error al cargar productos maestros")
   }
   const data = await res.json()
-  return Array.isArray(data) ? data : []
+  if (data && Array.isArray(data.items)) {
+    return {
+      items: data.items,
+      total: Number(data.total) || 0,
+      limit: Number(data.limit) || limit,
+      offset: Number(data.offset) ?? offset,
+    }
+  }
+  return { items: [], total: 0, limit, offset }
 }
 
-/** GET /products-master?supplier_id=null — total de filas (supplier_id IS NULL). */
+/** Total de productos con supplier_id IS NULL (COUNT en servidor, sin traer filas). */
 export async function getProductsMasterUnassignedCount(): Promise<number> {
-  const res = await fetch(`${API_URL}/products-master?supplier_id=null`, {
-    headers: getAuthHeaders(),
-  })
-  if (!res.ok) {
-    throw new Error("Error al contar productos sin proveedor")
-  }
-  const data = await res.json()
-  return Array.isArray(data) ? data.length : 0
+  return getProductsMasterWithoutSupplierCount()
 }
 
 export interface PatchProductMasterResponse {
@@ -761,12 +778,19 @@ export async function patchProductMaster(
   return res.json()
 }
 
-export async function getProductsMasterWithoutSupplier(search?: string): Promise<ProductMasterRow[]> {
+export async function getProductsMasterWithoutSupplier(
+  search?: string,
+  page?: { limit?: number; offset?: number },
+): Promise<ProductsMasterPage> {
   const qs = new URLSearchParams()
   qs.set("supplier_id", "null")
   if (search && search.trim()) {
     qs.set("search", search.trim())
   }
+  const limit = page?.limit ?? PRODUCTS_MASTER_PAGE_SIZE
+  const offset = page?.offset ?? 0
+  qs.set("limit", String(limit))
+  qs.set("offset", String(offset))
   const res = await fetch(`${API_URL}/products-master?${qs.toString()}`, {
     headers: getAuthHeaders(),
   })
@@ -774,7 +798,15 @@ export async function getProductsMasterWithoutSupplier(search?: string): Promise
     throw new Error("Error al cargar productos sin proveedor")
   }
   const data = await res.json()
-  return Array.isArray(data) ? data : []
+  if (data && Array.isArray(data.items)) {
+    return {
+      items: data.items,
+      total: Number(data.total) || 0,
+      limit: Number(data.limit) || limit,
+      offset: Number(data.offset) ?? offset,
+    }
+  }
+  return { items: [], total: 0, limit, offset }
 }
 
 export async function getProductsMasterWithoutSupplierCount(): Promise<number> {
