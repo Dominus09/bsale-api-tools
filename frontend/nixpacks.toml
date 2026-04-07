@@ -2,7 +2,9 @@
 #
 # En Coolify (recurso "front erp"):
 # - Desactiva "Is it a static site?" / sitio estático.
-# - Deja "Publish Directory" VACÍO (no uses "/" si eso activa solo archivos estáticos).
+# - "Publish Directory": en Configuration → General, debajo de "Base Directory" (si tu versión
+#   lo muestra). Si ponías "/" y ves "Cannot GET", bórralo y deja el campo vacío. En v4 a veces
+#   solo aparece si activas sitio estático; si no lo ves, ignora y usa Build Pack = Dockerfile.
 # - Puerto expuesto: 3000 (o el que use tu proxy hacia el contenedor).
 # - Base Directory: frontend (como ya tienes).
 
