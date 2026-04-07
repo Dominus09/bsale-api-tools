@@ -185,6 +185,7 @@ export interface PurchaseAnalysisRow {
 export interface PurchaseOrderHeader {
   oc_id: number
   company_id: number
+  company_name?: string | null
   office_id: number
   supplier_id: number
   supplier_name: string | null
@@ -196,6 +197,33 @@ export interface PurchaseOrderHeader {
   observacion: string | null
   status: string
   created_at?: string | null
+}
+
+export interface PurchaseOfficeRef {
+  office_id: number
+  label: string
+}
+
+export interface PurchaseLinePayload {
+  variant_id?: number | null
+  product_type_name?: string | null
+  product_name?: string | null
+  variant_name?: string | null
+  barcode?: string | null
+  cantidad: number
+  units_per_box?: number | null
+  costo_unitario: number
+}
+
+export interface GeneratePurchaseOrderFromLinesPayload {
+  company_id: number
+  office_id: number
+  supplier_id: number
+  fecha_entrega?: string | null
+  forma_pago?: string | null
+  responsable?: string | null
+  observacion?: string | null
+  lines: PurchaseLinePayload[]
 }
 
 export interface PurchaseOrderDetailRow {
@@ -559,19 +587,40 @@ export async function updateSupplier(
   return res.json()
 }
 
-export async function getPurchaseAnalysis(
-  officeId: number,
-  options?: { status?: string },
-): Promise<PurchaseAnalysisRow[]> {
+function resolvePurchaseCompanyId(override?: number | null): number {
+  if (override != null && Number.isFinite(override) && override > 0) {
+    return override
+  }
   const companyId = getCompanyId()
   if (companyId == null || !Number.isFinite(companyId)) {
     throw new Error("Empresa no seleccionada")
   }
+  return companyId
+}
+
+export async function getPurchaseOffices(companyId: number): Promise<PurchaseOfficeRef[]> {
   const qs = new URLSearchParams()
   qs.set("company_id", String(companyId))
-  qs.set("office_id", String(officeId))
-  if (options?.status && options.status.trim()) {
-    qs.set("status", options.status.trim())
+  const res = await fetch(`${API_URL}/purchase-offices?${qs.toString()}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    throw new Error("Error al cargar sucursales")
+  }
+  const data = await res.json()
+  return Array.isArray(data) ? data : []
+}
+
+export async function getPurchaseAnalysis(params: {
+  companyId: number
+  officeId: number
+  supplierId?: number
+}): Promise<PurchaseAnalysisRow[]> {
+  const qs = new URLSearchParams()
+  qs.set("company_id", String(params.companyId))
+  qs.set("office_id", String(params.officeId))
+  if (params.supplierId != null && Number.isFinite(params.supplierId)) {
+    qs.set("supplier_id", String(params.supplierId))
   }
   const res = await fetch(`${API_URL}/purchase-analysis?${qs.toString()}`, {
     headers: getAuthHeaders(),
@@ -584,15 +633,15 @@ export async function getPurchaseAnalysis(
   return Array.isArray(data) ? data : []
 }
 
-export async function getPurchaseOrders(officeId?: number): Promise<PurchaseOrderHeader[]> {
-  const companyId = getCompanyId()
-  if (companyId == null || !Number.isFinite(companyId)) {
-    throw new Error("Empresa no seleccionada")
-  }
+export async function getPurchaseOrders(options?: {
+  companyId?: number
+  officeId?: number
+}): Promise<PurchaseOrderHeader[]> {
+  const companyId = resolvePurchaseCompanyId(options?.companyId ?? null)
   const qs = new URLSearchParams()
   qs.set("company_id", String(companyId))
-  if (officeId != null && Number.isFinite(officeId)) {
-    qs.set("office_id", String(officeId))
+  if (options?.officeId != null && Number.isFinite(options.officeId)) {
+    qs.set("office_id", String(options.officeId))
   }
   const res = await fetch(`${API_URL}/purchase-orders?${qs.toString()}`, {
     headers: getAuthHeaders(),
@@ -604,14 +653,14 @@ export async function getPurchaseOrders(officeId?: number): Promise<PurchaseOrde
   return Array.isArray(data) ? data : []
 }
 
-export async function getPurchaseOrder(ocId: number): Promise<{
+export async function getPurchaseOrder(
+  ocId: number,
+  options?: { companyId?: number },
+): Promise<{
   header: PurchaseOrderHeader
   details: PurchaseOrderDetailRow[]
 }> {
-  const companyId = getCompanyId()
-  if (companyId == null || !Number.isFinite(companyId)) {
-    throw new Error("Empresa no seleccionada")
-  }
+  const companyId = resolvePurchaseCompanyId(options?.companyId ?? null)
   const qs = new URLSearchParams()
   qs.set("company_id", String(companyId))
   const res = await fetch(`${API_URL}/purchase-orders/${ocId}?${qs.toString()}`, {
@@ -635,6 +684,41 @@ export async function generatePurchaseOrder(
   if (!res.ok) {
     const msg = await res.text()
     throw new Error(msg || "Error al generar la OC")
+  }
+  return res.json()
+}
+
+export async function generatePurchaseOrderFromLines(
+  payload: GeneratePurchaseOrderFromLinesPayload,
+): Promise<{ oc_id: number }> {
+  const res = await fetch(`${API_URL}/purchase-orders/generate-from-lines`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const msg = await res.text()
+    throw new Error(msg || "Error al generar la OC")
+  }
+  return res.json()
+}
+
+export async function patchPurchaseOrderStatus(
+  ocId: number,
+  status: string,
+  companyId?: number,
+): Promise<{ oc_id: number; status: string }> {
+  const cid = resolvePurchaseCompanyId(companyId ?? null)
+  const qs = new URLSearchParams()
+  qs.set("company_id", String(cid))
+  const res = await fetch(`${API_URL}/purchase-orders/${ocId}?${qs.toString()}`, {
+    method: "PATCH",
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ status }),
+  })
+  if (!res.ok) {
+    const msg = await res.text()
+    throw new Error(msg || "Error al actualizar estado")
   }
   return res.json()
 }

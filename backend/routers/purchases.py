@@ -2,7 +2,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.db import get_connection
@@ -30,60 +30,101 @@ def _serialize_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return {k: _jsonable_value(v) for k, v in row.items()}
 
 
+@router.get("/purchase-offices")
+def list_purchase_offices(company_id: int) -> List[Dict[str, Any]]:
+    """Sucursales (office_id) presentes en el análisis de compra para la empresa."""
+    sql = """
+        SELECT DISTINCT office_id
+        FROM bsale.vw_purchase_analysis
+        WHERE company_id = %s
+        ORDER BY office_id
+    """
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(sql, (company_id,))
+        rows = _rows_to_dicts(cur)
+        cur.close()
+        return [
+            {
+                "office_id": int(r["office_id"]),
+                "label": f"Sucursal {int(r['office_id'])}",
+            }
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
 @router.get("/purchase-analysis")
 def purchase_analysis(
     company_id: int,
     office_id: Optional[int] = None,
+    supplier_id: Optional[int] = Query(
+        None,
+        description="Filtrar filas cuyo barcode en products_master tenga este proveedor",
+    ),
     status: Optional[str] = Query(
         None,
         description="Filtrar por status: COMPRAR, REVISAR, NO_COMPRAR",
     ),
-    limit: int = Query(5000, ge=1, le=20000),
+    limit: int = Query(8000, ge=1, le=20000),
 ) -> List[Dict[str, Any]]:
     """
-    Filas de bsale.vw_purchase_analysis para la empresa (y opcionalmente sucursal).
+    Filas de bsale.vw_purchase_analysis para la empresa (y opcionalmente sucursal y proveedor).
     """
-    sql = """
+    join_pm = ""
+    if supplier_id is not None:
+        join_pm = """
+        INNER JOIN bsale.products_master pm
+            ON pm.barcode = pa.barcode
+           AND pm.supplier_id = %s
+        """
+    sql = f"""
         SELECT
-            company_id,
-            office_id,
-            variant_id,
-            product_type_name,
-            product_name,
-            variant_name,
-            barcode,
-            ventas_7_dias,
-            ventas_30_dias,
-            promedio_diario,
-            stock_actual,
-            costo_bruto,
-            dias_cobertura,
-            demanda_proyectada,
-            unidades_a_comprar,
-            units_per_box,
-            units_per_box_eff,
-            cajas_sugeridas,
-            status,
-            costo_total_compra
-        FROM bsale.vw_purchase_analysis
-        WHERE company_id = %s
+            pa.company_id,
+            pa.office_id,
+            pa.variant_id,
+            pa.product_type_name,
+            pa.product_name,
+            pa.variant_name,
+            pa.barcode,
+            pa.ventas_7_dias,
+            pa.ventas_30_dias,
+            pa.promedio_diario,
+            pa.stock_actual,
+            pa.costo_bruto,
+            pa.dias_cobertura,
+            pa.demanda_proyectada,
+            pa.unidades_a_comprar,
+            pa.units_per_box,
+            pa.units_per_box_eff,
+            pa.cajas_sugeridas,
+            pa.status,
+            pa.costo_total_compra
+        FROM bsale.vw_purchase_analysis pa
+        {join_pm}
+        WHERE pa.company_id = %s
     """
-    params: list[Any] = [company_id]
+    params: list[Any] = []
+    if supplier_id is not None:
+        params.append(supplier_id)
+    params.append(company_id)
     if office_id is not None:
-        sql += " AND office_id = %s"
+        sql += " AND pa.office_id = %s"
         params.append(office_id)
     if status is not None and status.strip():
-        sql += " AND status = %s"
+        sql += " AND pa.status = %s"
         params.append(status.strip().upper())
     sql += """
         ORDER BY
-            CASE status
+            CASE pa.status
                 WHEN 'COMPRAR' THEN 1
                 WHEN 'REVISAR' THEN 2
                 ELSE 3
             END,
-            costo_total_compra DESC NULLS LAST,
-            variant_id
+            pa.costo_total_compra DESC NULLS LAST,
+            pa.variant_id
         LIMIT %s
     """
     params.append(limit)
@@ -302,6 +343,7 @@ def get_purchase_order(
         SELECT
             o.oc_id,
             o.company_id,
+            c.name AS company_name,
             o.office_id,
             o.supplier_id,
             s.name AS supplier_name,
@@ -315,6 +357,7 @@ def get_purchase_order(
             o.created_at
         FROM bsale.oc_document o
         LEFT JOIN bsale.suppliers s ON s.id = o.supplier_id
+        LEFT JOIN bsale.companies c ON c.company_id = o.company_id
         WHERE o.oc_id = %s AND o.company_id = %s
     """
     details_sql = """
@@ -406,4 +449,191 @@ def generate_purchase_order(body: GeneratePurchaseOrderBody) -> Dict[str, Any]:
         conn.rollback()
         raise HTTPException(status_code=400, detail=str(e)) from e
     finally:
+        conn.close()
+
+
+class PurchaseLineIn(BaseModel):
+    variant_id: Optional[int] = None
+    product_type_name: Optional[str] = None
+    product_name: Optional[str] = None
+    variant_name: Optional[str] = None
+    barcode: Optional[str] = None
+    cantidad: float = Field(..., gt=0)
+    units_per_box: Optional[int] = None
+    costo_unitario: float = Field(..., ge=0)
+
+
+class GeneratePurchaseOrderFromLinesBody(BaseModel):
+    company_id: int
+    office_id: int
+    supplier_id: int
+    fecha_entrega: Optional[date] = None
+    forma_pago: Optional[str] = None
+    responsable: Optional[str] = None
+    observacion: Optional[str] = None
+    lines: List[PurchaseLineIn] = Field(..., min_length=1)
+
+
+_OC_STATUSES = frozenset(
+    {"BORRADOR", "GENERADA", "ENVIADA", "RECIBIDA", "ANULADA"},
+)
+
+
+def _units_per_box_eff(units: Optional[int]) -> int:
+    if units is None or units <= 0:
+        return 1
+    return int(units)
+
+
+@router.post("/purchase-orders/generate-from-lines")
+def generate_purchase_order_from_lines(
+    body: GeneratePurchaseOrderFromLinesBody,
+) -> Dict[str, Any]:
+    """
+    Crea OC e inserta líneas explícitas (cantidades editadas, manuales sin variant_id).
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            INSERT INTO bsale.oc_document (
+                company_id,
+                office_id,
+                supplier_id,
+                fecha_emision,
+                fecha_entrega,
+                forma_pago,
+                responsable,
+                observacion,
+                status,
+                total_oc
+            )
+            VALUES (%s, %s, %s, CURRENT_TIMESTAMP, %s, %s, %s, %s, 'GENERADA', 0)
+            RETURNING oc_id
+            """,
+            (
+                body.company_id,
+                body.office_id,
+                body.supplier_id,
+                body.fecha_entrega,
+                body.forma_pago,
+                body.responsable,
+                body.observacion,
+            ),
+        )
+        oc_row = cur.fetchone()
+        if not oc_row:
+            raise HTTPException(status_code=500, detail="No se pudo crear la OC")
+        oc_id = int(oc_row[0])
+
+        insert_detail = """
+            INSERT INTO bsale.oc_details (
+                oc_id,
+                company_id,
+                office_id,
+                variant_id,
+                product_type_name,
+                product_name,
+                variant_name,
+                barcode,
+                cantidad,
+                units_per_box,
+                cajas,
+                costo_unitario,
+                costo_total
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
+        for ln in body.lines:
+            upe = _units_per_box_eff(ln.units_per_box)
+            cajas = float(ln.cantidad) / float(upe)
+            costo_total = float(ln.cantidad) * float(ln.costo_unitario)
+            cur.execute(
+                insert_detail,
+                (
+                    oc_id,
+                    body.company_id,
+                    body.office_id,
+                    ln.variant_id,
+                    ln.product_type_name,
+                    ln.product_name,
+                    ln.variant_name,
+                    ln.barcode,
+                    ln.cantidad,
+                    ln.units_per_box,
+                    cajas,
+                    ln.costo_unitario,
+                    costo_total,
+                ),
+            )
+
+        cur.execute(
+            """
+            SELECT COALESCE(SUM(costo_total), 0)
+            FROM bsale.oc_details
+            WHERE oc_id = %s
+            """,
+            (oc_id,),
+        )
+        total_row = cur.fetchone()
+        total_oc = float(total_row[0]) if total_row and total_row[0] is not None else 0.0
+        cur.execute(
+            "UPDATE bsale.oc_document SET total_oc = %s WHERE oc_id = %s",
+            (total_oc, oc_id),
+        )
+        conn.commit()
+        return {"oc_id": oc_id}
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    finally:
+        cur.close()
+        conn.close()
+
+
+class PatchPurchaseOrderBody(BaseModel):
+    status: str
+
+
+@router.patch("/purchase-orders/{oc_id}")
+def patch_purchase_order(
+    oc_id: int,
+    company_id: int = Query(...),
+    body: PatchPurchaseOrderBody = Body(...),
+):
+    st = (body.status or "").strip().upper()
+    if st not in _OC_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"status debe ser uno de: {', '.join(sorted(_OC_STATUSES))}",
+        )
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            UPDATE bsale.oc_document
+            SET status = %s
+            WHERE oc_id = %s AND company_id = %s
+            RETURNING oc_id, status
+            """,
+            (st, oc_id, company_id),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="OC no encontrada")
+        conn.commit()
+        return {"oc_id": int(row[0]), "status": row[1]}
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    finally:
+        cur.close()
         conn.close()

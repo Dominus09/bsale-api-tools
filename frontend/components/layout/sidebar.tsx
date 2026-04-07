@@ -7,7 +7,6 @@ import {
   LayoutDashboard,
   TrendingUp,
   AlertTriangle,
-  Store,
   Package,
   ShoppingCart,
   Warehouse,
@@ -22,8 +21,8 @@ import {
   Printer,
   BarChart3,
   Building2,
-  Boxes,
-  Brain,
+  FileSpreadsheet,
+  ClipboardList,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -59,9 +58,8 @@ const navSections: { title: string; items: NavItem[] }[] = [
   {
     title: "Compras",
     items: [
-      { href: "/compras/inteligencia", label: "Compras inteligentes", icon: Brain },
-      { href: "/compras/proveedores", label: "Proveedores", icon: Store },
-      { href: "/compras/productos", label: "Productos", icon: Boxes },
+      { href: "/compras/generar-oc", label: "Generar OC", icon: FileSpreadsheet },
+      { href: "/compras/registros-oc", label: "Registros OC", icon: ClipboardList },
     ],
   },
   {
