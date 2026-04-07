@@ -22,10 +22,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { ComprasDataStatusCard } from "@/components/compras/compras-data-status"
 import {
   createSupplier,
   getProductsMasterWithoutSupplier,
   getProductsMasterWithoutSupplierCount,
+  getStoredCompanyId,
   getSuppliers,
   PRODUCTS_MASTER_PAGE_SIZE,
   type ProductMasterRow,
@@ -128,6 +130,11 @@ export default function Page() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null)
   const [form, setForm] = useState<FormState>(emptyForm)
+  const [dataStatusCompanyId, setDataStatusCompanyId] = useState<number | null>(null)
+
+  useEffect(() => {
+    setDataStatusCompanyId(getStoredCompanyId())
+  }, [])
 
   const filteredSuppliers = useMemo(() => {
     const term = searchTerm.trim().toLowerCase()
@@ -422,6 +429,8 @@ export default function Page() {
           </Dialog>
         </div>
       </div>
+
+      <ComprasDataStatusCard companyId={dataStatusCompanyId} />
 
       {error ? (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">

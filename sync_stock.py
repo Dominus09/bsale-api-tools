@@ -92,15 +92,16 @@ def upsert(rows):
     execute_batch(cur, """
 
         INSERT INTO bsale.stocks
-        (company_id, variant_id, office_id, quantity_available, quantity_reserved)
+        (company_id, variant_id, office_id, quantity_available, quantity_reserved, updated_at)
 
-        VALUES (%s,%s,%s,%s,%s)
+        VALUES (%s,%s,%s,%s,%s, NOW())
 
         ON CONFLICT (company_id, variant_id, office_id)
         DO UPDATE SET
 
         quantity_available = EXCLUDED.quantity_available,
-        quantity_reserved = EXCLUDED.quantity_reserved
+        quantity_reserved = EXCLUDED.quantity_reserved,
+        updated_at = NOW()
 
     """, rows)
 

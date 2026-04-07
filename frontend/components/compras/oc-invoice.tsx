@@ -35,6 +35,20 @@ export function OcInvoicePrint({ header, details }: OcInvoiceProps) {
             <p className="mt-1 text-sm text-slate-600">
               {header.company_name ?? `Empresa ${header.company_id}`}
             </p>
+            <p className="mt-0.5 text-sm text-slate-600">
+              <span className="text-slate-500">Sucursal:</span>{" "}
+              {header.office_name?.trim() ? (
+                <>
+                  <span className="font-medium text-slate-800">{header.office_name.trim()}</span>
+                  <span className="text-slate-400"> (id {header.office_id})</span>
+                </>
+              ) : (
+                <span className="font-medium text-slate-800">Sucursal {header.office_id}</span>
+              )}
+              {header.office_state != null && header.office_state !== 1 ? (
+                <span className="ml-1 font-medium text-amber-800">· Inactiva en Bsale</span>
+              ) : null}
+            </p>
           </div>
           <div className="text-right text-sm text-slate-600">
             <p>
@@ -42,9 +56,6 @@ export function OcInvoicePrint({ header, details }: OcInvoiceProps) {
             </p>
             <p>
               <span className="text-slate-500">Entrega:</span> {fmtDate(header.fecha_entrega)}
-            </p>
-            <p>
-              <span className="text-slate-500">Sucursal:</span> {header.office_id}
             </p>
           </div>
         </div>

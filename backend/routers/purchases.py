@@ -1,13 +1,17 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Body, HTTPException, Query
 from pydantic import BaseModel, Field
+from psycopg2 import errors as pg_errors
 
 from backend.db import get_connection
 
 router = APIRouter(tags=["purchases"])
+
+TZ_CL = ZoneInfo("America/Santiago")
 
 
 def _rows_to_dicts(cur) -> List[Dict[str, Any]]:
@@ -30,14 +34,150 @@ def _serialize_row(row: Dict[str, Any]) -> Dict[str, Any]:
     return {k: _jsonable_value(v) for k, v in row.items()}
 
 
+def _parse_office_state(raw: Any) -> Optional[int]:
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_santiago(dt: Any) -> Optional[datetime]:
+    if dt is None or not isinstance(dt, datetime):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(TZ_CL)
+
+
+@router.get("/purchase-data-freshness")
+def purchase_data_freshness(company_id: int) -> Dict[str, Any]:
+    """
+    Indicadores de frescura de datos para compras (informativo).
+    Stock: MAX(updated_at) en bsale.stocks. Ventas: MAX(emission_date) en bsale.documents.
+    Umbrales de stock y reglas de ventas usan hora Chile (America/Santiago).
+    """
+    sql_stock = """
+        SELECT MAX(updated_at) AS last_stock_update
+        FROM bsale.stocks
+        WHERE company_id = %s
+    """
+    sql_sales = """
+        SELECT MAX(emission_date) AS last_sales_update
+        FROM bsale.documents
+        WHERE company_id = %s
+    """
+    last_stock_raw: Any = None
+    last_sales_raw: Any = None
+    stock_column_missing = False
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        try:
+            cur.execute(sql_stock, (company_id,))
+            row_s = cur.fetchone()
+            last_stock_raw = row_s[0] if row_s else None
+        except pg_errors.UndefinedColumn:
+            conn.rollback()
+            stock_column_missing = True
+            last_stock_raw = None
+        cur.execute(sql_sales, (company_id,))
+        row_d = cur.fetchone()
+        last_sales_raw = row_d[0] if row_d else None
+        cur.close()
+    finally:
+        conn.close()
+
+    now_cl = datetime.now(TZ_CL)
+    last_stock_iso = last_stock_raw.isoformat() if isinstance(last_stock_raw, datetime) else None
+    last_sales_iso = last_sales_raw.isoformat() if isinstance(last_sales_raw, datetime) else None
+
+    # --- Stock (solo antigüedad del último sync) ---
+    stock_block: Dict[str, Any]
+    if stock_column_missing:
+        stock_block = {
+            "status": "DESACTUALIZADO",
+            "minutes_ago": None,
+            "message": "Falta columna updated_at en stocks. Ejecuta backend/sql/stocks_add_updated_at.sql y vuelve a correr sync de stock.",
+        }
+    elif last_stock_raw is None or not isinstance(last_stock_raw, datetime):
+        stock_block = {
+            "status": "DESACTUALIZADO",
+            "minutes_ago": None,
+            "message": "Sin registros de stock para esta empresa o nunca sincronizado.",
+        }
+    else:
+        ls = _to_santiago(last_stock_raw)
+        assert ls is not None
+        delta_min = int((now_cl - ls).total_seconds() // 60)
+        if delta_min < 30:
+            st = "OK"
+        elif delta_min < 60:
+            st = "REVISAR"
+        else:
+            st = "DESACTUALIZADO"
+        stock_block = {
+            "status": st,
+            "minutes_ago": delta_min,
+            "message": f"actualizado hace {delta_min} minutos",
+        }
+
+    # --- Ventas (corte 05:00 Chile; no mezclar con lógica de stock) ---
+    cutoff = now_cl.replace(hour=5, minute=0, second=0, microsecond=0)
+    sales_block: Dict[str, Any]
+    if now_cl < cutoff:
+        sales_block = {
+            "status": "ESPERANDO ACTUALIZACIÓN",
+            "message": "Actualización diaria de ventas después de las 05:00 (hora Chile).",
+        }
+    elif last_sales_raw is None or not isinstance(last_sales_raw, datetime):
+        sales_block = {
+            "status": "ERROR / NO ACTUALIZADO",
+            "message": "No hay documentos con fecha de emisión en la base.",
+        }
+    else:
+        le = _to_santiago(last_sales_raw)
+        assert le is not None
+        if le.date() == now_cl.date():
+            sales_block = {
+                "status": "OK",
+                "message": f"actualizado hoy a las {le.strftime('%H:%M')}",
+            }
+        else:
+            sales_block = {
+                "status": "ERROR / NO ACTUALIZADO",
+                "message": "Las ventas no reflejan el día actual.",
+            }
+
+    return {
+        "company_id": company_id,
+        "last_stock_update": last_stock_iso,
+        "last_sales_update": last_sales_iso,
+        "stock": stock_block,
+        "sales": sales_block,
+    }
+
+
 @router.get("/purchase-offices")
 def list_purchase_offices(company_id: int) -> List[Dict[str, Any]]:
-    """Sucursales (office_id) presentes en el análisis de compra para la empresa."""
+    """
+    Sucursales presentes en vw_purchase_analysis con nombre y state desde bsale.offices
+    (sync Bsale en sync_catalog.py). Bsale: state 1 = activa, 0 = inactiva.
+    Sin fila en offices: office_state e is_active null.
+    """
     sql = """
-        SELECT DISTINCT office_id
-        FROM bsale.vw_purchase_analysis
-        WHERE company_id = %s
-        ORDER BY office_id
+        SELECT DISTINCT
+            pa.office_id,
+            COALESCE(NULLIF(TRIM(ofc.name), ''), '') AS office_name,
+            ofc.state AS office_state
+        FROM bsale.vw_purchase_analysis pa
+        LEFT JOIN bsale.offices ofc
+            ON ofc.company_id = pa.company_id
+           AND ofc.bsale_id = pa.office_id
+        WHERE pa.company_id = %s
+        ORDER BY pa.office_id
     """
     conn = get_connection()
     try:
@@ -45,13 +185,25 @@ def list_purchase_offices(company_id: int) -> List[Dict[str, Any]]:
         cur.execute(sql, (company_id,))
         rows = _rows_to_dicts(cur)
         cur.close()
-        return [
-            {
-                "office_id": int(r["office_id"]),
-                "label": f"Sucursal {int(r['office_id'])}",
-            }
-            for r in rows
-        ]
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            oid = int(r["office_id"])
+            name = (r.get("office_name") or "").strip()
+            st = _parse_office_state(r.get("office_state"))
+            is_active = None if st is None else (st == 1)
+            label = name if name else f"Sucursal {oid}"
+            if st is not None and st != 1:
+                label = f"{label} (inactiva)"
+            out.append(
+                {
+                    "office_id": oid,
+                    "office_name": name or None,
+                    "office_state": st,
+                    "is_active": is_active,
+                    "label": label,
+                }
+            )
+        return out
     finally:
         conn.close()
 
@@ -302,6 +454,8 @@ def list_purchase_orders(
             o.oc_id,
             o.company_id,
             o.office_id,
+            NULLIF(TRIM(ofc.name), '') AS office_name,
+            ofc.state AS office_state,
             o.supplier_id,
             s.name AS supplier_name,
             o.fecha_emision,
@@ -314,6 +468,9 @@ def list_purchase_orders(
             o.created_at
         FROM bsale.oc_document o
         LEFT JOIN bsale.suppliers s ON s.id = o.supplier_id
+        LEFT JOIN bsale.offices ofc
+            ON ofc.company_id = o.company_id
+           AND ofc.bsale_id = o.office_id
         WHERE o.company_id = %s
     """
     params: list[Any] = [company_id]
@@ -345,6 +502,8 @@ def get_purchase_order(
             o.company_id,
             c.name AS company_name,
             o.office_id,
+            NULLIF(TRIM(ofc.name), '') AS office_name,
+            ofc.state AS office_state,
             o.supplier_id,
             s.name AS supplier_name,
             o.fecha_emision,
@@ -358,6 +517,9 @@ def get_purchase_order(
         FROM bsale.oc_document o
         LEFT JOIN bsale.suppliers s ON s.id = o.supplier_id
         LEFT JOIN bsale.companies c ON c.company_id = o.company_id
+        LEFT JOIN bsale.offices ofc
+            ON ofc.company_id = o.company_id
+           AND ofc.bsale_id = o.office_id
         WHERE o.oc_id = %s AND o.company_id = %s
     """
     details_sql = """

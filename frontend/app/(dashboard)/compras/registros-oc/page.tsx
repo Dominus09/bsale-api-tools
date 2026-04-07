@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react"
 import { Eye, Loader2, Printer } from "lucide-react"
 
+import { ComprasDataStatusCard } from "@/components/compras/compras-data-status"
 import { OcInvoicePrint, triggerPrintInvoice } from "@/components/compras/oc-invoice"
 import { Button } from "@/components/ui/button"
 import {
@@ -30,6 +31,7 @@ import {
 } from "@/components/ui/table"
 import {
   type Company,
+  type PurchaseOfficeRef,
   type PurchaseOrderDetailRow,
   type PurchaseOrderHeader,
   getCompanies,
@@ -56,7 +58,7 @@ function fmtMoney(n: number | string | null | undefined): string {
 
 export default function RegistrosOcPage() {
   const [companies, setCompanies] = useState<Company[]>([])
-  const [offices, setOffices] = useState<{ office_id: number; label: string }[]>([])
+  const [offices, setOffices] = useState<PurchaseOfficeRef[]>([])
   const [companyId, setCompanyId] = useState<string>(NONE)
   const [officeId, setOfficeId] = useState<string>(NONE)
 
@@ -177,6 +179,8 @@ export default function RegistrosOcPage() {
         <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Registros de órdenes de compra</h1>
         <p className="text-sm text-slate-500">Consulta, imprime y actualiza el estado de cada OC.</p>
       </div>
+
+      <ComprasDataStatusCard companyId={Number.isFinite(cid) ? cid : null} />
 
       {error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>

@@ -25,9 +25,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { ComprasDataStatusCard } from "@/components/compras/compras-data-status"
 import {
   getProductsMaster,
   getProductsMasterUnassignedCount,
+  getStoredCompanyId,
   getSuppliers,
   patchProductMaster,
   PRODUCTS_MASTER_PAGE_SIZE,
@@ -67,6 +69,7 @@ export default function Page() {
 
   const [saveSuccessBarcodes, setSaveSuccessBarcodes] = useState<Set<string>>(() => new Set())
   const saveFlashTimeoutsRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  const [dataStatusCompanyId, setDataStatusCompanyId] = useState<number | null>(null)
 
   const clearSaveSuccessFlash = useCallback((barcode: string) => {
     const id = saveFlashTimeoutsRef.current.get(barcode)
@@ -213,6 +216,10 @@ export default function Page() {
     }
   }, [])
 
+  useEffect(() => {
+    setDataStatusCompanyId(getStoredCompanyId())
+  }, [])
+
   const setPending = useCallback((barcode: string, on: boolean) => {
     setPendingBarcodes((prev) => {
       const next = new Set(prev)
@@ -319,6 +326,8 @@ export default function Page() {
           Carga masiva
         </Button>
       </div>
+
+      <ComprasDataStatusCard companyId={dataStatusCompanyId} />
 
       <Dialog open={bulkDialogOpen} onOpenChange={setBulkDialogOpen}>
         <DialogContent className="max-h-[min(90vh,32rem)] overflow-y-auto sm:max-w-lg">

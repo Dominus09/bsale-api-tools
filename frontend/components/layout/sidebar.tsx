@@ -21,8 +21,10 @@ import {
   Printer,
   BarChart3,
   Building2,
+  Boxes,
   FileSpreadsheet,
   ScrollText,
+  Store,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -60,6 +62,8 @@ const navSections: { title: string; items: NavItem[] }[] = [
     items: [
       { href: "/compras/generar-oc", label: "Generar OC", icon: FileSpreadsheet },
       { href: "/compras/registros-oc", label: "Registros OC", icon: ScrollText },
+      { href: "/compras/proveedores", label: "Proveedores", icon: Store },
+      { href: "/compras/productos", label: "Productos", icon: Boxes },
     ],
   },
   {

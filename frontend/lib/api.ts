@@ -187,6 +187,10 @@ export interface PurchaseOrderHeader {
   company_id: number
   company_name?: string | null
   office_id: number
+  /** Nombre desde bsale.offices (sync Bsale); null si no hay fila */
+  office_name?: string | null
+  /** Bsale offices.state: 1 activa, 0 inactiva; null si no hay fila en offices */
+  office_state?: number | null
   supplier_id: number
   supplier_name: string | null
   fecha_emision: string | null
@@ -199,8 +203,34 @@ export interface PurchaseOrderHeader {
   created_at?: string | null
 }
 
+export type PurchaseDataFreshnessStockStatus = "OK" | "REVISAR" | "DESACTUALIZADO"
+
+export type PurchaseDataFreshnessSalesStatus = "OK" | "ESPERANDO ACTUALIZACIÓN" | "ERROR / NO ACTUALIZADO"
+
+export interface PurchaseDataFreshness {
+  company_id: number
+  last_stock_update: string | null
+  last_sales_update: string | null
+  stock: {
+    status: PurchaseDataFreshnessStockStatus
+    minutes_ago: number | null
+    message: string
+  }
+  sales: {
+    status: PurchaseDataFreshnessSalesStatus
+    message: string
+  }
+}
+
 export interface PurchaseOfficeRef {
   office_id: number
+  /** Nombre desde bsale.offices (sync Bsale); null si no hay fila */
+  office_name: string | null
+  /** Bsale offices.state; null si no hay fila sincronizada */
+  office_state: number | null
+  /** true/false según state === 1; null si office_state es null */
+  is_active: boolean | null
+  /** Texto para mostrar en UI */
   label: string
 }
 
@@ -333,10 +363,17 @@ function getAuthHeaders(): HeadersInit {
   }
 }
 
-function getCompanyId(): number | null {
+/** Empresa seleccionada en localStorage (login / contexto dashboard). */
+export function getStoredCompanyId(): number | null {
   if (typeof window === "undefined") return null
-  const companyId = localStorage.getItem("company_id")
-  return companyId ? parseInt(companyId, 10) : null
+  const raw = localStorage.getItem("company_id")
+  if (!raw) return null
+  const n = parseInt(raw, 10)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+function getCompanyId(): number | null {
+  return getStoredCompanyId()
 }
 
 // Helper function to check if error is a network error
@@ -598,6 +635,18 @@ function resolvePurchaseCompanyId(override?: number | null): number {
   return companyId
 }
 
+export async function getPurchaseDataFreshness(companyId: number): Promise<PurchaseDataFreshness> {
+  const qs = new URLSearchParams()
+  qs.set("company_id", String(companyId))
+  const res = await fetch(`${API_URL}/purchase-data-freshness?${qs.toString()}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    throw new Error("No se pudo cargar el estado de los datos")
+  }
+  return res.json() as Promise<PurchaseDataFreshness>
+}
+
 export async function getPurchaseOffices(companyId: number): Promise<PurchaseOfficeRef[]> {
   const qs = new URLSearchParams()
   qs.set("company_id", String(companyId))
@@ -608,7 +657,32 @@ export async function getPurchaseOffices(companyId: number): Promise<PurchaseOff
     throw new Error("Error al cargar sucursales")
   }
   const data = await res.json()
-  return Array.isArray(data) ? data : []
+  const list = Array.isArray(data) ? data : []
+  return list.map(
+    (o: {
+      office_id?: number
+      office_name?: string | null
+      office_state?: number | null
+      is_active?: boolean | null
+      label?: string
+    }) => {
+      const id = Number(o.office_id)
+      const rawSt = o.office_state
+      const office_state =
+        rawSt == null || !Number.isFinite(Number(rawSt)) ? null : Number(rawSt)
+      const is_active =
+        office_state === null ? null : office_state === 1
+      const label =
+        typeof o.label === "string" && o.label.trim() ? o.label.trim() : `Sucursal ${id}`
+      return {
+        office_id: id,
+        office_name: o.office_name ?? null,
+        office_state,
+        is_active,
+        label,
+      }
+    },
+  )
 }
 
 export async function getPurchaseAnalysis(params: {

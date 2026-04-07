@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { FilePlus, Loader2, Printer } from "lucide-react"
 
+import { ComprasDataStatusCard } from "@/components/compras/compras-data-status"
 import { OcInvoicePrint, triggerPrintInvoice } from "@/components/compras/oc-invoice"
 import { Button } from "@/components/ui/button"
 import {
@@ -32,6 +33,7 @@ import {
 import {
   type Company,
   type PurchaseAnalysisRow,
+  type PurchaseOfficeRef,
   type PurchaseOrderDetailRow,
   type PurchaseOrderHeader,
   generatePurchaseOrderFromLines,
@@ -45,6 +47,7 @@ import {
 import { cn } from "@/lib/utils"
 
 const NONE = "__none__"
+const TABLE_COLS = 13
 
 function rowKey(r: PurchaseAnalysisRow): string {
   return `a-${r.company_id}-${r.office_id}-${r.variant_id}`
@@ -56,6 +59,33 @@ function fmtNum(n: number | null | undefined, d = 0): string {
     minimumFractionDigits: d,
     maximumFractionDigits: d,
   })
+}
+
+/** Unidades por caja efectivas a partir de la fila del análisis */
+function initialUnitsPerBox(r: PurchaseAnalysisRow): number {
+  const raw = r.units_per_box != null && Number(r.units_per_box) > 0 ? Number(r.units_per_box) : null
+  const eff =
+    r.units_per_box_eff != null && Number(r.units_per_box_eff) > 0 ? Number(r.units_per_box_eff) : null
+  return raw ?? eff ?? 1
+}
+
+function effectiveUpb(stored: number | undefined): number {
+  return stored != null && Number.isFinite(stored) && stored > 0 ? stored : 1
+}
+
+type ManualDraft = {
+  key: string
+  product_type_name: string
+  product_name: string
+  variant_name: string
+  barcode: string
+  costo_bruto: number
+  units_per_box: number | null
+  cantidad: number
+}
+
+function manualEffectiveUpb(m: ManualDraft): number {
+  return m.units_per_box != null && m.units_per_box > 0 ? m.units_per_box : 1
 }
 
 function statusRowClass(status: string): string {
@@ -71,20 +101,9 @@ function statusRowClass(status: string): string {
   }
 }
 
-type ManualDraft = {
-  key: string
-  product_type_name: string
-  product_name: string
-  variant_name: string
-  barcode: string
-  costo_bruto: number
-  units_per_box: number | null
-  cantidad: number
-}
-
 export default function GenerarOcPage() {
   const [companies, setCompanies] = useState<Company[]>([])
-  const [offices, setOffices] = useState<{ office_id: number; label: string }[]>([])
+  const [offices, setOffices] = useState<PurchaseOfficeRef[]>([])
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
 
   const [companyId, setCompanyId] = useState<string>(NONE)
@@ -96,6 +115,8 @@ export default function GenerarOcPage() {
   const [error, setError] = useState("")
 
   const [qtyByKey, setQtyByKey] = useState<Record<string, number>>({})
+  const [costoByKey, setCostoByKey] = useState<Record<string, number>>({})
+  const [upbByKey, setUpbByKey] = useState<Record<string, number>>({})
   const [excluded, setExcluded] = useState<Set<string>>(() => new Set())
   const [manualRows, setManualRows] = useState<ManualDraft[]>([])
 
@@ -151,6 +172,8 @@ export default function GenerarOcPage() {
     setOfficeId(NONE)
     setAnalysis([])
     setQtyByKey({})
+    setCostoByKey({})
+    setUpbByKey({})
     setExcluded(new Set())
     setManualRows([])
   }, [cid])
@@ -167,10 +190,17 @@ export default function GenerarOcPage() {
       })
       setAnalysis(rows)
       const q: Record<string, number> = {}
+      const c: Record<string, number> = {}
+      const u: Record<string, number> = {}
       for (const r of rows) {
-        q[rowKey(r)] = Number(r.unidades_a_comprar) || 0
+        const k = rowKey(r)
+        q[k] = Number(r.unidades_a_comprar) || 0
+        c[k] = Number(r.costo_bruto) || 0
+        u[k] = initialUnitsPerBox(r)
       }
       setQtyByKey(q)
+      setCostoByKey(c)
+      setUpbByKey(u)
       setExcluded(new Set())
     } catch (e) {
       setAnalysis([])
@@ -185,17 +215,76 @@ export default function GenerarOcPage() {
     else {
       setAnalysis([])
       setQtyByKey({})
+      setCostoByKey({})
+      setUpbByKey({})
       setExcluded(new Set())
       setManualRows([])
     }
   }, [filtersReady, loadAnalysis])
 
-  const updateQty = (key: string, raw: string) => {
+  const updateUnidadesAnalysis = (key: string, raw: string, ex: boolean) => {
+    if (ex) return
     const n = parseFloat(raw.replace(",", "."))
     setQtyByKey((prev) => ({
       ...prev,
       [key]: Number.isFinite(n) && n >= 0 ? n : 0,
     }))
+  }
+
+  const updateCajasAnalysis = (key: string, raw: string, ex: boolean) => {
+    if (ex) return
+    const cajas = parseFloat(raw.replace(",", "."))
+    if (!Number.isFinite(cajas) || cajas < 0) return
+    const upb = effectiveUpb(upbByKey[key])
+    setQtyByKey((prev) => ({
+      ...prev,
+      [key]: cajas * upb,
+    }))
+  }
+
+  const updateCostoAnalysis = (key: string, raw: string) => {
+    const n = parseFloat(raw.replace(",", "."))
+    setCostoByKey((prev) => ({
+      ...prev,
+      [key]: Number.isFinite(n) && n >= 0 ? n : 0,
+    }))
+  }
+
+  const updateUpbAnalysis = (key: string, raw: string) => {
+    let n = parseInt(raw.replace(/\D/g, ""), 10)
+    if (!Number.isFinite(n) || n <= 0) n = 1
+    setUpbByKey((prev) => ({ ...prev, [key]: n }))
+  }
+
+  const patchManual = (key: string, fn: (m: ManualDraft) => ManualDraft) => {
+    setManualRows((rows) => rows.map((r) => (r.key === key ? fn(r) : r)))
+  }
+
+  const updateManualUnidades = (key: string, raw: string) => {
+    const n = parseFloat(raw.replace(",", "."))
+    if (!Number.isFinite(n) || n < 0) return
+    patchManual(key, (m) => ({ ...m, cantidad: n }))
+  }
+
+  const updateManualCajas = (key: string, raw: string) => {
+    const cajas = parseFloat(raw.replace(",", "."))
+    if (!Number.isFinite(cajas) || cajas < 0) return
+    patchManual(key, (m) => {
+      const upb = manualEffectiveUpb(m)
+      return { ...m, cantidad: cajas * upb }
+    })
+  }
+
+  const updateManualCosto = (key: string, raw: string) => {
+    const n = parseFloat(raw.replace(",", "."))
+    if (!Number.isFinite(n) || n < 0) return
+    patchManual(key, (m) => ({ ...m, costo_bruto: n }))
+  }
+
+  const updateManualUpb = (key: string, raw: string) => {
+    let n = parseInt(raw.replace(/\D/g, ""), 10)
+    if (!Number.isFinite(n) || n <= 0) n = 1
+    patchManual(key, (m) => ({ ...m, units_per_box: n }))
   }
 
   const toggleExclude = (key: string) => {
@@ -274,7 +363,7 @@ export default function GenerarOcPage() {
       if (excluded.has(k)) continue
       const qty = qtyByKey[k] ?? 0
       if (qty <= 0) continue
-      const upe = r.units_per_box_eff ?? 1
+      const upb = effectiveUpb(upbByKey[k])
       out.push({
         variant_id: r.variant_id,
         product_type_name: r.product_type_name,
@@ -282,8 +371,8 @@ export default function GenerarOcPage() {
         variant_name: r.variant_name,
         barcode: r.barcode,
         cantidad: qty,
-        units_per_box: r.units_per_box ?? upe,
-        costo_unitario: Number(r.costo_bruto) || 0,
+        units_per_box: upb,
+        costo_unitario: costoByKey[k] ?? 0,
       })
     }
     for (const m of manualRows) {
@@ -294,12 +383,12 @@ export default function GenerarOcPage() {
         variant_name: m.variant_name || null,
         barcode: m.barcode || null,
         cantidad: m.cantidad,
-        units_per_box: m.units_per_box,
+        units_per_box: manualEffectiveUpb(m),
         costo_unitario: m.costo_bruto,
       })
     }
     return out
-  }, [analysis, excluded, qtyByKey, manualRows, filtersReady])
+  }, [analysis, excluded, qtyByKey, costoByKey, upbByKey, manualRows, filtersReady])
 
   const openConfirm = () => {
     if (!filtersReady) {
@@ -311,7 +400,6 @@ export default function GenerarOcPage() {
       return
     }
     setError("")
-    setConfirmForm((f) => ({ ...f }))
     setConfirmOpen(true)
   }
 
@@ -345,20 +433,21 @@ export default function GenerarOcPage() {
   }
 
   return (
-    <div className="mx-auto max-w-[1200px] space-y-8 pb-16">
+    <div className="mx-auto max-w-[1280px] space-y-6 pb-16">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Generar orden de compra</h1>
         <p className="text-sm text-slate-500">
-          Arma la compra con sugerencias por sucursal y proveedor; ajusta cantidades y confirma.
+          Filtros y líneas de compra; la confirmación (fecha, pago, responsable) se hace en el paso final.
         </p>
       </div>
+
+      <ComprasDataStatusCard companyId={Number.isFinite(cid) ? cid : null} />
 
       {error ? (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
       ) : null}
 
       <section className="rounded-xl border border-slate-200/80 bg-white p-5 shadow-sm">
-        <h2 className="mb-4 text-xs font-semibold uppercase tracking-wide text-slate-500">Contexto</h2>
         <div className="grid gap-4 sm:grid-cols-3">
           <div className="space-y-2">
             <Label>Empresa</Label>
@@ -409,29 +498,30 @@ export default function GenerarOcPage() {
             </Select>
           </div>
         </div>
-
-        <div className="mt-6 flex flex-wrap gap-3 border-t border-slate-100 pt-5">
-          <Button type="button" variant="outline" onClick={openAddManual} disabled={!filtersReady}>
-            <FilePlus className="mr-2 size-4" />
-            Agregar producto
-          </Button>
-          <Button type="button" onClick={openConfirm} disabled={!filtersReady || loadingAnalysis}>
-            Generar orden de compra
-          </Button>
-          {loadingAnalysis ? (
-            <span className="inline-flex items-center gap-2 text-sm text-slate-500">
-              <Loader2 className="size-4 animate-spin" />
-              Cargando sugerencias…
-            </span>
-          ) : null}
-        </div>
       </section>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <Button type="button" variant="outline" onClick={openAddManual} disabled={!filtersReady}>
+          <FilePlus className="mr-2 size-4" />
+          Agregar producto
+        </Button>
+        <Button type="button" onClick={openConfirm} disabled={!filtersReady || loadingAnalysis}>
+          Generar orden de compra
+        </Button>
+        {loadingAnalysis ? (
+          <span className="inline-flex items-center gap-2 text-sm text-slate-500">
+            <Loader2 className="size-4 animate-spin" />
+            Cargando sugerencias…
+          </span>
+        ) : null}
+      </div>
 
       <section className="rounded-xl border border-slate-200/80 bg-white shadow-sm">
         <div className="border-b border-slate-100 px-5 py-3">
-          <h2 className="text-sm font-medium text-slate-800">Líneas sugeridas y manuales</h2>
+          <h2 className="text-sm font-medium text-slate-800">Líneas</h2>
           <p className="text-xs text-slate-500">
-            Verde · comprar · Amarillo · revisar · Rojo · no comprar. Puedes excluir filas o editar cantidades.
+            COMPRAR · verde · REVISAR · amarillo · NO_COMPRAR · rojo. Unidades y cajas se sincronizan según unid/caja
+            (mín. 1).
           </p>
         </div>
         <div className="overflow-x-auto p-2">
@@ -444,17 +534,19 @@ export default function GenerarOcPage() {
                 <TableHead>Producto</TableHead>
                 <TableHead>Variante</TableHead>
                 <TableHead className="text-right">Stock</TableHead>
-                <TableHead className="text-right">Venta 7d / 30d</TableHead>
-                <TableHead className="text-right">Unid.</TableHead>
+                <TableHead className="text-right">Venta</TableHead>
+                <TableHead className="text-right">Costo bruto</TableHead>
+                <TableHead className="text-right">Unid/caja</TableHead>
+                <TableHead className="text-right">Unidades</TableHead>
                 <TableHead className="text-right">Cajas</TableHead>
                 <TableHead className="text-right">Total</TableHead>
-                <TableHead className="w-10" />
+                <TableHead className="w-14" />
               </TableRow>
             </TableHeader>
             <TableBody>
               {manualRows.map((m) => {
-                const upe = m.units_per_box && m.units_per_box > 0 ? m.units_per_box : 1
-                const cajas = m.cantidad / upe
+                const upb = manualEffectiveUpb(m)
+                const cajas = m.cantidad / upb
                 const total = m.cantidad * m.costo_bruto
                 return (
                   <TableRow key={m.key} className="border-slate-200 bg-sky-500/10">
@@ -464,16 +556,52 @@ export default function GenerarOcPage() {
                         Manual
                       </span>
                     </TableCell>
-                    <TableCell className="max-w-[120px] truncate">{m.product_type_name || "—"}</TableCell>
-                    <TableCell className="max-w-[160px] font-medium">{m.product_name}</TableCell>
-                    <TableCell className="max-w-[160px] truncate">{m.variant_name || "—"}</TableCell>
+                    <TableCell className="max-w-[100px] truncate">{m.product_type_name || "—"}</TableCell>
+                    <TableCell className="max-w-[140px] font-medium">{m.product_name}</TableCell>
+                    <TableCell className="max-w-[140px] truncate">{m.variant_name || "—"}</TableCell>
                     <TableCell className="text-right">—</TableCell>
                     <TableCell className="text-right">—</TableCell>
-                    <TableCell className="text-right tabular-nums">{fmtNum(m.cantidad, 2)}</TableCell>
-                    <TableCell className="text-right tabular-nums">{fmtNum(cajas, 2)}</TableCell>
+                    <TableCell className="text-right">
+                      <Input
+                        className="h-8 w-[5.5rem] tabular-nums text-right"
+                        inputMode="decimal"
+                        value={String(m.costo_bruto)}
+                        onChange={(e) => updateManualCosto(m.key, e.target.value)}
+                      />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Input
+                        className="h-8 w-14 tabular-nums text-right"
+                        inputMode="numeric"
+                        value={String(upb)}
+                        onChange={(e) => updateManualUpb(m.key, e.target.value)}
+                      />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Input
+                        className="h-8 w-[5.5rem] tabular-nums text-right"
+                        inputMode="decimal"
+                        value={String(m.cantidad)}
+                        onChange={(e) => updateManualUnidades(m.key, e.target.value)}
+                      />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Input
+                        className="h-8 w-[5.5rem] tabular-nums text-right"
+                        inputMode="decimal"
+                        value={Number.isFinite(cajas) ? String(Math.round(cajas * 1e6) / 1e6) : ""}
+                        onChange={(e) => updateManualCajas(m.key, e.target.value)}
+                      />
+                    </TableCell>
                     <TableCell className="text-right tabular-nums font-medium">{fmtNum(total, 0)}</TableCell>
                     <TableCell>
-                      <Button type="button" variant="ghost" size="sm" className="text-red-600" onClick={() => removeManual(m.key)}>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="text-red-600"
+                        onClick={() => removeManual(m.key)}
+                      >
                         Quitar
                       </Button>
                     </TableCell>
@@ -482,7 +610,7 @@ export default function GenerarOcPage() {
               })}
               {analysis.length === 0 && manualRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={11} className="py-12 text-center text-slate-500">
+                  <TableCell colSpan={TABLE_COLS} className="py-12 text-center text-slate-500">
                     {filtersReady
                       ? "No hay filas para este contexto."
                       : "Elige empresa, sucursal y proveedor para ver sugerencias."}
@@ -493,9 +621,9 @@ export default function GenerarOcPage() {
                 const k = rowKey(r)
                 const ex = excluded.has(k)
                 const qty = qtyByKey[k] ?? 0
-                const upe = r.units_per_box_eff && r.units_per_box_eff > 0 ? r.units_per_box_eff : 1
-                const cajas = qty / upe
-                const unit = Number(r.costo_bruto) || 0
+                const upb = effectiveUpb(upbByKey[k])
+                const cajas = qty / upb
+                const unit = costoByKey[k] ?? 0
                 const total = qty * unit
                 return (
                   <TableRow key={k} className={cn("border-slate-200", statusRowClass(r.status), ex && "opacity-40")}>
@@ -520,22 +648,49 @@ export default function GenerarOcPage() {
                         {r.status}
                       </span>
                     </TableCell>
-                    <TableCell className="max-w-[120px] truncate text-slate-600">{r.product_type_name ?? "—"}</TableCell>
-                    <TableCell className="max-w-[160px] font-medium text-slate-900">{r.product_name ?? "—"}</TableCell>
-                    <TableCell className="max-w-[180px] truncate text-slate-600">{r.variant_name ?? "—"}</TableCell>
+                    <TableCell className="max-w-[100px] truncate text-slate-600">{r.product_type_name ?? "—"}</TableCell>
+                    <TableCell className="max-w-[140px] font-medium text-slate-900">{r.product_name ?? "—"}</TableCell>
+                    <TableCell className="max-w-[160px] truncate text-slate-600">{r.variant_name ?? "—"}</TableCell>
                     <TableCell className="text-right tabular-nums">{fmtNum(r.stock_actual, 0)}</TableCell>
                     <TableCell className="text-right tabular-nums text-xs text-slate-600">
                       {fmtNum(r.ventas_7_dias, 0)} / {fmtNum(r.ventas_30_dias, 0)}
                     </TableCell>
                     <TableCell className="text-right">
                       <Input
-                        className="h-8 w-20 tabular-nums text-right"
-                        value={String(qty)}
+                        className="h-8 w-[5.5rem] tabular-nums text-right"
+                        inputMode="decimal"
+                        value={String(unit)}
                         disabled={ex}
-                        onChange={(e) => updateQty(k, e.target.value)}
+                        onChange={(e) => updateCostoAnalysis(k, e.target.value)}
                       />
                     </TableCell>
-                    <TableCell className="text-right tabular-nums text-slate-700">{fmtNum(cajas, 2)}</TableCell>
+                    <TableCell className="text-right">
+                      <Input
+                        className="h-8 w-14 tabular-nums text-right"
+                        inputMode="numeric"
+                        value={String(upb)}
+                        disabled={ex}
+                        onChange={(e) => updateUpbAnalysis(k, e.target.value)}
+                      />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Input
+                        className="h-8 w-[5.5rem] tabular-nums text-right"
+                        inputMode="decimal"
+                        value={String(qty)}
+                        disabled={ex}
+                        onChange={(e) => updateUnidadesAnalysis(k, e.target.value, ex)}
+                      />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Input
+                        className="h-8 w-[5.5rem] tabular-nums text-right"
+                        inputMode="decimal"
+                        value={Number.isFinite(cajas) ? String(Math.round(cajas * 1e6) / 1e6) : ""}
+                        disabled={ex}
+                        onChange={(e) => updateCajasAnalysis(k, e.target.value, ex)}
+                      />
+                    </TableCell>
                     <TableCell className="text-right tabular-nums font-medium text-slate-900">{fmtNum(total, 0)}</TableCell>
                     <TableCell />
                   </TableRow>
