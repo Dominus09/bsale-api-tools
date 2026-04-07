@@ -158,6 +158,106 @@ export interface UpdateSupplierPayload {
   is_active?: boolean
 }
 
+/** Fila de bsale.vw_purchase_analysis (GET /purchase-analysis) */
+export interface PurchaseAnalysisRow {
+  company_id: number
+  office_id: number
+  variant_id: number
+  product_type_name: string | null
+  product_name: string | null
+  variant_name: string | null
+  barcode: string | null
+  ventas_7_dias: number
+  ventas_30_dias: number
+  promedio_diario: number
+  stock_actual: number
+  costo_bruto: number
+  dias_cobertura: number
+  demanda_proyectada: number
+  unidades_a_comprar: number
+  units_per_box: number | null
+  units_per_box_eff: number
+  cajas_sugeridas: number
+  status: string
+  costo_total_compra: number
+}
+
+export interface PurchaseOrderHeader {
+  oc_id: number
+  company_id: number
+  office_id: number
+  supplier_id: number
+  supplier_name: string | null
+  fecha_emision: string | null
+  fecha_entrega: string | null
+  total_oc: number
+  forma_pago: string | null
+  responsable: string | null
+  observacion: string | null
+  status: string
+  created_at?: string | null
+}
+
+export interface PurchaseOrderDetailRow {
+  oc_detail_id: number
+  oc_id: number
+  company_id: number
+  office_id: number
+  variant_id: number | null
+  product_type_name: string | null
+  product_name: string | null
+  variant_name: string | null
+  barcode: string | null
+  cantidad: number
+  units_per_box: number | null
+  cajas: number | null
+  costo_unitario: number
+  costo_total: number
+  created_at?: string | null
+}
+
+export interface PurchaseManualItem {
+  id: number
+  company_id: number
+  office_id: number
+  supplier_id: number
+  product_type_name: string | null
+  product_name: string | null
+  variant_name: string | null
+  barcode: string | null
+  units_per_box: number | null
+  costo_bruto: number | null
+  cantidad: number
+  oc_id: number | null
+  consumed_at: string | null
+  created_at?: string | null
+}
+
+export interface CreatePurchaseManualItemPayload {
+  company_id: number
+  office_id: number
+  supplier_id: number
+  product_type_name?: string | null
+  product_name?: string | null
+  variant_name?: string | null
+  barcode?: string | null
+  units_per_box?: number | null
+  costo_bruto?: number | null
+  cantidad: number
+}
+
+export interface GeneratePurchaseOrderPayload {
+  company_id: number
+  office_id: number
+  supplier_id: number
+  fecha_emision?: string | null
+  fecha_entrega?: string | null
+  forma_pago?: string | null
+  responsable?: string | null
+  observacion?: string | null
+  manual_ids?: number[] | null
+}
+
 export interface ProductMasterRow {
   id: number
   barcode: string
@@ -457,6 +557,142 @@ export async function updateSupplier(
     throw new Error(msg || "Error al actualizar proveedor")
   }
   return res.json()
+}
+
+export async function getPurchaseAnalysis(
+  officeId: number,
+  options?: { status?: string },
+): Promise<PurchaseAnalysisRow[]> {
+  const companyId = getCompanyId()
+  if (companyId == null || !Number.isFinite(companyId)) {
+    throw new Error("Empresa no seleccionada")
+  }
+  const qs = new URLSearchParams()
+  qs.set("company_id", String(companyId))
+  qs.set("office_id", String(officeId))
+  if (options?.status && options.status.trim()) {
+    qs.set("status", options.status.trim())
+  }
+  const res = await fetch(`${API_URL}/purchase-analysis?${qs.toString()}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const msg = await res.text()
+    throw new Error(msg || "Error al cargar análisis de compra")
+  }
+  const data = await res.json()
+  return Array.isArray(data) ? data : []
+}
+
+export async function getPurchaseOrders(officeId?: number): Promise<PurchaseOrderHeader[]> {
+  const companyId = getCompanyId()
+  if (companyId == null || !Number.isFinite(companyId)) {
+    throw new Error("Empresa no seleccionada")
+  }
+  const qs = new URLSearchParams()
+  qs.set("company_id", String(companyId))
+  if (officeId != null && Number.isFinite(officeId)) {
+    qs.set("office_id", String(officeId))
+  }
+  const res = await fetch(`${API_URL}/purchase-orders?${qs.toString()}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    throw new Error("Error al cargar órdenes de compra")
+  }
+  const data = await res.json()
+  return Array.isArray(data) ? data : []
+}
+
+export async function getPurchaseOrder(ocId: number): Promise<{
+  header: PurchaseOrderHeader
+  details: PurchaseOrderDetailRow[]
+}> {
+  const companyId = getCompanyId()
+  if (companyId == null || !Number.isFinite(companyId)) {
+    throw new Error("Empresa no seleccionada")
+  }
+  const qs = new URLSearchParams()
+  qs.set("company_id", String(companyId))
+  const res = await fetch(`${API_URL}/purchase-orders/${ocId}?${qs.toString()}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const msg = await res.text()
+    throw new Error(msg || "Error al cargar la OC")
+  }
+  return res.json()
+}
+
+export async function generatePurchaseOrder(
+  payload: GeneratePurchaseOrderPayload,
+): Promise<{ oc_id: number }> {
+  const res = await fetch(`${API_URL}/purchase-orders/generate`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const msg = await res.text()
+    throw new Error(msg || "Error al generar la OC")
+  }
+  return res.json()
+}
+
+export async function getPurchaseManualItems(
+  officeId: number,
+  supplierId?: number,
+): Promise<PurchaseManualItem[]> {
+  const companyId = getCompanyId()
+  if (companyId == null || !Number.isFinite(companyId)) {
+    throw new Error("Empresa no seleccionada")
+  }
+  const qs = new URLSearchParams()
+  qs.set("company_id", String(companyId))
+  qs.set("office_id", String(officeId))
+  if (supplierId != null && Number.isFinite(supplierId)) {
+    qs.set("supplier_id", String(supplierId))
+  }
+  const res = await fetch(`${API_URL}/purchase-manual-items?${qs.toString()}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    throw new Error("Error al cargar ítems manuales")
+  }
+  const data = await res.json()
+  return Array.isArray(data) ? data : []
+}
+
+export async function createPurchaseManualItem(
+  payload: CreatePurchaseManualItemPayload,
+): Promise<PurchaseManualItem> {
+  const res = await fetch(`${API_URL}/purchase-manual-items`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const msg = await res.text()
+    throw new Error(msg || "Error al crear ítem manual")
+  }
+  return res.json()
+}
+
+export async function deletePurchaseManualItem(itemId: number): Promise<void> {
+  const companyId = getCompanyId()
+  if (companyId == null || !Number.isFinite(companyId)) {
+    throw new Error("Empresa no seleccionada")
+  }
+  const qs = new URLSearchParams()
+  qs.set("company_id", String(companyId))
+  const res = await fetch(`${API_URL}/purchase-manual-items/${itemId}?${qs.toString()}`, {
+    method: "DELETE",
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const msg = await res.text()
+    throw new Error(msg || "Error al eliminar ítem")
+  }
 }
 
 export interface GetProductsMasterParams {
