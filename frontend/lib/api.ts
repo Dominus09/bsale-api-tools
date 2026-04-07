@@ -671,7 +671,11 @@ export async function getPurchaseOffices(companyId: number): Promise<PurchaseOff
       const office_state =
         rawSt == null || !Number.isFinite(Number(rawSt)) ? null : Number(rawSt)
       const is_active =
-        office_state === null ? null : office_state === 0 || office_state === 1
+        typeof o.is_active === "boolean"
+          ? o.is_active
+          : office_state === null
+            ? null
+            : office_state === 0 || office_state === 1
       const label =
         typeof o.label === "string" && o.label.trim() ? o.label.trim() : `Sucursal ${id}`
       return {

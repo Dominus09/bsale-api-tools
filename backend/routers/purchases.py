@@ -48,6 +48,108 @@ def _office_state_is_active(st: Optional[int]) -> bool:
     return st is not None and st in (0, 1)
 
 
+def _office_state_raw_to_int(raw: Any) -> Optional[int]:
+    """Acepta int, bool (PG/psycopg2) o string numérico para offices.state."""
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        return 1 if raw else 0
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _office_listing_is_active(raw: Any) -> Optional[bool]:
+    """
+    Para UI: True/False si conocemos state; None si no hay fila en offices.
+    Valores 0 y 1 se consideran habilitados; otros enteros, deshabilitado.
+    """
+    if raw is None:
+        return None
+    n = _office_state_raw_to_int(raw)
+    if n is None:
+        return None
+    return n in (0, 1)
+
+
+def _fetch_purchase_offices_rows(cur, company_id: int) -> List[Dict[str, Any]]:
+    """Query con vw_purchase_analysis ∪ stocks ∪ offices; fallback sin vista si no existe."""
+    sql_full = """
+        WITH office_ids AS (
+            SELECT DISTINCT office_id AS oid
+            FROM bsale.vw_purchase_analysis
+            WHERE company_id = %s
+            UNION
+            SELECT DISTINCT office_id AS oid
+            FROM bsale.stocks
+            WHERE company_id = %s
+            UNION
+            SELECT bsale_id AS oid
+            FROM bsale.offices
+            WHERE company_id = %s
+        )
+        SELECT
+            oi.oid AS office_id,
+            COALESCE(NULLIF(TRIM(ofc.name), ''), '') AS office_name,
+            ofc.state AS office_state
+        FROM office_ids oi
+        LEFT JOIN bsale.offices ofc
+            ON ofc.company_id = %s
+           AND ofc.bsale_id = oi.oid
+        ORDER BY
+            NULLIF(TRIM(COALESCE(ofc.name, '')), '') ASC NULLS LAST,
+            oi.oid ASC
+    """
+    sql_fallback = """
+        WITH office_ids AS (
+            SELECT DISTINCT office_id AS oid
+            FROM bsale.stocks
+            WHERE company_id = %s
+            UNION
+            SELECT bsale_id AS oid
+            FROM bsale.offices
+            WHERE company_id = %s
+        )
+        SELECT
+            oi.oid AS office_id,
+            COALESCE(NULLIF(TRIM(ofc.name), ''), '') AS office_name,
+            ofc.state AS office_state
+        FROM office_ids oi
+        LEFT JOIN bsale.offices ofc
+            ON ofc.company_id = %s
+           AND ofc.bsale_id = oi.oid
+        ORDER BY
+            NULLIF(TRIM(COALESCE(ofc.name, '')), '') ASC NULLS LAST,
+            oi.oid ASC
+    """
+    sql_offices_only = """
+        SELECT
+            ofc.bsale_id AS office_id,
+            COALESCE(NULLIF(TRIM(ofc.name), ''), '') AS office_name,
+            ofc.state AS office_state
+        FROM bsale.offices ofc
+        WHERE ofc.company_id = %s
+        ORDER BY
+            NULLIF(TRIM(ofc.name), '') ASC NULLS LAST,
+            ofc.bsale_id ASC
+    """
+    params_full = (company_id, company_id, company_id, company_id)
+    params_fb = (company_id, company_id, company_id)
+    try:
+        cur.execute(sql_full, params_full)
+        return _rows_to_dicts(cur)
+    except pg_errors.Error:
+        cur.connection.rollback()
+        try:
+            cur.execute(sql_fallback, params_fb)
+            return _rows_to_dicts(cur)
+        except pg_errors.Error:
+            cur.connection.rollback()
+            cur.execute(sql_offices_only, (company_id,))
+            return _rows_to_dicts(cur)
+
+
 def _to_santiago(dt: Any) -> Optional[datetime]:
     if dt is None or not isinstance(dt, datetime):
         return None
@@ -168,43 +270,30 @@ def purchase_data_freshness(company_id: int) -> Dict[str, Any]:
 @router.get("/purchase-offices")
 def list_purchase_offices(company_id: int) -> List[Dict[str, Any]]:
     """
-    Sucursales habilitadas en análisis: bsale.offices.state IN (0, 1).
-    0 = activa en datos locales; 1 = típico valor activo desde API Bsale en sync.
-    Orden por nombre; sin sufijos de estado en label.
-    """
-    sql = """
-        SELECT DISTINCT
-            pa.office_id,
-            COALESCE(NULLIF(TRIM(ofc.name), ''), '') AS office_name,
-            ofc.state AS office_state
-        FROM bsale.vw_purchase_analysis pa
-        INNER JOIN bsale.offices ofc
-            ON ofc.company_id = pa.company_id
-           AND ofc.bsale_id = pa.office_id
-           AND ofc.state IN (0, 1)
-        WHERE pa.company_id = %s
-        ORDER BY
-            NULLIF(TRIM(ofc.name), '') ASC NULLS LAST,
-            pa.office_id ASC
+    Sucursales para compras: unión de ids vistos en análisis, stock y catálogo offices,
+    con LEFT JOIN a bsale.offices por nombre/state. Sin INNER JOIN ni filtro por state
+    (evita listado vacío si falta sync o convención de state distinta).
+    Orden por nombre y luego por id.
     """
     conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute(sql, (company_id,))
-        rows = _rows_to_dicts(cur)
+        rows = _fetch_purchase_offices_rows(cur, company_id)
         cur.close()
         out: List[Dict[str, Any]] = []
         for r in rows:
             oid = int(r["office_id"])
             name = (r.get("office_name") or "").strip()
-            st = _parse_office_state(r.get("office_state"))
+            raw_st = r.get("office_state")
+            st = _office_state_raw_to_int(raw_st)
             label = name if name else f"Sucursal {oid}"
+            active_flag = _office_listing_is_active(raw_st)
             out.append(
                 {
                     "office_id": oid,
                     "office_name": name or None,
                     "office_state": st,
-                    "is_active": _office_state_is_active(st),
+                    "is_active": active_flag if active_flag is not None else True,
                     "label": label,
                 }
             )
