@@ -2,8 +2,9 @@
 
 import type { PurchaseOrderDetailRow, PurchaseOrderHeader } from "@/lib/api"
 
+/** Misma imagen que el login (Grupo La Quillotana). */
 const LOGO_URL =
-  "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Emblema%20auxiliar%20sin%20sucursal-3muphOJR8q7mpoZPwKQhJb7RbLYvdu.png"
+  "https://hebbkx1anhila5yf.public.blob.vercel-storage.com/GRUPO%20QUILLOTANA%20PS-fK4da0sPbUwnmEpeEVmmumWdj977f0.png"
 
 /** Moneda: sin decimales si es entero; hasta 2 si hace falta. */
 function fmtMoney(n: number | string | null | undefined): string {
@@ -65,7 +66,7 @@ export function OcInvoicePrint({ header, details }: OcInvoiceProps) {
             padding: 0 !important;
           }
         }
-      `}`}</style>
+      `}</style>
 
       <div
         className="mx-auto w-full max-w-[210mm] bg-white px-10 py-9 shadow-sm print:max-w-none print:px-0 print:py-0 print:shadow-none sm:px-12 sm:py-10"
@@ -77,8 +78,8 @@ export function OcInvoicePrint({ header, details }: OcInvoiceProps) {
             <div className="flex flex-col items-center gap-3 sm:flex-row sm:items-start sm:gap-5">
               <img
                 src={LOGO_URL}
-                alt="La Quillotana"
-                className="h-16 w-16 shrink-0 object-contain sm:h-[4.5rem] sm:w-[4.5rem]"
+                alt="Grupo Quillotana"
+                className="h-16 max-w-[min(100%,260px)] shrink-0 object-contain object-left sm:h-[4.25rem] sm:max-w-[280px]"
               />
               <div className="text-center sm:text-left">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">
