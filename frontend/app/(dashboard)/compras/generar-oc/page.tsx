@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { FilePlus, Loader2, Printer } from "lucide-react"
+import { FilePlus, Loader2, Printer, Sparkles } from "lucide-react"
 
 import { ComprasDataStatusCard } from "@/components/compras/compras-data-status"
 import { OcInvoicePrint, triggerPrintInvoice } from "@/components/compras/oc-invoice"
@@ -141,6 +141,47 @@ function effectiveUpb(stored: number | undefined): number {
   return stored != null && Number.isFinite(stored) && stored > 0 ? stored : 1
 }
 
+function roundMax2(n: number): number {
+  if (!Number.isFinite(n)) return 0
+  return Math.round(n * 100) / 100
+}
+
+/** Solo cajas completas: CEIL(unidades/upb), unidades finales = cajas * upb. */
+function unitsToWholeBoxes(unitsRaw: number, upb: number): number {
+  const box = upb > 0 && Number.isFinite(upb) ? upb : 1
+  const u = Math.max(0, roundMax2(unitsRaw))
+  if (u <= 0) return 0
+  const cajas = Math.ceil(u / box)
+  return cajas * box
+}
+
+function parseIntNonNeg(raw: string): number | null {
+  const t = String(raw).replace(/\D/g, "")
+  const n = t === "" ? 0 : parseInt(t, 10)
+  if (!Number.isFinite(n) || n < 0) return null
+  return n
+}
+
+/** Texto de cajas (entero) cuando unidades ya están alineadas a CxC. */
+function fmtCajasEnteras(qty: number, upb: number): string {
+  const b = effectiveUpb(upb)
+  if (qty <= 0) return "0"
+  return String(Math.round(qty / b))
+}
+
+/**
+ * Sugerencia 14 días: promedio_diario = ventas_30/30, demanda_14 = promedio*14,
+ * crudo = max(demanda_14 - stock, 0), luego redondeo a cajas completas.
+ */
+function suggestedUnitsFrom14dCoverage(r: PurchaseAnalysisRow, upb: number): number {
+  const v30 = Number(r.ventas_30_dias) || 0
+  const stock = Number(r.stock_actual) || 0
+  const prom = v30 / 30
+  const demand14 = prom * 14
+  const raw = Math.max(0, roundMax2(demand14 - stock))
+  return unitsToWholeBoxes(raw, upb)
+}
+
 type ManualDraft = {
   key: string
   product_type_name: string
@@ -262,9 +303,10 @@ export default function GenerarOcPage() {
       const u: Record<string, number> = {}
       for (const r of rows) {
         const k = rowKey(r)
-        q[k] = Number(r.unidades_a_comprar) || 0
+        const upb0 = cxcFromAnalysisRow(r)
+        u[k] = upb0
+        q[k] = unitsToWholeBoxes(Number(r.unidades_a_comprar) || 0, upb0)
         c[k] = Number(r.costo_bruto) || 0
-        u[k] = cxcFromAnalysisRow(r)
       }
       setQtyByKey(q)
       setCostoByKey(c)
@@ -293,16 +335,18 @@ export default function GenerarOcPage() {
   const updateUnidadesAnalysis = (key: string, raw: string, ex: boolean) => {
     if (ex) return
     const n = parseFloat(raw.replace(",", "."))
+    if (!Number.isFinite(n) || n < 0) return
+    const upb = effectiveUpb(upbByKey[key])
     setQtyByKey((prev) => ({
       ...prev,
-      [key]: Number.isFinite(n) && n >= 0 ? n : 0,
+      [key]: unitsToWholeBoxes(n, upb),
     }))
   }
 
   const updateCajasAnalysis = (key: string, raw: string, ex: boolean) => {
     if (ex) return
-    const cajas = parseFloat(raw.replace(",", "."))
-    if (!Number.isFinite(cajas) || cajas < 0) return
+    const cajas = parseIntNonNeg(raw)
+    if (cajas === null) return
     const upb = effectiveUpb(upbByKey[key])
     setQtyByKey((prev) => ({
       ...prev,
@@ -322,6 +366,10 @@ export default function GenerarOcPage() {
     let n = parseInt(raw.replace(/\D/g, ""), 10)
     if (!Number.isFinite(n) || n <= 0) n = 1
     setUpbByKey((prev) => ({ ...prev, [key]: n }))
+    setQtyByKey((prev) => {
+      const cur = prev[key] ?? 0
+      return { ...prev, [key]: unitsToWholeBoxes(cur, n) }
+    })
   }
 
   const patchManual = (key: string, fn: (m: ManualDraft) => ManualDraft) => {
@@ -331,16 +379,19 @@ export default function GenerarOcPage() {
   const updateManualUnidades = (key: string, raw: string) => {
     const n = parseFloat(raw.replace(",", "."))
     if (!Number.isFinite(n) || n < 0) return
-    patchManual(key, (m) => ({ ...m, cantidad: n }))
+    patchManual(key, (m) => ({
+      ...m,
+      cantidad: unitsToWholeBoxes(n, manualEffectiveUpb(m)),
+    }))
   }
 
   const updateManualCajas = (key: string, raw: string) => {
-    const cajas = parseFloat(raw.replace(",", "."))
-    if (!Number.isFinite(cajas) || cajas < 0) return
-    patchManual(key, (m) => {
-      const upb = manualEffectiveUpb(m)
-      return { ...m, cantidad: cajas * upb }
-    })
+    const cajas = parseIntNonNeg(raw)
+    if (cajas === null) return
+    patchManual(key, (m) => ({
+      ...m,
+      cantidad: cajas * manualEffectiveUpb(m),
+    }))
   }
 
   const updateManualCosto = (key: string, raw: string) => {
@@ -352,7 +403,11 @@ export default function GenerarOcPage() {
   const updateManualUpb = (key: string, raw: string) => {
     let n = parseInt(raw.replace(/\D/g, ""), 10)
     if (!Number.isFinite(n) || n <= 0) n = 1
-    patchManual(key, (m) => ({ ...m, units_per_box: n }))
+    patchManual(key, (m) => ({
+      ...m,
+      units_per_box: n,
+      cantidad: unitsToWholeBoxes(m.cantidad, n),
+    }))
   }
 
   const toggleExclude = (key: string) => {
@@ -363,6 +418,19 @@ export default function GenerarOcPage() {
       return next
     })
   }
+
+  const applySuggestCompra = useCallback(() => {
+    if (!filtersReady || analysis.length === 0) return
+    setQtyByKey((prev) => {
+      const next = { ...prev }
+      for (const r of analysis) {
+        const k = rowKey(r)
+        const upb = effectiveUpb(upbByKey[k] ?? cxcFromAnalysisRow(r))
+        next[k] = suggestedUnitsFrom14dCoverage(r, upb)
+      }
+      return next
+    })
+  }, [filtersReady, analysis, upbByKey])
 
   const openAddManual = () => {
     setManualForm({
@@ -395,6 +463,7 @@ export default function GenerarOcPage() {
       setError("Costo inválido")
       return
     }
+    const upbEff = upb != null && Number.isFinite(upb) && upb > 0 ? upb : 1
     const row: ManualDraft = {
       key: `m-${typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : String(Date.now())}`,
       product_type_name: manualForm.product_type_name.trim() || "",
@@ -403,7 +472,7 @@ export default function GenerarOcPage() {
       barcode: manualForm.barcode.trim() || "",
       costo_bruto: cost,
       units_per_box: upb != null && Number.isFinite(upb) && upb > 0 ? upb : null,
-      cantidad: qty,
+      cantidad: unitsToWholeBoxes(qty, upbEff),
     }
     setManualRows((prev) => [...prev, row])
     setError("")
@@ -429,9 +498,10 @@ export default function GenerarOcPage() {
     for (const r of analysis) {
       const k = rowKey(r)
       if (excluded.has(k)) continue
-      const qty = qtyByKey[k] ?? 0
-      if (qty <= 0) continue
+      const qtyRaw = qtyByKey[k] ?? 0
       const upb = effectiveUpb(upbByKey[k])
+      const qty = unitsToWholeBoxes(qtyRaw, upb)
+      if (qty <= 0) continue
       out.push({
         variant_id: r.variant_id,
         product_type_name: r.product_type_name,
@@ -444,14 +514,17 @@ export default function GenerarOcPage() {
       })
     }
     for (const m of manualRows) {
+      const mupb = manualEffectiveUpb(m)
+      const mcant = unitsToWholeBoxes(m.cantidad, mupb)
+      if (mcant <= 0) continue
       out.push({
         variant_id: null,
         product_type_name: m.product_type_name || null,
         product_name: m.product_name,
         variant_name: m.variant_name || null,
         barcode: m.barcode || null,
-        cantidad: m.cantidad,
-        units_per_box: manualEffectiveUpb(m),
+        cantidad: mcant,
+        units_per_box: mupb,
         costo_unitario: m.costo_bruto,
       })
     }
@@ -573,6 +646,15 @@ export default function GenerarOcPage() {
           <FilePlus className="mr-2 size-4" />
           Agregar producto
         </Button>
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={applySuggestCompra}
+          disabled={!filtersReady || loadingAnalysis || analysis.length === 0}
+        >
+          <Sparkles className="mr-2 size-4" />
+          Sugerir compra
+        </Button>
         <Button type="button" onClick={openConfirm} disabled={!filtersReady || loadingAnalysis}>
           Generar orden de compra
         </Button>
@@ -589,7 +671,10 @@ export default function GenerarOcPage() {
           <h2 className="text-sm font-medium text-slate-800">Líneas</h2>
           <p className="text-xs text-slate-500">
             COMPRAR · verde · REVISAR · amarillo · NO_COMPRAR · rojo. CxC = bsale.variants.units_per_box (resp.
-            SEC en descripción). Unidades y cajas se sincronizan según CxC (mín. 1).
+            SEC en descripción). Solo cajas completas: las unidades siempre son múltiplo de CxC.{" "}
+            <span className="font-medium text-slate-600">
+              Sugerir compra recalcula con cobertura de 14 días (promedio diario = ventas 30 días ÷ 30).
+            </span>
           </p>
         </div>
         <div className="min-w-0 overflow-x-auto p-2">
@@ -602,7 +687,9 @@ export default function GenerarOcPage() {
                 <TableHead>Producto</TableHead>
                 <TableHead>Variante</TableHead>
                 <TableHead className="text-right">Stock</TableHead>
-                <TableHead className="text-right">Venta</TableHead>
+                <TableHead className="text-right whitespace-nowrap">
+                  7 días / 30 días
+                </TableHead>
                 <TableHead className="text-right">Costo bruto</TableHead>
                 <TableHead className="text-right" title="Cantidad por caja (units_per_box)">
                   CxC
@@ -616,7 +703,6 @@ export default function GenerarOcPage() {
             <TableBody>
               {manualRows.map((m) => {
                 const upb = manualEffectiveUpb(m)
-                const cajas = m.cantidad / upb
                 const total = m.cantidad * m.costo_bruto
                 return (
                   <TableRow key={m.key} className="border-slate-200 bg-sky-500/10">
@@ -664,8 +750,8 @@ export default function GenerarOcPage() {
                     <TableCell className="text-right align-middle">
                       <Input
                         className="ml-auto h-8 w-[6.5rem] tabular-nums text-right"
-                        inputMode="decimal"
-                        value={Number.isFinite(cajas) ? fmtInputMax2(cajas) : ""}
+                        inputMode="numeric"
+                        value={fmtCajasEnteras(m.cantidad, upb)}
                         onChange={(e) => updateManualCajas(m.key, e.target.value)}
                       />
                     </TableCell>
@@ -698,7 +784,6 @@ export default function GenerarOcPage() {
                 const ex = excluded.has(k)
                 const qty = qtyByKey[k] ?? 0
                 const upb = effectiveUpb(upbByKey[k])
-                const cajas = qty / upb
                 const unit = costoByKey[k] ?? 0
                 const total = qty * unit
                 return (
@@ -767,8 +852,8 @@ export default function GenerarOcPage() {
                     <TableCell className="text-right align-middle">
                       <Input
                         className="ml-auto h-8 w-[6.5rem] tabular-nums text-right"
-                        inputMode="decimal"
-                        value={Number.isFinite(cajas) ? fmtInputMax2(cajas) : ""}
+                        inputMode="numeric"
+                        value={fmtCajasEnteras(qty, upb)}
                         disabled={ex}
                         onChange={(e) => updateCajasAnalysis(k, e.target.value, ex)}
                       />

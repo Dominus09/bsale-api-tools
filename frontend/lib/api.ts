@@ -172,7 +172,9 @@ export interface PurchaseAnalysisRow {
   promedio_diario: number
   stock_actual: number
   costo_bruto: number
+  /** Cobertura objetivo de la sugerencia (14 días). */
   dias_cobertura: number
+  /** demanda_14d ≈ (ventas_30/30)*14 desde la vista. */
   demanda_proyectada: number
   unidades_a_comprar: number
   /** CxC desde bsale.variants.units_per_box; la vista puede completar con SEC en description si columna NULL/0. */
@@ -191,7 +193,7 @@ export interface PurchaseOrderHeader {
   office_id: number
   /** Nombre desde bsale.offices (sync Bsale); null si no hay fila */
   office_name?: string | null
-  /** Bsale offices.state; habilitada en compras = 0 o 1 */
+  /** Bsale offices.state; activa en compras = 0 */
   office_state?: number | null
   supplier_id: number
   supplier_name: string | null
@@ -228,9 +230,9 @@ export interface PurchaseOfficeRef {
   office_id: number
   /** Nombre desde bsale.offices (sync Bsale); null si no hay fila */
   office_name: string | null
-  /** Bsale offices.state; listado compras solo incluye state 0 o 1 (habilitadas) */
+  /** Bsale offices.state; listado compras solo incluye state = 0 */
   office_state: number | null
-  /** true si state es 0 o 1 en respuesta de purchase-offices */
+  /** true en respuesta de purchase-offices (solo sucursales state = 0) */
   is_active: boolean | null
   /** Texto para mostrar en UI */
   label: string
@@ -677,7 +679,7 @@ export async function getPurchaseOffices(companyId: number): Promise<PurchaseOff
           ? o.is_active
           : office_state === null
             ? null
-            : office_state === 0 || office_state === 1
+            : office_state === 0
       const label =
         typeof o.label === "string" && o.label.trim() ? o.label.trim() : `Sucursal ${id}`
       return {

@@ -266,44 +266,64 @@ enriched AS (
 ),
 calc AS (
     SELECT
-        e.*,
-        7::integer AS dias_cobertura,
-        (e.promedio_diario * 7)::numeric AS demanda_proyectada,
+        e.company_id,
+        e.office_id,
+        e.variant_id,
+        e.ventas_7_dias,
+        e.ventas_30_dias,
+        (COALESCE(e.ventas_30_dias, 0) / 30.0)::numeric AS promedio_diario,
+        e.stock_actual,
+        e.costo_bruto,
+        e.units_per_box,
+        e.units_per_box_eff,
+        e.product_type_name,
+        e.product_name,
+        e.variant_name,
+        e.barcode,
+        14::integer AS dias_cobertura,
+        ((COALESCE(e.ventas_30_dias, 0) / 30.0) * 14)::numeric AS demanda_proyectada,
         GREATEST(
-            (e.promedio_diario * 7)::numeric - e.stock_actual,
+            ((COALESCE(e.ventas_30_dias, 0) / 30.0) * 14)::numeric - e.stock_actual,
             0::numeric
-        ) AS unidades_a_comprar
+        ) AS unidades_crudo
     FROM enriched e
+),
+calc_boxes AS (
+    SELECT
+        c.*,
+        CASE
+            WHEN c.unidades_crudo <= 0 THEN 0::bigint
+            ELSE CEIL(c.unidades_crudo / NULLIF(c.units_per_box_eff, 0))::bigint
+        END AS cajas_sugeridas
+    FROM calc c
 )
 SELECT
-    c.company_id,
-    c.office_id,
-    c.variant_id,
-    c.product_type_name,
-    c.product_name,
-    c.variant_name,
-    c.barcode,
-    c.ventas_7_dias,
-    c.ventas_30_dias,
-    c.promedio_diario,
-    c.stock_actual,
-    c.costo_bruto,
-    c.dias_cobertura,
-    c.demanda_proyectada,
-    c.unidades_a_comprar,
-    c.units_per_box,
-    c.units_per_box_eff,
-    (c.unidades_a_comprar / c.units_per_box_eff::numeric) AS cajas_sugeridas,
+    cb.company_id,
+    cb.office_id,
+    cb.variant_id,
+    cb.product_type_name,
+    cb.product_name,
+    cb.variant_name,
+    cb.barcode,
+    cb.ventas_7_dias,
+    cb.ventas_30_dias,
+    cb.promedio_diario,
+    cb.stock_actual,
+    cb.costo_bruto,
+    cb.dias_cobertura,
+    cb.demanda_proyectada,
+    (cb.cajas_sugeridas * cb.units_per_box_eff)::numeric AS unidades_a_comprar,
+    cb.units_per_box,
+    cb.units_per_box_eff,
+    cb.cajas_sugeridas::numeric AS cajas_sugeridas,
     CASE
-        WHEN c.ventas_30_dias = 0 AND c.stock_actual > 0 THEN 'NO_COMPRAR'
-        WHEN c.unidades_a_comprar <= 0 THEN 'NO_COMPRAR'
-        WHEN c.unidades_a_comprar > 0
-             AND c.unidades_a_comprar < c.units_per_box_eff THEN 'REVISAR'
-        WHEN c.unidades_a_comprar >= c.units_per_box_eff THEN 'COMPRAR'
+        WHEN cb.ventas_30_dias = 0 AND cb.stock_actual > 0 THEN 'NO_COMPRAR'
+        WHEN (cb.cajas_sugeridas * cb.units_per_box_eff) <= 0 THEN 'NO_COMPRAR'
+        WHEN (cb.cajas_sugeridas * cb.units_per_box_eff) > 0 THEN 'COMPRAR'
         ELSE 'REVISAR'
     END AS status,
-    (c.unidades_a_comprar * c.costo_bruto)::numeric AS costo_total_compra
-FROM calc c;
+    ((cb.cajas_sugeridas * cb.units_per_box_eff) * cb.costo_bruto)::numeric AS costo_total_compra
+FROM calc_boxes cb;
 
 -- =============================================================================
 -- ETAPA D — Tablas OC primero (purchase_manual_items referencia oc_document)
@@ -523,8 +543,9 @@ END;
 $$;
 
 COMMENT ON VIEW bsale.vw_purchase_analysis IS
-    'status: 1) ventas_30=0 y stock>0 → NO_COMPRAR; 2) unidades<=0 → NO_COMPRAR; '
-    '3) 0<unidades<units_per_box_eff → REVISAR; 4) unidades>=units_per_box_eff → COMPRAR; ELSE REVISAR (nunca NULL).';
+    'Sugerencia: promedio_diario=ventas_30/30, demanda_14d=promedio*14, unidades_crudo=max(demanda_14-stock,0); '
+    'cajas=CEIL(unidades_crudo/units_per_box_eff), unidades=cajas*units_per_box_eff (solo cajas completas). '
+    'status: ventas_30=0 y stock>0 → NO_COMPRAR; unidades<=0 → NO_COMPRAR; unidades>0 → COMPRAR; ELSE REVISAR.';
 
 COMMENT ON FUNCTION bsale.generate_purchase_order IS
     'OC desde vw_purchase_analysis (COMPRAR) + opcional líneas manuales (p_manual_ids); marca oc_id/consumed_at.';

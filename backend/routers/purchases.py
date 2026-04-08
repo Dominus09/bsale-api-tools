@@ -270,9 +270,8 @@ def purchase_data_freshness(company_id: int) -> Dict[str, Any]:
 @router.get("/purchase-offices")
 def list_purchase_offices(company_id: int) -> List[Dict[str, Any]]:
     """
-    Sucursales para compras: unión de ids vistos en análisis, stock y catálogo offices,
-    con LEFT JOIN a bsale.offices por nombre/state. Sin INNER JOIN ni filtro por state
-    (evita listado vacío si falta sync o convención de state distinta).
+    Sucursales para compras: mismas fuentes que _fetch_purchase_offices_rows; solo se listan
+    activas (bsale.offices.state = 0). Sin fila en offices: se omite (no inventar sucursal).
     Orden por nombre y luego por id.
     """
     conn = get_connection()
@@ -286,14 +285,15 @@ def list_purchase_offices(company_id: int) -> List[Dict[str, Any]]:
             name = (r.get("office_name") or "").strip()
             raw_st = r.get("office_state")
             st = _office_state_raw_to_int(raw_st)
+            if st != 0:
+                continue
             label = name if name else f"Sucursal {oid}"
-            active_flag = _office_listing_is_active(raw_st)
             out.append(
                 {
                     "office_id": oid,
                     "office_name": name or None,
                     "office_state": st,
-                    "is_active": active_flag if active_flag is not None else True,
+                    "is_active": True,
                     "label": label,
                 }
             )
