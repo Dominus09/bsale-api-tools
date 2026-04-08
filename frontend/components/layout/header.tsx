@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { LogOut, Building2, User, Wifi, WifiOff } from "lucide-react"
+import { LogOut, Building2, User, Wifi, WifiOff, PanelLeft, PanelLeftClose } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -13,7 +13,13 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { logout, getStoredEmail, getStoredCompanyName, getIsDemoMode, initDemoMode } from "@/lib/api"
 
-export function Header() {
+type HeaderProps = {
+  /** Si se pasa, muestra botón para colapsar/expandir el sidebar del dashboard. */
+  sidebarOpen?: boolean
+  onToggleSidebar?: () => void
+}
+
+export function Header({ sidebarOpen, onToggleSidebar }: HeaderProps) {
   const [email, setEmail] = useState<string | null>(null)
   const [companyName, setCompanyName] = useState<string | null>(null)
   const [isDemoMode, setIsDemoMode] = useState(false)
@@ -45,8 +51,24 @@ export function Header() {
 
   return (
     <header className="flex h-16 items-center justify-between border-b border-border bg-card px-6">
-      <div className="flex items-center gap-3">
-        <Building2 className="h-5 w-5 text-muted-foreground" />
+      <div className="flex min-w-0 items-center gap-3">
+        {onToggleSidebar ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="shrink-0"
+            onClick={onToggleSidebar}
+            aria-label={sidebarOpen ? "Ocultar menú lateral" : "Mostrar menú lateral"}
+          >
+            {sidebarOpen ? (
+              <PanelLeftClose className="h-5 w-5" />
+            ) : (
+              <PanelLeft className="h-5 w-5" />
+            )}
+          </Button>
+        ) : null}
+        <Building2 className="h-5 w-5 shrink-0 text-muted-foreground" />
         <span className="font-medium text-foreground">
           {companyName || "Selecciona una empresa"}
         </span>

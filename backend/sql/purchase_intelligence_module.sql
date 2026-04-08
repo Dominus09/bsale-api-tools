@@ -21,8 +21,12 @@ SET units_per_box = (regexp_match(
     UPPER(COALESCE(v.description, '')),
     E'SEC\s*([0-9]+)'
 ))[1]::integer
-WHERE v.units_per_box IS NULL
-  AND UPPER(COALESCE(v.description, '')) ~ E'SEC\s*[0-9]+';
+WHERE (v.units_per_box IS NULL OR v.units_per_box = 0)
+  AND UPPER(COALESCE(v.description, '')) ~ E'SEC\s*[0-9]+'
+  AND (regexp_match(
+        UPPER(COALESCE(v.description, '')),
+        E'SEC\s*([0-9]+)'
+    ))[1]::integer > 0;
 
 -- =============================================================================
 -- ETAPA B — Vistas de ventas y auxiliares
@@ -183,7 +187,8 @@ FROM bsale.stocks;
 -- =============================================================================
 -- ETAPA C — vw_purchase_analysis
 -- status: orden estricto de evaluación CASE (primera condición que cumple gana)
--- units_per_box = valor real en variants; units_per_box_eff = COALESCE(NULLIF(units_per_box,0),1)
+-- units_per_box: columna bsale.variants.units_per_box; si NULL/0 y hay "(SEC N)" en description, se usa N.
+-- units_per_box_eff = COALESCE(NULLIF(units_per_box_resuelto,0),1) para cajas (evita cajas = unidades salvo CxC=1).
 -- =============================================================================
 CREATE OR REPLACE VIEW bsale.vw_purchase_analysis AS
 WITH office_variants AS (
@@ -203,8 +208,17 @@ enriched AS (
         COALESCE(r.promedio_diario, 0)::numeric AS promedio_diario,
         COALESCE(st.stock_actual, 0)::numeric AS stock_actual,
         COALESCE(c.costo_bruto, 0)::numeric AS costo_bruto,
-        v.units_per_box,
-        COALESCE(NULLIF(v.units_per_box, 0), 1) AS units_per_box_eff,
+        COALESCE(
+            NULLIF(v.units_per_box, 0),
+            NULLIF(sec.sec_n, 0)
+        ) AS units_per_box,
+        COALESCE(
+            COALESCE(
+                NULLIF(v.units_per_box, 0),
+                NULLIF(sec.sec_n, 0)
+            ),
+            1
+        ) AS units_per_box_eff,
         pt.name AS product_type_name,
         p.name AS product_name,
         v.description AS variant_name,
@@ -213,6 +227,17 @@ enriched AS (
     INNER JOIN bsale.variants v
         ON v.company_id = ov.company_id
        AND v.bsale_id = ov.variant_id
+    CROSS JOIN LATERAL (
+        SELECT
+            CASE
+                WHEN UPPER(COALESCE(v.description, '')) ~ E'SEC\s*[0-9]+'
+                THEN (regexp_match(
+                    UPPER(COALESCE(v.description, '')),
+                    E'SEC\s*([0-9]+)'
+                ))[1]::integer
+                ELSE NULL
+            END AS sec_n
+    ) sec
     INNER JOIN bsale.products p
         ON p.company_id = v.company_id
        AND p.bsale_id = v.product_id
@@ -427,7 +452,7 @@ BEGIN
         pa.variant_name,
         pa.barcode,
         pa.unidades_a_comprar,
-        pa.units_per_box,
+        COALESCE(pa.units_per_box, pa.units_per_box_eff),
         pa.cajas_sugeridas,
         pa.costo_bruto,
         pa.costo_total_compra

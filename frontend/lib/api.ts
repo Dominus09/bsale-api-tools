@@ -175,7 +175,9 @@ export interface PurchaseAnalysisRow {
   dias_cobertura: number
   demanda_proyectada: number
   unidades_a_comprar: number
+  /** CxC desde bsale.variants.units_per_box; la vista puede completar con SEC en description si columna NULL/0. */
   units_per_box: number | null
+  /** Coalesce(units_per_box útil, 1) — base para cajas_sugeridas y reglas de estado. */
   units_per_box_eff: number
   cajas_sugeridas: number
   status: string

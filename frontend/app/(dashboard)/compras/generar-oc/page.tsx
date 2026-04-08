@@ -30,6 +30,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   type Company,
   type PurchaseAnalysisRow,
@@ -82,13 +83,58 @@ function fmtCostoInput(n: number): string {
   return fmtInputMax2(n)
 }
 
+/** Extrae N de "(SEC N)" / "SEC N" en descripción de variante (misma lógica que SQL). */
+function secUnitsFromVariantText(s: string | null | undefined): number | null {
+  if (s == null || !String(s).trim()) return null
+  const m = String(s).toUpperCase().match(/SEC\s*(\d+)/)
+  if (!m) return null
+  const n = parseInt(m[1], 10)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
 /**
- * CxC = units_per_box del backend; NULL o ≤0 se muestra/edita como 1 (sin usar units_per_box_eff).
+ * CxC: bsale.variants.units_per_box vía API (vw_purchase_analysis ya resuelve SEC en description si columna NULL/0).
+ * Si aún falta, mismo respaldo SEC en cliente para no mostrar 1 por defecto cuando hay texto.
  */
 function cxcFromAnalysisRow(r: PurchaseAnalysisRow): number {
   const v = r.units_per_box
   if (v != null && Number(v) > 0) return Number(v)
+  const sec = secUnitsFromVariantText(r.variant_name)
+  if (sec != null) return sec
   return 1
+}
+
+function NameCellWithTooltip({
+  raw,
+  className,
+}: {
+  raw: string | null | undefined
+  className?: string
+}) {
+  const c = cleanDisplayName(raw) || "—"
+  const body = (
+    <span className={cn("line-clamp-4 whitespace-normal break-words text-sm leading-snug", className)}>
+      {c}
+    </span>
+  )
+  if (c === "—") {
+    return body
+  }
+  return (
+    <Tooltip delayDuration={300}>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className="w-full cursor-default text-left outline-none focus-visible:ring-2 focus-visible:ring-slate-400/60 rounded-sm"
+        >
+          {body}
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className="max-w-md whitespace-pre-wrap text-left font-normal">
+        {c}
+      </TooltipContent>
+    </Tooltip>
+  )
 }
 
 function effectiveUpb(stored: number | undefined): number {
@@ -455,7 +501,7 @@ export default function GenerarOcPage() {
   }
 
   return (
-    <div className="mx-auto max-w-[1280px] space-y-6 pb-16">
+    <div className="mx-auto w-full max-w-[min(100%,1680px)] space-y-6 pb-16">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Generar orden de compra</h1>
         <p className="text-sm text-slate-500">
@@ -542,11 +588,11 @@ export default function GenerarOcPage() {
         <div className="border-b border-slate-100 px-5 py-3">
           <h2 className="text-sm font-medium text-slate-800">Líneas</h2>
           <p className="text-xs text-slate-500">
-            COMPRAR · verde · REVISAR · amarillo · NO_COMPRAR · rojo. CxC = cantidad por caja (units_per_box del
-            catálogo). Unidades y cajas se sincronizan según CxC (mín. 1).
+            COMPRAR · verde · REVISAR · amarillo · NO_COMPRAR · rojo. CxC = bsale.variants.units_per_box (resp.
+            SEC en descripción). Unidades y cajas se sincronizan según CxC (mín. 1).
           </p>
         </div>
-        <div className="overflow-x-auto p-2">
+        <div className="min-w-0 overflow-x-auto p-2">
           <Table>
             <TableHeader>
               <TableRow className="border-slate-200 hover:bg-transparent">
@@ -580,29 +626,14 @@ export default function GenerarOcPage() {
                         Manual
                       </span>
                     </TableCell>
-                    <TableCell
-                      className="min-w-[6.5rem] max-w-[min(200px,24vw)] align-top text-slate-600"
-                      title={cleanDisplayName(m.product_type_name) || undefined}
-                    >
-                      <span className="line-clamp-3 whitespace-normal break-words text-sm leading-snug">
-                        {cleanDisplayName(m.product_type_name) || "—"}
-                      </span>
+                    <TableCell className="min-w-[8rem] max-w-[min(260px,30vw)] align-top text-slate-600">
+                      <NameCellWithTooltip raw={m.product_type_name} />
                     </TableCell>
-                    <TableCell
-                      className="min-w-[7rem] max-w-[min(220px,26vw)] align-top font-medium"
-                      title={cleanDisplayName(m.product_name) || undefined}
-                    >
-                      <span className="line-clamp-3 whitespace-normal break-words text-sm leading-snug">
-                        {cleanDisplayName(m.product_name) || "—"}
-                      </span>
+                    <TableCell className="min-w-[12rem] max-w-[min(380px,40vw)] align-top">
+                      <NameCellWithTooltip raw={m.product_name} className="font-medium text-slate-900" />
                     </TableCell>
-                    <TableCell
-                      className="min-w-[7rem] max-w-[min(240px,28vw)] align-top text-slate-600"
-                      title={cleanDisplayName(m.variant_name) || undefined}
-                    >
-                      <span className="line-clamp-3 whitespace-normal break-words text-sm leading-snug">
-                        {cleanDisplayName(m.variant_name) || "—"}
-                      </span>
+                    <TableCell className="min-w-[12rem] max-w-[min(440px,44vw)] align-top text-slate-600">
+                      <NameCellWithTooltip raw={m.variant_name} />
                     </TableCell>
                     <TableCell className="text-right">—</TableCell>
                     <TableCell className="text-right">—</TableCell>
@@ -693,29 +724,14 @@ export default function GenerarOcPage() {
                         {r.status}
                       </span>
                     </TableCell>
-                    <TableCell
-                      className="min-w-[6.5rem] max-w-[min(200px,24vw)] align-top text-slate-600"
-                      title={cleanDisplayName(r.product_type_name) || undefined}
-                    >
-                      <span className="line-clamp-3 whitespace-normal break-words text-sm leading-snug">
-                        {cleanDisplayName(r.product_type_name) || "—"}
-                      </span>
+                    <TableCell className="min-w-[8rem] max-w-[min(260px,30vw)] align-top text-slate-600">
+                      <NameCellWithTooltip raw={r.product_type_name} />
                     </TableCell>
-                    <TableCell
-                      className="min-w-[7rem] max-w-[min(220px,26vw)] align-top font-medium text-slate-900"
-                      title={cleanDisplayName(r.product_name) || undefined}
-                    >
-                      <span className="line-clamp-3 whitespace-normal break-words text-sm leading-snug">
-                        {cleanDisplayName(r.product_name) || "—"}
-                      </span>
+                    <TableCell className="min-w-[12rem] max-w-[min(380px,40vw)] align-top">
+                      <NameCellWithTooltip raw={r.product_name} className="font-medium text-slate-900" />
                     </TableCell>
-                    <TableCell
-                      className="min-w-[7rem] max-w-[min(240px,28vw)] align-top text-slate-600"
-                      title={cleanDisplayName(r.variant_name) || undefined}
-                    >
-                      <span className="line-clamp-3 whitespace-normal break-words text-sm leading-snug">
-                        {cleanDisplayName(r.variant_name) || "—"}
-                      </span>
+                    <TableCell className="min-w-[12rem] max-w-[min(440px,44vw)] align-top text-slate-600">
+                      <NameCellWithTooltip raw={r.variant_name} />
                     </TableCell>
                     <TableCell className="text-right tabular-nums align-middle">{fmtNum(r.stock_actual, 0)}</TableCell>
                     <TableCell className="text-right tabular-nums text-xs text-slate-600 align-middle">
