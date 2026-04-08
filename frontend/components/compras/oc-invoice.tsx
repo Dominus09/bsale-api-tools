@@ -245,29 +245,77 @@ function detailRowClass(index: number): string {
   return base + zebra
 }
 
+/**
+ * Imprime solo la OC. El host suele vivir dentro de un Dialog con `transform`
+ * (centrado Radix); `position:absolute` ahí se ancla al modal y en PDF queda
+ * medio folio en blanco arriba. Clonamos al `body` para posicionar respecto
+ * al área de impresión real.
+ */
 export function triggerPrintInvoice(rootId: string) {
   const node = document.getElementById(rootId)
   if (!node) {
     window.print()
     return
   }
+
+  const cloneId = `${rootId}-print-clone`
+  const clone = node.cloneNode(true) as HTMLElement
+  clone.id = cloneId
+  clone.removeAttribute("hidden")
+  clone.setAttribute("data-oc-print-clone", "1")
+  document.body.appendChild(clone)
+
   const style = document.createElement("style")
   style.setAttribute("data-oc-print", "1")
   style.textContent = `
-    @page { size: A4; margin: 14mm 16mm; }
+    /* Clon fuera de vista en pantalla (solo existe mientras dura el diálogo de impresión). */
+    #${cloneId} {
+      position: fixed;
+      left: -9999px;
+      top: 0;
+      width: 210mm;
+      max-width: 100vw;
+      opacity: 0;
+      pointer-events: none;
+      z-index: -1;
+    }
+    @page { size: A4; margin: 12mm 14mm; }
     @media print {
+      html, body {
+        height: auto !important;
+        overflow: visible !important;
+        background: white !important;
+      }
       body * { visibility: hidden !important; }
-      #${rootId}, #${rootId} * { visibility: visible !important; }
-      #${rootId} {
+      #${cloneId}, #${cloneId} * { visibility: visible !important; }
+      #${cloneId} {
         position: absolute !important;
         left: 0 !important;
         top: 0 !important;
         width: 100% !important;
+        max-width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        opacity: 1 !important;
+        z-index: auto !important;
         background: white !important;
+        box-shadow: none !important;
       }
     }
   `
   document.head.appendChild(style)
+
+  let cleaned = false
+  const cleanup = () => {
+    if (cleaned) return
+    cleaned = true
+    style.remove()
+    clone.remove()
+    window.removeEventListener("afterprint", cleanup)
+  }
+
+  window.addEventListener("afterprint", cleanup)
   window.print()
-  document.head.removeChild(style)
+  /* Si afterprint no dispara (poco frecuente), no dejar el clon en el DOM para siempre. */
+  window.setTimeout(cleanup, 120_000)
 }
