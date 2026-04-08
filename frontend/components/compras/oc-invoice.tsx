@@ -78,45 +78,49 @@ export function OcInvoicePrint({ header, details }: OcInvoiceProps) {
         className="oc-invoice-sheet mx-auto w-full max-w-full bg-white px-4 py-6 text-[15px] shadow-sm sm:px-7 sm:py-8 sm:text-[16px] md:px-9 md:py-9 md:text-[17px] print:px-0 print:py-0 print:text-base print:shadow-none"
         style={{ fontFamily: "system-ui, 'Segoe UI', Roboto, sans-serif" }}
       >
-        {/* Cabecera documento */}
-        <header className="border-b border-slate-200 pb-6">
-          <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
-            <div className="flex min-w-0 flex-col items-center gap-4 sm:flex-row sm:items-start sm:gap-6">
+        {/* Cabecera: 3 columnas horizontales — logo | empresa/sucursal | OC/fechas */}
+        <header className="border-b border-slate-200 pb-4 print:pb-3">
+          <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-4 gap-y-2 sm:gap-x-6">
+            {/* Izquierda: logo */}
+            <div className="flex justify-start self-start pt-0.5">
               <img
                 src={LOGO_URL}
                 alt="Grupo Quillotana"
-                className="h-20 max-w-[min(100%,340px)] shrink-0 object-contain object-left sm:h-24 sm:max-w-[380px]"
+                className="h-14 w-auto max-h-[3.25rem] max-w-[200px] object-contain object-left sm:h-[3.5rem] sm:max-w-[220px] print:h-[3.25rem] print:max-w-[200px]"
               />
-              <div className="min-w-0 text-center sm:text-left">
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">
-                  Orden de compra
-                </p>
-                <h1 className="mt-1 text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
-                  ORDEN DE COMPRA
-                </h1>
-                <p className="mt-3 text-xl font-semibold leading-tight text-slate-900 sm:text-2xl">
-                  {companyDisplay(header)}
-                </p>
-                <p className="mt-2 text-base text-slate-600 sm:text-lg">
-                  <span className="text-slate-500">Sucursal:</span>{" "}
-                  <span className="font-medium text-slate-800">{officeDisplay(header)}</span>
-                </p>
-              </div>
             </div>
 
-            <div className="flex shrink-0 flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50/80 px-5 py-4 text-base sm:min-w-[12rem] sm:text-right">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">N° OC</p>
-                <p className="text-3xl font-bold tabular-nums text-slate-900 sm:text-4xl">{header.oc_id}</p>
-              </div>
-              <div className="space-y-1.5 border-t border-slate-200/80 pt-3 text-slate-700">
-                <p>
+            {/* Centro: título + empresa (grande) + sucursal */}
+            <div className="min-w-0 px-1 text-center sm:px-2">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500 sm:text-[11px]">
+                Orden de compra
+              </p>
+              <h1 className="mt-0.5 text-lg font-bold leading-tight tracking-tight text-slate-900 sm:text-xl print:text-[1.35rem]">
+                ORDEN DE COMPRA
+              </h1>
+              <p className="mt-2 text-xl font-bold leading-snug text-slate-900 sm:text-2xl md:text-[1.65rem] print:text-[1.6rem]">
+                {companyDisplay(header)}
+              </p>
+              <p className="mt-1 text-sm text-slate-600 sm:text-[0.95rem]">
+                <span className="text-slate-500">Sucursal:</span>{" "}
+                <span className="font-semibold text-slate-800">{officeDisplay(header)}</span>
+              </p>
+            </div>
+
+            {/* Derecha: N° OC + fechas alineadas a la derecha */}
+            <div className="min-w-[7.5rem] shrink-0 text-right sm:min-w-[9rem]">
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 sm:text-xs">N° OC</p>
+              <p className="mt-0.5 text-2xl font-bold tabular-nums leading-none text-slate-900 sm:text-3xl print:text-[1.85rem]">
+                {header.oc_id}
+              </p>
+              <div className="mt-2 space-y-0.5 text-xs text-slate-700 sm:text-sm">
+                <p className="tabular-nums">
                   <span className="text-slate-500">Emisión:</span>{" "}
-                  <span className="font-medium tabular-nums text-slate-900">{fmtDate(header.fecha_emision)}</span>
+                  <span className="font-semibold text-slate-900">{fmtDate(header.fecha_emision)}</span>
                 </p>
-                <p>
+                <p className="tabular-nums">
                   <span className="text-slate-500">Entrega:</span>{" "}
-                  <span className="font-medium tabular-nums text-slate-900">{fmtDate(header.fecha_entrega)}</span>
+                  <span className="font-semibold text-slate-900">{fmtDate(header.fecha_entrega)}</span>
                 </p>
               </div>
             </div>
