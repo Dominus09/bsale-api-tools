@@ -2,7 +2,6 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { useState } from "react"
 import {
   LayoutDashboard,
   TrendingUp,
@@ -14,7 +13,6 @@ import {
   Users,
   Settings,
   ChevronRight,
-  ChevronDown,
   ClipboardList,
   Tag,
   ScanLine,
@@ -25,8 +23,11 @@ import {
   FileSpreadsheet,
   ScrollText,
   Store,
+  ChevronsLeft,
+  ChevronsRight,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
 type NavItem = {
   href: string
@@ -89,24 +90,62 @@ const navSections: { title: string; items: NavItem[] }[] = [
   },
 ]
 
-export function Sidebar() {
+type SidebarProps = {
+  compact?: boolean
+  onToggleCompact?: () => void
+}
+
+export function Sidebar({ compact = false, onToggleCompact }: SidebarProps) {
   const pathname = usePathname()
 
   return (
-    <aside className="flex h-full w-64 flex-col border-r border-border bg-card">
-      <div className="flex h-16 items-center gap-2 border-b border-border px-4">
-        <img
-          src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Emblema%20auxiliar%20sin%20sucursal-3muphOJR8q7mpoZPwKQhJb7RbLYvdu.png"
-          alt="Quillotana"
-          className="h-10 w-10 object-contain"
-        />
-        <span className="font-semibold text-foreground">Quillotana ERP</span>
+    <aside
+      className={cn(
+        "flex h-full shrink-0 flex-col border-r border-border bg-card transition-[width] duration-200 ease-out",
+        compact ? "w-[4.25rem]" : "w-64",
+      )}
+    >
+      <div
+        className={cn(
+          "flex shrink-0 items-center border-b border-border",
+          compact ? "flex-col gap-2 py-3" : "h-16 gap-2 px-4",
+        )}
+      >
+        <div className={cn("flex items-center gap-2", compact ? "justify-center" : "min-w-0 flex-1")}>
+          <img
+            src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Emblema%20auxiliar%20sin%20sucursal-3muphOJR8q7mpoZPwKQhJb7RbLYvdu.png"
+            alt="Quillotana"
+            className={cn("shrink-0 object-contain", compact ? "h-8 w-8" : "h-10 w-10")}
+          />
+          {!compact ? (
+            <span className="min-w-0 truncate font-semibold text-foreground">Quillotana ERP</span>
+          ) : null}
+        </div>
+        {onToggleCompact ? (
+          <button
+            type="button"
+            onClick={onToggleCompact}
+            className={cn(
+              "flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+              compact ? "" : "ml-auto",
+            )}
+            aria-label={compact ? "Expandir menú lateral" : "Modo compacto (solo iconos)"}
+            title={compact ? "Expandir menú" : "Solo iconos"}
+          >
+            {compact ? <ChevronsRight className="h-5 w-5" /> : <ChevronsLeft className="h-5 w-5" />}
+          </button>
+        ) : null}
       </div>
 
-      <nav className="flex-1 overflow-y-auto p-3">
+      <nav className="flex-1 overflow-y-auto overflow-x-hidden p-2">
         {navSections.map((section) => (
           <div key={section.title} className="mb-4">
-            <div className="mb-2 px-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            <div
+              className={cn(
+                "mb-2 px-3 text-xs font-medium uppercase tracking-wider text-muted-foreground",
+                compact && "sr-only",
+              )}
+            >
               {section.title}
             </div>
             <div className="space-y-1">
@@ -115,41 +154,74 @@ export function Sidebar() {
                 const isDisabled = item.disabled
 
                 if (isDisabled) {
-                  return (
+                  const disabledNode = (
                     <div
-                      key={item.label}
-                      className="flex cursor-not-allowed items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted-foreground/50"
+                      className={cn(
+                        "flex cursor-not-allowed items-center rounded-lg text-sm font-medium text-muted-foreground/50",
+                        compact ? "justify-center px-2 py-2.5" : "gap-3 px-3 py-2",
+                      )}
                     >
-                      <item.icon className="h-4 w-4" />
-                      {item.label}
+                      <item.icon className="h-4 w-4 shrink-0" />
+                      {!compact ? item.label : null}
                     </div>
+                  )
+                  if (compact) {
+                    return (
+                      <Tooltip key={item.label}>
+                        <TooltipTrigger asChild>{disabledNode}</TooltipTrigger>
+                        <TooltipContent side="right">{item.label} (próximamente)</TooltipContent>
+                      </Tooltip>
+                    )
+                  }
+                  return <div key={item.label}>{disabledNode}</div>
+                }
+
+                const linkInner = (
+                  <Link
+                    href={item.href}
+                    className={cn(
+                      "flex items-center rounded-lg text-sm font-medium transition-colors",
+                      compact ? "justify-center px-2 py-2.5" : "gap-3 px-3 py-2",
+                      isActive
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+                    )}
+                  >
+                    <item.icon className="h-4 w-4 shrink-0" />
+                    {!compact ? (
+                      <>
+                        <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                        {isActive ? <ChevronRight className="ml-auto h-4 w-4 shrink-0" /> : null}
+                      </>
+                    ) : null}
+                  </Link>
+                )
+
+                if (compact) {
+                  return (
+                    <Tooltip key={item.href}>
+                      <TooltipTrigger asChild>{linkInner}</TooltipTrigger>
+                      <TooltipContent side="right">{item.label}</TooltipContent>
+                    </Tooltip>
                   )
                 }
 
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={cn(
-                      "flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                      isActive
-                        ? "bg-primary text-primary-foreground"
-                        : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                    )}
-                  >
-                    <item.icon className="h-4 w-4" />
-                    {item.label}
-                    {isActive && <ChevronRight className="ml-auto h-4 w-4" />}
-                  </Link>
-                )
+                return <div key={item.href}>{linkInner}</div>
               })}
             </div>
           </div>
         ))}
       </nav>
 
-      <div className="border-t border-border p-4">
-        <p className="text-xs text-muted-foreground">Grupo Quillotana ERP v1.0</p>
+      <div className={cn("border-t border-border", compact ? "p-2" : "p-4")}>
+        <p
+          className={cn(
+            "text-xs text-muted-foreground",
+            compact && "sr-only",
+          )}
+        >
+          Grupo Quillotana ERP v1.0
+        </p>
       </div>
     </aside>
   )

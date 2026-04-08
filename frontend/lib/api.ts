@@ -182,6 +182,7 @@ export interface PurchaseAnalysisRow {
   /** Coalesce(units_per_box útil, 1) — base para cajas_sugeridas y reglas de estado. */
   units_per_box_eff: number
   cajas_sugeridas: number
+  /** estado_sistema (backend / vista). No usar como etiqueta en UI; el front calcula estado_usuario. */
   status: string
   costo_total_compra: number
 }

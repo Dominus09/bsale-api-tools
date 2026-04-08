@@ -23,7 +23,6 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
@@ -48,7 +47,10 @@ import {
 import { cn } from "@/lib/utils"
 
 const NONE = "__none__"
-const TABLE_COLS = 13
+const TABLE_COLS = 12
+
+type EstadoUsuario = "COMPRAR" | "REVISAR" | "NO_COMPRAR"
+type StatusFilter = "ALL" | EstadoUsuario
 
 function rowKey(r: PurchaseAnalysisRow): string {
   return `a-${r.company_id}-${r.office_id}-${r.variant_id}`
@@ -113,7 +115,7 @@ function NameCellWithTooltip({
 }) {
   const c = cleanDisplayName(raw) || "—"
   const body = (
-    <span className={cn("line-clamp-4 whitespace-normal break-words text-sm leading-snug", className)}>
+    <span className={cn("line-clamp-3 whitespace-normal break-words text-sm leading-snug", className)}>
       {c}
     </span>
   )
@@ -155,18 +157,50 @@ function unitsToWholeBoxes(unitsRaw: number, upb: number): number {
   return cajas * box
 }
 
-function parseIntNonNeg(raw: string): number | null {
-  const t = String(raw).replace(/\D/g, "")
-  const n = t === "" ? 0 : parseInt(t, 10)
+/** Cajas = unidades / CxC; entero si cae justo, si no hasta 2 decimales. */
+function fmtCajasDisplay(qty: number, upb: number): string {
+  const b = effectiveUpb(upb)
+  if (qty <= 0) return "0"
+  const c = qty / b
+  if (Number.isInteger(c)) return String(c)
+  return fmtInputMax2(c)
+}
+
+function parseCajasDecimal(raw: string): number | null {
+  const t = String(raw).replace(",", ".").trim()
+  if (t === "") return null
+  const n = parseFloat(t)
   if (!Number.isFinite(n) || n < 0) return null
   return n
 }
 
-/** Texto de cajas (entero) cuando unidades ya están alineadas a CxC. */
-function fmtCajasEnteras(qty: number, upb: number): string {
-  const b = effectiveUpb(upb)
-  if (qty <= 0) return "0"
-  return String(Math.round(qty / b))
+/** Menos de ~7 días de stock según promedio diario → prioridad en la tabla. */
+function isCriticalRow(r: PurchaseAnalysisRow): boolean {
+  const stock = Number(r.stock_actual) || 0
+  if (stock <= 0) return true
+  const pd = Number(r.promedio_diario) || 0
+  if (pd <= 0) return false
+  return stock / pd < 7
+}
+
+function estadoUsuarioForAnalysis(qty: number, touched: boolean): EstadoUsuario {
+  const q = roundMax2(qty)
+  if (q <= 0) return "NO_COMPRAR"
+  if (touched) return "REVISAR"
+  return "COMPRAR"
+}
+
+function sortEstadoRank(e: EstadoUsuario): number {
+  switch (e) {
+    case "COMPRAR":
+      return 1
+    case "REVISAR":
+      return 2
+    case "NO_COMPRAR":
+      return 3
+    default:
+      return 4
+  }
 }
 
 /**
@@ -193,11 +227,15 @@ type ManualDraft = {
   cantidad: number
 }
 
+type DisplayRow =
+  | { kind: "manual"; key: string; m: ManualDraft }
+  | { kind: "analysis"; key: string; r: PurchaseAnalysisRow }
+
 function manualEffectiveUpb(m: ManualDraft): number {
   return m.units_per_box != null && m.units_per_box > 0 ? m.units_per_box : 1
 }
 
-function statusRowClass(status: string): string {
+function statusRowClass(status: EstadoUsuario | string): string {
   switch (status) {
     case "COMPRAR":
       return "bg-emerald-500/12 hover:bg-emerald-500/18"
@@ -208,6 +246,21 @@ function statusRowClass(status: string): string {
     default:
       return "bg-muted/40"
   }
+}
+
+function EstadoUsuarioBadge({ estado }: { estado: EstadoUsuario }) {
+  return (
+    <span
+      className={cn(
+        "rounded-full px-2 py-0.5 text-xs font-medium",
+        estado === "COMPRAR" && "bg-emerald-600/25 text-emerald-900",
+        estado === "REVISAR" && "bg-amber-500/30 text-amber-950",
+        estado === "NO_COMPRAR" && "bg-red-600/25 text-red-900",
+      )}
+    >
+      {estado}
+    </span>
+  )
 }
 
 export default function GenerarOcPage() {
@@ -226,7 +279,9 @@ export default function GenerarOcPage() {
   const [qtyByKey, setQtyByKey] = useState<Record<string, number>>({})
   const [costoByKey, setCostoByKey] = useState<Record<string, number>>({})
   const [upbByKey, setUpbByKey] = useState<Record<string, number>>({})
-  const [excluded, setExcluded] = useState<Set<string>>(() => new Set())
+  /** Filas de análisis editadas por el usuario tras la última carga o «Sugerir compra» → estado_usuario REVISAR. */
+  const [analysisTouchedKeys, setAnalysisTouchedKeys] = useState<Set<string>>(() => new Set())
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL")
   const [manualRows, setManualRows] = useState<ManualDraft[]>([])
 
   const [addOpen, setAddOpen] = useState(false)
@@ -260,6 +315,10 @@ export default function GenerarOcPage() {
   const sid = supplierId !== NONE ? parseInt(supplierId, 10) : NaN
   const filtersReady = Number.isFinite(cid) && Number.isFinite(oid) && Number.isFinite(sid)
 
+  const markAnalysisTouched = useCallback((key: string) => {
+    setAnalysisTouchedKeys((prev) => new Set(prev).add(key))
+  }, [])
+
   useEffect(() => {
     getCompanies()
       .then(setCompanies)
@@ -283,7 +342,7 @@ export default function GenerarOcPage() {
     setQtyByKey({})
     setCostoByKey({})
     setUpbByKey({})
-    setExcluded(new Set())
+    setAnalysisTouchedKeys(new Set())
     setManualRows([])
   }, [cid])
 
@@ -311,7 +370,7 @@ export default function GenerarOcPage() {
       setQtyByKey(q)
       setCostoByKey(c)
       setUpbByKey(u)
-      setExcluded(new Set())
+      setAnalysisTouchedKeys(new Set())
     } catch (e) {
       setAnalysis([])
       setError(e instanceof Error ? e.message : "Error al cargar datos")
@@ -327,31 +386,30 @@ export default function GenerarOcPage() {
       setQtyByKey({})
       setCostoByKey({})
       setUpbByKey({})
-      setExcluded(new Set())
+      setAnalysisTouchedKeys(new Set())
       setManualRows([])
     }
   }, [filtersReady, loadAnalysis])
 
-  const updateUnidadesAnalysis = (key: string, raw: string, ex: boolean) => {
-    if (ex) return
+  const updateUnidadesAnalysis = (key: string, raw: string) => {
     const n = parseFloat(raw.replace(",", "."))
     if (!Number.isFinite(n) || n < 0) return
-    const upb = effectiveUpb(upbByKey[key])
     setQtyByKey((prev) => ({
       ...prev,
-      [key]: unitsToWholeBoxes(n, upb),
+      [key]: roundMax2(n),
     }))
+    markAnalysisTouched(key)
   }
 
-  const updateCajasAnalysis = (key: string, raw: string, ex: boolean) => {
-    if (ex) return
-    const cajas = parseIntNonNeg(raw)
+  const updateCajasAnalysis = (key: string, raw: string) => {
+    const cajas = parseCajasDecimal(raw)
     if (cajas === null) return
     const upb = effectiveUpb(upbByKey[key])
     setQtyByKey((prev) => ({
       ...prev,
-      [key]: cajas * upb,
+      [key]: roundMax2(cajas * upb),
     }))
+    markAnalysisTouched(key)
   }
 
   const updateCostoAnalysis = (key: string, raw: string) => {
@@ -360,16 +418,18 @@ export default function GenerarOcPage() {
       ...prev,
       [key]: Number.isFinite(n) && n >= 0 ? n : 0,
     }))
+    markAnalysisTouched(key)
   }
 
   const updateUpbAnalysis = (key: string, raw: string) => {
     let n = parseInt(raw.replace(/\D/g, ""), 10)
     if (!Number.isFinite(n) || n <= 0) n = 1
     setUpbByKey((prev) => ({ ...prev, [key]: n }))
-    setQtyByKey((prev) => {
-      const cur = prev[key] ?? 0
-      return { ...prev, [key]: unitsToWholeBoxes(cur, n) }
-    })
+    setQtyByKey((prev) => ({
+      ...prev,
+      [key]: roundMax2(prev[key] ?? 0),
+    }))
+    markAnalysisTouched(key)
   }
 
   const patchManual = (key: string, fn: (m: ManualDraft) => ManualDraft) => {
@@ -381,16 +441,16 @@ export default function GenerarOcPage() {
     if (!Number.isFinite(n) || n < 0) return
     patchManual(key, (m) => ({
       ...m,
-      cantidad: unitsToWholeBoxes(n, manualEffectiveUpb(m)),
+      cantidad: roundMax2(n),
     }))
   }
 
   const updateManualCajas = (key: string, raw: string) => {
-    const cajas = parseIntNonNeg(raw)
+    const cajas = parseCajasDecimal(raw)
     if (cajas === null) return
     patchManual(key, (m) => ({
       ...m,
-      cantidad: cajas * manualEffectiveUpb(m),
+      cantidad: roundMax2(cajas * manualEffectiveUpb(m)),
     }))
   }
 
@@ -406,21 +466,17 @@ export default function GenerarOcPage() {
     patchManual(key, (m) => ({
       ...m,
       units_per_box: n,
-      cantidad: unitsToWholeBoxes(m.cantidad, n),
+      cantidad: roundMax2(m.cantidad),
     }))
-  }
-
-  const toggleExclude = (key: string) => {
-    setExcluded((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
   }
 
   const applySuggestCompra = useCallback(() => {
     if (!filtersReady || analysis.length === 0) return
+    setAnalysisTouchedKeys((prev) => {
+      const next = new Set(prev)
+      for (const r of analysis) next.delete(rowKey(r))
+      return next
+    })
     setQtyByKey((prev) => {
       const next = { ...prev }
       for (const r of analysis) {
@@ -463,7 +519,6 @@ export default function GenerarOcPage() {
       setError("Costo inválido")
       return
     }
-    const upbEff = upb != null && Number.isFinite(upb) && upb > 0 ? upb : 1
     const row: ManualDraft = {
       key: `m-${typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : String(Date.now())}`,
       product_type_name: manualForm.product_type_name.trim() || "",
@@ -472,7 +527,7 @@ export default function GenerarOcPage() {
       barcode: manualForm.barcode.trim() || "",
       costo_bruto: cost,
       units_per_box: upb != null && Number.isFinite(upb) && upb > 0 ? upb : null,
-      cantidad: unitsToWholeBoxes(qty, upbEff),
+      cantidad: roundMax2(qty),
     }
     setManualRows((prev) => [...prev, row])
     setError("")
@@ -497,10 +552,9 @@ export default function GenerarOcPage() {
     }[] = []
     for (const r of analysis) {
       const k = rowKey(r)
-      if (excluded.has(k)) continue
       const qtyRaw = qtyByKey[k] ?? 0
       const upb = effectiveUpb(upbByKey[k])
-      const qty = unitsToWholeBoxes(qtyRaw, upb)
+      const qty = roundMax2(qtyRaw)
       if (qty <= 0) continue
       out.push({
         variant_id: r.variant_id,
@@ -515,7 +569,7 @@ export default function GenerarOcPage() {
     }
     for (const m of manualRows) {
       const mupb = manualEffectiveUpb(m)
-      const mcant = unitsToWholeBoxes(m.cantidad, mupb)
+      const mcant = roundMax2(m.cantidad)
       if (mcant <= 0) continue
       out.push({
         variant_id: null,
@@ -529,7 +583,54 @@ export default function GenerarOcPage() {
       })
     }
     return out
-  }, [analysis, excluded, qtyByKey, costoByKey, upbByKey, manualRows, filtersReady])
+  }, [analysis, qtyByKey, costoByKey, upbByKey, manualRows, filtersReady])
+
+  const orderSummary = useMemo(() => {
+    let total = 0
+    let cajas = 0
+    let productos = 0
+    for (const line of linesToSubmit) {
+      const upb = line.units_per_box != null && line.units_per_box > 0 ? line.units_per_box : 1
+      total += line.cantidad * line.costo_unitario
+      cajas += line.cantidad / upb
+      productos += 1
+    }
+    return { total, cajas, productos }
+  }, [linesToSubmit])
+
+  const displayRows = useMemo(() => {
+    const items: DisplayRow[] = [
+      ...manualRows.map((m) => ({ kind: "manual" as const, key: m.key, m })),
+      ...analysis.map((r) => ({ kind: "analysis" as const, key: rowKey(r), r })),
+    ]
+
+    const estadoOf = (item: DisplayRow): EstadoUsuario => {
+      if (item.kind === "manual") {
+        return roundMax2(item.m.cantidad) > 0 ? "COMPRAR" : "NO_COMPRAR"
+      }
+      const qty = qtyByKey[item.key] ?? 0
+      return estadoUsuarioForAnalysis(qty, analysisTouchedKeys.has(item.key))
+    }
+
+    const filtered = items.filter((item) => {
+      if (statusFilter === "ALL") return true
+      return estadoOf(item) === statusFilter
+    })
+
+    filtered.sort((a, b) => {
+      const ca = a.kind === "analysis" && isCriticalRow(a.r) ? 0 : 1
+      const cb = b.kind === "analysis" && isCriticalRow(b.r) ? 0 : 1
+      if (ca !== cb) return ca - cb
+      const ea = sortEstadoRank(estadoOf(a))
+      const eb = sortEstadoRank(estadoOf(b))
+      if (ea !== eb) return ea - eb
+      const na = a.kind === "manual" ? a.m.product_name : a.r.product_name
+      const nb = b.kind === "manual" ? b.m.product_name : b.r.product_name
+      return (na || "").localeCompare(nb || "", "es")
+    })
+
+    return filtered
+  }, [manualRows, analysis, qtyByKey, analysisTouchedKeys, statusFilter])
 
   const openConfirm = () => {
     if (!filtersReady) {
@@ -537,7 +638,7 @@ export default function GenerarOcPage() {
       return
     }
     if (linesToSubmit.length === 0) {
-      setError("No hay líneas para la orden (revisa cantidades o inclusiones)")
+      setError("No hay líneas para la orden (revisa cantidades mayores a cero)")
       return
     }
     setError("")
@@ -658,6 +759,24 @@ export default function GenerarOcPage() {
         <Button type="button" onClick={openConfirm} disabled={!filtersReady || loadingAnalysis}>
           Generar orden de compra
         </Button>
+        <div className="flex min-w-[12rem] flex-1 flex-wrap items-center gap-2 sm:flex-initial">
+          <Label className="whitespace-nowrap text-xs text-slate-600">Filtrar estado</Label>
+          <Select
+            value={statusFilter}
+            onValueChange={(v) => setStatusFilter(v as StatusFilter)}
+            disabled={!filtersReady}
+          >
+            <SelectTrigger className="h-9 w-[11rem] bg-white">
+              <SelectValue placeholder="Estado" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">Todos</SelectItem>
+              <SelectItem value="COMPRAR">COMPRAR</SelectItem>
+              <SelectItem value="REVISAR">REVISAR</SelectItem>
+              <SelectItem value="NO_COMPRAR">NO_COMPRAR</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
         {loadingAnalysis ? (
           <span className="inline-flex items-center gap-2 text-sm text-slate-500">
             <Loader2 className="size-4 animate-spin" />
@@ -670,106 +789,54 @@ export default function GenerarOcPage() {
         <div className="border-b border-slate-100 px-5 py-3">
           <h2 className="text-sm font-medium text-slate-800">Líneas</h2>
           <p className="text-xs text-slate-500">
-            COMPRAR · verde · REVISAR · amarillo · NO_COMPRAR · rojo. CxC = bsale.variants.units_per_box (resp.
-            SEC en descripción). Solo cajas completas: las unidades siempre son múltiplo de CxC.{" "}
+            El estado mostrado es el <span className="font-medium text-slate-600">estado_usuario</span> (recalculado
+            aquí). El backend sigue enviando <span className="font-medium text-slate-600">estado_sistema</span> en el
+            campo API <span className="font-mono text-slate-700">status</span> (no se muestra).{" "}
             <span className="font-medium text-slate-600">
-              Sugerir compra recalcula con cobertura de 14 días (promedio diario = ventas 30 días ÷ 30).
+              Sugerir compra: cobertura 14 días y cajas completas. Edición manual: permite unidades fraccionadas respecto
+              de CxC.
             </span>
           </p>
         </div>
-        <div className="min-w-0 overflow-x-auto p-2">
-          <Table>
-            <TableHeader>
-              <TableRow className="border-slate-200 hover:bg-transparent">
-                <TableHead className="w-10 text-center">Ok</TableHead>
-                <TableHead>Estado</TableHead>
-                <TableHead>Tipo</TableHead>
-                <TableHead>Producto</TableHead>
-                <TableHead>Variante</TableHead>
-                <TableHead className="text-right">Stock</TableHead>
-                <TableHead className="text-right whitespace-nowrap">
-                  7 días / 30 días
-                </TableHead>
-                <TableHead className="text-right">Costo bruto</TableHead>
-                <TableHead className="text-right" title="Cantidad por caja (units_per_box)">
+        <div className="grid gap-3 border-b border-slate-100 px-5 py-3 sm:grid-cols-3">
+          <div>
+            <p className="text-xs text-slate-500">Total compra (líneas con cantidad &gt; 0)</p>
+            <p className="text-lg font-semibold tabular-nums text-slate-900">
+              ${fmtNum(orderSummary.total, 0)}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs text-slate-500">Total cajas (equiv.)</p>
+            <p className="text-lg font-semibold tabular-nums text-slate-900">
+              {fmtNum(orderSummary.cajas, 2)}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs text-slate-500">Productos en OC</p>
+            <p className="text-lg font-semibold tabular-nums text-slate-900">{orderSummary.productos}</p>
+          </div>
+        </div>
+        <div className="max-h-[min(72vh,820px)] min-w-0 overflow-auto">
+          <table className="w-full min-w-[1180px] border-collapse text-sm">
+            <TableHeader className="sticky top-0 z-30 border-b border-slate-200 bg-white shadow-[0_1px_0_0_rgb(226_232_240)] [&_tr]:border-slate-200 [&_tr]:hover:bg-transparent">
+              <TableRow>
+                <TableHead className="bg-white">Estado</TableHead>
+                <TableHead className="min-w-[7rem] bg-white">Tipo</TableHead>
+                <TableHead className="min-w-[10rem] max-w-[min(320px,40vw)] bg-white">Producto</TableHead>
+                <TableHead className="min-w-[12rem] max-w-[min(480px,52vw)] bg-white">Variante</TableHead>
+                <TableHead className="bg-white text-right">Stock</TableHead>
+                <TableHead className="bg-white text-right whitespace-nowrap">7 días / 30 días</TableHead>
+                <TableHead className="bg-white text-right">Costo bruto</TableHead>
+                <TableHead className="bg-white text-right" title="Cantidad por caja (units_per_box)">
                   CxC
                 </TableHead>
-                <TableHead className="text-right">Unidades</TableHead>
-                <TableHead className="text-right">Cajas</TableHead>
-                <TableHead className="text-right tabular-nums">Total</TableHead>
-                <TableHead className="w-14" />
+                <TableHead className="bg-white text-right">Unidades</TableHead>
+                <TableHead className="bg-white text-right">Cajas</TableHead>
+                <TableHead className="bg-white text-right tabular-nums">Total</TableHead>
+                <TableHead className="w-[4.5rem] bg-white" />
               </TableRow>
             </TableHeader>
             <TableBody>
-              {manualRows.map((m) => {
-                const upb = manualEffectiveUpb(m)
-                const total = m.cantidad * m.costo_bruto
-                return (
-                  <TableRow key={m.key} className="border-slate-200 bg-sky-500/10">
-                    <TableCell className="text-center">—</TableCell>
-                    <TableCell>
-                      <span className="rounded-full bg-sky-600/20 px-2 py-0.5 text-xs font-medium text-sky-900">
-                        Manual
-                      </span>
-                    </TableCell>
-                    <TableCell className="min-w-[8rem] max-w-[min(260px,30vw)] align-top text-slate-600">
-                      <NameCellWithTooltip raw={m.product_type_name} />
-                    </TableCell>
-                    <TableCell className="min-w-[12rem] max-w-[min(380px,40vw)] align-top">
-                      <NameCellWithTooltip raw={m.product_name} className="font-medium text-slate-900" />
-                    </TableCell>
-                    <TableCell className="min-w-[12rem] max-w-[min(440px,44vw)] align-top text-slate-600">
-                      <NameCellWithTooltip raw={m.variant_name} />
-                    </TableCell>
-                    <TableCell className="text-right">—</TableCell>
-                    <TableCell className="text-right">—</TableCell>
-                    <TableCell className="text-right align-middle">
-                      <Input
-                        className="ml-auto h-8 w-[6.5rem] tabular-nums text-right"
-                        inputMode="numeric"
-                        value={fmtCostoInput(m.costo_bruto)}
-                        onChange={(e) => updateManualCosto(m.key, e.target.value)}
-                      />
-                    </TableCell>
-                    <TableCell className="text-right align-middle">
-                      <Input
-                        className="ml-auto h-8 w-14 tabular-nums text-right"
-                        inputMode="numeric"
-                        value={String(upb)}
-                        onChange={(e) => updateManualUpb(m.key, e.target.value)}
-                      />
-                    </TableCell>
-                    <TableCell className="text-right align-middle">
-                      <Input
-                        className="ml-auto h-8 w-[6.5rem] tabular-nums text-right"
-                        inputMode="decimal"
-                        value={fmtInputMax2(m.cantidad)}
-                        onChange={(e) => updateManualUnidades(m.key, e.target.value)}
-                      />
-                    </TableCell>
-                    <TableCell className="text-right align-middle">
-                      <Input
-                        className="ml-auto h-8 w-[6.5rem] tabular-nums text-right"
-                        inputMode="numeric"
-                        value={fmtCajasEnteras(m.cantidad, upb)}
-                        onChange={(e) => updateManualCajas(m.key, e.target.value)}
-                      />
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums font-medium align-middle">{fmtNum(total, 0)}</TableCell>
-                    <TableCell>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="text-red-600"
-                        onClick={() => removeManual(m.key)}
-                      >
-                        Quitar
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                )
-              })}
               {analysis.length === 0 && manualRows.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={TABLE_COLS} className="py-12 text-center text-slate-500">
@@ -779,43 +846,113 @@ export default function GenerarOcPage() {
                   </TableCell>
                 </TableRow>
               ) : null}
-              {analysis.map((r) => {
-                const k = rowKey(r)
-                const ex = excluded.has(k)
+              {filtersReady &&
+              analysis.length + manualRows.length > 0 &&
+              displayRows.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={TABLE_COLS} className="py-10 text-center text-slate-500">
+                    Ninguna fila coincide con el filtro de estado. Cambia el filtro o revisa cantidades.
+                  </TableCell>
+                </TableRow>
+              ) : null}
+              {displayRows.map((item) => {
+                if (item.kind === "manual") {
+                  const m = item.m
+                  const upb = manualEffectiveUpb(m)
+                  const estado: EstadoUsuario = roundMax2(m.cantidad) > 0 ? "COMPRAR" : "NO_COMPRAR"
+                  const total = m.cantidad * m.costo_bruto
+                  return (
+                    <TableRow
+                      key={item.key}
+                      className={cn("border-slate-200 bg-sky-500/10", statusRowClass(estado))}
+                    >
+                      <TableCell className="align-top">
+                        <div className="flex flex-col gap-1">
+                          <EstadoUsuarioBadge estado={estado} />
+                          <span className="text-[10px] font-medium uppercase tracking-wide text-sky-800">
+                            Manual
+                          </span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="max-w-[min(280px,36vw)] whitespace-normal align-top text-slate-600">
+                        <NameCellWithTooltip raw={m.product_type_name} />
+                      </TableCell>
+                      <TableCell className="max-w-[min(320px,40vw)] whitespace-normal align-top">
+                        <NameCellWithTooltip raw={m.product_name} className="font-medium text-slate-900" />
+                      </TableCell>
+                      <TableCell className="max-w-[min(480px,52vw)] whitespace-normal align-top text-slate-600">
+                        <NameCellWithTooltip raw={m.variant_name} />
+                      </TableCell>
+                      <TableCell className="text-right">—</TableCell>
+                      <TableCell className="text-right">—</TableCell>
+                      <TableCell className="text-right align-middle">
+                        <Input
+                          className="ml-auto h-8 w-[6.5rem] tabular-nums text-right"
+                          inputMode="decimal"
+                          value={fmtCostoInput(m.costo_bruto)}
+                          onChange={(e) => updateManualCosto(m.key, e.target.value)}
+                        />
+                      </TableCell>
+                      <TableCell className="text-right align-middle">
+                        <Input
+                          className="ml-auto h-8 w-14 tabular-nums text-right"
+                          inputMode="numeric"
+                          value={String(upb)}
+                          onChange={(e) => updateManualUpb(m.key, e.target.value)}
+                        />
+                      </TableCell>
+                      <TableCell className="text-right align-middle">
+                        <Input
+                          className="ml-auto h-8 w-[6.5rem] tabular-nums text-right"
+                          inputMode="decimal"
+                          value={fmtInputMax2(m.cantidad)}
+                          onChange={(e) => updateManualUnidades(m.key, e.target.value)}
+                        />
+                      </TableCell>
+                      <TableCell className="text-right align-middle">
+                        <Input
+                          className="ml-auto h-8 w-[6.5rem] tabular-nums text-right"
+                          inputMode="decimal"
+                          value={fmtCajasDisplay(m.cantidad, upb)}
+                          onChange={(e) => updateManualCajas(m.key, e.target.value)}
+                        />
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums font-medium align-middle">
+                        {fmtNum(total, 0)}
+                      </TableCell>
+                      <TableCell className="align-middle">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="text-red-600"
+                          onClick={() => removeManual(m.key)}
+                        >
+                          Quitar
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  )
+                }
+                const r = item.r
+                const k = item.key
                 const qty = qtyByKey[k] ?? 0
                 const upb = effectiveUpb(upbByKey[k])
                 const unit = costoByKey[k] ?? 0
                 const total = qty * unit
+                const estado = estadoUsuarioForAnalysis(qty, analysisTouchedKeys.has(k))
                 return (
-                  <TableRow key={k} className={cn("border-slate-200", statusRowClass(r.status), ex && "opacity-40")}>
-                    <TableCell className="text-center">
-                      <input
-                        type="checkbox"
-                        checked={!ex}
-                        onChange={() => toggleExclude(k)}
-                        className="size-4 accent-slate-900"
-                        aria-label="Incluir en la orden"
-                      />
+                  <TableRow key={k} className={cn("border-slate-200", statusRowClass(estado))}>
+                    <TableCell className="align-top">
+                      <EstadoUsuarioBadge estado={estado} />
                     </TableCell>
-                    <TableCell>
-                      <span
-                        className={cn(
-                          "rounded-full px-2 py-0.5 text-xs font-medium",
-                          r.status === "COMPRAR" && "bg-emerald-600/25 text-emerald-900",
-                          r.status === "REVISAR" && "bg-amber-500/30 text-amber-950",
-                          r.status === "NO_COMPRAR" && "bg-red-600/25 text-red-900",
-                        )}
-                      >
-                        {r.status}
-                      </span>
-                    </TableCell>
-                    <TableCell className="min-w-[8rem] max-w-[min(260px,30vw)] align-top text-slate-600">
+                    <TableCell className="min-w-[7rem] whitespace-normal align-top text-slate-600">
                       <NameCellWithTooltip raw={r.product_type_name} />
                     </TableCell>
-                    <TableCell className="min-w-[12rem] max-w-[min(380px,40vw)] align-top">
+                    <TableCell className="max-w-[min(320px,40vw)] whitespace-normal align-top">
                       <NameCellWithTooltip raw={r.product_name} className="font-medium text-slate-900" />
                     </TableCell>
-                    <TableCell className="min-w-[12rem] max-w-[min(440px,44vw)] align-top text-slate-600">
+                    <TableCell className="max-w-[min(480px,52vw)] whitespace-normal align-top text-slate-600">
                       <NameCellWithTooltip raw={r.variant_name} />
                     </TableCell>
                     <TableCell className="text-right tabular-nums align-middle">{fmtNum(r.stock_actual, 0)}</TableCell>
@@ -825,9 +962,8 @@ export default function GenerarOcPage() {
                     <TableCell className="text-right align-middle">
                       <Input
                         className="ml-auto h-8 w-[6.5rem] tabular-nums text-right"
-                        inputMode="numeric"
+                        inputMode="decimal"
                         value={fmtCostoInput(unit)}
-                        disabled={ex}
                         onChange={(e) => updateCostoAnalysis(k, e.target.value)}
                       />
                     </TableCell>
@@ -836,7 +972,6 @@ export default function GenerarOcPage() {
                         className="ml-auto h-8 w-14 tabular-nums text-right"
                         inputMode="numeric"
                         value={String(upb)}
-                        disabled={ex}
                         onChange={(e) => updateUpbAnalysis(k, e.target.value)}
                       />
                     </TableCell>
@@ -845,17 +980,15 @@ export default function GenerarOcPage() {
                         className="ml-auto h-8 w-[6.5rem] tabular-nums text-right"
                         inputMode="decimal"
                         value={fmtInputMax2(qty)}
-                        disabled={ex}
-                        onChange={(e) => updateUnidadesAnalysis(k, e.target.value, ex)}
+                        onChange={(e) => updateUnidadesAnalysis(k, e.target.value)}
                       />
                     </TableCell>
                     <TableCell className="text-right align-middle">
                       <Input
                         className="ml-auto h-8 w-[6.5rem] tabular-nums text-right"
-                        inputMode="numeric"
-                        value={fmtCajasEnteras(qty, upb)}
-                        disabled={ex}
-                        onChange={(e) => updateCajasAnalysis(k, e.target.value, ex)}
+                        inputMode="decimal"
+                        value={fmtCajasDisplay(qty, upb)}
+                        onChange={(e) => updateCajasAnalysis(k, e.target.value)}
                       />
                     </TableCell>
                     <TableCell className="text-right tabular-nums font-medium text-slate-900 align-middle">
@@ -866,7 +999,7 @@ export default function GenerarOcPage() {
                 )
               })}
             </TableBody>
-          </Table>
+          </table>
         </div>
       </section>
 

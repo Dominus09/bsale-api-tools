@@ -15,6 +15,7 @@ export default function DashboardLayout({
   const router = useRouter()
   const [isChecking, setIsChecking] = useState(true)
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [sidebarCompact, setSidebarCompact] = useState(false)
 
   useEffect(() => {
     if (!isAuthenticated()) {
@@ -41,7 +42,9 @@ export default function DashboardLayout({
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
-      {sidebarOpen ? <Sidebar /> : null}
+      {sidebarOpen ? (
+        <Sidebar compact={sidebarCompact} onToggleCompact={() => setSidebarCompact((c) => !c)} />
+      ) : null}
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <Header
           sidebarOpen={sidebarOpen}
