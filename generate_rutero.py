@@ -3,9 +3,9 @@
 Asigna dia_atencion (Lunes–Sábado) a clientes con georreferencia, por vendedor.
 
 - Usa bsale_id como clave de actualización.
-- KMeans (6 clusters) si el vendedor tiene ≥6 clientes; reparto por módulo si tiene menos.
+- Orden geográfico (lat, lon) y reparto en 6 bloques de tamaño ~igual (sin KMeans).
 
-Requisitos: pip install pandas scikit-learn psycopg2-binary python-dotenv
+Requisitos: pip install pandas psycopg2-binary python-dotenv
 Variables de entorno (mismo esquema que sync_clients): PG_HOST, PG_DB, PG_USER, PG_PASSWORD
 
 Ejecución manual:
@@ -19,9 +19,7 @@ import argparse
 import logging
 import os
 import sys
-from collections import defaultdict
 
-import numpy as np
 import pandas as pd
 import psycopg2
 from psycopg2.extras import execute_batch
@@ -32,8 +30,6 @@ try:
     load_dotenv()
 except ImportError:
     pass
-
-from sklearn.cluster import KMeans
 
 logging.basicConfig(
     level=logging.INFO,
@@ -71,49 +67,70 @@ def connect():
 
 
 def assign_days_modulo(n: int) -> list[str]:
+    """Menos de 6 clientes: reparto circular Lunes→Sábado."""
     return [DIAS[i % 6] for i in range(n)]
 
 
-def assign_days_kmeans(lat: np.ndarray, lon: np.ndarray) -> list[str]:
-    """KMeans con 6 clusters; días asignados según orden geográfico de centroides (norte→sur, luego lon)."""
-    n = len(lat)
+def assign_days_equal_chunks(n: int) -> list[str]:
+    """
+    n >= 6: orden ya aplicado fuera; asignar secuencialmente por bloques.
+    chunk_size = n // 6 → Lunes..Viernes reciben chunk_size; Sábado absorbe el resto.
+    """
     if n == 0:
         return []
-    coords = np.column_stack([lat, lon])
-    k = min(6, n)
-    if k < 6:
+    if n < 6:
         return assign_days_modulo(n)
 
-    kmeans = KMeans(n_clusters=6, random_state=42, n_init=10)
-    labels = kmeans.fit_predict(coords)
-    centers = kmeans.cluster_centers_
-
-    # Orden estable: latitud descendente (norte primero), luego longitud ascendente.
-    # lexsort: última fila del tuple es la clave primaria → (-lat, lon).
-    sort_order = np.lexsort((centers[:, 1], -centers[:, 0]))
-    rank_by_cluster = {int(cluster_idx): rank for rank, cluster_idx in enumerate(sort_order)}
-
-    return [DIAS[rank_by_cluster[int(lab)]] for lab in labels]
+    chunk_size = n // 6
+    out: list[str] = []
+    pos = 0
+    for d in range(6):
+        if d < 5:
+            take = chunk_size
+        else:
+            take = n - pos
+        out.extend([DIAS[d]] * take)
+        pos += take
+    assert len(out) == n, (len(out), n)
+    return out
 
 
 def process_vendor(sub: pd.DataFrame) -> pd.DataFrame:
-    """Devuelve sub con columna dia_atencion."""
+    """Ordena por lat, lon y asigna dia_atencion con bloques equitativos."""
     sub = sub.copy()
     n = len(sub)
     if n == 0:
         sub["dia_atencion"] = []
         return sub
 
-    lat = sub["lat"].astype(float).values
-    lon = sub["lon"].astype(float).values
-
-    if n >= 6:
-        dias = assign_days_kmeans(lat, lon)
-    else:
-        dias = assign_days_modulo(n)
-
-    sub["dia_atencion"] = dias
+    sorted_sub = sub.sort_values(by=["lat", "lon"], kind="mergesort")
+    dias = assign_days_equal_chunks(n)
+    sorted_sub = sorted_sub.assign(dia_atencion=dias)
+    # Devolver en el orden original del grupo (índice original)
+    sub["dia_atencion"] = sorted_sub["dia_atencion"].reindex(sub.index)
     return sub
+
+
+def log_vendor_balance(vendedor: str, sub: pd.DataFrame) -> None:
+    """Cuentas por día; avisa si min/max difieren mucho."""
+    c = sub.groupby("dia_atencion", sort=False).size()
+    counts = pd.Series({d: int(c.get(d, 0)) for d in DIAS})
+    lo, hi = int(counts.min()), int(counts.max())
+    rango = hi - lo
+    log.info(
+        "  %r → por día %s | min=%d max=%d rango=%d",
+        vendedor,
+        dict(zip(DIAS, counts.tolist())),
+        lo,
+        hi,
+        rango,
+    )
+    if rango > 1 and len(sub) >= 6:
+        log.warning(
+            "  %r: rango %d (esperable cuando n%%6!=0 el sábado concentra el remanente)",
+            vendedor,
+            rango,
+        )
 
 
 def main() -> int:
@@ -145,7 +162,6 @@ def main() -> int:
 
     log.info("Total filas cargadas: %d", len(df))
 
-    # Log clientes por vendedor
     counts = df.groupby("vendedor").size().sort_values(ascending=False)
     log.info("Clientes por vendedor (top 20):")
     for v, c in counts.head(20).items():
@@ -154,14 +170,15 @@ def main() -> int:
         log.info("  ... (%d vendedores en total)", len(counts))
 
     out_frames: list[pd.DataFrame] = []
+    log.info("Distribución por vendedor y día (validación equilibrio):")
     for vendedor, sub in df.groupby("vendedor", sort=True):
         processed = process_vendor(sub)
         out_frames.append(processed)
+        log_vendor_balance(vendedor, processed)
         log.info(
-            "Vendedor %r: %d clientes → %s",
+            "Vendedor %r: %d clientes → orden lat/lon + bloques (chunk=n//6, sábado=resto)",
             vendedor,
             len(processed),
-            "KMeans(6)" if len(processed) >= 6 else "módulo 6",
         )
 
     result = pd.concat(out_frames, ignore_index=True)
@@ -171,16 +188,24 @@ def main() -> int:
 
     log.info("Total registros a actualizar: %d", len(updates))
 
-    # Distribución por día y vendedor
     dist = (
         result.groupby(["vendedor", "dia_atencion"])
         .size()
         .reset_index(name="cantidad")
         .sort_values(["vendedor", "dia_atencion"])
     )
-    log.info("Distribución por vendedor y día (fragmento, hasta 40 filas):")
-    with pd.option_context("display.max_rows", 40, "display.width", 120):
-        log.info("\n%s", dist.head(40).to_string(index=False))
+    log.info("Tabla distribución (fragmento, hasta 48 filas):")
+    with pd.option_context("display.max_rows", 48, "display.width", 120):
+        log.info("\n%s", dist.head(48).to_string(index=False))
+
+    # Resumen global por día (todos los vendedores)
+    global_day = result.groupby("dia_atencion").size().reindex(DIAS, fill_value=0)
+    log.info(
+        "Totales globales por día: %s | min=%d max=%d",
+        dict(zip(DIAS, global_day.tolist())),
+        int(global_day.min()),
+        int(global_day.max()),
+    )
 
     if args.dry_run:
         log.info("Dry-run: no se aplicaron cambios en la base de datos.")
@@ -202,6 +227,9 @@ def main() -> int:
     print("\n--- Resumen: vendedor | dia_atencion | cantidad ---")
     print(dist.to_string(index=False))
     print(f"\nTotal procesados: {len(updates)}")
+    print("\n--- Totales por día (todos los vendedores) ---")
+    for d in DIAS:
+        print(f"  {d}: {int(global_day[d])}")
 
     return 0
 

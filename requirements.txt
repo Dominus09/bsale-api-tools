@@ -10,4 +10,3 @@ pyjwt
 python-jose[cryptography]
 python-multipart
 pandas
-scikit-learn
