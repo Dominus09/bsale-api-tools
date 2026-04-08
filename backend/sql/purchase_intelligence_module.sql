@@ -10,7 +10,7 @@ CREATE SCHEMA IF NOT EXISTS bsale;
 
 -- =============================================================================
 -- ETAPA A — variants.units_per_box + backfill (formato Bsale: "(SEC 6)", "(SEC 12)")
--- Patrón: literal SEC + espacios opcionales + dígitos (primer grupo capturado).
+-- Patrón: SEC + espacios + dígitos; regexp_match[2] = grupo (número). [[:space:]] por POSIX.
 -- No sobrescribe filas con units_per_box ya informado.
 -- =============================================================================
 ALTER TABLE bsale.variants
@@ -19,14 +19,14 @@ ALTER TABLE bsale.variants
 UPDATE bsale.variants v
 SET units_per_box = (regexp_match(
     UPPER(COALESCE(v.description, '')),
-    E'SEC\s*([0-9]+)'
-))[1]::integer
+    E'SEC[[:space:]]*([0-9]+)'
+))[2]::integer
 WHERE (v.units_per_box IS NULL OR v.units_per_box = 0)
-  AND UPPER(COALESCE(v.description, '')) ~ E'SEC\s*[0-9]+'
+  AND UPPER(COALESCE(v.description, '')) ~ E'SEC[[:space:]]*[0-9]+'
   AND (regexp_match(
         UPPER(COALESCE(v.description, '')),
-        E'SEC\s*([0-9]+)'
-    ))[1]::integer > 0;
+        E'SEC[[:space:]]*([0-9]+)'
+    ))[2]::integer > 0;
 
 -- =============================================================================
 -- ETAPA B — Vistas de ventas y auxiliares
@@ -230,11 +230,11 @@ enriched AS (
     CROSS JOIN LATERAL (
         SELECT
             CASE
-                WHEN UPPER(COALESCE(v.description, '')) ~ E'SEC\s*[0-9]+'
+                WHEN UPPER(COALESCE(v.description, '')) ~ E'SEC[[:space:]]*[0-9]+'
                 THEN (regexp_match(
                     UPPER(COALESCE(v.description, '')),
-                    E'SEC\s*([0-9]+)'
-                ))[1]::integer
+                    E'SEC[[:space:]]*([0-9]+)'
+                ))[2]::integer
                 ELSE NULL
             END AS sec_n
     ) sec

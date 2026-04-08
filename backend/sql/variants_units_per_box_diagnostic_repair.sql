@@ -8,6 +8,8 @@
 -- =============================================================================
 
 -- --- DIAGNÓSTICO 1: Variantes sin CxC útil (NULL o 0) ---
+-- Nota PG: regexp_match devuelve [1]=match completo, [2]=1er grupo (el número).
+-- Usar [[:space:]]* en lugar de \s (POSIX; \s a veces no matchea).
 SELECT
     v.company_id,
     v.bsale_id AS variant_id,
@@ -15,11 +17,11 @@ SELECT
     LEFT(v.description, 120) AS description_sample,
     (regexp_match(
         UPPER(COALESCE(v.description, '')),
-        E'SEC\s*([0-9]+)'
-    ))[1] AS sec_extraido,
+        E'SEC[[:space:]]*([0-9]+)'
+    ))[2] AS sec_extraido,
     CASE
         WHEN v.units_per_box IS NOT NULL AND v.units_per_box > 0 THEN 'OK columna'
-        WHEN UPPER(COALESCE(v.description, '')) ~ E'SEC\s*[0-9]+' THEN 'Reparable por SEC'
+        WHEN UPPER(COALESCE(v.description, '')) ~ E'SEC[[:space:]]*[0-9]+' THEN 'Reparable por SEC'
         ELSE 'Sin columna ni SEC'
     END AS estado
 FROM bsale.variants v
@@ -35,7 +37,7 @@ SELECT
     COUNT(*) FILTER (WHERE v.units_per_box IS NULL OR v.units_per_box = 0) AS sin_cxc,
     COUNT(*) FILTER (
         WHERE (v.units_per_box IS NULL OR v.units_per_box = 0)
-          AND UPPER(COALESCE(v.description, '')) ~ E'SEC\s*[0-9]+'
+          AND UPPER(COALESCE(v.description, '')) ~ E'SEC[[:space:]]*[0-9]+'
     ) AS reparables_sec
 FROM bsale.variants v
 GROUP BY v.company_id
@@ -69,14 +71,14 @@ LIMIT 50;
 UPDATE bsale.variants v
 SET units_per_box = (regexp_match(
     UPPER(COALESCE(v.description, '')),
-    E'SEC\s*([0-9]+)'
-))[1]::integer
+    E'SEC[[:space:]]*([0-9]+)'
+))[2]::integer
 WHERE (v.units_per_box IS NULL OR v.units_per_box = 0)
-  AND UPPER(COALESCE(v.description, '')) ~ E'SEC\s*[0-9]+'
+  AND UPPER(COALESCE(v.description, '')) ~ E'SEC[[:space:]]*[0-9]+'
   AND (regexp_match(
         UPPER(COALESCE(v.description, '')),
-        E'SEC\s*([0-9]+)'
-    ))[1]::integer > 0;
+        E'SEC[[:space:]]*([0-9]+)'
+    ))[2]::integer > 0;
 
 -- Verificar filas afectadas con SELECT antes en transacción:
 -- BEGIN; UPDATE ...; SELECT ...; ROLLBACK; o COMMIT;
