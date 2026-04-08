@@ -1256,16 +1256,19 @@ export default function GenerarOcPage() {
       </Dialog>
 
       <Dialog open={resultOpen} onOpenChange={setResultOpen}>
-        <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
-          <DialogHeader>
+        <DialogContent className="flex h-[min(94vh,calc(100dvh-1rem))] max-h-[min(94vh,calc(100dvh-1rem))] w-[calc(100vw-0.75rem)] max-w-[calc(100vw-0.75rem)] flex-col gap-3 overflow-hidden p-3 sm:h-auto sm:max-h-[min(94vh,960px)] sm:w-[min(96vw,1400px)] sm:max-w-[min(96vw,1400px)] sm:gap-4 sm:p-5">
+          <DialogHeader className="shrink-0 space-y-1">
             <DialogTitle>Orden generada</DialogTitle>
           </DialogHeader>
           {resultHeader ? (
-            <div id={printHostId} className="py-2">
+            <div
+              id={printHostId}
+              className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-auto sm:overflow-x-hidden rounded-md border border-slate-200/80 bg-slate-50/50 p-2 sm:p-3 print:overflow-visible print:border-0 print:bg-transparent print:p-0"
+            >
               <OcInvoicePrint header={resultHeader} details={resultDetails} />
             </div>
           ) : null}
-          <DialogFooter className="gap-2 sm:justify-end">
+          <DialogFooter className="shrink-0 gap-2 sm:justify-end">
             <Button type="button" variant="outline" onClick={() => setResultOpen(false)}>
               Cerrar
             </Button>
