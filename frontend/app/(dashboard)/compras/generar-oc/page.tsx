@@ -1,7 +1,7 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
-import { FilePlus, Loader2, Printer, Sparkles } from "lucide-react"
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react"
+import { FilePlus, Loader2, Pencil, Printer, Sparkles } from "lucide-react"
 
 import { ComprasDataStatusCard } from "@/components/compras/compras-data-status"
 import { OcInvoicePrint, triggerPrintInvoice } from "@/components/compras/oc-invoice"
@@ -51,6 +51,9 @@ const TABLE_COLS = 12
 
 type EstadoUsuario = "COMPRAR" | "REVISAR" | "NO_COMPRAR"
 type StatusFilter = "ALL" | EstadoUsuario
+
+/** Orden de filas elegido por el usuario (sin orden fijo implícito). */
+type SortByKey = "producto" | "prioridad" | "stock" | "venta"
 
 function rowKey(r: PurchaseAnalysisRow): string {
   return `a-${r.company_id}-${r.office_id}-${r.variant_id}`
@@ -190,19 +193,6 @@ function estadoUsuarioForAnalysis(qty: number, touched: boolean): EstadoUsuario 
   return "COMPRAR"
 }
 
-function sortEstadoRank(e: EstadoUsuario): number {
-  switch (e) {
-    case "COMPRAR":
-      return 1
-    case "REVISAR":
-      return 2
-    case "NO_COMPRAR":
-      return 3
-    default:
-      return 4
-  }
-}
-
 /**
  * Sugerencia 14 días: promedio_diario = ventas_30/30, demanda_14 = promedio*14,
  * crudo = max(demanda_14 - stock, 0), luego redondeo a cajas completas.
@@ -230,6 +220,31 @@ type ManualDraft = {
 type DisplayRow =
   | { kind: "manual"; key: string; m: ManualDraft }
   | { kind: "analysis"; key: string; r: PurchaseAnalysisRow }
+
+function productNameOf(item: DisplayRow): string {
+  return (item.kind === "manual" ? item.m.product_name : item.r.product_name) || ""
+}
+
+/**
+ * Prioridad: CRÍTICO → BAJO (no comprar) → COMPRAR → resto (p. ej. REVISAR).
+ */
+function prioridadSortRank(item: DisplayRow, estado: EstadoUsuario): number {
+  if (item.kind === "analysis" && isCriticalRow(item.r)) return 0
+  if (estado === "NO_COMPRAR") return 1
+  if (estado === "COMPRAR") return 2
+  return 3
+}
+
+function stockSortValue(item: DisplayRow): number {
+  if (item.kind === "manual") return Number.POSITIVE_INFINITY
+  return Number(item.r.stock_actual) || 0
+}
+
+/** Ventas 30 días; manuales quedan al final al ordenar por venta (mayor a menor). */
+function ventaSortValue(item: DisplayRow): number {
+  if (item.kind === "manual") return Number.NEGATIVE_INFINITY
+  return Number(item.r.ventas_30_dias) || 0
+}
 
 function manualEffectiveUpb(m: ManualDraft): number {
   return m.units_per_box != null && m.units_per_box > 0 ? m.units_per_box : 1
@@ -263,6 +278,28 @@ function EstadoUsuarioBadge({ estado }: { estado: EstadoUsuario }) {
   )
 }
 
+/** Fila con tooltip si solo se marcaron cambios de cantidad/cajas (sin columna extra). */
+function PurchaseLineTableRow({
+  qtyEdited,
+  className,
+  children,
+}: {
+  qtyEdited: boolean
+  className?: string
+  children: ReactNode
+}) {
+  const row = <TableRow className={className}>{children}</TableRow>
+  if (!qtyEdited) return row
+  return (
+    <Tooltip delayDuration={400}>
+      <TooltipTrigger asChild>{row}</TooltipTrigger>
+      <TooltipContent side="left" align="center" className="max-w-[16rem] text-xs font-normal">
+        Cantidad modificada manualmente
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
 export default function GenerarOcPage() {
   const [companies, setCompanies] = useState<Company[]>([])
   const [offices, setOffices] = useState<PurchaseOfficeRef[]>([])
@@ -281,7 +318,10 @@ export default function GenerarOcPage() {
   const [upbByKey, setUpbByKey] = useState<Record<string, number>>({})
   /** Filas de análisis editadas por el usuario tras la última carga o «Sugerir compra» → estado_usuario REVISAR. */
   const [analysisTouchedKeys, setAnalysisTouchedKeys] = useState<Set<string>>(() => new Set())
+  /** Solo cambios en unidades o cajas (indicador visual + tooltip; no columna nueva). */
+  const [quantityEditedKeys, setQuantityEditedKeys] = useState<Set<string>>(() => new Set())
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL")
+  const [sortBy, setSortBy] = useState<SortByKey>("producto")
   const [manualRows, setManualRows] = useState<ManualDraft[]>([])
 
   const [addOpen, setAddOpen] = useState(false)
@@ -319,6 +359,10 @@ export default function GenerarOcPage() {
     setAnalysisTouchedKeys((prev) => new Set(prev).add(key))
   }, [])
 
+  const markQuantityEdited = useCallback((key: string) => {
+    setQuantityEditedKeys((prev) => new Set(prev).add(key))
+  }, [])
+
   useEffect(() => {
     getCompanies()
       .then(setCompanies)
@@ -343,6 +387,7 @@ export default function GenerarOcPage() {
     setCostoByKey({})
     setUpbByKey({})
     setAnalysisTouchedKeys(new Set())
+    setQuantityEditedKeys(new Set())
     setManualRows([])
   }, [cid])
 
@@ -371,6 +416,7 @@ export default function GenerarOcPage() {
       setCostoByKey(c)
       setUpbByKey(u)
       setAnalysisTouchedKeys(new Set())
+      setQuantityEditedKeys(new Set())
     } catch (e) {
       setAnalysis([])
       setError(e instanceof Error ? e.message : "Error al cargar datos")
@@ -387,6 +433,7 @@ export default function GenerarOcPage() {
       setCostoByKey({})
       setUpbByKey({})
       setAnalysisTouchedKeys(new Set())
+      setQuantityEditedKeys(new Set())
       setManualRows([])
     }
   }, [filtersReady, loadAnalysis])
@@ -399,6 +446,7 @@ export default function GenerarOcPage() {
       [key]: roundMax2(n),
     }))
     markAnalysisTouched(key)
+    markQuantityEdited(key)
   }
 
   const updateCajasAnalysis = (key: string, raw: string) => {
@@ -410,6 +458,7 @@ export default function GenerarOcPage() {
       [key]: roundMax2(cajas * upb),
     }))
     markAnalysisTouched(key)
+    markQuantityEdited(key)
   }
 
   const updateCostoAnalysis = (key: string, raw: string) => {
@@ -443,6 +492,7 @@ export default function GenerarOcPage() {
       ...m,
       cantidad: roundMax2(n),
     }))
+    markQuantityEdited(key)
   }
 
   const updateManualCajas = (key: string, raw: string) => {
@@ -452,6 +502,7 @@ export default function GenerarOcPage() {
       ...m,
       cantidad: roundMax2(cajas * manualEffectiveUpb(m)),
     }))
+    markQuantityEdited(key)
   }
 
   const updateManualCosto = (key: string, raw: string) => {
@@ -473,6 +524,11 @@ export default function GenerarOcPage() {
   const applySuggestCompra = useCallback(() => {
     if (!filtersReady || analysis.length === 0) return
     setAnalysisTouchedKeys((prev) => {
+      const next = new Set(prev)
+      for (const r of analysis) next.delete(rowKey(r))
+      return next
+    })
+    setQuantityEditedKeys((prev) => {
       const next = new Set(prev)
       for (const r of analysis) next.delete(rowKey(r))
       return next
@@ -535,6 +591,11 @@ export default function GenerarOcPage() {
   }
 
   const removeManual = (key: string) => {
+    setQuantityEditedKeys((prev) => {
+      const next = new Set(prev)
+      next.delete(key)
+      return next
+    })
     setManualRows((prev) => prev.filter((r) => r.key !== key))
   }
 
@@ -618,19 +679,38 @@ export default function GenerarOcPage() {
     })
 
     filtered.sort((a, b) => {
-      const ca = a.kind === "analysis" && isCriticalRow(a.r) ? 0 : 1
-      const cb = b.kind === "analysis" && isCriticalRow(b.r) ? 0 : 1
-      if (ca !== cb) return ca - cb
-      const ea = sortEstadoRank(estadoOf(a))
-      const eb = sortEstadoRank(estadoOf(b))
-      if (ea !== eb) return ea - eb
-      const na = a.kind === "manual" ? a.m.product_name : a.r.product_name
-      const nb = b.kind === "manual" ? b.m.product_name : b.r.product_name
-      return (na || "").localeCompare(nb || "", "es")
+      const ea = estadoOf(a)
+      const eb = estadoOf(b)
+      const na = productNameOf(a)
+      const nb = productNameOf(b)
+      let cmp = 0
+      switch (sortBy) {
+        case "producto":
+          cmp = na.localeCompare(nb, "es")
+          break
+        case "prioridad": {
+          cmp = prioridadSortRank(a, ea) - prioridadSortRank(b, eb)
+          if (cmp === 0) cmp = na.localeCompare(nb, "es")
+          break
+        }
+        case "stock": {
+          cmp = stockSortValue(a) - stockSortValue(b)
+          if (!Number.isFinite(cmp) || cmp === 0) cmp = na.localeCompare(nb, "es")
+          break
+        }
+        case "venta": {
+          cmp = ventaSortValue(b) - ventaSortValue(a)
+          if (!Number.isFinite(cmp) || cmp === 0) cmp = na.localeCompare(nb, "es")
+          break
+        }
+        default:
+          cmp = na.localeCompare(nb, "es")
+      }
+      return cmp
     })
 
     return filtered
-  }, [manualRows, analysis, qtyByKey, analysisTouchedKeys, statusFilter])
+  }, [manualRows, analysis, qtyByKey, analysisTouchedKeys, statusFilter, sortBy])
 
   const openConfirm = () => {
     if (!filtersReady) {
@@ -777,6 +857,24 @@ export default function GenerarOcPage() {
             </SelectContent>
           </Select>
         </div>
+        <div className="flex min-w-[12rem] flex-wrap items-center gap-2">
+          <Label className="whitespace-nowrap text-xs text-slate-600">Ordenar por</Label>
+          <Select
+            value={sortBy}
+            onValueChange={(v) => setSortBy(v as SortByKey)}
+            disabled={!filtersReady}
+          >
+            <SelectTrigger className="h-9 w-[10.5rem] bg-white">
+              <SelectValue placeholder="Orden" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="producto">Producto</SelectItem>
+              <SelectItem value="prioridad">Prioridad</SelectItem>
+              <SelectItem value="stock">Stock</SelectItem>
+              <SelectItem value="venta">Venta</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
         {loadingAnalysis ? (
           <span className="inline-flex items-center gap-2 text-sm text-slate-500">
             <Loader2 className="size-4 animate-spin" />
@@ -861,14 +959,28 @@ export default function GenerarOcPage() {
                   const upb = manualEffectiveUpb(m)
                   const estado: EstadoUsuario = roundMax2(m.cantidad) > 0 ? "COMPRAR" : "NO_COMPRAR"
                   const total = m.cantidad * m.costo_bruto
+                  const qtyEdited = quantityEditedKeys.has(item.key)
                   return (
-                    <TableRow
+                    <PurchaseLineTableRow
                       key={item.key}
-                      className={cn("border-slate-200 bg-sky-500/10", statusRowClass(estado))}
+                      qtyEdited={qtyEdited}
+                      className={cn(
+                        "border-slate-200 bg-sky-500/10",
+                        statusRowClass(estado),
+                        qtyEdited && "border-l-[3px] border-l-sky-600/80 bg-sky-500/[0.14]",
+                      )}
                     >
                       <TableCell className="align-top">
                         <div className="flex flex-col gap-1">
-                          <EstadoUsuarioBadge estado={estado} />
+                          <div className="flex flex-wrap items-center gap-1">
+                            <EstadoUsuarioBadge estado={estado} />
+                            {qtyEdited ? (
+                              <Pencil
+                                className="size-3.5 shrink-0 text-sky-800/85"
+                                aria-hidden
+                              />
+                            ) : null}
+                          </div>
                           <span className="text-[10px] font-medium uppercase tracking-wide text-sky-800">
                             Manual
                           </span>
@@ -931,7 +1043,7 @@ export default function GenerarOcPage() {
                           Quitar
                         </Button>
                       </TableCell>
-                    </TableRow>
+                    </PurchaseLineTableRow>
                   )
                 }
                 const r = item.r
@@ -941,10 +1053,24 @@ export default function GenerarOcPage() {
                 const unit = costoByKey[k] ?? 0
                 const total = qty * unit
                 const estado = estadoUsuarioForAnalysis(qty, analysisTouchedKeys.has(k))
+                const qtyEdited = quantityEditedKeys.has(k)
                 return (
-                  <TableRow key={k} className={cn("border-slate-200", statusRowClass(estado))}>
+                  <PurchaseLineTableRow
+                    key={k}
+                    qtyEdited={qtyEdited}
+                    className={cn(
+                      "border-slate-200",
+                      statusRowClass(estado),
+                      qtyEdited && "border-l-[3px] border-l-sky-600/80 bg-slate-50/90",
+                    )}
+                  >
                     <TableCell className="align-top">
-                      <EstadoUsuarioBadge estado={estado} />
+                      <div className="flex flex-wrap items-center gap-1">
+                        <EstadoUsuarioBadge estado={estado} />
+                        {qtyEdited ? (
+                          <Pencil className="size-3.5 shrink-0 text-sky-800/85" aria-hidden />
+                        ) : null}
+                      </div>
                     </TableCell>
                     <TableCell className="min-w-[7rem] whitespace-normal align-top text-slate-600">
                       <NameCellWithTooltip raw={r.product_type_name} />
@@ -995,7 +1121,7 @@ export default function GenerarOcPage() {
                       {fmtNum(total, 0)}
                     </TableCell>
                     <TableCell />
-                  </TableRow>
+                  </PurchaseLineTableRow>
                 )
               })}
             </TableBody>
