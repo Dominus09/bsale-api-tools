@@ -23,6 +23,7 @@ import {
   FileSpreadsheet,
   ScrollText,
   Store,
+  MapPin,
   ChevronsLeft,
   ChevronsRight,
 } from "lucide-react"
@@ -66,6 +67,10 @@ const navSections: { title: string; items: NavItem[] }[] = [
       { href: "/compras/proveedores", label: "Proveedores", icon: Store },
       { href: "/compras/productos", label: "Productos", icon: Boxes },
     ],
+  },
+  {
+    title: "Distribuidora",
+    items: [{ href: "/distribuidora/mapa", label: "Mapa rutero", icon: MapPin }],
   },
   {
     title: "Operaciones",

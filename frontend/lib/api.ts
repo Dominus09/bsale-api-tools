@@ -566,6 +566,44 @@ export async function getProductsWithoutCost(): Promise<ProductWithoutCost[]> {
   }
 }
 
+/** Cliente del rutero para mapa (API /distribuidora/mapa). */
+export interface DistribuidoraMapaCliente {
+  bsale_id: number
+  first_name: string | null
+  last_name: string | null
+  nombre_fantasia: string | null
+  phone: string | null
+  vendedor: string | null
+  dia_atencion: string | null
+  dia_extra: string | null
+  municipality: string | null
+  lat: number
+  lon: number
+  tipo_atencion: string | null
+  orden_ruta: number | null
+}
+
+export interface DistribuidoraPuntoBase {
+  vendedor: string | null
+  nombre: string | null
+  lat: number
+  lon: number
+}
+
+export async function getDistribuidoraMapa(): Promise<{
+  clientes: DistribuidoraMapaCliente[]
+  bases: DistribuidoraPuntoBase[]
+}> {
+  const res = await fetch(`${API_URL}/distribuidora/mapa`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar mapa del rutero")
+  }
+  return res.json()
+}
+
 export async function getSuppliers(name?: string): Promise<Supplier[]> {
   const qs = new URLSearchParams()
   const companyId = getCompanyId()
