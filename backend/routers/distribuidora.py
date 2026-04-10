@@ -16,6 +16,17 @@ def _as_float(value) -> float | None:
     return float(value)
 
 
+def _clientes_validos_coords(clientes: list[dict]) -> list[dict]:
+    return [
+        c
+        for c in clientes
+        if c.get("lat") is not None
+        and c.get("lon") is not None
+        and float(c["lat"]) != 0
+        and float(c["lon"]) != 0
+    ]
+
+
 def _clientes_orden_visita_desde_ors(clientes: list[dict], route: dict) -> list[dict]:
     """
     Intenta ordenar clientes según steps[].way_points[0] de ORS (índices al mismo orden de coords
@@ -159,14 +170,7 @@ def get_ruta_detalle(
     finally:
         conn.close()
 
-    clientes = [
-        c
-        for c in clientes
-        if c.get("lat") is not None
-        and c.get("lon") is not None
-        and float(c["lat"]) != 0
-        and float(c["lon"]) != 0
-    ]
+    clientes = _clientes_validos_coords(clientes)
     print("TOTAL CLIENTES VALIDOS:", len(clientes))
 
     if len(clientes) == 0:
@@ -228,6 +232,204 @@ def get_ruta_detalle(
         "clientes": clientes_ordenados,
         "base": base,
     }
+
+
+@router.get("/analisis-km")
+def get_analisis_km(
+    max_pares: int = Query(
+        300,
+        ge=1,
+        le=800,
+        description="Máximo de combinaciones vendedor+día a evaluar (cada una llama a ORS).",
+    ),
+):
+    """
+    Kilómetros ORS por vendedor y día (base → clientes → base), ordenado de mayor a menor km.
+    `eficiencia` = km / cliente (promedio km por visita).
+    """
+    from backend.utils.ors_client import get_route
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT DISTINCT
+                TRIM(COALESCE(vendedor::text, '')) AS vendedor,
+                TRIM(COALESCE(dia_atencion::text, '')) AS dia
+            FROM bsale.rutero
+            WHERE company_id = 3
+              AND activo = TRUE
+              AND lat IS NOT NULL
+              AND lon IS NOT NULL
+              AND LOWER(tipo_atencion) <> 'telefonico'
+              AND TRIM(COALESCE(vendedor::text, '')) <> ''
+              AND TRIM(COALESCE(dia_atencion::text, '')) <> ''
+            ORDER BY vendedor, dia_atencion
+            LIMIT %s
+            """,
+            (max_pares,),
+        )
+        pares = _rows_to_json(cur)
+
+        resultados: list[dict] = []
+        for p in pares:
+            v = (p.get("vendedor") or "").strip()
+            d = (p.get("dia") or "").strip()
+            if not v or not d:
+                continue
+
+            cur.execute(
+                """
+                SELECT vendedor, nombre, lat, lon
+                FROM bsale.puntos_base
+                WHERE LOWER(vendedor) = LOWER(%s)
+                LIMIT 1
+                """,
+                (v,),
+            )
+            bases = _rows_to_json(cur)
+            if not bases:
+                resultados.append(
+                    {
+                        "vendedor": v,
+                        "dia": d,
+                        "km": 0.0,
+                        "clientes": 0,
+                        "eficiencia": 0.0,
+                        "error": "sin_punto_base",
+                    }
+                )
+                continue
+            base = bases[0]
+            blon = _as_float(base.get("lon"))
+            blat = _as_float(base.get("lat"))
+            if blon is None or blat is None:
+                resultados.append(
+                    {
+                        "vendedor": v,
+                        "dia": d,
+                        "km": 0.0,
+                        "clientes": 0,
+                        "eficiencia": 0.0,
+                        "error": "base_sin_coordenadas",
+                    }
+                )
+                continue
+
+            cur.execute(
+                """
+                SELECT
+                    bsale_id,
+                    first_name,
+                    last_name,
+                    nombre_fantasia,
+                    phone,
+                    vendedor,
+                    dia_atencion,
+                    dia_extra,
+                    municipality,
+                    lat,
+                    lon,
+                    tipo_atencion,
+                    orden_ruta
+                FROM bsale.rutero
+                WHERE company_id = 3
+                  AND activo = TRUE
+                  AND LOWER(vendedor) = LOWER(%s)
+                  AND LOWER(dia_atencion) = LOWER(%s)
+                  AND lat IS NOT NULL
+                  AND lon IS NOT NULL
+                  AND LOWER(tipo_atencion) <> 'telefonico'
+                ORDER BY orden_ruta NULLS LAST, bsale_id
+                """,
+                (v, d),
+            )
+            clientes = _clientes_validos_coords(_rows_to_json(cur))
+            n = len(clientes)
+            if n == 0:
+                resultados.append(
+                    {
+                        "vendedor": v,
+                        "dia": d,
+                        "km": 0.0,
+                        "clientes": 0,
+                        "eficiencia": 0.0,
+                    }
+                )
+                continue
+
+            coords: list[list[float]] = [[float(base["lon"]), float(base["lat"])]]
+            for c in clientes:
+                coords.append([float(c["lon"]), float(c["lat"])])
+            coords.append([float(base["lon"]), float(base["lat"])])
+
+            if len(coords) > 50:
+                resultados.append(
+                    {
+                        "vendedor": v,
+                        "dia": d,
+                        "km": 0.0,
+                        "clientes": n,
+                        "eficiencia": 0.0,
+                        "error": "demasiados_puntos_ors",
+                    }
+                )
+                continue
+
+            try:
+                ors_data = get_route(coords)
+            except Exception as e:
+                print("ERROR ORS analisis-km:", v, d, str(e))
+                resultados.append(
+                    {
+                        "vendedor": v,
+                        "dia": d,
+                        "km": 0.0,
+                        "clientes": n,
+                        "eficiencia": 0.0,
+                        "error": "ors_fallo",
+                    }
+                )
+                continue
+
+            if "routes" not in ors_data or not ors_data["routes"]:
+                resultados.append(
+                    {
+                        "vendedor": v,
+                        "dia": d,
+                        "km": 0.0,
+                        "clientes": n,
+                        "eficiencia": 0.0,
+                        "error": "ors_sin_rutas",
+                    }
+                )
+                continue
+
+            summary = ors_data["routes"][0].get("summary") or {}
+            dist_m = summary.get("distance")
+            if dist_m is None:
+                km = 0.0
+            else:
+                km = float(dist_m) / 1000.0
+
+            ef = round(km / n, 2) if n else 0.0
+            resultados.append(
+                {
+                    "vendedor": v,
+                    "dia": d,
+                    "km": round(km, 1),
+                    "clientes": n,
+                    "eficiencia": ef,
+                }
+            )
+
+        cur.close()
+    finally:
+        conn.close()
+
+    resultados.sort(key=lambda r: float(r.get("km") or 0), reverse=True)
+    return resultados
 
 
 @router.get("/rutero")
