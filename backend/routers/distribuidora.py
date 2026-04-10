@@ -16,6 +16,76 @@ def _as_float(value) -> float | None:
     return float(value)
 
 
+def _clientes_orden_visita_desde_ors(clientes: list[dict], route: dict) -> list[dict]:
+    """
+    Intenta ordenar clientes según steps[].way_points[0] de ORS (índices al mismo orden de coords
+    enviadas: 0=base, 1..n=clientes, n+1=base). Si los índices no encajan (p. ej. geometría densa),
+    devuelve el mismo orden con orden_visita 1..n.
+    """
+    n = len(clientes)
+    if n == 0:
+        return []
+
+    segments = route.get("segments") or []
+    steps: list = []
+    if segments and isinstance(segments[0], dict):
+        steps = segments[0].get("steps") or []
+
+    orden_coords: list[int] = []
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        wp = step.get("way_points")
+        if not isinstance(wp, (list, tuple)) or len(wp) < 1:
+            continue
+        w0 = wp[0]
+        if isinstance(w0, int):
+            orden_coords.append(w0)
+
+    orden_final = list(dict.fromkeys(orden_coords))
+    max_idx_valido = n + 1  # coords: 0..n+1
+
+    indices_cliente: list[int] = []
+    for idx in orden_final:
+        if idx == 0 or idx == max_idx_valido:
+            continue
+        if not isinstance(idx, int):
+            continue
+        if 1 <= idx <= n:
+            indices_cliente.append(idx)
+
+    indices_unicos: list[int] = []
+    vistos: set[int] = set()
+    for idx in indices_cliente:
+        if idx not in vistos:
+            vistos.add(idx)
+            indices_unicos.append(idx)
+
+    if not indices_unicos:
+        salida = []
+        for i, c in enumerate(clientes, start=1):
+            fila = dict(c)
+            fila["orden_visita"] = i
+            salida.append(fila)
+        return salida
+
+    salida: list[dict] = []
+    for idx in indices_unicos:
+        fila = dict(clientes[idx - 1])
+        salida.append(fila)
+
+    for k in range(1, n + 1):
+        if k not in vistos:
+            fila = dict(clientes[k - 1])
+            salida.append(fila)
+            vistos.add(k)
+
+    for i, fila in enumerate(salida, start=1):
+        fila["orden_visita"] = i
+
+    return salida
+
+
 @router.get("/ruta-detalle")
 def get_ruta_detalle(
     vendedor: str = Query(..., min_length=1, description="Código vendedor (ej. vendedor_1)"),
@@ -147,13 +217,15 @@ def get_ruta_detalle(
     summary = route["summary"]
     geometry = route.get("geometry")
 
+    clientes_ordenados = _clientes_orden_visita_desde_ors(clientes, route)
+
     return {
         "vendedor": v,
         "dia": d,
         "km_totales": summary["distance"] / 1000,
         "minutos_totales": summary["duration"] / 60,
         "geometry": geometry,
-        "clientes": clientes,
+        "clientes": clientes_ordenados,
         "base": base,
     }
 
