@@ -4,6 +4,9 @@
 # en esa ruta y falla si COPY dejó un archivo ahí (Docker: "not a directory"). Ver .dockerignore y
 # tsconfig.json → tsBuildInfoFile en node_modules/.cache/.
 #
+# Build: `pnpm run build` usa `next build --webpack` (package.json) para evitar fallos en CI/VPS
+# con Turbopack (p. ej. exit 255 / OOM al compilar). Si hace falta más RAM: NODE_OPTIONS en Coolify.
+#
 # En Coolify (recurso "front erp"):
 # - Desactiva "Is it a static site?" / sitio estático.
 # - "Publish Directory": en Configuration → General, debajo de "Base Directory" (si tu versión
