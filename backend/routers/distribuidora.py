@@ -79,7 +79,7 @@ def get_ruta_detalle(
               AND LOWER(dia_atencion) = LOWER(%s)
               AND lat IS NOT NULL
               AND lon IS NOT NULL
-              AND COALESCE(tipo_atencion, 'terreno') <> 'telefonico'
+              AND LOWER(tipo_atencion) <> 'telefonico'
             ORDER BY orden_ruta NULLS LAST, bsale_id
             """,
             (v, d),
@@ -88,6 +88,16 @@ def get_ruta_detalle(
         cur.close()
     finally:
         conn.close()
+
+    clientes = [
+        c
+        for c in clientes
+        if c.get("lat") is not None
+        and c.get("lon") is not None
+        and float(c["lat"]) != 0
+        and float(c["lon"]) != 0
+    ]
+    print("TOTAL CLIENTES VALIDOS:", len(clientes))
 
     if len(clientes) == 0:
         return {
@@ -100,14 +110,13 @@ def get_ruta_detalle(
             "base": base,
         }
 
-    coords: list[list[float]] = [[base_lon, base_lat]]
+    coords: list[list[float]] = []
+    coords.append([float(base["lon"]), float(base["lat"])])
     for c in clientes:
-        lon = _as_float(c.get("lon"))
-        lat = _as_float(c.get("lat"))
-        if lon is None or lat is None:
-            continue
-        coords.append([lon, lat])
-    coords.append([base_lon, base_lat])
+        coords.append([float(c["lon"]), float(c["lat"])])
+    coords.append([float(base["lon"]), float(base["lat"])])
+
+    print("TOTAL COORDS ENVIADAS:", len(coords))
 
     if len(coords) < 2:
         return {"error": "No hay suficientes puntos para calcular ruta"}
@@ -117,9 +126,6 @@ def get_ruta_detalle(
             "error": "Demasiados puntos para ORS",
             "total_coords": len(coords),
         }
-
-    print("CLIENTES ENCONTRADOS:", len(clientes))
-    print("COORDENADAS:", coords)
 
     try:
         ors_data = get_route(coords)
