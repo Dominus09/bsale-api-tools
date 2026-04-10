@@ -604,6 +604,45 @@ export async function getDistribuidoraMapa(): Promise<{
   return res.json()
 }
 
+/** Filas genéricas JSON (listados /distribuidora/*). */
+export type DistribuidoraRecord = Record<string, unknown>
+
+export async function getDistribuidoraRutero(): Promise<DistribuidoraRecord[]> {
+  const res = await fetch(`${API_URL}/distribuidora/rutero`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar rutero")
+  }
+  const data = await res.json()
+  return Array.isArray(data) ? data : []
+}
+
+export async function getDistribuidoraPendientes(): Promise<DistribuidoraRecord[]> {
+  const res = await fetch(`${API_URL}/distribuidora/pendientes`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar pendientes")
+  }
+  const data = await res.json()
+  return Array.isArray(data) ? data : []
+}
+
+export async function getDistribuidoraSinGeoref(): Promise<DistribuidoraRecord[]> {
+  const res = await fetch(`${API_URL}/distribuidora/sin-georef`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar registros sin georreferencia")
+  }
+  const data = await res.json()
+  return Array.isArray(data) ? data : []
+}
+
 export async function getSuppliers(name?: string): Promise<Supplier[]> {
   const qs = new URLSearchParams()
   const companyId = getCompanyId()

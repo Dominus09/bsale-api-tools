@@ -14,7 +14,8 @@ import {
   Users,
   Settings,
   ChevronRight,
-  ChevronDown,
+  Plus,
+  Minus,
   ClipboardList,
   Tag,
   ScanLine,
@@ -26,6 +27,10 @@ import {
   ScrollText,
   Store,
   MapPin,
+  MapPinOff,
+  Route,
+  ClipboardList,
+  Wallet,
   ChevronsLeft,
   ChevronsRight,
 } from "lucide-react"
@@ -72,7 +77,13 @@ const navSections: { title: string; items: NavItem[] }[] = [
   },
   {
     title: "Distribuidora",
-    items: [{ href: "/distribuidora/mapa", label: "Mapa rutero", icon: MapPin }],
+    items: [
+      { href: "/distribuidora/mapa", label: "Mapa rutero", icon: MapPin },
+      { href: "/distribuidora/rutero", label: "Rutero", icon: Route },
+      { href: "/distribuidora/pendientes", label: "Pendientes", icon: ClipboardList },
+      { href: "/distribuidora/sin-georef", label: "Sin georef", icon: MapPinOff },
+      { href: "/distribuidora/viaticos", label: "Viáticos", icon: Wallet },
+    ],
   },
   {
     title: "Operaciones",
@@ -114,7 +125,7 @@ function sectionContainsPath(
 
 export function Sidebar({ compact = false, onToggleCompact }: SidebarProps) {
   const pathname = usePathname()
-  const [openSection, setOpenSection] = useState<string | null>(null)
+  const [openSection, setOpenSection] = useState<string | null>("Distribuidora")
 
   useEffect(() => {
     const active = navSections.find((s) => sectionContainsPath(s, pathname))
@@ -250,13 +261,11 @@ export function Sidebar({ compact = false, onToggleCompact }: SidebarProps) {
                 )}
               >
                 <span className="truncate">{section.title}</span>
-                <ChevronDown
-                  className={cn(
-                    "h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200",
-                    isOpen ? "rotate-180" : "rotate-0",
-                  )}
-                  aria-hidden
-                />
+                {isOpen ? (
+                  <Minus className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+                ) : (
+                  <Plus className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+                )}
               </button>
               {isOpen ? (
                 <div className="mt-1 space-y-1 border-l border-border pl-2 ml-2">
