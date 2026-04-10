@@ -109,19 +109,39 @@ def get_ruta_detalle(
         coords.append([lon, lat])
     coords.append([base_lon, base_lat])
 
+    if len(coords) < 2:
+        return {"error": "No hay suficientes puntos para calcular ruta"}
+
+    if len(coords) > 50:
+        return {
+            "error": "Demasiados puntos para ORS",
+            "total": len(coords),
+        }
+
+    print("CLIENTES ENCONTRADOS:", len(clientes))
+    print("COORDENADAS:", coords)
+
     try:
         ors_data = get_route(coords)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Error OpenRouteService: {e}") from e
+        print("ERROR ORS:", str(e))
+        return {
+            "error": "Fallo al calcular ruta",
+            "detalle": str(e),
+            "coords_enviadas": coords,
+        }
+
     try:
         feature = ors_data["features"][0]
         summary = feature["properties"]["summary"]
         geometry = feature["geometry"]
     except (KeyError, IndexError, TypeError) as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Respuesta ORS inesperada: {e}",
-        ) from e
+        print("ERROR ORS RESPUESTA:", str(e))
+        return {
+            "error": "Fallo al interpretar respuesta ORS",
+            "detalle": str(e),
+            "coords_enviadas": coords,
+        }
 
     return {
         "vendedor": v,
