@@ -36,7 +36,7 @@ def get_ruta_detalle(
             """
             SELECT vendedor, nombre, lat, lon
             FROM bsale.puntos_base
-            WHERE TRIM(COALESCE(vendedor::text, '')) = %s
+            WHERE LOWER(vendedor) = LOWER(%s)
             LIMIT 1
             """,
             (v,),
@@ -75,8 +75,8 @@ def get_ruta_detalle(
             FROM bsale.rutero
             WHERE company_id = 3
               AND activo = TRUE
-              AND TRIM(COALESCE(vendedor::text, '')) = %s
-              AND TRIM(COALESCE(dia_atencion::text, '')) = %s
+              AND LOWER(vendedor) = LOWER(%s)
+              AND LOWER(dia_atencion) = LOWER(%s)
               AND lat IS NOT NULL
               AND lon IS NOT NULL
               AND COALESCE(tipo_atencion, 'terreno') <> 'telefonico'
