@@ -29,7 +29,6 @@ import {
   MapPin,
   MapPinOff,
   Route,
-  ClipboardList,
   Wallet,
   ChevronsLeft,
   ChevronsRight,
