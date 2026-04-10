@@ -8,7 +8,7 @@ def get_connection():
         database=os.getenv("PG_DB"),
         user=os.getenv("PG_USER"),
         password=os.getenv("PG_PASSWORD"),
-        port=5432
+        port=os.getenv("PG_PORT", "5432"),
     )
 
     return conn

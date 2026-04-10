@@ -11,6 +11,7 @@ from backend.routers.catalog import router as catalog_router
 from backend.routers import alerts
 from backend.routers import companies
 from backend.routers import dashboard
+from backend.routers import distribuidora
 from backend.routers import margin_export
 from backend.routers import margin_problems
 from backend.routers import margins
@@ -77,6 +78,9 @@ app.include_router(purchases.router)
 app.include_router(uploads.router)
 app.include_router(margin_problems.router)
 app.include_router(margin_export.router)
+
+# --- Distribuidora ---
+app.include_router(distribuidora.router)
 
 # --- ERP ---
 app.include_router(erp_router)
