@@ -1,6 +1,8 @@
 node_modules
 .next
 .git
+# Evita conflicto con el mount de caché de Nixpacks/Coolify en /app/tsconfig.tsbuildinfo (debe ser dir o ausente).
+tsconfig.tsbuildinfo
 *.md
 .env*
 npm-debug.log*

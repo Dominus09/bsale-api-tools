@@ -1,5 +1,9 @@
 # Next.js en modo servidor (SSR / App Router). Requiere `pnpm start` → `next start`, NO nginx estático.
 #
+# Deploy Nixpacks: no commitear `tsconfig.tsbuildinfo` en la raíz del frontend; Coolify monta caché
+# en esa ruta y falla si COPY dejó un archivo ahí (Docker: "not a directory"). Ver .dockerignore y
+# tsconfig.json → tsBuildInfoFile en node_modules/.cache/.
+#
 # En Coolify (recurso "front erp"):
 # - Desactiva "Is it a static site?" / sitio estático.
 # - "Publish Directory": en Configuration → General, debajo de "Base Directory" (si tu versión
