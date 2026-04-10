@@ -115,7 +115,7 @@ def get_ruta_detalle(
     if len(coords) > 50:
         return {
             "error": "Demasiados puntos para ORS",
-            "total": len(coords),
+            "total_coords": len(coords),
         }
 
     print("CLIENTES ENCONTRADOS:", len(clientes))
@@ -131,15 +131,35 @@ def get_ruta_detalle(
             "coords_enviadas": coords,
         }
 
+    if "features" not in ors_data:
+        print("ERROR ORS RESPUESTA: clave 'features' ausente")
+        return {
+            "error": "ORS no devolvió ruta válida",
+            "respuesta_ors": ors_data,
+        }
+
+    features = ors_data.get("features", [])
+    if not features:
+        return {
+            "error": "ORS no retornó features",
+        }
+
+    feat0 = features[0]
     try:
-        feature = ors_data["features"][0]
-        summary = feature["properties"]["summary"]
-        geometry = feature["geometry"]
-    except (KeyError, IndexError, TypeError) as e:
+        summary = feat0["properties"]["summary"]
+        geometry = feat0["geometry"]
+    except (KeyError, TypeError, IndexError) as e:
         print("ERROR ORS RESPUESTA:", str(e))
         return {
             "error": "Fallo al interpretar respuesta ORS",
             "detalle": str(e),
+            "coords_enviadas": coords,
+        }
+
+    if not isinstance(summary, dict) or "distance" not in summary or "duration" not in summary:
+        return {
+            "error": "Fallo al interpretar respuesta ORS",
+            "detalle": "summary sin distance/duration",
             "coords_enviadas": coords,
         }
 
