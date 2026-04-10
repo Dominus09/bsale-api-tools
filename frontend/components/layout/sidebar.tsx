@@ -1,5 +1,6 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import {
@@ -13,6 +14,7 @@ import {
   Users,
   Settings,
   ChevronRight,
+  ChevronDown,
   ClipboardList,
   Tag,
   ScanLine,
@@ -100,8 +102,24 @@ type SidebarProps = {
   onToggleCompact?: () => void
 }
 
+function sectionContainsPath(
+  section: (typeof navSections)[number],
+  pathname: string,
+): boolean {
+  return section.items.some((item) => {
+    if (item.disabled || !item.href || item.href === "#") return false
+    return pathname === item.href || pathname.startsWith(item.href + "/")
+  })
+}
+
 export function Sidebar({ compact = false, onToggleCompact }: SidebarProps) {
   const pathname = usePathname()
+  const [openSection, setOpenSection] = useState<string | null>(null)
+
+  useEffect(() => {
+    const active = navSections.find((s) => sectionContainsPath(s, pathname))
+    if (active) setOpenSection(active.title)
+  }, [pathname])
 
   return (
     <aside
@@ -143,79 +161,111 @@ export function Sidebar({ compact = false, onToggleCompact }: SidebarProps) {
       </div>
 
       <nav className="flex-1 overflow-y-auto overflow-x-hidden p-2">
-        {navSections.map((section) => (
-          <div key={section.title} className="mb-4">
-            <div
-              className={cn(
-                "mb-2 px-3 text-xs font-medium uppercase tracking-wider text-muted-foreground",
-                compact && "sr-only",
-              )}
-            >
-              {section.title}
-            </div>
-            <div className="space-y-1">
-              {section.items.map((item) => {
-                const isActive = pathname === item.href || pathname.startsWith(item.href + "/")
-                const isDisabled = item.disabled
+        {navSections.map((section) => {
+          const renderItem = (item: NavItem) => {
+            const isActive =
+              !item.disabled &&
+              item.href !== "#" &&
+              (pathname === item.href || pathname.startsWith(item.href + "/"))
+            const isDisabled = item.disabled
 
-                if (isDisabled) {
-                  const disabledNode = (
-                    <div
-                      className={cn(
-                        "flex cursor-not-allowed items-center rounded-lg text-sm font-medium text-muted-foreground/50",
-                        compact ? "justify-center px-2 py-2.5" : "gap-3 px-3 py-2",
-                      )}
-                    >
-                      <item.icon className="h-4 w-4 shrink-0" />
-                      {!compact ? item.label : null}
-                    </div>
-                  )
-                  if (compact) {
-                    return (
-                      <Tooltip key={item.label}>
-                        <TooltipTrigger asChild>{disabledNode}</TooltipTrigger>
-                        <TooltipContent side="right">{item.label} (próximamente)</TooltipContent>
-                      </Tooltip>
-                    )
-                  }
-                  return <div key={item.label}>{disabledNode}</div>
-                }
-
-                const linkInner = (
-                  <Link
-                    href={item.href}
-                    className={cn(
-                      "flex items-center rounded-lg text-sm font-medium transition-colors",
-                      compact ? "justify-center px-2 py-2.5" : "gap-3 px-3 py-2",
-                      isActive
-                        ? "bg-primary text-primary-foreground"
-                        : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
-                    )}
-                  >
-                    <item.icon className="h-4 w-4 shrink-0" />
-                    {!compact ? (
-                      <>
-                        <span className="min-w-0 flex-1 truncate">{item.label}</span>
-                        {isActive ? <ChevronRight className="ml-auto h-4 w-4 shrink-0" /> : null}
-                      </>
-                    ) : null}
-                  </Link>
+            if (isDisabled) {
+              const disabledNode = (
+                <div
+                  className={cn(
+                    "flex cursor-not-allowed items-center rounded-lg text-sm font-medium text-muted-foreground/50",
+                    compact ? "justify-center px-2 py-2.5" : "gap-3 px-3 py-2",
+                  )}
+                >
+                  <item.icon className="h-4 w-4 shrink-0" />
+                  {!compact ? item.label : null}
+                </div>
+              )
+              if (compact) {
+                return (
+                  <Tooltip key={item.label}>
+                    <TooltipTrigger asChild>{disabledNode}</TooltipTrigger>
+                    <TooltipContent side="right">{item.label} (próximamente)</TooltipContent>
+                  </Tooltip>
                 )
+              }
+              return <div key={item.label}>{disabledNode}</div>
+            }
 
-                if (compact) {
-                  return (
-                    <Tooltip key={item.href}>
-                      <TooltipTrigger asChild>{linkInner}</TooltipTrigger>
-                      <TooltipContent side="right">{item.label}</TooltipContent>
-                    </Tooltip>
-                  )
+            const linkInner = (
+              <Link
+                href={item.href}
+                className={cn(
+                  "flex items-center rounded-lg text-sm font-medium transition-colors",
+                  compact ? "justify-center px-2 py-2.5" : "gap-3 px-3 py-2",
+                  isActive
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+                )}
+              >
+                <item.icon className="h-4 w-4 shrink-0" />
+                {!compact ? (
+                  <>
+                    <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                    {isActive ? <ChevronRight className="ml-auto h-4 w-4 shrink-0" /> : null}
+                  </>
+                ) : null}
+              </Link>
+            )
+
+            if (compact) {
+              return (
+                <Tooltip key={item.href}>
+                  <TooltipTrigger asChild>{linkInner}</TooltipTrigger>
+                  <TooltipContent side="right">{item.label}</TooltipContent>
+                </Tooltip>
+              )
+            }
+
+            return <div key={item.href}>{linkInner}</div>
+          }
+
+          if (compact) {
+            return (
+              <div key={section.title} className="mb-4">
+                <div className="sr-only">{section.title}</div>
+                <div className="space-y-1">{section.items.map((item) => renderItem(item))}</div>
+              </div>
+            )
+          }
+
+          const isOpen = openSection === section.title
+
+          return (
+            <div key={section.title} className="mb-1">
+              <button
+                type="button"
+                aria-expanded={isOpen}
+                onClick={() =>
+                  setOpenSection((prev) => (prev === section.title ? null : section.title))
                 }
-
-                return <div key={item.href}>{linkInner}</div>
-              })}
+                className={cn(
+                  "flex w-full cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground transition-colors",
+                  "hover:bg-accent hover:text-accent-foreground",
+                )}
+              >
+                <span className="truncate">{section.title}</span>
+                <ChevronDown
+                  className={cn(
+                    "h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200",
+                    isOpen ? "rotate-180" : "rotate-0",
+                  )}
+                  aria-hidden
+                />
+              </button>
+              {isOpen ? (
+                <div className="mt-1 space-y-1 border-l border-border pl-2 ml-2">
+                  {section.items.map((item) => renderItem(item))}
+                </div>
+              ) : null}
             </div>
-          </div>
-        ))}
+          )
+        })}
       </nav>
 
       <div className={cn("border-t border-border", compact ? "p-2" : "p-4")}>

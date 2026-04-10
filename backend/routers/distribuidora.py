@@ -5,6 +5,11 @@ from backend.db import get_connection
 router = APIRouter(prefix="/distribuidora", tags=["Distribuidora"])
 
 
+def _rows_to_json(cur) -> list[dict]:
+    columns = [col[0] for col in cur.description]
+    return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+
 @router.get("/rutero")
 def get_rutero():
     conn = get_connection()
@@ -12,29 +17,65 @@ def get_rutero():
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT
-                id,
-                bsale_id,
-                first_name,
-                last_name,
-                nombre_fantasia,
-                phone,
-                vendedor,
-                dia_atencion,
-                dia_extra,
-                municipality,
-                lat,
-                lon,
-                tipo_atencion,
-                orden_ruta
+            SELECT *
             FROM bsale.rutero
             WHERE company_id = 3
               AND activo = TRUE
             """
         )
-        columns = [col[0] for col in cur.description]
-        rows = cur.fetchall()
-        data = [dict(zip(columns, row)) for row in rows]
+        data = _rows_to_json(cur)
+        cur.close()
+    finally:
+        conn.close()
+
+    return data
+
+
+@router.get("/sin-georef")
+def get_sin_georef():
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT *
+            FROM bsale.rutero
+            WHERE company_id = 3
+              AND activo = TRUE
+              AND (lat IS NULL OR lon IS NULL)
+            """
+        )
+        data = _rows_to_json(cur)
+        cur.close()
+    finally:
+        conn.close()
+
+    return data
+
+
+@router.get("/pendientes")
+def get_pendientes():
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT *
+            FROM bsale.clients
+            WHERE company_id = 3
+              AND vendedor IN (
+                  'vendedor_1',
+                  'vendedor_2',
+                  'vendedor_3',
+                  'vendedor_4'
+              )
+              AND (
+                  dia_atencion IS NULL
+                  OR lat IS NULL
+              )
+            """
+        )
+        data = _rows_to_json(cur)
         cur.close()
     finally:
         conn.close()
@@ -70,8 +111,7 @@ def get_mapa():
               AND lon IS NOT NULL
             """
         )
-        columns = [col[0] for col in cur.description]
-        clientes = [dict(zip(columns, row)) for row in cur.fetchall()]
+        clientes = _rows_to_json(cur)
 
         cur.execute(
             """
@@ -79,8 +119,7 @@ def get_mapa():
             FROM bsale.puntos_base
             """
         )
-        columns = [col[0] for col in cur.description]
-        bases = [dict(zip(columns, row)) for row in cur.fetchall()]
+        bases = _rows_to_json(cur)
         cur.close()
     finally:
         conn.close()
@@ -109,8 +148,7 @@ def get_resumen():
             ORDER BY vendedor, dia_atencion
             """
         )
-        columns = [col[0] for col in cur.description]
-        data = [dict(zip(columns, row)) for row in cur.fetchall()]
+        data = _rows_to_json(cur)
         cur.close()
     finally:
         conn.close()

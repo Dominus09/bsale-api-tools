@@ -123,3 +123,11 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Mapa Distribuidora: DivIcon de puntos base sin caja blanca por defecto de Leaflet */
+.leaflet-div-icon.distribuidora-punto-base-icon {
+  background: transparent !important;
+  border: none !important;
+  margin-left: 0 !important;
+  margin-top: 0 !important;
+}

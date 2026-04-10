@@ -11,6 +11,8 @@ import {
 } from "@/lib/api"
 
 import "leaflet/dist/leaflet.css"
+import "react-leaflet-cluster/dist/assets/MarkerCluster.css"
+import "react-leaflet-cluster/dist/assets/MarkerCluster.Default.css"
 
 const MapContainer = dynamic(
   () => import("react-leaflet").then((m) => m.MapContainer),
@@ -26,6 +28,18 @@ const CircleMarker = dynamic(
 )
 const Popup = dynamic(
   () => import("react-leaflet").then((m) => m.Popup),
+  { ssr: false },
+)
+const Marker = dynamic(
+  () => import("react-leaflet").then((m) => m.Marker),
+  { ssr: false },
+)
+const Tooltip = dynamic(
+  () => import("react-leaflet").then((m) => m.Tooltip),
+  { ssr: false },
+)
+const MarkerClusterGroup = dynamic(
+  () => import("react-leaflet-cluster").then((m) => m.default),
   { ssr: false },
 )
 
@@ -64,6 +78,28 @@ function nombreCliente(c: DistribuidoraMapaCliente): string {
   const ln = c.last_name?.trim() ?? ""
   const full = `${fn} ${ln}`.trim()
   return full || `Cliente #${c.bsale_id}`
+}
+
+/** Icono grande: relleno rojo fuerte, borde negro (no depende de filtros de clientes). */
+function usePuntoBaseIcon() {
+  return useMemo(() => {
+    if (typeof window === "undefined") return null
+    const L = require("leaflet") as typeof import("leaflet")
+    return L.divIcon({
+      className: "distribuidora-punto-base-icon",
+      html: `<div style="width:34px;height:34px;border-radius:50%;background:#b91c1c;border:4px solid #0a0a0a;box-shadow:0 3px 12px rgba(0,0,0,0.5);box-sizing:border-box"></div>`,
+      iconSize: [34, 34],
+      iconAnchor: [17, 17],
+      popupAnchor: [0, -14],
+    })
+  }, [])
+}
+
+function labelsBase(b: DistribuidoraPuntoBase): { nombre: string; vendedor: string } {
+  return {
+    nombre: b.nombre?.trim() || "Base",
+    vendedor: b.vendedor?.trim() || "—",
+  }
 }
 
 export default function DistribuidoraMapaPage() {
@@ -120,6 +156,7 @@ export default function DistribuidoraMapaPage() {
     })
   }, [clientes, vendedor, dia])
 
+  /** Siempre desde `bases` completo: no aplica filtros de vendedor/día del rutero. */
   const basesOk = useMemo(
     () =>
       bases.filter(
@@ -130,6 +167,8 @@ export default function DistribuidoraMapaPage() {
       ),
     [bases],
   )
+
+  const iconoBase = usePuntoBaseIcon()
 
   if (loading) {
     return (
@@ -206,93 +245,106 @@ export default function DistribuidoraMapaPage() {
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
 
-          {filtrados.map((c) => {
-            const telefonico =
-              (c.tipo_atencion ?? "").toLowerCase().trim() === "telefonico"
-            const stroke = telefonico ? "#64748b" : getColorByDay(c.dia_atencion)
-            const fill = telefonico ? "#94a3b8" : getColorByDay(c.dia_atencion)
-            return (
-              <CircleMarker
-                key={c.bsale_id}
-                center={[c.lat, c.lon]}
-                radius={telefonico ? 6 : 8}
-                pathOptions={{
-                  color: stroke,
-                  fillColor: fill,
-                  fillOpacity: telefonico ? 0.75 : 0.88,
-                  weight: 2,
-                }}
-              >
-                <Popup>
-                  <div className="min-w-[10rem] space-y-1.5 text-sm text-foreground">
-                    <p className="font-semibold leading-tight">{nombreCliente(c)}</p>
-                    {telefonico ? (
-                      <p className="text-xs font-medium text-muted-foreground">
-                        Atención telefónica
-                      </p>
-                    ) : null}
-                    <dl className="space-y-1 text-xs text-muted-foreground">
-                      <div className="flex justify-between gap-3">
-                        <dt>Vendedor</dt>
-                        <dd className="text-right text-foreground">
-                          {c.vendedor ?? "—"}
-                        </dd>
-                      </div>
-                      <div className="flex justify-between gap-3">
-                        <dt>Día</dt>
-                        <dd className="text-right text-foreground">
-                          {c.dia_atencion ?? "—"}
-                        </dd>
-                      </div>
-                      <div className="flex justify-between gap-3">
-                        <dt>Teléfono</dt>
-                        <dd className="text-right text-foreground">
-                          {c.phone?.trim() || "—"}
-                        </dd>
-                      </div>
-                      <div className="flex justify-between gap-3">
-                        <dt>Comuna</dt>
-                        <dd className="text-right text-foreground">
-                          {c.municipality ?? "—"}
-                        </dd>
-                      </div>
-                      <div className="flex justify-between gap-3">
-                        <dt>Tipo</dt>
-                        <dd className="text-right capitalize text-foreground">
-                          {c.tipo_atencion ?? "—"}
-                        </dd>
-                      </div>
-                    </dl>
-                  </div>
-                </Popup>
-              </CircleMarker>
-            )
-          })}
+          <MarkerClusterGroup
+            chunkedLoading
+            showCoverageOnHover={false}
+            maxClusterRadius={56}
+            spiderfyOnMaxZoom
+          >
+            {filtrados.map((c) => {
+              const telefonico =
+                (c.tipo_atencion ?? "").toLowerCase().trim() === "telefonico"
+              const stroke = telefonico ? "#64748b" : getColorByDay(c.dia_atencion)
+              const fill = telefonico ? "#94a3b8" : getColorByDay(c.dia_atencion)
+              return (
+                <CircleMarker
+                  key={c.bsale_id}
+                  center={[c.lat, c.lon]}
+                  radius={telefonico ? 6 : 8}
+                  pathOptions={{
+                    color: stroke,
+                    fillColor: fill,
+                    fillOpacity: telefonico ? 0.75 : 0.88,
+                    weight: 2,
+                  }}
+                >
+                  <Popup>
+                    <div className="min-w-[10rem] space-y-1.5 text-sm text-foreground">
+                      <p className="font-semibold leading-tight">{nombreCliente(c)}</p>
+                      {telefonico ? (
+                        <p className="text-xs font-medium text-muted-foreground">
+                          Atención telefónica
+                        </p>
+                      ) : null}
+                      <dl className="space-y-1 text-xs text-muted-foreground">
+                        <div className="flex justify-between gap-3">
+                          <dt>Vendedor</dt>
+                          <dd className="text-right text-foreground">
+                            {c.vendedor ?? "—"}
+                          </dd>
+                        </div>
+                        <div className="flex justify-between gap-3">
+                          <dt>Día</dt>
+                          <dd className="text-right text-foreground">
+                            {c.dia_atencion ?? "—"}
+                          </dd>
+                        </div>
+                        <div className="flex justify-between gap-3">
+                          <dt>Teléfono</dt>
+                          <dd className="text-right text-foreground">
+                            {c.phone?.trim() || "—"}
+                          </dd>
+                        </div>
+                        <div className="flex justify-between gap-3">
+                          <dt>Comuna</dt>
+                          <dd className="text-right text-foreground">
+                            {c.municipality ?? "—"}
+                          </dd>
+                        </div>
+                        <div className="flex justify-between gap-3">
+                          <dt>Tipo</dt>
+                          <dd className="text-right capitalize text-foreground">
+                            {c.tipo_atencion ?? "—"}
+                          </dd>
+                        </div>
+                      </dl>
+                    </div>
+                  </Popup>
+                </CircleMarker>
+              )
+            })}
+          </MarkerClusterGroup>
 
-          {basesOk.map((b, i) => (
-            <CircleMarker
-              key={`base-${i}-${b.vendedor ?? ""}-${b.nombre ?? ""}`}
-              center={[b.lat, b.lon]}
-              radius={7}
-              pathOptions={{
-                color: "#0f172a",
-                fillColor: "#1e293b",
-                fillOpacity: 1,
-                weight: 2,
-              }}
-            >
-              <Popup>
-                <div className="text-sm">
-                  <p className="font-semibold text-foreground">
-                    {b.nombre?.trim() || "Base"}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {b.vendedor?.trim() || "—"}
-                  </p>
-                </div>
-              </Popup>
-            </CircleMarker>
-          ))}
+          {iconoBase
+            ? basesOk.map((b, i) => {
+                const { nombre, vendedor: vBase } = labelsBase(b)
+                return (
+                  <Marker
+                    key={`base-${i}-${vBase}-${nombre}`}
+                    position={[b.lat, b.lon]}
+                    icon={iconoBase}
+                    zIndexOffset={800}
+                  >
+                    <Tooltip
+                      permanent
+                      direction="top"
+                      offset={[0, -10]}
+                      opacity={1}
+                      className="!rounded-md !border !border-neutral-800 !bg-neutral-950 !px-2.5 !py-1.5 !text-[11px] !leading-snug !text-white !shadow-lg [&_.leaflet-tooltip-content]:!m-0"
+                    >
+                      <div className="font-semibold">{nombre}</div>
+                      <div className="mt-0.5 font-normal opacity-90">{vBase}</div>
+                    </Tooltip>
+                    <Popup>
+                      <div className="text-sm">
+                        <p className="font-semibold text-foreground">{nombre}</p>
+                        <p className="text-xs text-muted-foreground">{vBase}</p>
+                      </div>
+                    </Popup>
+                  </Marker>
+                )
+              })
+            : null}
         </MapContainer>
       </div>
     </div>
