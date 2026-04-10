@@ -6,7 +6,7 @@ const MapaRuteroClient = dynamic(() => import("@/components/distribuidora/mapa-r
   ssr: false,
   loading: () => (
     <div className="p-4">
-      <div className="rounded-xl border border-border bg-white p-4 shadow-sm dark:bg-card">
+      <div className="rounded-xl bg-white p-4 shadow dark:bg-card">
         <div className="mb-3 flex justify-between">
           <div className="space-y-2">
             <div className="h-6 w-40 animate-pulse rounded bg-muted" />
@@ -17,7 +17,9 @@ const MapaRuteroClient = dynamic(() => import("@/components/distribuidora/mapa-r
             <div className="h-9 w-36 animate-pulse rounded-md bg-muted" />
           </div>
         </div>
-        <div className="h-[75vh] animate-pulse rounded-lg bg-muted/50" />
+        <div className="relative h-[75vh] overflow-hidden rounded-lg bg-muted/30 ring-1 ring-black/5 dark:ring-white/10">
+          <div className="h-full animate-pulse bg-muted/40" />
+        </div>
       </div>
     </div>
   ),

@@ -24,7 +24,9 @@ const MarkerClusterGroup = dynamic(() => import("react-leaflet-cluster").then((m
 })
 
 const MAP_CENTER: [number, number] = [-42.6, -73.8]
-const MAP_ZOOM = 9
+const MAP_ZOOM = 10
+
+type MapStyleId = "light" | "streets"
 
 const FILTER_ALL = "__all__"
 
@@ -105,6 +107,7 @@ export default function MapaRuteroClient() {
   const [error, setError] = useState("")
   const [vendedorFilter, setVendedorFilter] = useState(FILTER_ALL)
   const [diaFilter, setDiaFilter] = useState(FILTER_ALL)
+  const [mapStyle, setMapStyle] = useState<MapStyleId>("light")
   const mounted = useRef(true)
 
   useEffect(() => {
@@ -169,9 +172,14 @@ export default function MapaRuteroClient() {
     setDiaFilter(e.target.value)
   }, [])
 
+  const onMapStyleChange = useCallback((e: ChangeEvent<HTMLSelectElement>) => {
+    const v = e.target.value
+    if (v === "light" || v === "streets") setMapStyle(v)
+  }, [])
+
   return (
     <div className="p-4">
-      <div className="rounded-xl border border-border bg-white p-4 shadow-md dark:bg-card">
+      <div className="rounded-xl bg-white p-4 shadow dark:bg-card">
         <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-lg font-semibold tracking-tight text-foreground">Mapa Rutero</h1>
@@ -210,7 +218,7 @@ export default function MapaRuteroClient() {
           </div>
         </div>
 
-        <div className="h-[75vh] overflow-hidden rounded-lg border border-border bg-muted/30">
+        <div className="relative h-[75vh] overflow-hidden rounded-lg bg-muted/20 shadow-inner ring-1 ring-black/5 dark:ring-white/10">
           {loading ? (
             <div className="flex h-full items-center justify-center gap-2 text-muted-foreground">
               <Loader2 className="h-6 w-6 animate-spin" />
@@ -221,17 +229,37 @@ export default function MapaRuteroClient() {
               {error}
             </div>
           ) : (
-            <MapContainer
-              center={MAP_CENTER}
-              zoom={MAP_ZOOM}
-              className="mapa-rutero-leaflet z-0 h-full w-full"
-              scrollWheelZoom
-              attributionControl
-            >
-              <TileLayer
-                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
-                url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
-              />
+            <>
+              <select
+                value={mapStyle}
+                onChange={onMapStyleChange}
+                aria-label="Estilo de mapa"
+                className="absolute right-3 top-3 z-[1000] rounded-md border border-input bg-white/95 px-2 py-1 text-sm shadow-md backdrop-blur-sm dark:bg-card/95"
+              >
+                <option value="light">Mapa limpio</option>
+                <option value="streets">Mapa calles</option>
+              </select>
+              <MapContainer
+                center={MAP_CENTER}
+                zoom={MAP_ZOOM}
+                className="mapa-rutero-leaflet z-0 h-full w-full"
+                scrollWheelZoom
+                attributionControl
+              >
+                {mapStyle === "light" && (
+                  <TileLayer
+                    key="light"
+                    url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+                    attribution="&copy; OpenStreetMap &copy; CARTO"
+                  />
+                )}
+                {mapStyle === "streets" && (
+                  <TileLayer
+                    key="streets"
+                    url="https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png"
+                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>, Tiles &copy; HOT'
+                  />
+                )}
               <MarkerClusterGroup chunkedLoading showCoverageOnHover={false}>
                 {clientesVisibles.map((c) => (
                   <Marker
@@ -281,6 +309,7 @@ export default function MapaRuteroClient() {
                 )
               })}
             </MapContainer>
+            </>
           )}
         </div>
       </div>
