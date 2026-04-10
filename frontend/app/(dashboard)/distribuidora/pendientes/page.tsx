@@ -1,14 +1,7 @@
-"use client"
-
-import { DistribuidoraRecordsView } from "@/components/distribuidora/distribuidora-records-view"
-import { getDistribuidoraPendientes } from "@/lib/api"
-
-export default function DistribuidoraPendientesPage() {
+export default function PendientesPage() {
   return (
-    <DistribuidoraRecordsView
-      title="Pendientes"
-      description="Clientes con vendedor asignado sin día de atención o sin coordenadas."
-      loadRows={getDistribuidoraPendientes}
-    />
+    <div className="p-6">
+      <h1 className="text-xl font-semibold">Pendientes</h1>
+    </div>
   )
 }

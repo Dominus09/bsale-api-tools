@@ -131,3 +131,40 @@
   margin-left: 0 !important;
   margin-top: 0 !important;
 }
+
+/* Mapa rutero: DivIcon sin marco por defecto */
+.leaflet-div-icon.mapa-rutero-cliente-icon,
+.leaflet-div-icon.mapa-rutero-base-icon {
+  background: transparent !important;
+  border: none !important;
+  margin-left: 0 !important;
+  margin-top: 0 !important;
+}
+
+/* Mapa rutero: popups */
+.mapa-rutero-leaflet .leaflet-popup-content-wrapper {
+  border-radius: 0.75rem;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid oklch(0.91 0 0);
+  box-shadow:
+    0 10px 15px -3px rgb(15 23 42 / 0.08),
+    0 4px 6px -4px rgb(15 23 42 / 0.06);
+}
+
+.dark .mapa-rutero-leaflet .leaflet-popup-content-wrapper {
+  border-color: oklch(0.269 0 0);
+  box-shadow:
+    0 10px 15px -3px rgb(0 0 0 / 0.35),
+    0 4px 6px -4px rgb(0 0 0 / 0.25);
+}
+
+.mapa-rutero-leaflet .leaflet-popup-content {
+  margin: 0;
+  min-width: 11rem;
+  line-height: 1.4;
+}
+
+.mapa-rutero-leaflet .leaflet-popup-tip {
+  box-shadow: 0 2px 4px rgb(15 23 42 / 0.06);
+}

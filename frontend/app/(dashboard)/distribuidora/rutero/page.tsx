@@ -1,14 +1,7 @@
-"use client"
-
-import { DistribuidoraRecordsView } from "@/components/distribuidora/distribuidora-records-view"
-import { getDistribuidoraRutero } from "@/lib/api"
-
-export default function DistribuidoraRuteroPage() {
+export default function RuteroPage() {
   return (
-    <DistribuidoraRecordsView
-      title="Rutero"
-      description="Registros activos del rutero (company_id = 3)."
-      loadRows={getDistribuidoraRutero}
-    />
+    <div className="p-6">
+      <h1 className="text-xl font-semibold">Rutero</h1>
+    </div>
   )
 }
