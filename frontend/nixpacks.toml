@@ -13,5 +13,12 @@ NODE_ENV = "production"
 HOSTNAME = "0.0.0.0"
 PORT = "3000"
 
+# Coolify/Nixpacks usa por defecto `pnpm i --frozen-lockfile` si hay pnpm-lock.yaml.
+# Si en tu PC aún no puedes regenerar el lockfile, esta fase evita el fallo del deploy.
+# Cuando puedas correr `pnpm install` en local y subir un lockfile fiable, borra este bloque.
+[phases.install]
+dependsOn = ["setup"]
+cmds = ["pnpm install --no-frozen-lockfile"]
+
 [start]
 cmd = "pnpm start"
