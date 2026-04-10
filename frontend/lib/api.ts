@@ -604,6 +604,26 @@ export async function getDistribuidoraMapa(): Promise<{
   return res.json()
 }
 
+/** Respuesta de GET /distribuidora/ruta-detalle (éxito o cuerpo con `error`). */
+export type DistribuidoraRutaDetalleJson = Record<string, unknown>
+
+export async function getDistribuidoraRutaDetalle(
+  vendedor: string,
+  dia: string,
+  signal?: AbortSignal,
+): Promise<DistribuidoraRutaDetalleJson> {
+  const qs = new URLSearchParams({ vendedor, dia })
+  const res = await fetch(`${API_URL}/distribuidora/ruta-detalle?${qs}`, {
+    headers: getAuthHeaders(),
+    signal,
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar ruta detalle")
+  }
+  return res.json()
+}
+
 /** Filas genéricas JSON (listados /distribuidora/*). */
 export type DistribuidoraRecord = Record<string, unknown>
 

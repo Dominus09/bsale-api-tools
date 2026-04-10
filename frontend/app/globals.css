@@ -124,6 +124,18 @@
   }
 }
 
+/* Mapa rutero: contenedor Leaflet ocupa todo el bloque (evita franjas sin tiles). */
+.mapa-rutero-wrapper .leaflet-container.mapa-rutero-leaflet {
+  height: 100%;
+  width: 100%;
+  max-width: 100%;
+  background: #dfe6ee;
+}
+
+.dark .mapa-rutero-wrapper .leaflet-container.mapa-rutero-leaflet {
+  background: #1e293b;
+}
+
 /* Mapa Distribuidora: DivIcon de puntos base sin caja blanca por defecto de Leaflet */
 .leaflet-div-icon.distribuidora-punto-base-icon {
   background: transparent !important;

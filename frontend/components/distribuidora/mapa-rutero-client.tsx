@@ -6,8 +6,11 @@ import L from "leaflet"
 import { useMap } from "react-leaflet"
 import { Loader2 } from "lucide-react"
 
+import polyline from "@mapbox/polyline"
+
 import {
   getDistribuidoraMapa,
+  getDistribuidoraRutaDetalle,
   type DistribuidoraMapaCliente,
   type DistribuidoraPuntoBase,
 } from "@/lib/api"
@@ -27,23 +30,39 @@ const MarkerClusterGroup = dynamic(() => import("react-leaflet-cluster").then((m
 const MAP_CENTER: [number, number] = [-42.6, -73.8]
 const MAP_ZOOM = 10
 
-const CARTO_LIGHT_TILES = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"
+/** Voyager: más contraste y calles que light_all (sigue siendo CARTO / OSM). */
+const CARTO_VOYAGER_TILES = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png"
 
-/** Recalcula tamaño del mapa (evita pane gris si el contenedor tenía altura 0 al montar). */
+/** Evita franjas grises: Leaflet debe medir el contenedor tras layout, sidebar y carga de tiles. */
 function MapaRuteroInvalidateSize() {
   const map = useMap()
   useEffect(() => {
     const fix = () => {
       map.invalidateSize()
     }
+    const container = map.getContainer()
+    const outer = container.parentElement
+
+    map.whenReady(() => {
+      fix()
+      window.setTimeout(fix, 0)
+    })
     fix()
-    const t1 = window.setTimeout(fix, 50)
-    const t2 = window.setTimeout(fix, 300)
+    const timeouts = [50, 150, 400, 800, 1500].map((ms) => window.setTimeout(fix, ms))
     window.addEventListener("resize", fix)
+
+    const ro =
+      typeof ResizeObserver !== "undefined" && outer
+        ? new ResizeObserver(() => {
+            window.requestAnimationFrame(fix)
+          })
+        : null
+    if (outer && ro) ro.observe(outer)
+
     return () => {
-      window.clearTimeout(t1)
-      window.clearTimeout(t2)
+      timeouts.forEach((id) => window.clearTimeout(id))
       window.removeEventListener("resize", fix)
+      ro?.disconnect()
     }
   }, [map])
   return null
@@ -51,23 +70,80 @@ function MapaRuteroInvalidateSize() {
 
 const FILTER_ALL = "__all__"
 
-function getColorByDay(dia: string | null | undefined): string {
-  switch (dia) {
-    case "Lunes":
-      return "#2563eb"
-    case "Martes":
-      return "#16a34a"
-    case "Miércoles":
-      return "#ea580c"
-    case "Jueves":
-      return "#dc2626"
-    case "Viernes":
-      return "#9333ea"
-    case "Sábado":
-      return "#ca8a04"
-    default:
-      return "#64748b"
+/** Clientes en mapa con ruta ORS (pedido: azul). */
+const MAP_CLIENTE_COLOR = "#2563eb"
+/** Punto base (pedido: rojo). */
+const MAP_BASE_COLOR = "#dc2626"
+
+function geometryToLatLngs(geometry: unknown): L.LatLngTuple[] {
+  if (geometry == null) return []
+  if (typeof geometry === "string" && geometry.length > 0) {
+    const decoded = polyline.decode(geometry, 5)
+    return decoded.map(([lat, lon]) => [lat, lon] as L.LatLngTuple)
   }
+  if (typeof geometry === "object" && geometry !== null && "type" in geometry) {
+    const g = geometry as { type: string; coordinates?: unknown }
+    if (g.type === "LineString" && Array.isArray(g.coordinates)) {
+      const coords = g.coordinates as [number, number][]
+      return coords.map(([lon, lat]) => [lat, lon] as L.LatLngTuple)
+    }
+  }
+  return []
+}
+
+/** Ruta ORS: polyline azul + fitBounds cuando hay vendedor y día concretos. */
+function MapaRuteroOrsRoute({ vendedor, dia }: { vendedor: string | null; dia: string | null }) {
+  const map = useMap()
+  const routeRef = useRef<L.Polyline | null>(null)
+
+  useEffect(() => {
+    const removeRoute = () => {
+      if (routeRef.current) {
+        map.removeLayer(routeRef.current)
+        routeRef.current = null
+      }
+    }
+
+    if (!vendedor?.trim() || !dia?.trim()) {
+      removeRoute()
+      return
+    }
+
+    const ac = new AbortController()
+    ;(async () => {
+      try {
+        const data = await getDistribuidoraRutaDetalle(vendedor.trim(), dia.trim(), ac.signal)
+        if (ac.signal.aborted) return
+        removeRoute()
+        if (data && typeof data === "object" && "error" in data && data.error) return
+
+        const latlngs = geometryToLatLngs(data.geometry)
+        if (latlngs.length < 2) return
+
+        const line = L.polyline(latlngs, {
+          color: "#2563eb",
+          weight: 5,
+          opacity: 0.9,
+          lineJoin: "round",
+          lineCap: "round",
+        }).addTo(map)
+        routeRef.current = line
+
+        const bounds = L.latLngBounds(latlngs)
+        map.fitBounds(bounds, { padding: [48, 48], maxZoom: 14, animate: false })
+        window.setTimeout(() => map.invalidateSize(), 0)
+      } catch {
+        if (!ac.signal.aborted) removeRoute()
+      }
+    })()
+
+    return () => {
+      ac.abort()
+      removeRoute()
+    }
+  }, [map, vendedor, dia])
+
+  return null
 }
 
 function nombreCliente(c: DistribuidoraMapaCliente): string {
@@ -109,7 +185,7 @@ function getBaseDivIcon(): L.DivIcon {
     const b = 2
     baseIconSingleton = L.divIcon({
       className: "mapa-rutero-base-icon",
-      html: `<div style="width:${s}px;height:${s}px;border-radius:4px;background:#1d4ed8;border:${b}px solid #ffffff;box-shadow:0 2px 8px rgba(15,23,42,0.28);box-sizing:content-box;"></div>`,
+      html: `<div style="width:${s}px;height:${s}px;border-radius:4px;background:${MAP_BASE_COLOR};border:${b}px solid #ffffff;box-shadow:0 2px 8px rgba(15,23,42,0.28);box-sizing:content-box;"></div>`,
       iconSize: [s + b * 2, s + b * 2],
       iconAnchor: [(s + b * 2) / 2, (s + b * 2) / 2],
       popupAnchor: [0, -8],
@@ -201,6 +277,15 @@ export default function MapaRuteroClient() {
             <p className="text-sm text-muted-foreground">
               Clientes visibles:{" "}
               <span className="font-medium tabular-nums text-foreground">{clientesVisibles.length}</span>
+              {vendedorFilter !== FILTER_ALL && diaFilter !== FILTER_ALL ? (
+                <span className="mt-1 block text-xs text-muted-foreground/90">
+                  Ruta ORS (línea azul) según vendedor y día seleccionados.
+                </span>
+              ) : (
+                <span className="mt-1 block text-xs text-muted-foreground/90">
+                  Elige vendedor y día para trazar la ruta real en el mapa.
+                </span>
+              )}
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -233,7 +318,7 @@ export default function MapaRuteroClient() {
           </div>
         </div>
 
-        <div className="relative h-[75vh] overflow-hidden rounded-lg bg-muted/20 shadow-inner ring-1 ring-black/5 dark:ring-white/10">
+        <div className="mapa-rutero-wrapper relative h-[75vh] min-h-[320px] w-full min-w-0 overflow-hidden rounded-lg bg-slate-200/80 shadow-inner ring-1 ring-black/5 dark:bg-slate-900/40 dark:ring-white/10">
           {loading ? (
             <div className="flex h-full items-center justify-center gap-2 text-muted-foreground">
               <Loader2 className="h-6 w-6 animate-spin" />
@@ -244,26 +329,32 @@ export default function MapaRuteroClient() {
               {error}
             </div>
           ) : (
-            <MapContainer
-              center={MAP_CENTER}
-              zoom={MAP_ZOOM}
-              className="mapa-rutero-leaflet z-0 h-full w-full"
-              scrollWheelZoom
-              attributionControl
-            >
-              <TileLayer
-                url={CARTO_LIGHT_TILES}
-                attribution="&copy; OpenStreetMap &copy; CARTO"
-                subdomains="abcd"
-              />
-              <MapaRuteroInvalidateSize />
-              <MarkerClusterGroup chunkedLoading showCoverageOnHover={false}>
-                {clientesVisibles.map((c) => (
-                  <Marker
-                    key={c.bsale_id}
-                    position={[c.lat, c.lon]}
-                    icon={getClienteDivIcon(getColorByDay(c.dia_atencion))}
-                  >
+            <div className="absolute inset-0 z-0 min-h-0 min-w-0">
+              <MapContainer
+                center={MAP_CENTER}
+                zoom={MAP_ZOOM}
+                className="mapa-rutero-leaflet z-0 h-full w-full"
+                style={{ height: "100%", width: "100%" }}
+                scrollWheelZoom
+                attributionControl
+              >
+                <TileLayer
+                  url={CARTO_VOYAGER_TILES}
+                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+                  subdomains="abcd"
+                />
+                <MapaRuteroInvalidateSize />
+                <MapaRuteroOrsRoute
+                  vendedor={vendedorFilter === FILTER_ALL ? null : vendedorFilter}
+                  dia={diaFilter === FILTER_ALL ? null : diaFilter}
+                />
+                <MarkerClusterGroup chunkedLoading showCoverageOnHover={false}>
+                  {clientesVisibles.map((c) => (
+                    <Marker
+                      key={c.bsale_id}
+                      position={[c.lat, c.lon]}
+                      icon={getClienteDivIcon(MAP_CLIENTE_COLOR)}
+                    >
                     <Popup>
                       <div className="mapa-rutero-popup-inner p-3 text-sm">
                         <p className="font-semibold leading-snug text-foreground">{nombreCliente(c)}</p>
@@ -289,23 +380,24 @@ export default function MapaRuteroClient() {
                         </dl>
                       </div>
                     </Popup>
-                  </Marker>
-                ))}
-              </MarkerClusterGroup>
-              {bases.map((b, i) => {
-                const key = `${b.vendedor ?? "b"}-${b.lat}-${b.lon}-${i}`
-                return (
-                  <Marker key={key} position={[b.lat, b.lon]} icon={getBaseDivIcon()}>
-                    <Popup>
-                      <div className="mapa-rutero-popup-inner p-2 text-sm">
-                        <p className="font-semibold text-foreground">{b.nombre?.trim() || "Punto base"}</p>
-                        <p className="text-muted-foreground">{b.vendedor?.trim() || "—"}</p>
-                      </div>
-                    </Popup>
-                  </Marker>
-                )
-              })}
-            </MapContainer>
+                    </Marker>
+                  ))}
+                </MarkerClusterGroup>
+                {bases.map((b, i) => {
+                  const key = `${b.vendedor ?? "b"}-${b.lat}-${b.lon}-${i}`
+                  return (
+                    <Marker key={key} position={[b.lat, b.lon]} icon={getBaseDivIcon()}>
+                      <Popup>
+                        <div className="mapa-rutero-popup-inner p-2 text-sm">
+                          <p className="font-semibold text-foreground">{b.nombre?.trim() || "Punto base"}</p>
+                          <p className="text-muted-foreground">{b.vendedor?.trim() || "—"}</p>
+                        </div>
+                      </Popup>
+                    </Marker>
+                  )
+                })}
+              </MapContainer>
+            </div>
           )}
         </div>
       </div>
