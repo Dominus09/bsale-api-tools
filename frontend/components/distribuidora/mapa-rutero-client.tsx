@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
 import dynamic from "next/dynamic"
 import L from "leaflet"
+import { useMap } from "react-leaflet"
 import { Loader2 } from "lucide-react"
 
 import {
@@ -27,6 +28,26 @@ const MAP_CENTER: [number, number] = [-42.6, -73.8]
 const MAP_ZOOM = 10
 
 const CARTO_LIGHT_TILES = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"
+
+/** Recalcula tamaño del mapa (evita pane gris si el contenedor tenía altura 0 al montar). */
+function MapaRuteroInvalidateSize() {
+  const map = useMap()
+  useEffect(() => {
+    const fix = () => {
+      map.invalidateSize()
+    }
+    fix()
+    const t1 = window.setTimeout(fix, 50)
+    const t2 = window.setTimeout(fix, 300)
+    window.addEventListener("resize", fix)
+    return () => {
+      window.clearTimeout(t1)
+      window.clearTimeout(t2)
+      window.removeEventListener("resize", fix)
+    }
+  }, [map])
+  return null
+}
 
 const FILTER_ALL = "__all__"
 
@@ -235,6 +256,7 @@ export default function MapaRuteroClient() {
                 attribution="&copy; OpenStreetMap &copy; CARTO"
                 subdomains="abcd"
               />
+              <MapaRuteroInvalidateSize />
               <MarkerClusterGroup chunkedLoading showCoverageOnHover={false}>
                 {clientesVisibles.map((c) => (
                   <Marker

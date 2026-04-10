@@ -137,37 +137,15 @@ def get_ruta_detalle(
             "coords_enviadas": coords,
         }
 
-    if "features" not in ors_data:
-        print("ERROR ORS RESPUESTA: clave 'features' ausente")
+    if "routes" not in ors_data or not ors_data["routes"]:
         return {
-            "error": "ORS no devolvió ruta válida",
+            "error": "ORS no devolvió rutas",
             "respuesta_ors": ors_data,
         }
 
-    features = ors_data.get("features", [])
-    if not features:
-        return {
-            "error": "ORS no retornó features",
-        }
-
-    feat0 = features[0]
-    try:
-        summary = feat0["properties"]["summary"]
-        geometry = feat0["geometry"]
-    except (KeyError, TypeError, IndexError) as e:
-        print("ERROR ORS RESPUESTA:", str(e))
-        return {
-            "error": "Fallo al interpretar respuesta ORS",
-            "detalle": str(e),
-            "coords_enviadas": coords,
-        }
-
-    if not isinstance(summary, dict) or "distance" not in summary or "duration" not in summary:
-        return {
-            "error": "Fallo al interpretar respuesta ORS",
-            "detalle": "summary sin distance/duration",
-            "coords_enviadas": coords,
-        }
+    route = ors_data["routes"][0]
+    summary = route["summary"]
+    geometry = route.get("geometry")
 
     return {
         "vendedor": v,
