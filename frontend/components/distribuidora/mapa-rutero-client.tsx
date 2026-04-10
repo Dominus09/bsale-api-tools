@@ -6,13 +6,15 @@ import L from "leaflet"
 import { useMap } from "react-leaflet"
 import { Loader2 } from "lucide-react"
 
-import polyline from "@mapbox/polyline"
+import polylineModule from "@mapbox/polyline"
 
 import {
   getDistribuidoraMapa,
   getDistribuidoraRutaDetalle,
+  isDistribuidoraRutaDetalleOk,
   type DistribuidoraMapaCliente,
   type DistribuidoraPuntoBase,
+  type DistribuidoraRutaDetalleJson,
 } from "@/lib/api"
 
 import "leaflet/dist/leaflet.css"
@@ -75,75 +77,192 @@ const MAP_CLIENTE_COLOR = "#2563eb"
 /** Punto base (pedido: rojo). */
 const MAP_BASE_COLOR = "#dc2626"
 
+type PolylineDecodeFn = (str: string, precision?: number) => [number, number][]
+
+function getPolylineDecode(): PolylineDecodeFn | null {
+  const m = polylineModule as unknown
+  if (m && typeof m === "object" && "decode" in m && typeof (m as { decode: unknown }).decode === "function") {
+    return (m as { decode: PolylineDecodeFn }).decode.bind(m) as PolylineDecodeFn
+  }
+  const d = (m as { default?: unknown })?.default
+  if (d && typeof d === "object" && "decode" in d && typeof (d as { decode: unknown }).decode === "function") {
+    return (d as { decode: PolylineDecodeFn }).decode.bind(d) as PolylineDecodeFn
+  }
+  return null
+}
+
+/** ORS suele mandar polyline codificada (precisión 5 o 6). @mapbox/polyline devuelve [lat, lon]. */
+function decodeEncodedPolylineToLatLngs(encoded: string): L.LatLngTuple[] {
+  const decode = getPolylineDecode()
+  if (!decode || !encoded.trim()) return []
+  const trimmed = encoded.trim()
+  for (const precision of [5, 6] as const) {
+    try {
+      const decoded = decode(trimmed, precision)
+      if (Array.isArray(decoded) && decoded.length >= 2) {
+        return decoded.map(([lat, lon]) => [lat, lon] as L.LatLngTuple)
+      }
+    } catch {
+      /* siguiente precisión */
+    }
+  }
+  try {
+    const decoded = decode(trimmed)
+    return decoded.map(([lat, lon]) => [lat, lon] as L.LatLngTuple)
+  } catch {
+    return []
+  }
+}
+
 function geometryToLatLngs(geometry: unknown): L.LatLngTuple[] {
   if (geometry == null) return []
-  if (typeof geometry === "string" && geometry.length > 0) {
-    const decoded = polyline.decode(geometry, 5)
-    return decoded.map(([lat, lon]) => [lat, lon] as L.LatLngTuple)
+
+  if (typeof geometry === "string") {
+    return decodeEncodedPolylineToLatLngs(geometry)
   }
-  if (typeof geometry === "object" && geometry !== null && "type" in geometry) {
-    const g = geometry as { type: string; coordinates?: unknown }
-    if (g.type === "LineString" && Array.isArray(g.coordinates)) {
-      const coords = g.coordinates as [number, number][]
+
+  if (typeof geometry === "object" && geometry !== null) {
+    const o = geometry as Record<string, unknown>
+    if (typeof o.coordinates === "string" && o.coordinates.trim()) {
+      return decodeEncodedPolylineToLatLngs(o.coordinates)
+    }
+    if (o.type === "LineString" && Array.isArray(o.coordinates)) {
+      const coords = o.coordinates as [number, number][]
       return coords.map(([lon, lat]) => [lat, lon] as L.LatLngTuple)
     }
   }
+
   return []
 }
 
-/** Ruta ORS: polyline azul + fitBounds cuando hay vendedor y día concretos. */
-function MapaRuteroOrsRoute({ vendedor, dia }: { vendedor: string | null; dia: string | null }) {
+declare global {
+  interface Window {
+    /** Capa de ruta ORS (compatibilidad / depuración; preferir limpiar vía ref en efecto). */
+    currentRoute?: L.Polyline
+  }
+}
+
+/** Ruta ORS: polyline azul + fitBounds (datos ya cargados en el padre). */
+function MapaRuteroOrsRoute({ detalle }: { detalle: DistribuidoraRutaDetalleJson | null }) {
   const map = useMap()
   const routeRef = useRef<L.Polyline | null>(null)
 
   useEffect(() => {
     const removeRoute = () => {
-      if (routeRef.current) {
-        map.removeLayer(routeRef.current)
-        routeRef.current = null
+      const layer =
+        routeRef.current ?? (typeof window !== "undefined" ? window.currentRoute : undefined)
+      if (layer) {
+        try {
+          map.removeLayer(layer)
+        } catch {
+          /* capa ya retirada */
+        }
+      }
+      routeRef.current = null
+      if (typeof window !== "undefined") {
+        window.currentRoute = undefined
       }
     }
 
-    if (!vendedor?.trim() || !dia?.trim()) {
-      removeRoute()
-      return
+    removeRoute()
+
+    if (!detalle || typeof detalle !== "object" || ("error" in detalle && detalle.error)) {
+      return removeRoute
     }
 
-    const ac = new AbortController()
-    ;(async () => {
-      try {
-        const data = await getDistribuidoraRutaDetalle(vendedor.trim(), dia.trim(), ac.signal)
-        if (ac.signal.aborted) return
-        removeRoute()
-        if (data && typeof data === "object" && "error" in data && data.error) return
-
-        const latlngs = geometryToLatLngs(data.geometry)
-        if (latlngs.length < 2) return
-
-        const line = L.polyline(latlngs, {
-          color: "#2563eb",
-          weight: 5,
-          opacity: 0.9,
-          lineJoin: "round",
-          lineCap: "round",
-        }).addTo(map)
-        routeRef.current = line
-
-        const bounds = L.latLngBounds(latlngs)
-        map.fitBounds(bounds, { padding: [48, 48], maxZoom: 14, animate: false })
-        window.setTimeout(() => map.invalidateSize(), 0)
-      } catch {
-        if (!ac.signal.aborted) removeRoute()
-      }
-    })()
-
-    return () => {
-      ac.abort()
-      removeRoute()
+    const geom = detalle.geometry
+    if (geom == null || (typeof geom === "string" && !geom.trim())) {
+      return removeRoute
     }
-  }, [map, vendedor, dia])
+
+    const latlngs = geometryToLatLngs(geom)
+    if (latlngs.length < 2) {
+      return removeRoute
+    }
+
+    const routeLine = L.polyline(latlngs, {
+      color: "#2563eb",
+      weight: 5,
+      opacity: 0.9,
+      lineJoin: "round",
+      lineCap: "round",
+    }).addTo(map)
+    routeRef.current = routeLine
+    if (typeof window !== "undefined") {
+      window.currentRoute = routeLine
+    }
+
+    map.fitBounds(routeLine.getBounds(), { padding: [48, 48], maxZoom: 14, animate: false })
+    window.setTimeout(() => map.invalidateSize(), 0)
+
+    return removeRoute
+  }, [map, detalle])
 
   return null
+}
+
+function MapaRuteroResumenRuta({
+  loading,
+  data,
+}: {
+  loading: boolean
+  data: DistribuidoraRutaDetalleJson | null
+}) {
+  return (
+    <div
+      id="resumen-ruta"
+      className="resumen-box pointer-events-auto text-foreground"
+      role="region"
+      aria-label="Resumen de ruta ORS"
+    >
+      <h4>Resumen Ruta</h4>
+      {loading ? (
+        <p className="mb-0 text-sm text-muted-foreground">Cargando métricas…</p>
+      ) : !data ? (
+        <p className="mb-0 text-sm text-muted-foreground">Sin datos.</p>
+      ) : "error" in data && data.error ? (
+        <p className="mb-0 text-sm text-destructive">
+          {String(data.error)}
+          {"detalle" in data && data.detalle != null ? ` — ${String(data.detalle)}` : ""}
+        </p>
+      ) : isDistribuidoraRutaDetalleOk(data) ? (
+        <>
+          <div className="resumen-item">
+            <span>Vendedor</span>
+            <b>{String(data.vendedor)}</b>
+          </div>
+          <div className="resumen-item">
+            <span>Día</span>
+            <b>{String(data.dia)}</b>
+          </div>
+          <div className="resumen-item">
+            <span>Clientes</span>
+            <b>{Array.isArray(data.clientes) ? data.clientes.length : 0}</b>
+          </div>
+          <div className="resumen-item">
+            <span>KM</span>
+            <b>{Number(data.km_totales).toFixed(1)} km</b>
+          </div>
+          <div className="resumen-item">
+            <span>Tiempo</span>
+            <b>
+              {Number(data.minutos_totales) >= 120
+                ? `${(Number(data.minutos_totales) / 60).toFixed(1)} h`
+                : `${Math.round(Number(data.minutos_totales))} min`}
+            </b>
+          </div>
+          {Array.isArray(data.clientes) && data.clientes.length > 0 ? (
+            <div className="resumen-item">
+              <span>Promedio</span>
+              <b>{`${(Number(data.km_totales) / data.clientes.length).toFixed(1)} km/cliente`}</b>
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <p className="mb-0 text-sm text-muted-foreground">Respuesta sin métricas reconocibles.</p>
+      )}
+    </div>
+  )
 }
 
 function nombreCliente(c: DistribuidoraMapaCliente): string {
@@ -204,7 +323,33 @@ export default function MapaRuteroClient() {
   const [error, setError] = useState("")
   const [vendedorFilter, setVendedorFilter] = useState(FILTER_ALL)
   const [diaFilter, setDiaFilter] = useState(FILTER_ALL)
+  const [rutaDetalle, setRutaDetalle] = useState<DistribuidoraRutaDetalleJson | null>(null)
+  const [rutaDetalleLoading, setRutaDetalleLoading] = useState(false)
   const mounted = useRef(true)
+
+  useEffect(() => {
+    if (vendedorFilter === FILTER_ALL || diaFilter === FILTER_ALL) {
+      setRutaDetalle(null)
+      setRutaDetalleLoading(false)
+      return
+    }
+    const ac = new AbortController()
+    setRutaDetalle(null)
+    setRutaDetalleLoading(true)
+    getDistribuidoraRutaDetalle(vendedorFilter, diaFilter, ac.signal)
+      .then((json) => {
+        if (!mounted.current || ac.signal.aborted) return
+        setRutaDetalle(json)
+      })
+      .catch(() => {
+        if (!mounted.current || ac.signal.aborted) return
+        setRutaDetalle({ error: "No se pudo cargar la ruta" })
+      })
+      .finally(() => {
+        if (mounted.current && !ac.signal.aborted) setRutaDetalleLoading(false)
+      })
+    return () => ac.abort()
+  }, [vendedorFilter, diaFilter])
 
   useEffect(() => {
     mounted.current = true
@@ -329,25 +474,23 @@ export default function MapaRuteroClient() {
               {error}
             </div>
           ) : (
-            <div className="absolute inset-0 z-0 min-h-0 min-w-0">
-              <MapContainer
-                center={MAP_CENTER}
-                zoom={MAP_ZOOM}
-                className="mapa-rutero-leaflet z-0 h-full w-full"
-                style={{ height: "100%", width: "100%" }}
-                scrollWheelZoom
-                attributionControl
-              >
-                <TileLayer
-                  url={CARTO_VOYAGER_TILES}
-                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
-                  subdomains="abcd"
-                />
-                <MapaRuteroInvalidateSize />
-                <MapaRuteroOrsRoute
-                  vendedor={vendedorFilter === FILTER_ALL ? null : vendedorFilter}
-                  dia={diaFilter === FILTER_ALL ? null : diaFilter}
-                />
+            <>
+              <div className="absolute inset-0 z-0 min-h-0 min-w-0">
+                <MapContainer
+                  center={MAP_CENTER}
+                  zoom={MAP_ZOOM}
+                  className="mapa-rutero-leaflet z-0 h-full w-full"
+                  style={{ height: "100%", width: "100%" }}
+                  scrollWheelZoom
+                  attributionControl
+                >
+                  <TileLayer
+                    url={CARTO_VOYAGER_TILES}
+                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+                    subdomains="abcd"
+                  />
+                  <MapaRuteroInvalidateSize />
+                  <MapaRuteroOrsRoute detalle={rutaDetalle} />
                 <MarkerClusterGroup chunkedLoading showCoverageOnHover={false}>
                   {clientesVisibles.map((c) => (
                     <Marker
@@ -396,8 +539,12 @@ export default function MapaRuteroClient() {
                     </Marker>
                   )
                 })}
-              </MapContainer>
-            </div>
+                </MapContainer>
+              </div>
+              {vendedorFilter !== FILTER_ALL && diaFilter !== FILTER_ALL ? (
+                <MapaRuteroResumenRuta loading={rutaDetalleLoading} data={rutaDetalle} />
+              ) : null}
+            </>
           )}
         </div>
       </div>

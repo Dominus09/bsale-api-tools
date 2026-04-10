@@ -136,6 +136,50 @@
   background: #1e293b;
 }
 
+/* Panel resumen ruta ORS (mapa rutero) */
+.mapa-rutero-wrapper .resumen-box {
+  position: absolute;
+  bottom: 20px;
+  right: 20px;
+  z-index: 1000;
+  min-width: 220px;
+  padding: 16px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.35;
+  background: #fff;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.dark .mapa-rutero-wrapper .resumen-box {
+  background: oklch(0.22 0 0);
+  color: oklch(0.96 0 0);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+}
+
+.mapa-rutero-wrapper .resumen-box h4 {
+  margin: 0 0 10px 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.mapa-rutero-wrapper .resumen-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+
+.mapa-rutero-wrapper .resumen-item:last-child {
+  margin-bottom: 0;
+}
+
+.mapa-rutero-wrapper .resumen-item b {
+  font-weight: 600;
+  text-align: right;
+}
+
 /* Mapa Distribuidora: DivIcon de puntos base sin caja blanca por defecto de Leaflet */
 .leaflet-div-icon.distribuidora-punto-base-icon {
   background: transparent !important;

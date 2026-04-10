@@ -607,6 +607,20 @@ export async function getDistribuidoraMapa(): Promise<{
 /** Respuesta de GET /distribuidora/ruta-detalle (éxito o cuerpo con `error`). */
 export type DistribuidoraRutaDetalleJson = Record<string, unknown>
 
+export function isDistribuidoraRutaDetalleOk(
+  d: DistribuidoraRutaDetalleJson,
+): d is DistribuidoraRutaDetalleJson & {
+  vendedor: string
+  dia: string
+  km_totales: number
+  minutos_totales: number
+  clientes: unknown[]
+} {
+  if (!d || typeof d !== "object") return false
+  if ("error" in d && d.error) return false
+  return "km_totales" in d && "minutos_totales" in d && "clientes" in d
+}
+
 export async function getDistribuidoraRutaDetalle(
   vendedor: string,
   dia: string,
