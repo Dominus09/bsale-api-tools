@@ -27,6 +27,18 @@ class OptimizarRutaBody(BaseModel):
     dia: str = Field(..., min_length=1)
 
 
+class AsignarDiaAtencionBody(BaseModel):
+    bsale_id: int = Field(..., ge=1)
+    dia_atencion: str = Field(..., min_length=1, description="Día de atención (ej. Lunes)")
+
+
+class ObservacionRuteroBody(BaseModel):
+    """`cliente_id` = PK `bsale.rutero.id` (fila del cliente en rutero)."""
+
+    cliente_id: int = Field(..., ge=1)
+    observaciones: str | None = Field(default=None, description="Texto libre; vacío o null → NULL en BD")
+
+
 class OptimizarRutaDesdeBody(BaseModel):
     """Reoptimiza solo la cola a partir de un índice (0 = primer cliente = toda la ruta)."""
 
@@ -557,25 +569,31 @@ def _geom_km_ruta_completa(
 
 def _ors_optimize_from_base_clientes_por_zonas(base: dict, clientes: list[dict]) -> dict:
     """
-    Agrupa clientes por zona (K-means), ordena grupos por cercanía a la base,
-    en cada grupo ordena por distancia a la base y llama ORS (ida y vuelta a base).
-    La visita global es grupo1 → grupo2 → …; km/geometría final coherente (secuencial o encadenado).
+    Pipeline de calidad: (1) preorden radial atan2(lat-base, lon-base); (2–3) K-means k∈{2,3,4}
+    en [lon,lat] con `cluster_id`; (4) grupos ordenados por centroide vs base; (5) ORS por grupo
+    (base→grupo→base, semilla radial intra-grupo); (6) concatenación; (7) ORS directions
+    BASE→ruta_final→BASE vía `_geom_km_ruta_completa` para km y geometría coherentes.
     """
     from backend.utils.ruta_zonas import (
-        agrupar_clientes_por_zona_kmeans,
-        elegir_num_zonas,
-        ordenar_clientes_en_grupo_por_distancia_a_base,
-        ordenar_grupos_por_cercania_a_base,
+        clientes_con_cluster_kmeans,
+        elegir_k_clusters,
+        listas_grupos_cluster_ordenados,
+        ordenar_grupo_radial_desde_base,
+        preordenar_radial_clientes,
     )
 
-    k = elegir_num_zonas(len(clientes))
-    grupos_raw = agrupar_clientes_por_zona_kmeans(clientes, k)
-    grupos = ordenar_grupos_por_cercania_a_base(grupos_raw, base)
+    radial = preordenar_radial_clientes(clientes, base)
+    k = elegir_k_clusters(len(radial))
+    tagged = clientes_con_cluster_kmeans(radial, k)
+    grupos = listas_grupos_cluster_ordenados(tagged, base)
 
     merged: list[dict] = []
     for g in grupos:
-        intra = ordenar_clientes_en_grupo_por_distancia_a_base(g, base)
-        sub = _ors_optimize_single_roundtrip(base, intra)
+        intra = ordenar_grupo_radial_desde_base(g, base)
+        if len(intra) + 2 <= 50:
+            sub = _ors_route_start_clients_end(base, intra, base)
+        else:
+            sub = _ors_optimize_from_base_clientes(base, intra)
         if "error" in sub:
             return sub
         merged.extend(sub["clientes"])
@@ -602,8 +620,8 @@ _ORS_OPTIMIZAR_UN_SOLO_BLOQUE_MAX = 14
 
 def _ors_optimize_from_base_clientes(base: dict, clientes: list[dict]) -> dict:
     """
-    Optimización ORS. Con muchos clientes: K-means por zona, ORS por grupo,
-    orden global grupo a grupo (grupos más cercanos a la base primero).
+    Optimización ORS. Con muchos clientes: pipeline radial + K-means (2–4 grupos) + ORS
+    por grupo y ruta final BASE→visitas→BASE para métricas y trazado.
     """
     if not clientes:
         return {
@@ -1167,17 +1185,62 @@ def get_analisis_km(
 
 
 @router.get("/rutero")
-def get_rutero():
+def get_rutero(
+    vendedor: str = Query(..., min_length=1, description="Código vendedor"),
+    dia: str = Query(..., min_length=1, description="Día de atención (dia_atencion)"),
+):
+    """
+    Listado del rutero para un vendedor y día: orden manual (NULL al final), nombre,
+    municipio, teléfono, observaciones. Incluye `tipo_atencion` y `activo` para columna Estado.
+    """
+    v = vendedor.strip()
+    d = dia.strip()
+    if not v or not d:
+        raise HTTPException(status_code=400, detail="vendedor y dia son obligatorios")
+
     conn = get_connection()
     try:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT *
-            FROM bsale.rutero
-            WHERE company_id = 3
-              AND activo = TRUE
-            """
+            SELECT
+                r.id,
+                r.vendedor,
+                r.dia_atencion,
+                r.orden_manual,
+                r.orden_ruta,
+                COALESCE(
+                    NULLIF(TRIM(r.nombre_fantasia), ''),
+                    NULLIF(
+                        TRIM(
+                            CONCAT_WS(
+                                ' ',
+                                NULLIF(TRIM(r.first_name), ''),
+                                NULLIF(TRIM(r.last_name), '')
+                            )
+                        ),
+                        ''
+                    ),
+                    'Cliente #' || r.bsale_id::text
+                ) AS cliente_nombre,
+                r.municipality,
+                r.lat,
+                r.lon,
+                r.phone AS telefono,
+                r.observaciones,
+                r.tipo_atencion,
+                r.activo,
+                r.bsale_id
+            FROM bsale.rutero r
+            WHERE r.company_id = 3
+              AND r.activo = TRUE
+              AND LOWER(TRIM(r.vendedor)) = LOWER(TRIM(%s))
+              AND LOWER(TRIM(r.dia_atencion)) = LOWER(TRIM(%s))
+            ORDER BY r.orden_manual ASC NULLS LAST,
+                     r.orden_ruta ASC NULLS LAST,
+                     r.bsale_id
+            """,
+            (v, d),
         )
         data = _rows_to_json(cur)
         cur.close()
@@ -1185,6 +1248,81 @@ def get_rutero():
         conn.close()
 
     return data
+
+
+def _rutero_fila_por_id(cur, row_id: int) -> dict | None:
+    cur.execute(
+        """
+        SELECT
+            r.id,
+            r.vendedor,
+            r.dia_atencion,
+            r.orden_manual,
+            r.orden_ruta,
+            COALESCE(
+                NULLIF(TRIM(r.nombre_fantasia), ''),
+                NULLIF(
+                    TRIM(
+                        CONCAT_WS(
+                            ' ',
+                            NULLIF(TRIM(r.first_name), ''),
+                            NULLIF(TRIM(r.last_name), '')
+                        )
+                    ),
+                    ''
+                ),
+                'Cliente #' || r.bsale_id::text
+            ) AS cliente_nombre,
+            r.municipality,
+            r.lat,
+            r.lon,
+            r.phone AS telefono,
+            r.observaciones,
+            r.tipo_atencion,
+            r.activo,
+            r.bsale_id
+        FROM bsale.rutero r
+        WHERE r.id = %s AND r.company_id = 3
+        """,
+        (row_id,),
+    )
+    rows = _rows_to_json(cur)
+    return rows[0] if rows else None
+
+
+@router.post("/observacion")
+def post_observacion_rutero(body: ObservacionRuteroBody):
+    """Persiste observaciones por fila rutero (`cliente_id` = `bsale.rutero.id`)."""
+    obs = body.observaciones
+    if obs is not None:
+        obs = obs.strip() or None
+
+    conn = get_connection()
+    fila: dict | None = None
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE bsale.rutero
+            SET observaciones = %s
+            WHERE id = %s
+              AND company_id = 3
+              AND activo = TRUE
+            """,
+            (obs, body.cliente_id),
+        )
+        if cur.rowcount == 0:
+            cur.close()
+            raise HTTPException(status_code=404, detail="Fila rutero no encontrada o inactiva")
+        conn.commit()
+        fila = _rutero_fila_por_id(cur, body.cliente_id)
+        cur.close()
+    finally:
+        conn.close()
+
+    if fila is None:
+        raise HTTPException(status_code=500, detail="No se pudo leer la fila actualizada")
+    return fila
 
 
 @router.get("/sin-georef")
@@ -1211,6 +1349,9 @@ def get_sin_georef():
 
 @router.get("/pendientes")
 def get_pendientes():
+    """
+    Clientes de ruta sin día de atención asignado (no entran al rutero operativo hasta tener día).
+    """
     conn = get_connection()
     try:
         cur = conn.cursor()
@@ -1227,8 +1368,11 @@ def get_pendientes():
               )
               AND (
                   dia_atencion IS NULL
-                  OR lat IS NULL
+                  OR TRIM(COALESCE(dia_atencion::text, '')) = ''
               )
+            ORDER BY vendedor,
+                     municipality NULLS LAST,
+                     bsale_id
             """
         )
         data = _rows_to_json(cur)
@@ -1237,6 +1381,55 @@ def get_pendientes():
         conn.close()
 
     return data
+
+
+@router.post("/pendientes/asignar-dia")
+def post_pendientes_asignar_dia(body: AsignarDiaAtencionBody):
+    """Asigna `dia_atencion` en `bsale.clients` (empresa 3)."""
+    d = body.dia_atencion.strip()
+    if not d:
+        raise HTTPException(status_code=400, detail="dia_atencion es obligatorio")
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE bsale.clients
+            SET dia_atencion = %s,
+                updated = CURRENT_TIMESTAMP
+            WHERE company_id = 3
+              AND bsale_id = %s
+              AND vendedor IN (
+                  'vendedor_1',
+                  'vendedor_2',
+                  'vendedor_3',
+                  'vendedor_4'
+              )
+            """,
+            (d, body.bsale_id),
+        )
+        if cur.rowcount == 0:
+            cur.close()
+            raise HTTPException(
+                status_code=404,
+                detail="Cliente no encontrado o no pertenece a los vendedores de ruta",
+            )
+        conn.commit()
+        cur.execute(
+            """
+            SELECT *
+            FROM bsale.clients
+            WHERE company_id = 3 AND bsale_id = %s
+            """,
+            (body.bsale_id,),
+        )
+        row = _rows_to_json(cur)
+        cur.close()
+    finally:
+        conn.close()
+
+    return row[0] if row else {"ok": True, "bsale_id": body.bsale_id, "dia_atencion": d}
 
 
 @router.get("/mapa")

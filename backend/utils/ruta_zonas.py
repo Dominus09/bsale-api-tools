@@ -1,14 +1,21 @@
 """
-Agrupación geográfica de clientes para optimización de ruta por tramos (ORS).
+Pipeline de optimización de ruta por etapas (preorden radial, K-means, ORS por grupo).
 
-K-means en (lon, lat) es suficiente para zonas locales; el orden de grupos respecto
-a la base usa distancia Haversine al centroide.
+1. Preordenamiento radial respecto a la base (atan2).
+2. K-means en (lon, lat) con k ∈ {2, 3, 4} según volumen; cada cliente lleva `cluster_id`.
+3. Agrupación por cluster y orden de grupos por cercanía del centroide a la base.
+4. ORS por grupo (entrada ordenada radialmente dentro del grupo); unión de visitas.
+5. La métrica y geometría finales de la ruta completa las calcula el router con ORS
+   secuencial BASE → ruta_final → BASE (`_geom_km_ruta_completa`).
 """
 
 from __future__ import annotations
 
 import math
 import random
+from collections import defaultdict
+
+
 def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Distancia en metros entre dos puntos WGS84."""
     r = 6_371_000.0
@@ -17,6 +24,27 @@ def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     dlmb = math.radians(lon2 - lon1)
     a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2) ** 2
     return 2 * r * math.asin(min(1.0, math.sqrt(a)))
+
+
+def angulo_radial_desde_base(c: dict, blat: float, blon: float) -> float:
+    """Ángulo en plano lat/lon respecto a la base (mismo criterio que atan2 del usuario)."""
+    return math.atan2(float(c["lat"]) - blat, float(c["lon"]) - blon)
+
+
+def preordenar_radial_clientes(clientes: list[dict], base: dict) -> list[dict]:
+    """Paso 1: copia la lista ordenada por ángulo atan2(lat - base.lat, lon - base.lon)."""
+    blat = float(base["lat"])
+    blon = float(base["lon"])
+    return sorted((dict(c) for c in clientes), key=lambda c: angulo_radial_desde_base(c, blat, blon))
+
+
+def elegir_k_clusters(n: int) -> int:
+    """Paso 2: k ∈ {2, 3, 4} según cantidad de clientes."""
+    if n < 16:
+        return 2
+    if n < 30:
+        return 3
+    return min(4, max(2, n // 10))
 
 
 def _dist_sq_xy(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -32,10 +60,7 @@ def _kmeans_labels_ll(
     max_iter: int = 50,
     seed: int = 42,
 ) -> list[int]:
-    """
-    K-means en el plano lon–lat (suficiente para clusters ~comuna).
-    Devuelve una etiqueta 0..k-1 por punto.
-    """
+    """K-means en lon–lat; etiquetas 0..k-1."""
     n = len(points)
     if n == 0:
         return []
@@ -43,8 +68,6 @@ def _kmeans_labels_ll(
         return [0] * n
     k = min(k, n)
     rng = random.Random(seed)
-
-    # Inicialización: k índices distintos
     pick = list(range(n))
     rng.shuffle(pick)
     centroids = [points[pick[i]] for i in range(k)]
@@ -80,34 +103,22 @@ def _kmeans_labels_ll(
     return labels
 
 
-def elegir_num_zonas(n: int) -> int:
-    """k=2 o k=3 según tamaño (solo se usa con n > umbral en el router)."""
-    if n < 30:
-        return 2
-    return 3
-
-
-def agrupar_clientes_por_zona_kmeans(clientes: list[dict], k: int) -> list[list[dict]]:
-    """Parte `clientes` en k grupos por cercanía geográfica (K-means lon/lat)."""
-    if not clientes:
+def clientes_con_cluster_kmeans(clientes_radial: list[dict], k: int) -> list[dict]:
+    """
+    Pasos 2–3: K-means sobre [lon, lat] en el orden radial; añade `cluster_id` a cada fila.
+    """
+    if not clientes_radial:
         return []
     if k <= 1:
-        return [list(clientes)]
+        return [{**dict(c), "cluster_id": 0} for c in clientes_radial]
 
-    pts: list[tuple[float, float]] = []
-    for c in clientes:
-        pts.append((float(c["lon"]), float(c["lat"])))
-
+    pts = [(float(c["lon"]), float(c["lat"])) for c in clientes_radial]
     labels = _kmeans_labels_ll(pts, k)
-    buckets: list[list[dict]] = [[] for _ in range(k)]
-    for c, lab in zip(clientes, labels):
-        buckets[lab].append(c)
-
-    return [g for g in buckets if g]
+    return [{**dict(c), "cluster_id": int(lab)} for c, lab in zip(clientes_radial, labels)]
 
 
 def ordenar_grupos_por_cercania_a_base(grupos: list[list[dict]], base: dict) -> list[list[dict]]:
-    """Grupos más cercanos a la base primero (centroide del grupo vs base)."""
+    """Paso 4: clusters más cercanos a la base primero (centroide vs base)."""
     blat = float(base["lat"])
     blon = float(base["lon"])
 
@@ -121,10 +132,17 @@ def ordenar_grupos_por_cercania_a_base(grupos: list[list[dict]], base: dict) -> 
     return sorted(grupos, key=score)
 
 
-def ordenar_clientes_en_grupo_por_distancia_a_base(grupo: list[dict], base: dict) -> list[dict]:
+def listas_grupos_cluster_ordenados(clientes_tagged: list[dict], base: dict) -> list[list[dict]]:
+    """Agrupa por `cluster_id` y ordena los grupos por distancia del centroide a la base."""
+    by_cluster: dict[int, list[dict]] = defaultdict(list)
+    for c in clientes_tagged:
+        by_cluster[int(c["cluster_id"])].append(c)
+    grupos = list(by_cluster.values())
+    return ordenar_grupos_por_cercania_a_base(grupos, base)
+
+
+def ordenar_grupo_radial_desde_base(grupo: list[dict], base: dict) -> list[dict]:
+    """Orden radial dentro del grupo (semilla para la petición ORS del paso 5)."""
     blat = float(base["lat"])
     blon = float(base["lon"])
-    return sorted(
-        grupo,
-        key=lambda c: haversine_m(blat, blon, float(c["lat"]), float(c["lon"])),
-    )
+    return sorted(grupo, key=lambda c: angulo_radial_desde_base(c, blat, blon))

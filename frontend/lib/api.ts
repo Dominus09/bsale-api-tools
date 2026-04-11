@@ -725,16 +725,57 @@ export async function getDistribuidoraRutaDetalle(
 /** Filas genéricas JSON (listados /distribuidora/*). */
 export type DistribuidoraRecord = Record<string, unknown>
 
-export async function getDistribuidoraRutero(): Promise<DistribuidoraRecord[]> {
-  const res = await fetch(`${API_URL}/distribuidora/rutero`, {
+/** Fila de GET /distribuidora/rutero?vendedor=&dia= */
+export type DistribuidoraRuteroFila = {
+  id: number
+  vendedor?: string | null
+  dia_atencion?: string | null
+  orden_manual?: number | null
+  orden_ruta?: number | null
+  cliente_nombre?: string | null
+  municipality?: string | null
+  lat?: number | null
+  lon?: number | null
+  telefono?: string | null
+  observaciones?: string | null
+  tipo_atencion?: string | null
+  activo?: boolean | null
+  bsale_id?: number | null
+}
+
+export async function getDistribuidoraRutero(
+  vendedor: string,
+  dia: string,
+  signal?: AbortSignal,
+): Promise<DistribuidoraRuteroFila[]> {
+  const qs = new URLSearchParams({ vendedor: vendedor.trim(), dia: dia.trim() })
+  const res = await fetch(`${API_URL}/distribuidora/rutero?${qs}`, {
     headers: getAuthHeaders(),
+    signal,
   })
   if (!res.ok) {
     const msg = await res.text().catch(() => "")
     throw new Error(msg || "Error al cargar rutero")
   }
   const data = await res.json()
-  return Array.isArray(data) ? data : []
+  return Array.isArray(data) ? (data as DistribuidoraRuteroFila[]) : []
+}
+
+/** POST /distribuidora/observacion — `cliente_id` = PK `bsale.rutero.id`. */
+export async function postDistribuidoraObservacionRutero(body: {
+  cliente_id: number
+  observaciones: string | null
+}): Promise<DistribuidoraRuteroFila> {
+  const res = await fetch(`${API_URL}/distribuidora/observacion`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "No se pudo guardar observaciones")
+  }
+  return res.json() as Promise<DistribuidoraRuteroFila>
 }
 
 export async function getDistribuidoraPendientes(): Promise<DistribuidoraRecord[]> {
@@ -747,6 +788,23 @@ export async function getDistribuidoraPendientes(): Promise<DistribuidoraRecord[
   }
   const data = await res.json()
   return Array.isArray(data) ? data : []
+}
+
+/** POST /distribuidora/pendientes/asignar-dia — actualiza `dia_atencion` en bsale.clients. */
+export async function postDistribuidoraPendientesAsignarDia(body: {
+  bsale_id: number
+  dia_atencion: string
+}): Promise<DistribuidoraRecord> {
+  const res = await fetch(`${API_URL}/distribuidora/pendientes/asignar-dia`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "No se pudo asignar el día")
+  }
+  return res.json() as Promise<DistribuidoraRecord>
 }
 
 export async function getDistribuidoraSinGeoref(): Promise<DistribuidoraRecord[]> {

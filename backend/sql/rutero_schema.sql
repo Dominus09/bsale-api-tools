@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS bsale.rutero (
     activo             BOOLEAN DEFAULT TRUE,
     orden_ruta         INTEGER,
     orden_manual       INTEGER,
+    observaciones      TEXT,
     fecha_rutero       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT rutero_company_bsale_unique UNIQUE (company_id, bsale_id),
     CONSTRAINT chk_tipo_atencion CHECK (tipo_atencion IN ('terreno', 'telefonico'))
