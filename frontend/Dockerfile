@@ -1,6 +1,8 @@
 # Imagen de producción Next.js para Coolify / Docker.
 #
 # Coolify (importante):
+# - Si el deploy falla en Nixpacks paso "nix-env / unpacking nixpkgs" (exit 255): en el recurso,
+#   Build Pack = "Dockerfile" (no Nixpacks), Base Directory = "frontend", Dockerfile = Dockerfile.
 # - Base Directory / contexto de build: carpeta "frontend" (este Dockerfile).
 # - Puerto interno del contenedor: 3000 (o el PORT que inyecte Coolify; standalone lo respeta).
 # - NO uses el Dockerfile de la raíz del repo (Python/API en 8000) para work.quillotana.cl.
@@ -11,8 +13,8 @@
 FROM node:22-alpine AS builder
 WORKDIR /app
 
-COPY package.json package-lock.json* ./
-RUN npm install
+COPY package.json package-lock.json ./
+RUN npm ci
 
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1

@@ -1,31 +1,28 @@
-# Next.js en modo servidor (SSR / App Router). Requiere `pnpm start` → `next start`, NO nginx estático.
+# Coolify / Nixpacks — evitar la fase `nix-env -if .nixpacks/nixpkgs-...` (paso #8) que suele fallar
+# con exit 255 por OOM/timeout al descomprimir nixpkgs en servidores pequeños.
 #
-# Deploy Nixpacks: no commitear `tsconfig.tsbuildinfo` en la raíz del frontend; Coolify monta caché
-# en esa ruta y falla si COPY dejó un archivo ahí (Docker: "not a directory"). Ver .dockerignore y
-# tsconfig.json → tsBuildInfoFile en node_modules/.cache/.
-#
-# Build: `pnpm run build` usa `next build --webpack` (package.json) para evitar fallos en CI/VPS
-# con Turbopack (p. ej. exit 255 / OOM al compilar). Si hace falta más RAM: NODE_OPTIONS en Coolify.
-#
-# En Coolify (recurso "front erp"):
-# - Desactiva "Is it a static site?" / sitio estático.
-# - "Publish Directory": en Configuration → General, debajo de "Base Directory" (si tu versión
-#   lo muestra). Si ponías "/" y ves "Cannot GET", bórralo y deja el campo vacío. En v4 a veces
-#   solo aparece si activas sitio estático; si no lo ves, ignora y usa Build Pack = Dockerfile.
-# - Puerto expuesto: 3000 (o el que use tu proxy hacia el contenedor).
-# - Base Directory: frontend (como ya tienes).
+# Estrategia: imagen base oficial con Node (sin Nix) + npm ci + build Next standalone.
+# Alternativa en el panel Coolify: Build Pack = "Dockerfile", Base Directory = "frontend"
+# (usa frontend/Dockerfile con node:22-alpine).
+
+buildImage = "node:22-bookworm-slim"
 
 [variables]
 NODE_ENV = "production"
 HOSTNAME = "0.0.0.0"
 PORT = "3000"
 
-# Coolify/Nixpacks usa por defecto `pnpm i --frozen-lockfile` si hay pnpm-lock.yaml.
-# Si en tu PC aún no puedes regenerar el lockfile, esta fase evita el fallo del deploy.
-# Cuando puedas correr `pnpm install` en local y subir un lockfile fiable, borra este bloque.
+# Sustituye los paquetes Nix del provider (no instalar nixpkgs en esta fase).
+[phases.setup]
+nixPkgs = []
+
 [phases.install]
 dependsOn = ["setup"]
-cmds = ["pnpm install --no-frozen-lockfile"]
+cmds = ["npm ci"]
+
+[phases.build]
+dependsOn = ["install"]
+cmds = ["npm run build"]
 
 [start]
-cmd = "pnpm start"
+cmd = "npm run start"
