@@ -581,6 +581,7 @@ export interface DistribuidoraMapaCliente {
   lon: number
   tipo_atencion: string | null
   orden_ruta: number | null
+  orden_manual: number | null
 }
 
 export interface DistribuidoraPuntoBase {
@@ -602,6 +603,38 @@ export async function getDistribuidoraMapa(): Promise<{
     throw new Error(msg || "Error al cargar mapa del rutero")
   }
   return res.json()
+}
+
+/** Guarda orden de visita manual (bsale.rutero.orden_manual). */
+export async function postDistribuidoraOrdenManual(body: {
+  cliente_id: number
+  orden_manual: number
+}): Promise<void> {
+  const res = await fetch(`${API_URL}/distribuidora/orden-manual`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "No se pudo guardar el orden manual")
+  }
+}
+
+/** Limpia orden_manual para vendedor+día (vuelve a optimización ORS). */
+export async function postDistribuidoraOrdenManualReset(body: {
+  vendedor: string
+  dia: string
+}): Promise<void> {
+  const res = await fetch(`${API_URL}/distribuidora/orden-manual/reset`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "No se pudo limpiar el orden manual")
+  }
 }
 
 /** Respuesta de GET /distribuidora/ruta-detalle (éxito o cuerpo con `error`). */

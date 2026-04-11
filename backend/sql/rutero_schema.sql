@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS bsale.rutero (
     tipo_atencion      TEXT DEFAULT 'terreno',
     activo             BOOLEAN DEFAULT TRUE,
     orden_ruta         INTEGER,
+    orden_manual       INTEGER,
     fecha_rutero       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT rutero_company_bsale_unique UNIQUE (company_id, bsale_id),
     CONSTRAINT chk_tipo_atencion CHECK (tipo_atencion IN ('terreno', 'telefonico'))
@@ -50,3 +51,6 @@ CREATE INDEX IF NOT EXISTS idx_rutero_municipality
 
 CREATE INDEX IF NOT EXISTS idx_rutero_activo
     ON bsale.rutero (activo);
+
+CREATE INDEX IF NOT EXISTS idx_rutero_orden_manual
+    ON bsale.rutero (vendedor, dia_atencion, orden_manual);

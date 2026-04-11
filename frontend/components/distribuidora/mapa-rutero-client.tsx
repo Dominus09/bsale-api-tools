@@ -8,10 +8,13 @@ import { Loader2 } from "lucide-react"
 
 import polylineModule from "@mapbox/polyline"
 
+import { Button } from "@/components/ui/button"
 import {
   getDistribuidoraMapa,
   getDistribuidoraRutaDetalle,
   isDistribuidoraRutaDetalleOk,
+  postDistribuidoraOrdenManual,
+  postDistribuidoraOrdenManualReset,
   type DistribuidoraMapaCliente,
   type DistribuidoraPuntoBase,
   type DistribuidoraRutaDetalleJson,
@@ -25,6 +28,7 @@ const MapContainer = dynamic(() => import("react-leaflet").then((m) => m.MapCont
 const TileLayer = dynamic(() => import("react-leaflet").then((m) => m.TileLayer), { ssr: false })
 const Marker = dynamic(() => import("react-leaflet").then((m) => m.Marker), { ssr: false })
 const Popup = dynamic(() => import("react-leaflet").then((m) => m.Popup), { ssr: false })
+const Tooltip = dynamic(() => import("react-leaflet").then((m) => m.Tooltip), { ssr: false })
 const MarkerClusterGroup = dynamic(() => import("react-leaflet-cluster").then((m) => m.default), {
   ssr: false,
 })
@@ -316,6 +320,13 @@ function getBaseDivIcon(): L.DivIcon {
 const SELECT_CLASS =
   "h-9 min-w-[140px] rounded-md border border-input bg-background px-3 text-sm shadow-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 
+function ordenManualDisplay(c: DistribuidoraMapaCliente): number | null {
+  const v = c.orden_manual
+  if (v == null) return null
+  const n = typeof v === "number" ? v : Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
 export default function MapaRuteroClient() {
   const [clientes, setClientes] = useState<DistribuidoraMapaCliente[]>([])
   const [bases, setBases] = useState<DistribuidoraPuntoBase[]>([])
@@ -325,7 +336,29 @@ export default function MapaRuteroClient() {
   const [diaFilter, setDiaFilter] = useState(FILTER_ALL)
   const [rutaDetalle, setRutaDetalle] = useState<DistribuidoraRutaDetalleJson | null>(null)
   const [rutaDetalleLoading, setRutaDetalleLoading] = useState(false)
+  const [ordenActual, setOrdenActual] = useState(1)
+  const [ordenGuardando, setOrdenGuardando] = useState(false)
+  const [ordenMensaje, setOrdenMensaje] = useState("")
   const mounted = useRef(true)
+
+  useEffect(() => {
+    setOrdenMensaje("")
+  }, [vendedorFilter, diaFilter])
+
+  useEffect(() => {
+    if (vendedorFilter === FILTER_ALL || diaFilter === FILTER_ALL) {
+      setOrdenActual(1)
+      return
+    }
+    const vis = clientes.filter(
+      (c) => c.vendedor?.trim() === vendedorFilter && c.dia_atencion?.trim() === diaFilter,
+    )
+    const nums = vis
+      .map((c) => ordenManualDisplay(c))
+      .filter((n): n is number => n != null)
+    const max = nums.length > 0 ? Math.max(...nums) : 0
+    setOrdenActual(max + 1)
+  }, [clientes, vendedorFilter, diaFilter])
 
   useEffect(() => {
     if (vendedorFilter === FILTER_ALL || diaFilter === FILTER_ALL) {
@@ -413,6 +446,52 @@ export default function MapaRuteroClient() {
     setDiaFilter(e.target.value)
   }, [])
 
+  const puedeEditarOrden =
+    vendedorFilter !== FILTER_ALL && diaFilter !== FILTER_ALL && !loading && !error
+
+  const onMarcadorOrdenClick = useCallback(
+    async (c: DistribuidoraMapaCliente) => {
+      if (!puedeEditarOrden || ordenGuardando) return
+      if (c.vendedor?.trim() !== vendedorFilter || c.dia_atencion?.trim() !== diaFilter) return
+
+      const n = ordenActual
+      setOrdenGuardando(true)
+      setOrdenMensaje("")
+      try {
+        await postDistribuidoraOrdenManual({ cliente_id: c.bsale_id, orden_manual: n })
+        setClientes((prev) =>
+          prev.map((x) => (x.bsale_id === c.bsale_id ? { ...x, orden_manual: n } : x)),
+        )
+        const json = await getDistribuidoraRutaDetalle(vendedorFilter, diaFilter)
+        if (mounted.current) setRutaDetalle(json)
+      } catch (e: unknown) {
+        setOrdenMensaje(e instanceof Error ? e.message : "Error al guardar orden")
+      } finally {
+        if (mounted.current) setOrdenGuardando(false)
+      }
+    },
+    [puedeEditarOrden, ordenGuardando, vendedorFilter, diaFilter, ordenActual],
+  )
+
+  const onResetOrdenManual = useCallback(async () => {
+    if (!puedeEditarOrden || ordenGuardando) return
+    setOrdenGuardando(true)
+    setOrdenMensaje("")
+    try {
+      await postDistribuidoraOrdenManualReset({ vendedor: vendedorFilter, dia: diaFilter })
+      const mapData = await getDistribuidoraMapa()
+      if (mounted.current) {
+        setClientes(Array.isArray(mapData.clientes) ? mapData.clientes : [])
+      }
+      const json = await getDistribuidoraRutaDetalle(vendedorFilter, diaFilter)
+      if (mounted.current) setRutaDetalle(json)
+    } catch (e: unknown) {
+      setOrdenMensaje(e instanceof Error ? e.message : "Error al limpiar orden")
+    } finally {
+      if (mounted.current) setOrdenGuardando(false)
+    }
+  }, [puedeEditarOrden, ordenGuardando, vendedorFilter, diaFilter])
+
   return (
     <div className="p-4">
       <div className="rounded-xl bg-white p-4 shadow dark:bg-card">
@@ -424,7 +503,9 @@ export default function MapaRuteroClient() {
               <span className="font-medium tabular-nums text-foreground">{clientesVisibles.length}</span>
               {vendedorFilter !== FILTER_ALL && diaFilter !== FILTER_ALL ? (
                 <span className="mt-1 block text-xs text-muted-foreground/90">
-                  Ruta ORS (línea azul) según vendedor y día seleccionados.
+                  Clic en un cliente para asignar orden de visita (1, 2, 3…). Con al menos un orden
+                  manual la ruta no usa ORS; &quot;Limpiar orden&quot; borra números y restaura la
+                  optimización ORS (línea azul).
                 </span>
               ) : (
                 <span className="mt-1 block text-xs text-muted-foreground/90">
@@ -460,8 +541,29 @@ export default function MapaRuteroClient() {
                 </option>
               ))}
             </select>
+            {puedeEditarOrden ? (
+              <>
+                <span className="flex items-center text-xs text-muted-foreground sm:text-sm">
+                  Siguiente: <span className="ml-1 font-semibold tabular-nums">{ordenActual}</span>
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={ordenGuardando}
+                  onClick={() => void onResetOrdenManual()}
+                >
+                  Limpiar orden manual
+                </Button>
+              </>
+            ) : null}
           </div>
         </div>
+        {ordenMensaje ? (
+          <p className="-mt-2 mb-3 text-sm text-destructive" role="alert">
+            {ordenMensaje}
+          </p>
+        ) : null}
 
         <div className="mapa-rutero-wrapper relative h-[75vh] min-h-[320px] w-full min-w-0 overflow-hidden rounded-lg bg-slate-200/80 shadow-inner ring-1 ring-black/5 dark:bg-slate-900/40 dark:ring-white/10">
           {loading ? (
@@ -492,39 +594,60 @@ export default function MapaRuteroClient() {
                   <MapaRuteroInvalidateSize />
                   <MapaRuteroOrsRoute detalle={rutaDetalle} />
                 <MarkerClusterGroup chunkedLoading showCoverageOnHover={false}>
-                  {clientesVisibles.map((c) => (
-                    <Marker
-                      key={c.bsale_id}
-                      position={[c.lat, c.lon]}
-                      icon={getClienteDivIcon(MAP_CLIENTE_COLOR)}
-                    >
-                    <Popup>
-                      <div className="mapa-rutero-popup-inner p-3 text-sm">
-                        <p className="font-semibold leading-snug text-foreground">{nombreCliente(c)}</p>
-                        <dl className="mt-2 space-y-1.5 text-muted-foreground">
-                          <div className="grid grid-cols-[5.5rem_1fr] gap-x-2 gap-y-1">
-                            <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
-                              Vendedor
-                            </dt>
-                            <dd className="text-foreground">{c.vendedor?.trim() || "—"}</dd>
-                            <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
-                              Día
-                            </dt>
-                            <dd className="text-foreground">{c.dia_atencion?.trim() || "—"}</dd>
-                            <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
-                              Teléfono
-                            </dt>
-                            <dd className="text-foreground">{c.phone?.trim() || "—"}</dd>
-                            <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
-                              Municipio
-                            </dt>
-                            <dd className="text-foreground">{c.municipality?.trim() || "—"}</dd>
+                  {clientesVisibles.map((c) => {
+                    const om = ordenManualDisplay(c)
+                    return (
+                      <Marker
+                        key={c.bsale_id}
+                        position={[c.lat, c.lon]}
+                        icon={getClienteDivIcon(MAP_CLIENTE_COLOR)}
+                        eventHandlers={{
+                          click: () => {
+                            void onMarcadorOrdenClick(c)
+                          },
+                        }}
+                      >
+                        {om != null ? (
+                          <Tooltip permanent direction="top" opacity={1} className="orden-tooltip">
+                            {String(om)}
+                          </Tooltip>
+                        ) : null}
+                        <Popup>
+                          <div className="mapa-rutero-popup-inner p-3 text-sm">
+                            <p className="font-semibold leading-snug text-foreground">{nombreCliente(c)}</p>
+                            <dl className="mt-2 space-y-1.5 text-muted-foreground">
+                              <div className="grid grid-cols-[5.5rem_1fr] gap-x-2 gap-y-1">
+                                <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
+                                  Vendedor
+                                </dt>
+                                <dd className="text-foreground">{c.vendedor?.trim() || "—"}</dd>
+                                <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
+                                  Día
+                                </dt>
+                                <dd className="text-foreground">{c.dia_atencion?.trim() || "—"}</dd>
+                                <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
+                                  Teléfono
+                                </dt>
+                                <dd className="text-foreground">{c.phone?.trim() || "—"}</dd>
+                                <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
+                                  Municipio
+                                </dt>
+                                <dd className="text-foreground">{c.municipality?.trim() || "—"}</dd>
+                                {om != null ? (
+                                  <>
+                                    <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
+                                      Orden manual
+                                    </dt>
+                                    <dd className="text-foreground">{om}</dd>
+                                  </>
+                                ) : null}
+                              </div>
+                            </dl>
                           </div>
-                        </dl>
-                      </div>
-                    </Popup>
-                    </Marker>
-                  ))}
+                        </Popup>
+                      </Marker>
+                    )
+                  })}
                 </MarkerClusterGroup>
                 {bases.map((b, i) => {
                   const key = `${b.vendedor ?? "b"}-${b.lat}-${b.lon}-${i}`

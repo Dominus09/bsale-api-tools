@@ -1,6 +1,17 @@
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from backend.db import get_connection
+
+
+class OrdenManualBody(BaseModel):
+    cliente_id: int = Field(..., ge=1, description="bsale_id del cliente en rutero")
+    orden_manual: int = Field(..., ge=1)
+
+
+class OrdenManualResetBody(BaseModel):
+    vendedor: str = Field(..., min_length=1)
+    dia: str = Field(..., min_length=1)
 
 router = APIRouter(prefix="/distribuidora", tags=["Distribuidora"])
 
@@ -97,6 +108,46 @@ def _clientes_orden_visita_desde_ors(clientes: list[dict], route: dict) -> list[
     return salida
 
 
+def _clientes_orden_manual(
+    manual_rows: list[dict],
+    todos_validos: list[dict],
+) -> list[dict]:
+    """
+    Orden: primero filas con orden_manual (orden_manual ASC), luego el resto
+    como en rutero (orden_ruta NULLS LAST, bsale_id).
+    """
+    by_id = {c["bsale_id"]: dict(c) for c in todos_validos}
+    vistos: set[int] = set()
+    salida: list[dict] = []
+
+    for m in manual_rows:
+        bid = m.get("bsale_id")
+        if bid is None or bid in vistos:
+            continue
+        base = by_id.get(bid)
+        if base is None:
+            continue
+        fila = dict(base)
+        salida.append(fila)
+        vistos.add(bid)
+
+    resto = sorted(
+        (c for c in todos_validos if c["bsale_id"] not in vistos),
+        key=lambda c: (
+            c.get("orden_ruta") is None,
+            c.get("orden_ruta") if c.get("orden_ruta") is not None else 0,
+            c["bsale_id"],
+        ),
+    )
+    for c in resto:
+        salida.append(dict(c))
+
+    for i, fila in enumerate(salida, start=1):
+        fila["orden_visita"] = i
+
+    return salida
+
+
 @router.get("/ruta-detalle")
 def get_ruta_detalle(
     vendedor: str = Query(..., min_length=1, description="Código vendedor (ej. vendedor_1)"),
@@ -152,7 +203,40 @@ def get_ruta_detalle(
                 lat,
                 lon,
                 tipo_atencion,
-                orden_ruta
+                orden_ruta,
+                orden_manual
+            FROM bsale.rutero
+            WHERE company_id = 3
+              AND activo = TRUE
+              AND LOWER(vendedor) = LOWER(%s)
+              AND LOWER(dia_atencion) = LOWER(%s)
+              AND lat IS NOT NULL
+              AND lon IS NOT NULL
+              AND LOWER(tipo_atencion) <> 'telefonico'
+              AND orden_manual IS NOT NULL
+            ORDER BY orden_manual ASC, bsale_id
+            """,
+            (v, d),
+        )
+        manual_raw = _rows_to_json(cur)
+
+        cur.execute(
+            """
+            SELECT
+                bsale_id,
+                first_name,
+                last_name,
+                nombre_fantasia,
+                phone,
+                vendedor,
+                dia_atencion,
+                dia_extra,
+                municipality,
+                lat,
+                lon,
+                tipo_atencion,
+                orden_ruta,
+                orden_manual
             FROM bsale.rutero
             WHERE company_id = 3
               AND activo = TRUE
@@ -171,6 +255,7 @@ def get_ruta_detalle(
         conn.close()
 
     clientes = _clientes_validos_coords(clientes)
+    manual_valid = _clientes_validos_coords(manual_raw)
     print("TOTAL CLIENTES VALIDOS:", len(clientes))
 
     if len(clientes) == 0:
@@ -181,6 +266,18 @@ def get_ruta_detalle(
             "minutos_totales": 0.0,
             "geometry": None,
             "clientes": clientes,
+            "base": base,
+        }
+
+    if len(manual_valid) > 0:
+        clientes_ordenados = _clientes_orden_manual(manual_valid, clientes)
+        return {
+            "vendedor": v,
+            "dia": d,
+            "km_totales": 0.0,
+            "minutos_totales": 0.0,
+            "geometry": None,
+            "clientes": clientes_ordenados,
             "base": base,
         }
 
@@ -525,7 +622,8 @@ def get_mapa():
                 lat,
                 lon,
                 tipo_atencion,
-                orden_ruta
+                orden_ruta,
+                orden_manual
             FROM bsale.rutero
             WHERE company_id = 3
               AND activo = TRUE
@@ -550,6 +648,67 @@ def get_mapa():
         "clientes": clientes,
         "bases": bases,
     }
+
+
+@router.post("/orden-manual/reset")
+def post_orden_manual_reset(body: OrdenManualResetBody):
+    """Pone orden_manual en NULL para el vendedor y día (vuelve a ORS en ruta-detalle)."""
+    v = body.vendedor.strip()
+    d = body.dia.strip()
+    if not v or not d:
+        raise HTTPException(status_code=400, detail="vendedor y dia son obligatorios")
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE bsale.rutero
+            SET orden_manual = NULL
+            WHERE company_id = 3
+              AND activo = TRUE
+              AND LOWER(vendedor) = LOWER(%s)
+              AND LOWER(dia_atencion) = LOWER(%s)
+            """,
+            (v, d),
+        )
+        n = cur.rowcount
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+
+    return {"ok": True, "actualizados": n}
+
+
+@router.post("/orden-manual")
+def post_orden_manual(body: OrdenManualBody):
+    """Persiste orden_manual para un cliente (bsale_id) en rutero."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE bsale.rutero
+            SET orden_manual = %s
+            WHERE company_id = 3
+              AND activo = TRUE
+              AND bsale_id = %s
+            """,
+            (body.orden_manual, body.cliente_id),
+        )
+        if cur.rowcount == 0:
+            cur.close()
+            raise HTTPException(
+                status_code=404,
+                detail=f"No hay fila activa en rutero para bsale_id={body.cliente_id}",
+            )
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+
+    return {"ok": True}
 
 
 @router.get("/resumen")
