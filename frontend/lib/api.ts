@@ -656,6 +656,24 @@ export async function postDistribuidoraOptimizarRuta(body: {
   return res.json()
 }
 
+/** POST /distribuidora/optimizar-ruta-desde — misma forma que optimizar-ruta o `{ error }`. */
+export async function postDistribuidoraOptimizarRutaDesde(body: {
+  vendedor: string
+  dia: string
+  desde_indice: number
+}): Promise<DistribuidoraOptimizarRutaJson> {
+  const res = await fetch(`${API_URL}/distribuidora/optimizar-ruta-desde`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "No se pudo reoptimizar la ruta")
+  }
+  return res.json()
+}
+
 export async function postDistribuidoraOrdenManualBulk(
   items: { id: number; orden_manual: number }[],
 ): Promise<void> {

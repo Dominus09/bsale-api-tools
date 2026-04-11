@@ -26,6 +26,19 @@ class OptimizarRutaBody(BaseModel):
     vendedor: str = Field(..., min_length=1)
     dia: str = Field(..., min_length=1)
 
+
+class OptimizarRutaDesdeBody(BaseModel):
+    """Reoptimiza solo la cola a partir de un índice (0 = primer cliente = toda la ruta)."""
+
+    vendedor: str = Field(..., min_length=1)
+    dia: str = Field(..., min_length=1)
+    desde_indice: int = Field(
+        ...,
+        ge=0,
+        description="Índice 0-based del primer cliente del tramo a reoptimizar (antes = [:i] intacto)",
+    )
+
+
 router = APIRouter(prefix="/distribuidora", tags=["Distribuidora"])
 
 
@@ -280,10 +293,10 @@ def _route_geometry_to_lonlat_coords(geometry: object) -> list[list[float]]:
     return []
 
 
-def _ors_optimize_single_roundtrip(base: dict, clientes: list[dict]) -> dict:
+def _ors_route_start_clients_end(start: dict, clientes: list[dict], end: dict) -> dict:
     """
-    Una llamada ORS: base → clientes (orden enviado) → base.
-    Orden de visita según steps de la respuesta (`_clientes_orden_visita_desde_ors`).
+    Una llamada ORS: start → clientes (orden enviado) → end.
+    `start` y `end` son dicts con lat/lon (p. ej. base o último cliente fijo).
     """
     from backend.utils.ors_client import get_route
 
@@ -296,10 +309,10 @@ def _ors_optimize_single_roundtrip(base: dict, clientes: list[dict]) -> dict:
         }
 
     coords: list[list[float]] = []
-    coords.append([float(base["lon"]), float(base["lat"])])
+    coords.append([float(start["lon"]), float(start["lat"])])
     for c in clientes:
         coords.append([float(c["lon"]), float(c["lat"])])
-    coords.append([float(base["lon"]), float(base["lat"])])
+    coords.append([float(end["lon"]), float(end["lat"])])
 
     if len(coords) < 2:
         return {"error": "No hay suficientes puntos para calcular ruta"}
@@ -337,6 +350,113 @@ def _ors_optimize_single_roundtrip(base: dict, clientes: list[dict]) -> dict:
         "geometry": geometry,
         "clientes": clientes_ordenados,
     }
+
+
+def _ors_optimize_single_roundtrip(base: dict, clientes: list[dict]) -> dict:
+    """Una llamada ORS: base → clientes → base."""
+    return _ors_route_start_clients_end(base, clientes, base)
+
+
+def _ors_ordered_tail_chunked(start: dict, despues: list[dict], base: dict) -> dict:
+    """
+    Cola larga: varias peticiones ORS [prev]→chunk→… y cierre final en base.
+    Devuelve la lista de clientes de la cola en el orden ORS agregado.
+    """
+    from backend.utils.ors_client import get_route
+
+    n = len(despues)
+    if n == 0:
+        return {"clientes": []}
+
+    pos = 0
+    prev_lon, prev_lat = float(start["lon"]), float(start["lat"])
+    blat = float(base["lat"])
+    blon = float(base["lon"])
+    out: list[dict] = []
+
+    while pos < n:
+        remaining = n - pos
+        if pos == 0:
+            if remaining + 2 <= 50:
+                chunk_len = remaining
+                is_last = True
+            else:
+                chunk_len = min(49, remaining - 1)
+                is_last = False
+        elif remaining + 2 <= 50:
+            chunk_len = remaining
+            is_last = True
+        else:
+            chunk_len = min(49, remaining - 1)
+            is_last = False
+
+        chunk = despues[pos : pos + chunk_len]
+        pos += len(chunk)
+        if not chunk:
+            break
+
+        coords: list[list[float]] = [[prev_lon, prev_lat]]
+        for c in chunk:
+            coords.append([float(c["lon"]), float(c["lat"])])
+        if is_last:
+            coords.append([blon, blat])
+
+        if len(coords) < 2 or len(coords) > 50:
+            return {"error": "Tramo demasiado largo para ORS (chunk interno)"}
+
+        try:
+            ors_data = get_route(coords)
+        except Exception as e:
+            print("ERROR ORS (subruta):", str(e))
+            return {"error": "Fallo al calcular subruta", "detalle": str(e)}
+
+        if "routes" not in ors_data or not ors_data["routes"]:
+            return {"error": "ORS no devolvió rutas en subruta"}
+
+        route = ors_data["routes"][0]
+        ordered = _clientes_orden_visita_desde_ors(chunk, route)
+        out.extend(ordered)
+
+        prev_lon = float(chunk[-1]["lon"])
+        prev_lat = float(chunk[-1]["lat"])
+
+    return {"clientes": out}
+
+
+def _ors_reoptimizar_cola(prev: dict | None, despues: list[dict], base: dict) -> dict:
+    """
+    ORS solo sobre `despues`: inicio en `prev` (último cliente fijo) o en base si no hay prev.
+    """
+    if not despues:
+        return {"error": "No hay tramo a reoptimizar"}
+    start = prev if prev is not None else base
+    if 1 + len(despues) + 1 <= 50:
+        return _ors_route_start_clients_end(start, despues, base)
+    sub = _ors_ordered_tail_chunked(start, despues, base)
+    if "error" in sub:
+        return sub
+    return {"clientes": sub["clientes"]}
+
+
+def _lista_visita_actual_ruta(
+    base: dict,
+    manual_raw: list[dict],
+    clientes_rows: list[dict],
+) -> tuple[list[dict] | None, dict | None]:
+    """
+    Misma secuencia que expone GET ruta-detalle: manual si hay; si no, ORS completo.
+    Devuelve (clientes_ordenados, error_payload).
+    """
+    clientes = _clientes_validos_coords(clientes_rows)
+    manual_valid = _clientes_validos_coords(manual_raw)
+    if not clientes:
+        return [], None
+    if len(manual_valid) > 0:
+        return _clientes_orden_manual(manual_valid, clientes), None
+    payload = _ors_optimize_from_base_clientes(base, clientes)
+    if "error" in payload:
+        return None, payload
+    return payload["clientes"], None
 
 
 def _geom_km_encadenado(
@@ -739,6 +859,75 @@ def post_optimizar_ruta(body: OptimizarRutaBody):
         "minutos_totales": payload["minutos_totales"],
         "geometry": payload["geometry"],
         "clientes": payload["clientes"],
+    }
+
+
+@router.post("/optimizar-ruta-desde")
+def post_optimizar_ruta_desde(body: OptimizarRutaDesdeBody):
+    """
+    Mantiene el orden de los primeros `desde_indice` clientes y vuelve a optimizar con ORS
+    el resto (inicio del tramo ORS: último cliente fijo o la base si desde_indice==0).
+    Persiste orden_manual = 1..n para el día.
+    """
+    v = body.vendedor.strip()
+    d = body.dia.strip()
+    if not v or not d:
+        raise HTTPException(status_code=400, detail="vendedor y dia son obligatorios")
+
+    base, manual_raw, clientes_rows = _cargar_contexto_ruta(v, d)
+    clientes_validos = _clientes_validos_coords(clientes_rows)
+    if len(clientes_validos) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="No hay clientes terreno con coordenadas válidas para este día",
+        )
+
+    orden, err_ctx = _lista_visita_actual_ruta(base, manual_raw, clientes_rows)
+    if err_ctx is not None:
+        return err_ctx
+    assert orden is not None
+
+    n = len(orden)
+    if body.desde_indice > n:
+        raise HTTPException(status_code=400, detail="desde_indice fuera de rango")
+    if body.desde_indice == n:
+        raise HTTPException(status_code=400, detail="No hay clientes a reoptimizar a partir de ese índice")
+
+    antes = orden[: body.desde_indice]
+    despues = orden[body.desde_indice :]
+    prev = antes[-1] if antes else None
+
+    tail_payload = _ors_reoptimizar_cola(prev, despues, base)
+    if "error" in tail_payload:
+        return tail_payload
+
+    despues_opt = tail_payload.get("clientes")
+    if not isinstance(despues_opt, list):
+        return {"error": "Respuesta ORS inválida"}
+
+    merged: list[dict] = [dict(c) for c in antes] + [dict(c) for c in despues_opt]
+    for i, fila in enumerate(merged, start=1):
+        fila["orden_visita"] = i
+
+    geo = _geom_km_ruta_completa(base, merged)
+    if geo is None:
+        return {"error": "No se pudo calcular geometría/km de la ruta combinada"}
+    geometry, km_totales, minutos_totales = geo
+
+    conn = get_connection()
+    try:
+        _persistir_orden_manual_vendedor_dia(conn, v, d, merged)
+    finally:
+        conn.close()
+
+    return {
+        "vendedor": v,
+        "dia": d,
+        "base": _base_respuesta_publica(base),
+        "km_totales": km_totales,
+        "minutos_totales": minutos_totales,
+        "geometry": geometry,
+        "clientes": merged,
     }
 
 

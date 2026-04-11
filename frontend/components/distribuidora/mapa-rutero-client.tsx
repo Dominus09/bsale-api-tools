@@ -30,7 +30,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
-import { GripVertical, Loader2 } from "lucide-react"
+import { GripVertical, Loader2, RefreshCw } from "lucide-react"
 
 import polylineModule from "@mapbox/polyline"
 
@@ -49,6 +49,7 @@ import {
   getDistribuidoraRutaDetalle,
   isDistribuidoraRutaDetalleOk,
   postDistribuidoraOptimizarRuta,
+  postDistribuidoraOptimizarRutaDesde,
   postDistribuidoraOrdenManualBulk,
   postDistribuidoraOrdenManualReset,
   type DistribuidoraMapaCliente,
@@ -466,22 +467,26 @@ function baseCoordsParaMapa(
 
 function RutaClienteSortableFila({
   row,
+  filaIndex,
   highlightBsaleId,
   hoverBsaleId,
   dragActiveId,
   dragOverId,
   onHoverLista,
   onSelectCliente,
+  onReoptimizarDesde,
   setRowRef,
   disabled,
 }: {
   row: RutaClienteFila
+  filaIndex: number
   highlightBsaleId: number | null
   hoverBsaleId: number | null
   dragActiveId: string | null
   dragOverId: string | null
   onHoverLista: (bsaleId: number | null) => void
   onSelectCliente: (row: RutaClienteFila) => void
+  onReoptimizarDesde?: (desdeIndice: number) => void
   setRowRef: (bsaleId: number, el: HTMLElement | null) => void
   disabled: boolean
 }) {
@@ -529,7 +534,7 @@ function RutaClienteSortableFila({
         </button>
         <button
           type="button"
-          className="min-w-0 flex-1 rounded-r-md px-1 py-2 text-left transition-colors"
+          className="min-w-0 flex-1 px-1 py-2 text-left transition-colors"
           onClick={() => onSelectCliente(row)}
           onMouseEnter={() => onHoverLista(bid)}
           onMouseLeave={() => onHoverLista(null)}
@@ -540,6 +545,23 @@ function RutaClienteSortableFila({
           </span>
           <span className="text-xs text-muted-foreground">{municipioDesdeFilaRuta(row)}</span>
         </button>
+        {onReoptimizarDesde ? (
+          <button
+            type="button"
+            className={cn(
+              "text-muted-foreground hover:text-primary hover:bg-primary/10 flex shrink-0 items-center rounded-r-md px-1.5 py-2 transition-colors",
+              disabled && "pointer-events-none opacity-40",
+            )}
+            title="Reoptimizar con ORS desde este cliente en adelante (lo anterior no cambia)"
+            aria-label="Reoptimizar desde aquí"
+            onClick={(e) => {
+              e.stopPropagation()
+              onReoptimizarDesde(filaIndex)
+            }}
+          >
+            <RefreshCw className="size-4" aria-hidden />
+          </button>
+        ) : null}
       </div>
     </li>
   )
@@ -552,6 +574,7 @@ function MapaRuteroPanelRuta({
   hoverBsaleId,
   onHoverLista,
   onSelectCliente,
+  onReoptimizarDesde,
   setListItemRef,
   onOrdenCambiado,
   ordenGuardando,
@@ -562,6 +585,7 @@ function MapaRuteroPanelRuta({
   hoverBsaleId: number | null
   onHoverLista: (bsaleId: number | null) => void
   onSelectCliente: (row: RutaClienteFila) => void
+  onReoptimizarDesde?: (desdeIndice: number) => void
   setListItemRef: (bsaleId: number, el: HTMLElement | null) => void
   onOrdenCambiado: (bulk: { id: number; orden_manual: number }[]) => Promise<void>
   ordenGuardando: boolean
@@ -640,7 +664,8 @@ function MapaRuteroPanelRuta({
       <div className="border-b border-border px-3 py-2">
         <h2 className="text-sm font-semibold tracking-tight">Ruta del día</h2>
         <p className="text-xs text-muted-foreground">
-          Arrastra con el icono ⋮⋮ para reordenar; clic en el cliente centra el mapa.
+          Arrastra con ⋮⋮; clic en el nombre centra el mapa; el botón circular a la derecha reoptimiza con ORS
+          solo desde esa visita en adelante.
         </p>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
@@ -673,16 +698,18 @@ function MapaRuteroPanelRuta({
               >
                 <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
                   <ul className="space-y-1">
-                    {items.map((row) => (
+                    {items.map((row, filaIndex) => (
                       <RutaClienteSortableFila
                         key={String(row.bsale_id)}
                         row={row}
+                        filaIndex={filaIndex}
                         highlightBsaleId={highlightBsaleId}
                         hoverBsaleId={hoverBsaleId}
                         dragActiveId={dragActiveId}
                         dragOverId={dragOverId}
                         onHoverLista={onHoverLista}
                         onSelectCliente={onSelectCliente}
+                        onReoptimizarDesde={onReoptimizarDesde}
                         setRowRef={setListItemRef}
                         disabled={ordenGuardando}
                       />
@@ -920,6 +947,36 @@ export default function MapaRuteroClient() {
     }
   }, [puedeEditarOrden, ordenGuardando, vendedorFilter, diaFilter])
 
+  const onReoptimizarDesdeIndice = useCallback(
+    async (desdeIndice: number) => {
+      if (!puedeEditarOrden || ordenGuardando) return
+      setOrdenGuardando(true)
+      setOrdenMensaje("")
+      try {
+        const json = await postDistribuidoraOptimizarRutaDesde({
+          vendedor: vendedorFilter,
+          dia: diaFilter,
+          desde_indice: desdeIndice,
+        })
+        if (!mounted.current) return
+        if (json && typeof json === "object" && "error" in json && json.error) {
+          setOrdenMensaje(String(json.error))
+          return
+        }
+        const mapData = await getDistribuidoraMapa()
+        if (!mounted.current) return
+        setClientes(Array.isArray(mapData.clientes) ? mapData.clientes : [])
+        captureMapViewBeforeRutaUpdate(mapRef, orsRouteViewRef)
+        setRutaDetalle(json as DistribuidoraRutaDetalleJson)
+      } catch (e: unknown) {
+        setOrdenMensaje(e instanceof Error ? e.message : "Error al reoptimizar desde aquí")
+      } finally {
+        if (mounted.current) setOrdenGuardando(false)
+      }
+    },
+    [puedeEditarOrden, ordenGuardando, vendedorFilter, diaFilter],
+  )
+
   const onConfirmarMoverOrden = useCallback(async () => {
     if (!puedeEditarOrden || !moverCliente || ordenGuardando) return
     const lista = rutaLista
@@ -1124,6 +1181,7 @@ export default function MapaRuteroClient() {
               hoverBsaleId={hoverBsaleId}
               onHoverLista={setHoverBsaleId}
               onSelectCliente={onSelectClienteLista}
+              onReoptimizarDesde={(i) => void onReoptimizarDesdeIndice(i)}
               setListItemRef={setListItemRef}
               onOrdenCambiado={onOrdenPanelReorder}
               ordenGuardando={ordenGuardando}
