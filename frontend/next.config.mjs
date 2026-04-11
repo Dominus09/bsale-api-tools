@@ -19,8 +19,20 @@ const nextConfig = {
     optimizePackageImports: ["lucide-react", "recharts"],
   },
   // Evita 404 en /favicon.ico (no hay .ico en public/; el navegador lo pide siempre)
+  // Proxy same-origin: el front hace fetch a /api-upstream/... y Next reenvía al API real
+  // (evita CORS cuando el panel está en test.quillotana.cl y el API en api.quillotana.cl).
   async rewrites() {
-    return [{ source: "/favicon.ico", destination: "/icon.svg" }]
+    const apiBase = (
+      process.env.API_PROXY_TARGET ||
+      process.env.NEXT_PUBLIC_API_URL ||
+      "https://api.quillotana.cl"
+    )
+      .trim()
+      .replace(/\/$/, "")
+    return [
+      { source: "/favicon.ico", destination: "/icon.svg" },
+      { source: "/api-upstream/:path*", destination: `${apiBase}/:path*` },
+    ]
   },
 }
 
