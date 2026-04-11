@@ -1,10 +1,36 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type CSSProperties,
+} from "react"
 import dynamic from "next/dynamic"
 import L from "leaflet"
 import { useMap } from "react-leaflet"
-import { Loader2 } from "lucide-react"
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragOverEvent,
+} from "@dnd-kit/core"
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable"
+import { CSS } from "@dnd-kit/utilities"
+import { GripVertical, Loader2 } from "lucide-react"
 
 import polylineModule from "@mapbox/polyline"
 
@@ -161,8 +187,30 @@ declare global {
   }
 }
 
-/** Ruta ORS: polyline azul + fitBounds (datos ya cargados en el padre). */
-function MapaRuteroOrsRoute({ detalle }: { detalle: DistribuidoraRutaDetalleJson | null }) {
+/** Comportamiento de cámara al redibujar la polyline ORS (ver ref en el padre). */
+type OrsRouteMapBehavior =
+  | { kind: "fitBounds" }
+  | { kind: "setView"; lat: number; lng: number; zoom: number }
+
+function MapaRuteroRegisterMap({ mapRef }: { mapRef: React.MutableRefObject<L.Map | null> }) {
+  const map = useMap()
+  useEffect(() => {
+    mapRef.current = map
+    return () => {
+      mapRef.current = null
+    }
+  }, [map, mapRef])
+  return null
+}
+
+/** Ruta ORS: polyline azul; fitBounds solo si el padre lo indica (carga / cambio vendedor+día). */
+function MapaRuteroOrsRoute({
+  detalle,
+  viewBehaviorRef,
+}: {
+  detalle: DistribuidoraRutaDetalleJson | null
+  viewBehaviorRef: React.MutableRefObject<OrsRouteMapBehavior>
+}) {
   const map = useMap()
   const routeRef = useRef<L.Polyline | null>(null)
 
@@ -211,11 +259,16 @@ function MapaRuteroOrsRoute({ detalle }: { detalle: DistribuidoraRutaDetalleJson
       window.currentRoute = routeLine
     }
 
-    map.fitBounds(routeLine.getBounds(), { padding: [48, 48], maxZoom: 14, animate: false })
+    const behavior = viewBehaviorRef.current
+    if (behavior.kind === "fitBounds") {
+      map.fitBounds(routeLine.getBounds(), { padding: [48, 48], maxZoom: 14, animate: false })
+    } else {
+      map.setView([behavior.lat, behavior.lng], behavior.zoom, { animate: false })
+    }
     window.setTimeout(() => map.invalidateSize(), 0)
 
     return removeRoute
-  }, [map, detalle])
+  }, [map, detalle, viewBehaviorRef])
 
   return null
 }
@@ -334,6 +387,24 @@ function clienteEnRutaActual(c: DistribuidoraMapaCliente, rutaDetalle: Distribui
   return rutaClientesOrdenados(rutaDetalle).some((row) => Number(row.bsale_id) === c.bsale_id)
 }
 
+function captureMapViewBeforeRutaUpdate(
+  mapRef: React.MutableRefObject<L.Map | null>,
+  viewBehaviorRef: React.MutableRefObject<OrsRouteMapBehavior>,
+) {
+  const m = mapRef.current
+  if (!m) {
+    viewBehaviorRef.current = { kind: "fitBounds" }
+    return
+  }
+  const c = m.getCenter()
+  viewBehaviorRef.current = {
+    kind: "setView",
+    lat: c.lat,
+    lng: c.lng,
+    zoom: m.getZoom(),
+  }
+}
+
 function reordenarParaBulk(
   clientesRuta: RutaClienteFila[],
   bsaleId: number,
@@ -393,6 +464,87 @@ function baseCoordsParaMapa(
   return null
 }
 
+function RutaClienteSortableFila({
+  row,
+  highlightBsaleId,
+  hoverBsaleId,
+  dragActiveId,
+  dragOverId,
+  onHoverLista,
+  onSelectCliente,
+  setRowRef,
+  disabled,
+}: {
+  row: RutaClienteFila
+  highlightBsaleId: number | null
+  hoverBsaleId: number | null
+  dragActiveId: string | null
+  dragOverId: string | null
+  onHoverLista: (bsaleId: number | null) => void
+  onSelectCliente: (row: RutaClienteFila) => void
+  setRowRef: (bsaleId: number, el: HTMLElement | null) => void
+  disabled: boolean
+}) {
+  const bid = Number(row.bsale_id)
+  const id = String(bid)
+  const ord = Number(row.orden_visita ?? 0)
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id,
+    disabled,
+  })
+  const style: CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition: transition ?? undefined,
+  }
+  const active = highlightBsaleId === bid
+  const ho = hoverBsaleId === bid
+  const isDropTarget = dragOverId === id && dragActiveId != null && dragActiveId !== id
+
+  return (
+    <li
+      ref={(node) => {
+        setNodeRef(node)
+        setRowRef(bid, node)
+      }}
+      style={style}
+      className={cn(
+        "list-none rounded-md border border-transparent transition-[box-shadow,transform,opacity,background-color] duration-200 ease-out",
+        (active || ho) && !isDragging && "border-primary/50 bg-primary/8 ring-1 ring-primary/35",
+        isDragging && "z-[5] scale-[1.02] opacity-95 shadow-lg ring-2 ring-primary/50",
+        isDropTarget && "border-primary/55 bg-primary/12 ring-2 ring-primary/40",
+      )}
+    >
+      <div className="flex items-stretch gap-0.5">
+        <button
+          type="button"
+          className={cn(
+            "text-muted-foreground hover:text-foreground flex shrink-0 cursor-grab touch-none items-center rounded-l-md px-1.5 py-2 active:cursor-grabbing",
+            disabled && "pointer-events-none opacity-40",
+          )}
+          aria-label="Arrastrar para reordenar visita"
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical className="size-4" aria-hidden />
+        </button>
+        <button
+          type="button"
+          className="min-w-0 flex-1 rounded-r-md px-1 py-2 text-left transition-colors"
+          onClick={() => onSelectCliente(row)}
+          onMouseEnter={() => onHoverLista(bid)}
+          onMouseLeave={() => onHoverLista(null)}
+        >
+          <span className="inline-flex min-w-[1.5rem] font-semibold tabular-nums text-primary">{ord}.</span>
+          <span className="mt-0.5 block font-medium leading-snug text-foreground">
+            {nombreClienteDesdeFilaRuta(row)}
+          </span>
+          <span className="text-xs text-muted-foreground">{municipioDesdeFilaRuta(row)}</span>
+        </button>
+      </div>
+    </li>
+  )
+}
+
 function MapaRuteroPanelRuta({
   rutaDetalle,
   loading,
@@ -401,6 +553,8 @@ function MapaRuteroPanelRuta({
   onHoverLista,
   onSelectCliente,
   setListItemRef,
+  onOrdenCambiado,
+  ordenGuardando,
 }: {
   rutaDetalle: DistribuidoraRutaDetalleJson | null
   loading: boolean
@@ -408,8 +562,21 @@ function MapaRuteroPanelRuta({
   hoverBsaleId: number | null
   onHoverLista: (bsaleId: number | null) => void
   onSelectCliente: (row: RutaClienteFila) => void
-  setListItemRef: (bsaleId: number, el: HTMLButtonElement | null) => void
+  setListItemRef: (bsaleId: number, el: HTMLElement | null) => void
+  onOrdenCambiado: (bulk: { id: number; orden_manual: number }[]) => Promise<void>
+  ordenGuardando: boolean
 }) {
+  const [items, setItems] = useState<RutaClienteFila[]>([])
+  const [dragActiveId, setDragActiveId] = useState<string | null>(null)
+  const [dragOverId, setDragOverId] = useState<string | null>(null)
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 6 },
+    }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  )
+
   const baseNombre = useMemo(() => {
     if (!rutaDetalle || typeof rutaDetalle !== "object") return "Base"
     if ("error" in rutaDetalle && rutaDetalle.error) return "Base"
@@ -418,9 +585,10 @@ function MapaRuteroPanelRuta({
     return typeof n === "string" && n.trim() ? n.trim() : "Base"
   }, [rutaDetalle])
 
-  const filas = useMemo(() => {
+  useEffect(() => {
     const raw = rutaClientesOrdenados(rutaDetalle)
-    return [...raw].sort((a, b) => Number(a.orden_visita ?? 0) - Number(b.orden_visita ?? 0))
+    const sorted = [...raw].sort((a, b) => Number(a.orden_visita ?? 0) - Number(b.orden_visita ?? 0))
+    setItems(sorted)
   }, [rutaDetalle])
 
   const errMsg =
@@ -434,6 +602,36 @@ function MapaRuteroPanelRuta({
   const km = ok ? Number(rutaDetalle.km_totales) : 0
   const min = ok ? Number(rutaDetalle.minutos_totales) : 0
 
+  const sortableIds = useMemo(() => items.map((r) => String(r.bsale_id)), [items])
+
+  const handleDragEnd = useCallback(
+    async (event: DragEndEvent) => {
+      const { active, over } = event
+      setDragActiveId(null)
+      setDragOverId(null)
+      if (ordenGuardando || !over || active.id === over.id) return
+      const oldIndex = items.findIndex((r) => String(r.bsale_id) === active.id)
+      const newIndex = items.findIndex((r) => String(r.bsale_id) === over.id)
+      if (oldIndex < 0 || newIndex < 0) return
+      const snapshot = items
+      const reordered: RutaClienteFila[] = arrayMove(items, oldIndex, newIndex).map((row, i) => ({
+        ...row,
+        orden_visita: i + 1,
+      }))
+      setItems(reordered)
+      const bulk = reordered.map((row, i) => ({
+        id: Number(row.bsale_id),
+        orden_manual: i + 1,
+      }))
+      try {
+        await onOrdenCambiado(bulk)
+      } catch {
+        setItems(snapshot)
+      }
+    },
+    [items, onOrdenCambiado, ordenGuardando],
+  )
+
   return (
     <aside
       className="flex w-full max-h-[75vh] shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-card text-card-foreground shadow-sm lg:w-80"
@@ -441,7 +639,9 @@ function MapaRuteroPanelRuta({
     >
       <div className="border-b border-border px-3 py-2">
         <h2 className="text-sm font-semibold tracking-tight">Ruta del día</h2>
-        <p className="text-xs text-muted-foreground">Inicio en base, visitas ordenadas, retorno a base</p>
+        <p className="text-xs text-muted-foreground">
+          Arrastra con el icono ⋮⋮ para reordenar; clic en el cliente centra el mapa.
+        </p>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
         {loading ? (
@@ -457,39 +657,40 @@ function MapaRuteroPanelRuta({
               <span aria-hidden>🟢 </span>
               <span className="font-medium">Inicio:</span> {baseNombre}
             </div>
-            <ul className="space-y-1">
-              {filas.map((row) => {
-                const bid = Number(row.bsale_id)
-                const ord = Number(row.orden_visita ?? 0)
-                const active = highlightBsaleId === bid
-                const ho = hoverBsaleId === bid
-                return (
-                  <li key={bid}>
-                    <button
-                      type="button"
-                      ref={(el) => setListItemRef(bid, el)}
-                      className={cn(
-                        "flex w-full items-start gap-2 rounded-md border border-transparent px-2 py-2 text-left transition-colors",
-                        (active || ho) && "border-primary/50 bg-primary/8 ring-1 ring-primary/35",
-                      )}
-                      onClick={() => onSelectCliente(row)}
-                      onMouseEnter={() => onHoverLista(bid)}
-                      onMouseLeave={() => onHoverLista(null)}
-                    >
-                      <span className="inline-flex min-w-[1.5rem] font-semibold tabular-nums text-primary">
-                        {ord}.
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block font-medium leading-snug text-foreground">
-                          {nombreClienteDesdeFilaRuta(row)}
-                        </span>
-                        <span className="text-xs text-muted-foreground">{municipioDesdeFilaRuta(row)}</span>
-                      </span>
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
+            {items.length === 0 ? (
+              <p className="text-muted-foreground">Sin clientes en la ruta.</p>
+            ) : (
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragStart={(e) => setDragActiveId(String(e.active.id))}
+                onDragOver={(e: DragOverEvent) => setDragOverId(e.over ? String(e.over.id) : null)}
+                onDragEnd={(e) => void handleDragEnd(e)}
+                onDragCancel={() => {
+                  setDragActiveId(null)
+                  setDragOverId(null)
+                }}
+              >
+                <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
+                  <ul className="space-y-1">
+                    {items.map((row) => (
+                      <RutaClienteSortableFila
+                        key={String(row.bsale_id)}
+                        row={row}
+                        highlightBsaleId={highlightBsaleId}
+                        hoverBsaleId={hoverBsaleId}
+                        dragActiveId={dragActiveId}
+                        dragOverId={dragOverId}
+                        onHoverLista={onHoverLista}
+                        onSelectCliente={onSelectCliente}
+                        setRowRef={setListItemRef}
+                        disabled={ordenGuardando}
+                      />
+                    ))}
+                  </ul>
+                </SortableContext>
+              </DndContext>
+            )}
             <div className="rounded-md bg-red-600/12 px-2 py-1.5 text-red-900 dark:bg-red-500/15 dark:text-red-100">
               <span aria-hidden>🔴 </span>
               <span className="font-medium">Fin:</span> {baseNombre}
@@ -533,12 +734,14 @@ export default function MapaRuteroClient() {
   const [moverCliente, setMoverCliente] = useState<DistribuidoraMapaCliente | null>(null)
   const [nuevaPosicion, setNuevaPosicion] = useState("1")
   const mounted = useRef(true)
-  const listItemRefs = useRef<Map<number, HTMLButtonElement>>(new Map())
+  const mapRef = useRef<L.Map | null>(null)
+  const orsRouteViewRef = useRef<OrsRouteMapBehavior>({ kind: "fitBounds" })
+  const listItemRefs = useRef<Map<number, HTMLElement>>(new Map())
   const [flyTo, setFlyTo] = useState<{ lat: number; lon: number; zoom: number } | null>(null)
   const [highlightBsaleId, setHighlightBsaleId] = useState<number | null>(null)
   const [hoverBsaleId, setHoverBsaleId] = useState<number | null>(null)
 
-  const setListItemRef = useCallback((bid: number, el: HTMLButtonElement | null) => {
+  const setListItemRef = useCallback((bid: number, el: HTMLElement | null) => {
     if (el) listItemRefs.current.set(bid, el)
     else listItemRefs.current.delete(bid)
   }, [])
@@ -581,6 +784,7 @@ export default function MapaRuteroClient() {
       setRutaDetalleLoading(false)
       return
     }
+    orsRouteViewRef.current = { kind: "fitBounds" }
     const ac = new AbortController()
     setRutaDetalle(null)
     setRutaDetalleLoading(true)
@@ -666,6 +870,30 @@ export default function MapaRuteroClient() {
 
   const rutaLista = useMemo(() => rutaClientesOrdenados(rutaDetalle), [rutaDetalle])
 
+  const onOrdenPanelReorder = useCallback(
+    async (bulk: { id: number; orden_manual: number }[]) => {
+      if (!puedeEditarOrden || ordenGuardando) return
+      setOrdenGuardando(true)
+      setOrdenMensaje("")
+      try {
+        await postDistribuidoraOrdenManualBulk(bulk)
+        const mapData = await getDistribuidoraMapa()
+        if (!mounted.current) return
+        setClientes(Array.isArray(mapData.clientes) ? mapData.clientes : [])
+        const json = await getDistribuidoraRutaDetalle(vendedorFilter, diaFilter)
+        if (!mounted.current) return
+        captureMapViewBeforeRutaUpdate(mapRef, orsRouteViewRef)
+        setRutaDetalle(json)
+      } catch (e: unknown) {
+        setOrdenMensaje(e instanceof Error ? e.message : "Error al guardar orden")
+        throw e
+      } finally {
+        if (mounted.current) setOrdenGuardando(false)
+      }
+    },
+    [puedeEditarOrden, ordenGuardando, vendedorFilter, diaFilter],
+  )
+
   const onOptimizarRuta = useCallback(async () => {
     if (!puedeEditarOrden || ordenGuardando) return
     setOrdenGuardando(true)
@@ -683,6 +911,7 @@ export default function MapaRuteroClient() {
       const mapData = await getDistribuidoraMapa()
       if (!mounted.current) return
       setClientes(Array.isArray(mapData.clientes) ? mapData.clientes : [])
+      captureMapViewBeforeRutaUpdate(mapRef, orsRouteViewRef)
       setRutaDetalle(json as DistribuidoraRutaDetalleJson)
     } catch (e: unknown) {
       setOrdenMensaje(e instanceof Error ? e.message : "Error al optimizar la ruta")
@@ -713,6 +942,7 @@ export default function MapaRuteroClient() {
       setClientes(Array.isArray(mapData.clientes) ? mapData.clientes : [])
       const json = await getDistribuidoraRutaDetalle(vendedorFilter, diaFilter)
       if (!mounted.current) return
+      captureMapViewBeforeRutaUpdate(mapRef, orsRouteViewRef)
       setRutaDetalle(json)
       setMoverCliente(null)
     } catch (e: unknown) {
@@ -741,7 +971,10 @@ export default function MapaRuteroClient() {
         setClientes(Array.isArray(mapData.clientes) ? mapData.clientes : [])
       }
       const json = await getDistribuidoraRutaDetalle(vendedorFilter, diaFilter)
-      if (mounted.current) setRutaDetalle(json)
+      if (mounted.current) {
+        captureMapViewBeforeRutaUpdate(mapRef, orsRouteViewRef)
+        setRutaDetalle(json)
+      }
     } catch (e: unknown) {
       setOrdenMensaje(e instanceof Error ? e.message : "Error al limpiar orden")
     } finally {
@@ -892,6 +1125,8 @@ export default function MapaRuteroClient() {
               onHoverLista={setHoverBsaleId}
               onSelectCliente={onSelectClienteLista}
               setListItemRef={setListItemRef}
+              onOrdenCambiado={onOrdenPanelReorder}
+              ordenGuardando={ordenGuardando}
             />
           ) : null}
           <div className="mapa-rutero-wrapper relative h-[75vh] min-h-[320px] w-full min-w-0 flex-1 overflow-hidden rounded-lg bg-slate-200/80 shadow-inner ring-1 ring-black/5 dark:bg-slate-900/40 dark:ring-white/10">
@@ -921,8 +1156,9 @@ export default function MapaRuteroClient() {
                       subdomains="abcd"
                     />
                     <MapaRuteroInvalidateSize />
+                    <MapaRuteroRegisterMap mapRef={mapRef} />
                     <MapaRuteroFlyTo flyTo={flyTo} />
-                    <MapaRuteroOrsRoute detalle={rutaDetalle} />
+                    <MapaRuteroOrsRoute detalle={rutaDetalle} viewBehaviorRef={orsRouteViewRef} />
                     {puedeEditarOrden ? (
                       <>
                         {clientesVisibles.map((c) => {
