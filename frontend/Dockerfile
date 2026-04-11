@@ -12,10 +12,21 @@
 # dominio apunte al recurso del frontend y al puerto correcto.
 
 FROM node:22-alpine AS builder
+# Evita fallos raros de binarios precompilados en musl (Next / Tailwind oxide, etc.).
+RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
+# Builders con poca RAM (Coolify/VPS): menos OOM en install + build de Next.
+ENV NODE_OPTIONS="--max-old-space-size=4096"
+ENV npm_config_audit=false
+ENV npm_config_fund=false
+ENV npm_config_fetch_retries=5
+ENV npm_config_fetch_retry_mintimeout=20000
+
 COPY package.json package-lock.json ./
-RUN npm ci
+# Caché de npm acelera redeploys y reduce timeouts al registry.
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --no-audit --no-fund
 
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
