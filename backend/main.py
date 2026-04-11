@@ -42,6 +42,15 @@ def _cors_allow_origins() -> list[str]:
     return base
 
 
+def _cors_allow_origin_regex() -> str | None:
+    """Cualquier host `*.quillotana.cl` en HTTPS (p. ej. test/work) sin redeploy por cada subdominio."""
+    raw = os.getenv("CORS_ALLOW_ORIGIN_REGEX", "").strip()
+    if raw:
+        return raw
+    # Coincide con test.quillotana.cl, work.quillotana.cl, etc. No incluye apex sin subdominio.
+    return r"https://[a-z0-9-]+\.quillotana\.cl$"
+
+
 app = FastAPI(
     title="Quillotana Analytics API",
     version="1.0",
@@ -49,6 +58,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_allow_origins(),
+    allow_origin_regex=_cors_allow_origin_regex(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
