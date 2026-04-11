@@ -1,6 +1,7 @@
 from io import BytesIO
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import StreamingResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
@@ -951,7 +952,39 @@ def get_viaticos(
         if not v or not d:
             continue
 
-        det = _build_ruta_detalle_response(v, d)
+        rend = _rendimiento_para_vendedor(cfg, v)
+        try:
+            det = _build_ruta_detalle_response(v, d)
+        except HTTPException as he:
+            detail = he.detail if isinstance(he.detail, str) else str(he.detail)
+            filas.append(
+                {
+                    "vendedor": v,
+                    "dia": d,
+                    "km": 0.0,
+                    "litros": 0.0,
+                    "costo": 0.0,
+                    "rendimiento_km_por_litro": round(rend, 4) if rend is not None else None,
+                    "error_ruta": detail,
+                    "centro_mapa": None,
+                },
+            )
+            continue
+        except Exception as e:
+            filas.append(
+                {
+                    "vendedor": v,
+                    "dia": d,
+                    "km": 0.0,
+                    "litros": 0.0,
+                    "costo": 0.0,
+                    "rendimiento_km_por_litro": round(rend, 4) if rend is not None else None,
+                    "error_ruta": str(e),
+                    "centro_mapa": None,
+                },
+            )
+            continue
+
         err_raw = det.get("error") if isinstance(det, dict) else None
         err = str(err_raw).strip() if err_raw not in (None, "", False) else None
 
@@ -962,7 +995,6 @@ def get_viaticos(
             except (TypeError, ValueError):
                 km = 0.0
 
-        rend = _rendimiento_para_vendedor(cfg, v)
         litros = 0.0
         costo = 0.0
         if rend and rend > 0 and km > 0 and precio > 0:
@@ -1020,17 +1052,20 @@ def get_viaticos(
             }
         )
 
-    return {
-        "config": cfg,
-        "filas": filas,
-        "totales": {
-            "costo_semanal": round(costo_total, 2),
-            "km_total": round(km_total, 2),
-            "rutas_evaluadas": n_filas,
-            "promedio_diario_general": round(promedio_diario_general, 2),
-        },
-        "por_vendedor": por_vendedor,
-    }
+    # cfg viene de PG con NUMERIC → Decimal; sin normalizar FastAPI puede responder 500 al serializar JSON.
+    return jsonable_encoder(
+        {
+            "config": cfg,
+            "filas": filas,
+            "totales": {
+                "costo_semanal": round(costo_total, 2),
+                "km_total": round(km_total, 2),
+                "rutas_evaluadas": n_filas,
+                "promedio_diario_general": round(promedio_diario_general, 2),
+            },
+            "por_vendedor": por_vendedor,
+        }
+    )
 
 
 @router.post("/optimizar-ruta")
