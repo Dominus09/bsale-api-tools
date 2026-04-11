@@ -103,7 +103,7 @@ export default function RuteroVistaClient() {
   }, [cargarTabla])
 
   const onObsBlur = useCallback(
-    async (row: DistribuidoraRuteroFila, value: string) {
+    async (row: DistribuidoraRuteroFila, value: string) => {
       const id = Number(row.id)
       if (!Number.isFinite(id)) return
       const next = value.trim()
