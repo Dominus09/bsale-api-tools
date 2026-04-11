@@ -216,10 +216,74 @@ def _geometria_ruta_secuencial(
     return (route.get("geometry"), km, mins)
 
 
-def _ors_optimize_from_base_clientes(base: dict, clientes: list[dict]) -> dict:
+def _decode_polyline_lonlat(polyline_str: str, precision: int = 5) -> list[list[float]]:
+    """Polyline codificada → [[lon, lat], ...] (algoritmo Google, precisión típica ORS=5)."""
+    if not polyline_str or not isinstance(polyline_str, str):
+        return []
+    index = 0
+    lat = 0
+    lng = 0
+    coordinates: list[list[float]] = []
+    factor = 10**precision
+    strlen = len(polyline_str)
+    while index < strlen:
+        result = 1
+        shift = 0
+        while True:
+            if index >= strlen:
+                return coordinates
+            b = ord(polyline_str[index]) - 63 - 1
+            index += 1
+            result += b << shift
+            shift += 5
+            if b < 31:
+                break
+        dlat = ~(result >> 1) if (result & 1) else (result >> 1)
+        lat += dlat
+
+        result = 1
+        shift = 0
+        while True:
+            if index >= strlen:
+                return coordinates
+            b = ord(polyline_str[index]) - 63 - 1
+            index += 1
+            result += b << shift
+            shift += 5
+            if b < 31:
+                break
+        dlng = ~(result >> 1) if (result & 1) else (result >> 1)
+        lng += dlng
+
+        coordinates.append([lng / factor, lat / factor])
+    return coordinates
+
+
+def _route_geometry_to_lonlat_coords(geometry: object) -> list[list[float]]:
+    """Unifica geometría ORS (GeoJSON LineString o polyline codificada)."""
+    if geometry is None:
+        return []
+    if isinstance(geometry, str):
+        c5 = _decode_polyline_lonlat(geometry, 5)
+        if c5:
+            return c5
+        return _decode_polyline_lonlat(geometry, 6)
+    if isinstance(geometry, dict):
+        if geometry.get("type") == "LineString":
+            coords = geometry.get("coordinates")
+            if isinstance(coords, list) and coords:
+                out: list[list[float]] = []
+                for p in coords:
+                    if isinstance(p, (list, tuple)) and len(p) >= 2:
+                        out.append([float(p[0]), float(p[1])])
+                return out
+    return []
+
+
+def _ors_optimize_single_roundtrip(base: dict, clientes: list[dict]) -> dict:
     """
-    Optimización ORS (orden de visita desde la respuesta ORS).
-    `clientes` ya filtrados por coordenadas válidas.
+    Una llamada ORS: base → clientes (orden enviado) → base.
+    Orden de visita según steps de la respuesta (`_clientes_orden_visita_desde_ors`).
     """
     from backend.utils.ors_client import get_route
 
@@ -273,6 +337,166 @@ def _ors_optimize_from_base_clientes(base: dict, clientes: list[dict]) -> dict:
         "geometry": geometry,
         "clientes": clientes_ordenados,
     }
+
+
+def _geom_km_encadenado(
+    base: dict,
+    clientes_ordenados: list[dict],
+) -> tuple[object | None, float, float] | None:
+    """
+    Ruta larga: varias peticiones ORS encadenadas (sin volver a base entre tramos),
+    suma km/minutos y une geometrías en un LineString GeoJSON.
+    Límite ORS: 50 coordenadas por petición.
+    """
+    from backend.utils.ors_client import get_route
+
+    n = len(clientes_ordenados)
+    if n == 0:
+        return (None, 0.0, 0.0)
+
+    blat = float(base["lat"])
+    blon = float(base["lon"])
+    merged_coords: list[list[float]] = []
+    total_km = 0.0
+    total_mins = 0.0
+    pos = 0
+    prev_lon, prev_lat = blon, blat
+
+    while pos < n:
+        remaining = n - pos
+        if pos == 0:
+            if remaining + 2 <= 50:
+                chunk_len = remaining
+                is_last = True
+            else:
+                chunk_len = min(49, remaining - 1)
+                is_last = False
+        elif remaining + 2 <= 50:
+            chunk_len = remaining
+            is_last = True
+        else:
+            chunk_len = min(49, remaining - 1)
+            is_last = False
+
+        chunk = clientes_ordenados[pos : pos + chunk_len]
+        pos += len(chunk)
+        if not chunk:
+            break
+
+        coords: list[list[float]] = [[prev_lon, prev_lat]]
+        coords.extend([float(c["lon"]), float(c["lat"])] for c in chunk)
+        if is_last:
+            coords.append([blon, blat])
+
+        if len(coords) < 2 or len(coords) > 50:
+            return None
+
+        try:
+            ors_data = get_route(coords)
+        except Exception:
+            return None
+
+        if "routes" not in ors_data or not ors_data["routes"]:
+            return None
+
+        route = ors_data["routes"][0]
+        summary = route.get("summary") or {}
+        dist_m = summary.get("distance")
+        dur_s = summary.get("duration")
+        if dist_m is not None:
+            total_km += float(dist_m) / 1000
+        if dur_s is not None:
+            total_mins += float(dur_s) / 60
+
+        part = _route_geometry_to_lonlat_coords(route.get("geometry"))
+        if part:
+            if merged_coords and part[0] == merged_coords[-1]:
+                part = part[1:]
+            merged_coords.extend(part)
+
+        prev_lon = float(chunk[-1]["lon"])
+        prev_lat = float(chunk[-1]["lat"])
+
+    if not merged_coords:
+        return None
+
+    geometry: object = {"type": "LineString", "coordinates": merged_coords}
+    return (geometry, total_km, total_mins)
+
+
+def _geom_km_ruta_completa(
+    base: dict,
+    clientes_ordenados: list[dict],
+) -> tuple[object | None, float, float] | None:
+    """Una petición secuencial si cabe en ORS; si no, tramos encadenados."""
+    seq = _geometria_ruta_secuencial(base, clientes_ordenados)
+    if seq is not None:
+        return seq
+    return _geom_km_encadenado(base, clientes_ordenados)
+
+
+def _ors_optimize_from_base_clientes_por_zonas(base: dict, clientes: list[dict]) -> dict:
+    """
+    Agrupa clientes por zona (K-means), ordena grupos por cercanía a la base,
+    en cada grupo ordena por distancia a la base y llama ORS (ida y vuelta a base).
+    La visita global es grupo1 → grupo2 → …; km/geometría final coherente (secuencial o encadenado).
+    """
+    from backend.utils.ruta_zonas import (
+        agrupar_clientes_por_zona_kmeans,
+        elegir_num_zonas,
+        ordenar_clientes_en_grupo_por_distancia_a_base,
+        ordenar_grupos_por_cercania_a_base,
+    )
+
+    k = elegir_num_zonas(len(clientes))
+    grupos_raw = agrupar_clientes_por_zona_kmeans(clientes, k)
+    grupos = ordenar_grupos_por_cercania_a_base(grupos_raw, base)
+
+    merged: list[dict] = []
+    for g in grupos:
+        intra = ordenar_clientes_en_grupo_por_distancia_a_base(g, base)
+        sub = _ors_optimize_single_roundtrip(base, intra)
+        if "error" in sub:
+            return sub
+        merged.extend(sub["clientes"])
+
+    for i, row in enumerate(merged, start=1):
+        row["orden_visita"] = i
+
+    geo = _geom_km_ruta_completa(base, merged)
+    if geo is None:
+        return {"error": "No se pudo calcular geometría/km de la ruta combinada"}
+
+    geometry, km_totales, minutos_totales = geo
+    return {
+        "km_totales": km_totales,
+        "minutos_totales": minutos_totales,
+        "geometry": geometry,
+        "clientes": merged,
+    }
+
+
+# Máximo clientes para una sola optimización ORS «monolítica» (sin partición por zonas).
+_ORS_OPTIMIZAR_UN_SOLO_BLOQUE_MAX = 14
+
+
+def _ors_optimize_from_base_clientes(base: dict, clientes: list[dict]) -> dict:
+    """
+    Optimización ORS. Con muchos clientes: K-means por zona, ORS por grupo,
+    orden global grupo a grupo (grupos más cercanos a la base primero).
+    """
+    if not clientes:
+        return {
+            "km_totales": 0.0,
+            "minutos_totales": 0.0,
+            "geometry": None,
+            "clientes": [],
+        }
+
+    if len(clientes) <= _ORS_OPTIMIZAR_UN_SOLO_BLOQUE_MAX:
+        return _ors_optimize_single_roundtrip(base, clientes)
+
+    return _ors_optimize_from_base_clientes_por_zonas(base, clientes)
 
 
 def _persistir_orden_manual_vendedor_dia(
