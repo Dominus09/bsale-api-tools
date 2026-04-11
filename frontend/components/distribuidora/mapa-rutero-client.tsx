@@ -9,6 +9,7 @@ import { Loader2 } from "lucide-react"
 import polylineModule from "@mapbox/polyline"
 
 import { Button } from "@/components/ui/button"
+import { cn } from "@/lib/utils"
 import {
   Dialog,
   DialogContent,
@@ -44,6 +45,9 @@ const MarkerClusterGroup = dynamic(() => import("react-leaflet-cluster").then((m
 
 const MAP_CENTER: [number, number] = [-42.6, -73.8]
 const MAP_ZOOM = 10
+
+/** Fila de cliente en respuesta ruta-detalle / optimizar-ruta. */
+type RutaClienteFila = Record<string, unknown>
 
 /** Voyager: más contraste y calles que light_all (sigue siendo CARTO / OSM). */
 const CARTO_VOYAGER_TILES = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png"
@@ -85,9 +89,11 @@ function MapaRuteroInvalidateSize() {
 
 const FILTER_ALL = "__all__"
 
-/** Clientes en mapa con ruta ORS (pedido: azul). */
+/** Clientes en mapa: estado normal / hover / seleccionado. */
 const MAP_CLIENTE_COLOR = "#2563eb"
-/** Punto base (pedido: rojo). */
+const MAP_CLIENTE_COLOR_HOVER = "#ea580c"
+const MAP_CLIENTE_COLOR_HIGHLIGHT = "#16a34a"
+/** Punto base (mapa general). */
 const MAP_BASE_COLOR = "#dc2626"
 
 type PolylineDecodeFn = (str: string, precision?: number) => [number, number][]
@@ -214,68 +220,17 @@ function MapaRuteroOrsRoute({ detalle }: { detalle: DistribuidoraRutaDetalleJson
   return null
 }
 
-function MapaRuteroResumenRuta({
-  loading,
-  data,
+function MapaRuteroFlyTo({
+  flyTo,
 }: {
-  loading: boolean
-  data: DistribuidoraRutaDetalleJson | null
+  flyTo: { lat: number; lon: number; zoom: number } | null
 }) {
-  return (
-    <div
-      id="resumen-ruta"
-      className="resumen-box pointer-events-auto text-foreground"
-      role="region"
-      aria-label="Resumen de ruta ORS"
-    >
-      <h4>Resumen Ruta</h4>
-      {loading ? (
-        <p className="mb-0 text-sm text-muted-foreground">Cargando métricas…</p>
-      ) : !data ? (
-        <p className="mb-0 text-sm text-muted-foreground">Sin datos.</p>
-      ) : "error" in data && data.error ? (
-        <p className="mb-0 text-sm text-destructive">
-          {String(data.error)}
-          {"detalle" in data && data.detalle != null ? ` — ${String(data.detalle)}` : ""}
-        </p>
-      ) : isDistribuidoraRutaDetalleOk(data) ? (
-        <>
-          <div className="resumen-item">
-            <span>Vendedor</span>
-            <b>{String(data.vendedor)}</b>
-          </div>
-          <div className="resumen-item">
-            <span>Día</span>
-            <b>{String(data.dia)}</b>
-          </div>
-          <div className="resumen-item">
-            <span>Clientes</span>
-            <b>{Array.isArray(data.clientes) ? data.clientes.length : 0}</b>
-          </div>
-          <div className="resumen-item">
-            <span>KM</span>
-            <b>{Number(data.km_totales).toFixed(1)} km</b>
-          </div>
-          <div className="resumen-item">
-            <span>Tiempo</span>
-            <b>
-              {Number(data.minutos_totales) >= 120
-                ? `${(Number(data.minutos_totales) / 60).toFixed(1)} h`
-                : `${Math.round(Number(data.minutos_totales))} min`}
-            </b>
-          </div>
-          {Array.isArray(data.clientes) && data.clientes.length > 0 ? (
-            <div className="resumen-item">
-              <span>Promedio</span>
-              <b>{`${(Number(data.km_totales) / data.clientes.length).toFixed(1)} km/cliente`}</b>
-            </div>
-          ) : null}
-        </>
-      ) : (
-        <p className="mb-0 text-sm text-muted-foreground">Respuesta sin métricas reconocibles.</p>
-      )}
-    </div>
-  )
+  const map = useMap()
+  useEffect(() => {
+    if (!flyTo) return
+    map.flyTo([flyTo.lat, flyTo.lon], flyTo.zoom, { duration: 0.45, easeLinearity: 0.25 })
+  }, [map, flyTo])
+  return null
 }
 
 function nombreCliente(c: DistribuidoraMapaCliente): string {
@@ -326,6 +281,21 @@ function getBaseDivIcon(): L.DivIcon {
   return baseIconSingleton
 }
 
+/** Base de ruta: ícono grande (bandera), no numerar — solo informativo en mapa. */
+let basePuntoRutaIcon: L.DivIcon | null = null
+function getBasePuntoRutaIcon(): L.DivIcon {
+  if (!basePuntoRutaIcon) {
+    basePuntoRutaIcon = L.divIcon({
+      className: "mapa-rutero-base-ruta-icon",
+      html: `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;pointer-events:none;"><span style="font-size:26px;line-height:1;text-shadow:0 1px 3px rgba(0,0,0,0.35);">&#128681;</span><span style="font-size:10px;font-weight:800;letter-spacing:0.04em;background:${MAP_BASE_COLOR};color:#fff;padding:2px 6px;border-radius:4px;border:2px solid #fff;box-shadow:0 2px 8px rgba(15,23,42,0.25);">BASE</span></div>`,
+      iconSize: [48, 52],
+      iconAnchor: [24, 52],
+      popupAnchor: [0, -56],
+    })
+  }
+  return basePuntoRutaIcon
+}
+
 const SELECT_CLASS =
   "h-9 min-w-[140px] rounded-md border border-input bg-background px-3 text-sm shadow-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 
@@ -335,8 +305,6 @@ function ordenManualDisplay(c: DistribuidoraMapaCliente): number | null {
   const n = typeof v === "number" ? v : Number(v)
   return Number.isFinite(n) ? n : null
 }
-
-type RutaClienteFila = Record<string, unknown>
 
 function rutaClientesOrdenados(rutaDetalle: DistribuidoraRutaDetalleJson | null): RutaClienteFila[] {
   if (!rutaDetalle || typeof rutaDetalle !== "object") return []
@@ -388,6 +356,169 @@ function reordenarParaBulk(
   }))
 }
 
+function nombreClienteDesdeFilaRuta(row: RutaClienteFila): string {
+  const fan = String(row.nombre_fantasia ?? "").trim()
+  if (fan) return fan
+  const fn = String(row.first_name ?? "").trim()
+  const ln = String(row.last_name ?? "").trim()
+  const full = `${fn} ${ln}`.trim()
+  const id = Number(row.bsale_id)
+  return full || (Number.isFinite(id) ? `Cliente #${id}` : "Cliente")
+}
+
+function municipioDesdeFilaRuta(row: RutaClienteFila): string {
+  return String(row.municipality ?? "").trim() || "—"
+}
+
+function baseCoordsParaMapa(
+  rutaDetalle: DistribuidoraRutaDetalleJson | null,
+  bases: DistribuidoraPuntoBase[],
+  vendedorFilter: string,
+): { nombre: string; lat: number; lon: number } | null {
+  if (rutaDetalle && typeof rutaDetalle === "object" && !("error" in rutaDetalle && rutaDetalle.error)) {
+    const b = rutaDetalle.base as Record<string, unknown> | undefined
+    if (b) {
+      const lat = Number(b.lat)
+      const lon = Number(b.lon)
+      if (Number.isFinite(lat) && Number.isFinite(lon)) {
+        const nombre = String(b.nombre ?? "").trim() || "Base"
+        return { nombre, lat, lon }
+      }
+    }
+  }
+  const f = bases.find((x) => x.vendedor?.trim() === vendedorFilter)
+  if (f && Number.isFinite(f.lat) && Number.isFinite(f.lon)) {
+    return { nombre: f.nombre?.trim() || "Base", lat: f.lat, lon: f.lon }
+  }
+  return null
+}
+
+function MapaRuteroPanelRuta({
+  rutaDetalle,
+  loading,
+  highlightBsaleId,
+  hoverBsaleId,
+  onHoverLista,
+  onSelectCliente,
+  setListItemRef,
+}: {
+  rutaDetalle: DistribuidoraRutaDetalleJson | null
+  loading: boolean
+  highlightBsaleId: number | null
+  hoverBsaleId: number | null
+  onHoverLista: (bsaleId: number | null) => void
+  onSelectCliente: (row: RutaClienteFila) => void
+  setListItemRef: (bsaleId: number, el: HTMLButtonElement | null) => void
+}) {
+  const baseNombre = useMemo(() => {
+    if (!rutaDetalle || typeof rutaDetalle !== "object") return "Base"
+    if ("error" in rutaDetalle && rutaDetalle.error) return "Base"
+    const b = rutaDetalle.base as Record<string, unknown> | undefined
+    const n = b?.nombre
+    return typeof n === "string" && n.trim() ? n.trim() : "Base"
+  }, [rutaDetalle])
+
+  const filas = useMemo(() => {
+    const raw = rutaClientesOrdenados(rutaDetalle)
+    return [...raw].sort((a, b) => Number(a.orden_visita ?? 0) - Number(b.orden_visita ?? 0))
+  }, [rutaDetalle])
+
+  const errMsg =
+    rutaDetalle && typeof rutaDetalle === "object" && "error" in rutaDetalle && rutaDetalle.error
+      ? String(rutaDetalle.error)
+      : null
+
+  const ok = rutaDetalle != null && isDistribuidoraRutaDetalleOk(rutaDetalle)
+
+  const nClientes = ok && Array.isArray(rutaDetalle.clientes) ? rutaDetalle.clientes.length : 0
+  const km = ok ? Number(rutaDetalle.km_totales) : 0
+  const min = ok ? Number(rutaDetalle.minutos_totales) : 0
+
+  return (
+    <aside
+      className="flex w-full max-h-[75vh] shrink-0 flex-col overflow-hidden rounded-lg border border-border bg-card text-card-foreground shadow-sm lg:w-80"
+      aria-label="Ruta del día: inicio, visitas y fin"
+    >
+      <div className="border-b border-border px-3 py-2">
+        <h2 className="text-sm font-semibold tracking-tight">Ruta del día</h2>
+        <p className="text-xs text-muted-foreground">Inicio en base, visitas ordenadas, retorno a base</p>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+        {loading ? (
+          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+            Cargando ruta…
+          </p>
+        ) : errMsg ? (
+          <p className="text-sm text-destructive">{errMsg}</p>
+        ) : (
+          <div className="space-y-2 text-sm">
+            <div className="rounded-md bg-emerald-600/12 px-2 py-1.5 text-emerald-900 dark:bg-emerald-500/15 dark:text-emerald-100">
+              <span aria-hidden>🟢 </span>
+              <span className="font-medium">Inicio:</span> {baseNombre}
+            </div>
+            <ul className="space-y-1">
+              {filas.map((row) => {
+                const bid = Number(row.bsale_id)
+                const ord = Number(row.orden_visita ?? 0)
+                const active = highlightBsaleId === bid
+                const ho = hoverBsaleId === bid
+                return (
+                  <li key={bid}>
+                    <button
+                      type="button"
+                      ref={(el) => setListItemRef(bid, el)}
+                      className={cn(
+                        "flex w-full items-start gap-2 rounded-md border border-transparent px-2 py-2 text-left transition-colors",
+                        (active || ho) && "border-primary/50 bg-primary/8 ring-1 ring-primary/35",
+                      )}
+                      onClick={() => onSelectCliente(row)}
+                      onMouseEnter={() => onHoverLista(bid)}
+                      onMouseLeave={() => onHoverLista(null)}
+                    >
+                      <span className="inline-flex min-w-[1.5rem] font-semibold tabular-nums text-primary">
+                        {ord}.
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block font-medium leading-snug text-foreground">
+                          {nombreClienteDesdeFilaRuta(row)}
+                        </span>
+                        <span className="text-xs text-muted-foreground">{municipioDesdeFilaRuta(row)}</span>
+                      </span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+            <div className="rounded-md bg-red-600/12 px-2 py-1.5 text-red-900 dark:bg-red-500/15 dark:text-red-100">
+              <span aria-hidden>🔴 </span>
+              <span className="font-medium">Fin:</span> {baseNombre}
+            </div>
+          </div>
+        )}
+      </div>
+      {ok ? (
+        <div className="space-y-1 border-t border-border px-3 py-2 text-xs text-muted-foreground">
+          <div className="flex justify-between gap-2">
+            <span>Clientes en ruta</span>
+            <span className="font-medium tabular-nums text-foreground">{nClientes}</span>
+          </div>
+          <div className="flex justify-between gap-2">
+            <span>Km totales</span>
+            <span className="font-medium tabular-nums text-foreground">{km.toFixed(1)} km</span>
+          </div>
+          <div className="flex justify-between gap-2">
+            <span>Tiempo estimado</span>
+            <span className="font-medium tabular-nums text-foreground">
+              {min >= 120 ? `${(min / 60).toFixed(1)} h` : `${Math.round(min)} min`}
+            </span>
+          </div>
+        </div>
+      ) : null}
+    </aside>
+  )
+}
+
 export default function MapaRuteroClient() {
   const [clientes, setClientes] = useState<DistribuidoraMapaCliente[]>([])
   const [bases, setBases] = useState<DistribuidoraPuntoBase[]>([])
@@ -402,9 +533,40 @@ export default function MapaRuteroClient() {
   const [moverCliente, setMoverCliente] = useState<DistribuidoraMapaCliente | null>(null)
   const [nuevaPosicion, setNuevaPosicion] = useState("1")
   const mounted = useRef(true)
+  const listItemRefs = useRef<Map<number, HTMLButtonElement>>(new Map())
+  const [flyTo, setFlyTo] = useState<{ lat: number; lon: number; zoom: number } | null>(null)
+  const [highlightBsaleId, setHighlightBsaleId] = useState<number | null>(null)
+  const [hoverBsaleId, setHoverBsaleId] = useState<number | null>(null)
+
+  const setListItemRef = useCallback((bid: number, el: HTMLButtonElement | null) => {
+    if (el) listItemRefs.current.set(bid, el)
+    else listItemRefs.current.delete(bid)
+  }, [])
+
+  const onSelectClienteLista = useCallback((row: RutaClienteFila) => {
+    const lat = Number(row.lat)
+    const lon = Number(row.lon)
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return
+    const bid = Number(row.bsale_id)
+    setHighlightBsaleId(Number.isFinite(bid) ? bid : null)
+    setFlyTo({ lat, lon, zoom: 16 })
+  }, [])
+
+  const focusClienteEnLista = useCallback((bsaleId: number) => {
+    setHighlightBsaleId(bsaleId)
+    window.requestAnimationFrame(() => {
+      listItemRefs.current.get(bsaleId)?.scrollIntoView({ behavior: "smooth", block: "nearest" })
+    })
+  }, [])
 
   useEffect(() => {
     setOrdenMensaje("")
+  }, [vendedorFilter, diaFilter])
+
+  useEffect(() => {
+    setHighlightBsaleId(null)
+    setHoverBsaleId(null)
+    setFlyTo(null)
   }, [vendedorFilter, diaFilter])
 
   useEffect(() => {
@@ -720,130 +882,202 @@ export default function MapaRuteroClient() {
           </DialogContent>
         </Dialog>
 
-        <div className="mapa-rutero-wrapper relative h-[75vh] min-h-[320px] w-full min-w-0 overflow-hidden rounded-lg bg-slate-200/80 shadow-inner ring-1 ring-black/5 dark:bg-slate-900/40 dark:ring-white/10">
-          {loading ? (
-            <div className="flex h-full items-center justify-center gap-2 text-muted-foreground">
-              <Loader2 className="h-6 w-6 animate-spin" />
-              Cargando mapa…
-            </div>
-          ) : error ? (
-            <div className="flex h-full items-center justify-center p-4 text-center text-sm text-destructive">
-              {error}
-            </div>
-          ) : (
-            <>
-              <div className="absolute inset-0 z-0 min-h-0 min-w-0">
-                <MapContainer
-                  center={MAP_CENTER}
-                  zoom={MAP_ZOOM}
-                  className="mapa-rutero-leaflet z-0 h-full w-full"
-                  style={{ height: "100%", width: "100%" }}
-                  scrollWheelZoom
-                  attributionControl
-                >
-                  <TileLayer
-                    url={CARTO_VOYAGER_TILES}
-                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
-                    subdomains="abcd"
-                  />
-                  <MapaRuteroInvalidateSize />
-                  <MapaRuteroOrsRoute detalle={rutaDetalle} />
-                <MarkerClusterGroup chunkedLoading showCoverageOnHover={false}>
-                  {clientesVisibles.map((c) => {
-                    const om = ordenMostradoEnMapa(c, rutaDetalle)
-                    const enRuta = clienteEnRutaActual(c, rutaDetalle)
-                    const puedeMover =
-                      puedeEditarOrden &&
-                      enRuta &&
-                      c.vendedor?.trim() === vendedorFilter &&
-                      c.dia_atencion?.trim() === diaFilter
-                    return (
-                      <Marker
-                        key={c.bsale_id}
-                        position={[c.lat, c.lon]}
-                        icon={getClienteDivIcon(MAP_CLIENTE_COLOR)}
-                      >
-                        {om != null ? (
-                          <Tooltip permanent direction="top" opacity={1} className="orden-tooltip">
-                            {String(om)}
-                          </Tooltip>
-                        ) : null}
-                        <Popup>
-                          <div className="mapa-rutero-popup-inner space-y-3 p-3 text-sm">
-                            <p className="font-semibold leading-snug text-foreground">{nombreCliente(c)}</p>
-                            <dl className="space-y-1.5 text-muted-foreground">
-                              <div className="grid grid-cols-[5.5rem_1fr] gap-x-2 gap-y-1">
-                                <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
-                                  Vendedor
-                                </dt>
-                                <dd className="text-foreground">{c.vendedor?.trim() || "—"}</dd>
-                                <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
-                                  Día
-                                </dt>
-                                <dd className="text-foreground">{c.dia_atencion?.trim() || "—"}</dd>
-                                <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
-                                  Teléfono
-                                </dt>
-                                <dd className="text-foreground">{c.phone?.trim() || "—"}</dd>
-                                <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
-                                  Municipio
-                                </dt>
-                                <dd className="text-foreground">{c.municipality?.trim() || "—"}</dd>
-                                {om != null ? (
-                                  <>
-                                    <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
-                                      Orden visita
-                                    </dt>
-                                    <dd className="text-foreground">{om}</dd>
-                                  </>
-                                ) : null}
-                              </div>
-                            </dl>
-                            {puedeEditarOrden &&
-                            c.vendedor?.trim() === vendedorFilter &&
-                            c.dia_atencion?.trim() === diaFilter ? (
-                              <Button
-                                type="button"
-                                variant="secondary"
-                                size="sm"
-                                className="w-full"
-                                disabled={!puedeMover || ordenGuardando}
-                                title={
-                                  !enRuta
-                                    ? "Este cliente no está en la ruta del día (p. ej. solo teléfono)."
-                                    : undefined
-                                }
-                                onClick={() => setMoverCliente(c)}
-                              >
-                                Mover en orden
-                              </Button>
-                            ) : null}
-                          </div>
-                        </Popup>
-                      </Marker>
-                    )
-                  })}
-                </MarkerClusterGroup>
-                {bases.map((b, i) => {
-                  const key = `${b.vendedor ?? "b"}-${b.lat}-${b.lon}-${i}`
-                  return (
-                    <Marker key={key} position={[b.lat, b.lon]} icon={getBaseDivIcon()}>
-                      <Popup>
-                        <div className="mapa-rutero-popup-inner p-2 text-sm">
-                          <p className="font-semibold text-foreground">{b.nombre?.trim() || "Punto base"}</p>
-                          <p className="text-muted-foreground">{b.vendedor?.trim() || "—"}</p>
-                        </div>
-                      </Popup>
-                    </Marker>
-                  )
-                })}
-                </MapContainer>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-stretch">
+          {puedeEditarOrden ? (
+            <MapaRuteroPanelRuta
+              rutaDetalle={rutaDetalle}
+              loading={rutaDetalleLoading}
+              highlightBsaleId={highlightBsaleId}
+              hoverBsaleId={hoverBsaleId}
+              onHoverLista={setHoverBsaleId}
+              onSelectCliente={onSelectClienteLista}
+              setListItemRef={setListItemRef}
+            />
+          ) : null}
+          <div className="mapa-rutero-wrapper relative h-[75vh] min-h-[320px] w-full min-w-0 flex-1 overflow-hidden rounded-lg bg-slate-200/80 shadow-inner ring-1 ring-black/5 dark:bg-slate-900/40 dark:ring-white/10">
+            {loading ? (
+              <div className="flex h-full items-center justify-center gap-2 text-muted-foreground">
+                <Loader2 className="h-6 w-6 animate-spin" />
+                Cargando mapa…
               </div>
-              {vendedorFilter !== FILTER_ALL && diaFilter !== FILTER_ALL ? (
-                <MapaRuteroResumenRuta loading={rutaDetalleLoading} data={rutaDetalle} />
-              ) : null}
-            </>
-          )}
+            ) : error ? (
+              <div className="flex h-full items-center justify-center p-4 text-center text-sm text-destructive">
+                {error}
+              </div>
+            ) : (
+              <>
+                <div className="absolute inset-0 z-0 min-h-0 min-w-0">
+                  <MapContainer
+                    center={MAP_CENTER}
+                    zoom={MAP_ZOOM}
+                    className="mapa-rutero-leaflet z-0 h-full w-full"
+                    style={{ height: "100%", width: "100%" }}
+                    scrollWheelZoom
+                    attributionControl
+                  >
+                    <TileLayer
+                      url={CARTO_VOYAGER_TILES}
+                      attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+                      subdomains="abcd"
+                    />
+                    <MapaRuteroInvalidateSize />
+                    <MapaRuteroFlyTo flyTo={flyTo} />
+                    <MapaRuteroOrsRoute detalle={rutaDetalle} />
+                    {puedeEditarOrden ? (
+                      <>
+                        {clientesVisibles.map((c) => {
+                          const om = ordenMostradoEnMapa(c, rutaDetalle)
+                          const enRuta = clienteEnRutaActual(c, rutaDetalle)
+                          const puedeMover =
+                            enRuta &&
+                            c.vendedor?.trim() === vendedorFilter &&
+                            c.dia_atencion?.trim() === diaFilter
+                          const fill =
+                            highlightBsaleId === c.bsale_id
+                              ? MAP_CLIENTE_COLOR_HIGHLIGHT
+                              : hoverBsaleId === c.bsale_id
+                                ? MAP_CLIENTE_COLOR_HOVER
+                                : MAP_CLIENTE_COLOR
+                          return (
+                            <Marker
+                              key={c.bsale_id}
+                              position={[c.lat, c.lon]}
+                              icon={getClienteDivIcon(fill)}
+                              eventHandlers={{
+                                click: () => focusClienteEnLista(c.bsale_id),
+                                mouseover: () => setHoverBsaleId(c.bsale_id),
+                                mouseout: () => setHoverBsaleId(null),
+                              }}
+                            >
+                              {om != null ? (
+                                <Tooltip permanent direction="top" opacity={1} className="orden-tooltip">
+                                  {String(om)}
+                                </Tooltip>
+                              ) : null}
+                              <Popup>
+                                <div className="mapa-rutero-popup-inner space-y-3 p-3 text-sm">
+                                  <p className="font-semibold leading-snug text-foreground">{nombreCliente(c)}</p>
+                                  <dl className="space-y-1.5 text-muted-foreground">
+                                    <div className="grid grid-cols-[5.5rem_1fr] gap-x-2 gap-y-1">
+                                      <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
+                                        Vendedor
+                                      </dt>
+                                      <dd className="text-foreground">{c.vendedor?.trim() || "—"}</dd>
+                                      <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
+                                        Día
+                                      </dt>
+                                      <dd className="text-foreground">{c.dia_atencion?.trim() || "—"}</dd>
+                                      <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
+                                        Teléfono
+                                      </dt>
+                                      <dd className="text-foreground">{c.phone?.trim() || "—"}</dd>
+                                      <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
+                                        Municipio
+                                      </dt>
+                                      <dd className="text-foreground">{c.municipality?.trim() || "—"}</dd>
+                                      {om != null ? (
+                                        <>
+                                          <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
+                                            Orden visita
+                                          </dt>
+                                          <dd className="text-foreground">{om}</dd>
+                                        </>
+                                      ) : null}
+                                    </div>
+                                  </dl>
+                                  {c.vendedor?.trim() === vendedorFilter &&
+                                  c.dia_atencion?.trim() === diaFilter ? (
+                                    <Button
+                                      type="button"
+                                      variant="secondary"
+                                      size="sm"
+                                      className="w-full"
+                                      disabled={!puedeMover || ordenGuardando}
+                                      title={
+                                        !enRuta
+                                          ? "Este cliente no está en la ruta del día (p. ej. solo teléfono)."
+                                          : undefined
+                                      }
+                                      onClick={() => setMoverCliente(c)}
+                                    >
+                                      Mover en orden
+                                    </Button>
+                                  ) : null}
+                                </div>
+                              </Popup>
+                            </Marker>
+                          )
+                        })}
+                        {(() => {
+                          const bc = baseCoordsParaMapa(rutaDetalle, bases, vendedorFilter)
+                          if (!bc) return null
+                          return (
+                            <Marker
+                              key="ruta-base-unica"
+                              position={[bc.lat, bc.lon]}
+                              icon={getBasePuntoRutaIcon()}
+                              interactive={false}
+                            />
+                          )
+                        })()}
+                      </>
+                    ) : (
+                      <>
+                        <MarkerClusterGroup chunkedLoading showCoverageOnHover={false}>
+                          {clientesVisibles.map((c) => (
+                            <Marker
+                              key={c.bsale_id}
+                              position={[c.lat, c.lon]}
+                              icon={getClienteDivIcon(MAP_CLIENTE_COLOR)}
+                            >
+                              <Popup>
+                                <div className="mapa-rutero-popup-inner p-3 text-sm">
+                                  <p className="font-semibold leading-snug text-foreground">{nombreCliente(c)}</p>
+                                  <dl className="mt-2 space-y-1.5 text-muted-foreground">
+                                    <div className="grid grid-cols-[5.5rem_1fr] gap-x-2 gap-y-1">
+                                      <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
+                                        Vendedor
+                                      </dt>
+                                      <dd className="text-foreground">{c.vendedor?.trim() || "—"}</dd>
+                                      <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
+                                        Día
+                                      </dt>
+                                      <dd className="text-foreground">{c.dia_atencion?.trim() || "—"}</dd>
+                                      <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
+                                        Teléfono
+                                      </dt>
+                                      <dd className="text-foreground">{c.phone?.trim() || "—"}</dd>
+                                      <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
+                                        Municipio
+                                      </dt>
+                                      <dd className="text-foreground">{c.municipality?.trim() || "—"}</dd>
+                                    </div>
+                                  </dl>
+                                </div>
+                              </Popup>
+                            </Marker>
+                          ))}
+                        </MarkerClusterGroup>
+                        {bases.map((b, i) => {
+                          const key = `${b.vendedor ?? "b"}-${b.lat}-${b.lon}-${i}`
+                          return (
+                            <Marker key={key} position={[b.lat, b.lon]} icon={getBaseDivIcon()}>
+                              <Popup>
+                                <div className="mapa-rutero-popup-inner p-2 text-sm">
+                                  <p className="font-semibold text-foreground">{b.nombre?.trim() || "Punto base"}</p>
+                                  <p className="text-muted-foreground">{b.vendedor?.trim() || "—"}</p>
+                                </div>
+                              </Popup>
+                            </Marker>
+                          )
+                        })}
+                      </>
+                    )}
+                  </MapContainer>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
     </div>

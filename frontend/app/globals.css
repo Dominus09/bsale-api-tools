@@ -242,3 +242,10 @@
 .dark .mapa-rutero-leaflet .leaflet-tooltip.orden-tooltip {
   border-color: oklch(0.91 0 0);
 }
+
+.leaflet-div-icon.mapa-rutero-base-ruta-icon {
+  background: transparent !important;
+  border: none !important;
+  margin-left: 0 !important;
+  margin-top: 0 !important;
+}

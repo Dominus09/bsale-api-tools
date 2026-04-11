@@ -6,7 +6,7 @@ from backend.db import get_connection
 
 class OrdenManualBody(BaseModel):
     cliente_id: int = Field(..., ge=1, description="bsale_id del cliente en rutero")
-    orden_manual: int = Field(..., ge=1)
+    orden_manual: int = Field(..., gt=0, description="Solo valores > 0 (orden de visita cliente)")
 
 
 class OrdenManualResetBody(BaseModel):
@@ -19,7 +19,7 @@ class OrdenManualBulkItem(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
     cliente_id: int = Field(..., ge=1, validation_alias=AliasChoices("id", "cliente_id"))
-    orden_manual: int = Field(..., ge=1)
+    orden_manual: int = Field(..., gt=0)
 
 
 class OptimizarRutaBody(BaseModel):
@@ -38,6 +38,21 @@ def _as_float(value) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+def _base_respuesta_publica(base_row: dict) -> dict:
+    """
+    Punto de partida/llegada de la ruta (no es cliente, sin orden de visita).
+    Solo nombre + coordenadas para API y front.
+    """
+    nombre = (base_row.get("nombre") or base_row.get("vendedor") or "").strip() or "Base"
+    lat = _as_float(base_row.get("lat"))
+    lon = _as_float(base_row.get("lon"))
+    return {
+        "nombre": nombre,
+        "lat": lat,
+        "lon": lon,
+    }
 
 
 def _clientes_validos_coords(clientes: list[dict]) -> list[dict]:
@@ -285,6 +300,12 @@ def _persistir_orden_manual_vendedor_dia(
         bid = c.get("bsale_id")
         if ov is None or bid is None:
             continue
+        ov_int = int(ov)
+        if ov_int <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail="orden_visita / orden_manual debe ser mayor que 0",
+            )
         cur.execute(
             """
             UPDATE bsale.rutero
@@ -295,7 +316,7 @@ def _persistir_orden_manual_vendedor_dia(
               AND LOWER(vendedor) = LOWER(%s)
               AND LOWER(dia_atencion) = LOWER(%s)
             """,
-            (int(ov), int(bid), v, d),
+            (ov_int, int(bid), v, d),
         )
     conn.commit()
     cur.close()
@@ -423,7 +444,7 @@ def get_ruta_detalle(
             "minutos_totales": 0.0,
             "geometry": None,
             "clientes": clientes,
-            "base": base,
+            "base": _base_respuesta_publica(base),
         }
 
     if len(manual_valid) > 0:
@@ -440,7 +461,7 @@ def get_ruta_detalle(
             "minutos_totales": minutos_totales,
             "geometry": geometry,
             "clientes": clientes_ordenados,
-            "base": base,
+            "base": _base_respuesta_publica(base),
         }
 
     ors_payload = _ors_optimize_from_base_clientes(base, clientes)
@@ -454,7 +475,7 @@ def get_ruta_detalle(
         "minutos_totales": ors_payload["minutos_totales"],
         "geometry": ors_payload["geometry"],
         "clientes": ors_payload["clientes"],
-        "base": base,
+        "base": _base_respuesta_publica(base),
     }
 
 
@@ -489,7 +510,7 @@ def post_optimizar_ruta(body: OptimizarRutaBody):
     return {
         "vendedor": v,
         "dia": d,
-        "base": base,
+        "base": _base_respuesta_publica(base),
         "km_totales": payload["km_totales"],
         "minutos_totales": payload["minutos_totales"],
         "geometry": payload["geometry"],
