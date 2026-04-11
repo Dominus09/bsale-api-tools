@@ -59,7 +59,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_allow_origins(),
     allow_origin_regex=_cors_allow_origin_regex(),
-    allow_credentials=True,
+    # False: el panel usa Bearer en header, no cookies. Con True, muchos navegadores exigen
+    # fetch(..., { credentials: 'include' }) y bloquean la respuesta si no coincide.
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
