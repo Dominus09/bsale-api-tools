@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from backend.db import get_connection
 
@@ -10,6 +10,19 @@ class OrdenManualBody(BaseModel):
 
 
 class OrdenManualResetBody(BaseModel):
+    vendedor: str = Field(..., min_length=1)
+    dia: str = Field(..., min_length=1)
+
+
+class OrdenManualBulkItem(BaseModel):
+    """`id` en JSON = bsale_id (contrato API)."""
+
+    model_config = ConfigDict(populate_by_name=True)
+    cliente_id: int = Field(..., ge=1, validation_alias=AliasChoices("id", "cliente_id"))
+    orden_manual: int = Field(..., ge=1)
+
+
+class OptimizarRutaBody(BaseModel):
     vendedor: str = Field(..., min_length=1)
     dia: str = Field(..., min_length=1)
 
@@ -148,19 +161,148 @@ def _clientes_orden_manual(
     return salida
 
 
-@router.get("/ruta-detalle")
-def get_ruta_detalle(
-    vendedor: str = Query(..., min_length=1, description="Código vendedor (ej. vendedor_1)"),
-    dia: str = Query(..., min_length=1, description="Día de atención (ej. Lunes), coincide con dia_atencion"),
-):
-    """Ruta en carretera (ORS) desde base → clientes del día → base."""
+def _geometria_ruta_secuencial(
+    base: dict,
+    clientes_ordenados: list[dict],
+) -> tuple[object | None, float, float] | None:
+    """
+    ORS en el orden fijo dado (base → visitas → base), sin reoptimizar secuencia.
+    Devuelve (geometry, km_totales, minutos_totales) o None si no se pudo calcular.
+    """
     from backend.utils.ors_client import get_route
 
-    v = vendedor.strip()
-    d = dia.strip()
-    if not v or not d:
-        raise HTTPException(status_code=400, detail="vendedor y dia son obligatorios")
+    if not clientes_ordenados:
+        return (None, 0.0, 0.0)
 
+    coords: list[list[float]] = [[float(base["lon"]), float(base["lat"])]]
+    for c in clientes_ordenados:
+        coords.append([float(c["lon"]), float(c["lat"])])
+    coords.append([float(base["lon"]), float(base["lat"])])
+
+    if len(coords) < 2:
+        return None
+    if len(coords) > 50:
+        return None
+
+    try:
+        ors_data = get_route(coords)
+    except Exception:
+        return None
+
+    if "routes" not in ors_data or not ors_data["routes"]:
+        return None
+
+    route = ors_data["routes"][0]
+    summary = route.get("summary") or {}
+    dist_m = summary.get("distance")
+    dur_s = summary.get("duration")
+    km = float(dist_m) / 1000 if dist_m is not None else 0.0
+    mins = float(dur_s) / 60 if dur_s is not None else 0.0
+    return (route.get("geometry"), km, mins)
+
+
+def _ors_optimize_from_base_clientes(base: dict, clientes: list[dict]) -> dict:
+    """
+    Optimización ORS (orden de visita desde la respuesta ORS).
+    `clientes` ya filtrados por coordenadas válidas.
+    """
+    from backend.utils.ors_client import get_route
+
+    if not clientes:
+        return {
+            "km_totales": 0.0,
+            "minutos_totales": 0.0,
+            "geometry": None,
+            "clientes": [],
+        }
+
+    coords: list[list[float]] = []
+    coords.append([float(base["lon"]), float(base["lat"])])
+    for c in clientes:
+        coords.append([float(c["lon"]), float(c["lat"])])
+    coords.append([float(base["lon"]), float(base["lat"])])
+
+    if len(coords) < 2:
+        return {"error": "No hay suficientes puntos para calcular ruta"}
+
+    if len(coords) > 50:
+        return {
+            "error": "Demasiados puntos para ORS",
+            "total_coords": len(coords),
+        }
+
+    try:
+        ors_data = get_route(coords)
+    except Exception as e:
+        print("ERROR ORS:", str(e))
+        return {
+            "error": "Fallo al calcular ruta",
+            "detalle": str(e),
+            "coords_enviadas": coords,
+        }
+
+    if "routes" not in ors_data or not ors_data["routes"]:
+        return {
+            "error": "ORS no devolvió rutas",
+            "respuesta_ors": ors_data,
+        }
+
+    route = ors_data["routes"][0]
+    summary = route["summary"]
+    geometry = route.get("geometry")
+    clientes_ordenados = _clientes_orden_visita_desde_ors(clientes, route)
+
+    return {
+        "km_totales": summary["distance"] / 1000,
+        "minutos_totales": summary["duration"] / 60,
+        "geometry": geometry,
+        "clientes": clientes_ordenados,
+    }
+
+
+def _persistir_orden_manual_vendedor_dia(
+    conn,
+    v: str,
+    d: str,
+    clientes_con_orden_visita: list[dict],
+) -> None:
+    """NULL orden_manual para el día y asigna según orden_visita (1..n)."""
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE bsale.rutero
+        SET orden_manual = NULL
+        WHERE company_id = 3
+          AND activo = TRUE
+          AND LOWER(vendedor) = LOWER(%s)
+          AND LOWER(dia_atencion) = LOWER(%s)
+          AND LOWER(COALESCE(tipo_atencion, '')) <> 'telefonico'
+        """,
+        (v, d),
+    )
+    for c in clientes_con_orden_visita:
+        ov = c.get("orden_visita")
+        bid = c.get("bsale_id")
+        if ov is None or bid is None:
+            continue
+        cur.execute(
+            """
+            UPDATE bsale.rutero
+            SET orden_manual = %s
+            WHERE company_id = 3
+              AND activo = TRUE
+              AND bsale_id = %s
+              AND LOWER(vendedor) = LOWER(%s)
+              AND LOWER(dia_atencion) = LOWER(%s)
+            """,
+            (int(ov), int(bid), v, d),
+        )
+    conn.commit()
+    cur.close()
+
+
+def _cargar_contexto_ruta(v: str, d: str) -> tuple[dict, list[dict], list[dict]]:
+    """Punto base + filas rutero con orden_manual + todas las filas del día (terreno)."""
     conn = get_connection()
     try:
         cur = conn.cursor()
@@ -254,7 +396,22 @@ def get_ruta_detalle(
     finally:
         conn.close()
 
-    clientes = _clientes_validos_coords(clientes)
+    return base, manual_raw, clientes
+
+
+@router.get("/ruta-detalle")
+def get_ruta_detalle(
+    vendedor: str = Query(..., min_length=1, description="Código vendedor (ej. vendedor_1)"),
+    dia: str = Query(..., min_length=1, description="Día de atención (ej. Lunes), coincide con dia_atencion"),
+):
+    """Ruta: si hay orden_manual se respeta la secuencia (sin reoptimizar); si no, ORS optimiza."""
+    v = vendedor.strip()
+    d = dia.strip()
+    if not v or not d:
+        raise HTTPException(status_code=400, detail="vendedor y dia son obligatorios")
+
+    base, manual_raw, clientes_rows = _cargar_contexto_ruta(v, d)
+    clientes = _clientes_validos_coords(clientes_rows)
     manual_valid = _clientes_validos_coords(manual_raw)
     print("TOTAL CLIENTES VALIDOS:", len(clientes))
 
@@ -271,64 +428,110 @@ def get_ruta_detalle(
 
     if len(manual_valid) > 0:
         clientes_ordenados = _clientes_orden_manual(manual_valid, clientes)
+        geo = _geometria_ruta_secuencial(base, clientes_ordenados)
+        if geo is None:
+            geometry, km_totales, minutos_totales = None, 0.0, 0.0
+        else:
+            geometry, km_totales, minutos_totales = geo
         return {
             "vendedor": v,
             "dia": d,
-            "km_totales": 0.0,
-            "minutos_totales": 0.0,
-            "geometry": None,
+            "km_totales": km_totales,
+            "minutos_totales": minutos_totales,
+            "geometry": geometry,
             "clientes": clientes_ordenados,
             "base": base,
         }
 
-    coords: list[list[float]] = []
-    coords.append([float(base["lon"]), float(base["lat"])])
-    for c in clientes:
-        coords.append([float(c["lon"]), float(c["lat"])])
-    coords.append([float(base["lon"]), float(base["lat"])])
-
-    print("TOTAL COORDS ENVIADAS:", len(coords))
-
-    if len(coords) < 2:
-        return {"error": "No hay suficientes puntos para calcular ruta"}
-
-    if len(coords) > 50:
-        return {
-            "error": "Demasiados puntos para ORS",
-            "total_coords": len(coords),
-        }
-
-    try:
-        ors_data = get_route(coords)
-    except Exception as e:
-        print("ERROR ORS:", str(e))
-        return {
-            "error": "Fallo al calcular ruta",
-            "detalle": str(e),
-            "coords_enviadas": coords,
-        }
-
-    if "routes" not in ors_data or not ors_data["routes"]:
-        return {
-            "error": "ORS no devolvió rutas",
-            "respuesta_ors": ors_data,
-        }
-
-    route = ors_data["routes"][0]
-    summary = route["summary"]
-    geometry = route.get("geometry")
-
-    clientes_ordenados = _clientes_orden_visita_desde_ors(clientes, route)
+    ors_payload = _ors_optimize_from_base_clientes(base, clientes)
+    if "error" in ors_payload:
+        return ors_payload
 
     return {
         "vendedor": v,
         "dia": d,
-        "km_totales": summary["distance"] / 1000,
-        "minutos_totales": summary["duration"] / 60,
-        "geometry": geometry,
-        "clientes": clientes_ordenados,
+        "km_totales": ors_payload["km_totales"],
+        "minutos_totales": ors_payload["minutos_totales"],
+        "geometry": ors_payload["geometry"],
+        "clientes": ors_payload["clientes"],
         "base": base,
     }
+
+
+@router.post("/optimizar-ruta")
+def post_optimizar_ruta(body: OptimizarRutaBody):
+    """
+    ORS optimiza la visita y persiste orden_manual = 1..n en rutero para ese vendedor y día.
+    """
+    v = body.vendedor.strip()
+    d = body.dia.strip()
+    if not v or not d:
+        raise HTTPException(status_code=400, detail="vendedor y dia son obligatorios")
+
+    base, _manual_raw, clientes_rows = _cargar_contexto_ruta(v, d)
+    clientes = _clientes_validos_coords(clientes_rows)
+    if len(clientes) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="No hay clientes terreno con coordenadas válidas para este día",
+        )
+
+    payload = _ors_optimize_from_base_clientes(base, clientes)
+    if "error" in payload:
+        return payload
+
+    conn = get_connection()
+    try:
+        _persistir_orden_manual_vendedor_dia(conn, v, d, payload["clientes"])
+    finally:
+        conn.close()
+
+    return {
+        "vendedor": v,
+        "dia": d,
+        "base": base,
+        "km_totales": payload["km_totales"],
+        "minutos_totales": payload["minutos_totales"],
+        "geometry": payload["geometry"],
+        "clientes": payload["clientes"],
+    }
+
+
+@router.post("/orden-manual-bulk")
+def post_orden_manual_bulk(items: list[OrdenManualBulkItem]):
+    """Actualiza orden_manual en lote (`id` = bsale_id)."""
+    if not items:
+        raise HTTPException(status_code=400, detail="Lista vacía")
+    if len(items) > 500:
+        raise HTTPException(status_code=400, detail="Demasiados ítems (máx. 500)")
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        for it in items:
+            cur.execute(
+                """
+                UPDATE bsale.rutero
+                SET orden_manual = %s
+                WHERE company_id = 3
+                  AND activo = TRUE
+                  AND bsale_id = %s
+                """,
+                (it.orden_manual, it.cliente_id),
+            )
+            if cur.rowcount == 0:
+                conn.rollback()
+                cur.close()
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No hay fila activa en rutero para bsale_id={it.cliente_id}",
+                )
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+
+    return {"ok": True, "actualizados": len(items)}
 
 
 @router.get("/analisis-km")

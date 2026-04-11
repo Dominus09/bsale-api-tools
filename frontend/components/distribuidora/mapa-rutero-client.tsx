@@ -10,10 +10,19 @@ import polylineModule from "@mapbox/polyline"
 
 import { Button } from "@/components/ui/button"
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
   getDistribuidoraMapa,
   getDistribuidoraRutaDetalle,
   isDistribuidoraRutaDetalleOk,
-  postDistribuidoraOrdenManual,
+  postDistribuidoraOptimizarRuta,
+  postDistribuidoraOrdenManualBulk,
   postDistribuidoraOrdenManualReset,
   type DistribuidoraMapaCliente,
   type DistribuidoraPuntoBase,
@@ -327,6 +336,58 @@ function ordenManualDisplay(c: DistribuidoraMapaCliente): number | null {
   return Number.isFinite(n) ? n : null
 }
 
+type RutaClienteFila = Record<string, unknown>
+
+function rutaClientesOrdenados(rutaDetalle: DistribuidoraRutaDetalleJson | null): RutaClienteFila[] {
+  if (!rutaDetalle || typeof rutaDetalle !== "object") return []
+  if ("error" in rutaDetalle && rutaDetalle.error) return []
+  const arr = rutaDetalle.clientes
+  if (!Array.isArray(arr)) return []
+  return arr.filter((x): x is RutaClienteFila => x != null && typeof x === "object")
+}
+
+function ordenMostradoEnMapa(c: DistribuidoraMapaCliente, rutaDetalle: DistribuidoraRutaDetalleJson | null): number | null {
+  const m = ordenManualDisplay(c)
+  if (m != null) return m
+  for (const row of rutaClientesOrdenados(rutaDetalle)) {
+    if (Number(row.bsale_id) !== c.bsale_id) continue
+    const ov = row.orden_visita
+    if (typeof ov === "number" && Number.isFinite(ov)) return ov
+    if (typeof ov === "string" && ov.trim()) {
+      const n = Number(ov)
+      return Number.isFinite(n) ? n : null
+    }
+    return null
+  }
+  return null
+}
+
+function clienteEnRutaActual(c: DistribuidoraMapaCliente, rutaDetalle: DistribuidoraRutaDetalleJson | null): boolean {
+  return rutaClientesOrdenados(rutaDetalle).some((row) => Number(row.bsale_id) === c.bsale_id)
+}
+
+function reordenarParaBulk(
+  clientesRuta: RutaClienteFila[],
+  bsaleId: number,
+  nuevaPosicion1Based: number,
+): { id: number; orden_manual: number }[] {
+  const sorted = [...clientesRuta].sort(
+    (a, b) => Number(a.orden_visita ?? 0) - Number(b.orden_visita ?? 0),
+  )
+  const idx = sorted.findIndex((row) => Number(row.bsale_id) === bsaleId)
+  if (idx < 0) {
+    throw new Error("Cliente no está en la ruta actual")
+  }
+  const max = sorted.length
+  const p = Math.min(Math.max(1, Math.floor(nuevaPosicion1Based)), max)
+  const [row] = sorted.splice(idx, 1)
+  sorted.splice(p - 1, 0, row)
+  return sorted.map((r, i) => ({
+    id: Number(r.bsale_id),
+    orden_manual: i + 1,
+  }))
+}
+
 export default function MapaRuteroClient() {
   const [clientes, setClientes] = useState<DistribuidoraMapaCliente[]>([])
   const [bases, setBases] = useState<DistribuidoraPuntoBase[]>([])
@@ -336,9 +397,10 @@ export default function MapaRuteroClient() {
   const [diaFilter, setDiaFilter] = useState(FILTER_ALL)
   const [rutaDetalle, setRutaDetalle] = useState<DistribuidoraRutaDetalleJson | null>(null)
   const [rutaDetalleLoading, setRutaDetalleLoading] = useState(false)
-  const [ordenActual, setOrdenActual] = useState(1)
   const [ordenGuardando, setOrdenGuardando] = useState(false)
   const [ordenMensaje, setOrdenMensaje] = useState("")
+  const [moverCliente, setMoverCliente] = useState<DistribuidoraMapaCliente | null>(null)
+  const [nuevaPosicion, setNuevaPosicion] = useState("1")
   const mounted = useRef(true)
 
   useEffect(() => {
@@ -346,19 +408,10 @@ export default function MapaRuteroClient() {
   }, [vendedorFilter, diaFilter])
 
   useEffect(() => {
-    if (vendedorFilter === FILTER_ALL || diaFilter === FILTER_ALL) {
-      setOrdenActual(1)
-      return
-    }
-    const vis = clientes.filter(
-      (c) => c.vendedor?.trim() === vendedorFilter && c.dia_atencion?.trim() === diaFilter,
-    )
-    const nums = vis
-      .map((c) => ordenManualDisplay(c))
-      .filter((n): n is number => n != null)
-    const max = nums.length > 0 ? Math.max(...nums) : 0
-    setOrdenActual(max + 1)
-  }, [clientes, vendedorFilter, diaFilter])
+    if (!moverCliente) return
+    const actual = ordenMostradoEnMapa(moverCliente, rutaDetalle)
+    setNuevaPosicion(actual != null ? String(actual) : "1")
+  }, [moverCliente, rutaDetalle])
 
   useEffect(() => {
     if (vendedorFilter === FILTER_ALL || diaFilter === FILTER_ALL) {
@@ -449,29 +502,71 @@ export default function MapaRuteroClient() {
   const puedeEditarOrden =
     vendedorFilter !== FILTER_ALL && diaFilter !== FILTER_ALL && !loading && !error
 
-  const onMarcadorOrdenClick = useCallback(
-    async (c: DistribuidoraMapaCliente) => {
-      if (!puedeEditarOrden || ordenGuardando) return
-      if (c.vendedor?.trim() !== vendedorFilter || c.dia_atencion?.trim() !== diaFilter) return
+  const rutaLista = useMemo(() => rutaClientesOrdenados(rutaDetalle), [rutaDetalle])
 
-      const n = ordenActual
-      setOrdenGuardando(true)
-      setOrdenMensaje("")
-      try {
-        await postDistribuidoraOrdenManual({ cliente_id: c.bsale_id, orden_manual: n })
-        setClientes((prev) =>
-          prev.map((x) => (x.bsale_id === c.bsale_id ? { ...x, orden_manual: n } : x)),
-        )
-        const json = await getDistribuidoraRutaDetalle(vendedorFilter, diaFilter)
-        if (mounted.current) setRutaDetalle(json)
-      } catch (e: unknown) {
-        setOrdenMensaje(e instanceof Error ? e.message : "Error al guardar orden")
-      } finally {
-        if (mounted.current) setOrdenGuardando(false)
+  const onOptimizarRuta = useCallback(async () => {
+    if (!puedeEditarOrden || ordenGuardando) return
+    setOrdenGuardando(true)
+    setOrdenMensaje("")
+    try {
+      const json = await postDistribuidoraOptimizarRuta({
+        vendedor: vendedorFilter,
+        dia: diaFilter,
+      })
+      if (!mounted.current) return
+      if (json && typeof json === "object" && "error" in json && json.error) {
+        setOrdenMensaje(String(json.error))
+        return
       }
-    },
-    [puedeEditarOrden, ordenGuardando, vendedorFilter, diaFilter, ordenActual],
-  )
+      const mapData = await getDistribuidoraMapa()
+      if (!mounted.current) return
+      setClientes(Array.isArray(mapData.clientes) ? mapData.clientes : [])
+      setRutaDetalle(json as DistribuidoraRutaDetalleJson)
+    } catch (e: unknown) {
+      setOrdenMensaje(e instanceof Error ? e.message : "Error al optimizar la ruta")
+    } finally {
+      if (mounted.current) setOrdenGuardando(false)
+    }
+  }, [puedeEditarOrden, ordenGuardando, vendedorFilter, diaFilter])
+
+  const onConfirmarMoverOrden = useCallback(async () => {
+    if (!puedeEditarOrden || !moverCliente || ordenGuardando) return
+    const lista = rutaLista
+    if (lista.length === 0) {
+      setOrdenMensaje("No hay ruta cargada para reordenar.")
+      return
+    }
+    const pos = Number.parseInt(nuevaPosicion, 10)
+    if (!Number.isFinite(pos) || pos < 1) {
+      setOrdenMensaje("Elige una posición válida.")
+      return
+    }
+    setOrdenGuardando(true)
+    setOrdenMensaje("")
+    try {
+      const bulk = reordenarParaBulk(lista, moverCliente.bsale_id, pos)
+      await postDistribuidoraOrdenManualBulk(bulk)
+      const mapData = await getDistribuidoraMapa()
+      if (!mounted.current) return
+      setClientes(Array.isArray(mapData.clientes) ? mapData.clientes : [])
+      const json = await getDistribuidoraRutaDetalle(vendedorFilter, diaFilter)
+      if (!mounted.current) return
+      setRutaDetalle(json)
+      setMoverCliente(null)
+    } catch (e: unknown) {
+      setOrdenMensaje(e instanceof Error ? e.message : "Error al guardar el nuevo orden")
+    } finally {
+      if (mounted.current) setOrdenGuardando(false)
+    }
+  }, [
+    puedeEditarOrden,
+    moverCliente,
+    ordenGuardando,
+    nuevaPosicion,
+    rutaLista,
+    vendedorFilter,
+    diaFilter,
+  ])
 
   const onResetOrdenManual = useCallback(async () => {
     if (!puedeEditarOrden || ordenGuardando) return
@@ -503,9 +598,10 @@ export default function MapaRuteroClient() {
               <span className="font-medium tabular-nums text-foreground">{clientesVisibles.length}</span>
               {vendedorFilter !== FILTER_ALL && diaFilter !== FILTER_ALL ? (
                 <span className="mt-1 block text-xs text-muted-foreground/90">
-                  Clic en un cliente para asignar orden de visita (1, 2, 3…). Con al menos un orden
-                  manual la ruta no usa ORS; &quot;Limpiar orden&quot; borra números y restaura la
-                  optimización ORS (línea azul).
+                  &quot;Optimizar ruta&quot; calcula el orden con ORS y lo guarda. Luego puedes abrir un
+                  cliente y usar &quot;Mover en orden&quot; para afinar. Si hay orden guardado en base,
+                  la secuencia es fija (sin reoptimizar); &quot;Limpiar orden manual&quot; vuelve al
+                  modo solo ORS.
                 </span>
               ) : (
                 <span className="mt-1 block text-xs text-muted-foreground/90">
@@ -543,9 +639,15 @@ export default function MapaRuteroClient() {
             </select>
             {puedeEditarOrden ? (
               <>
-                <span className="flex items-center text-xs text-muted-foreground sm:text-sm">
-                  Siguiente: <span className="ml-1 font-semibold tabular-nums">{ordenActual}</span>
-                </span>
+                <Button
+                  type="button"
+                  variant="default"
+                  size="sm"
+                  disabled={ordenGuardando || rutaDetalleLoading}
+                  onClick={() => void onOptimizarRuta()}
+                >
+                  Optimizar ruta
+                </Button>
                 <Button
                   type="button"
                   variant="outline"
@@ -564,6 +666,59 @@ export default function MapaRuteroClient() {
             {ordenMensaje}
           </p>
         ) : null}
+
+        <Dialog
+          open={moverCliente != null}
+          onOpenChange={(open) => {
+            if (!open) setMoverCliente(null)
+          }}
+        >
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Mover en orden de visita</DialogTitle>
+              <DialogDescription>
+                {moverCliente ? (
+                  <>
+                    Cliente: <span className="font-medium text-foreground">{nombreCliente(moverCliente)}</span>.
+                    Elige la nueva posición en la ruta (1 = primero).
+                  </>
+                ) : null}
+              </DialogDescription>
+            </DialogHeader>
+            {moverCliente && rutaLista.length > 0 ? (
+              <div className="grid gap-2">
+                <label htmlFor="nueva-posicion-ruta" className="text-sm font-medium text-foreground">
+                  Nueva posición
+                </label>
+                <select
+                  id="nueva-posicion-ruta"
+                  className={SELECT_CLASS}
+                  value={nuevaPosicion}
+                  onChange={(e) => setNuevaPosicion(e.target.value)}
+                  aria-label="Nueva posición en la ruta"
+                >
+                  {Array.from({ length: rutaLista.length }, (_, i) => i + 1).map((n) => (
+                    <option key={n} value={String(n)}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setMoverCliente(null)}>
+                Cancelar
+              </Button>
+              <Button
+                type="button"
+                disabled={ordenGuardando || rutaLista.length === 0}
+                onClick={() => void onConfirmarMoverOrden()}
+              >
+                Guardar
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         <div className="mapa-rutero-wrapper relative h-[75vh] min-h-[320px] w-full min-w-0 overflow-hidden rounded-lg bg-slate-200/80 shadow-inner ring-1 ring-black/5 dark:bg-slate-900/40 dark:ring-white/10">
           {loading ? (
@@ -595,17 +750,18 @@ export default function MapaRuteroClient() {
                   <MapaRuteroOrsRoute detalle={rutaDetalle} />
                 <MarkerClusterGroup chunkedLoading showCoverageOnHover={false}>
                   {clientesVisibles.map((c) => {
-                    const om = ordenManualDisplay(c)
+                    const om = ordenMostradoEnMapa(c, rutaDetalle)
+                    const enRuta = clienteEnRutaActual(c, rutaDetalle)
+                    const puedeMover =
+                      puedeEditarOrden &&
+                      enRuta &&
+                      c.vendedor?.trim() === vendedorFilter &&
+                      c.dia_atencion?.trim() === diaFilter
                     return (
                       <Marker
                         key={c.bsale_id}
                         position={[c.lat, c.lon]}
                         icon={getClienteDivIcon(MAP_CLIENTE_COLOR)}
-                        eventHandlers={{
-                          click: () => {
-                            void onMarcadorOrdenClick(c)
-                          },
-                        }}
                       >
                         {om != null ? (
                           <Tooltip permanent direction="top" opacity={1} className="orden-tooltip">
@@ -613,9 +769,9 @@ export default function MapaRuteroClient() {
                           </Tooltip>
                         ) : null}
                         <Popup>
-                          <div className="mapa-rutero-popup-inner p-3 text-sm">
+                          <div className="mapa-rutero-popup-inner space-y-3 p-3 text-sm">
                             <p className="font-semibold leading-snug text-foreground">{nombreCliente(c)}</p>
-                            <dl className="mt-2 space-y-1.5 text-muted-foreground">
+                            <dl className="space-y-1.5 text-muted-foreground">
                               <div className="grid grid-cols-[5.5rem_1fr] gap-x-2 gap-y-1">
                                 <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
                                   Vendedor
@@ -636,13 +792,32 @@ export default function MapaRuteroClient() {
                                 {om != null ? (
                                   <>
                                     <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
-                                      Orden manual
+                                      Orden visita
                                     </dt>
                                     <dd className="text-foreground">{om}</dd>
                                   </>
                                 ) : null}
                               </div>
                             </dl>
+                            {puedeEditarOrden &&
+                            c.vendedor?.trim() === vendedorFilter &&
+                            c.dia_atencion?.trim() === diaFilter ? (
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                className="w-full"
+                                disabled={!puedeMover || ordenGuardando}
+                                title={
+                                  !enRuta
+                                    ? "Este cliente no está en la ruta del día (p. ej. solo teléfono)."
+                                    : undefined
+                                }
+                                onClick={() => setMoverCliente(c)}
+                              >
+                                Mover en orden
+                              </Button>
+                            ) : null}
                           </div>
                         </Popup>
                       </Marker>

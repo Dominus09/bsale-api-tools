@@ -637,6 +637,39 @@ export async function postDistribuidoraOrdenManualReset(body: {
   }
 }
 
+/** Respuesta de POST /distribuidora/optimizar-ruta (misma forma que ruta-detalle o `{ error }`). */
+export type DistribuidoraOptimizarRutaJson = Record<string, unknown>
+
+export async function postDistribuidoraOptimizarRuta(body: {
+  vendedor: string
+  dia: string
+}): Promise<DistribuidoraOptimizarRutaJson> {
+  const res = await fetch(`${API_URL}/distribuidora/optimizar-ruta`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "No se pudo optimizar la ruta")
+  }
+  return res.json()
+}
+
+export async function postDistribuidoraOrdenManualBulk(
+  items: { id: number; orden_manual: number }[],
+): Promise<void> {
+  const res = await fetch(`${API_URL}/distribuidora/orden-manual-bulk`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(items),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "No se pudo guardar el orden")
+  }
+}
+
 /** Respuesta de GET /distribuidora/ruta-detalle (éxito o cuerpo con `error`). */
 export type DistribuidoraRutaDetalleJson = Record<string, unknown>
 
