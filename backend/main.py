@@ -1,8 +1,8 @@
 import os
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 
+from backend.cors_middleware import QuillotanaCorsMiddleware
 from backend.routers import auth
 from backend.routers import orders
 from backend.routers.catalog import router as catalog_router
@@ -55,15 +55,12 @@ app = FastAPI(
     title="Quillotana Analytics API",
     version="1.0",
 )
+# CORS: middleware ASGI propio (preflight + ACAO en cada respuesta) además de ser tolerante
+# con proxies; el panel usa Bearer, sin cookies → no hace falta Access-Control-Allow-Credentials.
 app.add_middleware(
-    CORSMiddleware,
+    QuillotanaCorsMiddleware,
     allow_origins=_cors_allow_origins(),
     allow_origin_regex=_cors_allow_origin_regex(),
-    # False: el panel usa Bearer en header, no cookies. Con True, muchos navegadores exigen
-    # fetch(..., { credentials: 'include' }) y bloquean la respuesta si no coincide.
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
 )
 
 # --- Auth (login staff + login-client) ---
