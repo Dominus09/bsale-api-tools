@@ -1,4 +1,7 @@
+from io import BytesIO
+
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from backend.db import get_connection
@@ -782,21 +785,11 @@ def _cargar_contexto_ruta(v: str, d: str) -> tuple[dict, list[dict], list[dict]]
     return base, manual_raw, clientes
 
 
-@router.get("/ruta-detalle")
-def get_ruta_detalle(
-    vendedor: str = Query(..., min_length=1, description="Código vendedor (ej. vendedor_1)"),
-    dia: str = Query(..., min_length=1, description="Día de atención (ej. Lunes), coincide con dia_atencion"),
-):
-    """Ruta: si hay orden_manual se respeta la secuencia (sin reoptimizar); si no, ORS optimiza."""
-    v = vendedor.strip()
-    d = dia.strip()
-    if not v or not d:
-        raise HTTPException(status_code=400, detail="vendedor y dia son obligatorios")
-
+def _build_ruta_detalle_response(v: str, d: str) -> dict:
+    """Misma lógica que GET /ruta-detalle (km desde ORS u orden manual + geometría)."""
     base, manual_raw, clientes_rows = _cargar_contexto_ruta(v, d)
     clientes = _clientes_validos_coords(clientes_rows)
     manual_valid = _clientes_validos_coords(manual_raw)
-    print("TOTAL CLIENTES VALIDOS:", len(clientes))
 
     if len(clientes) == 0:
         return {
@@ -838,6 +831,205 @@ def get_ruta_detalle(
         "geometry": ors_payload["geometry"],
         "clientes": ors_payload["clientes"],
         "base": _base_respuesta_publica(base),
+    }
+
+
+def _fetch_config_viaticos_row() -> dict | None:
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM bsale.config_viaticos ORDER BY id LIMIT 1")
+        rows = _rows_to_json(cur)
+        cur.close()
+    finally:
+        conn.close()
+    return rows[0] if rows else None
+
+
+def _rendimiento_para_vendedor(cfg: dict, vendedor: str) -> float | None:
+    lv = vendedor.strip().lower()
+    col = {
+        "vendedor_1": "rendimiento_v1",
+        "vendedor_2": "rendimiento_v2",
+        "vendedor_3": "rendimiento_v3",
+        "vendedor_4": "rendimiento_v4",
+    }.get(lv, "rendimiento_v1")
+    raw = cfg.get(col)
+    if raw is None:
+        return None
+    try:
+        r = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return r if r > 0 else None
+
+
+_DIAS_SEMANA_SQL = (
+    "Lunes",
+    "Martes",
+    "Miércoles",
+    "Miercoles",
+    "Jueves",
+    "Viernes",
+    "Sábado",
+    "Sabado",
+    "Domingo",
+)
+
+
+@router.get("/ruta-detalle")
+def get_ruta_detalle(
+    vendedor: str = Query(..., min_length=1, description="Código vendedor (ej. vendedor_1)"),
+    dia: str = Query(..., min_length=1, description="Día de atención (ej. Lunes), coincide con dia_atencion"),
+):
+    """Ruta: si hay orden_manual se respeta la secuencia (sin reoptimizar); si no, ORS optimiza."""
+    v = vendedor.strip()
+    d = dia.strip()
+    if not v or not d:
+        raise HTTPException(status_code=400, detail="vendedor y dia son obligatorios")
+
+    return _build_ruta_detalle_response(v, d)
+
+
+@router.get("/viaticos")
+def get_viaticos(
+    max_rutas: int = Query(
+        120,
+        ge=1,
+        le=400,
+        description="Máximo de combinaciones vendedor+día (cada una usa la lógica de ruta-detalle / ORS).",
+    ),
+):
+    """
+    Costo combustible estimado por ruta (km de ruta-detalle × config_viaticos) y totales semanales
+    (días Lunes–Domingo en rutero).
+    """
+    cfg = _fetch_config_viaticos_row()
+    if not cfg:
+        raise HTTPException(
+            status_code=503,
+            detail="No hay fila en bsale.config_viaticos (ejecutar backend/sql/config_viaticos_schema.sql)",
+        )
+
+    try:
+        precio = float(cfg.get("valor_combustible") or 0)
+    except (TypeError, ValueError):
+        precio = 0.0
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT DISTINCT
+                TRIM(COALESCE(vendedor::text, '')) AS vendedor,
+                TRIM(COALESCE(dia_atencion::text, '')) AS dia
+            FROM bsale.rutero
+            WHERE company_id = 3
+              AND activo = TRUE
+              AND LOWER(tipo_atencion) <> 'telefonico'
+              AND TRIM(COALESCE(vendedor::text, '')) <> ''
+              AND TRIM(COALESCE(dia_atencion::text, '')) <> ''
+              AND LOWER(TRIM(COALESCE(vendedor::text, ''))) IN (
+                  'vendedor_1', 'vendedor_2', 'vendedor_3', 'vendedor_4'
+              )
+              AND TRIM(dia_atencion) IN %s
+            ORDER BY vendedor, dia_atencion
+            LIMIT %s
+            """,
+            (_DIAS_SEMANA_SQL, max_rutas),
+        )
+        pares = _rows_to_json(cur)
+        cur.close()
+    finally:
+        conn.close()
+
+    filas: list[dict] = []
+    for p in pares:
+        v = (p.get("vendedor") or "").strip()
+        d = (p.get("dia") or "").strip()
+        if not v or not d:
+            continue
+
+        det = _build_ruta_detalle_response(v, d)
+        err_raw = det.get("error") if isinstance(det, dict) else None
+        err = str(err_raw).strip() if err_raw not in (None, "", False) else None
+
+        km = 0.0
+        if err is None:
+            try:
+                km = float(det.get("km_totales") or 0)
+            except (TypeError, ValueError):
+                km = 0.0
+
+        rend = _rendimiento_para_vendedor(cfg, v)
+        litros = 0.0
+        costo = 0.0
+        if rend and rend > 0 and km > 0 and precio > 0:
+            litros = km / rend
+            costo = litros * precio
+
+        base_pub = det.get("base") if isinstance(det.get("base"), dict) else None
+        filas.append(
+            {
+                "vendedor": v,
+                "dia": d,
+                "km": round(km, 2),
+                "litros": round(litros, 4),
+                "costo": round(costo, 2),
+                "rendimiento_km_por_litro": round(rend, 4) if rend is not None else None,
+                "error_ruta": err,
+                "centro_mapa": (
+                    {
+                        "lat": base_pub.get("lat"),
+                        "lon": base_pub.get("lon"),
+                    }
+                    if base_pub
+                    else None
+                ),
+            }
+        )
+
+    costo_total = sum(float(f["costo"]) for f in filas)
+    km_total = sum(float(f["km"]) for f in filas)
+    n_filas = len(filas)
+    promedio_diario_general = costo_total / 7.0 if costo_total else 0.0
+
+    por_v: dict[str, dict] = {}
+    for f in filas:
+        vv = f["vendedor"]
+        if vv not in por_v:
+            por_v[vv] = {"vendedor": vv, "costo_total": 0.0, "km_total": 0.0, "dias": 0}
+        por_v[vv]["costo_total"] += float(f["costo"])
+        por_v[vv]["km_total"] += float(f["km"])
+        por_v[vv]["dias"] += 1
+
+    por_vendedor: list[dict] = []
+    for vv in sorted(por_v.keys()):
+        agg = por_v[vv]
+        ct = agg["costo_total"]
+        nd = max(1, int(agg["dias"]))
+        por_vendedor.append(
+            {
+                "vendedor": vv,
+                "costo_total": round(ct, 2),
+                "km_total": round(agg["km_total"], 2),
+                "dias_con_ruta": agg["dias"],
+                "promedio_diario_rutas": round(ct / nd, 2),
+                "promedio_diario_calendario": round(ct / 7.0, 2),
+            }
+        )
+
+    return {
+        "config": cfg,
+        "filas": filas,
+        "totales": {
+            "costo_semanal": round(costo_total, 2),
+            "km_total": round(km_total, 2),
+            "rutas_evaluadas": n_filas,
+            "promedio_diario_general": round(promedio_diario_general, 2),
+        },
+        "por_vendedor": por_vendedor,
     }
 
 
@@ -1323,6 +1515,61 @@ def post_observacion_rutero(body: ObservacionRuteroBody):
     if fila is None:
         raise HTTPException(status_code=500, detail="No se pudo leer la fila actualizada")
     return fila
+
+
+@router.get("/sin-georef/export")
+def get_sin_georef_export():
+    """Exporta filas rutero sin coordenadas a Excel (.xlsx)."""
+    import pandas as pd
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                COALESCE(
+                    NULLIF(TRIM(nombre_fantasia), ''),
+                    NULLIF(
+                        TRIM(
+                            CONCAT_WS(
+                                ' ',
+                                NULLIF(TRIM(first_name), ''),
+                                NULLIF(TRIM(last_name), '')
+                            )
+                        ),
+                        ''
+                    ),
+                    'Cliente #' || bsale_id::text
+                ) AS cliente_nombre,
+                vendedor,
+                municipality,
+                address AS direccion,
+                phone AS telefono
+            FROM bsale.rutero
+            WHERE company_id = 3
+              AND activo = TRUE
+              AND (lat IS NULL OR lon IS NULL)
+            ORDER BY vendedor,
+                     municipality NULLS LAST,
+                     bsale_id
+            """
+        )
+        rows = cur.fetchall()
+        columns = [col[0] for col in cur.description]
+        cur.close()
+    finally:
+        conn.close()
+
+    df = pd.DataFrame(rows, columns=columns)
+    buf = BytesIO()
+    df.to_excel(buf, index=False, engine="openpyxl")
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="sin_georef.xlsx"'},
+    )
 
 
 @router.get("/sin-georef")

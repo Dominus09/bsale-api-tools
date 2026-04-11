@@ -807,6 +807,60 @@ export async function postDistribuidoraPendientesAsignarDia(body: {
   return res.json() as Promise<DistribuidoraRecord>
 }
 
+export type DistribuidoraViaticosTotales = {
+  costo_semanal: number
+  km_total: number
+  rutas_evaluadas: number
+  promedio_diario_general: number
+}
+
+export type DistribuidoraViaticosPorVendedor = {
+  vendedor: string
+  costo_total: number
+  km_total: number
+  dias_con_ruta: number
+  promedio_diario_rutas: number
+  promedio_diario_calendario: number
+}
+
+export type DistribuidoraViaticosFila = {
+  vendedor: string
+  dia: string
+  km: number
+  litros: number
+  costo: number
+  rendimiento_km_por_litro?: number | null
+  error_ruta?: string | null
+  centro_mapa?: { lat: number | null; lon: number | null } | null
+}
+
+export type DistribuidoraViaticosJson = {
+  config: Record<string, unknown>
+  filas: DistribuidoraViaticosFila[]
+  totales: DistribuidoraViaticosTotales
+  por_vendedor: DistribuidoraViaticosPorVendedor[]
+}
+
+export async function getDistribuidoraViaticos(options?: {
+  max_rutas?: number
+  signal?: AbortSignal
+}): Promise<DistribuidoraViaticosJson> {
+  const qs = new URLSearchParams()
+  if (options?.max_rutas != null && Number.isFinite(options.max_rutas)) {
+    qs.set("max_rutas", String(options.max_rutas))
+  }
+  const suffix = qs.toString() ? `?${qs.toString()}` : ""
+  const res = await fetch(`${API_URL}/distribuidora/viaticos${suffix}`, {
+    headers: getAuthHeaders(),
+    signal: options?.signal,
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar viáticos")
+  }
+  return res.json() as Promise<DistribuidoraViaticosJson>
+}
+
 export async function getDistribuidoraSinGeoref(): Promise<DistribuidoraRecord[]> {
   const res = await fetch(`${API_URL}/distribuidora/sin-georef`, {
     headers: getAuthHeaders(),
@@ -817,6 +871,30 @@ export async function getDistribuidoraSinGeoref(): Promise<DistribuidoraRecord[]
   }
   const data = await res.json()
   return Array.isArray(data) ? data : []
+}
+
+/** Descarga GET /distribuidora/sin-georef/export (Excel .xlsx). */
+export async function downloadDistribuidoraSinGeorefExcel(): Promise<void> {
+  const res = await fetch(`${API_URL}/distribuidora/sin-georef/export`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al exportar Excel")
+  }
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  try {
+    const a = document.createElement("a")
+    a.href = url
+    a.download = "sin_georef.xlsx"
+    a.rel = "noopener"
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+  } finally {
+    URL.revokeObjectURL(url)
+  }
 }
 
 export async function getSuppliers(name?: string): Promise<Supplier[]> {

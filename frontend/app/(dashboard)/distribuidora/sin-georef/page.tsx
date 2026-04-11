@@ -1,9 +1,14 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { Loader2 } from "lucide-react"
+import { FileSpreadsheet, Loader2 } from "lucide-react"
 
-import { getDistribuidoraSinGeoref, type DistribuidoraRecord } from "@/lib/api"
+import { Button } from "@/components/ui/button"
+import {
+  downloadDistribuidoraSinGeorefExcel,
+  getDistribuidoraSinGeoref,
+  type DistribuidoraRecord,
+} from "@/lib/api"
 
 function str(v: unknown): string {
   if (v == null || v === "") return "—"
@@ -27,6 +32,8 @@ export default function SinGeorefPage() {
   const [rows, setRows] = useState<DistribuidoraRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState("")
 
   useEffect(() => {
     let cancelled = false
@@ -49,18 +56,49 @@ export default function SinGeorefPage() {
 
   return (
     <div className="space-y-4 p-6">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight">Sin georeferencia</h1>
-        <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-          Clientes del rutero activos sin latitud o longitud. Actualiza coordenadas en origen para que
-          aparezcan en el mapa rutero.
-        </p>
-        {!loading && !error ? (
-          <p className="mt-2 text-sm text-muted-foreground">
-            Registros: <span className="font-medium tabular-nums text-foreground">{rows.length}</span>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">Sin georeferencia</h1>
+          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
+            Clientes del rutero activos sin latitud o longitud. Actualiza coordenadas en origen para que
+            aparezcan en el mapa rutero.
           </p>
-        ) : null}
+          {!loading && !error ? (
+            <p className="mt-2 text-sm text-muted-foreground">
+              Registros: <span className="font-medium tabular-nums text-foreground">{rows.length}</span>
+            </p>
+          ) : null}
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="shrink-0 gap-2"
+          disabled={exporting}
+          onClick={() => {
+            setExportError("")
+            setExporting(true)
+            downloadDistribuidoraSinGeorefExcel()
+              .catch((e: unknown) => {
+                setExportError(e instanceof Error ? e.message : "Error al exportar")
+              })
+              .finally(() => setExporting(false))
+          }}
+        >
+          {exporting ? (
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+          ) : (
+            <FileSpreadsheet className="h-4 w-4" aria-hidden />
+          )}
+          Exportar Excel
+        </Button>
       </div>
+
+      {exportError ? (
+        <p className="text-sm text-destructive" role="alert">
+          {exportError}
+        </p>
+      ) : null}
 
       {loading ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">

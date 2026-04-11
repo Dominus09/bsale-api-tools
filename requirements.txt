@@ -10,3 +10,4 @@ pyjwt
 python-jose[cryptography]
 python-multipart
 pandas
+openpyxl
