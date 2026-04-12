@@ -159,6 +159,11 @@ def post_login_vendedor_app(body: LoginRequest):
         row = cur.fetchone()
         if not row:
             cur.close()
+            # --- DEBUG temporal (quitar tras depurar): no hay fila para este codigo ---
+            logger.warning(
+                "DEBUG_LOGIN_TEMP sin_fila_en_bd codigo_consultado=%r",
+                codigo,
+            )
             raise HTTPException(
                 status_code=401,
                 detail="Código o contraseña incorrectos.",
@@ -168,8 +173,18 @@ def post_login_vendedor_app(body: LoginRequest):
         cur.close()
 
         plain = body.password.encode("utf-8")
-        hashed = _password_hash_a_bytes(rec["password_hash"])
-        if not bcrypt.checkpw(plain, hashed):
+        raw_ph = rec["password_hash"]
+        hashed = _password_hash_a_bytes(raw_ph)
+        # --- DEBUG temporal (quitar tras depurar): diagnóstico hash / bcrypt ---
+        logger.warning(
+            "DEBUG_LOGIN_TEMP codigo_consultado=%r tipo_password_hash=%s longitud_hash_bytes=%s",
+            codigo,
+            type(raw_ph).__name__,
+            len(hashed),
+        )
+        check_ok = bcrypt.checkpw(plain, hashed)
+        logger.warning("DEBUG_LOGIN_TEMP bcrypt_checkpw=%s", check_ok)
+        if not check_ok:
             raise HTTPException(
                 status_code=401,
                 detail="Código o contraseña incorrectos.",
