@@ -9,12 +9,15 @@ from __future__ import annotations
 import logging
 from datetime import date
 
+import bcrypt
 import psycopg2
 from fastapi import APIRouter, HTTPException, Query
 from psycopg2 import errors as pg_errors
 
 from backend.db import get_connection
 from backend.schemas.distribuidora import (
+    LoginRequest,
+    LoginSuccessResponse,
     RutaResponse,
     SyncRequest,
     SyncResponse,
@@ -124,6 +127,61 @@ def _insertar_visita_sql(cur, body: VisitaCreate) -> dict | None:
         ),
     )
     return _fetchone_dict(cur)
+
+
+def _password_hash_a_bytes(stored) -> bytes:
+    """Normaliza lo que devuelve psycopg2 (str o memoryview) a bytes para bcrypt."""
+    if isinstance(stored, memoryview):
+        return bytes(stored)
+    if isinstance(stored, bytes):
+        return stored
+    return str(stored).encode("utf-8")
+
+
+@router.post("/login", response_model=LoginSuccessResponse)
+def post_login_vendedor_app(body: LoginRequest):
+    """
+    Login de vendedores de la app móvil (tabla bsale.vendedores_app, hash bcrypt).
+    """
+    codigo = body.codigo.strip()
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT codigo, nombre, password_hash
+            FROM bsale.vendedores_app
+            WHERE codigo = %s AND activo = true
+            LIMIT 1
+            """,
+            (codigo,),
+        )
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            raise HTTPException(
+                status_code=401,
+                detail="Código o contraseña incorrectos.",
+            )
+        cols = [c[0] for c in cur.description]
+        rec = dict(zip(cols, row))
+        cur.close()
+
+        plain = body.password.encode("utf-8")
+        hashed = _password_hash_a_bytes(rec["password_hash"])
+        if not bcrypt.checkpw(plain, hashed):
+            raise HTTPException(
+                status_code=401,
+                detail="Código o contraseña incorrectos.",
+            )
+    finally:
+        conn.close()
+
+    return LoginSuccessResponse(
+        success=True,
+        vendedor=rec["codigo"],
+        nombre=rec["nombre"],
+    )
 
 
 @router.get("/vendedor/ruta", response_model=RutaResponse)

@@ -14,6 +14,23 @@ TipoIncidencia = Literal["local cerrado", "sin stock", "no compra", "fuera de ru
 SyncStatus = Literal["synced", "pending_sync"]
 
 
+class LoginRequest(BaseModel):
+    """Credenciales de la app móvil (vendedores_app, no ERP)."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    codigo: str = Field(..., min_length=1, max_length=50, description="Ej. vendedor_1")
+    password: str = Field(..., min_length=1, description="Contraseña en texto plano solo en tránsito HTTPS")
+
+
+class LoginSuccessResponse(BaseModel):
+    """Respuesta exitosa del login (sin token JWT hasta que lo definan)."""
+
+    success: bool = True
+    vendedor: str = Field(description="Mismo valor que codigo en BD")
+    nombre: str
+
+
 class VisitaCreate(BaseModel):
     """Cuerpo mínimo y campos opcionales para registrar una visita (app móvil / sync offline)."""
 

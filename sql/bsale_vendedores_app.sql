@@ -33,17 +33,22 @@ INSERT INTO bsale.vendedores_app (codigo, nombre, password_hash)
 VALUES
   (
     'vendedor_1',
-    'Juan Pérez',
+    'Alvaro Vargas',
     '$2b$12$9JpLR/Hsfw661WQ3WEMKAeQbgAIf9b3IdFeO5xns7bLVMkRbIMBLq'
   ),
   (
     'vendedor_2',
-    'Pedro Soto',
+    'Cristofer Saldivia',
+    '$2b$12$9JpLR/Hsfw661WQ3WEMKAeQbgAIf9b3IdFeO5xns7bLVMkRbIMBLq'
+  ),
+  (
+    'vendedor_4',
+    'Marcelo Yañez',
     '$2b$12$9JpLR/Hsfw661WQ3WEMKAeQbgAIf9b3IdFeO5xns7bLVMkRbIMBLq'
   ),
   (
     'vendedor_3',
-    'Luis González',
+    'Erick Paredes',
     '$2b$12$9JpLR/Hsfw661WQ3WEMKAeQbgAIf9b3IdFeO5xns7bLVMkRbIMBLq'
   )
 ON CONFLICT (codigo) DO NOTHING;
