@@ -29,7 +29,6 @@ import {
   MapPin,
   MapPinOff,
   Route,
-  Wallet,
   ChevronsLeft,
   ChevronsRight,
 } from "lucide-react"
@@ -81,7 +80,6 @@ const navSections: { title: string; items: NavItem[] }[] = [
       { href: "/distribuidora/rutero", label: "Rutero", icon: Route },
       { href: "/distribuidora/pendientes", label: "Pendientes", icon: ClipboardList },
       { href: "/distribuidora/sin-georef", label: "Sin georef", icon: MapPinOff },
-      { href: "/distribuidora/viaticos", label: "Viáticos", icon: Wallet },
     ],
   },
   {
