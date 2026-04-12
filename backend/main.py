@@ -12,6 +12,7 @@ from backend.routers import alerts
 from backend.routers import companies
 from backend.routers import dashboard
 from backend.routers import distribuidora
+from backend.routers.app_distribuidora import router as app_distribuidora_router
 from backend.routers import margin_export
 from backend.routers import margin_problems
 from backend.routers import margins
@@ -90,6 +91,9 @@ app.include_router(margin_export.router)
 
 # --- Distribuidora ---
 app.include_router(distribuidora.router)
+
+# --- App móvil / rutas del día (bsale.rutas_dia + visitas, sync offline) ---
+app.include_router(app_distribuidora_router, prefix="/app_distribuidora")
 
 # --- ERP ---
 app.include_router(erp_router)
