@@ -323,83 +323,231 @@ def _detail_row(document_id: int, item: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
-def _find_document_id_changes(
-    cur, rows: list[tuple[Any, ...]]
-) -> list[tuple[int, int]]:
-    """
-    Antes de un upsert por clave lógica, devuelve pares (document_id_antiguo, document_id_nuevo)
-    cuando ya existe un documento con el mismo (company_id, office_id, document_type_id, number).
-    """
-    new_ids: list[int] = []
-    type_ids: list[int] = []
-    numbers: list[int] = []
-    for row in rows:
-        new_id = int(row[0])
-        dt = row[_ROW_DOCUMENT_TYPE_ID]
-        num = row[_ROW_NUMBER]
+def _load_existing_documents_by_logical(
+    cur,
+    logical_keys: list[tuple[int, int]],
+    document_ids: list[int],
+) -> dict[tuple[int, int], int]:
+    """Por (document_type_id, number) → ``document_id`` actual en DB."""
+    by_logical: dict[tuple[int, int], int] = {}
+    if not logical_keys and not document_ids:
+        return by_logical
+    t_logical = [k[0] for k in logical_keys]
+    n_logical = [k[1] for k in logical_keys]
+    doc_ids = list(dict.fromkeys(document_ids))
+    cur.execute(
+        """
+        SELECT d.document_id, d.document_type_id, d.number
+        FROM distribuidora.documents d
+        WHERE d.company_id = %s
+          AND d.office_id = %s
+          AND (
+              (cardinality(%s::bigint[]) > 0 AND d.document_id = ANY(%s::bigint[]))
+              OR (
+                  cardinality(%s::int[]) > 0
+                  AND (d.document_type_id, d.number) IN (
+                      SELECT x.tid, x.num
+                      FROM unnest(%s::int[], %s::bigint[]) AS x(tid, num)
+                  )
+              )
+          )
+        """,
+        (
+            COMPANY_ID,
+            OFFICE_ID,
+            doc_ids,
+            doc_ids,
+            t_logical,
+            t_logical,
+            n_logical,
+        ),
+    )
+    for doc_id, dt, num in cur.fetchall():
         if dt is None or num is None:
             continue
         try:
-            t_int = int(dt)
-            n_int = int(num)
+            key = (int(dt), int(num))
+            by_logical[key] = int(doc_id)
         except (TypeError, ValueError):
             continue
-        new_ids.append(new_id)
-        type_ids.append(t_int)
-        numbers.append(n_int)
-    if not new_ids:
-        return []
+    return by_logical
+
+
+def _delete_stale_document_rows_holding_new_ids(
+    cur, new_ids: list[int], logical_keys: list[tuple[int, int]]
+) -> int:
+    """
+    Elimina filas que ocupan un ``document_id`` que vamos a asignar por clave lógica,
+    pero con otra clave (evita violación de PK antes del UPDATE).
+    """
+    if not new_ids or not logical_keys:
+        return 0
+    t_ex = [k[0] for k in logical_keys]
+    n_ex = [k[1] for k in logical_keys]
     cur.execute(
         """
-        SELECT d.document_id, v.new_id
-        FROM distribuidora.documents d
-        INNER JOIN (
-            SELECT u.new_id, u.document_type_id, u.number
-            FROM unnest(%s::bigint[], %s::int[], %s::bigint[]) AS u(new_id, document_type_id, number)
-        ) v ON d.company_id = %s
-            AND d.office_id = %s
-            AND d.document_type_id = v.document_type_id
-            AND d.number = v.number
-            AND d.document_id IS DISTINCT FROM v.new_id
+        DELETE FROM distribuidora.documents d
+        WHERE d.company_id = %s
+          AND d.office_id = %s
+          AND d.document_id = ANY(%s::bigint[])
+          AND NOT EXISTS (
+              SELECT 1
+              FROM unnest(%s::int[], %s::bigint[]) AS ex(tid, num)
+              WHERE ex.tid IS NOT DISTINCT FROM d.document_type_id
+                AND ex.num IS NOT DISTINCT FROM d.number
+          )
         """,
-        (new_ids, type_ids, numbers, COMPANY_ID, OFFICE_ID),
+        (COMPANY_ID, OFFICE_ID, new_ids, t_ex, n_ex),
     )
-    return [(int(o), int(n)) for o, n in cur.fetchall()]
+    return cur.rowcount
 
 
-def _upsert_documents_logical_batch(cur, rows: list[tuple[Any, ...]]) -> tuple[int, int]:
-    sql = """
-        INSERT INTO distribuidora.documents (
+def _batch_update_documents_by_logical_key(cur, rows: list[tuple[Any, ...]]) -> int:
+    """UPDATE ... WHERE (document_type_id, number); sin INSERT."""
+    if not rows:
+        return 0
+    cur.execute(
+        """
+        UPDATE distribuidora.documents d
+        SET document_id = v.document_id,
+            emission_date = v.emission_date,
+            document_type_id = v.document_type_id,
+            client_id = v.client_id,
+            vendedor_id = v.vendedor_id,
+            total_amount = v.total_amount,
+            state = v.state,
+            url_pdf = v.url_pdf,
+            token = v.token,
+            office_id = v.office_id,
+            company_id = v.company_id,
+            number = v.number,
+            document_type_name = v.document_type_name,
+            reference = v.reference,
+            expiration_date = v.expiration_date,
+            raw_data = v.raw_data
+        FROM unnest(
+            %s::bigint[],
+            %s::timestamptz[],
+            %s::int[],
+            %s::int[],
+            %s::int[],
+            %s::numeric[],
+            %s::int[],
+            %s::text[],
+            %s::text[],
+            %s::int[],
+            %s::int[],
+            %s::bigint[],
+            %s::text[],
+            %s::text[],
+            %s::timestamptz[],
+            %s::jsonb[]
+        ) AS v(
             document_id, emission_date, document_type_id, client_id, vendedor_id,
             total_amount, state, url_pdf, token, office_id, company_id, number,
             document_type_name, reference, expiration_date, raw_data
-        ) VALUES %s
-        ON CONFLICT (company_id, office_id, document_type_id, number)
-        WHERE document_type_id IS NOT NULL AND number IS NOT NULL
-        DO UPDATE SET
-            document_id = EXCLUDED.document_id,
-            emission_date = EXCLUDED.emission_date,
-            document_type_id = EXCLUDED.document_type_id,
-            client_id = EXCLUDED.client_id,
-            vendedor_id = EXCLUDED.vendedor_id,
-            total_amount = EXCLUDED.total_amount,
-            state = EXCLUDED.state,
-            url_pdf = EXCLUDED.url_pdf,
-            token = EXCLUDED.token,
-            office_id = EXCLUDED.office_id,
-            company_id = EXCLUDED.company_id,
-            number = EXCLUDED.number,
-            document_type_name = EXCLUDED.document_type_name,
-            reference = EXCLUDED.reference,
-            expiration_date = EXCLUDED.expiration_date,
-            raw_data = EXCLUDED.raw_data
-        RETURNING (xmax = 0) AS inserted
+        )
+        WHERE d.company_id = %s
+          AND d.office_id = %s
+          AND d.document_type_id IS NOT DISTINCT FROM v.document_type_id
+          AND d.number IS NOT DISTINCT FROM v.number
+        """,
+        (
+            [int(r[0]) for r in rows],
+            [r[1] for r in rows],
+            [int(r[2]) for r in rows],
+            [r[3] for r in rows],
+            [r[4] for r in rows],
+            [r[5] for r in rows],
+            [r[6] for r in rows],
+            [r[7] for r in rows],
+            [r[8] for r in rows],
+            [r[9] for r in rows],
+            [r[10] for r in rows],
+            [int(r[11]) for r in rows],
+            [r[12] for r in rows],
+            [r[13] for r in rows],
+            [r[14] for r in rows],
+            [r[15] for r in rows],
+            COMPANY_ID,
+            OFFICE_ID,
+        ),
+    )
+    return cur.rowcount
+
+
+def _upsert_documents_logical_batch(
+    cur, rows: list[tuple[Any, ...]]
+) -> tuple[int, int, list[tuple[int, int]]]:
     """
-    template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
-    execute_values(cur, sql, rows, template=template, page_size=len(rows))
-    out = cur.fetchall()
-    ins = sum(1 for (x,) in out if x)
-    return ins, len(out) - ins
+    Resuelve clave lógica (document_type_id, number) vs PK (document_id) en Python:
+
+    * Sin fila lógica → INSERT … ON CONFLICT (document_id) DO UPDATE
+    * Misma PK → mismo upsert por PK
+    * PK distinta → UPDATE por (document_type_id, number) solamente (sin INSERT)
+
+    Devuelve (insertados, actualizados, pares (document_id_antiguo, document_id_nuevo)).
+    """
+    id_changes: list[tuple[int, int]] = []
+    if not rows:
+        return 0, 0, id_changes
+
+    keys: list[tuple[int, int]] = []
+    nids: list[int] = []
+    for row in rows:
+        try:
+            tid = int(row[_ROW_DOCUMENT_TYPE_ID])
+            num = int(row[_ROW_NUMBER])
+            nid = int(row[0])
+        except (TypeError, ValueError):
+            continue
+        keys.append((tid, num))
+        nids.append(nid)
+
+    if not keys:
+        return 0, 0, id_changes
+
+    by_logical = _load_existing_documents_by_logical(cur, keys, nids)
+
+    case_c: list[tuple[Any, ...]] = []
+    upsert_pk: list[tuple[Any, ...]] = []
+
+    for row in rows:
+        try:
+            tid = int(row[_ROW_DOCUMENT_TYPE_ID])
+            num = int(row[_ROW_NUMBER])
+            nid = int(row[0])
+        except (TypeError, ValueError):
+            continue
+        key = (tid, num)
+        existing_id = by_logical.get(key)
+        if existing_id is None:
+            upsert_pk.append(row)
+        elif existing_id == nid:
+            upsert_pk.append(row)
+        else:
+            logger.info(
+                "document_id cambiado detectado: old_id=%s new_id=%s document_type_id=%s number=%s",
+                existing_id,
+                nid,
+                tid,
+                num,
+            )
+            id_changes.append((existing_id, nid))
+            case_c.append(row)
+
+    upd_c = 0
+    if case_c:
+        new_ids_c = [int(r[0]) for r in case_c]
+        keys_c = [(int(r[_ROW_DOCUMENT_TYPE_ID]), int(r[_ROW_NUMBER])) for r in case_c]
+        _delete_stale_document_rows_holding_new_ids(cur, new_ids_c, keys_c)
+        upd_c = _batch_update_documents_by_logical_key(cur, case_c)
+
+    ins = upd = 0
+    if upsert_pk:
+        ins, upd = _upsert_documents_pk_batch(cur, upsert_pk)
+
+    return ins, upd + upd_c, id_changes
 
 
 def _upsert_documents_pk_batch(cur, rows: list[tuple[Any, ...]]) -> tuple[int, int]:
@@ -450,8 +598,8 @@ def _upsert_documents_batch(
 
     ins_total = upd_total = 0
     if logical_rows:
-        changes.extend(_find_document_id_changes(cur, logical_rows))
-        ins, upd = _upsert_documents_logical_batch(cur, logical_rows)
+        ins, upd, ch = _upsert_documents_logical_batch(cur, logical_rows)
+        changes.extend(ch)
         ins_total += ins
         upd_total += upd
     if pk_rows:
