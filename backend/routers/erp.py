@@ -1,4 +1,5 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
+
 from backend.db import get_connection
 
 router = APIRouter(prefix="/erp", tags=["ERP"])
@@ -74,3 +75,21 @@ def get_margins():
     conn.close()
 
     return data
+
+
+@router.post("/sync-distribuidora")
+def post_sync_distribuidora():
+    """
+    Sincronización incremental Bsale → distribuidora.documents / document_details
+    (company_id=3, office_id=1). Requiere BSALE_TOKEN en el entorno.
+    """
+    from backend.jobs.sync_bsale_distribuidora import sync_bsale_distribuidora
+
+    try:
+        return sync_bsale_distribuidora()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e

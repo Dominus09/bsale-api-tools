@@ -57,6 +57,23 @@ def _cors_allow_origin_regex() -> str | None:
     return r"https://[a-z0-9-]+\.quillotana\.cl$"
 
 
+async def _distribuidora_bsale_sync_background_loop() -> None:
+    """Ejecuta sync_bsale_distribuidora cada DISTRIBUIDORA_BSALE_SYNC_INTERVAL_SEC (default 30 min)."""
+    from backend.jobs.sync_bsale_distribuidora import sync_bsale_distribuidora
+
+    delay_first = int(os.getenv("DISTRIBUIDORA_BSALE_SYNC_START_DELAY_SEC", "45"))
+    interval = int(os.getenv("DISTRIBUIDORA_BSALE_SYNC_INTERVAL_SEC", str(30 * 60)))
+    if interval < 120:
+        interval = 120
+    await asyncio.sleep(max(0, delay_first))
+    while True:
+        try:
+            sync_bsale_distribuidora()
+        except Exception:
+            logger.exception("sync_bsale_distribuidora (job programado) falló")
+        await asyncio.sleep(interval)
+
+
 async def _rutero_sync_background_loop() -> None:
     """Ejecuta sync_rutero cada RUTERO_SYNC_INTERVAL_SEC (default 6 h)."""
     from backend.jobs.sync_rutero import sync_rutero
@@ -76,12 +93,19 @@ async def _rutero_sync_background_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task: asyncio.Task | None = None
-    disabled = os.getenv("RUTERO_SYNC_DISABLED", "").strip().lower() in ("1", "true", "yes")
-    if not disabled:
-        task = asyncio.create_task(_rutero_sync_background_loop())
+    tasks: list[asyncio.Task] = []
+    rutero_disabled = os.getenv("RUTERO_SYNC_DISABLED", "").strip().lower() in ("1", "true", "yes")
+    if not rutero_disabled:
+        tasks.append(asyncio.create_task(_rutero_sync_background_loop()))
+    dist_disabled = os.getenv("DISTRIBUIDORA_BSALE_SYNC_DISABLED", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if not dist_disabled:
+        tasks.append(asyncio.create_task(_distribuidora_bsale_sync_background_loop()))
     yield
-    if task:
+    for task in tasks:
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
