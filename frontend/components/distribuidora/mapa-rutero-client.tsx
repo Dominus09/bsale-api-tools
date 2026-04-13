@@ -30,7 +30,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
-import { GripVertical, Loader2, RefreshCw } from "lucide-react"
+import { GripVertical, Loader2, Lock, RefreshCw } from "lucide-react"
 
 import polylineModule from "@mapbox/polyline"
 
@@ -72,6 +72,11 @@ const MarkerClusterGroup = dynamic(() => import("react-leaflet-cluster").then((m
 
 const MAP_CENTER: [number, number] = [-42.6, -73.8]
 const MAP_ZOOM = 10
+
+function formatearMinutos(m: number): string {
+  if (!Number.isFinite(m)) return "—"
+  return m >= 120 ? `${(m / 60).toFixed(1)} h` : `${Math.round(m)} min`
+}
 
 /** Fila de cliente en respuesta ruta-detalle / optimizar-ruta. */
 type RutaClienteFila = Record<string, unknown>
@@ -475,6 +480,8 @@ function RutaClienteSortableFila({
   onHoverLista,
   onSelectCliente,
   onReoptimizarDesde,
+  onBloquearHasta,
+  totalFilas,
   setRowRef,
   disabled,
 }: {
@@ -487,6 +494,9 @@ function RutaClienteSortableFila({
   onHoverLista: (bsaleId: number | null) => void
   onSelectCliente: (row: RutaClienteFila) => void
   onReoptimizarDesde?: (desdeIndice: number) => void
+  /** Fija visitas 0..filaIndex inclusive; optimiza solo la cola (índice servidor = filaIndex + 1). */
+  onBloquearHasta?: (filaIndex: number) => void
+  totalFilas: number
   setRowRef: (bsaleId: number, el: HTMLElement | null) => void
   disabled: boolean
 }) {
@@ -504,6 +514,8 @@ function RutaClienteSortableFila({
   const active = highlightBsaleId === bid
   const ho = hoverBsaleId === bid
   const isDropTarget = dragOverId === id && dragActiveId != null && dragActiveId !== id
+  const puedeBloquearHasta =
+    Boolean(onBloquearHasta) && totalFilas >= 2 && filaIndex < totalFilas - 1
 
   return (
     <li
@@ -545,23 +557,42 @@ function RutaClienteSortableFila({
           </span>
           <span className="text-xs text-muted-foreground">{municipioDesdeFilaRuta(row)}</span>
         </button>
-        {onReoptimizarDesde ? (
-          <button
-            type="button"
-            className={cn(
-              "text-muted-foreground hover:text-primary hover:bg-primary/10 flex shrink-0 items-center rounded-r-md px-1.5 py-2 transition-colors",
-              disabled && "pointer-events-none opacity-40",
-            )}
-            title="Reoptimizar con ORS desde este cliente en adelante (lo anterior no cambia)"
-            aria-label="Reoptimizar desde aquí"
-            onClick={(e) => {
-              e.stopPropagation()
-              onReoptimizarDesde(filaIndex)
-            }}
-          >
-            <RefreshCw className="size-4" aria-hidden />
-          </button>
-        ) : null}
+        <div className="flex shrink-0 flex-col justify-stretch overflow-hidden rounded-r-md border-l border-border/60">
+          {onBloquearHasta && puedeBloquearHasta ? (
+            <button
+              type="button"
+              className={cn(
+                "text-muted-foreground hover:text-primary hover:bg-primary/10 flex flex-1 items-center justify-center px-1.5 py-1.5 transition-colors",
+                disabled && "pointer-events-none opacity-40",
+              )}
+              title="Bloquear hasta aquí: las visitas hasta esta fila no se mueven; solo se reordena el resto"
+              aria-label="Bloquear hasta aquí"
+              onClick={(e) => {
+                e.stopPropagation()
+                onBloquearHasta(filaIndex)
+              }}
+            >
+              <Lock className="size-3.5" aria-hidden />
+            </button>
+          ) : null}
+          {onReoptimizarDesde ? (
+            <button
+              type="button"
+              className={cn(
+                "text-muted-foreground hover:text-primary hover:bg-primary/10 flex flex-1 items-center justify-center px-1.5 py-1.5 transition-colors",
+                disabled && "pointer-events-none opacity-40",
+              )}
+              title="Reoptimizar desde aquí: lo anterior queda igual; se recalcula el orden del tramo con el optimizador local y se traza con ORS"
+              aria-label="Reoptimizar desde aquí"
+              onClick={(e) => {
+                e.stopPropagation()
+                onReoptimizarDesde(filaIndex)
+              }}
+            >
+              <RefreshCw className="size-3.5" aria-hidden />
+            </button>
+          ) : null}
+        </div>
       </div>
     </li>
   )
@@ -575,6 +606,7 @@ function MapaRuteroPanelRuta({
   onHoverLista,
   onSelectCliente,
   onReoptimizarDesde,
+  onBloquearHasta,
   setListItemRef,
   onOrdenCambiado,
   ordenGuardando,
@@ -586,6 +618,7 @@ function MapaRuteroPanelRuta({
   onHoverLista: (bsaleId: number | null) => void
   onSelectCliente: (row: RutaClienteFila) => void
   onReoptimizarDesde?: (desdeIndice: number) => void
+  onBloquearHasta?: (filaIndex: number) => void
   setListItemRef: (bsaleId: number, el: HTMLElement | null) => void
   onOrdenCambiado: (bulk: { id: number; orden_manual: number }[]) => Promise<void>
   ordenGuardando: boolean
@@ -625,6 +658,20 @@ function MapaRuteroPanelRuta({
   const nClientes = ok && Array.isArray(rutaDetalle.clientes) ? rutaDetalle.clientes.length : 0
   const km = ok ? Number(rutaDetalle.km_totales) : 0
   const min = ok ? Number(rutaDetalle.minutos_totales) : 0
+  const minCond =
+    ok && typeof rutaDetalle.minutos_conduccion === "number"
+      ? Number(rutaDetalle.minutos_conduccion)
+      : null
+  const minAt =
+    ok && typeof rutaDetalle.minutos_atencion === "number" ? Number(rutaDetalle.minutos_atencion) : null
+  const minTotalReal =
+    ok && typeof rutaDetalle.minutos_total_real === "number"
+      ? Number(rutaDetalle.minutos_total_real)
+      : null
+  const tCli =
+    ok && typeof rutaDetalle.tiempo_por_cliente_min === "number"
+      ? Number(rutaDetalle.tiempo_por_cliente_min)
+      : null
 
   const sortableIds = useMemo(() => items.map((r) => String(r.bsale_id)), [items])
 
@@ -664,8 +711,8 @@ function MapaRuteroPanelRuta({
       <div className="border-b border-border px-3 py-2">
         <h2 className="text-sm font-semibold tracking-tight">Ruta del día</h2>
         <p className="text-xs text-muted-foreground">
-          Arrastra con ⋮⋮; clic en el nombre centra el mapa; el botón circular a la derecha reoptimiza con ORS
-          solo desde esa visita en adelante.
+          Arrastra con ⋮⋮; clic en el nombre centra el mapa. Candado: fija el prefijo de la ruta y solo reordena
+          lo que sigue. Flechas: reoptimiza la cola desde esa visita (orden local + trazado ORS).
         </p>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
@@ -710,6 +757,8 @@ function MapaRuteroPanelRuta({
                         onHoverLista={onHoverLista}
                         onSelectCliente={onSelectCliente}
                         onReoptimizarDesde={onReoptimizarDesde}
+                        onBloquearHasta={onBloquearHasta}
+                        totalFilas={items.length}
                         setRowRef={setListItemRef}
                         disabled={ordenGuardando}
                       />
@@ -735,12 +784,32 @@ function MapaRuteroPanelRuta({
             <span>Km totales</span>
             <span className="font-medium tabular-nums text-foreground">{km.toFixed(1)} km</span>
           </div>
-          <div className="flex justify-between gap-2">
-            <span>Tiempo estimado</span>
-            <span className="font-medium tabular-nums text-foreground">
-              {min >= 120 ? `${(min / 60).toFixed(1)} h` : `${Math.round(min)} min`}
-            </span>
-          </div>
+          {minCond != null && minAt != null && minTotalReal != null ? (
+            <>
+              <div className="flex justify-between gap-2">
+                <span>Conducción (ORS)</span>
+                <span className="font-medium tabular-nums text-foreground">{formatearMinutos(minCond)}</span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span>
+                  Atención
+                  {tCli != null ? (
+                    <span className="text-muted-foreground/80"> ({nClientes}×{tCli} min)</span>
+                  ) : null}
+                </span>
+                <span className="font-medium tabular-nums text-foreground">{formatearMinutos(minAt)}</span>
+              </div>
+              <div className="flex justify-between gap-2 border-t border-border/60 pt-1 font-medium text-foreground">
+                <span>Tiempo total real</span>
+                <span className="tabular-nums">{formatearMinutos(minTotalReal)}</span>
+              </div>
+            </>
+          ) : (
+            <div className="flex justify-between gap-2">
+              <span>Tiempo conducción</span>
+              <span className="font-medium tabular-nums text-foreground">{formatearMinutos(min)}</span>
+            </div>
+          )}
         </div>
       ) : null}
     </aside>
@@ -921,6 +990,37 @@ export default function MapaRuteroClient() {
     [puedeEditarOrden, ordenGuardando, vendedorFilter, diaFilter],
   )
 
+  const onBloquearHastaFila = useCallback(
+    async (filaIndex: number) => {
+      if (!puedeEditarOrden || ordenGuardando) return
+      const k = filaIndex + 1
+      setOrdenGuardando(true)
+      setOrdenMensaje("")
+      try {
+        const json = await postDistribuidoraOptimizarRuta({
+          vendedor: vendedorFilter,
+          dia: diaFilter,
+          bloque_hasta_indice: k,
+        })
+        if (!mounted.current) return
+        if (json && typeof json === "object" && "error" in json && json.error) {
+          setOrdenMensaje(String(json.error))
+          return
+        }
+        const mapData = await getDistribuidoraMapa()
+        if (!mounted.current) return
+        setClientes(Array.isArray(mapData.clientes) ? mapData.clientes : [])
+        captureMapViewBeforeRutaUpdate(mapRef, orsRouteViewRef)
+        setRutaDetalle(json as DistribuidoraRutaDetalleJson)
+      } catch (e: unknown) {
+        setOrdenMensaje(e instanceof Error ? e.message : "Error al optimizar con tramo bloqueado")
+      } finally {
+        if (mounted.current) setOrdenGuardando(false)
+      }
+    },
+    [puedeEditarOrden, ordenGuardando, vendedorFilter, diaFilter],
+  )
+
   const onOptimizarRuta = useCallback(async () => {
     if (!puedeEditarOrden || ordenGuardando) return
     setOrdenGuardando(true)
@@ -1050,10 +1150,10 @@ export default function MapaRuteroClient() {
               <span className="font-medium tabular-nums text-foreground">{clientesVisibles.length}</span>
               {vendedorFilter !== FILTER_ALL && diaFilter !== FILTER_ALL ? (
                 <span className="mt-1 block text-xs text-muted-foreground/90">
-                  &quot;Optimizar ruta&quot; calcula el orden con ORS y lo guarda. Luego puedes abrir un
-                  cliente y usar &quot;Mover en orden&quot; para afinar. Si hay orden guardado en base,
-                  la secuencia es fija (sin reoptimizar); &quot;Limpiar orden manual&quot; vuelve al
-                  modo solo ORS.
+                  &quot;Optimizar ruta&quot; recalcula el orden con el optimizador local (sectores + 2-opt) y
+                  traza con OpenRouteService; lo guarda como orden de visita. Puedes candar un prefijo o
+                  reoptimizar desde una fila sin perder lo anterior. Si ya hay orden en base, no se
+                  sobrescribe hasta que optimices; &quot;Limpiar orden manual&quot; borra ese orden fijo.
                 </span>
               ) : (
                 <span className="mt-1 block text-xs text-muted-foreground/90">
@@ -1182,6 +1282,7 @@ export default function MapaRuteroClient() {
               onHoverLista={setHoverBsaleId}
               onSelectCliente={onSelectClienteLista}
               onReoptimizarDesde={(i) => void onReoptimizarDesdeIndice(i)}
+              onBloquearHasta={(i) => void onBloquearHastaFila(i)}
               setListItemRef={setListItemRef}
               onOrdenCambiado={onOrdenPanelReorder}
               ordenGuardando={ordenGuardando}

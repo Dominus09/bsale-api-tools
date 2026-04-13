@@ -644,6 +644,10 @@ export type DistribuidoraOptimizarRutaJson = Record<string, unknown>
 export async function postDistribuidoraOptimizarRuta(body: {
   vendedor: string
   dia: string
+  /** Primer índice 0-based del tramo a reordenar; visitas 0..k-1 quedan fijas (omitir = toda la ruta). */
+  bloque_hasta_indice?: number | null
+  /** Minutos de atención por visita para el total real (si no se envía, usa default del servidor). */
+  tiempo_por_cliente_min?: number | null
 }): Promise<DistribuidoraOptimizarRutaJson> {
   const res = await fetch(`${API_URL}/distribuidora/optimizar-ruta`, {
     method: "POST",
@@ -662,6 +666,7 @@ export async function postDistribuidoraOptimizarRutaDesde(body: {
   vendedor: string
   dia: string
   desde_indice: number
+  tiempo_por_cliente_min?: number | null
 }): Promise<DistribuidoraOptimizarRutaJson> {
   const res = await fetch(`${API_URL}/distribuidora/optimizar-ruta-desde`, {
     method: "POST",
@@ -721,6 +726,47 @@ export async function getDistribuidoraRutaDetalle(
     throw new Error(msg || "Error al cargar ruta detalle")
   }
   return res.json()
+}
+
+/** GET /distribuidora/resumen-vendedor — rutas por día para un vendedor. */
+export type DistribuidoraResumenDiaJson = {
+  dia: string
+  color: string
+  km_totales: number
+  minutos_totales: number
+  clientes_count: number
+  geometry: unknown
+  base: unknown
+  clientes: unknown[]
+  alerta_calidad?: boolean
+  km_por_cliente?: number
+}
+
+export type DistribuidoraResumenVendedorJson = {
+  vendedor: string
+  dias: DistribuidoraResumenDiaJson[]
+  km_total_semana: number
+  min_total_semana: number
+  clientes_total_semana: number
+  promedio_km_por_dia: number
+  km_dia_mas_largo: number
+  km_dia_mas_corto: number
+}
+
+export async function getDistribuidoraResumenVendedor(
+  vendedor: string,
+  signal?: AbortSignal,
+): Promise<DistribuidoraResumenVendedorJson> {
+  const qs = new URLSearchParams({ vendedor })
+  const res = await fetch(`${API_URL}/distribuidora/resumen-vendedor?${qs}`, {
+    headers: getAuthHeaders(),
+    signal,
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar resumen vendedor")
+  }
+  return res.json() as Promise<DistribuidoraResumenVendedorJson>
 }
 
 /** Filas genéricas JSON (listados /distribuidora/*). */
