@@ -6,10 +6,12 @@ Sincronización incremental Bsale → distribuidora.documents / distribuidora.do
 - Token: ``BSALE_TOKEN`` o, si no existe, ``BSALE_TOKEN_SPA`` (Coolify).
 - Rango de emisión: último sync_state.last_sync − 2 h hasta ahora (timestamps UNIX en Bsale).
 - Detalles: documentos sin filas en document_details, más re-sync forzado si cambió ``document_id``.
+- Re-sync histórico solo documentos: ``resync_bsale_documents_full()`` (POST ``/erp/resync-distribuidora``).
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -18,7 +20,7 @@ from decimal import Decimal
 from typing import Any
 
 import requests
-from psycopg2.extras import execute_values
+from psycopg2.extras import Json, execute_values
 
 from backend.db import get_connection
 
@@ -43,6 +45,13 @@ _ADVISORY_LOCK_KEY = 5_927_184_003
 
 # Documentos sin detalle: no escanear toda la historia en el primer sync
 _FIRST_SYNC_CUTOFF = datetime(2010, 1, 1, tzinfo=timezone.utc)
+
+# Índices fijos en la tupla de _doc_row_from_bsale (no usar row[-1] por columnas nuevas al final).
+_ROW_DOCUMENT_TYPE_ID = 2
+_ROW_NUMBER = 11
+
+# Un ejemplo de JSON documento por ejecución de sync (logs).
+_document_raw_sample_logged = False
 
 
 def _ensure_distribuidora_tables(cur) -> None:
@@ -91,7 +100,11 @@ def _ensure_distribuidora_tables(cur) -> None:
             token TEXT,
             office_id INTEGER NOT NULL,
             company_id INTEGER NOT NULL DEFAULT 3,
-            number BIGINT
+            number BIGINT,
+            document_type_name TEXT,
+            reference TEXT,
+            expiration_date TIMESTAMPTZ,
+            raw_data JSONB
         )
         """
     )
@@ -99,6 +112,30 @@ def _ensure_distribuidora_tables(cur) -> None:
         """
         ALTER TABLE distribuidora.documents
         ADD COLUMN IF NOT EXISTS number BIGINT
+        """
+    )
+    cur.execute(
+        """
+        ALTER TABLE distribuidora.documents
+        ADD COLUMN IF NOT EXISTS document_type_name TEXT
+        """
+    )
+    cur.execute(
+        """
+        ALTER TABLE distribuidora.documents
+        ADD COLUMN IF NOT EXISTS reference TEXT
+        """
+    )
+    cur.execute(
+        """
+        ALTER TABLE distribuidora.documents
+        ADD COLUMN IF NOT EXISTS expiration_date TIMESTAMPTZ
+        """
+    )
+    cur.execute(
+        """
+        ALTER TABLE distribuidora.documents
+        ADD COLUMN IF NOT EXISTS raw_data JSONB
         """
     )
     cur.execute(
@@ -197,15 +234,62 @@ def _bsale_get(
         return r.json()
 
 
+def _reference_from_bsale(d: dict[str, Any]) -> str | None:
+    ref = d.get("reference")
+    if ref is not None and ref != "":
+        if isinstance(ref, str):
+            return ref
+        return str(ref)
+    refs = d.get("references")
+    if refs is None or refs == "":
+        return None
+    if isinstance(refs, str):
+        return refs
+    if isinstance(refs, list):
+        if not refs:
+            return None
+        parts: list[str] = []
+        for x in refs:
+            if isinstance(x, dict):
+                parts.append(json.dumps(x, ensure_ascii=False, separators=(",", ":")))
+            else:
+                parts.append(str(x))
+        return "; ".join(parts)
+    return str(refs)
+
+
+def _expiration_from_bsale(d: dict[str, Any]) -> datetime | None:
+    raw = d.get("expirationDate")
+    if raw is None:
+        return None
+    try:
+        return datetime.fromtimestamp(int(raw), tz=timezone.utc)
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def _log_sample_document_raw_data(d: dict[str, Any]) -> None:
+    """Log de un documento Bsale en JSON (recorte) para inspección manual."""
+    try:
+        sample = json.dumps(d, ensure_ascii=False, indent=2, default=str)
+    except TypeError:
+        sample = repr(d)
+    max_len = 8000
+    if len(sample) > max_len:
+        sample = sample[:max_len] + "\n... [truncado]"
+    logger.info("ejemplo raw_data documento Bsale (sync distribuidora):\n%s", sample)
+
+
 def _doc_row_from_bsale(d: dict[str, Any]) -> tuple[Any, ...]:
     emission_raw = d.get("emissionDate")
     emission_date = None
     if emission_raw is not None:
         emission_date = datetime.fromtimestamp(int(emission_raw), tz=timezone.utc)
+    doc_type = d.get("document_type") or {}
     return (
         int(d["id"]),
         emission_date,
-        (d.get("document_type") or {}).get("id"),
+        doc_type.get("id"),
         (d.get("client") or {}).get("id"),
         (d.get("user") or {}).get("id"),
         _num(d.get("totalAmount")),
@@ -215,6 +299,10 @@ def _doc_row_from_bsale(d: dict[str, Any]) -> tuple[Any, ...]:
         OFFICE_ID,
         COMPANY_ID,
         d.get("number"),
+        doc_type.get("name"),
+        _reference_from_bsale(d),
+        _expiration_from_bsale(d),
+        Json(d),
     )
 
 
@@ -247,8 +335,8 @@ def _find_document_id_changes(
     numbers: list[int] = []
     for row in rows:
         new_id = int(row[0])
-        dt = row[2]
-        num = row[-1]
+        dt = row[_ROW_DOCUMENT_TYPE_ID]
+        num = row[_ROW_NUMBER]
         if dt is None or num is None:
             continue
         try:
@@ -283,7 +371,8 @@ def _upsert_documents_logical_batch(cur, rows: list[tuple[Any, ...]]) -> tuple[i
     sql = """
         INSERT INTO distribuidora.documents (
             document_id, emission_date, document_type_id, client_id, vendedor_id,
-            total_amount, state, url_pdf, token, office_id, company_id, number
+            total_amount, state, url_pdf, token, office_id, company_id, number,
+            document_type_name, reference, expiration_date, raw_data
         ) VALUES %s
         ON CONFLICT (company_id, office_id, document_type_id, number)
         WHERE document_type_id IS NOT NULL AND number IS NOT NULL
@@ -299,10 +388,14 @@ def _upsert_documents_logical_batch(cur, rows: list[tuple[Any, ...]]) -> tuple[i
             token = EXCLUDED.token,
             office_id = EXCLUDED.office_id,
             company_id = EXCLUDED.company_id,
-            number = EXCLUDED.number
+            number = EXCLUDED.number,
+            document_type_name = EXCLUDED.document_type_name,
+            reference = EXCLUDED.reference,
+            expiration_date = EXCLUDED.expiration_date,
+            raw_data = EXCLUDED.raw_data
         RETURNING (xmax = 0) AS inserted
     """
-    template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+    template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
     execute_values(cur, sql, rows, template=template, page_size=len(rows))
     out = cur.fetchall()
     ins = sum(1 for (x,) in out if x)
@@ -313,7 +406,8 @@ def _upsert_documents_pk_batch(cur, rows: list[tuple[Any, ...]]) -> tuple[int, i
     sql = """
         INSERT INTO distribuidora.documents (
             document_id, emission_date, document_type_id, client_id, vendedor_id,
-            total_amount, state, url_pdf, token, office_id, company_id, number
+            total_amount, state, url_pdf, token, office_id, company_id, number,
+            document_type_name, reference, expiration_date, raw_data
         ) VALUES %s
         ON CONFLICT (document_id) DO UPDATE SET
             emission_date = EXCLUDED.emission_date,
@@ -326,10 +420,14 @@ def _upsert_documents_pk_batch(cur, rows: list[tuple[Any, ...]]) -> tuple[int, i
             token = EXCLUDED.token,
             office_id = EXCLUDED.office_id,
             company_id = EXCLUDED.company_id,
-            number = EXCLUDED.number
+            number = EXCLUDED.number,
+            document_type_name = EXCLUDED.document_type_name,
+            reference = EXCLUDED.reference,
+            expiration_date = EXCLUDED.expiration_date,
+            raw_data = EXCLUDED.raw_data
         RETURNING (xmax = 0) AS inserted
     """
-    template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+    template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
     execute_values(cur, sql, rows, template=template, page_size=len(rows))
     out = cur.fetchall()
     ins = sum(1 for (x,) in out if x)
@@ -343,8 +441,12 @@ def _upsert_documents_batch(
     if not rows:
         return 0, 0, changes
 
-    logical_rows = [r for r in rows if r[2] is not None and r[-1] is not None]
-    pk_rows = [r for r in rows if r[2] is None or r[-1] is None]
+    logical_rows = [
+        r for r in rows if r[_ROW_DOCUMENT_TYPE_ID] is not None and r[_ROW_NUMBER] is not None
+    ]
+    pk_rows = [
+        r for r in rows if r[_ROW_DOCUMENT_TYPE_ID] is None or r[_ROW_NUMBER] is None
+    ]
 
     ins_total = upd_total = 0
     if logical_rows:
@@ -357,6 +459,277 @@ def _upsert_documents_batch(
         ins_total += ins
         upd_total += upd
     return ins_total, upd_total, changes
+
+
+def _document_ids_needing_raw_backfill(cur, bsale_ids: list[int]) -> set[int]:
+    """document_id en DB (distribuidora) con raw_data aún NULL."""
+    if not bsale_ids:
+        return set()
+    cur.execute(
+        """
+        SELECT document_id
+        FROM distribuidora.documents
+        WHERE company_id = %s
+          AND office_id = %s
+          AND document_id = ANY(%s::bigint[])
+          AND raw_data IS NULL
+        """,
+        (COMPANY_ID, OFFICE_ID, bsale_ids),
+    )
+    return {int(r[0]) for r in cur.fetchall()}
+
+
+def resync_bsale_documents_full(*, strict_token: bool = False) -> dict[str, Any]:
+    """
+    Re-sincronización histórica de documentos (Bsale → ``distribuidora.documents``).
+
+    Ventana: ``MIN(emission_date)`` en DB hasta ahora; reutiliza paginación, retry y
+    ``_upsert_documents_batch`` (sin duplicar por clave lógica / PK). No toca
+    ``sync_state`` ni ``document_details``.
+
+    ``DISTRIBUIDORA_RESYNC_ONLY_RAW_NULL=1`` (defecto): solo considera filas con
+    ``raw_data IS NULL`` para la fecha mínima y para decidir qué ítems de cada
+    página se vuelven a persistir. ``0`` desactiva el filtro (re-procesa todo el rango).
+    """
+    t0 = time.perf_counter()
+    only_missing_raw = os.getenv("DISTRIBUIDORA_RESYNC_ONLY_RAW_NULL", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+    )
+
+    token = _bsale_token_distribuidora()
+    if not token:
+        if strict_token:
+            raise ValueError(
+                "Ningún token Bsale en el entorno: defina BSALE_TOKEN o BSALE_TOKEN_SPA (p. ej. en Coolify)."
+            )
+        return {
+            "mode": "resync_documents_full",
+            "documents_api_items": 0,
+            "documents_processed": 0,
+            "documents_inserted": 0,
+            "documents_updated": 0,
+            "documents_id_changed": 0,
+            "only_missing_raw_data": only_missing_raw,
+            "emitidos_desde": None,
+            "emitidos_hasta": None,
+            "raw_data_null_remaining": None,
+            "duration_seconds": round(time.perf_counter() - t0, 3),
+            "omitido_concurrencia": False,
+            "skipped": True,
+            "skip_reason": "BSALE_TOKEN / BSALE_TOKEN_SPA no configuradas",
+            "errors": None,
+        }
+
+    stats: dict[str, Any] = {
+        "mode": "resync_documents_full",
+        "documents_api_items": 0,
+        "documents_processed": 0,
+        "documents_inserted": 0,
+        "documents_updated": 0,
+        "documents_id_changed": 0,
+        "only_missing_raw_data": only_missing_raw,
+        "emitidos_desde": None,
+        "emitidos_hasta": None,
+        "raw_data_null_remaining": None,
+        "duration_seconds": 0.0,
+        "omitido_concurrencia": False,
+        "skipped": False,
+        "skip_reason": None,
+        "errors": None,
+    }
+
+    conn = get_connection()
+    got_lock = False
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT pg_try_advisory_lock(%s)", (_ADVISORY_LOCK_KEY,))
+        got_lock = bool(cur.fetchone()[0])
+        if not got_lock:
+            stats["omitido_concurrencia"] = True
+            logger.info("resync_bsale_documents_full omitido (lock en uso)")
+            cur.close()
+            stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
+            return stats
+
+        _ensure_distribuidora_tables(cur)
+        conn.commit()
+
+        if only_missing_raw:
+            cur.execute(
+                """
+                SELECT MIN(emission_date)
+                FROM distribuidora.documents
+                WHERE company_id = %s
+                  AND office_id = %s
+                  AND raw_data IS NULL
+                """,
+                (COMPANY_ID, OFFICE_ID),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT MIN(emission_date)
+                FROM distribuidora.documents
+                WHERE company_id = %s AND office_id = %s
+                """,
+                (COMPANY_ID, OFFICE_ID),
+            )
+        row = cur.fetchone()
+        min_em = row[0] if row else None
+        if min_em is None:
+            logger.info(
+                "resync_bsale_documents_full: sin MIN(emission_date) aplicable "
+                "(tabla vacía o nada que coincida con el filtro)"
+            )
+            stats["skip_reason"] = "no_min_emission_date"
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM distribuidora.documents
+                WHERE company_id = %s
+                  AND office_id = %s
+                  AND raw_data IS NULL
+                """,
+                (COMPANY_ID, OFFICE_ID),
+            )
+            stats["raw_data_null_remaining"] = int(cur.fetchone()[0])
+            conn.commit()
+            cur.close()
+            stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
+            logger.info(
+                "resync_bsale_documents_full: duration=%ss processed=%s upd=%s ins=%s "
+                "raw_null_remaining=%s",
+                stats["duration_seconds"],
+                stats["documents_processed"],
+                stats["documents_updated"],
+                stats["documents_inserted"],
+                stats["raw_data_null_remaining"],
+            )
+            return stats
+
+        if min_em.tzinfo is None:
+            min_em = min_em.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        desde_ts = int(min_em.timestamp())
+        hasta_ts = int(now.timestamp())
+        if desde_ts >= hasta_ts:
+            desde_ts = hasta_ts - 3600
+
+        stats["emitidos_desde"] = min_em.isoformat()
+        stats["emitidos_hasta"] = now.isoformat()
+
+        session = requests.Session()
+        offset = 0
+        pending_docs: list[tuple[Any, ...]] = []
+        id_change_pairs: list[tuple[int, int]] = []
+
+        while True:
+            params = {
+                "limit": LIMIT_BSALE,
+                "offset": offset,
+                "emissiondaterange": f"[{desde_ts},{hasta_ts}]",
+            }
+            data = _bsale_get(session, f"{BASE_BSALE}/documents.json", token, params)
+            items = data.get("items") or []
+            if not items:
+                break
+
+            page_candidates: list[dict[str, Any]] = []
+            for d in items:
+                oid = (d.get("office") or {}).get("id")
+                if oid is None:
+                    continue
+                if int(oid) != OFFICE_ID:
+                    continue
+                stats["documents_api_items"] += 1
+                page_candidates.append(d)
+
+            if only_missing_raw and page_candidates:
+                ids = [int(x["id"]) for x in page_candidates]
+                need_ids = _document_ids_needing_raw_backfill(cur, ids)
+                for d in page_candidates:
+                    if int(d["id"]) not in need_ids:
+                        continue
+                    pending_docs.append(_doc_row_from_bsale(d))
+                    stats["documents_processed"] += 1
+            else:
+                for d in page_candidates:
+                    pending_docs.append(_doc_row_from_bsale(d))
+                    stats["documents_processed"] += 1
+
+            if len(pending_docs) >= 200:
+                ins, upd, ch = _upsert_documents_batch(cur, pending_docs)
+                stats["documents_inserted"] += ins
+                stats["documents_updated"] += upd
+                id_change_pairs.extend(ch)
+                conn.commit()
+                pending_docs.clear()
+
+            offset += LIMIT_BSALE
+
+        if pending_docs:
+            ins, upd, ch = _upsert_documents_batch(cur, pending_docs)
+            stats["documents_inserted"] += ins
+            stats["documents_updated"] += upd
+            id_change_pairs.extend(ch)
+            conn.commit()
+
+        new_to_old: dict[int, int] = {}
+        for old_id, new_id in id_change_pairs:
+            new_to_old[new_id] = old_id
+        stats["documents_id_changed"] = len(new_to_old)
+
+        cur.execute(
+            """
+            SELECT COUNT(*)
+            FROM distribuidora.documents
+            WHERE company_id = %s
+              AND office_id = %s
+              AND raw_data IS NULL
+            """,
+            (COMPANY_ID, OFFICE_ID),
+        )
+        stats["raw_data_null_remaining"] = int(cur.fetchone()[0])
+        conn.commit()
+        cur.close()
+
+        stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
+        logger.info(
+            "resync_bsale_documents_full OK: api_items=%s processed=%s ins=%s upd=%s "
+            "id_changed=%s raw_null_remaining=%s only_missing_raw=%s duration=%ss",
+            stats["documents_api_items"],
+            stats["documents_processed"],
+            stats["documents_inserted"],
+            stats["documents_updated"],
+            stats["documents_id_changed"],
+            stats["raw_data_null_remaining"],
+            only_missing_raw,
+            stats["duration_seconds"],
+        )
+    except Exception as e:
+        logger.exception("resync_bsale_documents_full: %s", e)
+        stats["errors"] = str(e)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            if got_lock:
+                c2 = conn.cursor()
+                c2.execute("SELECT pg_advisory_unlock(%s)", (_ADVISORY_LOCK_KEY,))
+                c2.close()
+        except Exception:
+            logger.exception("resync_bsale_documents_full: unlock")
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    return stats
 
 
 def _insert_details_batch(cur, rows: list[tuple[Any, ...]]) -> int:
@@ -384,6 +757,7 @@ def sync_bsale_distribuidora(*, strict_token: bool = False) -> dict[str, Any]:
         Si False (job en background), devuelve ``skipped=True`` sin excepción.
     """
     global _token_missing_logged
+    global _document_raw_sample_logged
 
     t0 = time.perf_counter()
     token = _bsale_token_distribuidora()
@@ -447,6 +821,8 @@ def sync_bsale_distribuidora(*, strict_token: bool = False) -> dict[str, Any]:
         _ensure_distribuidora_tables(cur)
         conn.commit()
 
+        _document_raw_sample_logged = False
+
         cur.execute(
             """
             SELECT last_sync
@@ -495,6 +871,9 @@ def sync_bsale_distribuidora(*, strict_token: bool = False) -> dict[str, Any]:
                     continue
                 if oid is None:
                     continue
+                if not _document_raw_sample_logged:
+                    _log_sample_document_raw_data(d)
+                    _document_raw_sample_logged = True
                 pending_docs.append(_doc_row_from_bsale(d))
                 stats["documents_processed"] += 1
 

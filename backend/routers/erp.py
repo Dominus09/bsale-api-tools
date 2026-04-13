@@ -93,3 +93,22 @@ def post_sync_distribuidora():
         raise HTTPException(status_code=502, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/resync-distribuidora")
+def post_resync_distribuidora():
+    """
+    Re-sincronización histórica solo de ``distribuidora.documents`` (relleno de columnas
+    nuevas vía upsert). Usa el mismo advisory lock que el sync incremental; no ejecuta
+    sync de detalles. Requiere BSALE_TOKEN o BSALE_TOKEN_SPA.
+    """
+    from backend.jobs.sync_bsale_distribuidora import resync_bsale_documents_full
+
+    try:
+        return resync_bsale_documents_full(strict_token=True)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e

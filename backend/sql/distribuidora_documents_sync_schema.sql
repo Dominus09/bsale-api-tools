@@ -32,11 +32,27 @@ CREATE TABLE IF NOT EXISTS distribuidora.documents (
     token              TEXT,
     office_id          INTEGER NOT NULL,
     company_id         INTEGER NOT NULL DEFAULT 3,
-    number             BIGINT
+    number             BIGINT,
+    document_type_name TEXT,
+    reference          TEXT,
+    expiration_date    TIMESTAMPTZ,
+    raw_data           JSONB
 );
 
 ALTER TABLE distribuidora.documents
     ADD COLUMN IF NOT EXISTS number BIGINT;
+
+ALTER TABLE distribuidora.documents
+    ADD COLUMN IF NOT EXISTS document_type_name TEXT;
+
+ALTER TABLE distribuidora.documents
+    ADD COLUMN IF NOT EXISTS reference TEXT;
+
+ALTER TABLE distribuidora.documents
+    ADD COLUMN IF NOT EXISTS expiration_date TIMESTAMPTZ;
+
+ALTER TABLE distribuidora.documents
+    ADD COLUMN IF NOT EXISTS raw_data JSONB;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_distribuidora_documents_logical
     ON distribuidora.documents (company_id, office_id, document_type_id, number)
