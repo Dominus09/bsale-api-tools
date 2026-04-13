@@ -188,13 +188,23 @@
   margin-top: 0 !important;
 }
 
-/* Mapa rutero: DivIcon sin marco por defecto */
-.leaflet-div-icon.mapa-rutero-cliente-icon,
-.leaflet-div-icon.mapa-rutero-base-icon {
+/* Mapa rutero: DivIcon cliente sin marco por defecto de Leaflet */
+.leaflet-div-icon.mapa-rutero-cliente-icon {
   background: transparent !important;
   border: none !important;
   margin-left: 0 !important;
   margin-top: 0 !important;
+}
+
+/* Mapa rutero: marcador base (L.icon → img) sin borde blanco roto */
+.leaflet-marker-icon.mapa-rutero-base-leaflet-icon {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.mapa-rutero-base-ruta-leaflet-icon {
+  filter: drop-shadow(0 2px 6px rgb(15 23 42 / 0.28));
 }
 
 /* Mapa rutero: popups */
@@ -243,9 +253,3 @@
   border-color: oklch(0.91 0 0);
 }
 
-.leaflet-div-icon.mapa-rutero-base-ruta-icon {
-  background: transparent !important;
-  border: none !important;
-  margin-left: 0 !important;
-  margin-top: 0 !important;
-}

@@ -127,8 +127,6 @@ const FILTER_ALL = "__all__"
 const MAP_CLIENTE_COLOR = "#2563eb"
 const MAP_CLIENTE_COLOR_HOVER = "#ea580c"
 const MAP_CLIENTE_COLOR_HIGHLIGHT = "#16a34a"
-/** Punto base (mapa general). */
-const MAP_BASE_COLOR = "#dc2626"
 
 type PolylineDecodeFn = (str: string, precision?: number) => [number, number][]
 
@@ -326,32 +324,33 @@ function getClienteDivIcon(fillColor: string): L.DivIcon {
   return icon
 }
 
-let baseIconSingleton: L.DivIcon | null = null
-function getBaseDivIcon(): L.DivIcon {
+/** Ruta absoluta desde `public/` (Next.js); evita imágenes rotas por emoji o rutas relativas. */
+const BASE_MARKER_ICON_URL = "/icons/base.png"
+
+let baseIconSingleton: L.Icon | null = null
+function getBaseMapIcon(): L.Icon {
   if (!baseIconSingleton) {
-    const s = 12
-    const b = 2
-    baseIconSingleton = L.divIcon({
-      className: "mapa-rutero-base-icon",
-      html: `<div style="width:${s}px;height:${s}px;border-radius:4px;background:${MAP_BASE_COLOR};border:${b}px solid #ffffff;box-shadow:0 2px 8px rgba(15,23,42,0.28);box-sizing:content-box;"></div>`,
-      iconSize: [s + b * 2, s + b * 2],
-      iconAnchor: [(s + b * 2) / 2, (s + b * 2) / 2],
-      popupAnchor: [0, -8],
+    baseIconSingleton = L.icon({
+      iconUrl: BASE_MARKER_ICON_URL,
+      iconSize: [32, 32],
+      iconAnchor: [16, 32],
+      popupAnchor: [0, -28],
+      className: "mapa-rutero-base-leaflet-icon",
     })
   }
   return baseIconSingleton
 }
 
-/** Base de ruta: ícono grande (bandera), no numerar — solo informativo en mapa. */
-let basePuntoRutaIcon: L.DivIcon | null = null
-function getBasePuntoRutaIcon(): L.DivIcon {
+/** Base en mapa de ruta: mismo asset, tamaño mayor para inicio/fin. */
+let basePuntoRutaIcon: L.Icon | null = null
+function getBasePuntoRutaMapIcon(): L.Icon {
   if (!basePuntoRutaIcon) {
-    basePuntoRutaIcon = L.divIcon({
-      className: "mapa-rutero-base-ruta-icon",
-      html: `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;pointer-events:none;"><span style="font-size:26px;line-height:1;text-shadow:0 1px 3px rgba(0,0,0,0.35);">&#128681;</span><span style="font-size:10px;font-weight:800;letter-spacing:0.04em;background:${MAP_BASE_COLOR};color:#fff;padding:2px 6px;border-radius:4px;border:2px solid #fff;box-shadow:0 2px 8px rgba(15,23,42,0.25);">BASE</span></div>`,
-      iconSize: [48, 52],
-      iconAnchor: [24, 52],
-      popupAnchor: [0, -56],
+    basePuntoRutaIcon = L.icon({
+      iconUrl: BASE_MARKER_ICON_URL,
+      iconSize: [40, 40],
+      iconAnchor: [20, 40],
+      popupAnchor: [0, -40],
+      className: "mapa-rutero-base-leaflet-icon mapa-rutero-base-ruta-leaflet-icon",
     })
   }
   return basePuntoRutaIcon
@@ -1601,7 +1600,7 @@ export default function MapaRuteroClient() {
                             <Marker
                               key="ruta-base-unica"
                               position={[bc.lat, bc.lon]}
-                              icon={getBasePuntoRutaIcon()}
+                              icon={getBasePuntoRutaMapIcon()}
                               interactive={false}
                             />
                           )
@@ -1647,7 +1646,7 @@ export default function MapaRuteroClient() {
                         {bases.map((b, i) => {
                           const key = `${b.vendedor ?? "b"}-${b.lat}-${b.lon}-${i}`
                           return (
-                            <Marker key={key} position={[b.lat, b.lon]} icon={getBaseDivIcon()}>
+                            <Marker key={key} position={[b.lat, b.lon]} icon={getBaseMapIcon()}>
                               <Popup>
                                 <div className="mapa-rutero-popup-inner p-2 text-sm">
                                   <p className="font-semibold text-foreground">{b.nombre?.trim() || "Punto base"}</p>
