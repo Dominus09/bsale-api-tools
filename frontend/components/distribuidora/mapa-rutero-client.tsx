@@ -47,6 +47,7 @@ import {
 import {
   getDistribuidoraMapa,
   getDistribuidoraRutaDetalle,
+  getDistribuidoraRutaSugerencias,
   isDistribuidoraRutaDetalleOk,
   postDistribuidoraOptimizarRuta,
   postDistribuidoraOptimizarRutaDesde,
@@ -55,6 +56,7 @@ import {
   type DistribuidoraMapaCliente,
   type DistribuidoraPuntoBase,
   type DistribuidoraRutaDetalleJson,
+  type DistribuidoraRutaSugerenciaJson,
 } from "@/lib/api"
 
 import "leaflet/dist/leaflet.css"
@@ -433,6 +435,22 @@ function reordenarParaBulk(
   }))
 }
 
+/** Intercambia dos visitas consecutivas y devuelve payload para orden-manual-bulk. */
+function bulkPorSwapAdyacente(rows: RutaClienteFila[], indiceA: number): { id: number; orden_manual: number }[] {
+  const sorted = [...rows].sort((a, b) => Number(a.orden_visita ?? 0) - Number(b.orden_visita ?? 0))
+  if (indiceA < 0 || indiceA >= sorted.length - 1) {
+    throw new Error("Intercambio no válido para la ruta actual")
+  }
+  const sw = [...sorted]
+  const t = sw[indiceA]
+  sw[indiceA] = sw[indiceA + 1]!
+  sw[indiceA + 1] = t
+  return sw.map((r, i) => ({
+    id: Number(r.bsale_id),
+    orden_manual: i + 1,
+  }))
+}
+
 function nombreClienteDesdeFilaRuta(row: RutaClienteFila): string {
   const fan = String(row.nombre_fantasia ?? "").trim()
   if (fan) return fan
@@ -598,6 +616,81 @@ function RutaClienteSortableFila({
   )
 }
 
+function MapaRuteroPanelSugerencias({
+  sugerencias,
+  ignoradas,
+  loading,
+  error,
+  ordenGuardando,
+  onIgnorar,
+  onAplicar,
+}: {
+  sugerencias: DistribuidoraRutaSugerenciaJson[]
+  ignoradas: string[]
+  loading: boolean
+  error: string
+  ordenGuardando: boolean
+  onIgnorar: (id: string) => void
+  onAplicar: (s: DistribuidoraRutaSugerenciaJson) => void
+}) {
+  const visibles = sugerencias.filter((s) => !ignoradas.includes(s.id))
+  return (
+    <div className="border-t border-border px-2 py-2">
+      <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        Sugerencias locales
+      </h3>
+      <p className="mb-2 text-[11px] leading-snug text-muted-foreground">
+        Propuestas puntuales (swap de visitas vecinas). No se aplica nada sola: elige aplicar o ignorar.
+      </p>
+      {error ? <p className="text-xs text-destructive">{error}</p> : null}
+      {loading ? (
+        <p className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+          Analizando…
+        </p>
+      ) : null}
+      {!loading && !error && visibles.length === 0 ? (
+        <p className="text-xs text-muted-foreground">Sin sugerencias por encima del umbral (0,5 km Haversine local).</p>
+      ) : null}
+      <ul className="max-h-36 space-y-2 overflow-y-auto">
+        {visibles.map((s) => (
+          <li
+            key={s.id}
+            className="rounded-md border border-border/80 bg-muted/25 px-2 py-1.5 text-[11px] leading-snug text-foreground"
+          >
+            <p className="text-foreground/95">{s.mensaje}</p>
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              <span className="rounded bg-primary/12 px-1.5 py-0.5 font-medium tabular-nums text-primary">
+                Δ ≈ {s.delta_km} km
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 text-[11px]"
+                disabled={ordenGuardando}
+                onClick={() => onIgnorar(s.id)}
+              >
+                Ignorar
+              </Button>
+              <Button
+                type="button"
+                variant="default"
+                size="sm"
+                className="h-7 text-[11px]"
+                disabled={ordenGuardando}
+                onClick={() => void onAplicar(s)}
+              >
+                Aplicar
+              </Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 function MapaRuteroPanelRuta({
   rutaDetalle,
   loading,
@@ -610,6 +703,12 @@ function MapaRuteroPanelRuta({
   setListItemRef,
   onOrdenCambiado,
   ordenGuardando,
+  sugerencias,
+  sugerenciasIgnoradas,
+  sugerenciasLoading,
+  sugerenciasError,
+  onSugerenciaIgnorar,
+  onSugerenciaAplicar,
 }: {
   rutaDetalle: DistribuidoraRutaDetalleJson | null
   loading: boolean
@@ -622,6 +721,12 @@ function MapaRuteroPanelRuta({
   setListItemRef: (bsaleId: number, el: HTMLElement | null) => void
   onOrdenCambiado: (bulk: { id: number; orden_manual: number }[]) => Promise<void>
   ordenGuardando: boolean
+  sugerencias: DistribuidoraRutaSugerenciaJson[]
+  sugerenciasIgnoradas: string[]
+  sugerenciasLoading: boolean
+  sugerenciasError: string
+  onSugerenciaIgnorar: (id: string) => void
+  onSugerenciaAplicar: (s: DistribuidoraRutaSugerenciaJson) => void
 }) {
   const [items, setItems] = useState<RutaClienteFila[]>([])
   const [dragActiveId, setDragActiveId] = useState<string | null>(null)
@@ -774,6 +879,17 @@ function MapaRuteroPanelRuta({
           </div>
         )}
       </div>
+      {ok && items.length >= 2 ? (
+        <MapaRuteroPanelSugerencias
+          sugerencias={sugerencias}
+          ignoradas={sugerenciasIgnoradas}
+          loading={sugerenciasLoading}
+          error={sugerenciasError}
+          ordenGuardando={ordenGuardando}
+          onIgnorar={onSugerenciaIgnorar}
+          onAplicar={onSugerenciaAplicar}
+        />
+      ) : null}
       {ok ? (
         <div className="space-y-1 border-t border-border px-3 py-2 text-xs text-muted-foreground">
           <div className="flex justify-between gap-2">
@@ -836,6 +952,10 @@ export default function MapaRuteroClient() {
   const [flyTo, setFlyTo] = useState<{ lat: number; lon: number; zoom: number } | null>(null)
   const [highlightBsaleId, setHighlightBsaleId] = useState<number | null>(null)
   const [hoverBsaleId, setHoverBsaleId] = useState<number | null>(null)
+  const [rutaSugerencias, setRutaSugerencias] = useState<DistribuidoraRutaSugerenciaJson[]>([])
+  const [rutaSugerenciasLoading, setRutaSugerenciasLoading] = useState(false)
+  const [rutaSugerenciasError, setRutaSugerenciasError] = useState("")
+  const [sugerenciasIgnoradas, setSugerenciasIgnoradas] = useState<string[]>([])
 
   const setListItemRef = useCallback((bid: number, el: HTMLElement | null) => {
     if (el) listItemRefs.current.set(bid, el)
@@ -866,6 +986,10 @@ export default function MapaRuteroClient() {
     setHighlightBsaleId(null)
     setHoverBsaleId(null)
     setFlyTo(null)
+  }, [vendedorFilter, diaFilter])
+
+  useEffect(() => {
+    setSugerenciasIgnoradas([])
   }, [vendedorFilter, diaFilter])
 
   useEffect(() => {
@@ -964,6 +1088,46 @@ export default function MapaRuteroClient() {
   const puedeEditarOrden =
     vendedorFilter !== FILTER_ALL && diaFilter !== FILTER_ALL && !loading && !error
 
+  const rutaOrdenFirma = useMemo(() => {
+    if (!isDistribuidoraRutaDetalleOk(rutaDetalle)) return ""
+    const arr = rutaDetalle.clientes as RutaClienteFila[]
+    return [...arr]
+      .sort((a, b) => Number(a.orden_visita ?? 0) - Number(b.orden_visita ?? 0))
+      .map((r) => `${Number(r.bsale_id)}:${Number(r.orden_visita ?? 0)}`)
+      .join("|")
+  }, [rutaDetalle])
+
+  useEffect(() => {
+    if (!puedeEditarOrden || rutaDetalleLoading || !isDistribuidoraRutaDetalleOk(rutaDetalle)) {
+      setRutaSugerencias([])
+      setRutaSugerenciasError("")
+      setRutaSugerenciasLoading(false)
+      return
+    }
+    const ac = new AbortController()
+    setRutaSugerenciasLoading(true)
+    setRutaSugerenciasError("")
+    getDistribuidoraRutaSugerencias(vendedorFilter, diaFilter, { signal: ac.signal })
+      .then((data) => {
+        if (ac.signal.aborted || !mounted.current) return
+        if (data.error) {
+          setRutaSugerencias([])
+          setRutaSugerenciasError(String(data.error))
+        } else {
+          setRutaSugerencias(Array.isArray(data.sugerencias) ? data.sugerencias : [])
+        }
+      })
+      .catch((e: unknown) => {
+        if (ac.signal.aborted || !mounted.current) return
+        setRutaSugerencias([])
+        setRutaSugerenciasError(e instanceof Error ? e.message : "Error al cargar sugerencias")
+      })
+      .finally(() => {
+        if (!ac.signal.aborted && mounted.current) setRutaSugerenciasLoading(false)
+      })
+    return () => ac.abort()
+  }, [puedeEditarOrden, vendedorFilter, diaFilter, rutaOrdenFirma, rutaDetalleLoading, rutaDetalle])
+
   const rutaLista = useMemo(() => rutaClientesOrdenados(rutaDetalle), [rutaDetalle])
 
   const onOrdenPanelReorder = useCallback(
@@ -988,6 +1152,27 @@ export default function MapaRuteroClient() {
       }
     },
     [puedeEditarOrden, ordenGuardando, vendedorFilter, diaFilter],
+  )
+
+  const onSugerenciaIgnorar = useCallback((id: string) => {
+    setSugerenciasIgnoradas((prev) => (prev.includes(id) ? prev : [...prev, id]))
+  }, [])
+
+  const onSugerenciaAplicar = useCallback(
+    async (s: DistribuidoraRutaSugerenciaJson) => {
+      if (!puedeEditarOrden || ordenGuardando || !isDistribuidoraRutaDetalleOk(rutaDetalle)) return
+      setOrdenMensaje("")
+      try {
+        const rows = rutaClientesOrdenados(rutaDetalle)
+        const sorted = [...rows].sort((a, b) => Number(a.orden_visita ?? 0) - Number(b.orden_visita ?? 0))
+        const bulk = bulkPorSwapAdyacente(sorted, s.indice_a)
+        await onOrdenPanelReorder(bulk)
+        setSugerenciasIgnoradas((prev) => prev.filter((id) => id !== s.id))
+      } catch {
+        /* mensaje vía onOrdenPanelReorder */
+      }
+    },
+    [puedeEditarOrden, ordenGuardando, rutaDetalle, onOrdenPanelReorder],
   )
 
   const onBloquearHastaFila = useCallback(
@@ -1286,6 +1471,12 @@ export default function MapaRuteroClient() {
               setListItemRef={setListItemRef}
               onOrdenCambiado={onOrdenPanelReorder}
               ordenGuardando={ordenGuardando}
+              sugerencias={rutaSugerencias}
+              sugerenciasIgnoradas={sugerenciasIgnoradas}
+              sugerenciasLoading={rutaSugerenciasLoading}
+              sugerenciasError={rutaSugerenciasError}
+              onSugerenciaIgnorar={onSugerenciaIgnorar}
+              onSugerenciaAplicar={onSugerenciaAplicar}
             />
           ) : null}
           <div className="mapa-rutero-wrapper relative h-[75vh] min-h-[320px] w-full min-w-0 flex-1 overflow-hidden rounded-lg bg-slate-200/80 shadow-inner ring-1 ring-black/5 dark:bg-slate-900/40 dark:ring-white/10">

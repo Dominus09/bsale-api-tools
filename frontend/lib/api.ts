@@ -728,6 +728,50 @@ export async function getDistribuidoraRutaDetalle(
   return res.json()
 }
 
+/** GET /distribuidora/ruta-sugerencias — swaps adyacentes que mejoran distancia local (Haversine). */
+export type DistribuidoraRutaSugerenciaJson = {
+  id: string
+  tipo: string
+  indice_a: number
+  indice_b: number
+  orden_visita_a: number
+  orden_visita_b: number
+  bsale_id_a: number
+  bsale_id_b: number
+  nombre_a: string
+  nombre_b: string
+  delta_km: number
+  mensaje: string
+}
+
+export type DistribuidoraRutaSugerenciasResponse = {
+  vendedor: string
+  dia: string
+  metrica: string
+  min_delta_km: number
+  sugerencias: DistribuidoraRutaSugerenciaJson[]
+  nota?: string
+  error?: string
+}
+
+export async function getDistribuidoraRutaSugerencias(
+  vendedor: string,
+  dia: string,
+  options?: { minDeltaKm?: number; signal?: AbortSignal },
+): Promise<DistribuidoraRutaSugerenciasResponse> {
+  const qs = new URLSearchParams({ vendedor, dia })
+  if (options?.minDeltaKm != null) qs.set("min_delta_km", String(options.minDeltaKm))
+  const res = await fetch(`${API_URL}/distribuidora/ruta-sugerencias?${qs}`, {
+    headers: getAuthHeaders(),
+    signal: options?.signal,
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar sugerencias de ruta")
+  }
+  return res.json() as Promise<DistribuidoraRutaSugerenciasResponse>
+}
+
 /** GET /distribuidora/resumen-vendedor — rutas por día para un vendedor. */
 export type DistribuidoraResumenDiaJson = {
   dia: string

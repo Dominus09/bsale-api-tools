@@ -12,6 +12,7 @@ from backend.utils.ruta_optimizador_local import (
     optimizar_cola_desde_ancla,
     optimizar_secuencia_cerrado,
 )
+from backend.utils.ruta_sugerencias_locales import sugerencias_swap_adyacentes
 
 logger = logging.getLogger(__name__)
 
@@ -808,6 +809,77 @@ def get_ruta_detalle(
         raise HTTPException(status_code=400, detail="vendedor y dia son obligatorios")
 
     return _with_tiempos_reales(_build_ruta_detalle_response(v, d))
+
+
+@router.get("/ruta-sugerencias")
+def get_ruta_sugerencias(
+    vendedor: str = Query(..., min_length=1, description="Código vendedor"),
+    dia: str = Query(..., min_length=1, description="Día de atención"),
+    min_delta_km: float = Query(
+        0.5,
+        ge=0.05,
+        le=500,
+        description="Ahorro mínimo estimado (km, Haversine en tramo local) para listar el swap",
+    ),
+):
+    """
+    Sugerencias puntuales (p. ej. intercambiar dos visitas consecutivas) según la **misma secuencia**
+    que expone GET /ruta-detalle (índices alineados con la lista del panel). No persiste cambios.
+    """
+    v = vendedor.strip()
+    d = dia.strip()
+    if not v or not d:
+        raise HTTPException(status_code=400, detail="vendedor y dia son obligatorios")
+
+    det = _build_ruta_detalle_response(v, d)
+    if not isinstance(det, dict):
+        raise HTTPException(status_code=500, detail="respuesta de ruta inválida")
+    if det.get("error"):
+        return {
+            "vendedor": v,
+            "dia": d,
+            "metrica": "haversine_tramo_local",
+            "min_delta_km": float(min_delta_km),
+            "sugerencias": [],
+            "error": det.get("error"),
+            "nota": "Sin sugerencias porque la ruta no pudo calcularse.",
+        }
+
+    base_pub = det.get("base") if isinstance(det.get("base"), dict) else {}
+    try:
+        base = {
+            "lat": float(base_pub.get("lat")),
+            "lon": float(base_pub.get("lon")),
+            "nombre": base_pub.get("nombre"),
+        }
+    except (TypeError, ValueError):
+        return {
+            "vendedor": v,
+            "dia": d,
+            "metrica": "haversine_tramo_local",
+            "min_delta_km": float(min_delta_km),
+            "sugerencias": [],
+            "error": "base_sin_coordenadas",
+            "nota": "La base no tiene lat/lon válidos.",
+        }
+
+    raw_clientes = det.get("clientes")
+    orden: list[dict] = []
+    if isinstance(raw_clientes, list):
+        orden = [dict(x) for x in raw_clientes if isinstance(x, dict)]
+
+    sugs = sugerencias_swap_adyacentes(base, orden, min_delta_km=min_delta_km)
+    return {
+        "vendedor": v,
+        "dia": d,
+        "metrica": "haversine_tramo_local",
+        "min_delta_km": float(min_delta_km),
+        "sugerencias": sugs,
+        "nota": (
+            "Solo estimación local; no se modifica la ruta hasta que el usuario aplique el cambio "
+            "(orden_manual en la app)."
+        ),
+    }
 
 
 @router.post("/optimizar-ruta")
