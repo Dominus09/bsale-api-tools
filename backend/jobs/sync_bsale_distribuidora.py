@@ -54,6 +54,21 @@ def _ensure_distribuidora_tables(cur) -> None:
         )
         """
     )
+    # Tabla creada antes sin last_sync: migración idempotente
+    cur.execute(
+        """
+        ALTER TABLE distribuidora.sync_state
+        ADD COLUMN IF NOT EXISTS last_sync TIMESTAMPTZ NOT NULL
+            DEFAULT TIMESTAMPTZ '2000-01-01 00:00:00+00'
+        """
+    )
+    cur.execute(
+        """
+        UPDATE distribuidora.sync_state
+        SET last_sync = TIMESTAMPTZ '2000-01-01 00:00:00+00'
+        WHERE last_sync IS NULL
+        """
+    )
     cur.execute(
         """
         INSERT INTO distribuidora.sync_state (last_sync)
@@ -89,7 +104,6 @@ def _ensure_distribuidora_tables(cur) -> None:
         CREATE TABLE IF NOT EXISTS distribuidora.document_details (
             detail_id BIGINT PRIMARY KEY,
             document_id BIGINT NOT NULL,
-            company_id INTEGER NOT NULL DEFAULT 3,
             line_number INTEGER,
             variant_id BIGINT,
             quantity NUMERIC(18, 4),
@@ -192,7 +206,6 @@ def _detail_row(document_id: int, item: dict[str, Any]) -> tuple[Any, ...]:
     return (
         int(item["id"]),
         document_id,
-        COMPANY_ID,
         item.get("lineNumber"),
         (item.get("variant") or {}).get("id"),
         _num(item.get("quantity")),
@@ -239,14 +252,14 @@ def _insert_details_batch(cur, rows: list[tuple[Any, ...]]) -> int:
         return 0
     sql = """
         INSERT INTO distribuidora.document_details (
-            detail_id, document_id, company_id, line_number, variant_id,
+            detail_id, document_id, line_number, variant_id,
             quantity, net_unit_value, total_unit_value, net_amount, tax_amount,
             total_amount, net_discount, discount_percentage
         ) VALUES %s
         ON CONFLICT (detail_id) DO NOTHING
         RETURNING detail_id
     """
-    template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+    template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
     execute_values(cur, sql, rows, template=template, page_size=len(rows))
     return len(cur.fetchall())
 
@@ -419,7 +432,6 @@ def sync_bsale_distribuidora(*, strict_token: bool = False) -> dict[str, Any]:
                         (
                             -doc_id,
                             doc_id,
-                            COMPANY_ID,
                             None,
                             None,
                             None,

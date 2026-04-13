@@ -8,6 +8,14 @@ CREATE TABLE IF NOT EXISTS distribuidora.sync_state (
     last_sync  TIMESTAMPTZ NOT NULL DEFAULT '2000-01-01 00:00:00+00'::timestamptz
 );
 
+-- Si sync_state ya existía sin last_sync (despliegues antiguos):
+ALTER TABLE distribuidora.sync_state
+    ADD COLUMN IF NOT EXISTS last_sync TIMESTAMPTZ NOT NULL
+        DEFAULT '2000-01-01 00:00:00+00'::timestamptz;
+
+UPDATE distribuidora.sync_state
+SET last_sync = COALESCE(last_sync, '2000-01-01 00:00:00+00'::timestamptz);
+
 INSERT INTO distribuidora.sync_state (last_sync)
 SELECT '2000-01-01 00:00:00+00'::timestamptz
 WHERE NOT EXISTS (SELECT 1 FROM distribuidora.sync_state);
@@ -35,7 +43,6 @@ CREATE INDEX IF NOT EXISTS idx_distribuidora_documents_company_office
 CREATE TABLE IF NOT EXISTS distribuidora.document_details (
     detail_id            BIGINT PRIMARY KEY,
     document_id          BIGINT NOT NULL,
-    company_id           INTEGER NOT NULL DEFAULT 3,
     line_number          INTEGER,
     variant_id           BIGINT,
     quantity             NUMERIC(18, 4),
@@ -50,9 +57,6 @@ CREATE TABLE IF NOT EXISTS distribuidora.document_details (
 
 CREATE INDEX IF NOT EXISTS idx_distribuidora_details_document
     ON distribuidora.document_details (document_id);
-
-CREATE INDEX IF NOT EXISTS idx_distribuidora_details_company
-    ON distribuidora.document_details (company_id);
 
 -- Nota: el job puede insertar una fila centinela con detail_id = -document_id cuando Bsale
 -- devuelve 0 líneas, para no reprocesar el mismo documento en bucle.
