@@ -2,7 +2,7 @@
 Sincronización incremental Bsale → distribuidora.documents / distribuidora.document_details.
 
 - company_id = 3 y office_id = 1 (filtrado en API y en consultas).
-- Token: variable de entorno BSALE_TOKEN.
+- Token: ``BSALE_TOKEN`` o, si no existe, ``BSALE_TOKEN_SPA`` (Coolify).
 - Rango de emisión: último sync_state.last_sync − 2 h hasta ahora (timestamps UNIX en Bsale).
 - Detalles: documentos sin filas en document_details (ventana emission_date configurable).
 """
@@ -23,7 +23,17 @@ from backend.db import get_connection
 
 logger = logging.getLogger(__name__)
 
+# Evita spam en logs cada 30 min si falta el token en el job programado
+_token_missing_logged = False
+
 BASE_BSALE = "https://api.bsale.io/v1"
+
+
+def _bsale_token_distribuidora() -> str:
+    """Token Bsale: prioridad BSALE_TOKEN, alternativa BSALE_TOKEN_SPA."""
+    return (os.getenv("BSALE_TOKEN") or "").strip() or (os.getenv("BSALE_TOKEN_SPA") or "").strip()
+
+
 COMPANY_ID = 3
 OFFICE_ID = 1
 LIMIT_BSALE = 50
@@ -132,7 +142,7 @@ def _bsale_get(
             continue
 
         if r.status_code == 401:
-            raise RuntimeError("Bsale 401 Unauthorized — revisar BSALE_TOKEN")
+            raise RuntimeError("Bsale 401 Unauthorized — revisar BSALE_TOKEN o BSALE_TOKEN_SPA")
 
         if r.status_code == 429:
             try:
@@ -241,14 +251,41 @@ def _insert_details_batch(cur, rows: list[tuple[Any, ...]]) -> int:
     return len(cur.fetchall())
 
 
-def sync_bsale_distribuidora() -> dict[str, Any]:
+def sync_bsale_distribuidora(*, strict_token: bool = False) -> dict[str, Any]:
     """
     Sincroniza documentos y luego detalles faltantes (incremental por sync_state + ventana Bsale).
+
+    :param strict_token: si True y no hay token en env, lanza ValueError (p. ej. POST manual).
+        Si False (job en background), devuelve ``skipped=True`` sin excepción.
     """
+    global _token_missing_logged
+
     t0 = time.perf_counter()
-    token = (os.getenv("BSALE_TOKEN") or "").strip()
+    token = _bsale_token_distribuidora()
     if not token:
-        raise ValueError("BSALE_TOKEN no configurada en el entorno")
+        if strict_token:
+            raise ValueError(
+                "Ningún token Bsale en el entorno: defina BSALE_TOKEN o BSALE_TOKEN_SPA (p. ej. en Coolify)."
+            )
+        if not _token_missing_logged:
+            logger.warning(
+                "Sin BSALE_TOKEN ni BSALE_TOKEN_SPA: sync distribuidora omitido. "
+                "Configura una de las dos en Coolify (o DISTRIBUIDORA_BSALE_SYNC_DISABLED=1)."
+            )
+            _token_missing_logged = True
+        return {
+            "documents_processed": 0,
+            "documents_inserted": 0,
+            "documents_updated": 0,
+            "details_inserted": 0,
+            "duration_seconds": round(time.perf_counter() - t0, 3),
+            "omitido_concurrencia": False,
+            "skipped": True,
+            "skip_reason": "BSALE_TOKEN / BSALE_TOKEN_SPA no configuradas",
+            "errors": None,
+        }
+
+    _token_missing_logged = False
 
     lookback_days = int(os.getenv("DISTRIBUIDORA_DETAILS_LOOKBACK_DAYS", "365"))
     details_chunk = int(os.getenv("DISTRIBUIDORA_DETAILS_DOC_CHUNK", "200"))
@@ -261,6 +298,7 @@ def sync_bsale_distribuidora() -> dict[str, Any]:
         "details_inserted": 0,
         "duration_seconds": 0.0,
         "omitido_concurrencia": False,
+        "skipped": False,
         "errors": None,
     }
 
@@ -460,4 +498,4 @@ def sync_bsale_distribuidora() -> dict[str, Any]:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    print(sync_bsale_distribuidora())
+    print(sync_bsale_distribuidora(strict_token=True))

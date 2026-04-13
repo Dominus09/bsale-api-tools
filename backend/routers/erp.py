@@ -81,12 +81,12 @@ def get_margins():
 def post_sync_distribuidora():
     """
     Sincronización incremental Bsale → distribuidora.documents / document_details
-    (company_id=3, office_id=1). Requiere BSALE_TOKEN en el entorno.
+    (company_id=3, office_id=1). Requiere BSALE_TOKEN o BSALE_TOKEN_SPA en el entorno.
     """
     from backend.jobs.sync_bsale_distribuidora import sync_bsale_distribuidora
 
     try:
-        return sync_bsale_distribuidora()
+        return sync_bsale_distribuidora(strict_token=True)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except RuntimeError as e:
