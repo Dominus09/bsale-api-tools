@@ -1691,6 +1691,20 @@ def post_orden_manual(body: OrdenManualBody):
     return {"ok": True}
 
 
+@router.post("/sync-rutero")
+def post_sync_rutero():
+    """
+    Sincroniza bsale.clients → bsale.rutero (empresa 3, vendedores de ruta).
+    Misma lógica que el job programado; útil para forzar actualización manual.
+    """
+    from backend.jobs.sync_rutero import sync_rutero
+
+    try:
+        return sync_rutero()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 @router.get("/resumen")
 def get_resumen():
     conn = get_connection()

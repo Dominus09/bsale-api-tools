@@ -1,6 +1,11 @@
+import asyncio
+import logging
 import os
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
+
+logger = logging.getLogger(__name__)
 
 from backend.cors_middleware import QuillotanaCorsMiddleware
 from backend.routers import auth
@@ -52,9 +57,40 @@ def _cors_allow_origin_regex() -> str | None:
     return r"https://[a-z0-9-]+\.quillotana\.cl$"
 
 
+async def _rutero_sync_background_loop() -> None:
+    """Ejecuta sync_rutero cada RUTERO_SYNC_INTERVAL_SEC (default 6 h)."""
+    from backend.jobs.sync_rutero import sync_rutero
+
+    delay_first = int(os.getenv("RUTERO_SYNC_START_DELAY_SEC", "15"))
+    interval = int(os.getenv("RUTERO_SYNC_INTERVAL_SEC", str(6 * 3600)))
+    if interval < 60:
+        interval = 60
+    await asyncio.sleep(max(0, delay_first))
+    while True:
+        try:
+            sync_rutero()
+        except Exception:
+            logger.exception("sync_rutero (job programado) falló")
+        await asyncio.sleep(interval)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task: asyncio.Task | None = None
+    disabled = os.getenv("RUTERO_SYNC_DISABLED", "").strip().lower() in ("1", "true", "yes")
+    if not disabled:
+        task = asyncio.create_task(_rutero_sync_background_loop())
+    yield
+    if task:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+
 app = FastAPI(
     title="Quillotana Analytics API",
     version="1.0",
+    lifespan=lifespan,
 )
 # CORS: middleware ASGI propio (preflight + ACAO en cada respuesta) además de ser tolerante
 # con proxies; el panel usa Bearer, sin cookies → no hace falta Access-Control-Allow-Credentials.
