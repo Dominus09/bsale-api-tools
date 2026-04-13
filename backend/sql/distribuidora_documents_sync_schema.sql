@@ -31,8 +31,16 @@ CREATE TABLE IF NOT EXISTS distribuidora.documents (
     url_pdf            TEXT,
     token              TEXT,
     office_id          INTEGER NOT NULL,
-    company_id         INTEGER NOT NULL DEFAULT 3
+    company_id         INTEGER NOT NULL DEFAULT 3,
+    number             BIGINT
 );
+
+ALTER TABLE distribuidora.documents
+    ADD COLUMN IF NOT EXISTS number BIGINT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_distribuidora_documents_logical
+    ON distribuidora.documents (company_id, office_id, document_type_id, number)
+    WHERE document_type_id IS NOT NULL AND number IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_distribuidora_documents_emission
     ON distribuidora.documents (emission_date);

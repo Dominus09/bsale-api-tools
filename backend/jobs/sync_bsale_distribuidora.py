@@ -2,9 +2,10 @@
 Sincronización incremental Bsale → distribuidora.documents / distribuidora.document_details.
 
 - company_id = 3 y office_id = 1 (filtrado en API y en consultas).
+- Clave lógica de documento: (document_type_id, number); ``document_id`` de Bsale puede cambiar.
 - Token: ``BSALE_TOKEN`` o, si no existe, ``BSALE_TOKEN_SPA`` (Coolify).
 - Rango de emisión: último sync_state.last_sync − 2 h hasta ahora (timestamps UNIX en Bsale).
-- Detalles: documentos sin filas en document_details (ventana emission_date configurable).
+- Detalles: documentos sin filas en document_details, más re-sync forzado si cambió ``document_id``.
 """
 
 from __future__ import annotations
@@ -89,8 +90,22 @@ def _ensure_distribuidora_tables(cur) -> None:
             url_pdf TEXT,
             token TEXT,
             office_id INTEGER NOT NULL,
-            company_id INTEGER NOT NULL DEFAULT 3
+            company_id INTEGER NOT NULL DEFAULT 3,
+            number BIGINT
         )
+        """
+    )
+    cur.execute(
+        """
+        ALTER TABLE distribuidora.documents
+        ADD COLUMN IF NOT EXISTS number BIGINT
+        """
+    )
+    cur.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_distribuidora_documents_logical
+        ON distribuidora.documents (company_id, office_id, document_type_id, number)
+        WHERE document_type_id IS NOT NULL AND number IS NOT NULL
         """
     )
     cur.execute(
@@ -199,6 +214,7 @@ def _doc_row_from_bsale(d: dict[str, Any]) -> tuple[Any, ...]:
         d.get("token"),
         OFFICE_ID,
         COMPANY_ID,
+        d.get("number"),
     )
 
 
@@ -219,13 +235,85 @@ def _detail_row(document_id: int, item: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
-def _upsert_documents_batch(cur, rows: list[tuple[Any, ...]]) -> tuple[int, int]:
-    if not rows:
-        return 0, 0
+def _find_document_id_changes(
+    cur, rows: list[tuple[Any, ...]]
+) -> list[tuple[int, int]]:
+    """
+    Antes de un upsert por clave lógica, devuelve pares (document_id_antiguo, document_id_nuevo)
+    cuando ya existe un documento con el mismo (company_id, office_id, document_type_id, number).
+    """
+    new_ids: list[int] = []
+    type_ids: list[int] = []
+    numbers: list[int] = []
+    for row in rows:
+        new_id = int(row[0])
+        dt = row[2]
+        num = row[-1]
+        if dt is None or num is None:
+            continue
+        try:
+            t_int = int(dt)
+            n_int = int(num)
+        except (TypeError, ValueError):
+            continue
+        new_ids.append(new_id)
+        type_ids.append(t_int)
+        numbers.append(n_int)
+    if not new_ids:
+        return []
+    cur.execute(
+        """
+        SELECT d.document_id, v.new_id
+        FROM distribuidora.documents d
+        INNER JOIN (
+            SELECT u.new_id, u.document_type_id, u.number
+            FROM unnest(%s::bigint[], %s::int[], %s::bigint[]) AS u(new_id, document_type_id, number)
+        ) v ON d.company_id = %s
+            AND d.office_id = %s
+            AND d.document_type_id = v.document_type_id
+            AND d.number = v.number
+            AND d.document_id IS DISTINCT FROM v.new_id
+        """,
+        (new_ids, type_ids, numbers, COMPANY_ID, OFFICE_ID),
+    )
+    return [(int(o), int(n)) for o, n in cur.fetchall()]
+
+
+def _upsert_documents_logical_batch(cur, rows: list[tuple[Any, ...]]) -> tuple[int, int]:
     sql = """
         INSERT INTO distribuidora.documents (
             document_id, emission_date, document_type_id, client_id, vendedor_id,
-            total_amount, state, url_pdf, token, office_id, company_id
+            total_amount, state, url_pdf, token, office_id, company_id, number
+        ) VALUES %s
+        ON CONFLICT (company_id, office_id, document_type_id, number)
+        WHERE document_type_id IS NOT NULL AND number IS NOT NULL
+        DO UPDATE SET
+            document_id = EXCLUDED.document_id,
+            emission_date = EXCLUDED.emission_date,
+            document_type_id = EXCLUDED.document_type_id,
+            client_id = EXCLUDED.client_id,
+            vendedor_id = EXCLUDED.vendedor_id,
+            total_amount = EXCLUDED.total_amount,
+            state = EXCLUDED.state,
+            url_pdf = EXCLUDED.url_pdf,
+            token = EXCLUDED.token,
+            office_id = EXCLUDED.office_id,
+            company_id = EXCLUDED.company_id,
+            number = EXCLUDED.number
+        RETURNING (xmax = 0) AS inserted
+    """
+    template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+    execute_values(cur, sql, rows, template=template, page_size=len(rows))
+    out = cur.fetchall()
+    ins = sum(1 for (x,) in out if x)
+    return ins, len(out) - ins
+
+
+def _upsert_documents_pk_batch(cur, rows: list[tuple[Any, ...]]) -> tuple[int, int]:
+    sql = """
+        INSERT INTO distribuidora.documents (
+            document_id, emission_date, document_type_id, client_id, vendedor_id,
+            total_amount, state, url_pdf, token, office_id, company_id, number
         ) VALUES %s
         ON CONFLICT (document_id) DO UPDATE SET
             emission_date = EXCLUDED.emission_date,
@@ -237,14 +325,38 @@ def _upsert_documents_batch(cur, rows: list[tuple[Any, ...]]) -> tuple[int, int]
             url_pdf = EXCLUDED.url_pdf,
             token = EXCLUDED.token,
             office_id = EXCLUDED.office_id,
-            company_id = EXCLUDED.company_id
+            company_id = EXCLUDED.company_id,
+            number = EXCLUDED.number
         RETURNING (xmax = 0) AS inserted
     """
-    template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
+    template = "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"
     execute_values(cur, sql, rows, template=template, page_size=len(rows))
     out = cur.fetchall()
     ins = sum(1 for (x,) in out if x)
     return ins, len(out) - ins
+
+
+def _upsert_documents_batch(
+    cur, rows: list[tuple[Any, ...]]
+) -> tuple[int, int, list[tuple[int, int]]]:
+    changes: list[tuple[int, int]] = []
+    if not rows:
+        return 0, 0, changes
+
+    logical_rows = [r for r in rows if r[2] is not None and r[-1] is not None]
+    pk_rows = [r for r in rows if r[2] is None or r[-1] is None]
+
+    ins_total = upd_total = 0
+    if logical_rows:
+        changes.extend(_find_document_id_changes(cur, logical_rows))
+        ins, upd = _upsert_documents_logical_batch(cur, logical_rows)
+        ins_total += ins
+        upd_total += upd
+    if pk_rows:
+        ins, upd = _upsert_documents_pk_batch(cur, pk_rows)
+        ins_total += ins
+        upd_total += upd
+    return ins_total, upd_total, changes
 
 
 def _insert_details_batch(cur, rows: list[tuple[Any, ...]]) -> int:
@@ -290,7 +402,9 @@ def sync_bsale_distribuidora(*, strict_token: bool = False) -> dict[str, Any]:
             "documents_processed": 0,
             "documents_inserted": 0,
             "documents_updated": 0,
+            "documents_id_changed": 0,
             "details_inserted": 0,
+            "details_deleted": 0,
             "duration_seconds": round(time.perf_counter() - t0, 3),
             "omitido_concurrencia": False,
             "skipped": True,
@@ -308,7 +422,9 @@ def sync_bsale_distribuidora(*, strict_token: bool = False) -> dict[str, Any]:
         "documents_processed": 0,
         "documents_inserted": 0,
         "documents_updated": 0,
+        "documents_id_changed": 0,
         "details_inserted": 0,
+        "details_deleted": 0,
         "duration_seconds": 0.0,
         "omitido_concurrencia": False,
         "skipped": False,
@@ -360,6 +476,7 @@ def sync_bsale_distribuidora(*, strict_token: bool = False) -> dict[str, Any]:
         session = requests.Session()
         offset = 0
         pending_docs: list[tuple[Any, ...]] = []
+        id_change_pairs: list[tuple[int, int]] = []
 
         while True:
             params = {
@@ -382,25 +499,42 @@ def sync_bsale_distribuidora(*, strict_token: bool = False) -> dict[str, Any]:
                 stats["documents_processed"] += 1
 
             if len(pending_docs) >= 200:
-                ins, upd = _upsert_documents_batch(cur, pending_docs)
+                ins, upd, ch = _upsert_documents_batch(cur, pending_docs)
                 stats["documents_inserted"] += ins
                 stats["documents_updated"] += upd
+                id_change_pairs.extend(ch)
                 conn.commit()
                 pending_docs.clear()
 
             offset += LIMIT_BSALE
 
         if pending_docs:
-            ins, upd = _upsert_documents_batch(cur, pending_docs)
+            ins, upd, ch = _upsert_documents_batch(cur, pending_docs)
             stats["documents_inserted"] += ins
             stats["documents_updated"] += upd
+            id_change_pairs.extend(ch)
             conn.commit()
 
+        new_to_old: dict[int, int] = {}
+        for old_id, new_id in id_change_pairs:
+            new_to_old[new_id] = old_id
+        stats["documents_id_changed"] = len(new_to_old)
+        for new_id, old_id in sorted(new_to_old.items(), key=lambda x: x[0]):
+            logger.info(
+                "document_id Bsale reasignado (misma clave tipo+número): old_id=%s new_id=%s",
+                old_id,
+                new_id,
+            )
+
+        force_resync_new_ids = set(new_to_old.keys())
         since_emission = max(desde, now - timedelta(days=lookback_days))
         pending_details: list[tuple[Any, ...]] = []
         last_doc_id = 0
+        empty_force_done: set[int] = set()
 
         while True:
+            fr = list(force_resync_new_ids)
+            ef = list(empty_force_done)
             cur.execute(
                 """
                 SELECT d.document_id
@@ -409,25 +543,111 @@ def sync_bsale_distribuidora(*, strict_token: bool = False) -> dict[str, Any]:
                   AND d.office_id = %s
                   AND d.emission_date >= %s
                   AND d.document_id > %s
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM distribuidora.document_details dd
-                      WHERE dd.document_id = d.document_id
+                  AND (
+                      NOT EXISTS (
+                          SELECT 1
+                          FROM distribuidora.document_details dd
+                          WHERE dd.document_id = d.document_id
+                      )
+                      OR (
+                          cardinality(%s::bigint[]) > 0
+                          AND d.document_id = ANY(%s::bigint[])
+                      )
+                  )
+                  AND (
+                      CASE WHEN cardinality(%s::bigint[]) = 0 THEN TRUE
+                      ELSE NOT (d.document_id = ANY(%s::bigint[])) END
                   )
                 ORDER BY d.document_id
                 LIMIT %s
                 """,
-                (COMPANY_ID, OFFICE_ID, since_emission, last_doc_id, details_chunk),
+                (
+                    COMPANY_ID,
+                    OFFICE_ID,
+                    since_emission,
+                    last_doc_id,
+                    fr,
+                    fr,
+                    ef,
+                    ef,
+                    details_chunk,
+                ),
             )
             doc_ids = [int(r[0]) for r in cur.fetchall()]
             if not doc_ids:
                 break
 
             for doc_id in doc_ids:
-                data = _bsale_get(session, f"{BASE_BSALE}/documents/{doc_id}/details.json", token)
+                is_force = doc_id in force_resync_new_ids
+                data = _bsale_get(
+                    session, f"{BASE_BSALE}/documents/{doc_id}/details.json", token
+                )
                 lines = data.get("items") or []
+                old_id = new_to_old.get(doc_id) if is_force else None
+
+                if is_force:
+                    if not lines:
+                        empty_force_done.add(doc_id)
+                        if old_id is not None:
+                            cur.execute(
+                                """
+                                DELETE FROM distribuidora.document_details
+                                WHERE document_id = %s
+                                """,
+                                (old_id,),
+                            )
+                            n = cur.rowcount
+                            stats["details_deleted"] += n
+                            logger.info(
+                                "detalles antiguos eliminados (reemplazo ID, 0 líneas Bsale): "
+                                "old_id=%s new_id=%s filas=%s",
+                                old_id,
+                                doc_id,
+                                n,
+                            )
+                        conn.commit()
+                        continue
+                    detail_rows: list[tuple[Any, ...]] = []
+                    for it in lines:
+                        try:
+                            detail_rows.append(_detail_row(doc_id, it))
+                        except Exception as e:
+                            logger.warning("Línea inválida doc %s: %s", doc_id, e)
+                    if not detail_rows:
+                        logger.warning(
+                            "doc %s: cambio de document_id pero 0 líneas insertables; "
+                            "no se eliminan detalles del document_id antiguo",
+                            doc_id,
+                        )
+                        conn.commit()
+                        continue
+                    ins = _insert_details_batch(cur, detail_rows)
+                    stats["details_inserted"] += ins
+                    logger.info(
+                        "detalles reinsertados tras cambio de document_id: new_id=%s filas=%s",
+                        doc_id,
+                        ins,
+                    )
+                    if old_id is not None:
+                        cur.execute(
+                            """
+                            DELETE FROM distribuidora.document_details
+                            WHERE document_id = %s
+                            """,
+                            (old_id,),
+                        )
+                        n = cur.rowcount
+                        stats["details_deleted"] += n
+                        logger.info(
+                            "detalles antiguos eliminados tras insertar nuevos: old_id=%s new_id=%s filas=%s",
+                            old_id,
+                            doc_id,
+                            n,
+                        )
+                    conn.commit()
+                    continue
+
                 if not lines:
-                    # Evita reconsultar el mismo documento sin fin si Bsale no devuelve líneas
                     pending_details.append(
                         (
                             -doc_id,
@@ -466,6 +686,47 @@ def sync_bsale_distribuidora(*, strict_token: bool = False) -> dict[str, Any]:
 
         cur.execute(
             """
+            SELECT COUNT(*)
+            FROM distribuidora.documents d
+            WHERE d.company_id = %s
+              AND d.office_id = %s
+              AND d.emission_date >= %s
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM distribuidora.document_details dd
+                  WHERE dd.document_id = d.document_id
+              )
+            """,
+            (COMPANY_ID, OFFICE_ID, since_emission),
+        )
+        no_details_count = int(cur.fetchone()[0])
+        if no_details_count > 0:
+            cur.execute(
+                """
+                SELECT d.document_id
+                FROM distribuidora.documents d
+                WHERE d.company_id = %s
+                  AND d.office_id = %s
+                  AND d.emission_date >= %s
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM distribuidora.document_details dd
+                      WHERE dd.document_id = d.document_id
+                  )
+                ORDER BY d.document_id
+                LIMIT 20
+                """,
+                (COMPANY_ID, OFFICE_ID, since_emission),
+            )
+            sample = [int(r[0]) for r in cur.fetchall()]
+            logger.warning(
+                "documentos sin detalles tras sync (ventana lookback): count=%s sample_ids=%s",
+                no_details_count,
+                sample,
+            )
+
+        cur.execute(
+            """
             UPDATE distribuidora.sync_state
             SET last_sync = %s
             WHERE id = (SELECT id FROM distribuidora.sync_state ORDER BY id DESC LIMIT 1)
@@ -476,11 +737,14 @@ def sync_bsale_distribuidora(*, strict_token: bool = False) -> dict[str, Any]:
         cur.close()
 
         logger.info(
-            "sync_bsale_distribuidora OK: processed=%s ins=%s upd=%s details=%s s=%.2f",
+            "sync_bsale_distribuidora OK: processed=%s ins=%s upd=%s id_changed=%s "
+            "details_ins=%s details_del=%s s=%.2f",
             stats["documents_processed"],
             stats["documents_inserted"],
             stats["documents_updated"],
+            stats["documents_id_changed"],
             stats["details_inserted"],
+            stats["details_deleted"],
             time.perf_counter() - t0,
         )
     except Exception as e:
