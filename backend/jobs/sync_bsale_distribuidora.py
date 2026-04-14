@@ -327,11 +327,18 @@ def _load_existing_documents_by_logical(
     cur,
     logical_keys: list[tuple[int, int]],
     document_ids: list[int],
-) -> dict[tuple[int, int], int]:
-    """Por (document_type_id, number) → ``document_id`` actual en DB."""
+) -> tuple[dict[tuple[int, int], int], set[int]]:
+    """
+    Por (document_type_id, number) → ``document_id`` actual en DB.
+
+    También devuelve ``existing_pks``: unión de filas de la consulta principal y de un
+    ``SELECT document_id … WHERE document_id = ANY(batch)`` explícito (prioridad PK),
+    para no intentar INSERT de un ``document_id`` ya presente.
+    """
     by_logical: dict[tuple[int, int], int] = {}
+    existing_pks: set[int] = set()
     if not logical_keys and not document_ids:
-        return by_logical
+        return by_logical, existing_pks
     t_logical = [k[0] for k in logical_keys]
     n_logical = [k[1] for k in logical_keys]
     doc_ids = list(dict.fromkeys(document_ids))
@@ -363,6 +370,10 @@ def _load_existing_documents_by_logical(
         ),
     )
     for doc_id, dt, num in cur.fetchall():
+        try:
+            existing_pks.add(int(doc_id))
+        except (TypeError, ValueError):
+            continue
         if dt is None or num is None:
             continue
         try:
@@ -370,7 +381,23 @@ def _load_existing_documents_by_logical(
             by_logical[key] = int(doc_id)
         except (TypeError, ValueError):
             continue
-    return by_logical
+    if doc_ids:
+        cur.execute(
+            """
+            SELECT document_id
+            FROM distribuidora.documents
+            WHERE company_id = %s
+              AND office_id = %s
+              AND document_id = ANY(%s::bigint[])
+            """,
+            (COMPANY_ID, OFFICE_ID, doc_ids),
+        )
+        for (did,) in cur.fetchall():
+            try:
+                existing_pks.add(int(did))
+            except (TypeError, ValueError):
+                continue
+    return by_logical, existing_pks
 
 
 def _delete_stale_document_rows_holding_new_ids(
@@ -569,11 +596,11 @@ def _upsert_documents_logical_batch(
     cur, rows: list[tuple[Any, ...]]
 ) -> tuple[int, int, list[tuple[int, int]]]:
     """
-    Clave lógica ``(document_type_id, number)`` (SELECT previo, sin ON CONFLICT):
+    Orden: (1) ``document_id`` en BD → ``UPDATE`` por PK; (2) clave lógica.
 
-    * A) No existe fila con esa clave → ``INSERT`` masivo
-    * B) Existe y ``document_id`` coincide → ``UPDATE`` por PK
-    * C) Existe y ``document_id`` cambió → ``UPDATE`` por clave lógica (misma fila, nuevo id)
+    * Si ``document_id`` ya existe → actualizar fila, nunca INSERT (evita PK duplicada).
+    * Si no existe PK pero existe ``(document_type_id, number)`` con otro id → UPDATE por clave.
+    * Si no existe ni PK ni clave lógica → INSERT.
 
     Devuelve (insertados, actualizados, pares (document_id_antiguo, document_id_nuevo)).
     """
@@ -596,11 +623,12 @@ def _upsert_documents_logical_batch(
     if not keys:
         return 0, 0, id_changes
 
-    by_logical = _load_existing_documents_by_logical(cur, keys, nids)
+    by_logical, existing_pks = _load_existing_documents_by_logical(cur, keys, nids)
 
     insert_rows: list[tuple[Any, ...]] = []
     update_same_rows: list[tuple[Any, ...]] = []
     case_c: list[tuple[Any, ...]] = []
+    update_pk_existing_count = 0
 
     for row in rows:
         try:
@@ -610,11 +638,15 @@ def _upsert_documents_logical_batch(
         except (TypeError, ValueError):
             continue
         key = (tid, num)
+
+        if nid in existing_pks:
+            update_same_rows.append(row)
+            update_pk_existing_count += 1
+            continue
+
         existing_id = by_logical.get(key)
         if existing_id is None:
             insert_rows.append(row)
-        elif existing_id == nid:
-            update_same_rows.append(row)
         else:
             logger.info(
                 "document_id cambiado detectado: old_id=%s new_id=%s document_type_id=%s number=%s",
@@ -632,6 +664,50 @@ def _upsert_documents_logical_batch(
         keys_c = [(int(r[_ROW_DOCUMENT_TYPE_ID]), int(r[_ROW_NUMBER])) for r in case_c]
         _delete_stale_document_rows_holding_new_ids(cur, new_ids_c, keys_c)
         upd_c = _batch_update_documents_by_logical_key(cur, case_c)
+        for r in case_c:
+            existing_pks.add(int(r[0]))
+
+    if insert_rows:
+        reinsert_as_update: list[tuple[Any, ...]] = []
+        still_insert: list[tuple[Any, ...]] = []
+        for r in insert_rows:
+            try:
+                uid = int(r[0])
+            except (TypeError, ValueError):
+                still_insert.append(r)
+                continue
+            if uid in existing_pks:
+                reinsert_as_update.append(r)
+            else:
+                still_insert.append(r)
+        if reinsert_as_update:
+            logger.info(
+                "document_id ocupado tras actualización por clave lógica → UPDATE: %s",
+                len(reinsert_as_update),
+            )
+            update_same_rows.extend(reinsert_as_update)
+        insert_rows = still_insert
+
+    if insert_rows:
+        seen_nid: set[int] = set()
+        deduped_ins: list[tuple[Any, ...]] = []
+        for r in insert_rows:
+            try:
+                uid = int(r[0])
+            except (TypeError, ValueError):
+                deduped_ins.append(r)
+                continue
+            if uid in seen_nid:
+                continue
+            seen_nid.add(uid)
+            deduped_ins.append(r)
+        insert_rows = deduped_ins
+
+    if update_same_rows:
+        by_uid: dict[int, tuple[Any, ...]] = {}
+        for r in update_same_rows:
+            by_uid[int(r[0])] = r
+        update_same_rows = list(by_uid.values())
 
     ins_count = _batch_insert_documents(cur, insert_rows) if insert_rows else 0
     upd_same = (
@@ -640,9 +716,14 @@ def _upsert_documents_logical_batch(
         else 0
     )
 
+    if update_pk_existing_count:
+        logger.info(
+            "document_id ya existe → se actualiza en vez de insertar: %s documento(s)",
+            update_pk_existing_count,
+        )
     logger.info(
-        "documentos (clave lógica): inserts=%s updates_mismo_document_id=%s "
-        "updates_cambio_document_id=%s",
+        "documentos (clave lógica): inserts=%s updates_por_document_id=%s "
+        "updates_cambio_document_id_por_clave=%s",
         len(insert_rows),
         len(update_same_rows),
         len(case_c),
