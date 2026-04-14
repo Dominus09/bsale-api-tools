@@ -8,6 +8,11 @@ Sincronización incremental Bsale → distribuidora.documents / distribuidora.do
 - Detalles: documentos sin filas en document_details, más re-sync forzado si cambió ``document_id``.
 - Re-sync histórico solo documentos: ``run_resync_distribuidora_background`` vía POST
   ``/erp/resync-distribuidora`` (tarea en segundo plano; ventana partida por meses).
+- Estado facturación OC (tipo 33): ``sync_distribuidora_oc_invoice_status`` vía
+  ``GET …/documents/{id}/references.json``; POST ``/erp/sync-oc-invoice-status`` (background).
+- Atributos OC (tipo 33): ``GET …/documents/{id}/attributes.json`` → ``attributes_data`` + columnas
+  derivadas (día entrega, boleta/factura, pago, nombre fantasía); en sync/resync tras cada lote
+  de documentos (``DISTRIBUIDORA_OC_ATTRIBUTES_DISABLED=1`` para omitir).
 """
 
 from __future__ import annotations
@@ -21,7 +26,7 @@ from decimal import Decimal
 from typing import Any
 
 import requests
-from psycopg2.extras import Json, execute_values
+from psycopg2.extras import Json, execute_batch, execute_values
 
 from backend.db import get_connection
 
@@ -48,6 +53,48 @@ OFFICE_ID = 1
 LIMIT_BSALE = 50
 MAX_TRANSIENT = 40
 _ADVISORY_LOCK_KEY = 5_927_184_003
+# Lock aparte para job de facturación de OC (no bloquea sync documental principal).
+_ADVISORY_LOCK_OC_INVOICE = 5_927_184_005
+
+# Orden de compra Bsale (distribuidora): detección de facturación vía /references.json
+DISTRIBUIDORA_OC_DOCUMENT_TYPE_ID = 33
+
+# Heurísticas para derivar columnas desde ``/documents/{id}/attributes.json`` (sin nombres fijos).
+_WEEKDAY_MARKERS = (
+    "lunes",
+    "martes",
+    "miércoles",
+    "miercoles",
+    "jueves",
+    "viernes",
+    "sábado",
+    "sabado",
+    "domingo",
+)
+_PAYMENT_MARKERS = (
+    "efectivo",
+    "transferencia",
+    "transf",
+    "crédito",
+    "credito",
+    "tarjeta",
+    "cheque",
+    "contado",
+    "redcompra",
+    "webpay",
+    "cuenta corriente",
+    "documento",
+)
+_CLIENT_FANTASY_NAME_LABEL_MARKERS = (
+    "fantas",
+    "fantasía",
+    "fantasia",
+    "nombre comercial",
+    "nom comercial",
+    "nom. comercial",
+    "nombre de fantas",
+    "nom de fantas",
+)
 
 # Documentos sin detalle: no escanear toda la historia en el primer sync
 _FIRST_SYNC_CUTOFF = datetime(2010, 1, 1, tzinfo=timezone.utc)
@@ -110,8 +157,20 @@ def _ensure_distribuidora_tables(cur) -> None:
             document_type_name TEXT,
             reference TEXT,
             expiration_date TIMESTAMPTZ,
-            raw_data JSONB
+            raw_data JSONB,
+            is_invoiced BOOLEAN NOT NULL DEFAULT FALSE,
+            attributes_data JSONB,
+            delivery_day TEXT,
+            document_to_generate TEXT,
+            payment_method TEXT,
+            client_name TEXT
         )
+        """
+    )
+    cur.execute(
+        """
+        ALTER TABLE distribuidora.documents
+        ADD COLUMN IF NOT EXISTS is_invoiced BOOLEAN NOT NULL DEFAULT FALSE
         """
     )
     cur.execute(
@@ -146,6 +205,43 @@ def _ensure_distribuidora_tables(cur) -> None:
     )
     cur.execute(
         """
+        ALTER TABLE distribuidora.documents
+        ADD COLUMN IF NOT EXISTS attributes_data JSONB
+        """
+    )
+    cur.execute(
+        """
+        ALTER TABLE distribuidora.documents
+        ADD COLUMN IF NOT EXISTS delivery_day TEXT
+        """
+    )
+    cur.execute(
+        """
+        ALTER TABLE distribuidora.documents
+        ADD COLUMN IF NOT EXISTS document_to_generate TEXT
+        """
+    )
+    cur.execute(
+        """
+        ALTER TABLE distribuidora.documents
+        ADD COLUMN IF NOT EXISTS payment_method TEXT
+        """
+    )
+    cur.execute(
+        """
+        ALTER TABLE distribuidora.documents
+        ADD COLUMN IF NOT EXISTS client_name TEXT
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_distribuidora_documents_oc_delivery_day
+        ON distribuidora.documents (document_type_id, delivery_day)
+        WHERE document_type_id = 33
+        """
+    )
+    cur.execute(
+        """
         CREATE UNIQUE INDEX IF NOT EXISTS uq_distribuidora_documents_logical
         ON distribuidora.documents (company_id, office_id, document_type_id, number)
         WHERE document_type_id IS NOT NULL AND number IS NOT NULL
@@ -155,6 +251,13 @@ def _ensure_distribuidora_tables(cur) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_distribuidora_documents_emission
         ON distribuidora.documents (emission_date)
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_distribuidora_documents_oc_invoiced
+        ON distribuidora.documents (document_type_id, is_invoiced)
+        WHERE document_type_id = 33
         """
     )
     cur.execute(
@@ -310,6 +413,254 @@ def _doc_row_from_bsale(d: dict[str, Any]) -> tuple[Any, ...]:
         _expiration_from_bsale(d),
         Json(d),
     )
+
+
+def _oc_attributes_sync_disabled() -> bool:
+    return os.getenv("DISTRIBUIDORA_OC_ATTRIBUTES_DISABLED", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+def _as_attr_text(v: Any) -> str | None:
+    if v is None:
+        return None
+    if isinstance(v, str):
+        s = v.strip()
+        return s if s else None
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return str(v)
+    return None
+
+
+def _value_contains_weekday(value_lower: str) -> bool:
+    for w in _WEEKDAY_MARKERS:
+        if w in value_lower:
+            return True
+    return False
+
+
+def _value_looks_like_payment(value_lower: str) -> bool:
+    return any(m in value_lower for m in _PAYMENT_MARKERS)
+
+
+def _label_looks_like_client_fantasy_name(name_lower: str) -> bool:
+    return any(m in name_lower for m in _CLIENT_FANTASY_NAME_LABEL_MARKERS)
+
+
+def _attribute_pairs_from_bsale_payload(data: dict[str, Any]) -> list[tuple[str | None, str]]:
+    """Pares (etiqueta, valor) legibles desde la respuesta de attributes.json."""
+    out: list[tuple[str | None, str]] = []
+    items = data.get("items")
+    if isinstance(items, list):
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            nm = _as_attr_text(
+                it.get("name")
+                or it.get("attributeName")
+                or it.get("label")
+                or it.get("title")
+                or it.get("key")
+            )
+            val = _as_attr_text(
+                it.get("value")
+                or it.get("text")
+                or it.get("content")
+                or it.get("stringValue")
+            )
+            if val is not None:
+                out.append((nm, val))
+    if out:
+        return out
+
+    def walk(obj: Any) -> None:
+        if isinstance(obj, dict):
+            val = _as_attr_text(
+                obj.get("value")
+                or obj.get("text")
+                or obj.get("content")
+                or obj.get("stringValue")
+            )
+            nm = _as_attr_text(
+                obj.get("name")
+                or obj.get("attributeName")
+                or obj.get("label")
+                or obj.get("title")
+                or obj.get("key")
+            )
+            if val is not None:
+                out.append((nm, val))
+            for k, v in obj.items():
+                if k in ("href", "url", "links") or v is None:
+                    continue
+                if isinstance(v, (dict, list)):
+                    walk(v)
+        elif isinstance(obj, list):
+            for el in obj:
+                walk(el)
+
+    walk(data)
+    return out
+
+
+def _derive_oc_attribute_columns(
+    pairs: list[tuple[str | None, str]],
+) -> tuple[str | None, str | None, str | None, str | None]:
+    """
+    Sin nombres de atributo fijos: heurística por contenido del valor y, para nombre fantasía,
+    por etiquetas típicas en español.
+    """
+    delivery_day: str | None = None
+    document_to_generate: str | None = None
+    payment_method: str | None = None
+    client_name: str | None = None
+
+    for raw_name, raw_val in pairs:
+        val = raw_val.strip()
+        if not val:
+            continue
+        vl = val.casefold()
+        nl = (raw_name or "").casefold()
+
+        if client_name is None and raw_name and _label_looks_like_client_fantasy_name(nl):
+            client_name = val
+            continue
+
+        if delivery_day is None and _value_contains_weekday(vl):
+            delivery_day = val
+            continue
+
+        if document_to_generate is None:
+            if "factura" in vl:
+                document_to_generate = val
+                continue
+            if "boleta" in vl:
+                document_to_generate = val
+                continue
+
+        if payment_method is None and _value_looks_like_payment(vl):
+            payment_method = val
+            continue
+
+    if payment_method is None:
+        for raw_name, raw_val in pairs:
+            val = raw_val.strip()
+            if not val:
+                continue
+            vl = val.casefold()
+            nl = (raw_name or "").casefold()
+            if _value_looks_like_payment(nl):
+                payment_method = val
+                break
+
+    return delivery_day, document_to_generate, payment_method, client_name
+
+
+def _collect_oc_document_ids_from_rows(rows: list[tuple[Any, ...]]) -> list[int]:
+    out: list[int] = []
+    seen: set[int] = set()
+    for r in rows:
+        try:
+            if int(r[_ROW_DOCUMENT_TYPE_ID]) != DISTRIBUIDORA_OC_DOCUMENT_TYPE_ID:
+                continue
+            did = int(r[0])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if did not in seen:
+            seen.add(did)
+            out.append(did)
+    return out
+
+
+def _batch_update_oc_derived_attributes(
+    cur,
+    rows: list[tuple[int, Any, str | None, str | None, str | None, str | None]],
+) -> None:
+    """
+    ``rows``: (document_id, attributes_data Json, delivery_day, document_to_generate,
+    payment_method, client_name).
+    """
+    if not rows:
+        return
+    execute_batch(
+        cur,
+        """
+        UPDATE distribuidora.documents
+        SET attributes_data = %s,
+            delivery_day = %s,
+            document_to_generate = %s,
+            payment_method = %s,
+            client_name = %s
+        WHERE company_id = %s
+          AND office_id = %s
+          AND document_id = %s
+          AND document_type_id = %s
+        """,
+        [
+            (
+                ad,
+                dd,
+                dg,
+                pm,
+                cn,
+                COMPANY_ID,
+                OFFICE_ID,
+                int(did),
+                DISTRIBUIDORA_OC_DOCUMENT_TYPE_ID,
+            )
+            for did, ad, dd, dg, pm, cn in rows
+        ],
+        page_size=len(rows),
+    )
+
+
+def _sync_oc_attributes_for_document_ids(
+    session: requests.Session,
+    token: str,
+    cur,
+    conn,
+    document_ids: list[int],
+    stats: dict[str, Any],
+) -> None:
+    """Tras persistir documentos: enriquecer OCs (tipo 33) con ``attributes.json``."""
+    if _oc_attributes_sync_disabled() or not document_ids:
+        return
+    chunk_max = int(os.getenv("DISTRIBUIDORA_OC_ATTRIBUTES_BATCH", "40"))
+    chunk_max = max(1, min(chunk_max, 200))
+    pos = 0
+    while pos < len(document_ids):
+        chunk = document_ids[pos : pos + chunk_max]
+        pos += chunk_max
+        batch_rows: list[tuple[int, Any, str | None, str | None, str | None, str | None]] = []
+        for doc_id in chunk:
+            try:
+                data = _bsale_get(
+                    session,
+                    f"{BASE_BSALE}/documents/{doc_id}/attributes.json",
+                    token,
+                )
+            except Exception as e:
+                logger.warning(
+                    "OC attributes doc_id=%s: error Bsale (%s); se deja fila sin actualizar",
+                    doc_id,
+                    e,
+                )
+                continue
+            if not isinstance(data, dict):
+                data = {"_non_object": data}
+            pairs = _attribute_pairs_from_bsale_payload(data)
+            dd, dg, pm, cn = _derive_oc_attribute_columns(pairs)
+            batch_rows.append((doc_id, Json(data), dd, dg, pm, cn))
+        if batch_rows:
+            _batch_update_oc_derived_attributes(cur, batch_rows)
+            conn.commit()
+            stats["oc_attributes_updated"] = stats.get("oc_attributes_updated", 0) + len(
+                batch_rows
+            )
 
 
 def _detail_row(document_id: int, item: dict[str, Any]) -> tuple[Any, ...]:
@@ -856,6 +1207,10 @@ def _resync_bsale_documents_window(
             stats["documents_updated"] += upd
             id_change_pairs.extend(ch)
             conn.commit()
+            oc_ids = _collect_oc_document_ids_from_rows(pending_docs)
+            _sync_oc_attributes_for_document_ids(
+                session, token, cur, conn, oc_ids, stats
+            )
             pending_docs.clear()
 
         offset += LIMIT_BSALE
@@ -866,6 +1221,8 @@ def _resync_bsale_documents_window(
         stats["documents_updated"] += upd
         id_change_pairs.extend(ch)
         conn.commit()
+        oc_ids = _collect_oc_document_ids_from_rows(pending_docs)
+        _sync_oc_attributes_for_document_ids(session, token, cur, conn, oc_ids, stats)
 
 
 def _document_ids_needing_raw_backfill(cur, bsale_ids: list[int]) -> set[int]:
@@ -893,7 +1250,9 @@ def resync_bsale_documents_full(*, strict_token: bool = False) -> dict[str, Any]
     Ventana: ``MIN(emission_date)`` en DB hasta ahora. La API se consulta **por meses**
     (rangos ``emissiondaterange`` acotados) para reducir carga y tiempo por llamada.
     Reutiliza paginación, retry y ``_upsert_documents_batch``. No toca ``sync_state``
-    ni ``document_details``.
+    ni ``document_details``. Tras cada lote de documentos, las OCs (tipo 33) enriquecen
+    columnas de atributos vía ``/documents/{id}/attributes.json`` salvo
+    ``DISTRIBUIDORA_OC_ATTRIBUTES_DISABLED=1``.
 
     ``DISTRIBUIDORA_RESYNC_ONLY_RAW_NULL=1`` (defecto): solo considera filas con
     ``raw_data IS NULL`` para la fecha mínima y para decidir qué ítems de cada
@@ -919,6 +1278,7 @@ def resync_bsale_documents_full(*, strict_token: bool = False) -> dict[str, Any]
             "documents_inserted": 0,
             "documents_updated": 0,
             "documents_id_changed": 0,
+            "oc_attributes_updated": 0,
             "only_missing_raw_data": only_missing_raw,
             "emitidos_desde": None,
             "emitidos_hasta": None,
@@ -937,6 +1297,7 @@ def resync_bsale_documents_full(*, strict_token: bool = False) -> dict[str, Any]
         "documents_inserted": 0,
         "documents_updated": 0,
         "documents_id_changed": 0,
+        "oc_attributes_updated": 0,
         "only_missing_raw_data": only_missing_raw,
         "emitidos_desde": None,
         "emitidos_hasta": None,
@@ -1103,12 +1464,13 @@ def resync_bsale_documents_full(*, strict_token: bool = False) -> dict[str, Any]
         stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
         logger.info(
             "resync_bsale_documents_full OK: api_items=%s processed=%s ins=%s upd=%s "
-            "id_changed=%s raw_null_remaining=%s only_missing_raw=%s duration=%ss",
+            "id_changed=%s oc_attr=%s raw_null_remaining=%s only_missing_raw=%s duration=%ss",
             stats["documents_api_items"],
             stats["documents_processed"],
             stats["documents_inserted"],
             stats["documents_updated"],
             stats["documents_id_changed"],
+            stats.get("oc_attributes_updated", 0),
             stats["raw_data_null_remaining"],
             only_missing_raw,
             stats["duration_seconds"],
@@ -1220,6 +1582,7 @@ def sync_bsale_distribuidora(*, strict_token: bool = False) -> dict[str, Any]:
             "documents_inserted": 0,
             "documents_updated": 0,
             "documents_id_changed": 0,
+            "oc_attributes_updated": 0,
             "details_inserted": 0,
             "details_deleted": 0,
             "duration_seconds": round(time.perf_counter() - t0, 3),
@@ -1240,6 +1603,7 @@ def sync_bsale_distribuidora(*, strict_token: bool = False) -> dict[str, Any]:
         "documents_inserted": 0,
         "documents_updated": 0,
         "documents_id_changed": 0,
+        "oc_attributes_updated": 0,
         "details_inserted": 0,
         "details_deleted": 0,
         "duration_seconds": 0.0,
@@ -1326,6 +1690,10 @@ def sync_bsale_distribuidora(*, strict_token: bool = False) -> dict[str, Any]:
                 stats["documents_updated"] += upd
                 id_change_pairs.extend(ch)
                 conn.commit()
+                oc_ids = _collect_oc_document_ids_from_rows(pending_docs)
+                _sync_oc_attributes_for_document_ids(
+                    session, token, cur, conn, oc_ids, stats
+                )
                 pending_docs.clear()
 
             offset += LIMIT_BSALE
@@ -1336,6 +1704,8 @@ def sync_bsale_distribuidora(*, strict_token: bool = False) -> dict[str, Any]:
             stats["documents_updated"] += upd
             id_change_pairs.extend(ch)
             conn.commit()
+            oc_ids = _collect_oc_document_ids_from_rows(pending_docs)
+            _sync_oc_attributes_for_document_ids(session, token, cur, conn, oc_ids, stats)
 
         new_to_old: dict[int, int] = {}
         for old_id, new_id in id_change_pairs:
@@ -1560,11 +1930,12 @@ def sync_bsale_distribuidora(*, strict_token: bool = False) -> dict[str, Any]:
 
         logger.info(
             "sync_bsale_distribuidora OK: processed=%s ins=%s upd=%s id_changed=%s "
-            "details_ins=%s details_del=%s s=%.2f",
+            "oc_attr=%s details_ins=%s details_del=%s s=%.2f",
             stats["documents_processed"],
             stats["documents_inserted"],
             stats["documents_updated"],
             stats["documents_id_changed"],
+            stats.get("oc_attributes_updated", 0),
             stats["details_inserted"],
             stats["details_deleted"],
             time.perf_counter() - t0,
@@ -1592,6 +1963,181 @@ def sync_bsale_distribuidora(*, strict_token: bool = False) -> dict[str, Any]:
 
     stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
     return stats
+
+
+def _batch_set_is_invoiced(cur, pairs: list[tuple[int, bool]]) -> None:
+    """Actualiza ``is_invoiced`` por ``document_id`` (lote)."""
+    if not pairs:
+        return
+    ids = [int(p[0]) for p in pairs]
+    flags = [bool(p[1]) for p in pairs]
+    cur.execute(
+        """
+        UPDATE distribuidora.documents d
+        SET is_invoiced = v.inv
+        FROM unnest(%s::bigint[], %s::boolean[]) AS v(id, inv)
+        WHERE d.company_id = %s
+          AND d.office_id = %s
+          AND d.document_id = v.id
+        """,
+        (ids, flags, COMPANY_ID, OFFICE_ID),
+    )
+
+
+def sync_distribuidora_oc_invoice_status(*, strict_token: bool = True) -> dict[str, Any]:
+    """
+    Para cada OC (``document_type_id`` = 33) en ``distribuidora.documents``, consulta
+    Bsale ``GET /v1/documents/{id}/references.json`` y actualiza ``is_invoiced``:
+    vacío → false, con ítems → true.
+
+    No debe llamarse en hot path de API; usar POST dedicado o tarea programada.
+    """
+    t0 = time.perf_counter()
+    stats: dict[str, Any] = {
+        "mode": "distribuidora_oc_invoice_status",
+        "oc_examined": 0,
+        "oc_invoiced": 0,
+        "oc_not_invoiced": 0,
+        "duration_seconds": 0.0,
+        "omitido_concurrencia": False,
+        "skipped": False,
+        "skip_reason": None,
+        "errors": None,
+    }
+
+    token = _bsale_token_distribuidora()
+    if not token:
+        if strict_token:
+            raise ValueError(
+                "Ningún token Bsale en el entorno: defina BSALE_TOKEN o BSALE_TOKEN_SPA (p. ej. en Coolify)."
+            )
+        stats["skipped"] = True
+        stats["skip_reason"] = "BSALE_TOKEN / BSALE_TOKEN_SPA no configuradas"
+        stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
+        return stats
+
+    conn = get_connection()
+    got_lock = False
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT pg_try_advisory_lock(%s)", (_ADVISORY_LOCK_OC_INVOICE,))
+        got_lock = bool(cur.fetchone()[0])
+        if not got_lock:
+            stats["omitido_concurrencia"] = True
+            logger.info("sync_distribuidora_oc_invoice_status omitido (lock en uso)")
+            cur.close()
+            stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
+            return stats
+
+        _ensure_distribuidora_tables(cur)
+        conn.commit()
+
+        cur.execute(
+            """
+            SELECT document_id
+            FROM distribuidora.documents
+            WHERE company_id = %s
+              AND office_id = %s
+              AND document_type_id = %s
+            ORDER BY emission_date DESC NULLS LAST, document_id
+            """,
+            (COMPANY_ID, OFFICE_ID, DISTRIBUIDORA_OC_DOCUMENT_TYPE_ID),
+        )
+        oc_ids = [int(r[0]) for r in cur.fetchall()]
+
+        logger.info(
+            "sync_distribuidora_oc_invoice_status INICIO: %s órdenes de compra (tipo %s)",
+            len(oc_ids),
+            DISTRIBUIDORA_OC_DOCUMENT_TYPE_ID,
+        )
+
+        session = requests.Session()
+        chunk: list[tuple[int, bool]] = []
+        batch_size = int(os.getenv("DISTRIBUIDORA_OC_INVOICE_BATCH", "50"))
+
+        for doc_id in oc_ids:
+            stats["oc_examined"] += 1
+            data = _bsale_get(
+                session,
+                f"{BASE_BSALE}/documents/{doc_id}/references.json",
+                token,
+            )
+            items = data.get("items")
+            if items is None:
+                items = data.get("references") or []
+            if not isinstance(items, list):
+                items = []
+            invoiced = len(items) > 0
+            if invoiced:
+                stats["oc_invoiced"] += 1
+            else:
+                stats["oc_not_invoiced"] += 1
+            chunk.append((doc_id, invoiced))
+
+            if len(chunk) >= batch_size:
+                _batch_set_is_invoiced(cur, chunk)
+                conn.commit()
+                chunk.clear()
+
+        if chunk:
+            _batch_set_is_invoiced(cur, chunk)
+            conn.commit()
+
+        cur.close()
+        stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
+        logger.info(
+            "sync_distribuidora_oc_invoice_status OK: examined=%s invoiced=%s "
+            "not_invoiced=%s duration=%ss",
+            stats["oc_examined"],
+            stats["oc_invoiced"],
+            stats["oc_not_invoiced"],
+            stats["duration_seconds"],
+        )
+    except Exception as e:
+        logger.exception("sync_distribuidora_oc_invoice_status: %s", e)
+        stats["errors"] = str(e)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            if got_lock:
+                c2 = conn.cursor()
+                c2.execute("SELECT pg_advisory_unlock(%s)", (_ADVISORY_LOCK_OC_INVOICE,))
+                c2.close()
+        except Exception:
+            logger.exception("sync_distribuidora_oc_invoice_status: unlock")
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    return stats
+
+
+def run_sync_distribuidora_oc_invoice_background() -> None:
+    """Punto de entrada para ``BackgroundTasks`` (POST ``/erp/sync-oc-invoice-status``)."""
+    try:
+        out = sync_distribuidora_oc_invoice_status(strict_token=True)
+    except ValueError as e:
+        logger.error("sync_oc_invoice_background: %s", e)
+        return
+    except Exception:
+        logger.exception("sync_oc_invoice_background: error no controlado")
+        return
+
+    if out.get("skipped"):
+        logger.warning(
+            "sync_oc_invoice_background: omitido (%s)", out.get("skip_reason")
+        )
+    elif out.get("omitido_concurrencia"):
+        logger.warning("sync_oc_invoice_background: lock en uso, no ejecutado")
+    elif out.get("errors"):
+        logger.error("sync_oc_invoice_background: errors=%s", out.get("errors"))
+    else:
+        logger.info("sync_oc_invoice_background: OK %s", out)
 
 
 if __name__ == "__main__":

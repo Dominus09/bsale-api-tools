@@ -165,6 +165,55 @@ def get_orders(
     return out
 
 
+@router.get("/orders/not-invoiced")
+def get_distribuidora_orders_not_invoiced(
+    limit: int = Query(100, ge=1, le=500),
+):
+    """
+    Órdenes de compra Bsale (``distribuidora.documents``, ``document_type_id`` = 33)
+    pendientes de facturar según ``is_invoiced`` (actualizar con POST
+    ``/erp/sync-oc-invoice-status``).
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT
+                document_id,
+                number,
+                emission_date,
+                state,
+                total_amount,
+                COALESCE(is_invoiced, FALSE) AS is_invoiced
+            FROM distribuidora.documents
+            WHERE company_id = 3
+              AND office_id = 1
+              AND document_type_id = 33
+              AND COALESCE(is_invoiced, FALSE) = FALSE
+            ORDER BY emission_date DESC NULLS LAST, document_id DESC
+            LIMIT %s
+            """,
+            (limit,),
+        )
+        rows = cur.fetchall()
+        cols = [d[0] for d in cur.description]
+        out = []
+        for r in rows:
+            d = dict(zip(cols, r))
+            ed = d.get("emission_date")
+            if ed is not None and hasattr(ed, "isoformat"):
+                d["emission_date"] = ed.isoformat()
+            ta = d.get("total_amount")
+            if ta is not None:
+                d["total_amount"] = float(ta)
+            out.append(d)
+        return {"count": len(out), "orders": out}
+    finally:
+        cur.close()
+        conn.close()
+
+
 @router.get("/orders/{order_id}")
 def get_order(order_id: int):
     conn = get_connection()

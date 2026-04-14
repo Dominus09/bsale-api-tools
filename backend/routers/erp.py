@@ -115,3 +115,24 @@ def post_resync_distribuidora(background_tasks: BackgroundTasks):
 
     background_tasks.add_task(run_resync_distribuidora_background)
     return {"status": "resync iniciado"}
+
+
+@router.post("/sync-oc-invoice-status")
+def post_sync_oc_invoice_status(background_tasks: BackgroundTasks):
+    """
+    Actualiza ``is_invoiced`` en ``distribuidora.documents`` para OCs (tipo 33) vía
+    Bsale ``/documents/{id}/references.json``. Tarea en segundo plano; requiere token.
+    """
+    from backend.jobs.sync_bsale_distribuidora import (
+        bsale_token_distribuidora_configured,
+        run_sync_distribuidora_oc_invoice_background,
+    )
+
+    if not bsale_token_distribuidora_configured():
+        raise HTTPException(
+            status_code=400,
+            detail="Defina BSALE_TOKEN o BSALE_TOKEN_SPA para ejecutar el proceso.",
+        )
+
+    background_tasks.add_task(run_sync_distribuidora_oc_invoice_background)
+    return {"status": "sync_oc_invoice_status iniciado"}

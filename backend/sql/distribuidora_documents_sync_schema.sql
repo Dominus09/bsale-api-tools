@@ -36,8 +36,17 @@ CREATE TABLE IF NOT EXISTS distribuidora.documents (
     document_type_name TEXT,
     reference          TEXT,
     expiration_date    TIMESTAMPTZ,
-    raw_data           JSONB
+    raw_data           JSONB,
+    is_invoiced        BOOLEAN NOT NULL DEFAULT FALSE,
+    attributes_data    JSONB,
+    delivery_day       TEXT,
+    document_to_generate TEXT,
+    payment_method     TEXT,
+    client_name        TEXT
 );
+
+ALTER TABLE distribuidora.documents
+    ADD COLUMN IF NOT EXISTS is_invoiced BOOLEAN NOT NULL DEFAULT FALSE;
 
 ALTER TABLE distribuidora.documents
     ADD COLUMN IF NOT EXISTS number BIGINT;
@@ -54,6 +63,21 @@ ALTER TABLE distribuidora.documents
 ALTER TABLE distribuidora.documents
     ADD COLUMN IF NOT EXISTS raw_data JSONB;
 
+ALTER TABLE distribuidora.documents
+    ADD COLUMN IF NOT EXISTS attributes_data JSONB;
+
+ALTER TABLE distribuidora.documents
+    ADD COLUMN IF NOT EXISTS delivery_day TEXT;
+
+ALTER TABLE distribuidora.documents
+    ADD COLUMN IF NOT EXISTS document_to_generate TEXT;
+
+ALTER TABLE distribuidora.documents
+    ADD COLUMN IF NOT EXISTS payment_method TEXT;
+
+ALTER TABLE distribuidora.documents
+    ADD COLUMN IF NOT EXISTS client_name TEXT;
+
 CREATE UNIQUE INDEX IF NOT EXISTS uq_distribuidora_documents_logical
     ON distribuidora.documents (company_id, office_id, document_type_id, number)
     WHERE document_type_id IS NOT NULL AND number IS NOT NULL;
@@ -63,6 +87,14 @@ CREATE INDEX IF NOT EXISTS idx_distribuidora_documents_emission
 
 CREATE INDEX IF NOT EXISTS idx_distribuidora_documents_company_office
     ON distribuidora.documents (company_id, office_id);
+
+CREATE INDEX IF NOT EXISTS idx_distribuidora_documents_oc_invoiced
+    ON distribuidora.documents (document_type_id, is_invoiced)
+    WHERE document_type_id = 33;
+
+CREATE INDEX IF NOT EXISTS idx_distribuidora_documents_oc_delivery_day
+    ON distribuidora.documents (document_type_id, delivery_day)
+    WHERE document_type_id = 33;
 
 CREATE TABLE IF NOT EXISTS distribuidora.document_details (
     detail_id            BIGINT PRIMARY KEY,
