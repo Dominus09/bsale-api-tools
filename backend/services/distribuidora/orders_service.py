@@ -26,12 +26,19 @@ def _serialize_row(d: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _split_csv_terms(raw: str | None) -> list[str]:
+    if not raw or not raw.strip():
+        return []
+    return [t.strip() for t in raw.split(",") if t.strip()]
+
+
 def list_purchase_orders(
     *,
     only_not_invoiced: bool = False,
     emission_date_from: date | None = None,
     emission_date_to: date | None = None,
     delivery_search: str | None = None,
+    municipality: str | None = None,
     client_id: int | None = None,
     user_id: int | None = None,
     limit: int = 500,
@@ -47,9 +54,26 @@ def list_purchase_orders(
     if emission_date_to is not None:
         params.append(emission_date_to)
         where.append("e.emission_date < (%s::date + interval '1 day')")
-    if delivery_search and delivery_search.strip():
-        params.append(f"%{delivery_search.strip()}%")
-        where.append("e.observaciones ILIKE %s")
+    delivery_terms = _split_csv_terms(delivery_search)
+    if delivery_terms:
+        ors: list[str] = []
+        for term in delivery_terms:
+            ors.append("e.observaciones ILIKE %s")
+            params.append(f"%{term}%")
+        where.append("(" + " OR ".join(ors) + ")")
+    muni_keys = _split_csv_terms(municipality)
+    if muni_keys:
+        muni_expr = (
+            "COALESCE(NULLIF(BTRIM(e.municipality), ''), NULLIF(BTRIM(e.city), ''), '')"
+        )
+        muni_parts: list[str] = []
+        for k in muni_keys:
+            if k == "__NONE__":
+                muni_parts.append(f"({muni_expr} = '')")
+            else:
+                params.append(k)
+                muni_parts.append(f"{muni_expr} = %s")
+        where.append("(" + " OR ".join(muni_parts) + ")")
     if client_id is not None:
         params.append(client_id)
         where.append("e.client_id = %s")

@@ -848,6 +848,8 @@ export async function getDistribuidoraOrdersPurchase(params: {
   emission_date_to: string
   only_not_invoiced?: boolean
   user_id?: number
+  delivery_search?: string
+  municipality?: string
   limit?: number
   offset?: number
   signal?: AbortSignal
@@ -857,6 +859,10 @@ export async function getDistribuidoraOrdersPurchase(params: {
   qs.set("emission_date_to", params.emission_date_to)
   if (params.only_not_invoiced) qs.set("only_not_invoiced", "true")
   if (params.user_id != null) qs.set("user_id", String(params.user_id))
+  if (params.delivery_search?.trim())
+    qs.set("delivery_search", params.delivery_search.trim())
+  if (params.municipality?.trim())
+    qs.set("municipality", params.municipality.trim())
   qs.set("limit", String(params.limit ?? 5000))
   qs.set("offset", String(params.offset ?? 0))
   const res = await fetch(`${API_URL}/distribuidora/orders/purchase?${qs}`, {

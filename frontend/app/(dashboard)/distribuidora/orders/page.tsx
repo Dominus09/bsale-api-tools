@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Loader2 } from "lucide-react"
+import { useRouter, useSearchParams } from "next/navigation"
 
 import { OrdersFilters, type MunicipalityOption, type SellerOption } from "@/components/distribuidora/orders/OrdersFilters"
 import { OrdersSummary } from "@/components/distribuidora/orders/OrdersSummary"
@@ -27,12 +28,19 @@ function communeKey(row: DistribuidoraPurchaseOrder): string {
 }
 
 export default function DistribuidoraOrdersPage() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const queryString = searchParams.toString()
   const { addPlanningDocuments, clearPlanningDocuments, planningDocumentIds } =
     useDistribuidoraPlanning()
 
-  const [date, setDate] = useState(() => localIsoDate())
+  const [dateFrom, setDateFrom] = useState(() => localIsoDate())
+  const [dateTo, setDateTo] = useState(() => localIsoDate())
+  const [deliverySearch, setDeliverySearch] = useState("")
   const [sellerUserId, setSellerUserId] = useState("")
   const [municipalityKey, setMunicipalityKey] = useState("")
+  /** Varias comunas desde URL (p. ej. análisis despacho); vacío = no aplica. */
+  const [municipalityCsvFromUrl, setMunicipalityCsvFromUrl] = useState("")
   const [onlyNotInvoiced, setOnlyNotInvoiced] = useState(false)
 
   const [rawItems, setRawItems] = useState<DistribuidoraPurchaseOrder[]>([])
@@ -44,6 +52,43 @@ export default function DistribuidoraOrdersPage() {
   const [feedback, setFeedback] = useState<string | null>(null)
 
   useEffect(() => {
+    const sp = new URLSearchParams(queryString)
+    const d0 =
+      sp.get("emission_date_from")?.trim() || sp.get("date")?.trim()
+    const d1 = sp.get("emission_date_to")?.trim() || sp.get("date_to")?.trim()
+    if (d0) setDateFrom(d0)
+    if (d1) setDateTo(d1)
+    else if (d0) setDateTo(d0)
+    const del =
+      sp.get("delivery_search")?.trim() || sp.get("observaciones")?.trim()
+    if (sp.has("delivery_search") || sp.has("observaciones")) {
+      setDeliverySearch(del ?? "")
+    }
+    const muni = sp.get("municipality")?.trim() || sp.get("ciudad")?.trim()
+    if (sp.has("municipality") || sp.has("ciudad")) {
+      if (muni) {
+        setMunicipalityCsvFromUrl(muni)
+        setMunicipalityKey("")
+      } else {
+        setMunicipalityCsvFromUrl("")
+      }
+    }
+    if (sp.get("only_not_invoiced") === "true") setOnlyNotInvoiced(true)
+    else if (sp.has("only_not_invoiced")) setOnlyNotInvoiced(false)
+  }, [queryString])
+
+  const municipalityApiParam = useMemo(() => {
+    if (municipalityCsvFromUrl.trim()) return municipalityCsvFromUrl.trim()
+    if (municipalityKey.trim()) return municipalityKey.trim()
+    return undefined
+  }, [municipalityCsvFromUrl, municipalityKey])
+
+  const onMunicipalityKeyChange = useCallback((value: string) => {
+    setMunicipalityKey(value)
+    setMunicipalityCsvFromUrl("")
+  }, [])
+
+  useEffect(() => {
     const ac = new AbortController()
     let cancelled = false
     ;(async () => {
@@ -53,10 +98,12 @@ export default function DistribuidoraOrdersPage() {
         const uid =
           sellerUserId === "" ? undefined : parseInt(sellerUserId, 10)
         const res = await getDistribuidoraOrdersPurchase({
-          emission_date_from: date,
-          emission_date_to: date,
+          emission_date_from: dateFrom,
+          emission_date_to: dateTo,
           only_not_invoiced: onlyNotInvoiced,
           user_id: Number.isFinite(uid as number) ? uid : undefined,
+          delivery_search: deliverySearch.trim() || undefined,
+          municipality: municipalityApiParam,
           limit: 5000,
           offset: 0,
           signal: ac.signal,
@@ -77,7 +124,14 @@ export default function DistribuidoraOrdersPage() {
       cancelled = true
       ac.abort()
     }
-  }, [date, sellerUserId, onlyNotInvoiced])
+  }, [
+    dateFrom,
+    dateTo,
+    sellerUserId,
+    onlyNotInvoiced,
+    deliverySearch,
+    municipalityApiParam,
+  ])
 
   const sellerOptions = useMemo((): SellerOption[] => {
     const byUser = new Map<number, string>()
@@ -117,10 +171,7 @@ export default function DistribuidoraOrdersPage() {
     }
   }, [municipalityKey, municipalityOptions])
 
-  const displayItems = useMemo(() => {
-    if (!municipalityKey) return rawItems
-    return rawItems.filter((r) => communeKey(r) === municipalityKey)
-  }, [rawItems, municipalityKey])
+  const displayItems = rawItems
 
   const truncated = total > rawItems.length
 
@@ -154,6 +205,11 @@ export default function DistribuidoraOrdersPage() {
     )
     window.setTimeout(() => setFeedback(null), 5000)
   }, [pageSelectedIds, addPlanningDocuments, planningDocumentIds.size])
+
+  const urlMunicipalityCount = useMemo(() => {
+    if (!municipalityCsvFromUrl.trim()) return 0
+    return municipalityCsvFromUrl.split(",").filter((s) => s.trim()).length
+  }, [municipalityCsvFromUrl])
 
   return (
     <div className="mx-auto flex max-w-[1400px] flex-col gap-6">
@@ -195,25 +251,57 @@ export default function DistribuidoraOrdersPage() {
         </Alert>
       ) : null}
 
+      {urlMunicipalityCount > 1 ? (
+        <Alert>
+          <AlertTitle>Filtro de ciudades</AlertTitle>
+          <AlertDescription className="flex flex-wrap items-center gap-2">
+            <span>
+              Aplicando {urlMunicipalityCount} comunas desde el análisis de despacho.
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setMunicipalityCsvFromUrl("")
+                const sp = new URLSearchParams(queryString)
+                sp.delete("municipality")
+                sp.delete("ciudad")
+                const next = sp.toString()
+                router.replace(
+                  next ? `/distribuidora/orders?${next}` : "/distribuidora/orders",
+                )
+              }}
+            >
+              Quitar filtro URL
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
       {truncated ? (
         <Alert>
           <AlertTitle>Aviso</AlertTitle>
           <AlertDescription>
-            Hay {total} órdenes en el día y se muestran {rawItems.length} (límite
+            Hay {total} órdenes en el rango y se muestran {rawItems.length} (límite
             5000). Ajuste filtros o aumente el límite en API si lo necesita.
           </AlertDescription>
         </Alert>
       ) : null}
 
       <OrdersFilters
-        date={date}
-        onDateChange={setDate}
+        dateFrom={dateFrom}
+        onDateFromChange={setDateFrom}
+        dateTo={dateTo}
+        onDateToChange={setDateTo}
+        deliverySearch={deliverySearch}
+        onDeliverySearchChange={setDeliverySearch}
         sellerOptions={sellerOptions}
         sellerUserId={sellerUserId}
         onSellerUserIdChange={setSellerUserId}
         municipalityOptions={municipalityOptions}
         municipalityKey={municipalityKey}
-        onMunicipalityKeyChange={setMunicipalityKey}
+        onMunicipalityKeyChange={onMunicipalityKeyChange}
         onlyNotInvoiced={onlyNotInvoiced}
         onOnlyNotInvoicedChange={setOnlyNotInvoiced}
         loading={loading}
@@ -239,7 +327,7 @@ export default function DistribuidoraOrdersPage() {
             loading={loading}
           />
           <p className="text-xs text-muted-foreground">
-            Mostrando {displayItems.length} de {rawItems.length} filas cargadas
+            Mostrando {displayItems.length} filas
             {total ? ` · Total servidor: ${total}` : ""}
           </p>
         </>

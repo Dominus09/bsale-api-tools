@@ -21,7 +21,11 @@ def get_orders_purchase(
     emission_date_to: date | None = Query(None),
     delivery_search: str | None = Query(
         None,
-        description="Búsqueda ILIKE dentro de observaciones (ej. martes)",
+        description="ILIKE en observaciones; varios términos separados por coma (OR).",
+    ),
+    municipality: str | None = Query(
+        None,
+        description="Comuna/ciudad exacta (COALESCE municipality,city); varias separadas por coma (OR).",
     ),
     client_id: int | None = Query(None),
     user_id: int | None = Query(None),
@@ -33,6 +37,7 @@ def get_orders_purchase(
         emission_date_from=emission_date_from,
         emission_date_to=emission_date_to,
         delivery_search=delivery_search,
+        municipality=municipality,
         client_id=client_id,
         user_id=user_id,
         limit=limit,

@@ -32,6 +32,7 @@ import {
   CalendarDays,
   ChevronsLeft,
   ChevronsRight,
+  PieChart,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -77,6 +78,11 @@ const navSections: { title: string; items: NavItem[] }[] = [
   {
     title: "Distribuidora",
     items: [
+      {
+        href: "/distribuidora/dispatch-analysis",
+        label: "Análisis despacho",
+        icon: PieChart,
+      },
       { href: "/distribuidora/orders", label: "Órdenes OC", icon: ShoppingCart },
       { href: "/distribuidora/mapa", label: "Mapa rutero", icon: MapPin },
       { href: "/distribuidora/resumen-vendedor", label: "Resumen vendedor", icon: CalendarDays },
