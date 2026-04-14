@@ -66,3 +66,11 @@ CREATE INDEX IF NOT EXISTS idx_distribuidora_references_ref_type
 CREATE INDEX IF NOT EXISTS idx_distribuidora_sync_logs_process_started
     ON distribuidora.sync_logs (process_name, started_at DESC);
 -- +go
+
+CREATE INDEX IF NOT EXISTS idx_distribuidora_route_planning_date_truck
+    ON distribuidora.route_planning (planning_date, truck);
+-- +go
+
+CREATE INDEX IF NOT EXISTS idx_distribuidora_route_planning_document
+    ON distribuidora.route_planning (document_id);
+-- +go

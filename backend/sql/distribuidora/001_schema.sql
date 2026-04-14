@@ -320,5 +320,25 @@ BEGIN
 END $$;
 -- +go
 
+CREATE TABLE IF NOT EXISTS distribuidora.route_planning (
+    id BIGSERIAL PRIMARY KEY,
+    planning_date DATE NOT NULL,
+    document_id BIGINT NOT NULL REFERENCES distribuidora.documents (document_id) ON DELETE CASCADE,
+    oc_number BIGINT,
+    client_id BIGINT,
+    client_name TEXT,
+    municipality TEXT,
+    address TEXT,
+    lat NUMERIC(12, 8),
+    lon NUMERIC(12, 8),
+    total_amount NUMERIC(18, 4),
+    truck TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'planned',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_distribuidora_route_planning_date_document UNIQUE (planning_date, document_id)
+);
+-- +go
+
 DROP INDEX IF EXISTS uq_distribuidora_documents_logical;
 -- +go
