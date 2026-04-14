@@ -46,6 +46,10 @@ WHERE d.company_id = 3
   AND d.document_type_id = 33;
 -- +go
 
+-- Facturación OC: solo boleta (1) o factura (6) como documento FUENTE de la referencia.
+-- La fila dr debe apuntar a la OC: reference_number = número de la OC y tipo referenciado
+-- 33 (orden de compra) o NULL si Bsale no envía reference_document_type_id.
+-- Sin heurísticas por cliente/monto; igualdad estricta reference_number = oc.number.
 CREATE OR REPLACE VIEW distribuidora.v_orders_purchase_status AS
 SELECT
     oc.document_id,
@@ -64,8 +68,13 @@ LEFT JOIN LATERAL (
        AND d.document_type_id IN (1, 6)
        AND d.company_id = oc.company_id
        AND d.office_id = oc.office_id
-    WHERE dr.reference_number IS NOT DISTINCT FROM oc.number
-      AND (dr.reference_document_type_id IS NULL OR dr.reference_document_type_id = 33)
+    WHERE dr.reference_number IS NOT NULL
+      AND oc.number IS NOT NULL
+      AND dr.reference_number = oc.number
+      AND (
+          dr.reference_document_type_id IS NULL
+          OR dr.reference_document_type_id = 33
+      )
     ORDER BY d.emission_date DESC NULLS LAST, d.document_id DESC
     LIMIT 1
 ) inv ON TRUE

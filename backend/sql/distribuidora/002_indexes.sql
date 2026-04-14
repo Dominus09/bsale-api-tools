@@ -53,6 +53,12 @@ CREATE INDEX IF NOT EXISTS idx_distribuidora_references_number
     ON distribuidora.document_references (reference_number);
 -- +go
 
+-- Apoya la vista de facturación (number + tipo referenciado OC o NULL).
+CREATE INDEX IF NOT EXISTS idx_distribuidora_references_number_ref_doc_type
+    ON distribuidora.document_references (reference_number, reference_document_type_id)
+    WHERE reference_number IS NOT NULL;
+-- +go
+
 CREATE INDEX IF NOT EXISTS idx_distribuidora_references_ref_type
     ON distribuidora.document_references (reference_document_type_id);
 -- +go
