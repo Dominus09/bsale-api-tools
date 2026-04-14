@@ -876,6 +876,67 @@ export async function getDistribuidoraOrdersPurchase(params: {
   return res.json() as Promise<DistribuidoraOrdersPurchaseResponse>
 }
 
+/** Fila de GET /distribuidora/orders/purchase/by-document-ids (preview planificación). */
+export type DistribuidoraPlanningPreviewItem = {
+  document_id: number
+  oc_number?: number | null
+  client_id?: number | null
+  client_name?: string | null
+  municipality?: string | null
+  address?: string | null
+  total_amount?: number | null
+  seller?: string | null
+  lat?: number | null
+  lon?: number | null
+}
+
+export async function getDistribuidoraPurchaseByDocumentIds(params: {
+  documentIds: number[]
+  signal?: AbortSignal
+}): Promise<{ items: DistribuidoraPlanningPreviewItem[] }> {
+  const ids = params.documentIds.filter((x) => Number.isFinite(x) && x > 0)
+  if (ids.length === 0) return { items: [] }
+  const qs = new URLSearchParams()
+  qs.set("ids", ids.join(","))
+  const res = await fetch(
+    `${API_URL}/distribuidora/orders/purchase/by-document-ids?${qs}`,
+    {
+      headers: getAuthHeaders(),
+      signal: params.signal,
+    },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar órdenes por id")
+  }
+  return res.json() as Promise<{ items: DistribuidoraPlanningPreviewItem[] }>
+}
+
+export type DistribuidoraRoutePlanningBatchResponse = {
+  inserted: number
+  planning_date: string
+  items: Array<Record<string, unknown>>
+  summaries: Array<Record<string, unknown>>
+  total_clients: number
+  total_amount: number
+}
+
+export async function postDistribuidoraRoutePlanningBatch(body: {
+  planning_date: string
+  assignments: { document_id: number; truck: string }[]
+}): Promise<DistribuidoraRoutePlanningBatchResponse> {
+  const res = await fetch(`${API_URL}/distribuidora/route-planning/batch`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al confirmar planificación")
+  }
+  return res.json() as Promise<DistribuidoraRoutePlanningBatchResponse>
+}
+
 /** Filas genéricas JSON (listados /distribuidora/*). */
 export type DistribuidoraRecord = Record<string, unknown>
 

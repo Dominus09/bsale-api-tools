@@ -9,7 +9,10 @@ from typing import Any
 import psycopg2
 from psycopg2 import errors as pg_errors
 
+from backend.db import get_connection
 from backend.repositories.distribuidora import route_planning_repo as repo
+
+ALLOWED_PLANNING_TRUCKS = frozenset({"HINO 2", "HINO 3", "HINO 4", "HYUNDAI"})
 
 
 class MissingDocumentsError(Exception):
@@ -24,6 +27,11 @@ class AlreadyPlannedError(Exception):
 
     def __init__(self, document_ids: set[int]) -> None:
         self.document_ids = document_ids
+
+
+class InvalidTruckError(Exception):
+    def __init__(self, truck: str) -> None:
+        self.truck = truck
 
 
 def _serialize_row(d: dict[str, Any]) -> dict[str, Any]:
@@ -130,6 +138,73 @@ def create_route_planning(
         "total_clients": total_clients,
         "total_amount": float(total_amount),
         "summary": truck_summary,
+    }
+
+
+def create_route_planning_batch(
+    *,
+    planning_date: date,
+    assignments: list[tuple[int, str]],
+) -> dict[str, Any]:
+    """Varias OC con distinto camión en una sola transacción."""
+    if not assignments:
+        raise ValueError("assignments no puede estar vacío")
+    doc_ids = [int(d) for d, _ in assignments]
+    if len(doc_ids) != len(set(doc_ids)):
+        raise ValueError("Cada document_id debe aparecer una sola vez")
+    for _, truck in assignments:
+        t = truck.strip()
+        if not t:
+            raise ValueError("truck es obligatorio")
+        if t not in ALLOWED_PLANNING_TRUCKS:
+            raise InvalidTruckError(t)
+
+    enriched = repo.fetch_enriched_orders_by_document_ids(doc_ids)
+    found = {int(r["document_id"]) for r in enriched}
+    missing = set(doc_ids) - found
+    if missing:
+        raise MissingDocumentsError(missing)
+
+    already = repo.existing_planned_document_ids(planning_date, doc_ids)
+    if already:
+        raise AlreadyPlannedError(already)
+
+    by_truck: dict[str, list[dict[str, Any]]] = {}
+    by_id = {int(r["document_id"]): r for r in enriched}
+    for doc_id, truck in assignments:
+        t = truck.strip()
+        by_truck.setdefault(t, []).append(by_id[int(doc_id)])
+
+    conn = get_connection()
+    cur = conn.cursor()
+    inserted = 0
+    try:
+        for truck, rows in by_truck.items():
+            inserted += repo.insert_planning_rows_cur(
+                cur,
+                planning_date,
+                truck,
+                rows,
+            )
+        conn.commit()
+    except pg_errors.UniqueViolation:
+        conn.rollback()
+        raise AlreadyPlannedError(set(doc_ids)) from None
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+    payload = get_route_planning(planning_date=planning_date, truck=None)
+    return {
+        "inserted": inserted,
+        "planning_date": planning_date.isoformat(),
+        "items": payload["items"],
+        "summaries": payload["summaries"],
+        "total_clients": payload["total_clients"],
+        "total_amount": payload["total_amount"],
     }
 
 

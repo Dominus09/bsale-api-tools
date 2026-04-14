@@ -35,6 +35,7 @@ def ensure_distribuidora_schema(cur) -> None:
         "003_views.sql",
         "004_route_planning_summary.sql",
         "005_route_picking.sql",
+        "006_route_planning_seller.sql",
     ):
         _run_sql_file(cur, fn)
 

@@ -22,6 +22,7 @@ _ROUTE_PLANNING_SELECT = """
     lat,
     lon,
     total_amount,
+    seller,
     truck,
     status,
     route_name,
@@ -81,11 +82,30 @@ def fetch_enriched_orders_by_document_ids(document_ids: list[int]) -> list[dict[
                 v.address,
                 v.total_amount,
                 c.lat::double precision AS lat,
-                c.lon::double precision AS lon
+                c.lon::double precision AS lon,
+                COALESCE(
+                    NULLIF(BTRIM(v.seller_name), ''),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(u.first_name, '')
+                            || ' '
+                            || COALESCE(u.last_name, '')
+                        ),
+                        ''
+                    ),
+                    NULLIF(BTRIM(u.email), ''),
+                    CASE
+                        WHEN v.user_id IS NULL THEN NULL
+                        ELSE 'Usuario ' || v.user_id::text
+                    END
+                ) AS seller
             FROM distribuidora.v_orders_purchase_enriched v
             LEFT JOIN bsale.clients c
                 ON c.company_id = 3
                AND c.bsale_id = v.client_id
+            LEFT JOIN bsale.bsale_users u
+                ON u.company_id = 3
+               AND u.bsale_id = v.user_id
             WHERE v.document_id IN ({ph})
             """,
             tuple(document_ids),
@@ -119,6 +139,64 @@ def existing_planned_document_ids(planning_date: date, document_ids: list[int]) 
         conn.close()
 
 
+def insert_planning_rows_cur(
+    cur,
+    planning_date: date,
+    truck: str,
+    rows: list[dict[str, Any]],
+    *,
+    route_name: str | None = None,
+    driver: str | None = None,
+    assistant_1: str | None = None,
+    assistant_2: str | None = None,
+    departure_time: str | None = None,
+    general_observation: str | None = None,
+) -> int:
+    if not rows:
+        return 0
+    tpl = [
+        (
+            planning_date,
+            int(r["document_id"]),
+            r.get("oc_number"),
+            r.get("client_id"),
+            r.get("client_name"),
+            r.get("municipality"),
+            r.get("address"),
+            r.get("lat"),
+            r.get("lon"),
+            r.get("total_amount"),
+            r.get("seller"),
+            truck,
+            "planned",
+            route_name,
+            driver,
+            assistant_1,
+            assistant_2,
+            departure_time,
+            general_observation,
+        )
+        for r in rows
+    ]
+    execute_values(
+        cur,
+        """
+        INSERT INTO distribuidora.route_planning (
+            planning_date, document_id, oc_number, client_id, client_name,
+            municipality, address, lat, lon, total_amount, seller, truck, status,
+            route_name, driver, assistant_1, assistant_2, departure_time,
+            general_observation, created_at, updated_at
+        ) VALUES %s
+        """,
+        tpl,
+        template=(
+            "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())"
+        ),
+        page_size=len(tpl),
+    )
+    return len(tpl)
+
+
 def insert_planning_rows(
     planning_date: date,
     truck: str,
@@ -136,47 +214,20 @@ def insert_planning_rows(
     conn = get_connection()
     cur = conn.cursor()
     try:
-        tpl = [
-            (
-                planning_date,
-                int(r["document_id"]),
-                r.get("oc_number"),
-                r.get("client_id"),
-                r.get("client_name"),
-                r.get("municipality"),
-                r.get("address"),
-                r.get("lat"),
-                r.get("lon"),
-                r.get("total_amount"),
-                truck,
-                "planned",
-                route_name,
-                driver,
-                assistant_1,
-                assistant_2,
-                departure_time,
-                general_observation,
-            )
-            for r in rows
-        ]
-        execute_values(
+        n = insert_planning_rows_cur(
             cur,
-            """
-            INSERT INTO distribuidora.route_planning (
-                planning_date, document_id, oc_number, client_id, client_name,
-                municipality, address, lat, lon, total_amount, truck, status,
-                route_name, driver, assistant_1, assistant_2, departure_time,
-                general_observation, created_at, updated_at
-            ) VALUES %s
-            """,
-            tpl,
-            template=(
-                "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())"
-            ),
-            page_size=len(tpl),
+            planning_date,
+            truck,
+            rows,
+            route_name=route_name,
+            driver=driver,
+            assistant_1=assistant_1,
+            assistant_2=assistant_2,
+            departure_time=departure_time,
+            general_observation=general_observation,
         )
         conn.commit()
-        return len(tpl)
+        return n
     except Exception:
         conn.rollback()
         raise

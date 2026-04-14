@@ -33,6 +33,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
   PieChart,
+  Truck,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -84,6 +85,7 @@ const navSections: { title: string; items: NavItem[] }[] = [
         icon: PieChart,
       },
       { href: "/distribuidora/orders", label: "Órdenes OC", icon: ShoppingCart },
+      { href: "/distribuidora/planning", label: "Planificación", icon: Truck },
       { href: "/distribuidora/mapa", label: "Mapa rutero", icon: MapPin },
       { href: "/distribuidora/resumen-vendedor", label: "Resumen vendedor", icon: CalendarDays },
       { href: "/distribuidora/rutero", label: "Rutero", icon: Route },

@@ -9,8 +9,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend.services.distribuidora.route_planning_service import (
     AlreadyPlannedError,
+    InvalidTruckError,
     MissingDocumentsError,
     create_route_planning,
+    create_route_planning_batch,
     delete_route_planning_row,
     get_route_planning,
     list_route_planning_summaries,
@@ -19,6 +21,20 @@ from backend.services.distribuidora.route_planning_service import (
 )
 
 router = APIRouter(prefix="/distribuidora", tags=["Distribuidora planificación rutas"])
+
+
+class PlanningAssignmentItem(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    document_id: int = Field(..., ge=1)
+    truck: str = Field(..., min_length=1)
+
+
+class RoutePlanningBatchBody(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    planning_date: date
+    assignments: list[PlanningAssignmentItem] = Field(..., min_length=1)
 
 
 class RoutePlanningCreateBody(BaseModel):
@@ -57,6 +73,39 @@ class RoutePlanningSummaryPatchBody(BaseModel):
     assistant_2: str | None = None
     departure_time: str | None = None
     general_observation: str | None = None
+
+
+@router.post("/route-planning/batch")
+def post_route_planning_batch(body: RoutePlanningBatchBody):
+    pairs = [(a.document_id, a.truck) for a in body.assignments]
+    try:
+        return create_route_planning_batch(
+            planning_date=body.planning_date,
+            assignments=pairs,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except InvalidTruckError as e:
+        raise HTTPException(
+            status_code=400,
+            detail={"message": "Camión no permitido", "truck": e.truck},
+        ) from e
+    except MissingDocumentsError as e:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Algunos document_id no existen en órdenes de compra",
+                "document_ids": sorted(e.document_ids),
+            },
+        ) from e
+    except AlreadyPlannedError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Ya planificados para esa fecha",
+                "document_ids": sorted(e.document_ids),
+            },
+        ) from e
 
 
 @router.post("/route-planning")
