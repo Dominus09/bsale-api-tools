@@ -104,6 +104,11 @@ function diasCatalogoDesdeMapaResp(data: {
   return Array.from(set).sort((a, b) => a.localeCompare(b, "es"))
 }
 
+function vendedoresCatalogoDesdeMapaResp(data: { vendedores?: unknown }): string[] {
+  if (!Array.isArray(data.vendedores)) return []
+  return data.vendedores.map((x) => String(x ?? "").trim()).filter(Boolean)
+}
+
 function formatearMinutos(m: number): string {
   if (!Number.isFinite(m)) return "—"
   return m >= 120 ? `${(m / 60).toFixed(1)} h` : `${Math.round(m)} min`
@@ -1256,6 +1261,8 @@ export default function MapaRuteroClient() {
   const [clientes, setClientes] = useState<DistribuidoraMapaCliente[]>([])
   const [diasAtencionOpciones, setDiasAtencionOpciones] = useState<string[]>([])
   const [bases, setBases] = useState<DistribuidoraPuntoBase[]>([])
+  /** Distinct vendedores desde API (/mapa); se fusiona con clientes/bases por si hay bases sin filas rutero. */
+  const [vendedoresCatalogo, setVendedoresCatalogo] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
   const [vendedorFilter, setVendedorFilter] = useState(FILTER_ALL)
@@ -1368,6 +1375,7 @@ export default function MapaRuteroClient() {
         setClientes(Array.isArray(data.clientes) ? data.clientes : [])
         setDiasAtencionOpciones(diasCatalogoDesdeMapaResp(data))
         setBases(Array.isArray(data.bases) ? data.bases : [])
+        setVendedoresCatalogo(vendedoresCatalogoDesdeMapaResp(data))
       })
       .catch((e: unknown) => {
         if (!mounted.current) return
@@ -1383,6 +1391,9 @@ export default function MapaRuteroClient() {
 
   const vendedorOptions = useMemo(() => {
     const set = new Set<string>()
+    for (const v0 of vendedoresCatalogo) {
+      if (v0) set.add(v0)
+    }
     for (const c of clientes) {
       const v = c.vendedor?.trim()
       if (v) set.add(v)
@@ -1392,7 +1403,7 @@ export default function MapaRuteroClient() {
       if (v) set.add(v)
     }
     return Array.from(set).sort((a, b) => a.localeCompare(b, "es"))
-  }, [clientes, bases])
+  }, [vendedoresCatalogo, clientes, bases])
 
   const clientesVisibles = useMemo(() => {
     return clientes.filter((c) => {
@@ -1621,6 +1632,7 @@ export default function MapaRuteroClient() {
         if (!mounted.current) return
         setClientes(Array.isArray(mapData.clientes) ? mapData.clientes : [])
         setDiasAtencionOpciones(diasCatalogoDesdeMapaResp(mapData))
+        setVendedoresCatalogo(vendedoresCatalogoDesdeMapaResp(mapData))
         const json = await getDistribuidoraRutaDetalle(vendedorFilter, diaFilter)
         if (!mounted.current) return
         captureMapViewBeforeRutaUpdate(mapRef, orsRouteViewRef)
@@ -1677,6 +1689,7 @@ export default function MapaRuteroClient() {
         if (!mounted.current) return
         setClientes(Array.isArray(mapData.clientes) ? mapData.clientes : [])
         setDiasAtencionOpciones(diasCatalogoDesdeMapaResp(mapData))
+        setVendedoresCatalogo(vendedoresCatalogoDesdeMapaResp(mapData))
         captureMapViewBeforeRutaUpdate(mapRef, orsRouteViewRef)
         setRutaDetalle(json as DistribuidoraRutaDetalleJson)
       } catch (e: unknown) {
@@ -1706,6 +1719,7 @@ export default function MapaRuteroClient() {
       if (!mounted.current) return
       setClientes(Array.isArray(mapData.clientes) ? mapData.clientes : [])
       setDiasAtencionOpciones(diasCatalogoDesdeMapaResp(mapData))
+      setVendedoresCatalogo(vendedoresCatalogoDesdeMapaResp(mapData))
       captureMapViewBeforeRutaUpdate(mapRef, orsRouteViewRef)
       setRutaDetalle(json as DistribuidoraRutaDetalleJson)
     } catch (e: unknown) {
@@ -1735,6 +1749,7 @@ export default function MapaRuteroClient() {
         if (!mounted.current) return
         setClientes(Array.isArray(mapData.clientes) ? mapData.clientes : [])
         setDiasAtencionOpciones(diasCatalogoDesdeMapaResp(mapData))
+        setVendedoresCatalogo(vendedoresCatalogoDesdeMapaResp(mapData))
         captureMapViewBeforeRutaUpdate(mapRef, orsRouteViewRef)
         setRutaDetalle(json as DistribuidoraRutaDetalleJson)
       } catch (e: unknown) {
@@ -1767,6 +1782,7 @@ export default function MapaRuteroClient() {
       if (!mounted.current) return
       setClientes(Array.isArray(mapData.clientes) ? mapData.clientes : [])
       setDiasAtencionOpciones(diasCatalogoDesdeMapaResp(mapData))
+      setVendedoresCatalogo(vendedoresCatalogoDesdeMapaResp(mapData))
       const json = await getDistribuidoraRutaDetalle(vendedorFilter, diaFilter)
       if (!mounted.current) return
       captureMapViewBeforeRutaUpdate(mapRef, orsRouteViewRef)
@@ -1797,6 +1813,7 @@ export default function MapaRuteroClient() {
       if (mounted.current) {
         setClientes(Array.isArray(mapData.clientes) ? mapData.clientes : [])
         setDiasAtencionOpciones(diasCatalogoDesdeMapaResp(mapData))
+        setVendedoresCatalogo(vendedoresCatalogoDesdeMapaResp(mapData))
       }
       const json = await getDistribuidoraRutaDetalle(vendedorFilter, diaFilter)
       if (mounted.current) {

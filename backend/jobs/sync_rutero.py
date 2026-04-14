@@ -155,7 +155,7 @@ def sync_rutero() -> dict[str, Any]:
                 c.dia_atencion,
                 NULL::text,
                 c.nombre_fantasia,
-                c.vendedor,
+                LOWER(TRIM(COALESCE(c.vendedor::text, ''))) AS vendedor,
                 c.rut_clean,
                 c.lat,
                 c.lon,
@@ -189,7 +189,8 @@ def sync_rutero() -> dict[str, Any]:
                 tipo_atencion = EXCLUDED.tipo_atencion,
                 activo = TRUE,
                 orden_manual = CASE
-                    WHEN bsale.rutero.vendedor IS DISTINCT FROM EXCLUDED.vendedor
+                    WHEN LOWER(TRIM(COALESCE(bsale.rutero.vendedor::text, '')))
+                         IS DISTINCT FROM LOWER(TRIM(COALESCE(EXCLUDED.vendedor::text, '')))
                       OR LOWER(TRIM(COALESCE(bsale.rutero.dia_atencion::text, '')))
                          IS DISTINCT FROM LOWER(TRIM(COALESCE(EXCLUDED.dia_atencion::text, '')))
                     THEN NULL
@@ -220,7 +221,7 @@ def sync_rutero() -> dict[str, Any]:
                 c.dia_atencion,
                 NULL::text,
                 c.nombre_fantasia,
-                c.vendedor,
+                LOWER(TRIM(COALESCE(c.vendedor::text, ''))) AS vendedor,
                 NULL::varchar,
                 c.lat,
                 c.lon,
@@ -253,7 +254,8 @@ def sync_rutero() -> dict[str, Any]:
                 tipo_atencion = EXCLUDED.tipo_atencion,
                 activo = TRUE,
                 orden_manual = CASE
-                    WHEN bsale.rutero.vendedor IS DISTINCT FROM EXCLUDED.vendedor
+                    WHEN LOWER(TRIM(COALESCE(bsale.rutero.vendedor::text, '')))
+                         IS DISTINCT FROM LOWER(TRIM(COALESCE(EXCLUDED.vendedor::text, '')))
                       OR LOWER(TRIM(COALESCE(bsale.rutero.dia_atencion::text, '')))
                          IS DISTINCT FROM LOWER(TRIM(COALESCE(EXCLUDED.dia_atencion::text, '')))
                     THEN NULL

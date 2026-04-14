@@ -207,7 +207,7 @@ def get_ruta_del_dia(
     """
     Obtiene la ruta del día en bsale.rutas_dia y las visitas asociadas ordenadas por orden_ruta.
     """
-    v = vendedor.strip()
+    v = (vendedor or "").strip().lower()
     conn = get_connection()
     try:
         cur = conn.cursor()
@@ -227,7 +227,8 @@ def get_ruta_del_dia(
                 created_at,
                 updated_at
             FROM bsale.rutas_dia
-            WHERE fecha = %s AND vendedor = %s
+            WHERE fecha = %s
+              AND LOWER(TRIM(COALESCE(vendedor::text, ''))) = %s
             LIMIT 1
             """,
             (fecha, v),

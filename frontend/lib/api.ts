@@ -597,6 +597,8 @@ export async function getDistribuidoraMapa(): Promise<{
   bases: DistribuidoraPuntoBase[]
   /** Días distintos en rutero (incluye `TELEFONICO` u otros) para selects aunque no vayan al mapa. */
   dias_atencion?: string[]
+  /** Códigos vendedor normalizados (minúsculas, sin espacios extremos), distintos en rutero activo. */
+  vendedores?: string[]
 }> {
   const res = await fetch(`${API_URL}/distribuidora/mapa`, {
     headers: getAuthHeaders(),
@@ -967,12 +969,28 @@ export type DistribuidoraRuteroFila = {
   activo?: boolean | null
 }
 
+/** Query GET /distribuidora/rutero — campos vacíos = sin filtro (todos). */
+export type DistribuidoraRuteroQuery = {
+  vendedor?: string
+  dia?: string
+  tipo?: "terreno" | "telefonico"
+  geo?: "con" | "sin"
+  /** `con` = con dia_atencion asignado; `sin` = sin día (ignora filtro `dia` por día de semana). */
+  dia_estado?: "con" | "sin"
+}
+
 export async function getDistribuidoraRutero(
-  vendedor: string,
-  dia: string,
+  query: DistribuidoraRuteroQuery,
   signal?: AbortSignal,
 ): Promise<DistribuidoraRuteroFila[]> {
-  const qs = new URLSearchParams({ vendedor: vendedor.trim(), dia: dia.trim() })
+  const qs = new URLSearchParams()
+  const v = query.vendedor?.trim()
+  const d = query.dia?.trim()
+  if (v) qs.set("vendedor", v)
+  if (d) qs.set("dia", d)
+  if (query.tipo) qs.set("tipo", query.tipo)
+  if (query.geo) qs.set("geo", query.geo)
+  if (query.dia_estado) qs.set("dia_estado", query.dia_estado)
   const res = await fetch(`${API_URL}/distribuidora/rutero?${qs}`, {
     headers: getAuthHeaders(),
     signal,

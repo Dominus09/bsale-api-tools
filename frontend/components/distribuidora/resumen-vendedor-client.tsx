@@ -268,6 +268,7 @@ function BaseMarkerResumen({ resumen }: { resumen: DistribuidoraResumenVendedorJ
 
 export default function ResumenVendedorClient() {
   const [mapaClientes, setMapaClientes] = useState<DistribuidoraMapaCliente[]>([])
+  const [vendedoresMapa, setVendedoresMapa] = useState<string[]>([])
   const [cargandoMapa, setCargandoMapa] = useState(true)
   const [vendedor, setVendedor] = useState<string>("")
   const [resumen, setResumen] = useState<DistribuidoraResumenVendedorJson | null>(null)
@@ -306,6 +307,11 @@ export default function ResumenVendedorClient() {
         const data = await getDistribuidoraMapa()
         if (cancel) return
         setMapaClientes(data.clientes ?? [])
+        setVendedoresMapa(
+          Array.isArray(data.vendedores)
+            ? data.vendedores.map((x) => String(x ?? "").trim()).filter(Boolean)
+            : [],
+        )
       } catch (e) {
         if (!cancel) setError(e instanceof Error ? e.message : "Error al cargar vendedores")
       } finally {
@@ -319,12 +325,15 @@ export default function ResumenVendedorClient() {
 
   const vendedores = useMemo(() => {
     const s = new Set<string>()
+    for (const v0 of vendedoresMapa) {
+      if (v0) s.add(v0)
+    }
     for (const c of mapaClientes) {
       const v = (c.vendedor ?? "").trim()
       if (v) s.add(v)
     }
     return [...s].sort((a, b) => a.localeCompare(b, "es"))
-  }, [mapaClientes])
+  }, [vendedoresMapa, mapaClientes])
 
   const cargarResumen = useCallback(async (v: string) => {
     if (!v) return

@@ -5,6 +5,8 @@ import { AlertTriangle, Copy, ExternalLink, Loader2 } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Label } from "@/components/ui/label"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Textarea } from "@/components/ui/textarea"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
@@ -62,21 +64,33 @@ function tipoAtencionValorUi(row: DistribuidoraRuteroFila): TipoAtencionUi {
   return esTipoTelefonico(row) ? "TELEFONICO" : "TERRENO"
 }
 
-function tieneGeorefMapa(row: DistribuidoraRuteroFila): boolean {
-  if (esDiaAtencionTelefonico(row.dia_atencion)) return true
-  if (esTipoTelefonico(row)) return true
+/** Coordenadas usables en mapa (no null, finitas, no (0,0)). */
+function tieneCoordsValidas(row: DistribuidoraRuteroFila): boolean {
   const lat = Number(row.lat)
   const lon = Number(row.lon)
-  return Number.isFinite(lat) && Number.isFinite(lon) && lat !== 0 && lon !== 0
+  return Number.isFinite(lat) && Number.isFinite(lon) && !(lat === 0 && lon === 0)
+}
+
+/** Cliente que entraría a ruta en mapa (excl. tipo/día telefónico en Bsale). */
+function requiereGeorefEnMapa(row: DistribuidoraRuteroFila): boolean {
+  if (esTipoTelefonico(row)) return false
+  if (esDiaAtencionTelefonico(row.dia_atencion)) return false
+  return true
+}
+
+function esTelefonicoVisual(row: DistribuidoraRuteroFila): boolean {
+  return esTipoTelefonico(row) || esDiaAtencionTelefonico(row.dia_atencion)
+}
+
+function sinDiaAsignado(row: DistribuidoraRuteroFila): boolean {
+  return !String(row.dia_atencion ?? "").trim()
 }
 
 function alertasOperativas(row: DistribuidoraRuteroFila): string[] {
   const a: string[] = []
   if (!String(row.rut ?? "").trim()) a.push("Sin RUT")
   if (!String(row.direccion ?? "").trim()) a.push("Sin dirección")
-  if (!esDiaAtencionTelefonico(row.dia_atencion) && !esTipoTelefonico(row) && !tieneGeorefMapa(row)) {
-    a.push("Sin georef")
-  }
+  if (requiereGeorefEnMapa(row) && !tieneCoordsValidas(row)) a.push("Sin georef")
   return a
 }
 
@@ -100,9 +114,16 @@ function ordenCelda(row: DistribuidoraRuteroFila): { texto: string; title?: stri
   return { texto: "—", title: "Sin orden manual" }
 }
 
+type FiltroTipoAtencion = "all" | "terreno" | "telefonico"
+type FiltroGeo = "all" | "con" | "sin"
+type FiltroDiaAsignado = "all" | "con" | "sin"
+
 export default function RuteroVistaClient() {
   const [vendedor, setVendedor] = useState("")
   const [dia, setDia] = useState("")
+  const [filtroTipo, setFiltroTipo] = useState<FiltroTipoAtencion>("all")
+  const [filtroGeo, setFiltroGeo] = useState<FiltroGeo>("all")
+  const [filtroDiaAsignado, setFiltroDiaAsignado] = useState<FiltroDiaAsignado>("all")
   const [vendedorOptions, setVendedorOptions] = useState<string[]>([])
   const [diaOptions, setDiaOptions] = useState<string[]>([])
   const [mapLoading, setMapLoading] = useState(true)
@@ -124,7 +145,17 @@ export default function RuteroVistaClient() {
         if (cancelled) return
         const clientes = Array.isArray(data.clientes) ? data.clientes : []
         const bases = Array.isArray(data.bases) ? (data.bases as DistribuidoraPuntoBase[]) : []
-        const vs = new Set(uniqueSorted(clientes.map((c) => c.vendedor)))
+        const vs = new Set<string>()
+        if (Array.isArray(data.vendedores)) {
+          for (const x of data.vendedores) {
+            const v = String(x ?? "").trim()
+            if (v) vs.add(v)
+          }
+        }
+        for (const v0 of uniqueSorted(clientes.map((c) => c.vendedor))) {
+          const v = v0?.trim()
+          if (v) vs.add(v)
+        }
         for (const b of bases) {
           const v = b.vendedor?.trim()
           if (v) vs.add(v)
@@ -143,17 +174,18 @@ export default function RuteroVistaClient() {
     }
   }, [])
 
-  const puedeCargar = vendedor.trim() !== "" && dia.trim() !== ""
-
   const cargarTabla = useCallback(async () => {
-    if (!puedeCargar) {
-      setFilas([])
-      return
-    }
+    if (mapLoading) return
     setTablaLoading(true)
     setTablaError("")
     try {
-      const data = await getDistribuidoraRutero(vendedor, dia)
+      const data = await getDistribuidoraRutero({
+        vendedor: vendedor.trim() || undefined,
+        dia: filtroDiaAsignado === "sin" ? undefined : dia.trim() || undefined,
+        tipo: filtroTipo === "all" ? undefined : filtroTipo,
+        geo: filtroGeo === "all" ? undefined : filtroGeo,
+        dia_estado: filtroDiaAsignado === "all" ? undefined : filtroDiaAsignado,
+      })
       setFilas(data)
     } catch (e: unknown) {
       setFilas([])
@@ -161,11 +193,23 @@ export default function RuteroVistaClient() {
     } finally {
       setTablaLoading(false)
     }
-  }, [puedeCargar, vendedor, dia])
+  }, [mapLoading, vendedor, dia, filtroTipo, filtroGeo, filtroDiaAsignado])
 
   useEffect(() => {
     void cargarTabla()
   }, [cargarTabla])
+
+  const contadores = useMemo(() => {
+    let telefonicos = 0
+    let sinGeoref = 0
+    let sinDia = 0
+    for (const row of filas) {
+      if (esTelefonicoVisual(row)) telefonicos += 1
+      if (sinDiaAsignado(row)) sinDia += 1
+      if (requiereGeorefEnMapa(row) && !tieneCoordsValidas(row)) sinGeoref += 1
+    }
+    return { total: filas.length, telefonicos, sinGeoref, sinDia }
+  }, [filas])
 
   const onTipoAtencionChange = useCallback(
     async (row: DistribuidoraRuteroFila, next: TipoAtencionUi) => {
@@ -234,9 +278,10 @@ export default function RuteroVistaClient() {
       <div>
         <h1 className="text-xl font-semibold tracking-tight text-foreground">Rutero</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Listado por vendedor y día. Estado (terreno / telefónico) se guarda al cambiar el desplegable. Las
-          observaciones se guardan al salir del cuadro de texto. RUT e ID Bsale permiten cruzar con Bsale; enlace
-          opcional vía{" "}
+          Listado completo de <code className="rounded bg-muted px-1 text-xs">bsale.rutero</code> (activos): incluye
+          telefónicos, sin georef y sin día. Usa los filtros para acotar. El mapa de rutas sigue mostrando solo
+          terreno con coordenadas y día asignado. Tipo (terreno / telefónico) se guarda en el desplegable; las
+          observaciones al salir del cuadro de texto. RUT e ID Bsale para cruzar con Bsale; enlace opcional vía{" "}
           <code className="rounded bg-muted px-1 text-xs">NEXT_PUBLIC_BSALE_CLIENT_URL_TEMPLATE</code>{" "}
           (placeholders <code className="text-xs">{"{bsale_id}"}</code> o <code className="text-xs">{"{id}"}</code>
           ).
@@ -249,56 +294,164 @@ export default function RuteroVistaClient() {
         </p>
       ) : null}
 
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="flex flex-col gap-1">
-          <label htmlFor="rutero-vendedor" className="text-sm font-medium text-foreground">
-            Vendedor
-          </label>
-          <select
-            id="rutero-vendedor"
-            className={SELECT_CLASS}
-            value={vendedor}
-            onChange={(e) => setVendedor(e.target.value)}
-            disabled={mapLoading}
-            aria-label="Vendedor"
+      <div className="space-y-4 rounded-lg border border-border bg-card p-4 shadow-sm">
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="flex flex-col gap-1">
+            <label htmlFor="rutero-vendedor" className="text-sm font-medium text-foreground">
+              Vendedor
+            </label>
+            <select
+              id="rutero-vendedor"
+              className={SELECT_CLASS}
+              value={vendedor}
+              onChange={(e) => setVendedor(e.target.value)}
+              disabled={mapLoading}
+              aria-label="Vendedor"
+            >
+              <option value="">Todos</option>
+              {vendedorOptions.map((v) => (
+                <option key={v} value={v}>
+                  {v}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex flex-col gap-1">
+            <label htmlFor="rutero-dia" className="text-sm font-medium text-foreground">
+              Día de atención
+            </label>
+            <select
+              id="rutero-dia"
+              className={SELECT_CLASS}
+              value={dia}
+              onChange={(e) => setDia(e.target.value)}
+              disabled={mapLoading || filtroDiaAsignado === "sin"}
+              aria-label="Día de atención (valor en rutero)"
+              title={
+                filtroDiaAsignado === "sin"
+                  ? "Con filtro «Sin día» no aplica un día concreto."
+                  : "Filtra por valor de dia_atencion (ej. lunes). «Todos» no acota por día."
+              }
+            >
+              <option value="">Todos</option>
+              {diaOptions.map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </select>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={mapLoading || tablaLoading}
+            onClick={() => void cargarTabla()}
           >
-            <option value="">—</option>
-            {vendedorOptions.map((v) => (
-              <option key={v} value={v}>
-                {v}
-              </option>
-            ))}
-          </select>
+            Actualizar
+          </Button>
         </div>
-        <div className="flex flex-col gap-1">
-          <label htmlFor="rutero-dia" className="text-sm font-medium text-foreground">
-            Día
-          </label>
-          <select
-            id="rutero-dia"
-            className={SELECT_CLASS}
-            value={dia}
-            onChange={(e) => setDia(e.target.value)}
-            disabled={mapLoading}
-            aria-label="Día de atención"
-          >
-            <option value="">—</option>
-            {diaOptions.map((d) => (
-              <option key={d} value={d}>
-                {d}
-              </option>
-            ))}
-          </select>
+
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="space-y-2 rounded-md border border-border/80 bg-muted/20 p-3">
+            <p className="text-xs font-medium text-muted-foreground">Tipo atención</p>
+            <RadioGroup
+              value={filtroTipo}
+              onValueChange={(v) => setFiltroTipo(v as FiltroTipoAtencion)}
+              className="flex flex-col gap-2"
+            >
+              <div className="flex items-center gap-2">
+                <RadioGroupItem value="all" id="rut-ft-all" />
+                <Label htmlFor="rut-ft-all" className="cursor-pointer text-sm font-normal">
+                  Todos
+                </Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <RadioGroupItem value="terreno" id="rut-ft-terreno" />
+                <Label htmlFor="rut-ft-terreno" className="cursor-pointer text-sm font-normal">
+                  Terreno
+                </Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <RadioGroupItem value="telefonico" id="rut-ft-tel" />
+                <Label htmlFor="rut-ft-tel" className="cursor-pointer text-sm font-normal">
+                  Telefónico
+                </Label>
+              </div>
+            </RadioGroup>
+          </div>
+          <div className="space-y-2 rounded-md border border-border/80 bg-muted/20 p-3">
+            <p className="text-xs font-medium text-muted-foreground">Georreferencia</p>
+            <RadioGroup
+              value={filtroGeo}
+              onValueChange={(v) => setFiltroGeo(v as FiltroGeo)}
+              className="flex flex-col gap-2"
+            >
+              <div className="flex items-center gap-2">
+                <RadioGroupItem value="all" id="rut-fg-all" />
+                <Label htmlFor="rut-fg-all" className="cursor-pointer text-sm font-normal">
+                  Todos
+                </Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <RadioGroupItem value="con" id="rut-fg-con" />
+                <Label htmlFor="rut-fg-con" className="cursor-pointer text-sm font-normal">
+                  Con georef
+                </Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <RadioGroupItem value="sin" id="rut-fg-sin" />
+                <Label htmlFor="rut-fg-sin" className="cursor-pointer text-sm font-normal">
+                  Sin georef
+                </Label>
+              </div>
+            </RadioGroup>
+          </div>
+          <div className="space-y-2 rounded-md border border-border/80 bg-muted/20 p-3">
+            <p className="text-xs font-medium text-muted-foreground">Día asignado</p>
+            <RadioGroup
+              value={filtroDiaAsignado}
+              onValueChange={(v) => setFiltroDiaAsignado(v as FiltroDiaAsignado)}
+              className="flex flex-col gap-2"
+            >
+              <div className="flex items-center gap-2">
+                <RadioGroupItem value="all" id="rut-fd-all" />
+                <Label htmlFor="rut-fd-all" className="cursor-pointer text-sm font-normal">
+                  Todos
+                </Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <RadioGroupItem value="con" id="rut-fd-con" />
+                <Label htmlFor="rut-fd-con" className="cursor-pointer text-sm font-normal">
+                  Con día
+                </Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <RadioGroupItem value="sin" id="rut-fd-sin" />
+                <Label htmlFor="rut-fd-sin" className="cursor-pointer text-sm font-normal">
+                  Sin día
+                </Label>
+              </div>
+            </RadioGroup>
+          </div>
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={!puedeCargar || tablaLoading}
-          onClick={() => void cargarTabla()}
-        >
-          Actualizar
-        </Button>
+
+        {!mapLoading && !tablaLoading ? (
+          <div className="flex flex-wrap gap-2 text-sm" aria-live="polite">
+            <Badge variant="secondary" className="font-normal">
+              Total {contadores.total}
+            </Badge>
+            <Badge variant="outline" className="border-slate-300 bg-slate-100 font-normal text-slate-800">
+              Telefónicos {contadores.telefonicos}
+            </Badge>
+            <Badge variant="outline" className="border-red-200 bg-red-50 font-normal text-red-900">
+              Sin georef {contadores.sinGeoref}
+            </Badge>
+            <Badge variant="outline" className="border-amber-300 bg-amber-50 font-normal text-amber-950">
+              Sin día {contadores.sinDia}
+            </Badge>
+          </div>
+        ) : null}
       </div>
 
       {tablaError ? (
@@ -307,20 +460,26 @@ export default function RuteroVistaClient() {
         </p>
       ) : null}
 
-      {!puedeCargar ? (
-        <p className="text-sm text-muted-foreground">Elige vendedor y día para ver el listado.</p>
+      {mapLoading ? (
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
+          Cargando opciones de vendedor y día…
+        </div>
       ) : tablaLoading ? (
         <div className="flex items-center gap-2 text-muted-foreground">
           <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
           Cargando rutero…
         </div>
       ) : filas.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No hay clientes activos para ese vendedor y día.</p>
+        <p className="text-sm text-muted-foreground">No hay filas que coincidan con los filtros seleccionados.</p>
       ) : (
         <div className="max-h-[min(75vh,800px)] overflow-auto rounded-md border border-border">
-          <table className="w-full min-w-[1100px] border-collapse text-left text-sm">
+          <table className="w-full min-w-[1240px] border-collapse text-left text-sm">
             <thead className="sticky top-0 z-10 border-b border-border bg-muted/90 backdrop-blur">
               <tr>
+                <th className="whitespace-nowrap px-2 py-2 font-medium" title="Resumen visual">
+                  Indic.
+                </th>
                 <th className="whitespace-nowrap px-3 py-2 font-medium" title={tituloOrden}>
                   Orden
                 </th>
@@ -328,8 +487,9 @@ export default function RuteroVistaClient() {
                 <th className="min-w-[200px] px-3 py-2 font-medium">Cliente</th>
                 <th className="min-w-[220px] px-3 py-2 font-medium">Dirección</th>
                 <th className="whitespace-nowrap px-3 py-2 font-medium">Comuna</th>
+                <th className="whitespace-nowrap px-3 py-2 font-medium">Día</th>
                 <th className="whitespace-nowrap px-3 py-2 font-medium">Teléfono</th>
-                <th className="whitespace-nowrap px-3 py-2 font-medium">Estado</th>
+                <th className="whitespace-nowrap px-3 py-2 font-medium">Tipo</th>
                 <th className="whitespace-nowrap px-3 py-2 font-medium">Georef</th>
                 <th className="min-w-[200px] px-3 py-2 font-medium">Observaciones</th>
                 <th className="whitespace-nowrap px-3 py-2 font-medium">Acciones</th>
@@ -346,28 +506,55 @@ export default function RuteroVistaClient() {
                 const bsaleUrl = urlClienteBsale(bsaleId)
                 const nombreMostrar = row.cliente_nombre ?? "—"
                 const tipoUi = tipoAtencionValorUi(row)
-                const diaTel = esDiaAtencionTelefonico(row.dia_atencion)
+                const telVis = esTelefonicoVisual(row)
+                const sinDia = sinDiaAsignado(row)
+                const sinGeoTerreno = requiereGeorefEnMapa(row) && !tieneCoordsValidas(row)
+                const tituloIndic = [
+                  telVis ? "Telefónico (tipo o día)" : null,
+                  sinDia ? "Sin día de atención asignado" : null,
+                  sinGeoTerreno ? "Sin georreferencia (terreno en mapa)" : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")
                 return (
                   <tr
                     key={row.id}
                     className={cn(
                       "border-b border-border/70 last:border-0",
-                      diaTel && "text-slate-700 dark:text-slate-200",
-                      diaTel && alertas.length === 0 && "bg-slate-50 dark:bg-slate-900/35",
-                      alertas.length > 0 &&
-                        "border-l-4 border-l-amber-500 bg-amber-50/70 dark:bg-amber-950/25",
+                      telVis && "text-slate-800 dark:text-slate-100",
+                      telVis && "bg-slate-100/80 dark:bg-slate-900/45",
+                      !telVis && sinDia && "bg-amber-50/70 dark:bg-amber-950/25",
+                      !telVis && !sinDia && sinGeoTerreno && "bg-red-50/60 dark:bg-red-950/20",
+                      alertas.length > 0 && "border-l-4 border-l-amber-500",
                     )}
                   >
-                    <td className="whitespace-nowrap px-3 py-2 tabular-nums" title={ord.title}>
-                      <div className="flex flex-col items-start gap-1">
-                        <span>{ord.texto}</span>
-                        {diaTel ? (
-                          <span className="inline-flex items-center gap-1 rounded border border-slate-300 bg-slate-200 px-1.5 py-0.5 text-[11px] font-medium text-slate-800 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100">
-                            <span aria-hidden>📞</span>
-                            Telefónico
+                    <td
+                      className="whitespace-nowrap px-2 py-2 text-center text-base leading-none"
+                      title={tituloIndic || undefined}
+                    >
+                      <div className="flex flex-col items-center gap-0.5">
+                        {telVis ? (
+                          <span className="text-slate-600 dark:text-slate-300" aria-hidden>
+                            📞
                           </span>
                         ) : null}
+                        {sinDia ? (
+                          <span className="text-amber-700 dark:text-amber-400" aria-hidden>
+                            📅
+                          </span>
+                        ) : null}
+                        {sinGeoTerreno ? (
+                          <span className="text-red-600 dark:text-red-400" aria-hidden>
+                            ⚠️
+                          </span>
+                        ) : null}
+                        {!telVis && !sinDia && !sinGeoTerreno ? (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        ) : null}
                       </div>
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 tabular-nums" title={ord.title}>
+                      <span>{ord.texto}</span>
                     </td>
                     <td className="whitespace-nowrap px-3 py-2 font-mono text-xs tabular-nums">
                       {rutStr || <span className="text-destructive">—</span>}
@@ -417,6 +604,9 @@ export default function RuteroVistaClient() {
                     <td className="whitespace-nowrap px-3 py-2 text-muted-foreground">
                       {row.municipality?.trim() || "—"}
                     </td>
+                    <td className="max-w-[140px] truncate px-3 py-2 text-muted-foreground" title={row.dia_atencion ?? ""}>
+                      {row.dia_atencion?.trim() || "—"}
+                    </td>
                     <td className="whitespace-nowrap px-3 py-2">{row.telefono?.trim() || "—"}</td>
                     <td className="whitespace-nowrap px-2 py-2">
                       <div
@@ -453,7 +643,11 @@ export default function RuteroVistaClient() {
                         <Badge variant="outline" className="text-muted-foreground">
                           N/A
                         </Badge>
-                      ) : tieneGeorefMapa(row) ? (
+                      ) : esDiaAtencionTelefonico(row.dia_atencion) ? (
+                        <Badge variant="outline" className="text-muted-foreground">
+                          Día tel.
+                        </Badge>
+                      ) : tieneCoordsValidas(row) ? (
                         <Badge className="border-transparent bg-emerald-600 text-white hover:bg-emerald-600/90">
                           OK
                         </Badge>

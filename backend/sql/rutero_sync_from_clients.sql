@@ -6,9 +6,8 @@
 --   1) Revisa mensajes de error: cualquier error en el bloque hace ROLLBACK y 0 filas.
 --   2) Comprueba que haya filas que cumplan el filtro (ejecutar aparte):
 --        SELECT COUNT(*) FROM bsale.clients WHERE company_id = 3;
---        SELECT DISTINCT TRIM(vendedor::text) AS v FROM bsale.clients WHERE company_id = 3;
---   3) Los valores de vendedor deben coincidir exactamente (mayúsculas/espacios) o usa el filtro
---      LOWER(TRIM(...)) del script.
+--        SELECT DISTINCT LOWER(TRIM(COALESCE(vendedor::text, ''))) AS v FROM bsale.clients WHERE company_id = 3;
+--   3) El script persiste vendedor normalizado (LOWER(TRIM(...))) para coincidir con la API y evitar duplicados.
 --
 -- dia_extra en rutero: si bsale.clients tiene columna dia_extra, cambia NULL::text por c.dia_extra
 -- y en el CASE añade: OR LOWER(COALESCE(c.dia_extra, '')) = 'telefonico'.
@@ -56,7 +55,7 @@ SELECT
     c.dia_atencion,
     NULL::text AS dia_extra,
     c.nombre_fantasia,
-    c.vendedor,
+    LOWER(TRIM(COALESCE(c.vendedor::text, ''))) AS vendedor,
     c.rut_clean,
     c.lat,
     c.lon,

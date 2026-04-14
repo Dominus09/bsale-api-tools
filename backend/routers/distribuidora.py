@@ -113,6 +113,11 @@ _SQL_RUTA_EXCL_DIA_TELEFONICO = "\n          AND LOWER(TRIM(COALESCE(dia_atencio
 _SQL_RUTA_EXCL_TIPO_TELEFONICO = "\n          AND LOWER(COALESCE(tipo_atencion::text, '')) <> 'telefonico'"
 
 
+def _norm_vendedor(s: str | None) -> str:
+    """Código vendedor estable (minúsculas, sin espacios extremos); alineado a sync_rutero y filtros SQL."""
+    return (s or "").strip().lower()
+
+
 def _rows_to_json(cur) -> list[dict]:
     columns = [col[0] for col in cur.description]
     return [dict(zip(columns, row)) for row in cur.fetchall()]
@@ -537,6 +542,8 @@ def _persistir_orden_manual_vendedor_dia(
     clientes_con_orden_visita: list[dict],
 ) -> None:
     """NULL orden_manual para el día y asigna según orden_visita (1..n)."""
+    v = _norm_vendedor(v)
+    d = (d or "").strip()
     cur = conn.cursor()
     cur.execute(
         """
@@ -544,7 +551,7 @@ def _persistir_orden_manual_vendedor_dia(
         SET orden_manual = NULL
         WHERE company_id = 3
           AND activo = TRUE
-          AND LOWER(vendedor) = LOWER(%s)
+          AND LOWER(TRIM(COALESCE(vendedor::text, ''))) = %s
           AND LOWER(dia_atencion) = LOWER(%s)
           AND LOWER(COALESCE(tipo_atencion, '')) <> 'telefonico'
         """
@@ -570,7 +577,7 @@ def _persistir_orden_manual_vendedor_dia(
             WHERE company_id = 3
               AND activo = TRUE
               AND bsale_id = %s
-              AND LOWER(vendedor) = LOWER(%s)
+              AND LOWER(TRIM(COALESCE(vendedor::text, ''))) = %s
               AND LOWER(dia_atencion) = LOWER(%s)
               AND LOWER(COALESCE(tipo_atencion, '')) <> 'telefonico'
             """
@@ -584,14 +591,20 @@ def _persistir_orden_manual_vendedor_dia(
 
 def _cargar_contexto_ruta(v: str, d: str) -> tuple[dict, list[dict], list[dict]]:
     """Punto base + filas rutero con orden_manual + todas las filas del día (terreno)."""
+    v = _norm_vendedor(v)
+    d = (d or "").strip()
     conn = get_connection()
     try:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT vendedor, nombre, lat, lon
+            SELECT
+                LOWER(TRIM(COALESCE(vendedor::text, ''))) AS vendedor,
+                nombre,
+                lat,
+                lon
             FROM bsale.puntos_base
-            WHERE LOWER(vendedor) = LOWER(%s)
+            WHERE LOWER(TRIM(COALESCE(vendedor::text, ''))) = %s
             LIMIT 1
             """,
             (v,),
@@ -619,7 +632,7 @@ def _cargar_contexto_ruta(v: str, d: str) -> tuple[dict, list[dict], list[dict]]
                 last_name,
                 nombre_fantasia,
                 phone,
-                vendedor,
+                LOWER(TRIM(COALESCE(vendedor::text, ''))) AS vendedor,
                 dia_atencion,
                 dia_extra,
                 municipality,
@@ -631,7 +644,7 @@ def _cargar_contexto_ruta(v: str, d: str) -> tuple[dict, list[dict], list[dict]]
             FROM bsale.rutero
             WHERE company_id = 3
               AND activo = TRUE
-              AND LOWER(vendedor) = LOWER(%s)
+              AND LOWER(TRIM(COALESCE(vendedor::text, ''))) = %s
               AND LOWER(dia_atencion) = LOWER(%s)
               AND lat IS NOT NULL
               AND lon IS NOT NULL
@@ -655,7 +668,7 @@ def _cargar_contexto_ruta(v: str, d: str) -> tuple[dict, list[dict], list[dict]]
                 last_name,
                 nombre_fantasia,
                 phone,
-                vendedor,
+                LOWER(TRIM(COALESCE(vendedor::text, ''))) AS vendedor,
                 dia_atencion,
                 dia_extra,
                 municipality,
@@ -667,7 +680,7 @@ def _cargar_contexto_ruta(v: str, d: str) -> tuple[dict, list[dict], list[dict]]
             FROM bsale.rutero
             WHERE company_id = 3
               AND activo = TRUE
-              AND LOWER(vendedor) = LOWER(%s)
+              AND LOWER(TRIM(COALESCE(vendedor::text, ''))) = %s
               AND LOWER(dia_atencion) = LOWER(%s)
               AND lat IS NOT NULL
               AND lon IS NOT NULL
@@ -689,6 +702,8 @@ def _cargar_contexto_ruta(v: str, d: str) -> tuple[dict, list[dict], list[dict]]
 
 def _build_ruta_detalle_response(v: str, d: str) -> dict:
     """GET /ruta-detalle: orden manual (>0) si hay; si no, orden por distancia a la base + trazado ORS si existe."""
+    v = _norm_vendedor(v)
+    d = (d or "").strip()
     base, manual_raw, clientes_rows = _cargar_contexto_ruta(v, d)
     clientes = _clientes_validos_coords(clientes_rows)
     manual_valid = _clientes_validos_coords(manual_raw)
@@ -788,6 +803,7 @@ def _sort_dias_semana(distinct: list[str]) -> list[str]:
 
 
 def _dias_rutero_vendedor(v: str) -> list[str]:
+    v = _norm_vendedor(v)
     conn = get_connection()
     try:
         cur = conn.cursor()
@@ -797,14 +813,14 @@ def _dias_rutero_vendedor(v: str) -> list[str]:
             FROM bsale.rutero
             WHERE company_id = 3
               AND activo = TRUE
-              AND LOWER(vendedor) = LOWER(%s)
+              AND LOWER(TRIM(COALESCE(vendedor::text, ''))) = %s
               AND dia_atencion IS NOT NULL
               AND TRIM(dia_atencion) <> ''
             """
             + _SQL_RUTA_EXCL_DIA_TELEFONICO
             + _SQL_RUTA_EXCL_TIPO_TELEFONICO
             + "\n            ",
-            (v.strip(),),
+            (v,),
         )
         raw = [r[0] for r in cur.fetchall() if r and r[0]]
         cur.close()
@@ -817,7 +833,7 @@ def _build_resumen_vendedor_response(v: str) -> dict:
     """
     Resumen semanal: reutiliza GET ruta-detalle / optimización persistida vía orden_manual.
     """
-    v = v.strip()
+    v = _norm_vendedor(v)
     dias = _dias_rutero_vendedor(v)
     salida_dias: list[dict] = []
     km_total = 0.0
@@ -874,7 +890,7 @@ def get_ruta_detalle(
     dia: str = Query(..., min_length=1, description="Día de atención (ej. Lunes), coincide con dia_atencion"),
 ):
     """Ruta: si hay orden_manual se respeta la secuencia (sin reoptimizar); si no, orden local + ORS trazado."""
-    v = vendedor.strip()
+    v = _norm_vendedor(vendedor)
     d = dia.strip()
     if not v or not d:
         raise HTTPException(status_code=400, detail="vendedor y dia son obligatorios")
@@ -897,7 +913,7 @@ def get_ruta_sugerencias(
     Sugerencias puntuales (p. ej. intercambiar dos visitas consecutivas) según la **misma secuencia**
     que expone GET /ruta-detalle (índices alineados con la lista del panel). No persiste cambios.
     """
-    v = vendedor.strip()
+    v = _norm_vendedor(vendedor)
     d = dia.strip()
     if not v or not d:
         raise HTTPException(status_code=400, detail="vendedor y dia son obligatorios")
@@ -959,7 +975,7 @@ def post_optimizar_ruta(body: OptimizarRutaBody):
     Optimización híbrida: orden local (sectores + 2-opt penalizado) y ORS solo para trazar.
     Si `bloque_hasta_indice` está definido, respeta el orden actual en BD hasta ese índice y solo reordena la cola.
     """
-    v = body.vendedor.strip()
+    v = _norm_vendedor(body.vendedor)
     d = body.dia.strip()
     if not v or not d:
         raise HTTPException(status_code=400, detail="vendedor y dia son obligatorios")
@@ -1055,7 +1071,7 @@ def post_optimizar_ruta_desde(body: OptimizarRutaDesdeBody):
     pipeline local (ángulo desde el último fijo + 2-opt). ORS solo traza la ruta completa al final.
     Persiste orden_manual = 1..n para el día.
     """
-    v = body.vendedor.strip()
+    v = _norm_vendedor(body.vendedor)
     d = body.dia.strip()
     if not v or not d:
         raise HTTPException(status_code=400, detail="vendedor y dia son obligatorios")
@@ -1198,7 +1214,7 @@ def get_analisis_km(
         cur.execute(
             """
             SELECT DISTINCT
-                TRIM(COALESCE(vendedor::text, '')) AS vendedor,
+                LOWER(TRIM(COALESCE(vendedor::text, ''))) AS vendedor,
                 TRIM(COALESCE(dia_atencion::text, '')) AS dia
             FROM bsale.rutero
             WHERE company_id = 3
@@ -1220,16 +1236,20 @@ def get_analisis_km(
 
         resultados: list[dict] = []
         for p in pares:
-            v = (p.get("vendedor") or "").strip()
+            v = _norm_vendedor(p.get("vendedor") if isinstance(p.get("vendedor"), str) else None)
             d = (p.get("dia") or "").strip()
             if not v or not d:
                 continue
 
             cur.execute(
                 """
-                SELECT vendedor, nombre, lat, lon
+                SELECT
+                    LOWER(TRIM(COALESCE(vendedor::text, ''))) AS vendedor,
+                    nombre,
+                    lat,
+                    lon
                 FROM bsale.puntos_base
-                WHERE LOWER(vendedor) = LOWER(%s)
+                WHERE LOWER(TRIM(COALESCE(vendedor::text, ''))) = %s
                 LIMIT 1
                 """,
                 (v,),
@@ -1271,7 +1291,7 @@ def get_analisis_km(
                     last_name,
                     nombre_fantasia,
                     phone,
-                    vendedor,
+                    LOWER(TRIM(COALESCE(vendedor::text, ''))) AS vendedor,
                     dia_atencion,
                     dia_extra,
                     municipality,
@@ -1282,7 +1302,7 @@ def get_analisis_km(
                 FROM bsale.rutero
                 WHERE company_id = 3
                   AND activo = TRUE
-                  AND LOWER(vendedor) = LOWER(%s)
+                  AND LOWER(TRIM(COALESCE(vendedor::text, ''))) = %s
                   AND LOWER(dia_atencion) = LOWER(%s)
                   AND lat IS NOT NULL
                   AND lon IS NOT NULL
@@ -1382,7 +1402,7 @@ def get_analisis_km(
 _RUTERO_FILA_SELECT = """
             SELECT
                 r.id,
-                r.vendedor,
+                LOWER(TRIM(COALESCE(r.vendedor::text, ''))) AS vendedor,
                 r.dia_atencion,
                 r.orden_manual,
                 r.orden_ruta,
@@ -1419,35 +1439,108 @@ _RUTERO_FILA_SELECT = """
 """
 
 
+def _rutero_list_where_order(
+    vendedor: str | None,
+    dia: str | None,
+    tipo: str | None,
+    geo: str | None,
+    dia_estado: str | None,
+) -> tuple[str, list]:
+    """
+    Filtros listado rutero (gestión): no excluye telefónicos ni georef (distinto de /mapa u ORS).
+    - vendedor vacío: todos los vendedores.
+    - dia vacío: sin filtrar por valor de dia_atencion (salvo dia_estado con/sin).
+    - dia_estado=sin: solo sin día; en ese caso se ignora el filtro por día concreto.
+    """
+    wheres = ["r.company_id = 3", "r.activo = TRUE"]
+    params: list = []
+
+    v = _norm_vendedor(vendedor) if vendedor else ""
+    if v:
+        wheres.append("LOWER(TRIM(COALESCE(r.vendedor::text, ''))) = %s")
+        params.append(v)
+
+    de = (dia_estado or "").strip().lower()
+    if de == "sin":
+        wheres.append("(r.dia_atencion IS NULL OR TRIM(COALESCE(r.dia_atencion::text, '')) = '')")
+    elif de == "con":
+        wheres.append(
+            "(r.dia_atencion IS NOT NULL AND TRIM(COALESCE(r.dia_atencion::text, '')) <> '')"
+        )
+
+    d_week = (dia or "").strip()
+    if d_week and de != "sin":
+        wheres.append("LOWER(TRIM(COALESCE(r.dia_atencion::text, ''))) = LOWER(TRIM(%s))")
+        params.append(d_week)
+
+    tipo_f = (tipo or "").strip().lower()
+    if tipo_f == "telefonico":
+        wheres.append(
+            "(LOWER(TRIM(COALESCE(r.tipo_atencion::text, ''))) = 'telefonico' "
+            "OR LOWER(TRIM(COALESCE(r.dia_atencion::text, ''))) = 'telefonico')"
+        )
+    elif tipo_f == "terreno":
+        wheres.append(
+            "(LOWER(TRIM(COALESCE(r.tipo_atencion::text, ''))) <> 'telefonico' "
+            "OR r.tipo_atencion IS NULL) "
+            "AND LOWER(TRIM(COALESCE(r.dia_atencion::text, ''))) <> 'telefonico'"
+        )
+
+    geo_f = (geo or "").strip().lower()
+    if geo_f == "con":
+        wheres.append(
+            "r.lat IS NOT NULL AND r.lon IS NOT NULL "
+            "AND NOT (r.lat::double precision = 0 AND r.lon::double precision = 0)"
+        )
+    elif geo_f == "sin":
+        wheres.append(
+            "(r.lat IS NULL OR r.lon IS NULL "
+            "OR (r.lat::double precision = 0 AND r.lon::double precision = 0))"
+        )
+
+    where_sql = " AND ".join(wheres)
+    return where_sql, params
+
+
+_RUTERO_LIST_ORDER = """
+            ORDER BY LOWER(TRIM(COALESCE(r.vendedor::text, ''))),
+                     LOWER(TRIM(COALESCE(r.dia_atencion::text, ''))) NULLS LAST,
+                     r.orden_manual ASC NULLS LAST,
+                     r.orden_ruta ASC NULLS LAST,
+                     r.bsale_id
+            """
+
+
 @router.get("/rutero")
 def get_rutero(
-    vendedor: str = Query(..., min_length=1, description="Código vendedor"),
-    dia: str = Query(..., min_length=1, description="Día de atención (dia_atencion)"),
+    vendedor: str | None = Query(None, description="Código vendedor; omitir o vacío = todos"),
+    dia: str | None = Query(None, description="dia_atencion (ej. lunes); vacío = todos salvo dia_estado"),
+    tipo: str | None = Query(None, description="terreno | telefonico"),
+    geo: str | None = Query(None, description="con | sin — coordenadas en rutero"),
+    dia_estado: str | None = Query(None, description="con | sin — tiene dia_atencion asignado"),
 ):
     """
-    Listado del rutero para un vendedor y día: orden, RUT, bsale_id, nombres, dirección,
-    comuna, teléfono, tipo de atención, coordenadas y observaciones.
+    Listado completo del rutero (gestión): mismas columnas que antes, sin excluir telefónicos
+    ni filas sin georef. Filtros opcionales por query (mapa y ORS siguen acotados aparte).
     """
-    v = vendedor.strip()
-    d = dia.strip()
-    if not v or not d:
-        raise HTTPException(status_code=400, detail="vendedor y dia son obligatorios")
+    tipo_f = (tipo or "").strip().lower()
+    geo_f = (geo or "").strip().lower()
+    de = (dia_estado or "").strip().lower()
+    if tipo_f and tipo_f not in ("terreno", "telefonico"):
+        raise HTTPException(status_code=400, detail="tipo debe ser terreno o telefonico")
+    if geo_f and geo_f not in ("con", "sin"):
+        raise HTTPException(status_code=400, detail="geo debe ser con o sin")
+    if de and de not in ("con", "sin"):
+        raise HTTPException(status_code=400, detail="dia_estado debe ser con o sin")
+
+    where_sql, params = _rutero_list_where_order(vendedor, dia, tipo, geo, dia_estado)
 
     conn = get_connection()
     try:
         cur = conn.cursor()
         cur.execute(
-            _RUTERO_FILA_SELECT
-            + """
-            WHERE r.company_id = 3
-              AND r.activo = TRUE
-              AND LOWER(TRIM(r.vendedor)) = LOWER(TRIM(%s))
-              AND LOWER(TRIM(r.dia_atencion)) = LOWER(TRIM(%s))
-            ORDER BY r.orden_manual ASC NULLS LAST,
-                     r.orden_ruta ASC NULLS LAST,
-                     r.bsale_id
-            """,
-            (v, d),
+            _RUTERO_FILA_SELECT + "\n            WHERE " + where_sql + _RUTERO_LIST_ORDER,
+            tuple(params),
         )
         data = _rows_to_json(cur)
         cur.close()
@@ -1561,7 +1654,7 @@ def get_sin_georef_export():
                     ),
                     'Cliente #' || bsale_id::text
                 ) AS cliente_nombre,
-                vendedor,
+                LOWER(TRIM(COALESCE(vendedor::text, ''))) AS vendedor,
                 municipality,
                 address AS direccion,
                 phone AS telefono
@@ -1569,7 +1662,7 @@ def get_sin_georef_export():
             WHERE company_id = 3
               AND activo = TRUE
               AND (lat IS NULL OR lon IS NULL)
-            ORDER BY vendedor,
+            ORDER BY LOWER(TRIM(COALESCE(vendedor::text, ''))),
                      municipality NULLS LAST,
                      bsale_id
             """
@@ -1626,7 +1719,7 @@ def get_pendientes():
             SELECT *
             FROM bsale.clients
             WHERE company_id = 3
-              AND vendedor IN (
+              AND LOWER(TRIM(COALESCE(vendedor::text, ''))) IN (
                   'vendedor_1',
                   'vendedor_2',
                   'vendedor_3',
@@ -1636,7 +1729,7 @@ def get_pendientes():
                   dia_atencion IS NULL
                   OR TRIM(COALESCE(dia_atencion::text, '')) = ''
               )
-            ORDER BY vendedor,
+            ORDER BY LOWER(TRIM(COALESCE(vendedor::text, ''))),
                      municipality NULLS LAST,
                      bsale_id
             """
@@ -1666,7 +1759,7 @@ def post_pendientes_asignar_dia(body: AsignarDiaAtencionBody):
                 updated = CURRENT_TIMESTAMP
             WHERE company_id = 3
               AND bsale_id = %s
-              AND vendedor IN (
+              AND LOWER(TRIM(COALESCE(vendedor::text, ''))) IN (
                   'vendedor_1',
                   'vendedor_2',
                   'vendedor_3',
@@ -1706,7 +1799,7 @@ def get_resumen_vendedor(
     Todas las rutas (días) del vendedor en un payload para mapa resumen semanal.
     Cada día reutiliza la misma lógica que /ruta-detalle (orden manual persistido u optimización).
     """
-    return _build_resumen_vendedor_response(vendedor.strip())
+    return _build_resumen_vendedor_response(_norm_vendedor(vendedor))
 
 
 @router.get("/mapa")
@@ -1722,7 +1815,7 @@ def get_mapa():
                 last_name,
                 nombre_fantasia,
                 phone,
-                vendedor,
+                LOWER(TRIM(COALESCE(vendedor::text, ''))) AS vendedor,
                 dia_atencion,
                 dia_extra,
                 municipality,
@@ -1758,7 +1851,23 @@ def get_mapa():
 
         cur.execute(
             """
-            SELECT vendedor, nombre, lat, lon
+            SELECT DISTINCT LOWER(TRIM(COALESCE(vendedor::text, ''))) AS v
+            FROM bsale.rutero
+            WHERE company_id = 3
+              AND activo = TRUE
+              AND TRIM(COALESCE(vendedor::text, '')) <> ''
+            ORDER BY 1
+            """
+        )
+        vendedores = [str(r[0]).strip() for r in cur.fetchall() if r and r[0]]
+
+        cur.execute(
+            """
+            SELECT
+                LOWER(TRIM(COALESCE(vendedor::text, ''))) AS vendedor,
+                nombre,
+                lat,
+                lon
             FROM bsale.puntos_base
             """
         )
@@ -1771,13 +1880,14 @@ def get_mapa():
         "clientes": clientes,
         "bases": bases,
         "dias_atencion": dias_atencion,
+        "vendedores": vendedores,
     }
 
 
 @router.post("/orden-manual/reset")
 def post_orden_manual_reset(body: OrdenManualResetBody):
     """Pone orden_manual en NULL para el vendedor y día (vuelve a ORS en ruta-detalle)."""
-    v = body.vendedor.strip()
+    v = _norm_vendedor(body.vendedor)
     d = body.dia.strip()
     if not v or not d:
         raise HTTPException(status_code=400, detail="vendedor y dia son obligatorios")
@@ -1791,7 +1901,7 @@ def post_orden_manual_reset(body: OrdenManualResetBody):
             SET orden_manual = NULL
             WHERE company_id = 3
               AND activo = TRUE
-              AND LOWER(vendedor) = LOWER(%s)
+              AND LOWER(TRIM(COALESCE(vendedor::text, ''))) = %s
               AND LOWER(dia_atencion) = LOWER(%s)
             """
             + _SQL_RUTA_EXCL_DIA_TELEFONICO
@@ -1860,13 +1970,13 @@ def get_resumen():
         cur.execute(
             """
             SELECT
-                vendedor,
+                LOWER(TRIM(COALESCE(vendedor::text, ''))) AS vendedor,
                 dia_atencion,
                 COUNT(*) AS cantidad
             FROM bsale.rutero
             WHERE company_id = 3
               AND activo = TRUE
-            GROUP BY vendedor, dia_atencion
+            GROUP BY LOWER(TRIM(COALESCE(vendedor::text, ''))), dia_atencion
             ORDER BY vendedor, dia_atencion
             """
         )
