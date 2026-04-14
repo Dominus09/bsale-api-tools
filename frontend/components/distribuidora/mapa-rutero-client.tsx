@@ -127,8 +127,11 @@ const FILTER_ALL = "__all__"
 const MAP_CLIENTE_COLOR = "#2563eb"
 const MAP_CLIENTE_COLOR_HOVER = "#ea580c"
 const MAP_CLIENTE_COLOR_HIGHLIGHT = "#16a34a"
-/** Cliente al que la simulación “llegó” (resaltado + popup). */
-const MAP_CLIENTE_COLOR_SIM_VISITA = "#c026d3"
+/** Cliente esperado por la simulación (llegada en orden; verde). */
+const MAP_CLIENTE_COLOR_SIM_VISITA = "#22c55e"
+
+const SIM_DIST_UMBRAL_M = 30
+const SIM_DWELL_MS = 2000
 
 type PolylineDecodeFn = (str: string, precision?: number) => [number, number][]
 
@@ -392,6 +395,10 @@ type SimulacionParada = {
   lon: number
   nombre: string
   orden: number
+  /** 1-based según orden de ruta (para “Cliente X de N”). */
+  paso: number
+  totalParadas: number
+  direccionLinea: string
 }
 
 /** Animación del vehículo sobre la polyline; no bloquea el hilo (setTimeout). */
@@ -432,7 +439,8 @@ function MapaRuteroSimulacionVehiculo({
     const dense = densificarRutaParaSimulacion(map, routePoints, 22)
     let cancelled = false
     let idx = 0
-    const visited = new Set<number>()
+    /** Siguiente cliente en orden de visita (solo se compara distancia a este). */
+    let paradaIdx = 0
     let dwellUntil = 0
     let timeoutId: ReturnType<typeof setTimeout> | undefined
 
@@ -465,20 +473,26 @@ function MapaRuteroSimulacionVehiculo({
       const pos = dense[idx]
       marker.setLatLng(pos)
 
-      for (const p of stops) {
-        if (visited.has(p.bsale_id)) continue
-        const dist = map.distance(pos, L.latLng(p.lat, p.lon))
-        if (dist < 50) {
-          visited.add(p.bsale_id)
-          onVisitClient(p.bsale_id)
-          L.popup({ maxWidth: 300, className: "mapa-rutero-sim-popup", autoPan: true })
-            .setLatLng([p.lat, p.lon])
+      if (paradaIdx < stops.length) {
+        const esperado = stops[paradaIdx]
+        const dist = map.distance(pos, L.latLng(esperado.lat, esperado.lon))
+        if (dist < SIM_DIST_UMBRAL_M) {
+          onVisitClient(esperado.bsale_id)
+          const dir = escapeHtmlTexto(esperado.direccionLinea)
+          const nom = escapeHtmlTexto(esperado.nombre)
+          L.popup({ maxWidth: 320, className: "mapa-rutero-sim-popup", autoPan: true })
+            .setLatLng([esperado.lat, esperado.lon])
             .setContent(
-              `<div class="p-1 text-sm leading-snug"><b>${escapeHtmlTexto(p.nombre)}</b><br/><span style="color:#444">Orden visita: ${Number.isFinite(p.orden) ? p.orden : "—"}</span></div>`,
+              `<div style="padding:6px;font-size:13px;line-height:1.35;color:#0f172a;">
+                <div style="margin-bottom:4px;font-size:11px;font-weight:600;color:#475569">Cliente ${esperado.paso} de ${esperado.totalParadas}</div>
+                <div style="font-weight:600">${nom}</div>
+                <div style="margin-top:2px;font-size:11px;color:#64748b">Orden visita: ${Number.isFinite(esperado.orden) ? esperado.orden : "—"}</div>
+                <div style="margin-top:6px;font-size:11px;color:#334155">${dir}</div>
+              </div>`,
             )
             .openOn(map)
-          dwellUntil = Date.now() + 2200
-          break
+          paradaIdx += 1
+          dwellUntil = Date.now() + SIM_DWELL_MS
         }
       }
 
@@ -1412,20 +1426,33 @@ export default function MapaRuteroClient() {
       return
     }
     const rows = [...rutaLista].sort((a, b) => Number(a.orden_visita ?? 0) - Number(b.orden_visita ?? 0))
-    const stops: SimulacionParada[] = []
-    let seq = 0
+    const filasCoords: RutaClienteFila[] = []
     for (const r of rows) {
       const lat = Number(r.lat)
       const lon = Number(r.lon)
       if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue
-      seq += 1
+      filasCoords.push(r)
+    }
+    const totalParadas = filasCoords.length
+    const stops: SimulacionParada[] = []
+    for (let i = 0; i < filasCoords.length; i++) {
+      const r = filasCoords[i]
+      const lat = Number(r.lat)
+      const lon = Number(r.lon)
       const ov = Number(r.orden_visita ?? r.orden_manual ?? 0)
+      const row = r as Record<string, unknown>
+      const mun = String(row.municipality ?? "").trim()
+      const calle = String(row.direccion ?? row.address ?? row.calle ?? "").trim()
+      const direccionLinea = [calle, mun].filter(Boolean).join(" · ") || "—"
       stops.push({
         bsale_id: Number(r.bsale_id),
         lat,
         lon,
         nombre: nombreClienteDesdeFilaRuta(r),
-        orden: Number.isFinite(ov) && ov > 0 ? ov : seq,
+        orden: Number.isFinite(ov) && ov > 0 ? ov : i + 1,
+        paso: i + 1,
+        totalParadas,
+        direccionLinea,
       })
     }
     if (stops.length === 0) {

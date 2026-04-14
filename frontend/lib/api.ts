@@ -950,15 +950,19 @@ export type DistribuidoraRuteroFila = {
   dia_atencion?: string | null
   orden_manual?: number | null
   orden_ruta?: number | null
-  cliente_nombre?: string | null
+  rut?: string | null
+  bsale_id?: number | null
+  nombre_fantasia?: string | null
+  razon_social?: string | null
+  direccion?: string | null
   municipality?: string | null
+  cliente_nombre?: string | null
   lat?: number | null
   lon?: number | null
   telefono?: string | null
   observaciones?: string | null
   tipo_atencion?: string | null
   activo?: boolean | null
-  bsale_id?: number | null
 }
 
 export async function getDistribuidoraRutero(

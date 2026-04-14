@@ -1336,31 +1336,29 @@ def get_analisis_km(
     return resultados
 
 
-@router.get("/rutero")
-def get_rutero(
-    vendedor: str = Query(..., min_length=1, description="Código vendedor"),
-    dia: str = Query(..., min_length=1, description="Día de atención (dia_atencion)"),
-):
-    """
-    Listado del rutero para un vendedor y día: orden manual (NULL al final), nombre,
-    municipio, teléfono, observaciones. Incluye `tipo_atencion` y `activo` para columna Estado.
-    """
-    v = vendedor.strip()
-    d = dia.strip()
-    if not v or not d:
-        raise HTTPException(status_code=400, detail="vendedor y dia son obligatorios")
-
-    conn = get_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
+# SELECT compartido: GET /rutero y POST /observacion (fila actualizada).
+_RUTERO_FILA_SELECT = """
             SELECT
                 r.id,
                 r.vendedor,
                 r.dia_atencion,
                 r.orden_manual,
                 r.orden_ruta,
+                NULLIF(TRIM(r.rut_clean::text), '') AS rut,
+                r.bsale_id,
+                NULLIF(TRIM(r.nombre_fantasia), '') AS nombre_fantasia,
+                NULLIF(
+                    TRIM(CONCAT_WS(' ', NULLIF(TRIM(r.first_name), ''), NULLIF(TRIM(r.last_name), ''))),
+                    ''
+                ) AS razon_social,
+                NULLIF(TRIM(r.address), '') AS direccion,
+                NULLIF(TRIM(r.municipality), '') AS municipality,
+                NULLIF(TRIM(r.phone), '') AS telefono,
+                r.tipo_atencion,
+                r.activo,
+                r.lat,
+                r.lon,
+                r.observaciones,
                 COALESCE(
                     NULLIF(TRIM(r.nombre_fantasia), ''),
                     NULLIF(
@@ -1374,16 +1372,31 @@ def get_rutero(
                         ''
                     ),
                     'Cliente #' || r.bsale_id::text
-                ) AS cliente_nombre,
-                r.municipality,
-                r.lat,
-                r.lon,
-                r.phone AS telefono,
-                r.observaciones,
-                r.tipo_atencion,
-                r.activo,
-                r.bsale_id
+                ) AS cliente_nombre
             FROM bsale.rutero r
+"""
+
+
+@router.get("/rutero")
+def get_rutero(
+    vendedor: str = Query(..., min_length=1, description="Código vendedor"),
+    dia: str = Query(..., min_length=1, description="Día de atención (dia_atencion)"),
+):
+    """
+    Listado del rutero para un vendedor y día: orden, RUT, bsale_id, nombres, dirección,
+    comuna, teléfono, tipo de atención, coordenadas y observaciones.
+    """
+    v = vendedor.strip()
+    d = dia.strip()
+    if not v or not d:
+        raise HTTPException(status_code=400, detail="vendedor y dia son obligatorios")
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            _RUTERO_FILA_SELECT
+            + """
             WHERE r.company_id = 3
               AND r.activo = TRUE
               AND LOWER(TRIM(r.vendedor)) = LOWER(TRIM(%s))
@@ -1404,38 +1417,7 @@ def get_rutero(
 
 def _rutero_fila_por_id(cur, row_id: int) -> dict | None:
     cur.execute(
-        """
-        SELECT
-            r.id,
-            r.vendedor,
-            r.dia_atencion,
-            r.orden_manual,
-            r.orden_ruta,
-            COALESCE(
-                NULLIF(TRIM(r.nombre_fantasia), ''),
-                NULLIF(
-                    TRIM(
-                        CONCAT_WS(
-                            ' ',
-                            NULLIF(TRIM(r.first_name), ''),
-                            NULLIF(TRIM(r.last_name), '')
-                        )
-                    ),
-                    ''
-                ),
-                'Cliente #' || r.bsale_id::text
-            ) AS cliente_nombre,
-            r.municipality,
-            r.lat,
-            r.lon,
-            r.phone AS telefono,
-            r.observaciones,
-            r.tipo_atencion,
-            r.activo,
-            r.bsale_id
-        FROM bsale.rutero r
-        WHERE r.id = %s AND r.company_id = 3
-        """,
+        _RUTERO_FILA_SELECT + " WHERE r.id = %s AND r.company_id = 3",
         (row_id,),
     )
     rows = _rows_to_json(cur)
