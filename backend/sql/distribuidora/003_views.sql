@@ -1,4 +1,5 @@
--- Vistas de negocio Distribuidora. Separador -- +go
+-- Vistas de negocio Distribuidora. Cada vista termina en ";".
+-- +go es separador para el job Python.
 
 CREATE OR REPLACE VIEW distribuidora.v_oc_attributes_flat AS
 SELECT
@@ -20,7 +21,7 @@ INNER JOIN distribuidora.documents d ON d.document_id = da.document_id
 WHERE d.company_id = 3
   AND d.office_id = 1
   AND d.document_type_id = 33
-GROUP BY da.document_id
+GROUP BY da.document_id;
 -- +go
 
 CREATE OR REPLACE VIEW distribuidora.v_orders_purchase AS
@@ -42,7 +43,7 @@ FROM distribuidora.documents d
 LEFT JOIN distribuidora.v_oc_attributes_flat a ON a.document_id = d.document_id
 WHERE d.company_id = 3
   AND d.office_id = 1
-  AND d.document_type_id = 33
+  AND d.document_type_id = 33;
 -- +go
 
 CREATE OR REPLACE VIEW distribuidora.v_orders_purchase_status AS
@@ -70,7 +71,7 @@ LEFT JOIN LATERAL (
 ) inv ON TRUE
 WHERE oc.company_id = 3
   AND oc.office_id = 1
-  AND oc.document_type_id = 33
+  AND oc.document_type_id = 33;
 -- +go
 
 CREATE OR REPLACE VIEW distribuidora.v_orders_purchase_enriched AS
@@ -94,5 +95,5 @@ SELECT
     s.invoicing_number,
     s.invoicing_emission_date
 FROM distribuidora.v_orders_purchase p
-LEFT JOIN distribuidora.v_orders_purchase_status s ON s.document_id = p.document_id
+LEFT JOIN distribuidora.v_orders_purchase_status s ON s.document_id = p.document_id;
 -- +go

@@ -1,6 +1,8 @@
--- Esquema base Distribuidora / Bsale (ingesta). Ejecutar con sync_repo (separador -- +go).
+-- Esquema base Distribuidora / Bsale (ingesta).
+-- Cada bloque termina en ";" para poder pegar todo el archivo en pgAdmin.
+-- El job Python sigue usando el separador "-- +go" (línea propia) para partir sentencias.
 
-CREATE SCHEMA IF NOT EXISTS distribuidora
+CREATE SCHEMA IF NOT EXISTS distribuidora;
 -- +go
 
 -- Migra sync_state legado (id + last_sync) → modelo por process_name.
@@ -32,7 +34,7 @@ BEGIN
         ALTER TABLE distribuidora.sync_state_new RENAME TO sync_state;
     END IF;
 END
-$mig_sync$
+$mig_sync$;
 -- +go
 
 CREATE TABLE IF NOT EXISTS distribuidora.sync_state (
@@ -43,17 +45,17 @@ CREATE TABLE IF NOT EXISTS distribuidora.sync_state (
     last_message TEXT,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_distribuidora_sync_state_process UNIQUE (process_name)
-)
+);
 -- +go
 
 INSERT INTO distribuidora.sync_state (process_name, last_sync, last_status)
 VALUES ('documents_incremental', TIMESTAMPTZ '2000-01-01 00:00:00+00', NULL)
-ON CONFLICT (process_name) DO NOTHING
+ON CONFLICT (process_name) DO NOTHING;
 -- +go
 
 INSERT INTO distribuidora.sync_state (process_name, last_sync, last_status)
 VALUES ('documents_resync', NULL, NULL)
-ON CONFLICT (process_name) DO NOTHING
+ON CONFLICT (process_name) DO NOTHING;
 -- +go
 
 CREATE TABLE IF NOT EXISTS distribuidora.sync_logs (
@@ -69,7 +71,34 @@ CREATE TABLE IF NOT EXISTS distribuidora.sync_logs (
     attributes_inserted INT NOT NULL DEFAULT 0,
     references_inserted INT NOT NULL DEFAULT 0,
     message TEXT
-)
+);
+-- +go
+
+-- Si ``sync_logs`` ya existía de un esquema viejo, CREATE IF NOT EXISTS no la toca:
+-- añadir columnas faltantes (valores por defecto solo para filas ya existentes).
+ALTER TABLE distribuidora.sync_logs ADD COLUMN IF NOT EXISTS process_name TEXT NOT NULL DEFAULT 'legacy';
+-- +go
+ALTER TABLE distribuidora.sync_logs ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+-- +go
+ALTER TABLE distribuidora.sync_logs ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ;
+-- +go
+ALTER TABLE distribuidora.sync_logs ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'unknown';
+-- +go
+ALTER TABLE distribuidora.sync_logs ADD COLUMN IF NOT EXISTS documents_processed INT NOT NULL DEFAULT 0;
+-- +go
+ALTER TABLE distribuidora.sync_logs ADD COLUMN IF NOT EXISTS documents_inserted INT NOT NULL DEFAULT 0;
+-- +go
+ALTER TABLE distribuidora.sync_logs ADD COLUMN IF NOT EXISTS documents_updated INT NOT NULL DEFAULT 0;
+-- +go
+ALTER TABLE distribuidora.sync_logs ADD COLUMN IF NOT EXISTS details_inserted INT NOT NULL DEFAULT 0;
+-- +go
+ALTER TABLE distribuidora.sync_logs ADD COLUMN IF NOT EXISTS attributes_inserted INT NOT NULL DEFAULT 0;
+-- +go
+ALTER TABLE distribuidora.sync_logs ADD COLUMN IF NOT EXISTS references_inserted INT NOT NULL DEFAULT 0;
+-- +go
+ALTER TABLE distribuidora.sync_logs ADD COLUMN IF NOT EXISTS message TEXT;
+-- +go
+ALTER TABLE distribuidora.sync_logs ALTER COLUMN process_name DROP DEFAULT;
 -- +go
 
 CREATE TABLE IF NOT EXISTS distribuidora.documents (
@@ -100,7 +129,7 @@ CREATE TABLE IF NOT EXISTS distribuidora.documents (
     raw_data JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-)
+);
 -- +go
 
 DO $mig_doc$
@@ -114,69 +143,69 @@ BEGIN
         UPDATE distribuidora.documents SET user_id = vendedor_id WHERE user_id IS NULL;
     END IF;
 END
-$mig_doc$
+$mig_doc$;
 -- +go
 
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS number BIGINT
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS number BIGINT;
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS document_type_id INT
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS document_type_id INT;
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS client_id BIGINT
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS client_id BIGINT;
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS office_id INT NOT NULL DEFAULT 1
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS office_id INT NOT NULL DEFAULT 1;
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS company_id INT NOT NULL DEFAULT 3
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS company_id INT NOT NULL DEFAULT 3;
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS user_id BIGINT
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS user_id BIGINT;
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS emission_date TIMESTAMPTZ
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS emission_date TIMESTAMPTZ;
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS expiration_date TIMESTAMPTZ
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS expiration_date TIMESTAMPTZ;
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS generation_date TIMESTAMPTZ
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS generation_date TIMESTAMPTZ;
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS total_amount NUMERIC(18, 4)
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS total_amount NUMERIC(18, 4);
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS net_amount NUMERIC(18, 4)
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS net_amount NUMERIC(18, 4);
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS tax_amount NUMERIC(18, 4)
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS tax_amount NUMERIC(18, 4);
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS state INT
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS state INT;
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS commercial_state INT
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS commercial_state INT;
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS informed_sii INT
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS informed_sii INT;
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS municipality TEXT
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS municipality TEXT;
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS city TEXT
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS city TEXT;
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS address TEXT
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS address TEXT;
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS token TEXT
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS token TEXT;
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS url_pdf TEXT
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS url_pdf TEXT;
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS url_public_view TEXT
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS url_public_view TEXT;
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS price_list_id BIGINT
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS price_list_id BIGINT;
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS tracking_number TEXT
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS tracking_number TEXT;
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS raw_data JSONB
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS raw_data JSONB;
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 -- +go
-ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
--- +go
-
-UPDATE distribuidora.documents SET raw_data = '{}'::jsonb WHERE raw_data IS NULL
+ALTER TABLE distribuidora.documents ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 -- +go
 
-ALTER TABLE distribuidora.documents ALTER COLUMN raw_data SET DEFAULT '{}'::jsonb
+UPDATE distribuidora.documents SET raw_data = '{}'::jsonb WHERE raw_data IS NULL;
 -- +go
 
-ALTER TABLE distribuidora.documents ALTER COLUMN raw_data SET NOT NULL
+ALTER TABLE distribuidora.documents ALTER COLUMN raw_data SET DEFAULT '{}'::jsonb;
+-- +go
+
+ALTER TABLE distribuidora.documents ALTER COLUMN raw_data SET NOT NULL;
 -- +go
 
 CREATE TABLE IF NOT EXISTS distribuidora.document_details (
@@ -200,30 +229,30 @@ CREATE TABLE IF NOT EXISTS distribuidora.document_details (
     raw_data JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-)
+);
 -- +go
 
-ALTER TABLE distribuidora.document_details ADD COLUMN IF NOT EXISTS variant_description TEXT
+ALTER TABLE distribuidora.document_details ADD COLUMN IF NOT EXISTS variant_description TEXT;
 -- +go
-ALTER TABLE distribuidora.document_details ADD COLUMN IF NOT EXISTS variant_code TEXT
+ALTER TABLE distribuidora.document_details ADD COLUMN IF NOT EXISTS variant_code TEXT;
 -- +go
-ALTER TABLE distribuidora.document_details ADD COLUMN IF NOT EXISTS total_discount NUMERIC(18, 4)
+ALTER TABLE distribuidora.document_details ADD COLUMN IF NOT EXISTS total_discount NUMERIC(18, 4);
 -- +go
-ALTER TABLE distribuidora.document_details ADD COLUMN IF NOT EXISTS related_detail_id BIGINT
+ALTER TABLE distribuidora.document_details ADD COLUMN IF NOT EXISTS related_detail_id BIGINT;
 -- +go
-ALTER TABLE distribuidora.document_details ADD COLUMN IF NOT EXISTS note TEXT
+ALTER TABLE distribuidora.document_details ADD COLUMN IF NOT EXISTS note TEXT;
 -- +go
-ALTER TABLE distribuidora.document_details ADD COLUMN IF NOT EXISTS raw_data JSONB
+ALTER TABLE distribuidora.document_details ADD COLUMN IF NOT EXISTS raw_data JSONB;
 -- +go
-ALTER TABLE distribuidora.document_details ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+ALTER TABLE distribuidora.document_details ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 -- +go
-ALTER TABLE distribuidora.document_details ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
--- +go
-
-UPDATE distribuidora.document_details SET raw_data = '{}'::jsonb WHERE raw_data IS NULL
+ALTER TABLE distribuidora.document_details ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 -- +go
 
-ALTER TABLE distribuidora.document_details ALTER COLUMN raw_data SET NOT NULL
+UPDATE distribuidora.document_details SET raw_data = '{}'::jsonb WHERE raw_data IS NULL;
+-- +go
+
+ALTER TABLE distribuidora.document_details ALTER COLUMN raw_data SET NOT NULL;
 -- +go
 
 CREATE TABLE IF NOT EXISTS distribuidora.document_attributes (
@@ -234,7 +263,7 @@ CREATE TABLE IF NOT EXISTS distribuidora.document_attributes (
     attribute_value TEXT,
     raw_data JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-)
+);
 -- +go
 
 CREATE TABLE IF NOT EXISTS distribuidora.document_references (
@@ -246,7 +275,7 @@ CREATE TABLE IF NOT EXISTS distribuidora.document_references (
     reference_reason TEXT,
     raw_data JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-)
+);
 -- +go
 
 DO $$
@@ -260,7 +289,7 @@ BEGIN
             REFERENCES distribuidora.documents (document_id)
             ON DELETE CASCADE;
     END IF;
-END $$
+END $$;
 -- +go
 
 DO $$
@@ -274,7 +303,7 @@ BEGIN
             REFERENCES distribuidora.documents (document_id)
             ON DELETE CASCADE;
     END IF;
-END $$
+END $$;
 -- +go
 
 DO $$
@@ -288,8 +317,8 @@ BEGIN
             REFERENCES distribuidora.documents (document_id)
             ON DELETE CASCADE;
     END IF;
-END $$
+END $$;
 -- +go
 
-DROP INDEX IF EXISTS uq_distribuidora_documents_logical
+DROP INDEX IF EXISTS uq_distribuidora_documents_logical;
 -- +go
