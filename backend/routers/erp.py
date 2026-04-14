@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from backend.db import get_connection
 
@@ -96,19 +96,22 @@ def post_sync_distribuidora():
 
 
 @router.post("/resync-distribuidora")
-def post_resync_distribuidora():
+def post_resync_distribuidora(background_tasks: BackgroundTasks):
     """
-    Re-sincronización histórica solo de ``distribuidora.documents`` (relleno de columnas
-    nuevas vía upsert). Usa el mismo advisory lock que el sync incremental; no ejecuta
-    sync de detalles. Requiere BSALE_TOKEN o BSALE_TOKEN_SPA.
+    Encola la re-sincronización histórica de ``distribuidora.documents`` en segundo plano
+    (evita timeout 524 en Cloudflare). El trabajo usa el mismo advisory lock que el sync
+    incremental. Requiere BSALE_TOKEN o BSALE_TOKEN_SPA.
     """
-    from backend.jobs.sync_bsale_distribuidora import resync_bsale_documents_full
+    from backend.jobs.sync_bsale_distribuidora import (
+        bsale_token_distribuidora_configured,
+        run_resync_distribuidora_background,
+    )
 
-    try:
-        return resync_bsale_documents_full(strict_token=True)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    except RuntimeError as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+    if not bsale_token_distribuidora_configured():
+        raise HTTPException(
+            status_code=400,
+            detail="Defina BSALE_TOKEN o BSALE_TOKEN_SPA para ejecutar el resync.",
+        )
+
+    background_tasks.add_task(run_resync_distribuidora_background)
+    return {"status": "resync iniciado"}

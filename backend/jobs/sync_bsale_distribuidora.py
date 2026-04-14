@@ -6,7 +6,8 @@ Sincronización incremental Bsale → distribuidora.documents / distribuidora.do
 - Token: ``BSALE_TOKEN`` o, si no existe, ``BSALE_TOKEN_SPA`` (Coolify).
 - Rango de emisión: último sync_state.last_sync − 2 h hasta ahora (timestamps UNIX en Bsale).
 - Detalles: documentos sin filas en document_details, más re-sync forzado si cambió ``document_id``.
-- Re-sync histórico solo documentos: ``resync_bsale_documents_full()`` (POST ``/erp/resync-distribuidora``).
+- Re-sync histórico solo documentos: ``run_resync_distribuidora_background`` vía POST
+  ``/erp/resync-distribuidora`` (tarea en segundo plano; ventana partida por meses).
 """
 
 from __future__ import annotations
@@ -35,6 +36,11 @@ BASE_BSALE = "https://api.bsale.io/v1"
 def _bsale_token_distribuidora() -> str:
     """Token Bsale: prioridad BSALE_TOKEN, alternativa BSALE_TOKEN_SPA."""
     return (os.getenv("BSALE_TOKEN") or "").strip() or (os.getenv("BSALE_TOKEN_SPA") or "").strip()
+
+
+def bsale_token_distribuidora_configured() -> bool:
+    """True si hay token Bsale disponible para sync/resync distribuidora."""
+    return bool(_bsale_token_distribuidora())
 
 
 COMPANY_ID = 3
@@ -787,6 +793,81 @@ def _upsert_documents_batch(
     return ins_total, upd_total, changes
 
 
+def _next_calendar_month_start_utc(d: datetime) -> datetime:
+    """Inicio (UTC) del mes calendario siguiente al mes de ``d``."""
+    y, m = d.year, d.month
+    if m == 12:
+        return datetime(y + 1, 1, 1, tzinfo=timezone.utc)
+    return datetime(y, m + 1, 1, tzinfo=timezone.utc)
+
+
+def _resync_bsale_documents_window(
+    cur,
+    conn,
+    session: requests.Session,
+    token: str,
+    desde_ts: int,
+    hasta_ts: int,
+    only_missing_raw: bool,
+    stats: dict[str, Any],
+    id_change_pairs: list[tuple[int, int]],
+) -> None:
+    """Una ventana ``[desde_ts, hasta_ts]`` (UNIX): paginación Bsale + upserts."""
+    offset = 0
+    pending_docs: list[tuple[Any, ...]] = []
+
+    while True:
+        params = {
+            "limit": LIMIT_BSALE,
+            "offset": offset,
+            "emissiondaterange": f"[{desde_ts},{hasta_ts}]",
+        }
+        data = _bsale_get(session, f"{BASE_BSALE}/documents.json", token, params)
+        items = data.get("items") or []
+        if not items:
+            break
+
+        page_candidates: list[dict[str, Any]] = []
+        for d in items:
+            oid = (d.get("office") or {}).get("id")
+            if oid is None:
+                continue
+            if int(oid) != OFFICE_ID:
+                continue
+            stats["documents_api_items"] += 1
+            page_candidates.append(d)
+
+        if only_missing_raw and page_candidates:
+            ids = [int(x["id"]) for x in page_candidates]
+            need_ids = _document_ids_needing_raw_backfill(cur, ids)
+            for d in page_candidates:
+                if int(d["id"]) not in need_ids:
+                    continue
+                pending_docs.append(_doc_row_from_bsale(d))
+                stats["documents_processed"] += 1
+        else:
+            for d in page_candidates:
+                pending_docs.append(_doc_row_from_bsale(d))
+                stats["documents_processed"] += 1
+
+        if len(pending_docs) >= 200:
+            ins, upd, ch = _upsert_documents_batch(cur, pending_docs)
+            stats["documents_inserted"] += ins
+            stats["documents_updated"] += upd
+            id_change_pairs.extend(ch)
+            conn.commit()
+            pending_docs.clear()
+
+        offset += LIMIT_BSALE
+
+    if pending_docs:
+        ins, upd, ch = _upsert_documents_batch(cur, pending_docs)
+        stats["documents_inserted"] += ins
+        stats["documents_updated"] += upd
+        id_change_pairs.extend(ch)
+        conn.commit()
+
+
 def _document_ids_needing_raw_backfill(cur, bsale_ids: list[int]) -> set[int]:
     """document_id en DB (distribuidora) con raw_data aún NULL."""
     if not bsale_ids:
@@ -809,9 +890,10 @@ def resync_bsale_documents_full(*, strict_token: bool = False) -> dict[str, Any]
     """
     Re-sincronización histórica de documentos (Bsale → ``distribuidora.documents``).
 
-    Ventana: ``MIN(emission_date)`` en DB hasta ahora; reutiliza paginación, retry y
-    ``_upsert_documents_batch`` (sin duplicar por clave lógica / PK). No toca
-    ``sync_state`` ni ``document_details``.
+    Ventana: ``MIN(emission_date)`` en DB hasta ahora. La API se consulta **por meses**
+    (rangos ``emissiondaterange`` acotados) para reducir carga y tiempo por llamada.
+    Reutiliza paginación, retry y ``_upsert_documents_batch``. No toca ``sync_state``
+    ni ``document_details``.
 
     ``DISTRIBUIDORA_RESYNC_ONLY_RAW_NULL=1`` (defecto): solo considera filas con
     ``raw_data IS NULL`` para la fecha mínima y para decidir qué ítems de cada
@@ -938,69 +1020,66 @@ def resync_bsale_documents_full(*, strict_token: bool = False) -> dict[str, Any]
         if min_em.tzinfo is None:
             min_em = min_em.replace(tzinfo=timezone.utc)
         now = datetime.now(timezone.utc)
-        desde_ts = int(min_em.timestamp())
-        hasta_ts = int(now.timestamp())
-        if desde_ts >= hasta_ts:
-            desde_ts = hasta_ts - 3600
 
         stats["emitidos_desde"] = min_em.isoformat()
         stats["emitidos_hasta"] = now.isoformat()
 
+        logger.info(
+            "resync_bsale_documents_full INICIO: desde=%s hasta=%s only_missing_raw=%s",
+            stats["emitidos_desde"],
+            stats["emitidos_hasta"],
+            only_missing_raw,
+        )
+
         session = requests.Session()
-        offset = 0
-        pending_docs: list[tuple[Any, ...]] = []
         id_change_pairs: list[tuple[int, int]] = []
 
-        while True:
-            params = {
-                "limit": LIMIT_BSALE,
-                "offset": offset,
-                "emissiondaterange": f"[{desde_ts},{hasta_ts}]",
-            }
-            data = _bsale_get(session, f"{BASE_BSALE}/documents.json", token, params)
-            items = data.get("items") or []
-            if not items:
-                break
+        chunk_start = min_em
+        month_idx = 0
+        while chunk_start < now:
+            month_floor = chunk_start.replace(
+                day=1, hour=0, minute=0, second=0, microsecond=0
+            )
+            chunk_end = min(_next_calendar_month_start_utc(month_floor), now)
+            w_desde = int(chunk_start.timestamp())
+            w_hasta = int(chunk_end.timestamp())
+            if w_desde >= w_hasta:
+                chunk_start = chunk_end
+                continue
 
-            page_candidates: list[dict[str, Any]] = []
-            for d in items:
-                oid = (d.get("office") or {}).get("id")
-                if oid is None:
-                    continue
-                if int(oid) != OFFICE_ID:
-                    continue
-                stats["documents_api_items"] += 1
-                page_candidates.append(d)
+            month_idx += 1
+            logger.info(
+                "resync_bsale_documents_full: mes %s rango_emisión [%s, %s) unix=[%s,%s]",
+                month_idx,
+                chunk_start.isoformat(),
+                chunk_end.isoformat(),
+                w_desde,
+                w_hasta,
+            )
 
-            if only_missing_raw and page_candidates:
-                ids = [int(x["id"]) for x in page_candidates]
-                need_ids = _document_ids_needing_raw_backfill(cur, ids)
-                for d in page_candidates:
-                    if int(d["id"]) not in need_ids:
-                        continue
-                    pending_docs.append(_doc_row_from_bsale(d))
-                    stats["documents_processed"] += 1
-            else:
-                for d in page_candidates:
-                    pending_docs.append(_doc_row_from_bsale(d))
-                    stats["documents_processed"] += 1
+            proc_before = stats["documents_processed"]
+            _resync_bsale_documents_window(
+                cur,
+                conn,
+                session,
+                token,
+                w_desde,
+                w_hasta,
+                only_missing_raw,
+                stats,
+                id_change_pairs,
+            )
+            proc_delta = stats["documents_processed"] - proc_before
+            logger.info(
+                "resync_bsale_documents_full: mes %s completado; documentos_procesados_mes=%s "
+                "(acumulado api_items=%s processed=%s)",
+                month_idx,
+                proc_delta,
+                stats["documents_api_items"],
+                stats["documents_processed"],
+            )
 
-            if len(pending_docs) >= 200:
-                ins, upd, ch = _upsert_documents_batch(cur, pending_docs)
-                stats["documents_inserted"] += ins
-                stats["documents_updated"] += upd
-                id_change_pairs.extend(ch)
-                conn.commit()
-                pending_docs.clear()
-
-            offset += LIMIT_BSALE
-
-        if pending_docs:
-            ins, upd, ch = _upsert_documents_batch(cur, pending_docs)
-            stats["documents_inserted"] += ins
-            stats["documents_updated"] += upd
-            id_change_pairs.extend(ch)
-            conn.commit()
+            chunk_start = chunk_end
 
         new_to_old: dict[int, int] = {}
         for old_id, new_id in id_change_pairs:
@@ -1056,6 +1135,44 @@ def resync_bsale_documents_full(*, strict_token: bool = False) -> dict[str, Any]
             pass
 
     return stats
+
+
+def run_resync_distribuidora_background() -> None:
+    """
+    Punto de entrada para ``BackgroundTasks`` (POST ``/erp/resync-distribuidora``).
+    No propaga excepciones al worker HTTP.
+    """
+    try:
+        out = resync_bsale_documents_full(strict_token=True)
+    except ValueError as e:
+        logger.error("resync_distribuidora_background: %s", e)
+        return
+    except Exception:
+        logger.exception("resync_distribuidora_background: error no controlado")
+        return
+
+    if out.get("skipped"):
+        logger.warning(
+            "resync_distribuidora_background: omitido/skipped (%s)",
+            out.get("skip_reason"),
+        )
+    elif out.get("omitido_concurrencia"):
+        logger.warning(
+            "resync_distribuidora_background: no ejecutado (advisory lock en uso)"
+        )
+    elif out.get("errors"):
+        logger.error(
+            "resync_distribuidora_background: terminó con errors=%s",
+            out.get("errors"),
+        )
+    else:
+        logger.info(
+            "resync_distribuidora_background: OK processed=%s ins=%s upd=%s s=%ss",
+            out.get("documents_processed"),
+            out.get("documents_inserted"),
+            out.get("documents_updated"),
+            out.get("duration_seconds"),
+        )
 
 
 def _insert_details_batch(cur, rows: list[tuple[Any, ...]]) -> int:
