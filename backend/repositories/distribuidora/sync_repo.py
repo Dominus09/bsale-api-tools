@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Solo líneas que son exclusivamente el marcador (no confundir con "-- +go texto..." en comentarios).
+_STMT_SPLIT_GO = re.compile(r"^\s*--\s*\+go\s*$", re.MULTILINE)
 
 _SQL_DIR = Path(__file__).resolve().parents[2] / "sql" / "distribuidora"
 
@@ -16,7 +20,7 @@ def _run_sql_file(cur, name: str) -> None:
     if not path.is_file():
         raise FileNotFoundError(f"SQL no encontrado: {path}")
     text = path.read_text(encoding="utf-8")
-    for chunk in text.split("-- +go"):
+    for chunk in _STMT_SPLIT_GO.split(text):
         stmt = chunk.strip()
         if not stmt:
             continue

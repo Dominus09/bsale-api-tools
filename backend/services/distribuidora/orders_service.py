@@ -73,8 +73,27 @@ def list_purchase_orders(
         params2.extend([limit, offset])
         cur.execute(
             f"""
-            SELECT *
+            SELECT
+                e.*,
+                COALESCE(
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(u.first_name, '')
+                            || ' '
+                            || COALESCE(u.last_name, '')
+                        ),
+                        ''
+                    ),
+                    NULLIF(BTRIM(u.email), ''),
+                    CASE
+                        WHEN e.user_id IS NULL THEN NULL
+                        ELSE 'Usuario ' || e.user_id::text
+                    END
+                ) AS seller
             FROM distribuidora.v_orders_purchase_enriched e
+            LEFT JOIN bsale.bsale_users u
+                ON u.company_id = 3
+               AND u.bsale_id = e.user_id
             WHERE {where_sql}
             ORDER BY e.emission_date DESC NULLS LAST, e.document_id DESC
             LIMIT %s OFFSET %s

@@ -77,6 +77,7 @@ const navSections: { title: string; items: NavItem[] }[] = [
   {
     title: "Distribuidora",
     items: [
+      { href: "/distribuidora/orders", label: "Órdenes OC", icon: ShoppingCart },
       { href: "/distribuidora/mapa", label: "Mapa rutero", icon: MapPin },
       { href: "/distribuidora/resumen-vendedor", label: "Resumen vendedor", icon: CalendarDays },
       { href: "/distribuidora/rutero", label: "Rutero", icon: Route },

@@ -813,6 +813,59 @@ export async function getDistribuidoraResumenVendedor(
   return res.json() as Promise<DistribuidoraResumenVendedorJson>
 }
 
+/** Fila de GET /distribuidora/orders/purchase (vista enriquecida + seller). */
+export type DistribuidoraPurchaseOrder = {
+  document_id: number
+  number?: number | null
+  client_id?: number | null
+  user_id?: number | null
+  emission_date?: string | null
+  total_amount?: number | null
+  municipality?: string | null
+  city?: string | null
+  address?: string | null
+  nombre_fantasia?: string | null
+  forma_pago?: string | null
+  observaciones?: string | null
+  is_invoiced?: boolean | null
+  seller?: string | null
+  [key: string]: unknown
+}
+
+export type DistribuidoraOrdersPurchaseResponse = {
+  total: number
+  limit: number
+  offset: number
+  items: DistribuidoraPurchaseOrder[]
+}
+
+export async function getDistribuidoraOrdersPurchase(params: {
+  emission_date_from: string
+  emission_date_to: string
+  only_not_invoiced?: boolean
+  user_id?: number
+  limit?: number
+  offset?: number
+  signal?: AbortSignal
+}): Promise<DistribuidoraOrdersPurchaseResponse> {
+  const qs = new URLSearchParams()
+  qs.set("emission_date_from", params.emission_date_from)
+  qs.set("emission_date_to", params.emission_date_to)
+  if (params.only_not_invoiced) qs.set("only_not_invoiced", "true")
+  if (params.user_id != null) qs.set("user_id", String(params.user_id))
+  qs.set("limit", String(params.limit ?? 5000))
+  qs.set("offset", String(params.offset ?? 0))
+  const res = await fetch(`${API_URL}/distribuidora/orders/purchase?${qs}`, {
+    headers: getAuthHeaders(),
+    signal: params.signal,
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar órdenes de compra")
+  }
+  return res.json() as Promise<DistribuidoraOrdersPurchaseResponse>
+}
+
 /** Filas genéricas JSON (listados /distribuidora/*). */
 export type DistribuidoraRecord = Record<string, unknown>
 
