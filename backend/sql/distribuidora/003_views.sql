@@ -1,6 +1,38 @@
 -- Vistas de negocio Distribuidora. Cada vista termina en ";".
 -- +go es separador para el job Python.
 
+-- Evita error 42P16 al cambiar orden/nombres de columnas respecto a vistas ya existentes.
+DROP VIEW IF EXISTS distribuidora.v_orders_purchase_enriched CASCADE;
+-- +go
+DROP VIEW IF EXISTS distribuidora.v_orders_purchase CASCADE;
+-- +go
+DROP VIEW IF EXISTS distribuidora.v_orders_purchase_status CASCADE;
+-- +go
+DROP VIEW IF EXISTS distribuidora.v_oc_attributes_flat CASCADE;
+-- +go
+DROP VIEW IF EXISTS distribuidora.v_documents_latest CASCADE;
+-- +go
+
+-- Una fila por (empresa, sucursal, tipo, número): versión más reciente de Bsale
+-- (mismo ``number`` + ``document_type_id`` puede repetirse con otro ``document_id``).
+CREATE OR REPLACE VIEW distribuidora.v_documents_latest AS
+SELECT DISTINCT ON (
+    d.company_id,
+    d.office_id,
+    d.document_type_id,
+    COALESCE(d.number, d.document_id)
+)
+    d.*
+FROM distribuidora.documents d
+ORDER BY
+    d.company_id,
+    d.office_id,
+    d.document_type_id,
+    COALESCE(d.number, d.document_id),
+    d.emission_date DESC NULLS LAST,
+    d.document_id DESC;
+-- +go
+
 CREATE OR REPLACE VIEW distribuidora.v_oc_attributes_flat AS
 SELECT
     da.document_id,
@@ -17,7 +49,7 @@ SELECT
         WHERE upper(btrim(da.attribute_name)) = upper(btrim('OBSERVACIONES'))
     ) AS observaciones
 FROM distribuidora.document_attributes da
-INNER JOIN distribuidora.documents d ON d.document_id = da.document_id
+INNER JOIN distribuidora.v_documents_latest d ON d.document_id = da.document_id
 WHERE d.company_id = 3
   AND d.office_id = 1
   AND d.document_type_id = 33
@@ -30,8 +62,6 @@ SELECT
     d.number,
     d.client_id,
     d.user_id,
-    d.seller_id,
-    d.seller_name,
     d.emission_date,
     d.total_amount,
     d.municipality,
@@ -40,8 +70,10 @@ SELECT
     a.tipo_documento_a_generar,
     a.nombre_fantasia,
     a.forma_pago,
-    a.observaciones
-FROM distribuidora.documents d
+    a.observaciones,
+    d.seller_id,
+    d.seller_name
+FROM distribuidora.v_documents_latest d
 LEFT JOIN distribuidora.v_oc_attributes_flat a ON a.document_id = d.document_id
 WHERE d.company_id = 3
   AND d.office_id = 1
@@ -61,11 +93,11 @@ SELECT
     inv.document_type_id AS invoicing_document_type_id,
     inv.number AS invoicing_number,
     inv.emission_date AS invoicing_emission_date
-FROM distribuidora.documents oc
+FROM distribuidora.v_documents_latest oc
 LEFT JOIN LATERAL (
     SELECT d.document_id, d.document_type_id, d.number, d.emission_date
     FROM distribuidora.document_references dr
-    INNER JOIN distribuidora.documents d
+    INNER JOIN distribuidora.v_documents_latest d
         ON d.document_id = dr.source_document_id
        AND d.document_type_id IN (1, 6)
        AND d.company_id = oc.company_id
@@ -91,8 +123,6 @@ SELECT
     p.number,
     p.client_id,
     p.user_id,
-    d.seller_id,
-    d.seller_name,
     p.emission_date,
     p.total_amount,
     p.municipality,
@@ -106,12 +136,9 @@ SELECT
     s.invoicing_document_id,
     s.invoicing_document_type_id,
     s.invoicing_number,
-    s.invoicing_emission_date
+    s.invoicing_emission_date,
+    p.seller_id,
+    p.seller_name
 FROM distribuidora.v_orders_purchase p
-INNER JOIN distribuidora.documents d
-    ON d.document_id = p.document_id
-   AND d.company_id = 3
-   AND d.office_id = 1
-   AND d.document_type_id = 33
 LEFT JOIN distribuidora.v_orders_purchase_status s ON s.document_id = p.document_id;
 -- +go
