@@ -10,7 +10,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import {
   getDistribuidoraMapa,
   getDistribuidoraRutero,
+  patchDistribuidoraRuteroTipoAtencion,
   postDistribuidoraObservacionRutero,
+  type DistribuidoraMapaCliente,
+  type DistribuidoraPuntoBase,
   type DistribuidoraRuteroFila,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
@@ -24,12 +27,43 @@ function uniqueSorted(vals: (string | null | undefined)[]): string[] {
   )
 }
 
+/** Valor Bsale en `dia_atencion` para clientes solo telefónicos (no rutas). */
+function esDiaAtencionTelefonico(value: string | null | undefined): boolean {
+  return String(value ?? "").trim().toLowerCase() === "telefonico"
+}
+
+function diasCatalogoDesdeMapaResp(data: {
+  clientes?: unknown
+  dias_atencion?: unknown
+}): string[] {
+  const set = new Set<string>()
+  if (Array.isArray(data.dias_atencion)) {
+    for (const x of data.dias_atencion) {
+      const d = String(x).trim()
+      if (d) set.add(d)
+    }
+  }
+  const arr = Array.isArray(data.clientes) ? (data.clientes as DistribuidoraMapaCliente[]) : []
+  for (const c of arr) {
+    const d = c.dia_atencion?.trim()
+    if (d) set.add(d)
+  }
+  return Array.from(set).sort((a, b) => a.localeCompare(b, "es"))
+}
+
 function esTipoTelefonico(row: DistribuidoraRuteroFila): boolean {
   const t = String(row.tipo_atencion ?? "terreno").toLowerCase()
   return t.includes("telefon")
 }
 
+type TipoAtencionUi = "TERRENO" | "TELEFONICO"
+
+function tipoAtencionValorUi(row: DistribuidoraRuteroFila): TipoAtencionUi {
+  return esTipoTelefonico(row) ? "TELEFONICO" : "TERRENO"
+}
+
 function tieneGeorefMapa(row: DistribuidoraRuteroFila): boolean {
+  if (esDiaAtencionTelefonico(row.dia_atencion)) return true
   if (esTipoTelefonico(row)) return true
   const lat = Number(row.lat)
   const lon = Number(row.lon)
@@ -40,7 +74,9 @@ function alertasOperativas(row: DistribuidoraRuteroFila): string[] {
   const a: string[] = []
   if (!String(row.rut ?? "").trim()) a.push("Sin RUT")
   if (!String(row.direccion ?? "").trim()) a.push("Sin dirección")
-  if (!esTipoTelefonico(row) && !tieneGeorefMapa(row)) a.push("Sin georef")
+  if (!esDiaAtencionTelefonico(row.dia_atencion) && !esTipoTelefonico(row) && !tieneGeorefMapa(row)) {
+    a.push("Sin georef")
+  }
   return a
 }
 
@@ -76,6 +112,7 @@ export default function RuteroVistaClient() {
   const [tablaLoading, setTablaLoading] = useState(false)
   const [tablaError, setTablaError] = useState("")
   const [savingId, setSavingId] = useState<number | null>(null)
+  const [savingTipoId, setSavingTipoId] = useState<number | null>(null)
   const [copiadoKey, setCopiadoKey] = useState<string | null>(null)
 
   useEffect(() => {
@@ -86,8 +123,14 @@ export default function RuteroVistaClient() {
       .then((data) => {
         if (cancelled) return
         const clientes = Array.isArray(data.clientes) ? data.clientes : []
-        setVendedorOptions(uniqueSorted(clientes.map((c) => c.vendedor)))
-        setDiaOptions(uniqueSorted(clientes.map((c) => c.dia_atencion)))
+        const bases = Array.isArray(data.bases) ? (data.bases as DistribuidoraPuntoBase[]) : []
+        const vs = new Set(uniqueSorted(clientes.map((c) => c.vendedor)))
+        for (const b of bases) {
+          const v = b.vendedor?.trim()
+          if (v) vs.add(v)
+        }
+        setVendedorOptions(Array.from(vs).sort((a, b) => a.localeCompare(b, "es")))
+        setDiaOptions(diasCatalogoDesdeMapaResp(data))
       })
       .catch((e: unknown) => {
         if (!cancelled) setMapError(e instanceof Error ? e.message : "Error al cargar opciones")
@@ -123,6 +166,25 @@ export default function RuteroVistaClient() {
   useEffect(() => {
     void cargarTabla()
   }, [cargarTabla])
+
+  const onTipoAtencionChange = useCallback(
+    async (row: DistribuidoraRuteroFila, next: TipoAtencionUi) => {
+      const id = Number(row.id)
+      if (!Number.isFinite(id)) return
+      if (tipoAtencionValorUi(row) === next) return
+      setSavingTipoId(id)
+      setTablaError("")
+      try {
+        const updated = await patchDistribuidoraRuteroTipoAtencion(id, { tipo_atencion: next })
+        setFilas((rows) => rows.map((r) => (Number(r.id) === id ? { ...r, ...updated } : r)))
+      } catch (e: unknown) {
+        setTablaError(e instanceof Error ? e.message : "Error al guardar tipo de atención")
+      } finally {
+        setSavingTipoId(null)
+      }
+    },
+    [],
+  )
 
   const onObsBlur = useCallback(
     async (row: DistribuidoraRuteroFila, value: string) => {
@@ -172,8 +234,9 @@ export default function RuteroVistaClient() {
       <div>
         <h1 className="text-xl font-semibold tracking-tight text-foreground">Rutero</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Listado por vendedor y día. Las observaciones se guardan al salir del cuadro de texto. RUT e ID Bsale
-          permiten cruzar con Bsale; enlace opcional vía{" "}
+          Listado por vendedor y día. Estado (terreno / telefónico) se guarda al cambiar el desplegable. Las
+          observaciones se guardan al salir del cuadro de texto. RUT e ID Bsale permiten cruzar con Bsale; enlace
+          opcional vía{" "}
           <code className="rounded bg-muted px-1 text-xs">NEXT_PUBLIC_BSALE_CLIENT_URL_TEMPLATE</code>{" "}
           (placeholders <code className="text-xs">{"{bsale_id}"}</code> o <code className="text-xs">{"{id}"}</code>
           ).
@@ -266,7 +329,7 @@ export default function RuteroVistaClient() {
                 <th className="min-w-[220px] px-3 py-2 font-medium">Dirección</th>
                 <th className="whitespace-nowrap px-3 py-2 font-medium">Comuna</th>
                 <th className="whitespace-nowrap px-3 py-2 font-medium">Teléfono</th>
-                <th className="whitespace-nowrap px-3 py-2 font-medium">Tipo</th>
+                <th className="whitespace-nowrap px-3 py-2 font-medium">Estado</th>
                 <th className="whitespace-nowrap px-3 py-2 font-medium">Georef</th>
                 <th className="min-w-[200px] px-3 py-2 font-medium">Observaciones</th>
                 <th className="whitespace-nowrap px-3 py-2 font-medium">Acciones</th>
@@ -282,17 +345,29 @@ export default function RuteroVistaClient() {
                 const bsaleId = row.bsale_id
                 const bsaleUrl = urlClienteBsale(bsaleId)
                 const nombreMostrar = row.cliente_nombre ?? "—"
+                const tipoUi = tipoAtencionValorUi(row)
+                const diaTel = esDiaAtencionTelefonico(row.dia_atencion)
                 return (
                   <tr
                     key={row.id}
                     className={cn(
                       "border-b border-border/70 last:border-0",
+                      diaTel && "text-slate-700 dark:text-slate-200",
+                      diaTel && alertas.length === 0 && "bg-slate-50 dark:bg-slate-900/35",
                       alertas.length > 0 &&
                         "border-l-4 border-l-amber-500 bg-amber-50/70 dark:bg-amber-950/25",
                     )}
                   >
                     <td className="whitespace-nowrap px-3 py-2 tabular-nums" title={ord.title}>
-                      {ord.texto}
+                      <div className="flex flex-col items-start gap-1">
+                        <span>{ord.texto}</span>
+                        {diaTel ? (
+                          <span className="inline-flex items-center gap-1 rounded border border-slate-300 bg-slate-200 px-1.5 py-0.5 text-[11px] font-medium text-slate-800 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-100">
+                            <span aria-hidden>📞</span>
+                            Telefónico
+                          </span>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="whitespace-nowrap px-3 py-2 font-mono text-xs tabular-nums">
                       {rutStr || <span className="text-destructive">—</span>}
@@ -343,12 +418,35 @@ export default function RuteroVistaClient() {
                       {row.municipality?.trim() || "—"}
                     </td>
                     <td className="whitespace-nowrap px-3 py-2">{row.telefono?.trim() || "—"}</td>
-                    <td className="whitespace-nowrap px-3 py-2">
-                      {esTipoTelefonico(row) ? (
-                        <Badge variant="outline">Teléfono</Badge>
-                      ) : (
-                        <Badge variant="secondary">Terreno</Badge>
-                      )}
+                    <td className="whitespace-nowrap px-2 py-2">
+                      <div
+                        className={cn(
+                          "inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-1",
+                          tipoUi === "TERRENO"
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-950 dark:border-emerald-800/70 dark:bg-emerald-950/40 dark:text-emerald-50"
+                            : "border-slate-200 bg-slate-100 text-slate-700 dark:border-slate-600 dark:bg-slate-800/80 dark:text-slate-200",
+                        )}
+                      >
+                        <span className="select-none text-base leading-none" aria-hidden title="Tipo de atención">
+                          {tipoUi === "TERRENO" ? "📍" : "📞"}
+                        </span>
+                        <select
+                          className={cn(
+                            "h-8 min-w-[9.5rem] max-w-[11rem] cursor-pointer rounded border-0 bg-transparent py-0 pl-0.5 pr-6 text-sm font-medium shadow-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-0",
+                            savingTipoId === row.id && "pointer-events-none opacity-60",
+                          )}
+                          aria-label={`Estado atención ${nombreMostrar}`}
+                          value={tipoUi}
+                          disabled={savingTipoId === row.id}
+                          onChange={(e) => {
+                            const v = e.target.value as TipoAtencionUi
+                            if (v === "TERRENO" || v === "TELEFONICO") void onTipoAtencionChange(row, v)
+                          }}
+                        >
+                          <option value="TERRENO">Terreno</option>
+                          <option value="TELEFONICO">Telefónico</option>
+                        </select>
+                      </div>
                     </td>
                     <td className="whitespace-nowrap px-3 py-2">
                       {esTipoTelefonico(row) ? (

@@ -75,6 +75,35 @@ const MarkerClusterGroup = dynamic(() => import("react-leaflet-cluster").then((m
 const MAP_CENTER: [number, number] = [-42.6, -73.8]
 const MAP_ZOOM = 10
 
+/** `dia_atencion` desde Bsale como atención telefónica (no entra a rutas / mapa / ORS). */
+function esDiaAtencionTelefonico(value: string | null | undefined): boolean {
+  return String(value ?? "").trim().toLowerCase() === "telefonico"
+}
+
+function esTipoAtencionTelefonicoMapa(c: DistribuidoraMapaCliente): boolean {
+  const t = String(c.tipo_atencion ?? "").trim().toLowerCase()
+  return t.includes("telefon")
+}
+
+function diasCatalogoDesdeMapaResp(data: {
+  clientes?: unknown
+  dias_atencion?: unknown
+}): string[] {
+  const set = new Set<string>()
+  if (Array.isArray(data.dias_atencion)) {
+    for (const x of data.dias_atencion) {
+      const d = String(x).trim()
+      if (d) set.add(d)
+    }
+  }
+  const arr = Array.isArray(data.clientes) ? (data.clientes as DistribuidoraMapaCliente[]) : []
+  for (const c of arr) {
+    const d = c.dia_atencion?.trim()
+    if (d) set.add(d)
+  }
+  return Array.from(set).sort((a, b) => a.localeCompare(b, "es"))
+}
+
 function formatearMinutos(m: number): string {
   if (!Number.isFinite(m)) return "—"
   return m >= 120 ? `${(m / 60).toFixed(1)} h` : `${Math.round(m)} min`
@@ -130,7 +159,6 @@ const MAP_CLIENTE_COLOR_HIGHLIGHT = "#16a34a"
 /** Cliente esperado por la simulación (llegada en orden; verde). */
 const MAP_CLIENTE_COLOR_SIM_VISITA = "#22c55e"
 
-const SIM_DIST_UMBRAL_M = 30
 const SIM_DWELL_MS = 2000
 
 type PolylineDecodeFn = (str: string, precision?: number) => [number, number][]
@@ -394,6 +422,7 @@ type SimulacionParada = {
   lat: number
   lon: number
   nombre: string
+  /** orden_manual (solo representación; no se reordena). */
   orden: number
   /** 1-based según orden de ruta (para “Cliente X de N”). */
   paso: number
@@ -401,13 +430,37 @@ type SimulacionParada = {
   direccionLinea: string
 }
 
-/** Animación del vehículo sobre la polyline; no bloquea el hilo (setTimeout). */
+function latLngCasiIguales(a: L.LatLngTuple, b: L.LatLngTuple, eps = 1e-5): boolean {
+  return Math.abs(a[0] - b[0]) < eps && Math.abs(a[1] - b[1]) < eps
+}
+
+/** Terreno operativo: no `dia_atencion = telefonico` (Bsale) ni `tipo_atencion` telefónico. */
+function filaRutaEsTerreno(r: RutaClienteFila): boolean {
+  const dia = (r as Record<string, unknown>).dia_atencion
+  if (esDiaAtencionTelefonico(dia == null ? undefined : String(dia))) return false
+  const raw = (r as Record<string, unknown>).tipo_atencion
+  const t = String(raw ?? "TERRENO").trim().toUpperCase()
+  if (!t) return true
+  return t === "TERRENO"
+}
+
+function ordenManualSimKey(r: RutaClienteFila): number {
+  const om = (r as Record<string, unknown>).orden_manual
+  if (om == null || om === "") return Number.POSITIVE_INFINITY
+  const n = typeof om === "number" ? om : Number(om)
+  return Number.isFinite(n) && n > 0 ? n : Number.POSITIVE_INFINITY
+}
+
+/**
+ * Recorre base → clientes → base en el orden EXACTO de `waypoints` (p. ej. orden_manual ASC).
+ * Cada tramo se densifica en línea recta; al terminar un tramo que llega a un cliente → popup (sin nearest-neighbor).
+ */
 function MapaRuteroSimulacionVehiculo({
   runId,
   running,
   paused,
   speedMult,
-  routePoints,
+  waypoints,
   stops,
   onVisitClient,
   onComplete,
@@ -416,7 +469,7 @@ function MapaRuteroSimulacionVehiculo({
   running: boolean
   paused: boolean
   speedMult: number
-  routePoints: L.LatLngTuple[] | null
+  waypoints: L.LatLngTuple[] | null
   stops: SimulacionParada[]
   onVisitClient: (bsaleId: number) => void
   onComplete: () => void
@@ -432,19 +485,27 @@ function MapaRuteroSimulacionVehiculo({
   }, [speedMult])
 
   useEffect(() => {
-    if (!running || !routePoints || routePoints.length < 2) {
+    if (!running || !waypoints || waypoints.length < 2) {
       return
     }
 
-    const dense = densificarRutaParaSimulacion(map, routePoints, 22)
+    const segments: L.LatLngTuple[][] = []
+    for (let s = 0; s < waypoints.length - 1; s++) {
+      const piece = densificarRutaParaSimulacion(map, [waypoints[s], waypoints[s + 1]], 22)
+      if (piece.length >= 2) segments.push(piece)
+    }
+    if (segments.length === 0) {
+      return
+    }
+
     let cancelled = false
-    let idx = 0
-    /** Siguiente cliente en orden de visita (solo se compara distancia a este). */
-    let paradaIdx = 0
+    let segIdx = 0
+    let subIdx = 0
     let dwellUntil = 0
     let timeoutId: ReturnType<typeof setTimeout> | undefined
 
-    const marker = L.marker(dense[0], {
+    const start = segments[0][0]
+    const marker = L.marker(start, {
       icon: getSimulacionVehiculoIcon(),
       zIndexOffset: 2500,
     }).addTo(map)
@@ -460,7 +521,7 @@ function MapaRuteroSimulacionVehiculo({
         timeoutId = window.setTimeout(tick, 120)
         return
       }
-      if (idx >= dense.length) {
+      if (segIdx >= segments.length) {
         try {
           if (map.hasLayer(marker)) map.removeLayer(marker)
         } catch {
@@ -470,13 +531,11 @@ function MapaRuteroSimulacionVehiculo({
         return
       }
 
-      const pos = dense[idx]
-      marker.setLatLng(pos)
-
-      if (paradaIdx < stops.length) {
-        const esperado = stops[paradaIdx]
-        const dist = map.distance(pos, L.latLng(esperado.lat, esperado.lon))
-        if (dist < SIM_DIST_UMBRAL_M) {
+      const path = segments[segIdx]
+      if (subIdx >= path.length) {
+        const llegadaIdx = segIdx + 1
+        if (llegadaIdx >= 1 && llegadaIdx <= stops.length) {
+          const esperado = stops[llegadaIdx - 1]
           onVisitClient(esperado.bsale_id)
           const dir = escapeHtmlTexto(esperado.direccionLinea)
           const nom = escapeHtmlTexto(esperado.nombre)
@@ -486,17 +545,30 @@ function MapaRuteroSimulacionVehiculo({
               `<div style="padding:6px;font-size:13px;line-height:1.35;color:#0f172a;">
                 <div style="margin-bottom:4px;font-size:11px;font-weight:600;color:#475569">Cliente ${esperado.paso} de ${esperado.totalParadas}</div>
                 <div style="font-weight:600">${nom}</div>
-                <div style="margin-top:2px;font-size:11px;color:#64748b">Orden visita: ${Number.isFinite(esperado.orden) ? esperado.orden : "—"}</div>
+                <div style="margin-top:2px;font-size:11px;color:#64748b">Orden manual: ${Number.isFinite(esperado.orden) ? esperado.orden : "—"}</div>
                 <div style="margin-top:6px;font-size:11px;color:#334155">${dir}</div>
               </div>`,
             )
             .openOn(map)
-          paradaIdx += 1
           dwellUntil = Date.now() + SIM_DWELL_MS
         }
+        segIdx += 1
+        if (segIdx >= segments.length) {
+          timeoutId = window.setTimeout(tick, 10)
+          return
+        }
+        subIdx = 0
+        const prev = path[path.length - 1]
+        const nextPath = segments[segIdx]
+        if (nextPath.length && latLngCasiIguales(prev, nextPath[0])) {
+          subIdx = 1
+        }
+        timeoutId = window.setTimeout(tick, 10)
+        return
       }
 
-      idx += 1
+      marker.setLatLng(path[subIdx])
+      subIdx += 1
       const baseDelay = 50 / Math.max(1, speedRef.current)
       const delay = Math.max(10, Math.round(baseDelay))
       timeoutId = window.setTimeout(tick, delay)
@@ -513,7 +585,7 @@ function MapaRuteroSimulacionVehiculo({
         /* */
       }
     }
-  }, [runId, running, map, routePoints, stops, onVisitClient, onComplete])
+  }, [runId, running, map, waypoints, stops, onVisitClient, onComplete])
 
   return null
 }
@@ -1083,7 +1155,7 @@ function MapaRuteroPanelRuta({
               <span className="font-medium">Inicio:</span> {baseNombre}
             </div>
             {items.length === 0 ? (
-              <p className="text-muted-foreground">Sin clientes en la ruta.</p>
+              <p className="text-muted-foreground">No hay clientes en terreno para este día.</p>
             ) : (
               <DndContext
                 sensors={sensors}
@@ -1182,6 +1254,7 @@ function MapaRuteroPanelRuta({
 
 export default function MapaRuteroClient() {
   const [clientes, setClientes] = useState<DistribuidoraMapaCliente[]>([])
+  const [diasAtencionOpciones, setDiasAtencionOpciones] = useState<string[]>([])
   const [bases, setBases] = useState<DistribuidoraPuntoBase[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState("")
@@ -1210,6 +1283,7 @@ export default function MapaRuteroClient() {
   const [simRunId, setSimRunId] = useState(0)
   const [simPath, setSimPath] = useState<L.LatLngTuple[] | null>(null)
   const [simStops, setSimStops] = useState<SimulacionParada[]>([])
+  const [simAvisoSinOrden, setSimAvisoSinOrden] = useState(false)
   const [simHighlightBsaleId, setSimHighlightBsaleId] = useState<number | null>(null)
 
   const setListItemRef = useCallback((bid: number, el: HTMLElement | null) => {
@@ -1245,6 +1319,7 @@ export default function MapaRuteroClient() {
     setSimPaused(false)
     setSimPath(null)
     setSimStops([])
+    setSimAvisoSinOrden(false)
     setSimHighlightBsaleId(null)
   }, [vendedorFilter, diaFilter])
 
@@ -1291,6 +1366,7 @@ export default function MapaRuteroClient() {
       .then((data) => {
         if (!mounted.current) return
         setClientes(Array.isArray(data.clientes) ? data.clientes : [])
+        setDiasAtencionOpciones(diasCatalogoDesdeMapaResp(data))
         setBases(Array.isArray(data.bases) ? data.bases : [])
       })
       .catch((e: unknown) => {
@@ -1311,17 +1387,12 @@ export default function MapaRuteroClient() {
       const v = c.vendedor?.trim()
       if (v) set.add(v)
     }
-    return Array.from(set).sort((a, b) => a.localeCompare(b, "es"))
-  }, [clientes])
-
-  const diaOptions = useMemo(() => {
-    const set = new Set<string>()
-    for (const c of clientes) {
-      const d = c.dia_atencion?.trim()
-      if (d) set.add(d)
+    for (const b of bases) {
+      const v = b.vendedor?.trim()
+      if (v) set.add(v)
     }
     return Array.from(set).sort((a, b) => a.localeCompare(b, "es"))
-  }, [clientes])
+  }, [clientes, bases])
 
   const clientesVisibles = useMemo(() => {
     return clientes.filter((c) => {
@@ -1336,6 +1407,20 @@ export default function MapaRuteroClient() {
       return true
     })
   }, [clientes, vendedorFilter, diaFilter])
+
+  /** Marcadores del mapa: excluye día y tipo telefónicos (coherente con API /distribuidora/mapa). */
+  const clientesMarcadoresMapa = useMemo(() => {
+    return clientesVisibles.filter((c) => !esDiaAtencionTelefonico(c.dia_atencion) && !esTipoAtencionTelefonicoMapa(c))
+  }, [clientesVisibles])
+
+  const sinClientesTerrenoEnRuta = useMemo(() => {
+    if (vendedorFilter === FILTER_ALL || diaFilter === FILTER_ALL) return false
+    if (rutaDetalleLoading) return false
+    if (!rutaDetalle || typeof rutaDetalle !== "object") return false
+    if ("error" in rutaDetalle && rutaDetalle.error) return false
+    const arr = rutaDetalle.clientes
+    return Array.isArray(arr) && arr.length === 0
+  }, [vendedorFilter, diaFilter, rutaDetalle, rutaDetalleLoading])
 
   const onVendedorChange = useCallback((e: ChangeEvent<HTMLSelectElement>) => {
     setVendedorFilter(e.target.value)
@@ -1408,6 +1493,7 @@ export default function MapaRuteroClient() {
   const onSimComplete = useCallback(() => {
     setSimRunning(false)
     setSimPaused(false)
+    setSimAvisoSinOrden(false)
     setSimHighlightBsaleId(null)
     try {
       mapRef.current?.closePopup()
@@ -1418,28 +1504,44 @@ export default function MapaRuteroClient() {
 
   const iniciarSimulacion = useCallback(() => {
     if (!puedeEditarOrden || !isDistribuidoraRutaDetalleOk(rutaDetalle)) return
-    const pts = geometryToLatLngs(rutaDetalle.geometry)
-    if (pts.length < 2) {
-      setOrdenMensaje(
-        "No hay geometría de ruta trazada para simular. Optimice la ruta o espere a que se genere el trazado ORS.",
-      )
+    const bc = baseCoordsParaMapa(rutaDetalle, bases, vendedorFilter)
+    if (!bc || !Number.isFinite(bc.lat) || !Number.isFinite(bc.lon)) {
+      setOrdenMensaje("No hay coordenadas de base para simular.")
       return
     }
-    const rows = [...rutaLista].sort((a, b) => Number(a.orden_visita ?? 0) - Number(b.orden_visita ?? 0))
-    const filasCoords: RutaClienteFila[] = []
-    for (const r of rows) {
+    const baseTuple: L.LatLngTuple = [bc.lat, bc.lon]
+    const terrenoEnRuta = rutaLista.filter(filaRutaEsTerreno)
+    const sinOrdenManual = terrenoEnRuta.filter((r) => {
+      const om = Number((r as Record<string, unknown>).orden_manual)
+      return !(Number.isFinite(om) && om > 0)
+    })
+    setSimAvisoSinOrden(sinOrdenManual.length > 0)
+
+    const conCoords = terrenoEnRuta.filter((r) => {
       const lat = Number(r.lat)
       const lon = Number(r.lon)
-      if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue
-      filasCoords.push(r)
-    }
-    const totalParadas = filasCoords.length
+      return Number.isFinite(lat) && Number.isFinite(lon)
+    })
+    const ordenados = [...conCoords].sort((a, b) => {
+      const ka = ordenManualSimKey(a)
+      const kb = ordenManualSimKey(b)
+      if (ka !== kb) return ka - kb
+      return Number(a.bsale_id) - Number(b.bsale_id)
+    })
+    console.log(
+      "SIM ORDEN:",
+      ordenados.map((r) => ({
+        bsale_id: Number(r.bsale_id),
+        orden_manual: (r as Record<string, unknown>).orden_manual,
+      })),
+    )
+    const totalParadas = ordenados.length
     const stops: SimulacionParada[] = []
-    for (let i = 0; i < filasCoords.length; i++) {
-      const r = filasCoords[i]
+    for (let i = 0; i < ordenados.length; i++) {
+      const r = ordenados[i]!
       const lat = Number(r.lat)
       const lon = Number(r.lon)
-      const ov = Number(r.orden_visita ?? r.orden_manual ?? 0)
+      const om = Number((r as Record<string, unknown>).orden_manual)
       const row = r as Record<string, unknown>
       const mun = String(row.municipality ?? "").trim()
       const calle = String(row.direccion ?? row.address ?? row.calle ?? "").trim()
@@ -1449,30 +1551,33 @@ export default function MapaRuteroClient() {
         lat,
         lon,
         nombre: nombreClienteDesdeFilaRuta(r),
-        orden: Number.isFinite(ov) && ov > 0 ? ov : i + 1,
+        orden: Number.isFinite(om) && om > 0 ? om : Number.NaN,
         paso: i + 1,
         totalParadas,
         direccionLinea,
       })
     }
     if (stops.length === 0) {
-      setOrdenMensaje("No hay clientes con coordenadas en la ruta para simular.")
+      setOrdenMensaje("No hay clientes en terreno con coordenadas para simular.")
+      setSimAvisoSinOrden(false)
       return
     }
+    const waypoints: L.LatLngTuple[] = [baseTuple, ...stops.map((s) => [s.lat, s.lon] as L.LatLngTuple), baseTuple]
     setOrdenMensaje("")
-    setSimPath(pts)
+    setSimPath(waypoints)
     setSimStops(stops)
     setSimPaused(false)
     setSimHighlightBsaleId(null)
     setSimRunId((n) => n + 1)
     setSimRunning(true)
-  }, [puedeEditarOrden, rutaDetalle, rutaLista])
+  }, [puedeEditarOrden, rutaDetalle, rutaLista, bases, vendedorFilter])
 
   const detenerSimulacion = useCallback(() => {
     setSimRunning(false)
     setSimPaused(false)
     setSimPath(null)
     setSimStops([])
+    setSimAvisoSinOrden(false)
     setSimHighlightBsaleId(null)
     try {
       mapRef.current?.closePopup()
@@ -1496,9 +1601,14 @@ export default function MapaRuteroClient() {
   const puedeSimularRuta =
     puedeEditarOrden &&
     isDistribuidoraRutaDetalleOk(rutaDetalle) &&
-    geometryToLatLngs(rutaDetalle.geometry).length >= 2 &&
-    rutaLista.length > 0 &&
-    !rutaDetalleLoading
+    !rutaDetalleLoading &&
+    baseCoordsParaMapa(rutaDetalle, bases, vendedorFilter) != null &&
+    rutaLista.some((r) => {
+      if (!filaRutaEsTerreno(r)) return false
+      const lat = Number(r.lat)
+      const lon = Number(r.lon)
+      return Number.isFinite(lat) && Number.isFinite(lon)
+    })
 
   const onOrdenPanelReorder = useCallback(
     async (bulk: { id: number; orden_manual: number }[]) => {
@@ -1510,6 +1620,7 @@ export default function MapaRuteroClient() {
         const mapData = await getDistribuidoraMapa()
         if (!mounted.current) return
         setClientes(Array.isArray(mapData.clientes) ? mapData.clientes : [])
+        setDiasAtencionOpciones(diasCatalogoDesdeMapaResp(mapData))
         const json = await getDistribuidoraRutaDetalle(vendedorFilter, diaFilter)
         if (!mounted.current) return
         captureMapViewBeforeRutaUpdate(mapRef, orsRouteViewRef)
@@ -1565,6 +1676,7 @@ export default function MapaRuteroClient() {
         const mapData = await getDistribuidoraMapa()
         if (!mounted.current) return
         setClientes(Array.isArray(mapData.clientes) ? mapData.clientes : [])
+        setDiasAtencionOpciones(diasCatalogoDesdeMapaResp(mapData))
         captureMapViewBeforeRutaUpdate(mapRef, orsRouteViewRef)
         setRutaDetalle(json as DistribuidoraRutaDetalleJson)
       } catch (e: unknown) {
@@ -1593,6 +1705,7 @@ export default function MapaRuteroClient() {
       const mapData = await getDistribuidoraMapa()
       if (!mounted.current) return
       setClientes(Array.isArray(mapData.clientes) ? mapData.clientes : [])
+      setDiasAtencionOpciones(diasCatalogoDesdeMapaResp(mapData))
       captureMapViewBeforeRutaUpdate(mapRef, orsRouteViewRef)
       setRutaDetalle(json as DistribuidoraRutaDetalleJson)
     } catch (e: unknown) {
@@ -1621,6 +1734,7 @@ export default function MapaRuteroClient() {
         const mapData = await getDistribuidoraMapa()
         if (!mounted.current) return
         setClientes(Array.isArray(mapData.clientes) ? mapData.clientes : [])
+        setDiasAtencionOpciones(diasCatalogoDesdeMapaResp(mapData))
         captureMapViewBeforeRutaUpdate(mapRef, orsRouteViewRef)
         setRutaDetalle(json as DistribuidoraRutaDetalleJson)
       } catch (e: unknown) {
@@ -1652,6 +1766,7 @@ export default function MapaRuteroClient() {
       const mapData = await getDistribuidoraMapa()
       if (!mounted.current) return
       setClientes(Array.isArray(mapData.clientes) ? mapData.clientes : [])
+      setDiasAtencionOpciones(diasCatalogoDesdeMapaResp(mapData))
       const json = await getDistribuidoraRutaDetalle(vendedorFilter, diaFilter)
       if (!mounted.current) return
       captureMapViewBeforeRutaUpdate(mapRef, orsRouteViewRef)
@@ -1681,6 +1796,7 @@ export default function MapaRuteroClient() {
       const mapData = await getDistribuidoraMapa()
       if (mounted.current) {
         setClientes(Array.isArray(mapData.clientes) ? mapData.clientes : [])
+        setDiasAtencionOpciones(diasCatalogoDesdeMapaResp(mapData))
       }
       const json = await getDistribuidoraRutaDetalle(vendedorFilter, diaFilter)
       if (mounted.current) {
@@ -1701,8 +1817,8 @@ export default function MapaRuteroClient() {
           <div>
             <h1 className="text-lg font-semibold tracking-tight text-foreground">Mapa Rutero</h1>
             <p className="text-sm text-muted-foreground">
-              Clientes visibles:{" "}
-              <span className="font-medium tabular-nums text-foreground">{clientesVisibles.length}</span>
+              Clientes en mapa (terreno):{" "}
+              <span className="font-medium tabular-nums text-foreground">{clientesMarcadoresMapa.length}</span>
               {vendedorFilter !== FILTER_ALL && diaFilter !== FILTER_ALL ? (
                 <span className="mt-1 block text-xs text-muted-foreground/90">
                   &quot;Optimizar ruta&quot; recalcula el orden con el optimizador local (sectores + 2-opt) y
@@ -1740,7 +1856,7 @@ export default function MapaRuteroClient() {
               aria-label="Filtrar por día"
             >
               <option value={FILTER_ALL}>Todos los días</option>
-              {diaOptions.map((d) => (
+              {diasAtencionOpciones.map((d) => (
                 <option key={d} value={d}>
                   {d}
                 </option>
@@ -1752,7 +1868,7 @@ export default function MapaRuteroClient() {
                   type="button"
                   variant="default"
                   size="sm"
-                  disabled={ordenGuardando || rutaDetalleLoading || simRunning}
+                  disabled={ordenGuardando || rutaDetalleLoading || simRunning || sinClientesTerrenoEnRuta}
                   onClick={() => void onOptimizarRuta()}
                 >
                   Optimizar ruta
@@ -1761,7 +1877,7 @@ export default function MapaRuteroClient() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  disabled={ordenGuardando || simRunning}
+                  disabled={ordenGuardando || simRunning || sinClientesTerrenoEnRuta}
                   onClick={() => void onResetOrdenManual()}
                 >
                   Limpiar orden manual
@@ -1774,8 +1890,8 @@ export default function MapaRuteroClient() {
                     disabled={!puedeSimularRuta}
                     title={
                       !puedeSimularRuta
-                        ? "Requiere vendedor y día, ruta con geometría trazada y al menos un cliente en terreno."
-                        : "Recorrido animado sobre la polyline (no bloquea la interfaz)."
+                        ? "Requiere vendedor y día, base con coordenadas y al menos un cliente TERRENO con ubicación."
+                        : "Simulación en orden manual (base → clientes → base); no optimiza ni reordena."
                     }
                     onClick={() => void iniciarSimulacion()}
                   >
@@ -1840,6 +1956,22 @@ export default function MapaRuteroClient() {
             role="status"
           >
             {mensajeRutaInformativa}
+          </p>
+        ) : null}
+        {sinClientesTerrenoEnRuta ? (
+          <p
+            className="-mt-2 mb-3 rounded-md border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-800 dark:border-slate-600 dark:bg-slate-800/60 dark:text-slate-100"
+            role="status"
+          >
+            No hay clientes en terreno para este día
+          </p>
+        ) : null}
+        {simRunning && simAvisoSinOrden ? (
+          <p
+            className="-mt-2 mb-3 rounded-md border border-amber-200/90 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-950 dark:border-amber-800/60 dark:bg-amber-950/35 dark:text-amber-50"
+            role="status"
+          >
+            Ruta sin orden definido
           </p>
         ) : null}
 
@@ -1949,7 +2081,7 @@ export default function MapaRuteroClient() {
                     <MapaRuteroFlyTo flyTo={flyTo} />
                     <MapaRuteroFitBoundsClientes
                       rutaDetalle={rutaDetalle}
-                      clientesVisibles={clientesVisibles}
+                      clientesVisibles={clientesMarcadoresMapa}
                       bases={bases}
                       vendedorFilter={vendedorFilter}
                       diaFilter={diaFilter}
@@ -1962,7 +2094,7 @@ export default function MapaRuteroClient() {
                         running={simRunning}
                         paused={simPaused}
                         speedMult={simSpeedMult}
-                        routePoints={simPath}
+                        waypoints={simPath}
                         stops={simStops}
                         onVisitClient={onSimVisit}
                         onComplete={onSimComplete}
@@ -1970,7 +2102,7 @@ export default function MapaRuteroClient() {
                     ) : null}
                     {puedeEditarOrden ? (
                       <>
-                        {clientesVisibles.map((c) => {
+                        {clientesMarcadoresMapa.map((c) => {
                           const om = ordenMostradoEnMapa(c, rutaDetalle)
                           const enRuta = clienteEnRutaActual(c, rutaDetalle)
                           const puedeMover =
@@ -2071,7 +2203,7 @@ export default function MapaRuteroClient() {
                     ) : (
                       <>
                         <MarkerClusterGroup chunkedLoading showCoverageOnHover={false}>
-                          {clientesVisibles.map((c) => (
+                          {clientesMarcadoresMapa.map((c) => (
                             <Marker
                               key={c.bsale_id}
                               position={[c.lat, c.lon]}

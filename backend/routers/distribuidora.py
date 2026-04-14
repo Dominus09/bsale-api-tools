@@ -69,6 +69,24 @@ class ObservacionRuteroBody(BaseModel):
     observaciones: str | None = Field(default=None, description="Texto libre; vacío o null → NULL en BD")
 
 
+class RuteroTipoAtencionPatchBody(BaseModel):
+    """Valores UI típicos `TERRENO` / `TELEFONICO`; se persisten como `terreno` / `telefonico` (CHECK en BD)."""
+
+    tipo_atencion: str = Field(..., min_length=1, description="terreno o telefonico (cualquier mayúscula)")
+
+
+def _normalize_rutero_tipo_atencion(raw: str) -> str:
+    t = (raw or "").strip().lower()
+    if "telefon" in t:
+        return "telefonico"
+    if t in ("terreno", ""):
+        return "terreno"
+    raise HTTPException(
+        status_code=400,
+        detail="tipo_atencion debe ser TERRENO o TELEFONICO",
+    )
+
+
 class OptimizarRutaDesdeBody(BaseModel):
     """Reoptimiza solo la cola a partir de un índice (0 = primer cliente = toda la ruta)."""
 
@@ -88,6 +106,11 @@ class OptimizarRutaDesdeBody(BaseModel):
 
 
 router = APIRouter(prefix="/distribuidora", tags=["Distribuidora"])
+
+# Rutas / ORS / mapa: excluye telefónicos por `dia_atencion` (valor Bsale "telefonico") y por `tipo_atencion`.
+# Solo filtros en lectura/escritura de orden; no se mutan columnas.
+_SQL_RUTA_EXCL_DIA_TELEFONICO = "\n          AND LOWER(TRIM(COALESCE(dia_atencion::text, ''))) <> 'telefonico'"
+_SQL_RUTA_EXCL_TIPO_TELEFONICO = "\n          AND LOWER(COALESCE(tipo_atencion::text, '')) <> 'telefonico'"
 
 
 def _rows_to_json(cur) -> list[dict]:
@@ -524,7 +547,9 @@ def _persistir_orden_manual_vendedor_dia(
           AND LOWER(vendedor) = LOWER(%s)
           AND LOWER(dia_atencion) = LOWER(%s)
           AND LOWER(COALESCE(tipo_atencion, '')) <> 'telefonico'
-        """,
+        """
+        + _SQL_RUTA_EXCL_DIA_TELEFONICO
+        + "\n        ",
         (v, d),
     )
     for c in clientes_con_orden_visita:
@@ -547,7 +572,10 @@ def _persistir_orden_manual_vendedor_dia(
               AND bsale_id = %s
               AND LOWER(vendedor) = LOWER(%s)
               AND LOWER(dia_atencion) = LOWER(%s)
-            """,
+              AND LOWER(COALESCE(tipo_atencion, '')) <> 'telefonico'
+            """
+            + _SQL_RUTA_EXCL_DIA_TELEFONICO
+            + "\n            ",
             (ov_int, int(bid), v, d),
         )
     conn.commit()
@@ -607,7 +635,10 @@ def _cargar_contexto_ruta(v: str, d: str) -> tuple[dict, list[dict], list[dict]]
               AND LOWER(dia_atencion) = LOWER(%s)
               AND lat IS NOT NULL
               AND lon IS NOT NULL
-              AND LOWER(tipo_atencion) <> 'telefonico'
+            """
+            + _SQL_RUTA_EXCL_DIA_TELEFONICO
+            + _SQL_RUTA_EXCL_TIPO_TELEFONICO
+            + """
               AND orden_manual IS NOT NULL
               AND orden_manual > 0
             ORDER BY orden_manual ASC, bsale_id
@@ -640,7 +671,10 @@ def _cargar_contexto_ruta(v: str, d: str) -> tuple[dict, list[dict], list[dict]]
               AND LOWER(dia_atencion) = LOWER(%s)
               AND lat IS NOT NULL
               AND lon IS NOT NULL
-              AND LOWER(tipo_atencion) <> 'telefonico'
+            """
+            + _SQL_RUTA_EXCL_DIA_TELEFONICO
+            + _SQL_RUTA_EXCL_TIPO_TELEFONICO
+            + """
             ORDER BY orden_ruta NULLS LAST, bsale_id
             """,
             (v, d),
@@ -766,8 +800,10 @@ def _dias_rutero_vendedor(v: str) -> list[str]:
               AND LOWER(vendedor) = LOWER(%s)
               AND dia_atencion IS NOT NULL
               AND TRIM(dia_atencion) <> ''
-              AND LOWER(COALESCE(tipo_atencion, '')) <> 'telefonico'
-            """,
+            """
+            + _SQL_RUTA_EXCL_DIA_TELEFONICO
+            + _SQL_RUTA_EXCL_TIPO_TELEFONICO
+            + "\n            ",
             (v.strip(),),
         )
         raw = [r[0] for r in cur.fetchall() if r and r[0]]
@@ -933,7 +969,7 @@ def post_optimizar_ruta(body: OptimizarRutaBody):
     if len(clientes) == 0:
         raise HTTPException(
             status_code=400,
-            detail="No hay clientes terreno con coordenadas válidas para este día",
+            detail="No hay clientes en terreno para este día",
         )
 
     if body.bloque_hasta_indice is None:
@@ -1029,7 +1065,7 @@ def post_optimizar_ruta_desde(body: OptimizarRutaDesdeBody):
     if len(clientes_validos) == 0:
         raise HTTPException(
             status_code=400,
-            detail="No hay clientes terreno con coordenadas válidas para este día",
+            detail="No hay clientes en terreno para este día",
         )
 
     orden = _orden_actual_rutero_terreno(base, manual_raw, clientes_rows)
@@ -1169,9 +1205,12 @@ def get_analisis_km(
               AND activo = TRUE
               AND lat IS NOT NULL
               AND lon IS NOT NULL
-              AND LOWER(tipo_atencion) <> 'telefonico'
               AND TRIM(COALESCE(vendedor::text, '')) <> ''
               AND TRIM(COALESCE(dia_atencion::text, '')) <> ''
+            """
+            + _SQL_RUTA_EXCL_DIA_TELEFONICO
+            + _SQL_RUTA_EXCL_TIPO_TELEFONICO
+            + """
             ORDER BY vendedor, dia_atencion
             LIMIT %s
             """,
@@ -1247,7 +1286,10 @@ def get_analisis_km(
                   AND LOWER(dia_atencion) = LOWER(%s)
                   AND lat IS NOT NULL
                   AND lon IS NOT NULL
-                  AND LOWER(tipo_atencion) <> 'telefonico'
+                """
+                + _SQL_RUTA_EXCL_DIA_TELEFONICO
+                + _SQL_RUTA_EXCL_TIPO_TELEFONICO
+                + """
                 ORDER BY orden_ruta NULLS LAST, bsale_id
                 """,
                 (v, d),
@@ -1459,6 +1501,41 @@ def post_observacion_rutero(body: ObservacionRuteroBody):
     return fila
 
 
+@router.patch("/rutero/{row_id}")
+def patch_rutero_tipo_atencion(row_id: int, body: RuteroTipoAtencionPatchBody):
+    """Actualiza `tipo_atencion` de una fila rutero por PK `bsale.rutero.id`."""
+    if row_id < 1:
+        raise HTTPException(status_code=400, detail="id inválido")
+    tipo_db = _normalize_rutero_tipo_atencion(body.tipo_atencion)
+
+    conn = get_connection()
+    fila: dict | None = None
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE bsale.rutero
+            SET tipo_atencion = %s
+            WHERE id = %s
+              AND company_id = 3
+              AND activo = TRUE
+            """,
+            (tipo_db, row_id),
+        )
+        if cur.rowcount == 0:
+            cur.close()
+            raise HTTPException(status_code=404, detail="Fila rutero no encontrada o inactiva")
+        conn.commit()
+        fila = _rutero_fila_por_id(cur, row_id)
+        cur.close()
+    finally:
+        conn.close()
+
+    if fila is None:
+        raise HTTPException(status_code=500, detail="No se pudo leer la fila actualizada")
+    return fila
+
+
 @router.get("/sin-georef/export")
 def get_sin_georef_export():
     """Exporta filas rutero sin coordenadas a Excel (.xlsx)."""
@@ -1660,8 +1737,24 @@ def get_mapa():
               AND lat IS NOT NULL
               AND lon IS NOT NULL
             """
+            + _SQL_RUTA_EXCL_DIA_TELEFONICO
+            + _SQL_RUTA_EXCL_TIPO_TELEFONICO
+            + "\n        ",
         )
         clientes = _rows_to_json(cur)
+
+        cur.execute(
+            """
+            SELECT DISTINCT TRIM(dia_atencion) AS d
+            FROM bsale.rutero
+            WHERE company_id = 3
+              AND activo = TRUE
+              AND dia_atencion IS NOT NULL
+              AND TRIM(COALESCE(dia_atencion::text, '')) <> ''
+            ORDER BY 1
+            """
+        )
+        dias_atencion = _sort_dias_semana([str(r[0]).strip() for r in cur.fetchall() if r and r[0]])
 
         cur.execute(
             """
@@ -1677,6 +1770,7 @@ def get_mapa():
     return {
         "clientes": clientes,
         "bases": bases,
+        "dias_atencion": dias_atencion,
     }
 
 
@@ -1699,7 +1793,10 @@ def post_orden_manual_reset(body: OrdenManualResetBody):
               AND activo = TRUE
               AND LOWER(vendedor) = LOWER(%s)
               AND LOWER(dia_atencion) = LOWER(%s)
-            """,
+            """
+            + _SQL_RUTA_EXCL_DIA_TELEFONICO
+            + _SQL_RUTA_EXCL_TIPO_TELEFONICO
+            + "\n        ",
             (v, d),
         )
         n = cur.rowcount

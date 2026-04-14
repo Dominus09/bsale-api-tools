@@ -595,6 +595,8 @@ export interface DistribuidoraPuntoBase {
 export async function getDistribuidoraMapa(): Promise<{
   clientes: DistribuidoraMapaCliente[]
   bases: DistribuidoraPuntoBase[]
+  /** Días distintos en rutero (incluye `TELEFONICO` u otros) para selects aunque no vayan al mapa. */
+  dias_atencion?: string[]
 }> {
   const res = await fetch(`${API_URL}/distribuidora/mapa`, {
     headers: getAuthHeaders(),
@@ -996,6 +998,23 @@ export async function postDistribuidoraObservacionRutero(body: {
   if (!res.ok) {
     const msg = await res.text().catch(() => "")
     throw new Error(msg || "No se pudo guardar observaciones")
+  }
+  return res.json() as Promise<DistribuidoraRuteroFila>
+}
+
+/** PATCH /distribuidora/rutero/{id} — `id` = PK `bsale.rutero.id`. */
+export async function patchDistribuidoraRuteroTipoAtencion(
+  ruteroId: number,
+  body: { tipo_atencion: "TERRENO" | "TELEFONICO" },
+): Promise<DistribuidoraRuteroFila> {
+  const res = await fetch(`${API_URL}/distribuidora/rutero/${ruteroId}`, {
+    method: "PATCH",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "No se pudo actualizar el tipo de atención")
   }
   return res.json() as Promise<DistribuidoraRuteroFila>
 }
