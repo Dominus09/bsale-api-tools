@@ -13,7 +13,9 @@ from backend.services.distribuidora.route_planning_service import (
     create_route_planning,
     delete_route_planning_row,
     get_route_planning,
+    list_route_planning_summaries,
     patch_route_planning,
+    patch_route_planning_summary,
 )
 
 router = APIRouter(prefix="/distribuidora", tags=["Distribuidora planificación rutas"])
@@ -25,6 +27,12 @@ class RoutePlanningCreateBody(BaseModel):
     planning_date: date
     document_ids: list[int] = Field(..., min_length=1)
     truck: str = Field(..., min_length=1)
+    route_name: str | None = None
+    driver: str | None = None
+    assistant_1: str | None = None
+    assistant_2: str | None = None
+    departure_time: str | None = None
+    general_observation: str | None = None
 
 
 class RoutePlanningPatchBody(BaseModel):
@@ -32,6 +40,23 @@ class RoutePlanningPatchBody(BaseModel):
 
     truck: str | None = None
     status: str | None = None
+    route_name: str | None = None
+    driver: str | None = None
+    assistant_1: str | None = None
+    assistant_2: str | None = None
+    departure_time: str | None = None
+    general_observation: str | None = None
+
+
+class RoutePlanningSummaryPatchBody(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    route_name: str | None = None
+    driver: str | None = None
+    assistant_1: str | None = None
+    assistant_2: str | None = None
+    departure_time: str | None = None
+    general_observation: str | None = None
 
 
 @router.post("/route-planning")
@@ -41,6 +66,12 @@ def post_route_planning(body: RoutePlanningCreateBody):
             planning_date=body.planning_date,
             document_ids=body.document_ids,
             truck=body.truck,
+            route_name=body.route_name,
+            driver=body.driver,
+            assistant_1=body.assistant_1,
+            assistant_2=body.assistant_2,
+            departure_time=body.departure_time,
+            general_observation=body.general_observation,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -62,6 +93,25 @@ def post_route_planning(body: RoutePlanningCreateBody):
         ) from e
 
 
+@router.get("/route-planning/summary")
+def get_route_planning_summaries_api(
+    planning_date: date = Query(..., description="Día de reparto"),
+):
+    return list_route_planning_summaries(planning_date)
+
+
+@router.patch("/route-planning/summary/{summary_id}")
+def patch_route_planning_summary_api(summary_id: int, body: RoutePlanningSummaryPatchBody):
+    data = body.model_dump(exclude_unset=True)
+    try:
+        row = patch_route_planning_summary(summary_id, data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if not row:
+        raise HTTPException(status_code=404, detail="Resumen no encontrado")
+    return row
+
+
 @router.get("/route-planning")
 def list_route_planning_api(
     planning_date: date = Query(..., description="Día de reparto"),
@@ -72,8 +122,9 @@ def list_route_planning_api(
 
 @router.patch("/route-planning/{row_id}")
 def patch_route_planning_api(row_id: int, body: RoutePlanningPatchBody):
+    data = body.model_dump(exclude_unset=True)
     try:
-        row = patch_route_planning(row_id, truck=body.truck, status=body.status)
+        row = patch_route_planning(row_id, data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     if not row:

@@ -334,11 +334,23 @@ CREATE TABLE IF NOT EXISTS distribuidora.route_planning (
     total_amount NUMERIC(18, 4),
     truck TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'planned',
+    route_name TEXT,
+    driver TEXT,
+    assistant_1 TEXT,
+    assistant_2 TEXT,
+    departure_time TEXT,
+    general_observation TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_distribuidora_route_planning_date_document UNIQUE (planning_date, document_id)
 );
 -- +go
 
-DROP INDEX IF EXISTS uq_distribuidora_documents_logical;
+ALTER TABLE distribuidora.route_planning
+    ADD COLUMN IF NOT EXISTS route_name TEXT,
+    ADD COLUMN IF NOT EXISTS driver TEXT,
+    ADD COLUMN IF NOT EXISTS assistant_1 TEXT,
+    ADD COLUMN IF NOT EXISTS assistant_2 TEXT,
+    ADD COLUMN IF NOT EXISTS departure_time TEXT,
+    ADD COLUMN IF NOT EXISTS general_observation TEXT;
 -- +go

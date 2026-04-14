@@ -25,7 +25,13 @@ def _run_sql_file(cur, name: str) -> None:
 
 
 def ensure_distribuidora_schema(cur) -> None:
-    for fn in ("001_schema.sql", "002_indexes.sql", "003_views.sql"):
+    for fn in (
+        "001_schema.sql",
+        "002_indexes.sql",
+        "003_views.sql",
+        "004_route_planning_summary.sql",
+        "005_route_picking.sql",
+    ):
         _run_sql_file(cur, fn)
 
 

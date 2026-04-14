@@ -1,4 +1,4 @@
-"""CRUD ``distribuidora.route_planning``."""
+"""CRUD ``distribuidora.route_planning`` y ``route_planning_summary``."""
 
 from __future__ import annotations
 
@@ -9,6 +9,54 @@ from typing import Any
 from psycopg2.extras import execute_values
 
 from backend.db import get_connection
+
+_ROUTE_PLANNING_SELECT = """
+    id,
+    planning_date,
+    document_id,
+    oc_number,
+    client_id,
+    client_name,
+    municipality,
+    address,
+    lat,
+    lon,
+    total_amount,
+    truck,
+    status,
+    route_name,
+    driver,
+    assistant_1,
+    assistant_2,
+    departure_time,
+    general_observation,
+    created_at,
+    updated_at
+"""
+
+_LINE_PATCHABLE = frozenset(
+    {
+        "truck",
+        "status",
+        "route_name",
+        "driver",
+        "assistant_1",
+        "assistant_2",
+        "departure_time",
+        "general_observation",
+    }
+)
+
+_SUMMARY_PATCHABLE = frozenset(
+    {
+        "route_name",
+        "driver",
+        "assistant_1",
+        "assistant_2",
+        "departure_time",
+        "general_observation",
+    }
+)
 
 
 def _in_placeholders(n: int) -> str:
@@ -75,6 +123,13 @@ def insert_planning_rows(
     planning_date: date,
     truck: str,
     rows: list[dict[str, Any]],
+    *,
+    route_name: str | None = None,
+    driver: str | None = None,
+    assistant_1: str | None = None,
+    assistant_2: str | None = None,
+    departure_time: str | None = None,
+    general_observation: str | None = None,
 ) -> int:
     if not rows:
         return 0
@@ -95,6 +150,12 @@ def insert_planning_rows(
                 r.get("total_amount"),
                 truck,
                 "planned",
+                route_name,
+                driver,
+                assistant_1,
+                assistant_2,
+                departure_time,
+                general_observation,
             )
             for r in rows
         ]
@@ -104,11 +165,14 @@ def insert_planning_rows(
             INSERT INTO distribuidora.route_planning (
                 planning_date, document_id, oc_number, client_id, client_name,
                 municipality, address, lat, lon, total_amount, truck, status,
-                created_at, updated_at
+                route_name, driver, assistant_1, assistant_2, departure_time,
+                general_observation, created_at, updated_at
             ) VALUES %s
             """,
             tpl,
-            template="(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())",
+            template=(
+                "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())"
+            ),
             page_size=len(tpl),
         )
         conn.commit()
@@ -129,23 +193,8 @@ def list_route_planning(
     cur = conn.cursor()
     try:
         cur.execute(
-            """
-            SELECT
-                id,
-                planning_date,
-                document_id,
-                oc_number,
-                client_id,
-                client_name,
-                municipality,
-                address,
-                lat,
-                lon,
-                total_amount,
-                truck,
-                status,
-                created_at,
-                updated_at
+            f"""
+            SELECT {_ROUTE_PLANNING_SELECT.strip()}
             FROM distribuidora.route_planning
             WHERE planning_date = %s
               AND (%s::text IS NULL OR %s::text = '' OR truck = %s)
@@ -174,29 +223,19 @@ def list_route_planning(
         conn.close()
 
 
-def update_route_planning(
-    row_id: int,
-    *,
-    truck: str | None = None,
-    status: str | None = None,
-) -> dict[str, Any] | None:
-    if truck is None and status is None:
+def update_route_planning(row_id: int, updates: dict[str, Any]) -> dict[str, Any] | None:
+    if not updates:
         return None
+    bad = set(updates) - _LINE_PATCHABLE
+    if bad:
+        raise ValueError(f"Campos no permitidos en route_planning: {sorted(bad)}")
     sets: list[str] = []
     params: list[Any] = []
-    if truck is not None:
-        sets.append("truck = %s")
-        params.append(truck)
-    if status is not None:
-        sets.append("status = %s")
-        params.append(status)
+    for key in sorted(updates.keys()):
+        sets.append(f"{key} = %s")
+        params.append(updates[key])
     sets.append("updated_at = NOW()")
     params.append(row_id)
-    returning = """
-        id, planning_date, document_id, oc_number, client_id, client_name,
-        municipality, address, lat, lon, total_amount, truck, status,
-        created_at, updated_at
-    """
     conn = get_connection()
     cur = conn.cursor()
     try:
@@ -205,7 +244,7 @@ def update_route_planning(
             UPDATE distribuidora.route_planning
             SET {", ".join(sets)}
             WHERE id = %s
-            RETURNING {returning}
+            RETURNING {_ROUTE_PLANNING_SELECT.strip()}
             """,
             tuple(params),
         )
@@ -235,6 +274,95 @@ def delete_route_planning(row_id: int) -> bool:
         n = cur.rowcount
         conn.commit()
         return n > 0
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        cur.close()
+        conn.close()
+
+
+def list_route_planning_summaries(planning_date: date) -> list[dict[str, Any]]:
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """
+            SELECT
+                id,
+                planning_date,
+                truck,
+                route_name,
+                driver,
+                assistant_1,
+                assistant_2,
+                departure_time,
+                total_clients,
+                total_amount,
+                general_observation,
+                created_at,
+                updated_at
+            FROM distribuidora.route_planning_summary
+            WHERE planning_date = %s
+            ORDER BY truck ASC, id ASC
+            """,
+            (planning_date,),
+        )
+        cols = [d[0] for d in cur.description]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+    finally:
+        cur.close()
+        conn.close()
+
+
+def update_route_planning_summary(
+    summary_id: int,
+    updates: dict[str, Any],
+) -> dict[str, Any] | None:
+    if not updates:
+        return None
+    bad = set(updates) - _SUMMARY_PATCHABLE
+    if bad:
+        raise ValueError(f"Campos no permitidos en route_planning_summary: {sorted(bad)}")
+    sets: list[str] = []
+    params: list[Any] = []
+    for key in sorted(updates.keys()):
+        sets.append(f"{key} = %s")
+        params.append(updates[key])
+    sets.append("updated_at = NOW()")
+    params.append(summary_id)
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            f"""
+            UPDATE distribuidora.route_planning_summary
+            SET {", ".join(sets)}
+            WHERE id = %s
+            RETURNING
+                id,
+                planning_date,
+                truck,
+                route_name,
+                driver,
+                assistant_1,
+                assistant_2,
+                departure_time,
+                total_clients,
+                total_amount,
+                general_observation,
+                created_at,
+                updated_at
+            """,
+            tuple(params),
+        )
+        row = cur.fetchone()
+        if not row:
+            conn.commit()
+            return None
+        cols = [d[0] for d in cur.description]
+        conn.commit()
+        return dict(zip(cols, row))
     except Exception:
         conn.rollback()
         raise

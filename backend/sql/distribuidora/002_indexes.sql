@@ -29,6 +29,12 @@ CREATE INDEX IF NOT EXISTS idx_distribuidora_documents_type_number
     ON distribuidora.documents (document_type_id, number);
 -- +go
 
+-- Identidad lógica Bsale (empresa + sucursal + tipo + folio); parcial para no indexar NULLs.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_distribuidora_documents_logical
+    ON distribuidora.documents (company_id, office_id, document_type_id, number)
+    WHERE document_type_id IS NOT NULL AND number IS NOT NULL;
+-- +go
+
 CREATE INDEX IF NOT EXISTS idx_distribuidora_details_document
     ON distribuidora.document_details (document_id);
 -- +go
