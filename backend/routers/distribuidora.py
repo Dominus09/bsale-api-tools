@@ -1,6 +1,5 @@
 import logging
 import os
-from collections import defaultdict
 from io import BytesIO
 
 from fastapi import APIRouter, HTTPException, Query
@@ -1485,106 +1484,6 @@ def get_sin_georef():
         conn.close()
 
     return data
-
-
-@router.get("/orders/by-day")
-def get_distribuidora_orders_by_day(
-    limit: int = Query(
-        3000,
-        ge=1,
-        le=10000,
-        description="Máximo de órdenes de compra (tipo 33) a leer antes de agrupar",
-    ),
-    only_not_invoiced: bool = Query(
-        False,
-        description="Solo filas con is_invoiced = false",
-    ),
-    include_attributes_data: bool = Query(
-        False,
-        description="Incluir attributes_data (JSON completo de Bsale; respuesta más pesada)",
-    ),
-):
-    """
-    OCs Bsale persistidas en ``distribuidora.documents`` agrupadas por ``delivery_day``
-    (columna rellenada en sync/resync desde ``GET …/documents/{id}/attributes.json``).
-    """
-    cols = """
-            document_id,
-            number,
-            emission_date,
-            state,
-            total_amount,
-            COALESCE(is_invoiced, FALSE) AS is_invoiced,
-            delivery_day,
-            document_to_generate,
-            payment_method,
-            client_name,
-            client_id
-    """
-    if include_attributes_data:
-        cols = cols + ",\n            attributes_data"
-
-    inv_clause = ""
-    if only_not_invoiced:
-        inv_clause = "AND COALESCE(d.is_invoiced, FALSE) = FALSE\n"
-
-    conn = get_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            f"""
-            SELECT
-            {cols}
-            FROM distribuidora.documents d
-            WHERE d.company_id = 3
-              AND d.office_id = 1
-              AND d.document_type_id = 33
-            {inv_clause}
-            ORDER BY d.delivery_day NULLS LAST,
-                     d.emission_date DESC NULLS LAST,
-                     d.document_id DESC
-            LIMIT %s
-            """,
-            (limit,),
-        )
-        rows = _rows_to_json(cur)
-        cur.close()
-    finally:
-        conn.close()
-
-    by_day: dict[str, list[dict]] = defaultdict(list)
-    for r in rows:
-        ed = r.get("emission_date")
-        if ed is not None and hasattr(ed, "isoformat"):
-            r["emission_date"] = ed.isoformat()
-        ta = r.get("total_amount")
-        if ta is not None:
-            r["total_amount"] = float(ta)
-        raw_dd = r.get("delivery_day")
-        gkey = (raw_dd or "").strip() or "__sin_dia__"
-        by_day[gkey].append(r)
-
-    def _sort_key(k: str) -> tuple[int, str]:
-        if k == "__sin_dia__":
-            return (1, "")
-        return (0, k.casefold())
-
-    groups: list[dict] = []
-    for gkey in sorted(by_day.keys(), key=_sort_key):
-        orders = by_day[gkey]
-        groups.append(
-            {
-                "delivery_day": None if gkey == "__sin_dia__" else gkey,
-                "order_count": len(orders),
-                "orders": orders,
-            }
-        )
-
-    return {
-        "total_orders": len(rows),
-        "group_count": len(groups),
-        "groups": groups,
-    }
 
 
 @router.get("/pendientes")

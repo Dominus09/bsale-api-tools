@@ -17,6 +17,8 @@ from backend.routers import alerts
 from backend.routers import companies
 from backend.routers import dashboard
 from backend.routers import distribuidora
+from backend.routers import distribuidora_orders
+from backend.routers import distribuidora_sync
 from backend.routers.app_distribuidora import router as app_distribuidora_router
 from backend.routers import margin_export
 from backend.routers import margin_problems
@@ -151,6 +153,8 @@ app.include_router(margin_export.router)
 
 # --- Distribuidora ---
 app.include_router(distribuidora.router)
+app.include_router(distribuidora_sync.router)
+app.include_router(distribuidora_orders.router)
 
 # --- App móvil / rutas del día (bsale.rutas_dia + visitas, sync offline) ---
 app.include_router(app_distribuidora_router, prefix="/app_distribuidora")

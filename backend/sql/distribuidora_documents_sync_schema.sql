@@ -1,20 +1,9 @@
+-- DEPRECADO: el esquema vive en ``backend/sql/distribuidora/`` (001_schema, 002_indexes, 003_views).
+-- El job aplica esos archivos vía ``sync_repo.ensure_distribuidora_schema``.
+-- Se conserva este archivo solo como referencia histórica; no ejecutar en paralelo con el nuevo esquema.
+
 -- Esquema distribuidora: documentos Bsale (empresa 3, office 1) + estado de sync incremental.
 -- Ejecutar una vez en PostgreSQL (o dejar que el job intente crear si no existe).
-
-CREATE SCHEMA IF NOT EXISTS distribuidora;
-
-CREATE TABLE IF NOT EXISTS distribuidora.sync_state (
-    id         SERIAL PRIMARY KEY,
-    last_sync  TIMESTAMPTZ NOT NULL DEFAULT '2000-01-01 00:00:00+00'::timestamptz
-);
-
--- Si sync_state ya existía sin last_sync (despliegues antiguos):
-ALTER TABLE distribuidora.sync_state
-    ADD COLUMN IF NOT EXISTS last_sync TIMESTAMPTZ NOT NULL
-        DEFAULT '2000-01-01 00:00:00+00'::timestamptz;
-
-UPDATE distribuidora.sync_state
-SET last_sync = COALESCE(last_sync, '2000-01-01 00:00:00+00'::timestamptz);
 
 INSERT INTO distribuidora.sync_state (last_sync)
 SELECT '2000-01-01 00:00:00+00'::timestamptz
