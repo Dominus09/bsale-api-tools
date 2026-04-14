@@ -30,6 +30,8 @@ SELECT
     d.number,
     d.client_id,
     d.user_id,
+    d.seller_id,
+    d.seller_name,
     d.emission_date,
     d.total_amount,
     d.municipality,
@@ -89,6 +91,8 @@ SELECT
     p.number,
     p.client_id,
     p.user_id,
+    d.seller_id,
+    d.seller_name,
     p.emission_date,
     p.total_amount,
     p.municipality,
@@ -104,5 +108,10 @@ SELECT
     s.invoicing_number,
     s.invoicing_emission_date
 FROM distribuidora.v_orders_purchase p
+INNER JOIN distribuidora.documents d
+    ON d.document_id = p.document_id
+   AND d.company_id = 3
+   AND d.office_id = 1
+   AND d.document_type_id = 33
 LEFT JOIN distribuidora.v_orders_purchase_status s ON s.document_id = p.document_id;
 -- +go

@@ -62,13 +62,20 @@ def refresh_and_list_route_picking(
                 v.tipo_documento_a_generar,
                 v.forma_pago,
                 v.observaciones,
-                NULLIF(
-                    BTRIM(
-                        COALESCE(u.first_name, '')
-                        || ' '
-                        || COALESCE(u.last_name, '')
+                COALESCE(
+                    NULLIF(BTRIM(v.seller_name), ''),
+                    NULLIF(
+                        BTRIM(
+                            COALESCE(u.first_name, '')
+                            || ' '
+                            || COALESCE(u.last_name, '')
+                        ),
+                        ''
                     ),
-                    ''
+                    CASE
+                        WHEN v.user_id IS NULL THEN NULL
+                        ELSE 'Usuario ' || v.user_id::text
+                    END
                 ),
                 COALESCE(rp.total_amount, v.total_amount),
                 NOW()

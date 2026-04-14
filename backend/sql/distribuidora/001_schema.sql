@@ -126,10 +126,17 @@ CREATE TABLE IF NOT EXISTS distribuidora.documents (
     url_public_view TEXT,
     price_list_id BIGINT,
     tracking_number TEXT,
+    seller_id INT,
+    seller_name TEXT,
     raw_data JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+-- +go
+
+ALTER TABLE distribuidora.documents
+    ADD COLUMN IF NOT EXISTS seller_id INT,
+    ADD COLUMN IF NOT EXISTS seller_name TEXT;
 -- +go
 
 DO $mig_doc$

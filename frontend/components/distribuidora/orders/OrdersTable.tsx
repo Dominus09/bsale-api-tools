@@ -114,6 +114,7 @@ export function OrdersTable({
               items.map((row) => {
                 const invoiced = row.is_invoiced === true
                 const seller =
+                  row.seller_name?.trim() ||
                   row.seller?.trim() ||
                   (row.user_id != null ? `Usuario ${row.user_id}` : "—")
                 return (

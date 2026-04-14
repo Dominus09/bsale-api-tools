@@ -76,6 +76,7 @@ def list_purchase_orders(
             SELECT
                 e.*,
                 COALESCE(
+                    NULLIF(BTRIM(e.seller_name), ''),
                     NULLIF(
                         BTRIM(
                             COALESCE(u.first_name, '')

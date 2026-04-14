@@ -52,7 +52,7 @@ export function OrdersSummary({ items }: OrdersSummaryProps) {
   const bySeller = useMemo(
     () =>
       aggregateByKey(items, (row) => {
-        const s = row.seller?.trim()
+        const s = row.seller_name?.trim() || row.seller?.trim()
         if (s) return s
         if (row.user_id != null) return `Usuario ${row.user_id}`
         return "Sin vendedor"

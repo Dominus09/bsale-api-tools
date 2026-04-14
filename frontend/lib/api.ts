@@ -819,6 +819,9 @@ export type DistribuidoraPurchaseOrder = {
   number?: number | null
   client_id?: number | null
   user_id?: number | null
+  seller_id?: number | null
+  /** Vendedor original (sync sellers.json); no depende del ``user_id`` del documento. */
+  seller_name?: string | null
   emission_date?: string | null
   total_amount?: number | null
   municipality?: string | null
@@ -828,6 +831,7 @@ export type DistribuidoraPurchaseOrder = {
   forma_pago?: string | null
   observaciones?: string | null
   is_invoiced?: boolean | null
+  /** Nombre a mostrar: prioriza ``seller_name`` en API. */
   seller?: string | null
   [key: string]: unknown
 }

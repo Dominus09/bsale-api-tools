@@ -86,6 +86,7 @@ export default function DistribuidoraOrdersPage() {
       if (id == null || !Number.isFinite(Number(id))) continue
       const n = Number(id)
       const label =
+        r.seller_name?.trim() ||
         r.seller?.trim() ||
         (Number.isFinite(n) ? `Usuario ${n}` : "Usuario")
       if (!byUser.has(n)) byUser.set(n, label)

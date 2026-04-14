@@ -145,3 +145,56 @@ def upsert_documents(cur, rows: list[dict[str, Any]]) -> tuple[int, int]:
     template = "(" + ",".join(["%s"] * len(cols)) + ",NOW(),NOW())"
     execute_values(cur, sql, values, template=template, page_size=len(values))
     return len(rows), len(rows)
+
+
+def parse_document_sellers_response(data: dict[str, Any]) -> tuple[int | None, str | None]:
+    """
+    Respuesta típica GET ``/v1/documents/{id}/sellers.json`` (Bsale):
+    ``{ "items": [ { "id", "firstName", "lastName", ... } ] }``.
+    Se usa el primer ítem como vendedor asociado al documento.
+    """
+    if not isinstance(data, dict):
+        return None, None
+    items = data.get("items")
+    if not isinstance(items, list) or len(items) == 0:
+        return None, None
+    s = items[0]
+    if not isinstance(s, dict):
+        return None, None
+    raw_id = s.get("id")
+    try:
+        seller_id = int(raw_id) if raw_id is not None else None
+    except (TypeError, ValueError):
+        seller_id = None
+    fn = str(s.get("firstName") or s.get("firstname") or "").strip()
+    ln = str(s.get("lastName") or s.get("lastname") or "").strip()
+    name = f"{fn} {ln}".strip() or None
+    return seller_id, name
+
+
+def update_document_seller_if_empty(
+    cur,
+    document_id: int,
+    seller_id: int | None,
+    seller_name: str | None,
+) -> bool:
+    """
+    Persiste ``seller_id`` / ``seller_name`` solo si ``seller_name`` está vacío
+    (no sobrescribe vendedor ya fijado).
+    """
+    if not seller_name or not str(seller_name).strip():
+        return False
+    name = str(seller_name).strip()
+    cur.execute(
+        """
+        UPDATE distribuidora.documents
+        SET
+            seller_id = %s,
+            seller_name = %s,
+            updated_at = NOW()
+        WHERE document_id = %s
+          AND (seller_name IS NULL OR BTRIM(seller_name) = '')
+        """,
+        (seller_id, name, document_id),
+    )
+    return cur.rowcount > 0

@@ -13,7 +13,12 @@ from typing import Any
 from backend.db import get_connection
 from backend.repositories.distribuidora.attributes_repo import replace_document_attributes
 from backend.repositories.distribuidora.details_repo import replace_document_details
-from backend.repositories.distribuidora.documents_repo import document_dict_from_bsale, upsert_documents
+from backend.repositories.distribuidora.documents_repo import (
+    document_dict_from_bsale,
+    parse_document_sellers_response,
+    update_document_seller_if_empty,
+    upsert_documents,
+)
 from backend.repositories.distribuidora.references_repo import replace_document_references
 from backend.repositories.distribuidora.sync_repo import (
     ensure_distribuidora_schema,
@@ -56,7 +61,7 @@ def _refresh_document_children(
     cur,
     document_id: int,
     document_type_id: int | None,
-    stats: dict[str, int],
+    stats: dict[str, Any],
 ) -> None:
     try:
         det = client.get(f"/documents/{document_id}/details.json")
@@ -85,6 +90,46 @@ def _refresh_document_children(
             stats["references_rows"] += n
         except Exception as e:
             logger.warning("references document_id=%s: %s", document_id, e)
+
+    _sync_document_sellers_if_empty(client, cur, document_id, document_type_id, stats)
+
+
+def _sync_document_sellers_if_empty(
+    client: BsaleClient,
+    cur,
+    document_id: int,
+    document_type_id: int | None,
+    stats: dict[str, Any],
+) -> None:
+    """GET ``/documents/{id}/sellers.json`` y guarda vendedor solo si ``seller_name`` está vacío."""
+    if document_type_id != 33:
+        return
+    cur.execute(
+        """
+        SELECT seller_name
+        FROM distribuidora.documents
+        WHERE document_id = %s
+        """,
+        (document_id,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return
+    if row[0] is not None and str(row[0]).strip() != "":
+        return
+    try:
+        data = client.get(f"/documents/{document_id}/sellers.json")
+    except Exception as e:
+        logger.warning("sellers.json document_id=%s: %s", document_id, e)
+        return
+    sid, sname = parse_document_sellers_response(data)
+    if not sname:
+        return
+    try:
+        if update_document_seller_if_empty(cur, document_id, sid, sname):
+            stats["sellers_filled"] = int(stats.get("sellers_filled") or 0) + 1
+    except Exception as e:
+        logger.warning("update seller document_id=%s: %s", document_id, e)
 
 
 def _fetch_documents_window(
@@ -194,6 +239,7 @@ def sync_bsale_distribuidora_incremental(*, strict_token: bool = False) -> dict[
         "details_rows": 0,
         "attributes_rows": 0,
         "references_rows": 0,
+        "sellers_filled": 0,
         "duration_seconds": 0.0,
         "omitido_concurrencia": False,
         "skipped": False,
@@ -317,6 +363,7 @@ def resync_bsale_distribuidora_range(
         "details_rows": 0,
         "attributes_rows": 0,
         "references_rows": 0,
+        "sellers_filled": 0,
         "months": 0,
         "duration_seconds": 0.0,
         "omitido_concurrencia": False,
