@@ -253,41 +253,37 @@ def _coords_ors_base_clientes_base(base: dict, clientes_ordenados: list[dict]) -
     return coords
 
 
-def _geometria_ruta_secuencial(
-    base: dict,
-    clientes_ordenados: list[dict],
-) -> tuple[object | None, float, float] | None:
-    """
-    ORS en el orden fijo dado (base → visitas → base), sin reoptimizar secuencia.
-    Devuelve (geometry, km_totales, minutos_totales) o None si no se pudo calcular.
-    """
-    from backend.utils.ors_client import get_route
-
-    if not clientes_ordenados:
-        return (None, 0.0, 0.0)
-
-    coords = _coords_ors_base_clientes_base(base, clientes_ordenados)
-
-    if len(coords) < 2:
-        return None
-    if len(coords) > 50:
-        return None
-
+def _ors_max_waypoints_per_chunk() -> int:
+    """ORS limita waypoints por petición; troceamos rutas largas (default 20, máx. 50)."""
+    raw = os.getenv("ORS_MAX_WAYPOINTS_PER_REQUEST", "20").strip()
     try:
-        ors_data = get_route(coords)
-    except Exception:
-        return None
+        n = int(raw)
+    except ValueError:
+        n = 20
+    return max(5, min(n, 50))
 
-    if "routes" not in ors_data or not ors_data["routes"]:
-        return None
 
-    route = ors_data["routes"][0]
-    summary = route.get("summary") or {}
-    dist_m = summary.get("distance")
-    dur_s = summary.get("duration")
-    km = float(dist_m) / 1000 if dist_m is not None else 0.0
-    mins = float(dur_s) / 60 if dur_s is not None else 0.0
-    return (route.get("geometry"), km, mins)
+def _lonlat_casi_iguales(a: list[float], b: list[float], eps: float = 1e-5) -> bool:
+    return abs(float(a[0]) - float(b[0])) < eps and abs(float(a[1]) - float(b[1])) < eps
+
+
+def _ors_dividir_tramos_solapados(coords: list[list[float]], max_wp: int) -> list[list[list[float]]]:
+    """
+    Lista de tramos consecutivos de hasta ``max_wp`` puntos cada uno.
+    Solape de 1 waypoint entre tramos para mantener continuidad (orden preservado).
+    """
+    n = len(coords)
+    if n <= max_wp:
+        return [coords]
+    chunks: list[list[list[float]]] = []
+    i = 0
+    while i < n:
+        j = min(i + max_wp, n)
+        chunks.append(coords[i:j])
+        if j >= n:
+            break
+        i = j - 1
+    return chunks
 
 
 def _decode_polyline_lonlat(polyline_str: str, precision: int = 5) -> list[list[float]]:
@@ -354,6 +350,73 @@ def _route_geometry_to_lonlat_coords(geometry: object) -> list[list[float]]:
     return []
 
 
+def _ors_route_merge_chunks(
+    coords: list[list[float]],
+    max_wp: int | None = None,
+) -> tuple[object | None, float, float] | None:
+    """
+    Varias peticiones ORS Directions en tramos (mismo orden de waypoints), une geometrías
+    en un LineString GeoJSON [lon, lat] y suma distancia/duración de cada tramo.
+    """
+    from backend.utils.ors_client import get_route
+
+    if len(coords) < 2:
+        return None
+    cap = max_wp if max_wp is not None else _ors_max_waypoints_per_chunk()
+    chunks = _ors_dividir_tramos_solapados(coords, cap)
+    merged: list[list[float]] = []
+    total_km = 0.0
+    total_mins = 0.0
+
+    for chunk in chunks:
+        if len(chunk) < 2:
+            return None
+        try:
+            ors_data = get_route(chunk)
+        except Exception:
+            return None
+        if "routes" not in ors_data or not ors_data["routes"]:
+            return None
+        route = ors_data["routes"][0]
+        summary = route.get("summary") or {}
+        dist_m = summary.get("distance")
+        dur_s = summary.get("duration")
+        if dist_m is not None:
+            total_km += float(dist_m) / 1000.0
+        if dur_s is not None:
+            total_mins += float(dur_s) / 60.0
+        part = _route_geometry_to_lonlat_coords(route.get("geometry"))
+        if not part:
+            return None
+        if merged:
+            if _lonlat_casi_iguales(part[0], merged[-1]):
+                part = part[1:]
+            elif part[0] == merged[-1]:
+                part = part[1:]
+        merged.extend(part)
+
+    if not merged:
+        return None
+    geometry: object = {"type": "LineString", "coordinates": merged}
+    return (geometry, total_km, total_mins)
+
+
+def _geometria_ruta_secuencial(
+    base: dict,
+    clientes_ordenados: list[dict],
+) -> tuple[object | None, float, float] | None:
+    """
+    ORS en el orden fijo (base → visitas → base). Rutas largas: varios tramos ORS unidos
+    (``ORS_MAX_WAYPOINTS_PER_REQUEST``, default 20 waypoints c/u, solape 1).
+    """
+    if not clientes_ordenados:
+        return (None, 0.0, 0.0)
+    coords = _coords_ors_base_clientes_base(base, clientes_ordenados)
+    if len(coords) < 2:
+        return None
+    return _ors_route_merge_chunks(coords, _ors_max_waypoints_per_chunk())
+
+
 def _ors_reoptimizar_cola(prev: dict | None, despues: list[dict], base: dict) -> dict:
     """
     Reordena solo la cola con el mismo pipeline local (ángulo + 2-opt) que la ruta completa.
@@ -384,102 +447,16 @@ def _geom_km_encadenado(
     base: dict,
     clientes_ordenados: list[dict],
 ) -> tuple[object | None, float, float] | None:
-    """
-    Ruta larga: varias peticiones ORS encadenadas (sin volver a base entre tramos),
-    suma km/minutos y une geometrías en un LineString GeoJSON.
-
-    Recorrido lógico completo: **BASE → clientes → BASE**.
-    - El **primer** tramo empieza en la base e incluye el desplazamiento hasta el primer cliente.
-    - Los tramos intermedios continúan entre último y siguiente cliente (sin duplicar base).
-    - El **último** tramo termina en la base (regreso desde el último cliente).
-
-    Límite ORS: 50 coordenadas por petición.
-    """
-    from backend.utils.ors_client import get_route
-
-    n = len(clientes_ordenados)
-    if n == 0:
-        return (None, 0.0, 0.0)
-
-    blat = float(base["lat"])
-    blon = float(base["lon"])
-    merged_coords: list[list[float]] = []
-    total_km = 0.0
-    total_mins = 0.0
-    pos = 0
-    prev_lon, prev_lat = blon, blat
-
-    while pos < n:
-        remaining = n - pos
-        if pos == 0:
-            if remaining + 2 <= 50:
-                chunk_len = remaining
-                is_last = True
-            else:
-                chunk_len = min(49, remaining - 1)
-                is_last = False
-        elif remaining + 2 <= 50:
-            chunk_len = remaining
-            is_last = True
-        else:
-            chunk_len = min(49, remaining - 1)
-            is_last = False
-
-        chunk = clientes_ordenados[pos : pos + chunk_len]
-        pos += len(chunk)
-        if not chunk:
-            break
-
-        coords: list[list[float]] = [[prev_lon, prev_lat]]
-        coords.extend([float(c["lon"]), float(c["lat"])] for c in chunk)
-        if is_last:
-            coords.append([blon, blat])
-
-        if len(coords) < 2 or len(coords) > 50:
-            return None
-
-        try:
-            ors_data = get_route(coords)
-        except Exception:
-            return None
-
-        if "routes" not in ors_data or not ors_data["routes"]:
-            return None
-
-        route = ors_data["routes"][0]
-        summary = route.get("summary") or {}
-        dist_m = summary.get("distance")
-        dur_s = summary.get("duration")
-        if dist_m is not None:
-            total_km += float(dist_m) / 1000
-        if dur_s is not None:
-            total_mins += float(dur_s) / 60
-
-        part = _route_geometry_to_lonlat_coords(route.get("geometry"))
-        if part:
-            if merged_coords and part[0] == merged_coords[-1]:
-                part = part[1:]
-            merged_coords.extend(part)
-
-        prev_lon = float(chunk[-1]["lon"])
-        prev_lat = float(chunk[-1]["lat"])
-
-    if not merged_coords:
-        return None
-
-    geometry: object = {"type": "LineString", "coordinates": merged_coords}
-    return (geometry, total_km, total_mins)
+    """Misma lógica que `_geometria_ruta_secuencial` (ORS por tramos unidos)."""
+    return _geometria_ruta_secuencial(base, clientes_ordenados)
 
 
 def _geom_km_ruta_completa(
     base: dict,
     clientes_ordenados: list[dict],
 ) -> tuple[object | None, float, float] | None:
-    """Una petición secuencial si cabe en ORS; si no, tramos encadenados."""
-    seq = _geometria_ruta_secuencial(base, clientes_ordenados)
-    if seq is not None:
-        return seq
-    return _geom_km_encadenado(base, clientes_ordenados)
+    """Geometría y km/min ORS para BASE→clientes→BASE (trocea automáticamente rutas largas)."""
+    return _geometria_ruta_secuencial(base, clientes_ordenados)
 
 
 def _ors_optimize_from_base_clientes(base: dict, clientes: list[dict]) -> dict:

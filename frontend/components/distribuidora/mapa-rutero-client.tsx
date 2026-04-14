@@ -30,7 +30,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
-import { GripVertical, Loader2, Lock, RefreshCw } from "lucide-react"
+import { Car, GripVertical, Loader2, Lock, Pause, Play, RefreshCw, RotateCcw } from "lucide-react"
 
 import polylineModule from "@mapbox/polyline"
 
@@ -127,6 +127,8 @@ const FILTER_ALL = "__all__"
 const MAP_CLIENTE_COLOR = "#2563eb"
 const MAP_CLIENTE_COLOR_HOVER = "#ea580c"
 const MAP_CLIENTE_COLOR_HIGHLIGHT = "#16a34a"
+/** Cliente al que la simulación “llegó” (resaltado + popup). */
+const MAP_CLIENTE_COLOR_SIM_VISITA = "#c026d3"
 
 type PolylineDecodeFn = (str: string, precision?: number) => [number, number][]
 
@@ -163,6 +165,40 @@ function decodeEncodedPolylineToLatLngs(encoded: string): L.LatLngTuple[] {
   } catch {
     return []
   }
+}
+
+/** Inserta puntos intermedios para que la simulación no “salte” visitas (umbral 50 m). */
+function densificarRutaParaSimulacion(
+  map: L.Map,
+  pts: L.LatLngTuple[],
+  maxSegmentM: number,
+): L.LatLngTuple[] {
+  if (pts.length < 2) return pts.slice()
+  const out: L.LatLngTuple[] = [pts[0]]
+  for (let j = 1; j < pts.length; j++) {
+    const a = pts[j - 1]
+    const b = pts[j]
+    const d = map.distance(a, b)
+    if (d <= maxSegmentM || d < 0.5) {
+      out.push(b)
+      continue
+    }
+    const steps = Math.max(2, Math.ceil(d / maxSegmentM))
+    for (let s = 1; s < steps; s++) {
+      const t = s / steps
+      out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t] as L.LatLngTuple)
+    }
+    out.push(b)
+  }
+  return out
+}
+
+function escapeHtmlTexto(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
 }
 
 function geometryToLatLngs(geometry: unknown): L.LatLngTuple[] {
@@ -314,15 +350,19 @@ const MARKER_BORDER = 2
 
 const clienteIconCache = new Map<string, L.DivIcon>()
 
-function getClienteDivIcon(fillColor: string): L.DivIcon {
-  const key = fillColor
+function getClienteDivIcon(fillColor: string, opts?: { simDestacado?: boolean }): L.DivIcon {
+  const sim = Boolean(opts?.simDestacado)
+  const key = `${fillColor}|${sim ? "s" : "n"}`
   let icon = clienteIconCache.get(key)
   if (!icon) {
-    const size = MARKER_PX
+    const size = sim ? 20 : MARKER_PX
     const b = MARKER_BORDER
+    const shadow = sim
+      ? "box-shadow:0 0 0 4px rgba(192,38,211,0.55),0 4px 16px rgba(15,23,42,0.4);transform:scale(1.12);"
+      : "box-shadow:0 2px 8px rgba(15,23,42,0.28);"
     icon = L.divIcon({
       className: "mapa-rutero-cliente-icon",
-      html: `<div style="width:${size}px;height:${size}px;border-radius:9999px;background:${fillColor};border:${b}px solid #ffffff;box-shadow:0 2px 8px rgba(15,23,42,0.28);box-sizing:content-box;"></div>`,
+      html: `<div style="width:${size}px;height:${size}px;border-radius:9999px;background:${fillColor};border:${b}px solid #ffffff;${shadow}box-sizing:content-box;"></div>`,
       iconSize: [size + b * 2, size + b * 2],
       iconAnchor: [(size + b * 2) / 2, (size + b * 2) / 2],
       popupAnchor: [0, -10],
@@ -330,6 +370,138 @@ function getClienteDivIcon(fillColor: string): L.DivIcon {
     clienteIconCache.set(key, icon)
   }
   return icon
+}
+
+let simVehiculoIconSingleton: L.DivIcon | null = null
+function getSimulacionVehiculoIcon(): L.DivIcon {
+  if (!simVehiculoIconSingleton) {
+    simVehiculoIconSingleton = L.divIcon({
+      className: "mapa-rutero-sim-vehiculo",
+      html:
+        '<div style="width:38px;height:38px;border-radius:50%;background:linear-gradient(160deg,#0f766e,#14b8a6);border:3px solid #fff;box-shadow:0 4px 14px rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;font-size:20px;line-height:1;" aria-hidden="true">🚐</div>',
+      iconSize: [38, 38],
+      iconAnchor: [19, 19],
+    })
+  }
+  return simVehiculoIconSingleton
+}
+
+type SimulacionParada = {
+  bsale_id: number
+  lat: number
+  lon: number
+  nombre: string
+  orden: number
+}
+
+/** Animación del vehículo sobre la polyline; no bloquea el hilo (setTimeout). */
+function MapaRuteroSimulacionVehiculo({
+  runId,
+  running,
+  paused,
+  speedMult,
+  routePoints,
+  stops,
+  onVisitClient,
+  onComplete,
+}: {
+  runId: number
+  running: boolean
+  paused: boolean
+  speedMult: number
+  routePoints: L.LatLngTuple[] | null
+  stops: SimulacionParada[]
+  onVisitClient: (bsaleId: number) => void
+  onComplete: () => void
+}) {
+  const map = useMap()
+  const pausedRef = useRef(paused)
+  const speedRef = useRef(speedMult)
+  useEffect(() => {
+    pausedRef.current = paused
+  }, [paused])
+  useEffect(() => {
+    speedRef.current = speedMult
+  }, [speedMult])
+
+  useEffect(() => {
+    if (!running || !routePoints || routePoints.length < 2) {
+      return
+    }
+
+    const dense = densificarRutaParaSimulacion(map, routePoints, 22)
+    let cancelled = false
+    let idx = 0
+    const visited = new Set<number>()
+    let dwellUntil = 0
+    let timeoutId: ReturnType<typeof setTimeout> | undefined
+
+    const marker = L.marker(dense[0], {
+      icon: getSimulacionVehiculoIcon(),
+      zIndexOffset: 2500,
+    }).addTo(map)
+
+    const tick = () => {
+      if (cancelled) return
+      const now = Date.now()
+      if (now < dwellUntil) {
+        timeoutId = window.setTimeout(tick, 90)
+        return
+      }
+      if (pausedRef.current) {
+        timeoutId = window.setTimeout(tick, 120)
+        return
+      }
+      if (idx >= dense.length) {
+        try {
+          if (map.hasLayer(marker)) map.removeLayer(marker)
+        } catch {
+          /* */
+        }
+        onComplete()
+        return
+      }
+
+      const pos = dense[idx]
+      marker.setLatLng(pos)
+
+      for (const p of stops) {
+        if (visited.has(p.bsale_id)) continue
+        const dist = map.distance(pos, L.latLng(p.lat, p.lon))
+        if (dist < 50) {
+          visited.add(p.bsale_id)
+          onVisitClient(p.bsale_id)
+          L.popup({ maxWidth: 300, className: "mapa-rutero-sim-popup", autoPan: true })
+            .setLatLng([p.lat, p.lon])
+            .setContent(
+              `<div class="p-1 text-sm leading-snug"><b>${escapeHtmlTexto(p.nombre)}</b><br/><span style="color:#444">Orden visita: ${Number.isFinite(p.orden) ? p.orden : "—"}</span></div>`,
+            )
+            .openOn(map)
+          dwellUntil = Date.now() + 2200
+          break
+        }
+      }
+
+      idx += 1
+      const baseDelay = 50 / Math.max(1, speedRef.current)
+      const delay = Math.max(10, Math.round(baseDelay))
+      timeoutId = window.setTimeout(tick, delay)
+    }
+
+    timeoutId = window.setTimeout(tick, 40)
+
+    return () => {
+      cancelled = true
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId)
+      try {
+        if (map.hasLayer(marker)) map.removeLayer(marker)
+      } catch {
+        /* */
+      }
+    }
+  }, [runId, running, map, routePoints, stops, onVisitClient, onComplete])
+
+  return null
 }
 
 /** Ruta absoluta desde `public/` (Next.js); evita imágenes rotas por emoji o rutas relativas. */
@@ -1018,6 +1190,13 @@ export default function MapaRuteroClient() {
   const [rutaSugerenciasLoading, setRutaSugerenciasLoading] = useState(false)
   const [rutaSugerenciasError, setRutaSugerenciasError] = useState("")
   const [sugerenciasIgnoradas, setSugerenciasIgnoradas] = useState<string[]>([])
+  const [simRunning, setSimRunning] = useState(false)
+  const [simPaused, setSimPaused] = useState(false)
+  const [simSpeedMult, setSimSpeedMult] = useState(1)
+  const [simRunId, setSimRunId] = useState(0)
+  const [simPath, setSimPath] = useState<L.LatLngTuple[] | null>(null)
+  const [simStops, setSimStops] = useState<SimulacionParada[]>([])
+  const [simHighlightBsaleId, setSimHighlightBsaleId] = useState<number | null>(null)
 
   const setListItemRef = useCallback((bid: number, el: HTMLElement | null) => {
     if (el) listItemRefs.current.set(bid, el)
@@ -1048,6 +1227,11 @@ export default function MapaRuteroClient() {
     setHighlightBsaleId(null)
     setHoverBsaleId(null)
     setFlyTo(null)
+    setSimRunning(false)
+    setSimPaused(false)
+    setSimPath(null)
+    setSimStops([])
+    setSimHighlightBsaleId(null)
   }, [vendedorFilter, diaFilter])
 
   useEffect(() => {
@@ -1201,6 +1385,93 @@ export default function MapaRuteroClient() {
   }, [puedeEditarOrden, vendedorFilter, diaFilter, rutaOrdenFirma, rutaDetalleLoading, rutaDetalle])
 
   const rutaLista = useMemo(() => rutaClientesOrdenados(rutaDetalle), [rutaDetalle])
+
+  const onSimVisit = useCallback((bsaleId: number) => {
+    setSimHighlightBsaleId(bsaleId)
+    focusClienteEnLista(bsaleId)
+  }, [focusClienteEnLista])
+
+  const onSimComplete = useCallback(() => {
+    setSimRunning(false)
+    setSimPaused(false)
+    setSimHighlightBsaleId(null)
+    try {
+      mapRef.current?.closePopup()
+    } catch {
+      /* */
+    }
+  }, [])
+
+  const iniciarSimulacion = useCallback(() => {
+    if (!puedeEditarOrden || !isDistribuidoraRutaDetalleOk(rutaDetalle)) return
+    const pts = geometryToLatLngs(rutaDetalle.geometry)
+    if (pts.length < 2) {
+      setOrdenMensaje(
+        "No hay geometría de ruta trazada para simular. Optimice la ruta o espere a que se genere el trazado ORS.",
+      )
+      return
+    }
+    const rows = [...rutaLista].sort((a, b) => Number(a.orden_visita ?? 0) - Number(b.orden_visita ?? 0))
+    const stops: SimulacionParada[] = []
+    let seq = 0
+    for (const r of rows) {
+      const lat = Number(r.lat)
+      const lon = Number(r.lon)
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue
+      seq += 1
+      const ov = Number(r.orden_visita ?? r.orden_manual ?? 0)
+      stops.push({
+        bsale_id: Number(r.bsale_id),
+        lat,
+        lon,
+        nombre: nombreClienteDesdeFilaRuta(r),
+        orden: Number.isFinite(ov) && ov > 0 ? ov : seq,
+      })
+    }
+    if (stops.length === 0) {
+      setOrdenMensaje("No hay clientes con coordenadas en la ruta para simular.")
+      return
+    }
+    setOrdenMensaje("")
+    setSimPath(pts)
+    setSimStops(stops)
+    setSimPaused(false)
+    setSimHighlightBsaleId(null)
+    setSimRunId((n) => n + 1)
+    setSimRunning(true)
+  }, [puedeEditarOrden, rutaDetalle, rutaLista])
+
+  const detenerSimulacion = useCallback(() => {
+    setSimRunning(false)
+    setSimPaused(false)
+    setSimPath(null)
+    setSimStops([])
+    setSimHighlightBsaleId(null)
+    try {
+      mapRef.current?.closePopup()
+    } catch {
+      /* */
+    }
+  }, [])
+
+  const reiniciarSimulacion = useCallback(() => {
+    if (!simPath || simPath.length < 2) return
+    setSimPaused(false)
+    setSimHighlightBsaleId(null)
+    try {
+      mapRef.current?.closePopup()
+    } catch {
+      /* */
+    }
+    setSimRunId((n) => n + 1)
+  }, [simPath])
+
+  const puedeSimularRuta =
+    puedeEditarOrden &&
+    isDistribuidoraRutaDetalleOk(rutaDetalle) &&
+    geometryToLatLngs(rutaDetalle.geometry).length >= 2 &&
+    rutaLista.length > 0 &&
+    !rutaDetalleLoading
 
   const onOrdenPanelReorder = useCallback(
     async (bulk: { id: number; orden_manual: number }[]) => {
@@ -1424,6 +1695,7 @@ export default function MapaRuteroClient() {
               className={SELECT_CLASS}
               value={vendedorFilter}
               onChange={onVendedorChange}
+              disabled={simRunning}
               aria-label="Filtrar por vendedor"
             >
               <option value={FILTER_ALL}>Todos los vendedores</option>
@@ -1437,6 +1709,7 @@ export default function MapaRuteroClient() {
               className={SELECT_CLASS}
               value={diaFilter}
               onChange={onDiaChange}
+              disabled={simRunning}
               aria-label="Filtrar por día"
             >
               <option value={FILTER_ALL}>Todos los días</option>
@@ -1452,7 +1725,7 @@ export default function MapaRuteroClient() {
                   type="button"
                   variant="default"
                   size="sm"
-                  disabled={ordenGuardando || rutaDetalleLoading}
+                  disabled={ordenGuardando || rutaDetalleLoading || simRunning}
                   onClick={() => void onOptimizarRuta()}
                 >
                   Optimizar ruta
@@ -1461,11 +1734,70 @@ export default function MapaRuteroClient() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  disabled={ordenGuardando}
+                  disabled={ordenGuardando || simRunning}
                   onClick={() => void onResetOrdenManual()}
                 >
                   Limpiar orden manual
                 </Button>
+                {!simRunning ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    disabled={!puedeSimularRuta}
+                    title={
+                      !puedeSimularRuta
+                        ? "Requiere vendedor y día, ruta con geometría trazada y al menos un cliente en terreno."
+                        : "Recorrido animado sobre la polyline (no bloquea la interfaz)."
+                    }
+                    onClick={() => void iniciarSimulacion()}
+                  >
+                    <Car className="mr-1.5 h-4 w-4" aria-hidden />
+                    Simular ruta
+                  </Button>
+                ) : (
+                  <>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setSimPaused((p) => !p)}
+                      aria-pressed={simPaused}
+                    >
+                      {simPaused ? (
+                        <>
+                          <Play className="mr-1.5 h-4 w-4" aria-hidden />
+                          Reanudar
+                        </>
+                      ) : (
+                        <>
+                          <Pause className="mr-1.5 h-4 w-4" aria-hidden />
+                          Pausar
+                        </>
+                      )}
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" onClick={() => void reiniciarSimulacion()}>
+                      <RotateCcw className="mr-1.5 h-4 w-4" aria-hidden />
+                      Reiniciar
+                    </Button>
+                    <Button type="button" variant="outline" size="sm" onClick={() => void detenerSimulacion()}>
+                      Detener
+                    </Button>
+                    <span className="text-xs font-medium text-muted-foreground sm:ml-1">Velocidad</span>
+                    {([1, 2, 4] as const).map((m) => (
+                      <Button
+                        key={m}
+                        type="button"
+                        variant={simSpeedMult === m ? "default" : "outline"}
+                        size="sm"
+                        className="min-w-[2.75rem] px-2"
+                        onClick={() => setSimSpeedMult(m)}
+                      >
+                        {m}x
+                      </Button>
+                    ))}
+                  </>
+                )}
               </>
             ) : null}
           </div>
@@ -1597,6 +1929,18 @@ export default function MapaRuteroClient() {
                       activo={puedeEditarOrden}
                     />
                     <MapaRuteroOrsRoute detalle={rutaDetalle} viewBehaviorRef={orsRouteViewRef} />
+                    {simRunning && simPath && simPath.length >= 2 ? (
+                      <MapaRuteroSimulacionVehiculo
+                        runId={simRunId}
+                        running={simRunning}
+                        paused={simPaused}
+                        speedMult={simSpeedMult}
+                        routePoints={simPath}
+                        stops={simStops}
+                        onVisitClient={onSimVisit}
+                        onComplete={onSimComplete}
+                      />
+                    ) : null}
                     {puedeEditarOrden ? (
                       <>
                         {clientesVisibles.map((c) => {
@@ -1606,8 +1950,10 @@ export default function MapaRuteroClient() {
                             enRuta &&
                             c.vendedor?.trim() === vendedorFilter &&
                             c.dia_atencion?.trim() === diaFilter
-                          const fill =
-                            highlightBsaleId === c.bsale_id
+                          const simHit = simHighlightBsaleId === c.bsale_id
+                          const fill = simHit
+                            ? MAP_CLIENTE_COLOR_SIM_VISITA
+                            : highlightBsaleId === c.bsale_id
                               ? MAP_CLIENTE_COLOR_HIGHLIGHT
                               : hoverBsaleId === c.bsale_id
                                 ? MAP_CLIENTE_COLOR_HOVER
@@ -1616,7 +1962,7 @@ export default function MapaRuteroClient() {
                             <Marker
                               key={c.bsale_id}
                               position={[c.lat, c.lon]}
-                              icon={getClienteDivIcon(fill)}
+                              icon={getClienteDivIcon(fill, { simDestacado: simHit })}
                               eventHandlers={{
                                 click: () => focusClienteEnLista(c.bsale_id),
                                 mouseover: () => setHoverBsaleId(c.bsale_id),
