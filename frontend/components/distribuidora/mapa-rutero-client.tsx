@@ -239,7 +239,15 @@ function MapaRuteroOrsRoute({
 
     removeRoute()
 
-    if (!detalle || typeof detalle !== "object" || ("error" in detalle && detalle.error)) {
+    if (!detalle || typeof detalle !== "object") {
+      return removeRoute
+    }
+    const hasClientesErr =
+      "error" in detalle &&
+      detalle.error &&
+      Array.isArray(detalle.clientes) &&
+      detalle.clientes.length > 0
+    if ("error" in detalle && detalle.error && !hasClientesErr) {
       return removeRoute
     }
 
@@ -368,10 +376,12 @@ function ordenManualDisplay(c: DistribuidoraMapaCliente): number | null {
 
 function rutaClientesOrdenados(rutaDetalle: DistribuidoraRutaDetalleJson | null): RutaClienteFila[] {
   if (!rutaDetalle || typeof rutaDetalle !== "object") return []
-  if ("error" in rutaDetalle && rutaDetalle.error) return []
   const arr = rutaDetalle.clientes
   if (!Array.isArray(arr)) return []
-  return arr.filter((x): x is RutaClienteFila => x != null && typeof x === "object")
+  const out = arr.filter((x): x is RutaClienteFila => x != null && typeof x === "object")
+  if (out.length > 0) return out
+  if ("error" in rutaDetalle && rutaDetalle.error) return []
+  return out
 }
 
 function ordenMostradoEnMapa(c: DistribuidoraMapaCliente, rutaDetalle: DistribuidoraRutaDetalleJson | null): number | null {
@@ -484,6 +494,54 @@ function baseCoordsParaMapa(
   if (f && Number.isFinite(f.lat) && Number.isFinite(f.lon)) {
     return { nombre: f.nombre?.trim() || "Base", lat: f.lat, lon: f.lon }
   }
+  return null
+}
+
+/** Si no hay polyline ORS, centra el mapa en clientes del día + base para que nunca quede vacío. */
+function MapaRuteroFitBoundsClientes({
+  rutaDetalle,
+  clientesVisibles,
+  bases,
+  vendedorFilter,
+  diaFilter,
+  activo,
+}: {
+  rutaDetalle: DistribuidoraRutaDetalleJson | null
+  clientesVisibles: DistribuidoraMapaCliente[]
+  bases: DistribuidoraPuntoBase[]
+  vendedorFilter: string
+  diaFilter: string
+  activo: boolean
+}) {
+  const map = useMap()
+  useEffect(() => {
+    if (!activo || vendedorFilter === FILTER_ALL || diaFilter === FILTER_ALL) return
+    if (!rutaDetalle || typeof rutaDetalle !== "object") return
+    const errOnly = "error" in rutaDetalle && rutaDetalle.error && !rutaClientesOrdenados(rutaDetalle).length
+    if (errOnly) return
+
+    const g = rutaDetalle.geometry
+    const latlngsFromGeom = geometryToLatLngs(g)
+    if (latlngsFromGeom.length >= 2) return
+
+    const pts: L.LatLngTuple[] = []
+    for (const c of clientesVisibles) {
+      if (Number.isFinite(c.lat) && Number.isFinite(c.lon)) pts.push([c.lat, c.lon])
+    }
+    const bc = baseCoordsParaMapa(rutaDetalle, bases, vendedorFilter)
+    if (bc && Number.isFinite(bc.lat) && Number.isFinite(bc.lon)) pts.push([bc.lat, bc.lon])
+    if (pts.length === 0) return
+
+    const t = window.setTimeout(() => {
+      try {
+        map.fitBounds(L.latLngBounds(pts), { padding: [48, 48], maxZoom: 14, animate: false })
+        map.invalidateSize()
+      } catch {
+        /* bounds inválidos */
+      }
+    }, 150)
+    return () => window.clearTimeout(t)
+  }, [map, activo, rutaDetalle, clientesVisibles, bases, vendedorFilter, diaFilter])
   return null
 }
 
@@ -825,10 +883,15 @@ function MapaRuteroPanelRuta({
             <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
             Cargando ruta…
           </p>
-        ) : errMsg ? (
+        ) : errMsg && items.length === 0 ? (
           <p className="text-sm text-destructive">{errMsg}</p>
         ) : (
           <div className="space-y-2 text-sm">
+            {errMsg && items.length > 0 ? (
+              <p className="rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1.5 text-xs text-destructive">
+                {errMsg}
+              </p>
+            ) : null}
             <div className="rounded-md bg-emerald-600/12 px-2 py-1.5 text-emerald-900 dark:bg-emerald-500/15 dark:text-emerald-100">
               <span aria-hidden>🟢 </span>
               <span className="font-medium">Inicio:</span> {baseNombre}
@@ -1083,6 +1146,16 @@ export default function MapaRuteroClient() {
   const onDiaChange = useCallback((e: ChangeEvent<HTMLSelectElement>) => {
     setDiaFilter(e.target.value)
   }, [])
+
+  const mensajeRutaInformativa = useMemo(() => {
+    if (!rutaDetalle || typeof rutaDetalle !== "object") return ""
+    const adv = rutaDetalle.advertencia_ors
+    if (typeof adv === "string" && adv.trim()) return adv.trim()
+    if (rutaDetalle.sin_orden_manual === true) {
+      return "Ruta sin optimizar - clientes sin orden asignado"
+    }
+    return ""
+  }, [rutaDetalle])
 
   const puedeEditarOrden =
     vendedorFilter !== FILTER_ALL && diaFilter !== FILTER_ALL && !loading && !error
@@ -1402,6 +1475,14 @@ export default function MapaRuteroClient() {
             {ordenMensaje}
           </p>
         ) : null}
+        {mensajeRutaInformativa ? (
+          <p
+            className="-mt-2 mb-3 rounded-md border border-amber-200/90 bg-amber-50 px-3 py-2 text-sm text-amber-950 dark:border-amber-800/60 dark:bg-amber-950/35 dark:text-amber-50"
+            role="status"
+          >
+            {mensajeRutaInformativa}
+          </p>
+        ) : null}
 
         <Dialog
           open={moverCliente != null}
@@ -1507,6 +1588,14 @@ export default function MapaRuteroClient() {
                     <MapaRuteroInvalidateSize />
                     <MapaRuteroRegisterMap mapRef={mapRef} />
                     <MapaRuteroFlyTo flyTo={flyTo} />
+                    <MapaRuteroFitBoundsClientes
+                      rutaDetalle={rutaDetalle}
+                      clientesVisibles={clientesVisibles}
+                      bases={bases}
+                      vendedorFilter={vendedorFilter}
+                      diaFilter={diaFilter}
+                      activo={puedeEditarOrden}
+                    />
                     <MapaRuteroOrsRoute detalle={rutaDetalle} viewBehaviorRef={orsRouteViewRef} />
                     {puedeEditarOrden ? (
                       <>

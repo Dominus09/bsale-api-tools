@@ -11,7 +11,9 @@ from backend.utils.ruta_optimizador_local import (
     log_resumen_optimizacion,
     optimizar_cola_desde_ancla,
     optimizar_secuencia_cerrado,
+    tour_length_closed,
 )
+from backend.utils.ruta_zonas import haversine_m
 from backend.utils.ruta_sugerencias_locales import sugerencias_swap_adyacentes
 
 logger = logging.getLogger(__name__)
@@ -125,6 +127,35 @@ def _clientes_validos_coords(clientes: list[dict]) -> list[dict]:
     ]
 
 
+def _orden_manual_valido(om: object) -> bool:
+    """Solo orden_manual explícito y > 0 cuenta como visita ordenada en BD."""
+    if om is None:
+        return False
+    try:
+        return int(om) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _ordenar_clientes_por_distancia_desde_base(base: dict, clientes: list[dict]) -> list[dict]:
+    """Orden de respaldo: más cercano a la base primero (Haversine)."""
+    blat = float(base["lat"])
+    blon = float(base["lon"])
+
+    def dist_m(c: dict) -> float:
+        try:
+            return float(
+                haversine_m(blat, blon, float(c["lat"]), float(c["lon"])),
+            )
+        except (TypeError, ValueError, KeyError):
+            return 1e18
+
+    out = [dict(x) for x in sorted(clientes, key=dist_m)]
+    for i, row in enumerate(out, start=1):
+        row["orden_visita"] = i
+    return out
+
+
 def _clientes_orden_manual(
     manual_rows: list[dict],
     todos_validos: list[dict],
@@ -165,16 +196,23 @@ def _clientes_orden_manual(
     return salida
 
 
-def _orden_actual_rutero_terreno(manual_raw: list[dict], clientes_rows: list[dict]) -> list[dict]:
+def _orden_actual_rutero_terreno(
+    base: dict,
+    manual_raw: list[dict],
+    clientes_rows: list[dict],
+) -> list[dict]:
     """
-    Orden de visita actual persistido / rutero (orden_manual + resto por orden_ruta),
-    sin ejecutar el optimizador automático.
+    Orden de visita actual: orden_manual > 0 en BD; si no hay ninguno, orden por distancia a la base
+    (misma heurística que GET ruta-detalle sin manual).
     """
     clientes = _clientes_validos_coords(clientes_rows)
     if not clientes:
         return []
-    manual_valid = _clientes_validos_coords(manual_raw)
-    return _clientes_orden_manual(manual_valid, clientes)
+    manual_solo_validos = [c for c in manual_raw if _orden_manual_valido(c.get("orden_manual"))]
+    manual_valid = _clientes_validos_coords(manual_solo_validos)
+    if len(manual_valid) > 0:
+        return _clientes_orden_manual(manual_valid, clientes)
+    return _ordenar_clientes_por_distancia_desde_base(base, clientes)
 
 
 def _tiempo_atencion_cliente_default() -> float:
@@ -333,19 +371,13 @@ def _lista_visita_actual_ruta(
     clientes_rows: list[dict],
 ) -> tuple[list[dict] | None, dict | None]:
     """
-    Misma secuencia que expone GET ruta-detalle: manual si hay; si no, pipeline local + ORS trazado.
-    Devuelve (clientes_ordenados, error_payload).
+    Secuencia alineada con GET ruta-detalle: manual válido (>0) si hay; si no, orden por distancia a la base.
     """
     clientes = _clientes_validos_coords(clientes_rows)
-    manual_valid = _clientes_validos_coords(manual_raw)
     if not clientes:
         return [], None
-    if len(manual_valid) > 0:
-        return _clientes_orden_manual(manual_valid, clientes), None
-    payload = _ors_optimize_from_base_clientes(base, clientes)
-    if "error" in payload:
-        return None, payload
-    return payload["clientes"], None
+    orden = _orden_actual_rutero_terreno(base, manual_raw, clientes_rows)
+    return orden, None
 
 
 def _geom_km_encadenado(
@@ -469,7 +501,17 @@ def _ors_optimize_from_base_clientes(base: dict, clientes: list[dict]) -> dict:
 
     geo = _geom_km_ruta_completa(base, optimizado)
     if geo is None:
-        return {"error": "No se pudo calcular geometría/km de la ruta"}
+        km_h = tour_length_closed(base, optimizado) / 1000.0
+        return {
+            "km_totales": round(km_h, 2),
+            "minutos_totales": 0.0,
+            "geometry": None,
+            "clientes": optimizado,
+            "advertencia_ors": (
+                "No se pudo trazar la ruta con ORS; se guardará el orden optimizado y "
+                "los km mostrados son aproximados (Haversine, ida y vuelta a la base)."
+            ),
+        }
 
     geometry, km_totales, minutos_totales = geo
     log_resumen_optimizacion(
@@ -590,6 +632,7 @@ def _cargar_contexto_ruta(v: str, d: str) -> tuple[dict, list[dict], list[dict]]
               AND lon IS NOT NULL
               AND LOWER(tipo_atencion) <> 'telefonico'
               AND orden_manual IS NOT NULL
+              AND orden_manual > 0
             ORDER BY orden_manual ASC, bsale_id
             """,
             (v, d),
@@ -634,7 +677,7 @@ def _cargar_contexto_ruta(v: str, d: str) -> tuple[dict, list[dict], list[dict]]
 
 
 def _build_ruta_detalle_response(v: str, d: str) -> dict:
-    """Misma lógica que GET /ruta-detalle (km desde ORS u orden manual + geometría)."""
+    """GET /ruta-detalle: orden manual (>0) si hay; si no, orden por distancia a la base + trazado ORS si existe."""
     base, manual_raw, clientes_rows = _cargar_contexto_ruta(v, d)
     clientes = _clientes_validos_coords(clientes_rows)
     manual_valid = _clientes_validos_coords(manual_raw)
@@ -654,7 +697,9 @@ def _build_ruta_detalle_response(v: str, d: str) -> dict:
         clientes_ordenados = _clientes_orden_manual(manual_valid, clientes)
         geo = _geometria_ruta_secuencial(base, clientes_ordenados)
         if geo is None:
-            geometry, km_totales, minutos_totales = None, 0.0, 0.0
+            geometry = None
+            km_totales = round(tour_length_closed(base, clientes_ordenados) / 1000.0, 2)
+            minutos_totales = 0.0
         else:
             geometry, km_totales, minutos_totales = geo
         return {
@@ -667,18 +712,30 @@ def _build_ruta_detalle_response(v: str, d: str) -> dict:
             "base": _base_respuesta_publica(base),
         }
 
-    ors_payload = _ors_optimize_from_base_clientes(base, clientes)
-    if "error" in ors_payload:
-        return ors_payload
-
+    clientes_ordenados = _ordenar_clientes_por_distancia_desde_base(base, clientes)
+    geo = _geom_km_ruta_completa(base, clientes_ordenados)
+    if geo is None:
+        km_h = tour_length_closed(base, clientes_ordenados) / 1000.0
+        return {
+            "vendedor": v,
+            "dia": d,
+            "km_totales": round(km_h, 2),
+            "minutos_totales": 0.0,
+            "geometry": None,
+            "clientes": clientes_ordenados,
+            "base": _base_respuesta_publica(base),
+            "sin_orden_manual": True,
+        }
+    geometry, km_totales, minutos_totales = geo
     return {
         "vendedor": v,
         "dia": d,
-        "km_totales": ors_payload["km_totales"],
-        "minutos_totales": ors_payload["minutos_totales"],
-        "geometry": ors_payload["geometry"],
-        "clientes": ors_payload["clientes"],
+        "km_totales": km_totales,
+        "minutos_totales": minutos_totales,
+        "geometry": geometry,
+        "clientes": clientes_ordenados,
         "base": _base_respuesta_publica(base),
+        "sin_orden_manual": True,
     }
 
 
@@ -906,7 +963,7 @@ def post_optimizar_ruta(body: OptimizarRutaBody):
         payload = _ors_optimize_from_base_clientes(base, clientes)
     else:
         k = int(body.bloque_hasta_indice)
-        orden_actual = _orden_actual_rutero_terreno(manual_raw, clientes_rows)
+        orden_actual = _orden_actual_rutero_terreno(base, manual_raw, clientes_rows)
         n = len(orden_actual)
         if k < 0 or k > n:
             raise HTTPException(status_code=400, detail="bloque_hasta_indice fuera de rango")
@@ -924,7 +981,16 @@ def post_optimizar_ruta(body: OptimizarRutaBody):
             row["orden_visita"] = i
         geo = _geom_km_ruta_completa(base, merged)
         if geo is None:
-            payload = {"error": "No se pudo calcular geometría/km de la ruta"}
+            km_h = tour_length_closed(base, merged) / 1000.0
+            payload = {
+                "km_totales": round(km_h, 2),
+                "minutos_totales": 0.0,
+                "geometry": None,
+                "clientes": merged,
+                "advertencia_ors": (
+                    "No se pudo trazar la ruta con ORS; se guardará el orden y los km son aproximados (Haversine)."
+                ),
+            }
         else:
             geometry, km_totales, minutos_totales = geo
             log_resumen_optimizacion(
@@ -942,7 +1008,9 @@ def post_optimizar_ruta(body: OptimizarRutaBody):
                 "clientes": merged,
             }
 
-    if "error" in payload:
+    if "error" in payload and (
+        not isinstance(payload.get("clientes"), list) or len(payload["clientes"]) == 0
+    ):
         return payload
 
     conn = get_connection()
@@ -961,6 +1029,9 @@ def post_optimizar_ruta(body: OptimizarRutaBody):
         "clientes": payload["clientes"],
         "bloque_hasta_indice": body.bloque_hasta_indice,
     }
+    adv = payload.get("advertencia_ors")
+    if isinstance(adv, str) and adv.strip():
+        out["advertencia_ors"] = adv.strip()
     return _with_tiempos_reales(out, body.tiempo_por_cliente_min)
 
 
@@ -984,7 +1055,7 @@ def post_optimizar_ruta_desde(body: OptimizarRutaDesdeBody):
             detail="No hay clientes terreno con coordenadas válidas para este día",
         )
 
-    orden = _orden_actual_rutero_terreno(manual_raw, clientes_rows)
+    orden = _orden_actual_rutero_terreno(base, manual_raw, clientes_rows)
     if not orden:
         raise HTTPException(
             status_code=400,
@@ -1015,7 +1086,26 @@ def post_optimizar_ruta_desde(body: OptimizarRutaDesdeBody):
 
     geo = _geom_km_ruta_completa(base, merged)
     if geo is None:
-        return {"error": "No se pudo calcular geometría/km de la ruta combinada"}
+        km_h = tour_length_closed(base, merged) / 1000.0
+        conn = get_connection()
+        try:
+            _persistir_orden_manual_vendedor_dia(conn, v, d, merged)
+        finally:
+            conn.close()
+        out = {
+            "vendedor": v,
+            "dia": d,
+            "base": _base_respuesta_publica(base),
+            "km_totales": round(km_h, 2),
+            "minutos_totales": 0.0,
+            "geometry": None,
+            "clientes": merged,
+            "desde_indice": body.desde_indice,
+            "advertencia_ors": (
+                "No se pudo trazar la ruta con ORS; se guardó el orden y los km son aproximados (Haversine)."
+            ),
+        }
+        return _with_tiempos_reales(out, body.tiempo_por_cliente_min)
     geometry, km_totales, minutos_totales = geo
 
     conn = get_connection()

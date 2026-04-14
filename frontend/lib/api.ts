@@ -707,8 +707,11 @@ export function isDistribuidoraRutaDetalleOk(
   clientes: unknown[]
 } {
   if (!d || typeof d !== "object") return false
-  if ("error" in d && d.error) return false
-  return "km_totales" in d && "minutos_totales" in d && "clientes" in d
+  const hasClientes = Array.isArray(d.clientes) && d.clientes.length > 0
+  if ("error" in d && d.error && !hasClientes) return false
+  if (!("km_totales" in d) || !("minutos_totales" in d) || !("clientes" in d)) return false
+  if (!Array.isArray(d.clientes)) return false
+  return true
 }
 
 export async function getDistribuidoraRutaDetalle(
