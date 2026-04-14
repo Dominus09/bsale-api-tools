@@ -18,6 +18,8 @@ import { AlertTriangle, Loader2, MapPin } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
   Select,
   SelectContent,
@@ -40,6 +42,7 @@ import {
   type DistribuidoraResumenDiaJson,
   type DistribuidoraResumenVendedorJson,
 } from "@/lib/api"
+import { exportResumenVendedorPdf } from "@/lib/resumen-vendedor-pdf"
 import { cn } from "@/lib/utils"
 
 import "leaflet/dist/leaflet.css"
@@ -52,6 +55,25 @@ const Popup = dynamic(() => import("react-leaflet").then((m) => m.Popup), { ssr:
 const CARTO_LIGHT = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
 const MAP_CENTER: [number, number] = [-33.0, -71.5]
 const MAP_ZOOM = 10
+
+/** Mínimos para simulación de combustible (evita /0 y valores absurdos). */
+const MIN_RENDIMIENTO_KM_L = 0.1
+const MIN_PRECIO_COMBUSTIBLE_CLP = 1
+
+function parseNumInputLoose(raw: string): number | null {
+  const t = raw.trim().replace(/\s/g, "").replace(",", ".")
+  if (!t) return null
+  const n = Number(t)
+  return Number.isFinite(n) ? n : null
+}
+
+function formatViaticoCLP(value: number): string {
+  return Math.round(value).toLocaleString("es-CL", {
+    style: "currency",
+    currency: "CLP",
+    maximumFractionDigits: 0,
+  })
+}
 
 type PolylineDecodeFn = (str: string, precision?: number) => [number, number][]
 
@@ -87,6 +109,21 @@ function decodeEncodedPolylineToLatLngs(encoded: string): L.LatLngTuple[] {
   } catch {
     return []
   }
+}
+
+/** Marcador base (sin iconUrl de Leaflet / bundler → evita “Mark” e imagen rota). */
+let resumenBaseIconSingleton: L.DivIcon | null = null
+function getResumenVendedorBaseIcon(): L.DivIcon {
+  if (!resumenBaseIconSingleton) {
+    resumenBaseIconSingleton = L.divIcon({
+      className: "base-icon",
+      html: "🏁",
+      iconSize: [30, 30],
+      iconAnchor: [15, 30],
+      popupAnchor: [0, -28],
+    })
+  }
+  return resumenBaseIconSingleton
 }
 
 function geometryToLatLngs(geometry: unknown): L.LatLngTuple[] {
@@ -134,33 +171,82 @@ type RutasCapasProps = {
   viewNonce: number
 }
 
-/** Polilíneas por día; opacidad según foco y visibilidad. */
+const RUTA_WEIGHT_BASE = 5
+const RUTA_WEIGHT_FOCO = 6
+const RUTA_OPACITY_NORMAL = 0.8
+const RUTA_OPACITY_ATENUADA = 0.36
+const RUTA_ANIM_MS = 380
+const RUTA_ANIM_STAGGER_MS = 55
+
+/** Polilíneas por día: grosor, opacidad 0.8, bordes suaves, animación ligera al aparecer. */
 function RutasSemanaCapas({ resumen, visibleDias, focoDia, viewNonce }: RutasCapasProps) {
   const map = useMap()
   const layersRef = useRef<L.Polyline[]>([])
+  const animRef = useRef<{ cancel: () => void } | null>(null)
 
   useEffect(() => {
+    animRef.current?.cancel()
     for (const pl of layersRef.current) {
       map.removeLayer(pl)
     }
     layersRef.current = []
     if (!resumen?.dias?.length) return
 
+    let cancelled = false
+    const timeouts: ReturnType<typeof setTimeout>[] = []
+
+    const cancel = () => {
+      cancelled = true
+      for (const t of timeouts) window.clearTimeout(t)
+    }
+    animRef.current = { cancel }
+
+    let animIndex = 0
     for (const d of resumen.dias) {
       if (!visibleDias.has(d.dia)) continue
       const latlngs = geometryToLatLngs(d.geometry)
       if (latlngs.length < 2) continue
       const esFoco = focoDia === d.dia
-      const atenuar = focoDia && focoDia !== d.dia
+      const atenuar = Boolean(focoDia && focoDia !== d.dia)
+      const targetOpacity = atenuar ? RUTA_OPACITY_ATENUADA : RUTA_OPACITY_NORMAL
+      const weight = esFoco ? RUTA_WEIGHT_FOCO : RUTA_WEIGHT_BASE
+
       const pl = L.polyline(latlngs, {
         color: d.color,
-        weight: esFoco ? 6 : 4,
-        opacity: atenuar ? 0.28 : 0.88,
+        weight,
+        opacity: 0,
         lineJoin: "round",
+        lineCap: "round",
       })
       pl.addTo(map)
       pl.bindPopup(`<strong>${d.dia}</strong><br/>${d.km_totales} km · ${d.clientes_count} clientes`)
       layersRef.current.push(pl)
+
+      const stagger = animIndex * RUTA_ANIM_STAGGER_MS
+      animIndex += 1
+
+      const t = window.setTimeout(() => {
+        if (cancelled) return
+        const start = performance.now()
+        const tick = (now: number) => {
+          if (cancelled) return
+          const p = Math.min(1, (now - start) / RUTA_ANIM_MS)
+          const ease = 1 - (1 - p) ** 2
+          pl.setStyle({ opacity: targetOpacity * ease })
+          if (p < 1) window.requestAnimationFrame(tick)
+        }
+        window.requestAnimationFrame(tick)
+      }, stagger)
+      timeouts.push(t)
+    }
+
+    return () => {
+      cancel()
+      for (const pl of layersRef.current) {
+        map.removeLayer(pl)
+      }
+      layersRef.current = []
+      animRef.current = null
     }
   }, [map, resumen, visibleDias, focoDia, viewNonce])
 
@@ -174,7 +260,7 @@ function BaseMarkerResumen({ resumen }: { resumen: DistribuidoraResumenVendedorJ
   const nombre = (base?.nombre as string) || "Base"
   if (lat == null || lon == null || Number.isNaN(lat) || Number.isNaN(lon)) return null
   return (
-    <Marker position={[lat, lon]}>
+    <Marker position={[lat, lon]} icon={getResumenVendedorBaseIcon()}>
       <Popup>{nombre}</Popup>
     </Marker>
   )
@@ -191,6 +277,10 @@ export default function ResumenVendedorClient() {
   const [focoDia, setFocoDia] = useState<string | null>(null)
   /** Incrementar solo al centrar en un día (fitBounds); toggles de capa no resetean cámara. */
   const [viewNonce, setViewNonce] = useState(0)
+  const [rendimientoKmL, setRendimientoKmL] = useState("")
+  const [precioCombustible, setPrecioCombustible] = useState("")
+  const [exportandoPdf, setExportandoPdf] = useState(false)
+  const [pdfError, setPdfError] = useState<string | null>(null)
   const mapRef = useRef<L.Map | null>(null)
   const autoFitKey = useRef<string | null>(null)
 
@@ -241,6 +331,7 @@ export default function ResumenVendedorClient() {
     autoFitKey.current = null
     setCargandoResumen(true)
     setError(null)
+    setPdfError(null)
     try {
       const data = await getDistribuidoraResumenVendedor(v)
       setResumen(data)
@@ -283,6 +374,42 @@ export default function ResumenVendedorClient() {
     setFocoDia(null)
     setViewNonce((n) => n + 1)
   }
+
+  const viaticoEstimado = useMemo(() => {
+    if (!resumen) return null
+    const km = Number(resumen.km_total_semana)
+    if (!Number.isFinite(km) || km <= 0) return null
+    const rend = parseNumInputLoose(rendimientoKmL)
+    const precio = parseNumInputLoose(precioCombustible)
+    if (rend == null || precio == null) return null
+    if (rend < MIN_RENDIMIENTO_KM_L || precio < MIN_PRECIO_COMBUSTIBLE_CLP) return null
+    const litros = km / rend
+    const clp = litros * precio
+    if (!Number.isFinite(clp) || clp < 0) return null
+    return Math.round(clp)
+  }, [resumen, rendimientoKmL, precioCombustible])
+
+  const entregarAnalisis = useCallback(async () => {
+    if (!resumen) return
+    const el = mapRef.current?.getContainer()
+    if (!el) {
+      setPdfError("El mapa aún no está listo para capturar. Espere un momento e intente de nuevo.")
+      return
+    }
+    setPdfError(null)
+    setExportandoPdf(true)
+    try {
+      await exportResumenVendedorPdf({
+        resumen,
+        mapElement: el,
+        viaticoClp: viaticoEstimado,
+      })
+    } catch (e) {
+      setPdfError(e instanceof Error ? e.message : "No se pudo generar el PDF.")
+    } finally {
+      setExportandoPdf(false)
+    }
+  }, [resumen, viaticoEstimado])
 
   return (
     <div className="space-y-4 p-4">
@@ -332,6 +459,76 @@ export default function ResumenVendedorClient() {
 
       {resumen && (
         <>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              type="button"
+              onClick={() => void entregarAnalisis()}
+              disabled={exportandoPdf}
+            >
+              {exportandoPdf ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> : null}
+              📄 Entregar análisis
+            </Button>
+            {pdfError ? <p className="max-w-xl text-sm text-destructive">{pdfError}</p> : null}
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="resumen-rendimiento">Rendimiento vehículo (km/l)</Label>
+                <Input
+                  id="resumen-rendimiento"
+                  type="number"
+                  inputMode="decimal"
+                  min={MIN_RENDIMIENTO_KM_L}
+                  step={0.1}
+                  placeholder="Ej. 12"
+                  value={rendimientoKmL}
+                  onChange={(e) => setRendimientoKmL(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Mín. {MIN_RENDIMIENTO_KM_L} km/l (evita división por cero).
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="resumen-precio-comb">Precio combustible (CLP/l)</Label>
+                <Input
+                  id="resumen-precio-comb"
+                  type="number"
+                  inputMode="numeric"
+                  min={MIN_PRECIO_COMBUSTIBLE_CLP}
+                  step={1}
+                  placeholder="Ej. 1200"
+                  value={precioCombustible}
+                  onChange={(e) => setPrecioCombustible(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Mín. {MIN_PRECIO_COMBUSTIBLE_CLP} CLP/l.
+                </p>
+              </div>
+            </div>
+            <Card className="border-primary/20 bg-primary/5">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">
+                  Viático estimado semanal
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {viaticoEstimado != null ? (
+                  <p className="text-2xl font-semibold tabular-nums tracking-tight">
+                    {formatViaticoCLP(viaticoEstimado)}
+                  </p>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Ingrese rendimiento (≥ {MIN_RENDIMIENTO_KM_L} km/l) y precio (≥{" "}
+                    {MIN_PRECIO_COMBUSTIBLE_CLP} CLP/l) para estimar con los{" "}
+                    <strong className="text-foreground">{resumen.km_total_semana}</strong> km de
+                    la semana.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Card>
               <CardHeader className="pb-2">

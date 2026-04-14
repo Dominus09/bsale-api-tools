@@ -683,15 +683,16 @@ def _build_ruta_detalle_response(v: str, d: str) -> dict:
 
 
 # Colores sugeridos por orden de día (Lunes → Sábado típico)
+# Paleta más saturada y distinguible en mapas claros (resumen semanal / gerencia).
 _COLORES_RUTA_SEMANA = (
-    "#2563eb",
-    "#22c55e",
-    "#ea580c",
-    "#dc2626",
-    "#9333ea",
-    "#ca8a04",
-    "#0891b2",
-    "#64748b",
+    "#b91c1c",  # red-700
+    "#1d4ed8",  # blue-700
+    "#15803d",  # green-700
+    "#a16207",  # yellow-700
+    "#7e22ce",  # purple-700
+    "#c2410c",  # orange-700
+    "#0e7490",  # cyan-700
+    "#4338ca",  # indigo-700
 )
 
 # Umbral suave: km por cliente por encima → marca alerta_calidad en el resumen

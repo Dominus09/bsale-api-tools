@@ -253,3 +253,15 @@
   border-color: oklch(0.91 0 0);
 }
 
+/* Resumen vendedor (mapa semanal): marcador base con emoji (L.divIcon) */
+.leaflet-div-icon.base-icon {
+  background: transparent !important;
+  border: none !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.35rem;
+  line-height: 30px;
+  box-shadow: none !important;
+}
+
