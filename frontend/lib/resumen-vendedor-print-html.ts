@@ -1,8 +1,12 @@
 "use client"
 
-import type { DistribuidoraResumenDiaJson, DistribuidoraResumenVendedorJson } from "@/lib/api"
+import type { DistribuidoraResumenVendedorJson } from "@/lib/api"
 
 import { geometryToLatLngs } from "@/lib/distribuidora-resumen-geometry"
+import {
+  buildClienteColumnsJueVie,
+  buildClienteColumnsLunMie,
+} from "@/lib/resumen-vendedor-pdf-clientes-layout"
 
 const TEXTO_METODOLOGIA =
   "Las rutas fueron optimizadas considerando distancia entre clientes, punto de partida y retorno al origen, buscando minimizar los kilómetros recorridos y el tiempo de traslado."
@@ -31,18 +35,6 @@ function nombreCliente(c: Record<string, unknown>): string {
     ""
   const t = String(raw).trim()
   return t || "Cliente"
-}
-
-function clientesOrdenados(dia: DistribuidoraResumenDiaJson): string[] {
-  const raw = dia.clientes
-  if (!Array.isArray(raw)) return []
-  const rows = raw as Record<string, unknown>[]
-  const withIdx = rows.map((c, i) => ({
-    c,
-    ov: Number(c.orden_visita) || i + 1,
-  }))
-  withIdx.sort((a, b) => a.ov - b.ov)
-  return withIdx.map(({ c }) => nombreCliente(c))
 }
 
 function hexStrokeForColor(c: string): string {
@@ -139,27 +131,34 @@ function buildBodyInner(resumen: DistribuidoraResumenVendedorJson, viaticoClp: n
     })
     .join("")
 
-  const detalleDias = resumen.dias
-    .map((d) => {
-      const nombres = clientesOrdenados(d)
-      const lista =
-        nombres.length === 0
-          ? `<p class="muted">Sin clientes en ruta.</p>`
-          : `<ol class="clientes">${nombres.map((n) => `<li>${escapeHtml(n)}</li>`).join("")}</ol>`
-      return `<section class="dia-block"><h3>${escapeHtml(d.dia)}</h3>${lista}</section>`
-    })
-    .join("")
+  const colHtml = (cols: { titulo: string; lineas: string[] }[], gridClass: string) => {
+    const cells = cols
+      .map((col) => {
+        const items =
+          col.lineas.length === 0
+            ? `<p class="muted">Sin visitas.</p>`
+            : `<ol class="clientes-col">${col.lineas.map((ln) => `<li>${escapeHtml(ln)}</li>`).join("")}</ol>`
+        return `<div class="dia-col"><h4>${escapeHtml(col.titulo)}</h4>${items}</div>`
+      })
+      .join("")
+    return `<div class="${gridClass}">${cells}</div>`
+  }
+
+  const bloqueLunMie = colHtml(buildClienteColumnsLunMie(resumen), "clientes-grid cols-3")
+  const bloqueJueVie = colHtml(buildClienteColumnsJueVie(resumen), "clientes-grid cols-2")
 
   return `
-  <h1>Ruta semanal — ${escapeHtml(resumen.vendedor)}</h1>
+  <h1>Ruta — ${escapeHtml(resumen.vendedor)} — Semana</h1>
   <p class="sub">Vista para imprimir. Use <strong>Imprimir</strong> del navegador y elija <strong>Guardar como PDF</strong> si lo desea.</p>
   <div class="metrics">${metrics}</div>
   <h2>Esquema de rutas</h2>
   ${buildRoutesSvg(resumen)}
   <h2>Leyenda (días)</h2>
   <ul class="leyenda">${leyenda}</ul>
-  <h2>Detalle por día (clientes)</h2>
-  ${detalleDias}
+  <h2>Clientes por día (lunes a miércoles)</h2>
+  ${bloqueLunMie}
+  <h2 class="page-break-before">Clientes por día (jueves y viernes)</h2>
+  ${bloqueJueVie}
   <p class="metodo">${escapeHtml(TEXTO_METODOLOGIA)}</p>
   `
 }
@@ -208,16 +207,29 @@ h3 { font-size: 13px; margin: 0 0 6px 0; color: #0f172a; }
   border: 1px solid #cbd5e1;
 }
 .warn { color: #b45309; font-size: 11px; }
-.dia-block {
-  margin-bottom: 12px;
+.clientes-grid {
+  display: grid;
+  gap: 12px 16px;
+  margin: 10px 0 18px 0;
+  align-items: start;
+}
+.clientes-grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+.clientes-grid.cols-2 { grid-template-columns: 1fr 1fr; }
+.dia-col {
   padding: 10px 12px;
   background: #f9fafb;
   border: 1px solid #e5e7eb;
   border-radius: 4px;
   break-inside: avoid;
 }
-.clientes { margin: 4px 0 0 0; padding-left: 18px; font-size: 11px; color: #334155; }
-.clientes li { margin-bottom: 2px; }
+.dia-col h4 { margin: 0 0 6px 0; font-size: 12px; color: #0f172a; }
+.clientes-col { margin: 0; padding-left: 18px; font-size: 11px; color: #334155; }
+.clientes-col li { margin-bottom: 2px; }
+.page-break-before {
+  break-before: page;
+  page-break-before: always;
+  margin-top: 28px;
+}
 .muted { color: #64748b; font-size: 12px; margin: 4px 0; }
 .metodo {
   margin-top: 18px;

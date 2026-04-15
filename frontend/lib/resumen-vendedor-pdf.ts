@@ -1,11 +1,12 @@
 import { format } from "date-fns"
 
 import type { DistribuidoraResumenVendedorJson } from "@/lib/api"
+import { buildOperationalInsights } from "@/lib/resumen-vendedor-analisis"
+import type { PdfClienteColumn } from "@/lib/resumen-vendedor-pdf-clientes-layout"
 import {
-  buildOperationalInsights,
-  clasificarEficiencia,
-  kmPorClienteSemana,
-} from "@/lib/resumen-vendedor-analisis"
+  buildClienteColumnsJueVie,
+  buildClienteColumnsLunMie,
+} from "@/lib/resumen-vendedor-pdf-clientes-layout"
 
 const PAGE_W_MM = 210
 const PAGE_H_MM = 297
@@ -128,39 +129,114 @@ export async function captureMapElementJpeg(mapElement: HTMLElement): Promise<st
   return canvas.toDataURL("image/jpeg", 0.92)
 }
 
-async function drawMapImageBlock(
+/**
+ * Mapa semanal en un rectángulo fijo: escala para caber, centrado (área máxima sin deformar).
+ * Sin barra de título extra (el encabezado de página ya lo describe).
+ */
+async function drawWeeklyMapInBox(
   doc: import("jspdf").jsPDF,
-  y: number,
+  boxX: number,
+  boxY: number,
+  boxW: number,
+  boxH: number,
   dataUrl: string,
-  title: string,
-  maxMapH: number,
-): Promise<number> {
-  y = drawSectionHeader(doc, y, `Mapa de rutas (${title})`)
-  y += CONTENT_PAD_MM
+): Promise<void> {
   const img = new Image()
   await new Promise<void>((resolve, reject) => {
     img.onload = () => resolve()
     img.onerror = () => reject(new Error("No se pudo leer la imagen del mapa"))
     img.src = dataUrl
   })
-  const maxMapW = INNER_W
   const aspect = img.width / img.height
-  let wMm = maxMapW
+  let wMm = boxW
   let hMm = wMm / aspect
-  if (hMm > maxMapH) {
-    hMm = maxMapH
+  if (hMm > boxH) {
+    hMm = boxH
     wMm = hMm * aspect
   }
-  y = ensureSpace(doc, y, hMm + 10)
+  const x0 = boxX + (boxW - wMm) / 2
+  const y0 = boxY + (boxH - hMm) / 2
   doc.setDrawColor(...BORDER_LIGHT)
-  doc.rect(MARGIN_MM - 0.25, y - 0.25, wMm + 0.5, hMm + 0.5, "S")
-  doc.addImage(dataUrl, "JPEG", MARGIN_MM, y, wMm, hMm)
-  return y + hMm + 8
+  doc.rect(boxX - 0.25, boxY - 0.25, boxW + 0.5, boxH + 0.5, "S")
+  doc.addImage(dataUrl, "JPEG", x0, y0, wMm, hMm)
+}
+
+function truncateLineToWidth(
+  doc: import("jspdf").jsPDF,
+  text: string,
+  maxW: number,
+  fontSize: number,
+): string {
+  doc.setFontSize(fontSize)
+  if (doc.getTextWidth(text) <= maxW) return text
+  const ell = "…"
+  let lo = 0
+  let hi = text.length
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2)
+    const s = text.slice(0, mid) + ell
+    if (doc.getTextWidth(s) <= maxW) lo = mid
+    else hi = mid - 1
+  }
+  return text.slice(0, lo) + ell
+}
+
+/**
+ * Tabla compacta: varias columnas (días), listas numeradas alineadas arriba.
+ * Devuelve la posición Y final aproximada.
+ */
+function drawClienteDayColumns(
+  doc: import("jspdf").jsPDF,
+  yStart: number,
+  sectionTitle: string,
+  columns: PdfClienteColumn[],
+): number {
+  let y = drawSectionHeader(doc, yStart, sectionTitle)
+  y += CONTENT_PAD_MM + 1
+
+  const n = columns.length
+  const gap = 4
+  const colW = (INNER_W - gap * (n - 1)) / n
+  const x0 = MARGIN_MM
+  const headerH = 5.5
+  const lineH = 3.85
+  const bodyFont = 8.2
+  const headFont = 9
+
+  doc.setFont("helvetica", "bold")
+  doc.setFontSize(headFont)
+  doc.setTextColor(...TEXT_DARK)
+  for (let c = 0; c < n; c++) {
+    const x = x0 + c * (colW + gap)
+    const tit = truncateLineToWidth(doc, columns[c].titulo, colW - 1, headFont)
+    doc.text(tit, x, y + 4)
+  }
+  y += headerH + 2
+
+  doc.setFont("helvetica", "normal")
+  doc.setFontSize(bodyFont)
+  doc.setTextColor(...TEXT_DARK)
+
+  const maxLines = Math.max(0, ...columns.map((co) => co.lineas.length))
+  for (let i = 0; i < maxLines; i++) {
+    y = ensureSpace(doc, y, lineH + 1)
+    for (let c = 0; c < n; c++) {
+      const line = columns[c].lineas[i]
+      if (!line) continue
+      const x = x0 + c * (colW + gap)
+      const t = truncateLineToWidth(doc, line, colW - 0.5, bodyFont)
+      doc.text(t, x, y + 3.2)
+    }
+    y += lineH
+  }
+
+  return y + 6
 }
 
 /**
  * Genera y descarga el informe PDF (mapa real vía html2canvas-pro, texto operativo dinámico).
- * Tipografía y secciones pensadas para impresión (sin iconos ni emojis).
+ * Estructura: p.1 título + resumen + mapa casi hoja completa; p.2–3 clientes por columnas;
+ * última(s) página(s) análisis operativo.
  */
 export async function exportResumenVendedorPdf(params: ExportResumenVendedorPdfParams): Promise<void> {
   const { jsPDF } = await import("jspdf")
@@ -173,130 +249,90 @@ export async function exportResumenVendedorPdf(params: ExportResumenVendedorPdfP
     compress: true,
   })
 
+  const vNombre = String(resumen.vendedor ?? "").trim() || "Vendedor"
+  const km = Number(resumen.km_total_semana) || 0
+
   let y = MARGIN_MM
 
   doc.setFillColor(BRAND_R, BRAND_G, BRAND_B)
-  doc.rect(0, 0, PAGE_W_MM, 24, "F")
+  doc.rect(0, 0, PAGE_W_MM, 18, "F")
   doc.setTextColor(255, 255, 255)
-  doc.setFontSize(15)
+  doc.setFontSize(13)
   doc.setFont("helvetica", "bold")
-  doc.text("Resumen semanal por vendedor", MARGIN_MM, 11)
-  doc.setFontSize(12)
-  doc.text(String(resumen.vendedor ?? "").trim() || "Vendedor", MARGIN_MM, 18)
+  doc.text(`Ruta — ${vNombre} — Semana`, MARGIN_MM, 11)
   doc.setFont("helvetica", "normal")
-  doc.setFontSize(8.5)
-  doc.text(`Generado: ${format(new Date(), "yyyy-MM-dd HH:mm")}`, MARGIN_MM, 22.5)
+  doc.setFontSize(8)
+  doc.text(`Generado: ${format(new Date(), "yyyy-MM-dd HH:mm")}`, MARGIN_MM, 15.5)
   doc.setTextColor(...TEXT_DARK)
 
-  y = 30
+  y = 22
 
-  y = drawSectionHeader(doc, y, "Viático (cálculo transparente)")
-  y += CONTENT_PAD_MM
-  const km = Number(resumen.km_total_semana) || 0
-  if (
-    rendimientoKmL != null &&
-    precioCombustibleClp != null &&
-    rendimientoKmL > 0 &&
-    precioCombustibleClp > 0
-  ) {
-    const litros = km / rendimientoKmL
-    const total = litros * precioCombustibleClp
-    const totalClp =
-      viaticoClp != null && Number.isFinite(viaticoClp) ? Math.round(viaticoClp) : Math.round(total)
-    const linesVi = [
-      `Km totales: ${km.toFixed(1)} km`,
-      `Rendimiento: ${rendimientoKmL} km/l`,
-      `Consumo estimado: ${litros.toFixed(2)} l`,
-      `Precio combustible: ${formatClp(precioCombustibleClp)} /l`,
-      `Viático estimado: ${formatClp(totalClp)}`,
-    ]
-    for (const ln of linesVi) {
-      y = ensureSpace(doc, y, 6)
-      doc.setFontSize(9.2)
-      doc.setTextColor(...TEXT_DARK)
-      doc.text(ln, MARGIN_MM + CONTENT_PAD_MM, y)
-      y += 5
-    }
-  } else {
-    y = ensureSpace(doc, y, 6)
-    doc.setFontSize(9.2)
-    doc.setTextColor(...TEXT_MUTED)
-    y = addParagraph(
-      doc,
-      "Para desglosar litros y costo, ingrese en el panel el rendimiento del vehículo (km/l) y el precio del combustible (CLP/l). El total del resumen superior usa esos valores y los km de la semana.",
-      MARGIN_MM + CONTENT_PAD_MM,
-      y,
-      INNER_W - CONTENT_PAD_MM * 2,
-      9.2,
-      4,
-    )
-    y += 2
-  }
-
-  y += 4
-  const kmPc = kmPorClienteSemana(resumen)
-  const eff = clasificarEficiencia(kmPc)
-  y = drawSectionHeader(doc, y, "Métricas")
-  y += CONTENT_PAD_MM
-  const bloquesMetricas: string[] = [
-    `Km total semana: ${fmtMetric(resumen.km_total_semana)} km`,
-    `Clientes (visitas): ${fmtMetric(resumen.clientes_total_semana)}`,
-    `Tiempo conducción (estim.): ${fmtMetric(resumen.min_total_semana)} min`,
-    `Promedio km / día: ${fmtMetric(resumen.promedio_km_por_dia)} km`,
-    `Día más largo: ${fmtMetric(resumen.km_dia_mas_largo)} km`,
-    `Día más corto: ${fmtMetric(resumen.km_dia_mas_corto)} km`,
-  ]
-  doc.setFontSize(9.2)
-  doc.setTextColor(...TEXT_DARK)
-  const colW = INNER_W / 2 - 3
-  let col = 0
-  let rowY = y
-  const startY = y
-  for (const line of bloquesMetricas) {
-    const x = MARGIN_MM + col * (colW + 6)
-    doc.text(line, x, rowY)
-    col += 1
-    if (col >= 2) {
-      col = 0
-      rowY += 4.8
-    }
-  }
-  if (col !== 0) rowY += 4.8
-  y = Math.max(rowY, startY + 22) + 3
   doc.setFont("helvetica", "bold")
   doc.setFontSize(9.5)
-  doc.text(`Indicador de eficiencia: ${eff.etiqueta}`, MARGIN_MM + CONTENT_PAD_MM, y)
+  doc.setTextColor(...TEXT_DARK)
+  doc.text("Resumen", MARGIN_MM, y)
+  y += 5
   doc.setFont("helvetica", "normal")
-  y += 4.5
-  y = addParagraph(
-    doc,
-    eff.texto,
-    MARGIN_MM + CONTENT_PAD_MM,
-    y,
-    INNER_W - CONTENT_PAD_MM * 2,
-    9.2,
-    4,
-    TEXT_DARK,
-  )
-  y += 6
+  doc.setFontSize(9.2)
 
-  const nMap = mapBlocks.length
+  const lineViatico = (() => {
+    if (
+      rendimientoKmL != null &&
+      precioCombustibleClp != null &&
+      rendimientoKmL > 0 &&
+      precioCombustibleClp > 0
+    ) {
+      const litros = km / rendimientoKmL
+      const total = litros * precioCombustibleClp
+      const totalClp =
+        viaticoClp != null && Number.isFinite(viaticoClp) ? Math.round(viaticoClp) : Math.round(total)
+      return `Viático estimado: ${formatClp(totalClp)} (${rendimientoKmL} km/l, ${formatClp(precioCombustibleClp)}/l, ${litros.toFixed(2)} l)`
+    }
+    return "Viático: ingrese rendimiento (km/l) y precio combustible en el panel para ver monto."
+  })()
 
-  if (nMap > 0) {
-    const firstMaxH = Math.max(88, Math.min(168, PAGE_H_MM - MARGIN_MM - y - 10))
-    y = await drawMapImageBlock(doc, y, mapBlocks[0].dataUrl, mapBlocks[0].title, firstMaxH)
-    for (let mi = 1; mi < nMap; mi++) {
-      doc.addPage()
-      y = MARGIN_MM
-      const maxH = Math.min(155, PAGE_H_MM - MARGIN_MM - y - 8)
-      y = await drawMapImageBlock(doc, y, mapBlocks[mi].dataUrl, mapBlocks[mi].title, maxH)
+  const resumenLineas = [
+    `Km totales semana: ${fmtMetric(resumen.km_total_semana)} km`,
+    `Clientes (visitas): ${fmtMetric(resumen.clientes_total_semana)}`,
+    `Tiempo conducción (estim.): ${fmtMetric(resumen.min_total_semana)} min`,
+    lineViatico,
+  ]
+  doc.setFontSize(9.2)
+  for (const ln of resumenLineas) {
+    const wrapped = doc.splitTextToSize(ln, INNER_W)
+    for (const wline of wrapped) {
+      y = ensureSpace(doc, y, 5.5)
+      doc.text(wline, MARGIN_MM, y)
+      y += 4.5
     }
   }
+  y += 3
 
-  if (y > PAGE_H_MM - MARGIN_MM - 48) {
-    doc.addPage()
-    y = MARGIN_MM
+  const mapBottom = PAGE_H_MM - MARGIN_MM - 2
+  const mapTop = y + 2
+  const mapH = Math.max(60, mapBottom - mapTop)
+
+  if (mapBlocks.length > 0 && mapBlocks[0].dataUrl) {
+    await drawWeeklyMapInBox(doc, MARGIN_MM, mapTop, INNER_W, mapH, mapBlocks[0].dataUrl)
+  } else {
+    y = ensureSpace(doc, y, 14)
+    doc.setFontSize(9)
+    doc.setTextColor(...TEXT_MUTED)
+    doc.text("Sin imagen de mapa disponible.", MARGIN_MM, mapTop + 8)
   }
+
+  const colsLunMie = buildClienteColumnsLunMie(resumen)
+  doc.addPage()
+  y = MARGIN_MM
+  y = drawClienteDayColumns(doc, y, "Clientes por día (Lunes a miércoles)", colsLunMie)
+
+  const colsJueVie = buildClienteColumnsJueVie(resumen)
+  doc.addPage()
+  y = MARGIN_MM
+  y = drawClienteDayColumns(doc, y, "Clientes por día (Jueves y viernes)", colsJueVie)
+
+  doc.addPage()
+  y = MARGIN_MM
   y = drawSectionHeader(doc, y, "Análisis operativo")
   y += CONTENT_PAD_MM
   const { paragraphs: insights } = (() => {
