@@ -475,7 +475,7 @@ export default function ResumenVendedorClient() {
               disabled={exportandoPdf}
             >
               {exportandoPdf ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> : null}
-              📄 Entregar análisis
+              {exportandoPdf ? "Generando PDF…" : "📄 Entregar análisis"}
             </Button>
             {pdfError ? <p className="max-w-xl text-sm text-destructive">{pdfError}</p> : null}
           </div>
