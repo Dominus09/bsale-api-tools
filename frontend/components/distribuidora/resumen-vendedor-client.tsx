@@ -42,6 +42,10 @@ import {
   type DistribuidoraResumenVendedorJson,
 } from "@/lib/api"
 import { geometryToLatLngs } from "@/lib/distribuidora-resumen-geometry"
+import {
+  safeBuildOperationalInsights,
+  safeClasificarEficiencia,
+} from "@/lib/resumen-vendedor-analisis"
 import { exportResumenVendedorPdf } from "@/lib/resumen-vendedor-pdf"
 import {
   RESUMEN_VENDEDOR_PRINT_POPUP_BLOCKED,
@@ -77,6 +81,21 @@ function formatViaticoCLP(value: number): string {
     currency: "CLP",
     maximumFractionDigits: 0,
   })
+}
+
+/** Texto seguro para tarjetas cuando el backend envía null o no numérico. */
+function fmtMetric(v: unknown): string {
+  const n = Number(v)
+  return Number.isFinite(n) ? String(n) : "—"
+}
+
+function diaTieneGeometriaRuta(d: DistribuidoraResumenDiaJson | null | undefined): boolean {
+  if (!d) return false
+  try {
+    return geometryToLatLngs(d.geometry).length >= 2
+  } catch {
+    return false
+  }
 }
 
 /** Marcador base (sin iconUrl de Leaflet / bundler → evita “Mark” e imagen rota). */
@@ -153,23 +172,30 @@ function RutasSemanaCapas({ resumen, visibleDias, focoDia, viewNonce }: RutasCap
 
     let animIndex = 0
     for (const d of resumen.dias) {
-      if (!visibleDias.has(d.dia)) continue
-      const latlngs = geometryToLatLngs(d.geometry)
+      if (!visibleDias.has(String(d.dia))) continue
+      let latlngs: L.LatLngTuple[] = []
+      try {
+        latlngs = geometryToLatLngs(d.geometry)
+      } catch {
+        latlngs = []
+      }
       if (latlngs.length < 2) continue
-      const esFoco = focoDia === d.dia
+      const esFoco = focoDia === String(d.dia)
       const atenuar = Boolean(focoDia && focoDia !== d.dia)
       const targetOpacity = atenuar ? RUTA_OPACITY_ATENUADA : RUTA_OPACITY_NORMAL
       const weight = esFoco ? RUTA_WEIGHT_FOCO : RUTA_WEIGHT_BASE
 
       const pl = L.polyline(latlngs, {
-        color: d.color,
+        color: typeof d.color === "string" && d.color ? d.color : "#2563eb",
         weight,
         opacity: 0,
         lineJoin: "round",
         lineCap: "round",
       })
       pl.addTo(map)
-      pl.bindPopup(`<strong>${d.dia}</strong><br/>${d.km_totales} km · ${d.clientes_count} clientes`)
+      pl.bindPopup(
+        `<strong>${String(d.dia ?? "—")}</strong><br/>${fmtMetric(d.km_totales)} km · ${fmtMetric(d.clientes_count)} clientes`,
+      )
       layersRef.current.push(pl)
 
       const stagger = animIndex * RUTA_ANIM_STAGGER_MS
@@ -204,18 +230,22 @@ function RutasSemanaCapas({ resumen, visibleDias, focoDia, viewNonce }: RutasCap
 }
 
 function sortedClientesForMap(dia: DistribuidoraResumenDiaJson): Record<string, unknown>[] {
-  const raw = dia.clientes
-  if (!Array.isArray(raw)) return []
-  return [...(raw as Record<string, unknown>[])].sort(
-    (a, b) => (Number(a.orden_visita) || 0) - (Number(b.orden_visita) || 0),
-  )
+  try {
+    const raw = dia?.clientes
+    if (!Array.isArray(raw)) return []
+    return [...(raw as Record<string, unknown>[])].sort(
+      (a, b) => (Number(a.orden_visita) || 0) - (Number(b.orden_visita) || 0),
+    )
+  } catch {
+    return []
+  }
 }
 
 /** Marcadores con número de orden (misma vista que se captura en el PDF). */
 function ResumenClienteMarkersVisita({ dias }: { dias: DistribuidoraResumenDiaJson[] }) {
-  return (
-    <>
-      {dias.flatMap((d) =>
+  const markers = useMemo(() => {
+    try {
+      return dias.flatMap((d) =>
         sortedClientesForMap(d)
           .map((c, i) => {
             const lat = Number(c.lat)
@@ -235,22 +265,29 @@ function ResumenClienteMarkersVisita({ dias }: { dias: DistribuidoraResumenDiaJs
             const nombre = String(
               c.cliente_nombre ?? c.nombre_fantasia ?? c.nombre ?? "Cliente",
             ).trim()
+            const diaKey = String(d?.dia ?? i)
             return (
-              <Marker key={`${d.dia}-${String(c.bsale_id ?? i)}`} position={[lat, lon]} icon={icon}>
+              <Marker key={`${diaKey}-${String(c.bsale_id ?? i)}`} position={[lat, lon]} icon={icon}>
                 <Popup>
                   <span className="text-sm">
                     <strong>{ov}.</strong> {nombre}
                     <br />
-                    <span className="text-muted-foreground">{d.dia}</span>
+                    <span className="text-muted-foreground">{diaKey}</span>
                   </span>
                 </Popup>
               </Marker>
             )
           })
           .filter(Boolean),
-      )}
-    </>
-  )
+      )
+    } catch (e) {
+      if (process.env.NODE_ENV === "development") {
+        console.error("[resumen-vendedor] ResumenClienteMarkersVisita", e)
+      }
+      return []
+    }
+  }, [dias])
+  return <>{markers}</>
 }
 
 function BaseMarkerResumen({ resumen }: { resumen: DistribuidoraResumenVendedorJson | null }) {
@@ -287,13 +324,18 @@ export default function ResumenVendedorClient() {
   const autoFitKey = useRef<string | null>(null)
 
   useEffect(() => {
-    if (!resumen?.dias?.length) return
-    const key = `${resumen.vendedor}:${resumen.dias.map((x) => x.dia).join("|")}`
+    const dias = resumen?.dias ?? []
+    if (!dias.length) return
+    const key = `${resumen?.vendedor ?? ""}:${dias.map((x) => String(x.dia ?? "")).join("|")}`
     if (autoFitKey.current === key) return
     autoFitKey.current = key
     const all: L.LatLngTuple[] = []
-    for (const d of resumen.dias) {
-      all.push(...geometryToLatLngs(d.geometry))
+    for (const d of dias) {
+      try {
+        all.push(...geometryToLatLngs(d.geometry))
+      } catch {
+        /* geometría inválida: omitir este día */
+      }
     }
     if (all.length < 2) return
     window.setTimeout(() => {
@@ -346,7 +388,9 @@ export default function ResumenVendedorClient() {
     try {
       const data = await getDistribuidoraResumenVendedor(v)
       setResumen(data)
-      setVisibleDias(new Set(data.dias.map((d) => d.dia)))
+      setVisibleDias(
+        new Set((data.dias ?? []).map((d) => String(d.dia ?? "")).filter(Boolean)),
+      )
       setFocoDia(null)
       setViewNonce((n) => n + 1)
     } catch (e) {
@@ -369,9 +413,14 @@ export default function ResumenVendedorClient() {
   const centrarEnDia = useCallback(
     (dia: string) => {
       if (!resumen) return
-      const d = resumen.dias.find((x) => x.dia === dia)
+      const d = (resumen.dias ?? []).find((x) => String(x.dia) === dia)
       if (!d) return
-      const latlngs = geometryToLatLngs(d.geometry)
+      let latlngs: L.LatLngTuple[] = []
+      try {
+        latlngs = geometryToLatLngs(d.geometry)
+      } catch {
+        return
+      }
       if (latlngs.length < 2 || !mapRef.current) return
       setFocoDia(dia)
       setViewNonce((n) => n + 1)
@@ -386,6 +435,25 @@ export default function ResumenVendedorClient() {
     setViewNonce((n) => n + 1)
   }
 
+  /** Debe declararse antes de `descargarAnalisisPdf` (evita TDZ: "Cannot access … before initialization"). */
+  const viaticoEstimado = useMemo(() => {
+    if (!resumen) return null
+    const km = Number(resumen.km_total_semana)
+    if (!Number.isFinite(km) || km <= 0) return null
+    const rend = parseNumInputLoose(rendimientoKmL)
+    const precio = parseNumInputLoose(precioCombustible)
+    if (rend == null || precio == null) return null
+    if (rend < MIN_RENDIMIENTO_KM_L || precio < MIN_PRECIO_COMBUSTIBLE_CLP) return null
+    const litros = km / rend
+    const clp = litros * precio
+    if (!Number.isFinite(clp) || clp < 0) return null
+    return Math.round(clp)
+  }, [resumen, rendimientoKmL, precioCombustible])
+
+  const diasLista = useMemo(() => resumen?.dias ?? [], [resumen])
+  const analisisUi = useMemo(() => safeBuildOperationalInsights(resumen), [resumen])
+  const eficienciaUi = useMemo(() => safeClasificarEficiencia(resumen), [resumen])
+
   const descargarAnalisisPdf = useCallback(async () => {
     if (!resumen) return
     const el = mapRef.current?.getContainer()
@@ -397,8 +465,9 @@ export default function ResumenVendedorClient() {
     setPdfGenerando(true)
     const prevVisible = new Set(visibleDias)
     const prevFoco = focoDia
+      const diasSafe = diasLista
     try {
-      setVisibleDias(new Set(resumen.dias.map((d) => d.dia)))
+      setVisibleDias(new Set(diasSafe.map((d) => String(d.dia ?? "")).filter(Boolean)))
       setFocoDia(null)
       setViewNonce((n) => n + 1)
       await new Promise((r) => setTimeout(r, 1100))
@@ -419,21 +488,7 @@ export default function ResumenVendedorClient() {
       setViewNonce((n) => n + 1)
       setPdfGenerando(false)
     }
-  }, [resumen, visibleDias, focoDia, viaticoEstimado, rendimientoKmL, precioCombustible])
-
-  const viaticoEstimado = useMemo(() => {
-    if (!resumen) return null
-    const km = Number(resumen.km_total_semana)
-    if (!Number.isFinite(km) || km <= 0) return null
-    const rend = parseNumInputLoose(rendimientoKmL)
-    const precio = parseNumInputLoose(precioCombustible)
-    if (rend == null || precio == null) return null
-    if (rend < MIN_RENDIMIENTO_KM_L || precio < MIN_PRECIO_COMBUSTIBLE_CLP) return null
-    const litros = km / rend
-    const clp = litros * precio
-    if (!Number.isFinite(clp) || clp < 0) return null
-    return Math.round(clp)
-  }, [resumen, rendimientoKmL, precioCombustible])
+  }, [resumen, diasLista, visibleDias, focoDia, viaticoEstimado, rendimientoKmL, precioCombustible])
 
   return (
     <div className="space-y-4 p-4">
@@ -579,9 +634,16 @@ export default function ResumenVendedorClient() {
                 ) : (
                   <p className="text-sm text-muted-foreground">
                     Ingrese rendimiento (≥ {MIN_RENDIMIENTO_KM_L} km/l) y precio (≥{" "}
-                    {MIN_PRECIO_COMBUSTIBLE_CLP} CLP/l) para estimar con los{" "}
-                    <strong className="text-foreground">{resumen.km_total_semana}</strong> km de
-                    la semana.
+                    {MIN_PRECIO_COMBUSTIBLE_CLP} CLP/l) para estimar
+                    {Number.isFinite(Number(resumen.km_total_semana)) ? (
+                      <>
+                        {" "}
+                        con los <strong className="text-foreground">{fmtMetric(resumen.km_total_semana)}</strong>{" "}
+                        km de la semana.
+                      </>
+                    ) : (
+                      <> según el kilometraje de la semana (dato no disponible en este resumen).</>
+                    )}
                   </p>
                 )}
               </CardContent>
@@ -593,149 +655,226 @@ export default function ResumenVendedorClient() {
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Km semana</CardTitle>
               </CardHeader>
-              <CardContent className="text-2xl font-semibold">{resumen.km_total_semana}</CardContent>
+              <CardContent className="text-2xl font-semibold">{fmtMetric(resumen.km_total_semana)}</CardContent>
             </Card>
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Tiempo (min)</CardTitle>
               </CardHeader>
-              <CardContent className="text-2xl font-semibold">{resumen.min_total_semana}</CardContent>
+              <CardContent className="text-2xl font-semibold">{fmtMetric(resumen.min_total_semana)}</CardContent>
             </Card>
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Clientes</CardTitle>
               </CardHeader>
-              <CardContent className="text-2xl font-semibold">{resumen.clientes_total_semana}</CardContent>
+              <CardContent className="text-2xl font-semibold">{fmtMetric(resumen.clientes_total_semana)}</CardContent>
             </Card>
             <Card>
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-medium text-muted-foreground">Prom. km / día</CardTitle>
               </CardHeader>
-              <CardContent className="text-2xl font-semibold">{resumen.promedio_km_por_dia}</CardContent>
+              <CardContent className="text-2xl font-semibold">{fmtMetric(resumen.promedio_km_por_dia)}</CardContent>
             </Card>
           </div>
 
-          <div className="grid gap-3 lg:grid-cols-[1fr_280px]">
-            <Card className="overflow-hidden">
-              <CardHeader className="flex flex-row items-center justify-between py-3">
-                <CardTitle className="text-base">Mapa</CardTitle>
-                {focoDia ? (
-                  <Button variant="outline" size="sm" onClick={limpiarFoco}>
-                    Quitar foco
-                  </Button>
-                ) : null}
-              </CardHeader>
-              <CardContent className="p-0">
-                <div className="relative h-[min(72vh,560px)] w-full">
-                  <MapContainer center={MAP_CENTER} zoom={MAP_ZOOM} className="h-full w-full z-0">
-                    <CaptureMapRef mapRef={mapRef} />
-                    <TileLayer attribution="&copy; CARTO" url={CARTO_LIGHT} />
-                    <ResumenMapInvalidate />
-                    <RutasSemanaCapas
-                      resumen={resumen}
-                      visibleDias={visibleDias}
-                      focoDia={focoDia}
-                      viewNonce={viewNonce}
-                    />
-                    <BaseMarkerResumen resumen={resumen} />
-                    <ResumenClienteMarkersVisita
-                      dias={resumen.dias.filter((d) => visibleDias.has(d.dia))}
-                    />
-                  </MapContainer>
-                </div>
-              </CardContent>
-            </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base">Análisis operativo</CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Eficiencia aparente:{" "}
+                <strong className="text-foreground">{eficienciaUi.etiqueta}</strong>
+                {" — "}
+                {eficienciaUi.texto}
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm leading-relaxed">
+              {!analisisUi.ok && analisisUi.message ? (
+                <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/35 dark:text-amber-100">
+                  {analisisUi.message}
+                </p>
+              ) : null}
+              {analisisUi.ok && analisisUi.paragraphs.length === 0 ? (
+                <p className="text-muted-foreground">Sin texto de análisis para mostrar.</p>
+              ) : null}
+              {analisisUi.paragraphs.map((p, i) => (
+                <p key={i}>{p}</p>
+              ))}
+            </CardContent>
+          </Card>
 
+          {diasLista.length === 0 ? (
             <Card>
               <CardHeader>
-                <CardTitle className="text-base">Leyenda</CardTitle>
+                <CardTitle className="text-base">Rutas de la semana</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-3 text-sm">
-                <div className="rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground">
-                  Km día más largo: <strong className="text-foreground">{resumen.km_dia_mas_largo}</strong>
-                  <br />
-                  Km día más corto: <strong className="text-foreground">{resumen.km_dia_mas_corto}</strong>
-                </div>
-                <ul className="space-y-2">
-                  {resumen.dias.map((d) => (
-                    <li key={d.dia} className="flex items-start gap-2">
-                      <span
-                        className="mt-1 h-3 w-3 shrink-0 rounded-full ring-1 ring-black/10"
-                        style={{ backgroundColor: d.color }}
-                      />
-                      <div className="min-w-0 flex-1">
-                        <div className="font-medium">{d.dia}</div>
-                        <div className="text-muted-foreground">
-                          {d.km_totales} km · {d.clientes_count} clientes
-                        </div>
-                        {d.alerta_calidad ? (
-                          <div className="mt-0.5 flex items-center gap-1 text-amber-700 dark:text-amber-400">
-                            <AlertTriangle className="h-3.5 w-3.5" />
-                            <span className="text-xs">Ruta larga por cliente (~{d.km_por_cliente} km/cli)</span>
-                          </div>
-                        ) : null}
-                        <div className="mt-1 flex flex-wrap gap-1">
-                          <Button variant="secondary" size="sm" className="h-7 text-xs" onClick={() => centrarEnDia(d.dia)}>
-                            <MapPin className="mr-1 h-3 w-3" />
-                            Centrar
-                          </Button>
-                        </div>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+              <CardContent className="space-y-2 text-sm text-muted-foreground">
+                <p>
+                  No hay jornadas con datos de ruta para este vendedor en el período consultado. Puede
+                  deberse a que aún no se planificaron visitas o a un problema al obtener los datos.
+                </p>
+                <p className="text-xs">El resto del resumen (métricas y simulación de viático) sigue disponible si el servidor envió totales.</p>
               </CardContent>
             </Card>
-          </div>
+          ) : (
+            <div className="grid gap-3 lg:grid-cols-[1fr_280px]">
+              <Card className="overflow-hidden">
+                <CardHeader className="flex flex-row items-center justify-between py-3">
+                  <CardTitle className="text-base">Mapa</CardTitle>
+                  {focoDia ? (
+                    <Button variant="outline" size="sm" onClick={limpiarFoco}>
+                      Quitar foco
+                    </Button>
+                  ) : null}
+                </CardHeader>
+                <CardContent className="p-0">
+                  <div className="relative h-[min(72vh,560px)] w-full">
+                    <MapContainer center={MAP_CENTER} zoom={MAP_ZOOM} className="h-full w-full z-0">
+                      <CaptureMapRef mapRef={mapRef} />
+                      <TileLayer attribution="&copy; CARTO" url={CARTO_LIGHT} />
+                      <ResumenMapInvalidate />
+                      <RutasSemanaCapas
+                        resumen={resumen}
+                        visibleDias={visibleDias}
+                        focoDia={focoDia}
+                        viewNonce={viewNonce}
+                      />
+                      <BaseMarkerResumen resumen={resumen} />
+                      <ResumenClienteMarkersVisita
+                        dias={diasLista.filter((d) => visibleDias.has(String(d.dia)))}
+                      />
+                    </MapContainer>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Leyenda</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3 text-sm">
+                  <div className="rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground">
+                    Km día más largo:{" "}
+                    <strong className="text-foreground">{fmtMetric(resumen.km_dia_mas_largo)}</strong>
+                    <br />
+                    Km día más corto:{" "}
+                    <strong className="text-foreground">{fmtMetric(resumen.km_dia_mas_corto)}</strong>
+                  </div>
+                  <ul className="space-y-2">
+                    {diasLista.map((d, idx) => (
+                      <li key={String(d.dia ?? `dia-${idx}`)} className="flex items-start gap-2">
+                        <span
+                          className="mt-1 h-3 w-3 shrink-0 rounded-full ring-1 ring-black/10"
+                          style={{ backgroundColor: d.color }}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium">{d.dia ?? "—"}</div>
+                          <div className="text-muted-foreground">
+                            {fmtMetric(d.km_totales)} km · {fmtMetric(d.clientes_count)} clientes
+                            {!diaTieneGeometriaRuta(d) ? (
+                              <span className="ml-1 text-xs">· sin trazado en mapa</span>
+                            ) : null}
+                          </div>
+                          {d.alerta_calidad ? (
+                            <div className="mt-0.5 flex items-center gap-1 text-amber-700 dark:text-amber-400">
+                              <AlertTriangle className="h-3.5 w-3.5" />
+                              <span className="text-xs">
+                                Ruta larga por cliente (~{fmtMetric(d.km_por_cliente)} km/cli)
+                              </span>
+                            </div>
+                          ) : null}
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              className="h-7 text-xs"
+                              disabled={!diaTieneGeometriaRuta(d)}
+                              title={
+                                diaTieneGeometriaRuta(d)
+                                  ? undefined
+                                  : "Este día no tiene geometría válida para centrar el mapa."
+                              }
+                              onClick={() => centrarEnDia(String(d.dia))}
+                            >
+                              <MapPin className="mr-1 h-3 w-3" />
+                              Centrar
+                            </Button>
+                          </div>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </CardContent>
+              </Card>
+            </div>
+          )}
 
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Detalle por día</CardTitle>
             </CardHeader>
             <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-10">Ver</TableHead>
-                    <TableHead>Día</TableHead>
-                    <TableHead>Clientes</TableHead>
-                    <TableHead>Km</TableHead>
-                    <TableHead>Min</TableHead>
-                    <TableHead>Capa</TableHead>
-                    <TableHead className="text-right">Acción</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {resumen.dias.map((d: DistribuidoraResumenDiaJson) => (
-                    <TableRow key={d.dia}>
-                      <TableCell>
-                        <Checkbox
-                          checked={visibleDias.has(d.dia)}
-                          onCheckedChange={() => toggleDia(d.dia)}
-                          aria-label={`Mostrar ${d.dia}`}
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <span className="mr-2 inline-block h-2 w-2 rounded-full align-middle" style={{ backgroundColor: d.color }} />
-                        {d.dia}
-                      </TableCell>
-                      <TableCell>{d.clientes_count}</TableCell>
-                      <TableCell>{d.km_totales}</TableCell>
-                      <TableCell>{d.minutos_totales}</TableCell>
-                      <TableCell>
-                        <Button type="button" variant="ghost" size="sm" className="h-8" onClick={() => centrarEnDia(d.dia)}>
-                          Centrar mapa
-                        </Button>
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button variant="outline" size="sm" asChild>
-                          <Link href="/distribuidora/rutero">Ver rutero</Link>
-                        </Button>
-                      </TableCell>
+              {diasLista.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No hay filas para mostrar.</p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-10">Ver</TableHead>
+                      <TableHead>Día</TableHead>
+                      <TableHead>Clientes</TableHead>
+                      <TableHead>Km</TableHead>
+                      <TableHead>Min</TableHead>
+                      <TableHead>Capa</TableHead>
+                      <TableHead className="text-right">Acción</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {diasLista.map((d: DistribuidoraResumenDiaJson, idx) => (
+                      <TableRow key={String(d.dia ?? `fila-${idx}`)}>
+                        <TableCell>
+                          <Checkbox
+                            checked={visibleDias.has(String(d.dia))}
+                            onCheckedChange={() => toggleDia(String(d.dia))}
+                            aria-label={`Mostrar ${String(d.dia)}`}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <span
+                            className="mr-2 inline-block h-2 w-2 rounded-full align-middle"
+                            style={{ backgroundColor: d.color }}
+                          />
+                          {d.dia ?? "—"}
+                        </TableCell>
+                        <TableCell>{fmtMetric(d.clientes_count)}</TableCell>
+                        <TableCell>{fmtMetric(d.km_totales)}</TableCell>
+                        <TableCell>{fmtMetric(d.minutos_totales)}</TableCell>
+                        <TableCell>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-8"
+                            disabled={!diaTieneGeometriaRuta(d)}
+                            title={
+                              diaTieneGeometriaRuta(d)
+                                ? undefined
+                                : "Sin geometría válida para este día."
+                            }
+                            onClick={() => centrarEnDia(String(d.dia))}
+                          >
+                            Centrar mapa
+                          </Button>
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button variant="outline" size="sm" asChild>
+                            <Link href="/distribuidora/rutero">Ver rutero</Link>
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
             </CardContent>
           </Card>
         </>

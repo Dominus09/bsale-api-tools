@@ -1,6 +1,11 @@
 import { format } from "date-fns"
 
 import type { DistribuidoraResumenDiaJson, DistribuidoraResumenVendedorJson } from "@/lib/api"
+import {
+  buildOperationalInsights,
+  clasificarEficiencia,
+  kmPorClienteSemana,
+} from "@/lib/resumen-vendedor-analisis"
 
 const PAGE_W_MM = 210
 const PAGE_H_MM = 297
@@ -61,95 +66,6 @@ function clientesOrdenadosRows(dia: DistribuidoraResumenDiaJson): Record<string,
   if (!Array.isArray(raw)) return []
   const rows = raw as Record<string, unknown>[]
   return [...rows].sort((a, b) => (Number(a.orden_visita) || 0) - (Number(b.orden_visita) || 0))
-}
-
-/** km totales / visitas semana (misma semana que el informe). */
-function kmPorClienteSemana(resumen: DistribuidoraResumenVendedorJson): number {
-  const n = resumen.clientes_total_semana
-  if (!n || n <= 0) return 0
-  return resumen.km_total_semana / n
-}
-
-function clasificarEficiencia(kmPorCli: number): { etiqueta: "Alta" | "Media" | "Baja"; texto: string } {
-  if (kmPorCli <= 0) return { etiqueta: "Media", texto: "sin datos de clientes" }
-  if (kmPorCli < 5) return { etiqueta: "Alta", texto: `${kmPorCli.toFixed(1)} km por cliente` }
-  if (kmPorCli <= 10) return { etiqueta: "Media", texto: `${kmPorCli.toFixed(1)} km por cliente` }
-  return { etiqueta: "Baja", texto: `${kmPorCli.toFixed(1)} km por cliente` }
-}
-
-function buildOperationalInsights(resumen: DistribuidoraResumenVendedorJson): string[] {
-  const out: string[] = []
-  const dias = resumen.dias
-  const kmT = Number(resumen.km_total_semana) || 0
-  const nCli = resumen.clientes_total_semana || 0
-
-  if (!dias.length) {
-    out.push("No hay jornadas con ruta terrestre registrada para este vendedor en el resumen actual.")
-    return out
-  }
-
-  const entries = dias.map((d) => ({
-    dia: d.dia,
-    km: Number(d.km_totales) || 0,
-    clis: Number(d.clientes_count) || 0,
-    kmPc: d.km_por_cliente != null ? Number(d.km_por_cliente) : 0,
-  }))
-
-  const maxEntry = entries.reduce((a, b) => (a.km >= b.km ? a : b))
-  const pctMax = kmT > 0 ? (100 * maxEntry.km) / kmT : 0
-  if (pctMax >= 40 && entries.length >= 2) {
-    out.push(
-      `Durante la semana, la carga de kilómetros se concentra con fuerza el día ${maxEntry.dia} (aprox. ${pctMax.toFixed(
-        0,
-      )}% del total), lo que marca el pico operativo de la semana.`,
-    )
-  }
-
-  const avgKmDia = entries.length ? kmT / entries.length : 0
-  const lowDays = entries.filter((e) => e.km > 0 && avgKmDia > 0 && e.km < avgKmDia * 0.45)
-  if (lowDays.length >= 1 && entries.length >= 3) {
-    out.push(
-      `Existen jornadas con menor recorrido (${lowDays
-        .map((x) => x.dia)
-        .join(", ")}), lo que puede representar oportunidades de redistribución de visitas.`,
-    )
-  }
-
-  if (kmT >= 400) {
-    out.push("El kilometraje semanal acumulado es elevado: la ruta implica alta exigencia logística en tiempo de manejo y costo de combustible.")
-  } else if (kmT > 0 && kmT <= 130 && entries.length >= 2) {
-    out.push("El kilometraje total es moderado: podría existir margen para densificar visitas en algunas jornadas sin saturar la semana.")
-  }
-
-  const kmPerClienteGlobal = nCli > 0 ? kmT / nCli : 0
-  if (kmPerClienteGlobal >= 12) {
-    out.push(
-      "El promedio de kilómetros por cliente sugiere puntos de atención relativamente dispersos, con impacto directo en tiempos de traslado.",
-    )
-  } else if (kmPerClienteGlobal > 0 && kmPerClienteGlobal <= 4.5) {
-    out.push(
-      "El promedio de kilómetros por cliente es favorable: la geografía de visitas tiende a ser compacta entre paradas consecutivas.",
-    )
-  }
-
-  const kms = entries.map((e) => e.km)
-  const mean = kms.reduce((s, x) => s + x, 0) / Math.max(kms.length, 1)
-  const stdev = Math.sqrt(kms.reduce((s, x) => s + (x - mean) ** 2, 0) / Math.max(kms.length, 1))
-  if (mean > 0 && stdev / mean > 0.38 && entries.length >= 3) {
-    out.push(
-      "Hay desbalance entre jornadas (variación notable en km por día); conviene revisar la asignación semanal frente al mix de clientes y prioridades.",
-    )
-  }
-
-  if (entries.some((e) => e.clis > 0 && e.km / e.clis > 18)) {
-    out.push("Algunos días muestran ratios altos de km por cliente, típicos de trayectos largos o secuencias poco compactas.")
-  }
-
-  out.push(
-    "Se sugiere revisar periódicamente la secuencia de visitas y el equilibrio entre días para optimizar costos y tiempos, alineando la operación con metas comerciales y de servicio.",
-  )
-
-  return out
 }
 
 function drawSectionBand(
@@ -372,7 +288,7 @@ export async function exportResumenVendedorPdf(params: ExportResumenVendedorPdfP
   doc.addImage(mapDataUrl, "JPEG", MARGIN_MM, y, wMm, hMm)
   y += hMm + 10
 
-  const pairs = chunkDias(resumen.dias, 2)
+  const pairs = chunkDias(resumen?.dias ?? [], 2)
   if (pairs.length > 0) {
     doc.addPage()
     y = MARGIN_MM
@@ -430,7 +346,13 @@ export async function exportResumenVendedorPdf(params: ExportResumenVendedorPdfP
   doc.addPage()
   y = MARGIN_MM
   y = drawSectionBand(doc, y, "Análisis operativo (automático)", "📊")
-  const insights = buildOperationalInsights(resumen)
+  const { paragraphs: insights } = (() => {
+    try {
+      return { paragraphs: buildOperationalInsights(resumen) }
+    } catch {
+      return { paragraphs: ["No fue posible generar el análisis automático para este vendedor."] }
+    }
+  })()
   doc.setFont("helvetica", "normal")
   doc.setTextColor(...TEXT_DARK)
   for (const para of insights) {
