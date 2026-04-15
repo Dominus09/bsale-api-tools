@@ -15,7 +15,7 @@ import { useMap } from "react-leaflet"
 import { AlertTriangle, Loader2, MapPin } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -46,7 +46,7 @@ import {
   safeBuildOperationalInsights,
   safeClasificarEficiencia,
 } from "@/lib/resumen-vendedor-analisis"
-import { fitMapToResumenForPdf } from "@/lib/resumen-vendedor-map-fit"
+import { fitMapToResumenBounds } from "@/lib/resumen-vendedor-map-fit"
 import { exportResumenVendedorPdf } from "@/lib/resumen-vendedor-pdf"
 import {
   RESUMEN_VENDEDOR_PRINT_POPUP_BLOCKED,
@@ -322,27 +322,6 @@ export default function ResumenVendedorClient() {
   const [pdfGenerando, setPdfGenerando] = useState(false)
   const [pdfError, setPdfError] = useState<string | null>(null)
   const mapRef = useRef<L.Map | null>(null)
-  const autoFitKey = useRef<string | null>(null)
-
-  useEffect(() => {
-    const dias = resumen?.dias ?? []
-    if (!dias.length) return
-    const key = `${resumen?.vendedor ?? ""}:${dias.map((x) => String(x.dia ?? "")).join("|")}`
-    if (autoFitKey.current === key) return
-    autoFitKey.current = key
-    const all: L.LatLngTuple[] = []
-    for (const d of dias) {
-      try {
-        all.push(...geometryToLatLngs(d.geometry))
-      } catch {
-        /* geometría inválida: omitir este día */
-      }
-    }
-    if (all.length < 2) return
-    window.setTimeout(() => {
-      mapRef.current?.fitBounds(L.latLngBounds(all), { padding: [40, 40], maxZoom: 12 })
-    }, 500)
-  }, [resumen])
 
   useEffect(() => {
     let cancel = false
@@ -381,7 +360,6 @@ export default function ResumenVendedorClient() {
 
   const cargarResumen = useCallback(async (v: string) => {
     if (!v) return
-    autoFitKey.current = null
     setCargandoResumen(true)
     setError(null)
     setVistaImpresionError(null)
@@ -431,11 +409,6 @@ export default function ResumenVendedorClient() {
     [resumen],
   )
 
-  const limpiarFoco = () => {
-    setFocoDia(null)
-    setViewNonce((n) => n + 1)
-  }
-
   /** Debe declararse antes de `descargarAnalisisPdf` (evita TDZ: "Cannot access … before initialization"). */
   const viaticoEstimado = useMemo(() => {
     if (!resumen) return null
@@ -454,6 +427,31 @@ export default function ResumenVendedorClient() {
   const diasLista = useMemo(() => resumen?.dias ?? [], [resumen])
   const analisisUi = useMemo(() => safeBuildOperationalInsights(resumen), [resumen])
   const eficienciaUi = useMemo(() => safeClasificarEficiencia(resumen), [resumen])
+
+  const ajustarMapaAResumen = useCallback(() => {
+    const map = mapRef.current
+    if (!map || !resumen?.dias?.length) return
+    try {
+      fitMapToResumenBounds(map, resumen, { visibleDias, padding: [50, 50] })
+      map.invalidateSize({ animate: false })
+    } catch {
+      /* vista actual se mantiene */
+    }
+  }, [resumen, visibleDias])
+
+  useEffect(() => {
+    if (!resumen?.dias?.length) return
+    if (focoDia) return
+    const t = window.setTimeout(() => {
+      ajustarMapaAResumen()
+    }, 700)
+    return () => window.clearTimeout(t)
+  }, [resumen, visibleDias, focoDia, ajustarMapaAResumen])
+
+  const limpiarFoco = useCallback(() => {
+    setFocoDia(null)
+    setViewNonce((n) => n + 1)
+  }, [])
 
   const descargarAnalisisPdf = useCallback(async () => {
     if (!resumen) return
@@ -475,12 +473,12 @@ export default function ResumenVendedorClient() {
       const map = mapRef.current
       if (map) {
         try {
-          fitMapToResumenForPdf(map, resumen)
+          fitMapToResumenBounds(map, resumen, { visibleDias: null, padding: [50, 50] })
           map.invalidateSize({ animate: false })
         } catch {
           /* el PDF igual se genera con la vista actual del mapa */
         }
-        await new Promise((r) => setTimeout(r, 450))
+        await new Promise((r) => setTimeout(r, 500))
       }
       const rend = parseNumInputLoose(rendimientoKmL)
       const precio = parseNumInputLoose(precioCombustible)
@@ -688,31 +686,6 @@ export default function ResumenVendedorClient() {
             </Card>
           </div>
 
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">Análisis operativo</CardTitle>
-              <p className="text-xs text-muted-foreground">
-                Eficiencia aparente:{" "}
-                <strong className="text-foreground">{eficienciaUi.etiqueta}</strong>
-                {" — "}
-                {eficienciaUi.texto}
-              </p>
-            </CardHeader>
-            <CardContent className="space-y-2 text-sm leading-relaxed">
-              {!analisisUi.ok && analisisUi.message ? (
-                <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/35 dark:text-amber-100">
-                  {analisisUi.message}
-                </p>
-              ) : null}
-              {analisisUi.ok && analisisUi.paragraphs.length === 0 ? (
-                <p className="text-muted-foreground">Sin texto de análisis para mostrar.</p>
-              ) : null}
-              {analisisUi.paragraphs.map((p, i) => (
-                <p key={i}>{p}</p>
-              ))}
-            </CardContent>
-          </Card>
-
           {diasLista.length === 0 ? (
             <Card>
               <CardHeader>
@@ -890,6 +863,40 @@ export default function ResumenVendedorClient() {
           </Card>
         </>
       )}
+
+      {resumen ? (
+        <section
+          aria-labelledby="analisis-operativo-heading"
+          className="mt-8 scroll-mt-6 border-t border-border pt-6"
+        >
+          <Card className="border-muted/80 bg-muted/20">
+            <CardHeader className="pb-2">
+              <CardTitle id="analisis-operativo-heading" className="text-base">
+                Análisis operativo
+              </CardTitle>
+              <CardDescription className="text-sm text-muted-foreground">
+                Conclusión del comportamiento de la semana: eficiencia aparente{" "}
+                <strong className="font-medium text-foreground">{eficienciaUi.etiqueta}</strong>
+                {" — "}
+                {eficienciaUi.texto}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm leading-relaxed">
+              {!analisisUi.ok && analisisUi.message ? (
+                <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/35 dark:text-amber-100">
+                  {analisisUi.message}
+                </p>
+              ) : null}
+              {analisisUi.ok && analisisUi.paragraphs.length === 0 ? (
+                <p className="text-muted-foreground">Sin texto de análisis para mostrar.</p>
+              ) : null}
+              {analisisUi.paragraphs.map((p, i) => (
+                <p key={i}>{p}</p>
+              ))}
+            </CardContent>
+          </Card>
+        </section>
+      ) : null}
     </div>
   )
 }

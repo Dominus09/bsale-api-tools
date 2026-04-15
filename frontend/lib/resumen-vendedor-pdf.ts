@@ -194,40 +194,6 @@ export async function exportResumenVendedorPdf(params: ExportResumenVendedorPdfP
 
   y = 30
 
-  y = drawSectionHeader(doc, y, "Resumen general")
-  y += CONTENT_PAD_MM
-  const bloques: string[] = [
-    `Km total semana: ${fmtMetric(resumen.km_total_semana)} km`,
-    `Clientes (visitas): ${fmtMetric(resumen.clientes_total_semana)}`,
-    `Tiempo conducción (estim.): ${fmtMetric(resumen.min_total_semana)} min`,
-    `Promedio km / día: ${fmtMetric(resumen.promedio_km_por_dia)} km`,
-    `Día más largo: ${fmtMetric(resumen.km_dia_mas_largo)} km`,
-    `Día más corto: ${fmtMetric(resumen.km_dia_mas_corto)} km`,
-  ]
-  if (viaticoClp != null && Number.isFinite(viaticoClp)) {
-    bloques.push(`Viático estimado (panel): ${formatClp(viaticoClp)}`)
-  } else {
-    bloques.push("Viático estimado: complete rendimiento y precio en el panel para un monto.")
-  }
-
-  doc.setFontSize(9.2)
-  doc.setTextColor(...TEXT_DARK)
-  const colW = INNER_W / 2 - 3
-  let col = 0
-  let rowY = y
-  const startY = y
-  for (const line of bloques) {
-    const x = MARGIN_MM + col * (colW + 6)
-    doc.text(line, x, rowY)
-    col += 1
-    if (col >= 2) {
-      col = 0
-      rowY += 4.8
-    }
-  }
-  if (col !== 0) rowY += 4.8
-  y = Math.max(rowY, startY + 26) + 5
-
   y = drawSectionHeader(doc, y, "Viático (cálculo transparente)")
   y += CONTENT_PAD_MM
   const km = Number(resumen.km_total_semana) || 0
@@ -271,16 +237,39 @@ export async function exportResumenVendedorPdf(params: ExportResumenVendedorPdfP
     y += 2
   }
 
-  y += 3
+  y += 4
   const kmPc = kmPorClienteSemana(resumen)
   const eff = clasificarEficiencia(kmPc)
-  y = drawSectionHeader(doc, y, "Indicador de eficiencia")
+  y = drawSectionHeader(doc, y, "Métricas")
   y += CONTENT_PAD_MM
-  y = ensureSpace(doc, y, 10)
-  doc.setFontSize(9.8)
+  const bloquesMetricas: string[] = [
+    `Km total semana: ${fmtMetric(resumen.km_total_semana)} km`,
+    `Clientes (visitas): ${fmtMetric(resumen.clientes_total_semana)}`,
+    `Tiempo conducción (estim.): ${fmtMetric(resumen.min_total_semana)} min`,
+    `Promedio km / día: ${fmtMetric(resumen.promedio_km_por_dia)} km`,
+    `Día más largo: ${fmtMetric(resumen.km_dia_mas_largo)} km`,
+    `Día más corto: ${fmtMetric(resumen.km_dia_mas_corto)} km`,
+  ]
+  doc.setFontSize(9.2)
   doc.setTextColor(...TEXT_DARK)
+  const colW = INNER_W / 2 - 3
+  let col = 0
+  let rowY = y
+  const startY = y
+  for (const line of bloquesMetricas) {
+    const x = MARGIN_MM + col * (colW + 6)
+    doc.text(line, x, rowY)
+    col += 1
+    if (col >= 2) {
+      col = 0
+      rowY += 4.8
+    }
+  }
+  if (col !== 0) rowY += 4.8
+  y = Math.max(rowY, startY + 22) + 3
   doc.setFont("helvetica", "bold")
-  doc.text(`Eficiencia de ruta: ${eff.etiqueta}`, MARGIN_MM + CONTENT_PAD_MM, y)
+  doc.setFontSize(9.5)
+  doc.text(`Indicador de eficiencia: ${eff.etiqueta}`, MARGIN_MM + CONTENT_PAD_MM, y)
   doc.setFont("helvetica", "normal")
   y += 4.5
   y = addParagraph(
@@ -293,7 +282,7 @@ export async function exportResumenVendedorPdf(params: ExportResumenVendedorPdfP
     4,
     TEXT_DARK,
   )
-  y += 5
+  y += 6
 
   y = drawSectionHeader(doc, y, "Mapa de rutas")
   y += CONTENT_PAD_MM
