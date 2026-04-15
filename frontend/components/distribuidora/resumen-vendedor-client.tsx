@@ -12,7 +12,6 @@ import {
 import dynamic from "next/dynamic"
 import L from "leaflet"
 import { useMap } from "react-leaflet"
-import polylineModule from "@mapbox/polyline"
 import { AlertTriangle, Loader2, MapPin } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -42,7 +41,8 @@ import {
   type DistribuidoraResumenDiaJson,
   type DistribuidoraResumenVendedorJson,
 } from "@/lib/api"
-import { exportResumenVendedorPdf } from "@/lib/resumen-vendedor-pdf"
+import { geometryToLatLngs } from "@/lib/distribuidora-resumen-geometry"
+import { openResumenVendedorPrintPreview } from "@/lib/resumen-vendedor-print-html"
 import { cn } from "@/lib/utils"
 
 import "leaflet/dist/leaflet.css"
@@ -75,42 +75,6 @@ function formatViaticoCLP(value: number): string {
   })
 }
 
-type PolylineDecodeFn = (str: string, precision?: number) => [number, number][]
-
-function getPolylineDecode(): PolylineDecodeFn | null {
-  const m = polylineModule as unknown
-  if (m && typeof m === "object" && "decode" in m && typeof (m as { decode: unknown }).decode === "function") {
-    return (m as { decode: PolylineDecodeFn }).decode.bind(m) as PolylineDecodeFn
-  }
-  const d = (m as { default?: unknown })?.default
-  if (d && typeof d === "object" && "decode" in d && typeof (d as { decode: unknown }).decode === "function") {
-    return (d as { decode: PolylineDecodeFn }).decode.bind(d) as PolylineDecodeFn
-  }
-  return null
-}
-
-function decodeEncodedPolylineToLatLngs(encoded: string): L.LatLngTuple[] {
-  const decode = getPolylineDecode()
-  if (!decode || !encoded.trim()) return []
-  const trimmed = encoded.trim()
-  for (const precision of [5, 6] as const) {
-    try {
-      const decoded = decode(trimmed, precision)
-      if (Array.isArray(decoded) && decoded.length >= 2) {
-        return decoded.map(([lat, lon]) => [lat, lon] as L.LatLngTuple)
-      }
-    } catch {
-      /* siguiente precisión */
-    }
-  }
-  try {
-    const decoded = decode(trimmed)
-    return decoded.map(([lat, lon]) => [lat, lon] as L.LatLngTuple)
-  } catch {
-    return []
-  }
-}
-
 /** Marcador base (sin iconUrl de Leaflet / bundler → evita “Mark” e imagen rota). */
 let resumenBaseIconSingleton: L.DivIcon | null = null
 function getResumenVendedorBaseIcon(): L.DivIcon {
@@ -124,24 +88,6 @@ function getResumenVendedorBaseIcon(): L.DivIcon {
     })
   }
   return resumenBaseIconSingleton
-}
-
-function geometryToLatLngs(geometry: unknown): L.LatLngTuple[] {
-  if (geometry == null) return []
-  if (typeof geometry === "string") {
-    return decodeEncodedPolylineToLatLngs(geometry)
-  }
-  if (typeof geometry === "object" && geometry !== null) {
-    const o = geometry as Record<string, unknown>
-    if (typeof o.coordinates === "string" && o.coordinates.trim()) {
-      return decodeEncodedPolylineToLatLngs(o.coordinates as string)
-    }
-    if (o.type === "LineString" && Array.isArray(o.coordinates)) {
-      const coords = o.coordinates as [number, number][]
-      return coords.map(([lon, lat]) => [lat, lon] as L.LatLngTuple)
-    }
-  }
-  return []
 }
 
 function ResumenMapInvalidate() {
@@ -280,8 +226,7 @@ export default function ResumenVendedorClient() {
   const [viewNonce, setViewNonce] = useState(0)
   const [rendimientoKmL, setRendimientoKmL] = useState("")
   const [precioCombustible, setPrecioCombustible] = useState("")
-  const [exportandoPdf, setExportandoPdf] = useState(false)
-  const [pdfError, setPdfError] = useState<string | null>(null)
+  const [vistaImpresionError, setVistaImpresionError] = useState<string | null>(null)
   const mapRef = useRef<L.Map | null>(null)
   const autoFitKey = useRef<string | null>(null)
 
@@ -340,7 +285,7 @@ export default function ResumenVendedorClient() {
     autoFitKey.current = null
     setCargandoResumen(true)
     setError(null)
-    setPdfError(null)
+    setVistaImpresionError(null)
     try {
       const data = await getDistribuidoraResumenVendedor(v)
       setResumen(data)
@@ -398,25 +343,13 @@ export default function ResumenVendedorClient() {
     return Math.round(clp)
   }, [resumen, rendimientoKmL, precioCombustible])
 
-  const entregarAnalisis = useCallback(async () => {
+  const abrirVistaPreviaImprimir = useCallback(() => {
     if (!resumen) return
-    const el = mapRef.current?.getContainer()
-    if (!el) {
-      setPdfError("El mapa aún no está listo para capturar. Espere un momento e intente de nuevo.")
-      return
-    }
-    setPdfError(null)
-    setExportandoPdf(true)
+    setVistaImpresionError(null)
     try {
-      await exportResumenVendedorPdf({
-        resumen,
-        mapElement: el,
-        viaticoClp: viaticoEstimado,
-      })
+      openResumenVendedorPrintPreview(resumen, viaticoEstimado)
     } catch (e) {
-      setPdfError(e instanceof Error ? e.message : "No se pudo generar el PDF.")
-    } finally {
-      setExportandoPdf(false)
+      setVistaImpresionError(e instanceof Error ? e.message : "No se pudo abrir la vista para imprimir.")
     }
   }, [resumen, viaticoEstimado])
 
@@ -469,15 +402,18 @@ export default function ResumenVendedorClient() {
       {resumen && (
         <>
           <div className="flex flex-wrap items-center gap-3">
-            <Button
-              type="button"
-              onClick={() => void entregarAnalisis()}
-              disabled={exportandoPdf}
-            >
-              {exportandoPdf ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> : null}
-              {exportandoPdf ? "Generando PDF…" : "📄 Entregar análisis"}
+            <Button type="button" variant="default" onClick={abrirVistaPreviaImprimir}>
+              Vista previa para imprimir
             </Button>
-            {pdfError ? <p className="max-w-xl text-sm text-destructive">{pdfError}</p> : null}
+            {vistaImpresionError ? (
+              <p className="max-w-xl text-sm text-destructive">{vistaImpresionError}</p>
+            ) : (
+              <p className="max-w-xl text-xs text-muted-foreground">
+                Se abre una ventana solo con estilos clásicos (sin oklch). Use{" "}
+                <strong className="text-foreground">Imprimir</strong> y elija{" "}
+                <strong className="text-foreground">Guardar como PDF</strong> en el navegador.
+              </p>
+            )}
           </div>
 
           <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
