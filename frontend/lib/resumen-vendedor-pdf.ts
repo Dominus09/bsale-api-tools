@@ -2,11 +2,6 @@ import { format } from "date-fns"
 
 import type { DistribuidoraResumenVendedorJson } from "@/lib/api"
 import {
-  buildConsolidatedSemanaClientRows,
-  buildDiasCargaSummaryLines,
-  type ConsolidatedClientePdfRow,
-} from "@/lib/resumen-vendedor-pdf-consolidado"
-import {
   buildOperationalInsights,
   clasificarEficiencia,
   kmPorClienteSemana,
@@ -38,7 +33,7 @@ export type ResumenPdfMapBlock = {
 
 export type ExportResumenVendedorPdfParams = {
   resumen: DistribuidoraResumenVendedorJson
-  /** Un mapa por bloque de días (misma lógica que el detalle: 2 días por bloque). */
+  /** Capturas del mapa (típicamente una: semana completa). */
   mapBlocks: ResumenPdfMapBlock[]
   viaticoClp: number | null
   rendimientoKmL: number | null
@@ -111,14 +106,6 @@ function ensureSpace(doc: import("jspdf").jsPDF, y: number, needMm: number): num
   return y
 }
 
-export function chunkDias<T>(arr: T[], size: number): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < arr.length; i += size) {
-    out.push(arr.slice(i, i + size))
-  }
-  return out
-}
-
 /** Captura JPEG del contenedor del mapa (html2canvas-pro). Exportado para armar varios mapas en PDF. */
 export async function captureMapElementJpeg(mapElement: HTMLElement): Promise<string> {
   const html2canvasMod = await import("html2canvas-pro")
@@ -139,60 +126,6 @@ export async function captureMapElementJpeg(mapElement: HTMLElement): Promise<st
     },
   })
   return canvas.toDataURL("image/jpeg", 0.92)
-}
-
-function truncatePdfCell(s: string, maxLen: number): string {
-  const t = s.trim()
-  if (t.length <= maxLen) return t
-  return `${t.slice(0, Math.max(0, maxLen - 1))}…`
-}
-
-function drawConsolidatedClientesTable(
-  doc: import("jspdf").jsPDF,
-  yStart: number,
-  rows: ConsolidatedClientePdfRow[],
-): number {
-  let y = yStart
-  const x0 = MARGIN_MM
-  const wOrd = 12
-  const wNom = 78
-  const wDia = 28
-  const wCom = INNER_W - wOrd - wNom - wDia - 2
-  const rowH = 4.05
-  const headH = 5.2
-
-  y = ensureSpace(doc, y, headH + 6)
-  const headTop = y
-  doc.setFillColor(226, 232, 240)
-  doc.rect(x0, headTop, INNER_W, headH, "F")
-  doc.setDrawColor(...BORDER_LIGHT)
-  doc.rect(x0, headTop, INNER_W, headH, "S")
-  doc.setFont("helvetica", "bold")
-  doc.setFontSize(7.8)
-  doc.setTextColor(...TEXT_DARK)
-  const headTextY = headTop + headH - 1.4
-  doc.text("Orden", x0 + 1, headTextY)
-  doc.text("Cliente", x0 + wOrd + 1, headTextY)
-  doc.text("Día", x0 + wOrd + wNom + 1, headTextY)
-  doc.text("Comuna", x0 + wOrd + wNom + wDia + 1, headTextY)
-  doc.setFont("helvetica", "normal")
-  y = headTop + headH + 1.5
-
-  for (const r of rows) {
-    y = ensureSpace(doc, y, rowH + 1)
-    const rowTop = y
-    doc.setDrawColor(...BORDER_LIGHT)
-    doc.line(x0, rowTop + rowH, x0 + INNER_W, rowTop + rowH)
-    doc.setFontSize(7.5)
-    doc.setTextColor(...TEXT_DARK)
-    const ty = rowTop + 3.15
-    doc.text(String(r.ordenGlobal), x0 + 1, ty)
-    doc.text(truncatePdfCell(r.nombre, 52), x0 + wOrd + 1, ty)
-    doc.text(truncatePdfCell(r.dia, 14), x0 + wOrd + wNom + 1, ty)
-    doc.text(truncatePdfCell(r.comuna, 36), x0 + wOrd + wNom + wDia + 1, ty)
-    y = rowTop + rowH
-  }
-  return y + 2
 }
 
 async function drawMapImageBlock(
@@ -347,53 +280,23 @@ export async function exportResumenVendedorPdf(params: ExportResumenVendedorPdfP
   )
   y += 6
 
-  const consolidated = buildConsolidatedSemanaClientRows(resumen)
-  const diasCargaLines = buildDiasCargaSummaryLines(resumen)
   const nMap = mapBlocks.length
 
   if (nMap > 0) {
     const firstMaxH = Math.max(88, Math.min(168, PAGE_H_MM - MARGIN_MM - y - 10))
     y = await drawMapImageBlock(doc, y, mapBlocks[0].dataUrl, mapBlocks[0].title, firstMaxH)
     for (let mi = 1; mi < nMap; mi++) {
-      const isLast = mi === nMap - 1
       doc.addPage()
       y = MARGIN_MM
-      const maxH =
-        isLast && consolidated.length > 0 ? Math.min(105, 132) : Math.min(155, PAGE_H_MM - MARGIN_MM - y - 8)
+      const maxH = Math.min(155, PAGE_H_MM - MARGIN_MM - y - 8)
       y = await drawMapImageBlock(doc, y, mapBlocks[mi].dataUrl, mapBlocks[mi].title, maxH)
     }
   }
 
-  if (consolidated.length > 0) {
-    if (y > PAGE_H_MM - MARGIN_MM - 50) {
-      doc.addPage()
-      y = MARGIN_MM
-    }
-    y = drawSectionHeader(doc, y, "Clientes de la semana")
-    y += CONTENT_PAD_MM
-    y = drawConsolidatedClientesTable(doc, y, consolidated)
+  if (y > PAGE_H_MM - MARGIN_MM - 48) {
+    doc.addPage()
+    y = MARGIN_MM
   }
-
-  if (diasCargaLines.length > 0) {
-    y = ensureSpace(doc, y, 18)
-    if (y > PAGE_H_MM - MARGIN_MM - 36) {
-      doc.addPage()
-      y = MARGIN_MM
-    }
-    y = drawSectionHeader(doc, y, "Resumen por día")
-    y += CONTENT_PAD_MM
-    doc.setFontSize(9)
-    doc.setTextColor(...TEXT_DARK)
-    for (const ln of diasCargaLines) {
-      y = ensureSpace(doc, y, 5)
-      doc.text(ln, MARGIN_MM + CONTENT_PAD_MM, y)
-      y += 4.5
-    }
-    y += 3
-  }
-
-  doc.addPage()
-  y = MARGIN_MM
   y = drawSectionHeader(doc, y, "Análisis operativo")
   y += CONTENT_PAD_MM
   const { paragraphs: insights } = (() => {
