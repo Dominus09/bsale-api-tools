@@ -47,7 +47,11 @@ import {
   safeClasificarEficiencia,
 } from "@/lib/resumen-vendedor-analisis"
 import { fitMapToResumenBounds } from "@/lib/resumen-vendedor-map-fit"
-import { exportResumenVendedorPdf } from "@/lib/resumen-vendedor-pdf"
+import {
+  captureMapElementJpeg,
+  chunkDias,
+  exportResumenVendedorPdf,
+} from "@/lib/resumen-vendedor-pdf"
 import {
   RESUMEN_VENDEDOR_PRINT_POPUP_BLOCKED,
   writeResumenVendedorPrintToWindow,
@@ -466,25 +470,46 @@ export default function ResumenVendedorClient() {
     const prevFoco = focoDia
       const diasSafe = diasLista
     try {
-      setVisibleDias(new Set(diasSafe.map((d) => String(d.dia ?? "")).filter(Boolean)))
       setFocoDia(null)
       setViewNonce((n) => n + 1)
-      await new Promise((r) => setTimeout(r, 1100))
-      const map = mapRef.current
-      if (map) {
-        try {
-          fitMapToResumenBounds(map, resumen, { visibleDias: null, padding: [50, 50] })
-          map.invalidateSize({ animate: false })
-        } catch {
-          /* el PDF igual se genera con la vista actual del mapa */
+      await new Promise((r) => setTimeout(r, 400))
+
+      const mapBlocks: { title: string; dataUrl: string }[] = []
+      const chunks = chunkDias(diasSafe, 2)
+      for (const chunk of chunks) {
+        const ids = new Set(chunk.map((d) => String(d.dia ?? "")).filter(Boolean))
+        if (ids.size === 0) continue
+        setVisibleDias(ids)
+        setViewNonce((n) => n + 1)
+        await new Promise((r) => setTimeout(r, 950))
+        const map = mapRef.current
+        if (map) {
+          try {
+            fitMapToResumenBounds(map, resumen, { visibleDias: ids, padding: [40, 40] })
+            map.invalidateSize({ animate: false })
+          } catch {
+            /* captura igual con vista actual */
+          }
         }
-        await new Promise((r) => setTimeout(r, 500))
+        await new Promise((r) => setTimeout(r, 650))
+        try {
+          const dataUrl = await captureMapElementJpeg(el)
+          const title =
+            chunk
+              .map((d) => String(d.dia ?? "—").trim())
+              .filter(Boolean)
+              .join(" y ") || "Bloque"
+          mapBlocks.push({ title, dataUrl })
+        } catch {
+          /* omitir bloque si falla la captura */
+        }
       }
+
       const rend = parseNumInputLoose(rendimientoKmL)
       const precio = parseNumInputLoose(precioCombustible)
       await exportResumenVendedorPdf({
         resumen,
-        mapElement: el,
+        mapBlocks,
         viaticoClp: viaticoEstimado,
         rendimientoKmL: rend,
         precioCombustibleClp: precio,

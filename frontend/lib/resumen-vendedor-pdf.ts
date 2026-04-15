@@ -2,6 +2,10 @@ import { format } from "date-fns"
 
 import type { DistribuidoraResumenDiaJson, DistribuidoraResumenVendedorJson } from "@/lib/api"
 import {
+  buildConsolidatedSemanaClientRows,
+  type ConsolidatedClientePdfRow,
+} from "@/lib/resumen-vendedor-pdf-consolidado"
+import {
   buildOperationalInsights,
   clasificarEficiencia,
   kmPorClienteSemana,
@@ -25,9 +29,16 @@ const BRAND_B = 60
 const TEXT_DARK: [number, number, number] = [15, 23, 42]
 const TEXT_MUTED: [number, number, number] = [71, 85, 105]
 
+export type ResumenPdfMapBlock = {
+  /** Ej.: "Lunes y Martes" */
+  title: string
+  dataUrl: string
+}
+
 export type ExportResumenVendedorPdfParams = {
   resumen: DistribuidoraResumenVendedorJson
-  mapElement: HTMLElement
+  /** Un mapa por bloque de días (misma lógica que el detalle: 2 días por bloque). */
+  mapBlocks: ResumenPdfMapBlock[]
   viaticoClp: number | null
   rendimientoKmL: number | null
   precioCombustibleClp: number | null
@@ -122,7 +133,7 @@ function ensureSpace(doc: import("jspdf").jsPDF, y: number, needMm: number): num
   return y
 }
 
-function chunkDias<T>(arr: T[], size: number): T[][] {
+export function chunkDias<T>(arr: T[], size: number): T[][] {
   const out: T[][] = []
   for (let i = 0; i < arr.length; i += size) {
     out.push(arr.slice(i, i + size))
@@ -139,7 +150,8 @@ function parseHexRgb(s: string | undefined): [number, number, number] {
   return [BRAND_R, BRAND_G, BRAND_B]
 }
 
-async function captureMapJpeg(mapElement: HTMLElement): Promise<string> {
+/** Captura JPEG del contenedor del mapa (html2canvas-pro). Exportado para armar varios mapas en PDF. */
+export async function captureMapElementJpeg(mapElement: HTMLElement): Promise<string> {
   const html2canvasMod = await import("html2canvas-pro")
   const html2canvas = html2canvasMod.default
   mapElement.scrollIntoView({ block: "nearest", behavior: "instant" })
@@ -160,15 +172,69 @@ async function captureMapJpeg(mapElement: HTMLElement): Promise<string> {
   return canvas.toDataURL("image/jpeg", 0.92)
 }
 
+function truncatePdfCell(s: string, maxLen: number): string {
+  const t = s.trim()
+  if (t.length <= maxLen) return t
+  return `${t.slice(0, Math.max(0, maxLen - 1))}…`
+}
+
+function drawConsolidatedClientesTable(
+  doc: import("jspdf").jsPDF,
+  yStart: number,
+  rows: ConsolidatedClientePdfRow[],
+): number {
+  let y = yStart
+  const x0 = MARGIN_MM
+  const wOrd = 10
+  const wNom = 64
+  const wDia = 26
+  const wCom = 48
+  const rowH = 4.1
+  const headH = 5.2
+
+  y = ensureSpace(doc, y, headH + 6)
+  const headTop = y
+  doc.setFillColor(226, 232, 240)
+  doc.rect(x0, headTop, INNER_W, headH, "F")
+  doc.setDrawColor(...BORDER_LIGHT)
+  doc.rect(x0, headTop, INNER_W, headH, "S")
+  doc.setFont("helvetica", "bold")
+  doc.setFontSize(7.8)
+  doc.setTextColor(...TEXT_DARK)
+  const headTextY = headTop + headH - 1.4
+  doc.text("Ord.", x0 + 1, headTextY)
+  doc.text("Cliente", x0 + wOrd + 1, headTextY)
+  doc.text("Día", x0 + wOrd + wNom + 1, headTextY)
+  doc.text("Comuna", x0 + wOrd + wNom + wDia + 1, headTextY)
+  doc.text("Tipo", x0 + wOrd + wNom + wDia + wCom + 1, headTextY)
+  doc.setFont("helvetica", "normal")
+  y = headTop + headH + 1.5
+
+  for (const r of rows) {
+    y = ensureSpace(doc, y, rowH + 1)
+    const rowTop = y
+    doc.setDrawColor(...BORDER_LIGHT)
+    doc.line(x0, rowTop + rowH, x0 + INNER_W, rowTop + rowH)
+    doc.setFontSize(7.5)
+    doc.setTextColor(...TEXT_DARK)
+    const ty = rowTop + 3.15
+    doc.text(String(r.ordenGlobal), x0 + 1, ty)
+    doc.text(truncatePdfCell(r.nombre, 46), x0 + wOrd + 1, ty)
+    doc.text(truncatePdfCell(r.dia, 14), x0 + wOrd + wNom + 1, ty)
+    doc.text(truncatePdfCell(r.comuna, 26), x0 + wOrd + wNom + wDia + 1, ty)
+    doc.text(truncatePdfCell(r.tipo, 11), x0 + wOrd + wNom + wDia + wCom + 1, ty)
+    y = rowTop + rowH
+  }
+  return y + 2
+}
+
 /**
  * Genera y descarga el informe PDF (mapa real vía html2canvas-pro, texto operativo dinámico).
  * Tipografía y secciones pensadas para impresión (sin iconos ni emojis).
  */
 export async function exportResumenVendedorPdf(params: ExportResumenVendedorPdfParams): Promise<void> {
   const { jsPDF } = await import("jspdf")
-  const { resumen, mapElement, viaticoClp, rendimientoKmL, precioCombustibleClp } = params
-
-  const mapDataUrl = await captureMapJpeg(mapElement)
+  const { resumen, mapBlocks, viaticoClp, rendimientoKmL, precioCombustibleClp } = params
 
   const doc = new jsPDF({
     orientation: "portrait",
@@ -284,28 +350,51 @@ export async function exportResumenVendedorPdf(params: ExportResumenVendedorPdfP
   )
   y += 6
 
-  y = drawSectionHeader(doc, y, "Mapa de rutas")
-  y += CONTENT_PAD_MM
   const maxMapW = INNER_W
-  const maxMapH = 148
-  const img = new Image()
-  await new Promise<void>((resolve, reject) => {
-    img.onload = () => resolve()
-    img.onerror = () => reject(new Error("No se pudo leer la imagen del mapa"))
-    img.src = mapDataUrl
-  })
-  const aspect = img.width / img.height
-  let wMm = maxMapW
-  let hMm = wMm / aspect
-  if (hMm > maxMapH) {
-    hMm = maxMapH
-    wMm = hMm * aspect
+  const maxMapH = 132
+  if (mapBlocks.length > 0) {
+    doc.addPage()
+    y = MARGIN_MM
+    for (let mi = 0; mi < mapBlocks.length; mi++) {
+      if (mi > 0) {
+        doc.addPage()
+        y = MARGIN_MM
+      }
+      const block = mapBlocks[mi]
+      y = drawSectionHeader(doc, y, `Mapa de rutas (${block.title})`)
+      y += CONTENT_PAD_MM
+      const img = new Image()
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve()
+        img.onerror = () => reject(new Error("No se pudo leer la imagen del mapa"))
+        img.src = block.dataUrl
+      })
+      const aspect = img.width / img.height
+      let wMm = maxMapW
+      let hMm = wMm / aspect
+      if (hMm > maxMapH) {
+        hMm = maxMapH
+        wMm = hMm * aspect
+      }
+      y = ensureSpace(doc, y, hMm + 10)
+      doc.setDrawColor(...BORDER_LIGHT)
+      doc.rect(MARGIN_MM - 0.25, y - 0.25, wMm + 0.5, hMm + 0.5, "S")
+      doc.addImage(block.dataUrl, "JPEG", MARGIN_MM, y, wMm, hMm)
+      y += hMm + 8
+    }
   }
-  y = ensureSpace(doc, y, hMm + 10)
-  doc.setDrawColor(...BORDER_LIGHT)
-  doc.rect(MARGIN_MM - 0.25, y - 0.25, wMm + 0.5, hMm + 0.5, "S")
-  doc.addImage(mapDataUrl, "JPEG", MARGIN_MM, y, wMm, hMm)
-  y += hMm + 8
+
+  const consolidated = buildConsolidatedSemanaClientRows(resumen)
+  if (consolidated.length > 0) {
+    y = ensureSpace(doc, y, 24)
+    if (y > PAGE_H_MM - MARGIN_MM - 40) {
+      doc.addPage()
+      y = MARGIN_MM
+    }
+    y = drawSectionHeader(doc, y, "Listado general de clientes de la semana")
+    y += CONTENT_PAD_MM
+    y = drawConsolidatedClientesTable(doc, y, consolidated)
+  }
 
   const dias = resumen?.dias ?? []
   const pairs = chunkDias(dias, 2)
@@ -356,12 +445,12 @@ export async function exportResumenVendedorPdf(params: ExportResumenVendedorPdfP
         for (const raw of rows) {
           const c = parseClienteRow(raw)
           const line = `${c.orden}. ${c.nombre} - ${c.comuna} (${c.tipoLabel})`
-          y = ensureSpace(doc, y, 5)
-          doc.setFontSize(8.2)
+          y = ensureSpace(doc, y, 4)
+          doc.setFontSize(7.6)
           doc.setTextColor(...TEXT_DARK)
           const wrapped = doc.splitTextToSize(line, INNER_W - CONTENT_PAD_MM * 2)
           doc.text(wrapped, MARGIN_MM + CONTENT_PAD_MM, y)
-          y += wrapped.length * 3.5 + 0.3
+          y += wrapped.length * 3.05 + 0.2
         }
         y += 2.5
       }
