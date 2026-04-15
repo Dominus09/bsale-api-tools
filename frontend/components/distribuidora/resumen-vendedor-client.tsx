@@ -1,6 +1,5 @@
 "use client"
 
-import Link from "next/link"
 import {
   useCallback,
   useEffect,
@@ -12,11 +11,10 @@ import {
 import dynamic from "next/dynamic"
 import L from "leaflet"
 import { useMap } from "react-leaflet"
-import { AlertTriangle, Loader2, MapPin } from "lucide-react"
+import { Loader2 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -42,6 +40,10 @@ import {
   type DistribuidoraResumenVendedorJson,
 } from "@/lib/api"
 import { geometryToLatLngs } from "@/lib/distribuidora-resumen-geometry"
+import {
+  buildConsolidatedSemanaClientRows,
+  buildDiasCargaSummaryLines,
+} from "@/lib/resumen-vendedor-pdf-consolidado"
 import {
   safeBuildOperationalInsights,
   safeClasificarEficiencia,
@@ -109,7 +111,7 @@ function getResumenVendedorBaseIcon(): L.DivIcon {
   if (!resumenBaseIconSingleton) {
     resumenBaseIconSingleton = L.divIcon({
       className: "base-icon",
-      html: "🏁",
+      html: "<span style=\"font:700 12px system-ui,sans-serif\">B</span>",
       iconSize: [30, 30],
       iconAnchor: [15, 30],
       popupAnchor: [0, -28],
@@ -124,17 +126,6 @@ function ResumenMapInvalidate() {
     const t = window.setTimeout(() => map.invalidateSize(), 200)
     return () => window.clearTimeout(t)
   }, [map])
-  return null
-}
-
-function CaptureMapRef({ mapRef }: { mapRef: MutableRefObject<L.Map | null> }) {
-  const map = useMap()
-  useEffect(() => {
-    mapRef.current = map
-    return () => {
-      mapRef.current = null
-    }
-  }, [map, mapRef])
   return null
 }
 
@@ -239,7 +230,9 @@ function sortedClientesForMap(dia: DistribuidoraResumenDiaJson): Record<string, 
     const raw = dia?.clientes
     if (!Array.isArray(raw)) return []
     return [...(raw as Record<string, unknown>[])].sort(
-      (a, b) => (Number(a.orden_visita) || 0) - (Number(b.orden_visita) || 0),
+      (a, b) =>
+        (Number(a.orden_manual ?? a.orden_visita) || 0) -
+        (Number(b.orden_manual ?? b.orden_visita) || 0),
     )
   } catch {
     return []
@@ -256,7 +249,7 @@ function ResumenClienteMarkersVisita({ dias }: { dias: DistribuidoraResumenDiaJs
             const lat = Number(c.lat)
             const lon = Number(c.lon)
             if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null
-            const ov = Number(c.orden_visita) || i + 1
+            const ov = Number(c.orden_manual ?? c.orden_visita) || i + 1
             const col = /^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{3})$/.test(String(d.color || "").trim())
               ? String(d.color).trim()
               : "#2563eb"
@@ -308,6 +301,92 @@ function BaseMarkerResumen({ resumen }: { resumen: DistribuidoraResumenVendedorJ
   )
 }
 
+/** Registra instancia Leaflet y ajusta zoom al bloque de días (PDF + pantalla). */
+function BloqueMapFit({
+  resumen,
+  visibleSet,
+  blockIndex,
+  mapsRef,
+}: {
+  resumen: DistribuidoraResumenVendedorJson
+  visibleSet: Set<string>
+  blockIndex: number
+  mapsRef: MutableRefObject<(L.Map | null)[]>
+}) {
+  const map = useMap()
+  useEffect(() => {
+    mapsRef.current[blockIndex] = map
+    return () => {
+      mapsRef.current[blockIndex] = null
+    }
+  }, [map, blockIndex, mapsRef])
+
+  useEffect(() => {
+    if (!resumen?.dias?.length || visibleSet.size === 0) return
+    const t = window.setTimeout(() => {
+      try {
+        fitMapToResumenBounds(map, resumen, { visibleDias: visibleSet, padding: [44, 44] })
+        map.invalidateSize({ animate: false })
+      } catch {
+        /* */
+      }
+    }, 520)
+    return () => window.clearTimeout(t)
+  }, [map, resumen, visibleSet])
+
+  return null
+}
+
+function MapaBloqueResumen({
+  resumen,
+  chunk,
+  blockIndex,
+  mapsRef,
+}: {
+  resumen: DistribuidoraResumenVendedorJson
+  chunk: DistribuidoraResumenDiaJson[]
+  blockIndex: number
+  mapsRef: MutableRefObject<(L.Map | null)[]>
+}) {
+  const visibleSet = useMemo(
+    () => new Set(chunk.map((d) => String(d.dia ?? "")).filter(Boolean)),
+    [chunk],
+  )
+  const titulo = useMemo(
+    () => chunk.map((d) => String(d.dia ?? "—").trim()).filter(Boolean).join(" · ") || "Bloque",
+    [chunk],
+  )
+
+  return (
+    <Card className="overflow-hidden border shadow-sm">
+      <CardHeader className="border-b bg-muted/40 py-3">
+        <CardTitle className="text-base font-semibold tracking-tight">Rutas: {titulo}</CardTitle>
+        <CardDescription className="text-xs">
+          Mapa centrado en estos días; colores y numeración de visitas coinciden con la leyenda de la
+          semana.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="p-0">
+        <div className="resumen-pdf-mapa-bloque relative h-[min(52vh,440px)] w-full min-h-[300px]">
+          <MapContainer center={MAP_CENTER} zoom={MAP_ZOOM} className="h-full w-full z-0" style={{ minHeight: 300 }}>
+            <BloqueMapFit resumen={resumen} visibleSet={visibleSet} blockIndex={blockIndex} mapsRef={mapsRef} />
+            <TileLayer attribution="&copy; CARTO" url={CARTO_LIGHT} />
+            <ResumenMapInvalidate />
+            <RutasSemanaCapas
+              resumen={resumen}
+              visibleDias={visibleSet}
+              focoDia={null}
+              viewNonce={blockIndex}
+            />
+            <BaseMarkerResumen resumen={resumen} />
+            <ResumenClienteMarkersVisita dias={chunk} />
+          </MapContainer>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 export default function ResumenVendedorClient() {
   const [mapaClientes, setMapaClientes] = useState<DistribuidoraMapaCliente[]>([])
   const [vendedoresMapa, setVendedoresMapa] = useState<string[]>([])
@@ -316,16 +395,13 @@ export default function ResumenVendedorClient() {
   const [resumen, setResumen] = useState<DistribuidoraResumenVendedorJson | null>(null)
   const [cargandoResumen, setCargandoResumen] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [visibleDias, setVisibleDias] = useState<Set<string>>(new Set())
-  const [focoDia, setFocoDia] = useState<string | null>(null)
-  /** Incrementar solo al centrar en un día (fitBounds); toggles de capa no resetean cámara. */
-  const [viewNonce, setViewNonce] = useState(0)
   const [rendimientoKmL, setRendimientoKmL] = useState("")
   const [precioCombustible, setPrecioCombustible] = useState("")
   const [vistaImpresionError, setVistaImpresionError] = useState<string | null>(null)
   const [pdfGenerando, setPdfGenerando] = useState(false)
   const [pdfError, setPdfError] = useState<string | null>(null)
-  const mapRef = useRef<L.Map | null>(null)
+  /** Una entrada Leaflet por bloque de mapa (mismo orden que chunkDias). */
+  const blockMapsRef = useRef<(L.Map | null)[]>([])
 
   useEffect(() => {
     let cancel = false
@@ -371,11 +447,6 @@ export default function ResumenVendedorClient() {
     try {
       const data = await getDistribuidoraResumenVendedor(v)
       setResumen(data)
-      setVisibleDias(
-        new Set((data.dias ?? []).map((d) => String(d.dia ?? "")).filter(Boolean)),
-      )
-      setFocoDia(null)
-      setViewNonce((n) => n + 1)
     } catch (e) {
       setResumen(null)
       setError(e instanceof Error ? e.message : "Error al cargar resumen")
@@ -383,35 +454,6 @@ export default function ResumenVendedorClient() {
       setCargandoResumen(false)
     }
   }, [])
-
-  const toggleDia = (dia: string) => {
-    setVisibleDias((prev) => {
-      const n = new Set(prev)
-      if (n.has(dia)) n.delete(dia)
-      else n.add(dia)
-      return n
-    })
-  }
-
-  const centrarEnDia = useCallback(
-    (dia: string) => {
-      if (!resumen) return
-      const d = (resumen.dias ?? []).find((x) => String(x.dia) === dia)
-      if (!d) return
-      let latlngs: L.LatLngTuple[] = []
-      try {
-        latlngs = geometryToLatLngs(d.geometry)
-      } catch {
-        return
-      }
-      if (latlngs.length < 2 || !mapRef.current) return
-      setFocoDia(dia)
-      setViewNonce((n) => n + 1)
-      const b = L.latLngBounds(latlngs)
-      mapRef.current.fitBounds(b, { padding: [36, 36], maxZoom: 14 })
-    },
-    [resumen],
-  )
 
   /** Debe declararse antes de `descargarAnalisisPdf` (evita TDZ: "Cannot access … before initialization"). */
   const viaticoEstimado = useMemo(() => {
@@ -429,69 +471,44 @@ export default function ResumenVendedorClient() {
   }, [resumen, rendimientoKmL, precioCombustible])
 
   const diasLista = useMemo(() => resumen?.dias ?? [], [resumen])
+  const diasChunks = useMemo(() => chunkDias(diasLista, 2), [diasLista])
+  const filasClientesSemana = useMemo(
+    () => (resumen ? buildConsolidatedSemanaClientRows(resumen) : []),
+    [resumen],
+  )
+  const lineasResumenDia = useMemo(
+    () => (resumen ? buildDiasCargaSummaryLines(resumen) : []),
+    [resumen],
+  )
   const analisisUi = useMemo(() => safeBuildOperationalInsights(resumen), [resumen])
   const eficienciaUi = useMemo(() => safeClasificarEficiencia(resumen), [resumen])
 
-  const ajustarMapaAResumen = useCallback(() => {
-    const map = mapRef.current
-    if (!map || !resumen?.dias?.length) return
-    try {
-      fitMapToResumenBounds(map, resumen, { visibleDias, padding: [50, 50] })
-      map.invalidateSize({ animate: false })
-    } catch {
-      /* vista actual se mantiene */
-    }
-  }, [resumen, visibleDias])
-
-  useEffect(() => {
-    if (!resumen?.dias?.length) return
-    if (focoDia) return
-    const t = window.setTimeout(() => {
-      ajustarMapaAResumen()
-    }, 700)
-    return () => window.clearTimeout(t)
-  }, [resumen, visibleDias, focoDia, ajustarMapaAResumen])
-
-  const limpiarFoco = useCallback(() => {
-    setFocoDia(null)
-    setViewNonce((n) => n + 1)
-  }, [])
-
   const descargarAnalisisPdf = useCallback(async () => {
     if (!resumen) return
-    const el = mapRef.current?.getContainer()
-    if (!el) {
-      setPdfError("El mapa no está listo. Espere un momento e intente de nuevo.")
-      return
-    }
     setPdfError(null)
     setPdfGenerando(true)
-    const prevVisible = new Set(visibleDias)
-    const prevFoco = focoDia
-      const diasSafe = diasLista
+    const diasSafe = diasLista
     try {
-      setFocoDia(null)
-      setViewNonce((n) => n + 1)
-      await new Promise((r) => setTimeout(r, 400))
-
-      const mapBlocks: { title: string; dataUrl: string }[] = []
       const chunks = chunkDias(diasSafe, 2)
-      for (const chunk of chunks) {
+      const roots = document.querySelectorAll<HTMLElement>(".resumen-pdf-mapa-bloque")
+      const mapBlocks: { title: string; dataUrl: string }[] = []
+
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i]
         const ids = new Set(chunk.map((d) => String(d.dia ?? "")).filter(Boolean))
         if (ids.size === 0) continue
-        setVisibleDias(ids)
-        setViewNonce((n) => n + 1)
-        await new Promise((r) => setTimeout(r, 950))
-        const map = mapRef.current
+        const map = blockMapsRef.current[i]
         if (map) {
           try {
             fitMapToResumenBounds(map, resumen, { visibleDias: ids, padding: [40, 40] })
             map.invalidateSize({ animate: false })
           } catch {
-            /* captura igual con vista actual */
+            /* */
           }
         }
-        await new Promise((r) => setTimeout(r, 650))
+        await new Promise((r) => setTimeout(r, 750))
+        const el = roots[i]
+        if (!el) continue
         try {
           const dataUrl = await captureMapElementJpeg(el)
           const title =
@@ -501,7 +518,7 @@ export default function ResumenVendedorClient() {
               .join(" y ") || "Bloque"
           mapBlocks.push({ title, dataUrl })
         } catch {
-          /* omitir bloque si falla la captura */
+          /* omitir bloque */
         }
       }
 
@@ -517,12 +534,9 @@ export default function ResumenVendedorClient() {
     } catch (e) {
       setPdfError(e instanceof Error ? e.message : "No se pudo generar el PDF.")
     } finally {
-      setVisibleDias(prevVisible)
-      setFocoDia(prevFoco)
-      setViewNonce((n) => n + 1)
       setPdfGenerando(false)
     }
-  }, [resumen, diasLista, visibleDias, focoDia, viaticoEstimado, rendimientoKmL, precioCombustible])
+  }, [resumen, diasLista, viaticoEstimado, rendimientoKmL, precioCombustible])
 
   return (
     <div className="space-y-4 p-4">
@@ -530,7 +544,8 @@ export default function ResumenVendedorClient() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Resumen semanal por vendedor</h1>
           <p className="text-sm text-muted-foreground">
-            Rutas por día en un solo mapa (colores por día). Reutiliza la misma lógica que ruta detalle.
+            Informe semanal: mapas por bloques de días, listado único de clientes y resumen compacto por
+            jornada. El análisis operativo va al final.
           </p>
         </div>
         <div className="flex w-full max-w-sm flex-col gap-1">
@@ -572,51 +587,31 @@ export default function ResumenVendedorClient() {
 
       {resumen && (
         <>
-          <div className="flex flex-wrap items-center gap-3">
-            <Button
-              type="button"
-              variant="default"
-              disabled={pdfGenerando}
-              onClick={() => void descargarAnalisisPdf()}
-            >
-              {pdfGenerando ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> : null}
-              {pdfGenerando ? "Generando PDF…" : "Descargar análisis PDF"}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                if (!resumen) return
-                setVistaImpresionError(null)
-                setPdfError(null)
-                const w = window.open("", "_blank")
-                if (!w) {
-                  setVistaImpresionError(RESUMEN_VENDEDOR_PRINT_POPUP_BLOCKED)
-                  return
-                }
-                try {
-                  writeResumenVendedorPrintToWindow(w, resumen, viaticoEstimado)
-                } catch (e) {
-                  w.close()
-                  setVistaImpresionError(
-                    e instanceof Error ? e.message : "No se pudo cargar la vista para imprimir.",
-                  )
-                }
-              }}
-            >
-              Vista previa para imprimir
-            </Button>
-            {pdfError ? <p className="w-full text-sm text-destructive">{pdfError}</p> : null}
-            {vistaImpresionError ? (
-              <p className="max-w-xl text-sm text-destructive">{vistaImpresionError}</p>
-            ) : !pdfError ? (
-              <p className="max-w-xl text-xs text-muted-foreground">
-                <strong className="text-foreground">PDF:</strong> descarga directa con mapa y análisis.
-                <span className="mx-1">·</span>
-                <strong className="text-foreground">Vista previa:</strong> ventana emergente → Imprimir /
-                Guardar como PDF.
-              </p>
-            ) : null}
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">Km semana</CardTitle>
+              </CardHeader>
+              <CardContent className="text-2xl font-semibold">{fmtMetric(resumen.km_total_semana)}</CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">Tiempo (min)</CardTitle>
+              </CardHeader>
+              <CardContent className="text-2xl font-semibold">{fmtMetric(resumen.min_total_semana)}</CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">Clientes</CardTitle>
+              </CardHeader>
+              <CardContent className="text-2xl font-semibold">{fmtMetric(resumen.clientes_total_semana)}</CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">Prom. km / día</CardTitle>
+              </CardHeader>
+              <CardContent className="text-2xl font-semibold">{fmtMetric(resumen.promedio_km_por_dia)}</CardContent>
+            </Card>
           </div>
 
           <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
@@ -684,31 +679,52 @@ export default function ResumenVendedorClient() {
             </Card>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Km semana</CardTitle>
-              </CardHeader>
-              <CardContent className="text-2xl font-semibold">{fmtMetric(resumen.km_total_semana)}</CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Tiempo (min)</CardTitle>
-              </CardHeader>
-              <CardContent className="text-2xl font-semibold">{fmtMetric(resumen.min_total_semana)}</CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Clientes</CardTitle>
-              </CardHeader>
-              <CardContent className="text-2xl font-semibold">{fmtMetric(resumen.clientes_total_semana)}</CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">Prom. km / día</CardTitle>
-              </CardHeader>
-              <CardContent className="text-2xl font-semibold">{fmtMetric(resumen.promedio_km_por_dia)}</CardContent>
-            </Card>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button
+              type="button"
+              variant="default"
+              disabled={pdfGenerando}
+              onClick={() => void descargarAnalisisPdf()}
+            >
+              {pdfGenerando ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> : null}
+              {pdfGenerando ? "Generando PDF…" : "Descargar análisis PDF"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                if (!resumen) return
+                setVistaImpresionError(null)
+                setPdfError(null)
+                const w = window.open("", "_blank")
+                if (!w) {
+                  setVistaImpresionError(RESUMEN_VENDEDOR_PRINT_POPUP_BLOCKED)
+                  return
+                }
+                try {
+                  writeResumenVendedorPrintToWindow(w, resumen, viaticoEstimado)
+                } catch (e) {
+                  w.close()
+                  setVistaImpresionError(
+                    e instanceof Error ? e.message : "No se pudo cargar la vista para imprimir.",
+                  )
+                }
+              }}
+            >
+              Vista previa para imprimir
+            </Button>
+            {pdfError ? <p className="w-full text-sm text-destructive">{pdfError}</p> : null}
+            {vistaImpresionError ? (
+              <p className="max-w-xl text-sm text-destructive">{vistaImpresionError}</p>
+            ) : !pdfError ? (
+              <p className="max-w-xl text-xs text-muted-foreground">
+                <strong className="text-foreground">PDF:</strong> mapas por bloque, clientes en una tabla y
+                análisis al final.
+                <span className="mx-1">·</span>
+                <strong className="text-foreground">Vista previa:</strong> ventana emergente → Imprimir /
+                Guardar como PDF.
+              </p>
+            ) : null}
           </div>
 
           {diasLista.length === 0 ? (
@@ -721,44 +737,31 @@ export default function ResumenVendedorClient() {
                   No hay jornadas con datos de ruta para este vendedor en el período consultado. Puede
                   deberse a que aún no se planificaron visitas o a un problema al obtener los datos.
                 </p>
-                <p className="text-xs">El resto del resumen (métricas y simulación de viático) sigue disponible si el servidor envió totales.</p>
+                <p className="text-xs">
+                  El resto del resumen (métricas y simulación de viático) sigue disponible si el servidor envió
+                  totales.
+                </p>
               </CardContent>
             </Card>
           ) : (
-            <div className="grid gap-3 lg:grid-cols-[1fr_280px]">
-              <Card className="overflow-hidden">
-                <CardHeader className="flex flex-row items-center justify-between py-3">
-                  <CardTitle className="text-base">Mapa</CardTitle>
-                  {focoDia ? (
-                    <Button variant="outline" size="sm" onClick={limpiarFoco}>
-                      Quitar foco
-                    </Button>
-                  ) : null}
-                </CardHeader>
-                <CardContent className="p-0">
-                  <div className="relative h-[min(72vh,560px)] w-full">
-                    <MapContainer center={MAP_CENTER} zoom={MAP_ZOOM} className="h-full w-full z-0">
-                      <CaptureMapRef mapRef={mapRef} />
-                      <TileLayer attribution="&copy; CARTO" url={CARTO_LIGHT} />
-                      <ResumenMapInvalidate />
-                      <RutasSemanaCapas
-                        resumen={resumen}
-                        visibleDias={visibleDias}
-                        focoDia={focoDia}
-                        viewNonce={viewNonce}
-                      />
-                      <BaseMarkerResumen resumen={resumen} />
-                      <ResumenClienteMarkersVisita
-                        dias={diasLista.filter((d) => visibleDias.has(String(d.dia)))}
-                      />
-                    </MapContainer>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Leyenda</CardTitle>
+            <div className="grid gap-4 xl:grid-cols-[1fr_min(280px,32%)]">
+              <div className="flex w-full min-w-0 flex-col gap-4">
+                {diasChunks.map((chunk, blockIndex) => (
+                  <MapaBloqueResumen
+                    key={chunk.map((d) => String(d.dia ?? "")).join("|") || `bloque-${blockIndex}`}
+                    resumen={resumen}
+                    chunk={chunk}
+                    blockIndex={blockIndex}
+                    mapsRef={blockMapsRef}
+                  />
+                ))}
+              </div>
+              <Card className="h-fit xl:sticky xl:top-4">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Leyenda (colores por día)</CardTitle>
+                  <CardDescription className="text-xs">
+                    Misma paleta en todos los mapas. Los números en el mapa son el orden de visita del día.
+                  </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3 text-sm">
                   <div className="rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground">
@@ -784,30 +787,10 @@ export default function ResumenVendedorClient() {
                             ) : null}
                           </div>
                           {d.alerta_calidad ? (
-                            <div className="mt-0.5 flex items-center gap-1 text-amber-700 dark:text-amber-400">
-                              <AlertTriangle className="h-3.5 w-3.5" />
-                              <span className="text-xs">
-                                Ruta larga por cliente (~{fmtMetric(d.km_por_cliente)} km/cli)
-                              </span>
-                            </div>
+                            <p className="mt-0.5 text-xs text-amber-800 dark:text-amber-300">
+                              Atención: ruta larga por cliente (~{fmtMetric(d.km_por_cliente)} km por cliente).
+                            </p>
                           ) : null}
-                          <div className="mt-1 flex flex-wrap gap-1">
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              className="h-7 text-xs"
-                              disabled={!diaTieneGeometriaRuta(d)}
-                              title={
-                                diaTieneGeometriaRuta(d)
-                                  ? undefined
-                                  : "Este día no tiene geometría válida para centrar el mapa."
-                              }
-                              onClick={() => centrarEnDia(String(d.dia))}
-                            >
-                              <MapPin className="mr-1 h-3 w-3" />
-                              Centrar
-                            </Button>
-                          </div>
                         </div>
                       </li>
                     ))}
@@ -819,70 +802,61 @@ export default function ResumenVendedorClient() {
 
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Detalle por día</CardTitle>
+              <CardTitle className="text-base">Clientes de la semana</CardTitle>
+              <CardDescription className="text-sm">
+                Orden de la semana (lunes a viernes) y orden de visita dentro de cada día. Una sola tabla para
+                revisar destinos sin saltar entre listas.
+              </CardDescription>
             </CardHeader>
             <CardContent>
-              {diasLista.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No hay filas para mostrar.</p>
+              {filasClientesSemana.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No hay clientes con coordenadas o datos de visita.</p>
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-10">Ver</TableHead>
-                      <TableHead>Día</TableHead>
-                      <TableHead>Clientes</TableHead>
-                      <TableHead>Km</TableHead>
-                      <TableHead>Min</TableHead>
-                      <TableHead>Capa</TableHead>
-                      <TableHead className="text-right">Acción</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {diasLista.map((d: DistribuidoraResumenDiaJson, idx) => (
-                      <TableRow key={String(d.dia ?? `fila-${idx}`)}>
-                        <TableCell>
-                          <Checkbox
-                            checked={visibleDias.has(String(d.dia))}
-                            onCheckedChange={() => toggleDia(String(d.dia))}
-                            aria-label={`Mostrar ${String(d.dia)}`}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <span
-                            className="mr-2 inline-block h-2 w-2 rounded-full align-middle"
-                            style={{ backgroundColor: d.color }}
-                          />
-                          {d.dia ?? "—"}
-                        </TableCell>
-                        <TableCell>{fmtMetric(d.clientes_count)}</TableCell>
-                        <TableCell>{fmtMetric(d.km_totales)}</TableCell>
-                        <TableCell>{fmtMetric(d.minutos_totales)}</TableCell>
-                        <TableCell>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className="h-8"
-                            disabled={!diaTieneGeometriaRuta(d)}
-                            title={
-                              diaTieneGeometriaRuta(d)
-                                ? undefined
-                                : "Sin geometría válida para este día."
-                            }
-                            onClick={() => centrarEnDia(String(d.dia))}
-                          >
-                            Centrar mapa
-                          </Button>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Button variant="outline" size="sm" asChild>
-                            <Link href="/distribuidora/rutero">Ver rutero</Link>
-                          </Button>
-                        </TableCell>
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-14">Orden</TableHead>
+                        <TableHead>Cliente</TableHead>
+                        <TableHead className="w-36">Día</TableHead>
+                        <TableHead>Comuna</TableHead>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {filasClientesSemana.map((r) => (
+                        <TableRow key={`${r.dia}-${r.ordenGlobal}-${r.nombre}`}>
+                          <TableCell className="tabular-nums text-muted-foreground">{r.ordenGlobal}</TableCell>
+                          <TableCell className="font-medium">{r.nombre}</TableCell>
+                          <TableCell>{r.dia}</TableCell>
+                          <TableCell className="text-muted-foreground">{r.comuna}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Resumen por día</CardTitle>
+              <CardDescription className="text-sm">
+                Carga por jornada; las marcas indican el día con más kilómetros y el de menor recorrido (si
+                aplica).
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {lineasResumenDia.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Sin datos por día.</p>
+              ) : (
+                <ul className="space-y-1.5 text-sm leading-relaxed">
+                  {lineasResumenDia.map((line) => (
+                    <li key={line} className="border-b border-border/60 pb-1.5 last:border-0 last:pb-0">
+                      {line}
+                    </li>
+                  ))}
+                </ul>
               )}
             </CardContent>
           </Card>

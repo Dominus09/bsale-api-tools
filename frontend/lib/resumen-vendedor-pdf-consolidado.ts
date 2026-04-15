@@ -56,6 +56,27 @@ function tipoAtencionLabel(c: Record<string, unknown>): string {
 /**
  * Una fila por visita programada: orden global, día (Lun→Dom), orden manual dentro del día.
  */
+/** Líneas tipo "Lunes: 120 km — 28 clientes" con marcas de carga (sin símbolos especiales). */
+export function buildDiasCargaSummaryLines(resumen: DistribuidoraResumenVendedorJson): string[] {
+  const dias = [...(resumen.dias ?? [])].sort((a, b) => {
+    const ka = diaSemanaSortKey(String(a.dia ?? ""))
+    const kb = diaSemanaSortKey(String(b.dia ?? ""))
+    if (ka !== kb) return ka - kb
+    return String(a.dia ?? "").localeCompare(String(b.dia ?? ""), "es")
+  })
+  const kms = dias.map((d) => Number(d.km_totales) || 0).filter((k) => k > 0)
+  const maxKm = kms.length ? Math.max(...kms) : 0
+  const minKm = kms.length ? Math.min(...kms) : 0
+  return dias.map((d) => {
+    const km = Number(d.km_totales) || 0
+    const n = Number(d.clientes_count) || 0
+    let tag = ""
+    if (km > 0 && maxKm > 0 && km === maxKm && maxKm !== minKm) tag = " [Mayor carga]"
+    if (km > 0 && minKm >= 0 && km === minKm && maxKm !== minKm) tag = " [Menor recorrido]"
+    return `${String(d.dia ?? "-")}: ${km} km — ${n} clientes${tag}`
+  })
+}
+
 export function buildConsolidatedSemanaClientRows(
   resumen: DistribuidoraResumenVendedorJson,
 ): ConsolidatedClientePdfRow[] {

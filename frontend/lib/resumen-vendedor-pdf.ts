@@ -1,8 +1,9 @@
 import { format } from "date-fns"
 
-import type { DistribuidoraResumenDiaJson, DistribuidoraResumenVendedorJson } from "@/lib/api"
+import type { DistribuidoraResumenVendedorJson } from "@/lib/api"
 import {
   buildConsolidatedSemanaClientRows,
+  buildDiasCargaSummaryLines,
   type ConsolidatedClientePdfRow,
 } from "@/lib/resumen-vendedor-pdf-consolidado"
 import {
@@ -68,29 +69,6 @@ function slugFilePart(s: string): string {
   )
 }
 
-function parseClienteRow(c: Record<string, unknown>): {
-  orden: number
-  nombre: string
-  comuna: string
-  tipoLabel: string
-} {
-  const orden = Number(c.orden_visita) || 0
-  const nombre = String(
-    c.cliente_nombre ?? c.nombre_fantasia ?? c.nombre ?? c.razon_social ?? "Cliente",
-  ).trim()
-  const comuna = String(c.municipality ?? c.comuna ?? "").trim() || "-"
-  const tipoRaw = String(c.tipo_atencion ?? "").toLowerCase()
-  const tipoLabel = tipoRaw.includes("telefon") ? "Telefónico" : "Terreno"
-  return { orden, nombre, comuna, tipoLabel }
-}
-
-function clientesOrdenadosRows(dia: DistribuidoraResumenDiaJson): Record<string, unknown>[] {
-  const raw = dia.clientes
-  if (!Array.isArray(raw)) return []
-  const rows = raw as Record<string, unknown>[]
-  return [...rows].sort((a, b) => (Number(a.orden_visita) || 0) - (Number(b.orden_visita) || 0))
-}
-
 /**
  * Título de sección: solo texto plano (sin símbolos fuera de Latin-1 del PDF).
  */
@@ -141,15 +119,6 @@ export function chunkDias<T>(arr: T[], size: number): T[][] {
   return out
 }
 
-function parseHexRgb(s: string | undefined): [number, number, number] {
-  const raw = String(s ?? "#b91c1c").trim()
-  const hex = raw.startsWith("#") ? raw.slice(1) : raw
-  if (/^[0-9a-fA-F]{6}$/.test(hex)) {
-    return [parseInt(hex.slice(0, 2), 16), parseInt(hex.slice(2, 4), 16), parseInt(hex.slice(4, 6), 16)]
-  }
-  return [BRAND_R, BRAND_G, BRAND_B]
-}
-
 /** Captura JPEG del contenedor del mapa (html2canvas-pro). Exportado para armar varios mapas en PDF. */
 export async function captureMapElementJpeg(mapElement: HTMLElement): Promise<string> {
   const html2canvasMod = await import("html2canvas-pro")
@@ -185,11 +154,11 @@ function drawConsolidatedClientesTable(
 ): number {
   let y = yStart
   const x0 = MARGIN_MM
-  const wOrd = 10
-  const wNom = 64
-  const wDia = 26
-  const wCom = 48
-  const rowH = 4.1
+  const wOrd = 12
+  const wNom = 78
+  const wDia = 28
+  const wCom = INNER_W - wOrd - wNom - wDia - 2
+  const rowH = 4.05
   const headH = 5.2
 
   y = ensureSpace(doc, y, headH + 6)
@@ -202,11 +171,10 @@ function drawConsolidatedClientesTable(
   doc.setFontSize(7.8)
   doc.setTextColor(...TEXT_DARK)
   const headTextY = headTop + headH - 1.4
-  doc.text("Ord.", x0 + 1, headTextY)
+  doc.text("Orden", x0 + 1, headTextY)
   doc.text("Cliente", x0 + wOrd + 1, headTextY)
   doc.text("Día", x0 + wOrd + wNom + 1, headTextY)
   doc.text("Comuna", x0 + wOrd + wNom + wDia + 1, headTextY)
-  doc.text("Tipo", x0 + wOrd + wNom + wDia + wCom + 1, headTextY)
   doc.setFont("helvetica", "normal")
   y = headTop + headH + 1.5
 
@@ -219,13 +187,42 @@ function drawConsolidatedClientesTable(
     doc.setTextColor(...TEXT_DARK)
     const ty = rowTop + 3.15
     doc.text(String(r.ordenGlobal), x0 + 1, ty)
-    doc.text(truncatePdfCell(r.nombre, 46), x0 + wOrd + 1, ty)
+    doc.text(truncatePdfCell(r.nombre, 52), x0 + wOrd + 1, ty)
     doc.text(truncatePdfCell(r.dia, 14), x0 + wOrd + wNom + 1, ty)
-    doc.text(truncatePdfCell(r.comuna, 26), x0 + wOrd + wNom + wDia + 1, ty)
-    doc.text(truncatePdfCell(r.tipo, 11), x0 + wOrd + wNom + wDia + wCom + 1, ty)
+    doc.text(truncatePdfCell(r.comuna, 36), x0 + wOrd + wNom + wDia + 1, ty)
     y = rowTop + rowH
   }
   return y + 2
+}
+
+async function drawMapImageBlock(
+  doc: import("jspdf").jsPDF,
+  y: number,
+  dataUrl: string,
+  title: string,
+  maxMapH: number,
+): Promise<number> {
+  y = drawSectionHeader(doc, y, `Mapa de rutas (${title})`)
+  y += CONTENT_PAD_MM
+  const img = new Image()
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve()
+    img.onerror = () => reject(new Error("No se pudo leer la imagen del mapa"))
+    img.src = dataUrl
+  })
+  const maxMapW = INNER_W
+  const aspect = img.width / img.height
+  let wMm = maxMapW
+  let hMm = wMm / aspect
+  if (hMm > maxMapH) {
+    hMm = maxMapH
+    wMm = hMm * aspect
+  }
+  y = ensureSpace(doc, y, hMm + 10)
+  doc.setDrawColor(...BORDER_LIGHT)
+  doc.rect(MARGIN_MM - 0.25, y - 0.25, wMm + 0.5, hMm + 0.5, "S")
+  doc.addImage(dataUrl, "JPEG", MARGIN_MM, y, wMm, hMm)
+  return y + hMm + 8
 }
 
 /**
@@ -350,115 +347,53 @@ export async function exportResumenVendedorPdf(params: ExportResumenVendedorPdfP
   )
   y += 6
 
-  const maxMapW = INNER_W
-  const maxMapH = 132
-  if (mapBlocks.length > 0) {
-    doc.addPage()
-    y = MARGIN_MM
-    for (let mi = 0; mi < mapBlocks.length; mi++) {
-      if (mi > 0) {
-        doc.addPage()
-        y = MARGIN_MM
-      }
-      const block = mapBlocks[mi]
-      y = drawSectionHeader(doc, y, `Mapa de rutas (${block.title})`)
-      y += CONTENT_PAD_MM
-      const img = new Image()
-      await new Promise<void>((resolve, reject) => {
-        img.onload = () => resolve()
-        img.onerror = () => reject(new Error("No se pudo leer la imagen del mapa"))
-        img.src = block.dataUrl
-      })
-      const aspect = img.width / img.height
-      let wMm = maxMapW
-      let hMm = wMm / aspect
-      if (hMm > maxMapH) {
-        hMm = maxMapH
-        wMm = hMm * aspect
-      }
-      y = ensureSpace(doc, y, hMm + 10)
-      doc.setDrawColor(...BORDER_LIGHT)
-      doc.rect(MARGIN_MM - 0.25, y - 0.25, wMm + 0.5, hMm + 0.5, "S")
-      doc.addImage(block.dataUrl, "JPEG", MARGIN_MM, y, wMm, hMm)
-      y += hMm + 8
+  const consolidated = buildConsolidatedSemanaClientRows(resumen)
+  const diasCargaLines = buildDiasCargaSummaryLines(resumen)
+  const nMap = mapBlocks.length
+
+  if (nMap > 0) {
+    const firstMaxH = Math.max(88, Math.min(168, PAGE_H_MM - MARGIN_MM - y - 10))
+    y = await drawMapImageBlock(doc, y, mapBlocks[0].dataUrl, mapBlocks[0].title, firstMaxH)
+    for (let mi = 1; mi < nMap; mi++) {
+      const isLast = mi === nMap - 1
+      doc.addPage()
+      y = MARGIN_MM
+      const maxH =
+        isLast && consolidated.length > 0 ? Math.min(105, 132) : Math.min(155, PAGE_H_MM - MARGIN_MM - y - 8)
+      y = await drawMapImageBlock(doc, y, mapBlocks[mi].dataUrl, mapBlocks[mi].title, maxH)
     }
   }
 
-  const consolidated = buildConsolidatedSemanaClientRows(resumen)
   if (consolidated.length > 0) {
-    y = ensureSpace(doc, y, 24)
-    if (y > PAGE_H_MM - MARGIN_MM - 40) {
+    if (y > PAGE_H_MM - MARGIN_MM - 50) {
       doc.addPage()
       y = MARGIN_MM
     }
-    y = drawSectionHeader(doc, y, "Listado general de clientes de la semana")
+    y = drawSectionHeader(doc, y, "Clientes de la semana")
     y += CONTENT_PAD_MM
     y = drawConsolidatedClientesTable(doc, y, consolidated)
   }
 
-  const dias = resumen?.dias ?? []
-  const pairs = chunkDias(dias, 2)
-  const minSpaceToStartDetalle = 36
-  if (pairs.length > 0) {
-    if (y > PAGE_H_MM - MARGIN_MM - minSpaceToStartDetalle) {
+  if (diasCargaLines.length > 0) {
+    y = ensureSpace(doc, y, 18)
+    if (y > PAGE_H_MM - MARGIN_MM - 36) {
       doc.addPage()
       y = MARGIN_MM
     }
-    for (let pi = 0; pi < pairs.length; pi++) {
-      if (pi > 0) {
-        doc.addPage()
-        y = MARGIN_MM
-      }
-      y = drawSectionHeader(doc, y, "Detalle por jornadas")
-      y += CONTENT_PAD_MM - 1
-      for (const dia of pairs[pi]) {
-        y = ensureSpace(doc, y, 11)
-        const [r, g, b] = parseHexRgb(dia.color)
-        const bandH = 6.8
-        doc.setFillColor(...SECTION_BG)
-        doc.rect(MARGIN_MM + 2.2, y, INNER_W - 2.2, bandH, "F")
-        doc.setFillColor(r, g, b)
-        doc.rect(MARGIN_MM, y, 2.2, bandH, "F")
-        doc.setDrawColor(...BORDER_LIGHT)
-        doc.rect(MARGIN_MM, y, INNER_W, bandH, "S")
-        doc.setTextColor(...TEXT_DARK)
-        doc.setFont("helvetica", "bold")
-        doc.setFontSize(9.5)
-        doc.text(
-          `${String(dia.dia ?? "-")}  |  ${fmtMetric(dia.km_totales)} km  |  ${fmtMetric(dia.clientes_count)} clientes  |  ${fmtMetric(dia.minutos_totales)} min`,
-          MARGIN_MM + 5,
-          y + bandH - 2,
-        )
-        doc.setFont("helvetica", "normal")
-        y += bandH + 2.2
-
-        const rows = clientesOrdenadosRows(dia)
-        if (rows.length === 0) {
-          y = ensureSpace(doc, y, 5)
-          doc.setFontSize(8.5)
-          doc.setTextColor(...TEXT_MUTED)
-          doc.text("Sin clientes listados para esta jornada.", MARGIN_MM + CONTENT_PAD_MM, y)
-          y += 5.5
-          continue
-        }
-
-        for (const raw of rows) {
-          const c = parseClienteRow(raw)
-          const line = `${c.orden}. ${c.nombre} - ${c.comuna} (${c.tipoLabel})`
-          y = ensureSpace(doc, y, 4)
-          doc.setFontSize(7.6)
-          doc.setTextColor(...TEXT_DARK)
-          const wrapped = doc.splitTextToSize(line, INNER_W - CONTENT_PAD_MM * 2)
-          doc.text(wrapped, MARGIN_MM + CONTENT_PAD_MM, y)
-          y += wrapped.length * 3.05 + 0.2
-        }
-        y += 2.5
-      }
+    y = drawSectionHeader(doc, y, "Resumen por día")
+    y += CONTENT_PAD_MM
+    doc.setFontSize(9)
+    doc.setTextColor(...TEXT_DARK)
+    for (const ln of diasCargaLines) {
+      y = ensureSpace(doc, y, 5)
+      doc.text(ln, MARGIN_MM + CONTENT_PAD_MM, y)
+      y += 4.5
     }
+    y += 3
   }
 
-  y += 2
-  y = ensureSpace(doc, y, 28)
+  doc.addPage()
+  y = MARGIN_MM
   y = drawSectionHeader(doc, y, "Análisis operativo")
   y += CONTENT_PAD_MM
   const { paragraphs: insights } = (() => {
