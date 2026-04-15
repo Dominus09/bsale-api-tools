@@ -41,7 +41,7 @@ function clientesOrdenados(dia: DistribuidoraResumenDiaJson): string[] {
   return withIdx.map(({ c }) => nombreCliente(c))
 }
 
-/** html2canvas 1.x no parsea oklch/oklab en reglas heredadas al clonar el mapa Leaflet. */
+/** html2canvas-pro soporta oklch; el saneo en onclone sigue ayudando con estilos raros del mapa. */
 function colorUsesModernSpace(value: string): boolean {
   return /\boklch\s*\(|\boklab\s*\(/i.test(value)
 }
@@ -122,7 +122,7 @@ function sanitizeCloneColorsForPdf(root: HTMLElement): void {
 }
 
 /**
- * Fuerza colores seguros en un subárbol (p. ej. clon) para html2canvas sin oklch.
+ * Fuerza colores seguros en un subárbol (p. ej. clon) para la captura del mapa.
  * No usa variables de tema.
  */
 function applyBrutalPdfStyles(root: HTMLElement): void {
@@ -322,7 +322,7 @@ export type ExportResumenVendedorPdfParams = {
 
 /**
  * Genera y descarga un PDF del resumen semanal.
- * El mapa se captura del Leaflet real (con saneo oklch en onclone); el bloque visual del PDF
+ * El mapa se captura del Leaflet real (html2canvas-pro + saneo en onclone); el bloque visual del PDF
  * se arma en un contenedor off-screen solo con estilos inline y se vuelve a rasterizar ahí
  * para no depender del tema Tailwind.
  */
@@ -331,7 +331,7 @@ export async function exportResumenVendedorPdf(
 ): Promise<void> {
   const [{ jsPDF }, html2canvasMod] = await Promise.all([
     import("jspdf"),
-    import("html2canvas"),
+    import("html2canvas-pro"),
   ])
   const html2canvas = html2canvasMod.default
   const { resumen, mapElement, viaticoClp } = params
