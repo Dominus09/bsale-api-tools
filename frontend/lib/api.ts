@@ -1037,6 +1037,10 @@ export async function patchDistribuidoraRuteroTipoAtencion(
   return res.json() as Promise<DistribuidoraRuteroFila>
 }
 
+/**
+ * @deprecated La UI de pendientes se unificó en `/distribuidora/rutero`. El endpoint backend sigue
+ *   disponible por compatibilidad; no uses esta función en pantallas nuevas.
+ */
 export async function getDistribuidoraPendientes(): Promise<DistribuidoraRecord[]> {
   const res = await fetch(`${API_URL}/distribuidora/pendientes`, {
     headers: getAuthHeaders(),
@@ -1049,7 +1053,10 @@ export async function getDistribuidoraPendientes(): Promise<DistribuidoraRecord[
   return Array.isArray(data) ? data : []
 }
 
-/** POST /distribuidora/pendientes/asignar-dia — actualiza `dia_atencion` en bsale.clients. */
+/**
+ * POST /distribuidora/pendientes/asignar-dia — actualiza `dia_atencion` en bsale.clients.
+ * @deprecated Preferir flujos desde Rutero; endpoint conservado por compatibilidad.
+ */
 export async function postDistribuidoraPendientesAsignarDia(body: {
   bsale_id: number
   dia_atencion: string
@@ -1066,6 +1073,9 @@ export async function postDistribuidoraPendientesAsignarDia(body: {
   return res.json() as Promise<DistribuidoraRecord>
 }
 
+/**
+ * @deprecated La vista “sin georef” se unificó en Rutero. El endpoint backend sigue disponible.
+ */
 export async function getDistribuidoraSinGeoref(): Promise<DistribuidoraRecord[]> {
   const res = await fetch(`${API_URL}/distribuidora/sin-georef`, {
     headers: getAuthHeaders(),
@@ -1078,7 +1088,10 @@ export async function getDistribuidoraSinGeoref(): Promise<DistribuidoraRecord[]
   return Array.isArray(data) ? data : []
 }
 
-/** Descarga GET /distribuidora/sin-georef/export (Excel .xlsx). */
+/**
+ * Descarga GET /distribuidora/sin-georef/export (Excel .xlsx).
+ * @deprecated Si se reexpone exportación, hacerlo desde Rutero; función conservada por compatibilidad.
+ */
 export async function downloadDistribuidoraSinGeorefExcel(): Promise<void> {
   const res = await fetch(`${API_URL}/distribuidora/sin-georef/export`, {
     headers: getAuthHeaders(),

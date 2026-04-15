@@ -1631,7 +1631,12 @@ def patch_rutero_tipo_atencion(row_id: int, body: RuteroTipoAtencionPatchBody):
 
 @router.get("/sin-georef/export")
 def get_sin_georef_export():
-    """Exporta filas rutero sin coordenadas a Excel (.xlsx)."""
+    """
+    Exporta filas rutero sin coordenadas a Excel (.xlsx).
+
+    Deprecated: la navegación dejó de exponer página dedicada; el rutero centraliza filtros.
+    Se mantiene el endpoint por si hay integraciones o enlaces antiguos.
+    """
     import pandas as pd
 
     conn = get_connection()
@@ -1686,6 +1691,7 @@ def get_sin_georef_export():
 
 @router.get("/sin-georef")
 def get_sin_georef():
+    """Deprecated: usar rutero con filtros; respuesta JSON conservada por compatibilidad."""
     conn = get_connection()
     try:
         cur = conn.cursor()
@@ -1710,6 +1716,8 @@ def get_sin_georef():
 def get_pendientes():
     """
     Clientes de ruta sin día de atención asignado (no entran al rutero operativo hasta tener día).
+
+    Deprecated: la UI unificada está en Rutero; endpoint conservado por compatibilidad.
     """
     conn = get_connection()
     try:
@@ -1744,7 +1752,11 @@ def get_pendientes():
 
 @router.post("/pendientes/asignar-dia")
 def post_pendientes_asignar_dia(body: AsignarDiaAtencionBody):
-    """Asigna `dia_atencion` en `bsale.clients` (empresa 3)."""
+    """
+    Asigna `dia_atencion` en `bsale.clients` (empresa 3).
+
+    Deprecated: asignación desde Rutero; POST conservado por compatibilidad.
+    """
     d = body.dia_atencion.strip()
     if not d:
         raise HTTPException(status_code=400, detail="dia_atencion es obligatorio")

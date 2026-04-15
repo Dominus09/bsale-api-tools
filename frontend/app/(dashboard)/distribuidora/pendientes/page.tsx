@@ -1,5 +1,6 @@
-import PendientesVistaClient from "@/components/distribuidora/pendientes-vista-client"
+import { permanentRedirect } from "next/navigation"
 
+/** La gestión de pendientes vive en Rutero; URL antigua conservada para enlaces guardados. */
 export default function PendientesPage() {
-  return <PendientesVistaClient />
+  permanentRedirect("/distribuidora/rutero")
 }

@@ -27,7 +27,6 @@ import {
   ScrollText,
   Store,
   MapPin,
-  MapPinOff,
   Route,
   CalendarDays,
   ChevronsLeft,
@@ -89,8 +88,6 @@ const navSections: { title: string; items: NavItem[] }[] = [
       { href: "/distribuidora/mapa", label: "Mapa rutero", icon: MapPin },
       { href: "/distribuidora/resumen-vendedor", label: "Resumen vendedor", icon: CalendarDays },
       { href: "/distribuidora/rutero", label: "Rutero", icon: Route },
-      { href: "/distribuidora/pendientes", label: "Pendientes", icon: ClipboardList },
-      { href: "/distribuidora/sin-georef", label: "Sin georef", icon: MapPinOff },
     ],
   },
   {
