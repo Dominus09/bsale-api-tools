@@ -46,6 +46,7 @@ import {
   safeBuildOperationalInsights,
   safeClasificarEficiencia,
 } from "@/lib/resumen-vendedor-analisis"
+import { fitMapToResumenForPdf } from "@/lib/resumen-vendedor-map-fit"
 import { exportResumenVendedorPdf } from "@/lib/resumen-vendedor-pdf"
 import {
   RESUMEN_VENDEDOR_PRINT_POPUP_BLOCKED,
@@ -471,6 +472,16 @@ export default function ResumenVendedorClient() {
       setFocoDia(null)
       setViewNonce((n) => n + 1)
       await new Promise((r) => setTimeout(r, 1100))
+      const map = mapRef.current
+      if (map) {
+        try {
+          fitMapToResumenForPdf(map, resumen)
+          map.invalidateSize({ animate: false })
+        } catch {
+          /* el PDF igual se genera con la vista actual del mapa */
+        }
+        await new Promise((r) => setTimeout(r, 450))
+      }
       const rend = parseNumInputLoose(rendimientoKmL)
       const precio = parseNumInputLoose(precioCombustible)
       await exportResumenVendedorPdf({
