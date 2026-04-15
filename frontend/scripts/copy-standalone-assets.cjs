@@ -11,8 +11,10 @@ const standaloneDir = path.join(root, ".next", "standalone")
 const serverPath = path.join(standaloneDir, "server.js")
 
 if (!fs.existsSync(serverPath)) {
-  console.warn("[copy-standalone-assets] .next/standalone/server.js no existe, se omite.")
-  process.exit(0)
+  console.error(
+    "[copy-standalone-assets] Falta .next/standalone/server.js (¿next build sin output standalone?). Abortando.",
+  )
+  process.exit(1)
 }
 
 const pubSrc = path.join(root, "public")
