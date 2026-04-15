@@ -284,22 +284,23 @@ ${inner}
 </html>`
 }
 
+/** Mensaje si el navegador bloquea la ventana (debe mostrarse fuera del `window.open`). */
+export const RESUMEN_VENDEDOR_PRINT_POPUP_BLOCKED =
+  "Debes permitir ventanas emergentes para descargar el análisis"
+
 /**
- * Abre una ventana con HTML autocontenido (sin Tailwind/oklch) para imprimir o “Guardar como PDF”.
+ * Escribe el HTML de impresión en una ventana ya abierta con `window.open` (síncrono en el mismo tick que el click).
+ * No llama a `window.open`: debe hacerlo el caller primero para evitar el bloqueador de popups.
  */
-export function openResumenVendedorPrintPreview(
+export function writeResumenVendedorPrintToWindow(
+  targetWindow: Window,
   resumen: DistribuidoraResumenVendedorJson,
   viaticoClp: number | null,
 ): void {
   const html = buildResumenVendedorPrintDocumentHtml(resumen, viaticoClp)
-  const w = window.open("", "_blank", "noopener,noreferrer")
-  if (!w) {
-    throw new Error(
-      "No se pudo abrir la ventana (bloqueador de ventanas emergentes). Permita ventanas para este sitio e intente de nuevo.",
-    )
-  }
-  w.document.open()
-  w.document.write(html)
-  w.document.close()
-  w.focus()
+  const doc = targetWindow.document
+  doc.open()
+  doc.write(html)
+  doc.close()
+  targetWindow.focus()
 }

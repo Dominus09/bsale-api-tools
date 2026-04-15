@@ -42,7 +42,10 @@ import {
   type DistribuidoraResumenVendedorJson,
 } from "@/lib/api"
 import { geometryToLatLngs } from "@/lib/distribuidora-resumen-geometry"
-import { openResumenVendedorPrintPreview } from "@/lib/resumen-vendedor-print-html"
+import {
+  RESUMEN_VENDEDOR_PRINT_POPUP_BLOCKED,
+  writeResumenVendedorPrintToWindow,
+} from "@/lib/resumen-vendedor-print-html"
 import { cn } from "@/lib/utils"
 
 import "leaflet/dist/leaflet.css"
@@ -343,16 +346,6 @@ export default function ResumenVendedorClient() {
     return Math.round(clp)
   }, [resumen, rendimientoKmL, precioCombustible])
 
-  const abrirVistaPreviaImprimir = useCallback(() => {
-    if (!resumen) return
-    setVistaImpresionError(null)
-    try {
-      openResumenVendedorPrintPreview(resumen, viaticoEstimado)
-    } catch (e) {
-      setVistaImpresionError(e instanceof Error ? e.message : "No se pudo abrir la vista para imprimir.")
-    }
-  }, [resumen, viaticoEstimado])
-
   return (
     <div className="space-y-4 p-4">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
@@ -402,16 +395,36 @@ export default function ResumenVendedorClient() {
       {resumen && (
         <>
           <div className="flex flex-wrap items-center gap-3">
-            <Button type="button" variant="default" onClick={abrirVistaPreviaImprimir}>
+            <Button
+              type="button"
+              variant="default"
+              onClick={() => {
+                if (!resumen) return
+                setVistaImpresionError(null)
+                const w = window.open("", "_blank")
+                if (!w) {
+                  setVistaImpresionError(RESUMEN_VENDEDOR_PRINT_POPUP_BLOCKED)
+                  return
+                }
+                try {
+                  writeResumenVendedorPrintToWindow(w, resumen, viaticoEstimado)
+                } catch (e) {
+                  w.close()
+                  setVistaImpresionError(
+                    e instanceof Error ? e.message : "No se pudo cargar la vista para imprimir.",
+                  )
+                }
+              }}
+            >
               Vista previa para imprimir
             </Button>
             {vistaImpresionError ? (
               <p className="max-w-xl text-sm text-destructive">{vistaImpresionError}</p>
             ) : (
               <p className="max-w-xl text-xs text-muted-foreground">
-                Se abre una ventana solo con estilos clásicos (sin oklch). Use{" "}
-                <strong className="text-foreground">Imprimir</strong> y elija{" "}
-                <strong className="text-foreground">Guardar como PDF</strong> en el navegador.
+                Se abre una ventana (permitir emergentes si el navegador lo pide). Use{" "}
+                <strong className="text-foreground">Imprimir</strong> y{" "}
+                <strong className="text-foreground">Guardar como PDF</strong>.
               </p>
             )}
           </div>
