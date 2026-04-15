@@ -1090,6 +1090,9 @@ export async function downloadDistribuidoraSinGeorefExcel(): Promise<void> {
   const blob = await res.blob()
   const url = URL.createObjectURL(blob)
   try {
+    if (typeof document === "undefined") {
+      throw new Error("La descarga solo está disponible en el navegador.")
+    }
     const a = document.createElement("a")
     a.href = url
     a.download = "sin_georef.xlsx"

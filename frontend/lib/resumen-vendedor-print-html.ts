@@ -1,3 +1,5 @@
+"use client"
+
 import type { DistribuidoraResumenDiaJson, DistribuidoraResumenVendedorJson } from "@/lib/api"
 
 import { geometryToLatLngs } from "@/lib/distribuidora-resumen-geometry"
