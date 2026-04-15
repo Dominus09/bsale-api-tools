@@ -42,6 +42,7 @@ import {
   type DistribuidoraResumenVendedorJson,
 } from "@/lib/api"
 import { geometryToLatLngs } from "@/lib/distribuidora-resumen-geometry"
+import { exportResumenVendedorPdf } from "@/lib/resumen-vendedor-pdf"
 import {
   RESUMEN_VENDEDOR_PRINT_POPUP_BLOCKED,
   writeResumenVendedorPrintToWindow,
@@ -202,6 +203,56 @@ function RutasSemanaCapas({ resumen, visibleDias, focoDia, viewNonce }: RutasCap
   return null
 }
 
+function sortedClientesForMap(dia: DistribuidoraResumenDiaJson): Record<string, unknown>[] {
+  const raw = dia.clientes
+  if (!Array.isArray(raw)) return []
+  return [...(raw as Record<string, unknown>[])].sort(
+    (a, b) => (Number(a.orden_visita) || 0) - (Number(b.orden_visita) || 0),
+  )
+}
+
+/** Marcadores con número de orden (misma vista que se captura en el PDF). */
+function ResumenClienteMarkersVisita({ dias }: { dias: DistribuidoraResumenDiaJson[] }) {
+  return (
+    <>
+      {dias.flatMap((d) =>
+        sortedClientesForMap(d)
+          .map((c, i) => {
+            const lat = Number(c.lat)
+            const lon = Number(c.lon)
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null
+            const ov = Number(c.orden_visita) || i + 1
+            const col = /^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{3})$/.test(String(d.color || "").trim())
+              ? String(d.color).trim()
+              : "#2563eb"
+            const icon = L.divIcon({
+              className: "resumen-vendedor-visit-pin",
+              html: `<div style="width:22px;height:22px;border-radius:999px;border:2.5px solid ${col};background:#fff;color:#0f172a;display:flex;align-items:center;justify-content:center;font:700 11px system-ui,-apple-system,sans-serif;line-height:1;box-shadow:0 1px 4px rgba(15,23,42,0.2);">${ov}</div>`,
+              iconSize: [22, 22],
+              iconAnchor: [11, 22],
+              popupAnchor: [0, -20],
+            })
+            const nombre = String(
+              c.cliente_nombre ?? c.nombre_fantasia ?? c.nombre ?? "Cliente",
+            ).trim()
+            return (
+              <Marker key={`${d.dia}-${String(c.bsale_id ?? i)}`} position={[lat, lon]} icon={icon}>
+                <Popup>
+                  <span className="text-sm">
+                    <strong>{ov}.</strong> {nombre}
+                    <br />
+                    <span className="text-muted-foreground">{d.dia}</span>
+                  </span>
+                </Popup>
+              </Marker>
+            )
+          })
+          .filter(Boolean),
+      )}
+    </>
+  )
+}
+
 function BaseMarkerResumen({ resumen }: { resumen: DistribuidoraResumenVendedorJson | null }) {
   const base = resumen?.dias?.[0]?.base as Record<string, unknown> | undefined
   const lat = base?.lat != null ? Number(base.lat) : null
@@ -230,6 +281,8 @@ export default function ResumenVendedorClient() {
   const [rendimientoKmL, setRendimientoKmL] = useState("")
   const [precioCombustible, setPrecioCombustible] = useState("")
   const [vistaImpresionError, setVistaImpresionError] = useState<string | null>(null)
+  const [pdfGenerando, setPdfGenerando] = useState(false)
+  const [pdfError, setPdfError] = useState<string | null>(null)
   const mapRef = useRef<L.Map | null>(null)
   const autoFitKey = useRef<string | null>(null)
 
@@ -289,6 +342,7 @@ export default function ResumenVendedorClient() {
     setCargandoResumen(true)
     setError(null)
     setVistaImpresionError(null)
+    setPdfError(null)
     try {
       const data = await getDistribuidoraResumenVendedor(v)
       setResumen(data)
@@ -331,6 +385,41 @@ export default function ResumenVendedorClient() {
     setFocoDia(null)
     setViewNonce((n) => n + 1)
   }
+
+  const descargarAnalisisPdf = useCallback(async () => {
+    if (!resumen) return
+    const el = mapRef.current?.getContainer()
+    if (!el) {
+      setPdfError("El mapa no está listo. Espere un momento e intente de nuevo.")
+      return
+    }
+    setPdfError(null)
+    setPdfGenerando(true)
+    const prevVisible = new Set(visibleDias)
+    const prevFoco = focoDia
+    try {
+      setVisibleDias(new Set(resumen.dias.map((d) => d.dia)))
+      setFocoDia(null)
+      setViewNonce((n) => n + 1)
+      await new Promise((r) => setTimeout(r, 1100))
+      const rend = parseNumInputLoose(rendimientoKmL)
+      const precio = parseNumInputLoose(precioCombustible)
+      await exportResumenVendedorPdf({
+        resumen,
+        mapElement: el,
+        viaticoClp: viaticoEstimado,
+        rendimientoKmL: rend,
+        precioCombustibleClp: precio,
+      })
+    } catch (e) {
+      setPdfError(e instanceof Error ? e.message : "No se pudo generar el PDF.")
+    } finally {
+      setVisibleDias(prevVisible)
+      setFocoDia(prevFoco)
+      setViewNonce((n) => n + 1)
+      setPdfGenerando(false)
+    }
+  }, [resumen, visibleDias, focoDia, viaticoEstimado, rendimientoKmL, precioCombustible])
 
   const viaticoEstimado = useMemo(() => {
     if (!resumen) return null
@@ -398,9 +487,19 @@ export default function ResumenVendedorClient() {
             <Button
               type="button"
               variant="default"
+              disabled={pdfGenerando}
+              onClick={() => void descargarAnalisisPdf()}
+            >
+              {pdfGenerando ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden /> : null}
+              {pdfGenerando ? "Generando PDF…" : "Descargar análisis PDF"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
               onClick={() => {
                 if (!resumen) return
                 setVistaImpresionError(null)
+                setPdfError(null)
                 const w = window.open("", "_blank")
                 if (!w) {
                   setVistaImpresionError(RESUMEN_VENDEDOR_PRINT_POPUP_BLOCKED)
@@ -418,15 +517,17 @@ export default function ResumenVendedorClient() {
             >
               Vista previa para imprimir
             </Button>
+            {pdfError ? <p className="w-full text-sm text-destructive">{pdfError}</p> : null}
             {vistaImpresionError ? (
               <p className="max-w-xl text-sm text-destructive">{vistaImpresionError}</p>
-            ) : (
+            ) : !pdfError ? (
               <p className="max-w-xl text-xs text-muted-foreground">
-                Se abre una ventana (permitir emergentes si el navegador lo pide). Use{" "}
-                <strong className="text-foreground">Imprimir</strong> y{" "}
-                <strong className="text-foreground">Guardar como PDF</strong>.
+                <strong className="text-foreground">PDF:</strong> descarga directa con mapa y análisis.
+                <span className="mx-1">·</span>
+                <strong className="text-foreground">Vista previa:</strong> ventana emergente → Imprimir /
+                Guardar como PDF.
               </p>
-            )}
+            ) : null}
           </div>
 
           <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
@@ -537,6 +638,9 @@ export default function ResumenVendedorClient() {
                       viewNonce={viewNonce}
                     />
                     <BaseMarkerResumen resumen={resumen} />
+                    <ResumenClienteMarkersVisita
+                      dias={resumen.dias.filter((d) => visibleDias.has(d.dia))}
+                    />
                   </MapContainer>
                 </div>
               </CardContent>

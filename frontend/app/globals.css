@@ -254,6 +254,14 @@
   border-color: rgb(232 232 232);
 }
 
+/* Resumen vendedor: orden de visita sobre el mapa (PDF / pantalla) */
+.leaflet-div-icon.resumen-vendedor-visit-pin {
+  background: transparent !important;
+  border: none !important;
+  margin-left: 0 !important;
+  margin-top: 0 !important;
+}
+
 /* Resumen vendedor (mapa semanal): marcador base con emoji (L.divIcon) */
 .leaflet-div-icon.base-icon {
   background: transparent !important;
