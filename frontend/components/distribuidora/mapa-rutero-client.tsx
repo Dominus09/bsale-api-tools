@@ -439,6 +439,72 @@ function latLngCasiIguales(a: L.LatLngTuple, b: L.LatLngTuple, eps = 1e-5): bool
   return Math.abs(a[0] - b[0]) < eps && Math.abs(a[1] - b[1]) < eps
 }
 
+/** Une tramos rectos densificados (base→…→base) y guarda el índice en `fullPath` del último punto de cada tramo a cliente. */
+function buildStraightSimulationPath(
+  map: L.Map,
+  waypoints: L.LatLngTuple[],
+  stopsCount: number,
+  maxSegmentM: number,
+): { fullPath: L.LatLngTuple[]; stopIndices: number[] } {
+  const fullPath: L.LatLngTuple[] = []
+  const stopIndices: number[] = []
+  for (let s = 0; s < waypoints.length - 1; s++) {
+    const piece = densificarRutaParaSimulacion(map, [waypoints[s]!, waypoints[s + 1]!], maxSegmentM)
+    if (piece.length < 2) continue
+    if (fullPath.length === 0) {
+      fullPath.push(...piece)
+    } else {
+      fullPath.push(...piece.slice(1))
+    }
+    if (s < stopsCount) {
+      stopIndices.push(fullPath.length - 1)
+    }
+  }
+  return { fullPath, stopIndices }
+}
+
+/**
+ * Primer índice a lo largo de la ruta (ORS) cercano a cada parada, en orden, para disparar visitas sin ir en línea recta.
+ */
+function findStopIndicesAlongOrsPath(
+  map: L.Map,
+  path: L.LatLngTuple[],
+  stops: SimulacionParada[],
+  radiusM: number,
+): number[] {
+  const out: number[] = []
+  let from = 0
+  for (const stop of stops) {
+    const t: L.LatLngTuple = [stop.lat, stop.lon]
+    let hit = -1
+    for (let i = from; i < path.length; i++) {
+      if (map.distance(path[i]!, t) <= radiusM) {
+        hit = i
+        break
+      }
+    }
+    if (hit < 0) {
+      let best = from
+      let bestD = Infinity
+      for (let i = from; i < path.length; i++) {
+        const d = map.distance(path[i]!, t)
+        if (d < bestD) {
+          bestD = d
+          best = i
+        }
+      }
+      hit = best
+    }
+    const prev = out.length ? out[out.length - 1]! : -1
+    if (hit <= prev) {
+      hit = Math.min(prev + 1, path.length - 1)
+    }
+    out.push(hit)
+    from = hit + 1
+  }
+  return out
+}
+
 /** Terreno operativo: no `dia_atencion = telefonico` (Bsale) ni `tipo_atencion` telefónico. */
 function filaRutaEsTerreno(r: RutaClienteFila): boolean {
   const dia = (r as Record<string, unknown>).dia_atencion
@@ -457,14 +523,15 @@ function ordenManualSimKey(r: RutaClienteFila): number {
 }
 
 /**
- * Recorre base → clientes → base en el orden EXACTO de `waypoints` (p. ej. orden_manual ASC).
- * Cada tramo se densifica en línea recta; al terminar un tramo que llega a un cliente → popup (sin nearest-neighbor).
+ * Recorre base → clientes → base siguiendo la polyline ORS (`orsPolyline`) por calle cuando existe;
+ * si no hay geometría válida o no coincide con las paradas, usa rectas densificadas entre `waypoints`.
  */
 function MapaRuteroSimulacionVehiculo({
   runId,
   running,
   paused,
   speedMult,
+  orsPolyline,
   waypoints,
   stops,
   onVisitClient,
@@ -474,6 +541,8 @@ function MapaRuteroSimulacionVehiculo({
   running: boolean
   paused: boolean
   speedMult: number
+  /** Geometría decodificada de ruta-detalle (ORS); prioridad sobre rectas. */
+  orsPolyline: L.LatLngTuple[] | null
   waypoints: L.LatLngTuple[] | null
   stops: SimulacionParada[]
   onVisitClient: (bsaleId: number) => void
@@ -490,26 +559,50 @@ function MapaRuteroSimulacionVehiculo({
   }, [speedMult])
 
   useEffect(() => {
-    if (!running || !waypoints || waypoints.length < 2) {
+    if (!running || !waypoints || waypoints.length < 2 || stops.length === 0) {
       return
     }
 
-    const segments: L.LatLngTuple[][] = []
-    for (let s = 0; s < waypoints.length - 1; s++) {
-      const piece = densificarRutaParaSimulacion(map, [waypoints[s], waypoints[s + 1]], 22)
-      if (piece.length >= 2) segments.push(piece)
+    const stopsCount = stops.length
+    const ORS_DENSIFY_M = 18
+    const STRAIGHT_DENSIFY_M = 22
+    const ORS_STOP_RADIUS_M = 130
+
+    let fullPath: L.LatLngTuple[]
+    let stopIndices: number[]
+    let useOrs = false
+
+    if (orsPolyline && orsPolyline.length >= 2) {
+      fullPath = densificarRutaParaSimulacion(map, orsPolyline, ORS_DENSIFY_M)
+      stopIndices = findStopIndicesAlongOrsPath(map, fullPath, stops, ORS_STOP_RADIUS_M)
+      if (stopIndices.length === stopsCount && fullPath.length >= 2) {
+        useOrs = true
+      }
     }
-    if (segments.length === 0) {
+
+    if (!useOrs) {
+      if (orsPolyline && orsPolyline.length >= 2) {
+        console.warn(
+          "[mapa rutero] Simulación: la polyline ORS no encaja con las paradas; se usa recorrido recto entre waypoints.",
+        )
+      }
+      const built = buildStraightSimulationPath(map, waypoints, stopsCount, STRAIGHT_DENSIFY_M)
+      fullPath = built.fullPath
+      stopIndices = built.stopIndices
+    }
+
+    if (fullPath.length < 2 || stopIndices.length !== stopsCount) {
       return
     }
 
     let cancelled = false
-    let segIdx = 0
     let subIdx = 0
     let dwellUntil = 0
+    let nextStopToTrigger = 0
+    let pendingPostDwellAdvance = false
     let timeoutId: ReturnType<typeof setTimeout> | undefined
 
-    const start = segments[0][0]
+    const start = fullPath[0]!
     const marker = L.marker(start, {
       icon: getSimulacionVehiculoIcon(),
       zIndexOffset: 2500,
@@ -522,11 +615,26 @@ function MapaRuteroSimulacionVehiculo({
         timeoutId = window.setTimeout(tick, 90)
         return
       }
+      if (pendingPostDwellAdvance) {
+        pendingPostDwellAdvance = false
+        subIdx += 1
+        if (subIdx >= fullPath.length) {
+          try {
+            if (map.hasLayer(marker)) map.removeLayer(marker)
+          } catch {
+            /* */
+          }
+          onComplete()
+          return
+        }
+        timeoutId = window.setTimeout(tick, 10)
+        return
+      }
       if (pausedRef.current) {
         timeoutId = window.setTimeout(tick, 120)
         return
       }
-      if (segIdx >= segments.length) {
+      if (subIdx >= fullPath.length) {
         try {
           if (map.hasLayer(marker)) map.removeLayer(marker)
         } catch {
@@ -536,43 +644,32 @@ function MapaRuteroSimulacionVehiculo({
         return
       }
 
-      const path = segments[segIdx]
-      if (subIdx >= path.length) {
-        const llegadaIdx = segIdx + 1
-        if (llegadaIdx >= 1 && llegadaIdx <= stops.length) {
-          const esperado = stops[llegadaIdx - 1]
-          onVisitClient(esperado.bsale_id)
-          const dir = escapeHtmlTexto(esperado.direccionLinea)
-          const nom = escapeHtmlTexto(esperado.nombre)
-          L.popup({ maxWidth: 320, className: "mapa-rutero-sim-popup", autoPan: true })
-            .setLatLng([esperado.lat, esperado.lon])
-            .setContent(
-              `<div style="padding:6px;font-size:13px;line-height:1.35;color:#0f172a;">
+      const nextIdx = stopIndices[nextStopToTrigger]
+      if (nextStopToTrigger < stopsCount && nextIdx !== undefined && subIdx >= nextIdx) {
+        const esperado = stops[nextStopToTrigger]!
+        marker.setLatLng(fullPath[nextIdx]!)
+        onVisitClient(esperado.bsale_id)
+        const dir = escapeHtmlTexto(esperado.direccionLinea)
+        const nom = escapeHtmlTexto(esperado.nombre)
+        L.popup({ maxWidth: 320, className: "mapa-rutero-sim-popup", autoPan: true })
+          .setLatLng([esperado.lat, esperado.lon])
+          .setContent(
+            `<div style="padding:6px;font-size:13px;line-height:1.35;color:#0f172a;">
                 <div style="margin-bottom:4px;font-size:11px;font-weight:600;color:#475569">Cliente ${esperado.paso} de ${esperado.totalParadas}</div>
                 <div style="font-weight:600">${nom}</div>
                 <div style="margin-top:2px;font-size:11px;color:#64748b">Orden manual: ${Number.isFinite(esperado.orden) ? esperado.orden : "—"}</div>
                 <div style="margin-top:6px;font-size:11px;color:#334155">${dir}</div>
               </div>`,
-            )
-            .openOn(map)
-          dwellUntil = Date.now() + SIM_DWELL_MS
-        }
-        segIdx += 1
-        if (segIdx >= segments.length) {
-          timeoutId = window.setTimeout(tick, 10)
-          return
-        }
-        subIdx = 0
-        const prev = path[path.length - 1]
-        const nextPath = segments[segIdx]
-        if (nextPath.length && latLngCasiIguales(prev, nextPath[0])) {
-          subIdx = 1
-        }
-        timeoutId = window.setTimeout(tick, 10)
+          )
+          .openOn(map)
+        dwellUntil = Date.now() + SIM_DWELL_MS
+        nextStopToTrigger += 1
+        pendingPostDwellAdvance = true
+        timeoutId = window.setTimeout(tick, 40)
         return
       }
 
-      marker.setLatLng(path[subIdx])
+      marker.setLatLng(fullPath[subIdx]!)
       subIdx += 1
       const baseDelay = 50 / Math.max(1, speedRef.current)
       const delay = Math.max(10, Math.round(baseDelay))
@@ -590,41 +687,55 @@ function MapaRuteroSimulacionVehiculo({
         /* */
       }
     }
-  }, [runId, running, map, waypoints, stops, onVisitClient, onComplete])
+  }, [runId, running, map, orsPolyline, waypoints, stops, onVisitClient, onComplete])
 
   return null
 }
 
-/** Ruta absoluta desde `public/` (Next.js); evita imágenes rotas por emoji o rutas relativas. */
-const BASE_MARKER_ICON_URL = "/icons/base.png"
-
-let baseIconSingleton: L.Icon | null = null
-function getBaseMapIcon(): L.Icon {
-  if (!baseIconSingleton) {
-    baseIconSingleton = L.icon({
-      iconUrl: BASE_MARKER_ICON_URL,
-      iconSize: [32, 32],
-      iconAnchor: [16, 32],
+/**
+ * Punto base: misma bandera 🏁 que resumen vendedor (`base-icon` en globals), sin L.icon/img.
+ * @see `getResumenVendedorBaseIcon` en resumen-vendedor-client.tsx
+ */
+let baseMapDivIconSingleton: L.DivIcon | null = null
+function getBaseMapIcon(): L.DivIcon {
+  if (!baseMapDivIconSingleton) {
+    baseMapDivIconSingleton = L.divIcon({
+      className: "base-icon",
+      html: "🏁",
+      iconSize: [30, 30],
+      iconAnchor: [15, 30],
       popupAnchor: [0, -28],
-      className: "mapa-rutero-base-leaflet-icon",
     })
   }
-  return baseIconSingleton
+  return baseMapDivIconSingleton
 }
 
-/** Base en mapa de ruta: mismo asset, tamaño mayor para inicio/fin. */
-let basePuntoRutaIcon: L.Icon | null = null
-function getBasePuntoRutaMapIcon(): L.Icon {
-  if (!basePuntoRutaIcon) {
-    basePuntoRutaIcon = L.icon({
-      iconUrl: BASE_MARKER_ICON_URL,
+/** Base en ruta del día: bandera un poco mayor (misma familia visual que resumen). */
+let basePuntoRutaDivIconSingleton: L.DivIcon | null = null
+function getBasePuntoRutaMapIcon(): L.DivIcon {
+  if (!basePuntoRutaDivIconSingleton) {
+    basePuntoRutaDivIconSingleton = L.divIcon({
+      className: "base-icon mapa-rutero-base-ruta-flag",
+      html: "🏁",
       iconSize: [40, 40],
       iconAnchor: [20, 40],
-      popupAnchor: [0, -40],
-      className: "mapa-rutero-base-leaflet-icon mapa-rutero-base-ruta-leaflet-icon",
+      popupAnchor: [0, -36],
     })
   }
-  return basePuntoRutaIcon
+  return basePuntoRutaDivIconSingleton
+}
+
+type MarkerClusterLike = { getChildCount(): number }
+
+/** Evita el cluster rojo por defecto de Leaflet.markercluster. */
+function mapaRuteroClusterIconCreate(cluster: MarkerClusterLike): L.DivIcon {
+  const count = cluster.getChildCount()
+  return L.divIcon({
+    className: "mapa-rutero-cluster-root",
+    html: `<div class="mapa-rutero-cluster-badge"><span>${count}</span></div>`,
+    iconSize: [44, 44],
+    iconAnchor: [22, 22],
+  })
 }
 
 const SELECT_CLASS =
@@ -1289,6 +1400,8 @@ export default function MapaRuteroClient() {
   const [simSpeedMult, setSimSpeedMult] = useState(1)
   const [simRunId, setSimRunId] = useState(0)
   const [simPath, setSimPath] = useState<L.LatLngTuple[] | null>(null)
+  /** Polyline ORS (calles) capturada al iniciar simulación; null = solo rectas entre waypoints. */
+  const [simOrsPolyline, setSimOrsPolyline] = useState<L.LatLngTuple[] | null>(null)
   const [simStops, setSimStops] = useState<SimulacionParada[]>([])
   const [simAvisoSinOrden, setSimAvisoSinOrden] = useState(false)
   const [simHighlightBsaleId, setSimHighlightBsaleId] = useState<number | null>(null)
@@ -1325,6 +1438,7 @@ export default function MapaRuteroClient() {
     setSimRunning(false)
     setSimPaused(false)
     setSimPath(null)
+    setSimOrsPolyline(null)
     setSimStops([])
     setSimAvisoSinOrden(false)
     setSimHighlightBsaleId(null)
@@ -1504,6 +1618,9 @@ export default function MapaRuteroClient() {
   const onSimComplete = useCallback(() => {
     setSimRunning(false)
     setSimPaused(false)
+    setSimPath(null)
+    setSimOrsPolyline(null)
+    setSimStops([])
     setSimAvisoSinOrden(false)
     setSimHighlightBsaleId(null)
     try {
@@ -1574,8 +1691,10 @@ export default function MapaRuteroClient() {
       return
     }
     const waypoints: L.LatLngTuple[] = [baseTuple, ...stops.map((s) => [s.lat, s.lon] as L.LatLngTuple), baseTuple]
+    const geomLine = geometryToLatLngs(rutaDetalle.geometry)
     setOrdenMensaje("")
     setSimPath(waypoints)
+    setSimOrsPolyline(geomLine.length >= 2 ? geomLine : null)
     setSimStops(stops)
     setSimPaused(false)
     setSimHighlightBsaleId(null)
@@ -1587,6 +1706,7 @@ export default function MapaRuteroClient() {
     setSimRunning(false)
     setSimPaused(false)
     setSimPath(null)
+    setSimOrsPolyline(null)
     setSimStops([])
     setSimAvisoSinOrden(false)
     setSimHighlightBsaleId(null)
@@ -2111,6 +2231,7 @@ export default function MapaRuteroClient() {
                         running={simRunning}
                         paused={simPaused}
                         speedMult={simSpeedMult}
+                        orsPolyline={simOrsPolyline}
                         waypoints={simPath}
                         stops={simStops}
                         onVisitClient={onSimVisit}
@@ -2219,7 +2340,11 @@ export default function MapaRuteroClient() {
                       </>
                     ) : (
                       <>
-                        <MarkerClusterGroup chunkedLoading showCoverageOnHover={false}>
+                        <MarkerClusterGroup
+                          chunkedLoading
+                          showCoverageOnHover={false}
+                          iconCreateFunction={mapaRuteroClusterIconCreate}
+                        >
                           {clientesMarcadoresMapa.map((c) => (
                             <Marker
                               key={c.bsale_id}

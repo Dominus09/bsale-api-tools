@@ -38,6 +38,91 @@ function clientesOrdenados(dia: DistribuidoraResumenDiaJson): string[] {
   return withIdx.map(({ c }) => nombreCliente(c))
 }
 
+/** html2canvas no parsea oklch/oklab; detectar y sustituir antes del pintado. */
+function colorUsesModernSpace(value: string): boolean {
+  return /\boklch\s*\(|\boklab\s*\(/i.test(value)
+}
+
+function fallbackColorForCssProp(prop: string): string {
+  if (prop === "backgroundColor") return "rgb(226, 232, 240)"
+  if (prop.startsWith("border") && prop.endsWith("Color")) return "rgb(148, 163, 184)"
+  if (prop === "outlineColor") return "rgb(148, 163, 184)"
+  if (prop === "fill") return "rgb(51, 136, 255)"
+  if (prop === "stroke") return "rgb(37, 99, 235)"
+  if (prop === "caretColor" || prop === "columnRuleColor" || prop === "textDecorationColor") return "rgb(15, 23, 42)"
+  return "rgb(15, 23, 42)"
+}
+
+function kebabFromDomProp(prop: string): string {
+  return prop.replace(/[A-Z]/g, (ch) => `-${ch.toLowerCase()}`)
+}
+
+/**
+ * Recorre el clon del DOM (callback `onclone` de html2canvas) y fuerza colores RGB
+ * donde el estilo computado usa oklch/oklab (p. ej. tema Tailwind v4).
+ */
+function stripModernColorFunctionsFromCssText(css: string): string {
+  return css
+    .replace(/oklch\([^)]*\)/gi, "rgb(15, 23, 42)")
+    .replace(/oklab\([^)]*\)/gi, "rgb(15, 23, 42)")
+}
+
+function sanitizeCloneColorsForPdf(root: HTMLElement): void {
+  const visit = (el: Element) => {
+    const rawAttr = el.getAttribute("style")
+    if (rawAttr && colorUsesModernSpace(rawAttr)) {
+      el.setAttribute("style", stripModernColorFunctionsFromCssText(rawAttr))
+    }
+    if (el instanceof HTMLElement) {
+      const cs = getComputedStyle(el)
+      const textProps: (keyof CSSStyleDeclaration)[] = [
+        "color",
+        "backgroundColor",
+        "borderTopColor",
+        "borderRightColor",
+        "borderBottomColor",
+        "borderLeftColor",
+        "outlineColor",
+        "textDecorationColor",
+        "columnRuleColor",
+        "caretColor",
+      ]
+      for (const prop of textProps) {
+        const raw = cs[prop] as string | undefined
+        if (!raw || raw === "transparent" || raw === "rgba(0, 0, 0, 0)") continue
+        if (colorUsesModernSpace(raw)) {
+          el.style.setProperty(kebabFromDomProp(String(prop)), fallbackColorForCssProp(String(prop)), "important")
+        }
+      }
+      const shadow = cs.boxShadow
+      if (shadow && colorUsesModernSpace(shadow)) {
+        el.style.setProperty("box-shadow", "none", "important")
+      }
+      const tshadow = cs.textShadow
+      if (tshadow && colorUsesModernSpace(tshadow)) {
+        el.style.setProperty("text-shadow", "none", "important")
+      }
+      const filt = cs.filter
+      if (filt && filt !== "none" && colorUsesModernSpace(filt)) {
+        el.style.setProperty("filter", "none", "important")
+      }
+    }
+    if (el instanceof SVGElement) {
+      const cs = getComputedStyle(el)
+      for (const prop of ["fill", "stroke"] as const) {
+        const raw = cs[prop]
+        if (!raw || raw === "none") continue
+        if (colorUsesModernSpace(raw)) {
+          el.style.setProperty(prop, fallbackColorForCssProp(prop), "important")
+        }
+      }
+    }
+  }
+
+  visit(root)
+  root.querySelectorAll("*").forEach(visit)
+}
+
 async function loadImageDataUrl(path: string): Promise<string | null> {
   try {
     const res = await fetch(path)
@@ -156,6 +241,11 @@ export async function exportResumenVendedorPdf(
     backgroundColor: "#dfe6ee",
     windowWidth: mapElement.scrollWidth,
     windowHeight: mapElement.scrollHeight,
+    onclone: (_clonedDoc, clonedElement) => {
+      sanitizeCloneColorsForPdf(clonedElement)
+      clonedElement.style.setProperty("background-color", "#dfe6ee", "important")
+      clonedElement.style.setProperty("color", "#0f172a", "important")
+    },
   })
 
   const imgData = canvas.toDataURL("image/jpeg", 0.88)
