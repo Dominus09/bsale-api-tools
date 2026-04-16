@@ -142,7 +142,6 @@ def sync_distribuidora_related_documents(
 
         detail_ids = _fetch_oc_detail_ids(cur, lookback_days=lb, limit_details=lim)
         stats["details_considered"] = len(detail_ids)
-        conn.commit()
 
         client = BsaleClient(token)
         throttle = float(os.getenv("DISTRIBUIDORA_RELATED_API_DELAY_SEC", "0.12"))
