@@ -369,14 +369,10 @@ END = %s"""
     try:
         print("[promotions/grid] SQL:\n", sql.strip())
         print("[promotions/grid] params:", repr(params))
-        try:
-            mogrified = cur.mogrify(sql, tuple(params))
-            print(
-                "[promotions/grid] mogrify:",
-                mogrified.decode("utf-8", errors="replace") if mogrified else "(null)",
-            )
-        except Exception as mog_e:
-            print("[promotions/grid] mogrify skip:", mog_e)
+        if params:
+            print(cur.mogrify(sql, tuple(params)))
+        else:
+            print(sql)
 
         try:
             cur.execute(sql, tuple(params))
