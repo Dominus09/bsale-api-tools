@@ -33,6 +33,7 @@ import {
   ChevronsRight,
   PieChart,
   Truck,
+  Percent,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -55,6 +56,7 @@ const navSections: { title: string; items: NavItem[] }[] = [
     items: [
       { href: "/margins", label: "Márgenes", icon: TrendingUp },
       { href: "/alerts", label: "Alertas", icon: AlertTriangle },
+      { href: "/promotions", label: "Promociones", icon: Percent },
     ],
   },
   {

@@ -260,6 +260,10 @@ def promotions_grid(
     canal: str | None = Query(None, description="Filtrar por canal (ruta | detalle)"),
     tipo: str | None = Query(None, description="Filtrar por tipo (oferta | remate)"),
     activa: bool | None = Query(None, description="Filtrar por flag activa en cabecera"),
+    estado: str | None = Query(
+        None,
+        description="Filtrar por estado derivado: Activa | Inactiva | Programada | Vencida",
+    ),
     company_id: int | None = Query(None, description="Filtrar por empresa en snapshot"),
 ) -> list[dict[str, Any]]:
     """
@@ -281,9 +285,23 @@ def promotions_grid(
     if company_id is not None:
         where.append("ps.company_id = %s")
         params.append(int(company_id))
+    if estado is not None and str(estado).strip():
+        where.append(
+            """(
+                CASE
+                    WHEN NOT p.activa THEN 'Inactiva'
+                    WHEN CURRENT_DATE < p.fecha_inicio THEN 'Programada'
+                    WHEN CURRENT_DATE > p.fecha_fin THEN 'Vencida'
+                    ELSE 'Activa'
+                END
+            ) = %s"""
+        )
+        params.append(str(estado).strip())
 
     sql = f"""
         SELECT
+            ps.promotion_id AS promotion_id,
+            p.activa AS activa,
             COALESCE(pm.product_type, '') AS tipo_producto,
             COALESCE(pm.product_name, '') AS producto,
             COALESCE(NULLIF(pm.variant_name, ''), vv.description, '') AS variante,

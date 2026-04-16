@@ -1540,6 +1540,136 @@ export async function getProductsMasterWithoutSupplierCount(): Promise<number> {
   return Number.isFinite(n) ? n : 0
 }
 
+/** Fila de GET /promotions/grid */
+export interface PromotionGridRow {
+  promotion_id: number
+  activa: boolean
+  tipo_producto: string
+  producto: string
+  variante: string
+  codigo_barras: string
+  descuento_porcentaje: number | string
+  descuento_texto: string
+  fecha_inicio: string
+  fecha_fin: string
+  tipo: string
+  observacion: string | null
+  canal: string
+  estado: string
+  company_id: number
+  price_list: string | null
+  precio_normal: number | string
+  precio_oferta: number | string
+}
+
+export interface GetPromotionsGridParams {
+  canal?: string
+  tipo?: string
+  activa?: boolean
+  estado?: string
+  company_id?: number
+}
+
+export async function getPromotionsGrid(
+  params?: GetPromotionsGridParams,
+): Promise<PromotionGridRow[]> {
+  const qs = new URLSearchParams()
+  if (params?.canal?.trim()) qs.set("canal", params.canal.trim().toLowerCase())
+  if (params?.tipo?.trim()) qs.set("tipo", params.tipo.trim().toLowerCase())
+  if (params?.activa !== undefined) qs.set("activa", String(params.activa))
+  if (params?.estado?.trim()) qs.set("estado", params.estado.trim())
+  if (params?.company_id != null && Number.isFinite(params.company_id)) {
+    qs.set("company_id", String(Math.trunc(params.company_id)))
+  }
+  const suffix = qs.toString() ? `?${qs.toString()}` : ""
+  const res = await fetch(`${API_URL}/promotions/grid${suffix}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const t = await res.text()
+    throw new Error(t || "Error al cargar promociones")
+  }
+  const data = await res.json()
+  return Array.isArray(data) ? data : []
+}
+
+export interface PromotionItemPayload {
+  barcode: string
+  tipo_descuento: "porcentaje" | "precio_fijo"
+  valor: number
+  observacion?: string | null
+}
+
+export interface PromotionCompanyPayload {
+  company_id: number
+  price_list?: string | null
+}
+
+export interface CreatePromotionPayload {
+  tipo: "oferta" | "remate"
+  canal: "ruta" | "detalle"
+  fecha_inicio: string
+  fecha_fin: string
+  activa?: boolean
+  items: PromotionItemPayload[]
+  companies: PromotionCompanyPayload[]
+}
+
+export async function createPromotion(payload: CreatePromotionPayload): Promise<{
+  id: number
+  items_processed: number
+  snapshots_generated: number
+}> {
+  const res = await fetch(`${API_URL}/promotions`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  })
+  const text = await res.text()
+  if (!res.ok) {
+    let msg = "Error al crear la promoción"
+    try {
+      const j = JSON.parse(text) as { detail?: unknown }
+      if (j?.detail != null) {
+        msg =
+          typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail)
+      }
+    } catch {
+      if (text) msg = text
+    }
+    throw new Error(msg)
+  }
+  return JSON.parse(text) as { id: number; items_processed: number; snapshots_generated: number }
+}
+
+export async function togglePromotion(promotionId: number): Promise<{
+  id: number
+  tipo: string
+  canal: string
+  fecha_inicio: string
+  fecha_fin: string
+  activa: boolean
+  created_at: string
+}> {
+  const res = await fetch(`${API_URL}/promotions/${promotionId}/toggle`, {
+    method: "PUT",
+    headers: getAuthHeaders(),
+  })
+  const text = await res.text()
+  if (!res.ok) {
+    throw new Error(text || "Error al actualizar promoción")
+  }
+  return JSON.parse(text) as {
+    id: number
+    tipo: string
+    canal: string
+    fecha_inicio: string
+    fecha_fin: string
+    activa: boolean
+    created_at: string
+  }
+}
+
 export function logout() {
   if (typeof window !== "undefined") {
     localStorage.removeItem("token")
