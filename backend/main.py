@@ -18,6 +18,7 @@ from backend.routers import companies
 from backend.routers import dashboard
 from backend.routers import distribuidora
 from backend.routers import distribuidora_orders
+from backend.routers import distribuidora_planning
 from backend.routers import distribuidora_route_picking
 from backend.routers import distribuidora_route_planning
 from backend.routers import distribuidora_sync
@@ -159,6 +160,7 @@ app.include_router(margin_export.router)
 app.include_router(distribuidora.router)
 app.include_router(distribuidora_sync.router)
 app.include_router(distribuidora_orders.router)
+app.include_router(distribuidora_planning.router)
 app.include_router(distribuidora_route_planning.router)
 app.include_router(distribuidora_route_picking.router)
 
