@@ -6,9 +6,12 @@ from __future__ import annotations
 
 import logging
 import os
+import random
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
+
+import requests
 
 from backend.db import get_connection
 from backend.repositories.distribuidora.attributes_repo import replace_document_attributes
@@ -28,7 +31,7 @@ from backend.repositories.distribuidora.sync_repo import (
     set_sync_state,
     start_sync_log,
 )
-from backend.services.distribuidora.bsale_client import BsaleClient
+from backend.services.distribuidora.bsale_client import BASE_BSALE, BsaleClient
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +39,8 @@ ADVISORY_LOCK_KEY = 5_927_184_003
 COMPANY_ID = 3
 OFFICE_ID = 1
 LIMIT_BSALE = 50
+RESYNC_BSALE_BACKOFFS_SEC = (3, 5, 10, 20, 30)
+RESYNC_HTTP_MAX_ATTEMPTS = 5
 PROCESS_INCREMENTAL = "documents_incremental"
 PROCESS_RESYNC = "documents_resync"
 _FIRST_SYNC_CUTOFF = datetime(2010, 1, 1, tzinfo=timezone.utc)
@@ -50,11 +55,199 @@ def bsale_token_distribuidora_configured() -> bool:
     return bool(_bsale_token())
 
 
-def _next_month_start_utc(d: datetime) -> datetime:
-    y, m = d.year, d.month
-    if m == 12:
-        return datetime(y + 1, 1, 1, tzinfo=timezone.utc)
-    return datetime(y, m + 1, 1, tzinfo=timezone.utc)
+def _resync_page_limit() -> int:
+    raw = int(os.getenv("DISTRIBUIDORA_RESYNC_PAGE_LIMIT", str(LIMIT_BSALE)))
+    return max(25, min(50, raw))
+
+
+def _utc_day_timestamp_bounds(d: date) -> tuple[int, int]:
+    """00:00:00.000 — 23:59:59.999 UTC para un día calendario."""
+    start = datetime(d.year, d.month, d.day, 0, 0, 0, 0, tzinfo=timezone.utc)
+    end = datetime(d.year, d.month, d.day, 23, 59, 59, 999999, tzinfo=timezone.utc)
+    return int(start.timestamp()), int(end.timestamp())
+
+
+def _documents_get_resync(client: BsaleClient, params: dict[str, Any]) -> dict[str, Any]:
+    """
+    GET ``/documents.json`` con reintentos ante 502/503/504, 500 y errores de red.
+    Hasta 5 intentos con backoff 3 → 5 → 10 → 20 → 30 s entre reintentos.
+    """
+    url = f"{BASE_BSALE}/documents.json"
+    backoffs = RESYNC_BSALE_BACKOFFS_SEC
+    http_retries = 0
+    while True:
+        try:
+            r = client.session.get(
+                url,
+                headers={"access_token": client.access_token},
+                params=params,
+                timeout=90,
+            )
+        except requests.RequestException as e:
+            if http_retries >= RESYNC_HTTP_MAX_ATTEMPTS - 1:
+                raise RuntimeError(f"Bsale /documents.json red tras {RESYNC_HTTP_MAX_ATTEMPTS} intentos: {e}") from e
+            wait = backoffs[min(http_retries, len(backoffs) - 1)]
+            logger.warning(
+                "Retry intento %s (red) — esperando %ss: %s",
+                http_retries + 1,
+                wait,
+                e,
+            )
+            time.sleep(wait)
+            http_retries += 1
+            continue
+
+        if r.status_code == 401:
+            raise RuntimeError(
+                "Bsale 401 Unauthorized — revisar BSALE_TOKEN o BSALE_TOKEN_SPA"
+            )
+
+        if r.status_code == 429:
+            try:
+                wait = int(r.json().get("retry_after", 60))
+            except Exception:
+                wait = 60
+            logger.warning("Bsale 429 — esperando %s s", wait)
+            time.sleep(wait)
+            continue
+
+        if r.status_code in (500, 502, 503, 504):
+            if http_retries >= RESYNC_HTTP_MAX_ATTEMPTS - 1:
+                raise RuntimeError(
+                    f"Bsale HTTP {r.status_code} en /documents.json tras {RESYNC_HTTP_MAX_ATTEMPTS} intentos"
+                )
+            wait = backoffs[min(http_retries, len(backoffs) - 1)]
+            logger.warning(
+                "Retry intento %s por HTTP %s — esperando %ss",
+                http_retries + 1,
+                r.status_code,
+                wait,
+            )
+            time.sleep(wait)
+            http_retries += 1
+            continue
+
+        if not (200 <= r.status_code < 300):
+            raise RuntimeError(f"Bsale HTTP {r.status_code}: {(r.text or '')[:500]}")
+
+        return r.json()
+
+
+def _append_items_from_bsale_response(
+    items: list[dict[str, Any]],
+    pending: list[dict[str, Any]],
+) -> None:
+    for d in items:
+        row = document_dict_from_bsale(d, company_id=COMPANY_ID, default_office_id=OFFICE_ID)
+        if row is None:
+            continue
+        pending.append(row)
+
+
+def _flush_pending_when_large(
+    client: BsaleClient,
+    cur,
+    conn,
+    pending: list[dict[str, Any]],
+    stats: dict[str, Any],
+    *,
+    min_batch: int = 200,
+) -> None:
+    if len(pending) < min_batch:
+        return
+    to_save = list(pending)
+    pending.clear()
+    try:
+        upsert_documents(cur, to_save)
+        for r in to_save:
+            _refresh_document_children(
+                client,
+                cur,
+                int(r["document_id"]),
+                r.get("document_type_id"),
+                stats,
+            )
+        conn.commit()
+        stats["documents_processed"] += len(to_save)
+    except Exception as e:
+        logger.exception(
+            "distribuidora: lote documentos falló (%s filas), rollback y se continúa: %s",
+            len(to_save),
+            e,
+        )
+        try:
+            conn.rollback()
+        except Exception:
+            logger.exception("distribuidora: rollback tras error de lote")
+        stats["documents_batch_failures"] = int(stats.get("documents_batch_failures") or 0) + 1
+
+
+def _flush_pending_tail(
+    client: BsaleClient,
+    cur,
+    conn,
+    pending: list[dict[str, Any]],
+    stats: dict[str, Any],
+) -> None:
+    if not pending:
+        return
+    to_save = list(pending)
+    pending.clear()
+    try:
+        upsert_documents(cur, to_save)
+        for r in to_save:
+            _refresh_document_children(
+                client,
+                cur,
+                int(r["document_id"]),
+                r.get("document_type_id"),
+                stats,
+            )
+        conn.commit()
+        stats["documents_processed"] += len(to_save)
+    except Exception as e:
+        logger.exception(
+            "distribuidora: último lote documentos falló (%s filas), rollback: %s",
+            len(to_save),
+            e,
+        )
+        try:
+            conn.rollback()
+        except Exception:
+            logger.exception("distribuidora: rollback tras error de último lote")
+        stats["documents_batch_failures"] = int(stats.get("documents_batch_failures") or 0) + 1
+
+
+def _fetch_documents_single_day_resync(
+    client: BsaleClient,
+    cur,
+    conn,
+    day: date,
+    stats: dict[str, Any],
+    *,
+    page_limit: int | None = None,
+) -> None:
+    """Un día UTC completo: paginación con offset reiniciado y pausas entre llamadas a Bsale."""
+    pl = page_limit if page_limit is not None else _resync_page_limit()
+    desde_ts, hasta_ts = _utc_day_timestamp_bounds(day)
+    pending: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        logger.info("Offset actual: %s (día %s)", offset, day.isoformat())
+        params = {
+            "limit": pl,
+            "offset": offset,
+            "emissiondaterange": f"[{desde_ts},{hasta_ts}]",
+        }
+        data = _documents_get_resync(client, params)
+        items = data.get("items") or []
+        if not items:
+            break
+        _append_items_from_bsale_response(items, pending)
+        _flush_pending_when_large(client, cur, conn, pending, stats)
+        offset += pl
+        time.sleep(random.uniform(0.2, 0.5))
+    _flush_pending_tail(client, cur, conn, pending, stats)
 
 
 def _refresh_document_children(
@@ -156,67 +349,12 @@ def _fetch_documents_window(
         if not items:
             break
 
-        for d in items:
-            row = document_dict_from_bsale(d, company_id=COMPANY_ID, default_office_id=OFFICE_ID)
-            if row is None:
-                continue
-            pending.append(row)
-
-        if len(pending) >= 200:
-            to_save = list(pending)
-            pending.clear()
-            try:
-                upsert_documents(cur, to_save)
-                for r in to_save:
-                    _refresh_document_children(
-                        client,
-                        cur,
-                        int(r["document_id"]),
-                        r.get("document_type_id"),
-                        stats,
-                    )
-                conn.commit()
-                stats["documents_processed"] += len(to_save)
-            except Exception as e:
-                logger.exception(
-                    "distribuidora: lote documentos falló (%s filas), rollback y se continúa: %s",
-                    len(to_save),
-                    e,
-                )
-                try:
-                    conn.rollback()
-                except Exception:
-                    logger.exception("distribuidora: rollback tras error de lote")
-                stats["documents_batch_failures"] = int(stats.get("documents_batch_failures") or 0) + 1
+        _append_items_from_bsale_response(items, pending)
+        _flush_pending_when_large(client, cur, conn, pending, stats)
 
         offset += LIMIT_BSALE
 
-    if pending:
-        to_save = list(pending)
-        pending.clear()
-        try:
-            upsert_documents(cur, to_save)
-            for r in to_save:
-                _refresh_document_children(
-                    client,
-                    cur,
-                    int(r["document_id"]),
-                    r.get("document_type_id"),
-                    stats,
-                )
-            conn.commit()
-            stats["documents_processed"] += len(to_save)
-        except Exception as e:
-            logger.exception(
-                "distribuidora: último lote documentos falló (%s filas), rollback: %s",
-                len(to_save),
-                e,
-            )
-            try:
-                conn.rollback()
-            except Exception:
-                logger.exception("distribuidora: rollback tras error de último lote")
-            stats["documents_batch_failures"] = int(stats.get("documents_batch_failures") or 0) + 1
+    _flush_pending_tail(client, cur, conn, pending, stats)
 
     stats["documents_inserted"] = stats["documents_processed"]
     stats["documents_updated"] = stats["documents_processed"]
@@ -408,7 +546,7 @@ def resync_bsale_distribuidora_range(
         "attributes_rows": 0,
         "references_rows": 0,
         "sellers_filled": 0,
-        "months": 0,
+        "days_processed": 0,
         "duration_seconds": 0.0,
         "omitido_concurrencia": False,
         "errors": None,
@@ -461,30 +599,45 @@ def resync_bsale_distribuidora_range(
             emission_from, emission_to = emission_to, emission_from
 
         logger.info(
-            "Resync distribuidora desde %s hasta %s (UTC)",
+            "Resync distribuidora desde %s hasta %s (UTC), modo día a día",
             emission_from.isoformat(),
             emission_to.isoformat(),
         )
 
         client = BsaleClient(token)
-        chunk_start = emission_from
-        while chunk_start < emission_to:
-            month_floor = chunk_start.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-            chunk_end = min(_next_month_start_utc(month_floor), emission_to)
-            w_desde = int(chunk_start.timestamp())
-            w_hasta = int(chunk_end.timestamp())
-            if w_desde < w_hasta:
-                stats["months"] += 1
-                _fetch_documents_window(
-                    client,
-                    cur,
-                    conn,
-                    desde_ts=w_desde,
-                    hasta_ts=w_hasta,
-                    stats=stats,
-                    log_id=None,
-                )
-            chunk_start = chunk_end
+        start_d = emission_from.astimezone(timezone.utc).date()
+        end_d = emission_to.astimezone(timezone.utc).date()
+        page_lim = _resync_page_limit()
+
+        current = start_d
+        while current <= end_d:
+            logger.info("Procesando día: %s", current.isoformat())
+            while True:
+                try:
+                    _fetch_documents_single_day_resync(
+                        client,
+                        cur,
+                        conn,
+                        current,
+                        stats,
+                        page_limit=page_lim,
+                    )
+                    logger.info("Día completado correctamente: %s", current.isoformat())
+                    stats["days_processed"] += 1
+                    break
+                except Exception as e:
+                    logger.exception(
+                        "distribuidora resync: día %s falló; se reintenta el mismo día: %s",
+                        current.isoformat(),
+                        e,
+                    )
+                    time.sleep(5)
+
+        stats["documents_inserted"] = stats["documents_processed"]
+        stats["documents_updated"] = stats["documents_processed"]
+        stats["details_inserted"] = stats.get("details_rows", 0)
+        stats["attributes_inserted"] = stats.get("attributes_rows", 0)
+        stats["references_inserted"] = stats.get("references_rows", 0)
 
         insert_sync_status_row(
             cur,
@@ -508,13 +661,15 @@ def resync_bsale_distribuidora_range(
             process_name=PROCESS_RESYNC,
             last_sync=emission_to,
             last_status="ok",
-            last_message=f"months={stats['months']} processed={stats['documents_processed']}",
+            last_message=(
+                f"days={stats['days_processed']} processed={stats['documents_processed']}"
+            ),
         )
         conn.commit()
         cur.close()
         logger.info(
-            "resync distribuidora OK: months=%s processed=%s s=%.2f",
-            stats["months"],
+            "resync distribuidora OK: days=%s processed=%s s=%.2f",
+            stats["days_processed"],
             stats["documents_processed"],
             time.perf_counter() - t0,
         )

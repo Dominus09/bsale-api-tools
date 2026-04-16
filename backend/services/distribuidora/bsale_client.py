@@ -19,6 +19,10 @@ class BsaleClient:
         self._token = token
         self.session = requests.Session()
 
+    @property
+    def access_token(self) -> str:
+        return self._token
+
     def get(
         self,
         path: str,

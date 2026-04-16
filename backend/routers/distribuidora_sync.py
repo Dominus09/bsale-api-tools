@@ -58,7 +58,8 @@ def post_resync_distribuidora(
     body: ResyncDistribuidoraBody | None = None,
 ):
     """
-    Re-sync por rango de emisión (por meses en el job). Sin cuerpo: desde MIN(emission_date) en BD.
+    Re-sync por rango de emisión: el job recorre **día a día** en segundo plano (ventanas pequeñas a Bsale).
+    Sin cuerpo: desde MIN(emission_date) en BD (o fallback días).
     """
     if not bsale_token_distribuidora_configured():
         raise HTTPException(
@@ -71,7 +72,10 @@ def post_resync_distribuidora(
         b.emission_from,
         b.emission_to,
     )
-    return {"status": "resync encolado", "range": {"emission_from": b.emission_from, "emission_to": b.emission_to}}
+    return {
+        "status": "resync iniciado",
+        "range": {"emission_from": b.emission_from, "emission_to": b.emission_to},
+    }
 
 
 @router.post("/sync-distribuidora-related")
