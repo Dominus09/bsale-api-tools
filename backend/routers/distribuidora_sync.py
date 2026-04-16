@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
@@ -16,15 +18,21 @@ from backend.services.distribuidora.sync_service import (
 )
 
 router = APIRouter(prefix="/erp", tags=["ERP Distribuidora"])
+logger = logging.getLogger(__name__)
 
 
 class ResyncDistribuidoraBody(BaseModel):
-    """Rango opcional (UTC). Fechas YYYY-MM-DD o ISO8601."""
+    """Rango opcional (UTC). Fechas ``YYYY-MM-DD`` o ISO8601.
 
+    Se aceptan ``start_date`` / ``end_date`` (preferido) o ``emission_from`` / ``emission_to`` (alias).
+    """
+
+    start_date: str | None = Field(default=None, description="Inicio inclusive (alias de emission_from)")
+    end_date: str | None = Field(default=None, description="Fin inclusive (alias de emission_to)")
     emission_from: str | None = Field(default=None, description="Inicio inclusive (fecha emisión)")
     emission_to: str | None = Field(default=None, description="Fin inclusive")
 
-    @field_validator("emission_from", "emission_to", mode="before")
+    @field_validator("start_date", "end_date", "emission_from", "emission_to", mode="before")
     @classmethod
     def _reject_garbage_date_strings(cls, v: object) -> str | None:
         if v is None:
@@ -67,14 +75,18 @@ def post_resync_distribuidora(
             detail="Defina BSALE_TOKEN o BSALE_TOKEN_SPA para ejecutar el resync.",
         )
     b = body or ResyncDistribuidoraBody()
+    emission_from = b.start_date or b.emission_from
+    emission_to = b.end_date or b.emission_to
+    if emission_from is not None or emission_to is not None:
+        logger.info("Resync distribuidora desde %s hasta %s", emission_from, emission_to)
     background_tasks.add_task(
         run_resync_distribuidora_background,
-        b.emission_from,
-        b.emission_to,
+        emission_from,
+        emission_to,
     )
     return {
         "status": "resync iniciado",
-        "range": {"emission_from": b.emission_from, "emission_to": b.emission_to},
+        "range": {"emission_from": emission_from, "emission_to": emission_to},
     }
 
 
