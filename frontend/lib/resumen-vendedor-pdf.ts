@@ -3,6 +3,7 @@ import { format } from "date-fns"
 import type { DistribuidoraResumenVendedorJson } from "@/lib/api"
 import { buildOperationalInsights } from "@/lib/resumen-vendedor-analisis"
 import type { PdfClienteColumn } from "@/lib/resumen-vendedor-pdf-clientes-layout"
+import { buildPdfWeeklyRouteMapDataUrl } from "@/lib/resumen-vendedor-pdf-route-canvas"
 import {
   buildClienteColumnsJueVie,
   buildClienteColumnsLunMie,
@@ -130,8 +131,8 @@ export async function captureMapElementJpeg(mapElement: HTMLElement): Promise<st
 }
 
 /**
- * Mapa semanal en un rectángulo fijo: escala para caber, centrado (área máxima sin deformar).
- * Sin barra de título extra (el encabezado de página ya lo describe).
+ * Mapa en el rectángulo del PDF: imagen escalada al **ancho y alto del recuadro**
+ * (misma relación de aspecto que el raster generado → sin bandas vacías).
  */
 async function drawWeeklyMapInBox(
   doc: import("jspdf").jsPDF,
@@ -147,18 +148,10 @@ async function drawWeeklyMapInBox(
     img.onerror = () => reject(new Error("No se pudo leer la imagen del mapa"))
     img.src = dataUrl
   })
-  const aspect = img.width / img.height
-  let wMm = boxW
-  let hMm = wMm / aspect
-  if (hMm > boxH) {
-    hMm = boxH
-    wMm = hMm * aspect
-  }
-  const x0 = boxX + (boxW - wMm) / 2
-  const y0 = boxY + (boxH - hMm) / 2
+  doc.addImage(dataUrl, "JPEG", boxX, boxY, boxW, boxH)
   doc.setDrawColor(...BORDER_LIGHT)
+  doc.setLineWidth(0.3)
   doc.rect(boxX - 0.25, boxY - 0.25, boxW + 0.5, boxH + 0.5, "S")
-  doc.addImage(dataUrl, "JPEG", x0, y0, wMm, hMm)
 }
 
 function truncateLineToWidth(
@@ -310,15 +303,27 @@ export async function exportResumenVendedorPdf(params: ExportResumenVendedorPdfP
 
   const mapBottom = PAGE_H_MM - MARGIN_MM - 2
   const mapTop = y + 2
+  /** Usa todo el espacio disponible bajo el resumen (típicamente ~80 % de la hoja si el resumen es breve). */
   const mapH = Math.max(60, mapBottom - mapTop)
 
-  if (mapBlocks.length > 0 && mapBlocks[0].dataUrl) {
-    await drawWeeklyMapInBox(doc, MARGIN_MM, mapTop, INNER_W, mapH, mapBlocks[0].dataUrl)
+  const mapAspect = INNER_W / mapH
+  const rasterW = 2400
+  const rasterH = Math.max(900, Math.round(rasterW / mapAspect))
+
+  const mapFromGeometry = await buildPdfWeeklyRouteMapDataUrl(resumen, {
+    width: rasterW,
+    height: rasterH,
+    paddingPx: 30,
+  })
+  const mapDataUrl = mapFromGeometry ?? mapBlocks[0]?.dataUrl ?? null
+
+  if (mapDataUrl) {
+    await drawWeeklyMapInBox(doc, MARGIN_MM, mapTop, INNER_W, mapH, mapDataUrl)
   } else {
     y = ensureSpace(doc, y, 14)
     doc.setFontSize(9)
     doc.setTextColor(...TEXT_MUTED)
-    doc.text("Sin imagen de mapa disponible.", MARGIN_MM, mapTop + 8)
+    doc.text("Sin geometría de ruta ni imagen de mapa para mostrar.", MARGIN_MM, mapTop + 8)
   }
 
   const colsLunMie = buildClienteColumnsLunMie(resumen)
