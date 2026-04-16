@@ -286,18 +286,22 @@ def promotions_grid(
         where.append("ps.company_id = %s")
         params.append(int(company_id))
     if estado is not None and str(estado).strip():
+        estado_param = str(estado).strip().capitalize()
+        print("Estado recibido:", estado_param)
         where.append(
-            """(
-                CASE
-                    WHEN NOT p.activa THEN 'Inactiva'
-                    WHEN CURRENT_DATE < p.fecha_inicio THEN 'Programada'
-                    WHEN CURRENT_DATE > p.fecha_fin THEN 'Vencida'
-                    ELSE 'Activa'
-                END
-            ) = %s"""
+            """CASE
+WHEN NOT p.activa THEN 'Inactiva'
+WHEN CURRENT_DATE < p.fecha_inicio THEN 'Programada'
+WHEN CURRENT_DATE > p.fecha_fin THEN 'Vencida'
+ELSE 'Activa'
+END = %s"""
         )
-        params.append(str(estado).strip())
+        params.append(estado_param)
 
+    # Columnas validadas contra el repo (no sustituyen \d en tu BD):
+    # - bsale.products_master: barcode, product_name, variant_name, product_type (products_master_schema.sql)
+    # - bsale.variants: company_id, bsale_id, product_id, code, bar_code, description (margin_analysis_view.sql)
+    # - bsale.product_types: company_id, bsale_id, name, state — no usado en este SELECT
     sql = f"""
         SELECT
             ps.promotion_id AS promotion_id,
@@ -344,14 +348,17 @@ def promotions_grid(
            AND pc.company_id = ps.company_id
         LEFT JOIN bsale.products_master pm
             ON pm.barcode = ps.barcode
-        LEFT JOIN LATERAL (
-            SELECT v.description
+        LEFT JOIN (
+            SELECT DISTINCT ON (v.company_id, v.bar_code)
+                v.company_id,
+                v.bar_code,
+                v.description
             FROM bsale.variants v
-            WHERE v.company_id = ps.company_id
-              AND v.bar_code = ps.barcode
-            ORDER BY v.bsale_id
-            LIMIT 1
-        ) vv ON TRUE
+            WHERE v.bar_code IS NOT NULL
+            ORDER BY v.company_id, v.bar_code, v.bsale_id
+        ) vv
+            ON vv.company_id = ps.company_id
+           AND vv.bar_code = ps.barcode
         WHERE {" AND ".join(where)}
         ORDER BY p.fecha_inicio DESC,
                  COALESCE(pm.product_name, '') ASC
@@ -360,9 +367,26 @@ def promotions_grid(
     conn = get_connection()
     cur = conn.cursor()
     try:
-        cur.execute(sql, tuple(params))
-        cols = [d[0] for d in cur.description]
-        return [dict(zip(cols, row)) for row in cur.fetchall()]
+        print("[promotions/grid] SQL:\n", sql.strip())
+        print("[promotions/grid] params:", repr(params))
+        try:
+            mogrified = cur.mogrify(sql, tuple(params))
+            print(
+                "[promotions/grid] mogrify:",
+                mogrified.decode("utf-8", errors="replace") if mogrified else "(null)",
+            )
+        except Exception as mog_e:
+            print("[promotions/grid] mogrify skip:", mog_e)
+
+        try:
+            cur.execute(sql, tuple(params))
+            cols = [d[0] for d in cur.description]
+            rows_out = [dict(zip(cols, row)) for row in cur.fetchall()]
+        except Exception as e:
+            print("ERROR GRID:", e)
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
+        return rows_out
     finally:
         cur.close()
         conn.close()
