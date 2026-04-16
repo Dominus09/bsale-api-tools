@@ -279,56 +279,63 @@ def promotions_grid(
         where.append("p.activa = %s")
         params.append(activa)
     if company_id is not None:
-        where.append("sps.company_id = %s")
+        where.append("ps.company_id = %s")
         params.append(int(company_id))
 
     sql = f"""
         SELECT
             COALESCE(pm.product_type, '') AS tipo_producto,
             COALESCE(pm.product_name, '') AS producto,
-            COALESCE(NULLIF(btrim(pm.variant_name), ''), vv.description, '') AS variante,
-            btrim(sps.barcode) AS codigo_barras,
+            COALESCE(NULLIF(pm.variant_name, ''), vv.description, '') AS variante,
+            ps.barcode AS codigo_barras,
+            ROUND(
+                CASE
+                    WHEN ps.precio_normal > 0
+                    THEN ((ps.precio_normal - ps.precio_oferta) / ps.precio_normal) * 100
+                    ELSE 0
+                END,
+                2
+            ) AS descuento_porcentaje,
             CASE
-                WHEN pi.tipo_descuento = 'porcentaje' THEN concat(trim(to_char(pi.valor, 'FM999999999990.99')), '%')
-                WHEN pi.tipo_descuento = 'precio_fijo' THEN concat(trim(to_char(pi.valor, 'FM999999999990.99')), ' (fijo)')
-                ELSE trim(to_char(pi.valor, 'FM999999999990.99'))
-            END AS descuento,
+                WHEN pi.tipo_descuento = 'porcentaje' THEN CONCAT(pi.valor::text, '%')
+                ELSE 'precio fijo'
+            END AS descuento_texto,
             p.fecha_inicio AS fecha_inicio,
             p.fecha_fin AS fecha_fin,
             p.tipo AS tipo,
             pi.observacion AS observacion,
             p.canal AS canal,
             CASE
-                WHEN p.activa IS TRUE
-                     AND CURRENT_DATE BETWEEN p.fecha_inicio AND p.fecha_fin
-                THEN 'Activa'
-                ELSE 'Inactiva'
+                WHEN NOT p.activa THEN 'Inactiva'
+                WHEN CURRENT_DATE < p.fecha_inicio THEN 'Programada'
+                WHEN CURRENT_DATE > p.fecha_fin THEN 'Vencida'
+                ELSE 'Activa'
             END AS estado,
-            sps.company_id AS company_id,
-            COALESCE(NULLIF(btrim(sps.price_list), ''), NULLIF(btrim(pc.price_list), '')) AS price_list,
-            sps.precio_normal AS precio_normal,
-            sps.precio_oferta AS precio_oferta
-        FROM app.promotion_price_snapshot sps
+            ps.company_id AS company_id,
+            COALESCE(ps.price_list, pc.price_list) AS price_list,
+            ps.precio_normal AS precio_normal,
+            ps.precio_oferta AS precio_oferta
+        FROM app.promotion_price_snapshot ps
         INNER JOIN app.promotions p
-            ON p.id = sps.promotion_id
+            ON p.id = ps.promotion_id
         INNER JOIN app.promotion_items pi
-            ON pi.promotion_id = sps.promotion_id
-           AND btrim(lower(pi.barcode)) = btrim(lower(sps.barcode))
+            ON pi.promotion_id = p.id
+           AND pi.barcode = ps.barcode
         INNER JOIN app.promotion_companies pc
-            ON pc.promotion_id = sps.promotion_id
-           AND pc.company_id = sps.company_id
+            ON pc.promotion_id = p.id
+           AND pc.company_id = ps.company_id
         LEFT JOIN bsale.products_master pm
-            ON btrim(lower(pm.barcode)) = btrim(lower(sps.barcode))
+            ON pm.barcode = ps.barcode
         LEFT JOIN LATERAL (
             SELECT v.description
             FROM bsale.variants v
-            WHERE v.company_id = sps.company_id
-              AND btrim(lower(v.bar_code)) = btrim(lower(sps.barcode))
+            WHERE v.company_id = ps.company_id
+              AND v.bar_code = ps.barcode
             ORDER BY v.bsale_id
             LIMIT 1
         ) vv ON TRUE
         WHERE {" AND ".join(where)}
-        ORDER BY p.fecha_inicio DESC NULLS LAST,
+        ORDER BY p.fecha_inicio DESC,
                  COALESCE(pm.product_name, '') ASC
     """
 
