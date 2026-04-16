@@ -33,6 +33,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import * as TooltipPrimitive from "@radix-ui/react-tooltip"
+import { TooltipContent, TooltipProvider } from "@/components/ui/tooltip"
+import { cn } from "@/lib/utils"
 import {
   createPromotion,
   getCompanies,
@@ -84,20 +87,31 @@ function estadoBadgeClass(estado: string) {
   }
 }
 
-function formatMoney(n: number | string | null | undefined) {
-  const v = typeof n === "string" ? parseFloat(n) : Number(n)
-  if (!Number.isFinite(v)) return "—"
-  return new Intl.NumberFormat("es-CL", {
-    style: "currency",
-    currency: "CLP",
-    maximumFractionDigits: 0,
-  }).format(v)
-}
-
-function formatDate(s: string | null | undefined) {
-  if (!s) return "—"
-  const d = s.slice(0, 10)
-  return d || "—"
+function EllipsisTooltip({
+  text,
+  className,
+}: {
+  text: string | null | undefined
+  className?: string
+}) {
+  const label = (text ?? "").trim() || "—"
+  return (
+    <TooltipPrimitive.Root>
+      <TooltipPrimitive.Trigger asChild>
+        <div
+          className={cn(
+            "block w-full max-w-full cursor-default truncate text-left",
+            className,
+          )}
+        >
+          {label}
+        </div>
+      </TooltipPrimitive.Trigger>
+      <TooltipContent side="top" className="max-w-sm break-words">
+        {label}
+      </TooltipContent>
+    </TooltipPrimitive.Root>
+  )
 }
 
 export default function PromotionsPage() {
@@ -421,23 +435,18 @@ export default function PromotionsPage() {
             </div>
           ) : (
             <ScrollArea className="h-[min(70vh,720px)] w-full">
+              <TooltipProvider delayDuration={250}>
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="sticky left-0 z-10 bg-card">Activa</TableHead>
+                    <TableHead className="max-w-[120px]">Estado</TableHead>
                     <TableHead>Tipo producto</TableHead>
-                    <TableHead>Producto</TableHead>
-                    <TableHead>Variante</TableHead>
-                    <TableHead>Código barras</TableHead>
-                    <TableHead>Precio normal</TableHead>
-                    <TableHead>Precio oferta</TableHead>
-                    <TableHead>Descuento %</TableHead>
-                    <TableHead>Inicio</TableHead>
-                    <TableHead>Fin</TableHead>
+                    <TableHead className="min-w-[250px]">Producto</TableHead>
+                    <TableHead className="min-w-[250px]">Variante</TableHead>
+                    <TableHead className="max-w-[120px]">Código barras</TableHead>
                     <TableHead>Tipo</TableHead>
                     <TableHead>Observación</TableHead>
-                    <TableHead>Canal</TableHead>
-                    <TableHead>Estado</TableHead>
+                    <TableHead className="max-w-[100px]">Canal</TableHead>
                     <TableHead>Empresa</TableHead>
                     <TableHead>Lista precio</TableHead>
                   </TableRow>
@@ -445,7 +454,7 @@ export default function PromotionsPage() {
                 <TableBody>
                   {rows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={15} className="text-center text-muted-foreground">
+                      <TableCell colSpan={10} className="text-center text-muted-foreground">
                         Sin filas para los filtros actuales.
                       </TableCell>
                     </TableRow>
@@ -454,43 +463,53 @@ export default function PromotionsPage() {
                       <TableRow
                         key={`${r.promotion_id}-${r.company_id}-${r.codigo_barras}`}
                       >
-                        <TableCell className="sticky left-0 z-10 bg-card">
-                          <Switch
-                            checked={!!r.activa}
-                            disabled={togglingId === r.promotion_id}
-                            onCheckedChange={() => void onToggleRow(r.promotion_id)}
+                        <TableCell className="max-w-[120px] align-top">
+                          <div className="flex min-w-0 max-w-[120px] flex-col gap-2">
+                            <Badge
+                              className={cn(
+                                "w-full max-w-full justify-center truncate font-normal",
+                                estadoBadgeClass(r.estado),
+                              )}
+                            >
+                              {r.estado}
+                            </Badge>
+                            <Switch
+                              checked={!!r.activa}
+                              disabled={togglingId === r.promotion_id}
+                              title="Activa (cabecera promoción)"
+                              onCheckedChange={() => void onToggleRow(r.promotion_id)}
+                            />
+                          </div>
+                        </TableCell>
+                        <TableCell className="max-w-[180px] truncate text-sm">
+                          {r.tipo_producto || "—"}
+                        </TableCell>
+                        <TableCell className="min-w-[250px] max-w-[250px] p-2 align-top">
+                          <EllipsisTooltip
+                            text={r.producto}
+                            className="min-w-0 max-w-full text-sm"
                           />
                         </TableCell>
-                        <TableCell className="max-w-[120px] truncate">{r.tipo_producto}</TableCell>
-                        <TableCell className="max-w-[160px] truncate">{r.producto}</TableCell>
-                        <TableCell className="max-w-[120px] truncate">{r.variante}</TableCell>
-                        <TableCell className="font-mono text-xs">{r.codigo_barras}</TableCell>
-                        <TableCell>{formatMoney(r.precio_normal)}</TableCell>
-                        <TableCell>{formatMoney(r.precio_oferta)}</TableCell>
-                        <TableCell>
-                          {(() => {
-                            const d = Number(r.descuento_porcentaje)
-                            return Number.isFinite(d) ? d.toFixed(2) : "—"
-                          })()}
-                          %
-                          <span className="text-muted-foreground ml-1 text-xs">
-                            ({r.descuento_texto})
-                          </span>
+                        <TableCell className="min-w-[250px] max-w-[250px] p-2 align-top">
+                          <EllipsisTooltip
+                            text={r.variante}
+                            className="min-w-0 max-w-full text-sm"
+                          />
                         </TableCell>
-                        <TableCell>{formatDate(r.fecha_inicio)}</TableCell>
-                        <TableCell>{formatDate(r.fecha_fin)}</TableCell>
+                        <TableCell className="max-w-[120px] truncate font-mono text-xs">
+                          {r.codigo_barras}
+                        </TableCell>
                         <TableCell className="capitalize">{r.tipo}</TableCell>
-                        <TableCell className="max-w-[140px] truncate text-sm">
+                        <TableCell className="max-w-[200px] truncate text-sm">
                           {r.observacion || "—"}
                         </TableCell>
-                        <TableCell className="capitalize">{r.canal}</TableCell>
-                        <TableCell>
-                          <Badge className={estadoBadgeClass(r.estado)}>{r.estado}</Badge>
+                        <TableCell className="max-w-[100px] truncate capitalize">
+                          {r.canal}
                         </TableCell>
-                        <TableCell className="max-w-[160px] truncate text-sm">
+                        <TableCell className="max-w-[200px] truncate text-sm">
                           {companyNameById.get(r.company_id) ?? `ID ${r.company_id}`}
                         </TableCell>
-                        <TableCell className="max-w-[120px] truncate text-sm">
+                        <TableCell className="max-w-[140px] truncate text-sm">
                           {r.price_list || "—"}
                         </TableCell>
                       </TableRow>
@@ -498,6 +517,7 @@ export default function PromotionsPage() {
                   )}
                 </TableBody>
               </Table>
+              </TooltipProvider>
             </ScrollArea>
           )}
         </CardContent>
