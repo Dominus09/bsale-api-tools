@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date
-
 from fastapi import APIRouter, BackgroundTasks, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from backend.services.distribuidora.orders_service import get_sync_status_payload
 from backend.services.distribuidora.sync_related_service import (
@@ -25,6 +23,18 @@ class ResyncDistribuidoraBody(BaseModel):
 
     emission_from: str | None = Field(default=None, description="Inicio inclusive (fecha emisión)")
     emission_to: str | None = Field(default=None, description="Fin inclusive")
+
+    @field_validator("emission_from", "emission_to", mode="before")
+    @classmethod
+    def _reject_garbage_date_strings(cls, v: object) -> str | None:
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            return str(v).strip() or None
+        t = v.strip()
+        if not t or t.lower() in ("string", "null", "undefined", "none", "nan", "-"):
+            return None
+        return t
 
 
 @router.post("/sync-distribuidora")

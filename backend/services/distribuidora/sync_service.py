@@ -450,7 +450,8 @@ def resync_bsale_distribuidora_range(
             row = cur.fetchone()
             min_em = row[0] if row and row[0] else None
             if min_em is None:
-                emission_from = now - timedelta(days=365)
+                fb_days = max(1, int(os.getenv("DISTRIBUIDORA_RESYNC_FALLBACK_DAYS", "90")))
+                emission_from = now - timedelta(days=fb_days)
             else:
                 emission_from = min_em if min_em.tzinfo else min_em.replace(tzinfo=timezone.utc)
         elif emission_from.tzinfo is None:
@@ -458,6 +459,12 @@ def resync_bsale_distribuidora_range(
 
         if emission_from > emission_to:
             emission_from, emission_to = emission_to, emission_from
+
+        logger.info(
+            "Resync distribuidora desde %s hasta %s (UTC)",
+            emission_from.isoformat(),
+            emission_to.isoformat(),
+        )
 
         client = BsaleClient(token)
         chunk_start = emission_from
@@ -555,16 +562,28 @@ def run_resync_distribuidora_background(
     emission_from_iso: str | None = None,
     emission_to_iso: str | None = None,
 ) -> None:
+    _GARBAGE = frozenset(
+        ("", "string", "null", "undefined", "none", "nan", "-"),
+    )
+
     def _parse(s: str | None) -> datetime | None:
-        if not s or not str(s).strip():
+        if s is None:
             return None
-        t = str(s).strip()
+        if not isinstance(s, str):
+            t = str(s).strip()
+        else:
+            t = s.strip()
+        if not t or t.lower() in _GARBAGE:
+            return None
         try:
-            if len(t) == 10:
+            if len(t) == 10 and t[4] == "-" and t[7] == "-":
                 return datetime.strptime(t, "%Y-%m-%d").replace(tzinfo=timezone.utc)
             return datetime.fromisoformat(t.replace("Z", "+00:00"))
         except ValueError:
-            logger.warning("fecha resync inválida %r — se ignora", s)
+            logger.warning(
+                "fecha resync inválida %r — se usará rango por defecto (MIN en BD o fallback días)",
+                s,
+            )
             return None
 
     try:
