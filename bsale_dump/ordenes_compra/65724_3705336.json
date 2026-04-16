@@ -1,0 +1,199 @@
+{
+  "document": {
+    "href": "https://api.bsale.io/v1/documents/3705336.json",
+    "id": 3705336,
+    "emissionDate": 1775520000,
+    "expirationDate": 1775520000,
+    "generationDate": 1775579177,
+    "number": 65724,
+    "serialNumber": null,
+    "trackingNumber": "",
+    "totalAmount": 223498,
+    "netAmount": 160213,
+    "taxAmount": 63285,
+    "exemptAmount": 0,
+    "notExemptAmount": 160213,
+    "exportTotalAmount": 0,
+    "exportNetAmount": 0,
+    "exportTaxAmount": 0,
+    "exportExemptAmount": 0,
+    "commissionRate": 0,
+    "commissionNetAmount": 0,
+    "commissionTaxAmount": 0,
+    "commissionTotalAmount": 0,
+    "percentageTaxWithheld": 0.0,
+    "purchaseTaxAmount": 0,
+    "purchaseTotalAmount": 0,
+    "address": "Balmaceda #229 ",
+    "municipality": "Castro ",
+    "city": "Castro",
+    "urlTimbre": null,
+    "urlPublicView": "https://app2.bsale.cl/view/21884/6ba62fc1afb4?sfd=99",
+    "urlPdf": "https://app2.bsale.cl/view/21884/6ba62fc1afb4.pdf?sfd=99",
+    "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/6ba62fc1afb4",
+    "urlPdfOriginal": "https://app2.bsale.cl/view/21884/6ba62fc1afb4.pdf",
+    "token": "6ba62fc1afb4",
+    "state": 0,
+    "commercialState": 0,
+    "cancellationStatus": 0,
+    "cancellationDate": null,
+    "urlXml": "https://api.bsale.cl/v1/21884/files/6ba62fc1afb4.xml",
+    "ted": null,
+    "salesId": null,
+    "informedSii": 2,
+    "responseMsgSii": null,
+    "document_type": {
+      "href": "https://api.bsale.io/v1/document_types/33.json",
+      "id": "33"
+    },
+    "client": {
+      "href": "https://api.bsale.io/v1/clients/2920.json",
+      "id": "2920"
+    },
+    "office": {
+      "href": "https://api.bsale.io/v1/offices/1.json",
+      "id": "1"
+    },
+    "user": {
+      "href": "https://api.bsale.io/v1/users/56.json",
+      "id": "56"
+    },
+    "coin": {
+      "href": "https://api.bsale.io/v1/coins/1.json",
+      "id": "1"
+    },
+    "priceList": {
+      "href": "https://api.bsale.io/v1/price_lists/14.json",
+      "id": "14"
+    },
+    "references": {
+      "href": "https://api.bsale.io/v1/documents/3705336/references.json"
+    },
+    "document_taxes": {
+      "href": "https://api.bsale.io/v1/documents/3705336/document_taxes.json"
+    },
+    "details": {
+      "href": "https://api.bsale.io/v1/documents/3705336/details.json"
+    },
+    "sellers": {
+      "href": "https://api.bsale.io/v1/documents/3705336/sellers.json"
+    },
+    "attributes": {
+      "href": "https://api.bsale.io/v1/documents/3705336/attributes.json"
+    },
+    "payments": {
+      "href": "https://api.bsale.io/v1/documents/3705336/payments.json"
+    }
+  },
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3705336/details.json",
+    "count": 2,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/documents/3705336/details/8672658.json",
+        "id": 8672658,
+        "lineNumber": 0,
+        "quantity": 30.0,
+        "netUnitValue": 2670,
+        "netUnitValueRaw": 2670.236559139786,
+        "totalUnitValue": 3725,
+        "netAmount": 80106,
+        "taxAmount": 31643,
+        "totalAmount": 111749,
+        "netDiscount": 1635,
+        "totalDiscount": 2281,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/11430.json",
+          "id": 11430,
+          "description": "BLANCO 2.0 LT (SEC 6)",
+          "code": "7804463000033"
+        },
+        "note": "",
+        "relatedDetailId": 8672224,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 2.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705336/details/8672659.json",
+        "id": 8672659,
+        "lineNumber": 0,
+        "quantity": 30.0,
+        "netUnitValue": 2670,
+        "netUnitValueRaw": 2670.236559139786,
+        "totalUnitValue": 3725,
+        "netAmount": 80107,
+        "taxAmount": 31642,
+        "totalAmount": 111749,
+        "netDiscount": 1635,
+        "totalDiscount": 2281,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/11431.json",
+          "id": 11431,
+          "description": "TINTO 2.0 LT (SEC 6)",
+          "code": "7804463000026"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 2.0
+      }
+    ]
+  },
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3705336/attributes.json",
+    "count": 4,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/44.json",
+        "id": 44,
+        "name": "TIPO DE DOCUMENTO A GENERAR",
+        "value": "Boleta"
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/45.json",
+        "id": 45,
+        "name": "NOMBRE FANTASIA",
+        "value": "Hotel tierra isla "
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/46.json",
+        "id": 46,
+        "name": "FORMA DE PAGO",
+        "value": "Efectivo o transferencia "
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/47.json",
+        "id": 47,
+        "name": "OBSERVACIONES",
+        "value": "Miércoles "
+      }
+    ]
+  },
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3705336/references.json",
+    "count": 0,
+    "limit": 25,
+    "offset": 0,
+    "items": []
+  },
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3705336/sellers.json",
+    "count": 1,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/users/80.json",
+        "id": 80,
+        "firstName": "Cristopher ",
+        "lastName": "Saldivia"
+      }
+    ]
+  }
+}

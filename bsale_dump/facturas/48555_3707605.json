@@ -1,0 +1,250 @@
+{
+  "document": {
+    "href": "https://api.bsale.io/v1/documents/3707605.json",
+    "id": 3707605,
+    "emissionDate": 1775692800,
+    "expirationDate": 1775692800,
+    "generationDate": 1775747533,
+    "rcofDate": 1775692800,
+    "number": 48555,
+    "serialNumber": null,
+    "trackingNumber": "",
+    "totalAmount": 230248,
+    "netAmount": 177419,
+    "taxAmount": 52829,
+    "exemptAmount": 0,
+    "notExemptAmount": 177419,
+    "exportTotalAmount": 0,
+    "exportNetAmount": 0,
+    "exportTaxAmount": 0,
+    "exportExemptAmount": 0,
+    "commissionRate": 0,
+    "commissionNetAmount": 0,
+    "commissionTaxAmount": 0,
+    "commissionTotalAmount": 0,
+    "percentageTaxWithheld": 0.0,
+    "purchaseTaxAmount": 0,
+    "purchaseTotalAmount": 0,
+    "address": "Felipe Westhoff s/ n",
+    "municipality": "Melinka",
+    "city": "Melinka",
+    "urlTimbre": "https://s3.amazonaws.com/bsale/21884/timbres/718f680f1cbd.png",
+    "urlPublicView": "https://app2.bsale.cl/view/21884/718f680f1cbd?sfd=99",
+    "urlPdf": "https://app2.bsale.cl/view/21884/718f680f1cbd.pdf?sfd=99",
+    "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/718f680f1cbd",
+    "urlPdfOriginal": "https://app2.bsale.cl/view/21884/718f680f1cbd.pdf",
+    "token": "718f680f1cbd",
+    "state": 0,
+    "commercialState": 0,
+    "cancellationStatus": 0,
+    "cancellationDate": null,
+    "urlXml": "https://api.bsale.cl/v1/21884/files/718f680f1cbd.xml",
+    "ted": "<TED version=\"1.0\"><DD><RE>76885233-2</RE><TD>33</TD><F>48555</F><FE>2026-04-09</FE><RR>16102657-3</RR><RSR>ILSE ANDREA OJEDA HARO</RSR><MNT>230248</MNT><IT1>ROYAL GUARD 0 0 DESECHABLE 355 CC SEC 2</IT1><CAF version=\"1.0\"><DA><RE>76885233-2</RE><RS>LA QUILLOTANA SPA</RS><TD>33</TD><RNG><D>46949</D><H>49514</H></RNG><FA>2025-12-07</FA><RSAPK><M>oKfWprzg372Xxff/aATP9KRvJM2uHsx/LfUfE9NYHWiLWhgrt4CB/Zlyl2qBkWRdrUoil5y9NnMLvWUNPoW1zQ==</M><E>Aw==</E></RSAPK><IDK>300</IDK></DA><FRMA algoritmo=\"SHA1withRSA\">OJ66iUG124lJrEqGCONMbESOFgj3d9T1UnL5w9BtMsh9ufsWS6Xx7qlTSrJu1dBNT1rOjg9oxnGDk51nM7uB0Q==</FRMA></CAF><TSTED>2026-04-09T11:12:13</TSTED></DD><FRMT algoritmo=\"SHA1withRSA\">MK5aIGQqw5LKWL8IRFKzlz6/Ore84WalfP5aTSiUa5hmEN/vQpTP0faYHvvRS7SUZKl5E8OE5TzSQZAZmmo99Q==</FRMT></TED>",
+    "salesId": null,
+    "informedSii": 0,
+    "responseMsgSii": "Proceso Finalizado Correctamente!",
+    "document_type": {
+      "href": "https://api.bsale.io/v1/document_types/6.json",
+      "id": "6"
+    },
+    "client": {
+      "href": "https://api.bsale.io/v1/clients/3329.json",
+      "id": "3329"
+    },
+    "office": {
+      "href": "https://api.bsale.io/v1/offices/1.json",
+      "id": "1"
+    },
+    "user": {
+      "href": "https://api.bsale.io/v1/users/56.json",
+      "id": "56"
+    },
+    "coin": {
+      "href": "https://api.bsale.io/v1/coins/1.json",
+      "id": "1"
+    },
+    "priceList": {
+      "href": "https://api.bsale.io/v1/price_lists/16.json",
+      "id": "16"
+    },
+    "references": {
+      "href": "https://api.bsale.io/v1/documents/3707605/references.json"
+    },
+    "document_taxes": {
+      "href": "https://api.bsale.io/v1/documents/3707605/document_taxes.json"
+    },
+    "details": {
+      "href": "https://api.bsale.io/v1/documents/3707605/details.json"
+    },
+    "sellers": {
+      "href": "https://api.bsale.io/v1/documents/3707605/sellers.json"
+    },
+    "attributes": {
+      "href": "https://api.bsale.io/v1/documents/3707605/attributes.json"
+    },
+    "payments": {
+      "href": "https://api.bsale.io/v1/documents/3707605/payments.json"
+    }
+  },
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3707605/details.json",
+    "count": 4,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/documents/3707605/details/8678137.json",
+        "id": 8678137,
+        "lineNumber": 0,
+        "quantity": 24.0,
+        "netUnitValue": 761,
+        "netUnitValueRaw": 761.240310077519,
+        "totalUnitValue": 982,
+        "netAmount": 18270,
+        "taxAmount": 5298,
+        "totalAmount": 23568,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/26828.json",
+          "id": 26828,
+          "description": "DESECHABLE 355 CC (SEC 24)",
+          "code": "67145903614165"
+        },
+        "note": "",
+        "relatedDetailId": 8677917,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707605/details/8678138.json",
+        "id": 8678138,
+        "lineNumber": 0,
+        "quantity": 24.0,
+        "netUnitValue": 888,
+        "netUnitValueRaw": 887.596899224806,
+        "totalUnitValue": 1145,
+        "netAmount": 21302,
+        "taxAmount": 6178,
+        "totalAmount": 27480,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/21449.json",
+          "id": 21449,
+          "description": "330 CC (SEC 24)",
+          "code": "1567436760543"
+        },
+        "note": "",
+        "relatedDetailId": 8677918,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707605/details/8678139.json",
+        "id": 8678139,
+        "lineNumber": 0,
+        "quantity": 8.0,
+        "netUnitValue": 15794,
+        "netUnitValueRaw": 15793.893129771,
+        "totalUnitValue": 20690,
+        "netAmount": 126351,
+        "taxAmount": 39169,
+        "totalAmount": 165520,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/28216.json",
+          "id": 28216,
+          "description": "T/ USO PAPEL 25 KG (SEC 1)",
+          "code": "70932004860409"
+        },
+        "note": "",
+        "relatedDetailId": 8677919,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707605/details/8678140.json",
+        "id": 8678140,
+        "lineNumber": 0,
+        "quantity": 8.0,
+        "netUnitValue": 1437,
+        "netUnitValueRaw": 1436.97478991597,
+        "totalUnitValue": 1710,
+        "netAmount": 11496,
+        "taxAmount": 2184,
+        "totalAmount": 13680,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/9081.json",
+          "id": 9081,
+          "description": "CARNE 245 GR (SEC 24)",
+          "code": "7802950012316"
+        },
+        "note": "",
+        "relatedDetailId": 8677920,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      }
+    ]
+  },
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3707605/attributes.json",
+    "count": 4,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/41.json",
+        "id": 41,
+        "name": "Nombre Conductor:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/42.json",
+        "id": 42,
+        "name": "Rut:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/43.json",
+        "id": 43,
+        "name": "Patente:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/50.json",
+        "id": 50,
+        "name": "NOTAS ASOCIADAS",
+        "value": ""
+      }
+    ]
+  },
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3707605/references.json",
+    "count": 0,
+    "limit": 25,
+    "offset": 0,
+    "items": []
+  },
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3707605/sellers.json",
+    "count": 1,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/users/80.json",
+        "id": 80,
+        "firstName": "Cristopher ",
+        "lastName": "Saldivia"
+      }
+    ]
+  }
+}

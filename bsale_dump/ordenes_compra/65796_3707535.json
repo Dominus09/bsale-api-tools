@@ -1,0 +1,174 @@
+{
+  "document": {
+    "href": "https://api.bsale.io/v1/documents/3707535.json",
+    "id": 3707535,
+    "emissionDate": 1775692800,
+    "expirationDate": 1775692800,
+    "generationDate": 1775736917,
+    "number": 65796,
+    "serialNumber": null,
+    "trackingNumber": "",
+    "totalAmount": 56400,
+    "netAmount": 47395,
+    "taxAmount": 9005,
+    "exemptAmount": 0,
+    "notExemptAmount": 47395,
+    "exportTotalAmount": 0,
+    "exportNetAmount": 0,
+    "exportTaxAmount": 0,
+    "exportExemptAmount": 0,
+    "commissionRate": 0,
+    "commissionNetAmount": 0,
+    "commissionTaxAmount": 0,
+    "commissionTotalAmount": 0,
+    "percentageTaxWithheld": 0.0,
+    "purchaseTaxAmount": 0,
+    "purchaseTotalAmount": 0,
+    "address": "Caldera MZ14 ST",
+    "municipality": "Melinka",
+    "city": "Melinka",
+    "urlTimbre": null,
+    "urlPublicView": "https://app2.bsale.cl/view/21884/5af9307a1624?sfd=99",
+    "urlPdf": "https://app2.bsale.cl/view/21884/5af9307a1624.pdf?sfd=99",
+    "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/5af9307a1624",
+    "urlPdfOriginal": "https://app2.bsale.cl/view/21884/5af9307a1624.pdf",
+    "token": "5af9307a1624",
+    "state": 0,
+    "commercialState": 0,
+    "cancellationStatus": 0,
+    "cancellationDate": null,
+    "urlXml": "https://api.bsale.cl/v1/21884/files/5af9307a1624.xml",
+    "ted": null,
+    "salesId": null,
+    "informedSii": 2,
+    "responseMsgSii": null,
+    "document_type": {
+      "href": "https://api.bsale.io/v1/document_types/33.json",
+      "id": "33"
+    },
+    "client": {
+      "href": "https://api.bsale.io/v1/clients/3235.json",
+      "id": "3235"
+    },
+    "office": {
+      "href": "https://api.bsale.io/v1/offices/1.json",
+      "id": "1"
+    },
+    "user": {
+      "href": "https://api.bsale.io/v1/users/80.json",
+      "id": "80"
+    },
+    "coin": {
+      "href": "https://api.bsale.io/v1/coins/1.json",
+      "id": "1"
+    },
+    "priceList": {
+      "href": "https://api.bsale.io/v1/price_lists/16.json",
+      "id": "16"
+    },
+    "references": {
+      "href": "https://api.bsale.io/v1/documents/3707535/references.json"
+    },
+    "document_taxes": {
+      "href": "https://api.bsale.io/v1/documents/3707535/document_taxes.json"
+    },
+    "details": {
+      "href": "https://api.bsale.io/v1/documents/3707535/details.json"
+    },
+    "sellers": {
+      "href": "https://api.bsale.io/v1/documents/3707535/sellers.json"
+    },
+    "attributes": {
+      "href": "https://api.bsale.io/v1/documents/3707535/attributes.json"
+    },
+    "payments": {
+      "href": "https://api.bsale.io/v1/documents/3707535/payments.json"
+    }
+  },
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3707535/details.json",
+    "count": 1,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/documents/3707535/details/8677892.json",
+        "id": 8677892,
+        "lineNumber": 0,
+        "quantity": 40.0,
+        "netUnitValue": 1185,
+        "netUnitValueRaw": 1184.87394957983,
+        "totalUnitValue": 1410,
+        "netAmount": 47395,
+        "taxAmount": 9005,
+        "totalAmount": 56400,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/8812.json",
+          "id": 8812,
+          "description": "1.0 KG (SEC 10)",
+          "code": "7801505231912"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      }
+    ]
+  },
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3707535/attributes.json",
+    "count": 4,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/44.json",
+        "id": 44,
+        "name": "TIPO DE DOCUMENTO A GENERAR",
+        "value": "Factura "
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/45.json",
+        "id": 45,
+        "name": "NOMBRE FANTASIA",
+        "value": "Titanic "
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/46.json",
+        "id": 46,
+        "name": "FORMA DE PAGO",
+        "value": "Transferencia "
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/47.json",
+        "id": 47,
+        "name": "OBSERVACIONES",
+        "value": "Viernes "
+      }
+    ]
+  },
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3707535/references.json",
+    "count": 0,
+    "limit": 25,
+    "offset": 0,
+    "items": []
+  },
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3707535/sellers.json",
+    "count": 1,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/users/80.json",
+        "id": 80,
+        "firstName": "Cristopher ",
+        "lastName": "Saldivia"
+      }
+    ]
+  }
+}

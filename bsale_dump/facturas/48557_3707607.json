@@ -1,0 +1,300 @@
+{
+  "document": {
+    "href": "https://api.bsale.io/v1/documents/3707607.json",
+    "id": 3707607,
+    "emissionDate": 1775692800,
+    "expirationDate": 1775692800,
+    "generationDate": 1775747623,
+    "rcofDate": 1775692800,
+    "number": 48557,
+    "serialNumber": null,
+    "trackingNumber": "",
+    "totalAmount": 259260,
+    "netAmount": 217866,
+    "taxAmount": 41394,
+    "exemptAmount": 0,
+    "notExemptAmount": 217866,
+    "exportTotalAmount": 0,
+    "exportNetAmount": 0,
+    "exportTaxAmount": 0,
+    "exportExemptAmount": 0,
+    "commissionRate": 0,
+    "commissionNetAmount": 0,
+    "commissionTaxAmount": 0,
+    "commissionTotalAmount": 0,
+    "percentageTaxWithheld": 0.0,
+    "purchaseTaxAmount": 0,
+    "purchaseTotalAmount": 0,
+    "address": "Antofagasta s/n",
+    "municipality": "Melinka",
+    "city": "Melinka",
+    "urlTimbre": "https://s3.amazonaws.com/bsale/21884/timbres/4c3fc575e47a.png",
+    "urlPublicView": "https://app2.bsale.cl/view/21884/4c3fc575e47a?sfd=99",
+    "urlPdf": "https://app2.bsale.cl/view/21884/4c3fc575e47a.pdf?sfd=99",
+    "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/4c3fc575e47a",
+    "urlPdfOriginal": "https://app2.bsale.cl/view/21884/4c3fc575e47a.pdf",
+    "token": "4c3fc575e47a",
+    "state": 0,
+    "commercialState": 0,
+    "cancellationStatus": 0,
+    "cancellationDate": null,
+    "urlXml": "https://api.bsale.cl/v1/21884/files/4c3fc575e47a.xml",
+    "ted": "<TED version=\"1.0\"><DD><RE>76885233-2</RE><TD>33</TD><F>48557</F><FE>2026-04-09</FE><RR>78175559-1</RR><RSR>COMERCIALIZADORA Y HOSPEDAJE RAICES DEL</RSR><MNT>259260</MNT><IT1>CHEETOS EVERCRISP HOR PALITOS QUESO 250</IT1><CAF version=\"1.0\"><DA><RE>76885233-2</RE><RS>LA QUILLOTANA SPA</RS><TD>33</TD><RNG><D>46949</D><H>49514</H></RNG><FA>2025-12-07</FA><RSAPK><M>oKfWprzg372Xxff/aATP9KRvJM2uHsx/LfUfE9NYHWiLWhgrt4CB/Zlyl2qBkWRdrUoil5y9NnMLvWUNPoW1zQ==</M><E>Aw==</E></RSAPK><IDK>300</IDK></DA><FRMA algoritmo=\"SHA1withRSA\">OJ66iUG124lJrEqGCONMbESOFgj3d9T1UnL5w9BtMsh9ufsWS6Xx7qlTSrJu1dBNT1rOjg9oxnGDk51nM7uB0Q==</FRMA></CAF><TSTED>2026-04-09T11:13:43</TSTED></DD><FRMT algoritmo=\"SHA1withRSA\">BfWD3CluvIAkOwcJO1puscRpBGTru00mLh3P6PLhtc4mvc0lI0hnTGDaTcIMPF5hJaI7oZy9rG+3fHH66U+7lg==</FRMT></TED>",
+    "salesId": null,
+    "informedSii": 0,
+    "responseMsgSii": "Proceso Finalizado Correctamente!",
+    "document_type": {
+      "href": "https://api.bsale.io/v1/document_types/6.json",
+      "id": "6"
+    },
+    "client": {
+      "href": "https://api.bsale.io/v1/clients/3607.json",
+      "id": "3607"
+    },
+    "office": {
+      "href": "https://api.bsale.io/v1/offices/1.json",
+      "id": "1"
+    },
+    "user": {
+      "href": "https://api.bsale.io/v1/users/56.json",
+      "id": "56"
+    },
+    "coin": {
+      "href": "https://api.bsale.io/v1/coins/1.json",
+      "id": "1"
+    },
+    "priceList": {
+      "href": "https://api.bsale.io/v1/price_lists/16.json",
+      "id": "16"
+    },
+    "references": {
+      "href": "https://api.bsale.io/v1/documents/3707607/references.json"
+    },
+    "document_taxes": {
+      "href": "https://api.bsale.io/v1/documents/3707607/document_taxes.json"
+    },
+    "details": {
+      "href": "https://api.bsale.io/v1/documents/3707607/details.json"
+    },
+    "sellers": {
+      "href": "https://api.bsale.io/v1/documents/3707607/sellers.json"
+    },
+    "attributes": {
+      "href": "https://api.bsale.io/v1/documents/3707607/attributes.json"
+    },
+    "payments": {
+      "href": "https://api.bsale.io/v1/documents/3707607/payments.json"
+    }
+  },
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3707607/details.json",
+    "count": 6,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/documents/3707607/details/8678142.json",
+        "id": 8678142,
+        "lineNumber": 0,
+        "quantity": 24.0,
+        "netUnitValue": 1748,
+        "netUnitValueRaw": 1747.89915966387,
+        "totalUnitValue": 2080,
+        "netAmount": 41950,
+        "taxAmount": 7970,
+        "totalAmount": 49920,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/29952.json",
+          "id": 29952,
+          "description": "HOR. PALITOS QUESO 250 GR (SEC 12)",
+          "code": "75218099455824"
+        },
+        "note": "",
+        "relatedDetailId": 8677910,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707607/details/8678143.json",
+        "id": 8678143,
+        "lineNumber": 0,
+        "quantity": 22.0,
+        "netUnitValue": 2210,
+        "netUnitValueRaw": 2210.08403361345,
+        "totalUnitValue": 2630,
+        "netAmount": 48622,
+        "taxAmount": 9238,
+        "totalAmount": 57860,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/29871.json",
+          "id": 29871,
+          "description": "I 275 GR (SEC 11)",
+          "code": "74948696260193"
+        },
+        "note": "",
+        "relatedDetailId": 8677911,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707607/details/8678144.json",
+        "id": 8678144,
+        "lineNumber": 0,
+        "quantity": 16.0,
+        "netUnitValue": 1815,
+        "netUnitValueRaw": 1815.12605042017,
+        "totalUnitValue": 2160,
+        "netAmount": 29042,
+        "taxAmount": 5518,
+        "totalAmount": 34560,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/27533.json",
+          "id": 27533,
+          "description": "QUESO 230 GR (SEC 16)",
+          "code": "68788862255730"
+        },
+        "note": "",
+        "relatedDetailId": 8677912,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707607/details/8678145.json",
+        "id": 8678145,
+        "lineNumber": 0,
+        "quantity": 12.0,
+        "netUnitValue": 1750,
+        "netUnitValueRaw": 1750.42016806723,
+        "totalUnitValue": 2083,
+        "netAmount": 21005,
+        "taxAmount": 3991,
+        "totalAmount": 24996,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/27065.json",
+          "id": 27065,
+          "description": "200 GR (SEC 12)",
+          "code": "68064274280813"
+        },
+        "note": "",
+        "relatedDetailId": 8677913,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707607/details/8678146.json",
+        "id": 8678146,
+        "lineNumber": 0,
+        "quantity": 16.0,
+        "netUnitValue": 1765,
+        "netUnitValueRaw": 1764.70588235294,
+        "totalUnitValue": 2100,
+        "netAmount": 28235,
+        "taxAmount": 5365,
+        "totalAmount": 33600,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/27583.json",
+          "id": 27583,
+          "description": "SAL ORIGINAL  230 GR (SEC 16)",
+          "code": "69030656683033"
+        },
+        "note": "",
+        "relatedDetailId": 8677914,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707607/details/8678147.json",
+        "id": 8678147,
+        "lineNumber": 0,
+        "quantity": 28.0,
+        "netUnitValue": 1750,
+        "netUnitValueRaw": 1750.42016806723,
+        "totalUnitValue": 2083,
+        "netAmount": 49012,
+        "taxAmount": 9312,
+        "totalAmount": 58324,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/14212.json",
+          "id": 14212,
+          "description": "250 GR (SEC 14)",
+          "code": "1493480120545"
+        },
+        "note": "",
+        "relatedDetailId": 8677915,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      }
+    ]
+  },
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3707607/attributes.json",
+    "count": 4,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/41.json",
+        "id": 41,
+        "name": "Nombre Conductor:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/42.json",
+        "id": 42,
+        "name": "Rut:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/43.json",
+        "id": 43,
+        "name": "Patente:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/50.json",
+        "id": 50,
+        "name": "NOTAS ASOCIADAS",
+        "value": ""
+      }
+    ]
+  },
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3707607/references.json",
+    "count": 0,
+    "limit": 25,
+    "offset": 0,
+    "items": []
+  },
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3707607/sellers.json",
+    "count": 1,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/users/80.json",
+        "id": 80,
+        "firstName": "Cristopher ",
+        "lastName": "Saldivia"
+      }
+    ]
+  }
+}

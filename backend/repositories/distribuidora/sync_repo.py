@@ -36,6 +36,7 @@ def ensure_distribuidora_schema(cur) -> None:
         "004_route_planning_summary.sql",
         "005_route_picking.sql",
         "006_route_planning_seller.sql",
+        "007_document_related_sync_status_views.sql",
     ):
         _run_sql_file(cur, fn)
 
@@ -84,6 +85,23 @@ def start_sync_log(cur, process_name: str) -> int:
         (process_name,),
     )
     return int(cur.fetchone()[0])
+
+
+def insert_sync_status_row(
+    cur,
+    *,
+    sync_type: str,
+    records_processed: int,
+    status: str,
+) -> None:
+    """Auditoría desacoplada de corridas (documentos, detalles, related, ventas/órdenes)."""
+    cur.execute(
+        """
+        INSERT INTO distribuidora.sync_status (sync_type, last_run, records_processed, status)
+        VALUES (%s, NOW(), %s, %s)
+        """,
+        (sync_type, int(records_processed), status),
+    )
 
 
 def finish_sync_log(

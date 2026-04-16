@@ -8,6 +8,9 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel, Field
 
 from backend.services.distribuidora.orders_service import get_sync_status_payload
+from backend.services.distribuidora.sync_related_service import (
+    run_sync_distribuidora_related_background,
+)
 from backend.services.distribuidora.sync_service import (
     bsale_token_distribuidora_configured,
     run_incremental_distribuidora_background,
@@ -59,6 +62,21 @@ def post_resync_distribuidora(
         b.emission_to,
     )
     return {"status": "resync encolado", "range": {"emission_from": b.emission_from, "emission_to": b.emission_to}}
+
+
+@router.post("/sync-distribuidora-related")
+def post_sync_distribuidora_related(background_tasks: BackgroundTasks):
+    """
+    Encola sync de ``document_related`` (API ``relateddetailid``), acotado en días y cantidad de líneas.
+    Lock distinto al sync incremental de documentos.
+    """
+    if not bsale_token_distribuidora_configured():
+        raise HTTPException(
+            status_code=400,
+            detail="Defina BSALE_TOKEN o BSALE_TOKEN_SPA para ejecutar el sync.",
+        )
+    background_tasks.add_task(run_sync_distribuidora_related_background)
+    return {"status": "related encolado"}
 
 
 @router.get("/sync-distribuidora/status")

@@ -1,0 +1,243 @@
+{
+  "document": {
+    "href": "https://api.bsale.io/v1/documents/3705442.json",
+    "id": 3705442,
+    "emissionDate": 1775520000,
+    "expirationDate": 1775520000,
+    "generationDate": 1775585290,
+    "number": 2570462,
+    "serialNumber": null,
+    "trackingNumber": "69d5480bd774fb87ea1c0663",
+    "totalAmount": 92608,
+    "netAmount": 77822,
+    "taxAmount": 14786,
+    "exemptAmount": 0,
+    "notExemptAmount": 77822,
+    "exportTotalAmount": 0,
+    "exportNetAmount": 0,
+    "exportTaxAmount": 0,
+    "exportExemptAmount": 0,
+    "commissionRate": 0,
+    "commissionNetAmount": 0,
+    "commissionTaxAmount": 0,
+    "commissionTotalAmount": 0,
+    "percentageTaxWithheld": 0.0,
+    "purchaseTaxAmount": 0,
+    "purchaseTotalAmount": 0,
+    "address": "Ladrilleros 901",
+    "municipality": "Quellon",
+    "city": "Quellon",
+    "urlTimbre": "https://s3.amazonaws.com/bsale/21884/timbres/3de15ba43f88.png",
+    "urlPublicView": "https://app2.bsale.cl/view/21884/3de15ba43f88?sfd=99",
+    "urlPdf": "https://app2.bsale.cl/view/21884/3de15ba43f88.pdf?sfd=99",
+    "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/3de15ba43f88",
+    "urlPdfOriginal": "https://app2.bsale.cl/view/21884/3de15ba43f88.pdf",
+    "token": "3de15ba43f88",
+    "state": 0,
+    "commercialState": 0,
+    "cancellationStatus": 0,
+    "cancellationDate": null,
+    "urlXml": "https://api.bsale.cl/v1/21884/files/3de15ba43f88.xml",
+    "ted": null,
+    "salesId": null,
+    "informedSii": 0,
+    "responseMsgSii": "Documento Recibido por el SII. Datos Coinciden con los Registrados",
+    "document_type": {
+      "href": "https://api.bsale.io/v1/document_types/1.json",
+      "id": "1"
+    },
+    "client": {
+      "href": "https://api.bsale.io/v1/clients/82.json",
+      "id": "82"
+    },
+    "office": {
+      "href": "https://api.bsale.io/v1/offices/1.json",
+      "id": "1"
+    },
+    "user": {
+      "href": "https://api.bsale.io/v1/users/49.json",
+      "id": "49"
+    },
+    "coin": {
+      "href": "https://api.bsale.io/v1/coins/1.json",
+      "id": "1"
+    },
+    "priceList": {
+      "href": "https://api.bsale.io/v1/price_lists/13.json",
+      "id": "13"
+    },
+    "references": {
+      "href": "https://api.bsale.io/v1/documents/3705442/references.json"
+    },
+    "document_taxes": {
+      "href": "https://api.bsale.io/v1/documents/3705442/document_taxes.json"
+    },
+    "details": {
+      "href": "https://api.bsale.io/v1/documents/3705442/details.json"
+    },
+    "sellers": {
+      "href": "https://api.bsale.io/v1/documents/3705442/sellers.json"
+    },
+    "attributes": {
+      "href": "https://api.bsale.io/v1/documents/3705442/attributes.json"
+    },
+    "payments": {
+      "href": "https://api.bsale.io/v1/documents/3705442/payments.json"
+    }
+  },
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3705442/details.json",
+    "count": 4,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/documents/3705442/details/8673032.json",
+        "id": 8673032,
+        "lineNumber": 0,
+        "quantity": 30.0,
+        "netUnitValue": 1146,
+        "netUnitValueRaw": 1146.21848739496,
+        "totalUnitValue": 1364,
+        "netAmount": 34386,
+        "taxAmount": 6534,
+        "totalAmount": 40920,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/11058.json",
+          "id": 11058,
+          "description": "RETORNABLE 1.2 LT (SEC 10)",
+          "code": "7802100001719"
+        },
+        "note": "",
+        "relatedDetailId": 8672318,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705442/details/8673033.json",
+        "id": 8673033,
+        "lineNumber": 0,
+        "quantity": 24.0,
+        "netUnitValue": 790,
+        "netUnitValueRaw": 789.915966386555,
+        "totalUnitValue": 940,
+        "netAmount": 18958,
+        "taxAmount": 3602,
+        "totalAmount": 22560,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/23110.json",
+          "id": 23110,
+          "description": "DESECHABLE 330 CC (SEC 24)",
+          "code": "1601053357515"
+        },
+        "note": "",
+        "relatedDetailId": 8672319,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705442/details/8673034.json",
+        "id": 8673034,
+        "lineNumber": 0,
+        "quantity": 24.0,
+        "netUnitValue": 708,
+        "netUnitValueRaw": 707.563025210084,
+        "totalUnitValue": 842,
+        "netAmount": 16982,
+        "taxAmount": 3226,
+        "totalAmount": 20208,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/11161.json",
+          "id": 11161,
+          "description": "DESECHABLE 330 CC (SEC 24)",
+          "code": "75001629"
+        },
+        "note": "",
+        "relatedDetailId": 8672320,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705442/details/8673035.json",
+        "id": 8673035,
+        "lineNumber": 0,
+        "quantity": 4.0,
+        "netUnitValue": 1874,
+        "netUnitValueRaw": 1873.94957983193,
+        "totalUnitValue": 2230,
+        "netAmount": 7496,
+        "taxAmount": 1424,
+        "totalAmount": 8920,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/11246.json",
+          "id": 11246,
+          "description": "TINTO 700 CC (SEC 12)",
+          "code": "7804300129439"
+        },
+        "note": "",
+        "relatedDetailId": 8672321,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      }
+    ]
+  },
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3705442/attributes.json",
+    "count": 3,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/38.json",
+        "id": 38,
+        "name": "NOMBRE CONDUCTOR:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/39.json",
+        "id": 39,
+        "name": "RUT:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/40.json",
+        "id": 40,
+        "name": "PATENTE:",
+        "value": ""
+      }
+    ]
+  },
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3705442/references.json",
+    "count": 0,
+    "limit": 25,
+    "offset": 0,
+    "items": []
+  },
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3705442/sellers.json",
+    "count": 1,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/users/85.json",
+        "id": 85,
+        "firstName": "Alvaro",
+        "lastName": "Vargas"
+      }
+    ]
+  }
+}

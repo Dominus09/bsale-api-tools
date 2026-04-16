@@ -1,0 +1,174 @@
+{
+  "document": {
+    "href": "https://api.bsale.io/v1/documents/3716264.json",
+    "id": 3716264,
+    "emissionDate": 1776297600,
+    "expirationDate": 1776297600,
+    "generationDate": 1776361836,
+    "number": 65992,
+    "serialNumber": null,
+    "trackingNumber": "",
+    "totalAmount": 39072,
+    "netAmount": 28009,
+    "taxAmount": 11063,
+    "exemptAmount": 0,
+    "notExemptAmount": 28009,
+    "exportTotalAmount": 0,
+    "exportNetAmount": 0,
+    "exportTaxAmount": 0,
+    "exportExemptAmount": 0,
+    "commissionRate": 0,
+    "commissionNetAmount": 0,
+    "commissionTaxAmount": 0,
+    "commissionTotalAmount": 0,
+    "percentageTaxWithheld": 0.0,
+    "purchaseTaxAmount": 0,
+    "purchaseTotalAmount": 0,
+    "address": "Pasaje 1",
+    "municipality": "Quemchi",
+    "city": "Dalcahue Costa",
+    "urlTimbre": null,
+    "urlPublicView": "https://app2.bsale.cl/view/21884/14f5cd90f9d8?sfd=99",
+    "urlPdf": "https://app2.bsale.cl/view/21884/14f5cd90f9d8.pdf?sfd=99",
+    "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/14f5cd90f9d8",
+    "urlPdfOriginal": "https://app2.bsale.cl/view/21884/14f5cd90f9d8.pdf",
+    "token": "14f5cd90f9d8",
+    "state": 0,
+    "commercialState": 0,
+    "cancellationStatus": 0,
+    "cancellationDate": null,
+    "urlXml": "https://api.bsale.cl/v1/21884/files/14f5cd90f9d8.xml",
+    "ted": null,
+    "salesId": null,
+    "informedSii": 2,
+    "responseMsgSii": null,
+    "document_type": {
+      "href": "https://api.bsale.io/v1/document_types/33.json",
+      "id": "33"
+    },
+    "client": {
+      "href": "https://api.bsale.io/v1/clients/2244.json",
+      "id": "2244"
+    },
+    "office": {
+      "href": "https://api.bsale.io/v1/offices/1.json",
+      "id": "1"
+    },
+    "user": {
+      "href": "https://api.bsale.io/v1/users/80.json",
+      "id": "80"
+    },
+    "coin": {
+      "href": "https://api.bsale.io/v1/coins/1.json",
+      "id": "1"
+    },
+    "priceList": {
+      "href": "https://api.bsale.io/v1/price_lists/13.json",
+      "id": "13"
+    },
+    "references": {
+      "href": "https://api.bsale.io/v1/documents/3716264/references.json"
+    },
+    "document_taxes": {
+      "href": "https://api.bsale.io/v1/documents/3716264/document_taxes.json"
+    },
+    "details": {
+      "href": "https://api.bsale.io/v1/documents/3716264/details.json"
+    },
+    "sellers": {
+      "href": "https://api.bsale.io/v1/documents/3716264/sellers.json"
+    },
+    "attributes": {
+      "href": "https://api.bsale.io/v1/documents/3716264/attributes.json"
+    },
+    "payments": {
+      "href": "https://api.bsale.io/v1/documents/3716264/payments.json"
+    }
+  },
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3716264/details.json",
+    "count": 1,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/documents/3716264/details/8697972.json",
+        "id": 8697972,
+        "lineNumber": 0,
+        "quantity": 12.0,
+        "netUnitValue": 2334,
+        "netUnitValueRaw": 2334.05017921147,
+        "totalUnitValue": 3256,
+        "netAmount": 28009,
+        "taxAmount": 11063,
+        "totalAmount": 39072,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/11232.json",
+          "id": 11232,
+          "description": "TINTO 1.5 LT (SEC 6)",
+          "code": "7804320058931"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      }
+    ]
+  },
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3716264/attributes.json",
+    "count": 4,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/44.json",
+        "id": 44,
+        "name": "TIPO DE DOCUMENTO A GENERAR",
+        "value": "Boleta "
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/45.json",
+        "id": 45,
+        "name": "NOMBRE FANTASIA",
+        "value": "Cahueles "
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/46.json",
+        "id": 46,
+        "name": "FORMA DE PAGO",
+        "value": "Transferencia "
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/47.json",
+        "id": 47,
+        "name": "OBSERVACIONES",
+        "value": "Viernes "
+      }
+    ]
+  },
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3716264/references.json",
+    "count": 0,
+    "limit": 25,
+    "offset": 0,
+    "items": []
+  },
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3716264/sellers.json",
+    "count": 1,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/users/80.json",
+        "id": 80,
+        "firstName": "Cristopher ",
+        "lastName": "Saldivia"
+      }
+    ]
+  }
+}

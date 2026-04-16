@@ -1,0 +1,200 @@
+{
+  "document": {
+    "href": "https://api.bsale.io/v1/documents/3705528.json",
+    "id": 3705528,
+    "emissionDate": 1775520000,
+    "expirationDate": 1775520000,
+    "generationDate": 1775589227,
+    "rcofDate": 1775520000,
+    "number": 48536,
+    "serialNumber": null,
+    "trackingNumber": "",
+    "totalAmount": 223845,
+    "netAmount": 185399,
+    "taxAmount": 38446,
+    "exemptAmount": 0,
+    "notExemptAmount": 185399,
+    "exportTotalAmount": 0,
+    "exportNetAmount": 0,
+    "exportTaxAmount": 0,
+    "exportExemptAmount": 0,
+    "commissionRate": 0,
+    "commissionNetAmount": 0,
+    "commissionTaxAmount": 0,
+    "commissionTotalAmount": 0,
+    "percentageTaxWithheld": 0.0,
+    "purchaseTaxAmount": 0,
+    "purchaseTotalAmount": 0,
+    "address": "Ohiggins #234",
+    "municipality": "Chonchi",
+    "city": "Chonchi",
+    "urlTimbre": "https://s3.amazonaws.com/bsale/21884/timbres/7dafad40a856.png",
+    "urlPublicView": "https://app2.bsale.cl/view/21884/7dafad40a856?sfd=99",
+    "urlPdf": "https://app2.bsale.cl/view/21884/7dafad40a856.pdf?sfd=99",
+    "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/7dafad40a856",
+    "urlPdfOriginal": "https://app2.bsale.cl/view/21884/7dafad40a856.pdf",
+    "token": "7dafad40a856",
+    "state": 0,
+    "commercialState": 0,
+    "cancellationStatus": 0,
+    "cancellationDate": null,
+    "urlXml": "https://api.bsale.cl/v1/21884/files/7dafad40a856.xml",
+    "ted": "<TED version=\"1.0\"><DD><RE>76885233-2</RE><TD>33</TD><F>48536</F><FE>2026-04-07</FE><RR>13408669-6</RR><RSR>FRANCISCO JAVIER CAYUN VERA</RSR><MNT>223845</MNT><IT1>KUNSTMANN AFRECHILLO 25 KG SEC 1 CON UN</IT1><CAF version=\"1.0\"><DA><RE>76885233-2</RE><RS>LA QUILLOTANA SPA</RS><TD>33</TD><RNG><D>46949</D><H>49514</H></RNG><FA>2025-12-07</FA><RSAPK><M>oKfWprzg372Xxff/aATP9KRvJM2uHsx/LfUfE9NYHWiLWhgrt4CB/Zlyl2qBkWRdrUoil5y9NnMLvWUNPoW1zQ==</M><E>Aw==</E></RSAPK><IDK>300</IDK></DA><FRMA algoritmo=\"SHA1withRSA\">OJ66iUG124lJrEqGCONMbESOFgj3d9T1UnL5w9BtMsh9ufsWS6Xx7qlTSrJu1dBNT1rOjg9oxnGDk51nM7uB0Q==</FRMA></CAF><TSTED>2026-04-07T15:13:47</TSTED></DD><FRMT algoritmo=\"SHA1withRSA\">Lt9gcB9k6A0vuSeod/wu45+jfzjIIfxStfPl8gPB8+jlhvsn7Rr2XPqO+OGujvaDa0oYKyk6f4g/O9Ny8lNOkg==</FRMT></TED>",
+    "salesId": null,
+    "informedSii": 0,
+    "responseMsgSii": "Proceso Finalizado Correctamente!",
+    "document_type": {
+      "href": "https://api.bsale.io/v1/document_types/6.json",
+      "id": "6"
+    },
+    "client": {
+      "href": "https://api.bsale.io/v1/clients/3410.json",
+      "id": "3410"
+    },
+    "office": {
+      "href": "https://api.bsale.io/v1/offices/1.json",
+      "id": "1"
+    },
+    "user": {
+      "href": "https://api.bsale.io/v1/users/49.json",
+      "id": "49"
+    },
+    "coin": {
+      "href": "https://api.bsale.io/v1/coins/1.json",
+      "id": "1"
+    },
+    "priceList": {
+      "href": "https://api.bsale.io/v1/price_lists/13.json",
+      "id": "13"
+    },
+    "references": {
+      "href": "https://api.bsale.io/v1/documents/3705528/references.json"
+    },
+    "document_taxes": {
+      "href": "https://api.bsale.io/v1/documents/3705528/document_taxes.json"
+    },
+    "details": {
+      "href": "https://api.bsale.io/v1/documents/3705528/details.json"
+    },
+    "sellers": {
+      "href": "https://api.bsale.io/v1/documents/3705528/sellers.json"
+    },
+    "attributes": {
+      "href": "https://api.bsale.io/v1/documents/3705528/attributes.json"
+    },
+    "payments": {
+      "href": "https://api.bsale.io/v1/documents/3705528/payments.json"
+    }
+  },
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3705528/details.json",
+    "count": 2,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/documents/3705528/details/8673466.json",
+        "id": 8673466,
+        "lineNumber": 0,
+        "quantity": 30.0,
+        "netUnitValue": 5584,
+        "netUnitValueRaw": 5583.613445378148,
+        "totalUnitValue": 6645,
+        "netAmount": 167508,
+        "taxAmount": 31826,
+        "totalAmount": 199335,
+        "netDiscount": 5181,
+        "totalDiscount": 6165,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/30222.json",
+          "id": 30222,
+          "description": "AFRECHILLO 25 KG (SEC 1)",
+          "code": "76313682637924"
+        },
+        "note": "",
+        "relatedDetailId": 8672752,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 3.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705528/details/8673467.json",
+        "id": 8673467,
+        "lineNumber": 0,
+        "quantity": 12.0,
+        "netUnitValue": 1491,
+        "netUnitValueRaw": 1490.8759124087585,
+        "totalUnitValue": 2043,
+        "netAmount": 17891,
+        "taxAmount": 6620,
+        "totalAmount": 24510,
+        "netDiscount": 941,
+        "totalDiscount": 1290,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/10894.json",
+          "id": 10894,
+          "description": "DESECHABLE 2.5 LT (SEC 6)",
+          "code": "7801610001523"
+        },
+        "note": "",
+        "relatedDetailId": 8672753,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 5.0
+      }
+    ]
+  },
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3705528/attributes.json",
+    "count": 4,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/41.json",
+        "id": 41,
+        "name": "Nombre Conductor:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/42.json",
+        "id": 42,
+        "name": "Rut:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/43.json",
+        "id": 43,
+        "name": "Patente:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/50.json",
+        "id": 50,
+        "name": "NOTAS ASOCIADAS",
+        "value": ""
+      }
+    ]
+  },
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3705528/references.json",
+    "count": 0,
+    "limit": 25,
+    "offset": 0,
+    "items": []
+  },
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3705528/sellers.json",
+    "count": 1,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/users/80.json",
+        "id": 80,
+        "firstName": "Cristopher ",
+        "lastName": "Saldivia"
+      }
+    ]
+  }
+}

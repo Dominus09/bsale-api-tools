@@ -219,11 +219,21 @@ def get_sync_status_payload() -> dict[str, Any]:
             cur.execute("SELECT pg_advisory_unlock(%s)", (ADVISORY_LOCK_KEY,))
         active = not got
 
+        sync_by_domain: dict[str, Any] | None = None
+        try:
+            cur.execute("SELECT * FROM distribuidora.v_sync_status")
+            row = cur.fetchone()
+            if row:
+                sync_by_domain = _serialize_row(_row_to_dict(cur, row))
+        except Exception:
+            sync_by_domain = None
+
         cur.close()
         return {
             "sync_state": states,
             "last_log": last_log,
             "sync_lock_active": active,
+            "sync_last_by_domain": sync_by_domain,
         }
     finally:
         conn.close()

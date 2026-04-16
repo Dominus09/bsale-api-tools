@@ -1,0 +1,249 @@
+{
+  "document": {
+    "href": "https://api.bsale.io/v1/documents/3705236.json",
+    "id": 3705236,
+    "emissionDate": 1775520000,
+    "expirationDate": 1775520000,
+    "generationDate": 1775569821,
+    "number": 65727,
+    "serialNumber": null,
+    "trackingNumber": "",
+    "totalAmount": 55512,
+    "netAmount": 46649,
+    "taxAmount": 8863,
+    "exemptAmount": 0,
+    "notExemptAmount": 46649,
+    "exportTotalAmount": 0,
+    "exportNetAmount": 0,
+    "exportTaxAmount": 0,
+    "exportExemptAmount": 0,
+    "commissionRate": 0,
+    "commissionNetAmount": 0,
+    "commissionTaxAmount": 0,
+    "commissionTotalAmount": 0,
+    "percentageTaxWithheld": 0.0,
+    "purchaseTaxAmount": 0,
+    "purchaseTotalAmount": 0,
+    "address": "Telegrafista Adelaida Uribe #906",
+    "municipality": "Quellon",
+    "city": "Quellon",
+    "urlTimbre": null,
+    "urlPublicView": "https://app2.bsale.cl/view/21884/fd19756bc91d?sfd=99",
+    "urlPdf": "https://app2.bsale.cl/view/21884/fd19756bc91d.pdf?sfd=99",
+    "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/fd19756bc91d",
+    "urlPdfOriginal": "https://app2.bsale.cl/view/21884/fd19756bc91d.pdf",
+    "token": "fd19756bc91d",
+    "state": 0,
+    "commercialState": 0,
+    "cancellationStatus": 0,
+    "cancellationDate": null,
+    "urlXml": "https://api.bsale.cl/v1/21884/files/fd19756bc91d.xml",
+    "ted": null,
+    "salesId": null,
+    "informedSii": 2,
+    "responseMsgSii": null,
+    "document_type": {
+      "href": "https://api.bsale.io/v1/document_types/33.json",
+      "id": "33"
+    },
+    "client": {
+      "href": "https://api.bsale.io/v1/clients/3004.json",
+      "id": "3004"
+    },
+    "office": {
+      "href": "https://api.bsale.io/v1/offices/1.json",
+      "id": "1"
+    },
+    "user": {
+      "href": "https://api.bsale.io/v1/users/85.json",
+      "id": "85"
+    },
+    "coin": {
+      "href": "https://api.bsale.io/v1/coins/1.json",
+      "id": "1"
+    },
+    "priceList": {
+      "href": "https://api.bsale.io/v1/price_lists/13.json",
+      "id": "13"
+    },
+    "references": {
+      "href": "https://api.bsale.io/v1/documents/3705236/references.json"
+    },
+    "document_taxes": {
+      "href": "https://api.bsale.io/v1/documents/3705236/document_taxes.json"
+    },
+    "details": {
+      "href": "https://api.bsale.io/v1/documents/3705236/details.json"
+    },
+    "sellers": {
+      "href": "https://api.bsale.io/v1/documents/3705236/sellers.json"
+    },
+    "attributes": {
+      "href": "https://api.bsale.io/v1/documents/3705236/attributes.json"
+    },
+    "payments": {
+      "href": "https://api.bsale.io/v1/documents/3705236/payments.json"
+    }
+  },
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3705236/details.json",
+    "count": 4,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/documents/3705236/details/8672244.json",
+        "id": 8672244,
+        "lineNumber": 0,
+        "quantity": 12.0,
+        "netUnitValue": 1051,
+        "netUnitValueRaw": 1051.26050420168,
+        "totalUnitValue": 1251,
+        "netAmount": 12615,
+        "taxAmount": 2397,
+        "totalAmount": 15012,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/9088.json",
+          "id": 9088,
+          "description": "SUAVE 250 GR (SEC 24)",
+          "code": "7793750000255"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705236/details/8672245.json",
+        "id": 8672245,
+        "lineNumber": 0,
+        "quantity": 10.0,
+        "netUnitValue": 1168,
+        "netUnitValueRaw": 1168.06722689076,
+        "totalUnitValue": 1390,
+        "netAmount": 11681,
+        "taxAmount": 2219,
+        "totalAmount": 13900,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/9099.json",
+          "id": 9099,
+          "description": "250 GR (SEC 10)",
+          "code": "7790387100310"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705236/details/8672246.json",
+        "id": 8672246,
+        "lineNumber": 0,
+        "quantity": 12.0,
+        "netUnitValue": 1471,
+        "netUnitValueRaw": 1470.58823529412,
+        "totalUnitValue": 1750,
+        "netAmount": 17647,
+        "taxAmount": 3353,
+        "totalAmount": 21000,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/18710.json",
+          "id": 18710,
+          "description": "VEGETAL 900 CC (SEC 12)",
+          "code": "1532730104239"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705236/details/8672247.json",
+        "id": 8672247,
+        "lineNumber": 0,
+        "quantity": 10.0,
+        "netUnitValue": 471,
+        "netUnitValueRaw": 470.588235294118,
+        "totalUnitValue": 560,
+        "netAmount": 4706,
+        "taxAmount": 894,
+        "totalAmount": 5600,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/9046.json",
+          "id": 9046,
+          "description": "FINA 1 KG (SEC 10)",
+          "code": "7803600031275"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      }
+    ]
+  },
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3705236/attributes.json",
+    "count": 4,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/44.json",
+        "id": 44,
+        "name": "TIPO DE DOCUMENTO A GENERAR",
+        "value": "Boleta"
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/45.json",
+        "id": 45,
+        "name": "NOMBRE FANTASIA",
+        "value": "Casonale"
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/46.json",
+        "id": 46,
+        "name": "FORMA DE PAGO",
+        "value": "Efectivo o deposito "
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/47.json",
+        "id": 47,
+        "name": "OBSERVACIONES",
+        "value": "Martes "
+      }
+    ]
+  },
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3705236/references.json",
+    "count": 0,
+    "limit": 25,
+    "offset": 0,
+    "items": []
+  },
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3705236/sellers.json",
+    "count": 1,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/users/85.json",
+        "id": 85,
+        "firstName": "Alvaro",
+        "lastName": "Vargas"
+      }
+    ]
+  }
+}

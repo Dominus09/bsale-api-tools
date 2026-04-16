@@ -1,0 +1,493 @@
+{
+  "document": {
+    "href": "https://api.bsale.io/v1/documents/3705515.json",
+    "id": 3705515,
+    "emissionDate": 1775520000,
+    "expirationDate": 1775520000,
+    "generationDate": 1775588920,
+    "number": 2570525,
+    "serialNumber": null,
+    "trackingNumber": "69d5563bd774fb87ea1c22c7",
+    "totalAmount": 292804,
+    "netAmount": 246054,
+    "taxAmount": 46750,
+    "exemptAmount": 0,
+    "notExemptAmount": 246054,
+    "exportTotalAmount": 0,
+    "exportNetAmount": 0,
+    "exportTaxAmount": 0,
+    "exportExemptAmount": 0,
+    "commissionRate": 0,
+    "commissionNetAmount": 0,
+    "commissionTaxAmount": 0,
+    "commissionTotalAmount": 0,
+    "percentageTaxWithheld": 0.0,
+    "purchaseTaxAmount": 0,
+    "purchaseTotalAmount": 0,
+    "address": "Cocauque",
+    "municipality": "Yaldad",
+    "city": "Quellon",
+    "urlTimbre": "https://s3.amazonaws.com/bsale/21884/timbres/6d7317a8e203.png",
+    "urlPublicView": "https://app2.bsale.cl/view/21884/6d7317a8e203?sfd=99",
+    "urlPdf": "https://app2.bsale.cl/view/21884/6d7317a8e203.pdf?sfd=99",
+    "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/6d7317a8e203",
+    "urlPdfOriginal": "https://app2.bsale.cl/view/21884/6d7317a8e203.pdf",
+    "token": "6d7317a8e203",
+    "state": 0,
+    "commercialState": 0,
+    "cancellationStatus": 0,
+    "cancellationDate": null,
+    "urlXml": "https://api.bsale.cl/v1/21884/files/6d7317a8e203.xml",
+    "ted": null,
+    "salesId": null,
+    "informedSii": 0,
+    "responseMsgSii": "Documento Recibido por el SII. Datos Coinciden con los Registrados",
+    "document_type": {
+      "href": "https://api.bsale.io/v1/document_types/1.json",
+      "id": "1"
+    },
+    "client": {
+      "href": "https://api.bsale.io/v1/clients/3760.json",
+      "id": "3760"
+    },
+    "office": {
+      "href": "https://api.bsale.io/v1/offices/1.json",
+      "id": "1"
+    },
+    "user": {
+      "href": "https://api.bsale.io/v1/users/39.json",
+      "id": "39"
+    },
+    "coin": {
+      "href": "https://api.bsale.io/v1/coins/1.json",
+      "id": "1"
+    },
+    "priceList": {
+      "href": "https://api.bsale.io/v1/price_lists/13.json",
+      "id": "13"
+    },
+    "references": {
+      "href": "https://api.bsale.io/v1/documents/3705515/references.json"
+    },
+    "document_taxes": {
+      "href": "https://api.bsale.io/v1/documents/3705515/document_taxes.json"
+    },
+    "details": {
+      "href": "https://api.bsale.io/v1/documents/3705515/details.json"
+    },
+    "sellers": {
+      "href": "https://api.bsale.io/v1/documents/3705515/sellers.json"
+    },
+    "attributes": {
+      "href": "https://api.bsale.io/v1/documents/3705515/attributes.json"
+    },
+    "payments": {
+      "href": "https://api.bsale.io/v1/documents/3705515/payments.json"
+    }
+  },
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3705515/details.json",
+    "count": 14,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/documents/3705515/details/8673318.json",
+        "id": 8673318,
+        "lineNumber": 0,
+        "quantity": 30.0,
+        "netUnitValue": 1747,
+        "netUnitValueRaw": 1747.05882352941,
+        "totalUnitValue": 2079,
+        "netAmount": 52411,
+        "taxAmount": 9959,
+        "totalAmount": 62370,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/11263.json",
+          "id": 11263,
+          "description": "BLANCO 700 CC (SEC 12)",
+          "code": "7804330231218"
+        },
+        "note": "",
+        "relatedDetailId": 8649633,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705515/details/8673319.json",
+        "id": 8673319,
+        "lineNumber": 0,
+        "quantity": 24.0,
+        "netUnitValue": 1747,
+        "netUnitValueRaw": 1747.05882352941,
+        "totalUnitValue": 2079,
+        "netAmount": 41929,
+        "taxAmount": 7967,
+        "totalAmount": 49896,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/11264.json",
+          "id": 11264,
+          "description": "TINTO 700 CC (SEC 12)",
+          "code": "7804330231119"
+        },
+        "note": "",
+        "relatedDetailId": 8649634,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705515/details/8673320.json",
+        "id": 8673320,
+        "lineNumber": 0,
+        "quantity": 54.0,
+        "netUnitValue": 584,
+        "netUnitValueRaw": 584.033613445378,
+        "totalUnitValue": 695,
+        "netAmount": 31538,
+        "taxAmount": 5992,
+        "totalAmount": 37530,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/11054.json",
+          "id": 11054,
+          "description": "LATA 350 CC (SEC 24)",
+          "code": "7802100010292"
+        },
+        "note": "",
+        "relatedDetailId": 8649635,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705515/details/8673321.json",
+        "id": 8673321,
+        "lineNumber": 0,
+        "quantity": 96.0,
+        "netUnitValue": 329,
+        "netUnitValueRaw": 328.571428571429,
+        "totalUnitValue": 391,
+        "netAmount": 31543,
+        "taxAmount": 5993,
+        "totalAmount": 37536,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/20626.json",
+          "id": 20626,
+          "description": "EXPRESS 237 CC (SEC 24)",
+          "code": "1551804909873"
+        },
+        "note": "",
+        "relatedDetailId": 8649636,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705515/details/8673322.json",
+        "id": 8673322,
+        "lineNumber": 0,
+        "quantity": 72.0,
+        "netUnitValue": 329,
+        "netUnitValueRaw": 328.571428571429,
+        "totalUnitValue": 391,
+        "netAmount": 23657,
+        "taxAmount": 4495,
+        "totalAmount": 28152,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/29467.json",
+          "id": 29467,
+          "description": "EXPRESS FULL SUGAR 237 CC (SEC 24)",
+          "code": "73773709590682"
+        },
+        "note": "",
+        "relatedDetailId": 8649637,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705515/details/8673323.json",
+        "id": 8673323,
+        "lineNumber": 0,
+        "quantity": 1.0,
+        "netUnitValue": 6933,
+        "netUnitValueRaw": 6932.7731092437,
+        "totalUnitValue": 8250,
+        "netAmount": 6933,
+        "taxAmount": 1317,
+        "totalAmount": 8250,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/11428.json",
+          "id": 11428,
+          "description": "BLANCO 5.0 LT (SEC 2)",
+          "code": "7804335411219"
+        },
+        "note": "",
+        "relatedDetailId": 8649638,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705515/details/8673324.json",
+        "id": 8673324,
+        "lineNumber": 0,
+        "quantity": 1.0,
+        "netUnitValue": 6933,
+        "netUnitValueRaw": 6932.7731092437,
+        "totalUnitValue": 8250,
+        "netAmount": 6933,
+        "taxAmount": 1317,
+        "totalAmount": 8250,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/11429.json",
+          "id": 11429,
+          "description": "TINTO 5.0 LT (SEC 2)",
+          "code": "7804335411110"
+        },
+        "note": "",
+        "relatedDetailId": 8649639,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705515/details/8673325.json",
+        "id": 8673325,
+        "lineNumber": 0,
+        "quantity": 24.0,
+        "netUnitValue": 689,
+        "netUnitValueRaw": 689.075630252101,
+        "totalUnitValue": 820,
+        "netAmount": 16538,
+        "taxAmount": 3142,
+        "totalAmount": 19680,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/11088.json",
+          "id": 11088,
+          "description": "LATA 350 CC (SEC 24)",
+          "code": "7802100006097"
+        },
+        "note": "",
+        "relatedDetailId": 8649640,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705515/details/8673326.json",
+        "id": 8673326,
+        "lineNumber": 0,
+        "quantity": 6.0,
+        "netUnitValue": 689,
+        "netUnitValueRaw": 689.075630252101,
+        "totalUnitValue": 820,
+        "netAmount": 4134,
+        "taxAmount": 786,
+        "totalAmount": 4920,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/9111.json",
+          "id": 9111,
+          "description": "C/GAS DESECHABLE 1.6 LT (SEC 6)",
+          "code": "7802820020953"
+        },
+        "note": "",
+        "relatedDetailId": 8649641,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705515/details/8673327.json",
+        "id": 8673327,
+        "lineNumber": 0,
+        "quantity": 4.0,
+        "netUnitValue": 630,
+        "netUnitValueRaw": 630.252100840336,
+        "totalUnitValue": 750,
+        "netAmount": 2521,
+        "taxAmount": 479,
+        "totalAmount": 3000,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/9109.json",
+          "id": 9109,
+          "description": "S/GAS DESECHABLE 1.6 LT (SEC 6)",
+          "code": "7802820021950"
+        },
+        "note": "",
+        "relatedDetailId": 8649642,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705515/details/8673328.json",
+        "id": 8673328,
+        "lineNumber": 0,
+        "quantity": 6.0,
+        "netUnitValue": 1496,
+        "netUnitValueRaw": 1495.79831932773,
+        "totalUnitValue": 1780,
+        "netAmount": 8975,
+        "taxAmount": 1705,
+        "totalAmount": 10680,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/10892.json",
+          "id": 10892,
+          "description": "DESECHABLE 1.5 LT (SEC 6)",
+          "code": "7801610001622"
+        },
+        "note": "",
+        "relatedDetailId": 8649643,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705515/details/8673329.json",
+        "id": 8673329,
+        "lineNumber": 0,
+        "quantity": 6.0,
+        "netUnitValue": 1496,
+        "netUnitValueRaw": 1495.79831932773,
+        "totalUnitValue": 1780,
+        "netAmount": 8975,
+        "taxAmount": 1705,
+        "totalAmount": 10680,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/29369.json",
+          "id": 29369,
+          "description": "FULL SUGAR DESECHABLE 1.5 LT (SEC 6)",
+          "code": "73481459910029"
+        },
+        "note": "",
+        "relatedDetailId": 8649644,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705515/details/8673330.json",
+        "id": 8673330,
+        "lineNumber": 0,
+        "quantity": 6.0,
+        "netUnitValue": 1496,
+        "netUnitValueRaw": 1495.79831932773,
+        "totalUnitValue": 1780,
+        "netAmount": 8975,
+        "taxAmount": 1705,
+        "totalAmount": 10680,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/10963.json",
+          "id": 10963,
+          "description": "DESECHABLE 1.5 LT (SEC 6)",
+          "code": "7801610005262"
+        },
+        "note": "",
+        "relatedDetailId": 8649645,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705515/details/8673331.json",
+        "id": 8673331,
+        "lineNumber": 0,
+        "quantity": 1.0,
+        "netUnitValue": 992,
+        "netUnitValueRaw": 991.596638655462,
+        "totalUnitValue": 1180,
+        "netAmount": 992,
+        "taxAmount": 188,
+        "totalAmount": 1180,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/28822.json",
+          "id": 28822,
+          "description": "MANGA X50 UNID DESECHABLE 300 CC (SEC 40)",
+          "code": "72486396527728"
+        },
+        "note": "",
+        "relatedDetailId": 8649646,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      }
+    ]
+  },
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3705515/attributes.json",
+    "count": 3,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/38.json",
+        "id": 38,
+        "name": "NOMBRE CONDUCTOR:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/39.json",
+        "id": 39,
+        "name": "RUT:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/40.json",
+        "id": 40,
+        "name": "PATENTE:",
+        "value": ""
+      }
+    ]
+  },
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3705515/references.json",
+    "count": 0,
+    "limit": 25,
+    "offset": 0,
+    "items": []
+  },
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3705515/sellers.json",
+    "count": 1,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/users/39.json",
+        "id": 39,
+        "firstName": "Stefania",
+        "lastName": "Uribe"
+      }
+    ]
+  }
+}

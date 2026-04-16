@@ -1,0 +1,299 @@
+{
+  "document": {
+    "href": "https://api.bsale.io/v1/documents/3705234.json",
+    "id": 3705234,
+    "emissionDate": 1775520000,
+    "expirationDate": 1775520000,
+    "generationDate": 1775569201,
+    "number": 65726,
+    "serialNumber": null,
+    "trackingNumber": "",
+    "totalAmount": 110000,
+    "netAmount": 92437,
+    "taxAmount": 17563,
+    "exemptAmount": 0,
+    "notExemptAmount": 92437,
+    "exportTotalAmount": 0,
+    "exportNetAmount": 0,
+    "exportTaxAmount": 0,
+    "exportExemptAmount": 0,
+    "commissionRate": 0,
+    "commissionNetAmount": 0,
+    "commissionTaxAmount": 0,
+    "commissionTotalAmount": 0,
+    "percentageTaxWithheld": 0.0,
+    "purchaseTaxAmount": 0,
+    "purchaseTotalAmount": 0,
+    "address": "Camino Ichuac s/n",
+    "municipality": "Puqueldon",
+    "city": "Puqueldon",
+    "urlTimbre": null,
+    "urlPublicView": "https://app2.bsale.cl/view/21884/d4d67d110d4b?sfd=99",
+    "urlPdf": "https://app2.bsale.cl/view/21884/d4d67d110d4b.pdf?sfd=99",
+    "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/d4d67d110d4b",
+    "urlPdfOriginal": "https://app2.bsale.cl/view/21884/d4d67d110d4b.pdf",
+    "token": "d4d67d110d4b",
+    "state": 0,
+    "commercialState": 0,
+    "cancellationStatus": 0,
+    "cancellationDate": null,
+    "urlXml": "https://api.bsale.cl/v1/21884/files/d4d67d110d4b.xml",
+    "ted": null,
+    "salesId": null,
+    "informedSii": 2,
+    "responseMsgSii": null,
+    "document_type": {
+      "href": "https://api.bsale.io/v1/document_types/33.json",
+      "id": "33"
+    },
+    "client": {
+      "href": "https://api.bsale.io/v1/clients/1858.json",
+      "id": "1858"
+    },
+    "office": {
+      "href": "https://api.bsale.io/v1/offices/1.json",
+      "id": "1"
+    },
+    "user": {
+      "href": "https://api.bsale.io/v1/users/85.json",
+      "id": "85"
+    },
+    "coin": {
+      "href": "https://api.bsale.io/v1/coins/1.json",
+      "id": "1"
+    },
+    "priceList": {
+      "href": "https://api.bsale.io/v1/price_lists/13.json",
+      "id": "13"
+    },
+    "references": {
+      "href": "https://api.bsale.io/v1/documents/3705234/references.json"
+    },
+    "document_taxes": {
+      "href": "https://api.bsale.io/v1/documents/3705234/document_taxes.json"
+    },
+    "details": {
+      "href": "https://api.bsale.io/v1/documents/3705234/details.json"
+    },
+    "sellers": {
+      "href": "https://api.bsale.io/v1/documents/3705234/sellers.json"
+    },
+    "attributes": {
+      "href": "https://api.bsale.io/v1/documents/3705234/attributes.json"
+    },
+    "payments": {
+      "href": "https://api.bsale.io/v1/documents/3705234/payments.json"
+    }
+  },
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3705234/details.json",
+    "count": 6,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/documents/3705234/details/8672236.json",
+        "id": 8672236,
+        "lineNumber": 0,
+        "quantity": 50.0,
+        "netUnitValue": 437,
+        "netUnitValueRaw": 436.974789915966,
+        "totalUnitValue": 520,
+        "netAmount": 21849,
+        "taxAmount": 4151,
+        "totalAmount": 26000,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/23817.json",
+          "id": 23817,
+          "description": "MOLIDA 15 GR (SEC 50)",
+          "code": "1612467488776"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705234/details/8672237.json",
+        "id": 8672237,
+        "lineNumber": 0,
+        "quantity": 25.0,
+        "netUnitValue": 353,
+        "netUnitValueRaw": 352.941176470588,
+        "totalUnitValue": 420,
+        "netAmount": 8824,
+        "taxAmount": 1676,
+        "totalAmount": 10500,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/23662.json",
+          "id": 23662,
+          "description": "ENTERO 20 GR (SEC 25)",
+          "code": "1610651742994"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705234/details/8672238.json",
+        "id": 8672238,
+        "lineNumber": 0,
+        "quantity": 25.0,
+        "netUnitValue": 824,
+        "netUnitValueRaw": 823.529411764706,
+        "totalUnitValue": 980,
+        "netAmount": 20588,
+        "taxAmount": 3912,
+        "totalAmount": 24500,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/27896.json",
+          "id": 27896,
+          "description": "MOLIDO 100 GR (SEC 25)",
+          "code": "69895703717306"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705234/details/8672239.json",
+        "id": 8672239,
+        "lineNumber": 0,
+        "quantity": 12.0,
+        "netUnitValue": 1471,
+        "netUnitValueRaw": 1470.58823529412,
+        "totalUnitValue": 1750,
+        "netAmount": 17647,
+        "taxAmount": 3353,
+        "totalAmount": 21000,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/18710.json",
+          "id": 18710,
+          "description": "VEGETAL 900 CC (SEC 12)",
+          "code": "1532730104239"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705234/details/8672240.json",
+        "id": 8672240,
+        "lineNumber": 0,
+        "quantity": 10.0,
+        "netUnitValue": 1521,
+        "netUnitValueRaw": 1521.00840336134,
+        "totalUnitValue": 1810,
+        "netAmount": 15210,
+        "taxAmount": 2890,
+        "totalAmount": 18100,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/20271.json",
+          "id": 20271,
+          "description": "PREGRANEADO 1 KG (SEC 10)",
+          "code": "1546098965927"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705234/details/8672241.json",
+        "id": 8672241,
+        "lineNumber": 0,
+        "quantity": 10.0,
+        "netUnitValue": 832,
+        "netUnitValueRaw": 831.932773109244,
+        "totalUnitValue": 990,
+        "netAmount": 8319,
+        "taxAmount": 1581,
+        "totalAmount": 9900,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/29799.json",
+          "id": 29799,
+          "description": "GRADO 2 LARGO 1 KG (SEC 10)",
+          "code": "74681739849500"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      }
+    ]
+  },
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3705234/attributes.json",
+    "count": 4,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/44.json",
+        "id": 44,
+        "name": "TIPO DE DOCUMENTO A GENERAR",
+        "value": "Boleta"
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/45.json",
+        "id": 45,
+        "name": "NOMBRE FANTASIA",
+        "value": "Yumifer"
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/46.json",
+        "id": 46,
+        "name": "FORMA DE PAGO",
+        "value": "Efectivo o deposito "
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/47.json",
+        "id": 47,
+        "name": "OBSERVACIONES",
+        "value": "Miércoles o viernes "
+      }
+    ]
+  },
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3705234/references.json",
+    "count": 0,
+    "limit": 25,
+    "offset": 0,
+    "items": []
+  },
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3705234/sellers.json",
+    "count": 1,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/users/85.json",
+        "id": 85,
+        "firstName": "Alvaro",
+        "lastName": "Vargas"
+      }
+    ]
+  }
+}

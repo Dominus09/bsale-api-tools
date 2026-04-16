@@ -1,0 +1,224 @@
+{
+  "document": {
+    "href": "https://api.bsale.io/v1/documents/3705338.json",
+    "id": 3705338,
+    "emissionDate": 1775520000,
+    "expirationDate": 1775520000,
+    "generationDate": 1775579247,
+    "number": 65725,
+    "serialNumber": null,
+    "trackingNumber": "",
+    "totalAmount": 196629,
+    "netAmount": 155213,
+    "taxAmount": 41416,
+    "exemptAmount": 0,
+    "notExemptAmount": 155213,
+    "exportTotalAmount": 0,
+    "exportNetAmount": 0,
+    "exportTaxAmount": 0,
+    "exportExemptAmount": 0,
+    "commissionRate": 0,
+    "commissionNetAmount": 0,
+    "commissionTaxAmount": 0,
+    "commissionTotalAmount": 0,
+    "percentageTaxWithheld": 0.0,
+    "purchaseTaxAmount": 0,
+    "purchaseTotalAmount": 0,
+    "address": "Pasaje Calletano Mella # 31a",
+    "municipality": "Queilen",
+    "city": "Queilen",
+    "urlTimbre": null,
+    "urlPublicView": "https://app2.bsale.cl/view/21884/ef213f082ef5?sfd=99",
+    "urlPdf": "https://app2.bsale.cl/view/21884/ef213f082ef5.pdf?sfd=99",
+    "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/ef213f082ef5",
+    "urlPdfOriginal": "https://app2.bsale.cl/view/21884/ef213f082ef5.pdf",
+    "token": "ef213f082ef5",
+    "state": 0,
+    "commercialState": 0,
+    "cancellationStatus": 0,
+    "cancellationDate": null,
+    "urlXml": "https://api.bsale.cl/v1/21884/files/ef213f082ef5.xml",
+    "ted": null,
+    "salesId": null,
+    "informedSii": 2,
+    "responseMsgSii": null,
+    "document_type": {
+      "href": "https://api.bsale.io/v1/document_types/33.json",
+      "id": "33"
+    },
+    "client": {
+      "href": "https://api.bsale.io/v1/clients/2848.json",
+      "id": "2848"
+    },
+    "office": {
+      "href": "https://api.bsale.io/v1/offices/1.json",
+      "id": "1"
+    },
+    "user": {
+      "href": "https://api.bsale.io/v1/users/56.json",
+      "id": "56"
+    },
+    "coin": {
+      "href": "https://api.bsale.io/v1/coins/1.json",
+      "id": "1"
+    },
+    "priceList": {
+      "href": "https://api.bsale.io/v1/price_lists/13.json",
+      "id": "13"
+    },
+    "references": {
+      "href": "https://api.bsale.io/v1/documents/3705338/references.json"
+    },
+    "document_taxes": {
+      "href": "https://api.bsale.io/v1/documents/3705338/document_taxes.json"
+    },
+    "details": {
+      "href": "https://api.bsale.io/v1/documents/3705338/details.json"
+    },
+    "sellers": {
+      "href": "https://api.bsale.io/v1/documents/3705338/sellers.json"
+    },
+    "attributes": {
+      "href": "https://api.bsale.io/v1/documents/3705338/attributes.json"
+    },
+    "payments": {
+      "href": "https://api.bsale.io/v1/documents/3705338/payments.json"
+    }
+  },
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3705338/details.json",
+    "count": 3,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/documents/3705338/details/8672661.json",
+        "id": 8672661,
+        "lineNumber": 0,
+        "quantity": 10.0,
+        "netUnitValue": 5584,
+        "netUnitValueRaw": 5583.613445378148,
+        "totalUnitValue": 6645,
+        "netAmount": 55836,
+        "taxAmount": 10609,
+        "totalAmount": 66445,
+        "netDiscount": 1727,
+        "totalDiscount": 2055,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/30222.json",
+          "id": 30222,
+          "description": "AFRECHILLO 25 KG (SEC 1)",
+          "code": "76313682637924"
+        },
+        "note": "",
+        "relatedDetailId": 8672231,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 3.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705338/details/8672662.json",
+        "id": 8672662,
+        "lineNumber": 0,
+        "quantity": 6.0,
+        "netUnitValue": 15320,
+        "netUnitValueRaw": 15320.076335877871,
+        "totalUnitValue": 20069,
+        "netAmount": 91921,
+        "taxAmount": 28496,
+        "totalAmount": 120416,
+        "netDiscount": 2843,
+        "totalDiscount": 3724,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/28216.json",
+          "id": 28216,
+          "description": "T/ USO PAPEL 25 KG (SEC 1)",
+          "code": "70932004860409"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 3.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705338/details/8672663.json",
+        "id": 8672663,
+        "lineNumber": 0,
+        "quantity": 10.0,
+        "netUnitValue": 746,
+        "netUnitValueRaw": 745.6412213740459,
+        "totalUnitValue": 977,
+        "netAmount": 7456,
+        "taxAmount": 2311,
+        "totalAmount": 9768,
+        "netDiscount": 231,
+        "totalDiscount": 302,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/29494.json",
+          "id": 29494,
+          "description": "TODO USO 1.0 KG (SEC 10)",
+          "code": "73835222799619"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 3.0
+      }
+    ]
+  },
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3705338/attributes.json",
+    "count": 4,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/44.json",
+        "id": 44,
+        "name": "TIPO DE DOCUMENTO A GENERAR",
+        "value": "Boleta"
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/45.json",
+        "id": 45,
+        "name": "NOMBRE FANTASIA",
+        "value": "Danisa "
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/46.json",
+        "id": 46,
+        "name": "FORMA DE PAGO",
+        "value": "Efectivo"
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/47.json",
+        "id": 47,
+        "name": "OBSERVACIONES",
+        "value": "Viernes "
+      }
+    ]
+  },
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3705338/references.json",
+    "count": 0,
+    "limit": 25,
+    "offset": 0,
+    "items": []
+  },
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3705338/sellers.json",
+    "count": 1,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/users/59.json",
+        "id": 59,
+        "firstName": "Vendedor ",
+        "lastName": "Vacacionista "
+      }
+    ]
+  }
+}

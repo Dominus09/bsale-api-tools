@@ -24,6 +24,7 @@ from backend.repositories.distribuidora.sync_repo import (
     ensure_distribuidora_schema,
     finish_sync_log,
     get_last_sync,
+    insert_sync_status_row,
     set_sync_state,
     start_sync_log,
 )
@@ -288,6 +289,21 @@ def sync_bsale_distribuidora_incremental(*, strict_token: bool = False) -> dict[
             client, cur, conn, desde_ts=desde_ts, hasta_ts=hasta_ts, stats=stats, log_id=log_id
         )
 
+        insert_sync_status_row(
+            cur,
+            sync_type="documents",
+            records_processed=int(stats.get("documents_processed", 0)),
+            status="success",
+        )
+        insert_sync_status_row(
+            cur,
+            sync_type="details",
+            records_processed=int(stats.get("details_rows", 0)),
+            status="success",
+        )
+        insert_sync_status_row(cur, sync_type="orders", records_processed=0, status="success")
+        insert_sync_status_row(cur, sync_type="sales", records_processed=0, status="success")
+
         set_sync_state(
             cur,
             process_name=PROCESS_INCREMENTAL,
@@ -434,6 +450,21 @@ def resync_bsale_distribuidora_range(
                     log_id=None,
                 )
             chunk_start = chunk_end
+
+        insert_sync_status_row(
+            cur,
+            sync_type="documents",
+            records_processed=int(stats.get("documents_processed", 0)),
+            status="success",
+        )
+        insert_sync_status_row(
+            cur,
+            sync_type="details",
+            records_processed=int(stats.get("details_rows", 0)),
+            status="success",
+        )
+        insert_sync_status_row(cur, sync_type="orders", records_processed=0, status="success")
+        insert_sync_status_row(cur, sync_type="sales", records_processed=0, status="success")
 
         if log_id is not None:
             finish_sync_log(cur, log_id, status="ok", stats=stats, message="resync_range completo")

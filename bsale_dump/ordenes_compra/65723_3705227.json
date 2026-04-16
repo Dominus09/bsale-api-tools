@@ -1,0 +1,249 @@
+{
+  "document": {
+    "href": "https://api.bsale.io/v1/documents/3705227.json",
+    "id": 3705227,
+    "emissionDate": 1775520000,
+    "expirationDate": 1775520000,
+    "generationDate": 1775567512,
+    "number": 65723,
+    "serialNumber": null,
+    "trackingNumber": "",
+    "totalAmount": 41048,
+    "netAmount": 34494,
+    "taxAmount": 6554,
+    "exemptAmount": 0,
+    "notExemptAmount": 34494,
+    "exportTotalAmount": 0,
+    "exportNetAmount": 0,
+    "exportTaxAmount": 0,
+    "exportExemptAmount": 0,
+    "commissionRate": 0,
+    "commissionNetAmount": 0,
+    "commissionTaxAmount": 0,
+    "commissionTotalAmount": 0,
+    "percentageTaxWithheld": 0.0,
+    "purchaseTaxAmount": 0,
+    "purchaseTotalAmount": 0,
+    "address": "san Antonio rural",
+    "municipality": "Ancud",
+    "city": "Ancud",
+    "urlTimbre": null,
+    "urlPublicView": "https://app2.bsale.cl/view/21884/03f4cda8a240?sfd=99",
+    "urlPdf": "https://app2.bsale.cl/view/21884/03f4cda8a240.pdf?sfd=99",
+    "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/03f4cda8a240",
+    "urlPdfOriginal": "https://app2.bsale.cl/view/21884/03f4cda8a240.pdf",
+    "token": "03f4cda8a240",
+    "state": 0,
+    "commercialState": 0,
+    "cancellationStatus": 0,
+    "cancellationDate": null,
+    "urlXml": "https://api.bsale.cl/v1/21884/files/03f4cda8a240.xml",
+    "ted": null,
+    "salesId": null,
+    "informedSii": 2,
+    "responseMsgSii": null,
+    "document_type": {
+      "href": "https://api.bsale.io/v1/document_types/33.json",
+      "id": "33"
+    },
+    "client": {
+      "href": "https://api.bsale.io/v1/clients/1545.json",
+      "id": "1545"
+    },
+    "office": {
+      "href": "https://api.bsale.io/v1/offices/1.json",
+      "id": "1"
+    },
+    "user": {
+      "href": "https://api.bsale.io/v1/users/89.json",
+      "id": "89"
+    },
+    "coin": {
+      "href": "https://api.bsale.io/v1/coins/1.json",
+      "id": "1"
+    },
+    "priceList": {
+      "href": "https://api.bsale.io/v1/price_lists/13.json",
+      "id": "13"
+    },
+    "references": {
+      "href": "https://api.bsale.io/v1/documents/3705227/references.json"
+    },
+    "document_taxes": {
+      "href": "https://api.bsale.io/v1/documents/3705227/document_taxes.json"
+    },
+    "details": {
+      "href": "https://api.bsale.io/v1/documents/3705227/details.json"
+    },
+    "sellers": {
+      "href": "https://api.bsale.io/v1/documents/3705227/sellers.json"
+    },
+    "attributes": {
+      "href": "https://api.bsale.io/v1/documents/3705227/attributes.json"
+    },
+    "payments": {
+      "href": "https://api.bsale.io/v1/documents/3705227/payments.json"
+    }
+  },
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3705227/details.json",
+    "count": 4,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/documents/3705227/details/8672220.json",
+        "id": 8672220,
+        "lineNumber": 0,
+        "quantity": 2.0,
+        "netUnitValue": 2429,
+        "netUnitValueRaw": 2428.57142857143,
+        "totalUnitValue": 2890,
+        "netAmount": 4857,
+        "taxAmount": 923,
+        "totalAmount": 5780,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/18524.json",
+          "id": 18524,
+          "description": "LIMPIAVIDRIO Y MULTIUSO GATILLO 750 CC (SEC 6)",
+          "code": "1532128979736"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705227/details/8672221.json",
+        "id": 8672221,
+        "lineNumber": 0,
+        "quantity": 2.0,
+        "netUnitValue": 9516,
+        "netUnitValueRaw": 9515.96638655462,
+        "totalUnitValue": 11324,
+        "netAmount": 19032,
+        "taxAmount": 3616,
+        "totalAmount": 22648,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/27686.json",
+          "id": 27686,
+          "description": "MAX X4 ROLLOS 500 MT (SEC 1)",
+          "code": "69384975817689"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705227/details/8672222.json",
+        "id": 8672222,
+        "lineNumber": 0,
+        "quantity": 4.0,
+        "netUnitValue": 1000,
+        "netUnitValueRaw": 1000.0,
+        "totalUnitValue": 1190,
+        "netAmount": 4000,
+        "taxAmount": 760,
+        "totalAmount": 4760,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/9221.json",
+          "id": 9221,
+          "description": "CLORO TRADICIONAL 1.0 LT (SEC 15)",
+          "code": "7805080100021"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705227/details/8672223.json",
+        "id": 8672223,
+        "lineNumber": 0,
+        "quantity": 2.0,
+        "netUnitValue": 3303,
+        "netUnitValueRaw": 3302.52100840336,
+        "totalUnitValue": 3930,
+        "netAmount": 6605,
+        "taxAmount": 1255,
+        "totalAmount": 7860,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/25555.json",
+          "id": 25555,
+          "description": "INSECTICIDA MOSCAS, MOSQUITOS Y ZANCUDOS 360 CC (SEC 12)",
+          "code": "1642198680337"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      }
+    ]
+  },
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3705227/attributes.json",
+    "count": 4,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/44.json",
+        "id": 44,
+        "name": "TIPO DE DOCUMENTO A GENERAR",
+        "value": "Boleta"
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/45.json",
+        "id": 45,
+        "name": "NOMBRE FANTASIA",
+        "value": "Entre puentes "
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/46.json",
+        "id": 46,
+        "name": "FORMA DE PAGO",
+        "value": "Efectivo "
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/47.json",
+        "id": 47,
+        "name": "OBSERVACIONES",
+        "value": "Entrega jueves "
+      }
+    ]
+  },
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3705227/references.json",
+    "count": 0,
+    "limit": 25,
+    "offset": 0,
+    "items": []
+  },
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3705227/sellers.json",
+    "count": 1,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/users/89.json",
+        "id": 89,
+        "firstName": "Ventas ",
+        "lastName": "Ruta Ancud"
+      }
+    ]
+  }
+}

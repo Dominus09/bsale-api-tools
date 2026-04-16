@@ -1,0 +1,164 @@
+{
+  "document": {
+    "href": "https://api.bsale.io/v1/documents/3707503.json",
+    "id": 3707503,
+    "emissionDate": 1775692800,
+    "expirationDate": 1775692800,
+    "generationDate": 1775707374,
+    "number": 2572413,
+    "serialNumber": null,
+    "trackingNumber": "69d724efec6e5315a528fad2",
+    "totalAmount": 5990,
+    "netAmount": 5034,
+    "taxAmount": 956,
+    "exemptAmount": 0,
+    "notExemptAmount": 5034,
+    "exportTotalAmount": 0,
+    "exportNetAmount": 0,
+    "exportTaxAmount": 0,
+    "exportExemptAmount": 0,
+    "commissionRate": 0,
+    "commissionNetAmount": 0,
+    "commissionTaxAmount": 0,
+    "commissionTotalAmount": 0,
+    "percentageTaxWithheld": 0.0,
+    "purchaseTaxAmount": 0,
+    "purchaseTotalAmount": 0,
+    "address": null,
+    "municipality": null,
+    "city": null,
+    "urlTimbre": "https://s3.amazonaws.com/bsale/21884/timbres/3dc58cd2015e.png",
+    "urlPublicView": "https://app2.bsale.cl/view/21884/3dc58cd2015e?sfd=99",
+    "urlPdf": "https://app2.bsale.cl/view/21884/3dc58cd2015e.pdf?sfd=99",
+    "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/3dc58cd2015e",
+    "urlPdfOriginal": "https://app2.bsale.cl/view/21884/3dc58cd2015e.pdf",
+    "token": "3dc58cd2015e",
+    "state": 0,
+    "commercialState": 0,
+    "cancellationStatus": 0,
+    "cancellationDate": null,
+    "urlXml": "https://api.bsale.cl/v1/21884/files/3dc58cd2015e.xml",
+    "ted": null,
+    "salesId": null,
+    "informedSii": 0,
+    "responseMsgSii": "Documento Recibido por el SII. Datos Coinciden con los Registrados",
+    "document_type": {
+      "href": "https://api.bsale.io/v1/document_types/1.json",
+      "id": "1"
+    },
+    "office": {
+      "href": "https://api.bsale.io/v1/offices/4.json",
+      "id": "4"
+    },
+    "user": {
+      "href": "https://api.bsale.io/v1/users/84.json",
+      "id": "84"
+    },
+    "coin": {
+      "href": "https://api.bsale.io/v1/coins/1.json",
+      "id": "1"
+    },
+    "priceList": {
+      "href": "https://api.bsale.io/v1/price_lists/12.json",
+      "id": "12"
+    },
+    "references": {
+      "href": "https://api.bsale.io/v1/documents/3707503/references.json"
+    },
+    "document_taxes": {
+      "href": "https://api.bsale.io/v1/documents/3707503/document_taxes.json"
+    },
+    "details": {
+      "href": "https://api.bsale.io/v1/documents/3707503/details.json"
+    },
+    "sellers": {
+      "href": "https://api.bsale.io/v1/documents/3707503/sellers.json"
+    },
+    "attributes": {
+      "href": "https://api.bsale.io/v1/documents/3707503/attributes.json"
+    },
+    "payments": {
+      "href": "https://api.bsale.io/v1/documents/3707503/payments.json"
+    }
+  },
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3707503/details.json",
+    "count": 1,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/documents/3707503/details/8677828.json",
+        "id": 8677828,
+        "lineNumber": 0,
+        "quantity": 1.0,
+        "netUnitValue": 5034,
+        "netUnitValueRaw": 5033.61344537815,
+        "totalUnitValue": 5990,
+        "netAmount": 5034,
+        "taxAmount": 956,
+        "totalAmount": 5990,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/18033.json",
+          "id": 18033,
+          "description": "",
+          "code": "1510096936113"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      }
+    ]
+  },
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3707503/attributes.json",
+    "count": 3,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/38.json",
+        "id": 38,
+        "name": "NOMBRE CONDUCTOR:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/39.json",
+        "id": 39,
+        "name": "RUT:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/40.json",
+        "id": 40,
+        "name": "PATENTE:",
+        "value": ""
+      }
+    ]
+  },
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3707503/references.json",
+    "count": 0,
+    "limit": 25,
+    "offset": 0,
+    "items": []
+  },
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3707503/sellers.json",
+    "count": 1,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/users/84.json",
+        "id": 84,
+        "firstName": "Caja",
+        "lastName": "Q1"
+      }
+    ]
+  }
+}

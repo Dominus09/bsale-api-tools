@@ -1,0 +1,249 @@
+{
+  "document": {
+    "href": "https://api.bsale.io/v1/documents/3707537.json",
+    "id": 3707537,
+    "emissionDate": 1775692800,
+    "expirationDate": 1775692800,
+    "generationDate": 1775737162,
+    "number": 65798,
+    "serialNumber": null,
+    "trackingNumber": "",
+    "totalAmount": 96762,
+    "netAmount": 74216,
+    "taxAmount": 22546,
+    "exemptAmount": 0,
+    "notExemptAmount": 74216,
+    "exportTotalAmount": 0,
+    "exportNetAmount": 0,
+    "exportTaxAmount": 0,
+    "exportExemptAmount": 0,
+    "commissionRate": 0,
+    "commissionNetAmount": 0,
+    "commissionTaxAmount": 0,
+    "commissionTotalAmount": 0,
+    "percentageTaxWithheld": 0.0,
+    "purchaseTaxAmount": 0,
+    "purchaseTotalAmount": 0,
+    "address": "Avenida aeropuerto s/n",
+    "municipality": "Melinka",
+    "city": "Melinka",
+    "urlTimbre": null,
+    "urlPublicView": "https://app2.bsale.cl/view/21884/e5fda20a145f?sfd=99",
+    "urlPdf": "https://app2.bsale.cl/view/21884/e5fda20a145f.pdf?sfd=99",
+    "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/e5fda20a145f",
+    "urlPdfOriginal": "https://app2.bsale.cl/view/21884/e5fda20a145f.pdf",
+    "token": "e5fda20a145f",
+    "state": 0,
+    "commercialState": 0,
+    "cancellationStatus": 0,
+    "cancellationDate": null,
+    "urlXml": "https://api.bsale.cl/v1/21884/files/e5fda20a145f.xml",
+    "ted": null,
+    "salesId": null,
+    "informedSii": 2,
+    "responseMsgSii": null,
+    "document_type": {
+      "href": "https://api.bsale.io/v1/document_types/33.json",
+      "id": "33"
+    },
+    "client": {
+      "href": "https://api.bsale.io/v1/clients/2819.json",
+      "id": "2819"
+    },
+    "office": {
+      "href": "https://api.bsale.io/v1/offices/1.json",
+      "id": "1"
+    },
+    "user": {
+      "href": "https://api.bsale.io/v1/users/80.json",
+      "id": "80"
+    },
+    "coin": {
+      "href": "https://api.bsale.io/v1/coins/1.json",
+      "id": "1"
+    },
+    "priceList": {
+      "href": "https://api.bsale.io/v1/price_lists/16.json",
+      "id": "16"
+    },
+    "references": {
+      "href": "https://api.bsale.io/v1/documents/3707537/references.json"
+    },
+    "document_taxes": {
+      "href": "https://api.bsale.io/v1/documents/3707537/document_taxes.json"
+    },
+    "details": {
+      "href": "https://api.bsale.io/v1/documents/3707537/details.json"
+    },
+    "sellers": {
+      "href": "https://api.bsale.io/v1/documents/3707537/sellers.json"
+    },
+    "attributes": {
+      "href": "https://api.bsale.io/v1/documents/3707537/attributes.json"
+    },
+    "payments": {
+      "href": "https://api.bsale.io/v1/documents/3707537/payments.json"
+    }
+  },
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3707537/details.json",
+    "count": 4,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/documents/3707537/details/8677894.json",
+        "id": 8677894,
+        "lineNumber": 0,
+        "quantity": 3.0,
+        "netUnitValue": 15794,
+        "netUnitValueRaw": 15793.893129771,
+        "totalUnitValue": 20690,
+        "netAmount": 47382,
+        "taxAmount": 14688,
+        "totalAmount": 62070,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/28216.json",
+          "id": 28216,
+          "description": "T/ USO PAPEL 25 KG (SEC 1)",
+          "code": "70932004860409"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707537/details/8677895.json",
+        "id": 8677895,
+        "lineNumber": 0,
+        "quantity": 24.0,
+        "netUnitValue": 639,
+        "netUnitValueRaw": 638.686131386861,
+        "totalUnitValue": 875,
+        "netAmount": 15328,
+        "taxAmount": 5672,
+        "totalAmount": 21000,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/10897.json",
+          "id": 10897,
+          "description": "LATA 350 CC (SEC 24)",
+          "code": "7801610001196"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707537/details/8677896.json",
+        "id": 8677896,
+        "lineNumber": 0,
+        "quantity": 6.0,
+        "netUnitValue": 959,
+        "netUnitValueRaw": 958.823529411765,
+        "totalUnitValue": 1141,
+        "netAmount": 5753,
+        "taxAmount": 1093,
+        "totalAmount": 6846,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/29035.json",
+          "id": 29035,
+          "description": "NARANJA 850 CC (SEC 6)",
+          "code": "72936586206025"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707537/details/8677897.json",
+        "id": 8677897,
+        "lineNumber": 0,
+        "quantity": 6.0,
+        "netUnitValue": 959,
+        "netUnitValueRaw": 958.823529411765,
+        "totalUnitValue": 1141,
+        "netAmount": 5753,
+        "taxAmount": 1093,
+        "totalAmount": 6846,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/29036.json",
+          "id": 29036,
+          "description": "ROJO 850 CC (SEC 6)",
+          "code": "72936626271907"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      }
+    ]
+  },
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3707537/attributes.json",
+    "count": 4,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/44.json",
+        "id": 44,
+        "name": "TIPO DE DOCUMENTO A GENERAR",
+        "value": "Boleta "
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/45.json",
+        "id": 45,
+        "name": "NOMBRE FANTASIA",
+        "value": "El viajero"
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/46.json",
+        "id": 46,
+        "name": "FORMA DE PAGO",
+        "value": "Efectivo "
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/47.json",
+        "id": 47,
+        "name": "OBSERVACIONES",
+        "value": "Viernes "
+      }
+    ]
+  },
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3707537/references.json",
+    "count": 0,
+    "limit": 25,
+    "offset": 0,
+    "items": []
+  },
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3707537/sellers.json",
+    "count": 1,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/users/80.json",
+        "id": 80,
+        "firstName": "Cristopher ",
+        "lastName": "Saldivia"
+      }
+    ]
+  }
+}

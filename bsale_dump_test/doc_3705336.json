@@ -1,0 +1,95 @@
+{
+  "document": {
+    "href": "https://api.bsale.io/v1/documents/3705336.json",
+    "id": 3705336,
+    "emissionDate": 1775520000,
+    "expirationDate": 1775520000,
+    "generationDate": 1775579177,
+    "number": 65724,
+    "serialNumber": null,
+    "trackingNumber": "",
+    "totalAmount": 223498,
+    "netAmount": 160213,
+    "taxAmount": 63285,
+    "exemptAmount": 0,
+    "notExemptAmount": 160213,
+    "exportTotalAmount": 0,
+    "exportNetAmount": 0,
+    "exportTaxAmount": 0,
+    "exportExemptAmount": 0,
+    "commissionRate": 0,
+    "commissionNetAmount": 0,
+    "commissionTaxAmount": 0,
+    "commissionTotalAmount": 0,
+    "percentageTaxWithheld": 0.0,
+    "purchaseTaxAmount": 0,
+    "purchaseTotalAmount": 0,
+    "address": "Balmaceda #229 ",
+    "municipality": "Castro ",
+    "city": "Castro",
+    "urlTimbre": null,
+    "urlPublicView": "https://app2.bsale.cl/view/21884/6ba62fc1afb4?sfd=99",
+    "urlPdf": "https://app2.bsale.cl/view/21884/6ba62fc1afb4.pdf?sfd=99",
+    "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/6ba62fc1afb4",
+    "urlPdfOriginal": "https://app2.bsale.cl/view/21884/6ba62fc1afb4.pdf",
+    "token": "6ba62fc1afb4",
+    "state": 0,
+    "commercialState": 0,
+    "cancellationStatus": 0,
+    "cancellationDate": null,
+    "urlXml": "https://api.bsale.cl/v1/21884/files/6ba62fc1afb4.xml",
+    "ted": null,
+    "salesId": null,
+    "informedSii": 2,
+    "responseMsgSii": null,
+    "document_type": {
+      "href": "https://api.bsale.io/v1/document_types/33.json",
+      "id": "33"
+    },
+    "client": {
+      "href": "https://api.bsale.io/v1/clients/2920.json",
+      "id": "2920"
+    },
+    "office": {
+      "href": "https://api.bsale.io/v1/offices/1.json",
+      "id": "1"
+    },
+    "user": {
+      "href": "https://api.bsale.io/v1/users/56.json",
+      "id": "56"
+    },
+    "coin": {
+      "href": "https://api.bsale.io/v1/coins/1.json",
+      "id": "1"
+    },
+    "priceList": {
+      "href": "https://api.bsale.io/v1/price_lists/14.json",
+      "id": "14"
+    },
+    "references": {
+      "href": "https://api.bsale.io/v1/documents/3705336/references.json"
+    },
+    "document_taxes": {
+      "href": "https://api.bsale.io/v1/documents/3705336/document_taxes.json"
+    },
+    "details": {
+      "href": "https://api.bsale.io/v1/documents/3705336/details.json"
+    },
+    "sellers": {
+      "href": "https://api.bsale.io/v1/documents/3705336/sellers.json"
+    },
+    "attributes": {
+      "href": "https://api.bsale.io/v1/documents/3705336/attributes.json"
+    },
+    "payments": {
+      "href": "https://api.bsale.io/v1/documents/3705336/payments.json"
+    }
+  },
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3705336/references.json",
+    "count": 0,
+    "limit": 25,
+    "offset": 0,
+    "items": []
+  }
+}

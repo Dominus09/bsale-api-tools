@@ -1,0 +1,424 @@
+{
+  "document": {
+    "href": "https://api.bsale.io/v1/documents/3707638.json",
+    "id": 3707638,
+    "emissionDate": 1775692800,
+    "expirationDate": 1775692800,
+    "generationDate": 1775748758,
+    "number": 65795,
+    "serialNumber": null,
+    "trackingNumber": "",
+    "totalAmount": 245096,
+    "netAmount": 189915,
+    "taxAmount": 55181,
+    "exemptAmount": 0,
+    "notExemptAmount": 189915,
+    "exportTotalAmount": 0,
+    "exportNetAmount": 0,
+    "exportTaxAmount": 0,
+    "exportExemptAmount": 0,
+    "commissionRate": 0,
+    "commissionNetAmount": 0,
+    "commissionTaxAmount": 0,
+    "commissionTotalAmount": 0,
+    "percentageTaxWithheld": 0.0,
+    "purchaseTaxAmount": 0,
+    "purchaseTotalAmount": 0,
+    "address": "Costanara sur s/n",
+    "municipality": "Melinka",
+    "city": "Melinka",
+    "urlTimbre": null,
+    "urlPublicView": "https://app2.bsale.cl/view/21884/a63d144b6f08?sfd=99",
+    "urlPdf": "https://app2.bsale.cl/view/21884/a63d144b6f08.pdf?sfd=99",
+    "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/a63d144b6f08",
+    "urlPdfOriginal": "https://app2.bsale.cl/view/21884/a63d144b6f08.pdf",
+    "token": "a63d144b6f08",
+    "state": 0,
+    "commercialState": 0,
+    "cancellationStatus": 0,
+    "cancellationDate": null,
+    "urlXml": "https://api.bsale.cl/v1/21884/files/a63d144b6f08.xml",
+    "ted": null,
+    "salesId": null,
+    "informedSii": 2,
+    "responseMsgSii": null,
+    "document_type": {
+      "href": "https://api.bsale.io/v1/document_types/33.json",
+      "id": "33"
+    },
+    "client": {
+      "href": "https://api.bsale.io/v1/clients/3085.json",
+      "id": "3085"
+    },
+    "office": {
+      "href": "https://api.bsale.io/v1/offices/1.json",
+      "id": "1"
+    },
+    "user": {
+      "href": "https://api.bsale.io/v1/users/56.json",
+      "id": "56"
+    },
+    "coin": {
+      "href": "https://api.bsale.io/v1/coins/1.json",
+      "id": "1"
+    },
+    "priceList": {
+      "href": "https://api.bsale.io/v1/price_lists/16.json",
+      "id": "16"
+    },
+    "references": {
+      "href": "https://api.bsale.io/v1/documents/3707638/references.json"
+    },
+    "document_taxes": {
+      "href": "https://api.bsale.io/v1/documents/3707638/document_taxes.json"
+    },
+    "details": {
+      "href": "https://api.bsale.io/v1/documents/3707638/details.json"
+    },
+    "sellers": {
+      "href": "https://api.bsale.io/v1/documents/3707638/sellers.json"
+    },
+    "attributes": {
+      "href": "https://api.bsale.io/v1/documents/3707638/attributes.json"
+    },
+    "payments": {
+      "href": "https://api.bsale.io/v1/documents/3707638/payments.json"
+    }
+  },
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3707638/details.json",
+    "count": 11,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/documents/3707638/details/8678398.json",
+        "id": 8678398,
+        "lineNumber": 0,
+        "quantity": 12.0,
+        "netUnitValue": 1065,
+        "netUnitValueRaw": 1065.23297491039,
+        "totalUnitValue": 1486,
+        "netAmount": 12783,
+        "taxAmount": 5049,
+        "totalAmount": 17832,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/11160.json",
+          "id": 11160,
+          "description": "RETORNABLE 1.0 LT (SEC 12)",
+          "code": "7802100430007"
+        },
+        "note": "",
+        "relatedDetailId": 8677881,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707638/details/8678399.json",
+        "id": 8678399,
+        "lineNumber": 0,
+        "quantity": 10.0,
+        "netUnitValue": 1065,
+        "netUnitValueRaw": 1065.23297491039,
+        "totalUnitValue": 1486,
+        "netAmount": 10652,
+        "taxAmount": 4208,
+        "totalAmount": 14860,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/11058.json",
+          "id": 11058,
+          "description": "RETORNABLE 1.2 LT (SEC 10)",
+          "code": "7802100001719"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707638/details/8678400.json",
+        "id": 8678400,
+        "lineNumber": 0,
+        "quantity": 10.0,
+        "netUnitValue": 1065,
+        "netUnitValueRaw": 1065.23297491039,
+        "totalUnitValue": 1486,
+        "netAmount": 10652,
+        "taxAmount": 4208,
+        "totalAmount": 14860,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/11074.json",
+          "id": 11074,
+          "description": "RETORNABLE 1.2 LT (SEC 10)",
+          "code": "7802100001887"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707638/details/8678401.json",
+        "id": 8678401,
+        "lineNumber": 0,
+        "quantity": 36.0,
+        "netUnitValue": 1641,
+        "netUnitValueRaw": 1640.86021505376,
+        "totalUnitValue": 2289,
+        "netAmount": 59070,
+        "taxAmount": 23333,
+        "totalAmount": 82404,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/11264.json",
+          "id": 11264,
+          "description": "TINTO 700 CC (SEC 12)",
+          "code": "7804330231119"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707638/details/8678402.json",
+        "id": 8678402,
+        "lineNumber": 0,
+        "quantity": 8.0,
+        "netUnitValue": 3135,
+        "netUnitValueRaw": 3134.45378151261,
+        "totalUnitValue": 3730,
+        "netAmount": 25076,
+        "taxAmount": 4764,
+        "totalAmount": 29840,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/29810.json",
+          "id": 29810,
+          "description": "PREMIUM XG 14 UNID (SEC 8)",
+          "code": "74714973898795"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707638/details/8678403.json",
+        "id": 8678403,
+        "lineNumber": 0,
+        "quantity": 10.0,
+        "netUnitValue": 1983,
+        "netUnitValueRaw": 1983.19327731092,
+        "totalUnitValue": 2360,
+        "netAmount": 19832,
+        "taxAmount": 3768,
+        "totalAmount": 23600,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/8784.json",
+          "id": 8784,
+          "description": "LARGO ANCHO G1 1.0 KG (SEC 10)",
+          "code": "7802615006551"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707638/details/8678404.json",
+        "id": 8678404,
+        "lineNumber": 0,
+        "quantity": 25.0,
+        "netUnitValue": 790,
+        "netUnitValueRaw": 789.915966386555,
+        "totalUnitValue": 940,
+        "netAmount": 19748,
+        "taxAmount": 3752,
+        "totalAmount": 23500,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/8905.json",
+          "id": 8905,
+          "description": "SPAGHETTI N° 5 400 GR (SEC 25)",
+          "code": "7802575004437"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707638/details/8678405.json",
+        "id": 8678405,
+        "lineNumber": 0,
+        "quantity": 10.0,
+        "netUnitValue": 513,
+        "netUnitValueRaw": 512.605042016807,
+        "totalUnitValue": 610,
+        "netAmount": 5126,
+        "taxAmount": 974,
+        "totalAmount": 6100,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/9046.json",
+          "id": 9046,
+          "description": "FINA 1 KG (SEC 10)",
+          "code": "7803600031275"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707638/details/8678406.json",
+        "id": 8678406,
+        "lineNumber": 0,
+        "quantity": 3.0,
+        "netUnitValue": 4782,
+        "netUnitValueRaw": 4781.51260504202,
+        "totalUnitValue": 5690,
+        "netAmount": 14345,
+        "taxAmount": 2725,
+        "totalAmount": 17070,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/29548.json",
+          "id": 29548,
+          "description": "MATIC  BICARBONATO 2.7 KG (SEC 7)",
+          "code": "74015669853770"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707638/details/8678407.json",
+        "id": 8678407,
+        "lineNumber": 0,
+        "quantity": 6.0,
+        "netUnitValue": 1395,
+        "netUnitValueRaw": 1394.95798319328,
+        "totalUnitValue": 1660,
+        "netAmount": 8370,
+        "taxAmount": 1590,
+        "totalAmount": 9960,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/18722.json",
+          "id": 18722,
+          "description": "BEBE 900 CC (SEC 12)",
+          "code": "1532732183430"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707638/details/8678408.json",
+        "id": 8678408,
+        "lineNumber": 0,
+        "quantity": 3.0,
+        "netUnitValue": 1420,
+        "netUnitValueRaw": 1420.16806722689,
+        "totalUnitValue": 1690,
+        "netAmount": 4261,
+        "taxAmount": 810,
+        "totalAmount": 5070,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/18716.json",
+          "id": 18716,
+          "description": "CLORO GEL 900 GR (SEC 12)",
+          "code": "1532731610832"
+        },
+        "note": "",
+        "relatedDetailId": 0,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      }
+    ]
+  },
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3707638/attributes.json",
+    "count": 4,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/44.json",
+        "id": 44,
+        "name": "TIPO DE DOCUMENTO A GENERAR",
+        "value": "Boleta "
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/45.json",
+        "id": 45,
+        "name": "NOMBRE FANTASIA",
+        "value": "Moralea"
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/46.json",
+        "id": 46,
+        "name": "FORMA DE PAGO",
+        "value": "Transferencia "
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/47.json",
+        "id": 47,
+        "name": "OBSERVACIONES",
+        "value": "Viernes "
+      }
+    ]
+  },
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3707638/references.json",
+    "count": 0,
+    "limit": 25,
+    "offset": 0,
+    "items": []
+  },
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3707638/sellers.json",
+    "count": 1,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/users/80.json",
+        "id": 80,
+        "firstName": "Cristopher ",
+        "lastName": "Saldivia"
+      }
+    ]
+  }
+}

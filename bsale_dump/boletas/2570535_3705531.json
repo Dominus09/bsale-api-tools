@@ -1,0 +1,268 @@
+{
+  "document": {
+    "href": "https://api.bsale.io/v1/documents/3705531.json",
+    "id": 3705531,
+    "emissionDate": 1775520000,
+    "expirationDate": 1775520000,
+    "generationDate": 1775589275,
+    "number": 2570535,
+    "serialNumber": null,
+    "trackingNumber": "69d5579ce5b80cdcabd88f37",
+    "totalAmount": 423926,
+    "netAmount": 356240,
+    "taxAmount": 67686,
+    "exemptAmount": 0,
+    "notExemptAmount": 356240,
+    "exportTotalAmount": 0,
+    "exportNetAmount": 0,
+    "exportTaxAmount": 0,
+    "exportExemptAmount": 0,
+    "commissionRate": 0,
+    "commissionNetAmount": 0,
+    "commissionTaxAmount": 0,
+    "commissionTotalAmount": 0,
+    "percentageTaxWithheld": 0.0,
+    "purchaseTaxAmount": 0,
+    "purchaseTotalAmount": 0,
+    "address": "Detif Rural S/N",
+    "municipality": "Puqueldon",
+    "city": "Puqueldon",
+    "urlTimbre": "https://s3.amazonaws.com/bsale/21884/timbres/32ac0c1d416a.png",
+    "urlPublicView": "https://app2.bsale.cl/view/21884/32ac0c1d416a?sfd=99",
+    "urlPdf": "https://app2.bsale.cl/view/21884/32ac0c1d416a.pdf?sfd=99",
+    "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/32ac0c1d416a",
+    "urlPdfOriginal": "https://app2.bsale.cl/view/21884/32ac0c1d416a.pdf",
+    "token": "32ac0c1d416a",
+    "state": 0,
+    "commercialState": 0,
+    "cancellationStatus": 0,
+    "cancellationDate": null,
+    "urlXml": "https://api.bsale.cl/v1/21884/files/32ac0c1d416a.xml",
+    "ted": null,
+    "salesId": null,
+    "informedSii": 0,
+    "responseMsgSii": "Documento Recibido por el SII. Datos Coinciden con los Registrados",
+    "document_type": {
+      "href": "https://api.bsale.io/v1/document_types/1.json",
+      "id": "1"
+    },
+    "client": {
+      "href": "https://api.bsale.io/v1/clients/2624.json",
+      "id": "2624"
+    },
+    "office": {
+      "href": "https://api.bsale.io/v1/offices/1.json",
+      "id": "1"
+    },
+    "user": {
+      "href": "https://api.bsale.io/v1/users/49.json",
+      "id": "49"
+    },
+    "coin": {
+      "href": "https://api.bsale.io/v1/coins/1.json",
+      "id": "1"
+    },
+    "priceList": {
+      "href": "https://api.bsale.io/v1/price_lists/14.json",
+      "id": "14"
+    },
+    "references": {
+      "href": "https://api.bsale.io/v1/documents/3705531/references.json"
+    },
+    "document_taxes": {
+      "href": "https://api.bsale.io/v1/documents/3705531/document_taxes.json"
+    },
+    "details": {
+      "href": "https://api.bsale.io/v1/documents/3705531/details.json"
+    },
+    "sellers": {
+      "href": "https://api.bsale.io/v1/documents/3705531/sellers.json"
+    },
+    "attributes": {
+      "href": "https://api.bsale.io/v1/documents/3705531/attributes.json"
+    },
+    "payments": {
+      "href": "https://api.bsale.io/v1/documents/3705531/payments.json"
+    }
+  },
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3705531/details.json",
+    "count": 5,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/documents/3705531/details/8673473.json",
+        "id": 8673473,
+        "lineNumber": 0,
+        "quantity": 288.0,
+        "netUnitValue": 750,
+        "netUnitValueRaw": 749.9159663865546,
+        "totalUnitValue": 892,
+        "netAmount": 215975,
+        "taxAmount": 41037,
+        "totalAmount": 257011,
+        "netDiscount": 6679,
+        "totalDiscount": 7949,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/23110.json",
+          "id": 23110,
+          "description": "DESECHABLE 330 CC (SEC 24)",
+          "code": "1601053357515"
+        },
+        "note": "",
+        "relatedDetailId": 8672794,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 3.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705531/details/8673474.json",
+        "id": 8673474,
+        "lineNumber": 0,
+        "quantity": 36.0,
+        "netUnitValue": 1052,
+        "netUnitValueRaw": 1051.5126050420188,
+        "totalUnitValue": 1251,
+        "netAmount": 37854,
+        "taxAmount": 7192,
+        "totalAmount": 45047,
+        "netDiscount": 1171,
+        "totalDiscount": 1393,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/29039.json",
+          "id": 29039,
+          "description": "DESECHABLE 620 CC (SEC 12)",
+          "code": "72962606191627"
+        },
+        "note": "",
+        "relatedDetailId": 8672795,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 3.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705531/details/8673475.json",
+        "id": 8673475,
+        "lineNumber": 0,
+        "quantity": 72.0,
+        "netUnitValue": 677,
+        "netUnitValueRaw": 677.3697478991593,
+        "totalUnitValue": 806,
+        "netAmount": 48771,
+        "taxAmount": 9266,
+        "totalAmount": 58037,
+        "netDiscount": 1508,
+        "totalDiscount": 1795,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/12752.json",
+          "id": 12752,
+          "description": "LATA 470 CC (SEC 24)",
+          "code": "1473620432"
+        },
+        "note": "",
+        "relatedDetailId": 8672796,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 3.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705531/details/8673476.json",
+        "id": 8673476,
+        "lineNumber": 0,
+        "quantity": 4.0,
+        "netUnitValue": 6123,
+        "netUnitValueRaw": 6122.68907563025,
+        "totalUnitValue": 7286,
+        "netAmount": 24491,
+        "taxAmount": 4653,
+        "totalAmount": 29144,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/28381.json",
+          "id": 28381,
+          "description": "X 12 LATA 354 CC (SEC 1)",
+          "code": "71406317183447"
+        },
+        "note": "",
+        "relatedDetailId": 8672797,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705531/details/8673477.json",
+        "id": 8673477,
+        "lineNumber": 0,
+        "quantity": 48.0,
+        "netUnitValue": 607,
+        "netUnitValueRaw": 607.268907563025,
+        "totalUnitValue": 723,
+        "netAmount": 29149,
+        "taxAmount": 5538,
+        "totalAmount": 34687,
+        "netDiscount": 901,
+        "totalDiscount": 1073,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/18596.json",
+          "id": 18596,
+          "description": "LATA 473 CC (SEC 24)",
+          "code": "1532457345584"
+        },
+        "note": "",
+        "relatedDetailId": 8672798,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 3.0
+      }
+    ]
+  },
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3705531/attributes.json",
+    "count": 3,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/38.json",
+        "id": 38,
+        "name": "NOMBRE CONDUCTOR:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/39.json",
+        "id": 39,
+        "name": "RUT:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/40.json",
+        "id": 40,
+        "name": "PATENTE:",
+        "value": ""
+      }
+    ]
+  },
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3705531/references.json",
+    "count": 0,
+    "limit": 25,
+    "offset": 0,
+    "items": []
+  },
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3705531/sellers.json",
+    "count": 1,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/users/85.json",
+        "id": 85,
+        "firstName": "Alvaro",
+        "lastName": "Vargas"
+      }
+    ]
+  }
+}

@@ -1,0 +1,243 @@
+{
+  "document": {
+    "href": "https://api.bsale.io/v1/documents/3705439.json",
+    "id": 3705439,
+    "emissionDate": 1775520000,
+    "expirationDate": 1775520000,
+    "generationDate": 1775585229,
+    "number": 2570460,
+    "serialNumber": null,
+    "trackingNumber": "69d547ce8a0321eb925a3c1f",
+    "totalAmount": 319896,
+    "netAmount": 268820,
+    "taxAmount": 51076,
+    "exemptAmount": 0,
+    "notExemptAmount": 268820,
+    "exportTotalAmount": 0,
+    "exportNetAmount": 0,
+    "exportTaxAmount": 0,
+    "exportExemptAmount": 0,
+    "commissionRate": 0,
+    "commissionNetAmount": 0,
+    "commissionTaxAmount": 0,
+    "commissionTotalAmount": 0,
+    "percentageTaxWithheld": 0.0,
+    "purchaseTaxAmount": 0,
+    "purchaseTotalAmount": 0,
+    "address": "Pasaje los fiordos S/N San antonio",
+    "municipality": "Quellon",
+    "city": "Quellon",
+    "urlTimbre": "https://s3.amazonaws.com/bsale/21884/timbres/e99563a54369.png",
+    "urlPublicView": "https://app2.bsale.cl/view/21884/e99563a54369?sfd=99",
+    "urlPdf": "https://app2.bsale.cl/view/21884/e99563a54369.pdf?sfd=99",
+    "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/e99563a54369",
+    "urlPdfOriginal": "https://app2.bsale.cl/view/21884/e99563a54369.pdf",
+    "token": "e99563a54369",
+    "state": 0,
+    "commercialState": 0,
+    "cancellationStatus": 0,
+    "cancellationDate": null,
+    "urlXml": "https://api.bsale.cl/v1/21884/files/e99563a54369.xml",
+    "ted": null,
+    "salesId": null,
+    "informedSii": 0,
+    "responseMsgSii": "Documento Recibido por el SII. Datos Coinciden con los Registrados",
+    "document_type": {
+      "href": "https://api.bsale.io/v1/document_types/1.json",
+      "id": "1"
+    },
+    "client": {
+      "href": "https://api.bsale.io/v1/clients/738.json",
+      "id": "738"
+    },
+    "office": {
+      "href": "https://api.bsale.io/v1/offices/1.json",
+      "id": "1"
+    },
+    "user": {
+      "href": "https://api.bsale.io/v1/users/49.json",
+      "id": "49"
+    },
+    "coin": {
+      "href": "https://api.bsale.io/v1/coins/1.json",
+      "id": "1"
+    },
+    "priceList": {
+      "href": "https://api.bsale.io/v1/price_lists/13.json",
+      "id": "13"
+    },
+    "references": {
+      "href": "https://api.bsale.io/v1/documents/3705439/references.json"
+    },
+    "document_taxes": {
+      "href": "https://api.bsale.io/v1/documents/3705439/document_taxes.json"
+    },
+    "details": {
+      "href": "https://api.bsale.io/v1/documents/3705439/details.json"
+    },
+    "sellers": {
+      "href": "https://api.bsale.io/v1/documents/3705439/sellers.json"
+    },
+    "attributes": {
+      "href": "https://api.bsale.io/v1/documents/3705439/attributes.json"
+    },
+    "payments": {
+      "href": "https://api.bsale.io/v1/documents/3705439/payments.json"
+    }
+  },
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3705439/details.json",
+    "count": 4,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/documents/3705439/details/8672948.json",
+        "id": 8672948,
+        "lineNumber": 0,
+        "quantity": 240.0,
+        "netUnitValue": 626,
+        "netUnitValueRaw": 626.050420168067,
+        "totalUnitValue": 745,
+        "netAmount": 150252,
+        "taxAmount": 28548,
+        "totalAmount": 178800,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/11053.json",
+          "id": 11053,
+          "description": "LATA 470 CC (SEC 24)",
+          "code": "7802100505323"
+        },
+        "note": "",
+        "relatedDetailId": 8672322,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705439/details/8672949.json",
+        "id": 8672949,
+        "lineNumber": 0,
+        "quantity": 48.0,
+        "netUnitValue": 790,
+        "netUnitValueRaw": 789.915966386555,
+        "totalUnitValue": 940,
+        "netAmount": 37916,
+        "taxAmount": 7204,
+        "totalAmount": 45120,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/23110.json",
+          "id": 23110,
+          "description": "DESECHABLE 330 CC (SEC 24)",
+          "code": "1601053357515"
+        },
+        "note": "",
+        "relatedDetailId": 8672323,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705439/details/8672950.json",
+        "id": 8672950,
+        "lineNumber": 0,
+        "quantity": 8.0,
+        "netUnitValue": 3361,
+        "netUnitValueRaw": 3360.50420168067,
+        "totalUnitValue": 3999,
+        "netAmount": 26884,
+        "taxAmount": 5108,
+        "totalAmount": 31992,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/11253.json",
+          "id": 11253,
+          "description": "BLANCO 2.0 LT (SEC 8)",
+          "code": "7804300121457"
+        },
+        "note": "",
+        "relatedDetailId": 8672324,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705439/details/8672951.json",
+        "id": 8672951,
+        "lineNumber": 0,
+        "quantity": 16.0,
+        "netUnitValue": 3361,
+        "netUnitValueRaw": 3360.50420168067,
+        "totalUnitValue": 3999,
+        "netAmount": 53768,
+        "taxAmount": 10216,
+        "totalAmount": 63984,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/11254.json",
+          "id": 11254,
+          "description": "TINTO 2.0 LT (SEC 8)",
+          "code": "7804300121440"
+        },
+        "note": "",
+        "relatedDetailId": 8672325,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      }
+    ]
+  },
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3705439/attributes.json",
+    "count": 3,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/38.json",
+        "id": 38,
+        "name": "NOMBRE CONDUCTOR:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/39.json",
+        "id": 39,
+        "name": "RUT:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/40.json",
+        "id": 40,
+        "name": "PATENTE:",
+        "value": ""
+      }
+    ]
+  },
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3705439/references.json",
+    "count": 0,
+    "limit": 25,
+    "offset": 0,
+    "items": []
+  },
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3705439/sellers.json",
+    "count": 1,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/users/85.json",
+        "id": 85,
+        "firstName": "Alvaro",
+        "lastName": "Vargas"
+      }
+    ]
+  }
+}

@@ -1,0 +1,250 @@
+{
+  "document": {
+    "href": "https://api.bsale.io/v1/documents/3705438.json",
+    "id": 3705438,
+    "emissionDate": 1775520000,
+    "expirationDate": 1775520000,
+    "generationDate": 1775585203,
+    "rcofDate": 1775520000,
+    "number": 48532,
+    "serialNumber": null,
+    "trackingNumber": "",
+    "totalAmount": 79102,
+    "netAmount": 54273,
+    "taxAmount": 24829,
+    "exemptAmount": 0,
+    "notExemptAmount": 54273,
+    "exportTotalAmount": 0,
+    "exportNetAmount": 0,
+    "exportTaxAmount": 0,
+    "exportExemptAmount": 0,
+    "commissionRate": 0,
+    "commissionNetAmount": 0,
+    "commissionTaxAmount": 0,
+    "commissionTotalAmount": 0,
+    "percentageTaxWithheld": 0.0,
+    "purchaseTaxAmount": 0,
+    "purchaseTotalAmount": 0,
+    "address": "Ladrlleros 901",
+    "municipality": "Quellon",
+    "city": "Quellon",
+    "urlTimbre": "https://s3.amazonaws.com/bsale/21884/timbres/ee05267dc8fc.png",
+    "urlPublicView": "https://app2.bsale.cl/view/21884/ee05267dc8fc?sfd=99",
+    "urlPdf": "https://app2.bsale.cl/view/21884/ee05267dc8fc.pdf?sfd=99",
+    "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/ee05267dc8fc",
+    "urlPdfOriginal": "https://app2.bsale.cl/view/21884/ee05267dc8fc.pdf",
+    "token": "ee05267dc8fc",
+    "state": 0,
+    "commercialState": 0,
+    "cancellationStatus": 0,
+    "cancellationDate": null,
+    "urlXml": "https://api.bsale.cl/v1/21884/files/ee05267dc8fc.xml",
+    "ted": "<TED version=\"1.0\"><DD><RE>76885233-2</RE><TD>33</TD><F>48532</F><FE>2026-04-07</FE><RR>18129341-1</RR><RSR>NAYARETH MARISOL PAREDES PAREDES</RSR><MNT>79102</MNT><IT1>HEINEKEN RETORNABLE 970 CC SEC 12 </IT1><CAF version=\"1.0\"><DA><RE>76885233-2</RE><RS>LA QUILLOTANA SPA</RS><TD>33</TD><RNG><D>46949</D><H>49514</H></RNG><FA>2025-12-07</FA><RSAPK><M>oKfWprzg372Xxff/aATP9KRvJM2uHsx/LfUfE9NYHWiLWhgrt4CB/Zlyl2qBkWRdrUoil5y9NnMLvWUNPoW1zQ==</M><E>Aw==</E></RSAPK><IDK>300</IDK></DA><FRMA algoritmo=\"SHA1withRSA\">OJ66iUG124lJrEqGCONMbESOFgj3d9T1UnL5w9BtMsh9ufsWS6Xx7qlTSrJu1dBNT1rOjg9oxnGDk51nM7uB0Q==</FRMA></CAF><TSTED>2026-04-07T14:06:43</TSTED></DD><FRMT algoritmo=\"SHA1withRSA\">EG4oclsiLyM0Wn4NYklRMi8uhcr64M90Ff6ImFYuwVSdhWrbWQljub5gJNEB5ZaoXV1xAXJoXjcpAViC75q3/Q==</FRMT></TED>",
+    "salesId": null,
+    "informedSii": 0,
+    "responseMsgSii": "Proceso Finalizado Correctamente!",
+    "document_type": {
+      "href": "https://api.bsale.io/v1/document_types/6.json",
+      "id": "6"
+    },
+    "client": {
+      "href": "https://api.bsale.io/v1/clients/2552.json",
+      "id": "2552"
+    },
+    "office": {
+      "href": "https://api.bsale.io/v1/offices/1.json",
+      "id": "1"
+    },
+    "user": {
+      "href": "https://api.bsale.io/v1/users/49.json",
+      "id": "49"
+    },
+    "coin": {
+      "href": "https://api.bsale.io/v1/coins/1.json",
+      "id": "1"
+    },
+    "priceList": {
+      "href": "https://api.bsale.io/v1/price_lists/13.json",
+      "id": "13"
+    },
+    "references": {
+      "href": "https://api.bsale.io/v1/documents/3705438/references.json"
+    },
+    "document_taxes": {
+      "href": "https://api.bsale.io/v1/documents/3705438/document_taxes.json"
+    },
+    "details": {
+      "href": "https://api.bsale.io/v1/documents/3705438/details.json"
+    },
+    "sellers": {
+      "href": "https://api.bsale.io/v1/documents/3705438/sellers.json"
+    },
+    "attributes": {
+      "href": "https://api.bsale.io/v1/documents/3705438/attributes.json"
+    },
+    "payments": {
+      "href": "https://api.bsale.io/v1/documents/3705438/payments.json"
+    }
+  },
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3705438/details.json",
+    "count": 4,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/documents/3705438/details/8672944.json",
+        "id": 8672944,
+        "lineNumber": 0,
+        "quantity": 24.0,
+        "netUnitValue": 977,
+        "netUnitValueRaw": 977.060931899642,
+        "totalUnitValue": 1363,
+        "netAmount": 23449,
+        "taxAmount": 9263,
+        "totalAmount": 32712,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/11080.json",
+          "id": 11080,
+          "description": "RETORNABLE 970 CC (SEC 12)",
+          "code": "7802100002242"
+        },
+        "note": "",
+        "relatedDetailId": 8672389,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705438/details/8672945.json",
+        "id": 8672945,
+        "lineNumber": 0,
+        "quantity": 1.0,
+        "netUnitValue": 5216,
+        "netUnitValueRaw": 5215.94684385382,
+        "totalUnitValue": 7850,
+        "netAmount": 5216,
+        "taxAmount": 2634,
+        "totalAmount": 7850,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/11614.json",
+          "id": 11614,
+          "description": "AÑEJO 1.0 LT (SEC 12)",
+          "code": "7461323129503"
+        },
+        "note": "",
+        "relatedDetailId": 8672390,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705438/details/8672946.json",
+        "id": 8672946,
+        "lineNumber": 0,
+        "quantity": 1.0,
+        "netUnitValue": 11468,
+        "netUnitValueRaw": 11468.438538206,
+        "totalUnitValue": 17260,
+        "netAmount": 11468,
+        "taxAmount": 5792,
+        "totalAmount": 17260,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/16081.json",
+          "id": 16081,
+          "description": "1 LT (SEC 6)",
+          "code": "1502221115924"
+        },
+        "note": "",
+        "relatedDetailId": 8672391,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705438/details/8672947.json",
+        "id": 8672947,
+        "lineNumber": 0,
+        "quantity": 2.0,
+        "netUnitValue": 7070,
+        "netUnitValueRaw": 7069.76744186047,
+        "totalUnitValue": 10640,
+        "netAmount": 14140,
+        "taxAmount": 7140,
+        "totalAmount": 21280,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/25017.json",
+          "id": 25017,
+          "description": "750 CC (SEC 12)",
+          "code": "1632952038948"
+        },
+        "note": "",
+        "relatedDetailId": 8672392,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      }
+    ]
+  },
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3705438/attributes.json",
+    "count": 4,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/41.json",
+        "id": 41,
+        "name": "Nombre Conductor:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/42.json",
+        "id": 42,
+        "name": "Rut:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/43.json",
+        "id": 43,
+        "name": "Patente:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/50.json",
+        "id": 50,
+        "name": "NOTAS ASOCIADAS",
+        "value": ""
+      }
+    ]
+  },
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3705438/references.json",
+    "count": 0,
+    "limit": 25,
+    "offset": 0,
+    "items": []
+  },
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3705438/sellers.json",
+    "count": 1,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/users/85.json",
+        "id": 85,
+        "firstName": "Alvaro",
+        "lastName": "Vargas"
+      }
+    ]
+  }
+}

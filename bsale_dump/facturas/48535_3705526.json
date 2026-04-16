@@ -1,0 +1,325 @@
+{
+  "document": {
+    "href": "https://api.bsale.io/v1/documents/3705526.json",
+    "id": 3705526,
+    "emissionDate": 1775520000,
+    "expirationDate": 1775520000,
+    "generationDate": 1775589192,
+    "rcofDate": 1775520000,
+    "number": 48535,
+    "serialNumber": null,
+    "trackingNumber": "",
+    "totalAmount": 492687,
+    "netAmount": 355553,
+    "taxAmount": 137134,
+    "exemptAmount": 0,
+    "notExemptAmount": 355553,
+    "exportTotalAmount": 0,
+    "exportNetAmount": 0,
+    "exportTaxAmount": 0,
+    "exportExemptAmount": 0,
+    "commissionRate": 0,
+    "commissionNetAmount": 0,
+    "commissionTaxAmount": 0,
+    "commissionTotalAmount": 0,
+    "percentageTaxWithheld": 0.0,
+    "purchaseTaxAmount": 0,
+    "purchaseTotalAmount": 0,
+    "address": "Quinched rural s/n",
+    "municipality": "Chonchi",
+    "city": "Chonchi",
+    "urlTimbre": "https://s3.amazonaws.com/bsale/21884/timbres/23006a8c4ebd.png",
+    "urlPublicView": "https://app2.bsale.cl/view/21884/23006a8c4ebd?sfd=99",
+    "urlPdf": "https://app2.bsale.cl/view/21884/23006a8c4ebd.pdf?sfd=99",
+    "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/23006a8c4ebd",
+    "urlPdfOriginal": "https://app2.bsale.cl/view/21884/23006a8c4ebd.pdf",
+    "token": "23006a8c4ebd",
+    "state": 0,
+    "commercialState": 0,
+    "cancellationStatus": 0,
+    "cancellationDate": null,
+    "urlXml": "https://api.bsale.cl/v1/21884/files/23006a8c4ebd.xml",
+    "ted": "<TED version=\"1.0\"><DD><RE>76885233-2</RE><TD>33</TD><F>48535</F><FE>2026-04-07</FE><RR>7302239-8</RR><RSR>JOSE ANIBAL OYARZUN BORQUEZ</RSR><MNT>492687</MNT><IT1>GATO TETRA BLANCO 2 0 LT SEC 8 CON UN 2</IT1><CAF version=\"1.0\"><DA><RE>76885233-2</RE><RS>LA QUILLOTANA SPA</RS><TD>33</TD><RNG><D>46949</D><H>49514</H></RNG><FA>2025-12-07</FA><RSAPK><M>oKfWprzg372Xxff/aATP9KRvJM2uHsx/LfUfE9NYHWiLWhgrt4CB/Zlyl2qBkWRdrUoil5y9NnMLvWUNPoW1zQ==</M><E>Aw==</E></RSAPK><IDK>300</IDK></DA><FRMA algoritmo=\"SHA1withRSA\">OJ66iUG124lJrEqGCONMbESOFgj3d9T1UnL5w9BtMsh9ufsWS6Xx7qlTSrJu1dBNT1rOjg9oxnGDk51nM7uB0Q==</FRMA></CAF><TSTED>2026-04-07T15:13:12</TSTED></DD><FRMT algoritmo=\"SHA1withRSA\">Gh5BozM4qg8jrENrD8Bhswl4B8U2/SFbT9ae4ucUn3+9UoF73FpeWkWz6GbUej9c+FqEjigKcPQ1vjQPOxUPgw==</FRMT></TED>",
+    "salesId": null,
+    "informedSii": 0,
+    "responseMsgSii": "Proceso Finalizado Correctamente!",
+    "document_type": {
+      "href": "https://api.bsale.io/v1/document_types/6.json",
+      "id": "6"
+    },
+    "client": {
+      "href": "https://api.bsale.io/v1/clients/2753.json",
+      "id": "2753"
+    },
+    "office": {
+      "href": "https://api.bsale.io/v1/offices/1.json",
+      "id": "1"
+    },
+    "user": {
+      "href": "https://api.bsale.io/v1/users/49.json",
+      "id": "49"
+    },
+    "coin": {
+      "href": "https://api.bsale.io/v1/coins/1.json",
+      "id": "1"
+    },
+    "priceList": {
+      "href": "https://api.bsale.io/v1/price_lists/13.json",
+      "id": "13"
+    },
+    "references": {
+      "href": "https://api.bsale.io/v1/documents/3705526/references.json"
+    },
+    "document_taxes": {
+      "href": "https://api.bsale.io/v1/documents/3705526/document_taxes.json"
+    },
+    "details": {
+      "href": "https://api.bsale.io/v1/documents/3705526/details.json"
+    },
+    "sellers": {
+      "href": "https://api.bsale.io/v1/documents/3705526/sellers.json"
+    },
+    "attributes": {
+      "href": "https://api.bsale.io/v1/documents/3705526/attributes.json"
+    },
+    "payments": {
+      "href": "https://api.bsale.io/v1/documents/3705526/payments.json"
+    }
+  },
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3705526/details.json",
+    "count": 7,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/documents/3705526/details/8673457.json",
+        "id": 8673457,
+        "lineNumber": 0,
+        "quantity": 32.0,
+        "netUnitValue": 2809,
+        "netUnitValueRaw": 2809.3333333333367,
+        "totalUnitValue": 3919,
+        "netAmount": 89899,
+        "taxAmount": 35510,
+        "totalAmount": 125408,
+        "netDiscount": 1834,
+        "totalDiscount": 2560,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/11253.json",
+          "id": 11253,
+          "description": "BLANCO 2.0 LT (SEC 8)",
+          "code": "7804300121457"
+        },
+        "note": "",
+        "relatedDetailId": 8672761,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 2.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705526/details/8673458.json",
+        "id": 8673458,
+        "lineNumber": 0,
+        "quantity": 40.0,
+        "netUnitValue": 2809,
+        "netUnitValueRaw": 2809.3333333333367,
+        "totalUnitValue": 3919,
+        "netAmount": 112373,
+        "taxAmount": 44387,
+        "totalAmount": 156761,
+        "netDiscount": 2294,
+        "totalDiscount": 3199,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/11254.json",
+          "id": 11254,
+          "description": "TINTO 2.0 LT (SEC 8)",
+          "code": "7804300121440"
+        },
+        "note": "",
+        "relatedDetailId": 8672762,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 2.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705526/details/8673459.json",
+        "id": 8673459,
+        "lineNumber": 0,
+        "quantity": 18.0,
+        "netUnitValue": 1286,
+        "netUnitValueRaw": 1286.277372262773,
+        "totalUnitValue": 1762,
+        "netAmount": 23153,
+        "taxAmount": 8567,
+        "totalAmount": 31720,
+        "netDiscount": 234,
+        "totalDiscount": 320,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/29369.json",
+          "id": 29369,
+          "description": "FULL SUGAR DESECHABLE 1.5 LT (SEC 6)",
+          "code": "73481459910029"
+        },
+        "note": "",
+        "relatedDetailId": 8672763,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 1.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705526/details/8673460.json",
+        "id": 8673460,
+        "lineNumber": 0,
+        "quantity": 10.0,
+        "netUnitValue": 4251,
+        "netUnitValueRaw": 4250.967741935481,
+        "totalUnitValue": 5930,
+        "netAmount": 42510,
+        "taxAmount": 16791,
+        "totalAmount": 59301,
+        "netDiscount": 429,
+        "totalDiscount": 599,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/22851.json",
+          "id": 22851,
+          "description": "X 12 UND LATA 350 CC (SEC 2)",
+          "code": "1596053976156"
+        },
+        "note": "",
+        "relatedDetailId": 8672764,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 1.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705526/details/8673461.json",
+        "id": 8673461,
+        "lineNumber": 0,
+        "quantity": 10.0,
+        "netUnitValue": 4251,
+        "netUnitValueRaw": 4250.967741935481,
+        "totalUnitValue": 5930,
+        "netAmount": 42510,
+        "taxAmount": 16791,
+        "totalAmount": 59301,
+        "netDiscount": 429,
+        "totalDiscount": 599,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/23179.json",
+          "id": 23179,
+          "description": "PACK X 12 UNID LATA 350 CC (SEC 2)",
+          "code": "7802100000583"
+        },
+        "note": "",
+        "relatedDetailId": 8672765,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 1.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705526/details/8673462.json",
+        "id": 8673462,
+        "lineNumber": 0,
+        "quantity": 48.0,
+        "netUnitValue": 542,
+        "netUnitValueRaw": 541.6589147286826,
+        "totalUnitValue": 699,
+        "netAmount": 26000,
+        "taxAmount": 7540,
+        "totalAmount": 33540,
+        "netDiscount": 530,
+        "totalDiscount": 684,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/10778.json",
+          "id": 10778,
+          "description": "CERO LATA 350 CC (SEC 24)",
+          "code": "7802100001115"
+        },
+        "note": "",
+        "relatedDetailId": 8672766,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 2.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3705526/details/8673463.json",
+        "id": 8673463,
+        "lineNumber": 0,
+        "quantity": 8.0,
+        "netUnitValue": 2389,
+        "netUnitValueRaw": 2388.5304659498183,
+        "totalUnitValue": 3332,
+        "netAmount": 19108,
+        "taxAmount": 7548,
+        "totalAmount": 26656,
+        "netDiscount": 390,
+        "totalDiscount": 544,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/11250.json",
+          "id": 11250,
+          "description": "TINTO 1.5 LT (SEC 8)",
+          "code": "7804300123444"
+        },
+        "note": "",
+        "relatedDetailId": 8672767,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 2.0
+      }
+    ]
+  },
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3705526/attributes.json",
+    "count": 4,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/41.json",
+        "id": 41,
+        "name": "Nombre Conductor:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/42.json",
+        "id": 42,
+        "name": "Rut:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/43.json",
+        "id": 43,
+        "name": "Patente:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/50.json",
+        "id": 50,
+        "name": "NOTAS ASOCIADAS",
+        "value": ""
+      }
+    ]
+  },
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3705526/references.json",
+    "count": 0,
+    "limit": 25,
+    "offset": 0,
+    "items": []
+  },
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3705526/sellers.json",
+    "count": 1,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/users/80.json",
+        "id": 80,
+        "firstName": "Cristopher ",
+        "lastName": "Saldivia"
+      }
+    ]
+  }
+}

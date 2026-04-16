@@ -1,0 +1,350 @@
+{
+  "document": {
+    "href": "https://api.bsale.io/v1/documents/3707609.json",
+    "id": 3707609,
+    "emissionDate": 1775692800,
+    "expirationDate": 1775692800,
+    "generationDate": 1775747675,
+    "rcofDate": 1775692800,
+    "number": 48559,
+    "serialNumber": null,
+    "trackingNumber": "",
+    "totalAmount": 326206,
+    "netAmount": 241314,
+    "taxAmount": 84892,
+    "exemptAmount": 0,
+    "notExemptAmount": 241314,
+    "exportTotalAmount": 0,
+    "exportNetAmount": 0,
+    "exportTaxAmount": 0,
+    "exportExemptAmount": 0,
+    "commissionRate": 0,
+    "commissionNetAmount": 0,
+    "commissionTaxAmount": 0,
+    "commissionTotalAmount": 0,
+    "percentageTaxWithheld": 0.0,
+    "purchaseTaxAmount": 0,
+    "purchaseTotalAmount": 0,
+    "address": "Mejillones s/n",
+    "municipality": "Melinka",
+    "city": "Melinka",
+    "urlTimbre": "https://s3.amazonaws.com/bsale/21884/timbres/1e345a23f4f9.png",
+    "urlPublicView": "https://app2.bsale.cl/view/21884/1e345a23f4f9?sfd=99",
+    "urlPdf": "https://app2.bsale.cl/view/21884/1e345a23f4f9.pdf?sfd=99",
+    "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/1e345a23f4f9",
+    "urlPdfOriginal": "https://app2.bsale.cl/view/21884/1e345a23f4f9.pdf",
+    "token": "1e345a23f4f9",
+    "state": 0,
+    "commercialState": 0,
+    "cancellationStatus": 0,
+    "cancellationDate": null,
+    "urlXml": "https://api.bsale.cl/v1/21884/files/1e345a23f4f9.xml",
+    "ted": "<TED version=\"1.0\"><DD><RE>76885233-2</RE><TD>33</TD><F>48559</F><FE>2026-04-09</FE><RR>14042773-K</RR><RSR>VICTOR EDUARDO ACUnA TORRES</RSR><MNT>326206</MNT><IT1>COCA COLA DESECHABLE 2 5 LT SEC 6 </IT1><CAF version=\"1.0\"><DA><RE>76885233-2</RE><RS>LA QUILLOTANA SPA</RS><TD>33</TD><RNG><D>46949</D><H>49514</H></RNG><FA>2025-12-07</FA><RSAPK><M>oKfWprzg372Xxff/aATP9KRvJM2uHsx/LfUfE9NYHWiLWhgrt4CB/Zlyl2qBkWRdrUoil5y9NnMLvWUNPoW1zQ==</M><E>Aw==</E></RSAPK><IDK>300</IDK></DA><FRMA algoritmo=\"SHA1withRSA\">OJ66iUG124lJrEqGCONMbESOFgj3d9T1UnL5w9BtMsh9ufsWS6Xx7qlTSrJu1dBNT1rOjg9oxnGDk51nM7uB0Q==</FRMA></CAF><TSTED>2026-04-09T11:14:35</TSTED></DD><FRMT algoritmo=\"SHA1withRSA\">e49ht8542aOEQKO8C7ZlEA6FOYNN6Fq45aS1nDTdcWb0z9uM16wqdYTk31G9MtcbmasgH6Krv+uv/I1urZgB+A==</FRMT></TED>",
+    "salesId": null,
+    "informedSii": 0,
+    "responseMsgSii": "Proceso Finalizado Correctamente!",
+    "document_type": {
+      "href": "https://api.bsale.io/v1/document_types/6.json",
+      "id": "6"
+    },
+    "client": {
+      "href": "https://api.bsale.io/v1/clients/3255.json",
+      "id": "3255"
+    },
+    "office": {
+      "href": "https://api.bsale.io/v1/offices/1.json",
+      "id": "1"
+    },
+    "user": {
+      "href": "https://api.bsale.io/v1/users/56.json",
+      "id": "56"
+    },
+    "coin": {
+      "href": "https://api.bsale.io/v1/coins/1.json",
+      "id": "1"
+    },
+    "priceList": {
+      "href": "https://api.bsale.io/v1/price_lists/16.json",
+      "id": "16"
+    },
+    "references": {
+      "href": "https://api.bsale.io/v1/documents/3707609/references.json"
+    },
+    "document_taxes": {
+      "href": "https://api.bsale.io/v1/documents/3707609/document_taxes.json"
+    },
+    "details": {
+      "href": "https://api.bsale.io/v1/documents/3707609/details.json"
+    },
+    "sellers": {
+      "href": "https://api.bsale.io/v1/documents/3707609/sellers.json"
+    },
+    "attributes": {
+      "href": "https://api.bsale.io/v1/documents/3707609/attributes.json"
+    },
+    "payments": {
+      "href": "https://api.bsale.io/v1/documents/3707609/payments.json"
+    }
+  },
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3707609/details.json",
+    "count": 8,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/documents/3707609/details/8678152.json",
+        "id": 8678152,
+        "lineNumber": 0,
+        "quantity": 18.0,
+        "netUnitValue": 1606,
+        "netUnitValueRaw": 1605.83941605839,
+        "totalUnitValue": 2200,
+        "netAmount": 28905,
+        "taxAmount": 10695,
+        "totalAmount": 39600,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/10894.json",
+          "id": 10894,
+          "description": "DESECHABLE 2.5 LT (SEC 6)",
+          "code": "7801610001523"
+        },
+        "note": "",
+        "relatedDetailId": 8677898,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707609/details/8678153.json",
+        "id": 8678153,
+        "lineNumber": 0,
+        "quantity": 12.0,
+        "netUnitValue": 1606,
+        "netUnitValueRaw": 1605.83941605839,
+        "totalUnitValue": 2200,
+        "netAmount": 19270,
+        "taxAmount": 7130,
+        "totalAmount": 26400,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/29477.json",
+          "id": 29477,
+          "description": "FULL SUGAR DESECHABLE 2.5 LT (SEC 6)",
+          "code": "73810106921261"
+        },
+        "note": "",
+        "relatedDetailId": 8677899,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707609/details/8678154.json",
+        "id": 8678154,
+        "lineNumber": 0,
+        "quantity": 12.0,
+        "netUnitValue": 1705,
+        "netUnitValueRaw": 1705.42635658915,
+        "totalUnitValue": 2200,
+        "netAmount": 20465,
+        "taxAmount": 5935,
+        "totalAmount": 26400,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/10962.json",
+          "id": 10962,
+          "description": "DESECHABLE 2.5 LT (SEC 6)",
+          "code": "7801610005521"
+        },
+        "note": "",
+        "relatedDetailId": 8677900,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707609/details/8678155.json",
+        "id": 8678155,
+        "lineNumber": 0,
+        "quantity": 12.0,
+        "netUnitValue": 1186,
+        "netUnitValueRaw": 1186.13138686131,
+        "totalUnitValue": 1625,
+        "netAmount": 14234,
+        "taxAmount": 5266,
+        "totalAmount": 19500,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/10878.json",
+          "id": 10878,
+          "description": "DESECHABLE 2.0 LT (SEC 6)",
+          "code": "7801620290191"
+        },
+        "note": "",
+        "relatedDetailId": 8677901,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707609/details/8678156.json",
+        "id": 8678156,
+        "lineNumber": 0,
+        "quantity": 24.0,
+        "netUnitValue": 672,
+        "netUnitValueRaw": 672.268907563025,
+        "totalUnitValue": 800,
+        "netAmount": 16134,
+        "taxAmount": 3066,
+        "totalAmount": 19200,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/9109.json",
+          "id": 9109,
+          "description": "S/GAS DESECHABLE 1.6 LT (SEC 6)",
+          "code": "7802820021950"
+        },
+        "note": "",
+        "relatedDetailId": 8677902,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707609/details/8678157.json",
+        "id": 8678157,
+        "lineNumber": 0,
+        "quantity": 36.0,
+        "netUnitValue": 462,
+        "netUnitValueRaw": 462.18487394958,
+        "totalUnitValue": 550,
+        "netAmount": 16638,
+        "taxAmount": 3161,
+        "totalAmount": 19800,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/9108.json",
+          "id": 9108,
+          "description": "C/GAS DESECHABLE 600 CC (SEC 12)",
+          "code": "7802820600100"
+        },
+        "note": "",
+        "relatedDetailId": 8677903,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707609/details/8678158.json",
+        "id": 8678158,
+        "lineNumber": 0,
+        "quantity": 12.0,
+        "netUnitValue": 5230,
+        "netUnitValueRaw": 5230.10752688172,
+        "totalUnitValue": 7296,
+        "netAmount": 62761,
+        "taxAmount": 24791,
+        "totalAmount": 87552,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/22083.json",
+          "id": 22083,
+          "description": "MERLOT 750 CC (SEC 6)",
+          "code": "1581020422608"
+        },
+        "note": "",
+        "relatedDetailId": 8677904,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707609/details/8678159.json",
+        "id": 8678159,
+        "lineNumber": 0,
+        "quantity": 12.0,
+        "netUnitValue": 5242,
+        "netUnitValueRaw": 5242.29390681004,
+        "totalUnitValue": 7313,
+        "netAmount": 62907,
+        "taxAmount": 24848,
+        "totalAmount": 87754,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/22084.json",
+          "id": 22084,
+          "description": "C.S 750 CC (SEC 6)",
+          "code": "1581020508748"
+        },
+        "note": "",
+        "relatedDetailId": 8677905,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      }
+    ]
+  },
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3707609/attributes.json",
+    "count": 4,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/41.json",
+        "id": 41,
+        "name": "Nombre Conductor:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/42.json",
+        "id": 42,
+        "name": "Rut:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/43.json",
+        "id": 43,
+        "name": "Patente:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/50.json",
+        "id": 50,
+        "name": "NOTAS ASOCIADAS",
+        "value": ""
+      }
+    ]
+  },
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3707609/references.json",
+    "count": 0,
+    "limit": 25,
+    "offset": 0,
+    "items": []
+  },
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3707609/sellers.json",
+    "count": 1,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/users/80.json",
+        "id": 80,
+        "firstName": "Cristopher ",
+        "lastName": "Saldivia"
+      }
+    ]
+  }
+}

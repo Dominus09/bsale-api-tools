@@ -1,0 +1,250 @@
+{
+  "document": {
+    "href": "https://api.bsale.io/v1/documents/3707608.json",
+    "id": 3707608,
+    "emissionDate": 1775692800,
+    "expirationDate": 1775692800,
+    "generationDate": 1775747639,
+    "rcofDate": 1775692800,
+    "number": 48558,
+    "serialNumber": null,
+    "trackingNumber": "",
+    "totalAmount": 49212,
+    "netAmount": 37433,
+    "taxAmount": 11779,
+    "exemptAmount": 0,
+    "notExemptAmount": 37433,
+    "exportTotalAmount": 0,
+    "exportNetAmount": 0,
+    "exportTaxAmount": 0,
+    "exportExemptAmount": 0,
+    "commissionRate": 0,
+    "commissionNetAmount": 0,
+    "commissionTaxAmount": 0,
+    "commissionTotalAmount": 0,
+    "percentageTaxWithheld": 0.0,
+    "purchaseTaxAmount": 0,
+    "purchaseTotalAmount": 0,
+    "address": "Mejillones S/N",
+    "municipality": "Melinka",
+    "city": "Melinka",
+    "urlTimbre": "https://s3.amazonaws.com/bsale/21884/timbres/a2a2f8beeecc.png",
+    "urlPublicView": "https://app2.bsale.cl/view/21884/a2a2f8beeecc?sfd=99",
+    "urlPdf": "https://app2.bsale.cl/view/21884/a2a2f8beeecc.pdf?sfd=99",
+    "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/a2a2f8beeecc",
+    "urlPdfOriginal": "https://app2.bsale.cl/view/21884/a2a2f8beeecc.pdf",
+    "token": "a2a2f8beeecc",
+    "state": 0,
+    "commercialState": 0,
+    "cancellationStatus": 0,
+    "cancellationDate": null,
+    "urlXml": "https://api.bsale.cl/v1/21884/files/a2a2f8beeecc.xml",
+    "ted": "<TED version=\"1.0\"><DD><RE>76885233-2</RE><TD>33</TD><F>48558</F><FE>2026-04-09</FE><RR>11433079-5</RR><RSR>MARCIA ALEJANDRA ROSAS ROSAS</RSR><MNT>49212</MNT><IT1>MONSTER ENERGY 473 CC SEC 24 </IT1><CAF version=\"1.0\"><DA><RE>76885233-2</RE><RS>LA QUILLOTANA SPA</RS><TD>33</TD><RNG><D>46949</D><H>49514</H></RNG><FA>2025-12-07</FA><RSAPK><M>oKfWprzg372Xxff/aATP9KRvJM2uHsx/LfUfE9NYHWiLWhgrt4CB/Zlyl2qBkWRdrUoil5y9NnMLvWUNPoW1zQ==</M><E>Aw==</E></RSAPK><IDK>300</IDK></DA><FRMA algoritmo=\"SHA1withRSA\">OJ66iUG124lJrEqGCONMbESOFgj3d9T1UnL5w9BtMsh9ufsWS6Xx7qlTSrJu1dBNT1rOjg9oxnGDk51nM7uB0Q==</FRMA></CAF><TSTED>2026-04-09T11:13:59</TSTED></DD><FRMT algoritmo=\"SHA1withRSA\">HB5f+ts7nhZ6K+WYN+O3frJ8UarRtJAWtnhbTqDr2LjWPkgo3afKtbpV77dol2FaooKpy4TtzxuwEWkF4btidA==</FRMT></TED>",
+    "salesId": null,
+    "informedSii": 0,
+    "responseMsgSii": "Proceso Finalizado Correctamente!",
+    "document_type": {
+      "href": "https://api.bsale.io/v1/document_types/6.json",
+      "id": "6"
+    },
+    "client": {
+      "href": "https://api.bsale.io/v1/clients/2821.json",
+      "id": "2821"
+    },
+    "office": {
+      "href": "https://api.bsale.io/v1/offices/1.json",
+      "id": "1"
+    },
+    "user": {
+      "href": "https://api.bsale.io/v1/users/56.json",
+      "id": "56"
+    },
+    "coin": {
+      "href": "https://api.bsale.io/v1/coins/1.json",
+      "id": "1"
+    },
+    "priceList": {
+      "href": "https://api.bsale.io/v1/price_lists/16.json",
+      "id": "16"
+    },
+    "references": {
+      "href": "https://api.bsale.io/v1/documents/3707608/references.json"
+    },
+    "document_taxes": {
+      "href": "https://api.bsale.io/v1/documents/3707608/document_taxes.json"
+    },
+    "details": {
+      "href": "https://api.bsale.io/v1/documents/3707608/details.json"
+    },
+    "sellers": {
+      "href": "https://api.bsale.io/v1/documents/3707608/sellers.json"
+    },
+    "attributes": {
+      "href": "https://api.bsale.io/v1/documents/3707608/attributes.json"
+    },
+    "payments": {
+      "href": "https://api.bsale.io/v1/documents/3707608/payments.json"
+    }
+  },
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3707608/details.json",
+    "count": 4,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/documents/3707608/details/8678148.json",
+        "id": 8678148,
+        "lineNumber": 0,
+        "quantity": 12.0,
+        "netUnitValue": 1204,
+        "netUnitValueRaw": 1204.3795620438,
+        "totalUnitValue": 1650,
+        "netAmount": 14453,
+        "taxAmount": 5347,
+        "totalAmount": 19800,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/10980.json",
+          "id": 10980,
+          "description": "ENERGY 473 CC (SEC 24)",
+          "code": "70847009511"
+        },
+        "note": "",
+        "relatedDetailId": 8677906,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707608/details/8678149.json",
+        "id": 8678149,
+        "lineNumber": 0,
+        "quantity": 12.0,
+        "netUnitValue": 956,
+        "netUnitValueRaw": 956.204379562044,
+        "totalUnitValue": 1310,
+        "netAmount": 11474,
+        "taxAmount": 4246,
+        "totalAmount": 15720,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/10984.json",
+          "id": 10984,
+          "description": "TRADICIONAL 250 CC (SEC 24)",
+          "code": "9002490100070"
+        },
+        "note": "",
+        "relatedDetailId": 8677907,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707608/details/8678150.json",
+        "id": 8678150,
+        "lineNumber": 0,
+        "quantity": 6.0,
+        "netUnitValue": 959,
+        "netUnitValueRaw": 958.823529411765,
+        "totalUnitValue": 1141,
+        "netAmount": 5753,
+        "taxAmount": 1093,
+        "totalAmount": 6846,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/29035.json",
+          "id": 29035,
+          "description": "NARANJA 850 CC (SEC 6)",
+          "code": "72936586206025"
+        },
+        "note": "",
+        "relatedDetailId": 8677908,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      },
+      {
+        "href": "https://api.bsale.io/v1/documents/3707608/details/8678151.json",
+        "id": 8678151,
+        "lineNumber": 0,
+        "quantity": 6.0,
+        "netUnitValue": 959,
+        "netUnitValueRaw": 958.823529411765,
+        "totalUnitValue": 1141,
+        "netAmount": 5753,
+        "taxAmount": 1093,
+        "totalAmount": 6846,
+        "netDiscount": 0,
+        "totalDiscount": 0,
+        "variant": {
+          "href": "https://api.bsale.io/v1/variants/29036.json",
+          "id": 29036,
+          "description": "ROJO 850 CC (SEC 6)",
+          "code": "72936626271907"
+        },
+        "note": "",
+        "relatedDetailId": 8677909,
+        "gratuity": 0,
+        "discountId": 0,
+        "discountPercentage": 0.0
+      }
+    ]
+  },
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3707608/attributes.json",
+    "count": 4,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/41.json",
+        "id": 41,
+        "name": "Nombre Conductor:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/42.json",
+        "id": 42,
+        "name": "Rut:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/43.json",
+        "id": 43,
+        "name": "Patente:",
+        "value": ""
+      },
+      {
+        "href": "https://api.bsale.io/v1/dynamic_attributes/50.json",
+        "id": 50,
+        "name": "NOTAS ASOCIADAS",
+        "value": ""
+      }
+    ]
+  },
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3707608/references.json",
+    "count": 0,
+    "limit": 25,
+    "offset": 0,
+    "items": []
+  },
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3707608/sellers.json",
+    "count": 1,
+    "limit": 25,
+    "offset": 0,
+    "items": [
+      {
+        "href": "https://api.bsale.io/v1/users/80.json",
+        "id": 80,
+        "firstName": "Cristopher ",
+        "lastName": "Saldivia"
+      }
+    ]
+  }
+}
