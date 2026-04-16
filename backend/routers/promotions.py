@@ -375,7 +375,10 @@ END = %s"""
             print(sql)
 
         try:
-            cur.execute(sql, tuple(params))
+            if params:
+                cur.execute(sql, tuple(params))
+            else:
+                cur.execute(sql)
             cols = [d[0] for d in cur.description]
             rows_out = [dict(zip(cols, row)) for row in cur.fetchall()]
         except Exception as e:
