@@ -9,6 +9,75 @@ from typing import Any
 from psycopg2.extras import Json, execute_values
 
 
+def _emission_sort_key(r: dict[str, Any]) -> tuple[float, int]:
+    """Mayor = más reciente: ``emission_date`` (timestamp), empate ``document_id``."""
+    em = r.get("emission_date")
+    did = int(r["document_id"])
+    if em is None:
+        return (-1.0, did)
+    try:
+        ts = float(em.timestamp())
+    except Exception:
+        ts = -1.0
+    return (ts, did)
+
+
+def _dedupe_logical_latest(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """
+    Misma clave (company_id, office_id, document_type_id, number): deja una fila
+    (la de emisión más reciente; empate por mayor ``document_id``).
+    Filas sin ``number`` o sin ``document_type_id`` se conservan todas (clave por PK).
+    """
+    by_logical: dict[tuple[int, int, int, int], dict[str, Any]] = {}
+    rest: list[dict[str, Any]] = []
+    for r in rows:
+        num, tid = r.get("number"), r.get("document_type_id")
+        if num is None or tid is None:
+            rest.append(r)
+            continue
+        k = (int(r["company_id"]), int(r["office_id"]), int(tid), int(num))
+        prev = by_logical.get(k)
+        if prev is None or _emission_sort_key(r) > _emission_sort_key(prev):
+            by_logical[k] = r
+    return list(by_logical.values()) + rest
+
+
+def _delete_stale_logical_versions(cur, rows: list[dict[str, Any]]) -> None:
+    """Elimina otras versiones Bsale del mismo folio (CASCADE limpia hijos del ``document_id`` viejo)."""
+    seen: set[tuple[int, int, int, int, int]] = set()
+    for r in rows:
+        num, tid = r.get("number"), r.get("document_type_id")
+        if num is None or tid is None:
+            continue
+        key = (
+            int(r["company_id"]),
+            int(r["office_id"]),
+            int(tid),
+            int(num),
+            int(r["document_id"]),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        cur.execute(
+            """
+            DELETE FROM distribuidora.documents
+            WHERE company_id = %s
+              AND office_id = %s
+              AND document_type_id = %s
+              AND number = %s
+              AND document_id <> %s
+            """,
+            (
+                int(r["company_id"]),
+                int(r["office_id"]),
+                int(tid),
+                int(num),
+                int(r["document_id"]),
+            ),
+        )
+
+
 def _num(v: Any) -> Any:
     if v is None:
         return None
@@ -79,11 +148,17 @@ def document_dict_from_bsale(
 
 def upsert_documents(cur, rows: list[dict[str, Any]]) -> tuple[int, int]:
     """
-    INSERT ... ON CONFLICT (document_id) DO UPDATE.
-    Devuelve (insertados_estimado, actualizados_estimado) — aproximado vía xmax.
+    Inserta/actualiza por ``document_id``.
+
+    Si Bsale envía un **nuevo** ``document_id`` para el mismo folio lógico
+    (``company_id``, ``office_id``, ``document_type_id``, ``number``), elimina primero
+    filas anteriores con esa clave (``ON DELETE CASCADE`` en hijos) y luego hace upsert
+    por PK para que no choque con ``uq_distribuidora_documents_logical``.
     """
     if not rows:
         return 0, 0
+    rows = _dedupe_logical_latest(rows)
+    _delete_stale_logical_versions(cur, rows)
     cols = [
         "document_id",
         "number",
@@ -143,7 +218,14 @@ def upsert_documents(cur, rows: list[dict[str, Any]]) -> tuple[int, int]:
             updated_at = NOW()
     """
     template = "(" + ",".join(["%s"] * len(cols)) + ",NOW(),NOW())"
-    execute_values(cur, sql, values, template=template, page_size=len(values))
+    try:
+        execute_values(cur, sql, values, template=template, page_size=len(values))
+    except Exception:
+        try:
+            cur.connection.rollback()
+        except Exception:
+            pass
+        raise
     return len(rows), len(rows)
 
 

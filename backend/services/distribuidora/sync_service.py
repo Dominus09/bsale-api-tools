@@ -161,12 +161,42 @@ def _fetch_documents_window(
             if row is None:
                 continue
             pending.append(row)
-            stats["documents_processed"] += 1
 
         if len(pending) >= 200:
-            upsert_documents(cur, pending)
-            conn.commit()
-            for r in pending:
+            to_save = list(pending)
+            pending.clear()
+            try:
+                upsert_documents(cur, to_save)
+                for r in to_save:
+                    _refresh_document_children(
+                        client,
+                        cur,
+                        int(r["document_id"]),
+                        r.get("document_type_id"),
+                        stats,
+                    )
+                conn.commit()
+                stats["documents_processed"] += len(to_save)
+            except Exception as e:
+                logger.exception(
+                    "distribuidora: lote documentos falló (%s filas), rollback y se continúa: %s",
+                    len(to_save),
+                    e,
+                )
+                try:
+                    conn.rollback()
+                except Exception:
+                    logger.exception("distribuidora: rollback tras error de lote")
+                stats["documents_batch_failures"] = int(stats.get("documents_batch_failures") or 0) + 1
+
+        offset += LIMIT_BSALE
+
+    if pending:
+        to_save = list(pending)
+        pending.clear()
+        try:
+            upsert_documents(cur, to_save)
+            for r in to_save:
                 _refresh_document_children(
                     client,
                     cur,
@@ -175,22 +205,18 @@ def _fetch_documents_window(
                     stats,
                 )
             conn.commit()
-            pending.clear()
-
-        offset += LIMIT_BSALE
-
-    if pending:
-        upsert_documents(cur, pending)
-        conn.commit()
-        for r in pending:
-            _refresh_document_children(
-                client,
-                cur,
-                int(r["document_id"]),
-                r.get("document_type_id"),
-                stats,
+            stats["documents_processed"] += len(to_save)
+        except Exception as e:
+            logger.exception(
+                "distribuidora: último lote documentos falló (%s filas), rollback: %s",
+                len(to_save),
+                e,
             )
-        conn.commit()
+            try:
+                conn.rollback()
+            except Exception:
+                logger.exception("distribuidora: rollback tras error de último lote")
+            stats["documents_batch_failures"] = int(stats.get("documents_batch_failures") or 0) + 1
 
     stats["documents_inserted"] = stats["documents_processed"]
     stats["documents_updated"] = stats["documents_processed"]
@@ -234,6 +260,7 @@ def sync_bsale_distribuidora_incremental(*, strict_token: bool = False) -> dict[
         "documents_processed": 0,
         "documents_inserted": 0,
         "documents_updated": 0,
+        "documents_batch_failures": 0,
         "details_inserted": 0,
         "attributes_inserted": 0,
         "references_inserted": 0,
@@ -373,6 +400,7 @@ def resync_bsale_distribuidora_range(
         "documents_processed": 0,
         "documents_inserted": 0,
         "documents_updated": 0,
+        "documents_batch_failures": 0,
         "details_inserted": 0,
         "attributes_inserted": 0,
         "references_inserted": 0,
