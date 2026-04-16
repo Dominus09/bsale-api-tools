@@ -61,10 +61,15 @@ def _resync_page_limit() -> int:
 
 
 def _utc_day_timestamp_bounds(d: date) -> tuple[int, int]:
-    """00:00:00.000 — 23:59:59.999 UTC para un día calendario."""
-    start = datetime(d.year, d.month, d.day, 0, 0, 0, 0, tzinfo=timezone.utc)
-    end = datetime(d.year, d.month, d.day, 23, 59, 59, 999999, tzinfo=timezone.utc)
-    return int(start.timestamp()), int(end.timestamp())
+    """
+    Límites UTC de un día calendario para ``emissiondaterange`` en Bsale.
+
+    Misma idea que ``sync_documents.py``: inicio 00:00 UTC y fin
+    ``(día+1).00:00 UTC - 1`` segundo (inclusive en la práctica para la API).
+    """
+    day_start = datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=timezone.utc)
+    end_ts = int((day_start + timedelta(days=1)).timestamp()) - 1
+    return int(day_start.timestamp()), end_ts
 
 
 def _documents_get_resync(client: BsaleClient, params: dict[str, Any]) -> dict[str, Any]:
@@ -230,10 +235,20 @@ def _fetch_documents_single_day_resync(
     """Un día UTC completo: paginación con offset reiniciado y pausas entre llamadas a Bsale."""
     pl = page_limit if page_limit is not None else _resync_page_limit()
     desde_ts, hasta_ts = _utc_day_timestamp_bounds(day)
+    day_start = datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=timezone.utc)
+    day_end = datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=timezone.utc)
+    logger.info(
+        "➡️ Rango enviado a Bsale (UTC): %s → %s | emissiondaterange epoch [%s,%s]",
+        day_start.isoformat(),
+        day_end.isoformat(),
+        desde_ts,
+        hasta_ts,
+    )
+    logger.info("📅 Procesando día: %s", day.isoformat())
     pending: list[dict[str, Any]] = []
     offset = 0
     while True:
-        logger.info("Offset actual: %s (día %s)", offset, day.isoformat())
+        logger.info("📄 Offset: %s (día %s)", offset, day.isoformat())
         params = {
             "limit": pl,
             "offset": offset,
@@ -241,6 +256,7 @@ def _fetch_documents_single_day_resync(
         }
         data = _documents_get_resync(client, params)
         items = data.get("items") or []
+        logger.info("📊 Docs obtenidos (API, sin filtrar oficina): %s", len(items))
         if not items:
             break
         _append_items_from_bsale_response(items, pending)
@@ -248,6 +264,7 @@ def _fetch_documents_single_day_resync(
         offset += pl
         time.sleep(random.uniform(0.2, 0.5))
     _flush_pending_tail(client, cur, conn, pending, stats)
+    logger.info("✅ Día completado: %s", day.isoformat())
 
 
 def _refresh_document_children(
@@ -608,10 +625,16 @@ def resync_bsale_distribuidora_range(
         start_d = emission_from.astimezone(timezone.utc).date()
         end_d = emission_to.astimezone(timezone.utc).date()
         page_lim = _resync_page_limit()
+        num_calendar_days = (end_d - start_d).days + 1
+        logger.info(
+            "Resync: recorriendo %s día(s) calendario UTC (%s .. %s inclusive)",
+            num_calendar_days,
+            start_d.isoformat(),
+            end_d.isoformat(),
+        )
 
         current = start_d
         while current <= end_d:
-            logger.info("Procesando día: %s", current.isoformat())
             while True:
                 try:
                     _fetch_documents_single_day_resync(
@@ -622,7 +645,6 @@ def resync_bsale_distribuidora_range(
                         stats,
                         page_limit=page_lim,
                     )
-                    logger.info("Día completado correctamente: %s", current.isoformat())
                     stats["days_processed"] += 1
                     break
                 except Exception as e:
@@ -632,6 +654,8 @@ def resync_bsale_distribuidora_range(
                         e,
                     )
                     time.sleep(5)
+
+            current += timedelta(days=1)
 
         stats["documents_inserted"] = stats["documents_processed"]
         stats["documents_updated"] = stats["documents_processed"]
