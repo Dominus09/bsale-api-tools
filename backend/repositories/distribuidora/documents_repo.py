@@ -42,42 +42,6 @@ def _dedupe_logical_latest(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list(by_logical.values()) + rest
 
 
-def _delete_stale_logical_versions(cur, rows: list[dict[str, Any]]) -> None:
-    """Elimina otras versiones Bsale del mismo folio (CASCADE limpia hijos del ``document_id`` viejo)."""
-    seen: set[tuple[int, int, int, int, int]] = set()
-    for r in rows:
-        num, tid = r.get("number"), r.get("document_type_id")
-        if num is None or tid is None:
-            continue
-        key = (
-            int(r["company_id"]),
-            int(r["office_id"]),
-            int(tid),
-            int(num),
-            int(r["document_id"]),
-        )
-        if key in seen:
-            continue
-        seen.add(key)
-        cur.execute(
-            """
-            DELETE FROM distribuidora.documents
-            WHERE company_id = %s
-              AND office_id = %s
-              AND document_type_id = %s
-              AND number = %s
-              AND document_id <> %s
-            """,
-            (
-                int(r["company_id"]),
-                int(r["office_id"]),
-                int(tid),
-                int(num),
-                int(r["document_id"]),
-            ),
-        )
-
-
 def _num(v: Any) -> Any:
     if v is None:
         return None
@@ -148,17 +112,16 @@ def document_dict_from_bsale(
 
 def upsert_documents(cur, rows: list[dict[str, Any]]) -> tuple[int, int]:
     """
-    Inserta/actualiza por ``document_id``.
+    Inserta/actualiza documentos.
 
-    Si Bsale envía un **nuevo** ``document_id`` para el mismo folio lógico
-    (``company_id``, ``office_id``, ``document_type_id``, ``number``), elimina primero
-    filas anteriores con esa clave (``ON DELETE CASCADE`` en hijos) y luego hace upsert
-    por PK para que no choque con ``uq_distribuidora_documents_logical``.
+    * Con folio lógico completo (``company_id``, ``office_id``, ``document_type_id``, ``number``):
+      ``ON CONFLICT`` sobre ese índice único parcial: actualiza ``document_id`` y campos clave
+      (los hijos siguen el nuevo id vía ``ON UPDATE CASCADE`` en las FK).
+    * Sin folio lógico (``number`` o ``document_type_id`` nulos): upsert por ``document_id``.
     """
     if not rows:
         return 0, 0
     rows = _dedupe_logical_latest(rows)
-    _delete_stale_logical_versions(cur, rows)
     cols = [
         "document_id",
         "number",
@@ -186,46 +149,80 @@ def upsert_documents(cur, rows: list[dict[str, Any]]) -> tuple[int, int]:
         "tracking_number",
         "raw_data",
     ]
-    values = [tuple(r[c] for c in cols) for r in rows]
-    sql = f"""
-        INSERT INTO distribuidora.documents ({", ".join(cols)}, created_at, updated_at)
-        VALUES %s
-        ON CONFLICT (document_id) DO UPDATE SET
-            number = EXCLUDED.number,
-            document_type_id = EXCLUDED.document_type_id,
-            client_id = EXCLUDED.client_id,
-            office_id = EXCLUDED.office_id,
-            company_id = EXCLUDED.company_id,
-            user_id = EXCLUDED.user_id,
-            emission_date = EXCLUDED.emission_date,
-            expiration_date = EXCLUDED.expiration_date,
-            generation_date = EXCLUDED.generation_date,
-            total_amount = EXCLUDED.total_amount,
-            net_amount = EXCLUDED.net_amount,
-            tax_amount = EXCLUDED.tax_amount,
-            state = EXCLUDED.state,
-            commercial_state = EXCLUDED.commercial_state,
-            informed_sii = EXCLUDED.informed_sii,
-            municipality = EXCLUDED.municipality,
-            city = EXCLUDED.city,
-            address = EXCLUDED.address,
-            token = EXCLUDED.token,
-            url_pdf = EXCLUDED.url_pdf,
-            url_public_view = EXCLUDED.url_public_view,
-            price_list_id = EXCLUDED.price_list_id,
-            tracking_number = EXCLUDED.tracking_number,
-            raw_data = EXCLUDED.raw_data,
-            updated_at = NOW()
-    """
     template = "(" + ",".join(["%s"] * len(cols)) + ",NOW(),NOW())"
-    try:
-        execute_values(cur, sql, values, template=template, page_size=len(values))
-    except Exception:
+
+    logical_rows = [
+        r
+        for r in rows
+        if r.get("number") is not None and r.get("document_type_id") is not None
+    ]
+    pk_rows = [
+        r
+        for r in rows
+        if r.get("number") is None or r.get("document_type_id") is None
+    ]
+
+    def _ev(sql: str, batch: list[dict[str, Any]]) -> None:
+        if not batch:
+            return
+        vals = [tuple(r[c] for c in cols) for r in batch]
         try:
-            cur.connection.rollback()
+            execute_values(cur, sql, vals, template=template, page_size=len(vals))
         except Exception:
-            pass
-        raise
+            try:
+                cur.connection.rollback()
+            except Exception:
+                pass
+            raise
+
+    if logical_rows:
+        sql_logical = f"""
+            INSERT INTO distribuidora.documents ({", ".join(cols)}, created_at, updated_at)
+            VALUES %s
+            ON CONFLICT (company_id, office_id, document_type_id, number)
+            WHERE document_type_id IS NOT NULL AND number IS NOT NULL
+            DO UPDATE SET
+                document_id = EXCLUDED.document_id,
+                total_amount = EXCLUDED.total_amount,
+                emission_date = EXCLUDED.emission_date,
+                raw_data = EXCLUDED.raw_data,
+                updated_at = NOW()
+        """
+        _ev(sql_logical, logical_rows)
+
+    if pk_rows:
+        sql_pk = f"""
+            INSERT INTO distribuidora.documents ({", ".join(cols)}, created_at, updated_at)
+            VALUES %s
+            ON CONFLICT (document_id) DO UPDATE SET
+                number = EXCLUDED.number,
+                document_type_id = EXCLUDED.document_type_id,
+                client_id = EXCLUDED.client_id,
+                office_id = EXCLUDED.office_id,
+                company_id = EXCLUDED.company_id,
+                user_id = EXCLUDED.user_id,
+                emission_date = EXCLUDED.emission_date,
+                expiration_date = EXCLUDED.expiration_date,
+                generation_date = EXCLUDED.generation_date,
+                total_amount = EXCLUDED.total_amount,
+                net_amount = EXCLUDED.net_amount,
+                tax_amount = EXCLUDED.tax_amount,
+                state = EXCLUDED.state,
+                commercial_state = EXCLUDED.commercial_state,
+                informed_sii = EXCLUDED.informed_sii,
+                municipality = EXCLUDED.municipality,
+                city = EXCLUDED.city,
+                address = EXCLUDED.address,
+                token = EXCLUDED.token,
+                url_pdf = EXCLUDED.url_pdf,
+                url_public_view = EXCLUDED.url_public_view,
+                price_list_id = EXCLUDED.price_list_id,
+                tracking_number = EXCLUDED.tracking_number,
+                raw_data = EXCLUDED.raw_data,
+                updated_at = NOW()
+        """
+        _ev(sql_pk, pk_rows)
+
     return len(rows), len(rows)
 
 
