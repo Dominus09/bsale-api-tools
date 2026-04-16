@@ -110,14 +110,77 @@ def document_dict_from_bsale(
     }
 
 
+def _execute_values_batch(
+    cur,
+    sql: str,
+    batch: list[dict[str, Any]],
+    cols: list[str],
+    template: str,
+) -> None:
+    if not batch:
+        return
+    vals = [tuple(r[c] for c in cols) for r in batch]
+    execute_values(cur, sql, vals, template=template, page_size=len(vals))
+
+
+def _apply_persisted_document_ids_for_folio_rows(cur, rows: list[dict[str, Any]]) -> None:
+    """
+    Tras upsert por folio (clave lógica), alinea ``document_id`` en memoria con el PK en BD.
+
+    En conflicto por folio **no** se actualiza ``document_id`` en la tabla; los hijos
+    (``document_details``, etc.) deben seguir usando el id histórico persistido.
+    """
+    keys: list[tuple[int, int, int, int]] = []
+    seen: set[tuple[int, int, int, int]] = set()
+    for r in rows:
+        if r.get("number") is None or r.get("document_type_id") is None:
+            continue
+        k = (
+            int(r["company_id"]),
+            int(r["office_id"]),
+            int(r["document_type_id"]),
+            int(r["number"]),
+        )
+        if k in seen:
+            continue
+        seen.add(k)
+        keys.append(k)
+    if not keys:
+        return
+    cur.execute(
+        """
+        SELECT document_id, company_id, office_id, document_type_id, number
+        FROM distribuidora.documents
+        WHERE (company_id, office_id, document_type_id, number) IN %s
+        """,
+        (tuple(keys),),
+    )
+    by_key: dict[tuple[int, int, int, int], int] = {}
+    for row in cur.fetchall() or []:
+        did, c, o, tid, num = int(row[0]), int(row[1]), int(row[2]), int(row[3]), int(row[4])
+        by_key[(c, o, tid, num)] = did
+    for r in rows:
+        if r.get("number") is None or r.get("document_type_id") is None:
+            continue
+        k = (
+            int(r["company_id"]),
+            int(r["office_id"]),
+            int(r["document_type_id"]),
+            int(r["number"]),
+        )
+        stored = by_key.get(k)
+        if stored is not None:
+            r["document_id"] = stored
+
+
 def upsert_documents(cur, rows: list[dict[str, Any]]) -> tuple[int, int]:
     """
-    Inserta/actualiza documentos.
+    Inserta/actualiza documentos sin borrar filas y **sin** cambiar ``document_id`` en updates.
 
-    * Con folio lógico completo (``company_id``, ``office_id``, ``document_type_id``, ``number``):
-      ``ON CONFLICT`` sobre ese índice único parcial: actualiza ``document_id`` y campos clave
-      (los hijos siguen el nuevo id vía ``ON UPDATE CASCADE`` en las FK).
-    * Sin folio lógico (``number`` o ``document_type_id`` nulos): upsert por ``document_id``.
+    * Con folio completo (``company_id``, ``office_id``, ``document_type_id``, ``number``):
+      ``ON CONFLICT`` en el índice único parcial; en update solo ``total_amount``,
+      ``emission_date``, ``raw_data``, ``updated_at``.
+    * Sin folio (``number`` o ``document_type_id`` nulos): upsert por ``document_id`` (PK).
     """
     if not rows:
         return 0, 0
@@ -151,7 +214,7 @@ def upsert_documents(cur, rows: list[dict[str, Any]]) -> tuple[int, int]:
     ]
     template = "(" + ",".join(["%s"] * len(cols)) + ",NOW(),NOW())"
 
-    logical_rows = [
+    folio_rows = [
         r
         for r in rows
         if r.get("number") is not None and r.get("document_type_id") is not None
@@ -162,33 +225,27 @@ def upsert_documents(cur, rows: list[dict[str, Any]]) -> tuple[int, int]:
         if r.get("number") is None or r.get("document_type_id") is None
     ]
 
-    def _ev(sql: str, batch: list[dict[str, Any]]) -> None:
-        if not batch:
-            return
-        vals = [tuple(r[c] for c in cols) for r in batch]
+    if folio_rows:
+        sql_folio_upsert = f"""
+            INSERT INTO distribuidora.documents ({", ".join(cols)}, created_at, updated_at)
+            VALUES %s
+            ON CONFLICT (company_id, office_id, document_type_id, number)
+            WHERE document_type_id IS NOT NULL AND number IS NOT NULL
+            DO UPDATE SET
+                total_amount = EXCLUDED.total_amount,
+                emission_date = EXCLUDED.emission_date,
+                raw_data = EXCLUDED.raw_data,
+                updated_at = NOW()
+        """
         try:
-            execute_values(cur, sql, vals, template=template, page_size=len(vals))
+            _execute_values_batch(cur, sql_folio_upsert, folio_rows, cols, template)
         except Exception:
             try:
                 cur.connection.rollback()
             except Exception:
                 pass
             raise
-
-    if logical_rows:
-        sql_logical = f"""
-            INSERT INTO distribuidora.documents ({", ".join(cols)}, created_at, updated_at)
-            VALUES %s
-            ON CONFLICT (company_id, office_id, document_type_id, number)
-            WHERE document_type_id IS NOT NULL AND number IS NOT NULL
-            DO UPDATE SET
-                document_id = EXCLUDED.document_id,
-                total_amount = EXCLUDED.total_amount,
-                emission_date = EXCLUDED.emission_date,
-                raw_data = EXCLUDED.raw_data,
-                updated_at = NOW()
-        """
-        _ev(sql_logical, logical_rows)
+        _apply_persisted_document_ids_for_folio_rows(cur, rows)
 
     if pk_rows:
         sql_pk = f"""
@@ -221,7 +278,14 @@ def upsert_documents(cur, rows: list[dict[str, Any]]) -> tuple[int, int]:
                 raw_data = EXCLUDED.raw_data,
                 updated_at = NOW()
         """
-        _ev(sql_pk, pk_rows)
+        try:
+            _execute_values_batch(cur, sql_pk, pk_rows, cols, template)
+        except Exception:
+            try:
+                cur.connection.rollback()
+            except Exception:
+                pass
+            raise
 
     return len(rows), len(rows)
 
