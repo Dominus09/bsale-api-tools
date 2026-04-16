@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.services.distribuidora.orders_service import get_sync_status_payload
 from backend.services.distribuidora.sync_related_service import (
+    run_resync_related_range_background,
     run_sync_distribuidora_related_background,
 )
 from backend.services.distribuidora.sync_service import (
@@ -144,6 +145,48 @@ def post_resync_distribuidora(
     return ResyncDistribuidoraResponse(
         status="resync iniciado",
         range=ResyncRangeResponse(emission_from=emission_from, emission_to=emission_to),
+    )
+
+
+@router.post(
+    "/resync-related",
+    response_model=ResyncDistribuidoraResponse,
+    responses={400: {"description": "Fechas inválidas o faltantes"}},
+)
+def post_resync_related(
+    background_tasks: BackgroundTasks,
+    request: ResyncRequest,
+):
+    """
+    Re-sync **histórico** de ``document_related`` (API ``relateddetailid``), día a día en UTC,
+    para OC (tipo 33) emitidas entre ``start_date`` y ``end_date`` (obligatorios, inclusive).
+    """
+    if not bsale_token_distribuidora_configured():
+        raise HTTPException(
+            status_code=400,
+            detail="Defina BSALE_TOKEN o BSALE_TOKEN_SPA para ejecutar el resync.",
+        )
+    if not request.start_date or not request.end_date:
+        raise HTTPException(
+            status_code=400,
+            detail="start_date y end_date son obligatorios para el resync histórico de relaciones.",
+        )
+    start_n = _normalize_resync_date_param("start_date", request.start_date)
+    end_n = _normalize_resync_date_param("end_date", request.end_date)
+    if start_n is None or end_n is None:
+        raise HTTPException(
+            status_code=400,
+            detail="start_date y end_date deben ser fechas válidas (YYYY-MM-DD o ISO8601).",
+        )
+    logger.info("Resync related distribuidora desde %s hasta %s", start_n, end_n)
+    background_tasks.add_task(
+        run_resync_related_range_background,
+        start_n,
+        end_n,
+    )
+    return ResyncDistribuidoraResponse(
+        status="resync related iniciado",
+        range=ResyncRangeResponse(emission_from=start_n, emission_to=end_n),
     )
 
 

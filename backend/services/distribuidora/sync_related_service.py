@@ -2,6 +2,8 @@
 Sync incremental de documentos relacionados a líneas OC (GET ``/documents.json?relateddetailid=``).
 
 Desacoplado del sync principal; escribe ``distribuidora.document_related`` con deduplicación.
+
+Incluye ``sync_related_documents_range`` para rellenar histórico por rango de emisión (día a día).
 """
 
 from __future__ import annotations
@@ -9,6 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from backend.db import get_connection
@@ -24,6 +27,14 @@ ADVISORY_LOCK_RELATED = 5_927_184_005
 COMPANY_ID = 3
 OFFICE_ID = 1
 DOC_TYPE_OC = 33
+RELATED_PAGE_LIMIT = 50
+
+
+def _utc_day_emission_bounds(d: date) -> tuple[datetime, datetime]:
+    """Inicio UTC del día y fin exclusivo (``[start, end)``) para filtrar ``emission_date``."""
+    start = datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=timezone.utc)
+    end_excl = start + timedelta(days=1)
+    return start, end_excl
 
 
 def _safe_int(v: Any) -> int | None:
@@ -61,6 +72,69 @@ def _fetch_oc_detail_ids(
         (DOC_TYPE_OC, COMPANY_ID, OFFICE_ID, max(1, lookback_days), limit_details),
     )
     return [int(r[0]) for r in cur.fetchall()]
+
+
+def _fetch_oc_detail_ids_for_emission_day(cur, day: date) -> list[int]:
+    """``detail_id`` distintos de líneas de OC cuyo documento emite ese día calendario (UTC)."""
+    day_start, day_end_excl = _utc_day_emission_bounds(day)
+    cur.execute(
+        """
+        SELECT DISTINCT dd.detail_id
+        FROM distribuidora.document_details dd
+        INNER JOIN distribuidora.documents d
+            ON d.document_id = dd.document_id
+        WHERE d.document_type_id = %s
+          AND d.company_id = %s
+          AND d.office_id = %s
+          AND d.emission_date IS NOT NULL
+          AND d.emission_date >= %s
+          AND d.emission_date < %s
+        ORDER BY dd.detail_id
+        """,
+        (DOC_TYPE_OC, COMPANY_ID, OFFICE_ID, day_start, day_end_excl),
+    )
+    return [int(r[0]) for r in cur.fetchall()]
+
+
+def _fetch_and_persist_related_for_detail(
+    client: BsaleClient,
+    cur,
+    detail_id: int,
+    *,
+    throttle: float,
+) -> tuple[int, int, int]:
+    """
+    GET ``/documents.json`` con ``relateddetailid`` y paginación; inserta con ``ON CONFLICT DO NOTHING``.
+
+    Retorna ``(items_api_total, filas_insertadas, llamadas_http)``.
+    """
+    items_api_total = 0
+    rows_inserted = 0
+    api_calls = 0
+    offset = 0
+    while True:
+        try:
+            data = client.get(
+                "/documents.json",
+                {
+                    "relateddetailid": detail_id,
+                    "limit": RELATED_PAGE_LIMIT,
+                    "offset": offset,
+                },
+            )
+        except Exception as e:
+            logger.warning("relateddetailid=%s offset=%s: %s", detail_id, offset, e)
+            break
+        api_calls += 1
+        items = data.get("items") or []
+        if not items:
+            break
+        items_api_total += len(items)
+        rows_inserted += _insert_related_rows(cur, detail_id, items)
+        offset += RELATED_PAGE_LIMIT
+        if throttle > 0:
+            time.sleep(throttle)
+    return items_api_total, rows_inserted, api_calls
 
 
 def _insert_related_rows(
@@ -202,6 +276,135 @@ def sync_distribuidora_related_documents(
 
     stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
     return stats
+
+
+def sync_related_documents_range(
+    *,
+    start_date: date,
+    end_date: date,
+    strict_token: bool = True,
+) -> dict[str, Any]:
+    """
+    Rellena ``distribuidora.document_related`` para OC (tipo 33) con emisión entre ``start_date`` y ``end_date``
+    (inclusive, días calendario UTC), recorriendo **día a día**.
+
+    Por cada ``detail_id`` de esas OC: GET ``/documents.json?relateddetailid=`` (paginado).
+    """
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+
+    token = _bsale_token()
+    if not token:
+        if strict_token:
+            raise ValueError("Ningún token Bsale: defina BSALE_TOKEN o BSALE_TOKEN_SPA.")
+        return {"skipped": True, "skip_reason": "sin token"}
+
+    t0 = time.perf_counter()
+    stats: dict[str, Any] = {
+        "mode": "related_range",
+        "days_processed": 0,
+        "details_processed": 0,
+        "rows_inserted": 0,
+        "api_calls": 0,
+        "relations_found": 0,
+        "duration_seconds": 0.0,
+        "omitido_concurrencia": False,
+        "errors": None,
+    }
+
+    conn = get_connection()
+    got_lock = False
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT pg_try_advisory_lock(%s)", (ADVISORY_LOCK_RELATED,))
+        got_lock = bool(cur.fetchone()[0])
+        if not got_lock:
+            stats["omitido_concurrencia"] = True
+            cur.close()
+            stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
+            return stats
+
+        ensure_distribuidora_schema(cur)
+        conn.commit()
+
+        client = BsaleClient(token)
+        throttle = float(os.getenv("DISTRIBUIDORA_RELATED_API_DELAY_SEC", "0.12"))
+
+        current = start_date
+        while current <= end_date:
+            logger.info("Procesando related día: %s", current.isoformat())
+            detail_ids = _fetch_oc_detail_ids_for_emission_day(cur, current)
+            for did in detail_ids:
+                logger.info("Detail procesado: %s", did)
+                items_total, ins, calls = _fetch_and_persist_related_for_detail(
+                    client, cur, did, throttle=throttle
+                )
+                stats["api_calls"] += calls
+                stats["details_processed"] += 1
+                stats["rows_inserted"] += ins
+                stats["relations_found"] += items_total
+                logger.info("Relaciones encontradas: %s", items_total)
+                conn.commit()
+
+            stats["days_processed"] += 1
+            current += timedelta(days=1)
+
+        insert_sync_status_row(
+            cur,
+            sync_type="related",
+            records_processed=int(stats["rows_inserted"]),
+            status="success",
+        )
+        conn.commit()
+        cur.close()
+        logger.info(
+            "sync related range OK: days=%s details=%s inserted=%s relations=%s s=%.2f",
+            stats["days_processed"],
+            stats["details_processed"],
+            stats["rows_inserted"],
+            stats["relations_found"],
+            time.perf_counter() - t0,
+        )
+    except Exception as e:
+        logger.exception("sync related range: %s", e)
+        stats["errors"] = str(e)
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            if got_lock:
+                c2 = conn.cursor()
+                c2.execute("SELECT pg_advisory_unlock(%s)", (ADVISORY_LOCK_RELATED,))
+                c2.close()
+        except Exception:
+            logger.exception("advisory unlock related range")
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
+    return stats
+
+
+def _parse_iso_to_date(s: str) -> date:
+    t = s.strip()
+    if len(t) == 10 and t[4] == "-" and t[7] == "-":
+        return datetime.strptime(t, "%Y-%m-%d").date()
+    dt = datetime.fromisoformat(t.replace("Z", "+00:00"))
+    return dt.astimezone(timezone.utc).date()
+
+
+def run_resync_related_range_background(start_date_iso: str, end_date_iso: str) -> None:
+    try:
+        sd = _parse_iso_to_date(start_date_iso)
+        ed = _parse_iso_to_date(end_date_iso)
+        sync_related_documents_range(start_date=sd, end_date=ed, strict_token=True)
+    except Exception:
+        logger.exception("resync related range background")
 
 
 def run_sync_distribuidora_related_background() -> None:
