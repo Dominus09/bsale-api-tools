@@ -2064,7 +2064,7 @@ export default function MapaRuteroClient() {
                       Detener
                     </Button>
                     <span className="text-xs font-medium text-muted-foreground sm:ml-1">Velocidad</span>
-                    {([1, 2, 4] as const).map((m) => (
+                    {([1, 2, 4, 10] as const).map((m) => (
                       <Button
                         key={m}
                         type="button"
