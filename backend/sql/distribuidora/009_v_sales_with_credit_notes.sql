@@ -19,7 +19,8 @@ SELECT
     b.total_amount_net AS total_amount,
     b.client_name,
     b.municipality,
-    b.seller_name
+    b.seller_name,
+    b.seller_id
 FROM (
     SELECT
         d.document_id,
@@ -58,7 +59,8 @@ FROM (
             NULLIF(TRIM(d.municipality), ''),
             NULLIF(TRIM(c.municipality), '')
         ) AS municipality,
-        COALESCE(NULLIF(TRIM(d.seller_name), ''), 'Sin vendedor') AS seller_name
+        COALESCE(NULLIF(TRIM(d.seller_name), ''), 'Sin vendedor') AS seller_name,
+        d.seller_id
     FROM distribuidora.v_documents_latest d
     LEFT JOIN bsale.clients c
         ON c.company_id = d.company_id

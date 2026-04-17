@@ -34,6 +34,8 @@ import {
   PieChart,
   Truck,
   Percent,
+  UserCircle2,
+  UserX,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -80,12 +82,15 @@ const navSections: { title: string; items: NavItem[] }[] = [
   {
     title: "Distribuidora",
     items: [
+      { href: "/distribuidora/dashboard", label: "Dashboard comercial", icon: BarChart3 },
+      { href: "/distribuidora/clientes", label: "Clientes", icon: Users },
+      { href: "/distribuidora/clientes/inactivos", label: "Clientes inactivos", icon: UserX },
+      { href: "/distribuidora/vendedores", label: "Vendedores", icon: UserCircle2 },
       {
         href: "/distribuidora/dispatch-analysis",
         label: "Análisis despacho",
         icon: PieChart,
       },
-      { href: "/distribuidora/clientes", label: "Clientes (ventas)", icon: Users },
       { href: "/distribuidora/orders", label: "Órdenes OC", icon: ShoppingCart },
       { href: "/distribuidora/planning", label: "Planificación", icon: Truck },
       { href: "/distribuidora/mapa", label: "Mapa rutero", icon: MapPin },

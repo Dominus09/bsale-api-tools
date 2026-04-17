@@ -1006,6 +1006,8 @@ export type DistribuidoraClientConsolidated = {
   ticket_promedio?: number
   primera_compra?: string | null
   ultima_compra?: string | null
+  /** Vendedor de la última venta (tipos 1/6) en el período. */
+  vendedor?: string | null
 }
 
 export type DistribuidoraClientsConsolidatedResponse = {
@@ -1069,6 +1071,7 @@ export type DistribuidoraClientInactive = {
   client_name?: string | null
   ultima_compra?: string | null
   dias_sin_comprar?: number
+  vendedor?: string | null
 }
 
 export async function getDistribuidoraClientsInactive(params: {
@@ -1127,6 +1130,58 @@ export type DistribuidoraClientSellerSummary = {
   clientes?: number
   ventas?: number
   ticket_promedio?: number
+  clientes_inactivos?: number
+}
+
+export type DistribuidoraDailySale = {
+  day?: string | null
+  total_net?: number | null
+}
+
+export type DistribuidoraRecoverClient = {
+  client_id: number
+  client_name?: string | null
+  vendedor?: string | null
+  ultima_compra?: string | null
+  dias_sin_comprar?: number
+  valor_historico_neto?: number | null
+}
+
+export type DistribuidoraClientsDashboardResponse = {
+  chart_range: { start: string; end: string; days: number }
+  kpi_month: { year: number; month: number; label: string }
+  daily_sales: DistribuidoraDailySale[]
+  sales_by_seller: DistribuidoraClientSellerSummary[]
+  seller_totals: { sellers: number; ventas_total: number }
+  kpis: {
+    ventas_mes?: number | null
+    ticket_mes?: number | null
+    clientes_activos?: number | null
+  }
+  recover_clients: DistribuidoraRecoverClient[]
+}
+
+export async function getDistribuidoraClientsDashboard(params: {
+  chart_days?: number
+  kpi_year?: number
+  kpi_month?: number
+  recover_min_days?: number
+  signal?: AbortSignal
+}): Promise<DistribuidoraClientsDashboardResponse> {
+  const qs = new URLSearchParams()
+  if (params.chart_days != null) qs.set("chart_days", String(params.chart_days))
+  if (params.kpi_year != null) qs.set("kpi_year", String(params.kpi_year))
+  if (params.kpi_month != null) qs.set("kpi_month", String(params.kpi_month))
+  if (params.recover_min_days != null) qs.set("recover_min_days", String(params.recover_min_days))
+  const res = await fetch(`${API_URL}/distribuidora/clients/dashboard?${qs}`, {
+    headers: getAuthHeaders(),
+    signal: params.signal,
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar dashboard comercial")
+  }
+  return res.json() as Promise<DistribuidoraClientsDashboardResponse>
 }
 
 export type DistribuidoraClientsSummarySellersResponse = {
@@ -1136,10 +1191,17 @@ export type DistribuidoraClientsSummarySellersResponse = {
 
 export async function getDistribuidoraClientsSummarySellers(params: {
   limit?: number
+  start_date?: string
+  end_date?: string
+  /** IDs Bsale separados por coma (ej. 80,85,59,89). */
+  seller_ids?: string
   signal?: AbortSignal
 }): Promise<DistribuidoraClientsSummarySellersResponse> {
   const qs = new URLSearchParams()
   qs.set("limit", String(Math.min(params.limit ?? 500, 5000)))
+  if (params.start_date?.trim()) qs.set("start_date", params.start_date.trim())
+  if (params.end_date?.trim()) qs.set("end_date", params.end_date.trim())
+  if (params.seller_ids?.trim()) qs.set("seller_ids", params.seller_ids.trim())
   const res = await fetch(`${API_URL}/distribuidora/clients/summary/sellers?${qs}`, {
     headers: getAuthHeaders(),
     signal: params.signal,

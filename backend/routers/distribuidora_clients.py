@@ -12,6 +12,23 @@ from backend.services.distribuidora import clients_analytics_service as cas
 router = APIRouter(prefix="/distribuidora", tags=["Distribuidora clientes"])
 
 
+def _parse_seller_ids_csv(raw: str | None, *, max_items: int = 24) -> list[int] | None:
+    if raw is None or not str(raw).strip():
+        return None
+    out: list[int] = []
+    for part in str(raw).split(","):
+        p = part.strip()
+        if not p:
+            continue
+        try:
+            out.append(int(p))
+        except ValueError:
+            continue
+    if not out:
+        return None
+    return out[:max_items]
+
+
 def _validate_date_range(start_date: date | None, end_date: date | None) -> None:
     if start_date is not None and end_date is not None and start_date > end_date:
         raise HTTPException(
@@ -66,12 +83,46 @@ async def get_clients_top(
     return await run_in_threadpool(_run)
 
 
+@router.get("/clients/dashboard")
+async def get_clients_dashboard(
+    chart_days: int = Query(30, ge=7, le=120),
+    kpi_year: int | None = Query(None, ge=2000, le=2100),
+    kpi_month: int | None = Query(None, ge=1, le=12),
+    recover_min_days: int = Query(7, ge=1, le=3650),
+):
+    """Bundle para dashboard comercial: ventas diarias, vendedores, KPI mes y clientes a recuperar."""
+
+    def _run():
+        return cas.clients_commercial_dashboard(
+            chart_days=chart_days,
+            kpi_year=kpi_year,
+            kpi_month=kpi_month,
+            recover_min_days=recover_min_days,
+        )
+
+    return await run_in_threadpool(_run)
+
+
 @router.get("/clients/summary/sellers")
 async def get_clients_summary_sellers(
     limit: int = Query(500, ge=1, le=cas.MAX_ANALYTICS_ROWS),
+    start_date: date | None = Query(None),
+    end_date: date | None = Query(None),
+    seller_ids: str | None = Query(
+        None,
+        description="IDs de vendedor Bsale (``documents.seller_id``) separados por coma, ej. 80,85,59,89",
+    ),
 ):
+    _validate_date_range(start_date, end_date)
+
     def _run():
-        items, totals = cas.summary_clients_by_seller(limit=limit)
+        ids = _parse_seller_ids_csv(seller_ids)
+        items, totals = cas.summary_clients_by_seller(
+            limit=limit,
+            start_date=start_date,
+            end_date=end_date,
+            seller_ids=ids,
+        )
         return {"items": items, "totals": totals}
 
     return await run_in_threadpool(_run)
