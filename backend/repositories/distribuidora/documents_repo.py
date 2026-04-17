@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
 from psycopg2.extras import Json, execute_values
+
+logger = logging.getLogger(__name__)
 
 
 def _emission_sort_key(r: dict[str, Any]) -> tuple[float, int]:
@@ -85,31 +88,75 @@ def document_dict_from_bsale(
     *,
     company_id: int = 3,
     default_office_id: int = 1,
+    sync_stats: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """
     Mapea JSON documento Bsale → fila ``documents``.
 
-    * No filtra por tipo de documento (1/6/9/33/…): el filtrado va en vistas (p. ej. ``v_sales``).
-    * Incluye todas las sucursales de la empresa; las vistas acotan ``office_id`` si aplica.
-    * ``None`` solo si el documento es de otra empresa (cuando viene ``company.id`` en el JSON).
+    * Solo ``company_id`` y ``office_id`` configurados (Distribuidora): si el JSON trae otra
+      empresa u otra sucursal, no se persiste (defensa adicional al filtro ``officeId`` en API).
+    * No filtra por tipo de documento (1/6/9/33/…): el filtrado fino va en vistas.
     """
-    office = d.get("office") or {}
-    oid_raw = office.get("id")
-    if oid_raw is None:
-        oid = default_office_id
-    else:
-        try:
-            oid = int(oid_raw)
-        except (TypeError, ValueError):
-            oid = default_office_id
+    doc_id = d.get("id")
 
     comp = (d.get("company") or {}).get("id")
     if comp is not None:
         try:
             if int(comp) != company_id:
+                if sync_stats is not None:
+                    sync_stats["skipped_other_company"] = (
+                        int(sync_stats.get("skipped_other_company") or 0) + 1
+                    )
+                logger.info(
+                    "Documento omitido por company distinta: id=%s company_id=%r (esperado %s)",
+                    doc_id,
+                    comp,
+                    company_id,
+                )
                 return None
         except (TypeError, ValueError):
+            if sync_stats is not None:
+                sync_stats["skipped_other_company"] = int(sync_stats.get("skipped_other_company") or 0) + 1
+            logger.info(
+                "Documento omitido por company inválida: id=%s company=%r",
+                doc_id,
+                comp,
+            )
             return None
+
+    office = d.get("office") or {}
+    oid_raw = office.get("id")
+    if oid_raw is None:
+        if sync_stats is not None:
+            sync_stats["skipped_other_office"] = int(sync_stats.get("skipped_other_office") or 0) + 1
+        logger.info(
+            "Documento omitido por office distinta: id=%s (sin office en JSON; se requiere office_id=%s)",
+            doc_id,
+            default_office_id,
+        )
+        return None
+    try:
+        oid = int(oid_raw)
+    except (TypeError, ValueError):
+        if sync_stats is not None:
+            sync_stats["skipped_other_office"] = int(sync_stats.get("skipped_other_office") or 0) + 1
+        logger.info(
+            "Documento omitido por office distinta: id=%s office_id=%r no numérico (esperado %s)",
+            doc_id,
+            oid_raw,
+            default_office_id,
+        )
+        return None
+    if oid != default_office_id:
+        if sync_stats is not None:
+            sync_stats["skipped_other_office"] = int(sync_stats.get("skipped_other_office") or 0) + 1
+        logger.info(
+            "Documento omitido por office distinta: id=%s office_id=%s (esperado %s)",
+            doc_id,
+            oid,
+            default_office_id,
+        )
+        return None
 
     doc_type = d.get("document_type") or {}
     client = d.get("client") or {}

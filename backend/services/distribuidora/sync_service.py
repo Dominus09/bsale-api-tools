@@ -76,7 +76,10 @@ def _documents_get_resync(client: BsaleClient, params: dict[str, Any]) -> dict[s
     """
     GET ``/documents.json`` con reintentos ante 502/503/504, 500 y errores de red.
     Hasta 5 intentos con backoff 3 → 5 → 10 → 20 → 30 s entre reintentos.
+
+    Siempre envía ``officeId`` = sucursal Distribuidora (``OFFICE_ID``).
     """
+    params = {**params, "officeId": OFFICE_ID}
     url = f"{BASE_BSALE}/documents.json"
     backoffs = RESYNC_BSALE_BACKOFFS_SEC
     http_retries = 0
@@ -141,9 +144,15 @@ def _documents_get_resync(client: BsaleClient, params: dict[str, Any]) -> dict[s
 def _append_items_from_bsale_response(
     items: list[dict[str, Any]],
     pending: list[dict[str, Any]],
+    stats: dict[str, Any],
 ) -> None:
     for d in items:
-        row = document_dict_from_bsale(d, company_id=COMPANY_ID, default_office_id=OFFICE_ID)
+        row = document_dict_from_bsale(
+            d,
+            company_id=COMPANY_ID,
+            default_office_id=OFFICE_ID,
+            sync_stats=stats,
+        )
         if row is None:
             continue
         pending.append(row)
@@ -256,10 +265,14 @@ def _fetch_documents_single_day_resync(
         }
         data = _documents_get_resync(client, params)
         items = data.get("items") or []
-        logger.info("📊 Docs obtenidos (API, sin filtrar oficina): %s", len(items))
+        logger.info(
+            "📊 Docs en respuesta API (officeId=%s + validación backend): %s",
+            OFFICE_ID,
+            len(items),
+        )
         if not items:
             break
-        _append_items_from_bsale_response(items, pending)
+        _append_items_from_bsale_response(items, pending, stats)
         _flush_pending_when_large(client, cur, conn, pending, stats)
         offset += len(items)
         time.sleep(random.uniform(0.2, 0.5))
@@ -367,7 +380,7 @@ def _fetch_documents_window(
         if not items:
             break
 
-        _append_items_from_bsale_response(items, pending)
+        _append_items_from_bsale_response(items, pending, stats)
         _flush_pending_when_large(client, cur, conn, pending, stats)
 
         offset += len(items)
@@ -418,6 +431,8 @@ def sync_bsale_distribuidora_incremental(*, strict_token: bool = False) -> dict[
         "documents_inserted": 0,
         "documents_updated": 0,
         "documents_batch_failures": 0,
+        "skipped_other_office": 0,
+        "skipped_other_company": 0,
         "details_inserted": 0,
         "attributes_inserted": 0,
         "references_inserted": 0,
@@ -469,6 +484,13 @@ def sync_bsale_distribuidora_incremental(*, strict_token: bool = False) -> dict[
             desde_ts = hasta_ts - 3600
 
         client = BsaleClient(token)
+        logger.info(
+            "distribuidora sync incremental: procesando solo company_id=%s office_id=%s "
+            "(Bsale GET /documents.json con officeId=%s)",
+            COMPANY_ID,
+            OFFICE_ID,
+            OFFICE_ID,
+        )
         _fetch_documents_window(
             client, cur, conn, desde_ts=desde_ts, hasta_ts=hasta_ts, stats=stats, log_id=log_id
         )
@@ -498,6 +520,13 @@ def sync_bsale_distribuidora_incremental(*, strict_token: bool = False) -> dict[
         conn.commit()
         cur.close()
 
+        logger.info(
+            "Total documentos guardados office %s: %s (omitidos otra office=%s otra company=%s)",
+            OFFICE_ID,
+            stats["documents_processed"],
+            stats.get("skipped_other_office", 0),
+            stats.get("skipped_other_company", 0),
+        )
         logger.info(
             "sync distribuidora incremental OK: processed=%s details=%s attr=%s ref=%s s=%.2f",
             stats["documents_processed"],
@@ -558,6 +587,8 @@ def resync_bsale_distribuidora_range(
         "documents_inserted": 0,
         "documents_updated": 0,
         "documents_batch_failures": 0,
+        "skipped_other_office": 0,
+        "skipped_other_company": 0,
         "details_inserted": 0,
         "attributes_inserted": 0,
         "references_inserted": 0,
@@ -634,6 +665,13 @@ def resync_bsale_distribuidora_range(
             start_d.isoformat(),
             end_d.isoformat(),
         )
+        logger.info(
+            "distribuidora resync documentos: procesando solo company_id=%s office_id=%s "
+            "(Bsale GET /documents.json con officeId=%s)",
+            COMPANY_ID,
+            OFFICE_ID,
+            OFFICE_ID,
+        )
 
         current = start_d
         while current <= end_d:
@@ -693,6 +731,13 @@ def resync_bsale_distribuidora_range(
         )
         conn.commit()
         cur.close()
+        logger.info(
+            "Total documentos guardados office %s: %s (omitidos otra office=%s otra company=%s)",
+            OFFICE_ID,
+            stats["documents_processed"],
+            stats.get("skipped_other_office", 0),
+            stats.get("skipped_other_company", 0),
+        )
         logger.info(
             "resync distribuidora OK: days=%s processed=%s s=%.2f",
             stats["days_processed"],

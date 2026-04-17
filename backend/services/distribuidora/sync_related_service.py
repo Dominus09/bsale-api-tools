@@ -57,6 +57,13 @@ def _safe_int(v: Any) -> int | None:
         return None
 
 
+def _related_item_office_id(it: dict[str, Any]) -> int | None:
+    off = it.get("office") or it.get("Office") or {}
+    if not isinstance(off, dict):
+        return None
+    return _safe_int(off.get("id"))
+
+
 def _bsale_token() -> str:
     return (os.getenv("BSALE_TOKEN") or "").strip() or (os.getenv("BSALE_TOKEN_SPA") or "").strip()
 
@@ -136,6 +143,7 @@ def _fetch_and_persist_related_for_detail(
     detail_id: int,
     *,
     throttle: float,
+    stats: dict[str, Any] | None = None,
 ) -> tuple[int, int, int]:
     """
     GET ``/documents.json`` con ``relateddetailid`` y paginación; inserta con ``ON CONFLICT DO NOTHING``.
@@ -154,6 +162,7 @@ def _fetch_and_persist_related_for_detail(
                     "relateddetailid": detail_id,
                     "limit": RELATED_PAGE_LIMIT,
                     "offset": offset,
+                    "officeId": OFFICE_ID,
                 },
             )
         except Exception as e:
@@ -164,8 +173,8 @@ def _fetch_and_persist_related_for_detail(
         if not items:
             break
         items_api_total += len(items)
-        rows_inserted += _insert_related_rows(conn, cur, detail_id, items)
-        offset += RELATED_PAGE_LIMIT
+        rows_inserted += _insert_related_rows(conn, cur, detail_id, items, stats=stats)
+        offset += len(items)
         if throttle > 0:
             time.sleep(throttle)
     return items_api_total, rows_inserted, api_calls
@@ -176,6 +185,8 @@ def _insert_related_rows(
     cur,
     detail_id: int,
     items: list[dict[str, Any]],
+    *,
+    stats: dict[str, Any] | None = None,
 ) -> int:
     """
     Inserta relaciones con ``ON CONFLICT DO NOTHING``.
@@ -186,6 +197,21 @@ def _insert_related_rows(
     for it in items:
         rid = _safe_int(it.get("id"))
         if rid is None:
+            continue
+        roff = _related_item_office_id(it)
+        if roff is None or roff != OFFICE_ID:
+            if stats is not None:
+                stats["related_skipped_other_office"] = (
+                    int(stats.get("related_skipped_other_office") or 0) + 1
+                )
+            logger.info(
+                "Relación omitida por office distinta: related_document_id=%s office=%s "
+                "(esperado office_id=%s) detail_id=%s",
+                rid,
+                roff,
+                OFFICE_ID,
+                detail_id,
+            )
             continue
         dt = it.get("documentType") or it.get("document_type") or {}
         tid = _safe_int(dt.get("id") if isinstance(dt, dict) else None)
@@ -246,6 +272,7 @@ def sync_distribuidora_related_documents(
         "details_considered": 0,
         "rows_inserted": 0,
         "api_calls": 0,
+        "related_skipped_other_office": 0,
         "duration_seconds": 0.0,
         "skipped": False,
         "omitido_concurrencia": False,
@@ -267,6 +294,15 @@ def sync_distribuidora_related_documents(
         ensure_distribuidora_schema(cur)
         conn.commit()
 
+        logger.info(
+            "sync related distribuidora: solo office_id=%s (Bsale officeId=%s en /documents.json; "
+            "detail_ids desde OC company_id=%s office_id=%s)",
+            OFFICE_ID,
+            OFFICE_ID,
+            COMPANY_ID,
+            OFFICE_ID,
+        )
+
         detail_ids = _fetch_oc_detail_ids(cur, lookback_days=lb, limit_details=lim)
         stats["details_considered"] = len(detail_ids)
 
@@ -276,7 +312,7 @@ def sync_distribuidora_related_documents(
         for did in detail_ids:
             try:
                 _rels, ins, calls = _fetch_and_persist_related_for_detail(
-                    client, conn, cur, did, throttle=throttle
+                    client, conn, cur, did, throttle=throttle, stats=stats
                 )
             except Exception as e:
                 logger.warning("relateddetailid=%s: %s", did, e)
@@ -298,9 +334,10 @@ def sync_distribuidora_related_documents(
         _with_deadlock_retry(conn, "related incremental insert_sync_status", _finalize_incremental)
         cur.close()
         logger.info(
-            "sync related OK: details=%s inserted=%s api=%s s=%.2f",
+            "sync related OK: details=%s inserted=%s omitidas otra office=%s api=%s s=%.2f",
             stats["details_considered"],
             stats["rows_inserted"],
+            stats.get("related_skipped_other_office", 0),
             stats["api_calls"],
             time.perf_counter() - t0,
         )
@@ -358,6 +395,7 @@ def sync_related_documents_range(
         "rows_inserted": 0,
         "api_calls": 0,
         "relations_found": 0,
+        "related_skipped_other_office": 0,
         "duration_seconds": 0.0,
         "omitido_concurrencia": False,
         "errors": None,
@@ -378,6 +416,14 @@ def sync_related_documents_range(
         ensure_distribuidora_schema(cur)
         conn.commit()
 
+        logger.info(
+            "sync related rango: solo office_id=%s (Bsale officeId=%s); OC company_id=%s office_id=%s",
+            OFFICE_ID,
+            OFFICE_ID,
+            COMPANY_ID,
+            OFFICE_ID,
+        )
+
         client = BsaleClient(token)
         throttle = float(os.getenv("DISTRIBUIDORA_RELATED_API_DELAY_SEC", "0.12"))
 
@@ -388,7 +434,7 @@ def sync_related_documents_range(
             for did in detail_ids:
                 logger.info("Detail procesado: %s", did)
                 items_total, ins, calls = _fetch_and_persist_related_for_detail(
-                    client, conn, cur, did, throttle=throttle
+                    client, conn, cur, did, throttle=throttle, stats=stats
                 )
                 stats["api_calls"] += calls
                 stats["details_processed"] += 1
@@ -411,11 +457,13 @@ def sync_related_documents_range(
         _with_deadlock_retry(conn, "related range insert_sync_status", _finalize_range)
         cur.close()
         logger.info(
-            "sync related range OK: days=%s details=%s inserted=%s relations=%s s=%.2f",
+            "sync related range OK: days=%s details=%s inserted=%s relations=%s "
+            "omitidas otra office=%s s=%.2f",
             stats["days_processed"],
             stats["details_processed"],
             stats["rows_inserted"],
             stats["relations_found"],
+            stats.get("related_skipped_other_office", 0),
             time.perf_counter() - t0,
         )
     except Exception as e:
