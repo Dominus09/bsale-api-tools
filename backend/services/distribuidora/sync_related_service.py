@@ -10,9 +10,13 @@ from __future__ import annotations
 
 import logging
 import os
+import random
 import time
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable, TypeVar
+
+import psycopg2.errors
+from psycopg2.extensions import connection as PgConnection
 
 from backend.db import get_connection
 from backend.repositories.distribuidora.sync_repo import (
@@ -23,7 +27,14 @@ from backend.services.distribuidora.bsale_client import BsaleClient
 
 logger = logging.getLogger(__name__)
 
+# Lock exclusivo global para **todo** trabajo sobre ``document_related`` (incremental + rango).
+# Misma sesión: try_advisory_lock al abrir conexión, unlock en ``finally`` antes de ``close``.
 ADVISORY_LOCK_RELATED = 5_927_184_005
+
+DEADLOCK_MAX_ATTEMPTS = 5
+DEADLOCK_SLEEP_SEC = 2.5
+
+T = TypeVar("T")
 COMPANY_ID = 3
 OFFICE_ID = 1
 DOC_TYPE_OC = 33
@@ -48,6 +59,28 @@ def _safe_int(v: Any) -> int | None:
 
 def _bsale_token() -> str:
     return (os.getenv("BSALE_TOKEN") or "").strip() or (os.getenv("BSALE_TOKEN_SPA") or "").strip()
+
+
+def _with_deadlock_retry(conn: PgConnection, label: str, fn: Callable[[], T]) -> T:
+    """Ejecuta ``fn`` (debe hacer ``commit`` o solo lecturas acotadas) y reintenta ante deadlock."""
+    for attempt in range(1, DEADLOCK_MAX_ATTEMPTS + 1):
+        try:
+            return fn()
+        except psycopg2.errors.DeadlockDetected:
+            logger.warning(
+                "DeadlockDetected (%s) intento %s/%s — rollback y reintento",
+                label,
+                attempt,
+                DEADLOCK_MAX_ATTEMPTS,
+            )
+            try:
+                conn.rollback()
+            except Exception:
+                logger.exception("rollback tras deadlock (%s)", label)
+            if attempt >= DEADLOCK_MAX_ATTEMPTS:
+                raise
+            time.sleep(DEADLOCK_SLEEP_SEC + random.uniform(0, 0.5))
+    raise RuntimeError("unreachable")
 
 
 def _fetch_oc_detail_ids(
@@ -98,6 +131,7 @@ def _fetch_oc_detail_ids_for_emission_day(cur, day: date) -> list[int]:
 
 def _fetch_and_persist_related_for_detail(
     client: BsaleClient,
+    conn: PgConnection,
     cur,
     detail_id: int,
     *,
@@ -130,7 +164,7 @@ def _fetch_and_persist_related_for_detail(
         if not items:
             break
         items_api_total += len(items)
-        rows_inserted += _insert_related_rows(cur, detail_id, items)
+        rows_inserted += _insert_related_rows(conn, cur, detail_id, items)
         offset += RELATED_PAGE_LIMIT
         if throttle > 0:
             time.sleep(throttle)
@@ -138,10 +172,16 @@ def _fetch_and_persist_related_for_detail(
 
 
 def _insert_related_rows(
+    conn: PgConnection,
     cur,
     detail_id: int,
     items: list[dict[str, Any]],
 ) -> int:
+    """
+    Inserta relaciones con ``ON CONFLICT DO NOTHING``.
+
+    Una transacción corta por fila (execute + commit) con reintento ante deadlock.
+    """
     n = 0
     for it in items:
         rid = _safe_int(it.get("id"))
@@ -151,18 +191,31 @@ def _insert_related_rows(
         tid = _safe_int(dt.get("id") if isinstance(dt, dict) else None)
         if tid is None:
             continue
-        cur.execute(
-            """
-            INSERT INTO distribuidora.document_related (
-                detail_id, related_document_id, related_document_type
+
+        def _insert_one(
+            _rid: int = rid,
+            _tid: int = tid,
+        ) -> int:
+            cur.execute(
+                """
+                INSERT INTO distribuidora.document_related (
+                    detail_id, related_document_id, related_document_type
+                )
+                VALUES (%s, %s, %s)
+                ON CONFLICT (detail_id, related_document_id) DO NOTHING
+                """,
+                (detail_id, _rid, _tid),
             )
-            VALUES (%s, %s, %s)
-            ON CONFLICT (detail_id, related_document_id) DO NOTHING
-            """,
-            (detail_id, rid, tid),
+            rc = int(cur.rowcount or 0)
+            conn.commit()
+            return rc
+
+        inserted = _with_deadlock_retry(
+            conn,
+            f"document_related detail_id={detail_id} related_document_id={rid}",
+            _insert_one,
         )
-        if cur.rowcount:
-            n += 1
+        n += inserted
     return n
 
 
@@ -222,29 +275,27 @@ def sync_distribuidora_related_documents(
 
         for did in detail_ids:
             try:
-                data = client.get(
-                    "/documents.json",
-                    {"relateddetailid": did, "limit": 50, "offset": 0},
+                _rels, ins, calls = _fetch_and_persist_related_for_detail(
+                    client, conn, cur, did, throttle=throttle
                 )
             except Exception as e:
                 logger.warning("relateddetailid=%s: %s", did, e)
                 continue
-            stats["api_calls"] += 1
-            items = data.get("items") or []
-            if items:
-                ins = _insert_related_rows(cur, did, items)
-                stats["rows_inserted"] += ins
-                conn.commit()
+            stats["api_calls"] += calls
+            stats["rows_inserted"] += ins
             if throttle > 0:
                 time.sleep(throttle)
 
-        insert_sync_status_row(
-            cur,
-            sync_type="related",
-            records_processed=int(stats["rows_inserted"]),
-            status="success",
-        )
-        conn.commit()
+        def _finalize_incremental() -> None:
+            insert_sync_status_row(
+                cur,
+                sync_type="related",
+                records_processed=int(stats["rows_inserted"]),
+                status="success",
+            )
+            conn.commit()
+
+        _with_deadlock_retry(conn, "related incremental insert_sync_status", _finalize_incremental)
         cur.close()
         logger.info(
             "sync related OK: details=%s inserted=%s api=%s s=%.2f",
@@ -337,25 +388,27 @@ def sync_related_documents_range(
             for did in detail_ids:
                 logger.info("Detail procesado: %s", did)
                 items_total, ins, calls = _fetch_and_persist_related_for_detail(
-                    client, cur, did, throttle=throttle
+                    client, conn, cur, did, throttle=throttle
                 )
                 stats["api_calls"] += calls
                 stats["details_processed"] += 1
                 stats["rows_inserted"] += ins
                 stats["relations_found"] += items_total
                 logger.info("Relaciones encontradas: %s", items_total)
-                conn.commit()
 
             stats["days_processed"] += 1
             current += timedelta(days=1)
 
-        insert_sync_status_row(
-            cur,
-            sync_type="related",
-            records_processed=int(stats["rows_inserted"]),
-            status="success",
-        )
-        conn.commit()
+        def _finalize_range() -> None:
+            insert_sync_status_row(
+                cur,
+                sync_type="related",
+                records_processed=int(stats["rows_inserted"]),
+                status="success",
+            )
+            conn.commit()
+
+        _with_deadlock_retry(conn, "related range insert_sync_status", _finalize_range)
         cur.close()
         logger.info(
             "sync related range OK: days=%s details=%s inserted=%s relations=%s s=%.2f",
