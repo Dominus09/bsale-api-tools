@@ -72,15 +72,26 @@ function formatDateTime(iso: string | null | undefined): string {
   })
 }
 
+/**
+ * KPIs sobre el conjunto de filas devuelto (p. ej. página actual).
+ * ``total_comprado`` = neto (factura/boleta − NC). El ticket global Bsale es
+ * monto de ventas reales / nº de ventas reales, **no** neto ÷ compras.
+ */
 function kpisFromConsolidated(rows: DistribuidoraClientConsolidated[]) {
   const n = rows.length
   let totalVentas = 0
   let totalCompras = 0
+  /** Suma de (ticket_cliente × compras_cliente) = suma montos bruto solo 1+6 en este conjunto. */
+  let sumaVentasRealesParaTicket = 0
   for (const r of rows) {
+    const compras = Number(r.total_compras ?? 0)
+    const ticket = Number(r.ticket_promedio ?? 0)
     totalVentas += Number(r.total_comprado ?? 0)
-    totalCompras += Number(r.total_compras ?? 0)
+    totalCompras += compras
+    sumaVentasRealesParaTicket += ticket * compras
   }
-  const ticketPromedioGlobal = totalCompras > 0 ? totalVentas / totalCompras : 0
+  const ticketPromedioGlobal =
+    totalCompras > 0 ? sumaVentasRealesParaTicket / totalCompras : 0
   const comprasPorCliente = n > 0 ? totalCompras / n : 0
   return {
     totalClientes: n,

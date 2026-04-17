@@ -1,4 +1,4 @@
-"""Análisis de clientes desde ``distribuidora.v_sales`` (neto con NC; ticket solo sobre boleta+factura)."""
+"""Análisis desde ``distribuidora.v_sales``: total neto con NC; ticket = solo tipos 1 y 6 (Bsale)."""
 
 from __future__ import annotations
 
@@ -78,6 +78,7 @@ def list_clients_consolidated(
             MAX(v.client_name) AS client_name,
             COALESCE(SUM(v.is_sale), 0)::bigint AS total_compras,
             COALESCE(SUM(v.total_amount_net), 0) AS total_comprado,
+            -- Ticket Bsale: SUM(monto boleta+factura) / COUNT(boleta+factura); NC no entra al denominador ni al numerador del ticket.
             COALESCE(
                 SUM(v.total_amount_sales) / NULLIF(SUM(v.is_sale)::numeric, 0),
                 0
@@ -184,6 +185,7 @@ def summary_clients_by_seller(*, limit: int) -> tuple[list[dict[str, Any]], dict
                 SUM(v.total_amount_sales) / NULLIF(SUM(v.is_sale)::numeric, 0),
                 0
             ) AS ticket_promedio
+            -- ventas = neto; ticket = solo 1+6 (mismo criterio que Bsale).
         FROM distribuidora.v_sales v
         GROUP BY v.seller_name
         ORDER BY SUM(v.total_amount_net) DESC NULLS LAST
