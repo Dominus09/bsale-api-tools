@@ -1,4 +1,4 @@
-"""Análisis de clientes a partir de ``distribuidora.v_sales`` (+ nombre vía ``bsale.clients``)."""
+"""Análisis de clientes a partir de ``distribuidora.v_sales`` (montos netos con NC)."""
 
 from __future__ import annotations
 
@@ -9,38 +9,12 @@ from typing import Any
 from backend.db import get_connection
 from backend.services.distribuidora.orders_service import _row_to_dict, _serialize_row
 
-COMPANY_ID = 3
 MAX_ANALYTICS_ROWS = 5000
 CONSOLIDATED_DEFAULT_LIMIT = 1000
 
 
-def _client_name_expr() -> str:
-    """Expresión SQL para nombre mostrable (una fila ``v`` + ``c``)."""
-    return """
-        COALESCE(
-            NULLIF(
-                TRIM(
-                    CONCAT_WS(
-                        ' ',
-                        NULLIF(TRIM(c.company), ''),
-                        NULLIF(TRIM(c.first_name), ''),
-                        NULLIF(TRIM(c.last_name), '')
-                    )
-                ),
-                ''
-            ),
-            'Cliente ' || COALESCE(v.client_id::text, '0')
-        )
-    """
-
-
-def _sales_from_with_client() -> str:
-    return f"""
-        FROM distribuidora.v_sales v
-        LEFT JOIN bsale.clients c
-            ON c.company_id = {COMPANY_ID}
-           AND c.bsale_id = v.client_id
-    """
+def _sales_from() -> str:
+    return "FROM distribuidora.v_sales v"
 
 
 def _conn_query_all(sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
@@ -96,19 +70,18 @@ def list_clients_consolidated(
         municipality=municipality,
     )
     cap = min(max(1, limit), MAX_ANALYTICS_ROWS)
-    name_sql = _client_name_expr()
     params2 = list(params)
     params2.extend([cap, offset])
     sql = f"""
         SELECT
             v.client_id,
-            MAX({name_sql.strip()}) AS client_name,
+            MAX(v.client_name) AS client_name,
             COUNT(*)::bigint AS total_compras,
             COALESCE(SUM(v.total_amount), 0) AS total_comprado,
             COALESCE(AVG(v.total_amount), 0) AS ticket_promedio,
             MIN(v.emission_date) AS primera_compra,
             MAX(v.emission_date) AS ultima_compra
-        {_sales_from_with_client()}
+        {_sales_from()}
         WHERE {where_sql}
         GROUP BY v.client_id
         ORDER BY SUM(v.total_amount) DESC NULLS LAST
@@ -132,20 +105,19 @@ def list_clients_frequency(
         municipality=municipality,
     )
     cap = min(max(1, limit), MAX_ANALYTICS_ROWS)
-    name_sql = _client_name_expr()
     params2 = list(params)
     params2.append(cap)
     sql = f"""
         SELECT
             v.client_id,
-            MAX({name_sql.strip()}) AS client_name,
+            MAX(v.client_name) AS client_name,
             COUNT(*)::bigint AS compras,
             (
                 (MAX((v.emission_date AT TIME ZONE 'UTC')::date)
                  - MIN((v.emission_date AT TIME ZONE 'UTC')::date))::numeric
                 / NULLIF(COUNT(*)::numeric, 0)
             ) AS frecuencia_dias
-        {_sales_from_with_client()}
+        {_sales_from()}
         WHERE {where_sql}
         GROUP BY v.client_id
         ORDER BY frecuencia_dias ASC NULLS LAST
@@ -157,17 +129,16 @@ def list_clients_frequency(
 def list_clients_inactive(*, days: int, limit: int) -> list[dict[str, Any]]:
     d = max(1, days)
     cap = min(max(1, limit), MAX_ANALYTICS_ROWS)
-    name_sql = _client_name_expr()
     sql = f"""
         SELECT
             v.client_id,
-            MAX({name_sql.strip()}) AS client_name,
+            MAX(v.client_name) AS client_name,
             MAX(v.emission_date) AS ultima_compra,
             (
                 CURRENT_DATE
                 - (MAX(v.emission_date) AT TIME ZONE 'UTC')::date
             )::int AS dias_sin_comprar
-        {_sales_from_with_client()}
+        {_sales_from()}
         GROUP BY v.client_id
         HAVING (CURRENT_DATE - (MAX(v.emission_date) AT TIME ZONE 'UTC')::date) > %s
         ORDER BY dias_sin_comprar DESC NULLS LAST
@@ -178,13 +149,12 @@ def list_clients_inactive(*, days: int, limit: int) -> list[dict[str, Any]]:
 
 def list_clients_top(*, limit: int) -> list[dict[str, Any]]:
     cap = min(max(1, limit), MAX_ANALYTICS_ROWS)
-    name_sql = _client_name_expr()
     sql = f"""
         SELECT
             v.client_id,
-            MAX({name_sql.strip()}) AS client_name,
+            MAX(v.client_name) AS client_name,
             COALESCE(SUM(v.total_amount), 0) AS total
-        {_sales_from_with_client()}
+        {_sales_from()}
         GROUP BY v.client_id
         ORDER BY SUM(v.total_amount) DESC NULLS LAST
         LIMIT %s

@@ -38,6 +38,7 @@ def ensure_distribuidora_schema(cur) -> None:
         "006_route_planning_seller.sql",
         "007_document_related_sync_status_views.sql",
         "008_documents_fk_on_update_cascade.sql",
+        "009_v_sales_with_credit_notes.sql",
     ):
         _run_sql_file(cur, fn)
 
