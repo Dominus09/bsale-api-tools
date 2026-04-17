@@ -7,6 +7,7 @@ Prefijo de montaje en main: /app_distribuidora
 from __future__ import annotations
 
 import logging
+import time
 from datetime import date
 
 import bcrypt
@@ -30,6 +31,177 @@ from backend.utils.geo import distancia_y_estado_validacion
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["App Distribuidora"])
+
+# Misma exclusión que GET /distribuidora/ruta-detalle (no visitas telefónicas en ruta terreno).
+_SQL_RUTERO_EXCL_TELEFONICO = """
+          AND LOWER(TRIM(COALESCE(dia_atencion::text, ''))) <> 'telefonico'
+          AND LOWER(COALESCE(tipo_atencion::text, '')) <> 'telefonico'
+"""
+
+_DIA_SEMANA_ES = (
+    "lunes",
+    "martes",
+    "miércoles",
+    "jueves",
+    "viernes",
+    "sábado",
+    "domingo",
+)
+
+
+def _dia_atencion_desde_fecha(fecha: date) -> str:
+    """Nombre del día en español (minúsculas), alineado a bsale.rutero.dia_atencion en comparaciones LOWER()."""
+    return _DIA_SEMANA_ES[fecha.weekday()]
+
+
+_RUTA_DIA_SELECT_COLS = """
+            SELECT
+                id,
+                fecha,
+                vendedor,
+                estado,
+                hora_inicio,
+                hora_fin,
+                total_clientes,
+                clientes_visitados,
+                clientes_pendientes,
+                porcentaje_cumplimiento,
+                created_at,
+                updated_at
+            FROM bsale.rutas_dia
+            WHERE fecha = %s
+              AND LOWER(TRIM(COALESCE(vendedor::text, ''))) = %s
+            LIMIT 1
+"""
+
+
+def _fetch_ruta_dia_row(cur, fecha: date, v: str):
+    cur.execute(_RUTA_DIA_SELECT_COLS, (fecha, v))
+    return cur.fetchone()
+
+
+def _insert_ruta_dia_si_ausente(cur, fecha: date, v: str):
+    """
+    Garantiza una fila en rutas_dia; devuelve la tupla completa y la lista de columnas
+    (mismo shape que el SELECT principal).
+    """
+    row = _fetch_ruta_dia_row(cur, fecha, v)
+    if row:
+        cols = [c[0] for c in cur.description]
+        return cols, row
+
+    cur.execute(
+        """
+            INSERT INTO bsale.rutas_dia (fecha, vendedor)
+            VALUES (%s, %s)
+            RETURNING
+                id,
+                fecha,
+                vendedor,
+                estado,
+                hora_inicio,
+                hora_fin,
+                total_clientes,
+                clientes_visitados,
+                clientes_pendientes,
+                porcentaje_cumplimiento,
+                created_at,
+                updated_at
+        """,
+        (fecha, v),
+    )
+    row = cur.fetchone()
+    cols = [c[0] for c in cur.description]
+    if row:
+        return cols, row
+
+    # Carrera muy rara: otro proceso insertó entre el SELECT y el INSERT.
+    row = _fetch_ruta_dia_row(cur, fecha, v)
+    if not row:
+        raise RuntimeError("no se pudo crear ni leer rutas_dia")
+    cols = [c[0] for c in cur.description]
+    return cols, row
+
+
+def _poblar_visitas_desde_rutero(cur, ruta_id: int, fecha: date, v: str) -> int:
+    """
+    Si no hay visitas para la ruta, las crea desde bsale.rutero (día = dia_atencion).
+    Devuelve cuántas filas insertó.
+    """
+    cur.execute(
+        "SELECT id FROM bsale.rutas_dia WHERE id = %s FOR UPDATE",
+        (ruta_id,),
+    )
+    if cur.fetchone() is None:
+        return 0
+
+    cur.execute(
+        "SELECT COUNT(*) FROM bsale.visitas WHERE ruta_id = %s",
+        (ruta_id,),
+    )
+    (n_visitas,) = cur.fetchone()
+    if n_visitas and int(n_visitas) > 0:
+        return 0
+
+    dia = _dia_atencion_desde_fecha(fecha)
+    cur.execute(
+        """
+            SELECT
+                r.bsale_id,
+                r.lat,
+                r.lon
+            FROM bsale.rutero r
+            WHERE r.company_id = 3
+              AND r.activo = TRUE
+              AND LOWER(TRIM(COALESCE(r.vendedor::text, ''))) = %s
+              AND LOWER(TRIM(COALESCE(r.dia_atencion::text, ''))) = LOWER(TRIM(%s))
+        """
+        + _SQL_RUTERO_EXCL_TELEFONICO
+        + """
+            ORDER BY
+              CASE WHEN r.orden_manual IS NOT NULL AND r.orden_manual > 0 THEN 0 ELSE 1 END,
+              r.orden_manual ASC NULLS LAST,
+              r.orden_ruta ASC NULLS LAST,
+              r.bsale_id ASC
+        """,
+        (v, dia),
+    )
+    clientes = cur.fetchall()
+    clientes = [c for c in clientes if c[0] is not None]
+    if not clientes:
+        return 0
+
+    ts_ms = int(time.time() * 1000)
+    insertados = 0
+    for orden, (bsale_id, lat, lon) in enumerate(clientes, start=1):
+        cliente_str = str(int(bsale_id))
+        local_action_id = f"init-{ts_ms}-{cliente_str}-{orden}"
+        cur.execute(
+            """
+            INSERT INTO bsale.visitas (
+                ruta_id,
+                cliente_id,
+                orden_ruta,
+                estado,
+                lat_cliente,
+                lon_cliente,
+                local_action_id
+            ) VALUES (%s, %s, %s, 'pendiente', %s, %s, %s)
+            """,
+            (ruta_id, cliente_str, orden, lat, lon, local_action_id),
+        )
+        insertados += 1
+
+    cur.execute(
+        """
+        UPDATE bsale.rutas_dia
+        SET total_clientes = %s,
+            clientes_pendientes = %s
+        WHERE id = %s
+        """,
+        (insertados, insertados, ruta_id),
+    )
+    return insertados
 
 
 def _rows_to_dict_list(cur) -> list[dict]:
@@ -206,77 +378,91 @@ def get_ruta_del_dia(
 ):
     """
     Obtiene la ruta del día en bsale.rutas_dia y las visitas asociadas ordenadas por orden_ruta.
+
+    Si no existe ``rutas_dia`` para (fecha, vendedor), se crea. Si la ruta no tiene visitas,
+    se generan desde ``bsale.rutero`` según el día de la semana de ``fecha`` (columna ``dia_atencion``).
     """
     v = (vendedor or "").strip().lower()
     conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT
-                id,
-                fecha,
-                vendedor,
-                estado,
-                hora_inicio,
-                hora_fin,
-                total_clientes,
-                clientes_visitados,
-                clientes_pendientes,
-                porcentaje_cumplimiento,
-                created_at,
-                updated_at
-            FROM bsale.rutas_dia
-            WHERE fecha = %s
-              AND LOWER(TRIM(COALESCE(vendedor::text, ''))) = %s
-            LIMIT 1
-            """,
-            (fecha, v),
-        )
-        ruta_row = cur.fetchone()
-        if not ruta_row:
-            cur.close()
-            raise HTTPException(
-                status_code=404,
-                detail="No se encontró una ruta para la fecha y vendedor indicados.",
+        try:
+            cols, ruta_row = _insert_ruta_dia_si_ausente(cur, fecha, v)
+            ruta = dict(zip(cols, ruta_row))
+            ruta_id = ruta["id"]
+
+            _poblar_visitas_desde_rutero(cur, ruta_id, fecha, v)
+
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    fecha,
+                    vendedor,
+                    estado,
+                    hora_inicio,
+                    hora_fin,
+                    total_clientes,
+                    clientes_visitados,
+                    clientes_pendientes,
+                    porcentaje_cumplimiento,
+                    created_at,
+                    updated_at
+                FROM bsale.rutas_dia
+                WHERE id = %s
+                """,
+                (ruta_id,),
             )
+            ruta_row = cur.fetchone()
+            cols_r = [c[0] for c in cur.description]
+            ruta = dict(zip(cols_r, ruta_row))
 
-        cols = [c[0] for c in cur.description]
-        ruta = dict(zip(cols, ruta_row))
-        ruta_id = ruta["id"]
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    ruta_id,
+                    cliente_id,
+                    orden_ruta,
+                    estado,
+                    tipo_incidencia,
+                    con_compra,
+                    observacion,
+                    foto_url,
+                    lat_cliente,
+                    lon_cliente,
+                    lat_visita,
+                    lon_visita,
+                    distancia_metros,
+                    validacion_estado,
+                    fecha_hora_visita,
+                    sync_status,
+                    local_action_id,
+                    created_at,
+                    updated_at
+                FROM bsale.visitas
+                WHERE ruta_id = %s
+                ORDER BY orden_ruta ASC, id ASC
+                """,
+                (ruta_id,),
+            )
+            visitas = _rows_to_dict_list(cur)
+            ruta["visitas"] = visitas
 
-        cur.execute(
-            """
-            SELECT
-                id,
-                ruta_id,
-                cliente_id,
-                orden_ruta,
-                estado,
-                tipo_incidencia,
-                con_compra,
-                observacion,
-                foto_url,
-                lat_cliente,
-                lon_cliente,
-                lat_visita,
-                lon_visita,
-                distancia_metros,
-                validacion_estado,
-                fecha_hora_visita,
-                sync_status,
-                local_action_id,
-                created_at,
-                updated_at
-            FROM bsale.visitas
-            WHERE ruta_id = %s
-            ORDER BY orden_ruta ASC, id ASC
-            """,
-            (ruta_id,),
-        )
-        visitas = _rows_to_dict_list(cur)
-        ruta["visitas"] = visitas
-        cur.close()
+            conn.commit()
+        except (psycopg2.Error, RuntimeError):
+            conn.rollback()
+            logger.exception(
+                "Error al obtener o inicializar GET /vendedor/ruta (fecha=%s vendedor=%s)",
+                fecha,
+                v,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="No se pudo obtener o inicializar la ruta del día.",
+            ) from None
+        finally:
+            cur.close()
     finally:
         conn.close()
 
