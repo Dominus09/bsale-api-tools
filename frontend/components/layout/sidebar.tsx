@@ -85,6 +85,7 @@ const navSections: { title: string; items: NavItem[] }[] = [
         label: "Análisis despacho",
         icon: PieChart,
       },
+      { href: "/distribuidora/clientes", label: "Clientes (ventas)", icon: Users },
       { href: "/distribuidora/orders", label: "Órdenes OC", icon: ShoppingCart },
       { href: "/distribuidora/planning", label: "Planificación", icon: Truck },
       { href: "/distribuidora/mapa", label: "Mapa rutero", icon: MapPin },

@@ -944,6 +944,205 @@ export async function postDistribuidoraRoutePlanningBatch(body: {
   return res.json() as Promise<DistribuidoraRoutePlanningBatchResponse>
 }
 
+/** GET /distribuidora/sales (planificación / análisis). */
+export type DistribuidoraSalesItem = {
+  document_id?: number
+  emission_date?: string | null
+  client_id?: number | null
+  municipality?: string | null
+  seller_name?: string | null
+  total_amount?: number | null
+  [key: string]: unknown
+}
+
+export type DistribuidoraSalesResponse = {
+  total: number
+  limit: number
+  offset: number
+  items: DistribuidoraSalesItem[]
+}
+
+export async function getDistribuidoraSales(params: {
+  start_date?: string
+  end_date?: string
+  seller?: string
+  municipality?: string
+  limit?: number
+  offset?: number
+  signal?: AbortSignal
+}): Promise<DistribuidoraSalesResponse> {
+  const qs = new URLSearchParams()
+  if (params.start_date?.trim()) qs.set("start_date", params.start_date.trim())
+  if (params.end_date?.trim()) qs.set("end_date", params.end_date.trim())
+  if (params.seller?.trim()) qs.set("seller", params.seller.trim())
+  if (params.municipality?.trim()) qs.set("municipality", params.municipality.trim())
+  qs.set("limit", String(Math.min(params.limit ?? 1000, 5000)))
+  qs.set("offset", String(params.offset ?? 0))
+  const res = await fetch(`${API_URL}/distribuidora/sales?${qs}`, {
+    headers: getAuthHeaders(),
+    signal: params.signal,
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar ventas")
+  }
+  return res.json() as Promise<DistribuidoraSalesResponse>
+}
+
+/** Análisis de clientes (GET /distribuidora/clients*). */
+export type DistribuidoraClientConsolidated = {
+  client_id: number
+  client_name?: string | null
+  total_compras?: number
+  total_comprado?: number
+  ticket_promedio?: number
+  primera_compra?: string | null
+  ultima_compra?: string | null
+}
+
+export type DistribuidoraClientsConsolidatedResponse = {
+  items: DistribuidoraClientConsolidated[]
+  limit: number
+  offset: number
+}
+
+export async function getDistribuidoraClientsConsolidated(params: {
+  start_date?: string
+  end_date?: string
+  seller?: string
+  municipality?: string
+  limit?: number
+  offset?: number
+  signal?: AbortSignal
+}): Promise<DistribuidoraClientsConsolidatedResponse> {
+  const qs = new URLSearchParams()
+  if (params.start_date?.trim()) qs.set("start_date", params.start_date.trim())
+  if (params.end_date?.trim()) qs.set("end_date", params.end_date.trim())
+  if (params.seller?.trim()) qs.set("seller", params.seller.trim())
+  if (params.municipality?.trim()) qs.set("municipality", params.municipality.trim())
+  qs.set("limit", String(Math.min(params.limit ?? 1000, 5000)))
+  qs.set("offset", String(params.offset ?? 0))
+  const res = await fetch(`${API_URL}/distribuidora/clients?${qs}`, {
+    headers: getAuthHeaders(),
+    signal: params.signal,
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar clientes consolidados")
+  }
+  return res.json() as Promise<DistribuidoraClientsConsolidatedResponse>
+}
+
+export type DistribuidoraClientTop = {
+  client_id: number
+  client_name?: string | null
+  total?: number
+}
+
+export async function getDistribuidoraClientsTop(params: {
+  limit?: number
+  signal?: AbortSignal
+}): Promise<{ items: DistribuidoraClientTop[] }> {
+  const qs = new URLSearchParams()
+  qs.set("limit", String(Math.min(params.limit ?? 20, 1000)))
+  const res = await fetch(`${API_URL}/distribuidora/clients/top?${qs}`, {
+    headers: getAuthHeaders(),
+    signal: params.signal,
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar top clientes")
+  }
+  return res.json() as Promise<{ items: DistribuidoraClientTop[] }>
+}
+
+export type DistribuidoraClientInactive = {
+  client_id: number
+  client_name?: string | null
+  ultima_compra?: string | null
+  dias_sin_comprar?: number
+}
+
+export async function getDistribuidoraClientsInactive(params: {
+  days?: number
+  limit?: number
+  signal?: AbortSignal
+}): Promise<{ items: DistribuidoraClientInactive[] }> {
+  const qs = new URLSearchParams()
+  qs.set("days", String(Math.max(1, params.days ?? 7)))
+  qs.set("limit", String(Math.min(params.limit ?? 1000, 5000)))
+  const res = await fetch(`${API_URL}/distribuidora/clients/inactive?${qs}`, {
+    headers: getAuthHeaders(),
+    signal: params.signal,
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar clientes inactivos")
+  }
+  return res.json() as Promise<{ items: DistribuidoraClientInactive[] }>
+}
+
+export type DistribuidoraClientFrequency = {
+  client_id: number
+  client_name?: string | null
+  compras?: number
+  frecuencia_dias?: number
+}
+
+export async function getDistribuidoraClientsFrequency(params: {
+  start_date?: string
+  end_date?: string
+  seller?: string
+  municipality?: string
+  limit?: number
+  signal?: AbortSignal
+}): Promise<{ items: DistribuidoraClientFrequency[] }> {
+  const qs = new URLSearchParams()
+  if (params.start_date?.trim()) qs.set("start_date", params.start_date.trim())
+  if (params.end_date?.trim()) qs.set("end_date", params.end_date.trim())
+  if (params.seller?.trim()) qs.set("seller", params.seller.trim())
+  if (params.municipality?.trim()) qs.set("municipality", params.municipality.trim())
+  qs.set("limit", String(Math.min(params.limit ?? 1000, 5000)))
+  const res = await fetch(`${API_URL}/distribuidora/clients/frequency?${qs}`, {
+    headers: getAuthHeaders(),
+    signal: params.signal,
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar frecuencia")
+  }
+  return res.json() as Promise<{ items: DistribuidoraClientFrequency[] }>
+}
+
+export type DistribuidoraClientSellerSummary = {
+  seller_name?: string | null
+  clientes?: number
+  ventas?: number
+  ticket_promedio?: number
+}
+
+export type DistribuidoraClientsSummarySellersResponse = {
+  items: DistribuidoraClientSellerSummary[]
+  totals: { sellers: number; ventas_total: number }
+}
+
+export async function getDistribuidoraClientsSummarySellers(params: {
+  limit?: number
+  signal?: AbortSignal
+}): Promise<DistribuidoraClientsSummarySellersResponse> {
+  const qs = new URLSearchParams()
+  qs.set("limit", String(Math.min(params.limit ?? 500, 5000)))
+  const res = await fetch(`${API_URL}/distribuidora/clients/summary/sellers?${qs}`, {
+    headers: getAuthHeaders(),
+    signal: params.signal,
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar resumen por vendedor")
+  }
+  return res.json() as Promise<DistribuidoraClientsSummarySellersResponse>
+}
+
 /** Filas genéricas JSON (listados /distribuidora/*). */
 export type DistribuidoraRecord = Record<string, unknown>
 
