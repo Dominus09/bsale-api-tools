@@ -26,17 +26,11 @@ from backend.schemas.distribuidora import (
     VisitaCreate,
     VisitaResponse,
 )
-from backend.utils.geo import distancia_y_estado_validacion
+from backend.utils.geo import coordenadas_visita_validas, distancia_y_estado_validacion
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["App Distribuidora"])
-
-# Misma exclusión que GET /distribuidora/ruta-detalle (no visitas telefónicas en ruta terreno).
-_SQL_RUTERO_EXCL_TELEFONICO = """
-          AND LOWER(TRIM(COALESCE(dia_atencion::text, ''))) <> 'telefonico'
-          AND LOWER(COALESCE(tipo_atencion::text, '')) <> 'telefonico'
-"""
 
 _DIA_SEMANA_ES = (
     "lunes",
@@ -50,8 +44,39 @@ _DIA_SEMANA_ES = (
 
 
 def _dia_atencion_desde_fecha(fecha: date) -> str:
-    """Nombre del día en español (minúsculas), alineado a bsale.rutero.dia_atencion en comparaciones LOWER()."""
+    """Nombre del día en español (minúsculas), alineado a bsale.rutero.dia_atencion."""
     return _DIA_SEMANA_ES[fecha.weekday()]
+
+
+def _es_atencion_telefonica(tipo_incidencia: str | None) -> bool:
+    return (tipo_incidencia or "").strip().lower() == "atencion telefonica"
+
+
+def _validacion_negocio_visita(body: VisitaCreate) -> str | None:
+    """
+    Reglas de negocio antes de persistir una visita (POST unitario o sync).
+    Devuelve mensaje listo para HTTP 400, o None si pasa.
+    """
+    if _es_atencion_telefonica(body.tipo_incidencia):
+        if body.foto_url is None or not str(body.foto_url).strip():
+            return "Debe subir evidencia para atención telefónica"
+        return None
+    if body.estado == "visitado":
+        if not coordenadas_visita_validas(body.lat_visita, body.lon_visita):
+            return "Se requieren coordenadas GPS para registrar la visita en terreno."
+    return None
+
+
+def _distancia_y_validacion_persistencia(body: VisitaCreate) -> tuple[float | None, str]:
+    """Distancia Haversine + validacion_estado; atención telefónica no usa GPS."""
+    if _es_atencion_telefonica(body.tipo_incidencia):
+        return None, "validado"
+    return distancia_y_estado_validacion(
+        body.lat_cliente,
+        body.lon_cliente,
+        body.lat_visita,
+        body.lon_visita,
+    )
 
 
 _RUTA_DIA_SELECT_COLS = """
@@ -84,6 +109,8 @@ def _insert_ruta_dia_si_ausente(cur, fecha: date, v: str):
     """
     Garantiza una fila en rutas_dia; devuelve la tupla completa y la lista de columnas
     (mismo shape que el SELECT principal).
+
+    Alta explícita para producción: estado en_progreso y contadores en cero.
     """
     row = _fetch_ruta_dia_row(cur, fecha, v)
     if row:
@@ -92,8 +119,24 @@ def _insert_ruta_dia_si_ausente(cur, fecha: date, v: str):
 
     cur.execute(
         """
-            INSERT INTO bsale.rutas_dia (fecha, vendedor)
-            VALUES (%s, %s)
+            INSERT INTO bsale.rutas_dia (
+                fecha,
+                vendedor,
+                estado,
+                total_clientes,
+                clientes_visitados,
+                clientes_pendientes,
+                porcentaje_cumplimiento
+            )
+            VALUES (
+                %s,
+                %s,
+                'en_progreso',
+                0,
+                0,
+                0,
+                0
+            )
             RETURNING
                 id,
                 fecha,
@@ -125,8 +168,12 @@ def _insert_ruta_dia_si_ausente(cur, fecha: date, v: str):
 
 def _poblar_visitas_desde_rutero(cur, ruta_id: int, fecha: date, v: str) -> int:
     """
-    Si no hay visitas para la ruta, las crea desde bsale.rutero (día = dia_atencion).
-    Devuelve cuántas filas insertó.
+    Si no hay visitas para la ruta, las crea desde bsale.rutero.
+
+    - Filtro vendedor: ``company`` o ``vendedor`` (minúsculas) coincide con el código de ruta.
+    - Día: ``dia_atencion`` comparado sin depender de tildes (lunes / miércoles / miercoles, etc.).
+    - Incluye clientes de atención telefónica en rutero (la evidencia se exige al cerrar POST /visitas).
+    - Snapshot: nombre_fantasia, dirección, comuna, rut_clean, lat/lon desde rutero.
     """
     cur.execute(
         "SELECT id FROM bsale.rutas_dia WHERE id = %s FOR UPDATE",
@@ -148,23 +195,31 @@ def _poblar_visitas_desde_rutero(cur, ruta_id: int, fecha: date, v: str) -> int:
         """
             SELECT
                 r.bsale_id,
+                r.nombre_fantasia,
+                r.address,
+                r.municipality,
+                r.rut_clean,
                 r.lat,
                 r.lon
             FROM bsale.rutero r
             WHERE r.company_id = 3
               AND r.activo = TRUE
-              AND LOWER(TRIM(COALESCE(r.vendedor::text, ''))) = %s
-              AND LOWER(TRIM(COALESCE(r.dia_atencion::text, ''))) = LOWER(TRIM(%s))
-        """
-        + _SQL_RUTERO_EXCL_TELEFONICO
-        + """
+              AND (
+                    LOWER(TRIM(COALESCE(r.company::text, ''))) = %s
+                 OR LOWER(TRIM(COALESCE(r.vendedor::text, ''))) = %s
+              )
+              AND translate(
+                    lower(trim(coalesce(r.dia_atencion::text, ''))),
+                    'áéíóúü',
+                    'aeiouu'
+                  ) = translate(lower(trim(%s)), 'áéíóúü', 'aeiouu')
             ORDER BY
               CASE WHEN r.orden_manual IS NOT NULL AND r.orden_manual > 0 THEN 0 ELSE 1 END,
               r.orden_manual ASC NULLS LAST,
               r.orden_ruta ASC NULLS LAST,
               r.bsale_id ASC
         """,
-        (v, dia),
+        (v, v, dia),
     )
     clientes = cur.fetchall()
     clientes = [c for c in clientes if c[0] is not None]
@@ -173,22 +228,41 @@ def _poblar_visitas_desde_rutero(cur, ruta_id: int, fecha: date, v: str) -> int:
 
     ts_ms = int(time.time() * 1000)
     insertados = 0
-    for orden, (bsale_id, lat, lon) in enumerate(clientes, start=1):
+    for orden, row in enumerate(clientes, start=1):
+        bsale_id, nombre_fantasia, address, municipality, rut_clean, lat, lon = row
         cliente_str = str(int(bsale_id))
-        local_action_id = f"init-{ts_ms}-{cliente_str}-{orden}"
+        local_action_id = f"init_{cliente_str}_{ts_ms}_{orden}"
+        if len(local_action_id) > 128:
+            local_action_id = local_action_id[:128]
+
         cur.execute(
             """
             INSERT INTO bsale.visitas (
                 ruta_id,
                 cliente_id,
+                nombre_fantasia,
+                direccion,
+                comuna,
+                rut_clean,
                 orden_ruta,
                 estado,
                 lat_cliente,
                 lon_cliente,
                 local_action_id
-            ) VALUES (%s, %s, %s, 'pendiente', %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'pendiente', %s, %s, %s)
             """,
-            (ruta_id, cliente_str, orden, lat, lon, local_action_id),
+            (
+                ruta_id,
+                cliente_str,
+                nombre_fantasia,
+                address,
+                municipality,
+                rut_clean,
+                orden,
+                lat,
+                lon,
+                local_action_id,
+            ),
         )
         insertados += 1
 
@@ -222,19 +296,20 @@ def _insertar_visita_sql(cur, body: VisitaCreate) -> dict | None:
     """
     Intenta insertar una fila en bsale.visitas.
     Devuelve el dict de la fila insertada, o None si local_action_id ya existía (ON CONFLICT).
+
+    Reglas de geo / telefonía aplicadas antes vía ``_validacion_negocio_visita`` en los routers.
     """
-    distancia, estado_val = distancia_y_estado_validacion(
-        body.lat_cliente,
-        body.lon_cliente,
-        body.lat_visita,
-        body.lon_visita,
-    )
+    distancia, estado_val = _distancia_y_validacion_persistencia(body)
 
     cur.execute(
         """
         INSERT INTO bsale.visitas (
             ruta_id,
             cliente_id,
+            nombre_fantasia,
+            direccion,
+            comuna,
+            rut_clean,
             orden_ruta,
             estado,
             tipo_incidencia,
@@ -251,7 +326,7 @@ def _insertar_visita_sql(cur, body: VisitaCreate) -> dict | None:
             sync_status,
             local_action_id
         ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s,
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
             %s, %s, %s, %s,
             %s, %s, %s, %s, %s
         )
@@ -260,6 +335,10 @@ def _insertar_visita_sql(cur, body: VisitaCreate) -> dict | None:
             id,
             ruta_id,
             cliente_id,
+            nombre_fantasia,
+            direccion,
+            comuna,
+            rut_clean,
             orden_ruta,
             estado,
             tipo_incidencia,
@@ -281,6 +360,10 @@ def _insertar_visita_sql(cur, body: VisitaCreate) -> dict | None:
         (
             body.ruta_id,
             body.cliente_id,
+            body.nombre_fantasia,
+            body.direccion,
+            body.comuna,
+            body.rut_clean,
             body.orden_ruta,
             body.estado,
             body.tipo_incidencia,
@@ -379,8 +462,9 @@ def get_ruta_del_dia(
     """
     Obtiene la ruta del día en bsale.rutas_dia y las visitas asociadas ordenadas por orden_ruta.
 
-    Si no existe ``rutas_dia`` para (fecha, vendedor), se crea. Si la ruta no tiene visitas,
-    se generan desde ``bsale.rutero`` según el día de la semana de ``fecha`` (columna ``dia_atencion``).
+    Si no existe ``rutas_dia`` para (fecha, vendedor), se crea con métricas en cero.
+    Si la ruta no tiene visitas, se generan desde ``bsale.rutero`` (filtro ``company`` o ``vendedor``,
+    día ``dia_atencion`` sin depender de tildes), copiando snapshot del cliente en cada visita.
     """
     v = (vendedor or "").strip().lower()
     conn = get_connection()
@@ -423,6 +507,10 @@ def get_ruta_del_dia(
                     id,
                     ruta_id,
                     cliente_id,
+                    nombre_fantasia,
+                    direccion,
+                    comuna,
+                    rut_clean,
                     orden_ruta,
                     estado,
                     tipo_incidencia,
@@ -473,7 +561,14 @@ def get_ruta_del_dia(
 def post_visita(body: VisitaCreate):
     """
     Registra una visita. Si local_action_id ya existe, no inserta (respuesta idempotente).
+
+    ``tipo_incidencia`` = ``atencion telefonica``: exige ``foto_url`` y no aplica validación GPS.
+    Estado ``visitado`` en terreno: exige ``lat_visita`` y ``lon_visita``.
     """
+    msg = _validacion_negocio_visita(body)
+    if msg:
+        raise HTTPException(status_code=400, detail=msg)
+
     conn = get_connection()
     try:
         cur = conn.cursor()
@@ -522,6 +617,16 @@ def post_visitas_sync(body: SyncRequest):
     errores = 0
 
     for item in body.visitas:
+        msg = _validacion_negocio_visita(item)
+        if msg:
+            errores += 1
+            logger.warning(
+                "Sync: validación rechazada local_action_id=%s: %s",
+                item.local_action_id,
+                msg,
+            )
+            continue
+
         conn = get_connection()
         try:
             cur = conn.cursor()

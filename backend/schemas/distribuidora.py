@@ -10,7 +10,14 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 EstadoVisita = Literal["pendiente", "visitado", "incidencia"]
-TipoIncidencia = Literal["local cerrado", "sin stock", "no compra", "fuera de ruta", "otros"]
+TipoIncidencia = Literal[
+    "local cerrado",
+    "sin stock",
+    "no compra",
+    "fuera de ruta",
+    "otros",
+    "atencion telefonica",
+]
 SyncStatus = Literal["synced", "pending_sync"]
 
 
@@ -52,6 +59,11 @@ class VisitaCreate(BaseModel):
     lat_visita: Decimal | float | None = None
     lon_visita: Decimal | float | None = None
 
+    nombre_fantasia: str | None = Field(default=None, max_length=512)
+    direccion: str | None = Field(default=None, max_length=1024)
+    comuna: str | None = Field(default=None, max_length=255)
+    rut_clean: str | None = Field(default=None, max_length=64)
+
     fecha_hora_visita: datetime | None = None
     sync_status: SyncStatus = "pending_sync"
 
@@ -70,6 +82,10 @@ class VisitaResponse(BaseModel):
     id: int
     ruta_id: int
     cliente_id: str
+    nombre_fantasia: str | None = None
+    direccion: str | None = None
+    comuna: str | None = None
+    rut_clean: str | None = None
     orden_ruta: int
     estado: str
     tipo_incidencia: str | None

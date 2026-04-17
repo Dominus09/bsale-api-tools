@@ -43,6 +43,11 @@ def _coord_valida(lat, lon) -> bool:
     return -90.0 <= la <= 90.0 and -180.0 <= lo <= 180.0
 
 
+def coordenadas_visita_validas(lat_visita, lon_visita) -> bool:
+    """True si lat/lon de la visita son usables para validación Haversine (API app)."""
+    return _coord_valida(lat_visita, lon_visita)
+
+
 def distancia_y_estado_validacion(
     lat_cliente,
     lon_cliente,

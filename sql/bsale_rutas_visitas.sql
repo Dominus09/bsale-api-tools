@@ -99,6 +99,12 @@ CREATE TABLE bsale.visitas (
     ON DELETE CASCADE,
 
   cliente_id varchar(128) NOT NULL,
+
+  nombre_fantasia text NULL,
+  direccion text NULL,
+  comuna text NULL,
+  rut_clean varchar(64) NULL,
+
   orden_ruta integer NOT NULL,
 
   estado varchar(32) NOT NULL DEFAULT 'pendiente',
@@ -114,7 +120,8 @@ CREATE TABLE bsale.visitas (
       'sin stock',
       'no compra',
       'fuera de ruta',
-      'otros'
+      'otros',
+      'atencion telefonica'
     )
   ),
 
