@@ -1,4 +1,4 @@
-"""Análisis de clientes a partir de ``distribuidora.v_sales`` (montos netos con NC)."""
+"""Análisis de clientes desde ``distribuidora.v_sales`` (neto con NC; ticket solo sobre boleta+factura)."""
 
 from __future__ import annotations
 
@@ -76,15 +76,18 @@ def list_clients_consolidated(
         SELECT
             v.client_id,
             MAX(v.client_name) AS client_name,
-            COUNT(*)::bigint AS total_compras,
-            COALESCE(SUM(v.total_amount), 0) AS total_comprado,
-            COALESCE(AVG(v.total_amount), 0) AS ticket_promedio,
-            MIN(v.emission_date) AS primera_compra,
-            MAX(v.emission_date) AS ultima_compra
+            COALESCE(SUM(v.is_sale), 0)::bigint AS total_compras,
+            COALESCE(SUM(v.total_amount_net), 0) AS total_comprado,
+            COALESCE(
+                SUM(v.total_amount_sales) / NULLIF(SUM(v.is_sale)::numeric, 0),
+                0
+            ) AS ticket_promedio,
+            MIN(v.emission_date) FILTER (WHERE v.is_sale = 1) AS primera_compra,
+            MAX(v.emission_date) FILTER (WHERE v.is_sale = 1) AS ultima_compra
         {_sales_from()}
         WHERE {where_sql}
         GROUP BY v.client_id
-        ORDER BY SUM(v.total_amount) DESC NULLS LAST
+        ORDER BY SUM(v.total_amount_net) DESC NULLS LAST
         LIMIT %s OFFSET %s
     """
     return _conn_query_all(sql, tuple(params2))
@@ -111,11 +114,15 @@ def list_clients_frequency(
         SELECT
             v.client_id,
             MAX(v.client_name) AS client_name,
-            COUNT(*)::bigint AS compras,
+            COALESCE(SUM(v.is_sale), 0)::bigint AS compras,
             (
-                (MAX((v.emission_date AT TIME ZONE 'UTC')::date)
-                 - MIN((v.emission_date AT TIME ZONE 'UTC')::date))::numeric
-                / NULLIF(COUNT(*)::numeric, 0)
+                (
+                    MAX((v.emission_date AT TIME ZONE 'UTC')::date)
+                    FILTER (WHERE v.is_sale = 1)
+                    - MIN((v.emission_date AT TIME ZONE 'UTC')::date)
+                    FILTER (WHERE v.is_sale = 1)
+                )::numeric
+                / NULLIF(SUM(v.is_sale)::numeric, 0)
             ) AS frecuencia_dias
         {_sales_from()}
         WHERE {where_sql}
@@ -133,14 +140,18 @@ def list_clients_inactive(*, days: int, limit: int) -> list[dict[str, Any]]:
         SELECT
             v.client_id,
             MAX(v.client_name) AS client_name,
-            MAX(v.emission_date) AS ultima_compra,
+            MAX(v.emission_date) FILTER (WHERE v.is_sale = 1) AS ultima_compra,
             (
                 CURRENT_DATE
-                - (MAX(v.emission_date) AT TIME ZONE 'UTC')::date
+                - (MAX(v.emission_date) FILTER (WHERE v.is_sale = 1) AT TIME ZONE 'UTC')::date
             )::int AS dias_sin_comprar
         {_sales_from()}
         GROUP BY v.client_id
-        HAVING (CURRENT_DATE - (MAX(v.emission_date) AT TIME ZONE 'UTC')::date) > %s
+        HAVING SUM(v.is_sale) > 0
+           AND (
+               CURRENT_DATE
+               - (MAX(v.emission_date) FILTER (WHERE v.is_sale = 1) AT TIME ZONE 'UTC')::date
+           ) > %s
         ORDER BY dias_sin_comprar DESC NULLS LAST
         LIMIT %s
     """
@@ -153,10 +164,10 @@ def list_clients_top(*, limit: int) -> list[dict[str, Any]]:
         SELECT
             v.client_id,
             MAX(v.client_name) AS client_name,
-            COALESCE(SUM(v.total_amount), 0) AS total
+            COALESCE(SUM(v.total_amount_net), 0) AS total
         {_sales_from()}
         GROUP BY v.client_id
-        ORDER BY SUM(v.total_amount) DESC NULLS LAST
+        ORDER BY SUM(v.total_amount_net) DESC NULLS LAST
         LIMIT %s
     """
     return _conn_query_all(sql, (cap,))
@@ -168,11 +179,14 @@ def summary_clients_by_seller(*, limit: int) -> tuple[list[dict[str, Any]], dict
         SELECT
             v.seller_name,
             COUNT(DISTINCT v.client_id)::bigint AS clientes,
-            COALESCE(SUM(v.total_amount), 0) AS ventas,
-            COALESCE(AVG(v.total_amount), 0) AS ticket_promedio
+            COALESCE(SUM(v.total_amount_net), 0) AS ventas,
+            COALESCE(
+                SUM(v.total_amount_sales) / NULLIF(SUM(v.is_sale)::numeric, 0),
+                0
+            ) AS ticket_promedio
         FROM distribuidora.v_sales v
         GROUP BY v.seller_name
-        ORDER BY SUM(v.total_amount) DESC NULLS LAST
+        ORDER BY SUM(v.total_amount_net) DESC NULLS LAST
         LIMIT %s
     """
     items_raw = _conn_query_all(sql, (cap,))

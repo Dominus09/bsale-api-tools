@@ -947,10 +947,18 @@ export async function postDistribuidoraRoutePlanningBatch(body: {
 /** GET /distribuidora/sales (planificación / análisis). */
 export type DistribuidoraSalesItem = {
   document_id?: number
+  document_type_id?: number | null
   emission_date?: string | null
   client_id?: number | null
   municipality?: string | null
   seller_name?: string | null
+  /** Neto (factura/boleta + NC negativas). */
+  total_amount_net?: number | null
+  /** Solo monto de boleta/factura; 0 en NC. */
+  total_amount_sales?: number | null
+  /** 1 si es venta (tipo 1 o 6), 0 si es NC. */
+  is_sale?: number | null
+  /** Igual que ``total_amount_net`` (compatibilidad). */
   total_amount?: number | null
   [key: string]: unknown
 }
