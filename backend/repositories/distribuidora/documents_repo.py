@@ -53,20 +53,63 @@ def _num(v: Any) -> Any:
         return None
 
 
+def _folio_number_from_bsale(d: dict[str, Any]) -> int | None:
+    """
+    Folio numérico para clave lógica (company, office, type, number).
+    Si Bsale envía folio no numérico, retorna None y el upsert usa solo ``document_id``.
+    """
+    raw = d.get("number")
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, float):
+        try:
+            i = int(raw)
+            return i if i == raw else None
+        except (TypeError, ValueError, OverflowError):
+            return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    try:
+        return int(s, 10)
+    except ValueError:
+        return None
+
+
 def document_dict_from_bsale(
     d: dict[str, Any],
     *,
     company_id: int = 3,
     default_office_id: int = 1,
 ) -> dict[str, Any] | None:
-    """Mapea JSON documento Bsale → fila ``documents``. None si no aplica (office distinto)."""
+    """
+    Mapea JSON documento Bsale → fila ``documents``.
+
+    * No filtra por tipo de documento (1/6/9/33/…): el filtrado va en vistas (p. ej. ``v_sales``).
+    * Incluye todas las sucursales de la empresa; las vistas acotan ``office_id`` si aplica.
+    * ``None`` solo si el documento es de otra empresa (cuando viene ``company.id`` en el JSON).
+    """
     office = d.get("office") or {}
-    oid = office.get("id")
-    if oid is None or int(oid) != default_office_id:
-        return None
+    oid_raw = office.get("id")
+    if oid_raw is None:
+        oid = default_office_id
+    else:
+        try:
+            oid = int(oid_raw)
+        except (TypeError, ValueError):
+            oid = default_office_id
+
     comp = (d.get("company") or {}).get("id")
-    if comp is not None and int(comp) != company_id:
-        return None
+    if comp is not None:
+        try:
+            if int(comp) != company_id:
+                return None
+        except (TypeError, ValueError):
+            return None
 
     doc_type = d.get("document_type") or {}
     client = d.get("client") or {}
@@ -83,7 +126,7 @@ def document_dict_from_bsale(
 
     return {
         "document_id": int(d["id"]),
-        "number": int(d["number"]) if d.get("number") is not None else None,
+        "number": _folio_number_from_bsale(d),
         "document_type_id": int(doc_type["id"]) if doc_type.get("id") is not None else None,
         "client_id": int(client["id"]) if client.get("id") is not None else None,
         "office_id": int(oid),

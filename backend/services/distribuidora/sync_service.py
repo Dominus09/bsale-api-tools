@@ -261,7 +261,7 @@ def _fetch_documents_single_day_resync(
             break
         _append_items_from_bsale_response(items, pending)
         _flush_pending_when_large(client, cur, conn, pending, stats)
-        offset += pl
+        offset += len(items)
         time.sleep(random.uniform(0.2, 0.5))
     _flush_pending_tail(client, cur, conn, pending, stats)
     logger.info("✅ Día completado: %s", day.isoformat())
@@ -292,7 +292,7 @@ def _refresh_document_children(
         except Exception as e:
             logger.warning("attributes document_id=%s: %s", document_id, e)
 
-    if document_type_id in (1, 6, 33):
+    if document_type_id in (1, 6, 9, 33):
         try:
             rd = client.get(f"/documents/{document_id}/references.json")
             if not isinstance(rd, dict):
@@ -353,6 +353,7 @@ def _fetch_documents_window(
     stats: dict[str, Any],
     log_id: int | None,
 ) -> None:
+    """Paginación por ``offset``; mismo cliente robusto que resync (429/5xx/red)."""
     offset = 0
     pending: list[dict[str, Any]] = []
     while True:
@@ -361,7 +362,7 @@ def _fetch_documents_window(
             "offset": offset,
             "emissiondaterange": f"[{desde_ts},{hasta_ts}]",
         }
-        data = client.get("/documents.json", params)
+        data = _documents_get_resync(client, params)
         items = data.get("items") or []
         if not items:
             break
@@ -369,7 +370,8 @@ def _fetch_documents_window(
         _append_items_from_bsale_response(items, pending)
         _flush_pending_when_large(client, cur, conn, pending, stats)
 
-        offset += LIMIT_BSALE
+        offset += len(items)
+        time.sleep(random.uniform(0.15, 0.45))
 
     _flush_pending_tail(client, cur, conn, pending, stats)
 
