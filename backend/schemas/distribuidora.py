@@ -38,15 +38,15 @@ class LoginSuccessResponse(BaseModel):
     nombre: str
 
 
-class VisitaCreate(BaseModel):
-    """Cuerpo mínimo y campos opcionales para registrar una visita (app móvil / sync offline)."""
+class VisitaUpdate(BaseModel):
+    """
+    Actualización de una visita ya creada en servidor (p. ej. desde GET /vendedor/ruta + rutero).
+    La app no inserta filas: solo envía el ``id`` de la visita y los campos a persistir.
+    """
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    local_action_id: str = Field(..., max_length=128, description="Id único por acción en el dispositivo.")
-    ruta_id: int = Field(..., ge=1)
-    cliente_id: str = Field(..., max_length=128)
-    orden_ruta: int = Field(..., ge=1)
+    id: int = Field(..., ge=1, description="PK de bsale.visitas (lo devuelve GET /vendedor/ruta).")
 
     estado: EstadoVisita = "pendiente"
     tipo_incidencia: TipoIncidencia | None = None
@@ -54,24 +54,17 @@ class VisitaCreate(BaseModel):
     observacion: str | None = None
     foto_url: str | None = None
 
-    lat_cliente: Decimal | float | None = None
-    lon_cliente: Decimal | float | None = None
     lat_visita: Decimal | float | None = None
     lon_visita: Decimal | float | None = None
 
-    nombre_fantasia: str | None = Field(default=None, max_length=512)
-    direccion: str | None = Field(default=None, max_length=1024)
-    comuna: str | None = Field(default=None, max_length=255)
-    rut_clean: str | None = Field(default=None, max_length=64)
-
     fecha_hora_visita: datetime | None = None
-    sync_status: SyncStatus = "pending_sync"
+    sync_status: SyncStatus | None = None
 
 
 class SyncRequest(BaseModel):
-    """Lote de visitas enviadas al sincronizar tras trabajo offline."""
+    """Lote de actualizaciones de visitas existentes (solo UPDATE por ``id``)."""
 
-    visitas: list[VisitaCreate] = Field(default_factory=list)
+    visitas: list[VisitaUpdate] = Field(default_factory=list)
 
 
 class VisitaResponse(BaseModel):
@@ -124,16 +117,14 @@ class RutaResponse(BaseModel):
 
 
 class SyncResponse(BaseModel):
-    """Resumen del procesamiento de un lote de sincronización."""
+    """Resumen del procesamiento de un lote de sincronización (solo actualizaciones)."""
 
     sincronizados: int
-    omitidos: int
     errores: int
 
 
 class VisitaAltaResponse(BaseModel):
-    """Respuesta del POST unitario de visita."""
+    """Respuesta simple del POST unitario de actualización de visita."""
 
     mensaje: str
-    insertado: bool
-    data: VisitaResponse | None = None
+    ok: bool = True

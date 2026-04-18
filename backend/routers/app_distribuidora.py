@@ -1,5 +1,7 @@
 """
-API móvil / distribuidora: rutas del día, visitas e idempotencia por local_action_id.
+API móvil / distribuidora: rutas del día y visitas generadas en servidor desde rutero.
+
+Las visitas se crean al cargar la ruta (GET /vendedor/ruta); la app solo las actualiza (POST).
 
 Prefijo de montaje en main: /app_distribuidora
 """
@@ -13,8 +15,6 @@ from datetime import date
 import bcrypt
 import psycopg2
 from fastapi import APIRouter, HTTPException, Query
-from psycopg2 import errors as pg_errors
-
 from backend.db import get_connection
 from backend.schemas.distribuidora import (
     LoginRequest,
@@ -23,8 +23,7 @@ from backend.schemas.distribuidora import (
     SyncRequest,
     SyncResponse,
     VisitaAltaResponse,
-    VisitaCreate,
-    VisitaResponse,
+    VisitaUpdate,
 )
 from backend.utils.geo import coordenadas_visita_validas, distancia_y_estado_validacion
 
@@ -52,30 +51,47 @@ def _es_atencion_telefonica(tipo_incidencia: str | None) -> bool:
     return (tipo_incidencia or "").strip().lower() == "atencion telefonica"
 
 
-def _validacion_negocio_visita(body: VisitaCreate) -> str | None:
-    """
-    Reglas de negocio antes de persistir una visita (POST unitario o sync).
-    Devuelve mensaje listo para HTTP 400, o None si pasa.
-    """
-    if _es_atencion_telefonica(body.tipo_incidencia):
-        if body.foto_url is None or not str(body.foto_url).strip():
+class ValidacionVisitaError(ValueError):
+    """Fallo de reglas de negocio al actualizar una visita (mensaje listo para API)."""
+
+    def __init__(self, mensaje: str):
+        super().__init__(mensaje)
+        self.mensaje = mensaje
+
+
+def _validacion_negocio_campos(
+    estado: str,
+    tipo_incidencia: str | None,
+    foto_url,
+    lat_visita,
+    lon_visita,
+) -> str | None:
+    """Reglas de negocio (telefonía / GPS visitado). None = OK."""
+    if _es_atencion_telefonica(tipo_incidencia):
+        if foto_url is None or not str(foto_url).strip():
             return "Debe subir evidencia para atención telefónica"
         return None
-    if body.estado == "visitado":
-        if not coordenadas_visita_validas(body.lat_visita, body.lon_visita):
+    if estado == "visitado":
+        if not coordenadas_visita_validas(lat_visita, lon_visita):
             return "Se requieren coordenadas GPS para registrar la visita en terreno."
     return None
 
 
-def _distancia_y_validacion_persistencia(body: VisitaCreate) -> tuple[float | None, str]:
+def _distancia_y_validacion_por_tipo(
+    tipo_incidencia: str | None,
+    lat_cliente,
+    lon_cliente,
+    lat_visita,
+    lon_visita,
+) -> tuple[float | None, str]:
     """Distancia Haversine + validacion_estado; atención telefónica no usa GPS."""
-    if _es_atencion_telefonica(body.tipo_incidencia):
+    if _es_atencion_telefonica(tipo_incidencia):
         return None, "validado"
     return distancia_y_estado_validacion(
-        body.lat_cliente,
-        body.lon_cliente,
-        body.lat_visita,
-        body.lon_visita,
+        lat_cliente,
+        lon_cliente,
+        lat_visita,
+        lon_visita,
     )
 
 
@@ -292,96 +308,83 @@ def _fetchone_dict(cur) -> dict | None:
     return dict(zip(columns, row))
 
 
-def _insertar_visita_sql(cur, body: VisitaCreate) -> dict | None:
+def _actualizar_visita_sql(cur, body: VisitaUpdate) -> bool:
     """
-    Intenta insertar una fila en bsale.visitas.
-    Devuelve el dict de la fila insertada, o None si local_action_id ya existía (ON CONFLICT).
+    UPDATE de una fila existente en bsale.visitas por ``id``.
+    No inserta: las filas deben existir (p. ej. generadas desde rutero en GET /vendedor/ruta).
 
-    Reglas de geo / telefonía aplicadas antes vía ``_validacion_negocio_visita`` en los routers.
+    :returns: True si se actualizó una fila, False si ``id`` no existe.
+    :raises ValidacionVisitaError: reglas de negocio (evidencia telefónica / GPS visitado).
     """
-    distancia, estado_val = _distancia_y_validacion_persistencia(body)
+    cur.execute(
+        """
+        SELECT lat_cliente, lon_cliente, lat_visita, lon_visita
+        FROM bsale.visitas
+        WHERE id = %s
+        FOR UPDATE
+        """,
+        (body.id,),
+    )
+    ex = cur.fetchone()
+    if not ex:
+        return False
+
+    lat_c, lon_c, lat_v0, lon_v0 = ex
+    lat_ve = body.lat_visita if body.lat_visita is not None else lat_v0
+    lon_ve = body.lon_visita if body.lon_visita is not None else lon_v0
+
+    msg = _validacion_negocio_campos(
+        body.estado,
+        body.tipo_incidencia,
+        body.foto_url,
+        lat_ve,
+        lon_ve,
+    )
+    if msg:
+        raise ValidacionVisitaError(msg)
+
+    distancia, estado_val = _distancia_y_validacion_por_tipo(
+        body.tipo_incidencia,
+        lat_c,
+        lon_c,
+        lat_ve,
+        lon_ve,
+    )
 
     cur.execute(
         """
-        INSERT INTO bsale.visitas (
-            ruta_id,
-            cliente_id,
-            nombre_fantasia,
-            direccion,
-            comuna,
-            rut_clean,
-            orden_ruta,
-            estado,
-            tipo_incidencia,
-            con_compra,
-            observacion,
-            foto_url,
-            lat_cliente,
-            lon_cliente,
-            lat_visita,
-            lon_visita,
-            distancia_metros,
-            validacion_estado,
-            fecha_hora_visita,
-            sync_status,
-            local_action_id
-        ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-            %s, %s, %s, %s,
-            %s, %s, %s, %s, %s
-        )
-        ON CONFLICT (local_action_id) DO NOTHING
-        RETURNING
-            id,
-            ruta_id,
-            cliente_id,
-            nombre_fantasia,
-            direccion,
-            comuna,
-            rut_clean,
-            orden_ruta,
-            estado,
-            tipo_incidencia,
-            con_compra,
-            observacion,
-            foto_url,
-            lat_cliente,
-            lon_cliente,
-            lat_visita,
-            lon_visita,
-            distancia_metros,
-            validacion_estado,
-            fecha_hora_visita,
-            sync_status,
-            local_action_id,
-            created_at,
-            updated_at
+        UPDATE bsale.visitas
+        SET
+            estado = %s,
+            tipo_incidencia = %s,
+            observacion = %s,
+            foto_url = %s,
+            con_compra = %s,
+            lat_visita = COALESCE(%s, lat_visita),
+            lon_visita = COALESCE(%s, lon_visita),
+            distancia_metros = %s,
+            validacion_estado = %s,
+            fecha_hora_visita = COALESCE(%s, fecha_hora_visita),
+            sync_status = COALESCE(%s, sync_status),
+            updated_at = clock_timestamp()
+        WHERE id = %s
         """,
         (
-            body.ruta_id,
-            body.cliente_id,
-            body.nombre_fantasia,
-            body.direccion,
-            body.comuna,
-            body.rut_clean,
-            body.orden_ruta,
             body.estado,
             body.tipo_incidencia,
-            body.con_compra,
             body.observacion,
             body.foto_url,
-            body.lat_cliente,
-            body.lon_cliente,
+            body.con_compra,
             body.lat_visita,
             body.lon_visita,
             distancia,
             estado_val,
             body.fecha_hora_visita,
             body.sync_status,
-            body.local_action_id,
+            body.id,
         ),
     )
-    return _fetchone_dict(cur)
+    return cur.rowcount > 0
 
 
 def _password_hash_a_bytes(stored) -> bytes:
@@ -558,50 +561,42 @@ def get_ruta_del_dia(
 
 
 @router.post("/visitas", response_model=VisitaAltaResponse)
-def post_visita(body: VisitaCreate):
+def post_visita(body: VisitaUpdate):
     """
-    Registra una visita. Si local_action_id ya existe, no inserta (respuesta idempotente).
+    Actualiza una visita existente por ``id`` (no inserta filas).
 
     ``tipo_incidencia`` = ``atencion telefonica``: exige ``foto_url`` y no aplica validación GPS.
-    Estado ``visitado`` en terreno: exige ``lat_visita`` y ``lon_visita``.
+    Estado ``visitado`` en terreno: exige ``lat_visita`` y ``lon_visita`` (o valores ya guardados).
     """
-    msg = _validacion_negocio_visita(body)
-    if msg:
-        raise HTTPException(status_code=400, detail=msg)
-
     conn = get_connection()
     try:
         cur = conn.cursor()
         try:
-            fila = _insertar_visita_sql(cur, body)
-        except pg_errors.ForeignKeyViolation:
+            ok = _actualizar_visita_sql(cur, body)
+        except ValidacionVisitaError as e:
             conn.rollback()
             cur.close()
-            raise HTTPException(
-                status_code=400,
-                detail="La ruta indicada no existe o no es válida para esta visita.",
-            ) from None
+            raise HTTPException(status_code=400, detail=e.mensaje) from None
         except psycopg2.Error:
-            logger.exception("Error SQL al insertar visita (local_action_id=%s)", body.local_action_id)
+            logger.exception("Error SQL al actualizar visita (id=%s)", body.id)
             conn.rollback()
             cur.close()
             raise HTTPException(
                 status_code=500,
-                detail="error al procesar visita",
+                detail="Error al procesar la actualización de la visita.",
             ) from None
 
-        if fila is None:
-            conn.commit()
+        if not ok:
+            conn.rollback()
             cur.close()
-            return VisitaAltaResponse(mensaje="visita ya registrada", insertado=False, data=None)
+            raise HTTPException(
+                status_code=404,
+                detail="No existe la visita indicada.",
+            )
 
         conn.commit()
         cur.close()
-        return VisitaAltaResponse(
-            mensaje="visita registrada",
-            insertado=True,
-            data=VisitaResponse.model_validate(fila),
-        )
+        return VisitaAltaResponse(mensaje="Visita actualizada", ok=True)
     finally:
         conn.close()
 
@@ -609,58 +604,42 @@ def post_visita(body: VisitaCreate):
 @router.post("/visitas/sync", response_model=SyncResponse)
 def post_visitas_sync(body: SyncRequest):
     """
-    Procesa un lote de visitas: inserta las nuevas y omite duplicados por local_action_id.
-    Cada ítem se confirma o revierte de forma independiente para maximizar visitas guardadas.
+    Actualiza visitas existentes una por una (solo UPDATE por ``id``).
+    Cada ítem usa su propia conexión/transacción; los fallos no afectan al resto.
     """
     sincronizados = 0
-    omitidos = 0
     errores = 0
 
     for item in body.visitas:
-        msg = _validacion_negocio_visita(item)
-        if msg:
-            errores += 1
-            logger.warning(
-                "Sync: validación rechazada local_action_id=%s: %s",
-                item.local_action_id,
-                msg,
-            )
-            continue
-
         conn = get_connection()
         try:
             cur = conn.cursor()
             try:
-                fila = _insertar_visita_sql(cur, item)
-            except pg_errors.ForeignKeyViolation:
+                ok = _actualizar_visita_sql(cur, item)
+            except ValidacionVisitaError as e:
                 conn.rollback()
                 errores += 1
-                logger.warning(
-                    "Sync: FK inválida para local_action_id=%s ruta_id=%s",
-                    item.local_action_id,
-                    item.ruta_id,
-                )
+                logger.warning("Sync: validación rechazada id=%s: %s", item.id, e.mensaje)
                 cur.close()
                 continue
             except psycopg2.Error:
                 conn.rollback()
                 errores += 1
-                logger.exception("Sync: error SQL para local_action_id=%s", item.local_action_id)
+                logger.exception("Sync: error SQL para visita id=%s", item.id)
                 cur.close()
                 continue
 
-            if fila is None:
-                conn.commit()
-                omitidos += 1
-            else:
-                conn.commit()
-                sincronizados += 1
+            if not ok:
+                conn.rollback()
+                errores += 1
+                logger.warning("Sync: visita inexistente id=%s", item.id)
+                cur.close()
+                continue
+
+            conn.commit()
+            sincronizados += 1
             cur.close()
         finally:
             conn.close()
 
-    return SyncResponse(
-        sincronizados=sincronizados,
-        omitidos=omitidos,
-        errores=errores,
-    )
+    return SyncResponse(sincronizados=sincronizados, errores=errores)
