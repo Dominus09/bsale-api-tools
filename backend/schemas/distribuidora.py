@@ -50,7 +50,10 @@ class VisitaUpdate(BaseModel):
 
     estado: EstadoVisita = "pendiente"
     tipo_incidencia: TipoIncidencia | None = None
-    con_compra: bool = False
+    con_compra: bool | None = Field(
+        default=None,
+        description="true/false si hubo compra. Si se omite el campo, no se altera con_compra en BD.",
+    )
     observacion: str | None = None
     foto_url: str | None = None
 

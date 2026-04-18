@@ -351,6 +351,13 @@ def _actualizar_visita_sql(cur, body: VisitaUpdate) -> bool:
         lon_ve,
     )
 
+    logger.info(
+        "Actualizar visita id=%s con_compra=%r (enviado en request) estado=%s",
+        body.id,
+        body.con_compra,
+        body.estado,
+    )
+
     cur.execute(
         """
         UPDATE bsale.visitas
@@ -359,7 +366,7 @@ def _actualizar_visita_sql(cur, body: VisitaUpdate) -> bool:
             tipo_incidencia = %s,
             observacion = %s,
             foto_url = %s,
-            con_compra = %s,
+            con_compra = COALESCE(%s, con_compra),
             lat_visita = COALESCE(%s, lat_visita),
             lon_visita = COALESCE(%s, lon_visita),
             distancia_metros = %s,
