@@ -60,7 +60,7 @@ SELECT
     c.lat,
     c.lon,
     CASE
-        WHEN LOWER(COALESCE(c.dia_atencion, '')) = 'telefonico'
+        WHEN LOWER(TRIM(COALESCE(c.dia_atencion::text, ''))) = 'telefonico'
         THEN 'telefonico'
         ELSE 'terreno'
     END,

@@ -1464,7 +1464,7 @@ _RUTERO_FILA_SELECT = """
                 r.id,
                 LOWER(TRIM(COALESCE(r.vendedor::text, ''))) AS vendedor,
                 r.dia_atencion,
-                NULLIF(TRIM(r.dia_extra::text), '') AS dia_extra,
+                NULLIF(TRIM(COALESCE(r.dia_extra::text, '')), '') AS dia_extra,
                 r.orden_manual,
                 r.orden_ruta,
                 NULLIF(TRIM(r.rut_clean::text), '') AS rut,
@@ -1513,7 +1513,7 @@ def _rutero_list_where_order(
     - vendedor vacío: todos los vendedores.
     - dia vacío: sin filtrar por valor de dia_atencion (salvo dia_estado con/sin).
     - dia_estado=sin: solo sin día; en ese caso se ignora el filtro por día concreto.
-    - sabado=con|sin: filtro por ``dia_extra = 'sabado'`` (case-insensitive).
+    - sabado=con|sin: filtro por ``LOWER(TRIM(dia_extra)) = 'sabado'`` (insensible a mayúsculas/espacios).
     """
     wheres = ["r.company_id = 3", "r.activo = TRUE"]
     params: list = []
@@ -1525,10 +1525,12 @@ def _rutero_list_where_order(
 
     de = (dia_estado or "").strip().lower()
     if de == "sin":
-        wheres.append("(r.dia_atencion IS NULL OR TRIM(COALESCE(r.dia_atencion::text, '')) = '')")
+        wheres.append(
+            "(r.dia_atencion IS NULL OR LOWER(TRIM(COALESCE(r.dia_atencion::text, ''))) = '')"
+        )
     elif de == "con":
         wheres.append(
-            "(r.dia_atencion IS NOT NULL AND TRIM(COALESCE(r.dia_atencion::text, '')) <> '')"
+            "(r.dia_atencion IS NOT NULL AND LOWER(TRIM(COALESCE(r.dia_atencion::text, ''))) <> '')"
         )
 
     d_week = (dia or "").strip()
@@ -1566,8 +1568,8 @@ def _rutero_list_where_order(
         wheres.append("LOWER(TRIM(COALESCE(r.dia_extra::text, ''))) = 'sabado'")
     elif sab == "sin":
         wheres.append(
-            "(r.dia_extra IS NULL OR TRIM(COALESCE(r.dia_extra::text, '')) = '' "
-            "OR LOWER(TRIM(r.dia_extra::text)) <> 'sabado')"
+            "(r.dia_extra IS NULL OR LOWER(TRIM(COALESCE(r.dia_extra::text, ''))) = '' "
+            "OR LOWER(TRIM(COALESCE(r.dia_extra::text, ''))) <> 'sabado')"
         )
 
     where_sql = " AND ".join(wheres)
@@ -1595,7 +1597,7 @@ def get_rutero(
     dia_estado: str | None = Query(None, description="con | sin — tiene dia_atencion asignado"),
     sabado: str | None = Query(
         None,
-        description="con | sin — dia_extra = sabado (atención sábado); omitir = todos",
+        description="con | sin — LOWER(TRIM(dia_extra)) = 'sabado' (atención sábado); omitir = todos",
     ),
 ):
     """
@@ -1679,7 +1681,7 @@ def post_observacion_rutero(body: ObservacionRuteroBody):
 @router.patch("/rutero/sabado")
 def patch_rutero_sabado(body: RuteroSabadoPatchBody):
     """
-    Asigna o quita atención de sábado: ``dia_extra = 'sabado'`` o ``NULL``.
+    Asigna o quita atención de sábado: persiste ``'sabado'`` normalizado en ``dia_extra`` o ``NULL``.
     Actualiza por ``rut_clean`` (empresa 3, filas activas); puede afectar más de una fila si hay duplicados de RUT.
     """
     rut = (body.rut_clean or "").strip()
@@ -1857,7 +1859,7 @@ def get_pendientes():
               )
               AND (
                   dia_atencion IS NULL
-                  OR TRIM(COALESCE(dia_atencion::text, '')) = ''
+                  OR LOWER(TRIM(COALESCE(dia_atencion::text, ''))) = ''
               )
             ORDER BY LOWER(TRIM(COALESCE(vendedor::text, ''))),
                      municipality NULLS LAST,
