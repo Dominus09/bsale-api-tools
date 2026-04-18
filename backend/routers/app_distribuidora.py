@@ -31,6 +31,14 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["App Distribuidora"])
 
+# Misma lógica que mapa / rutas web: sábado extra en `dia_extra` sin tocar `dia_atencion`.
+_SQL_RUTERO_DIA_OPERATIVO_R = """(
+    CASE
+        WHEN LOWER(TRIM(COALESCE(r.dia_extra::text, ''))) = 'sabado' THEN 'Sabado'
+        ELSE TRIM(COALESCE(r.dia_atencion::text, ''))
+    END
+)"""
+
 _DIA_SEMANA_ES = (
     "lunes",
     "martes",
@@ -43,7 +51,7 @@ _DIA_SEMANA_ES = (
 
 
 def _dia_atencion_desde_fecha(fecha: date) -> str:
-    """Nombre del día en español (minúsculas), alineado a bsale.rutero.dia_atencion."""
+    """Nombre del día en español (minúsculas), alineado a la comparación con `dia_operativo` en rutero."""
     return _DIA_SEMANA_ES[fecha.weekday()]
 
 
@@ -114,6 +122,71 @@ _RUTA_DIA_SELECT_COLS = """
               AND LOWER(TRIM(COALESCE(vendedor::text, ''))) = %s
             LIMIT 1
 """
+
+_RUTA_DIA_BY_ID_SELECT = """
+            SELECT
+                id,
+                fecha,
+                vendedor,
+                estado,
+                hora_inicio,
+                hora_fin,
+                total_clientes,
+                clientes_visitados,
+                clientes_pendientes,
+                porcentaje_cumplimiento,
+                created_at,
+                updated_at
+            FROM bsale.rutas_dia
+            WHERE id = %s
+"""
+
+_VISITAS_POR_RUTA_SELECT = """
+                SELECT
+                    id,
+                    ruta_id,
+                    cliente_id,
+                    nombre_fantasia,
+                    direccion,
+                    comuna,
+                    rut_clean,
+                    orden_ruta,
+                    estado,
+                    tipo_incidencia,
+                    con_compra,
+                    observacion,
+                    foto_url,
+                    lat_cliente,
+                    lon_cliente,
+                    lat_visita,
+                    lon_visita,
+                    distancia_metros,
+                    validacion_estado,
+                    fecha_hora_visita,
+                    sync_status,
+                    local_action_id,
+                    created_at,
+                    updated_at
+                FROM bsale.visitas
+                WHERE ruta_id = %s
+                ORDER BY orden_ruta ASC, id ASC
+"""
+
+
+def _count_visitas_por_ruta(cur, ruta_id: int) -> int:
+    cur.execute(
+        "SELECT COUNT(*) FROM bsale.visitas WHERE ruta_id = %s",
+        (ruta_id,),
+    )
+    row = cur.fetchone()
+    if not row or row[0] is None:
+        return 0
+    return int(row[0])
+
+
+def _fetch_visitas_por_ruta(cur, ruta_id: int) -> list[dict]:
+    cur.execute(_VISITAS_POR_RUTA_SELECT, (ruta_id,))
+    return _rows_to_dict_list(cur)
 
 
 def _fetch_ruta_dia_row(cur, fecha: date, v: str):
@@ -187,7 +260,7 @@ def _poblar_visitas_desde_rutero(cur, ruta_id: int, fecha: date, v: str) -> int:
     Si no hay visitas para la ruta, las crea desde bsale.rutero.
 
     - Filtro vendedor: ``company`` o ``vendedor`` (minúsculas) coincide con el código de ruta.
-    - Día: ``dia_atencion`` comparado sin depender de tildes (lunes / miércoles / miercoles, etc.).
+    - Día: ``dia_operativo`` (``dia_extra`` sábado → Sabado; si no ``dia_atencion``), comparado sin tildes.
     - Incluye clientes de atención telefónica en rutero (la evidencia se exige al cerrar POST /visitas).
     - Snapshot: nombre_fantasia, dirección, comuna, rut_clean, lat/lon desde rutero.
     """
@@ -225,7 +298,10 @@ def _poblar_visitas_desde_rutero(cur, ruta_id: int, fecha: date, v: str) -> int:
                  OR LOWER(TRIM(COALESCE(r.vendedor::text, ''))) = %s
               )
               AND translate(
-                    lower(trim(coalesce(r.dia_atencion::text, ''))),
+                    lower(trim("""
+        + _SQL_RUTERO_DIA_OPERATIVO_R
+        + """
+                    )),
                     'áéíóúü',
                     'aeiouu'
                   ) = translate(lower(trim(%s)), 'áéíóúü', 'aeiouu')
@@ -473,8 +549,8 @@ def get_ruta_del_dia(
     Obtiene la ruta del día en bsale.rutas_dia y las visitas asociadas ordenadas por orden_ruta.
 
     Si no existe ``rutas_dia`` para (fecha, vendedor), se crea con métricas en cero.
-    Si la ruta no tiene visitas, se generan desde ``bsale.rutero`` (filtro ``company`` o ``vendedor``,
-    día ``dia_atencion`` sin depender de tildes), copiando snapshot del cliente en cada visita.
+    Si ``COUNT(visitas) = 0`` para esa ruta, se ejecuta ``_poblar_visitas_desde_rutero`` y luego se vuelve a leer
+    ``rutas_dia`` y ``visitas`` antes de responder (nunca se devuelve ``visitas`` sin intentar poblar antes).
     """
     v = (vendedor or "").strip().lower()
     conn = get_connection()
@@ -485,66 +561,15 @@ def get_ruta_del_dia(
             ruta = dict(zip(cols, ruta_row))
             ruta_id = ruta["id"]
 
-            _poblar_visitas_desde_rutero(cur, ruta_id, fecha, v)
+            if _count_visitas_por_ruta(cur, ruta_id) == 0:
+                _poblar_visitas_desde_rutero(cur, ruta_id, fecha, v)
 
-            cur.execute(
-                """
-                SELECT
-                    id,
-                    fecha,
-                    vendedor,
-                    estado,
-                    hora_inicio,
-                    hora_fin,
-                    total_clientes,
-                    clientes_visitados,
-                    clientes_pendientes,
-                    porcentaje_cumplimiento,
-                    created_at,
-                    updated_at
-                FROM bsale.rutas_dia
-                WHERE id = %s
-                """,
-                (ruta_id,),
-            )
+            cur.execute(_RUTA_DIA_BY_ID_SELECT, (ruta_id,))
             ruta_row = cur.fetchone()
             cols_r = [c[0] for c in cur.description]
             ruta = dict(zip(cols_r, ruta_row))
 
-            cur.execute(
-                """
-                SELECT
-                    id,
-                    ruta_id,
-                    cliente_id,
-                    nombre_fantasia,
-                    direccion,
-                    comuna,
-                    rut_clean,
-                    orden_ruta,
-                    estado,
-                    tipo_incidencia,
-                    con_compra,
-                    observacion,
-                    foto_url,
-                    lat_cliente,
-                    lon_cliente,
-                    lat_visita,
-                    lon_visita,
-                    distancia_metros,
-                    validacion_estado,
-                    fecha_hora_visita,
-                    sync_status,
-                    local_action_id,
-                    created_at,
-                    updated_at
-                FROM bsale.visitas
-                WHERE ruta_id = %s
-                ORDER BY orden_ruta ASC, id ASC
-                """,
-                (ruta_id,),
-            )
-            visitas = _rows_to_dict_list(cur)
+            visitas = _fetch_visitas_por_ruta(cur, ruta_id)
             ruta["visitas"] = visitas
 
             conn.commit()
