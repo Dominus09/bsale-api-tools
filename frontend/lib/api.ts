@@ -1016,6 +1016,67 @@ export type DistribuidoraClientsConsolidatedResponse = {
   offset: number
 }
 
+/** GET /distribuidora/clientes/analisis — comportamiento, frecuencia mensual, nivel A–E. */
+export type DistribuidoraClienteAnalisis = {
+  client_id: number
+  nombre?: string | null
+  fantasy_name?: string | null
+  rut_clean?: string | null
+  municipality?: string | null
+  city?: string | null
+  ultima_compra?: string | null
+  compra_30_dias?: number
+  compra_60_dias?: number
+  freq_enero?: number
+  freq_febrero?: number
+  freq_marzo?: number
+  freq_abril?: number
+  nivel_cliente?: string
+  dias_sin_comprar?: number | null
+}
+
+export async function getDistribuidoraClientesAnalisis(params?: {
+  limit?: number
+  signal?: AbortSignal
+}): Promise<{ items: DistribuidoraClienteAnalisis[] }> {
+  const qs = new URLSearchParams()
+  qs.set("limit", String(Math.min(params?.limit ?? 5000, 10000)))
+  const res = await fetch(`${API_URL}/distribuidora/clientes/analisis?${qs}`, {
+    headers: getAuthHeaders(),
+    signal: params?.signal,
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar análisis de clientes")
+  }
+  return res.json() as Promise<{ items: DistribuidoraClienteAnalisis[] }>
+}
+
+/** Descarga GET /distribuidora/clientes/analisis/export (.xlsx). */
+export async function downloadDistribuidoraClientesAnalisisExcel(params?: {
+  limit?: number
+}): Promise<void> {
+  const qs = new URLSearchParams()
+  qs.set("limit", String(Math.min(params?.limit ?? 10000, 10000)))
+  const res = await fetch(`${API_URL}/distribuidora/clientes/analisis/export?${qs}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al exportar análisis")
+  }
+  const blob = await res.blob()
+  const cd = res.headers.get("Content-Disposition")
+  const m = cd?.match(/filename="([^"]+)"/)
+  const name = m?.[1] ?? "analisis_clientes.xlsx"
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = name
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 export async function getDistribuidoraClientsConsolidated(params: {
   start_date?: string
   end_date?: string

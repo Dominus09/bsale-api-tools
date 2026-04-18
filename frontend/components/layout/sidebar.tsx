@@ -84,6 +84,7 @@ const navSections: { title: string; items: NavItem[] }[] = [
     items: [
       { href: "/distribuidora/dashboard", label: "Dashboard comercial", icon: BarChart3 },
       { href: "/distribuidora/clientes", label: "Clientes", icon: Users },
+      { href: "/distribuidora/clientes/analisis", label: "Análisis clientes", icon: FileSpreadsheet },
       { href: "/distribuidora/clientes/inactivos", label: "Clientes inactivos", icon: UserX },
       { href: "/distribuidora/vendedores", label: "Vendedores", icon: UserCircle2 },
       {

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from datetime import date
+from io import BytesIO
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
+from backend.services.distribuidora import clientes_analisis_completo_service as cac
 from backend.services.distribuidora import clients_analytics_service as cas
 
 router = APIRouter(prefix="/distribuidora", tags=["Distribuidora clientes"])
@@ -126,6 +129,34 @@ async def get_clients_summary_sellers(
         return {"items": items, "totals": totals}
 
     return await run_in_threadpool(_run)
+
+
+@router.get("/clientes/analisis")
+async def get_clientes_analisis(
+    limit: int = Query(5000, ge=1, le=cac.MAX_ANALISIS_CLIENTES),
+):
+    """
+    Análisis de clientes con montos 30/60 días, frecuencia mensual (año calendario actual)
+    y clasificación A–E (misma lógica que negocio definida en SQL).
+    """
+
+    def _run():
+        return {"items": cac.list_clientes_analisis(limit=limit)}
+
+    return await run_in_threadpool(_run)
+
+
+@router.get("/clientes/analisis/export")
+def get_clientes_analisis_export(
+    limit: int = Query(10000, ge=1, le=cac.MAX_ANALISIS_CLIENTES),
+):
+    """Descarga Excel (.xlsx) con el mismo criterio que GET /clientes/analisis."""
+    data, fname = cac.build_clientes_analisis_excel_bytes(limit=limit)
+    return StreamingResponse(
+        BytesIO(data),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 @router.get("/clients")
