@@ -95,8 +95,8 @@ export function buildClienteColumnsLunMie(resumen: DistribuidoraResumenVendedorJ
   return [1, 2, 3].map((k) => columnaParaClave(k, porClave))
 }
 
-/** Dos columnas: Jueves, Viernes. */
+/** Tres columnas: Jueves, Viernes, Sábado (operativo, incl. `dia_extra`). */
 export function buildClienteColumnsJueVie(resumen: DistribuidoraResumenVendedorJson): PdfClienteColumn[] {
   const porClave = diasPorClaveSemana(resumen)
-  return [4, 5].map((k) => columnaParaClave(k, porClave))
+  return [4, 5, 6].map((k) => columnaParaClave(k, porClave))
 }

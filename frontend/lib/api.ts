@@ -575,6 +575,8 @@ export interface DistribuidoraMapaCliente {
   nombre_fantasia: string | null
   phone: string | null
   vendedor: string | null
+  /** Día efectivo de ruta (incluye sábado extra vía `dia_extra`). */
+  dia_operativo?: string | null
   dia_atencion: string | null
   dia_extra: string | null
   municipality: string | null
@@ -595,7 +597,7 @@ export interface DistribuidoraPuntoBase {
 export async function getDistribuidoraMapa(): Promise<{
   clientes: DistribuidoraMapaCliente[]
   bases: DistribuidoraPuntoBase[]
-  /** Días distintos en rutero (incluye `TELEFONICO` u otros) para selects aunque no vayan al mapa. */
+  /** Días operativos distintos (lun–dom; sábado extra incluido como Sabado). */
   dias_atencion?: string[]
   /** Códigos vendedor normalizados (minúsculas, sin espacios extremos), distintos en rutero activo. */
   vendedores?: string[]

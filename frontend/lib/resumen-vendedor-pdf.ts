@@ -334,7 +334,7 @@ export async function exportResumenVendedorPdf(params: ExportResumenVendedorPdfP
   const colsJueVie = buildClienteColumnsJueVie(resumen)
   doc.addPage()
   y = MARGIN_MM
-  y = drawClienteDayColumns(doc, y, "Clientes por día (Jueves y viernes)", colsJueVie)
+  y = drawClienteDayColumns(doc, y, "Clientes por día (Jueves, viernes y sábado)", colsJueVie)
 
   doc.addPage()
   y = MARGIN_MM

@@ -145,7 +145,7 @@ function buildBodyInner(resumen: DistribuidoraResumenVendedorJson, viaticoClp: n
   }
 
   const bloqueLunMie = colHtml(buildClienteColumnsLunMie(resumen), "clientes-grid cols-3")
-  const bloqueJueVie = colHtml(buildClienteColumnsJueVie(resumen), "clientes-grid cols-2")
+  const bloqueJueVie = colHtml(buildClienteColumnsJueVie(resumen), "clientes-grid cols-3")
 
   return `
   <h1>Ruta — ${escapeHtml(resumen.vendedor)} — Semana</h1>
@@ -157,7 +157,7 @@ function buildBodyInner(resumen: DistribuidoraResumenVendedorJson, viaticoClp: n
   <ul class="leyenda">${leyenda}</ul>
   <h2>Clientes por día (lunes a miércoles)</h2>
   ${bloqueLunMie}
-  <h2 class="page-break-before">Clientes por día (jueves y viernes)</h2>
+  <h2 class="page-break-before">Clientes por día (jueves, viernes y sábado)</h2>
   ${bloqueJueVie}
   <p class="metodo">${escapeHtml(TEXTO_METODOLOGIA)}</p>
   `

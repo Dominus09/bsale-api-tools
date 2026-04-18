@@ -58,6 +58,7 @@ import {
   type DistribuidoraRutaDetalleJson,
   type DistribuidoraRutaSugerenciaJson,
 } from "@/lib/api"
+import { diaSemanaSortKey } from "@/lib/resumen-vendedor-pdf-clientes-layout"
 
 import "leaflet/dist/leaflet.css"
 import "react-leaflet-cluster/dist/assets/MarkerCluster.css"
@@ -85,6 +86,24 @@ function esTipoAtencionTelefonicoMapa(c: DistribuidoraMapaCliente): boolean {
   return t.includes("telefon")
 }
 
+/** Día de ruta en mapa / filtros: backend `dia_operativo` o derivado de `dia_extra` + `dia_atencion`. */
+function diaOperativoMapaCliente(c: DistribuidoraMapaCliente): string {
+  const op = c.dia_operativo?.trim()
+  if (op) return op
+  const ex = String(c.dia_extra ?? "").trim().toLowerCase()
+  if (ex === "sabado") return "Sabado"
+  return c.dia_atencion?.trim() ?? ""
+}
+
+function sortDiasOperativosCatalogo(days: string[]): string[] {
+  return [...new Set(days.map((x) => x.trim()).filter(Boolean))].sort((a, b) => {
+    const ka = diaSemanaSortKey(a)
+    const kb = diaSemanaSortKey(b)
+    if (ka !== kb) return ka - kb
+    return a.localeCompare(b, "es")
+  })
+}
+
 function diasCatalogoDesdeMapaResp(data: {
   clientes?: unknown
   dias_atencion?: unknown
@@ -98,10 +117,10 @@ function diasCatalogoDesdeMapaResp(data: {
   }
   const arr = Array.isArray(data.clientes) ? (data.clientes as DistribuidoraMapaCliente[]) : []
   for (const c of arr) {
-    const d = c.dia_atencion?.trim()
+    const d = diaOperativoMapaCliente(c)
     if (d) set.add(d)
   }
-  return Array.from(set).sort((a, b) => a.localeCompare(b, "es"))
+  return sortDiasOperativosCatalogo(Array.from(set))
 }
 
 function vendedoresCatalogoDesdeMapaResp(data: { vendedores?: unknown }): string[] {
@@ -1526,7 +1545,7 @@ export default function MapaRuteroClient() {
         if (v !== vendedorFilter) return false
       }
       if (diaFilter !== FILTER_ALL) {
-        const d = c.dia_atencion?.trim() ?? ""
+        const d = diaOperativoMapaCliente(c)
         if (d !== diaFilter) return false
       }
       return true
@@ -1990,7 +2009,7 @@ export default function MapaRuteroClient() {
               value={diaFilter}
               onChange={onDiaChange}
               disabled={simRunning}
-              aria-label="Filtrar por día"
+              aria-label="Filtrar por día operativo"
             >
               <option value={FILTER_ALL}>Todos los días</option>
               {diasAtencionOpciones.map((d) => (
@@ -2241,12 +2260,14 @@ export default function MapaRuteroClient() {
                     {puedeEditarOrden ? (
                       <>
                         {clientesMarcadoresMapa.map((c) => {
+                          const dop = diaOperativoMapaCliente(c)
+                          const daCal = c.dia_atencion?.trim() ?? ""
                           const om = ordenMostradoEnMapa(c, rutaDetalle)
                           const enRuta = clienteEnRutaActual(c, rutaDetalle)
                           const puedeMover =
                             enRuta &&
                             c.vendedor?.trim() === vendedorFilter &&
-                            c.dia_atencion?.trim() === diaFilter
+                            dop === diaFilter
                           const simHit = simHighlightBsaleId === c.bsale_id
                           const fill = simHit
                             ? MAP_CLIENTE_COLOR_SIM_VISITA
@@ -2281,9 +2302,17 @@ export default function MapaRuteroClient() {
                                       </dt>
                                       <dd className="text-foreground">{c.vendedor?.trim() || "—"}</dd>
                                       <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
-                                        Día
+                                        Día operativo
                                       </dt>
-                                      <dd className="text-foreground">{c.dia_atencion?.trim() || "—"}</dd>
+                                      <dd className="text-foreground">{dop || "—"}</dd>
+                                      {daCal && daCal !== dop ? (
+                                        <>
+                                          <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
+                                            Día rutero
+                                          </dt>
+                                          <dd className="text-foreground">{daCal}</dd>
+                                        </>
+                                      ) : null}
                                       <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
                                         Teléfono
                                       </dt>
@@ -2302,8 +2331,7 @@ export default function MapaRuteroClient() {
                                       ) : null}
                                     </div>
                                   </dl>
-                                  {c.vendedor?.trim() === vendedorFilter &&
-                                  c.dia_atencion?.trim() === diaFilter ? (
+                                  {c.vendedor?.trim() === vendedorFilter && dop === diaFilter ? (
                                     <Button
                                       type="button"
                                       variant="secondary"
@@ -2345,7 +2373,10 @@ export default function MapaRuteroClient() {
                           showCoverageOnHover={false}
                           iconCreateFunction={mapaRuteroClusterIconCreate}
                         >
-                          {clientesMarcadoresMapa.map((c) => (
+                          {clientesMarcadoresMapa.map((c) => {
+                            const dopC = diaOperativoMapaCliente(c)
+                            const daC = c.dia_atencion?.trim() ?? ""
+                            return (
                             <Marker
                               key={c.bsale_id}
                               position={[c.lat, c.lon]}
@@ -2361,9 +2392,17 @@ export default function MapaRuteroClient() {
                                       </dt>
                                       <dd className="text-foreground">{c.vendedor?.trim() || "—"}</dd>
                                       <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
-                                        Día
+                                        Día operativo
                                       </dt>
-                                      <dd className="text-foreground">{c.dia_atencion?.trim() || "—"}</dd>
+                                      <dd className="text-foreground">{dopC || "—"}</dd>
+                                      {daC && daC !== dopC ? (
+                                        <>
+                                          <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
+                                            Día rutero
+                                          </dt>
+                                          <dd className="text-foreground">{daC}</dd>
+                                        </>
+                                      ) : null}
                                       <dt className="text-xs font-medium uppercase tracking-wide text-muted-foreground/80">
                                         Teléfono
                                       </dt>
@@ -2377,7 +2416,8 @@ export default function MapaRuteroClient() {
                                 </div>
                               </Popup>
                             </Marker>
-                          ))}
+                            )
+                          })}
                         </MarkerClusterGroup>
                         {bases.map((b, i) => {
                           const key = `${b.vendedor ?? "b"}-${b.lat}-${b.lon}-${i}`

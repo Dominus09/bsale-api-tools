@@ -741,6 +741,12 @@ export default function ResumenVendedorClient() {
               <Card>
                 <CardHeader>
                   <CardTitle className="text-base">Leyenda</CardTitle>
+                  {diasLista.some((d) => /sabado/i.test(String(d.dia ?? ""))) ? (
+                    <CardDescription className="text-xs text-muted-foreground">
+                      <strong className="font-medium text-foreground">Sabado</strong> (atención extra en rutero) usa
+                      color morado fijo en polilíneas y leyenda.
+                    </CardDescription>
+                  ) : null}
                 </CardHeader>
                 <CardContent className="space-y-3 text-sm">
                   <div className="rounded-md border bg-muted/30 p-2 text-xs text-muted-foreground">

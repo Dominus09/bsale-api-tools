@@ -121,6 +121,17 @@ router = APIRouter(prefix="/distribuidora", tags=["Distribuidora"])
 _SQL_RUTA_EXCL_DIA_TELEFONICO = "\n          AND LOWER(TRIM(COALESCE(dia_atencion::text, ''))) <> 'telefonico'"
 _SQL_RUTA_EXCL_TIPO_TELEFONICO = "\n          AND LOWER(COALESCE(tipo_atencion::text, '')) <> 'telefonico'"
 
+# Día operativo: sábado extra (`dia_extra`) sin alterar la tabla; el resto sigue `dia_atencion`.
+_SQL_DIA_OPERATIVO_SQL_BARE = """(
+    CASE
+        WHEN LOWER(TRIM(COALESCE(dia_extra::text, ''))) = 'sabado' THEN 'Sabado'
+        ELSE TRIM(COALESCE(dia_atencion::text, ''))
+    END
+)"""
+_SQL_MATCH_DIA_OPERATIVO_BARE = (
+    f"\n          AND LOWER(TRIM({_SQL_DIA_OPERATIVO_SQL_BARE})) = LOWER(TRIM(%s))"
+)
+
 
 def _norm_vendedor(s: str | None) -> str:
     """Código vendedor estable (minúsculas, sin espacios extremos); alineado a sync_rutero y filtros SQL."""
@@ -561,7 +572,9 @@ def _persistir_orden_manual_vendedor_dia(
         WHERE company_id = 3
           AND activo = TRUE
           AND LOWER(TRIM(COALESCE(vendedor::text, ''))) = %s
-          AND LOWER(dia_atencion) = LOWER(%s)
+        """
+        + _SQL_MATCH_DIA_OPERATIVO_BARE
+        + """
           AND LOWER(COALESCE(tipo_atencion, '')) <> 'telefonico'
         """
         + _SQL_RUTA_EXCL_DIA_TELEFONICO
@@ -587,7 +600,9 @@ def _persistir_orden_manual_vendedor_dia(
               AND activo = TRUE
               AND bsale_id = %s
               AND LOWER(TRIM(COALESCE(vendedor::text, ''))) = %s
-              AND LOWER(dia_atencion) = LOWER(%s)
+            """
+            + _SQL_MATCH_DIA_OPERATIVO_BARE
+            + """
               AND LOWER(COALESCE(tipo_atencion, '')) <> 'telefonico'
             """
             + _SQL_RUTA_EXCL_DIA_TELEFONICO
@@ -644,6 +659,9 @@ def _cargar_contexto_ruta(v: str, d: str) -> tuple[dict, list[dict], list[dict]]
                 LOWER(TRIM(COALESCE(vendedor::text, ''))) AS vendedor,
                 dia_atencion,
                 dia_extra,
+                """
+            + _SQL_DIA_OPERATIVO_SQL_BARE
+            + """ AS dia_operativo,
                 municipality,
                 lat,
                 lon,
@@ -654,7 +672,9 @@ def _cargar_contexto_ruta(v: str, d: str) -> tuple[dict, list[dict], list[dict]]
             WHERE company_id = 3
               AND activo = TRUE
               AND LOWER(TRIM(COALESCE(vendedor::text, ''))) = %s
-              AND LOWER(dia_atencion) = LOWER(%s)
+            """
+            + _SQL_MATCH_DIA_OPERATIVO_BARE
+            + """
               AND lat IS NOT NULL
               AND lon IS NOT NULL
             """
@@ -680,6 +700,9 @@ def _cargar_contexto_ruta(v: str, d: str) -> tuple[dict, list[dict], list[dict]]
                 LOWER(TRIM(COALESCE(vendedor::text, ''))) AS vendedor,
                 dia_atencion,
                 dia_extra,
+                """
+            + _SQL_DIA_OPERATIVO_SQL_BARE
+            + """ AS dia_operativo,
                 municipality,
                 lat,
                 lon,
@@ -690,7 +713,9 @@ def _cargar_contexto_ruta(v: str, d: str) -> tuple[dict, list[dict], list[dict]]
             WHERE company_id = 3
               AND activo = TRUE
               AND LOWER(TRIM(COALESCE(vendedor::text, ''))) = %s
-              AND LOWER(dia_atencion) = LOWER(%s)
+            """
+            + _SQL_MATCH_DIA_OPERATIVO_BARE
+            + """
               AND lat IS NOT NULL
               AND lon IS NOT NULL
             """
@@ -811,6 +836,13 @@ def _sort_dias_semana(distinct: list[str]) -> list[str]:
     return sorted({str(d).strip() for d in distinct if d and str(d).strip()}, key=_dia_sort_key)
 
 
+def _color_resumen_dia(dia: str, idx: int) -> str:
+    """Sábado operativo siempre morado (#7e22ce); el resto rota en la paleta semanal."""
+    if _dia_normalizado(dia) == "sabado":
+        return "#7e22ce"
+    return _COLORES_RUTA_SEMANA[idx % len(_COLORES_RUTA_SEMANA)]
+
+
 def _dias_rutero_vendedor(v: str) -> list[str]:
     v = _norm_vendedor(v)
     conn = get_connection()
@@ -818,17 +850,23 @@ def _dias_rutero_vendedor(v: str) -> list[str]:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT DISTINCT TRIM(dia_atencion) AS d
-            FROM bsale.rutero
-            WHERE company_id = 3
-              AND activo = TRUE
-              AND LOWER(TRIM(COALESCE(vendedor::text, ''))) = %s
-              AND dia_atencion IS NOT NULL
-              AND TRIM(dia_atencion) <> ''
+            SELECT DISTINCT TRIM(dia_op) AS d
+            FROM (
+                SELECT """
+            + _SQL_DIA_OPERATIVO_SQL_BARE
+            + """ AS dia_op
+                FROM bsale.rutero
+                WHERE company_id = 3
+                  AND activo = TRUE
+                  AND LOWER(TRIM(COALESCE(vendedor::text, ''))) = %s
             """
             + _SQL_RUTA_EXCL_DIA_TELEFONICO
             + _SQL_RUTA_EXCL_TIPO_TELEFONICO
-            + "\n            ",
+            + """
+            ) x
+            WHERE dia_op IS NOT NULL
+              AND TRIM(dia_op) <> ''
+            """,
             (v,),
         )
         raw = [r[0] for r in cur.fetchall() if r and r[0]]
@@ -859,7 +897,7 @@ def _build_resumen_vendedor_response(v: str) -> dict:
         km = float(det.get("km_totales") or 0.0)
         mins = float(det.get("minutos_totales") or 0.0)
         km_por_cliente = km / n_c if n_c else 0.0
-        color = _COLORES_RUTA_SEMANA[idx % len(_COLORES_RUTA_SEMANA)]
+        color = _color_resumen_dia(dia, idx)
         salida_dias.append(
             {
                 "dia": dia,
@@ -896,7 +934,11 @@ def _build_resumen_vendedor_response(v: str) -> dict:
 @router.get("/ruta-detalle")
 def get_ruta_detalle(
     vendedor: str = Query(..., min_length=1, description="Código vendedor (ej. vendedor_1)"),
-    dia: str = Query(..., min_length=1, description="Día de atención (ej. Lunes), coincide con dia_atencion"),
+    dia: str = Query(
+        ...,
+        min_length=1,
+        description="Día operativo (ej. Lunes, Sabado): dia_extra=sabado → Sabado; resto = dia_atencion.",
+    ),
 ):
     """Ruta: si hay orden_manual se respeta la secuencia (sin reoptimizar); si no, orden local + ORS trazado."""
     v = _norm_vendedor(vendedor)
@@ -1224,19 +1266,26 @@ def get_analisis_km(
             """
             SELECT DISTINCT
                 LOWER(TRIM(COALESCE(vendedor::text, ''))) AS vendedor,
-                TRIM(COALESCE(dia_atencion::text, '')) AS dia
-            FROM bsale.rutero
-            WHERE company_id = 3
-              AND activo = TRUE
-              AND lat IS NOT NULL
-              AND lon IS NOT NULL
-              AND TRIM(COALESCE(vendedor::text, '')) <> ''
-              AND TRIM(COALESCE(dia_atencion::text, '')) <> ''
+                TRIM(dia_op) AS dia
+            FROM (
+                SELECT
+                    vendedor,
+                    """
+            + _SQL_DIA_OPERATIVO_SQL_BARE
+            + """ AS dia_op
+                FROM bsale.rutero
+                WHERE company_id = 3
+                  AND activo = TRUE
+                  AND lat IS NOT NULL
+                  AND lon IS NOT NULL
+                  AND TRIM(COALESCE(vendedor::text, '')) <> ''
             """
             + _SQL_RUTA_EXCL_DIA_TELEFONICO
             + _SQL_RUTA_EXCL_TIPO_TELEFONICO
             + """
-            ORDER BY vendedor, dia_atencion
+            ) sub
+            WHERE TRIM(COALESCE(dia_op, '')) <> ''
+            ORDER BY vendedor, dia
             LIMIT %s
             """,
             (max_pares,),
@@ -1312,7 +1361,9 @@ def get_analisis_km(
                 WHERE company_id = 3
                   AND activo = TRUE
                   AND LOWER(TRIM(COALESCE(vendedor::text, ''))) = %s
-                  AND LOWER(dia_atencion) = LOWER(%s)
+                """
+                + _SQL_MATCH_DIA_OPERATIVO_BARE
+                + """
                   AND lat IS NOT NULL
                   AND lon IS NOT NULL
                 """
@@ -1901,6 +1952,9 @@ def get_mapa():
                 LOWER(TRIM(COALESCE(vendedor::text, ''))) AS vendedor,
                 dia_atencion,
                 dia_extra,
+                """
+            + _SQL_DIA_OPERATIVO_SQL_BARE
+            + """ AS dia_operativo,
                 municipality,
                 lat,
                 lon,
@@ -1921,12 +1975,22 @@ def get_mapa():
 
         cur.execute(
             """
-            SELECT DISTINCT TRIM(dia_atencion) AS d
-            FROM bsale.rutero
-            WHERE company_id = 3
-              AND activo = TRUE
-              AND dia_atencion IS NOT NULL
-              AND TRIM(COALESCE(dia_atencion::text, '')) <> ''
+            SELECT DISTINCT TRIM(dia_op) AS d
+            FROM (
+                SELECT """
+            + _SQL_DIA_OPERATIVO_SQL_BARE
+            + """ AS dia_op
+                FROM bsale.rutero
+                WHERE company_id = 3
+                  AND activo = TRUE
+                  AND lat IS NOT NULL
+                  AND lon IS NOT NULL
+            """
+            + _SQL_RUTA_EXCL_DIA_TELEFONICO
+            + _SQL_RUTA_EXCL_TIPO_TELEFONICO
+            + """
+            ) x
+            WHERE TRIM(COALESCE(dia_op, '')) <> ''
             ORDER BY 1
             """
         )
@@ -1985,8 +2049,8 @@ def post_orden_manual_reset(body: OrdenManualResetBody):
             WHERE company_id = 3
               AND activo = TRUE
               AND LOWER(TRIM(COALESCE(vendedor::text, ''))) = %s
-              AND LOWER(dia_atencion) = LOWER(%s)
             """
+            + _SQL_MATCH_DIA_OPERATIVO_BARE
             + _SQL_RUTA_EXCL_DIA_TELEFONICO
             + _SQL_RUTA_EXCL_TIPO_TELEFONICO
             + "\n        ",
@@ -2054,13 +2118,18 @@ def get_resumen():
             """
             SELECT
                 LOWER(TRIM(COALESCE(vendedor::text, ''))) AS vendedor,
-                dia_atencion,
+                """
+            + _SQL_DIA_OPERATIVO_SQL_BARE
+            + """ AS dia_operativo,
                 COUNT(*) AS cantidad
             FROM bsale.rutero
             WHERE company_id = 3
               AND activo = TRUE
-            GROUP BY LOWER(TRIM(COALESCE(vendedor::text, ''))), dia_atencion
-            ORDER BY vendedor, dia_atencion
+            GROUP BY LOWER(TRIM(COALESCE(vendedor::text, ''))),
+                """
+            + _SQL_DIA_OPERATIVO_SQL_BARE
+            + """
+            ORDER BY vendedor, 2
             """
         )
         data = _rows_to_json(cur)
