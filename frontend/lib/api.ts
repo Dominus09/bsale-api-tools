@@ -1282,6 +1282,8 @@ export type DistribuidoraRuteroFila = {
   id: number
   vendedor?: string | null
   dia_atencion?: string | null
+  /** Atención sábado cuando vale ``sabado`` (persistido en ``dia_extra``). */
+  dia_extra?: string | null
   orden_manual?: number | null
   orden_ruta?: number | null
   rut?: string | null
@@ -1307,6 +1309,8 @@ export type DistribuidoraRuteroQuery = {
   geo?: "con" | "sin"
   /** `con` = con dia_atencion asignado; `sin` = sin día (ignora filtro `dia` por día de semana). */
   dia_estado?: "con" | "sin"
+  /** `con` = dia_extra sábado; `sin` = sin marca sábado. */
+  sabado?: "con" | "sin"
 }
 
 export async function getDistribuidoraRutero(
@@ -1321,6 +1325,7 @@ export async function getDistribuidoraRutero(
   if (query.tipo) qs.set("tipo", query.tipo)
   if (query.geo) qs.set("geo", query.geo)
   if (query.dia_estado) qs.set("dia_estado", query.dia_estado)
+  if (query.sabado) qs.set("sabado", query.sabado)
   const res = await fetch(`${API_URL}/distribuidora/rutero?${qs}`, {
     headers: getAuthHeaders(),
     signal,
@@ -1365,6 +1370,23 @@ export async function patchDistribuidoraRuteroTipoAtencion(
     throw new Error(msg || "No se pudo actualizar el tipo de atención")
   }
   return res.json() as Promise<DistribuidoraRuteroFila>
+}
+
+/** PATCH /distribuidora/rutero/sabado — ``dia_extra`` = ``sabado`` o NULL por RUT. */
+export async function patchDistribuidoraRuteroSabado(body: {
+  rut_clean: string
+  activo: boolean
+}): Promise<{ updated: number; rut_clean: string; activo: boolean }> {
+  const res = await fetch(`${API_URL}/distribuidora/rutero/sabado`, {
+    method: "PATCH",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "No se pudo actualizar sábado")
+  }
+  return res.json() as Promise<{ updated: number; rut_clean: string; activo: boolean }>
 }
 
 /**

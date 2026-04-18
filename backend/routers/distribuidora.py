@@ -69,6 +69,15 @@ class ObservacionRuteroBody(BaseModel):
     observaciones: str | None = Field(default=None, description="Texto libre; vacío o null → NULL en BD")
 
 
+class RuteroSabadoPatchBody(BaseModel):
+    """Marca o quita atención de sábado vía ``dia_extra`` (valor fijo ``sabado`` en BD)."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    rut_clean: str = Field(..., min_length=1, max_length=64)
+    activo: bool
+
+
 class RuteroTipoAtencionPatchBody(BaseModel):
     """Valores UI típicos `TERRENO` / `TELEFONICO`; se persisten como `terreno` / `telefonico` (CHECK en BD)."""
 
@@ -1404,6 +1413,7 @@ _RUTERO_FILA_SELECT = """
                 r.id,
                 LOWER(TRIM(COALESCE(r.vendedor::text, ''))) AS vendedor,
                 r.dia_atencion,
+                NULLIF(TRIM(r.dia_extra::text), '') AS dia_extra,
                 r.orden_manual,
                 r.orden_ruta,
                 NULLIF(TRIM(r.rut_clean::text), '') AS rut,
@@ -1445,12 +1455,14 @@ def _rutero_list_where_order(
     tipo: str | None,
     geo: str | None,
     dia_estado: str | None,
+    sabado: str | None = None,
 ) -> tuple[str, list]:
     """
     Filtros listado rutero (gestión): no excluye telefónicos ni georef (distinto de /mapa u ORS).
     - vendedor vacío: todos los vendedores.
     - dia vacío: sin filtrar por valor de dia_atencion (salvo dia_estado con/sin).
     - dia_estado=sin: solo sin día; en ese caso se ignora el filtro por día concreto.
+    - sabado=con|sin: filtro por ``dia_extra = 'sabado'`` (case-insensitive).
     """
     wheres = ["r.company_id = 3", "r.activo = TRUE"]
     params: list = []
@@ -1498,16 +1510,28 @@ def _rutero_list_where_order(
             "OR (r.lat::double precision = 0 AND r.lon::double precision = 0))"
         )
 
+    sab = (sabado or "").strip().lower()
+    if sab == "con":
+        wheres.append("LOWER(TRIM(COALESCE(r.dia_extra::text, ''))) = 'sabado'")
+    elif sab == "sin":
+        wheres.append(
+            "(r.dia_extra IS NULL OR TRIM(COALESCE(r.dia_extra::text, '')) = '' "
+            "OR LOWER(TRIM(r.dia_extra::text)) <> 'sabado')"
+        )
+
     where_sql = " AND ".join(wheres)
     return where_sql, params
 
 
 _RUTERO_LIST_ORDER = """
-            ORDER BY LOWER(TRIM(COALESCE(r.vendedor::text, ''))),
-                     LOWER(TRIM(COALESCE(r.dia_atencion::text, ''))) NULLS LAST,
-                     r.orden_manual ASC NULLS LAST,
-                     r.orden_ruta ASC NULLS LAST,
-                     r.bsale_id
+            ORDER BY
+                CASE WHEN LOWER(TRIM(COALESCE(r.dia_extra::text, ''))) = 'sabado' THEN 0 ELSE 1 END,
+                LOWER(TRIM(COALESCE(r.vendedor::text, ''))),
+                LOWER(TRIM(COALESCE(r.dia_atencion::text, ''))) NULLS LAST,
+                r.nombre_fantasia ASC NULLS LAST,
+                r.orden_manual ASC NULLS LAST,
+                r.orden_ruta ASC NULLS LAST,
+                r.bsale_id
             """
 
 
@@ -1518,6 +1542,10 @@ def get_rutero(
     tipo: str | None = Query(None, description="terreno | telefonico"),
     geo: str | None = Query(None, description="con | sin — coordenadas en rutero"),
     dia_estado: str | None = Query(None, description="con | sin — tiene dia_atencion asignado"),
+    sabado: str | None = Query(
+        None,
+        description="con | sin — dia_extra = sabado (atención sábado); omitir = todos",
+    ),
 ):
     """
     Listado completo del rutero (gestión): mismas columnas que antes, sin excluir telefónicos
@@ -1526,14 +1554,17 @@ def get_rutero(
     tipo_f = (tipo or "").strip().lower()
     geo_f = (geo or "").strip().lower()
     de = (dia_estado or "").strip().lower()
+    sab_f = (sabado or "").strip().lower()
     if tipo_f and tipo_f not in ("terreno", "telefonico"):
         raise HTTPException(status_code=400, detail="tipo debe ser terreno o telefonico")
     if geo_f and geo_f not in ("con", "sin"):
         raise HTTPException(status_code=400, detail="geo debe ser con o sin")
     if de and de not in ("con", "sin"):
         raise HTTPException(status_code=400, detail="dia_estado debe ser con o sin")
+    if sab_f and sab_f not in ("con", "sin"):
+        raise HTTPException(status_code=400, detail="sabado debe ser con o sin")
 
-    where_sql, params = _rutero_list_where_order(vendedor, dia, tipo, geo, dia_estado)
+    where_sql, params = _rutero_list_where_order(vendedor, dia, tipo, geo, dia_estado, sabado)
 
     conn = get_connection()
     try:
@@ -1592,6 +1623,46 @@ def post_observacion_rutero(body: ObservacionRuteroBody):
     if fila is None:
         raise HTTPException(status_code=500, detail="No se pudo leer la fila actualizada")
     return fila
+
+
+@router.patch("/rutero/sabado")
+def patch_rutero_sabado(body: RuteroSabadoPatchBody):
+    """
+    Asigna o quita atención de sábado: ``dia_extra = 'sabado'`` o ``NULL``.
+    Actualiza por ``rut_clean`` (empresa 3, filas activas); puede afectar más de una fila si hay duplicados de RUT.
+    """
+    rut = (body.rut_clean or "").strip()
+    if not rut:
+        raise HTTPException(status_code=400, detail="rut_clean es obligatorio")
+
+    dia_val = "sabado" if body.activo else None
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE bsale.rutero
+            SET dia_extra = %s
+            WHERE company_id = 3
+              AND activo = TRUE
+              AND TRIM(LOWER(COALESCE(rut_clean::text, ''))) = TRIM(LOWER(%s))
+            """,
+            (dia_val, rut),
+        )
+        n = cur.rowcount
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+
+    if n == 0:
+        raise HTTPException(
+            status_code=404,
+            detail="No se encontró fila activa en rutero con el RUT indicado.",
+        )
+
+    return {"updated": n, "rut_clean": rut, "activo": body.activo}
 
 
 @router.patch("/rutero/{row_id}")

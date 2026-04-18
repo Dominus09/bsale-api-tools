@@ -12,12 +12,15 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import {
   getDistribuidoraMapa,
   getDistribuidoraRutero,
+  patchDistribuidoraRuteroSabado,
   patchDistribuidoraRuteroTipoAtencion,
   postDistribuidoraObservacionRutero,
   type DistribuidoraMapaCliente,
   type DistribuidoraPuntoBase,
   type DistribuidoraRuteroFila,
 } from "@/lib/api"
+import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 
 const SELECT_CLASS =
@@ -86,6 +89,14 @@ function sinDiaAsignado(row: DistribuidoraRuteroFila): boolean {
   return !String(row.dia_atencion ?? "").trim()
 }
 
+function esDiaExtraSabado(row: DistribuidoraRuteroFila): boolean {
+  return String(row.dia_extra ?? "").trim().toLowerCase() === "sabado"
+}
+
+function normalizarRutBusqueda(raw: string): string {
+  return raw.toLowerCase().replace(/[.\-\s]/g, "")
+}
+
 function alertasOperativas(row: DistribuidoraRuteroFila): string[] {
   const a: string[] = []
   if (!String(row.rut ?? "").trim()) a.push("Sin RUT")
@@ -117,6 +128,7 @@ function ordenCelda(row: DistribuidoraRuteroFila): { texto: string; title?: stri
 type FiltroTipoAtencion = "all" | "terreno" | "telefonico"
 type FiltroGeo = "all" | "con" | "sin"
 type FiltroDiaAsignado = "all" | "con" | "sin"
+type FiltroSabado = "all" | "con" | "sin"
 
 export default function RuteroVistaClient() {
   const [vendedor, setVendedor] = useState("")
@@ -124,6 +136,8 @@ export default function RuteroVistaClient() {
   const [filtroTipo, setFiltroTipo] = useState<FiltroTipoAtencion>("all")
   const [filtroGeo, setFiltroGeo] = useState<FiltroGeo>("all")
   const [filtroDiaAsignado, setFiltroDiaAsignado] = useState<FiltroDiaAsignado>("all")
+  const [filtroSabado, setFiltroSabado] = useState<FiltroSabado>("all")
+  const [buscarRut, setBuscarRut] = useState("")
   const [vendedorOptions, setVendedorOptions] = useState<string[]>([])
   const [diaOptions, setDiaOptions] = useState<string[]>([])
   const [mapLoading, setMapLoading] = useState(true)
@@ -134,6 +148,7 @@ export default function RuteroVistaClient() {
   const [tablaError, setTablaError] = useState("")
   const [savingId, setSavingId] = useState<number | null>(null)
   const [savingTipoId, setSavingTipoId] = useState<number | null>(null)
+  const [savingSabadoRut, setSavingSabadoRut] = useState<string | null>(null)
   const [copiadoKey, setCopiadoKey] = useState<string | null>(null)
 
   useEffect(() => {
@@ -185,6 +200,7 @@ export default function RuteroVistaClient() {
         tipo: filtroTipo === "all" ? undefined : filtroTipo,
         geo: filtroGeo === "all" ? undefined : filtroGeo,
         dia_estado: filtroDiaAsignado === "all" ? undefined : filtroDiaAsignado,
+        sabado: filtroSabado === "all" ? undefined : filtroSabado,
       })
       setFilas(data)
     } catch (e: unknown) {
@@ -193,7 +209,7 @@ export default function RuteroVistaClient() {
     } finally {
       setTablaLoading(false)
     }
-  }, [mapLoading, vendedor, dia, filtroTipo, filtroGeo, filtroDiaAsignado])
+  }, [mapLoading, vendedor, dia, filtroTipo, filtroGeo, filtroDiaAsignado, filtroSabado])
 
   useEffect(() => {
     void cargarTabla()
@@ -203,13 +219,24 @@ export default function RuteroVistaClient() {
     let telefonicos = 0
     let sinGeoref = 0
     let sinDia = 0
+    let conSabado = 0
     for (const row of filas) {
       if (esTelefonicoVisual(row)) telefonicos += 1
       if (sinDiaAsignado(row)) sinDia += 1
       if (requiereGeorefEnMapa(row) && !tieneCoordsValidas(row)) sinGeoref += 1
+      if (esDiaExtraSabado(row)) conSabado += 1
     }
-    return { total: filas.length, telefonicos, sinGeoref, sinDia }
+    return { total: filas.length, telefonicos, sinGeoref, sinDia, conSabado }
   }, [filas])
+
+  const filasPorRut = useMemo(() => {
+    const q = normalizarRutBusqueda(buscarRut.trim())
+    if (!q) return filas
+    return filas.filter((row) => {
+      const ruts = normalizarRutBusqueda(String(row.rut ?? ""))
+      return ruts.includes(q)
+    })
+  }, [filas, buscarRut])
 
   const onTipoAtencionChange = useCallback(
     async (row: DistribuidoraRuteroFila, next: TipoAtencionUi) => {
@@ -229,6 +256,33 @@ export default function RuteroVistaClient() {
     },
     [],
   )
+
+  const onSabadoChange = useCallback(async (row: DistribuidoraRuteroFila, activo: boolean) => {
+    const rut = String(row.rut ?? "").trim()
+    if (!rut) {
+      setTablaError("Sin RUT no se puede marcar sábado.")
+      return
+    }
+    const rutKey = rut.toLowerCase()
+    setSavingSabadoRut(rutKey)
+    setTablaError("")
+    try {
+      await patchDistribuidoraRuteroSabado({ rut_clean: rut, activo })
+      setFilas((rows) =>
+        rows.map((r) =>
+          String(r.rut ?? "")
+            .trim()
+            .toLowerCase() === rutKey
+            ? { ...r, dia_extra: activo ? "sabado" : null }
+            : r,
+        ),
+      )
+    } catch (e: unknown) {
+      setTablaError(e instanceof Error ? e.message : "Error al guardar sábado")
+    } finally {
+      setSavingSabadoRut(null)
+    }
+  }, [])
 
   const onObsBlur = useCallback(
     async (row: DistribuidoraRuteroFila, value: string) => {
@@ -279,12 +333,11 @@ export default function RuteroVistaClient() {
         <h1 className="text-xl font-semibold tracking-tight text-foreground">Rutero</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Listado completo de <code className="rounded bg-muted px-1 text-xs">bsale.rutero</code> (activos): incluye
-          telefónicos, sin georef y sin día. Usa los filtros para acotar. El mapa de rutas sigue mostrando solo
-          terreno con coordenadas y día asignado. Tipo (terreno / telefónico) se guarda en el desplegable; las
-          observaciones al salir del cuadro de texto. RUT e ID Bsale para cruzar con Bsale; enlace opcional vía{" "}
-          <code className="rounded bg-muted px-1 text-xs">NEXT_PUBLIC_BSALE_CLIENT_URL_TEMPLATE</code>{" "}
-          (placeholders <code className="text-xs">{"{bsale_id}"}</code> o <code className="text-xs">{"{id}"}</code>
-          ).
+          telefónicos, sin georef y sin día. Marca <strong className="text-foreground">Sábado</strong> con el
+          interruptor (se guarda en <code className="rounded bg-muted px-1 text-xs">dia_extra</code>); los clientes
+          con sábado aparecen primero en la tabla. Usa los filtros para acotar. El mapa de rutas puede ampliarse en un
+          siguiente paso para considerar <code className="text-xs">dia_atencion OR dia_extra</code>. Tipo (terreno /
+          telefónico) en el desplegable; observaciones al salir del cuadro de texto.
         </p>
       </div>
 
@@ -341,6 +394,20 @@ export default function RuteroVistaClient() {
               ))}
             </select>
           </div>
+          <div className="flex min-w-[200px] flex-1 flex-col gap-1 sm:max-w-xs">
+            <label htmlFor="rutero-buscar-rut" className="text-sm font-medium text-foreground">
+              Buscar por RUT
+            </label>
+            <Input
+              id="rutero-buscar-rut"
+              placeholder="Buscar por RUT"
+              value={buscarRut}
+              onChange={(e) => setBuscarRut(e.target.value)}
+              disabled={mapLoading}
+              className="h-9"
+              autoComplete="off"
+            />
+          </div>
           <Button
             type="button"
             variant="outline"
@@ -352,7 +419,7 @@ export default function RuteroVistaClient() {
           </Button>
         </div>
 
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <div className="space-y-2 rounded-md border border-border/80 bg-muted/20 p-3">
             <p className="text-xs font-medium text-muted-foreground">Tipo atención</p>
             <RadioGroup
@@ -434,12 +501,42 @@ export default function RuteroVistaClient() {
               </div>
             </RadioGroup>
           </div>
+          <div className="space-y-2 rounded-md border border-border/80 bg-muted/20 p-3">
+            <p className="text-xs font-medium text-muted-foreground">Sábado</p>
+            <RadioGroup
+              value={filtroSabado}
+              onValueChange={(v) => setFiltroSabado(v as FiltroSabado)}
+              className="flex flex-col gap-2"
+            >
+              <div className="flex items-center gap-2">
+                <RadioGroupItem value="all" id="rut-fs-all" />
+                <Label htmlFor="rut-fs-all" className="cursor-pointer text-sm font-normal">
+                  Todos
+                </Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <RadioGroupItem value="con" id="rut-fs-con" />
+                <Label htmlFor="rut-fs-con" className="cursor-pointer text-sm font-normal">
+                  Con sábado
+                </Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <RadioGroupItem value="sin" id="rut-fs-sin" />
+                <Label htmlFor="rut-fs-sin" className="cursor-pointer text-sm font-normal">
+                  Sin sábado
+                </Label>
+              </div>
+            </RadioGroup>
+          </div>
         </div>
 
         {!mapLoading && !tablaLoading ? (
           <div className="flex flex-wrap gap-2 text-sm" aria-live="polite">
             <Badge variant="secondary" className="font-normal">
               Total {contadores.total}
+            </Badge>
+            <Badge variant="outline" className="border-sky-300 bg-sky-50 font-normal text-sky-950">
+              Sábado {contadores.conSabado}
             </Badge>
             <Badge variant="outline" className="border-slate-300 bg-slate-100 font-normal text-slate-800">
               Telefónicos {contadores.telefonicos}
@@ -472,9 +569,13 @@ export default function RuteroVistaClient() {
         </div>
       ) : filas.length === 0 ? (
         <p className="text-sm text-muted-foreground">No hay filas que coincidan con los filtros seleccionados.</p>
+      ) : filasPorRut.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          Ningún RUT coincide con la búsqueda. Ajusta el texto o limpia el campo.
+        </p>
       ) : (
         <div className="max-h-[min(75vh,800px)] overflow-auto rounded-md border border-border">
-          <table className="w-full min-w-[1240px] border-collapse text-left text-sm">
+          <table className="w-full min-w-[1320px] border-collapse text-left text-sm">
             <thead className="sticky top-0 z-10 border-b border-border bg-muted/90 backdrop-blur">
               <tr>
                 <th className="whitespace-nowrap px-2 py-2 font-medium" title="Resumen visual">
@@ -488,6 +589,7 @@ export default function RuteroVistaClient() {
                 <th className="min-w-[220px] px-3 py-2 font-medium">Dirección</th>
                 <th className="whitespace-nowrap px-3 py-2 font-medium">Comuna</th>
                 <th className="whitespace-nowrap px-3 py-2 font-medium">Día</th>
+                <th className="whitespace-nowrap px-3 py-2 font-medium">Sábado</th>
                 <th className="whitespace-nowrap px-3 py-2 font-medium">Teléfono</th>
                 <th className="whitespace-nowrap px-3 py-2 font-medium">Tipo</th>
                 <th className="whitespace-nowrap px-3 py-2 font-medium">Georef</th>
@@ -496,10 +598,11 @@ export default function RuteroVistaClient() {
               </tr>
             </thead>
             <tbody>
-              {filas.map((row) => {
+              {filasPorRut.map((row) => {
                 const ord = ordenCelda(row)
                 const alertas = alertasOperativas(row)
                 const rutStr = String(row.rut ?? "").trim()
+                const rutKeyNorm = rutStr.toLowerCase()
                 const dirStr = String(row.direccion ?? "").trim()
                 const razon = String(row.razon_social ?? "").trim()
                 const bsaleId = row.bsale_id
@@ -525,6 +628,7 @@ export default function RuteroVistaClient() {
                       telVis && "bg-slate-100/80 dark:bg-slate-900/45",
                       !telVis && sinDia && "bg-amber-50/70 dark:bg-amber-950/25",
                       !telVis && !sinDia && sinGeoTerreno && "bg-red-50/60 dark:bg-red-950/20",
+                      esDiaExtraSabado(row) && "bg-sky-50/50 dark:bg-sky-950/20",
                       alertas.length > 0 && "border-l-4 border-l-amber-500",
                     )}
                   >
@@ -606,6 +710,24 @@ export default function RuteroVistaClient() {
                     </td>
                     <td className="max-w-[140px] truncate px-3 py-2 text-muted-foreground" title={row.dia_atencion ?? ""}>
                       {row.dia_atencion?.trim() || "—"}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 align-middle">
+                      <div className="flex flex-col items-start gap-1.5 sm:flex-row sm:items-center">
+                        {esDiaExtraSabado(row) ? (
+                          <Badge className="border-transparent bg-sky-600 text-white hover:bg-sky-600/90">
+                            Sábado
+                          </Badge>
+                        ) : null}
+                        <div className="flex items-center gap-2">
+                          <Switch
+                            checked={esDiaExtraSabado(row)}
+                            disabled={!rutStr || savingSabadoRut === rutKeyNorm}
+                            aria-label={`Sábado ${nombreMostrar}`}
+                            onCheckedChange={(v) => void onSabadoChange(row, v)}
+                          />
+                          <span className="sr-only">Sábado</span>
+                        </div>
+                      </div>
                     </td>
                     <td className="whitespace-nowrap px-3 py-2">{row.telefono?.trim() || "—"}</td>
                     <td className="whitespace-nowrap px-2 py-2">
