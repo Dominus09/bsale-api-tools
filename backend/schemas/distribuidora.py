@@ -20,6 +20,8 @@ TipoIncidencia = Literal[
 ]
 SyncStatus = Literal["synced", "pending_sync"]
 
+TipoUsuarioApp = Literal["vendedor", "chofer", "bodega"]
+
 
 class LoginRequest(BaseModel):
     """Credenciales de la app móvil (vendedores_app, no ERP)."""
@@ -36,6 +38,9 @@ class LoginSuccessResponse(BaseModel):
     success: bool = True
     vendedor: str = Field(description="Mismo valor que codigo en BD")
     nombre: str
+    tipo_usuario: TipoUsuarioApp = Field(
+        description="Rol en la app: vendedor, chofer o bodega (desde bsale.vendedores_app.tipo_usuario).",
+    )
 
 
 class VisitaUpdate(BaseModel):

@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import date
+from typing import cast
 
 import bcrypt
 import psycopg2
@@ -19,6 +20,7 @@ from backend.db import get_connection
 from backend.schemas.distribuidora import (
     LoginRequest,
     LoginSuccessResponse,
+    TipoUsuarioApp,
     RutaResponse,
     SyncRequest,
     SyncResponse,
@@ -470,6 +472,31 @@ def _actualizar_visita_sql(cur, body: VisitaUpdate) -> bool:
     return cur.rowcount > 0
 
 
+_TIPOS_USUARIO_APP = frozenset({"vendedor", "chofer", "bodega"})
+
+
+def _tipo_usuario_app_validado(rec: dict) -> TipoUsuarioApp:
+    """Exige ``tipo_usuario`` no nulo y uno de los valores permitidos (insensible a mayúsculas)."""
+    raw = rec.get("tipo_usuario")
+    if raw is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Usuario sin tipo_usuario asignado. Contacte al administrador.",
+        )
+    t = str(raw).strip().lower()
+    if not t:
+        raise HTTPException(
+            status_code=403,
+            detail="Usuario sin tipo_usuario asignado. Contacte al administrador.",
+        )
+    if t not in _TIPOS_USUARIO_APP:
+        raise HTTPException(
+            status_code=403,
+            detail="tipo_usuario no válido en el servidor. Contacte al administrador.",
+        )
+    return cast(TipoUsuarioApp, t)
+
+
 def _password_hash_a_bytes(stored) -> bytes:
     """Normaliza lo que devuelve psycopg2 (str o memoryview) a bytes para bcrypt."""
     if isinstance(stored, memoryview):
@@ -482,7 +509,9 @@ def _password_hash_a_bytes(stored) -> bytes:
 @router.post("/login", response_model=LoginSuccessResponse)
 def post_login_vendedor_app(body: LoginRequest):
     """
-    Login de vendedores de la app móvil (tabla bsale.vendedores_app, hash bcrypt).
+    Login de la app móvil (tabla bsale.vendedores_app, hash bcrypt).
+
+    La respuesta incluye ``tipo_usuario`` (vendedor | chofer | bodega); debe estar definido en BD.
     """
     codigo = body.codigo.strip()
     conn = get_connection()
@@ -490,7 +519,7 @@ def post_login_vendedor_app(body: LoginRequest):
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT codigo, nombre, password_hash
+            SELECT codigo, nombre, password_hash, tipo_usuario
             FROM bsale.vendedores_app
             WHERE codigo = %s AND activo = true
             LIMIT 1
@@ -500,11 +529,6 @@ def post_login_vendedor_app(body: LoginRequest):
         row = cur.fetchone()
         if not row:
             cur.close()
-            # --- DEBUG temporal (quitar tras depurar): no hay fila para este codigo ---
-            logger.warning(
-                "DEBUG_LOGIN_TEMP sin_fila_en_bd codigo_consultado=%r",
-                codigo,
-            )
             raise HTTPException(
                 status_code=401,
                 detail="Código o contraseña incorrectos.",
@@ -516,15 +540,7 @@ def post_login_vendedor_app(body: LoginRequest):
         plain = body.password.encode("utf-8")
         raw_ph = rec["password_hash"]
         hashed = _password_hash_a_bytes(raw_ph)
-        # --- DEBUG temporal (quitar tras depurar): diagnóstico hash / bcrypt ---
-        logger.warning(
-            "DEBUG_LOGIN_TEMP codigo_consultado=%r tipo_password_hash=%s longitud_hash_bytes=%s",
-            codigo,
-            type(raw_ph).__name__,
-            len(hashed),
-        )
         check_ok = bcrypt.checkpw(plain, hashed)
-        logger.warning("DEBUG_LOGIN_TEMP bcrypt_checkpw=%s", check_ok)
         if not check_ok:
             raise HTTPException(
                 status_code=401,
@@ -533,10 +549,12 @@ def post_login_vendedor_app(body: LoginRequest):
     finally:
         conn.close()
 
+    tipo = _tipo_usuario_app_validado(rec)
     return LoginSuccessResponse(
         success=True,
         vendedor=rec["codigo"],
         nombre=rec["nombre"],
+        tipo_usuario=tipo,
     )
 
 
