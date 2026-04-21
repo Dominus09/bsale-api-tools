@@ -7,7 +7,8 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Query
+from pydantic import BaseModel, ConfigDict
 
 from backend.repositories.distribuidora.route_planning_repo import (
     fetch_enriched_orders_by_document_ids,
@@ -19,16 +20,73 @@ from backend.services.distribuidora.orders_service import (
     list_dispatch_prep_planning_rows,
     list_purchase_orders,
 )
-from backend.services.distribuidora.sync_service import (
-    DistribuidoraSyncService,
-    bsale_token_distribuidora_configured,
+from backend.services.distribuidora.resync_oc_jobs import (
+    create_job,
+    get_job,
+    run_resync_oc_job,
 )
+from backend.services.distribuidora.sync_service import bsale_token_distribuidora_configured
 
 router = APIRouter(prefix="/distribuidora", tags=["Distribuidora órdenes"])
 logger = logging.getLogger(__name__)
 
 # Ventana corta (días calendario UTC) para traer documentos recientes desde Bsale.
 _RESYNC_OC_CALENDAR_DAYS = 2
+
+
+class ResyncOcStartBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    emission_date_from: date | None = None
+    emission_date_to: date | None = None
+
+
+def _resync_oc_emission_bounds(
+    body: ResyncOcStartBody | None,
+) -> tuple[datetime, datetime, str, str]:
+    """
+    Devuelve ``(emission_from_utc, emission_to_utc, emission_date_from_str, emission_date_to_str)``.
+    Si el cuerpo no trae fechas, usa la ventana corta de días calendario UTC.
+    """
+    now = datetime.now(timezone.utc)
+    b = body or ResyncOcStartBody()
+    if b.emission_date_from is not None and b.emission_date_to is not None:
+        d0, d1 = b.emission_date_from, b.emission_date_to
+        if d0 > d1:
+            d0, d1 = d1, d0
+        emission_from = datetime(
+            d0.year,
+            d0.month,
+            d0.day,
+            0,
+            0,
+            0,
+            tzinfo=timezone.utc,
+        )
+        end_of_range = datetime(
+            d1.year,
+            d1.month,
+            d1.day,
+            23,
+            59,
+            59,
+            tzinfo=timezone.utc,
+        )
+        emission_to = min(now, end_of_range)
+        if emission_from > emission_to:
+            emission_to = now
+        return emission_from, emission_to, d0.isoformat(), d1.isoformat()
+
+    start_day = now.date() - timedelta(days=_RESYNC_OC_CALENDAR_DAYS - 1)
+    emission_from = datetime(
+        start_day.year,
+        start_day.month,
+        start_day.day,
+        0,
+        0,
+        0,
+        tzinfo=timezone.utc,
+    )
+    return emission_from, now, start_day.isoformat(), now.date().isoformat()
 
 
 def _preview_enriched_row(r: dict[str, Any]) -> dict[str, Any]:
@@ -166,40 +224,56 @@ def get_dispatch_prep_planning_rows(
 
 
 @router.post("/resync-oc")
-def post_resync_oc():
+def post_resync_oc(
+    background_tasks: BackgroundTasks,
+    body: ResyncOcStartBody | None = Body(default=None),
+):
     """
-    Re-sincroniza Bsale → ``distribuidora.*`` para los últimos días (UTC), vía
-    ``DistribuidoraSyncService.run_resync``. El GET de Bsale es por rango de emisión;
-    las OC se persisten como ``document_type_id = 33``.
+    Encola un resync Bsale → ``distribuidora.*`` en background (no bloquea el HTTP).
+
+    Opcional JSON: ``emission_date_from``, ``emission_date_to`` (``YYYY-MM-DD``, UTC día
+    calendario). Si omiten, se usa una ventana corta de días recientes.
+
+    El cliente debe hacer polling a ``GET /distribuidora/resync-oc/status/{job_id}``.
     """
     if not bsale_token_distribuidora_configured():
         logger.error("resync-oc: sin BSALE_TOKEN / BSALE_TOKEN_SPA")
         return {"ok": False, "error": "sin_token"}
-    try:
-        now = datetime.now(timezone.utc)
-        start_day = now.date() - timedelta(days=_RESYNC_OC_CALENDAR_DAYS - 1)
-        emission_from = datetime(
-            start_day.year,
-            start_day.month,
-            start_day.day,
-            0,
-            0,
-            0,
-            tzinfo=timezone.utc,
-        )
-        result = DistribuidoraSyncService.run_resync(
-            emission_from=emission_from,
-            emission_to=now,
-            strict_token=True,
-        )
-        total = int(result.get("documents_processed", 0) or 0)
-        errores = int(result.get("document_errors", 0) or 0)
-        return {
-            "ok": True,
-            "total": total,
-            "errores": errores,
-            "result": result,
-        }
-    except Exception as e:
-        logger.error("Resync OC error: %s", e, exc_info=True)
-        return {"ok": False, "error": str(e)}
+    emission_from, emission_to, df, dt = _resync_oc_emission_bounds(body)
+    job = create_job(emission_date_from=df, emission_date_to=dt)
+    jid = str(job["job_id"])
+    background_tasks.add_task(
+        run_resync_oc_job,
+        jid,
+        emission_from,
+        emission_to,
+        df,
+        dt,
+    )
+    return {
+        "ok": True,
+        "job_id": jid,
+        "status": "started",
+        "emission_date_from": df,
+        "emission_date_to": dt,
+    }
+
+
+@router.get("/resync-oc/status/{job_id}")
+def get_resync_oc_status(job_id: str):
+    rec = get_job(job_id)
+    if not rec:
+        return {"ok": False, "error": "job_not_found"}
+    return {
+        "ok": True,
+        "job_id": rec["job_id"],
+        "status": rec["status"],
+        "processed_count": rec["processed_count"],
+        "updated_count": rec["updated_count"],
+        "error_count": rec["error_count"],
+        "message": rec["message"],
+        "emission_date_from": rec["emission_date_from"],
+        "emission_date_to": rec["emission_date_to"],
+        "started_at": rec["started_at"],
+        "finished_at": rec["finished_at"],
+    }

@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { Loader2, RefreshCw } from "lucide-react"
@@ -9,6 +9,7 @@ import {
   distribuidoraTruckCapacityLabel,
   getDistribuidoraPlanificacionOrders,
   getDistribuidoraTrucks,
+  pollDistribuidoraResyncOcJobUntilTerminal,
   postDistribuidoraResyncOc,
   type DistribuidoraPlanificacionOrderRow,
   type DistribuidoraTruck,
@@ -64,48 +65,21 @@ function formatCLP(n: number): string {
   })
 }
 
-function documentsProcessedFromResyncResult(result: unknown): number | null {
-  if (!result || typeof result !== "object") return null
-  const v = (result as { documents_processed?: unknown }).documents_processed
-  if (typeof v === "number" && Number.isFinite(v)) return v
-  if (typeof v === "string" && v.trim() !== "") {
-    const n = Number(v)
-    return Number.isFinite(n) ? n : null
-  }
-  return null
+type ResyncOcProgressUi = {
+  range: string
+  status: string
+  jobId: string
+  processed: number
+  updated: number
+  errors: number
+  message?: string
 }
 
-type DistribuidoraResyncSummary = { total: number; errores: number }
-
-function resyncSummaryFromApiResponse(data: {
-  ok: boolean
-  total?: unknown
-  errores?: unknown
-  result?: unknown
-}): DistribuidoraResyncSummary | null {
-  if (typeof data.total === "number" && Number.isFinite(data.total)) {
-    const errores =
-      typeof data.errores === "number" && Number.isFinite(data.errores)
-        ? data.errores
-        : 0
-    return { total: data.total, errores }
-  }
-  const total = documentsProcessedFromResyncResult(data.result)
-  if (total == null) return null
-  const r = data.result
-  let errores = 0
-  if (r && typeof r === "object" && "document_errors" in r) {
-    const e = (r as { document_errors?: unknown }).document_errors
-    if (typeof e === "number" && Number.isFinite(e)) errores = e
-  }
-  return { total, errores }
-}
-
-function formatResyncCompletedMessage(s: DistribuidoraResyncSummary): string {
-  if (s.errores > 0) {
-    return `Sync completado: ${s.total} documentos (${s.errores} errores)`
-  }
-  return `Sync completado: ${s.total} documentos`
+type ResyncOcFinalUi = {
+  range: string
+  processed: number
+  updated: number
+  errors: number
 }
 
 const TRUCK_UNSET = "__unset__"
@@ -120,8 +94,9 @@ export default function PrePlanificacionDespachoPage() {
   const [loading, setLoading] = useState(true)
   const [loadingSync, setLoadingSync] = useState(false)
   const [lastOrdersLoadAt, setLastOrdersLoadAt] = useState<string | null>(null)
-  const [lastResyncSummary, setLastResyncSummary] =
-    useState<DistribuidoraResyncSummary | null>(null)
+  const [resyncProgress, setResyncProgress] = useState<ResyncOcProgressUi | null>(null)
+  const [resyncFinal, setResyncFinal] = useState<ResyncOcFinalUi | null>(null)
+  const resyncPollAbortRef = useRef<AbortController | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<string | null>(null)
 
@@ -186,25 +161,100 @@ export default function PrePlanificacionDespachoPage() {
     return () => ac.abort()
   }, [loadPlanificacionRows])
 
+  useEffect(() => {
+    return () => {
+      resyncPollAbortRef.current?.abort()
+    }
+  }, [])
+
   const onResyncOrders = useCallback(async () => {
     const emissionDateFrom = dateFrom
     const emissionDateTo = dateTo
+    const rangeLabel = `${emissionDateFrom} → ${emissionDateTo}`
     console.log("🔄 Iniciando actualización órdenes")
-    console.log("📅 Rango fechas:", emissionDateFrom, "→", emissionDateTo)
+    console.log("Rango fechas:", emissionDateFrom, "->", emissionDateTo)
+    resyncPollAbortRef.current?.abort()
+    const ac = new AbortController()
+    resyncPollAbortRef.current = ac
     setLoadingSync(true)
+    setResyncFinal(null)
+    setResyncProgress({
+      range: rangeLabel,
+      status: "starting",
+      jobId: "",
+      processed: 0,
+      updated: 0,
+      errors: 0,
+      message: "Encolando job…",
+    })
     try {
-      const syncRes = await postDistribuidoraResyncOc()
-      console.log("✅ Resync respuesta:", syncRes)
-      if (syncRes.ok) {
-        setLastResyncSummary(resyncSummaryFromApiResponse(syncRes))
-      } else {
-        setLastResyncSummary(null)
+      const start = await postDistribuidoraResyncOc({
+        emission_date_from: emissionDateFrom,
+        emission_date_to: emissionDateTo,
+        signal: ac.signal,
+      })
+      if (!start.ok || !start.job_id) {
+        console.error("No se pudo iniciar resync:", start.error)
+        setResyncProgress(null)
+        return
       }
-      await loadPlanificacionRows()
-      console.log("📦 Órdenes recargadas correctamente")
-    } catch (e) {
+      console.log("Job creado:", start.job_id)
+      const apiRange = `${start.emission_date_from ?? emissionDateFrom} → ${start.emission_date_to ?? emissionDateTo}`
+      setResyncProgress({
+        range: apiRange,
+        status: start.status ?? "started",
+        jobId: start.job_id,
+        processed: 0,
+        updated: 0,
+        errors: 0,
+        message: "Actualizando órdenes desde Bsale…",
+      })
+      const end = await pollDistribuidoraResyncOcJobUntilTerminal(start.job_id, {
+        signal: ac.signal,
+        onStatus: (s) => {
+          console.log("Estado job:", s.status)
+          const pc = s.processed_count ?? 0
+          const uc = s.updated_count ?? 0
+          console.log(`Procesadas: ${pc}, actualizadas: ${uc}`)
+          setResyncProgress({
+            range: apiRange,
+            status: s.status ?? "?",
+            jobId: start.job_id!,
+            processed: pc,
+            updated: uc,
+            errors: s.error_count ?? 0,
+            message: s.message,
+          })
+        },
+      })
+      if (!end.ok) {
+        console.error("Estado job inválido:", end.error)
+        setResyncProgress(null)
+        return
+      }
+      if (end.status === "error") {
+        console.error("Resync job error:", end.message)
+        setResyncProgress(null)
+        return
+      }
+      if (end.status === "done") {
+        const pc = end.processed_count ?? 0
+        const uc = end.updated_count ?? 0
+        const ec = end.error_count ?? 0
+        await loadPlanificacionRows(ac.signal)
+        console.log("Órdenes recargadas correctamente")
+        setResyncFinal({
+          range: apiRange,
+          processed: pc,
+          updated: uc,
+          errors: ec,
+        })
+        setResyncProgress(null)
+      }
+    } catch (e: unknown) {
+      if (e instanceof Error && e.name === "AbortError") return
       console.error("❌ Error en resync:", e)
-      setLastResyncSummary(null)
+      setResyncProgress(null)
     } finally {
       setLoadingSync(false)
     }
@@ -348,7 +398,7 @@ export default function PrePlanificacionDespachoPage() {
         </Button>
         {loadingSync ? (
           <span className="text-xs text-muted-foreground">
-            Actualizando desde Bsale…
+            Actualizando órdenes… (job en servidor)
           </span>
         ) : null}
       </div>
@@ -356,8 +406,28 @@ export default function PrePlanificacionDespachoPage() {
         {lastOrdersLoadAt ? (
           <p>Última actualización: {lastOrdersLoadAt}</p>
         ) : null}
-        {lastResyncSummary != null ? (
-          <p className="text-foreground/90">{formatResyncCompletedMessage(lastResyncSummary)}</p>
+        {resyncProgress ? (
+          <>
+            <p>Rango: {resyncProgress.range}</p>
+            <p className="text-foreground/90">
+              Estado: {resyncProgress.status}
+              {resyncProgress.message ? ` — ${resyncProgress.message}` : ""}
+            </p>
+            <p className="text-foreground/90">
+              Resultado (parcial): {resyncProgress.processed} procesadas /{" "}
+              {resyncProgress.updated} actualizadas
+              {resyncProgress.errors > 0 ? ` (${resyncProgress.errors} errores)` : ""}
+            </p>
+          </>
+        ) : null}
+        {resyncFinal ? (
+          <>
+            <p>Rango: {resyncFinal.range}</p>
+            <p className="text-foreground/90">
+              Resultado: {resyncFinal.processed} procesadas / {resyncFinal.updated} actualizadas
+              {resyncFinal.errors > 0 ? ` (${resyncFinal.errors} errores)` : ""}
+            </p>
+          </>
         ) : null}
       </div>
 

@@ -10,7 +10,7 @@ import os
 import random
 import time
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 import requests
 
@@ -143,6 +143,20 @@ def _documents_get_resync(client: BsaleClient, params: dict[str, Any]) -> dict[s
         return r.json()
 
 
+def _notify_progress(stats: dict[str, Any]) -> None:
+    cb = stats.get("_on_progress")
+    if not callable(cb):
+        return
+    cb(
+        {
+            "documents_processed": int(stats.get("documents_processed") or 0),
+            "updated_documents": int(stats.get("updated_documents") or 0),
+            "document_errors": int(stats.get("document_errors") or 0),
+            "message": "Procesando órdenes",
+        }
+    )
+
+
 def _append_items_from_bsale_response(
     items: list[dict[str, Any]],
     pending: list[dict[str, Any]],
@@ -164,8 +178,12 @@ def _append_items_from_bsale_response(
                 exc_info=True,
             )
             stats["document_errors"] = int(stats.get("document_errors") or 0) + 1
+            _notify_progress(stats)
             continue
         if row is None:
+            did = d.get("id")
+            if did is not None:
+                logger.info("document skipped %s", did)
             continue
         row["_bsale_document"] = d
         pending.append(row)
@@ -186,9 +204,10 @@ def _process_one_pending_document_row(
     stats: dict[str, Any],
 ) -> None:
     doc_log_id = _document_log_id_from_row(row)
+    logger.info("processing document %s", doc_log_id)
     try:
         try:
-            upsert_documents(cur, [row], stats)
+            _, row_was_existing = upsert_documents(cur, [row], stats)
         except Exception as e:
             stats["document_upsert_failures"] = int(stats.get("document_upsert_failures") or 0) + 1
             stats["document_errors"] = int(stats.get("document_errors") or 0) + 1
@@ -205,6 +224,7 @@ def _process_one_pending_document_row(
                     "distribuidora: rollback tras error upsert documento %s",
                     doc_log_id,
                 )
+            _notify_progress(stats)
             return
         _refresh_document_children(
             client,
@@ -216,6 +236,11 @@ def _process_one_pending_document_row(
         )
         conn.commit()
         stats["documents_processed"] += 1
+        if int(row_was_existing or 0) > 0:
+            logger.info("document updated %s", doc_log_id)
+        else:
+            logger.info("document inserted %s", doc_log_id)
+        _notify_progress(stats)
     except Exception as e:
         stats["document_errors"] = int(stats.get("document_errors") or 0) + 1
         logger.error(
@@ -231,6 +256,7 @@ def _process_one_pending_document_row(
                 "distribuidora: rollback tras error documento %s",
                 doc_log_id,
             )
+        _notify_progress(stats)
 
 
 def _flush_pending_when_large(
@@ -689,6 +715,7 @@ def resync_bsale_distribuidora_range(
     emission_from: datetime | None = None,
     emission_to: datetime | None = None,
     strict_token: bool = True,
+    on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     token = _bsale_token()
     if not token:
@@ -722,6 +749,8 @@ def resync_bsale_distribuidora_range(
         "omitido_concurrencia": False,
         "errors": None,
     }
+    if on_progress is not None:
+        stats["_on_progress"] = on_progress
 
     conn = get_connection()
     got_lock = False
@@ -733,6 +762,7 @@ def resync_bsale_distribuidora_range(
         if not got_lock:
             stats["omitido_concurrencia"] = True
             cur.close()
+            stats.pop("_on_progress", None)
             stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
             return stats
 
@@ -774,6 +804,20 @@ def resync_bsale_distribuidora_range(
             emission_from.isoformat(),
             emission_to.isoformat(),
         )
+        if on_progress is not None:
+            logger.info(
+                "resync_oc started from %s to %s",
+                emission_from.isoformat(),
+                emission_to.isoformat(),
+            )
+            on_progress(
+                {
+                    "documents_processed": 0,
+                    "updated_documents": 0,
+                    "document_errors": 0,
+                    "message": "Iniciando resync",
+                }
+            )
 
         client = BsaleClient(token)
         start_d = emission_from.astimezone(timezone.utc).date()
@@ -825,6 +869,23 @@ def resync_bsale_distribuidora_range(
         stats["details_inserted"] = stats.get("details_rows", 0)
         stats["attributes_inserted"] = stats.get("attributes_rows", 0)
         stats["references_inserted"] = stats.get("references_rows", 0)
+
+        if on_progress is not None:
+            err_n = int(stats.get("document_errors") or 0)
+            logger.info(
+                "resync_oc finished: processed=%s updated=%s errors=%s",
+                proc,
+                upd,
+                err_n,
+            )
+            on_progress(
+                {
+                    "documents_processed": proc,
+                    "updated_documents": upd,
+                    "document_errors": err_n,
+                    "message": "Finalizando",
+                }
+            )
 
         logger.info("Documentos procesados: %s", stats["documents_processed"])
         logger.info("Errores: %s", int(stats.get("document_errors") or 0))
@@ -879,6 +940,7 @@ def resync_bsale_distribuidora_range(
     except Exception as e:
         logger.exception("resync distribuidora: %s", e)
         stats["errors"] = str(e)
+        stats.pop("_on_progress", None)
         try:
             c2 = conn.cursor()
             if log_id is not None:
@@ -905,6 +967,7 @@ def resync_bsale_distribuidora_range(
         except Exception:
             pass
 
+    stats.pop("_on_progress", None)
     stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
     return stats
 
@@ -967,9 +1030,11 @@ class DistribuidoraSyncService:
         emission_from: datetime | None = None,
         emission_to: datetime | None = None,
         strict_token: bool = True,
+        on_progress: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         return resync_bsale_distribuidora_range(
             emission_from=emission_from,
             emission_to=emission_to,
             strict_token=strict_token,
+            on_progress=on_progress,
         )

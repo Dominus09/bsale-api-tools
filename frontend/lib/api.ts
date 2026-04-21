@@ -1011,35 +1011,127 @@ export async function getDistribuidoraTrucks(params?: {
   return res.json() as Promise<{ items: DistribuidoraTruck[] }>
 }
 
-export type DistribuidoraResyncOcResponse = {
+/** Respuesta inmediata al encolar resync OC (el trabajo corre en background). */
+export type DistribuidoraResyncOcStartResponse = {
   ok: boolean
-  /** Documentos persistidos correctamente (sync robusto por ítem). */
-  total?: number
-  /** Fallos por documento (mapeo, upsert o post-proceso); no aborta el resto. */
-  errores?: number
-  result?: unknown
+  job_id?: string
+  status?: string
+  emission_date_from?: string
+  emission_date_to?: string
   error?: string
 }
 
-/** POST /distribuidora/resync-oc — ventana corta Bsale → distribuidora, luego recargar listados. */
+export type DistribuidoraResyncOcJobStatusResponse = {
+  ok: boolean
+  job_id?: string
+  status?: string
+  processed_count?: number
+  updated_count?: number
+  error_count?: number
+  message?: string
+  emission_date_from?: string
+  emission_date_to?: string
+  started_at?: string | null
+  finished_at?: string | null
+  error?: string
+}
+
+/** POST /distribuidora/resync-oc — encola job; usar polling con ``getDistribuidoraResyncOcStatus``. */
 export async function postDistribuidoraResyncOc(params?: {
+  emission_date_from?: string
+  emission_date_to?: string
   signal?: AbortSignal
-}): Promise<DistribuidoraResyncOcResponse> {
+}): Promise<DistribuidoraResyncOcStartResponse> {
+  const body =
+    params?.emission_date_from && params?.emission_date_to
+      ? JSON.stringify({
+          emission_date_from: params.emission_date_from,
+          emission_date_to: params.emission_date_to,
+        })
+      : "{}"
   const res = await fetch(`${API_URL}/distribuidora/resync-oc`, {
     method: "POST",
-    headers: getAuthHeaders(),
+    headers: {
+      ...getAuthHeaders(),
+      "Content-Type": "application/json",
+    },
+    body,
     signal: params?.signal,
   })
-  const data = (await res.json().catch(() => ({}))) as DistribuidoraResyncOcResponse
+  const data = (await res.json().catch(() => ({}))) as DistribuidoraResyncOcStartResponse
   if (!res.ok) {
     return { ok: false, error: data?.error ?? `HTTP ${res.status}` }
   }
   return {
     ok: Boolean(data.ok),
-    total: typeof data.total === "number" ? data.total : undefined,
-    errores: typeof data.errores === "number" ? data.errores : undefined,
-    result: data.result,
+    job_id: typeof data.job_id === "string" ? data.job_id : undefined,
+    status: typeof data.status === "string" ? data.status : undefined,
+    emission_date_from:
+      typeof data.emission_date_from === "string" ? data.emission_date_from : undefined,
+    emission_date_to:
+      typeof data.emission_date_to === "string" ? data.emission_date_to : undefined,
     error: data.error,
+  }
+}
+
+/** GET /distribuidora/resync-oc/status/{job_id} */
+export async function getDistribuidoraResyncOcStatus(
+  jobId: string,
+  params?: { signal?: AbortSignal },
+): Promise<DistribuidoraResyncOcJobStatusResponse> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/resync-oc/status/${encodeURIComponent(jobId)}`,
+    {
+      method: "GET",
+      headers: getAuthHeaders(),
+      signal: params?.signal,
+    },
+  )
+  const data = (await res.json().catch(() => ({}))) as DistribuidoraResyncOcJobStatusResponse
+  if (!res.ok) {
+    return { ok: false, error: data?.error ?? `HTTP ${res.status}` }
+  }
+  return {
+    ok: Boolean(data.ok),
+    job_id: typeof data.job_id === "string" ? data.job_id : undefined,
+    status: typeof data.status === "string" ? data.status : undefined,
+    processed_count:
+      typeof data.processed_count === "number" ? data.processed_count : undefined,
+    updated_count: typeof data.updated_count === "number" ? data.updated_count : undefined,
+    error_count: typeof data.error_count === "number" ? data.error_count : undefined,
+    message: typeof data.message === "string" ? data.message : undefined,
+    emission_date_from:
+      typeof data.emission_date_from === "string" ? data.emission_date_from : undefined,
+    emission_date_to:
+      typeof data.emission_date_to === "string" ? data.emission_date_to : undefined,
+    started_at: data.started_at ?? null,
+    finished_at: data.finished_at ?? null,
+    error: data.error,
+  }
+}
+
+const RESYNC_OC_POLL_MS = 2000
+
+/** Poll hasta ``status`` done o error (o hasta ``AbortSignal``). */
+export async function pollDistribuidoraResyncOcJobUntilTerminal(
+  jobId: string,
+  options: {
+    signal?: AbortSignal
+    onStatus?: (s: DistribuidoraResyncOcJobStatusResponse) => void
+    intervalMs?: number
+  } = {},
+): Promise<DistribuidoraResyncOcJobStatusResponse> {
+  const intervalMs = options.intervalMs ?? RESYNC_OC_POLL_MS
+  for (;;) {
+    if (options.signal?.aborted) {
+      throw new DOMException("Aborted", "AbortError")
+    }
+    const st = await getDistribuidoraResyncOcStatus(jobId, { signal: options.signal })
+    options.onStatus?.(st)
+    if (!st.ok) return st
+    const terminal = st.status === "done" || st.status === "error"
+    if (terminal) return st
+    await new Promise((r) => setTimeout(r, intervalMs))
   }
 }
 
