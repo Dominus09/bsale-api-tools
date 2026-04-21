@@ -2,16 +2,25 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter
 
 from backend.db import get_connection
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/distribuidora", tags=["Distribuidora camiones"])
 
 
 @router.get("/trucks")
 def get_trucks():
-    conn = get_connection()
+    """Lista camiones activos; ante error de BD devuelve lista vacía (evita 500)."""
+    try:
+        conn = get_connection()
+    except Exception as e:
+        logger.error("Error conectando a BD para trucks: %s", e, exc_info=True)
+        return {"items": []}
     try:
         cur = conn.cursor()
         cur.execute(
@@ -33,5 +42,11 @@ def get_trucks():
             if rid is not None:
                 r["id"] = int(rid)
         return {"items": rows}
+    except Exception as e:
+        logger.error("Error cargando trucks: %s", e, exc_info=True)
+        return {"items": []}
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass

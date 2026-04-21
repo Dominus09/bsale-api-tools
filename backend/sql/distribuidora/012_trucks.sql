@@ -19,7 +19,7 @@ VALUES
     ('Hino 3', 'RYPJ-94', 5600),
     ('Hino 2', 'PZPD-64', 5600),
     ('Hino 4', 'TDDP-64', 7600),
-    ('Hyundai', 'SRJK-79', 1500)
+    ('Hyundai', 'SRJK79', 1500)
 ON CONFLICT (plate) DO NOTHING;
 -- +go
 

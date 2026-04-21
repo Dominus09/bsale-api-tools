@@ -63,6 +63,8 @@ function formatCLP(n: number): string {
   })
 }
 
+const TRUCK_SELECT_UNASSIGNED = "__unset__"
+
 export default function PrePlanificacionDespachoPage() {
   const router = useRouter()
   const [dateFrom, setDateFrom] = useState(() => localIsoDate())
@@ -77,15 +79,21 @@ export default function PrePlanificacionDespachoPage() {
   const [selected, setSelected] = useState<Set<number>>(() => new Set())
   const [truckIdByDoc, setTruckIdByDoc] = useState<Record<number, number>>({})
   const [trucks, setTrucks] = useState<DistribuidoraTruck[]>([])
+  const [trucksError, setTrucksError] = useState<string | null>(null)
 
   useEffect(() => {
     const ac = new AbortController()
     ;(async () => {
+      setTrucksError(null)
       try {
         const res = await getDistribuidoraTrucks({ signal: ac.signal })
         setTrucks(res.items)
-      } catch {
+      } catch (e: unknown) {
+        if (e instanceof Error && e.name === "AbortError") return
         setTrucks([])
+        setTrucksError(
+          e instanceof Error ? e.message : "No se pudieron cargar los camiones",
+        )
       }
     })()
     return () => ac.abort()
@@ -122,22 +130,6 @@ export default function PrePlanificacionDespachoPage() {
     }
   }, [dateFrom, dateTo, deliveryDay])
 
-  useEffect(() => {
-    if (trucks.length === 0) return
-    const defaultId = trucks[0]!.id
-    setTruckIdByDoc((prev) => {
-      const next = { ...prev }
-      for (const r of rows) {
-        if (next[r.document_id] === undefined) next[r.document_id] = defaultId
-      }
-      for (const k of Object.keys(next)) {
-        const id = Number(k)
-        if (!rows.some((r) => r.document_id === id)) delete next[id]
-      }
-      return next
-    })
-  }, [rows, trucks])
-
   const toggle = useCallback((id: number, checked: boolean, canSelect: boolean) => {
     if (!canSelect) return
     setSelected((prev) => {
@@ -157,6 +149,19 @@ export default function PrePlanificacionDespachoPage() {
     }
     return list
   }, [rows, selected])
+
+  const canEnviarPlanificacion = useMemo(() => {
+    if (trucks.length === 0 || selected.size === 0) return false
+    for (const docId of selected) {
+      const row = rows.find((r) => r.document_id === docId)
+      const geo = Boolean(row?.has_georef && row.lat != null && row.lng != null)
+      const tid = truckIdByDoc[docId]
+      const truckOk =
+        Number.isFinite(tid) && Number(tid) > 0 && trucks.some((t) => t.id === tid)
+      if (!geo || !truckOk) return false
+    }
+    return true
+  }, [trucks, selected, rows, truckIdByDoc])
 
   const onSubmit = useCallback(() => {
     setFeedback(null)
@@ -277,6 +282,13 @@ export default function PrePlanificacionDespachoPage() {
         </div>
       ) : null}
 
+      {trucksError ? (
+        <Alert variant="destructive">
+          <AlertTitle>Camiones</AlertTitle>
+          <AlertDescription>{trucksError}</AlertDescription>
+        </Alert>
+      ) : null}
+
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           Seleccionadas con georef:{" "}
@@ -286,7 +298,7 @@ export default function PrePlanificacionDespachoPage() {
         <Button
           type="button"
           onClick={onSubmit}
-          disabled={loading || selected.size === 0 || trucks.length === 0}
+          disabled={loading || !canEnviarPlanificacion}
         >
           Enviar a planificación
         </Button>
@@ -359,15 +371,26 @@ export default function PrePlanificacionDespachoPage() {
                     </TableCell>
                     <TableCell>
                       <div className="flex min-w-[11rem] flex-col gap-1.5">
+                        {trucks.length === 0 ? (
+                          <span className="text-xs text-muted-foreground">
+                            Sin camiones
+                          </span>
+                        ) : (
                         <Select
                           value={
                             tid != null && trucks.some((x) => x.id === tid)
                               ? String(tid)
-                              : trucks[0]
-                                ? String(trucks[0].id)
-                                : ""
+                              : TRUCK_SELECT_UNASSIGNED
                           }
                           onValueChange={(v) => {
+                            if (v === TRUCK_SELECT_UNASSIGNED) {
+                              setTruckIdByDoc((prev) => {
+                                const next = { ...prev }
+                                delete next[r.document_id]
+                                return next
+                              })
+                              return
+                            }
                             const n = Number.parseInt(v, 10)
                             if (!Number.isFinite(n)) return
                             setTruckIdByDoc((prev) => ({
@@ -375,19 +398,23 @@ export default function PrePlanificacionDespachoPage() {
                               [r.document_id]: n,
                             }))
                           }}
-                          disabled={!geo || trucks.length === 0}
+                          disabled={!geo}
                         >
                           <SelectTrigger className="h-8 max-w-[16rem] text-xs">
-                            <SelectValue placeholder="Camión" />
+                            <SelectValue placeholder="Asignar" />
                           </SelectTrigger>
                           <SelectContent>
+                            <SelectItem value={TRUCK_SELECT_UNASSIGNED}>
+                              Asignar
+                            </SelectItem>
                             {trucks.map((t) => (
                               <SelectItem key={t.id} value={String(t.id)}>
-                                {distribuidoraTruckCapacityLabel(t)}
+                                {t.name} ({t.plate})
                               </SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
+                        )}
                         {capLabel && geo ? (
                           <Badge
                             variant="secondary"

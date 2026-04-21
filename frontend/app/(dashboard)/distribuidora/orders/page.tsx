@@ -77,6 +77,9 @@ function formatClp(n: number): string {
   return clp.format(Number.isFinite(n) ? n : 0)
 }
 
+/** Valor sentinela en Select (Radix no admite `value=""`). */
+const TRUCK_SELECT_UNASSIGNED = "__unset__"
+
 export default function DistribuidoraOrdersPage() {
   const router = useRouter()
   const [dateFrom, setDateFrom] = useState(() => localIsoDate())
@@ -152,7 +155,7 @@ export default function DistribuidoraOrdersPage() {
         setObservationTexts(obs.items)
         setPlanningRows(plan.items)
         setSelectedPlanning(new Set())
-        setTruckByDoc({})
+        setTruckIdByDoc({})
       } catch (e: unknown) {
         if (cancelled || (e instanceof Error && e.name === "AbortError")) return
         setError(e instanceof Error ? e.message : "Error al cargar datos")
@@ -168,22 +171,6 @@ export default function DistribuidoraOrdersPage() {
       ac.abort()
     }
   }, [dateFrom, dateTo, onlyNotInvoiced, activeDayFilter])
-
-  useEffect(() => {
-    if (trucks.length === 0) return
-    const defaultId = trucks[0]!.id
-    setTruckIdByDoc((prev) => {
-      const next = { ...prev }
-      for (const r of planningRows) {
-        if (next[r.document_id] === undefined) next[r.document_id] = defaultId
-      }
-      for (const k of Object.keys(next)) {
-        const id = Number(k)
-        if (!planningRows.some((r) => r.document_id === id)) delete next[id]
-      }
-      return next
-    })
-  }, [planningRows, trucks])
 
   const tagStats = useMemo(
     () => aggregateObservationTags(observationTexts),
@@ -673,15 +660,26 @@ export default function DistribuidoraOrdersPage() {
                       </TableCell>
                       <TableCell>
                         <div className="flex min-w-[11rem] flex-col gap-1.5">
+                          {trucks.length === 0 ? (
+                            <span className="text-xs text-muted-foreground">
+                              Sin camiones
+                            </span>
+                          ) : (
                           <Select
                             value={
                               tid != null && trucks.some((x) => x.id === tid)
                                 ? String(tid)
-                                : trucks[0]
-                                  ? String(trucks[0].id)
-                                  : ""
+                                : TRUCK_SELECT_UNASSIGNED
                             }
                             onValueChange={(v) => {
+                              if (v === TRUCK_SELECT_UNASSIGNED) {
+                                setTruckIdByDoc((prev) => {
+                                  const next = { ...prev }
+                                  delete next[r.document_id]
+                                  return next
+                                })
+                                return
+                              }
                               const n = Number.parseInt(v, 10)
                               if (!Number.isFinite(n)) return
                               setTruckIdByDoc((prev) => ({
@@ -689,19 +687,23 @@ export default function DistribuidoraOrdersPage() {
                                 [r.document_id]: n,
                               }))
                             }}
-                            disabled={!geo || trucks.length === 0}
+                            disabled={!geo}
                           >
                             <SelectTrigger className="h-8 max-w-[16rem] text-xs">
-                              <SelectValue placeholder="Camión" />
+                              <SelectValue placeholder="Asignar" />
                             </SelectTrigger>
                             <SelectContent>
+                              <SelectItem value={TRUCK_SELECT_UNASSIGNED}>
+                                Asignar
+                              </SelectItem>
                               {trucks.map((t) => (
                                 <SelectItem key={t.id} value={String(t.id)}>
-                                  {distribuidoraTruckCapacityLabel(t)}
+                                  {t.name} ({t.plate})
                                 </SelectItem>
                               ))}
                             </SelectContent>
                           </Select>
+                          )}
                           {capLabel && geo ? (
                             <Badge
                               variant="secondary"
