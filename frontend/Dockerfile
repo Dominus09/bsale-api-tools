@@ -17,6 +17,7 @@ RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
 # Builders con poca RAM (Coolify/VPS): menos OOM en install + build de Next.
+# Ajustar si hace falta: 2048–8192. Deprecations en build: BUILD_DEBUG=1 o npm run build:debug
 ENV NODE_OPTIONS="--max-old-space-size=4096"
 ENV npm_config_audit=false
 ENV npm_config_fund=false
@@ -31,6 +32,7 @@ RUN --mount=type=cache,target=/root/.npm \
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
+# Deprecations de Node en log de build: ARG BUILD_DEBUG=1 en Coolify o usar npm run build:debug en local.
 RUN npm run build
 
 FROM node:22-alpine AS runner

@@ -4,7 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build --webpack && node scripts/copy-standalone-assets.cjs",
+    "build": "node scripts/run-build.cjs",
+    "build:next-only": "next build --webpack",
+    "build:debug": "node scripts/run-build.cjs --trace-deprecation",
     "start": "node .next/standalone/server.js",
     "lint": "eslint ."
   },
