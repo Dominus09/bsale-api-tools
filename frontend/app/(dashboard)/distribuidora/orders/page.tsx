@@ -2,7 +2,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
-import { Loader2, MapPin, Package, RefreshCw, Truck } from "lucide-react"
+import { ChevronDown, Loader2, MapPin, Package, RefreshCw, Truck } from "lucide-react"
 
 import {
   distribuidoraTruckCapacityLabel,
@@ -22,6 +22,12 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   Card,
   CardContent,
@@ -80,6 +86,7 @@ import {
   writePlanificacionPayload,
   type PlanificacionStoredOrder,
 } from "@/lib/planificacion-despacho-storage"
+import { toast } from "@/hooks/use-toast"
 
 function localIsoDate(d = new Date()): string {
   const y = d.getFullYear()
@@ -112,6 +119,8 @@ function documentsProcessedFromResyncResult(result: unknown): number | null {
 /** Valor sentinela en `<select>` nativo para “sin camión”. */
 const TRUCK_UNSET = "__unset__"
 
+const LAST_GROUP_TRUCK_STORAGE_KEY = "distribuidora_last_group_truck_id"
+
 type PlanningSortKey = "oc" | "municipality" | "amount"
 
 function rowHasGeo(r: DistribuidoraDispatchPrepPlanningRow): boolean {
@@ -127,6 +136,79 @@ function isValidTruckId(
     Number.isFinite(tid) &&
     tid > 0 &&
     trucks.some((t) => t.id === tid)
+  )
+}
+
+function GroupTruckAssignMenu({
+  municipalityLabel,
+  groupRows,
+  trucksOrdered,
+  lastSuggestedTruckId,
+  disabled,
+  onPickTruck,
+}: {
+  municipalityLabel: string
+  groupRows: DistribuidoraDispatchPrepPlanningRow[]
+  trucksOrdered: DistribuidoraTruck[]
+  lastSuggestedTruckId: number | null
+  disabled: boolean
+  onPickTruck: (truckId: number) => void
+}) {
+  const noGeoCount = groupRows.filter((r) => !rowHasGeo(r)).length
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={disabled}
+          className="gap-1"
+          aria-label={`Asignar camión a pedidos con georef en ${municipalityLabel}`}
+        >
+          Asignar camión
+          <ChevronDown className="size-4 opacity-70" aria-hidden />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        className="w-[min(22rem,calc(100vw-2rem))] p-2"
+      >
+        {noGeoCount > 0 ? (
+          <Alert className="mb-2 border-amber-500/40 bg-amber-50/90 dark:bg-amber-950/40">
+            <AlertTitle className="text-xs">Georreferencia</AlertTitle>
+            <AlertDescription className="text-xs">
+              {noGeoCount} cliente{noGeoCount !== 1 ? "s" : ""} no tienen
+              coordenadas y no serán asignados
+            </AlertDescription>
+          </Alert>
+        ) : null}
+        <div className="flex flex-col gap-0.5">
+          {trucksOrdered.map((t) => (
+            <DropdownMenuItem
+              key={t.id}
+              onSelect={() => onPickTruck(t.id)}
+              className={cn(
+                "cursor-pointer",
+                lastSuggestedTruckId === t.id &&
+                  "bg-muted/70 ring-1 ring-inset ring-primary/30",
+              )}
+            >
+              <span className="flex w-full items-center justify-between gap-2 pr-1">
+                <span>
+                  {t.name} ({t.plate})
+                </span>
+                {lastSuggestedTruckId === t.id ? (
+                  <Badge variant="outline" className="text-[10px] font-normal">
+                    Reciente
+                  </Badge>
+                ) : null}
+              </span>
+            </DropdownMenuItem>
+          ))}
+        </div>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -268,6 +350,29 @@ export default function DistribuidoraOrdersPage() {
     truckId: number
     count: number
   } | null>(null)
+  const [lastSuggestedGroupTruckId, setLastSuggestedGroupTruckId] = useState<
+    number | null
+  >(null)
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      const raw = sessionStorage.getItem(LAST_GROUP_TRUCK_STORAGE_KEY)
+      const n = raw != null ? Number.parseInt(raw, 10) : NaN
+      if (Number.isFinite(n) && n > 0) setLastSuggestedGroupTruckId(n)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  useEffect(() => {
+    if (
+      lastSuggestedGroupTruckId != null &&
+      !trucks.some((t) => t.id === lastSuggestedGroupTruckId)
+    ) {
+      setLastSuggestedGroupTruckId(null)
+    }
+  }, [trucks, lastSuggestedGroupTruckId])
 
   useEffect(() => {
     const ac = new AbortController()
@@ -552,23 +657,61 @@ export default function DistribuidoraOrdersPage() {
     router.push("/distribuidora/planificacion")
   }, [trucks, planningRows, truckIdByDoc, router])
 
-  const assignTruckToGroup = useCallback(
-    (groupRows: DistribuidoraDispatchPrepPlanningRow[]) => {
-      const existing = groupRows
-        .map((r) => truckIdByDoc[r.document_id])
-        .find((t) => isValidTruckId(t, trucks))
-      const tid = existing ?? trucks[0]?.id
-      if (tid == null) return
+  const trucksOrderedForGroupMenu = useMemo(() => {
+    const list = [...trucks]
+    const pref = lastSuggestedGroupTruckId
+    if (pref != null) {
+      const ix = list.findIndex((t) => t.id === pref)
+      if (ix > 0) {
+        const [sel] = list.splice(ix, 1)
+        list.unshift(sel)
+      }
+    }
+    return list
+  }, [trucks, lastSuggestedGroupTruckId])
+
+  const assignTruckToGroupWithChoice = useCallback(
+    (
+      municipalityLabel: string,
+      truckId: number,
+      groupRows: DistribuidoraDispatchPrepPlanningRow[],
+    ) => {
+      const geoRows = groupRows.filter(rowHasGeo)
+      const noGeoCount = groupRows.length - geoRows.length
+      if (geoRows.length === 0) {
+        toast({
+          variant: "destructive",
+          title: "Sin pedidos asignables",
+          description:
+            "Ningún pedido del grupo tiene coordenadas; no se asignó camión.",
+        })
+        return
+      }
       setTruckIdByDoc((prev) => {
         const next = { ...prev }
-        for (const r of groupRows) {
-          if (!rowHasGeo(r)) continue
-          next[r.document_id] = tid
+        for (const r of geoRows) {
+          next[r.document_id] = truckId
         }
         return next
       })
+      try {
+        sessionStorage.setItem(LAST_GROUP_TRUCK_STORAGE_KEY, String(truckId))
+      } catch {
+        /* ignore */
+      }
+      setLastSuggestedGroupTruckId(truckId)
+      const truck = trucks.find((t) => t.id === truckId)
+      const truckName = truck?.name ?? "Camión"
+      toast({
+        title: "Camión asignado al grupo",
+        description: `Camión ${truckName} asignado a ${geoRows.length} pedido(s) en ${municipalityLabel}${
+          noGeoCount > 0
+            ? `. ${noGeoCount} sin coordenadas omitidos.`
+            : ""
+        }`,
+      })
     },
-    [truckIdByDoc, trucks],
+    [trucks],
   )
 
   const confirmBulkTruckSuggest = useCallback(() => {
@@ -1072,15 +1215,20 @@ export default function DistribuidoraOrdersPage() {
                                   {formatClp(block.total)}
                                 </span>
                               </div>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="outline"
+                              <GroupTruckAssignMenu
+                                municipalityLabel={block.key}
+                                groupRows={block.rows}
+                                trucksOrdered={trucksOrderedForGroupMenu}
+                                lastSuggestedTruckId={lastSuggestedGroupTruckId}
                                 disabled={trucks.length === 0}
-                                onClick={() => assignTruckToGroup(block.rows)}
-                              >
-                                Asignar camión a todo el grupo
-                              </Button>
+                                onPickTruck={(truckId) =>
+                                  assignTruckToGroupWithChoice(
+                                    block.key,
+                                    truckId,
+                                    block.rows,
+                                  )
+                                }
+                              />
                             </div>
                           </TableCell>
                         </TableRow>
