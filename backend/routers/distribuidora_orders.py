@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+import time
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
 from backend.repositories.distribuidora.route_planning_repo import (
@@ -25,6 +27,9 @@ from backend.services.distribuidora.resync_oc_jobs import (
     get_job,
     run_resync_oc_job,
 )
+from backend.services.distribuidora.distribuidora_sync_status_service import (
+    get_distribuidora_sync_status_payload,
+)
 from backend.services.distribuidora.sync_related_service import (
     run_sync_distribuidora_related_background,
 )
@@ -39,6 +44,62 @@ logger = logging.getLogger(__name__)
 
 # Ventana corta (días calendario UTC) para traer documentos recientes desde Bsale.
 _RESYNC_OC_CALENDAR_DAYS = 2
+
+
+def _run_distribuidora_sync_orders_task() -> None:
+    """Ejecutado vía ``BackgroundTasks`` (no bloquea HTTP)."""
+    t0 = time.perf_counter()
+    logger.info("distribuidora sync-orders background: inicio")
+    try:
+        stats = sync_bsale_distribuidora_orders_incremental(strict_token=True)
+        if stats.get("skipped"):
+            logger.warning(
+                "distribuidora sync-orders background: omitido %s",
+                stats.get("skip_reason"),
+            )
+            return
+        if stats.get("omitido_concurrencia"):
+            logger.warning("distribuidora sync-orders background: omitido por lock")
+            return
+        try:
+            run_sync_distribuidora_related_background()
+        except Exception:
+            logger.exception("distribuidora sync-orders background: related falló")
+    except Exception:
+        logger.exception("distribuidora sync-orders background: error")
+    finally:
+        logger.info(
+            "distribuidora sync-orders background: fin duracion_s=%.3f",
+            time.perf_counter() - t0,
+        )
+
+
+def _run_distribuidora_sync_sales_task() -> None:
+    """Ejecutado vía ``BackgroundTasks`` (no bloquea HTTP)."""
+    t0 = time.perf_counter()
+    logger.info("distribuidora sync-sales background: inicio")
+    try:
+        stats = sync_bsale_distribuidora_sales_incremental(strict_token=True)
+        if stats.get("skipped"):
+            logger.warning(
+                "distribuidora sync-sales background: omitido %s",
+                stats.get("skip_reason"),
+            )
+            return
+        if stats.get("omitido_concurrencia"):
+            logger.warning("distribuidora sync-sales background: omitido por lock")
+            return
+        try:
+            run_sync_distribuidora_related_background()
+        except Exception:
+            logger.exception("distribuidora sync-sales background: related falló")
+    except Exception:
+        logger.exception("distribuidora sync-sales background: error")
+    finally:
+        logger.info(
+            "distribuidora sync-sales background: fin duracion_s=%.3f",
+            time.perf_counter() - t0,
+        )
 
 
 class ResyncOcStartBody(BaseModel):
@@ -104,56 +165,38 @@ def _preview_enriched_row(r: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-@router.post("/sync-orders")
-def post_distribuidora_sync_orders():
+@router.get("/sync-status")
+def get_distribuidora_sync_status():
     """
-    Sync incremental solo órdenes de compra Bsale (``document_type_id`` 33).
-    La visibilidad en pre‑despacho depende de ``document_related`` hacia boleta/factura (1, 6).
+    Último estado de sync tipado (``documents_orders``, ``documents_sales``) + métricas en
+    ``last_message`` (JSON) y ``sync_logs`` para ``running`` / ``error``.
+    """
+    return get_distribuidora_sync_status_payload()
+
+
+@router.post("/sync-orders")
+def post_distribuidora_sync_orders(background_tasks: BackgroundTasks):
+    """
+    Encola sync incremental de órdenes (tipo 33) + relaciones; **no bloquea** el HTTP (202).
+
+    El cliente debe hacer polling a ``GET /distribuidora/sync-status`` y recargar datos al avanzar
+    ``orders.last_run`` o ver ``orders.status``.
     """
     if not bsale_token_distribuidora_configured():
         raise HTTPException(status_code=503, detail="sin_token")
-    try:
-        stats = sync_bsale_distribuidora_orders_incremental(strict_token=True)
-    except ValueError as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
-    if stats.get("omitido_concurrencia"):
-        raise HTTPException(
-            status_code=409,
-            detail="Otro sync o resync tiene el lock; reintente en unos segundos.",
-        )
-    if stats.get("skipped"):
-        raise HTTPException(status_code=503, detail=stats.get("skip_reason") or "omitido")
-    try:
-        run_sync_distribuidora_related_background()
-    except Exception:
-        logger.exception("sync-orders: related sync falló (OC ya guardadas)")
-    return {"ok": True, "stats": stats}
+    background_tasks.add_task(_run_distribuidora_sync_orders_task)
+    return JSONResponse({"ok": True, "status": "queued"}, status_code=202)
 
 
 @router.post("/sync-sales")
-def post_distribuidora_sync_sales():
+def post_distribuidora_sync_sales(background_tasks: BackgroundTasks):
     """
-    Sync incremental boletas (1), facturas (6) y notas de crédito (9).
-    Tras guardar documentos, ejecuta sync de relaciones para no dejar OC desalineadas.
+    Encola sync incremental de ventas (1/6/9) + relaciones; **no bloquea** el HTTP (202).
     """
     if not bsale_token_distribuidora_configured():
         raise HTTPException(status_code=503, detail="sin_token")
-    try:
-        stats = sync_bsale_distribuidora_sales_incremental(strict_token=True)
-    except ValueError as e:
-        raise HTTPException(status_code=503, detail=str(e)) from e
-    if stats.get("omitido_concurrencia"):
-        raise HTTPException(
-            status_code=409,
-            detail="Otro sync o resync tiene el lock; reintente en unos segundos.",
-        )
-    if stats.get("skipped"):
-        raise HTTPException(status_code=503, detail=stats.get("skip_reason") or "omitido")
-    try:
-        run_sync_distribuidora_related_background()
-    except Exception:
-        logger.exception("sync-sales: related sync falló (ventas ya guardadas)")
-    return {"ok": True, "stats": stats}
+    background_tasks.add_task(_run_distribuidora_sync_sales_task)
+    return JSONResponse({"ok": True, "status": "queued"}, status_code=202)
 
 
 @router.get("/orders/purchase/by-document-ids")
@@ -236,12 +279,19 @@ def get_dispatch_prep_by_municipality(
         None,
         description="Opcional: lunes|martes|miercoles|jueves|viernes|sabado (coincidencia en observaciones).",
     ),
+    limit: int = Query(
+        250,
+        ge=1,
+        le=300,
+        description="Máximo de comunas (grupos) en la respuesta; reduce carga.",
+    ),
 ):
     rows = list_dispatch_prep_by_municipality(
         emission_date_from=emission_date_from,
         emission_date_to=emission_date_to,
         only_not_invoiced=only_not_invoiced,
         day_filter=day_filter,
+        limit=limit,
     )
     return {"items": rows}
 
@@ -254,7 +304,12 @@ def get_dispatch_prep_observaciones(
         True,
         description="Si true: solo textos de OC sin factura/boleta en document_related.",
     ),
-    limit: int = Query(2000, ge=1, le=5000),
+    limit: int = Query(
+        300,
+        ge=1,
+        le=300,
+        description="Máximo de textos devueltos (capado a 300 para aligerar el endpoint).",
+    ),
     day_filter: str | None = Query(
         None,
         description="Opcional: día de la semana (mismo criterio que by-municipality).",
@@ -279,16 +334,27 @@ def get_dispatch_prep_planning_rows(
         description="Si true: solo filas OC sin factura/boleta en document_related.",
     ),
     day_filter: str | None = Query(None),
-    limit: int = Query(5000, ge=1, le=5000),
+    limit: int = Query(
+        400,
+        ge=1,
+        le=1500,
+        description="Tamaño de página (máx. 1500).",
+    ),
+    offset: int = Query(
+        0,
+        ge=0,
+        le=500_000,
+        description="Desplazamiento para paginación.",
+    ),
 ):
-    rows = list_dispatch_prep_planning_rows(
+    return list_dispatch_prep_planning_rows(
         emission_date_from=emission_date_from,
         emission_date_to=emission_date_to,
         only_not_invoiced=only_not_invoiced,
         day_filter=day_filter,
         limit=limit,
+        offset=offset,
     )
-    return {"items": rows}
 
 
 @router.post("/resync-oc")

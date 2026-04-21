@@ -1,0 +1,16 @@
+# Coolify / Nginx — evitar 502/504 y "socket hang up" cuando el panel hace polling
+# o espera sync en background (el POST vuelve en <1s; GET sync-status suele ser rápido).
+#
+# Ajustar en el proxy delante de Uvicorn/Gunicorn, NO en el navegador.
+
+# proxy_read_timeout 300s;
+# proxy_send_timeout 300s;
+# proxy_connect_timeout 75s;
+
+# Ejemplo location para API:
+# location / {
+#   proxy_pass http://api_upstream;
+#   proxy_http_version 1.1;
+#   proxy_set_header Connection "";
+#   proxy_read_timeout 300s;
+# }

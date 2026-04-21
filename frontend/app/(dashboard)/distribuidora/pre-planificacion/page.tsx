@@ -8,9 +8,12 @@ import { Loader2, RefreshCw } from "lucide-react"
 import {
   distribuidoraTruckCapacityLabel,
   getDistribuidoraPlanificacionOrders,
+  getDistribuidoraSyncStatus,
   getDistribuidoraTrucks,
   postDistribuidoraSyncOrders,
+  waitDistribuidoraTypedSyncComplete,
   type DistribuidoraPlanificacionOrderRow,
+  type DistribuidoraSyncStatusResponse,
   type DistribuidoraTruck,
 } from "@/lib/api"
 import {
@@ -64,6 +67,19 @@ function formatCLP(n: number): string {
   })
 }
 
+function syncStatusEmoji(st: string | undefined): string {
+  if (st === "running") return "🟡"
+  if (st === "error") return "🔴"
+  return "🟢"
+}
+
+function formatSyncLastRun(iso: string | null | undefined): string {
+  if (!iso) return "—"
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleString("es-CL", { dateStyle: "short", timeStyle: "short" })
+}
+
 const TRUCK_UNSET = "__unset__"
 
 export default function PrePlanificacionDespachoPage() {
@@ -78,6 +94,8 @@ export default function PrePlanificacionDespachoPage() {
   const [lastOrdersLoadAt, setLastOrdersLoadAt] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<string | null>(null)
+  const [syncStatus, setSyncStatus] = useState<DistribuidoraSyncStatusResponse | null>(null)
+  const [syncStatusError, setSyncStatusError] = useState<string | null>(null)
 
   const [selected, setSelected] = useState<Set<number>>(() => new Set())
   const [truckIdByDoc, setTruckIdByDoc] = useState<Record<number, number | null>>({})
@@ -140,30 +158,62 @@ export default function PrePlanificacionDespachoPage() {
     return () => ac.abort()
   }, [loadPlanificacionRows])
 
+  const loadSyncStatus = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const s = await getDistribuidoraSyncStatus({ signal })
+      setSyncStatus(s)
+      setSyncStatusError(null)
+    } catch (e: unknown) {
+      if (e instanceof Error && e.name === "AbortError") return
+      setSyncStatus(null)
+      setSyncStatusError(e instanceof Error ? e.message : "No se pudo leer el estado de sync.")
+    }
+  }, [])
+
+  useEffect(() => {
+    const ac = new AbortController()
+    void loadSyncStatus(ac.signal)
+    const id = window.setInterval(() => {
+      void loadSyncStatus()
+    }, 30_000)
+    return () => {
+      ac.abort()
+      window.clearInterval(id)
+    }
+  }, [loadSyncStatus])
+
   const onSyncOrdersFromBsale = useCallback(async () => {
     const ac = new AbortController()
     setLoadingSync(true)
     setFeedback(null)
+    let baseline: string | null = null
     try {
+      try {
+        const st0 = await getDistribuidoraSyncStatus({ signal: ac.signal })
+        baseline = st0.orders.last_run ?? null
+      } catch {
+        baseline = null
+      }
       const r = await postDistribuidoraSyncOrders({ signal: ac.signal })
       if (!r.ok) {
-        setFeedback(r.error ?? "No se pudo sincronizar órdenes.")
+        setFeedback(r.error ?? "No se pudo encolar sync de órdenes.")
         return
       }
+      await waitDistribuidoraTypedSyncComplete({
+        branch: "orders",
+        baselineLastRun: baseline,
+        signal: ac.signal,
+      })
       await loadPlanificacionRows(ac.signal)
-      const proc = r.stats?.documents_processed
-      setFeedback(
-        typeof proc === "number"
-          ? `Órdenes sincronizadas (${proc} documentos). Tabla actualizada.`
-          : "Órdenes sincronizadas. Tabla actualizada.",
-      )
+      await loadSyncStatus(ac.signal)
+      setFeedback("Órdenes sincronizadas. Tabla actualizada.")
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") return
       setFeedback(e instanceof Error ? e.message : "Error al sincronizar.")
     } finally {
       setLoadingSync(false)
     }
-  }, [loadPlanificacionRows])
+  }, [loadPlanificacionRows, loadSyncStatus])
 
   const toggle = useCallback((id: number, checked: boolean, canSelect: boolean) => {
     if (!canSelect) return
@@ -283,6 +333,45 @@ export default function PrePlanificacionDespachoPage() {
           <AlertTitle>{feedback.startsWith("Órdenes") ? "Listo" : "No se puede continuar"}</AlertTitle>
           <AlertDescription>{feedback}</AlertDescription>
         </Alert>
+      ) : null}
+
+      {syncStatusError ? (
+        <p className="text-xs text-amber-700 dark:text-amber-400">{syncStatusError}</p>
+      ) : null}
+      {syncStatus ? (
+        <div className="rounded-lg border border-border/70 bg-muted/30 px-4 py-3 text-sm">
+          <p className="font-medium text-foreground">
+            {syncStatusEmoji(syncStatus.orders.status)} Sync órdenes (Bsale tipo 33)
+            {syncStatus.orders.status === "running"
+              ? " — ejecutando"
+              : syncStatus.orders.status === "error"
+                ? " — error"
+                : " — OK"}
+            {syncStatus.sync_lock_active ? " · lock activo" : ""}
+          </p>
+          <ul className="mt-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+            <li>
+              Última actualización:{" "}
+              <span className="text-foreground">{formatSyncLastRun(syncStatus.orders.last_run)}</span>
+            </li>
+            <li>
+              Procesados (último ciclo):{" "}
+              <span className="tabular-nums text-foreground">{syncStatus.orders.processed}</span>
+            </li>
+            <li>
+              OC visibles (ventana último sync):{" "}
+              <span className="tabular-nums text-foreground">{syncStatus.orders.visibles ?? 0}</span>
+            </li>
+            <li>
+              OC ocultas (con boleta/factura):{" "}
+              <span className="tabular-nums text-foreground">{syncStatus.orders.ocultas ?? 0}</span>
+            </li>
+          </ul>
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            Estado vía servidor cada 30 s. Las cantidades reflejan la ventana de emisión del último sync
+            incremental.
+          </p>
+        </div>
       ) : null}
 
       <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">

@@ -333,6 +333,7 @@ def list_dispatch_prep_by_municipality(
     emission_date_to: date,
     only_not_invoiced: bool = True,
     day_filter: str | None = None,
+    limit: int = 250,
 ) -> list[dict[str, Any]]:
     """
     Resumen por comuna para pre‑planificación de despacho (órdenes de compra Bsale tipo 33).
@@ -342,6 +343,7 @@ def list_dispatch_prep_by_municipality(
     """
     d0, d1 = _normalize_date_range(emission_date_from, emission_date_to)
     skip_day, day_like = _day_filter_sql_params(day_filter)
+    lim = max(1, min(int(limit), 300))
     conn = get_connection()
     try:
         cur = conn.cursor()
@@ -366,8 +368,9 @@ def list_dispatch_prep_by_municipality(
               AND CASE WHEN %s THEN TRUE ELSE {_OBS_NORMALIZED_D} LIKE %s END
             GROUP BY 1
             ORDER BY total_ventas DESC NULLS LAST, municipality ASC
+            LIMIT %s
             """,
-            (d0, d1, only_not_invoiced, skip_day, day_like),
+            (d0, d1, only_not_invoiced, skip_day, day_like, lim),
         )
         rows = [_serialize_row(_row_to_dict(cur, r)) for r in cur.fetchall()]
         cur.close()
@@ -381,12 +384,12 @@ def list_dispatch_prep_observation_texts(
     emission_date_from: date,
     emission_date_to: date,
     only_not_invoiced: bool = True,
-    limit: int = 2000,
+    limit: int = 300,
     day_filter: str | None = None,
 ) -> list[str]:
     """Textos de observaciones (atributo OBSERVACIONES en OC) para análisis en frontend."""
     d0, d1 = _normalize_date_range(emission_date_from, emission_date_to)
-    lim = max(1, min(int(limit), 5000))
+    lim = max(1, min(int(limit), 300))
     skip_day, day_like = _day_filter_sql_params(day_filter)
     conn = get_connection()
     try:
@@ -425,16 +428,20 @@ def list_dispatch_prep_planning_rows(
     emission_date_to: date,
     only_not_invoiced: bool = True,
     day_filter: str | None = None,
-    limit: int = 5000,
-) -> list[dict[str, Any]]:
+    limit: int = 400,
+    offset: int = 0,
+) -> dict[str, Any]:
     """
     Filas OC (33) para tabla de pre‑planificación: join ``bsale.clients`` (no existe ``clientes``).
 
     Observaciones: mismo criterio que el resumen por comuna (atributo + ``comments`` en JSON).
+    Paginación: ``limit`` + ``offset``; se pide ``limit + 1`` filas para inferir ``has_more``.
     """
     d0, d1 = _normalize_date_range(emission_date_from, emission_date_to)
     skip_day, day_like = _day_filter_sql_params(day_filter)
-    lim = max(1, min(int(limit), 5000))
+    lim = max(1, min(int(limit), 1500))
+    off = max(0, int(offset))
+    fetch = lim + 1
     conn = get_connection()
     try:
         cur = conn.cursor()
@@ -471,12 +478,20 @@ def list_dispatch_prep_planning_rows(
               AND (%s = FALSE OR {OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL})
               AND CASE WHEN %s THEN TRUE ELSE {_OBS_NORMALIZED_D} LIKE %s END
             ORDER BY d.number DESC NULLS LAST, d.document_id DESC
-            LIMIT %s
+            LIMIT %s OFFSET %s
             """,
-            (d0, d1, only_not_invoiced, skip_day, day_like, lim),
+            (d0, d1, only_not_invoiced, skip_day, day_like, fetch, off),
         )
-        rows = [_serialize_row(_row_to_dict(cur, r)) for r in cur.fetchall()]
+        raw = cur.fetchall() or []
+        has_more = len(raw) > lim
+        slice_rows = raw[:lim]
+        rows = [_serialize_row(_row_to_dict(cur, r)) for r in slice_rows]
         cur.close()
-        return rows
+        return {
+            "items": rows,
+            "has_more": has_more,
+            "limit": lim,
+            "offset": off,
+        }
     finally:
         conn.close()

@@ -9,10 +9,13 @@ import {
   getDistribuidoraDispatchPrepByMunicipality,
   getDistribuidoraDispatchPrepObservaciones,
   getDistribuidoraDispatchPrepPlanningRows,
+  getDistribuidoraSyncStatus,
   getDistribuidoraTrucks,
   postDistribuidoraSyncOrders,
+  waitDistribuidoraTypedSyncComplete,
   type DistribuidoraDispatchPrepMunicipalityRow,
   type DistribuidoraDispatchPrepPlanningRow,
+  type DistribuidoraSyncStatusResponse,
   type DistribuidoraTruck,
 } from "@/lib/api"
 import {
@@ -103,6 +106,19 @@ const clp = new Intl.NumberFormat("es-CL", {
 
 function formatClp(n: number): string {
   return clp.format(Number.isFinite(n) ? n : 0)
+}
+
+function syncStatusEmoji(st: string | undefined): string {
+  if (st === "running") return "🟡"
+  if (st === "error") return "🔴"
+  return "🟢"
+}
+
+function formatSyncLastRun(iso: string | null | undefined): string {
+  if (!iso) return "—"
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleString("es-CL", { dateStyle: "short", timeStyle: "short" })
 }
 
 /** Valor sentinela en `<select>` nativo para “sin camión”. */
@@ -327,6 +343,8 @@ export default function DistribuidoraOrdersPage() {
   const [loadingSync, setLoadingSync] = useState(false)
   const [lastOrdersLoadAt, setLastOrdersLoadAt] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [syncStatus, setSyncStatus] = useState<DistribuidoraSyncStatusResponse | null>(null)
+  const [syncStatusError, setSyncStatusError] = useState<string | null>(null)
   const [trucks, setTrucks] = useState<DistribuidoraTruck[]>([])
   const [trucksError, setTrucksError] = useState<string | null>(null)
   const [planificacionFeedback, setPlanificacionFeedback] = useState<string | null>(null)
@@ -414,8 +432,11 @@ export default function DistribuidoraOrdersPage() {
         ])
         setRows(byMuni.items)
         setObservationTexts(obs.items)
-        setPlanningRows(plan.items)
-        console.log("📋 Órdenes cargadas:", plan.items.length)
+        setPlanningRows(plan.items ?? [])
+        if (plan.has_more) {
+          console.warn("Pre-planificación: hay más filas; paginación offset no implementada en UI.")
+        }
+        console.log("📋 Órdenes cargadas:", plan.items?.length ?? 0)
         setLastOrdersLoadAt(
           new Date().toLocaleString("es-CL", {
             dateStyle: "short",
@@ -442,27 +463,60 @@ export default function DistribuidoraOrdersPage() {
     return () => ac.abort()
   }, [loadDispatchPrep])
 
+  const loadSyncStatus = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const s = await getDistribuidoraSyncStatus({ signal })
+      setSyncStatus(s)
+      setSyncStatusError(null)
+    } catch (e: unknown) {
+      if (e instanceof Error && e.name === "AbortError") return
+      setSyncStatus(null)
+      setSyncStatusError(e instanceof Error ? e.message : "No se pudo leer el estado de sync.")
+    }
+  }, [])
+
+  useEffect(() => {
+    const ac = new AbortController()
+    void loadSyncStatus(ac.signal)
+    const id = window.setInterval(() => {
+      void loadSyncStatus()
+    }, 30_000)
+    return () => {
+      ac.abort()
+      window.clearInterval(id)
+    }
+  }, [loadSyncStatus])
+
   const onSyncOrdersFromBsale = useCallback(async () => {
     const ac = new AbortController()
     setLoadingSync(true)
+    let baseline: string | null = null
     try {
+      try {
+        const st0 = await getDistribuidoraSyncStatus({ signal: ac.signal })
+        baseline = st0.orders.last_run ?? null
+      } catch {
+        baseline = null
+      }
       const r = await postDistribuidoraSyncOrders({ signal: ac.signal })
       if (!r.ok) {
         toast({
-          title: "No se pudo sincronizar",
+          title: "No se pudo encolar sync",
           description: r.error ?? "Error desconocido",
           variant: "destructive",
         })
         return
       }
+      await waitDistribuidoraTypedSyncComplete({
+        branch: "orders",
+        baselineLastRun: baseline,
+        signal: ac.signal,
+      })
       await loadDispatchPrep(ac.signal)
-      const proc = r.stats?.documents_processed
+      await loadSyncStatus(ac.signal)
       toast({
         title: "Órdenes actualizadas",
-        description:
-          typeof proc === "number"
-            ? `Documentos procesados: ${proc}. Resumen y tabla recargados.`
-            : "Resumen por comuna, observaciones y pre‑planificación recargados.",
+        description: "Sync en servidor completado. Resumen, observaciones y tabla recargados.",
       })
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") return
@@ -474,7 +528,7 @@ export default function DistribuidoraOrdersPage() {
     } finally {
       setLoadingSync(false)
     }
-  }, [loadDispatchPrep])
+  }, [loadDispatchPrep, loadSyncStatus])
 
   const tagStats = useMemo(
     () => aggregateObservationTags(observationTexts),
@@ -791,6 +845,44 @@ export default function DistribuidoraOrdersPage() {
           <AlertTitle>Error</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
+      ) : null}
+
+      {syncStatusError ? (
+        <p className="text-xs text-amber-700 dark:text-amber-400">{syncStatusError}</p>
+      ) : null}
+      {syncStatus ? (
+        <div className="rounded-lg border border-border/70 bg-muted/30 px-4 py-3 text-sm">
+          <p className="font-medium text-foreground">
+            {syncStatusEmoji(syncStatus.orders.status)} Sync órdenes (Bsale tipo 33)
+            {syncStatus.orders.status === "running"
+              ? " — ejecutando"
+              : syncStatus.orders.status === "error"
+                ? " — error"
+                : " — OK"}
+            {syncStatus.sync_lock_active ? " · lock activo" : ""}
+          </p>
+          <ul className="mt-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+            <li>
+              Última actualización:{" "}
+              <span className="text-foreground">{formatSyncLastRun(syncStatus.orders.last_run)}</span>
+            </li>
+            <li>
+              Procesados (último ciclo):{" "}
+              <span className="tabular-nums text-foreground">{syncStatus.orders.processed}</span>
+            </li>
+            <li>
+              OC visibles (ventana último sync):{" "}
+              <span className="tabular-nums text-foreground">{syncStatus.orders.visibles ?? 0}</span>
+            </li>
+            <li>
+              OC ocultas (con boleta/factura):{" "}
+              <span className="tabular-nums text-foreground">{syncStatus.orders.ocultas ?? 0}</span>
+            </li>
+          </ul>
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            Actualización automática del estado cada 30 s.
+          </p>
+        </div>
       ) : null}
 
       <section className="rounded-2xl border border-border/60 bg-card/40 p-6 shadow-sm backdrop-blur-sm">

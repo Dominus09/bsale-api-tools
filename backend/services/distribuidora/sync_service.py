@@ -183,7 +183,7 @@ def _log_orders_sync_summary(
     stats: dict[str, Any],
     desde_ts: int,
     hasta_ts: int,
-) -> None:
+) -> dict[str, Any]:
     """Post-sync: OC en ventana según ``v_documents_latest`` y relación hacia boleta/factura (1, 6)."""
     cur.execute(
         """
@@ -240,6 +240,14 @@ def _log_orders_sync_summary(
         visible,
         with_inv,
     )
+    return {
+        "processed": proc,
+        "visibles": visible,
+        "ocultas": with_inv,
+        "total_oc": total_oc,
+        "emission_window_from": emission_from.astimezone(timezone.utc).isoformat(),
+        "emission_window_to": emission_to.astimezone(timezone.utc).isoformat(),
+    }
 
 
 def _log_sales_sync_summary(
@@ -250,7 +258,7 @@ def _log_sales_sync_summary(
     stats: dict[str, Any],
     desde_ts: int,
     hasta_ts: int,
-) -> None:
+) -> dict[str, Any]:
     cur.execute(
         """
         SELECT
@@ -322,6 +330,17 @@ def _log_sales_sync_summary(
         round(ticket, 2),
         cnt_real,
     )
+    return {
+        "processed": proc,
+        "boletas": n_b,
+        "facturas": n_f,
+        "nc": n_nc,
+        "monto_neto": float(m_neto),
+        "ticket_promedio_ventas_reales": round(ticket, 2),
+        "ventas_reales_count": cnt_real,
+        "emission_window_from": emission_from.astimezone(timezone.utc).isoformat(),
+        "emission_window_to": emission_to.astimezone(timezone.utc).isoformat(),
+    }
 
 
 def _append_items_from_bsale_response(
@@ -822,8 +841,9 @@ def sync_bsale_distribuidora_incremental(
 
         stats.pop("_allowed_document_type_ids", None)
 
+        snapshot_msg: str | None = None
         if process_name == PROCESS_ORDERS:
-            _log_orders_sync_summary(
+            snap = _log_orders_sync_summary(
                 cur,
                 emission_from=desde,
                 emission_to=now,
@@ -831,8 +851,9 @@ def sync_bsale_distribuidora_incremental(
                 desde_ts=desde_ts,
                 hasta_ts=hasta_ts,
             )
+            snapshot_msg = json.dumps({**snap, "kind": "orders"}, ensure_ascii=False)
         elif process_name == PROCESS_SALES:
-            _log_sales_sync_summary(
+            snap = _log_sales_sync_summary(
                 cur,
                 emission_from=desde,
                 emission_to=now,
@@ -840,6 +861,7 @@ def sync_bsale_distribuidora_incremental(
                 desde_ts=desde_ts,
                 hasta_ts=hasta_ts,
             )
+            snapshot_msg = json.dumps({**snap, "kind": "sales"}, ensure_ascii=False)
 
         proc_count = int(stats.get("documents_processed", 0))
         insert_sync_status_row(
@@ -873,7 +895,9 @@ def sync_bsale_distribuidora_incremental(
             process_name=process_name,
             last_sync=now,
             last_status="ok",
-            last_message=f"processed={stats['documents_processed']}",
+            last_message=snapshot_msg
+            if snapshot_msg is not None
+            else f"processed={stats['documents_processed']}",
         )
         conn.commit()
         cur.close()
@@ -912,6 +936,16 @@ def sync_bsale_distribuidora_incremental(
             c2 = conn.cursor()
             if log_id is not None:
                 finish_sync_log(c2, log_id, status="error", stats=stats, message=str(e))
+            if process_name in (PROCESS_ORDERS, PROCESS_SALES):
+                set_sync_state(
+                    c2,
+                    process_name=process_name,
+                    last_status="error",
+                    last_message=json.dumps(
+                        {"error": str(e)[:2000], "kind": process_name},
+                        ensure_ascii=False,
+                    ),
+                )
             conn.commit()
             c2.close()
         except Exception:

@@ -17,8 +17,11 @@ import { AlertCircle, Loader2, Users, Wallet } from "lucide-react"
 
 import {
   getDistribuidoraClientsDashboard,
+  getDistribuidoraSyncStatus,
   postDistribuidoraSyncSales,
+  waitDistribuidoraTypedSyncComplete,
   type DistribuidoraClientsDashboardResponse,
+  type DistribuidoraSyncStatusResponse,
 } from "@/lib/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -55,9 +58,17 @@ function formatDateTime(iso: string | null | undefined): string {
   return d.toLocaleString("es-CL", { dateStyle: "short", timeStyle: "short" })
 }
 
+function syncStatusEmoji(st: string | undefined): string {
+  if (st === "running") return "🟡"
+  if (st === "error") return "🔴"
+  return "🟢"
+}
+
 export default function DistribuidoraCommercialDashboardPage() {
   const [loading, setLoading] = useState(true)
   const [syncingSales, setSyncingSales] = useState(false)
+  const [syncStatus, setSyncStatus] = useState<DistribuidoraSyncStatusResponse | null>(null)
+  const [syncStatusError, setSyncStatusError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [data, setData] = useState<DistribuidoraClientsDashboardResponse | null>(null)
 
@@ -78,22 +89,58 @@ export default function DistribuidoraCommercialDashboardPage() {
     }
   }, [])
 
+  const loadSyncStatus = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const s = await getDistribuidoraSyncStatus({ signal })
+      setSyncStatus(s)
+      setSyncStatusError(null)
+    } catch (e: unknown) {
+      if (e instanceof Error && e.name === "AbortError") return
+      setSyncStatus(null)
+      setSyncStatusError(e instanceof Error ? e.message : "No se pudo leer el estado de sync.")
+    }
+  }, [])
+
+  useEffect(() => {
+    const ac = new AbortController()
+    void loadSyncStatus(ac.signal)
+    const id = window.setInterval(() => {
+      void loadSyncStatus()
+    }, 30_000)
+    return () => {
+      ac.abort()
+      window.clearInterval(id)
+    }
+  }, [loadSyncStatus])
+
   const onSyncSalesFromBsale = useCallback(async () => {
     setSyncingSales(true)
     setError(null)
+    let baseline: string | null = null
     try {
+      try {
+        const st0 = await getDistribuidoraSyncStatus()
+        baseline = st0.sales.last_run ?? null
+      } catch {
+        baseline = null
+      }
       const r = await postDistribuidoraSyncSales()
       if (!r.ok) {
-        setError(r.error ?? "No se pudo sincronizar ventas desde Bsale.")
+        setError(r.error ?? "No se pudo encolar sync de ventas.")
         return
       }
+      await waitDistribuidoraTypedSyncComplete({
+        branch: "sales",
+        baselineLastRun: baseline,
+      })
       await load()
+      await loadSyncStatus()
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Error al sincronizar ventas.")
     } finally {
       setSyncingSales(false)
     }
-  }, [load])
+  }, [load, loadSyncStatus])
 
   useEffect(() => {
     void load()
@@ -160,6 +207,55 @@ export default function DistribuidoraCommercialDashboardPage() {
           </Button>
         </div>
       </div>
+
+      {syncStatusError ? (
+        <p className="text-xs text-amber-700 dark:text-amber-400">{syncStatusError}</p>
+      ) : null}
+      {syncStatus ? (
+        <div className="rounded-lg border border-border/70 bg-muted/30 px-4 py-3 text-sm">
+          <p className="font-medium text-foreground">
+            {syncStatusEmoji(syncStatus.sales.status)} Sync ventas (tipos 1 / 6 / 9)
+            {syncStatus.sales.status === "running"
+              ? " — ejecutando"
+              : syncStatus.sales.status === "error"
+                ? " — error"
+                : " — OK"}
+            {syncStatus.sync_lock_active ? " · lock activo" : ""}
+          </p>
+          <ul className="mt-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2 lg:grid-cols-3">
+            <li>
+              Última actualización:{" "}
+              <span className="text-foreground">{formatDateTime(syncStatus.sales.last_run)}</span>
+            </li>
+            <li>
+              Boletas (ventana último sync):{" "}
+              <span className="tabular-nums text-foreground">{syncStatus.sales.boletas ?? 0}</span>
+            </li>
+            <li>
+              Facturas:{" "}
+              <span className="tabular-nums text-foreground">{syncStatus.sales.facturas ?? 0}</span>
+            </li>
+            <li>
+              Notas de crédito:{" "}
+              <span className="tabular-nums text-foreground">{syncStatus.sales.nc ?? 0}</span>
+            </li>
+            <li className="sm:col-span-2 lg:col-span-2">
+              Monto neto (1+6−9 en ventana):{" "}
+              <span className="tabular-nums text-foreground">
+                {formatCLP(Number(syncStatus.sales.monto_neto ?? 0))}
+              </span>
+            </li>
+            <li>
+              Docs procesados (ciclo):{" "}
+              <span className="tabular-nums text-foreground">{syncStatus.sales.processed}</span>
+            </li>
+          </ul>
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            Estado del servidor cada 30 s; conteos y monto corresponden a la ventana de emisión del último sync
+            incremental de ventas.
+          </p>
+        </div>
+      ) : null}
 
       {error ? (
         <Alert variant="destructive">

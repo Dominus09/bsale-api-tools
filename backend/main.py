@@ -8,6 +8,7 @@ from fastapi import FastAPI
 logger = logging.getLogger(__name__)
 
 from backend.cors_middleware import QuillotanaCorsMiddleware
+from backend.middleware.distribuidora_request_log import DistribuidoraRequestLogMiddleware
 from backend.routers import auth
 from backend.routers import orders
 from backend.routers.catalog import router as catalog_router
@@ -135,6 +136,8 @@ app.add_middleware(
     allow_origins=_cors_allow_origins(),
     allow_origin_regex=_cors_allow_origin_regex(),
 )
+# Log de duración en ``/distribuidora`` (añadido después de CORS → capa exterior).
+app.add_middleware(DistribuidoraRequestLogMiddleware)
 
 # --- Auth (login staff + login-client) ---
 app.include_router(auth.router)

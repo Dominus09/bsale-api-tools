@@ -903,6 +903,8 @@ export async function getDistribuidoraDispatchPrepByMunicipality(params: {
   emission_date_to: string
   only_not_invoiced?: boolean
   day_filter?: string | null
+  /** Máximo de comunas (grupos); default 250, máx. 300 en API. */
+  limit?: number
   signal?: AbortSignal
 }): Promise<DistribuidoraDispatchPrepByMunicipalityResponse> {
   const qs = new URLSearchParams()
@@ -910,6 +912,7 @@ export async function getDistribuidoraDispatchPrepByMunicipality(params: {
   qs.set("emission_date_to", params.emission_date_to)
   if (params.only_not_invoiced === false) qs.set("only_not_invoiced", "false")
   if (params.day_filter?.trim()) qs.set("day_filter", params.day_filter.trim())
+  if (params.limit != null) qs.set("limit", String(params.limit))
   const res = await fetch(
     `${API_URL}/distribuidora/orders/dispatch-prep/by-municipality?${qs}`,
     { headers: getAuthHeaders(), signal: params.signal },
@@ -930,6 +933,8 @@ export async function getDistribuidoraDispatchPrepObservaciones(params: {
   emission_date_to: string
   only_not_invoiced?: boolean
   day_filter?: string | null
+  /** Máximo 300 (default API). */
+  limit?: number
   signal?: AbortSignal
 }): Promise<DistribuidoraDispatchPrepObservacionesResponse> {
   const qs = new URLSearchParams()
@@ -937,7 +942,7 @@ export async function getDistribuidoraDispatchPrepObservaciones(params: {
   qs.set("emission_date_to", params.emission_date_to)
   if (params.only_not_invoiced === false) qs.set("only_not_invoiced", "false")
   if (params.day_filter?.trim()) qs.set("day_filter", params.day_filter.trim())
-  qs.set("limit", "2000")
+  qs.set("limit", String(params.limit ?? 300))
   const res = await fetch(
     `${API_URL}/distribuidora/orders/dispatch-prep/observaciones?${qs}`,
     { headers: getAuthHeaders(), signal: params.signal },
@@ -964,18 +969,29 @@ export type DistribuidoraDispatchPrepPlanningRow = {
   estado_real?: string | null
 }
 
+export type DistribuidoraDispatchPrepPlanningRowsResponse = {
+  items: DistribuidoraDispatchPrepPlanningRow[]
+  has_more: boolean
+  limit: number
+  offset: number
+}
+
 export async function getDistribuidoraDispatchPrepPlanningRows(params: {
   emission_date_from: string
   emission_date_to: string
   only_not_invoiced?: boolean
   day_filter?: string | null
+  limit?: number
+  offset?: number
   signal?: AbortSignal
-}): Promise<{ items: DistribuidoraDispatchPrepPlanningRow[] }> {
+}): Promise<DistribuidoraDispatchPrepPlanningRowsResponse> {
   const qs = new URLSearchParams()
   qs.set("emission_date_from", params.emission_date_from)
   qs.set("emission_date_to", params.emission_date_to)
   if (params.only_not_invoiced === false) qs.set("only_not_invoiced", "false")
   if (params.day_filter?.trim()) qs.set("day_filter", params.day_filter.trim())
+  if (params.limit != null) qs.set("limit", String(params.limit))
+  if (params.offset != null) qs.set("offset", String(params.offset))
   const res = await fetch(
     `${API_URL}/distribuidora/orders/dispatch-prep/planning-rows?${qs}`,
     { headers: getAuthHeaders(), signal: params.signal },
@@ -984,7 +1000,7 @@ export async function getDistribuidoraDispatchPrepPlanningRows(params: {
     const msg = await res.text().catch(() => "")
     throw new Error(msg || "Error al cargar pre-planificación")
   }
-  return res.json() as Promise<{ items: DistribuidoraDispatchPrepPlanningRow[] }>
+  return res.json() as Promise<DistribuidoraDispatchPrepPlanningRowsResponse>
 }
 
 export type DistribuidoraTruck = {
@@ -1014,9 +1030,10 @@ export async function getDistribuidoraTrucks(params?: {
   return res.json() as Promise<{ items: DistribuidoraTruck[] }>
 }
 
-/** POST /distribuidora/sync-orders | /distribuidora/sync-sales (respuesta al terminar el sync). */
+/** POST /distribuidora/sync-orders | /distribuidora/sync-sales (202 ``queued`` o error). */
 export type DistribuidoraTypedSyncResponse = {
   ok: boolean
+  status?: string
   stats?: Record<string, unknown>
   error?: string
 }
@@ -1053,7 +1070,46 @@ export async function postDistribuidoraSyncOrders(params?: {
       error: _detailFromBody(data) ?? `HTTP ${res.status}`,
     }
   }
-  return { ok: true, stats: data.stats as Record<string, unknown> | undefined }
+  const st = typeof data.status === "string" ? data.status : undefined
+  return {
+    ok: true,
+    status: st ?? (res.status === 202 ? "queued" : undefined),
+    stats: data.stats as Record<string, unknown> | undefined,
+  }
+}
+
+/** GET /distribuidora/sync-status — estado ``sync_state`` + último ``sync_logs`` por proceso. */
+export type DistribuidoraSyncStatusBranch = {
+  last_run: string | null
+  processed: number
+  visibles?: number
+  ocultas?: number
+  boletas?: number
+  facturas?: number
+  nc?: number
+  monto_neto?: number
+  status: "ok" | "running" | "error"
+}
+
+export type DistribuidoraSyncStatusResponse = {
+  orders: DistribuidoraSyncStatusBranch
+  sales: DistribuidoraSyncStatusBranch
+  sync_lock_active: boolean
+}
+
+export async function getDistribuidoraSyncStatus(params?: {
+  signal?: AbortSignal
+}): Promise<DistribuidoraSyncStatusResponse> {
+  const res = await fetch(`${API_URL}/distribuidora/sync-status`, {
+    method: "GET",
+    headers: getAuthHeaders(),
+    signal: params?.signal,
+  })
+  if (!res.ok) {
+    const t = await res.text().catch(() => "")
+    throw new Error(t || `HTTP ${res.status}`)
+  }
+  return res.json() as Promise<DistribuidoraSyncStatusResponse>
 }
 
 export async function postDistribuidoraSyncSales(params?: {
@@ -1074,7 +1130,63 @@ export async function postDistribuidoraSyncSales(params?: {
       error: _detailFromBody(data) ?? `HTTP ${res.status}`,
     }
   }
-  return { ok: true, stats: data.stats as Record<string, unknown> | undefined }
+  const st = typeof data.status === "string" ? data.status : undefined
+  return {
+    ok: true,
+    status: st ?? (res.status === 202 ? "queued" : undefined),
+    stats: data.stats as Record<string, unknown> | undefined,
+  }
+}
+
+function sleepMs(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => resolve(), ms)
+    if (!signal) return
+    const onAbort = () => {
+      clearTimeout(t)
+      reject(new DOMException("Aborted", "AbortError"))
+    }
+    if (signal.aborted) {
+      clearTimeout(t)
+      onAbort()
+      return
+    }
+    signal.addEventListener("abort", onAbort, { once: true })
+  })
+}
+
+/**
+ * Tras un POST sync en background, espera a que ``sync-status`` refleje un nuevo ``last_run``
+ * o estado error (polling).
+ */
+export async function waitDistribuidoraTypedSyncComplete(opts: {
+  branch: "orders" | "sales"
+  baselineLastRun: string | null
+  timeoutMs?: number
+  pollMs?: number
+  signal?: AbortSignal
+}): Promise<DistribuidoraSyncStatusResponse> {
+  const { branch, baselineLastRun, timeoutMs = 180_000, pollMs = 2500, signal } = opts
+  const deadline = Date.now() + timeoutMs
+  const label = branch === "orders" ? "órdenes" : "ventas"
+  while (Date.now() < deadline) {
+    const s = await getDistribuidoraSyncStatus({ signal })
+    const b = branch === "orders" ? s.orders : s.sales
+    if (b.status === "error") {
+      throw new Error(`El sync de ${label} terminó con error.`)
+    }
+    if (b.status === "running") {
+      await sleepMs(pollMs, signal)
+      continue
+    }
+    if ((b.last_run ?? null) !== (baselineLastRun ?? null)) {
+      return s
+    }
+    await sleepMs(pollMs, signal)
+  }
+  throw new Error(
+    `Tiempo de espera (${Math.round(timeoutMs / 1000)} s) esperando el sync de ${label}.`,
+  )
 }
 
 /** Respuesta inmediata al encolar resync OC (el trabajo corre en background). */
