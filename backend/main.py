@@ -24,6 +24,7 @@ from backend.routers import distribuidora_planning
 from backend.routers import distribuidora_route_picking
 from backend.routers import distribuidora_route_planning
 from backend.routers import distribuidora_sync
+from backend.routers import distribuidora_trucks
 from backend.routers.app_distribuidora import router as app_distribuidora_router
 from backend.routers import margin_export
 from backend.routers import margin_problems
@@ -167,6 +168,7 @@ app.include_router(distribuidora_planning.router)
 app.include_router(distribuidora_clients.router)
 app.include_router(distribuidora_route_planning.router)
 app.include_router(distribuidora_route_picking.router)
+app.include_router(distribuidora_trucks.router)
 
 # --- App móvil / rutas del día (bsale.rutas_dia + visitas, sync offline) ---
 app.include_router(app_distribuidora_router, prefix="/app_distribuidora")

@@ -5,6 +5,9 @@ export type PlanificacionStoredOrder = {
   client_id?: number | null
   lat: number
   lng: number
+  /** Id de ``distribuidora.trucks`` (pre-despacho). */
+  truck_id: number
+  /** Etiqueta para agrupar rutas (p. ej. ``Hino 3 (5600 kg)``). */
   camion: string
   oc?: number | null
   nombre_fantasia?: string | null

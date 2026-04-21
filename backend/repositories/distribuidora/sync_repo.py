@@ -41,6 +41,7 @@ def ensure_distribuidora_schema(cur) -> None:
         "009_v_sales_with_credit_notes.sql",
         "010_document_sellers.sql",
         "011_v_sales_document_sellers.sql",
+        "012_trucks.sql",
     ):
         _run_sql_file(cur, fn)
 

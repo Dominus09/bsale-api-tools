@@ -1,4 +1,4 @@
-"""Pre‑planificación y cálculo de rutas ORS para despacho (documentos 1/6)."""
+"""Pre‑planificación (OC tipo 33) y cálculo de rutas ORS para despacho."""
 
 from __future__ import annotations
 

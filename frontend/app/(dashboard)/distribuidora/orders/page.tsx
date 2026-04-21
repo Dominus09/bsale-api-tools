@@ -1,14 +1,18 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { useRouter } from "next/navigation"
 import { Loader2, MapPin, Package, Truck } from "lucide-react"
 
 import {
+  distribuidoraTruckCapacityLabel,
   getDistribuidoraDispatchPrepByMunicipality,
   getDistribuidoraDispatchPrepObservaciones,
   getDistribuidoraDispatchPrepPlanningRows,
+  getDistribuidoraTrucks,
   type DistribuidoraDispatchPrepMunicipalityRow,
   type DistribuidoraDispatchPrepPlanningRow,
+  type DistribuidoraTruck,
 } from "@/lib/api"
 import {
   aggregateObservationTags,
@@ -51,8 +55,10 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { cn } from "@/lib/utils"
-
-const TRUCKS = ["Camión 1", "Camión 2", "Camión 3"] as const
+import {
+  writePlanificacionPayload,
+  type PlanificacionStoredOrder,
+} from "@/lib/planificacion-despacho-storage"
 
 function localIsoDate(d = new Date()): string {
   const y = d.getFullYear()
@@ -72,6 +78,7 @@ function formatClp(n: number): string {
 }
 
 export default function DistribuidoraOrdersPage() {
+  const router = useRouter()
   const [dateFrom, setDateFrom] = useState(() => localIsoDate())
   const [dateTo, setDateTo] = useState(() => localIsoDate())
   const [onlyNotInvoiced, setOnlyNotInvoiced] = useState(true)
@@ -82,13 +89,32 @@ export default function DistribuidoraOrdersPage() {
   const [planningRows, setPlanningRows] = useState<DistribuidoraDispatchPrepPlanningRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [trucks, setTrucks] = useState<DistribuidoraTruck[]>([])
+  const [trucksError, setTrucksError] = useState<string | null>(null)
+  const [planificacionFeedback, setPlanificacionFeedback] = useState<string | null>(null)
 
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailRow, setDetailRow] =
     useState<DistribuidoraDispatchPrepMunicipalityRow | null>(null)
 
   const [selectedPlanning, setSelectedPlanning] = useState<Set<number>>(() => new Set())
-  const [truckByDoc, setTruckByDoc] = useState<Record<number, string>>({})
+  const [truckIdByDoc, setTruckIdByDoc] = useState<Record<number, number>>({})
+
+  useEffect(() => {
+    const ac = new AbortController()
+    ;(async () => {
+      setTrucksError(null)
+      try {
+        const res = await getDistribuidoraTrucks({ signal: ac.signal })
+        setTrucks(res.items)
+      } catch (e: unknown) {
+        if (e instanceof Error && e.name === "AbortError") return
+        setTrucks([])
+        setTrucksError(e instanceof Error ? e.message : "No se pudieron cargar los camiones")
+      }
+    })()
+    return () => ac.abort()
+  }, [])
 
   useEffect(() => {
     const ac = new AbortController()
@@ -144,10 +170,12 @@ export default function DistribuidoraOrdersPage() {
   }, [dateFrom, dateTo, onlyNotInvoiced, activeDayFilter])
 
   useEffect(() => {
-    setTruckByDoc((prev) => {
+    if (trucks.length === 0) return
+    const defaultId = trucks[0]!.id
+    setTruckIdByDoc((prev) => {
       const next = { ...prev }
       for (const r of planningRows) {
-        if (next[r.document_id] === undefined) next[r.document_id] = TRUCKS[0]
+        if (next[r.document_id] === undefined) next[r.document_id] = defaultId
       }
       for (const k of Object.keys(next)) {
         const id = Number(k)
@@ -155,7 +183,7 @@ export default function DistribuidoraOrdersPage() {
       }
       return next
     })
-  }, [planningRows])
+  }, [planningRows, trucks])
 
   const tagStats = useMemo(
     () => aggregateObservationTags(observationTexts),
@@ -192,6 +220,68 @@ export default function DistribuidoraOrdersPage() {
     }
     return { count, amount }
   }, [planningRows, selectedPlanning])
+
+  const canPassToPlanificacion = useMemo(() => {
+    if (trucks.length === 0 || selectedPlanning.size === 0) return false
+    for (const docId of selectedPlanning) {
+      const row = planningRows.find((r) => r.document_id === docId)
+      const geo = Boolean(
+        row?.has_georef && row.lat != null && row.lng != null,
+      )
+      const tid = truckIdByDoc[docId]
+      const truckOk =
+        Number.isFinite(tid) && tid > 0 && trucks.some((t) => t.id === tid)
+      if (!geo || !truckOk) return false
+    }
+    return true
+  }, [trucks, selectedPlanning, planningRows, truckIdByDoc])
+
+  const onPassToPlanificacion = useCallback(() => {
+    setPlanificacionFeedback(null)
+    if (trucks.length === 0) {
+      setPlanificacionFeedback("No hay camiones configurados.")
+      return
+    }
+    if (selectedPlanning.size === 0) {
+      setPlanificacionFeedback("Seleccione al menos un pedido con georreferencia y camión.")
+      return
+    }
+    const byTruck: Record<number, number> = {}
+    const stored: PlanificacionStoredOrder[] = []
+
+    for (const r of planningRows) {
+      if (!selectedPlanning.has(r.document_id)) continue
+      const geo = Boolean(r.has_georef && r.lat != null && r.lng != null)
+      const tid = truckIdByDoc[r.document_id]
+      const truck = trucks.find((t) => t.id === tid)
+      if (!geo || !truck) {
+        setPlanificacionFeedback(
+          "Cada pedido seleccionado debe tener georreferencia y un camión asignado.",
+        )
+        return
+      }
+      const idx = (byTruck[tid] = (byTruck[tid] ?? 0) + 1)
+      const camion = distribuidoraTruckCapacityLabel(truck)
+      stored.push({
+        document_id: r.document_id,
+        client_id: r.client_id ?? null,
+        lat: Number(r.lat),
+        lng: Number(r.lng),
+        truck_id: tid,
+        camion,
+        oc: r.oc ?? null,
+        nombre_fantasia: r.nombre_fantasia ?? null,
+        total_amount: r.total_amount != null ? Number(r.total_amount) : null,
+        stop_index: idx,
+      })
+    }
+
+    writePlanificacionPayload({
+      submittedAt: new Date().toISOString(),
+      orders: stored,
+    })
+    router.push("/distribuidora/planificacion")
+  }, [trucks, planningRows, selectedPlanning, truckIdByDoc, router])
 
   const togglePlanning = useCallback(
     (id: number, checked: boolean, canSelect: boolean) => {
@@ -483,10 +573,27 @@ export default function DistribuidoraOrdersPage() {
               Órdenes OC en el rango (y con filtro de día si aplica), ordenadas por monto.
             </p>
           </div>
-          <Button type="button" variant="secondary" disabled>
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={!canPassToPlanificacion}
+            onClick={onPassToPlanificacion}
+          >
             Pasar a planificación
           </Button>
         </div>
+        {planificacionFeedback ? (
+          <Alert>
+            <AlertTitle>No se puede continuar</AlertTitle>
+            <AlertDescription>{planificacionFeedback}</AlertDescription>
+          </Alert>
+        ) : null}
+        {trucksError ? (
+          <Alert variant="destructive">
+            <AlertTitle>Camiones</AlertTitle>
+            <AlertDescription>{trucksError}</AlertDescription>
+          </Alert>
+        ) : null}
         <div className="flex flex-wrap items-center gap-4 rounded-lg border border-border/50 bg-muted/20 px-4 py-3 text-sm">
           <span>
             Pedidos seleccionados:{" "}
@@ -513,7 +620,7 @@ export default function DistribuidoraOrdersPage() {
                 <TableHead>Vendedor</TableHead>
                 <TableHead className="text-right">Monto</TableHead>
                 <TableHead>Georef</TableHead>
-                <TableHead className="min-w-[9rem]">Camión</TableHead>
+                <TableHead className="min-w-[12rem]">Camión</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -526,6 +633,9 @@ export default function DistribuidoraOrdersPage() {
               ) : (
                 planningRows.map((r) => {
                   const geo = Boolean(r.has_georef && r.lat != null && r.lng != null)
+                  const tid = truckIdByDoc[r.document_id]
+                  const truck = trucks.find((t) => t.id === tid)
+                  const capLabel = truck ? distribuidoraTruckCapacityLabel(truck) : null
                   return (
                     <TableRow key={r.document_id} className="text-sm">
                       <TableCell>
@@ -562,24 +672,46 @@ export default function DistribuidoraOrdersPage() {
                         )}
                       </TableCell>
                       <TableCell>
-                        <Select
-                          value={truckByDoc[r.document_id] ?? TRUCKS[0]}
-                          onValueChange={(v) =>
-                            setTruckByDoc((prev) => ({ ...prev, [r.document_id]: v }))
-                          }
-                          disabled={!geo}
-                        >
-                          <SelectTrigger className="h-8 w-[8.5rem] text-xs">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {TRUCKS.map((t) => (
-                              <SelectItem key={t} value={t}>
-                                {t}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        <div className="flex min-w-[11rem] flex-col gap-1.5">
+                          <Select
+                            value={
+                              tid != null && trucks.some((x) => x.id === tid)
+                                ? String(tid)
+                                : trucks[0]
+                                  ? String(trucks[0].id)
+                                  : ""
+                            }
+                            onValueChange={(v) => {
+                              const n = Number.parseInt(v, 10)
+                              if (!Number.isFinite(n)) return
+                              setTruckIdByDoc((prev) => ({
+                                ...prev,
+                                [r.document_id]: n,
+                              }))
+                            }}
+                            disabled={!geo || trucks.length === 0}
+                          >
+                            <SelectTrigger className="h-8 max-w-[16rem] text-xs">
+                              <SelectValue placeholder="Camión" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {trucks.map((t) => (
+                                <SelectItem key={t.id} value={String(t.id)}>
+                                  {distribuidoraTruckCapacityLabel(t)}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {capLabel && geo ? (
+                            <Badge
+                              variant="secondary"
+                              className="w-fit max-w-[16rem] truncate text-[10px] font-normal"
+                              title={capLabel}
+                            >
+                              {capLabel}
+                            </Badge>
+                          ) : null}
+                        </div>
                       </TableCell>
                     </TableRow>
                   )

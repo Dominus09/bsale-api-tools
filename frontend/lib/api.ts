@@ -984,7 +984,34 @@ export async function getDistribuidoraDispatchPrepPlanningRows(params: {
   return res.json() as Promise<{ items: DistribuidoraDispatchPrepPlanningRow[] }>
 }
 
-/** Fila de GET /distribuidora/planificacion/orders (boleta/factura + observaciones). */
+export type DistribuidoraTruck = {
+  id: number
+  name: string
+  plate: string
+  max_weight_kg: number
+}
+
+export function distribuidoraTruckCapacityLabel(
+  t: Pick<DistribuidoraTruck, "name" | "max_weight_kg">,
+): string {
+  return `${t.name} (${t.max_weight_kg} kg)`
+}
+
+export async function getDistribuidoraTrucks(params?: {
+  signal?: AbortSignal
+}): Promise<{ items: DistribuidoraTruck[] }> {
+  const res = await fetch(`${API_URL}/distribuidora/trucks`, {
+    headers: getAuthHeaders(),
+    signal: params?.signal,
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar camiones")
+  }
+  return res.json() as Promise<{ items: DistribuidoraTruck[] }>
+}
+
+/** Fila de GET /distribuidora/planificacion/orders (OC tipo 33 + observaciones). */
 export type DistribuidoraPlanificacionOrderRow = {
   document_id: number
   client_id?: number | null

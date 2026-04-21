@@ -43,9 +43,8 @@ def list_dispatch_planning_orders(
     office_id: int = 1,
 ) -> list[dict[str, Any]]:
     """
-    Documentos tipo boleta/factura (1, 6) pendientes (``state = 0``) con texto de observación
-    derivado de atributo ``OBSERVACIONES`` y/o ``raw_data->>'comments'`` (no existe columna
-    ``observations`` en ``documents``).
+    Órdenes de compra Bsale (``document_type_id = 33``) pendientes (``state = 0``) con texto de
+    observación derivado de atributo ``OBSERVACIONES`` y/o ``raw_data->>'comments'``.
     """
     d0, d1 = _normalize_date_range(emission_date_from, emission_date_to)
     day = (delivery_day or "all").strip().lower()
@@ -117,7 +116,7 @@ def list_dispatch_planning_orders(
                    AND c.bsale_id = d.client_id
                 WHERE d.company_id = %s
                   AND d.office_id = %s
-                  AND d.document_type_id IN (1, 6)
+                  AND d.document_type_id = 33
                   AND d.state = 0
                   AND d.emission_date >= %s::date
                   AND d.emission_date < (%s::date + interval '1 day')
@@ -197,7 +196,7 @@ def list_dispatch_planning_orders(
                    AND c.bsale_id = d.client_id
                 WHERE d.company_id = %s
                   AND d.office_id = %s
-                  AND d.document_type_id IN (1, 6)
+                  AND d.document_type_id = 33
                   AND d.state = 0
                   AND d.emission_date >= %s::date
                   AND d.emission_date < (%s::date + interval '1 day')
