@@ -943,6 +943,69 @@ export async function getDistribuidoraDispatchPrepObservaciones(params: {
   return res.json() as Promise<DistribuidoraDispatchPrepObservacionesResponse>
 }
 
+/** Fila de GET /distribuidora/planificacion/orders (boleta/factura + observaciones). */
+export type DistribuidoraPlanificacionOrderRow = {
+  document_id: number
+  client_id?: number | null
+  oc?: number | null
+  nombre_fantasia?: string | null
+  municipality?: string | null
+  direccion?: string | null
+  comuna?: string | null
+  seller_name?: string | null
+  total_amount?: number | null
+  has_georef?: boolean | null
+  lat?: number | null
+  lng?: number | null
+  observations?: string | null
+}
+
+export async function getDistribuidoraPlanificacionOrders(params: {
+  emission_date_from: string
+  emission_date_to: string
+  delivery_day?: string
+  signal?: AbortSignal
+}): Promise<{ items: DistribuidoraPlanificacionOrderRow[] }> {
+  const qs = new URLSearchParams()
+  qs.set("emission_date_from", params.emission_date_from)
+  qs.set("emission_date_to", params.emission_date_to)
+  if (params.delivery_day?.trim()) qs.set("delivery_day", params.delivery_day.trim())
+  const res = await fetch(`${API_URL}/distribuidora/planificacion/orders?${qs}`, {
+    headers: getAuthHeaders(),
+    signal: params.signal,
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar órdenes para planificación")
+  }
+  return res.json() as Promise<{ items: DistribuidoraPlanificacionOrderRow[] }>
+}
+
+export type DistribuidoraPlanificacionOrsRoute = {
+  camion: string
+  distance_km: number
+  duration_min: number
+  geometry: { type: string; coordinates: number[][] }
+  coordinates: number[][]
+}
+
+export async function postDistribuidoraPlanificacionOrsRoutes(params: {
+  routes: { camion: string; coordinates: number[][] }[]
+  signal?: AbortSignal
+}): Promise<{ routes: DistribuidoraPlanificacionOrsRoute[] }> {
+  const res = await fetch(`${API_URL}/distribuidora/planificacion/ors-routes`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ routes: params.routes }),
+    signal: params.signal,
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al calcular rutas ORS")
+  }
+  return res.json() as Promise<{ routes: DistribuidoraPlanificacionOrsRoute[] }>
+}
+
 /** Fila de GET /distribuidora/orders/purchase/by-document-ids (preview planificación). */
 export type DistribuidoraPlanningPreviewItem = {
   document_id: number

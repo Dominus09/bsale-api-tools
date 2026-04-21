@@ -93,6 +93,8 @@ const navSections: { title: string; items: NavItem[] }[] = [
         icon: PieChart,
       },
       { href: "/distribuidora/orders", label: "Pre‑despacho OC", icon: ShoppingCart },
+      { href: "/distribuidora/pre-planificacion", label: "Pre‑planif. despacho", icon: ClipboardList },
+      { href: "/distribuidora/planificacion", label: "Planif. mapa ORS", icon: MapPin },
       { href: "/distribuidora/planning", label: "Planificación", icon: Truck },
       { href: "/distribuidora/mapa", label: "Mapa rutero", icon: MapPin },
       { href: "/distribuidora/resumen-vendedor", label: "Resumen vendedor", icon: CalendarDays },
