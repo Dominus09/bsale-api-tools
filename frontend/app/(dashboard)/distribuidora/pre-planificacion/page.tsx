@@ -64,6 +64,17 @@ function formatCLP(n: number): string {
   })
 }
 
+function documentsProcessedFromResyncResult(result: unknown): number | null {
+  if (!result || typeof result !== "object") return null
+  const v = (result as { documents_processed?: unknown }).documents_processed
+  if (typeof v === "number" && Number.isFinite(v)) return v
+  if (typeof v === "string" && v.trim() !== "") {
+    const n = Number(v)
+    return Number.isFinite(n) ? n : null
+  }
+  return null
+}
+
 const TRUCK_UNSET = "__unset__"
 
 export default function PrePlanificacionDespachoPage() {
@@ -75,6 +86,10 @@ export default function PrePlanificacionDespachoPage() {
   const [rows, setRows] = useState<DistribuidoraPlanificacionOrderRow[]>([])
   const [loading, setLoading] = useState(true)
   const [loadingSync, setLoadingSync] = useState(false)
+  const [lastOrdersLoadAt, setLastOrdersLoadAt] = useState<string | null>(null)
+  const [lastResyncDocumentsProcessed, setLastResyncDocumentsProcessed] = useState<
+    number | null
+  >(null)
   const [error, setError] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<string | null>(null)
 
@@ -113,6 +128,13 @@ export default function PrePlanificacionDespachoPage() {
           signal,
         })
         setRows(res.items)
+        console.log("📋 Órdenes cargadas:", res.items.length)
+        setLastOrdersLoadAt(
+          new Date().toLocaleString("es-CL", {
+            dateStyle: "short",
+            timeStyle: "medium",
+          }),
+        )
         setSelected(new Set())
         setTruckIdByDoc({})
       } catch (e: unknown) {
@@ -133,19 +155,29 @@ export default function PrePlanificacionDespachoPage() {
   }, [loadPlanificacionRows])
 
   const onResyncOrders = useCallback(async () => {
+    const emissionDateFrom = dateFrom
+    const emissionDateTo = dateTo
+    console.log("🔄 Iniciando actualización órdenes")
+    console.log("📅 Rango fechas:", emissionDateFrom, "→", emissionDateTo)
     setLoadingSync(true)
     try {
       const syncRes = await postDistribuidoraResyncOc()
-      if (!syncRes.ok) {
-        console.error("resync-oc:", syncRes.error ?? syncRes)
+      console.log("✅ Resync respuesta:", syncRes)
+      const proc = documentsProcessedFromResyncResult(syncRes.result)
+      if (syncRes.ok) {
+        setLastResyncDocumentsProcessed(proc)
+      } else {
+        setLastResyncDocumentsProcessed(null)
       }
       await loadPlanificacionRows()
+      console.log("📦 Órdenes recargadas correctamente")
     } catch (e) {
-      console.error(e)
+      console.error("❌ Error en resync:", e)
+      setLastResyncDocumentsProcessed(null)
     } finally {
       setLoadingSync(false)
     }
-  }, [loadPlanificacionRows])
+  }, [loadPlanificacionRows, dateFrom, dateTo])
 
   const toggle = useCallback((id: number, checked: boolean, canSelect: boolean) => {
     if (!canSelect) return
@@ -287,6 +319,19 @@ export default function PrePlanificacionDespachoPage() {
           <span className="text-xs text-muted-foreground">
             Actualizando desde Bsale…
           </span>
+        ) : null}
+      </div>
+      <div className="mb-2 space-y-1 text-xs text-muted-foreground">
+        {lastOrdersLoadAt ? (
+          <p>Última actualización: {lastOrdersLoadAt}</p>
+        ) : null}
+        {lastResyncDocumentsProcessed != null ? (
+          <p className="text-foreground/90">
+            Órdenes actualizadas:{" "}
+            <span className="font-mono tabular-nums">
+              {lastResyncDocumentsProcessed}
+            </span>
+          </p>
         ) : null}
       </div>
 

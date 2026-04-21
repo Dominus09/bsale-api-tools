@@ -139,7 +139,7 @@ def list_dispatch_planning_orders(
                         'áéíóúü',
                         'aeiouu'
                     ) LIKE %s
-                ORDER BY d.emission_date DESC NULLS LAST, d.document_id DESC
+                ORDER BY d.number DESC NULLS LAST, d.document_id DESC
                 LIMIT 5000
                 """,
                 (company_id, office_id, d0, d1, day_pat),
@@ -200,7 +200,7 @@ def list_dispatch_planning_orders(
                   AND d.state = 0
                   AND d.emission_date >= %s::date
                   AND d.emission_date < (%s::date + interval '1 day')
-                ORDER BY d.emission_date DESC NULLS LAST, d.document_id DESC
+                ORDER BY d.number DESC NULLS LAST, d.document_id DESC
                 LIMIT 5000
                 """,
                 (company_id, office_id, d0, d1),

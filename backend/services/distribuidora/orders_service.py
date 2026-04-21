@@ -437,7 +437,7 @@ def list_dispatch_prep_planning_rows(
               AND d.emission_date < (%s::date + interval '1 day')
               AND (%s = FALSE OR d.state = 0)
               AND CASE WHEN %s THEN TRUE ELSE {_OBS_NORMALIZED_D} LIKE %s END
-            ORDER BY d.total_amount DESC NULLS LAST, d.document_id DESC
+            ORDER BY d.number DESC NULLS LAST, d.document_id DESC
             LIMIT %s
             """,
             (d0, d1, only_not_invoiced, skip_day, day_like, lim),
