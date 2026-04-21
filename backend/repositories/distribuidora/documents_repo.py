@@ -263,14 +263,35 @@ def _apply_persisted_document_ids_for_folio_rows(cur, rows: list[dict[str, Any]]
             r["document_id"] = stored
 
 
-def upsert_documents(cur, rows: list[dict[str, Any]]) -> tuple[int, int]:
+def _folio_conflict_key(r: dict[str, Any]) -> tuple[int, int, int, int] | None:
+    if r.get("number") is None or r.get("document_type_id") is None:
+        return None
+    try:
+        return (
+            int(r["company_id"]),
+            int(r["office_id"]),
+            int(r["document_type_id"]),
+            int(r["number"]),
+        )
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
+def upsert_documents(
+    cur,
+    rows: list[dict[str, Any]],
+    sync_stats: dict[str, Any] | None = None,
+) -> tuple[int, int]:
     """
     Inserta/actualiza documentos sin borrar filas y **sin** cambiar ``document_id`` en updates.
 
     * Con folio completo (``company_id``, ``office_id``, ``document_type_id``, ``number``):
-      ``ON CONFLICT`` en el índice único parcial; en update solo ``total_amount``,
-      ``emission_date``, ``raw_data``, ``updated_at``.
+      ``ON CONFLICT`` en el índice único parcial; en update se refrescan **todos** los campos
+      relevantes desde Bsale (incl. ``state``, montos, fechas, ``raw_data``, etc.).
     * Sin folio (``number`` o ``document_type_id`` nulos): upsert por ``document_id`` (PK).
+
+    Retorna ``(total_filas, filas_que_ya_existían_en_bd)``; la segunda sirve para
+    ``updated_documents`` en logs de sync (aprox. conflictos / refrescos).
     """
     if not rows:
         return 0, 0
@@ -315,15 +336,62 @@ def upsert_documents(cur, rows: list[dict[str, Any]]) -> tuple[int, int]:
         if r.get("number") is None or r.get("document_type_id") is None
     ]
 
+    updated_existing = 0
+
     if folio_rows:
+        folio_keys: list[tuple[int, int, int, int]] = []
+        seen_k: set[tuple[int, int, int, int]] = set()
+        for r in folio_rows:
+            k = _folio_conflict_key(r)
+            if k is None or k in seen_k:
+                continue
+            seen_k.add(k)
+            folio_keys.append(k)
+
+        before_folio: set[tuple[int, int, int, int]] = set()
+        if folio_keys:
+            cur.execute(
+                """
+                SELECT company_id, office_id, document_type_id, number
+                FROM distribuidora.documents
+                WHERE (company_id, office_id, document_type_id, number) IN %s
+                """,
+                (tuple(folio_keys),),
+            )
+            for row in cur.fetchall() or []:
+                before_folio.add(
+                    (int(row[0]), int(row[1]), int(row[2]), int(row[3])),
+                )
+
         sql_folio_upsert = f"""
             INSERT INTO distribuidora.documents ({", ".join(cols)}, created_at, updated_at)
             VALUES %s
             ON CONFLICT (company_id, office_id, document_type_id, number)
             WHERE document_type_id IS NOT NULL AND number IS NOT NULL
             DO UPDATE SET
-                total_amount = EXCLUDED.total_amount,
+                number = EXCLUDED.number,
+                document_type_id = EXCLUDED.document_type_id,
+                client_id = EXCLUDED.client_id,
+                office_id = EXCLUDED.office_id,
+                company_id = EXCLUDED.company_id,
+                user_id = EXCLUDED.user_id,
                 emission_date = EXCLUDED.emission_date,
+                expiration_date = EXCLUDED.expiration_date,
+                generation_date = EXCLUDED.generation_date,
+                total_amount = EXCLUDED.total_amount,
+                net_amount = EXCLUDED.net_amount,
+                tax_amount = EXCLUDED.tax_amount,
+                state = EXCLUDED.state,
+                commercial_state = EXCLUDED.commercial_state,
+                informed_sii = EXCLUDED.informed_sii,
+                municipality = EXCLUDED.municipality,
+                city = EXCLUDED.city,
+                address = EXCLUDED.address,
+                token = EXCLUDED.token,
+                url_pdf = EXCLUDED.url_pdf,
+                url_public_view = EXCLUDED.url_public_view,
+                price_list_id = EXCLUDED.price_list_id,
+                tracking_number = EXCLUDED.tracking_number,
                 raw_data = EXCLUDED.raw_data,
                 updated_at = NOW()
         """
@@ -337,7 +405,40 @@ def upsert_documents(cur, rows: list[dict[str, Any]]) -> tuple[int, int]:
             raise
         _apply_persisted_document_ids_for_folio_rows(cur, rows)
 
+        seen_folio_count: set[tuple[int, int, int, int]] = set()
+        for r in folio_rows:
+            k = _folio_conflict_key(r)
+            if k is None or k not in before_folio or k in seen_folio_count:
+                continue
+            seen_folio_count.add(k)
+            updated_existing += 1
+
     if pk_rows:
+        pk_ids: list[int] = []
+        seen_id: set[int] = set()
+        for r in pk_rows:
+            try:
+                did = int(r["document_id"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            if did in seen_id:
+                continue
+            seen_id.add(did)
+            pk_ids.append(did)
+
+        before_pk: set[int] = set()
+        if pk_ids:
+            cur.execute(
+                """
+                SELECT document_id
+                FROM distribuidora.documents
+                WHERE document_id IN %s
+                """,
+                (tuple(pk_ids),),
+            )
+            for (did,) in cur.fetchall() or []:
+                before_pk.add(int(did))
+
         sql_pk = f"""
             INSERT INTO distribuidora.documents ({", ".join(cols)}, created_at, updated_at)
             VALUES %s
@@ -377,7 +478,28 @@ def upsert_documents(cur, rows: list[dict[str, Any]]) -> tuple[int, int]:
                 pass
             raise
 
-    return len(rows), len(rows)
+        seen_pk_count: set[int] = set()
+        for r in pk_rows:
+            try:
+                did = int(r["document_id"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            if did not in before_pk or did in seen_pk_count:
+                continue
+            seen_pk_count.add(did)
+            updated_existing += 1
+
+    if sync_stats is not None:
+        sync_stats["updated_documents"] = int(
+            sync_stats.get("updated_documents", 0),
+        ) + int(updated_existing)
+        logger.info(
+            "distribuidora.documents upsert: batch_rows=%s updated_documents=%s",
+            len(rows),
+            updated_existing,
+        )
+
+    return len(rows), int(updated_existing)
 
 
 def seller_tuple_from_bsale_item(s: dict[str, Any]) -> tuple[int | None, str | None]:

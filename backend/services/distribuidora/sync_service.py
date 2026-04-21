@@ -175,7 +175,7 @@ def _flush_pending_when_large(
     to_save = list(pending)
     pending.clear()
     try:
-        upsert_documents(cur, to_save)
+        upsert_documents(cur, to_save, stats)
         for r in to_save:
             _refresh_document_children(
                 client,
@@ -212,7 +212,7 @@ def _flush_pending_tail(
     to_save = list(pending)
     pending.clear()
     try:
-        upsert_documents(cur, to_save)
+        upsert_documents(cur, to_save, stats)
         for r in to_save:
             _refresh_document_children(
                 client,
@@ -455,8 +455,10 @@ def _fetch_documents_window(
 
     _flush_pending_tail(client, cur, conn, pending, stats)
 
-    stats["documents_inserted"] = stats["documents_processed"]
-    stats["documents_updated"] = stats["documents_processed"]
+    upd = int(stats.get("updated_documents", 0) or 0)
+    proc = int(stats.get("documents_processed", 0) or 0)
+    stats["documents_updated"] = upd
+    stats["documents_inserted"] = max(0, proc - upd)
     stats["details_inserted"] = stats.get("details_rows", 0)
     stats["attributes_inserted"] = stats.get("attributes_rows", 0)
     stats["references_inserted"] = stats.get("references_rows", 0)
@@ -497,6 +499,7 @@ def sync_bsale_distribuidora_incremental(*, strict_token: bool = False) -> dict[
         "documents_processed": 0,
         "documents_inserted": 0,
         "documents_updated": 0,
+        "updated_documents": 0,
         "documents_batch_failures": 0,
         "skipped_other_office": 0,
         "skipped_other_company": 0,
@@ -596,8 +599,9 @@ def sync_bsale_distribuidora_incremental(*, strict_token: bool = False) -> dict[
             stats.get("skipped_other_company", 0),
         )
         logger.info(
-            "sync distribuidora incremental OK: processed=%s details=%s attr=%s ref=%s s=%.2f",
+            "sync distribuidora incremental OK: processed=%s updated_documents=%s details=%s attr=%s ref=%s s=%.2f",
             stats["documents_processed"],
+            stats.get("updated_documents", 0),
             stats["details_inserted"],
             stats["attributes_inserted"],
             stats["references_inserted"],
@@ -654,6 +658,7 @@ def resync_bsale_distribuidora_range(
         "documents_processed": 0,
         "documents_inserted": 0,
         "documents_updated": 0,
+        "updated_documents": 0,
         "documents_batch_failures": 0,
         "skipped_other_office": 0,
         "skipped_other_company": 0,
@@ -766,8 +771,10 @@ def resync_bsale_distribuidora_range(
 
             current += timedelta(days=1)
 
-        stats["documents_inserted"] = stats["documents_processed"]
-        stats["documents_updated"] = stats["documents_processed"]
+        upd = int(stats.get("updated_documents", 0) or 0)
+        proc = int(stats.get("documents_processed", 0) or 0)
+        stats["documents_updated"] = upd
+        stats["documents_inserted"] = max(0, proc - upd)
         stats["details_inserted"] = stats.get("details_rows", 0)
         stats["attributes_inserted"] = stats.get("attributes_rows", 0)
         stats["references_inserted"] = stats.get("references_rows", 0)
@@ -808,9 +815,10 @@ def resync_bsale_distribuidora_range(
             stats.get("skipped_other_company", 0),
         )
         logger.info(
-            "resync distribuidora OK: days=%s processed=%s s=%.2f",
+            "resync distribuidora OK: days=%s processed=%s updated_documents=%s s=%.2f",
             stats["days_processed"],
             stats["documents_processed"],
+            stats.get("updated_documents", 0),
             time.perf_counter() - t0,
         )
     except Exception as e:
