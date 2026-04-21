@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import date
+import logging
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -18,8 +19,16 @@ from backend.services.distribuidora.orders_service import (
     list_dispatch_prep_planning_rows,
     list_purchase_orders,
 )
+from backend.services.distribuidora.sync_service import (
+    DistribuidoraSyncService,
+    bsale_token_distribuidora_configured,
+)
 
 router = APIRouter(prefix="/distribuidora", tags=["Distribuidora órdenes"])
+logger = logging.getLogger(__name__)
+
+# Ventana corta (días calendario UTC) para traer documentos recientes desde Bsale.
+_RESYNC_OC_CALENDAR_DAYS = 2
 
 
 def _preview_enriched_row(r: dict[str, Any]) -> dict[str, Any]:
@@ -154,3 +163,36 @@ def get_dispatch_prep_planning_rows(
         limit=limit,
     )
     return {"items": rows}
+
+
+@router.post("/resync-oc")
+def post_resync_oc():
+    """
+    Re-sincroniza Bsale → ``distribuidora.*`` para los últimos días (UTC), vía
+    ``DistribuidoraSyncService.run_resync``. El GET de Bsale es por rango de emisión;
+    las OC se persisten como ``document_type_id = 33``.
+    """
+    if not bsale_token_distribuidora_configured():
+        logger.error("resync-oc: sin BSALE_TOKEN / BSALE_TOKEN_SPA")
+        return {"ok": False, "error": "sin_token"}
+    try:
+        now = datetime.now(timezone.utc)
+        start_day = now.date() - timedelta(days=_RESYNC_OC_CALENDAR_DAYS - 1)
+        emission_from = datetime(
+            start_day.year,
+            start_day.month,
+            start_day.day,
+            0,
+            0,
+            0,
+            tzinfo=timezone.utc,
+        )
+        result = DistribuidoraSyncService.run_resync(
+            emission_from=emission_from,
+            emission_to=now,
+            strict_token=True,
+        )
+        return {"ok": True, "result": result}
+    except Exception as e:
+        logger.error("Resync OC error: %s", e, exc_info=True)
+        return {"ok": False, "error": str(e)}

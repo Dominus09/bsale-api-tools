@@ -1011,6 +1011,32 @@ export async function getDistribuidoraTrucks(params?: {
   return res.json() as Promise<{ items: DistribuidoraTruck[] }>
 }
 
+export type DistribuidoraResyncOcResponse = {
+  ok: boolean
+  result?: unknown
+  error?: string
+}
+
+/** POST /distribuidora/resync-oc — ventana corta Bsale → distribuidora, luego recargar listados. */
+export async function postDistribuidoraResyncOc(params?: {
+  signal?: AbortSignal
+}): Promise<DistribuidoraResyncOcResponse> {
+  const res = await fetch(`${API_URL}/distribuidora/resync-oc`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    signal: params?.signal,
+  })
+  const data = (await res.json().catch(() => ({}))) as DistribuidoraResyncOcResponse
+  if (!res.ok) {
+    return { ok: false, error: data?.error ?? `HTTP ${res.status}` }
+  }
+  return {
+    ok: Boolean(data.ok),
+    result: data.result,
+    error: data.error,
+  }
+}
+
 /** Fila de GET /distribuidora/planificacion/orders (OC tipo 33 + observaciones). */
 export type DistribuidoraPlanificacionOrderRow = {
   document_id: number

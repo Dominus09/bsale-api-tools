@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
-import { Loader2, MapPin, Package, Truck } from "lucide-react"
+import { Loader2, MapPin, Package, RefreshCw, Truck } from "lucide-react"
 
 import {
   distribuidoraTruckCapacityLabel,
@@ -10,6 +10,7 @@ import {
   getDistribuidoraDispatchPrepObservaciones,
   getDistribuidoraDispatchPrepPlanningRows,
   getDistribuidoraTrucks,
+  postDistribuidoraResyncOc,
   type DistribuidoraDispatchPrepMunicipalityRow,
   type DistribuidoraDispatchPrepPlanningRow,
   type DistribuidoraTruck,
@@ -38,13 +39,6 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import {
   Table,
@@ -77,8 +71,8 @@ function formatClp(n: number): string {
   return clp.format(Number.isFinite(n) ? n : 0)
 }
 
-/** Valor sentinela en Select (Radix no admite `value=""`). */
-const TRUCK_SELECT_UNASSIGNED = "__unset__"
+/** Valor sentinela en `<select>` nativo para “sin camión”. */
+const TRUCK_UNSET = "__unset__"
 
 export default function DistribuidoraOrdersPage() {
   const router = useRouter()
@@ -91,6 +85,7 @@ export default function DistribuidoraOrdersPage() {
   const [observationTexts, setObservationTexts] = useState<string[]>([])
   const [planningRows, setPlanningRows] = useState<DistribuidoraDispatchPrepPlanningRow[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadingSync, setLoadingSync] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [trucks, setTrucks] = useState<DistribuidoraTruck[]>([])
   const [trucksError, setTrucksError] = useState<string | null>(null)
@@ -101,7 +96,7 @@ export default function DistribuidoraOrdersPage() {
     useState<DistribuidoraDispatchPrepMunicipalityRow | null>(null)
 
   const [selectedPlanning, setSelectedPlanning] = useState<Set<number>>(() => new Set())
-  const [truckIdByDoc, setTruckIdByDoc] = useState<Record<number, number>>({})
+  const [truckIdByDoc, setTruckIdByDoc] = useState<Record<number, number | null>>({})
 
   useEffect(() => {
     const ac = new AbortController()
@@ -119,10 +114,8 @@ export default function DistribuidoraOrdersPage() {
     return () => ac.abort()
   }, [])
 
-  useEffect(() => {
-    const ac = new AbortController()
-    let cancelled = false
-    ;(async () => {
+  const loadDispatchPrep = useCallback(
+    async (signal?: AbortSignal) => {
       setLoading(true)
       setError(null)
       try {
@@ -133,44 +126,61 @@ export default function DistribuidoraOrdersPage() {
             emission_date_to: dateTo,
             only_not_invoiced: onlyNotInvoiced,
             day_filter: dayParam,
-            signal: ac.signal,
+            signal,
           }),
           getDistribuidoraDispatchPrepObservaciones({
             emission_date_from: dateFrom,
             emission_date_to: dateTo,
             only_not_invoiced: onlyNotInvoiced,
             day_filter: dayParam,
-            signal: ac.signal,
+            signal,
           }),
           getDistribuidoraDispatchPrepPlanningRows({
             emission_date_from: dateFrom,
             emission_date_to: dateTo,
             only_not_invoiced: onlyNotInvoiced,
             day_filter: dayParam,
-            signal: ac.signal,
+            signal,
           }),
         ])
-        if (cancelled) return
         setRows(byMuni.items)
         setObservationTexts(obs.items)
         setPlanningRows(plan.items)
         setSelectedPlanning(new Set())
         setTruckIdByDoc({})
       } catch (e: unknown) {
-        if (cancelled || (e instanceof Error && e.name === "AbortError")) return
+        if (e instanceof Error && e.name === "AbortError") return
         setError(e instanceof Error ? e.message : "Error al cargar datos")
         setRows([])
         setObservationTexts([])
         setPlanningRows([])
       } finally {
-        if (!cancelled) setLoading(false)
+        setLoading(false)
       }
-    })()
-    return () => {
-      cancelled = true
-      ac.abort()
+    },
+    [dateFrom, dateTo, onlyNotInvoiced, activeDayFilter],
+  )
+
+  useEffect(() => {
+    const ac = new AbortController()
+    void loadDispatchPrep(ac.signal)
+    return () => ac.abort()
+  }, [loadDispatchPrep])
+
+  const onResyncOrders = useCallback(async () => {
+    setLoadingSync(true)
+    try {
+      const syncRes = await postDistribuidoraResyncOc()
+      if (!syncRes.ok) {
+        console.error("resync-oc:", syncRes.error ?? syncRes)
+      }
+      await loadDispatchPrep()
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setLoadingSync(false)
     }
-  }, [dateFrom, dateTo, onlyNotInvoiced, activeDayFilter])
+  }, [loadDispatchPrep])
 
   const tagStats = useMemo(
     () => aggregateObservationTags(observationTexts),
@@ -217,7 +227,10 @@ export default function DistribuidoraOrdersPage() {
       )
       const tid = truckIdByDoc[docId]
       const truckOk =
-        Number.isFinite(tid) && tid > 0 && trucks.some((t) => t.id === tid)
+        tid != null &&
+        Number.isFinite(tid) &&
+        tid > 0 &&
+        trucks.some((t) => t.id === tid)
       if (!geo || !truckOk) return false
     }
     return true
@@ -226,7 +239,7 @@ export default function DistribuidoraOrdersPage() {
   const onPassToPlanificacion = useCallback(() => {
     setPlanificacionFeedback(null)
     if (trucks.length === 0) {
-      setPlanificacionFeedback("No hay camiones configurados.")
+      setPlanificacionFeedback("⚠️ No hay camiones disponibles.")
       return
     }
     if (selectedPlanning.size === 0) {
@@ -240,7 +253,8 @@ export default function DistribuidoraOrdersPage() {
       if (!selectedPlanning.has(r.document_id)) continue
       const geo = Boolean(r.has_georef && r.lat != null && r.lng != null)
       const tid = truckIdByDoc[r.document_id]
-      const truck = trucks.find((t) => t.id === tid)
+      const truck =
+        tid != null ? trucks.find((t) => t.id === tid) : undefined
       if (!geo || !truck) {
         setPlanificacionFeedback(
           "Cada pedido seleccionado debe tener georreferencia y un camión asignado.",
@@ -308,6 +322,28 @@ export default function DistribuidoraOrdersPage() {
       ) : null}
 
       <section className="rounded-2xl border border-border/60 bg-card/40 p-6 shadow-sm backdrop-blur-sm">
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={loading || loadingSync}
+            onClick={() => void onResyncOrders()}
+            className="shrink-0 gap-2"
+          >
+            {loadingSync ? (
+              <Loader2 className="size-4 animate-spin" aria-hidden />
+            ) : (
+              <RefreshCw className="size-4" aria-hidden />
+            )}
+            Actualizar órdenes
+          </Button>
+          {loadingSync ? (
+            <span className="text-xs text-muted-foreground">
+              Actualizando desde Bsale…
+            </span>
+          ) : null}
+        </div>
         <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
           <div className="grid gap-5 sm:grid-cols-2">
             <div className="space-y-2">
@@ -580,6 +616,13 @@ export default function DistribuidoraOrdersPage() {
             <AlertTitle>Camiones</AlertTitle>
             <AlertDescription>{trucksError}</AlertDescription>
           </Alert>
+        ) : trucks.length === 0 ? (
+          <Alert>
+            <AlertTitle>Camiones</AlertTitle>
+            <AlertDescription>
+              ⚠️ No hay camiones disponibles
+            </AlertDescription>
+          </Alert>
         ) : null}
         <div className="flex flex-wrap items-center gap-4 rounded-lg border border-border/50 bg-muted/20 px-4 py-3 text-sm">
           <span>
@@ -620,8 +663,10 @@ export default function DistribuidoraOrdersPage() {
               ) : (
                 planningRows.map((r) => {
                   const geo = Boolean(r.has_georef && r.lat != null && r.lng != null)
-                  const tid = truckIdByDoc[r.document_id]
-                  const truck = trucks.find((t) => t.id === tid)
+                  const docId = r.document_id
+                  const tid = truckIdByDoc[docId]
+                  const truck =
+                    tid != null ? trucks.find((t) => t.id === tid) : undefined
                   const capLabel = truck ? distribuidoraTruckCapacityLabel(truck) : null
                   return (
                     <TableRow key={r.document_id} className="text-sm">
@@ -662,47 +707,36 @@ export default function DistribuidoraOrdersPage() {
                         <div className="flex min-w-[11rem] flex-col gap-1.5">
                           {trucks.length === 0 ? (
                             <span className="text-xs text-muted-foreground">
-                              Sin camiones
+                              ⚠️ No hay camiones disponibles
                             </span>
                           ) : (
-                          <Select
+                          <select
+                            className="h-8 max-w-[16rem] rounded-md border border-input bg-background px-2 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                             value={
                               tid != null && trucks.some((x) => x.id === tid)
                                 ? String(tid)
-                                : TRUCK_SELECT_UNASSIGNED
+                                : TRUCK_UNSET
                             }
-                            onValueChange={(v) => {
-                              if (v === TRUCK_SELECT_UNASSIGNED) {
-                                setTruckIdByDoc((prev) => {
-                                  const next = { ...prev }
-                                  delete next[r.document_id]
-                                  return next
-                                })
-                                return
-                              }
-                              const n = Number.parseInt(v, 10)
-                              if (!Number.isFinite(n)) return
+                            onChange={(e) => {
+                              const val =
+                                e.target.value === TRUCK_UNSET
+                                  ? null
+                                  : Number(e.target.value)
                               setTruckIdByDoc((prev) => ({
                                 ...prev,
-                                [r.document_id]: n,
+                                [docId]: val,
                               }))
                             }}
                             disabled={!geo}
+                            aria-label={`Camión OC ${r.oc ?? docId}`}
                           >
-                            <SelectTrigger className="h-8 max-w-[16rem] text-xs">
-                              <SelectValue placeholder="Asignar" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value={TRUCK_SELECT_UNASSIGNED}>
-                                Asignar
-                              </SelectItem>
-                              {trucks.map((t) => (
-                                <SelectItem key={t.id} value={String(t.id)}>
-                                  {t.name} ({t.plate})
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                            <option value={TRUCK_UNSET}>Asignar</option>
+                            {trucks.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.name} ({t.plate})
+                              </option>
+                            ))}
+                          </select>
                           )}
                           {capLabel && geo ? (
                             <Badge
