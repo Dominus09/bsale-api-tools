@@ -58,6 +58,16 @@ VALUES ('documents_resync', NULL, NULL)
 ON CONFLICT (process_name) DO NOTHING;
 -- +go
 
+INSERT INTO distribuidora.sync_state (process_name, last_sync, last_status)
+VALUES ('documents_orders', TIMESTAMPTZ '2000-01-01 00:00:00+00', NULL)
+ON CONFLICT (process_name) DO NOTHING;
+-- +go
+
+INSERT INTO distribuidora.sync_state (process_name, last_sync, last_status)
+VALUES ('documents_sales', TIMESTAMPTZ '2000-01-01 00:00:00+00', NULL)
+ON CONFLICT (process_name) DO NOTHING;
+-- +go
+
 CREATE TABLE IF NOT EXISTS distribuidora.sync_logs (
     id BIGSERIAL PRIMARY KEY,
     process_name TEXT NOT NULL,

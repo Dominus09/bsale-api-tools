@@ -80,6 +80,27 @@ def set_sync_state(
     )
 
 
+def ensure_sync_state_row(
+    cur,
+    process_name: str,
+    *,
+    default_last_sync: Any = None,
+) -> None:
+    """
+    Garantiza una fila en ``sync_state`` para ``process_name`` (``set_sync_state`` solo hace UPDATE).
+    """
+    if default_last_sync is None:
+        default_last_sync = "2000-01-01 00:00:00+00"
+    cur.execute(
+        """
+        INSERT INTO distribuidora.sync_state (process_name, last_sync, last_status)
+        VALUES (%s, %s::timestamptz, NULL)
+        ON CONFLICT (process_name) DO NOTHING
+        """,
+        (process_name, default_last_sync),
+    )
+
+
 def start_sync_log(cur, process_name: str) -> int:
     cur.execute(
         """

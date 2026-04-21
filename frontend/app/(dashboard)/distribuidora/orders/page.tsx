@@ -1,6 +1,6 @@
 "use client"
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { ChevronDown, Loader2, MapPin, Package, RefreshCw, Truck } from "lucide-react"
 
@@ -10,8 +10,7 @@ import {
   getDistribuidoraDispatchPrepObservaciones,
   getDistribuidoraDispatchPrepPlanningRows,
   getDistribuidoraTrucks,
-  pollDistribuidoraResyncOcJobUntilTerminal,
-  postDistribuidoraResyncOc,
+  postDistribuidoraSyncOrders,
   type DistribuidoraDispatchPrepMunicipalityRow,
   type DistribuidoraDispatchPrepPlanningRow,
   type DistribuidoraTruck,
@@ -104,23 +103,6 @@ const clp = new Intl.NumberFormat("es-CL", {
 
 function formatClp(n: number): string {
   return clp.format(Number.isFinite(n) ? n : 0)
-}
-
-type ResyncOcProgressUi = {
-  range: string
-  status: string
-  jobId: string
-  processed: number
-  updated: number
-  errors: number
-  message?: string
-}
-
-type ResyncOcFinalUi = {
-  range: string
-  processed: number
-  updated: number
-  errors: number
 }
 
 /** Valor sentinela en `<select>` nativo para “sin camión”. */
@@ -344,9 +326,6 @@ export default function DistribuidoraOrdersPage() {
   const [loading, setLoading] = useState(true)
   const [loadingSync, setLoadingSync] = useState(false)
   const [lastOrdersLoadAt, setLastOrdersLoadAt] = useState<string | null>(null)
-  const [resyncProgress, setResyncProgress] = useState<ResyncOcProgressUi | null>(null)
-  const [resyncFinal, setResyncFinal] = useState<ResyncOcFinalUi | null>(null)
-  const resyncPollAbortRef = useRef<AbortController | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [trucks, setTrucks] = useState<DistribuidoraTruck[]>([])
   const [trucksError, setTrucksError] = useState<string | null>(null)
@@ -463,104 +442,39 @@ export default function DistribuidoraOrdersPage() {
     return () => ac.abort()
   }, [loadDispatchPrep])
 
-  useEffect(() => {
-    return () => {
-      resyncPollAbortRef.current?.abort()
-    }
-  }, [])
-
-  const onResyncOrders = useCallback(async () => {
-    const emissionDateFrom = dateFrom
-    const emissionDateTo = dateTo
-    const rangeLabel = `${emissionDateFrom} → ${emissionDateTo}`
-    console.log("🔄 Iniciando actualización órdenes")
-    console.log("Rango fechas:", emissionDateFrom, "->", emissionDateTo)
-    resyncPollAbortRef.current?.abort()
+  const onSyncOrdersFromBsale = useCallback(async () => {
     const ac = new AbortController()
-    resyncPollAbortRef.current = ac
     setLoadingSync(true)
-    setResyncFinal(null)
-    setResyncProgress({
-      range: rangeLabel,
-      status: "starting",
-      jobId: "",
-      processed: 0,
-      updated: 0,
-      errors: 0,
-      message: "Encolando job…",
-    })
     try {
-      const start = await postDistribuidoraResyncOc({
-        emission_date_from: emissionDateFrom,
-        emission_date_to: emissionDateTo,
-        signal: ac.signal,
-      })
-      if (!start.ok || !start.job_id) {
-        console.error("No se pudo iniciar resync:", start.error)
-        setResyncProgress(null)
-        return
-      }
-      console.log("Job creado:", start.job_id)
-      const apiRange = `${start.emission_date_from ?? emissionDateFrom} → ${start.emission_date_to ?? emissionDateTo}`
-      setResyncProgress({
-        range: apiRange,
-        status: start.status ?? "started",
-        jobId: start.job_id,
-        processed: 0,
-        updated: 0,
-        errors: 0,
-        message: "Actualizando órdenes desde Bsale…",
-      })
-      const end = await pollDistribuidoraResyncOcJobUntilTerminal(start.job_id, {
-        signal: ac.signal,
-        onStatus: (s) => {
-          console.log("Estado job:", s.status)
-          const pc = s.processed_count ?? 0
-          const uc = s.updated_count ?? 0
-          console.log(`Procesadas: ${pc}, actualizadas: ${uc}`)
-          setResyncProgress({
-            range: apiRange,
-            status: s.status ?? "?",
-            jobId: start.job_id!,
-            processed: pc,
-            updated: uc,
-            errors: s.error_count ?? 0,
-            message: s.message,
-          })
-        },
-      })
-      if (!end.ok) {
-        console.error("Estado job inválido:", end.error)
-        setResyncProgress(null)
-        return
-      }
-      if (end.status === "error") {
-        console.error("Resync job error:", end.message)
-        setResyncProgress(null)
-        return
-      }
-      if (end.status === "done") {
-        const pc = end.processed_count ?? 0
-        const uc = end.updated_count ?? 0
-        const ec = end.error_count ?? 0
-        await loadDispatchPrep(ac.signal)
-        console.log("Órdenes recargadas correctamente")
-        setResyncFinal({
-          range: apiRange,
-          processed: pc,
-          updated: uc,
-          errors: ec,
+      const r = await postDistribuidoraSyncOrders({ signal: ac.signal })
+      if (!r.ok) {
+        toast({
+          title: "No se pudo sincronizar",
+          description: r.error ?? "Error desconocido",
+          variant: "destructive",
         })
-        setResyncProgress(null)
+        return
       }
+      await loadDispatchPrep(ac.signal)
+      const proc = r.stats?.documents_processed
+      toast({
+        title: "Órdenes actualizadas",
+        description:
+          typeof proc === "number"
+            ? `Documentos procesados: ${proc}. Resumen y tabla recargados.`
+            : "Resumen por comuna, observaciones y pre‑planificación recargados.",
+      })
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") return
-      console.error("❌ Error en resync:", e)
-      setResyncProgress(null)
+      toast({
+        title: "Error al sincronizar",
+        description: e instanceof Error ? e.message : "Error desconocido",
+        variant: "destructive",
+      })
     } finally {
       setLoadingSync(false)
     }
-  }, [loadDispatchPrep, dateFrom, dateTo])
+  }, [loadDispatchPrep])
 
   const tagStats = useMemo(
     () => aggregateObservationTags(observationTexts),
@@ -886,7 +800,7 @@ export default function DistribuidoraOrdersPage() {
             variant="outline"
             size="sm"
             disabled={loading || loadingSync}
-            onClick={() => void onResyncOrders()}
+            onClick={() => void onSyncOrdersFromBsale()}
             className="shrink-0 gap-2"
           >
             {loadingSync ? (
@@ -898,36 +812,13 @@ export default function DistribuidoraOrdersPage() {
           </Button>
           {loadingSync ? (
             <span className="text-xs text-muted-foreground">
-              Actualizando órdenes… (job en servidor, no cierre esta pestaña)
+              Sincronizando órdenes de compra desde Bsale (solo tipo 33)…
             </span>
           ) : null}
         </div>
         <div className="mb-4 space-y-1 text-xs text-muted-foreground">
           {lastOrdersLoadAt ? (
             <p>Última actualización: {lastOrdersLoadAt}</p>
-          ) : null}
-          {resyncProgress ? (
-            <>
-              <p>Rango: {resyncProgress.range}</p>
-              <p className="text-foreground/90">
-                Estado: {resyncProgress.status}
-                {resyncProgress.message ? ` — ${resyncProgress.message}` : ""}
-              </p>
-              <p className="text-foreground/90">
-                Resultado (parcial): {resyncProgress.processed} procesadas /{" "}
-                {resyncProgress.updated} actualizadas
-                {resyncProgress.errors > 0 ? ` (${resyncProgress.errors} errores)` : ""}
-              </p>
-            </>
-          ) : null}
-          {resyncFinal ? (
-            <>
-              <p>Rango: {resyncFinal.range}</p>
-              <p className="text-foreground/90">
-                Resultado: {resyncFinal.processed} procesadas / {resyncFinal.updated} actualizadas
-                {resyncFinal.errors > 0 ? ` (${resyncFinal.errors} errores)` : ""}
-              </p>
-            </>
           ) : null}
         </div>
         <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">

@@ -136,6 +136,17 @@ def run_resync_oc_job(
             err,
             job_id,
         )
+        try:
+            from backend.services.distribuidora.sync_related_service import (
+                run_sync_distribuidora_related_background,
+            )
+
+            run_sync_distribuidora_related_background()
+        except Exception:
+            logger.exception(
+                "resync_oc job %s: related sync tras resync documentos falló",
+                job_id,
+            )
         update_job(
             job_id,
             status="done",

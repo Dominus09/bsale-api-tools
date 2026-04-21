@@ -25,7 +25,14 @@ from backend.services.distribuidora.resync_oc_jobs import (
     get_job,
     run_resync_oc_job,
 )
-from backend.services.distribuidora.sync_service import bsale_token_distribuidora_configured
+from backend.services.distribuidora.sync_related_service import (
+    run_sync_distribuidora_related_background,
+)
+from backend.services.distribuidora.sync_service import (
+    bsale_token_distribuidora_configured,
+    sync_bsale_distribuidora_orders_incremental,
+    sync_bsale_distribuidora_sales_incremental,
+)
 
 router = APIRouter(prefix="/distribuidora", tags=["Distribuidora órdenes"])
 logger = logging.getLogger(__name__)
@@ -95,6 +102,58 @@ def _preview_enriched_row(r: dict[str, Any]) -> dict[str, Any]:
         if isinstance(v, Decimal):
             out[k] = float(v) if v is not None else None
     return out
+
+
+@router.post("/sync-orders")
+def post_distribuidora_sync_orders():
+    """
+    Sync incremental solo órdenes de compra Bsale (``document_type_id`` 33).
+    La visibilidad en pre‑despacho depende de ``document_related`` hacia boleta/factura (1, 6).
+    """
+    if not bsale_token_distribuidora_configured():
+        raise HTTPException(status_code=503, detail="sin_token")
+    try:
+        stats = sync_bsale_distribuidora_orders_incremental(strict_token=True)
+    except ValueError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    if stats.get("omitido_concurrencia"):
+        raise HTTPException(
+            status_code=409,
+            detail="Otro sync o resync tiene el lock; reintente en unos segundos.",
+        )
+    if stats.get("skipped"):
+        raise HTTPException(status_code=503, detail=stats.get("skip_reason") or "omitido")
+    try:
+        run_sync_distribuidora_related_background()
+    except Exception:
+        logger.exception("sync-orders: related sync falló (OC ya guardadas)")
+    return {"ok": True, "stats": stats}
+
+
+@router.post("/sync-sales")
+def post_distribuidora_sync_sales():
+    """
+    Sync incremental boletas (1), facturas (6) y notas de crédito (9).
+    Tras guardar documentos, ejecuta sync de relaciones para no dejar OC desalineadas.
+    """
+    if not bsale_token_distribuidora_configured():
+        raise HTTPException(status_code=503, detail="sin_token")
+    try:
+        stats = sync_bsale_distribuidora_sales_incremental(strict_token=True)
+    except ValueError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    if stats.get("omitido_concurrencia"):
+        raise HTTPException(
+            status_code=409,
+            detail="Otro sync o resync tiene el lock; reintente en unos segundos.",
+        )
+    if stats.get("skipped"):
+        raise HTTPException(status_code=503, detail=stats.get("skip_reason") or "omitido")
+    try:
+        run_sync_distribuidora_related_background()
+    except Exception:
+        logger.exception("sync-sales: related sync falló (ventas ya guardadas)")
+    return {"ok": True, "stats": stats}
 
 
 @router.get("/orders/purchase/by-document-ids")

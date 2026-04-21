@@ -1014,6 +1014,69 @@ export async function getDistribuidoraTrucks(params?: {
   return res.json() as Promise<{ items: DistribuidoraTruck[] }>
 }
 
+/** POST /distribuidora/sync-orders | /distribuidora/sync-sales (respuesta al terminar el sync). */
+export type DistribuidoraTypedSyncResponse = {
+  ok: boolean
+  stats?: Record<string, unknown>
+  error?: string
+}
+
+function _detailFromBody(data: unknown): string | undefined {
+  if (!data || typeof data !== "object") return undefined
+  const d = (data as { detail?: unknown }).detail
+  if (typeof d === "string") return d
+  if (Array.isArray(d) && d.length && typeof d[0] === "object" && d[0] !== null) {
+    const msg = (d[0] as { msg?: unknown }).msg
+    if (typeof msg === "string") return msg
+  }
+  return undefined
+}
+
+export async function postDistribuidoraSyncOrders(params?: {
+  signal?: AbortSignal
+}): Promise<DistribuidoraTypedSyncResponse> {
+  const res = await fetch(`${API_URL}/distribuidora/sync-orders`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    signal: params?.signal,
+  })
+  const data = (await res.json().catch(() => ({}))) as Record<string, unknown>
+  if (res.status === 409) {
+    return {
+      ok: false,
+      error: _detailFromBody(data) ?? "sync_en_curso",
+    }
+  }
+  if (!res.ok) {
+    return {
+      ok: false,
+      error: _detailFromBody(data) ?? `HTTP ${res.status}`,
+    }
+  }
+  return { ok: true, stats: data.stats as Record<string, unknown> | undefined }
+}
+
+export async function postDistribuidoraSyncSales(params?: {
+  signal?: AbortSignal
+}): Promise<DistribuidoraTypedSyncResponse> {
+  const res = await fetch(`${API_URL}/distribuidora/sync-sales`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    signal: params?.signal,
+  })
+  const data = (await res.json().catch(() => ({}))) as Record<string, unknown>
+  if (res.status === 409) {
+    return { ok: false, error: _detailFromBody(data) ?? "sync_en_curso" }
+  }
+  if (!res.ok) {
+    return {
+      ok: false,
+      error: _detailFromBody(data) ?? `HTTP ${res.status}`,
+    }
+  }
+  return { ok: true, stats: data.stats as Record<string, unknown> | undefined }
+}
+
 /** Respuesta inmediata al encolar resync OC (el trabajo corre en background). */
 export type DistribuidoraResyncOcStartResponse = {
   ok: boolean

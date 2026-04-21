@@ -17,6 +17,7 @@ import { AlertCircle, Loader2, Users, Wallet } from "lucide-react"
 
 import {
   getDistribuidoraClientsDashboard,
+  postDistribuidoraSyncSales,
   type DistribuidoraClientsDashboardResponse,
 } from "@/lib/api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -56,6 +57,7 @@ function formatDateTime(iso: string | null | undefined): string {
 
 export default function DistribuidoraCommercialDashboardPage() {
   const [loading, setLoading] = useState(true)
+  const [syncingSales, setSyncingSales] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [data, setData] = useState<DistribuidoraClientsDashboardResponse | null>(null)
 
@@ -75,6 +77,23 @@ export default function DistribuidoraCommercialDashboardPage() {
       setLoading(false)
     }
   }, [])
+
+  const onSyncSalesFromBsale = useCallback(async () => {
+    setSyncingSales(true)
+    setError(null)
+    try {
+      const r = await postDistribuidoraSyncSales()
+      if (!r.ok) {
+        setError(r.error ?? "No se pudo sincronizar ventas desde Bsale.")
+        return
+      }
+      await load()
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Error al sincronizar ventas.")
+    } finally {
+      setSyncingSales(false)
+    }
+  }, [load])
 
   useEffect(() => {
     void load()
@@ -125,6 +144,19 @@ export default function DistribuidoraCommercialDashboardPage() {
           </Button>
           <Button type="button" variant="secondary" size="sm" onClick={() => void load()} disabled={loading}>
             Actualizar
+          </Button>
+          <Button
+            type="button"
+            variant="default"
+            size="sm"
+            onClick={() => void onSyncSalesFromBsale()}
+            disabled={loading || syncingSales}
+            className="gap-1.5"
+          >
+            {syncingSales ? (
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+            ) : null}
+            Actualizar ventas
           </Button>
         </div>
       </div>

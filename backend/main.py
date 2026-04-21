@@ -67,11 +67,14 @@ def _cors_allow_origin_regex() -> str | None:
 
 
 async def _distribuidora_bsale_sync_background_loop() -> None:
-    """Ejecuta sync_bsale_distribuidora cada DISTRIBUIDORA_BSALE_SYNC_INTERVAL_SEC (default 30 min)."""
+    """
+    Ejecuta ``sync_bsale_distribuidora`` (sync-orders + sync-sales + related) cada
+    ``DISTRIBUIDORA_BSALE_SYNC_INTERVAL_SEC`` (default 10 min).
+    """
     from backend.jobs.sync_bsale_distribuidora import sync_bsale_distribuidora
 
     delay_first = int(os.getenv("DISTRIBUIDORA_BSALE_SYNC_START_DELAY_SEC", "45"))
-    interval = int(os.getenv("DISTRIBUIDORA_BSALE_SYNC_INTERVAL_SEC", str(30 * 60)))
+    interval = int(os.getenv("DISTRIBUIDORA_BSALE_SYNC_INTERVAL_SEC", str(10 * 60)))
     if interval < 120:
         interval = 120
     await asyncio.sleep(max(0, delay_first))

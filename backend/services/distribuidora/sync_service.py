@@ -27,6 +27,7 @@ from backend.repositories.distribuidora.documents_repo import (
 from backend.repositories.distribuidora.references_repo import replace_document_references
 from backend.repositories.distribuidora.sync_repo import (
     ensure_distribuidora_schema,
+    ensure_sync_state_row,
     finish_sync_log,
     get_last_sync,
     insert_sync_status_row,
@@ -45,6 +46,10 @@ RESYNC_BSALE_BACKOFFS_SEC = (3, 5, 10, 20, 30)
 RESYNC_HTTP_MAX_ATTEMPTS = 5
 PROCESS_INCREMENTAL = "documents_incremental"
 PROCESS_RESYNC = "documents_resync"
+PROCESS_ORDERS = "documents_orders"
+PROCESS_SALES = "documents_sales"
+DOC_TYPES_OC = frozenset({33})
+DOC_TYPES_SALES = frozenset({1, 6, 9})
 _FIRST_SYNC_CUTOFF = datetime(2010, 1, 1, tzinfo=timezone.utc)
 _token_missing_logged = False
 
@@ -157,12 +162,180 @@ def _notify_progress(stats: dict[str, Any]) -> None:
     )
 
 
+def _bsale_document_type_id(d: dict[str, Any]) -> int | None:
+    dt = d.get("document_type") or d.get("documentType")
+    if not isinstance(dt, dict):
+        return None
+    raw = dt.get("id")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _log_orders_sync_summary(
+    cur,
+    *,
+    emission_from: datetime,
+    emission_to: datetime,
+    stats: dict[str, Any],
+    desde_ts: int,
+    hasta_ts: int,
+) -> None:
+    """Post-sync: OC en ventana según ``v_documents_latest`` y relación hacia boleta/factura (1, 6)."""
+    cur.execute(
+        """
+        WITH oc AS (
+            SELECT d.document_id, d.company_id, d.office_id
+            FROM distribuidora.v_documents_latest d
+            WHERE d.company_id = %s
+              AND d.office_id = %s
+              AND d.document_type_id = 33
+              AND d.emission_date >= %s
+              AND d.emission_date <= %s
+        )
+        SELECT
+            COUNT(*)::int AS total_oc,
+            COALESCE(
+                COUNT(*) FILTER (
+                    WHERE EXISTS (
+                        SELECT 1
+                        FROM distribuidora.document_related dr
+                        INNER JOIN distribuidora.document_details dd
+                            ON dd.detail_id = dr.detail_id
+                        INNER JOIN distribuidora.v_documents_latest inv
+                            ON inv.document_id = dr.related_document_id
+                           AND inv.document_type_id IN (1, 6)
+                           AND inv.company_id = oc.company_id
+                           AND inv.office_id = oc.office_id
+                        WHERE dd.document_id = oc.document_id
+                    )
+                ),
+                0
+            )::int AS oc_with_boleta_factura
+        FROM oc
+        """,
+        (COMPANY_ID, OFFICE_ID, emission_from, emission_to),
+    )
+    row = cur.fetchone() or (0, 0)
+    total_oc, with_inv = int(row[0] or 0), int(row[1] or 0)
+    visible = max(0, total_oc - with_inv)
+    proc = int(stats.get("documents_processed") or 0)
+    skipped_t = int(stats.get("skipped_document_type_filter") or 0)
+    logger.info(
+        "sync-orders: rango epoch Bsale [%s, %s] | API docs guardados=%s | API omitidos_por_tipo=%s",
+        desde_ts,
+        hasta_ts,
+        proc,
+        skipped_t,
+    )
+    logger.info(
+        "sync-orders: ventana BD emission_date [%s, %s] | OC totales=%s | OC visibles_pre_despacho=%s | "
+        "OC ocultas_boleta_factura_relacionada=%s",
+        emission_from.isoformat(),
+        emission_to.isoformat(),
+        total_oc,
+        visible,
+        with_inv,
+    )
+
+
+def _log_sales_sync_summary(
+    cur,
+    *,
+    emission_from: datetime,
+    emission_to: datetime,
+    stats: dict[str, Any],
+    desde_ts: int,
+    hasta_ts: int,
+) -> None:
+    cur.execute(
+        """
+        SELECT
+            COUNT(*) FILTER (WHERE document_type_id = 1)::int AS n_boleta,
+            COUNT(*) FILTER (WHERE document_type_id = 6)::int AS n_factura,
+            COUNT(*) FILTER (WHERE document_type_id = 9)::int AS n_nc,
+            COALESCE(
+                SUM(
+                    CASE
+                        WHEN document_type_id = 9 THEN -COALESCE(total_amount, 0::numeric)
+                        ELSE COALESCE(total_amount, 0::numeric)
+                    END
+                ),
+                0::numeric
+            ) AS monto_neto
+        FROM distribuidora.v_documents_latest
+        WHERE company_id = %s
+          AND office_id = %s
+          AND document_type_id IN (1, 6, 9)
+          AND emission_date >= %s
+          AND emission_date <= %s
+        """,
+        (COMPANY_ID, OFFICE_ID, emission_from, emission_to),
+    )
+    r0 = cur.fetchone()
+    n_b, n_f, n_nc, m_neto = 0, 0, 0, 0
+    if r0:
+        n_b, n_f, n_nc = int(r0[0] or 0), int(r0[1] or 0), int(r0[2] or 0)
+        m_neto = float(r0[3] or 0)
+
+    cur.execute(
+        """
+        SELECT
+            COALESCE(SUM(COALESCE(total_amount, 0::numeric)), 0::numeric) AS suma,
+            COUNT(*)::int AS cnt
+        FROM distribuidora.v_documents_latest
+        WHERE company_id = %s
+          AND office_id = %s
+          AND document_type_id IN (1, 6)
+          AND emission_date >= %s
+          AND emission_date <= %s
+        """,
+        (COMPANY_ID, OFFICE_ID, emission_from, emission_to),
+    )
+    r1 = cur.fetchone()
+    sum_real, cnt_real = (0.0, 0)
+    if r1:
+        sum_real, cnt_real = float(r1[0] or 0), int(r1[1] or 0)
+    ticket = (sum_real / cnt_real) if cnt_real else 0.0
+
+    proc = int(stats.get("documents_processed") or 0)
+    skipped_t = int(stats.get("skipped_document_type_filter") or 0)
+    logger.info(
+        "sync-sales: rango epoch Bsale [%s, %s] | API docs guardados=%s | API omitidos_por_tipo=%s",
+        desde_ts,
+        hasta_ts,
+        proc,
+        skipped_t,
+    )
+    logger.info(
+        "sync-sales: ventana BD emission_date [%s, %s] | boletas=%s facturas=%s nc=%s | "
+        "monto_neto_suma_tipos_1_6_9=%s | ticket_promedio_solo_1_6=%s (n=%s)",
+        emission_from.isoformat(),
+        emission_to.isoformat(),
+        n_b,
+        n_f,
+        n_nc,
+        m_neto,
+        round(ticket, 2),
+        cnt_real,
+    )
+
+
 def _append_items_from_bsale_response(
     items: list[dict[str, Any]],
     pending: list[dict[str, Any]],
     stats: dict[str, Any],
 ) -> None:
+    allowed = stats.get("_allowed_document_type_ids")
     for d in items:
+        if allowed is not None:
+            tid = _bsale_document_type_id(d)
+            if tid not in allowed:
+                stats["skipped_document_type_filter"] = int(stats.get("skipped_document_type_filter") or 0) + 1
+                continue
         try:
             row = document_dict_from_bsale(
                 d,
@@ -533,7 +706,12 @@ def _fetch_documents_window(
         conn.commit()
 
 
-def sync_bsale_distribuidora_incremental(*, strict_token: bool = False) -> dict[str, Any]:
+def sync_bsale_distribuidora_incremental(
+    *,
+    strict_token: bool = False,
+    process_name: str = PROCESS_INCREMENTAL,
+    allowed_document_type_ids: frozenset[int] | None = None,
+) -> dict[str, Any]:
     global _token_missing_logged
     t0 = time.perf_counter()
     token = _bsale_token()
@@ -556,6 +734,7 @@ def sync_bsale_distribuidora_incremental(*, strict_token: bool = False) -> dict[
 
     stats: dict[str, Any] = {
         "mode": "incremental",
+        "process_name": process_name,
         "documents_processed": 0,
         "documents_inserted": 0,
         "documents_updated": 0,
@@ -566,6 +745,7 @@ def sync_bsale_distribuidora_incremental(*, strict_token: bool = False) -> dict[
         "seller_sync_failures": 0,
         "skipped_other_office": 0,
         "skipped_other_company": 0,
+        "skipped_document_type_filter": 0,
         "details_inserted": 0,
         "attributes_inserted": 0,
         "references_inserted": 0,
@@ -594,12 +774,14 @@ def sync_bsale_distribuidora_incremental(*, strict_token: bool = False) -> dict[
             return stats
 
         ensure_distribuidora_schema(cur)
+        if allowed_document_type_ids is not None:
+            ensure_sync_state_row(cur, process_name)
         conn.commit()
 
-        log_id = start_sync_log(cur, PROCESS_INCREMENTAL)
+        log_id = start_sync_log(cur, process_name)
         conn.commit()
 
-        last_sync = get_last_sync(cur, PROCESS_INCREMENTAL)
+        last_sync = get_last_sync(cur, process_name)
         if last_sync is None:
             last_sync = datetime(2000, 1, 1, tzinfo=timezone.utc)
         elif last_sync.tzinfo is None:
@@ -608,7 +790,10 @@ def sync_bsale_distribuidora_incremental(*, strict_token: bool = False) -> dict[
         now = datetime.now(timezone.utc)
         if last_sync < _FIRST_SYNC_CUTOFF:
             desde = now - timedelta(days=30)
-            logger.info("sync incremental: primer ciclo amplio (30 días)")
+            logger.info(
+                "sync incremental (%s): primer ciclo amplio (30 días)",
+                process_name,
+            )
         else:
             desde = last_sync - timedelta(hours=2)
 
@@ -617,22 +802,50 @@ def sync_bsale_distribuidora_incremental(*, strict_token: bool = False) -> dict[
         if desde_ts >= hasta_ts:
             desde_ts = hasta_ts - 3600
 
+        if allowed_document_type_ids is not None:
+            stats["_allowed_document_type_ids"] = allowed_document_type_ids
+
         client = BsaleClient(token)
         logger.info(
-            "distribuidora sync incremental: procesando solo company_id=%s office_id=%s "
-            "(Bsale GET /documents.json con officeId=%s)",
+            "distribuidora sync incremental (%s): company_id=%s office_id=%s officeId=%s | "
+            "epoch [%s, %s]",
+            process_name,
             COMPANY_ID,
             OFFICE_ID,
             OFFICE_ID,
+            desde_ts,
+            hasta_ts,
         )
         _fetch_documents_window(
             client, cur, conn, desde_ts=desde_ts, hasta_ts=hasta_ts, stats=stats, log_id=log_id
         )
 
+        stats.pop("_allowed_document_type_ids", None)
+
+        if process_name == PROCESS_ORDERS:
+            _log_orders_sync_summary(
+                cur,
+                emission_from=desde,
+                emission_to=now,
+                stats=stats,
+                desde_ts=desde_ts,
+                hasta_ts=hasta_ts,
+            )
+        elif process_name == PROCESS_SALES:
+            _log_sales_sync_summary(
+                cur,
+                emission_from=desde,
+                emission_to=now,
+                stats=stats,
+                desde_ts=desde_ts,
+                hasta_ts=hasta_ts,
+            )
+
+        proc_count = int(stats.get("documents_processed", 0))
         insert_sync_status_row(
             cur,
             sync_type="documents",
-            records_processed=int(stats.get("documents_processed", 0)),
+            records_processed=proc_count,
             status="success",
         )
         insert_sync_status_row(
@@ -641,12 +854,23 @@ def sync_bsale_distribuidora_incremental(*, strict_token: bool = False) -> dict[
             records_processed=int(stats.get("details_rows", 0)),
             status="success",
         )
-        insert_sync_status_row(cur, sync_type="orders", records_processed=0, status="success")
-        insert_sync_status_row(cur, sync_type="sales", records_processed=0, status="success")
+        if process_name == PROCESS_ORDERS:
+            insert_sync_status_row(
+                cur, sync_type="orders", records_processed=proc_count, status="success"
+            )
+            insert_sync_status_row(cur, sync_type="sales", records_processed=0, status="success")
+        elif process_name == PROCESS_SALES:
+            insert_sync_status_row(cur, sync_type="orders", records_processed=0, status="success")
+            insert_sync_status_row(
+                cur, sync_type="sales", records_processed=proc_count, status="success"
+            )
+        else:
+            insert_sync_status_row(cur, sync_type="orders", records_processed=0, status="success")
+            insert_sync_status_row(cur, sync_type="sales", records_processed=0, status="success")
 
         set_sync_state(
             cur,
-            process_name=PROCESS_INCREMENTAL,
+            process_name=process_name,
             last_sync=now,
             last_status="ok",
             last_message=f"processed={stats['documents_processed']}",
@@ -662,12 +886,15 @@ def sync_bsale_distribuidora_incremental(*, strict_token: bool = False) -> dict[
             stats.get("skipped_other_company", 0),
         )
         logger.info(
-            "sync distribuidora incremental OK: processed=%s updated_documents=%s details=%s attr=%s ref=%s s=%.2f",
+            "sync distribuidora incremental OK (%s): processed=%s updated_documents=%s details=%s "
+            "attr=%s ref=%s omitidos_tipo=%s s=%.2f",
+            process_name,
             stats["documents_processed"],
             stats.get("updated_documents", 0),
             stats["details_inserted"],
             stats["attributes_inserted"],
             stats["references_inserted"],
+            int(stats.get("skipped_document_type_filter") or 0),
             time.perf_counter() - t0,
         )
         logger.info("Documentos procesados: %s", stats["documents_processed"])
@@ -678,6 +905,7 @@ def sync_bsale_distribuidora_incremental(*, strict_token: bool = False) -> dict[
             int(stats.get("document_upsert_failures") or 0),
         )
     except Exception as e:
+        stats.pop("_allowed_document_type_ids", None)
         logger.exception("sync distribuidora incremental: %s", e)
         stats["errors"] = str(e)
         try:
@@ -708,6 +936,24 @@ def sync_bsale_distribuidora_incremental(*, strict_token: bool = False) -> dict[
 
     stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
     return stats
+
+
+def sync_bsale_distribuidora_orders_incremental(*, strict_token: bool = False) -> dict[str, Any]:
+    """Solo OC Bsale (``document_type_id`` 33); pre-despacho excluye por relación 1/6 en consultas."""
+    return sync_bsale_distribuidora_incremental(
+        strict_token=strict_token,
+        process_name=PROCESS_ORDERS,
+        allowed_document_type_ids=DOC_TYPES_OC,
+    )
+
+
+def sync_bsale_distribuidora_sales_incremental(*, strict_token: bool = False) -> dict[str, Any]:
+    """Boletas (1), facturas (6) y notas de crédito (9)."""
+    return sync_bsale_distribuidora_incremental(
+        strict_token=strict_token,
+        process_name=PROCESS_SALES,
+        allowed_document_type_ids=DOC_TYPES_SALES,
+    )
 
 
 def resync_bsale_distribuidora_range(
@@ -973,8 +1219,15 @@ def resync_bsale_distribuidora_range(
 
 
 def run_incremental_distribuidora_background() -> None:
+    """Mismo flujo que el job programado: órdenes (33), ventas (1/6/9), luego relaciones."""
     try:
-        sync_bsale_distribuidora_incremental(strict_token=True)
+        sync_bsale_distribuidora_orders_incremental(strict_token=True)
+        sync_bsale_distribuidora_sales_incremental(strict_token=True)
+        from backend.services.distribuidora.sync_related_service import (
+            run_sync_distribuidora_related_background,
+        )
+
+        run_sync_distribuidora_related_background()
     except Exception:
         logger.exception("incremental background")
 
@@ -1022,7 +1275,17 @@ class DistribuidoraSyncService:
 
     @staticmethod
     def run_incremental(*, strict_token: bool = False) -> dict[str, Any]:
-        return sync_bsale_distribuidora_incremental(strict_token=strict_token)
+        o = sync_bsale_distribuidora_orders_incremental(strict_token=strict_token)
+        s = sync_bsale_distribuidora_sales_incremental(strict_token=strict_token)
+        try:
+            from backend.services.distribuidora.sync_related_service import (
+                run_sync_distribuidora_related_background,
+            )
+
+            run_sync_distribuidora_related_background()
+        except Exception:
+            logger.exception("DistribuidoraSyncService.run_incremental: related falló")
+        return {"orders": o, "sales": s}
 
     @staticmethod
     def run_resync(
