@@ -18,8 +18,9 @@ from backend.repositories.distribuidora.attributes_repo import replace_document_
 from backend.repositories.distribuidora.details_repo import replace_document_details
 from backend.repositories.distribuidora.documents_repo import (
     document_dict_from_bsale,
-    parse_document_sellers_response,
-    update_document_seller_if_empty,
+    replace_document_sellers,
+    seller_tuples_from_sellers_api_response,
+    set_document_primary_seller,
     upsert_documents,
 )
 from backend.repositories.distribuidora.references_repo import replace_document_references
@@ -155,6 +156,7 @@ def _append_items_from_bsale_response(
         )
         if row is None:
             continue
+        row["_bsale_document"] = d
         pending.append(row)
 
 
@@ -180,6 +182,7 @@ def _flush_pending_when_large(
                 int(r["document_id"]),
                 r.get("document_type_id"),
                 stats,
+                raw_document=r.get("_bsale_document"),
             )
         conn.commit()
         stats["documents_processed"] += len(to_save)
@@ -216,6 +219,7 @@ def _flush_pending_tail(
                 int(r["document_id"]),
                 r.get("document_type_id"),
                 stats,
+                raw_document=r.get("_bsale_document"),
             )
         conn.commit()
         stats["documents_processed"] += len(to_save)
@@ -280,12 +284,73 @@ def _fetch_documents_single_day_resync(
     logger.info("✅ Día completado: %s", day.isoformat())
 
 
+def _seller_tuples_from_bsale_document_json(
+    client: BsaleClient,
+    raw: dict[str, Any],
+) -> list[tuple[int | None, str | None]]:
+    """
+    Obtiene vendedores desde el JSON del documento Bsale (clave ``sellers``).
+    Suele ser ``{ "href": "https://.../sellers.json" }``; si ya viene ``items``, lo usa.
+    """
+    sellers = raw.get("sellers")
+    if sellers is None:
+        return []
+    if isinstance(sellers, dict):
+        href = sellers.get("href")
+        if isinstance(href, str) and href.strip():
+            try:
+                data = client.get(href.strip())
+            except Exception as e:
+                logger.warning("sellers href document_id=%s: %s", raw.get("id"), e)
+                return []
+            return seller_tuples_from_sellers_api_response(data)
+        items = sellers.get("items")
+        if isinstance(items, list):
+            return seller_tuples_from_sellers_api_response({"items": items})
+    if isinstance(sellers, list):
+        return seller_tuples_from_sellers_api_response({"items": sellers})
+    return []
+
+
+def _sync_document_sellers(
+    client: BsaleClient,
+    cur,
+    document_id: int,
+    raw_document: dict[str, Any] | None,
+    stats: dict[str, Any],
+) -> None:
+    """
+    Persiste ``distribuidora.document_sellers`` desde ``document.sellers`` o GET sellers.json.
+
+    Si ``sellers`` viene vacío, solo se eliminan filas previas (ningún INSERT).
+    """
+    tuples: list[tuple[int | None, str | None]] = []
+    if isinstance(raw_document, dict):
+        tuples = _seller_tuples_from_bsale_document_json(client, raw_document)
+    if not tuples:
+        try:
+            data = client.get(f"/documents/{document_id}/sellers.json")
+            tuples = seller_tuples_from_sellers_api_response(data)
+        except Exception as e:
+            logger.warning("sellers.json document_id=%s: %s", document_id, e)
+    try:
+        n = replace_document_sellers(cur, document_id, tuples)
+        stats["document_sellers_rows"] = int(stats.get("document_sellers_rows") or 0) + n
+        if tuples:
+            sid0, name0 = tuples[0]
+            set_document_primary_seller(cur, document_id, sid0, name0)
+            stats["sellers_filled"] = int(stats.get("sellers_filled") or 0) + 1
+    except Exception as e:
+        logger.warning("document_sellers document_id=%s: %s", document_id, e)
+
+
 def _refresh_document_children(
     client: BsaleClient,
     cur,
     document_id: int,
     document_type_id: int | None,
     stats: dict[str, Any],
+    raw_document: dict[str, Any] | None = None,
 ) -> None:
     try:
         det = client.get(f"/documents/{document_id}/details.json")
@@ -315,45 +380,7 @@ def _refresh_document_children(
         except Exception as e:
             logger.warning("references document_id=%s: %s", document_id, e)
 
-    _sync_document_sellers_if_empty(client, cur, document_id, document_type_id, stats)
-
-
-def _sync_document_sellers_if_empty(
-    client: BsaleClient,
-    cur,
-    document_id: int,
-    document_type_id: int | None,
-    stats: dict[str, Any],
-) -> None:
-    """GET ``/documents/{id}/sellers.json`` y guarda vendedor solo si ``seller_name`` está vacío."""
-    if document_type_id != 33:
-        return
-    cur.execute(
-        """
-        SELECT seller_name
-        FROM distribuidora.documents
-        WHERE document_id = %s
-        """,
-        (document_id,),
-    )
-    row = cur.fetchone()
-    if row is None:
-        return
-    if row[0] is not None and str(row[0]).strip() != "":
-        return
-    try:
-        data = client.get(f"/documents/{document_id}/sellers.json")
-    except Exception as e:
-        logger.warning("sellers.json document_id=%s: %s", document_id, e)
-        return
-    sid, sname = parse_document_sellers_response(data)
-    if not sname:
-        return
-    try:
-        if update_document_seller_if_empty(cur, document_id, sid, sname):
-            stats["sellers_filled"] = int(stats.get("sellers_filled") or 0) + 1
-    except Exception as e:
-        logger.warning("update seller document_id=%s: %s", document_id, e)
+    _sync_document_sellers(client, cur, document_id, raw_document, stats)
 
 
 def _fetch_documents_window(
@@ -440,6 +467,7 @@ def sync_bsale_distribuidora_incremental(*, strict_token: bool = False) -> dict[
         "attributes_rows": 0,
         "references_rows": 0,
         "sellers_filled": 0,
+        "document_sellers_rows": 0,
         "duration_seconds": 0.0,
         "omitido_concurrencia": False,
         "skipped": False,
@@ -596,6 +624,7 @@ def resync_bsale_distribuidora_range(
         "attributes_rows": 0,
         "references_rows": 0,
         "sellers_filled": 0,
+        "document_sellers_rows": 0,
         "days_processed": 0,
         "duration_seconds": 0.0,
         "omitido_concurrencia": False,

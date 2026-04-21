@@ -380,20 +380,8 @@ def upsert_documents(cur, rows: list[dict[str, Any]]) -> tuple[int, int]:
     return len(rows), len(rows)
 
 
-def parse_document_sellers_response(data: dict[str, Any]) -> tuple[int | None, str | None]:
-    """
-    Respuesta típica GET ``/v1/documents/{id}/sellers.json`` (Bsale):
-    ``{ "items": [ { "id", "firstName", "lastName", ... } ] }``.
-    Se usa el primer ítem como vendedor asociado al documento.
-    """
-    if not isinstance(data, dict):
-        return None, None
-    items = data.get("items")
-    if not isinstance(items, list) or len(items) == 0:
-        return None, None
-    s = items[0]
-    if not isinstance(s, dict):
-        return None, None
+def seller_tuple_from_bsale_item(s: dict[str, Any]) -> tuple[int | None, str | None]:
+    """Un vendedor desde ítem ``items[]`` de sellers.json (Bsale)."""
     raw_id = s.get("id")
     try:
         seller_id = int(raw_id) if raw_id is not None else None
@@ -403,6 +391,88 @@ def parse_document_sellers_response(data: dict[str, Any]) -> tuple[int | None, s
     ln = str(s.get("lastName") or s.get("lastname") or "").strip()
     name = f"{fn} {ln}".strip() or None
     return seller_id, name
+
+
+def seller_tuples_from_sellers_api_response(data: Any) -> list[tuple[int | None, str | None]]:
+    """
+    Respuesta típica GET ``/v1/documents/{id}/sellers.json``:
+    ``{ "items": [ { "id", "firstName", "lastName", ... }, ... ] }``.
+    Devuelve todas las tuplas con nombre no vacío.
+    """
+    if not isinstance(data, dict):
+        return []
+    items = data.get("items")
+    if not isinstance(items, list) or len(items) == 0:
+        return []
+    out: list[tuple[int | None, str | None]] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        sid, sname = seller_tuple_from_bsale_item(it)
+        if sname and str(sname).strip():
+            out.append((sid, str(sname).strip()))
+    return out
+
+
+def parse_document_sellers_response(data: dict[str, Any]) -> tuple[int | None, str | None]:
+    """
+    Primer vendedor de la respuesta sellers.json (compatibilidad con código legado).
+    """
+    rows = seller_tuples_from_sellers_api_response(data)
+    return rows[0] if rows else (None, None)
+
+
+def replace_document_sellers(
+    cur,
+    document_id: int,
+    rows: list[tuple[int | None, str | None]],
+) -> int:
+    """
+    Reemplaza vendedores del documento: borra filas previas e inserta ``rows`` (0..n).
+
+    Omite filas sin ``seller_name`` útil.
+    """
+    cur.execute(
+        "DELETE FROM distribuidora.document_sellers WHERE document_id = %s",
+        (document_id,),
+    )
+    if not rows:
+        return 0
+    n = 0
+    for sid, sname in rows:
+        if not sname or not str(sname).strip():
+            continue
+        cur.execute(
+            """
+            INSERT INTO distribuidora.document_sellers (document_id, seller_id, seller_name)
+            VALUES (%s, %s, %s)
+            """,
+            (document_id, sid, str(sname).strip()),
+        )
+        n += 1
+    return n
+
+
+def set_document_primary_seller(
+    cur,
+    document_id: int,
+    seller_id: int | None,
+    seller_name: str | None,
+) -> None:
+    """Sincroniza ``documents.seller_*`` con el vendedor principal (primera fila de sync)."""
+    if not seller_name or not str(seller_name).strip():
+        return
+    cur.execute(
+        """
+        UPDATE distribuidora.documents
+        SET
+            seller_id = %s,
+            seller_name = %s,
+            updated_at = NOW()
+        WHERE document_id = %s
+        """,
+        (seller_id, str(seller_name).strip(), document_id),
+    )
 
 
 def update_document_seller_if_empty(
