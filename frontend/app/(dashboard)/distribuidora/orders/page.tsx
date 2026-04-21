@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Loader2, MapPin, Package, RefreshCw, Truck } from "lucide-react"
 
@@ -29,7 +29,16 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { Checkbox } from "@/components/ui/checkbox"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import {
   Dialog,
   DialogContent,
@@ -39,6 +48,13 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import {
   Table,
@@ -48,7 +64,18 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
+import {
+  buildClusterLabelByDocumentId,
+  buildRouteStubsFromAssignments,
+  normMunicipality,
+} from "@/lib/distribuidora-logistics"
 import {
   writePlanificacionPayload,
   type PlanificacionStoredOrder,
@@ -85,6 +112,129 @@ function documentsProcessedFromResyncResult(result: unknown): number | null {
 /** Valor sentinela en `<select>` nativo para “sin camión”. */
 const TRUCK_UNSET = "__unset__"
 
+type PlanningSortKey = "oc" | "municipality" | "amount"
+
+function rowHasGeo(r: DistribuidoraDispatchPrepPlanningRow): boolean {
+  return Boolean(r.has_georef && r.lat != null && r.lng != null)
+}
+
+function isValidTruckId(
+  tid: number | null | undefined,
+  trucks: DistribuidoraTruck[],
+): tid is number {
+  return (
+    tid != null &&
+    Number.isFinite(tid) &&
+    tid > 0 &&
+    trucks.some((t) => t.id === tid)
+  )
+}
+
+function PlanningTableRow({
+  r,
+  trucks,
+  truckIdByDoc,
+  clusterLabel,
+  onTruckChange,
+}: {
+  r: DistribuidoraDispatchPrepPlanningRow
+  trucks: DistribuidoraTruck[]
+  truckIdByDoc: Record<number, number | null>
+  clusterLabel: string
+  onTruckChange: (row: DistribuidoraDispatchPrepPlanningRow, raw: string) => void
+}) {
+  const geo = rowHasGeo(r)
+  const docId = r.document_id
+  const tid = truckIdByDoc[docId]
+  const truck =
+    tid != null ? trucks.find((t) => t.id === tid) : undefined
+  const capLabel = truck ? distribuidoraTruckCapacityLabel(truck) : null
+  const inPlan = geo && isValidTruckId(tid, trucks)
+
+  return (
+    <TableRow
+      className={cn(
+        "text-sm transition-colors",
+        geo ? "hover:bg-muted/70" : "bg-destructive/10 hover:bg-destructive/15",
+        inPlan && "border-l-2 border-l-primary bg-primary/[0.06]",
+      )}
+    >
+      <TableCell className="font-mono tabular-nums">{r.oc ?? "—"}</TableCell>
+      <TableCell className="max-w-[10rem] truncate">
+        {r.nombre_fantasia?.trim() || "—"}
+      </TableCell>
+      <TableCell className="max-w-[8rem] truncate">
+        {r.municipality?.trim() || "—"}
+      </TableCell>
+      <TableCell className="max-w-[12rem] truncate">
+        {r.direccion?.trim() || "—"}
+      </TableCell>
+      <TableCell className="max-w-[8rem] truncate">
+        {r.seller_name?.trim() || "—"}
+      </TableCell>
+      <TableCell className="text-right tabular-nums">
+        {formatClp(Number(r.total_amount ?? 0))}
+      </TableCell>
+      <TableCell>
+        {geo ? (
+          <Badge className="bg-emerald-600 hover:bg-emerald-600">OK</Badge>
+        ) : (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex cursor-help">
+                <Badge variant="destructive">Sin coordenadas</Badge>
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-xs">
+              Este cliente no puede ser planificado
+            </TooltipContent>
+          </Tooltip>
+        )}
+      </TableCell>
+      <TableCell className="max-w-[9rem] truncate text-xs text-muted-foreground">
+        {clusterLabel}
+      </TableCell>
+      <TableCell>
+        <div className="flex min-w-[11rem] flex-col gap-1.5">
+          {trucks.length === 0 ? (
+            <span className="text-xs text-muted-foreground">
+              ⚠️ No hay camiones disponibles
+            </span>
+          ) : (
+            <select
+              className="h-9 max-w-[16rem] rounded-md border border-input bg-background px-2 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+              value={
+                tid != null && trucks.some((x) => x.id === tid)
+                  ? String(tid)
+                  : TRUCK_UNSET
+              }
+              onChange={(e) => onTruckChange(r, e.target.value)}
+              disabled={!geo}
+              aria-label={`Camión OC ${r.oc ?? docId}`}
+            >
+              <option value={TRUCK_UNSET}>Asignar</option>
+              {trucks.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name} ({t.plate})
+                </option>
+              ))}
+            </select>
+          )}
+          {capLabel && geo ? (
+            <Badge
+              variant="secondary"
+              className="w-fit max-w-[16rem] truncate text-[10px] font-normal"
+              title={capLabel}
+            >
+              {capLabel}
+            </Badge>
+          ) : null}
+        </div>
+      </TableCell>
+    </TableRow>
+  )
+}
+
 export default function DistribuidoraOrdersPage() {
   const router = useRouter()
   const [dateFrom, setDateFrom] = useState(() => localIsoDate())
@@ -110,8 +260,14 @@ export default function DistribuidoraOrdersPage() {
   const [detailRow, setDetailRow] =
     useState<DistribuidoraDispatchPrepMunicipalityRow | null>(null)
 
-  const [selectedPlanning, setSelectedPlanning] = useState<Set<number>>(() => new Set())
+  const [planningSortBy, setPlanningSortBy] = useState<PlanningSortKey>("oc")
+  const [groupByMunicipality, setGroupByMunicipality] = useState(false)
   const [truckIdByDoc, setTruckIdByDoc] = useState<Record<number, number | null>>({})
+  const [bulkTruckSuggest, setBulkTruckSuggest] = useState<{
+    municipality: string
+    truckId: number
+    count: number
+  } | null>(null)
 
   useEffect(() => {
     const ac = new AbortController()
@@ -168,7 +324,6 @@ export default function DistribuidoraOrdersPage() {
             timeStyle: "medium",
           }),
         )
-        setSelectedPlanning(new Set())
         setTruckIdByDoc({})
       } catch (e: unknown) {
         if (e instanceof Error && e.name === "AbortError") return
@@ -239,34 +394,118 @@ export default function DistribuidoraOrdersPage() {
     }
   }, [rows])
 
-  const planningSelectionSummary = useMemo(() => {
+  const validTruckIdSet = useMemo(
+    () => new Set(trucks.map((t) => t.id)),
+    [trucks],
+  )
+
+  const sortedPlanningRows = useMemo(() => {
+    const list = [...planningRows]
+    if (planningSortBy === "oc") {
+      list.sort((a, b) => {
+        const na = Number(a.oc)
+        const nb = Number(b.oc)
+        const fa = Number.isFinite(na) ? na : -Infinity
+        const fb = Number.isFinite(nb) ? nb : -Infinity
+        if (fb !== fa) return fb - fa
+        return b.document_id - a.document_id
+      })
+    } else if (planningSortBy === "municipality") {
+      list.sort((a, b) =>
+        normMunicipality(a.municipality).localeCompare(
+          normMunicipality(b.municipality),
+          "es",
+        ),
+      )
+    } else {
+      list.sort((a, b) => {
+        const ma = Number(a.total_amount)
+        const mb = Number(b.total_amount)
+        const fa = Number.isFinite(ma) ? ma : -Infinity
+        const fb = Number.isFinite(mb) ? mb : -Infinity
+        return fb - fa
+      })
+    }
+    return list
+  }, [planningRows, planningSortBy])
+
+  const clusterByDoc = useMemo(
+    () => buildClusterLabelByDocumentId(sortedPlanningRows),
+    [sortedPlanningRows],
+  )
+
+  const routeStubsPreview = useMemo(
+    () =>
+      buildRouteStubsFromAssignments({
+        truckIdByDoc,
+        rows: sortedPlanningRows,
+        validTruckIds: validTruckIdSet,
+      }),
+    [truckIdByDoc, sortedPlanningRows, validTruckIdSet],
+  )
+
+  const logisticsKpis = useMemo(() => {
+    const truckIds = new Set<number>()
     let count = 0
     let amount = 0
-    for (const r of planningRows) {
-      if (!selectedPlanning.has(r.document_id)) continue
+    const comunas = new Set<string>()
+    for (const r of sortedPlanningRows) {
+      if (!rowHasGeo(r)) continue
+      const tid = truckIdByDoc[r.document_id]
+      if (!isValidTruckId(tid, trucks)) continue
       count += 1
       amount += Number(r.total_amount ?? 0)
+      comunas.add(normMunicipality(r.municipality))
+      truckIds.add(tid)
     }
-    return { count, amount }
-  }, [planningRows, selectedPlanning])
+    return {
+      trucksUsed: truckIds.size,
+      orders: count,
+      amount,
+      comunas: comunas.size,
+    }
+  }, [sortedPlanningRows, truckIdByDoc, trucks])
+
+  const groupedBlocks = useMemo(() => {
+    type Block = {
+      key: string
+      rows: DistribuidoraDispatchPrepPlanningRow[]
+      total: number
+    }
+    if (!groupByMunicipality) {
+      const total = sortedPlanningRows.reduce(
+        (s, r) => s + Number(r.total_amount ?? 0),
+        0,
+      )
+      const single: Block = { key: "_all", rows: sortedPlanningRows, total }
+      return [single]
+    }
+    const map = new Map<string, DistribuidoraDispatchPrepPlanningRow[]>()
+    for (const r of sortedPlanningRows) {
+      const k = normMunicipality(r.municipality)
+      if (!map.has(k)) map.set(k, [])
+      map.get(k)!.push(r)
+    }
+    const keys = [...map.keys()].sort((a, b) => a.localeCompare(b, "es"))
+    return keys.map((key) => {
+      const gr = map.get(key)!
+      const total = gr.reduce((s, r) => s + Number(r.total_amount ?? 0), 0)
+      return { key, rows: gr, total }
+    })
+  }, [sortedPlanningRows, groupByMunicipality])
 
   const canPassToPlanificacion = useMemo(() => {
-    if (trucks.length === 0 || selectedPlanning.size === 0) return false
-    for (const docId of selectedPlanning) {
-      const row = planningRows.find((r) => r.document_id === docId)
-      const geo = Boolean(
-        row?.has_georef && row.lat != null && row.lng != null,
-      )
-      const tid = truckIdByDoc[docId]
-      const truckOk =
-        tid != null &&
-        Number.isFinite(tid) &&
-        tid > 0 &&
-        trucks.some((t) => t.id === tid)
-      if (!geo || !truckOk) return false
+    if (trucks.length === 0) return false
+    let anyInPlan = false
+    for (const r of planningRows) {
+      const tid = truckIdByDoc[r.document_id]
+      const assigned = tid != null
+      const valid = isValidTruckId(tid, trucks)
+      if (assigned && (!valid || !rowHasGeo(r))) return false
+      if (valid && rowHasGeo(r)) anyInPlan = true
     }
-    return true
-  }, [trucks, selectedPlanning, planningRows, truckIdByDoc])
+    return anyInPlan
+  }, [trucks, planningRows, truckIdByDoc])
 
   const onPassToPlanificacion = useCallback(() => {
     setPlanificacionFeedback(null)
@@ -274,25 +513,15 @@ export default function DistribuidoraOrdersPage() {
       setPlanificacionFeedback("⚠️ No hay camiones disponibles.")
       return
     }
-    if (selectedPlanning.size === 0) {
-      setPlanificacionFeedback("Seleccione al menos un pedido con georreferencia y camión.")
-      return
-    }
     const byTruck: Record<number, number> = {}
     const stored: PlanificacionStoredOrder[] = []
 
     for (const r of planningRows) {
-      if (!selectedPlanning.has(r.document_id)) continue
-      const geo = Boolean(r.has_georef && r.lat != null && r.lng != null)
+      if (!rowHasGeo(r)) continue
       const tid = truckIdByDoc[r.document_id]
       const truck =
         tid != null ? trucks.find((t) => t.id === tid) : undefined
-      if (!geo || !truck) {
-        setPlanificacionFeedback(
-          "Cada pedido seleccionado debe tener georreferencia y un camión asignado.",
-        )
-        return
-      }
+      if (!isValidTruckId(tid, trucks) || !truck) continue
       const idx = (byTruck[tid] = (byTruck[tid] ?? 0) + 1)
       const camion = distribuidoraTruckCapacityLabel(truck)
       stored.push({
@@ -309,24 +538,90 @@ export default function DistribuidoraOrdersPage() {
       })
     }
 
+    if (stored.length === 0) {
+      setPlanificacionFeedback(
+        "Faltan camiones o georreferencias para continuar",
+      )
+      return
+    }
+
     writePlanificacionPayload({
       submittedAt: new Date().toISOString(),
       orders: stored,
     })
     router.push("/distribuidora/planificacion")
-  }, [trucks, planningRows, selectedPlanning, truckIdByDoc, router])
+  }, [trucks, planningRows, truckIdByDoc, router])
 
-  const togglePlanning = useCallback(
-    (id: number, checked: boolean, canSelect: boolean) => {
-      if (!canSelect) return
-      setSelectedPlanning((prev) => {
-        const n = new Set(prev)
-        if (checked) n.add(id)
-        else n.delete(id)
-        return n
+  const assignTruckToGroup = useCallback(
+    (groupRows: DistribuidoraDispatchPrepPlanningRow[]) => {
+      const existing = groupRows
+        .map((r) => truckIdByDoc[r.document_id])
+        .find((t) => isValidTruckId(t, trucks))
+      const tid = existing ?? trucks[0]?.id
+      if (tid == null) return
+      setTruckIdByDoc((prev) => {
+        const next = { ...prev }
+        for (const r of groupRows) {
+          if (!rowHasGeo(r)) continue
+          next[r.document_id] = tid
+        }
+        return next
       })
     },
-    [],
+    [truckIdByDoc, trucks],
+  )
+
+  const confirmBulkTruckSuggest = useCallback(() => {
+    const sug = bulkTruckSuggest
+    if (!sug) return
+    const { municipality, truckId } = sug
+    setTruckIdByDoc((prev) => {
+      const next = { ...prev }
+      for (const x of planningRows) {
+        if (normMunicipality(x.municipality) !== municipality) continue
+        if (!rowHasGeo(x)) continue
+        const t = prev[x.document_id]
+        if (t == null || !isValidTruckId(t, trucks)) next[x.document_id] = truckId
+      }
+      return next
+    })
+    setBulkTruckSuggest(null)
+  }, [bulkTruckSuggest, planningRows, trucks])
+
+  const onPlanningTruckChange = useCallback(
+    (row: DistribuidoraDispatchPrepPlanningRow, raw: string) => {
+      const nextVal = raw === TRUCK_UNSET ? null : Number(raw)
+      const coerced =
+        nextVal != null && Number.isFinite(nextVal) ? nextVal : null
+      setTruckIdByDoc((prev) => {
+        const merged: Record<number, number | null> = {
+          ...prev,
+          [row.document_id]: coerced,
+        }
+        if (coerced != null && rowHasGeo(row)) {
+          const muni = normMunicipality(row.municipality)
+          let c = 0
+          for (const x of planningRows) {
+            if (x.document_id === row.document_id) continue
+            if (normMunicipality(x.municipality) !== muni) continue
+            if (!rowHasGeo(x)) continue
+            const t = merged[x.document_id]
+            if (t == null || !isValidTruckId(t, trucks)) c += 1
+          }
+          if (c > 0) {
+            queueMicrotask(() =>
+              setBulkTruckSuggest({
+                municipality: muni,
+                truckId: coerced,
+                count: c,
+              }),
+            )
+          }
+        }
+        return merged
+      })
+    },
+    [planningRows, trucks],
   )
 
   const openDetail = useCallback((r: DistribuidoraDispatchPrepMunicipalityRow) => {
@@ -631,177 +926,211 @@ export default function DistribuidoraOrdersPage() {
         </div>
       </section>
 
-      <section className="space-y-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-              Pre‑planificación
-            </h2>
-            <p className="text-xs text-muted-foreground">
-              Órdenes OC en el rango (y con filtro de día si aplica), ordenadas por monto.
-            </p>
+      <TooltipProvider delayDuration={200}>
+        <section className="space-y-4" data-route-stubs={routeStubsPreview.length}>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                Pre‑planificación
+              </h2>
+              <p className="text-xs text-muted-foreground">
+                Asignar camión incluye el pedido en el envío. Sin georreferencia no se puede
+                planificar.
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={!canPassToPlanificacion}
+              onClick={onPassToPlanificacion}
+            >
+              Pasar a planificación
+            </Button>
           </div>
-          <Button
-            type="button"
-            variant="secondary"
-            disabled={!canPassToPlanificacion}
-            onClick={onPassToPlanificacion}
-          >
-            Pasar a planificación
-          </Button>
-        </div>
-        {planificacionFeedback ? (
-          <Alert>
-            <AlertTitle>No se puede continuar</AlertTitle>
-            <AlertDescription>{planificacionFeedback}</AlertDescription>
-          </Alert>
-        ) : null}
-        {trucksError ? (
-          <Alert variant="destructive">
-            <AlertTitle>Camiones</AlertTitle>
-            <AlertDescription>{trucksError}</AlertDescription>
-          </Alert>
-        ) : trucks.length === 0 ? (
-          <Alert>
-            <AlertTitle>Camiones</AlertTitle>
-            <AlertDescription>
-              ⚠️ No hay camiones disponibles
-            </AlertDescription>
-          </Alert>
-        ) : null}
-        <div className="flex flex-wrap items-center gap-4 rounded-lg border border-border/50 bg-muted/20 px-4 py-3 text-sm">
-          <span>
-            Pedidos seleccionados:{" "}
-            <strong className="tabular-nums text-foreground">
-              {planningSelectionSummary.count}
-            </strong>
-          </span>
-          <span>
-            Monto seleccionado:{" "}
-            <strong className="tabular-nums text-foreground">
-              {formatClp(planningSelectionSummary.amount)}
-            </strong>
-          </span>
-        </div>
-        <div className="overflow-x-auto rounded-xl border border-border/50">
-          <Table>
-            <TableHeader>
-              <TableRow className="hover:bg-transparent">
-                <TableHead className="w-10" />
-                <TableHead>OC</TableHead>
-                <TableHead>Nombre fantasía</TableHead>
-                <TableHead>Comuna</TableHead>
-                <TableHead>Dirección</TableHead>
-                <TableHead>Vendedor</TableHead>
-                <TableHead className="text-right">Monto</TableHead>
-                <TableHead>Georef</TableHead>
-                <TableHead className="min-w-[12rem]">Camión</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {planningRows.length === 0 && !loading ? (
-                <TableRow>
-                  <TableCell colSpan={9} className="py-10 text-center text-muted-foreground">
-                    Sin filas para mostrar (ajuste fechas o filtro de día).
-                  </TableCell>
+          {!canPassToPlanificacion && planningRows.length > 0 ? (
+            <p className="text-xs text-amber-700 dark:text-amber-500">
+              Faltan camiones o georreferencias para continuar
+            </p>
+          ) : null}
+          {planificacionFeedback ? (
+            <Alert>
+              <AlertTitle>No se puede continuar</AlertTitle>
+              <AlertDescription>{planificacionFeedback}</AlertDescription>
+            </Alert>
+          ) : null}
+          {trucksError ? (
+            <Alert variant="destructive">
+              <AlertTitle>Camiones</AlertTitle>
+              <AlertDescription>{trucksError}</AlertDescription>
+            </Alert>
+          ) : trucks.length === 0 ? (
+            <Alert>
+              <AlertTitle>Camiones</AlertTitle>
+              <AlertDescription>
+                ⚠️ No hay camiones disponibles
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          <div className="flex flex-col gap-4 rounded-lg border border-border/50 bg-muted/20 p-4 sm:flex-row sm:flex-wrap sm:items-end">
+            <div className="space-y-2">
+              <Label className="text-xs">Ordenar por</Label>
+              <Select
+                value={planningSortBy}
+                onValueChange={(v) => setPlanningSortBy(v as PlanningSortKey)}
+                disabled={loading}
+              >
+                <SelectTrigger className="h-9 w-[200px] text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="oc">Número OC (mayor primero)</SelectItem>
+                  <SelectItem value="municipality">Municipality (A–Z)</SelectItem>
+                  <SelectItem value="amount">Monto (mayor primero)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center gap-3">
+              <Switch
+                id="prep-group-muni"
+                checked={groupByMunicipality}
+                onCheckedChange={(v) => setGroupByMunicipality(v === true)}
+                disabled={loading}
+              />
+              <Label htmlFor="prep-group-muni" className="text-sm font-medium">
+                Agrupar por comuna
+              </Label>
+            </div>
+          </div>
+          <div className="grid gap-3 rounded-lg border border-border/50 bg-card/50 px-4 py-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+            <div className="flex items-center gap-2">
+              <span aria-hidden>🚛</span>
+              <span className="text-muted-foreground">Camiones usados</span>
+              <strong className="ml-auto tabular-nums">
+                {logisticsKpis.trucksUsed}
+              </strong>
+            </div>
+            <div className="flex items-center gap-2">
+              <span aria-hidden>📦</span>
+              <span className="text-muted-foreground">Pedidos en plan</span>
+              <strong className="ml-auto tabular-nums">
+                {logisticsKpis.orders}
+              </strong>
+            </div>
+            <div className="flex items-center gap-2">
+              <span aria-hidden>💰</span>
+              <span className="text-muted-foreground">Monto total</span>
+              <strong className="ml-auto tabular-nums text-xs sm:text-sm">
+                {formatClp(logisticsKpis.amount)}
+              </strong>
+            </div>
+            <div className="flex items-center gap-2">
+              <span aria-hidden>📍</span>
+              <span className="text-muted-foreground">Comunas activas</span>
+              <strong className="ml-auto tabular-nums">
+                {logisticsKpis.comunas}
+              </strong>
+            </div>
+          </div>
+          <div className="overflow-x-auto rounded-xl border border-border/50">
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>OC</TableHead>
+                  <TableHead>Nombre fantasía</TableHead>
+                  <TableHead>Comuna</TableHead>
+                  <TableHead>Dirección</TableHead>
+                  <TableHead>Vendedor</TableHead>
+                  <TableHead className="text-right">Monto</TableHead>
+                  <TableHead>Georef</TableHead>
+                  <TableHead>Cluster</TableHead>
+                  <TableHead className="min-w-[12rem]">Camión</TableHead>
                 </TableRow>
-              ) : (
-                planningRows.map((r) => {
-                  const geo = Boolean(r.has_georef && r.lat != null && r.lng != null)
-                  const docId = r.document_id
-                  const tid = truckIdByDoc[docId]
-                  const truck =
-                    tid != null ? trucks.find((t) => t.id === tid) : undefined
-                  const capLabel = truck ? distribuidoraTruckCapacityLabel(truck) : null
-                  return (
-                    <TableRow key={r.document_id} className="text-sm">
-                      <TableCell>
-                        <Checkbox
-                          checked={selectedPlanning.has(r.document_id)}
-                          disabled={!geo}
-                          onCheckedChange={(c) =>
-                            togglePlanning(r.document_id, c === true, geo)
+              </TableHeader>
+              <TableBody>
+                {planningRows.length === 0 && !loading ? (
+                  <TableRow>
+                    <TableCell
+                      colSpan={9}
+                      className="py-10 text-center text-muted-foreground"
+                    >
+                      Sin filas para mostrar (ajuste fechas o filtro de día).
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  groupedBlocks.map((block) => (
+                    <Fragment key={block.key}>
+                      {groupByMunicipality && block.key !== "_all" ? (
+                        <TableRow className="bg-muted/70 hover:bg-muted/70">
+                          <TableCell colSpan={9} className="py-3">
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                              <div>
+                                <span className="text-sm font-semibold tracking-wide">
+                                  {block.key}
+                                </span>
+                                <span className="ml-2 text-xs text-muted-foreground">
+                                  ({block.rows.length} pedidos) ·{" "}
+                                  {formatClp(block.total)}
+                                </span>
+                              </div>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                disabled={trucks.length === 0}
+                                onClick={() => assignTruckToGroup(block.rows)}
+                              >
+                                Asignar camión a todo el grupo
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
+                      {block.rows.map((r) => (
+                        <PlanningTableRow
+                          key={r.document_id}
+                          r={r}
+                          trucks={trucks}
+                          truckIdByDoc={truckIdByDoc}
+                          clusterLabel={
+                            clusterByDoc.get(r.document_id) ?? "—"
                           }
-                          aria-label={`Seleccionar OC ${r.oc ?? r.document_id}`}
+                          onTruckChange={onPlanningTruckChange}
                         />
-                      </TableCell>
-                      <TableCell className="font-mono tabular-nums">{r.oc ?? "—"}</TableCell>
-                      <TableCell className="max-w-[10rem] truncate">
-                        {r.nombre_fantasia?.trim() || "—"}
-                      </TableCell>
-                      <TableCell className="max-w-[8rem] truncate">
-                        {r.municipality?.trim() || "—"}
-                      </TableCell>
-                      <TableCell className="max-w-[12rem] truncate">
-                        {r.direccion?.trim() || "—"}
-                      </TableCell>
-                      <TableCell className="max-w-[8rem] truncate">
-                        {r.seller_name?.trim() || "—"}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {formatClp(Number(r.total_amount ?? 0))}
-                      </TableCell>
-                      <TableCell>
-                        {geo ? (
-                          <Badge className="bg-emerald-600 hover:bg-emerald-600">OK</Badge>
-                        ) : (
-                          <Badge variant="destructive">Sin coordenadas</Badge>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex min-w-[11rem] flex-col gap-1.5">
-                          {trucks.length === 0 ? (
-                            <span className="text-xs text-muted-foreground">
-                              ⚠️ No hay camiones disponibles
-                            </span>
-                          ) : (
-                          <select
-                            className="h-8 max-w-[16rem] rounded-md border border-input bg-background px-2 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                            value={
-                              tid != null && trucks.some((x) => x.id === tid)
-                                ? String(tid)
-                                : TRUCK_UNSET
-                            }
-                            onChange={(e) => {
-                              const val =
-                                e.target.value === TRUCK_UNSET
-                                  ? null
-                                  : Number(e.target.value)
-                              setTruckIdByDoc((prev) => ({
-                                ...prev,
-                                [docId]: val,
-                              }))
-                            }}
-                            disabled={!geo}
-                            aria-label={`Camión OC ${r.oc ?? docId}`}
-                          >
-                            <option value={TRUCK_UNSET}>Asignar</option>
-                            {trucks.map((t) => (
-                              <option key={t.id} value={t.id}>
-                                {t.name} ({t.plate})
-                              </option>
-                            ))}
-                          </select>
-                          )}
-                          {capLabel && geo ? (
-                            <Badge
-                              variant="secondary"
-                              className="w-fit max-w-[16rem] truncate text-[10px] font-normal"
-                              title={capLabel}
-                            >
-                              {capLabel}
-                            </Badge>
-                          ) : null}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  )
-                })
-              )}
-            </TableBody>
-          </Table>
-        </div>
-      </section>
+                      ))}
+                    </Fragment>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </section>
+      </TooltipProvider>
+
+      <AlertDialog
+        open={bulkTruckSuggest != null}
+        onOpenChange={(o) => {
+          if (!o) setBulkTruckSuggest(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Asignar el mismo camión</AlertDialogTitle>
+            <AlertDialogDescription>
+              {bulkTruckSuggest
+                ? `Hay ${bulkTruckSuggest.count} pedido(s) en ${bulkTruckSuggest.municipality} sin camión → ¿asignar este camión?`
+                : null}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setBulkTruckSuggest(null)}>
+              No
+            </AlertDialogCancel>
+            <AlertDialogAction onClick={() => confirmBulkTruckSuggest()}>
+              Sí
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
         <DialogContent className="sm:max-w-md">
