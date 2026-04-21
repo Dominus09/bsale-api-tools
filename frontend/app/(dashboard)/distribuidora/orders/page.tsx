@@ -6,10 +6,16 @@ import { Loader2, MapPin, Package, Truck } from "lucide-react"
 import {
   getDistribuidoraDispatchPrepByMunicipality,
   getDistribuidoraDispatchPrepObservaciones,
+  getDistribuidoraDispatchPrepPlanningRows,
   type DistribuidoraDispatchPrepMunicipalityRow,
+  type DistribuidoraDispatchPrepPlanningRow,
 } from "@/lib/api"
-import { aggregateObservationTags } from "@/lib/dispatch-prep-tags"
+import {
+  aggregateObservationTags,
+  weekdayTokenFromTagLabel,
+} from "@/lib/dispatch-prep-tags"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Card,
@@ -18,6 +24,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -27,8 +34,25 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import { cn } from "@/lib/utils"
+
+const TRUCKS = ["Camión 1", "Camión 2", "Camión 3"] as const
 
 function localIsoDate(d = new Date()): string {
   const y = d.getFullYear()
@@ -51,15 +75,20 @@ export default function DistribuidoraOrdersPage() {
   const [dateFrom, setDateFrom] = useState(() => localIsoDate())
   const [dateTo, setDateTo] = useState(() => localIsoDate())
   const [onlyNotInvoiced, setOnlyNotInvoiced] = useState(true)
+  const [activeDayFilter, setActiveDayFilter] = useState<string | null>(null)
 
   const [rows, setRows] = useState<DistribuidoraDispatchPrepMunicipalityRow[]>([])
   const [observationTexts, setObservationTexts] = useState<string[]>([])
+  const [planningRows, setPlanningRows] = useState<DistribuidoraDispatchPrepPlanningRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailRow, setDetailRow] =
     useState<DistribuidoraDispatchPrepMunicipalityRow | null>(null)
+
+  const [selectedPlanning, setSelectedPlanning] = useState<Set<number>>(() => new Set())
+  const [truckByDoc, setTruckByDoc] = useState<Record<number, string>>({})
 
   useEffect(() => {
     const ac = new AbortController()
@@ -68,28 +97,42 @@ export default function DistribuidoraOrdersPage() {
       setLoading(true)
       setError(null)
       try {
-        const [byMuni, obs] = await Promise.all([
+        const dayParam = activeDayFilter ?? undefined
+        const [byMuni, obs, plan] = await Promise.all([
           getDistribuidoraDispatchPrepByMunicipality({
             emission_date_from: dateFrom,
             emission_date_to: dateTo,
             only_not_invoiced: onlyNotInvoiced,
+            day_filter: dayParam,
             signal: ac.signal,
           }),
           getDistribuidoraDispatchPrepObservaciones({
             emission_date_from: dateFrom,
             emission_date_to: dateTo,
             only_not_invoiced: onlyNotInvoiced,
+            day_filter: dayParam,
+            signal: ac.signal,
+          }),
+          getDistribuidoraDispatchPrepPlanningRows({
+            emission_date_from: dateFrom,
+            emission_date_to: dateTo,
+            only_not_invoiced: onlyNotInvoiced,
+            day_filter: dayParam,
             signal: ac.signal,
           }),
         ])
         if (cancelled) return
         setRows(byMuni.items)
         setObservationTexts(obs.items)
+        setPlanningRows(plan.items)
+        setSelectedPlanning(new Set())
+        setTruckByDoc({})
       } catch (e: unknown) {
         if (cancelled || (e instanceof Error && e.name === "AbortError")) return
         setError(e instanceof Error ? e.message : "Error al cargar datos")
         setRows([])
         setObservationTexts([])
+        setPlanningRows([])
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -98,12 +141,32 @@ export default function DistribuidoraOrdersPage() {
       cancelled = true
       ac.abort()
     }
-  }, [dateFrom, dateTo, onlyNotInvoiced])
+  }, [dateFrom, dateTo, onlyNotInvoiced, activeDayFilter])
+
+  useEffect(() => {
+    setTruckByDoc((prev) => {
+      const next = { ...prev }
+      for (const r of planningRows) {
+        if (next[r.document_id] === undefined) next[r.document_id] = TRUCKS[0]
+      }
+      for (const k of Object.keys(next)) {
+        const id = Number(k)
+        if (!planningRows.some((r) => r.document_id === id)) delete next[id]
+      }
+      return next
+    })
+  }, [planningRows])
 
   const tagStats = useMemo(
     () => aggregateObservationTags(observationTexts),
     [observationTexts],
   )
+
+  const onChipClick = useCallback((tag: string) => {
+    const token = weekdayTokenFromTagLabel(tag)
+    if (!token) return
+    setActiveDayFilter((prev) => (prev === token ? null : token))
+  }, [])
 
   const kpis = useMemo(() => {
     let pedidos = 0
@@ -119,6 +182,30 @@ export default function DistribuidoraOrdersPage() {
     }
   }, [rows])
 
+  const planningSelectionSummary = useMemo(() => {
+    let count = 0
+    let amount = 0
+    for (const r of planningRows) {
+      if (!selectedPlanning.has(r.document_id)) continue
+      count += 1
+      amount += Number(r.total_amount ?? 0)
+    }
+    return { count, amount }
+  }, [planningRows, selectedPlanning])
+
+  const togglePlanning = useCallback(
+    (id: number, checked: boolean, canSelect: boolean) => {
+      if (!canSelect) return
+      setSelectedPlanning((prev) => {
+        const n = new Set(prev)
+        if (checked) n.add(id)
+        else n.delete(id)
+        return n
+      })
+    },
+    [],
+  )
+
   const openDetail = useCallback((r: DistribuidoraDispatchPrepMunicipalityRow) => {
     setDetailRow(r)
     setDetailOpen(true)
@@ -131,8 +218,8 @@ export default function DistribuidoraOrdersPage() {
           Pre‑planificación de despacho
         </h1>
         <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
-          Vista de análisis por comuna y señales de día en observaciones de órdenes de
-          compra (sin listado operativo de documentos).
+          Análisis por comuna, observaciones con filtro por día y tabla de pre‑planificación
+          (órdenes de compra).
         </p>
       </header>
 
@@ -299,8 +386,19 @@ export default function DistribuidoraOrdersPage() {
             Observaciones
           </h2>
           <p className="text-xs leading-relaxed text-muted-foreground">
-            Hasta 2000 textos de observaciones en el rango. Se detectan días de la semana
-            y palabras como entrega, reparto o retiro para agrupar frecuencias.
+            Pulse un chip para filtrar por ese día en observaciones (otro clic limpia el filtro).
+            {activeDayFilter ? (
+              <span className="mt-1 flex flex-wrap items-center gap-2 font-medium text-foreground">
+                Filtro: <code className="text-xs">{activeDayFilter}</code>
+                <button
+                  type="button"
+                  className="text-xs font-normal text-primary underline-offset-2 hover:underline"
+                  onClick={() => setActiveDayFilter(null)}
+                >
+                  Quitar filtro
+                </button>
+              </span>
+            ) : null}
           </p>
           <div className="flex flex-wrap gap-2">
             {tagStats.length === 0 && !loading ? (
@@ -308,17 +406,38 @@ export default function DistribuidoraOrdersPage() {
                 Sin menciones de días en observaciones.
               </span>
             ) : (
-              tagStats.map(({ tag, count }) => (
-                <span
-                  key={tag}
-                  className="inline-flex items-center rounded-full border border-border/60 bg-background px-3 py-1 text-xs font-medium shadow-sm"
-                >
-                  {tag}{" "}
-                  <span className="ml-1 tabular-nums text-muted-foreground">
-                    ({count})
-                  </span>
-                </span>
-              ))
+              tagStats.map(({ tag, count }) => {
+                const token = weekdayTokenFromTagLabel(tag)
+                const active = token != null && activeDayFilter === token
+                const clickable = token != null
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    disabled={!clickable || loading}
+                    onClick={() => onChipClick(tag)}
+                    className={cn(
+                      "inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium shadow-sm transition-colors",
+                      "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      clickable && "cursor-pointer",
+                      !clickable && "cursor-default opacity-80",
+                      active
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-border/60 bg-muted/50 text-muted-foreground hover:bg-muted",
+                    )}
+                  >
+                    {tag}{" "}
+                    <span
+                      className={cn(
+                        "ml-1 tabular-nums",
+                        active ? "text-primary-foreground/90" : "text-muted-foreground",
+                      )}
+                    >
+                      ({count})
+                    </span>
+                  </button>
+                )
+              })
             )}
           </div>
         </aside>
@@ -351,6 +470,123 @@ export default function DistribuidoraOrdersPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      </section>
+
+      <section className="space-y-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              Pre‑planificación
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              Órdenes OC en el rango (y con filtro de día si aplica), ordenadas por monto.
+            </p>
+          </div>
+          <Button type="button" variant="secondary" disabled>
+            Pasar a planificación
+          </Button>
+        </div>
+        <div className="flex flex-wrap items-center gap-4 rounded-lg border border-border/50 bg-muted/20 px-4 py-3 text-sm">
+          <span>
+            Pedidos seleccionados:{" "}
+            <strong className="tabular-nums text-foreground">
+              {planningSelectionSummary.count}
+            </strong>
+          </span>
+          <span>
+            Monto seleccionado:{" "}
+            <strong className="tabular-nums text-foreground">
+              {formatClp(planningSelectionSummary.amount)}
+            </strong>
+          </span>
+        </div>
+        <div className="overflow-x-auto rounded-xl border border-border/50">
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="w-10" />
+                <TableHead>OC</TableHead>
+                <TableHead>Nombre fantasía</TableHead>
+                <TableHead>Comuna</TableHead>
+                <TableHead>Dirección</TableHead>
+                <TableHead>Vendedor</TableHead>
+                <TableHead className="text-right">Monto</TableHead>
+                <TableHead>Georef</TableHead>
+                <TableHead className="min-w-[9rem]">Camión</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {planningRows.length === 0 && !loading ? (
+                <TableRow>
+                  <TableCell colSpan={9} className="py-10 text-center text-muted-foreground">
+                    Sin filas para mostrar (ajuste fechas o filtro de día).
+                  </TableCell>
+                </TableRow>
+              ) : (
+                planningRows.map((r) => {
+                  const geo = Boolean(r.has_georef && r.lat != null && r.lng != null)
+                  return (
+                    <TableRow key={r.document_id} className="text-sm">
+                      <TableCell>
+                        <Checkbox
+                          checked={selectedPlanning.has(r.document_id)}
+                          disabled={!geo}
+                          onCheckedChange={(c) =>
+                            togglePlanning(r.document_id, c === true, geo)
+                          }
+                          aria-label={`Seleccionar OC ${r.oc ?? r.document_id}`}
+                        />
+                      </TableCell>
+                      <TableCell className="font-mono tabular-nums">{r.oc ?? "—"}</TableCell>
+                      <TableCell className="max-w-[10rem] truncate">
+                        {r.nombre_fantasia?.trim() || "—"}
+                      </TableCell>
+                      <TableCell className="max-w-[8rem] truncate">
+                        {r.municipality?.trim() || "—"}
+                      </TableCell>
+                      <TableCell className="max-w-[12rem] truncate">
+                        {r.direccion?.trim() || "—"}
+                      </TableCell>
+                      <TableCell className="max-w-[8rem] truncate">
+                        {r.seller_name?.trim() || "—"}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {formatClp(Number(r.total_amount ?? 0))}
+                      </TableCell>
+                      <TableCell>
+                        {geo ? (
+                          <Badge className="bg-emerald-600 hover:bg-emerald-600">OK</Badge>
+                        ) : (
+                          <Badge variant="destructive">Sin coordenadas</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <Select
+                          value={truckByDoc[r.document_id] ?? TRUCKS[0]}
+                          onValueChange={(v) =>
+                            setTruckByDoc((prev) => ({ ...prev, [r.document_id]: v }))
+                          }
+                          disabled={!geo}
+                        >
+                          <SelectTrigger className="h-8 w-[8.5rem] text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {TRUCKS.map((t) => (
+                              <SelectItem key={t} value={t}>
+                                {t}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })
+              )}
+            </TableBody>
+          </Table>
         </div>
       </section>
 

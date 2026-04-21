@@ -900,12 +900,14 @@ export async function getDistribuidoraDispatchPrepByMunicipality(params: {
   emission_date_from: string
   emission_date_to: string
   only_not_invoiced?: boolean
+  day_filter?: string | null
   signal?: AbortSignal
 }): Promise<DistribuidoraDispatchPrepByMunicipalityResponse> {
   const qs = new URLSearchParams()
   qs.set("emission_date_from", params.emission_date_from)
   qs.set("emission_date_to", params.emission_date_to)
   if (params.only_not_invoiced === false) qs.set("only_not_invoiced", "false")
+  if (params.day_filter?.trim()) qs.set("day_filter", params.day_filter.trim())
   const res = await fetch(
     `${API_URL}/distribuidora/orders/dispatch-prep/by-municipality?${qs}`,
     { headers: getAuthHeaders(), signal: params.signal },
@@ -925,12 +927,14 @@ export async function getDistribuidoraDispatchPrepObservaciones(params: {
   emission_date_from: string
   emission_date_to: string
   only_not_invoiced?: boolean
+  day_filter?: string | null
   signal?: AbortSignal
 }): Promise<DistribuidoraDispatchPrepObservacionesResponse> {
   const qs = new URLSearchParams()
   qs.set("emission_date_from", params.emission_date_from)
   qs.set("emission_date_to", params.emission_date_to)
   if (params.only_not_invoiced === false) qs.set("only_not_invoiced", "false")
+  if (params.day_filter?.trim()) qs.set("day_filter", params.day_filter.trim())
   qs.set("limit", "2000")
   const res = await fetch(
     `${API_URL}/distribuidora/orders/dispatch-prep/observaciones?${qs}`,
@@ -941,6 +945,43 @@ export async function getDistribuidoraDispatchPrepObservaciones(params: {
     throw new Error(msg || "Error al cargar observaciones")
   }
   return res.json() as Promise<DistribuidoraDispatchPrepObservacionesResponse>
+}
+
+export type DistribuidoraDispatchPrepPlanningRow = {
+  document_id: number
+  oc?: number | null
+  client_id?: number | null
+  nombre_fantasia?: string | null
+  municipality?: string | null
+  direccion?: string | null
+  seller_name?: string | null
+  total_amount?: number | null
+  has_georef?: boolean | null
+  lat?: number | null
+  lng?: number | null
+}
+
+export async function getDistribuidoraDispatchPrepPlanningRows(params: {
+  emission_date_from: string
+  emission_date_to: string
+  only_not_invoiced?: boolean
+  day_filter?: string | null
+  signal?: AbortSignal
+}): Promise<{ items: DistribuidoraDispatchPrepPlanningRow[] }> {
+  const qs = new URLSearchParams()
+  qs.set("emission_date_from", params.emission_date_from)
+  qs.set("emission_date_to", params.emission_date_to)
+  if (params.only_not_invoiced === false) qs.set("only_not_invoiced", "false")
+  if (params.day_filter?.trim()) qs.set("day_filter", params.day_filter.trim())
+  const res = await fetch(
+    `${API_URL}/distribuidora/orders/dispatch-prep/planning-rows?${qs}`,
+    { headers: getAuthHeaders(), signal: params.signal },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar pre-planificación")
+  }
+  return res.json() as Promise<{ items: DistribuidoraDispatchPrepPlanningRow[] }>
 }
 
 /** Fila de GET /distribuidora/planificacion/orders (boleta/factura + observaciones). */

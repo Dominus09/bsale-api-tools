@@ -2,11 +2,58 @@
 
 from __future__ import annotations
 
+import unicodedata
 from datetime import date
 from decimal import Decimal
 from typing import Any
 
 from backend.db import get_connection
+
+_DAY_FILTER_ALLOW = frozenset({"lunes", "martes", "miercoles", "jueves", "viernes", "sabado"})
+
+# Texto “observaciones” en documento OC: atributo + comentarios JSON (no hay columna ``observations``).
+_OBS_NORMALIZED_D = """translate(lower(
+    COALESCE(
+        NULLIF(BTRIM((
+            SELECT da.attribute_value
+            FROM distribuidora.document_attributes da
+            WHERE da.document_id = d.document_id
+              AND UPPER(BTRIM(da.attribute_name)) = 'OBSERVACIONES'
+            ORDER BY da.id DESC NULLS LAST
+            LIMIT 1
+        )), ''),
+        NULLIF(BTRIM(d.raw_data->>'comments'), '')
+    )
+), 'áéíóúü', 'aeiouu')"""
+
+_OBS_NORMALIZED_P = """translate(lower(
+    COALESCE(
+        NULLIF(BTRIM(p.observaciones), ''),
+        NULLIF(BTRIM(d.raw_data->>'comments'), '')
+    )
+), 'áéíóúü', 'aeiouu')"""
+
+
+def _sanitize_day_filter(raw: str | None) -> str | None:
+    if raw is None or not str(raw).strip():
+        return None
+    s = "".join(
+        c
+        for c in unicodedata.normalize("NFD", str(raw).strip().lower())
+        if unicodedata.category(c) != "Mn"
+    )
+    s = "".join(c for c in s if c.isalpha())
+    if s not in _DAY_FILTER_ALLOW:
+        return None
+    return s
+
+
+def _day_filter_sql_params(day_filter: str | None) -> tuple[bool, str]:
+    """Para ``CASE WHEN %s THEN TRUE ELSE <obs> LIKE %s END``."""
+    tok = _sanitize_day_filter(day_filter)
+    if not tok:
+        return True, ""
+    return False, f"%{tok}%"
 
 
 def _row_to_dict(cur, row: tuple) -> dict[str, Any]:
@@ -253,6 +300,7 @@ def list_dispatch_prep_by_municipality(
     emission_date_from: date,
     emission_date_to: date,
     only_not_invoiced: bool = True,
+    day_filter: str | None = None,
 ) -> list[dict[str, Any]]:
     """
     Resumen por comuna para pre‑planificación de despacho (órdenes de compra Bsale tipo 33).
@@ -261,11 +309,12 @@ def list_dispatch_prep_by_municipality(
     ``distribuidora.documents`` (no ``is_invoiced`` de la vista de facturación).
     """
     d0, d1 = _normalize_date_range(emission_date_from, emission_date_to)
+    skip_day, day_like = _day_filter_sql_params(day_filter)
     conn = get_connection()
     try:
         cur = conn.cursor()
         cur.execute(
-            """
+            f"""
             SELECT
                 COALESCE(
                     NULLIF(BTRIM(d.municipality), ''),
@@ -282,10 +331,11 @@ def list_dispatch_prep_by_municipality(
               AND d.emission_date >= %s::date
               AND d.emission_date < (%s::date + interval '1 day')
               AND (%s = FALSE OR d.state = 0)
+              AND CASE WHEN %s THEN TRUE ELSE {_OBS_NORMALIZED_D} LIKE %s END
             GROUP BY 1
             ORDER BY total_ventas DESC NULLS LAST, municipality ASC
             """,
-            (d0, d1, only_not_invoiced),
+            (d0, d1, only_not_invoiced, skip_day, day_like),
         )
         rows = [_serialize_row(_row_to_dict(cur, r)) for r in cur.fetchall()]
         cur.close()
@@ -300,15 +350,17 @@ def list_dispatch_prep_observation_texts(
     emission_date_to: date,
     only_not_invoiced: bool = True,
     limit: int = 2000,
+    day_filter: str | None = None,
 ) -> list[str]:
     """Textos de observaciones (atributo OBSERVACIONES en OC) para análisis en frontend."""
     d0, d1 = _normalize_date_range(emission_date_from, emission_date_to)
     lim = max(1, min(int(limit), 5000))
+    skip_day, day_like = _day_filter_sql_params(day_filter)
     conn = get_connection()
     try:
         cur = conn.cursor()
         cur.execute(
-            """
+            f"""
             SELECT p.observaciones
             FROM distribuidora.v_orders_purchase p
             INNER JOIN distribuidora.v_documents_latest d ON d.document_id = p.document_id
@@ -317,9 +369,10 @@ def list_dispatch_prep_observation_texts(
               AND d.emission_date >= %s::date
               AND d.emission_date < (%s::date + interval '1 day')
               AND (%s = FALSE OR d.state = 0)
+              AND CASE WHEN %s THEN TRUE ELSE {_OBS_NORMALIZED_P} LIKE %s END
             LIMIT %s
             """,
-            (d0, d1, only_not_invoiced, lim),
+            (d0, d1, only_not_invoiced, skip_day, day_like, lim),
         )
         out: list[str] = []
         for (text,) in cur.fetchall():
@@ -330,5 +383,67 @@ def list_dispatch_prep_observation_texts(
                 out.append(s)
         cur.close()
         return out
+    finally:
+        conn.close()
+
+
+def list_dispatch_prep_planning_rows(
+    *,
+    emission_date_from: date,
+    emission_date_to: date,
+    only_not_invoiced: bool = True,
+    day_filter: str | None = None,
+    limit: int = 5000,
+) -> list[dict[str, Any]]:
+    """
+    Filas OC (33) para tabla de pre‑planificación: join ``bsale.clients`` (no existe ``clientes``).
+
+    Observaciones: mismo criterio que el resumen por comuna (atributo + ``comments`` en JSON).
+    """
+    d0, d1 = _normalize_date_range(emission_date_from, emission_date_to)
+    skip_day, day_like = _day_filter_sql_params(day_filter)
+    lim = max(1, min(int(limit), 5000))
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            SELECT
+                d.document_id,
+                d.number AS oc,
+                d.client_id,
+                NULLIF(BTRIM(c.nombre_fantasia), '') AS nombre_fantasia,
+                COALESCE(
+                    NULLIF(BTRIM(d.municipality), ''),
+                    NULLIF(BTRIM(c.municipality), '')
+                ) AS municipality,
+                COALESCE(
+                    NULLIF(BTRIM(d.address), ''),
+                    NULLIF(BTRIM(c.address), '')
+                ) AS direccion,
+                NULLIF(BTRIM(d.seller_name), '') AS seller_name,
+                d.total_amount,
+                (c.lat IS NOT NULL AND c.lon IS NOT NULL) AS has_georef,
+                c.lat::double precision AS lat,
+                c.lon::double precision AS lng
+            FROM distribuidora.v_documents_latest d
+            LEFT JOIN bsale.clients c
+                ON c.company_id = d.company_id
+               AND c.bsale_id = d.client_id
+            WHERE d.company_id = 3
+              AND d.office_id = 1
+              AND d.document_type_id = 33
+              AND d.emission_date >= %s::date
+              AND d.emission_date < (%s::date + interval '1 day')
+              AND (%s = FALSE OR d.state = 0)
+              AND CASE WHEN %s THEN TRUE ELSE {_OBS_NORMALIZED_D} LIKE %s END
+            ORDER BY d.total_amount DESC NULLS LAST, d.document_id DESC
+            LIMIT %s
+            """,
+            (d0, d1, only_not_invoiced, skip_day, day_like, lim),
+        )
+        rows = [_serialize_row(_row_to_dict(cur, r)) for r in cur.fetchall()]
+        cur.close()
+        return rows
     finally:
         conn.close()

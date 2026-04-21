@@ -52,6 +52,16 @@ export function tagsFromObservationText(text: string): string[] {
   return Array.from(found)
 }
 
+/** Token ASCII para filtro backend (``LIKE %token%`` sobre observaciones normalizadas). */
+export function weekdayTokenFromTagLabel(tag: string): string | null {
+  const norm = stripAccents(tag)
+  if (!norm.trim()) return null
+  const re = new RegExp(WEEKDAY_RE.source, "i")
+  const m = re.exec(norm)
+  if (!m?.[1]) return null
+  return stripAccents(m[1]).toLowerCase()
+}
+
 export function aggregateObservationTags(texts: readonly string[]): {
   tag: string
   count: number

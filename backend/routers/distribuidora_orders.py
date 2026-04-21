@@ -15,6 +15,7 @@ from backend.services.distribuidora.orders_service import (
     get_purchase_order_detail,
     list_dispatch_prep_by_municipality,
     list_dispatch_prep_observation_texts,
+    list_dispatch_prep_planning_rows,
     list_purchase_orders,
 )
 
@@ -102,11 +103,16 @@ def get_dispatch_prep_by_municipality(
         True,
         description="Si true: solo documentos con state = 0 (pendiente Bsale). Si false: todos los state.",
     ),
+    day_filter: str | None = Query(
+        None,
+        description="Opcional: lunes|martes|miercoles|jueves|viernes|sabado (coincidencia en observaciones).",
+    ),
 ):
     rows = list_dispatch_prep_by_municipality(
         emission_date_from=emission_date_from,
         emission_date_to=emission_date_to,
         only_not_invoiced=only_not_invoiced,
+        day_filter=day_filter,
     )
     return {"items": rows}
 
@@ -117,11 +123,34 @@ def get_dispatch_prep_observaciones(
     emission_date_to: date = Query(...),
     only_not_invoiced: bool = Query(True),
     limit: int = Query(2000, ge=1, le=5000),
+    day_filter: str | None = Query(
+        None,
+        description="Opcional: día de la semana (mismo criterio que by-municipality).",
+    ),
 ):
     texts = list_dispatch_prep_observation_texts(
         emission_date_from=emission_date_from,
         emission_date_to=emission_date_to,
         only_not_invoiced=only_not_invoiced,
         limit=limit,
+        day_filter=day_filter,
     )
     return {"items": texts}
+
+
+@router.get("/orders/dispatch-prep/planning-rows")
+def get_dispatch_prep_planning_rows(
+    emission_date_from: date = Query(...),
+    emission_date_to: date = Query(...),
+    only_not_invoiced: bool = Query(True),
+    day_filter: str | None = Query(None),
+    limit: int = Query(5000, ge=1, le=5000),
+):
+    rows = list_dispatch_prep_planning_rows(
+        emission_date_from=emission_date_from,
+        emission_date_to=emission_date_to,
+        only_not_invoiced=only_not_invoiced,
+        day_filter=day_filter,
+        limit=limit,
+    )
+    return {"items": rows}
