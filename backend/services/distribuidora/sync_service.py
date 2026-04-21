@@ -4,6 +4,7 @@ Orquestación sync Bsale → ``distribuidora.*`` (documentos, detalles, atributo
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import random
@@ -312,6 +313,18 @@ def _seller_tuples_from_bsale_document_json(
     return []
 
 
+def _sellers_raw_for_log(value: Any, max_len: int = 4000) -> str:
+    if value is None:
+        return "null"
+    try:
+        s = json.dumps(value, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        s = repr(value)
+    if len(s) > max_len:
+        return f"{s[:max_len]}...(truncated)"
+    return s
+
+
 def _sync_document_sellers(
     client: BsaleClient,
     cur,
@@ -324,6 +337,13 @@ def _sync_document_sellers(
 
     Si ``sellers`` viene vacío, solo se eliminan filas previas (ningún INSERT).
     """
+    sellers_raw = raw_document.get("sellers") if isinstance(raw_document, dict) else None
+    logger.info(
+        "[document_sellers] pre document_id=%s sellers_raw=%s",
+        document_id,
+        _sellers_raw_for_log(sellers_raw),
+    )
+
     tuples: list[tuple[int | None, str | None]] = []
     if isinstance(raw_document, dict):
         tuples = _seller_tuples_from_bsale_document_json(client, raw_document)
@@ -333,6 +353,26 @@ def _sync_document_sellers(
             tuples = seller_tuples_from_sellers_api_response(data)
         except Exception as e:
             logger.warning("sellers.json document_id=%s: %s", document_id, e)
+
+    logger.info(
+        "[document_sellers] parsed document_id=%s sellers_count=%s",
+        document_id,
+        len(tuples),
+    )
+    if not tuples:
+        logger.info(
+            "No sellers found for document_id=%s",
+            document_id,
+        )
+    else:
+        for sid, name in tuples:
+            logger.info(
+                "[document_sellers] insert_row document_id=%s seller_id=%s seller_name=%s",
+                document_id,
+                sid,
+                name,
+            )
+
     try:
         n = replace_document_sellers(cur, document_id, tuples)
         stats["document_sellers_rows"] = int(stats.get("document_sellers_rows") or 0) + n
