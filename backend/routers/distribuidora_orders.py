@@ -124,7 +124,10 @@ def get_orders_purchase_by_document_ids(
 
 @router.get("/orders/purchase")
 def get_orders_purchase(
-    only_not_invoiced: bool = Query(False),
+    only_not_invoiced: bool = Query(
+        False,
+        description="Si true: solo OC sin factura/boleta en document_related (vista enriquecida).",
+    ),
     emission_date_from: date | None = Query(None),
     emission_date_to: date | None = Query(None),
     delivery_search: str | None = Query(
@@ -168,7 +171,7 @@ def get_dispatch_prep_by_municipality(
     emission_date_to: date = Query(..., description="Fin inclusive (fecha local)"),
     only_not_invoiced: bool = Query(
         True,
-        description="Si true: solo documentos con state = 0 (pendiente Bsale). Si false: todos los state.",
+        description="Si true: solo OC sin factura/boleta enlazada en document_related (vía detalles). Si false: todas.",
     ),
     day_filter: str | None = Query(
         None,
@@ -188,7 +191,10 @@ def get_dispatch_prep_by_municipality(
 def get_dispatch_prep_observaciones(
     emission_date_from: date = Query(...),
     emission_date_to: date = Query(...),
-    only_not_invoiced: bool = Query(True),
+    only_not_invoiced: bool = Query(
+        True,
+        description="Si true: solo textos de OC sin factura/boleta en document_related.",
+    ),
     limit: int = Query(2000, ge=1, le=5000),
     day_filter: str | None = Query(
         None,
@@ -209,7 +215,10 @@ def get_dispatch_prep_observaciones(
 def get_dispatch_prep_planning_rows(
     emission_date_from: date = Query(...),
     emission_date_to: date = Query(...),
-    only_not_invoiced: bool = Query(True),
+    only_not_invoiced: bool = Query(
+        True,
+        description="Si true: solo filas OC sin factura/boleta en document_related.",
+    ),
     day_filter: str | None = Query(None),
     limit: int = Query(5000, ge=1, le=5000),
 ):

@@ -11,6 +11,38 @@ from backend.db import get_connection
 
 _DAY_FILTER_ALLOW = frozenset({"lunes", "martes", "miercoles", "jueves", "viernes", "sabado"})
 
+# OC (tipo 33): facturada si hay ``document_related`` desde un detalle de la OC hacia boleta/factura (1 o 6).
+OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL = """
+NOT EXISTS (
+    SELECT 1
+    FROM distribuidora.document_related dr
+    INNER JOIN distribuidora.document_details dd ON dd.detail_id = dr.detail_id
+    INNER JOIN distribuidora.v_documents_latest inv
+        ON inv.document_id = dr.related_document_id
+       AND inv.document_type_id IN (1, 6)
+       AND inv.company_id = d.company_id
+       AND inv.office_id = d.office_id
+    WHERE dd.document_id = d.document_id
+)
+""".strip()
+
+OC_PURCHASE_ESTADO_REAL_SQL = """
+CASE
+    WHEN EXISTS (
+        SELECT 1
+        FROM distribuidora.document_related dr
+        INNER JOIN distribuidora.document_details dd ON dd.detail_id = dr.detail_id
+        INNER JOIN distribuidora.v_documents_latest inv
+            ON inv.document_id = dr.related_document_id
+           AND inv.document_type_id IN (1, 6)
+           AND inv.company_id = d.company_id
+           AND inv.office_id = d.office_id
+        WHERE dd.document_id = d.document_id
+    ) THEN 'Facturada'
+    ELSE 'Pendiente'
+END
+""".strip()
+
 # Texto “observaciones” en documento OC: atributo + comentarios JSON (no hay columna ``observations``).
 _OBS_NORMALIZED_D = """translate(lower(
     COALESCE(
@@ -305,8 +337,8 @@ def list_dispatch_prep_by_municipality(
     """
     Resumen por comuna para pre‑planificación de despacho (órdenes de compra Bsale tipo 33).
 
-    Filtro "solo no facturadas" sigue la especificación de producto: ``state = 0`` en
-    ``distribuidora.documents`` (no ``is_invoiced`` de la vista de facturación).
+    Filtro "solo no facturadas": sin fila en ``document_related`` hacia boleta/factura (tipos 1/6),
+    vía detalles de la misma OC (no se usa ``state``).
     """
     d0, d1 = _normalize_date_range(emission_date_from, emission_date_to)
     skip_day, day_like = _day_filter_sql_params(day_filter)
@@ -330,7 +362,7 @@ def list_dispatch_prep_by_municipality(
               AND d.document_type_id = 33
               AND d.emission_date >= %s::date
               AND d.emission_date < (%s::date + interval '1 day')
-              AND (%s = FALSE OR d.state = 0)
+              AND (%s = FALSE OR {OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL})
               AND CASE WHEN %s THEN TRUE ELSE {_OBS_NORMALIZED_D} LIKE %s END
             GROUP BY 1
             ORDER BY total_ventas DESC NULLS LAST, municipality ASC
@@ -368,7 +400,7 @@ def list_dispatch_prep_observation_texts(
               AND BTRIM(p.observaciones) <> ''
               AND d.emission_date >= %s::date
               AND d.emission_date < (%s::date + interval '1 day')
-              AND (%s = FALSE OR d.state = 0)
+              AND (%s = FALSE OR {OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL})
               AND CASE WHEN %s THEN TRUE ELSE {_OBS_NORMALIZED_P} LIKE %s END
             LIMIT %s
             """,
@@ -425,7 +457,8 @@ def list_dispatch_prep_planning_rows(
                 d.total_amount,
                 (c.lat IS NOT NULL AND c.lon IS NOT NULL) AS has_georef,
                 c.lat::double precision AS lat,
-                c.lon::double precision AS lng
+                c.lon::double precision AS lng,
+                ({OC_PURCHASE_ESTADO_REAL_SQL}) AS estado_real
             FROM distribuidora.v_documents_latest d
             LEFT JOIN bsale.clients c
                 ON c.company_id = d.company_id
@@ -435,7 +468,7 @@ def list_dispatch_prep_planning_rows(
               AND d.document_type_id = 33
               AND d.emission_date >= %s::date
               AND d.emission_date < (%s::date + interval '1 day')
-              AND (%s = FALSE OR d.state = 0)
+              AND (%s = FALSE OR {OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL})
               AND CASE WHEN %s THEN TRUE ELSE {_OBS_NORMALIZED_D} LIKE %s END
             ORDER BY d.number DESC NULLS LAST, d.document_id DESC
             LIMIT %s

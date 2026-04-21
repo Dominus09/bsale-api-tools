@@ -100,7 +100,7 @@ export function OrdersTable({
               <TableHead>Comuna</TableHead>
               <TableHead className="text-right">Total</TableHead>
               <TableHead>Vendedor</TableHead>
-              <TableHead>Estado</TableHead>
+              <TableHead>Estado real</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -112,7 +112,12 @@ export function OrdersTable({
               </TableRow>
             ) : (
               items.map((row) => {
-                const invoiced = row.is_invoiced === true
+                const estadoReal =
+                  typeof row.estado_real === "string" && row.estado_real.trim() !== ""
+                    ? row.estado_real.trim()
+                    : row.is_invoiced === true
+                      ? "Facturada"
+                      : "Pendiente"
                 const seller =
                   row.seller_name?.trim() ||
                   row.seller?.trim() ||
@@ -143,12 +148,12 @@ export function OrdersTable({
                     </TableCell>
                     <TableCell className="max-w-[180px] truncate">{seller}</TableCell>
                     <TableCell>
-                      {invoiced ? (
+                      {estadoReal === "Facturada" ? (
                         <Badge className="bg-emerald-600 hover:bg-emerald-600">
                           Facturada
                         </Badge>
                       ) : (
-                        <Badge variant="destructive">No facturada</Badge>
+                        <Badge variant="secondary">Pendiente</Badge>
                       )}
                     </TableCell>
                   </TableRow>

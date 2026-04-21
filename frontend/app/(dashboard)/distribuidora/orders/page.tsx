@@ -261,6 +261,13 @@ function PlanningTableRow({
       <TableCell className="max-w-[8rem] truncate">
         {r.seller_name?.trim() || "—"}
       </TableCell>
+      <TableCell className="whitespace-nowrap text-xs">
+        {r.estado_real === "Facturada" ? (
+          <Badge className="bg-emerald-600 hover:bg-emerald-600">Facturada</Badge>
+        ) : (
+          <Badge variant="secondary">Pendiente</Badge>
+        )}
+      </TableCell>
       <TableCell className="text-right tabular-nums">
         {formatClp(Number(r.total_amount ?? 0))}
       </TableCell>
@@ -957,8 +964,8 @@ export default function DistribuidoraOrdersPage() {
               <Label htmlFor="prep-only-open" className="text-sm font-medium">
                 Solo no facturadas{" "}
                 <span className="block text-xs font-normal text-muted-foreground">
-                  Equivale a <code className="text-xs">state = 0</code> en documentos
-                  OC
+                  Sin enlace en <code className="text-xs">document_related</code> hacia
+                  boleta o factura (tipos 1/6)
                 </span>
               </Label>
             </div>
@@ -1279,6 +1286,7 @@ export default function DistribuidoraOrdersPage() {
                   <TableHead>Comuna</TableHead>
                   <TableHead>Dirección</TableHead>
                   <TableHead>Vendedor</TableHead>
+                  <TableHead>Estado real</TableHead>
                   <TableHead className="text-right">Monto</TableHead>
                   <TableHead>Georef</TableHead>
                   <TableHead>Cluster</TableHead>
@@ -1289,7 +1297,7 @@ export default function DistribuidoraOrdersPage() {
                 {planningRows.length === 0 && !loading ? (
                   <TableRow>
                     <TableCell
-                      colSpan={9}
+                      colSpan={10}
                       className="py-10 text-center text-muted-foreground"
                     >
                       Sin filas para mostrar (ajuste fechas o filtro de día).
@@ -1300,7 +1308,7 @@ export default function DistribuidoraOrdersPage() {
                     <Fragment key={block.key}>
                       {groupByMunicipality && block.key !== "_all" ? (
                         <TableRow className="bg-muted/70 hover:bg-muted/70">
-                          <TableCell colSpan={9} className="py-3">
+                          <TableCell colSpan={10} className="py-3">
                             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                               <div>
                                 <span className="text-sm font-semibold tracking-wide">

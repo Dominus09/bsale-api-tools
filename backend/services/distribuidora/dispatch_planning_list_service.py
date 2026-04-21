@@ -7,6 +7,10 @@ from decimal import Decimal
 from typing import Any
 
 from backend.db import get_connection
+from backend.services.distribuidora.orders_service import (
+    OC_PURCHASE_ESTADO_REAL_SQL,
+    OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL,
+)
 
 _ALLOWED_DAYS = frozenset(
     {"lunes", "martes", "miercoles", "jueves", "viernes", "sabado"},
@@ -43,8 +47,8 @@ def list_dispatch_planning_orders(
     office_id: int = 1,
 ) -> list[dict[str, Any]]:
     """
-    Órdenes de compra Bsale (``document_type_id = 33``) pendientes (``state = 0``) con texto de
-    observación derivado de atributo ``OBSERVACIONES`` y/o ``raw_data->>'comments'``.
+    Órdenes de compra Bsale (``document_type_id = 33``) sin factura/boleta enlazada en
+    ``document_related``, con observación desde atributo ``OBSERVACIONES`` y/o ``raw_data->>'comments'``.
     """
     d0, d1 = _normalize_date_range(emission_date_from, emission_date_to)
     day = (delivery_day or "all").strip().lower()
@@ -66,7 +70,7 @@ def list_dispatch_planning_orders(
         cur = conn.cursor()
         if day_filter_active and day_pat:
             cur.execute(
-                """
+                f"""
                 SELECT
                     d.document_id,
                     d.client_id,
@@ -109,7 +113,8 @@ def list_dispatch_planning_orders(
                             ''
                         ),
                         NULLIF(BTRIM(d.raw_data->>'comments'), '')
-                    ) AS observations
+                    ) AS observations,
+                    ({OC_PURCHASE_ESTADO_REAL_SQL}) AS estado_real
                 FROM distribuidora.v_documents_latest d
                 LEFT JOIN bsale.clients c
                     ON c.company_id = d.company_id
@@ -117,7 +122,7 @@ def list_dispatch_planning_orders(
                 WHERE d.company_id = %s
                   AND d.office_id = %s
                   AND d.document_type_id = 33
-                  AND d.state = 0
+                  AND {OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL}
                   AND d.emission_date >= %s::date
                   AND d.emission_date < (%s::date + interval '1 day')
                   AND translate(
@@ -146,7 +151,7 @@ def list_dispatch_planning_orders(
             )
         else:
             cur.execute(
-                """
+                f"""
                 SELECT
                     d.document_id,
                     d.client_id,
@@ -189,7 +194,8 @@ def list_dispatch_planning_orders(
                             ''
                         ),
                         NULLIF(BTRIM(d.raw_data->>'comments'), '')
-                    ) AS observations
+                    ) AS observations,
+                    ({OC_PURCHASE_ESTADO_REAL_SQL}) AS estado_real
                 FROM distribuidora.v_documents_latest d
                 LEFT JOIN bsale.clients c
                     ON c.company_id = d.company_id
@@ -197,7 +203,7 @@ def list_dispatch_planning_orders(
                 WHERE d.company_id = %s
                   AND d.office_id = %s
                   AND d.document_type_id = 33
-                  AND d.state = 0
+                  AND {OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL}
                   AND d.emission_date >= %s::date
                   AND d.emission_date < (%s::date + interval '1 day')
                 ORDER BY d.number DESC NULLS LAST, d.document_id DESC

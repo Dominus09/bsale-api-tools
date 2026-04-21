@@ -400,7 +400,7 @@ export default function DispatchAnalysisPage() {
                 disabled={loading}
               />
               <label htmlFor="da-notinv" className="cursor-pointer text-sm">
-                Solo pedidos no facturados
+                Solo pedidos sin factura/boleta enlazada (document_related)
               </label>
             </div>
           </div>

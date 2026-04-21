@@ -505,6 +505,7 @@ export default function PrePlanificacionDespachoPage() {
               <TableHead>Dirección</TableHead>
               <TableHead>Comuna</TableHead>
               <TableHead>Vendedor</TableHead>
+              <TableHead>Estado real</TableHead>
               <TableHead className="text-right">Monto</TableHead>
               <TableHead>Georef</TableHead>
               <TableHead className="min-w-[9rem]">Camión</TableHead>
@@ -513,7 +514,7 @@ export default function PrePlanificacionDespachoPage() {
           <TableBody>
             {rows.length === 0 && !loading ? (
               <TableRow>
-                <TableCell colSpan={10} className="py-10 text-center text-muted-foreground">
+                <TableCell colSpan={11} className="py-10 text-center text-muted-foreground">
                   Sin resultados en el rango y filtro de día.
                 </TableCell>
               </TableRow>
@@ -550,6 +551,13 @@ export default function PrePlanificacionDespachoPage() {
                     <TableCell className="max-w-[8rem] truncate">{r.comuna?.trim() || "—"}</TableCell>
                     <TableCell className="max-w-[8rem] truncate">
                       {r.seller_name?.trim() || "—"}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-xs">
+                      {r.estado_real === "Facturada" ? (
+                        <Badge className="bg-emerald-600 hover:bg-emerald-600">Facturada</Badge>
+                      ) : (
+                        <Badge variant="secondary">Pendiente</Badge>
+                      )}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {formatCLP(Number(r.total_amount ?? 0))}

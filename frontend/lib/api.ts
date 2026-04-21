@@ -840,6 +840,8 @@ export type DistribuidoraPurchaseOrder = {
   forma_pago?: string | null
   observaciones?: string | null
   is_invoiced?: boolean | null
+  /** Facturada / Pendiente según ``document_related`` (no ``state``). */
+  estado_real?: string | null
   /** Nombre a mostrar: prioriza ``seller_name`` en API. */
   seller?: string | null
   [key: string]: unknown
@@ -959,6 +961,7 @@ export type DistribuidoraDispatchPrepPlanningRow = {
   has_georef?: boolean | null
   lat?: number | null
   lng?: number | null
+  estado_real?: string | null
 }
 
 export async function getDistribuidoraDispatchPrepPlanningRows(params: {
@@ -1150,6 +1153,7 @@ export type DistribuidoraPlanificacionOrderRow = {
   lat?: number | null
   lng?: number | null
   observations?: string | null
+  estado_real?: string | null
 }
 
 export async function getDistribuidoraPlanificacionOrders(params: {
