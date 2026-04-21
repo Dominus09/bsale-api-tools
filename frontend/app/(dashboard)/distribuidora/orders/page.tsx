@@ -1,25 +1,34 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { Loader2 } from "lucide-react"
-import Link from "next/link"
-import { useSearchParams } from "next/navigation"
+import { Loader2, MapPin, Package, Truck } from "lucide-react"
 
 import {
-  OrdersFilters,
-  WEEKDAY_DELIVERY_OPTIONS,
-  type MunicipalityOption,
-  type SellerOption,
-} from "@/components/distribuidora/orders/OrdersFilters"
-import { OrdersSummary } from "@/components/distribuidora/orders/OrdersSummary"
-import { OrdersTable } from "@/components/distribuidora/orders/OrdersTable"
-import { useDistribuidoraPlanning } from "@/context/distribuidora-planning-selection"
-import {
-  getDistribuidoraOrdersPurchase,
-  type DistribuidoraPurchaseOrder,
+  getDistribuidoraDispatchPrepByMunicipality,
+  getDistribuidoraDispatchPrepObservaciones,
+  type DistribuidoraDispatchPrepMunicipalityRow,
 } from "@/lib/api"
+import { aggregateObservationTags } from "@/lib/dispatch-prep-tags"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
+import { cn } from "@/lib/utils"
 
 function localIsoDate(d = new Date()): string {
   const y = d.getFullYear()
@@ -28,126 +37,29 @@ function localIsoDate(d = new Date()): string {
   return `${y}-${m}-${day}`
 }
 
-function communeKey(row: DistribuidoraPurchaseOrder): string {
-  const t = row.municipality?.trim() || row.city?.trim()
-  return t || "__NONE__"
-}
+const clp = new Intl.NumberFormat("es-CL", {
+  style: "currency",
+  currency: "CLP",
+  maximumFractionDigits: 0,
+})
 
-function parseDeliveryFromUrl(del: string | undefined): {
-  days: Set<string>
-  extra: string
-} {
-  if (!del?.trim()) return { days: new Set(), extra: "" }
-  const days = new Set<string>()
-  const extras: string[] = []
-  for (const part of del.split(",").map((s) => s.trim()).filter(Boolean)) {
-    let matched = false
-    for (const d of WEEKDAY_DELIVERY_OPTIONS) {
-      if (d.toLowerCase() === part.toLowerCase()) {
-        days.add(d)
-        matched = true
-        break
-      }
-    }
-    if (!matched) extras.push(part)
-  }
-  return { days, extra: extras.join(", ") }
+function formatClp(n: number): string {
+  return clp.format(Number.isFinite(n) ? n : 0)
 }
 
 export default function DistribuidoraOrdersPage() {
-  const searchParams = useSearchParams()
-  const queryString = searchParams.toString()
-  const { addPlanningDocuments, clearPlanningDocuments, planningDocumentIds } =
-    useDistribuidoraPlanning()
-
   const [dateFrom, setDateFrom] = useState(() => localIsoDate())
   const [dateTo, setDateTo] = useState(() => localIsoDate())
-  const [selectedDeliveryDays, setSelectedDeliveryDays] = useState<Set<string>>(
-    () => new Set(),
-  )
-  const [deliveryExtraText, setDeliveryExtraText] = useState("")
-  const [sellerUserId, setSellerUserId] = useState("")
-  const [selectedMunicipalities, setSelectedMunicipalities] = useState<Set<string>>(
-    () => new Set(),
-  )
-  const [onlyNotInvoiced, setOnlyNotInvoiced] = useState(false)
+  const [onlyNotInvoiced, setOnlyNotInvoiced] = useState(true)
 
-  const [rawItems, setRawItems] = useState<DistribuidoraPurchaseOrder[]>([])
-  const [total, setTotal] = useState(0)
+  const [rows, setRows] = useState<DistribuidoraDispatchPrepMunicipalityRow[]>([])
+  const [observationTexts, setObservationTexts] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const [pageSelectedIds, setPageSelectedIds] = useState<Set<number>>(() => new Set())
-  const [feedback, setFeedback] = useState<string | null>(null)
-
-  useEffect(() => {
-    const sp = new URLSearchParams(queryString)
-    const d0 =
-      sp.get("emission_date_from")?.trim() || sp.get("date")?.trim()
-    const d1 = sp.get("emission_date_to")?.trim() || sp.get("date_to")?.trim()
-    if (d0) setDateFrom(d0)
-    if (d1) setDateTo(d1)
-    else if (d0) setDateTo(d0)
-    const del =
-      sp.get("delivery_search")?.trim() || sp.get("observaciones")?.trim()
-    if (sp.has("delivery_search") || sp.has("observaciones")) {
-      const { days, extra } = parseDeliveryFromUrl(del ?? undefined)
-      setSelectedDeliveryDays(days)
-      setDeliveryExtraText(extra)
-    }
-    const muni = sp.get("municipality")?.trim() || sp.get("ciudad")?.trim()
-    if (sp.has("municipality") || sp.has("ciudad")) {
-      if (muni) {
-        setSelectedMunicipalities(
-          new Set(muni.split(",").map((s) => s.trim()).filter(Boolean)),
-        )
-      } else {
-        setSelectedMunicipalities(new Set())
-      }
-    }
-    if (sp.get("only_not_invoiced") === "true") setOnlyNotInvoiced(true)
-    else if (sp.has("only_not_invoiced")) setOnlyNotInvoiced(false)
-    if (sp.has("user_id")) {
-      const u = sp.get("user_id")?.trim()
-      if (u && Number.isFinite(Number.parseInt(u, 10))) setSellerUserId(u)
-      else setSellerUserId("")
-    }
-  }, [queryString])
-
-  const deliverySearchParam = useMemo(() => {
-    const parts: string[] = []
-    const days = Array.from(selectedDeliveryDays).sort((a, b) =>
-      a.localeCompare(b, "es"),
-    )
-    parts.push(...days)
-    const extra = deliveryExtraText.trim()
-    if (extra) parts.push(extra)
-    if (parts.length === 0) return undefined
-    return parts.join(",")
-  }, [selectedDeliveryDays, deliveryExtraText])
-
-  const municipalityApiParam = useMemo(() => {
-    if (selectedMunicipalities.size === 0) return undefined
-    return Array.from(selectedMunicipalities).join(",")
-  }, [selectedMunicipalities])
-
-  const toggleDeliveryDay = useCallback((day: string) => {
-    setSelectedDeliveryDays((prev) => {
-      const n = new Set(prev)
-      if (n.has(day)) n.delete(day)
-      else n.add(day)
-      return n
-    })
-  }, [])
-
-  const toggleMunicipality = useCallback((value: string) => {
-    setSelectedMunicipalities((prev) => {
-      const n = new Set(prev)
-      if (n.has(value)) n.delete(value)
-      else n.add(value)
-      return n
-    })
-  }, [])
+  const [detailOpen, setDetailOpen] = useState(false)
+  const [detailRow, setDetailRow] =
+    useState<DistribuidoraDispatchPrepMunicipalityRow | null>(null)
 
   useEffect(() => {
     const ac = new AbortController()
@@ -156,27 +68,28 @@ export default function DistribuidoraOrdersPage() {
       setLoading(true)
       setError(null)
       try {
-        const uid =
-          sellerUserId === "" ? undefined : parseInt(sellerUserId, 10)
-        const res = await getDistribuidoraOrdersPurchase({
-          emission_date_from: dateFrom,
-          emission_date_to: dateTo,
-          only_not_invoiced: onlyNotInvoiced,
-          user_id: Number.isFinite(uid as number) ? uid : undefined,
-          delivery_search: deliverySearchParam,
-          municipality: municipalityApiParam,
-          limit: 5000,
-          offset: 0,
-          signal: ac.signal,
-        })
+        const [byMuni, obs] = await Promise.all([
+          getDistribuidoraDispatchPrepByMunicipality({
+            emission_date_from: dateFrom,
+            emission_date_to: dateTo,
+            only_not_invoiced: onlyNotInvoiced,
+            signal: ac.signal,
+          }),
+          getDistribuidoraDispatchPrepObservaciones({
+            emission_date_from: dateFrom,
+            emission_date_to: dateTo,
+            only_not_invoiced: onlyNotInvoiced,
+            signal: ac.signal,
+          }),
+        ])
         if (cancelled) return
-        setRawItems(res.items)
-        setTotal(res.total)
+        setRows(byMuni.items)
+        setObservationTexts(obs.items)
       } catch (e: unknown) {
         if (cancelled || (e instanceof Error && e.name === "AbortError")) return
-        setError(e instanceof Error ? e.message : "Error al cargar órdenes")
-        setRawItems([])
-        setTotal(0)
+        setError(e instanceof Error ? e.message : "Error al cargar datos")
+        setRows([])
+        setObservationTexts([])
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -185,120 +98,43 @@ export default function DistribuidoraOrdersPage() {
       cancelled = true
       ac.abort()
     }
-  }, [
-    dateFrom,
-    dateTo,
-    sellerUserId,
-    onlyNotInvoiced,
-    deliverySearchParam,
-    municipalityApiParam,
-  ])
+  }, [dateFrom, dateTo, onlyNotInvoiced])
 
-  const sellerOptions = useMemo((): SellerOption[] => {
-    const byUser = new Map<number, string>()
-    for (const r of rawItems) {
-      const id = r.user_id
-      if (id == null || !Number.isFinite(Number(id))) continue
-      const n = Number(id)
-      const label =
-        r.seller_name?.trim() ||
-        r.seller?.trim() ||
-        (Number.isFinite(n) ? `Usuario ${n}` : "Usuario")
-      if (!byUser.has(n)) byUser.set(n, label)
-    }
-    return Array.from(byUser.entries())
-      .map(([user_id, label]) => ({ user_id, label }))
-      .sort((a, b) => a.label.localeCompare(b.label, "es"))
-  }, [rawItems])
-
-  const municipalityOptions = useMemo((): MunicipalityOption[] => {
-    const seen = new Map<string, string>()
-    for (const k of selectedMunicipalities) {
-      const label = k === "__NONE__" ? "(Sin comuna / ciudad)" : k
-      seen.set(k, label)
-    }
-    for (const r of rawItems) {
-      const k = communeKey(r)
-      const label = k === "__NONE__" ? "(Sin comuna / ciudad)" : k
-      seen.set(k, label)
-    }
-    return Array.from(seen.entries())
-      .map(([value, label]) => ({ value, label }))
-      .sort((a, b) => a.label.localeCompare(b.label, "es"))
-  }, [rawItems, selectedMunicipalities])
-
-  const displayItems = rawItems
-
-  const truncated = total > rawItems.length
-
-  const toggle = useCallback((documentId: number, checked: boolean) => {
-    setPageSelectedIds((prev) => {
-      const n = new Set(prev)
-      if (checked) n.add(documentId)
-      else n.delete(documentId)
-      return n
-    })
-  }, [])
-
-  const toggleAll = useCallback(
-    (checked: boolean) => {
-      setPageSelectedIds(() => {
-        if (!checked) return new Set()
-        return new Set(displayItems.map((r) => r.document_id))
-      })
-    },
-    [displayItems],
+  const tagStats = useMemo(
+    () => aggregateObservationTags(observationTexts),
+    [observationTexts],
   )
 
-  const onAddToPlanning = useCallback(() => {
-    const ids = Array.from(pageSelectedIds)
-    if (ids.length === 0) return
-    const prevQueue = planningDocumentIds.size
-    addPlanningDocuments(ids)
-    setPageSelectedIds(new Set())
-    setFeedback(
-      `Se añadieron ${ids.length} orden(es) a la cola de planificación (total en cola: ${prevQueue + ids.length}).`,
-    )
-    window.setTimeout(() => setFeedback(null), 5000)
-  }, [pageSelectedIds, addPlanningDocuments, planningDocumentIds.size])
+  const kpis = useMemo(() => {
+    let pedidos = 0
+    let ventas = 0
+    for (const r of rows) {
+      pedidos += Number(r.pedidos) || 0
+      ventas += Number(r.total_ventas) || 0
+    }
+    return {
+      comunas: rows.length,
+      pedidos,
+      ventas,
+    }
+  }, [rows])
+
+  const openDetail = useCallback((r: DistribuidoraDispatchPrepMunicipalityRow) => {
+    setDetailRow(r)
+    setDetailOpen(true)
+  }, [])
 
   return (
-    <div className="mx-auto flex max-w-[1400px] flex-col gap-6">
-      <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            Órdenes de compra
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Distribuidora · filtros combinables (fechas, comuna, vendedor, observaciones)
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-          <span>
-            En cola planificación:{" "}
-            <strong className="text-foreground">
-              {planningDocumentIds.size}
-            </strong>
-          </span>
-          {planningDocumentIds.size > 0 ? (
-            <>
-              <Button asChild size="sm">
-                <Link href="/distribuidora/planning">Planificar camiones</Link>
-              </Button>
-              <Button type="button" variant="outline" size="sm" onClick={() => clearPlanningDocuments()}>
-                Vaciar cola
-              </Button>
-            </>
-          ) : null}
-        </div>
-      </div>
-
-      {feedback ? (
-        <Alert>
-          <AlertTitle>Listo</AlertTitle>
-          <AlertDescription>{feedback}</AlertDescription>
-        </Alert>
-      ) : null}
+    <div className="mx-auto flex max-w-6xl flex-col gap-10 pb-16">
+      <header className="space-y-2">
+        <h1 className="text-3xl font-semibold tracking-tight">
+          Pre‑planificación de despacho
+        </h1>
+        <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
+          Vista de análisis por comuna y señales de día en observaciones de órdenes de
+          compra (sin listado operativo de documentos).
+        </p>
+      </header>
 
       {error ? (
         <Alert variant="destructive">
@@ -307,63 +143,249 @@ export default function DistribuidoraOrdersPage() {
         </Alert>
       ) : null}
 
-      {truncated ? (
-        <Alert>
-          <AlertTitle>Aviso</AlertTitle>
-          <AlertDescription>
-            Hay {total} órdenes en el rango y se muestran {rawItems.length} (límite
-            5000). Ajuste filtros o aumente el límite en API si lo necesita.
-          </AlertDescription>
-        </Alert>
-      ) : null}
+      <section className="rounded-2xl border border-border/60 bg-card/40 p-6 shadow-sm backdrop-blur-sm">
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+          <div className="grid gap-5 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="prep-from">Fecha desde</Label>
+              <Input
+                id="prep-from"
+                type="date"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+                disabled={loading}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="prep-to">Fecha hasta</Label>
+              <Input
+                id="prep-to"
+                type="date"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+                disabled={loading}
+              />
+            </div>
+          </div>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-6">
+            <div className="flex items-center gap-3">
+              <Switch
+                id="prep-only-open"
+                checked={onlyNotInvoiced}
+                onCheckedChange={(v) => setOnlyNotInvoiced(v === true)}
+                disabled={loading}
+              />
+              <Label htmlFor="prep-only-open" className="text-sm font-medium">
+                Solo no facturadas{" "}
+                <span className="block text-xs font-normal text-muted-foreground">
+                  Equivale a <code className="text-xs">state = 0</code> en documentos
+                  OC
+                </span>
+              </Label>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="shrink-0 self-start"
+              disabled={loading || !onlyNotInvoiced}
+              onClick={() => setOnlyNotInvoiced(false)}
+            >
+              Mostrar todo
+            </Button>
+          </div>
+        </div>
+      </section>
 
-      <OrdersFilters
-        dateFrom={dateFrom}
-        onDateFromChange={setDateFrom}
-        dateTo={dateTo}
-        onDateToChange={setDateTo}
-        selectedDeliveryDays={selectedDeliveryDays}
-        onToggleDeliveryDay={toggleDeliveryDay}
-        onClearDeliveryDays={() => setSelectedDeliveryDays(new Set())}
-        deliveryExtraText={deliveryExtraText}
-        onDeliveryExtraTextChange={setDeliveryExtraText}
-        sellerOptions={sellerOptions}
-        sellerUserId={sellerUserId}
-        onSellerUserIdChange={setSellerUserId}
-        municipalityOptions={municipalityOptions}
-        selectedMunicipalityKeys={selectedMunicipalities}
-        onToggleMunicipality={toggleMunicipality}
-        onClearMunicipalities={() => setSelectedMunicipalities(new Set())}
-        onlyNotInvoiced={onlyNotInvoiced}
-        onOnlyNotInvoicedChange={setOnlyNotInvoiced}
-        loading={loading}
-      />
+      <section className="grid gap-4 sm:grid-cols-3">
+        <Card className="border-0 bg-muted/30 py-5 shadow-sm">
+          <CardHeader className="pb-2">
+            <CardDescription>Comunas con movimiento</CardDescription>
+            <CardTitle className="flex items-center gap-2 text-2xl tabular-nums">
+              <MapPin className="size-5 text-muted-foreground" />
+              {loading ? "—" : kpis.comunas}
+            </CardTitle>
+          </CardHeader>
+        </Card>
+        <Card className="border-0 bg-muted/30 py-5 shadow-sm">
+          <CardHeader className="pb-2">
+            <CardDescription>Pedidos (OC)</CardDescription>
+            <CardTitle className="flex items-center gap-2 text-2xl tabular-nums">
+              <Package className="size-5 text-muted-foreground" />
+              {loading ? "—" : kpis.pedidos.toLocaleString("es-CL")}
+            </CardTitle>
+          </CardHeader>
+        </Card>
+        <Card className="border-0 bg-muted/30 py-5 shadow-sm">
+          <CardHeader className="pb-2">
+            <CardDescription>Monto total</CardDescription>
+            <CardTitle className="flex items-center gap-2 text-xl tabular-nums sm:text-2xl">
+              <Truck className="size-5 shrink-0 text-muted-foreground" />
+              {loading ? "—" : formatClp(kpis.ventas)}
+            </CardTitle>
+          </CardHeader>
+        </Card>
+      </section>
 
       {loading ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          Cargando órdenes…
+          <Loader2 className="size-4 animate-spin" />
+          Cargando resumen…
         </div>
       ) : null}
 
-      {!loading ? (
-        <>
-          <OrdersSummary items={displayItems} />
-          <OrdersTable
-            items={displayItems}
-            pageSelectedIds={pageSelectedIds}
-            onToggle={toggle}
-            onToggleAll={toggleAll}
-            onAddToPlanning={onAddToPlanning}
-            planningBasketCount={planningDocumentIds.size}
-            loading={loading}
-          />
-          <p className="text-xs text-muted-foreground">
-            Mostrando {displayItems.length} filas
-            {total ? ` · Total servidor: ${total}` : ""}
+      <div className="grid gap-10 lg:grid-cols-[1fr_min(22rem,100%)] lg:items-start">
+        <section className="min-w-0 space-y-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+            Por comuna
+          </h2>
+          <div className="overflow-x-auto rounded-xl border border-border/50 bg-background/80">
+            <table className="w-full min-w-[28rem] border-collapse text-sm">
+              <thead>
+                <tr className="text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  <th className="px-4 py-3">Comuna</th>
+                  <th className="px-4 py-3 text-right">Clientes únicos</th>
+                  <th className="px-4 py-3 text-right">Pedidos</th>
+                  <th className="px-4 py-3 text-right">Venta total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.length === 0 && !loading ? (
+                  <tr>
+                    <td
+                      colSpan={4}
+                      className="px-4 py-10 text-center text-muted-foreground"
+                    >
+                      Sin datos en el rango seleccionado.
+                    </td>
+                  </tr>
+                ) : (
+                  rows.map((r) => (
+                    <tr
+                      key={r.municipality}
+                      className={cn(
+                        "border-t border-border/40 transition-colors",
+                        "hover:bg-muted/50",
+                      )}
+                    >
+                      <td className="px-4 py-2.5 font-medium">
+                        <button
+                          type="button"
+                          className="rounded text-left underline-offset-2 hover:underline"
+                          onClick={() => openDetail(r)}
+                        >
+                          {r.municipality}
+                        </button>
+                      </td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">
+                        {Number(r.clientes_unicos).toLocaleString("es-CL")}
+                      </td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">
+                        {Number(r.pedidos).toLocaleString("es-CL")}
+                      </td>
+                      <td className="px-4 py-2.5 text-right tabular-nums">
+                        {formatClp(Number(r.total_ventas))}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <aside className="space-y-3 rounded-xl border border-border/50 bg-muted/20 p-5">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+            Observaciones
+          </h2>
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Hasta 2000 textos de observaciones en el rango. Se detectan días de la semana
+            y palabras como entrega, reparto o retiro para agrupar frecuencias.
           </p>
-        </>
-      ) : null}
+          <div className="flex flex-wrap gap-2">
+            {tagStats.length === 0 && !loading ? (
+              <span className="text-sm text-muted-foreground">
+                Sin menciones de días en observaciones.
+              </span>
+            ) : (
+              tagStats.map(({ tag, count }) => (
+                <span
+                  key={tag}
+                  className="inline-flex items-center rounded-full border border-border/60 bg-background px-3 py-1 text-xs font-medium shadow-sm"
+                >
+                  {tag}{" "}
+                  <span className="ml-1 tabular-nums text-muted-foreground">
+                    ({count})
+                  </span>
+                </span>
+              ))
+            )}
+          </div>
+        </aside>
+      </div>
+
+      <section className="space-y-3">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+          Resumen compacto
+        </h2>
+        <div className="max-w-xl overflow-x-auto rounded-lg border border-border/40 bg-background/90 text-xs">
+          <table className="w-full border-collapse">
+            <thead>
+              <tr className="border-b border-border/50 bg-muted/40 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                <th className="px-2 py-1.5">Comuna</th>
+                <th className="px-2 py-1.5 text-right">Clientes únicos</th>
+                <th className="px-2 py-1.5 text-right">Venta total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={`sum-${r.municipality}`} className="border-t border-border/30">
+                  <td className="px-2 py-1 font-medium">{r.municipality}</td>
+                  <td className="px-2 py-1 text-right tabular-nums">
+                    {Number(r.clientes_unicos).toLocaleString("es-CL")}
+                  </td>
+                  <td className="px-2 py-1 text-right tabular-nums">
+                    {formatClp(Number(r.total_ventas))}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{detailRow?.municipality ?? "Comuna"}</DialogTitle>
+            <DialogDescription>
+              Resumen agregado en el rango de fechas y filtros actuales.
+            </DialogDescription>
+          </DialogHeader>
+          {detailRow ? (
+            <dl className="grid gap-2 text-sm">
+              <div className="flex justify-between gap-4">
+                <dt className="text-muted-foreground">Clientes únicos</dt>
+                <dd className="font-medium tabular-nums">
+                  {Number(detailRow.clientes_unicos).toLocaleString("es-CL")}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-muted-foreground">Pedidos</dt>
+                <dd className="font-medium tabular-nums">
+                  {Number(detailRow.pedidos).toLocaleString("es-CL")}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-4">
+                <dt className="text-muted-foreground">Venta total</dt>
+                <dd className="font-medium tabular-nums">
+                  {formatClp(Number(detailRow.total_ventas))}
+                </dd>
+              </div>
+            </dl>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

@@ -885,6 +885,64 @@ export async function getDistribuidoraOrdersPurchase(params: {
   return res.json() as Promise<DistribuidoraOrdersPurchaseResponse>
 }
 
+export type DistribuidoraDispatchPrepMunicipalityRow = {
+  municipality: string
+  clientes_unicos: number
+  pedidos: number
+  total_ventas: number
+}
+
+export type DistribuidoraDispatchPrepByMunicipalityResponse = {
+  items: DistribuidoraDispatchPrepMunicipalityRow[]
+}
+
+export async function getDistribuidoraDispatchPrepByMunicipality(params: {
+  emission_date_from: string
+  emission_date_to: string
+  only_not_invoiced?: boolean
+  signal?: AbortSignal
+}): Promise<DistribuidoraDispatchPrepByMunicipalityResponse> {
+  const qs = new URLSearchParams()
+  qs.set("emission_date_from", params.emission_date_from)
+  qs.set("emission_date_to", params.emission_date_to)
+  if (params.only_not_invoiced === false) qs.set("only_not_invoiced", "false")
+  const res = await fetch(
+    `${API_URL}/distribuidora/orders/dispatch-prep/by-municipality?${qs}`,
+    { headers: getAuthHeaders(), signal: params.signal },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar resumen por comuna")
+  }
+  return res.json() as Promise<DistribuidoraDispatchPrepByMunicipalityResponse>
+}
+
+export type DistribuidoraDispatchPrepObservacionesResponse = {
+  items: string[]
+}
+
+export async function getDistribuidoraDispatchPrepObservaciones(params: {
+  emission_date_from: string
+  emission_date_to: string
+  only_not_invoiced?: boolean
+  signal?: AbortSignal
+}): Promise<DistribuidoraDispatchPrepObservacionesResponse> {
+  const qs = new URLSearchParams()
+  qs.set("emission_date_from", params.emission_date_from)
+  qs.set("emission_date_to", params.emission_date_to)
+  if (params.only_not_invoiced === false) qs.set("only_not_invoiced", "false")
+  qs.set("limit", "2000")
+  const res = await fetch(
+    `${API_URL}/distribuidora/orders/dispatch-prep/observaciones?${qs}`,
+    { headers: getAuthHeaders(), signal: params.signal },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar observaciones")
+  }
+  return res.json() as Promise<DistribuidoraDispatchPrepObservacionesResponse>
+}
+
 /** Fila de GET /distribuidora/orders/purchase/by-document-ids (preview planificación). */
 export type DistribuidoraPlanningPreviewItem = {
   document_id: number

@@ -13,6 +13,8 @@ from backend.repositories.distribuidora.route_planning_repo import (
 )
 from backend.services.distribuidora.orders_service import (
     get_purchase_order_detail,
+    list_dispatch_prep_by_municipality,
+    list_dispatch_prep_observation_texts,
     list_purchase_orders,
 )
 
@@ -90,3 +92,36 @@ def get_order_purchase_detail(document_id: int):
     if not data:
         raise HTTPException(status_code=404, detail="OC no encontrada")
     return data
+
+
+@router.get("/orders/dispatch-prep/by-municipality")
+def get_dispatch_prep_by_municipality(
+    emission_date_from: date = Query(..., description="Inicio inclusive (fecha local)"),
+    emission_date_to: date = Query(..., description="Fin inclusive (fecha local)"),
+    only_not_invoiced: bool = Query(
+        True,
+        description="Si true: solo documentos con state = 0 (pendiente Bsale). Si false: todos los state.",
+    ),
+):
+    rows = list_dispatch_prep_by_municipality(
+        emission_date_from=emission_date_from,
+        emission_date_to=emission_date_to,
+        only_not_invoiced=only_not_invoiced,
+    )
+    return {"items": rows}
+
+
+@router.get("/orders/dispatch-prep/observaciones")
+def get_dispatch_prep_observaciones(
+    emission_date_from: date = Query(...),
+    emission_date_to: date = Query(...),
+    only_not_invoiced: bool = Query(True),
+    limit: int = Query(2000, ge=1, le=5000),
+):
+    texts = list_dispatch_prep_observation_texts(
+        emission_date_from=emission_date_from,
+        emission_date_to=emission_date_to,
+        only_not_invoiced=only_not_invoiced,
+        limit=limit,
+    )
+    return {"items": texts}

@@ -237,3 +237,98 @@ def get_sync_status_payload() -> dict[str, Any]:
         }
     finally:
         conn.close()
+
+
+def _normalize_date_range(
+    emission_date_from: date,
+    emission_date_to: date,
+) -> tuple[date, date]:
+    if emission_date_from > emission_date_to:
+        return emission_date_to, emission_date_from
+    return emission_date_from, emission_date_to
+
+
+def list_dispatch_prep_by_municipality(
+    *,
+    emission_date_from: date,
+    emission_date_to: date,
+    only_not_invoiced: bool = True,
+) -> list[dict[str, Any]]:
+    """
+    Resumen por comuna para pre‑planificación de despacho (órdenes de compra Bsale tipo 33).
+
+    Filtro "solo no facturadas" sigue la especificación de producto: ``state = 0`` en
+    ``distribuidora.documents`` (no ``is_invoiced`` de la vista de facturación).
+    """
+    d0, d1 = _normalize_date_range(emission_date_from, emission_date_to)
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                COALESCE(
+                    NULLIF(BTRIM(d.municipality), ''),
+                    NULLIF(BTRIM(d.city), ''),
+                    '(Sin comuna)'
+                ) AS municipality,
+                COUNT(DISTINCT d.client_id) AS clientes_unicos,
+                COUNT(*) AS pedidos,
+                SUM(COALESCE(d.total_amount, 0::numeric)) AS total_ventas
+            FROM distribuidora.v_documents_latest d
+            WHERE d.company_id = 3
+              AND d.office_id = 1
+              AND d.document_type_id = 33
+              AND d.emission_date >= %s::date
+              AND d.emission_date < (%s::date + interval '1 day')
+              AND (%s = FALSE OR d.state = 0)
+            GROUP BY 1
+            ORDER BY total_ventas DESC NULLS LAST, municipality ASC
+            """,
+            (d0, d1, only_not_invoiced),
+        )
+        rows = [_serialize_row(_row_to_dict(cur, r)) for r in cur.fetchall()]
+        cur.close()
+        return rows
+    finally:
+        conn.close()
+
+
+def list_dispatch_prep_observation_texts(
+    *,
+    emission_date_from: date,
+    emission_date_to: date,
+    only_not_invoiced: bool = True,
+    limit: int = 2000,
+) -> list[str]:
+    """Textos de observaciones (atributo OBSERVACIONES en OC) para análisis en frontend."""
+    d0, d1 = _normalize_date_range(emission_date_from, emission_date_to)
+    lim = max(1, min(int(limit), 5000))
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT p.observaciones
+            FROM distribuidora.v_orders_purchase p
+            INNER JOIN distribuidora.v_documents_latest d ON d.document_id = p.document_id
+            WHERE p.observaciones IS NOT NULL
+              AND BTRIM(p.observaciones) <> ''
+              AND d.emission_date >= %s::date
+              AND d.emission_date < (%s::date + interval '1 day')
+              AND (%s = FALSE OR d.state = 0)
+            LIMIT %s
+            """,
+            (d0, d1, only_not_invoiced, lim),
+        )
+        out: list[str] = []
+        for (text,) in cur.fetchall():
+            if text is None:
+                continue
+            s = str(text).strip()
+            if s:
+                out.append(s)
+        cur.close()
+        return out
+    finally:
+        conn.close()
