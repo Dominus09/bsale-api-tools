@@ -149,16 +149,88 @@ def _append_items_from_bsale_response(
     stats: dict[str, Any],
 ) -> None:
     for d in items:
-        row = document_dict_from_bsale(
-            d,
-            company_id=COMPANY_ID,
-            default_office_id=OFFICE_ID,
-            sync_stats=stats,
-        )
+        try:
+            row = document_dict_from_bsale(
+                d,
+                company_id=COMPANY_ID,
+                default_office_id=OFFICE_ID,
+                sync_stats=stats,
+            )
+        except Exception as e:
+            logger.error(
+                "Error procesando documento %s: %s",
+                d.get("id"),
+                str(e),
+                exc_info=True,
+            )
+            stats["document_errors"] = int(stats.get("document_errors") or 0) + 1
+            continue
         if row is None:
             continue
         row["_bsale_document"] = d
         pending.append(row)
+
+
+def _document_log_id_from_row(row: dict[str, Any]) -> Any:
+    raw = row.get("_bsale_document")
+    if isinstance(raw, dict):
+        return raw.get("id", row.get("document_id"))
+    return row.get("document_id")
+
+
+def _process_one_pending_document_row(
+    client: BsaleClient,
+    cur,
+    conn,
+    row: dict[str, Any],
+    stats: dict[str, Any],
+) -> None:
+    doc_log_id = _document_log_id_from_row(row)
+    try:
+        try:
+            upsert_documents(cur, [row], stats)
+        except Exception as e:
+            stats["document_upsert_failures"] = int(stats.get("document_upsert_failures") or 0) + 1
+            stats["document_errors"] = int(stats.get("document_errors") or 0) + 1
+            logger.error(
+                "Error procesando documento %s: %s",
+                doc_log_id,
+                str(e),
+                exc_info=True,
+            )
+            try:
+                conn.rollback()
+            except Exception:
+                logger.exception(
+                    "distribuidora: rollback tras error upsert documento %s",
+                    doc_log_id,
+                )
+            return
+        _refresh_document_children(
+            client,
+            cur,
+            int(row["document_id"]),
+            row.get("document_type_id"),
+            stats,
+            raw_document=row.get("_bsale_document"),
+        )
+        conn.commit()
+        stats["documents_processed"] += 1
+    except Exception as e:
+        stats["document_errors"] = int(stats.get("document_errors") or 0) + 1
+        logger.error(
+            "Error procesando documento %s: %s",
+            doc_log_id,
+            str(e),
+            exc_info=True,
+        )
+        try:
+            conn.rollback()
+        except Exception:
+            logger.exception(
+                "distribuidora: rollback tras error documento %s",
+                doc_log_id,
+            )
 
 
 def _flush_pending_when_large(
@@ -174,30 +246,8 @@ def _flush_pending_when_large(
         return
     to_save = list(pending)
     pending.clear()
-    try:
-        upsert_documents(cur, to_save, stats)
-        for r in to_save:
-            _refresh_document_children(
-                client,
-                cur,
-                int(r["document_id"]),
-                r.get("document_type_id"),
-                stats,
-                raw_document=r.get("_bsale_document"),
-            )
-        conn.commit()
-        stats["documents_processed"] += len(to_save)
-    except Exception as e:
-        logger.exception(
-            "distribuidora: lote documentos falló (%s filas), rollback y se continúa: %s",
-            len(to_save),
-            e,
-        )
-        try:
-            conn.rollback()
-        except Exception:
-            logger.exception("distribuidora: rollback tras error de lote")
-        stats["documents_batch_failures"] = int(stats.get("documents_batch_failures") or 0) + 1
+    for r in to_save:
+        _process_one_pending_document_row(client, cur, conn, r, stats)
 
 
 def _flush_pending_tail(
@@ -211,30 +261,8 @@ def _flush_pending_tail(
         return
     to_save = list(pending)
     pending.clear()
-    try:
-        upsert_documents(cur, to_save, stats)
-        for r in to_save:
-            _refresh_document_children(
-                client,
-                cur,
-                int(r["document_id"]),
-                r.get("document_type_id"),
-                stats,
-                raw_document=r.get("_bsale_document"),
-            )
-        conn.commit()
-        stats["documents_processed"] += len(to_save)
-    except Exception as e:
-        logger.exception(
-            "distribuidora: último lote documentos falló (%s filas), rollback: %s",
-            len(to_save),
-            e,
-        )
-        try:
-            conn.rollback()
-        except Exception:
-            logger.exception("distribuidora: rollback tras error de último lote")
-        stats["documents_batch_failures"] = int(stats.get("documents_batch_failures") or 0) + 1
+    for r in to_save:
+        _process_one_pending_document_row(client, cur, conn, r, stats)
 
 
 def _fetch_documents_single_day_resync(
@@ -381,7 +409,13 @@ def _sync_document_sellers(
             set_document_primary_seller(cur, document_id, sid0, name0)
             stats["sellers_filled"] = int(stats.get("sellers_filled") or 0) + 1
     except Exception as e:
-        logger.warning("document_sellers document_id=%s: %s", document_id, e)
+        stats["seller_sync_failures"] = int(stats.get("seller_sync_failures") or 0) + 1
+        logger.error(
+            "seller_sync_failed document_id=%s: %s",
+            document_id,
+            e,
+            exc_info=True,
+        )
 
 
 def _refresh_document_children(
@@ -501,6 +535,9 @@ def sync_bsale_distribuidora_incremental(*, strict_token: bool = False) -> dict[
         "documents_updated": 0,
         "updated_documents": 0,
         "documents_batch_failures": 0,
+        "document_errors": 0,
+        "document_upsert_failures": 0,
+        "seller_sync_failures": 0,
         "skipped_other_office": 0,
         "skipped_other_company": 0,
         "details_inserted": 0,
@@ -607,6 +644,13 @@ def sync_bsale_distribuidora_incremental(*, strict_token: bool = False) -> dict[
             stats["references_inserted"],
             time.perf_counter() - t0,
         )
+        logger.info("Documentos procesados: %s", stats["documents_processed"])
+        logger.info("Errores: %s", int(stats.get("document_errors") or 0))
+        logger.info("Sellers fallidos: %s", int(stats.get("seller_sync_failures") or 0))
+        logger.info(
+            "Inserts/upserts fallidos: %s",
+            int(stats.get("document_upsert_failures") or 0),
+        )
     except Exception as e:
         logger.exception("sync distribuidora incremental: %s", e)
         stats["errors"] = str(e)
@@ -660,6 +704,9 @@ def resync_bsale_distribuidora_range(
         "documents_updated": 0,
         "updated_documents": 0,
         "documents_batch_failures": 0,
+        "document_errors": 0,
+        "document_upsert_failures": 0,
+        "seller_sync_failures": 0,
         "skipped_other_office": 0,
         "skipped_other_company": 0,
         "details_inserted": 0,
@@ -778,6 +825,14 @@ def resync_bsale_distribuidora_range(
         stats["details_inserted"] = stats.get("details_rows", 0)
         stats["attributes_inserted"] = stats.get("attributes_rows", 0)
         stats["references_inserted"] = stats.get("references_rows", 0)
+
+        logger.info("Documentos procesados: %s", stats["documents_processed"])
+        logger.info("Errores: %s", int(stats.get("document_errors") or 0))
+        logger.info("Sellers fallidos: %s", int(stats.get("seller_sync_failures") or 0))
+        logger.info(
+            "Inserts/upserts fallidos: %s",
+            int(stats.get("document_upsert_failures") or 0),
+        )
 
         insert_sync_status_row(
             cur,

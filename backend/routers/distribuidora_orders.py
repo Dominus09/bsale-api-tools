@@ -192,7 +192,14 @@ def post_resync_oc():
             emission_to=now,
             strict_token=True,
         )
-        return {"ok": True, "result": result}
+        total = int(result.get("documents_processed", 0) or 0)
+        errores = int(result.get("document_errors", 0) or 0)
+        return {
+            "ok": True,
+            "total": total,
+            "errores": errores,
+            "result": result,
+        }
     except Exception as e:
         logger.error("Resync OC error: %s", e, exc_info=True)
         return {"ok": False, "error": str(e)}

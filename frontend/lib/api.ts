@@ -1013,6 +1013,10 @@ export async function getDistribuidoraTrucks(params?: {
 
 export type DistribuidoraResyncOcResponse = {
   ok: boolean
+  /** Documentos persistidos correctamente (sync robusto por ítem). */
+  total?: number
+  /** Fallos por documento (mapeo, upsert o post-proceso); no aborta el resto. */
+  errores?: number
   result?: unknown
   error?: string
 }
@@ -1032,6 +1036,8 @@ export async function postDistribuidoraResyncOc(params?: {
   }
   return {
     ok: Boolean(data.ok),
+    total: typeof data.total === "number" ? data.total : undefined,
+    errores: typeof data.errores === "number" ? data.errores : undefined,
     result: data.result,
     error: data.error,
   }

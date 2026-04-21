@@ -116,6 +116,39 @@ function documentsProcessedFromResyncResult(result: unknown): number | null {
   return null
 }
 
+type DistribuidoraResyncSummary = { total: number; errores: number }
+
+function resyncSummaryFromApiResponse(data: {
+  ok: boolean
+  total?: unknown
+  errores?: unknown
+  result?: unknown
+}): DistribuidoraResyncSummary | null {
+  if (typeof data.total === "number" && Number.isFinite(data.total)) {
+    const errores =
+      typeof data.errores === "number" && Number.isFinite(data.errores)
+        ? data.errores
+        : 0
+    return { total: data.total, errores }
+  }
+  const total = documentsProcessedFromResyncResult(data.result)
+  if (total == null) return null
+  const r = data.result
+  let errores = 0
+  if (r && typeof r === "object" && "document_errors" in r) {
+    const e = (r as { document_errors?: unknown }).document_errors
+    if (typeof e === "number" && Number.isFinite(e)) errores = e
+  }
+  return { total, errores }
+}
+
+function formatResyncCompletedMessage(s: DistribuidoraResyncSummary): string {
+  if (s.errores > 0) {
+    return `Sync completado: ${s.total} documentos (${s.errores} errores)`
+  }
+  return `Sync completado: ${s.total} documentos`
+}
+
 /** Valor sentinela en `<select>` nativo para “sin camión”. */
 const TRUCK_UNSET = "__unset__"
 
@@ -330,9 +363,8 @@ export default function DistribuidoraOrdersPage() {
   const [loading, setLoading] = useState(true)
   const [loadingSync, setLoadingSync] = useState(false)
   const [lastOrdersLoadAt, setLastOrdersLoadAt] = useState<string | null>(null)
-  const [lastResyncDocumentsProcessed, setLastResyncDocumentsProcessed] = useState<
-    number | null
-  >(null)
+  const [lastResyncSummary, setLastResyncSummary] =
+    useState<DistribuidoraResyncSummary | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [trucks, setTrucks] = useState<DistribuidoraTruck[]>([])
   const [trucksError, setTrucksError] = useState<string | null>(null)
@@ -458,17 +490,16 @@ export default function DistribuidoraOrdersPage() {
     try {
       const syncRes = await postDistribuidoraResyncOc()
       console.log("✅ Resync respuesta:", syncRes)
-      const proc = documentsProcessedFromResyncResult(syncRes.result)
       if (syncRes.ok) {
-        setLastResyncDocumentsProcessed(proc)
+        setLastResyncSummary(resyncSummaryFromApiResponse(syncRes))
       } else {
-        setLastResyncDocumentsProcessed(null)
+        setLastResyncSummary(null)
       }
       await loadDispatchPrep()
       console.log("📦 Órdenes recargadas correctamente")
     } catch (e) {
       console.error("❌ Error en resync:", e)
-      setLastResyncDocumentsProcessed(null)
+      setLastResyncSummary(null)
     } finally {
       setLoadingSync(false)
     }
@@ -818,13 +849,8 @@ export default function DistribuidoraOrdersPage() {
           {lastOrdersLoadAt ? (
             <p>Última actualización: {lastOrdersLoadAt}</p>
           ) : null}
-          {lastResyncDocumentsProcessed != null ? (
-            <p className="text-foreground/90">
-              Órdenes actualizadas:{" "}
-              <span className="font-mono tabular-nums">
-                {lastResyncDocumentsProcessed}
-              </span>
-            </p>
+          {lastResyncSummary != null ? (
+            <p className="text-foreground/90">{formatResyncCompletedMessage(lastResyncSummary)}</p>
           ) : null}
         </div>
         <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
