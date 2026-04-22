@@ -8,7 +8,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from backend.db import get_connection
-from backend.repositories.distribuidora.sync_repo import ensure_distribuidora_schema
 from backend.services.distribuidora.sync_service import (
     ADVISORY_LOCK_KEY,
     PROCESS_ORDERS,
@@ -118,11 +117,12 @@ def get_distribuidora_sync_status_payload() -> dict[str, Any]:
 
     Métricas numéricas provienen del JSON en ``last_message`` escrito al finalizar cada sync OK.
     """
-    conn = get_connection()
+    # No llamar ``ensure_distribuidora_schema`` aquí: reaplicaría DDL/SQL pesado en cada
+    # polling del front (p. ej. cada 30s) y puede bloquear la BD (DROP VIEW, etc.).
+    conn = None
     try:
+        conn = get_connection()
         cur = conn.cursor()
-        ensure_distribuidora_schema(cur)
-        conn.commit()
 
         cur.execute("SELECT pg_try_advisory_lock(%s)", (ADVISORY_LOCK_KEY,))
         lock_busy = not bool(cur.fetchone()[0])
@@ -181,7 +181,8 @@ def get_distribuidora_sync_status_payload() -> dict[str, Any]:
             "sync_lock_active": lock_busy,
         }
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass

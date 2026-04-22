@@ -262,14 +262,12 @@ def get_purchase_order_detail(document_id: int) -> dict[str, Any] | None:
 
 def get_sync_status_payload() -> dict[str, Any]:
     """Estado sync + lock (sin bloquear al caller si otro proceso corre)."""
-    from backend.repositories.distribuidora.sync_repo import ensure_distribuidora_schema
     from backend.services.distribuidora.sync_service import ADVISORY_LOCK_KEY
 
-    conn = get_connection()
+    conn = None
     try:
+        conn = get_connection()
         cur = conn.cursor()
-        ensure_distribuidora_schema(cur)
-        conn.commit()
         cur.execute(
             """
             SELECT process_name, last_sync, last_status, last_message, updated_at
@@ -315,7 +313,11 @@ def get_sync_status_payload() -> dict[str, Any]:
             "sync_last_by_domain": sync_by_domain,
         }
     finally:
-        conn.close()
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def _normalize_date_range(

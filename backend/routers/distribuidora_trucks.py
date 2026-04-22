@@ -16,6 +16,7 @@ router = APIRouter(prefix="/distribuidora", tags=["Distribuidora camiones"])
 @router.get("/trucks")
 def get_trucks():
     """Lista camiones activos; ante error de BD devuelve lista vacía (evita 500)."""
+    conn = None
     try:
         conn = get_connection()
     except Exception as e:
@@ -46,7 +47,8 @@ def get_trucks():
         logger.error("Error cargando trucks: %s", e, exc_info=True)
         return {"items": []}
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
