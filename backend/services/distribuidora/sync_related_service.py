@@ -535,6 +535,92 @@ def _insert_related_triples(
     return inserted_new
 
 
+def _references_list_from_relateddetail_item(it: dict[str, Any]) -> list[Any]:
+    """Lista de referencias embebidas en un ítem de ``relateddetailid`` (lista o ``references.items``)."""
+    raw = it.get("references")
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, dict):
+        inner = raw.get("items")
+        if isinstance(inner, list):
+            return inner
+    return []
+
+
+def _append_triple_from_ref_entry(
+    cur,
+    detail_id: int,
+    ref: dict[str, Any],
+    *,
+    stats: dict[str, Any] | None,
+    log_ctx: str,
+    out: list[tuple[int, int, int]],
+) -> bool:
+    """
+    Parsea una entrada de ``references`` (anidada o plana) y añade un triple si pasa office y tipos.
+    Retorna True si se añadió una fila al listado ``out``.
+    """
+    nested = ref.get("document")
+    if isinstance(nested, dict) and nested.get("id"):
+        related_id = _safe_int(nested.get("id"))
+        rt_raw = (
+            nested.get("documentType")
+            or nested.get("document_type")
+            or nested.get("document_type_id")
+        )
+        office_blob = dict(nested)
+    else:
+        related_id = _safe_int(
+            ref.get("id") or ref.get("documentId") or ref.get("document_id"),
+        )
+        rt_raw = (
+            ref.get("documentType")
+            or ref.get("document_type")
+            or ref.get("document_type_id")
+        )
+        office_blob = dict(ref)
+        if related_id is not None and office_blob.get("id") is None:
+            office_blob["id"] = related_id
+
+    related_type = _coerce_document_type_id(rt_raw)
+    if related_id is None or related_type is None:
+        return False
+    if related_type not in RELATED_DOCUMENT_TYPES_ALLOWED:
+        return False
+
+    allow_office, office_motivo = _office_allows_relation(cur, related_id, office_blob)
+    if not allow_office:
+        if stats is not None:
+            stats["related_skipped_other_office"] = (
+                int(stats.get("related_skipped_other_office") or 0) + 1
+            )
+        logger.warning(
+            "%s[detail %s] ref embebida descartada por office: related_document_id=%s → %s",
+            log_ctx,
+            detail_id,
+            related_id,
+            office_motivo,
+        )
+        return False
+
+    logger.warning(
+        "[RELATED FROM REFERENCES] detail_id=%s related_id=%s type=%s",
+        detail_id,
+        related_id,
+        related_type,
+    )
+    logger.warning(
+        "[RELATED INSERT TRY] detail_id=%s related_id=%s type=%s",
+        detail_id,
+        related_id,
+        related_type,
+    )
+    out.append((detail_id, related_id, related_type))
+    return True
+
+
 def _documents_json_items_to_triples(
     cur,
     detail_id: int,
@@ -553,10 +639,20 @@ def _documents_json_items_to_triples(
         logger.warning(f"[RELATED DEBUG RAW] item={json.dumps(it)[:1000]}")
         logger.warning(f"[RELATED DEBUG KEYS] keys={list(it.keys())}")
 
+        added_from_refs = False
+        for ref in _references_list_from_relateddetail_item(it):
+            if isinstance(ref, dict) and _append_triple_from_ref_entry(
+                cur, detail_id, ref, stats=stats, log_ctx=log_ctx, out=out
+            ):
+                added_from_refs = True
+
+        if added_from_refs:
+            continue
+
         rid, tid, office_blob, parse_motivo = _parse_related_document_blob(it)
         if parse_motivo is not None or rid is None:
             logger.warning(
-                "%s[detail %s] relación descartada (parser): %s",
+                "%s[detail %s] relación descartada (parser fallback): %s",
                 log_ctx,
                 detail_id,
                 parse_motivo or "sin related_id",
@@ -607,7 +703,7 @@ def _documents_json_items_to_triples(
             )
 
         logger.info(
-            "%s[detail %s] parsed relation → doc_id=%s type=%s",
+            "%s[detail %s] parsed relation (fallback) → doc_id=%s type=%s",
             log_ctx,
             detail_id,
             rid,
