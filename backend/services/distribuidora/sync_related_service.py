@@ -1,8 +1,12 @@
 """
-Sync incremental de relaciones OC → otros documentos vía
-``GET /v1/documents/{document_id}/references.json`` (no ``relateddetailid`` ni refs embebidas).
+Sync incremental de relaciones OC → otros documentos:
 
-Escribe ``distribuidora.document_related`` con deduplicación.
+1. ``GET /v1/documents/{document_id}/references.json`` (relaciones a nivel documento).
+2. ``GET /v1/documents/{document_id}/details.json`` y por cada detalle
+   ``GET /v1/documents.json?relateddetailid=`` (relaciones a nivel línea; Bsale no siempre
+   expone todo en references).
+
+Escribe ``distribuidora.document_related`` con deduplicación (``ON CONFLICT``) y filtro por office.
 
 Incluye ``sync_related_documents_range`` para rellenar histórico por rango de emisión (día a día).
 """
@@ -39,6 +43,8 @@ T = TypeVar("T")
 COMPANY_ID = 3
 OFFICE_ID = 1
 DOC_TYPE_OC = 33
+RELATED_DETAIL_PAGE_LIMIT = 50
+DETAILS_PAGE_LIMIT = 50
 
 
 def _utc_day_emission_bounds(d: date) -> tuple[datetime, datetime]:
@@ -291,6 +297,195 @@ def _insert_related_triples(
     return n
 
 
+def _documents_json_items_to_triples(
+    detail_id: int,
+    items: list[Any],
+    *,
+    stats: dict[str, Any] | None,
+) -> list[tuple[int, int, int]]:
+    """``items`` de ``/documents.json?relateddetailid=`` son documentos completos (``id``, ``documentType``, ``office``)."""
+    out: list[tuple[int, int, int]] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        rid = _safe_int(it.get("id"))
+        if rid is None:
+            continue
+        roff = _related_item_office_id(it)
+        if roff is None or roff != OFFICE_ID:
+            if stats is not None:
+                stats["related_skipped_other_office"] = (
+                    int(stats.get("related_skipped_other_office") or 0) + 1
+                )
+            logger.info(
+                "relateddetailid omitida por office: related_document_id=%s office=%s "
+                "(esperado %s) detail_id=%s",
+                rid,
+                roff,
+                OFFICE_ID,
+                detail_id,
+            )
+            continue
+        tid = _document_type_id_from_doc(it)
+        if tid is None:
+            continue
+        out.append((detail_id, rid, tid))
+    return out
+
+
+def _fetch_detail_ids_from_bsale_details(
+    client: BsaleClient,
+    document_id: int,
+    *,
+    throttle: float,
+) -> tuple[list[int], int]:
+    """
+    ``GET /documents/{document_id}/details.json`` paginado.
+
+    Retorna ``(detail_ids, llamadas_http)``.
+    """
+    ids: list[int] = []
+    api_calls = 0
+    offset = 0
+    while True:
+        try:
+            data = client.get(
+                f"/documents/{document_id}/details.json",
+                {"limit": DETAILS_PAGE_LIMIT, "offset": offset},
+            )
+        except Exception as e:
+            logger.warning("details.json document_id=%s offset=%s: %s", document_id, offset, e)
+            break
+        api_calls += 1
+        items = data.get("items") or []
+        if not isinstance(items, list):
+            break
+        for it in items:
+            if isinstance(it, dict):
+                did = _safe_int(it.get("id"))
+                if did is not None:
+                    ids.append(did)
+        if len(items) < DETAILS_PAGE_LIMIT:
+            break
+        offset += len(items)
+        if throttle > 0:
+            time.sleep(throttle)
+    # Orden estable y sin duplicados (paginación / API)
+    ids = list(dict.fromkeys(ids))
+    return ids, api_calls
+
+
+def _fetch_and_persist_relateddetailid_for_detail(
+    client: BsaleClient,
+    conn: PgConnection,
+    cur,
+    detail_id: int,
+    *,
+    throttle: float,
+    stats: dict[str, Any] | None,
+) -> tuple[int, int, int]:
+    """
+    GET ``/documents.json?relateddetailid=`` paginado; inserta en ``document_related``.
+
+    Retorna ``(items_api_total, filas_insertadas, llamadas_http)``.
+    """
+    items_api_total = 0
+    rows_inserted = 0
+    api_calls = 0
+    offset = 0
+    while True:
+        try:
+            data = client.get(
+                "/documents.json",
+                {
+                    "relateddetailid": detail_id,
+                    "limit": RELATED_DETAIL_PAGE_LIMIT,
+                    "offset": offset,
+                    "officeId": OFFICE_ID,
+                },
+            )
+        except Exception as e:
+            logger.warning("relateddetailid=%s offset=%s: %s", detail_id, offset, e)
+            break
+        api_calls += 1
+        items = data.get("items") or []
+        if not items:
+            break
+        items_api_total += len(items)
+        triples = _documents_json_items_to_triples(detail_id, items, stats=stats)
+        rows_inserted += _insert_related_triples(conn, cur, triples, stats=stats)
+        offset += len(items)
+        if throttle > 0:
+            time.sleep(throttle)
+    logger.info(
+        "relateddetailid detail_id=%s items=%s insertadas=%s llamadas=%s",
+        detail_id,
+        items_api_total,
+        rows_inserted,
+        api_calls,
+    )
+    return items_api_total, rows_inserted, api_calls
+
+
+def _sync_related_by_detail_for_oc_document(
+    client: BsaleClient,
+    conn: PgConnection,
+    cur,
+    document_id: int,
+    *,
+    throttle: float,
+    stats: dict[str, Any] | None,
+) -> tuple[int, int, int, int]:
+    """
+    ``details.json`` + ``relateddetailid`` por línea.
+
+    Retorna ``(detail_ids_procesados, items_related_total, filas_insertadas, llamadas_http)``.
+    """
+    detail_ids, calls_details = _fetch_detail_ids_from_bsale_details(
+        client, document_id, throttle=throttle
+    )
+    if not detail_ids:
+        fallback = _detail_ids_for_document(cur, document_id)
+        if fallback:
+            logger.info(
+                "document_id=%s details.json sin líneas; fallback BD detail_ids=%s",
+                document_id,
+                len(fallback),
+            )
+            detail_ids = fallback
+        else:
+            logger.warning("document_id=%s sin detail_ids (API ni BD)", document_id)
+
+    items_total = 0
+    rows_ins = 0
+    calls_rel = 0
+    for did in detail_ids:
+        if stats is not None:
+            stats["relateddetail_details_processed"] = (
+                int(stats.get("relateddetail_details_processed") or 0) + 1
+            )
+        it_tot, ins, c = _fetch_and_persist_relateddetailid_for_detail(
+            client, conn, cur, did, throttle=throttle, stats=stats
+        )
+        items_total += it_tot
+        rows_ins += ins
+        calls_rel += c
+
+    if stats is not None:
+        stats["relateddetail_items_total"] = int(stats.get("relateddetail_items_total") or 0) + items_total
+
+    calls_total = calls_details + calls_rel
+    logger.info(
+        "document_id=%s relateddetail flujo: details=%s items=%s insertadas=%s api=%s",
+        document_id,
+        len(detail_ids),
+        items_total,
+        rows_ins,
+        calls_total,
+    )
+    return len(detail_ids), items_total, rows_ins, calls_total
+
+
 def _fetch_and_persist_related_for_document(
     client: BsaleClient,
     conn: PgConnection,
@@ -301,50 +496,79 @@ def _fetch_and_persist_related_for_document(
     stats: dict[str, Any] | None = None,
 ) -> tuple[int, int, int]:
     """
-    ``GET /documents/{document_id}/references.json``; persiste en ``document_related``.
+    ``references.json`` + ``details.json`` / ``relateddetailid``; persiste en ``document_related``.
 
-    Retorna ``(n_items_api, filas_insertadas, llamadas_http)``.
+    Retorna ``(n_items_api_total, filas_insertadas, llamadas_http)``.
+    ``n_items_api_total`` suma ítems de references + documentos devueltos por relateddetailid.
     """
+    api_calls = 0
+    rows_inserted = 0
+    items_metric = 0
+
+    # --- 1) references.json ---
     try:
         data = client.get(f"/documents/{document_id}/references.json")
     except Exception as e:
         logger.warning("references.json document_id=%s: %s", document_id, e)
-        return 0, 0, 0
+        data = None
 
-    items = data.get("items")
-    if items is None:
-        items = data.get("references") or []
-    if not isinstance(items, list):
-        items = []
+    if data is not None:
+        items = data.get("items")
+        if items is None:
+            items = data.get("references") or []
+        if not isinstance(items, list):
+            items = []
 
-    n_items = len(items)
-    if stats is not None:
-        stats["references_items_total"] = int(stats.get("references_items_total") or 0) + n_items
+        n_items = len(items)
+        items_metric += n_items
+        if stats is not None:
+            stats["references_items_total"] = int(stats.get("references_items_total") or 0) + n_items
 
-    detail_list = _detail_ids_for_document(cur, document_id)
-    valid = set(detail_list)
-    fallback = detail_list[0] if len(detail_list) == 1 else None
+        detail_list = _detail_ids_for_document(cur, document_id)
+        valid = set(detail_list)
+        fallback = detail_list[0] if len(detail_list) == 1 else None
 
-    triples = _reference_items_to_related_triples(
-        document_id,
-        items,
-        valid,
-        fallback_single_detail_id=fallback,
-        stats=stats,
+        triples = _reference_items_to_related_triples(
+            document_id,
+            items,
+            valid,
+            fallback_single_detail_id=fallback,
+            stats=stats,
+        )
+        ins_ref = _insert_related_triples(conn, cur, triples, stats=stats)
+        rows_inserted += ins_ref
+
+        logger.info(
+            "document_id=%s references.json items=%s parseadas=%s insertadas=%s",
+            document_id,
+            n_items,
+            len(triples),
+            ins_ref,
+        )
+
+        if throttle > 0:
+            time.sleep(throttle)
+
+        api_calls += 1
+
+    # --- 2) details.json + relateddetailid por línea ---
+    ndet, it_rel, ins_det, calls_det = _sync_related_by_detail_for_oc_document(
+        client, conn, cur, document_id, throttle=throttle, stats=stats
     )
-    inserted = _insert_related_triples(conn, cur, triples, stats=stats)
+    api_calls += calls_det
+    rows_inserted += ins_det
+    items_metric += it_rel
 
     logger.info(
-        "document_id=%s references.json items=%s parseadas=%s insertadas=%s",
+        "document_id=%s resumen related: references+relateddetail items_metric=%s "
+        "filas_insertadas=%s (último flujo details_api=%s)",
         document_id,
-        n_items,
-        len(triples),
-        inserted,
+        items_metric,
+        rows_inserted,
+        ndet,
     )
 
-    if throttle > 0:
-        time.sleep(throttle)
-    return n_items, inserted, 1
+    return items_metric, rows_inserted, api_calls
 
 
 def sync_distribuidora_related_documents(
@@ -355,7 +579,7 @@ def sync_distribuidora_related_documents(
     limit_documents: int | None = None,
 ) -> dict[str, Any]:
     """
-    Para cada ``document_id`` de OC reciente, ``GET …/documents/{id}/references.json`` y persiste relaciones.
+    Por cada OC reciente: ``references.json`` + ``details.json`` y ``documents.json?relateddetailid=``.
 
     Env:
       DISTRIBUIDORA_RELATED_LOOKBACK_DAYS (default 7)
@@ -376,6 +600,8 @@ def sync_distribuidora_related_documents(
         "documents_considered": 0,
         "details_considered": 0,
         "references_items_total": 0,
+        "relateddetail_details_processed": 0,
+        "relateddetail_items_total": 0,
         "rows_inserted": 0,
         "api_calls": 0,
         "related_skipped_other_office": 0,
@@ -401,8 +627,8 @@ def sync_distribuidora_related_documents(
         conn.commit()
 
         logger.info(
-            "sync related distribuidora: office_id=%s; GET references.json por documento OC "
-            "(company_id=%s office_id=%s)",
+            "sync related distribuidora: office_id=%s; por OC: references.json + "
+            "details.json / relateddetailid (company_id=%s office_id=%s)",
             OFFICE_ID,
             COMPANY_ID,
             OFFICE_ID,
@@ -410,7 +636,6 @@ def sync_distribuidora_related_documents(
 
         document_ids = _fetch_oc_document_ids(cur, lookback_days=lb, limit_documents=lim)
         stats["documents_considered"] = len(document_ids)
-        stats["details_considered"] = stats["documents_considered"]
 
         client = BsaleClient(token)
         throttle = float(os.getenv("DISTRIBUIDORA_RELATED_API_DELAY_SEC", "0.12"))
@@ -421,7 +646,7 @@ def sync_distribuidora_related_documents(
                     client, conn, cur, doc_id, throttle=throttle, stats=stats
                 )
             except Exception as e:
-                logger.warning("references.json document_id=%s: %s", doc_id, e)
+                logger.warning("sync_related document_id=%s: %s", doc_id, e)
                 continue
             stats["api_calls"] += calls
             stats["rows_inserted"] += ins
@@ -431,6 +656,8 @@ def sync_distribuidora_related_documents(
                 n_items,
                 ins,
             )
+
+        stats["details_considered"] = int(stats.get("relateddetail_details_processed") or 0)
 
         def _finalize_incremental() -> None:
             insert_sync_status_row(
@@ -444,10 +671,12 @@ def sync_distribuidora_related_documents(
         _with_deadlock_retry(conn, "related incremental insert_sync_status", _finalize_incremental)
         cur.close()
         logger.info(
-            "sync related OK: documents=%s references_items=%s inserted=%s "
-            "omitidas otra office=%s api=%s s=%.2f",
+            "sync related OK: documents=%s references_items=%s relateddetail_details=%s "
+            "relateddetail_items=%s inserted=%s omitidas otra office=%s api=%s s=%.2f",
             stats["documents_considered"],
             stats.get("references_items_total", 0),
+            stats.get("relateddetail_details_processed", 0),
+            stats.get("relateddetail_items_total", 0),
             stats["rows_inserted"],
             stats.get("related_skipped_other_office", 0),
             stats["api_calls"],
@@ -488,7 +717,7 @@ def sync_related_documents_range(
     Rellena ``distribuidora.document_related`` para OC (tipo 33) con emisión entre ``start_date`` y ``end_date``
     (inclusive, días calendario UTC), recorriendo **día a día**.
 
-    Por cada ``document_id`` de esas OC: GET ``/documents/{id}/references.json``.
+    Por cada ``document_id`` de esas OC: ``references.json`` + ``details.json`` / ``relateddetailid``.
     """
     if start_date > end_date:
         start_date, end_date = end_date, start_date
@@ -509,6 +738,8 @@ def sync_related_documents_range(
         "api_calls": 0,
         "relations_found": 0,
         "references_items_total": 0,
+        "relateddetail_details_processed": 0,
+        "relateddetail_items_total": 0,
         "related_skipped_other_office": 0,
         "duration_seconds": 0.0,
         "omitido_concurrencia": False,
@@ -531,8 +762,7 @@ def sync_related_documents_range(
         conn.commit()
 
         logger.info(
-            "sync related rango: solo office_id=%s (Bsale officeId=%s); OC company_id=%s office_id=%s",
-            OFFICE_ID,
+            "sync related rango: office_id=%s; OC company_id=%s office_id=%s",
             OFFICE_ID,
             COMPANY_ID,
             OFFICE_ID,
@@ -546,20 +776,21 @@ def sync_related_documents_range(
             logger.info("Procesando related día: %s", current.isoformat())
             document_ids = _fetch_oc_document_ids_for_emission_day(cur, current)
             for doc_id in document_ids:
-                logger.info("Documento OC procesado (references.json): %s", doc_id)
+                logger.info("Documento OC procesado (references + relateddetailid): %s", doc_id)
                 items_total, ins, calls = _fetch_and_persist_related_for_document(
                     client, conn, cur, doc_id, throttle=throttle, stats=stats
                 )
                 stats["api_calls"] += calls
                 stats["documents_processed"] += 1
-                stats["details_processed"] = stats["documents_processed"]
+                stats["details_processed"] = int(stats.get("relateddetail_details_processed") or 0)
                 stats["rows_inserted"] += ins
                 stats["relations_found"] += items_total
                 logger.info(
-                    "document_id=%s references items=%s insertadas=%s",
+                    "document_id=%s items_metric=%s filas_insertadas=%s (acum. details_lines=%s)",
                     doc_id,
                     items_total,
                     ins,
+                    stats.get("relateddetail_details_processed", 0),
                 )
 
             stats["days_processed"] += 1
@@ -576,12 +807,16 @@ def sync_related_documents_range(
 
         _with_deadlock_retry(conn, "related range insert_sync_status", _finalize_range)
         cur.close()
+        stats["details_processed"] = int(stats.get("relateddetail_details_processed") or 0)
         logger.info(
-            "sync related range OK: days=%s documents=%s references_items=%s inserted=%s "
+            "sync related range OK: days=%s documents=%s references_items=%s "
+            "relateddetail_details=%s relateddetail_items=%s inserted=%s "
             "omitidas otra office=%s s=%.2f",
             stats["days_processed"],
             stats["documents_processed"],
             stats.get("references_items_total", 0),
+            stats.get("relateddetail_details_processed", 0),
+            stats.get("relateddetail_items_total", 0),
             stats["rows_inserted"],
             stats.get("related_skipped_other_office", 0),
             time.perf_counter() - t0,
