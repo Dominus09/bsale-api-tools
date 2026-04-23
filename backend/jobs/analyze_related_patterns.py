@@ -1,5 +1,5 @@
 """
-Analiza ``relateddetailid`` en las últimas 50 OC (tipo 33) para ver patrones de facturación.
+Analiza ``relateddetailid`` en las últimas 500 OC (tipo 33), con throttling y muestra acotada.
 
 Uso:
   python -m backend.jobs.analyze_related_patterns
@@ -9,7 +9,6 @@ Requiere BD (PG_*) y ``BSALE_TOKEN`` o ``BSALE_TOKEN_SPA``.
 
 from __future__ import annotations
 
-import sys
 import time
 from decimal import Decimal
 from typing import Any
@@ -22,6 +21,10 @@ from backend.services.distribuidora.sync_service import _bsale_token
 DETAILS_LIMIT = 50
 RELATED_LIMIT = 50
 DOC_TYPE_OC = 33
+OC_SAMPLE_LIMIT = 500
+DETAILS_MAX_PER_OC = 3
+API_SLEEP_SEC = 0.1
+DEBUG_EJEMPLOS = 10
 
 
 def _log(msg: str) -> None:
@@ -37,6 +40,13 @@ def _safe_int(v: Any) -> int | None:
         return None
 
 
+def _get(client: BsaleClient, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    """GET Bsale + pausa fija para no saturar la API."""
+    r = client.get(path, params)
+    time.sleep(API_SLEEP_SEC)
+    return r
+
+
 def _item_doc_type_id(it: dict[str, Any]) -> int | None:
     nested = it.get("document")
     if isinstance(nested, dict):
@@ -50,18 +60,22 @@ def _item_doc_type_id(it: dict[str, Any]) -> int | None:
     return _safe_int(dt)
 
 
-def _fetch_detail_ids(client: BsaleClient, document_id: int) -> list[int]:
+def _fetch_first_detail_ids(client: BsaleClient, document_id: int, max_ids: int) -> list[int]:
+    """Solo las primeras ``max_ids`` líneas (orden API: primera página, luego siguiente si hace falta)."""
     ids: list[int] = []
     offset = 0
-    while True:
-        data = client.get(
+    while len(ids) < max_ids:
+        data = _get(
+            client,
             f"/documents/{document_id}/details.json",
             {"limit": DETAILS_LIMIT, "offset": offset},
         )
         items = data.get("items") or []
-        if not isinstance(items, list):
+        if not isinstance(items, list) or not items:
             break
         for it in items:
+            if len(ids) >= max_ids:
+                break
             if isinstance(it, dict):
                 did = _safe_int(it.get("id"))
                 if did is not None:
@@ -69,15 +83,20 @@ def _fetch_detail_ids(client: BsaleClient, document_id: int) -> list[int]:
         if len(items) < DETAILS_LIMIT:
             break
         offset += len(items)
-        time.sleep(0.12)
-    return list(dict.fromkeys(ids))
+    return ids
 
 
-def _fetch_related_types(client: BsaleClient, detail_id: int) -> set[int]:
+def _fetch_related_types(
+    client: BsaleClient,
+    detail_id: int,
+    *,
+    stop_on_sale: bool,
+) -> set[int]:
     types: set[int] = set()
     offset = 0
     while True:
-        data = client.get(
+        data = _get(
+            client,
             "/documents.json",
             {
                 "relateddetailid": detail_id,
@@ -94,21 +113,12 @@ def _fetch_related_types(client: BsaleClient, detail_id: int) -> set[int]:
                 tid = _item_doc_type_id(it)
                 if tid is not None:
                     types.add(tid)
+        if stop_on_sale and types & {1, 6}:
+            break
         if len(items) < RELATED_LIMIT:
             break
         offset += len(items)
-        time.sleep(0.12)
     return types
-
-
-def _classify(types: set[int]) -> str:
-    if not types:
-        return "NO FACTURADA"
-    if types & {1, 6}:
-        return "FACTURADA"
-    if DOC_TYPE_OC in types:
-        return "SOLO_33"
-    return "OTRO"
 
 
 def _bd_tipo_33_con_venta(
@@ -155,9 +165,9 @@ def main() -> int:
         FROM distribuidora.documents
         WHERE document_type_id = %s
         ORDER BY emission_date DESC NULLS LAST, document_id DESC
-        LIMIT 50
+        LIMIT %s
         """,
-        (DOC_TYPE_OC,),
+        (DOC_TYPE_OC, OC_SAMPLE_LIMIT),
     )
     rows = cur.fetchall()
     if not rows:
@@ -168,54 +178,47 @@ def main() -> int:
 
     client = BsaleClient(token)
 
-    _log("")
-    _log("OC      | tipos (relateddetailid) | clasificación | tipo_33→venta_BD")
-    _log("--------+-------------------------+-----------------+------------------")
+    total_oc = 0
+    facturadas_directo = 0
+    solo_tipo_33 = 0
+    sin_relacion = 0
+    otras_relaciones = 0
+    tipo_33_con_venta = 0
+    tipo_33_sin_venta = 0
 
-    n_con_venta_related = 0
-    n_con_33_related = 0
-    n_sin_relaciones = 0
-    n_solo_33_con_match_bd = 0
-    n_solo_33_sin_match_bd = 0
-    n_label_facturada = 0
-    n_label_no_facturada = 0
-    n_label_solo_33 = 0
-    n_label_otro = 0
+    ej_33_con_venta: list[tuple[int, int, list[int]]] = []
+    ej_33_sin_venta: list[tuple[int, int, list[int]]] = []
 
     for document_id, number, client_id, total_amount in rows:
         did = int(document_id)
         num = _safe_int(number)
         if num is None:
             num = did
+        total_oc += 1
+
         types_acc: set[int] = set()
         try:
-            for detail_id in _fetch_detail_ids(client, did):
-                types_acc |= _fetch_related_types(client, detail_id)
-                time.sleep(0.1)
-        except Exception as e:
-            _log(f"{num:<7} | (error API: {e}) | — | —")
-            time.sleep(0.3)
-            continue
-
-        tipos_str = str(sorted(types_acc)) if types_acc else "[]"
-        label = _classify(types_acc)
-        if label == "FACTURADA":
-            n_label_facturada += 1
-        elif label == "NO FACTURADA":
-            n_label_no_facturada += 1
-        elif label == "SOLO_33":
-            n_label_solo_33 += 1
-        else:
-            n_label_otro += 1
+            detail_ids = _fetch_first_detail_ids(client, did, DETAILS_MAX_PER_OC)
+            for detail_id in detail_ids:
+                types_acc |= _fetch_related_types(
+                    client,
+                    detail_id,
+                    stop_on_sale=True,
+                )
+                if types_acc & {1, 6}:
+                    break
+        except Exception:
+            types_acc = set()
 
         if types_acc & {1, 6}:
-            n_con_venta_related += 1
-        if DOC_TYPE_OC in types_acc:
-            n_con_33_related += 1
-        if not types_acc:
-            n_sin_relaciones += 1
+            facturadas_directo += 1
+        elif DOC_TYPE_OC in types_acc:
+            solo_tipo_33 += 1
+        elif not types_acc:
+            sin_relacion += 1
+        else:
+            otras_relaciones += 1
 
-        match_bd = "-"
         if DOC_TYPE_OC in types_acc:
             ok = _bd_tipo_33_con_venta(
                 cur,
@@ -223,46 +226,49 @@ def main() -> int:
                 document_id=did,
                 oc_total=total_amount if total_amount is not None else None,
             )
-            match_bd = "true" if ok else "false"
-            if label == "SOLO_33":
-                if ok:
-                    n_solo_33_con_match_bd += 1
-                else:
-                    n_solo_33_sin_match_bd += 1
-
-        _log(f"{num:<7} | {tipos_str:<23} | {label:<15} | {match_bd}")
-        time.sleep(0.2)
+            if ok:
+                tipo_33_con_venta += 1
+                if len(ej_33_con_venta) < DEBUG_EJEMPLOS:
+                    ej_33_con_venta.append((num, did, sorted(types_acc)))
+            else:
+                tipo_33_sin_venta += 1
+                if len(ej_33_sin_venta) < DEBUG_EJEMPLOS:
+                    ej_33_sin_venta.append((num, did, sorted(types_acc)))
 
     cur.close()
     conn.close()
 
     _log("")
-    _log("========== RESUMEN ==========")
-    _log(f"OC analizadas: {len(rows)}")
-    _log(f"Con tipo 1 o 6 en relateddetailid (alguna línea): {n_con_venta_related}")
-    _log(f"Con tipo 33 en relateddetailid: {n_con_33_related}")
-    _log(f"Sin relaciones (sin ítems / sin tipos parseados): {n_sin_relaciones}")
+    _log("======== RESULTADO ========")
     _log("")
-    _log("Por clasificación en tabla:")
-    _log(f"  FACTURADA: {n_label_facturada}")
-    _log(f"  NO FACTURADA: {n_label_no_facturada}")
-    _log(f"  SOLO_33: {n_label_solo_33}")
-    _log(f"  OTRO: {n_label_otro}")
+    _log(f"Total OC analizadas: {total_oc}")
     _log("")
-    _log("SOLO_33 en API + venta 1/6 en BD (mismo cliente, monto ~1% o mín. 50):")
-    _log(f"  con match BD: {n_solo_33_con_match_bd}")
-    _log(f"  sin match BD: {n_solo_33_sin_match_bd}")
+    _log(f"Facturadas (tipo 1/6): {facturadas_directo}")
+    _log(f"Solo tipo 33: {solo_tipo_33}")
+    _log(f"Sin relación: {sin_relacion}")
+    if otras_relaciones:
+        _log(f"Otras relaciones (sin 1/6/33): {otras_relaciones}")
     _log("")
-    _log("--- Lectura ---")
+    _log(f"Tipo 33 con venta: {tipo_33_con_venta}")
+    _log(f"Tipo 33 sin venta: {tipo_33_sin_venta}")
+    _log("")
+    _log("--- Ejemplos (tipo 33 en API, hasta 10 c/u) ---")
+    _log("OC con tipo 33 y venta en BD (cliente + monto ~1% o mín. 50):")
+    if not ej_33_con_venta:
+        _log("  (ninguno)")
+    else:
+        for n, did, tipos in ej_33_con_venta:
+            _log(f"  number={n} document_id={did} tipos={tipos}")
+    _log("OC con tipo 33 sin venta en BD:")
+    if not ej_33_sin_venta:
+        _log("  (ninguno)")
+    else:
+        for n, did, tipos in ej_33_sin_venta:
+            _log(f"  number={n} document_id={did} tipos={tipos}")
+    _log("")
     _log(
-        "Si muchas FACTURADA con [1]/[6] en relateddetailid, ese endpoint refleja facturación.",
-    )
-    _log(
-        "Si predominan SOLO_33 pero match_bd=true, el 33 suele ser eco de la OC y la venta "
-        "no viene en relateddetailid (revisar references.json u otros flujos).",
-    )
-    _log(
-        "Si SOLO_33 y match_bd=false, puede ser OC sin facturar o relación no expuesta por Bsale.",
+        "Lectura: si ``Facturadas (1/6)`` es bajo y ``Tipo 33 con venta`` es alto, "
+        "la facturación suele estar en BD pero no en ``relateddetailid``.",
     )
 
     return 0
