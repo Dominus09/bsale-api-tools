@@ -237,40 +237,39 @@ def _parse_related_document_blob(
     item: dict[str, Any],
 ) -> tuple[int | None, int | None, dict[str, Any], str | None]:
     """
-    Extrae documento relacionado para OC → venta.
+    Soporta dos formatos de Bsale:
 
-    Retorna ``(related_id, related_type_id, office_blob, motivo_error)``.
-    ``motivo_error`` solo si no hay ``related_id`` usable.
+    1. Anidado (p. ej. ``references``): ``{ "document": { "id", "documentType", ... } }``
+    2. Plano (``GET /documents.json?relateddetailid=``): ``{ "id", "documentType", "number", ... }``
+       — el documento relacionado va en la raíz, no bajo ``document``.
     """
-    raw_doc = item.get("document")
-    doc = raw_doc if isinstance(raw_doc, dict) else {}
+    doc = item.get("document")
 
-    related_id = _safe_int(
-        doc.get("id") or item.get("documentId") or item.get("document_id"),
-    )
-    if related_id is None:
-        related_id = _safe_int(item.get("id"))
+    if isinstance(doc, dict) and doc.get("id"):
+        related_id = _safe_int(doc.get("id"))
+        rt_raw = (
+            doc.get("documentType")
+            or doc.get("document_type")
+            or doc.get("document_type_id")
+        )
+        office_blob = dict(doc)
+    else:
+        related_id = _safe_int(
+            item.get("id") or item.get("documentId") or item.get("document_id"),
+        )
+        rt_raw = (
+            item.get("documentType")
+            or item.get("document_type")
+            or item.get("document_type_id")
+        )
+        office_blob = dict(item)
+        if related_id is not None and office_blob.get("id") is None:
+            office_blob["id"] = related_id
 
-    rt_raw = (
-        doc.get("documentType")
-        or doc.get("document_type")
-        or doc.get("document_type_id")
-        or item.get("documentType")
-        or item.get("document_type")
-        or item.get("document_type_id")
-    )
     related_type = _coerce_document_type_id(rt_raw)
 
     if related_id is None:
-        return None, None, {}, "sin related_id (document.id / documentId / document_id / id)"
-
-    if doc:
-        office_blob = dict(doc)
-        if office_blob.get("id") is None:
-            office_blob["id"] = related_id
-    else:
-        office_blob = dict(item)
-        office_blob["id"] = related_id
+        return None, None, {}, "sin related_id (document.id o id/documentId en raíz)"
 
     return related_id, related_type, office_blob, None
 
@@ -367,6 +366,8 @@ def _reference_items_to_related_triples(
         if not isinstance(it, dict):
             logger.warning("%s references ítem no dict: %r", log_ctx, it)
             continue
+        logger.warning(f"[RELATED DEBUG RAW] item={json.dumps(it)[:1000]}")
+        logger.warning(f"[RELATED DEBUG KEYS] keys={list(it.keys())}")
 
         rid, tid, office_blob, parse_motivo = _parse_related_document_blob(it)
         if parse_motivo is not None or rid is None:
@@ -452,6 +453,12 @@ def _reference_items_to_related_triples(
                 rid,
             )
             continue
+        logger.warning(
+            "[RELATED INSERT TRY] detail_id=%s related_id=%s type=%s",
+            detail_id,
+            rid,
+            tid,
+        )
         out.append((detail_id, rid, tid))
     return out
 
@@ -470,12 +477,6 @@ def _insert_related_triples(
     conflicts = 0
     for detail_id, rid, tid in triples:
         attempted += 1
-        logger.warning(
-            "[RELATED INSERT TRY] detail_id=%s related_id=%s type=%s",
-            detail_id,
-            rid,
-            tid,
-        )
 
         def _insert_one(
             _did: int = detail_id,
@@ -549,6 +550,8 @@ def _documents_json_items_to_triples(
         if not isinstance(it, dict):
             logger.warning("%s[detail %s] ítem no dict: %r", log_ctx, detail_id, it)
             continue
+        logger.warning(f"[RELATED DEBUG RAW] item={json.dumps(it)[:1000]}")
+        logger.warning(f"[RELATED DEBUG KEYS] keys={list(it.keys())}")
 
         rid, tid, office_blob, parse_motivo = _parse_related_document_blob(it)
         if parse_motivo is not None or rid is None:
@@ -606,6 +609,12 @@ def _documents_json_items_to_triples(
         logger.info(
             "%s[detail %s] parsed relation → doc_id=%s type=%s",
             log_ctx,
+            detail_id,
+            rid,
+            tid,
+        )
+        logger.warning(
+            "[RELATED INSERT TRY] detail_id=%s related_id=%s type=%s",
             detail_id,
             rid,
             tid,
@@ -714,9 +723,6 @@ def _fetch_and_persist_relateddetailid_for_detail(
         if not items:
             break
         items_api_total += len(items)
-        for item in items:
-            if isinstance(item, dict):
-                logger.warning(f"[RELATED DEBUG RAW] item={json.dumps(item)[:1000]}")
         triples = _documents_json_items_to_triples(
             cur,
             detail_id,
@@ -858,10 +864,6 @@ def _fetch_and_persist_related_for_document(
             items = data.get("references") or []
         if not isinstance(items, list):
             items = []
-
-        for item in items:
-            if isinstance(item, dict):
-                logger.warning(f"[RELATED DEBUG RAW] item={json.dumps(item)[:1000]}")
 
         n_items = len(items)
         items_metric += n_items
