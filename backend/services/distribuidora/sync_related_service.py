@@ -50,6 +50,7 @@ T = TypeVar("T")
 COMPANY_ID = 3
 OFFICE_ID = 1
 DOC_TYPE_OC = 33
+RELATED_DOCUMENT_TYPES_ALLOWED = frozenset({1, 6, 9})
 RELATED_DETAIL_PAGE_LIMIT = 50
 DETAILS_PAGE_LIMIT = 50
 
@@ -217,78 +218,61 @@ def _detail_ids_for_document(cur, document_id: int) -> list[int]:
 
 
 def _related_document_from_reference_item(it: dict[str, Any]) -> dict[str, Any] | None:
-    """Documento relacionado en ítem de ``references.json`` (misma heurística que relateddetail)."""
-    blob, _motivo = _parse_related_document_blob(it)
+    """Blob mínimo para compatibilidad; preferir ``_parse_related_document_blob``."""
+    rid, _tid, blob, motivo = _parse_related_document_blob(it)
+    if motivo is not None or rid is None:
+        return None
     return blob
 
 
-def _document_type_id_from_doc(doc: dict[str, Any]) -> int | None:
-    for part in _doc_parts_for_type_and_office(doc):
-        dt = part.get("documentType") or part.get("document_type")
-        if isinstance(dt, dict):
-            tid = _safe_int(dt.get("id"))
-            if tid is not None:
-                return tid
-        if isinstance(dt, int):
-            return dt
-        tid = _safe_int(part.get("document_type_id") or part.get("documentTypeId"))
-        if tid is not None:
-            return tid
-    return None
+def _coerce_document_type_id(raw: Any) -> int | None:
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        return _safe_int(raw.get("id"))
+    return _safe_int(raw)
 
 
-def _parse_related_document_blob(it: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+def _parse_related_document_blob(
+    item: dict[str, Any],
+) -> tuple[int | None, int | None, dict[str, Any], str | None]:
     """
-    Obtiene el dict del **documento relacionado** (no el id de fila referencia).
+    Extrae documento relacionado para OC → venta.
 
-    Retorna ``(blob, None)`` o ``(None, motivo)``.
+    Retorna ``(related_id, related_type_id, office_blob, motivo_error)``.
+    ``motivo_error`` solo si no hay ``related_id`` usable.
     """
-    nested = it.get("document")
-    if isinstance(nested, dict) and _safe_int(nested.get("id")) is not None:
-        return nested, None
+    raw_doc = item.get("document")
+    doc = raw_doc if isinstance(raw_doc, dict) else {}
 
-    ext_id = _safe_int(it.get("documentId") or it.get("document_id"))
-    if ext_id is not None:
-        merged: dict[str, Any] = {"id": ext_id}
-        if isinstance(nested, dict):
-            for k in ("documentType", "document_type", "office", "Office"):
-                if nested.get(k) is not None:
-                    merged[k] = nested[k]
-        for k in (
-            "documentType",
-            "document_type",
-            "office",
-            "Office",
-            "document_type_id",
-            "documentTypeId",
-        ):
-            if it.get(k) is not None:
-                merged[k] = it[k]
-        return merged, None
+    related_id = _safe_int(
+        doc.get("id") or item.get("documentId") or item.get("document_id"),
+    )
+    if related_id is None:
+        related_id = _safe_int(item.get("id"))
 
-    rid = _safe_int(it.get("id"))
-    if rid is None:
-        return None, "sin id útil (falta document.id, documentId, id)"
-    looks_like_doc = any(
-        it.get(k) is not None
-        for k in (
-            "documentType",
-            "document_type",
-            "office",
-            "Office",
-            "number",
-            "serialNumber",
-            "emissionDate",
-            "netAmount",
-            "totalAmount",
-        )
+    rt_raw = (
+        doc.get("documentType")
+        or doc.get("document_type")
+        or doc.get("document_type_id")
+        or item.get("documentType")
+        or item.get("document_type")
+        or item.get("document_type_id")
     )
-    if looks_like_doc:
-        return it, None
-    return None, (
-        f"id={rid} en item pero no parece documento Bsale "
-        f"(falta documentType/office/campos típicos); keys={sorted(it.keys())}"
-    )
+    related_type = _coerce_document_type_id(rt_raw)
+
+    if related_id is None:
+        return None, None, {}, "sin related_id (document.id / documentId / document_id / id)"
+
+    if doc:
+        office_blob = dict(doc)
+        if office_blob.get("id") is None:
+            office_blob["id"] = related_id
+    else:
+        office_blob = dict(item)
+        office_blob["id"] = related_id
+
+    return related_id, related_type, office_blob, None
 
 
 def _office_allows_relation(cur, related_document_id: int, blob: dict[str, Any]) -> tuple[bool, str]:
@@ -383,22 +367,32 @@ def _reference_items_to_related_triples(
         if not isinstance(it, dict):
             logger.warning("%s references ítem no dict: %r", log_ctx, it)
             continue
-        logger.info("%s references raw_item=%s", log_ctx, _json_debug_chunk(it))
 
-        doc, parse_motivo = _parse_related_document_blob(it)
-        if not doc:
+        rid, tid, office_blob, parse_motivo = _parse_related_document_blob(it)
+        if parse_motivo is not None or rid is None:
             logger.warning(
                 "%s references relación descartada (parser): %s",
                 log_ctx,
-                parse_motivo or "blob None",
+                parse_motivo or "sin related_id",
             )
             continue
-        rid = _safe_int(doc.get("id"))
-        if rid is None:
-            logger.warning("%s references relación descartada: blob sin id tras parse", log_ctx)
+
+        if tid is None:
+            logger.warning(
+                "%s references relación descartada: sin tipo para related_document_id=%s",
+                log_ctx,
+                rid,
+            )
+            continue
+        if tid not in RELATED_DOCUMENT_TYPES_ALLOWED:
+            logger.warning(
+                "[RELATED IGNORE] tipo inválido: %s item=%s",
+                tid,
+                json.dumps(it)[:1000],
+            )
             continue
 
-        allow_office, office_motivo = _office_allows_relation(cur, rid, doc)
+        allow_office, office_motivo = _office_allows_relation(cur, rid, office_blob)
         if not allow_office:
             if stats is not None:
                 stats["related_skipped_other_office"] = (
@@ -422,17 +416,6 @@ def _reference_items_to_related_triples(
                 rid,
                 office_motivo,
             )
-
-        tid = _document_type_id_from_doc(doc)
-        if tid is None:
-            logger.warning(
-                "%s references relación descartada: sin document_type_id parseable "
-                "para related_document_id=%s blob_keys=%s",
-                log_ctx,
-                rid,
-                sorted(doc.keys()),
-            )
-            continue
 
         logger.info(
             "%s references parsed relation → doc_id=%s type=%s",
@@ -487,9 +470,8 @@ def _insert_related_triples(
     conflicts = 0
     for detail_id, rid, tid in triples:
         attempted += 1
-        logger.info(
-            "%s INSERT intento detail_id=%s related_document_id=%s related_document_type=%s",
-            log_ctx,
+        logger.warning(
+            "[RELATED INSERT TRY] detail_id=%s related_id=%s type=%s",
             detail_id,
             rid,
             tid,
@@ -567,23 +549,34 @@ def _documents_json_items_to_triples(
         if not isinstance(it, dict):
             logger.warning("%s[detail %s] ítem no dict: %r", log_ctx, detail_id, it)
             continue
-        logger.info("%s[detail %s] relateddetail raw_item=%s", log_ctx, detail_id, _json_debug_chunk(it))
 
-        blob, parse_motivo = _parse_related_document_blob(it)
-        if not blob:
+        rid, tid, office_blob, parse_motivo = _parse_related_document_blob(it)
+        if parse_motivo is not None or rid is None:
             logger.warning(
                 "%s[detail %s] relación descartada (parser): %s",
                 log_ctx,
                 detail_id,
-                parse_motivo or "blob None",
+                parse_motivo or "sin related_id",
             )
             continue
-        rid = _safe_int(blob.get("id"))
-        if rid is None:
-            logger.warning("%s[detail %s] relación descartada: blob sin id", log_ctx, detail_id)
+
+        if tid is None:
+            logger.warning(
+                "%s[detail %s] relación descartada: sin tipo para related_document_id=%s",
+                log_ctx,
+                detail_id,
+                rid,
+            )
+            continue
+        if tid not in RELATED_DOCUMENT_TYPES_ALLOWED:
+            logger.warning(
+                "[RELATED IGNORE] tipo inválido: %s item=%s",
+                tid,
+                json.dumps(it)[:1000],
+            )
             continue
 
-        allow_office, office_motivo = _office_allows_relation(cur, rid, blob)
+        allow_office, office_motivo = _office_allows_relation(cur, rid, office_blob)
         if not allow_office:
             if stats is not None:
                 stats["related_skipped_other_office"] = (
@@ -609,16 +602,6 @@ def _documents_json_items_to_triples(
                 rid,
                 office_motivo,
             )
-
-        tid = _document_type_id_from_doc(blob)
-        if tid is None:
-            logger.warning(
-                "%s[detail %s] relación descartada: sin document_type para related_document_id=%s",
-                log_ctx,
-                detail_id,
-                rid,
-            )
-            continue
 
         logger.info(
             "%s[detail %s] parsed relation → doc_id=%s type=%s",
@@ -731,6 +714,9 @@ def _fetch_and_persist_relateddetailid_for_detail(
         if not items:
             break
         items_api_total += len(items)
+        for item in items:
+            if isinstance(item, dict):
+                logger.warning(f"[RELATED DEBUG RAW] item={json.dumps(item)[:1000]}")
         triples = _documents_json_items_to_triples(
             cur,
             detail_id,
@@ -872,6 +858,10 @@ def _fetch_and_persist_related_for_document(
             items = data.get("references") or []
         if not isinstance(items, list):
             items = []
+
+        for item in items:
+            if isinstance(item, dict):
+                logger.warning(f"[RELATED DEBUG RAW] item={json.dumps(item)[:1000]}")
 
         n_items = len(items)
         items_metric += n_items
