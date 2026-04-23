@@ -9,10 +9,17 @@ Sync incremental de relaciones OC → otros documentos:
 Escribe ``distribuidora.document_related`` con deduplicación (``ON CONFLICT``) y filtro por office.
 
 Incluye ``sync_related_documents_range`` para rellenar histórico por rango de emisión (día a día).
+
+Depuración por número de OC: ``debug_sync_related_for_document`` o
+``python -m backend.jobs.debug_sync_related_oc [número]``.
+
+Logs usan prefijo ``[RELATED][OC …]``. JSON completo de Bsale para la OC de depuración
+(``_RELATED_DEBUG_OC_NUMBER``, hoy 66080) en ``details.json`` / ``relateddetailid``.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import random
@@ -46,6 +53,10 @@ DOC_TYPE_OC = 33
 RELATED_DETAIL_PAGE_LIMIT = 50
 DETAILS_PAGE_LIMIT = 50
 
+# Depuración temporal: volcar JSON Bsale completo para esta OC (número de documento).
+_RELATED_DEBUG_OC_NUMBER = 66080
+_RELATED_DEBUG_JSON_MAX = 400_000
+
 
 def _utc_day_emission_bounds(d: date) -> tuple[datetime, datetime]:
     """Inicio UTC del día y fin exclusivo (``[start, end)``) para filtrar ``emission_date``."""
@@ -63,11 +74,65 @@ def _safe_int(v: Any) -> int | None:
         return None
 
 
-def _related_item_office_id(it: dict[str, Any]) -> int | None:
-    off = it.get("office") or it.get("Office") or {}
-    if not isinstance(off, dict):
+def _json_debug_chunk(obj: Any) -> str:
+    try:
+        s = json.dumps(obj, ensure_ascii=False, default=str)
+    except TypeError:
+        s = repr(obj)
+    if len(s) > _RELATED_DEBUG_JSON_MAX:
+        return s[:_RELATED_DEBUG_JSON_MAX] + f"... [truncado, total {len(s)} chars]"
+    return s
+
+
+def _oc_number_for_document(cur, document_id: int) -> int | None:
+    cur.execute(
+        "SELECT number FROM distribuidora.documents WHERE document_id = %s",
+        (document_id,),
+    )
+    row = cur.fetchone()
+    if not row or row[0] is None:
         return None
-    return _safe_int(off.get("id"))
+    return int(row[0])
+
+
+def _related_log_ctx(oc_number: int | None, document_id: int) -> str:
+    if oc_number is not None:
+        return f"[RELATED][OC {oc_number}]"
+    return f"[RELATED][DOC {document_id}]"
+
+
+def _document_office_in_db(cur, document_id: int) -> int | None:
+    cur.execute(
+        "SELECT office_id FROM distribuidora.documents WHERE document_id = %s",
+        (document_id,),
+    )
+    row = cur.fetchone()
+    if not row or row[0] is None:
+        return None
+    return int(row[0])
+
+
+def _doc_parts_for_type_and_office(d: dict[str, Any]) -> list[dict[str, Any]]:
+    parts: list[dict[str, Any]] = [d]
+    nested = d.get("document")
+    if isinstance(nested, dict):
+        parts.append(nested)
+    return parts
+
+
+def _office_id_from_blob(blob: dict[str, Any]) -> int | None:
+    for part in _doc_parts_for_type_and_office(blob):
+        off = part.get("office") or part.get("Office")
+        if isinstance(off, dict):
+            oid = _safe_int(off.get("id"))
+            if oid is not None:
+                return oid
+    return None
+
+
+def _related_item_office_id(it: dict[str, Any]) -> int | None:
+    """Office del documento relacionado (raíz o anidado en ``document``)."""
+    return _office_id_from_blob(it)
 
 
 def _bsale_token() -> str:
@@ -152,26 +217,130 @@ def _detail_ids_for_document(cur, document_id: int) -> list[int]:
 
 
 def _related_document_from_reference_item(it: dict[str, Any]) -> dict[str, Any] | None:
-    """El documento relacionado suele ir anidado en ``item['document']`` (no usar ``item['id']`` como doc)."""
-    doc = it.get("document")
-    if isinstance(doc, dict) and _safe_int(doc.get("id")) is not None:
-        return doc
-    if _safe_int(it.get("id")) is not None and (
-        it.get("documentType") is not None or it.get("document_type") is not None
-    ):
-        return it
-    return None
+    """Documento relacionado en ítem de ``references.json`` (misma heurística que relateddetail)."""
+    blob, _motivo = _parse_related_document_blob(it)
+    return blob
 
 
 def _document_type_id_from_doc(doc: dict[str, Any]) -> int | None:
-    dt = doc.get("documentType") or doc.get("document_type")
-    if isinstance(dt, dict):
-        tid = _safe_int(dt.get("id"))
+    for part in _doc_parts_for_type_and_office(doc):
+        dt = part.get("documentType") or part.get("document_type")
+        if isinstance(dt, dict):
+            tid = _safe_int(dt.get("id"))
+            if tid is not None:
+                return tid
+        if isinstance(dt, int):
+            return dt
+        tid = _safe_int(part.get("document_type_id") or part.get("documentTypeId"))
         if tid is not None:
             return tid
-    if isinstance(dt, int):
-        return dt
-    return _safe_int(doc.get("document_type_id") or doc.get("documentTypeId"))
+    return None
+
+
+def _parse_related_document_blob(it: dict[str, Any]) -> tuple[dict[str, Any] | None, str | None]:
+    """
+    Obtiene el dict del **documento relacionado** (no el id de fila referencia).
+
+    Retorna ``(blob, None)`` o ``(None, motivo)``.
+    """
+    nested = it.get("document")
+    if isinstance(nested, dict) and _safe_int(nested.get("id")) is not None:
+        return nested, None
+
+    ext_id = _safe_int(it.get("documentId") or it.get("document_id"))
+    if ext_id is not None:
+        merged: dict[str, Any] = {"id": ext_id}
+        if isinstance(nested, dict):
+            for k in ("documentType", "document_type", "office", "Office"):
+                if nested.get(k) is not None:
+                    merged[k] = nested[k]
+        for k in (
+            "documentType",
+            "document_type",
+            "office",
+            "Office",
+            "document_type_id",
+            "documentTypeId",
+        ):
+            if it.get(k) is not None:
+                merged[k] = it[k]
+        return merged, None
+
+    rid = _safe_int(it.get("id"))
+    if rid is None:
+        return None, "sin id útil (falta document.id, documentId, id)"
+    looks_like_doc = any(
+        it.get(k) is not None
+        for k in (
+            "documentType",
+            "document_type",
+            "office",
+            "Office",
+            "number",
+            "serialNumber",
+            "emissionDate",
+            "netAmount",
+            "totalAmount",
+        )
+    )
+    if looks_like_doc:
+        return it, None
+    return None, (
+        f"id={rid} en item pero no parece documento Bsale "
+        f"(falta documentType/office/campos típicos); keys={sorted(it.keys())}"
+    )
+
+
+def _office_allows_relation(cur, related_document_id: int, blob: dict[str, Any]) -> tuple[bool, str]:
+    """
+    No descartar relaciones válidas si la API omite ``office`` o viene inconsistente
+    pero ``distribuidora.documents`` ya tiene la boleta/factura en nuestra sucursal.
+    """
+    api_off = _office_id_from_blob(blob)
+    db_off = _document_office_in_db(cur, related_document_id)
+
+    if db_off == OFFICE_ID:
+        if api_off is not None and api_off != OFFICE_ID:
+            return (
+                True,
+                f"aceptado por BD: documento {related_document_id} office_id={db_off} "
+                f"(API reportaba office_id={api_off})",
+            )
+        if api_off is None:
+            return True, f"aceptado por BD: documento {related_document_id} office_id={db_off} (API sin office)"
+        return True, f"office API={api_off} alineado con BD"
+
+    if api_off == OFFICE_ID:
+        if db_off is not None and db_off != OFFICE_ID:
+            return (
+                False,
+                f"rechazado: API office={api_off} pero en BD documento {related_document_id} "
+                f"tiene office_id={db_off}",
+            )
+        return True, f"office API={api_off} (documento aún no en BD o coherente)"
+
+    if api_off is not None and api_off != OFFICE_ID:
+        if db_off == OFFICE_ID:
+            return (
+                True,
+                f"aceptado por BD pese a API: related_document_id={related_document_id} "
+                f"API office={api_off} → BD office_id={db_off}",
+            )
+        return (
+            False,
+            f"rechazado: API office_id={api_off} y BD office_id={db_off} (esperado {OFFICE_ID})",
+        )
+
+    if api_off is None and db_off is None:
+        return (
+            False,
+            f"rechazado: sin office en payload y documento {related_document_id} no está en BD local",
+        )
+
+    return (
+        False,
+        f"rechazado: sin office claro en API; BD documento {related_document_id} office_id={db_off}",
+    )
 
 
 def _detail_id_from_reference_item(it: dict[str, Any]) -> int | None:
@@ -189,68 +358,114 @@ def _detail_id_from_reference_item(it: dict[str, Any]) -> int | None:
 
 
 def _reference_items_to_related_triples(
+    cur,
     source_document_id: int,
     items: list[Any],
     valid_detail_ids: set[int],
     *,
     fallback_single_detail_id: int | None,
     stats: dict[str, Any] | None,
+    oc_number: int | None,
+    log_ctx: str,
 ) -> list[tuple[int, int, int]]:
     """``(detail_id, related_document_id, related_document_type_id)`` listos para insertar."""
     out: list[tuple[int, int, int]] = []
     if not valid_detail_ids:
         logger.warning(
-            "references sin líneas locales: source_document_id=%s (document_details vacío)",
+            "%s references sin líneas locales: document_id=%s (document_details vacío)",
+            log_ctx,
             source_document_id,
         )
         return out
 
+    logger.info("%s references ítems API=%s", log_ctx, len(items))
     for it in items:
         if not isinstance(it, dict):
+            logger.warning("%s references ítem no dict: %r", log_ctx, it)
             continue
-        doc = _related_document_from_reference_item(it)
+        logger.info("%s references raw_item=%s", log_ctx, _json_debug_chunk(it))
+
+        doc, parse_motivo = _parse_related_document_blob(it)
         if not doc:
+            logger.warning(
+                "%s references relación descartada (parser): %s",
+                log_ctx,
+                parse_motivo or "blob None",
+            )
             continue
         rid = _safe_int(doc.get("id"))
         if rid is None:
+            logger.warning("%s references relación descartada: blob sin id tras parse", log_ctx)
             continue
-        roff = _related_item_office_id(doc)
-        if roff is None or roff != OFFICE_ID:
+
+        allow_office, office_motivo = _office_allows_relation(cur, rid, doc)
+        if not allow_office:
             if stats is not None:
                 stats["related_skipped_other_office"] = (
                     int(stats.get("related_skipped_other_office") or 0) + 1
                 )
-            logger.info(
-                "Relación omitida por office distinta: related_document_id=%s office=%s "
-                "(esperado office_id=%s) source_document_id=%s",
+            logger.warning(
+                "%s references relación descartada por office: related_document_id=%s → %s",
+                log_ctx,
                 rid,
-                roff,
-                OFFICE_ID,
-                source_document_id,
+                office_motivo,
             )
             continue
+        if allow_office and (
+            "aceptado por BD" in office_motivo
+            or "pese a API" in office_motivo
+            or "API reportaba" in office_motivo
+        ):
+            logger.info(
+                "%s references office eval: related_document_id=%s → %s",
+                log_ctx,
+                rid,
+                office_motivo,
+            )
+
         tid = _document_type_id_from_doc(doc)
         if tid is None:
+            logger.warning(
+                "%s references relación descartada: sin document_type_id parseable "
+                "para related_document_id=%s blob_keys=%s",
+                log_ctx,
+                rid,
+                sorted(doc.keys()),
+            )
             continue
+
+        logger.info(
+            "%s references parsed relation → doc_id=%s type=%s",
+            log_ctx,
+            rid,
+            tid,
+        )
 
         detail_id = _detail_id_from_reference_item(it)
         if detail_id is None and fallback_single_detail_id is not None:
             detail_id = fallback_single_detail_id
+            logger.info(
+                "%s references detail_id ausente en ítem; fallback línea única detail_id=%s",
+                log_ctx,
+                detail_id,
+            )
         if detail_id is None:
             logger.warning(
-                "references item sin detail_id (OC multilínea?): source_document_id=%s "
+                "%s references relación descartada: sin detail_id (OC multilínea?) "
                 "related_document_id=%s keys=%s",
-                source_document_id,
+                log_ctx,
                 rid,
                 sorted(it.keys()),
             )
             continue
         if detail_id not in valid_detail_ids:
             logger.warning(
-                "references detail_id no pertenece al documento: source_document_id=%s "
-                "detail_id=%s related_document_id=%s",
-                source_document_id,
+                "%s references relación descartada: detail_id=%s no está en document_details "
+                "del document_id=%s (válidos=%s) related_document_id=%s",
+                log_ctx,
                 detail_id,
+                source_document_id,
+                sorted(valid_detail_ids),
                 rid,
             )
             continue
@@ -264,10 +479,21 @@ def _insert_related_triples(
     triples: list[tuple[int, int, int]],
     *,
     stats: dict[str, Any] | None = None,
+    log_ctx: str = "",
 ) -> int:
     """Inserta relaciones con ``ON CONFLICT DO NOTHING``; un commit por fila + reintento deadlock."""
-    n = 0
+    attempted = 0
+    inserted_new = 0
+    conflicts = 0
     for detail_id, rid, tid in triples:
+        attempted += 1
+        logger.info(
+            "%s INSERT intento detail_id=%s related_document_id=%s related_document_type=%s",
+            log_ctx,
+            detail_id,
+            rid,
+            tid,
+        )
 
         def _insert_one(
             _did: int = detail_id,
@@ -288,47 +514,119 @@ def _insert_related_triples(
             conn.commit()
             return rc
 
-        inserted = _with_deadlock_retry(
+        ins = _with_deadlock_retry(
             conn,
             f"document_related detail_id={detail_id} related_document_id={rid}",
             _insert_one,
         )
-        n += inserted
-    return n
+        if ins > 0:
+            inserted_new += ins
+            logger.info(
+                "%s INSERT OK (fila nueva) detail_id=%s related_document_id=%s type=%s",
+                log_ctx,
+                detail_id,
+                rid,
+                tid,
+            )
+        else:
+            conflicts += 1
+            logger.info(
+                "%s INSERT sin fila nueva (ON CONFLICT duplicate) detail_id=%s "
+                "related_document_id=%s type=%s",
+                log_ctx,
+                detail_id,
+                rid,
+                tid,
+            )
+
+    logger.info(
+        "%s INSERT resumen intentos=%s insertadas=%s conflictos_duplicado=%s",
+        log_ctx,
+        attempted,
+        inserted_new,
+        conflicts,
+    )
+    if stats is not None:
+        stats["related_insert_attempts"] = int(stats.get("related_insert_attempts") or 0) + attempted
+        stats["related_insert_conflicts"] = int(stats.get("related_insert_conflicts") or 0) + conflicts
+    return inserted_new
 
 
 def _documents_json_items_to_triples(
+    cur,
     detail_id: int,
     items: list[Any],
     *,
     stats: dict[str, Any] | None,
+    log_ctx: str,
 ) -> list[tuple[int, int, int]]:
-    """``items`` de ``/documents.json?relateddetailid=`` son documentos completos (``id``, ``documentType``, ``office``)."""
+    """Parsea ``items`` de ``/documents.json?relateddetailid=`` hacia triples insertables."""
     out: list[tuple[int, int, int]] = []
+    logger.info("%s[detail %s] related items API=%s", log_ctx, detail_id, len(items))
     for it in items:
         if not isinstance(it, dict):
+            logger.warning("%s[detail %s] ítem no dict: %r", log_ctx, detail_id, it)
             continue
-        rid = _safe_int(it.get("id"))
+        logger.info("%s[detail %s] relateddetail raw_item=%s", log_ctx, detail_id, _json_debug_chunk(it))
+
+        blob, parse_motivo = _parse_related_document_blob(it)
+        if not blob:
+            logger.warning(
+                "%s[detail %s] relación descartada (parser): %s",
+                log_ctx,
+                detail_id,
+                parse_motivo or "blob None",
+            )
+            continue
+        rid = _safe_int(blob.get("id"))
         if rid is None:
+            logger.warning("%s[detail %s] relación descartada: blob sin id", log_ctx, detail_id)
             continue
-        roff = _related_item_office_id(it)
-        if roff is None or roff != OFFICE_ID:
+
+        allow_office, office_motivo = _office_allows_relation(cur, rid, blob)
+        if not allow_office:
             if stats is not None:
                 stats["related_skipped_other_office"] = (
                     int(stats.get("related_skipped_other_office") or 0) + 1
                 )
-            logger.info(
-                "relateddetailid omitida por office: related_document_id=%s office=%s "
-                "(esperado %s) detail_id=%s",
-                rid,
-                roff,
-                OFFICE_ID,
+            logger.warning(
+                "%s[detail %s] relación descartada por office: related_document_id=%s → %s",
+                log_ctx,
                 detail_id,
+                rid,
+                office_motivo,
             )
             continue
-        tid = _document_type_id_from_doc(it)
+        if allow_office and (
+            "aceptado por BD" in office_motivo
+            or "pese a API" in office_motivo
+            or "API reportaba" in office_motivo
+        ):
+            logger.info(
+                "%s[detail %s] office eval related_document_id=%s → %s",
+                log_ctx,
+                detail_id,
+                rid,
+                office_motivo,
+            )
+
+        tid = _document_type_id_from_doc(blob)
         if tid is None:
+            logger.warning(
+                "%s[detail %s] relación descartada: sin document_type para related_document_id=%s",
+                log_ctx,
+                detail_id,
+                rid,
+            )
             continue
+
+        logger.info(
+            "%s[detail %s] parsed relation → doc_id=%s type=%s",
+            log_ctx,
+            detail_id,
+            rid,
+            tid,
+        )
         out.append((detail_id, rid, tid))
     return out
 
@@ -338,6 +636,8 @@ def _fetch_detail_ids_from_bsale_details(
     document_id: int,
     *,
     throttle: float,
+    related_debug: bool = False,
+    log_ctx: str = "",
 ) -> tuple[list[int], int]:
     """
     ``GET /documents/{document_id}/details.json`` paginado.
@@ -354,9 +654,17 @@ def _fetch_detail_ids_from_bsale_details(
                 {"limit": DETAILS_PAGE_LIMIT, "offset": offset},
             )
         except Exception as e:
-            logger.warning("details.json document_id=%s offset=%s: %s", document_id, offset, e)
+            logger.warning("%s details.json document_id=%s offset=%s: %s", log_ctx, document_id, offset, e)
             break
         api_calls += 1
+        if related_debug:
+            logger.info(
+                "%s[DEBUG] details.json document_id=%s offset=%s JSON=%s",
+                log_ctx,
+                document_id,
+                offset,
+                _json_debug_chunk(data),
+            )
         items = data.get("items") or []
         if not isinstance(items, list):
             break
@@ -372,6 +680,7 @@ def _fetch_detail_ids_from_bsale_details(
             time.sleep(throttle)
     # Orden estable y sin duplicados (paginación / API)
     ids = list(dict.fromkeys(ids))
+    logger.info("%s details.json detail_ids usados=%s (n=%s)", log_ctx, ids, len(ids))
     return ids, api_calls
 
 
@@ -383,6 +692,8 @@ def _fetch_and_persist_relateddetailid_for_detail(
     *,
     throttle: float,
     stats: dict[str, Any] | None,
+    log_ctx: str,
+    related_debug: bool,
 ) -> tuple[int, int, int]:
     """
     GET ``/documents.json?relateddetailid=`` paginado; inserta en ``document_related``.
@@ -405,20 +716,35 @@ def _fetch_and_persist_relateddetailid_for_detail(
                 },
             )
         except Exception as e:
-            logger.warning("relateddetailid=%s offset=%s: %s", detail_id, offset, e)
+            logger.warning("%s relateddetailid=%s offset=%s: %s", log_ctx, detail_id, offset, e)
             break
         api_calls += 1
+        if related_debug:
+            logger.info(
+                "%s[DEBUG] relateddetailid=%s offset=%s JSON=%s",
+                log_ctx,
+                detail_id,
+                offset,
+                _json_debug_chunk(data),
+            )
         items = data.get("items") or []
         if not items:
             break
         items_api_total += len(items)
-        triples = _documents_json_items_to_triples(detail_id, items, stats=stats)
-        rows_inserted += _insert_related_triples(conn, cur, triples, stats=stats)
+        triples = _documents_json_items_to_triples(
+            cur,
+            detail_id,
+            items,
+            stats=stats,
+            log_ctx=log_ctx,
+        )
+        rows_inserted += _insert_related_triples(conn, cur, triples, stats=stats, log_ctx=log_ctx)
         offset += len(items)
         if throttle > 0:
             time.sleep(throttle)
     logger.info(
-        "relateddetailid detail_id=%s items=%s insertadas=%s llamadas=%s",
+        "%s relateddetail resumen detail_id=%s items=%s insertadas=%s llamadas=%s",
+        log_ctx,
         detail_id,
         items_api_total,
         rows_inserted,
@@ -435,6 +761,8 @@ def _sync_related_by_detail_for_oc_document(
     *,
     throttle: float,
     stats: dict[str, Any] | None,
+    log_ctx: str,
+    related_debug: bool,
 ) -> tuple[int, int, int, int]:
     """
     ``details.json`` + ``relateddetailid`` por línea.
@@ -442,19 +770,24 @@ def _sync_related_by_detail_for_oc_document(
     Retorna ``(detail_ids_procesados, items_related_total, filas_insertadas, llamadas_http)``.
     """
     detail_ids, calls_details = _fetch_detail_ids_from_bsale_details(
-        client, document_id, throttle=throttle
+        client,
+        document_id,
+        throttle=throttle,
+        related_debug=related_debug,
+        log_ctx=log_ctx,
     )
+    logger.info("%s details encontrados=%s detail_ids=%s", log_ctx, len(detail_ids), detail_ids)
     if not detail_ids:
         fallback = _detail_ids_for_document(cur, document_id)
         if fallback:
             logger.info(
-                "document_id=%s details.json sin líneas; fallback BD detail_ids=%s",
-                document_id,
-                len(fallback),
+                "%s details.json sin líneas; fallback BD detail_ids=%s",
+                log_ctx,
+                fallback,
             )
             detail_ids = fallback
         else:
-            logger.warning("document_id=%s sin detail_ids (API ni BD)", document_id)
+            logger.warning("%s sin detail_ids (API ni BD) document_id=%s", log_ctx, document_id)
 
     items_total = 0
     rows_ins = 0
@@ -465,7 +798,14 @@ def _sync_related_by_detail_for_oc_document(
                 int(stats.get("relateddetail_details_processed") or 0) + 1
             )
         it_tot, ins, c = _fetch_and_persist_relateddetailid_for_detail(
-            client, conn, cur, did, throttle=throttle, stats=stats
+            client,
+            conn,
+            cur,
+            did,
+            throttle=throttle,
+            stats=stats,
+            log_ctx=log_ctx,
+            related_debug=related_debug,
         )
         items_total += it_tot
         rows_ins += ins
@@ -476,7 +816,8 @@ def _sync_related_by_detail_for_oc_document(
 
     calls_total = calls_details + calls_rel
     logger.info(
-        "document_id=%s relateddetail flujo: details=%s items=%s insertadas=%s api=%s",
+        "%s relateddetail flujo: document_id=%s details=%s items=%s insertadas=%s api=%s",
+        log_ctx,
         document_id,
         len(detail_ids),
         items_total,
@@ -501,6 +842,19 @@ def _fetch_and_persist_related_for_document(
     Retorna ``(n_items_api_total, filas_insertadas, llamadas_http)``.
     ``n_items_api_total`` suma ítems de references + documentos devueltos por relateddetailid.
     """
+    oc_number = _oc_number_for_document(cur, document_id)
+    log_ctx = _related_log_ctx(oc_number, document_id)
+    related_debug = oc_number is not None and oc_number == _RELATED_DEBUG_OC_NUMBER
+
+    detail_ids_bd = _detail_ids_for_document(cur, document_id)
+    logger.info(
+        "%s document_id=%s número_OC=%s detail_ids_en_BD=%s",
+        log_ctx,
+        document_id,
+        oc_number,
+        detail_ids_bd,
+    )
+
     api_calls = 0
     rows_inserted = 0
     items_metric = 0
@@ -509,7 +863,7 @@ def _fetch_and_persist_related_for_document(
     try:
         data = client.get(f"/documents/{document_id}/references.json")
     except Exception as e:
-        logger.warning("references.json document_id=%s: %s", document_id, e)
+        logger.warning("%s references.json error: %s", log_ctx, e)
         data = None
 
     if data is not None:
@@ -524,23 +878,29 @@ def _fetch_and_persist_related_for_document(
         if stats is not None:
             stats["references_items_total"] = int(stats.get("references_items_total") or 0) + n_items
 
+        if related_debug:
+            logger.info("%s[DEBUG] references.json JSON=%s", log_ctx, _json_debug_chunk(data))
+
         detail_list = _detail_ids_for_document(cur, document_id)
         valid = set(detail_list)
         fallback = detail_list[0] if len(detail_list) == 1 else None
 
         triples = _reference_items_to_related_triples(
+            cur,
             document_id,
             items,
             valid,
             fallback_single_detail_id=fallback,
             stats=stats,
+            oc_number=oc_number,
+            log_ctx=log_ctx,
         )
-        ins_ref = _insert_related_triples(conn, cur, triples, stats=stats)
+        ins_ref = _insert_related_triples(conn, cur, triples, stats=stats, log_ctx=log_ctx)
         rows_inserted += ins_ref
 
         logger.info(
-            "document_id=%s references.json items=%s parseadas=%s insertadas=%s",
-            document_id,
+            "%s references.json items=%s triples=%s insertadas=%s",
+            log_ctx,
             n_items,
             len(triples),
             ins_ref,
@@ -553,15 +913,22 @@ def _fetch_and_persist_related_for_document(
 
     # --- 2) details.json + relateddetailid por línea ---
     ndet, it_rel, ins_det, calls_det = _sync_related_by_detail_for_oc_document(
-        client, conn, cur, document_id, throttle=throttle, stats=stats
+        client,
+        conn,
+        cur,
+        document_id,
+        throttle=throttle,
+        stats=stats,
+        log_ctx=log_ctx,
+        related_debug=related_debug,
     )
     api_calls += calls_det
     rows_inserted += ins_det
     items_metric += it_rel
 
     logger.info(
-        "document_id=%s resumen related: references+relateddetail items_metric=%s "
-        "filas_insertadas=%s (último flujo details_api=%s)",
+        "%s resumen related: document_id=%s items_metric=%s filas_insertadas=%s details_procesados=%s",
+        log_ctx,
         document_id,
         items_metric,
         rows_inserted,
@@ -844,6 +1211,89 @@ def sync_related_documents_range(
 
     stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
     return stats
+
+
+def debug_sync_related_for_document(document_number: int) -> dict[str, Any]:
+    """
+    Ejecuta **solo** el flujo ``document_related`` para una OC identificada por ``number`` en BD.
+
+    Útil para depurar (p. ej. ``python -m backend.jobs.debug_sync_related_oc 66080``).
+    Requiere el mismo advisory lock que el sync incremental de relaciones.
+    """
+    token = _bsale_token()
+    if not token:
+        return {"ok": False, "error": "sin token Bsale"}
+    conn = get_connection()
+    cur = conn.cursor()
+    got_lock = False
+    try:
+        ensure_distribuidora_schema(cur)
+        conn.commit()
+        cur.execute(
+            """
+            SELECT document_id FROM distribuidora.documents
+            WHERE company_id = %s AND office_id = %s AND document_type_id = %s AND number = %s
+            LIMIT 1
+            """,
+            (COMPANY_ID, OFFICE_ID, DOC_TYPE_OC, document_number),
+        )
+        row = cur.fetchone()
+        if not row:
+            return {
+                "ok": False,
+                "error": f"OC número {document_number} no encontrada en distribuidora.documents",
+            }
+        document_id = int(row[0])
+        cur.execute("SELECT pg_try_advisory_lock(%s)", (ADVISORY_LOCK_RELATED,))
+        got_lock = bool(cur.fetchone()[0])
+        if not got_lock:
+            return {
+                "ok": False,
+                "error": "Lock document_related en uso; detenga otro sync related e intente de nuevo.",
+            }
+        client = BsaleClient(token)
+        stats: dict[str, Any] = {}
+        items_m, inserted, calls = _fetch_and_persist_related_for_document(
+            client, conn, cur, document_id, throttle=0.0, stats=stats
+        )
+        cur.execute(
+            """
+            SELECT dr.detail_id, dr.related_document_id, dr.related_document_type
+            FROM distribuidora.document_related dr
+            INNER JOIN distribuidora.document_details dd ON dd.detail_id = dr.detail_id
+            WHERE dd.document_id = %s
+            ORDER BY dr.related_document_id
+            """,
+            (document_id,),
+        )
+        rel_after = [
+            {"detail_id": int(a), "related_document_id": int(b), "related_document_type": int(c)}
+            for a, b, c in cur.fetchall()
+        ]
+        return {
+            "ok": True,
+            "document_number": document_number,
+            "document_id": document_id,
+            "items_metric": items_m,
+            "rows_inserted_this_run": inserted,
+            "api_calls": calls,
+            "stats_counters": stats,
+            "document_related_rows_for_oc": rel_after,
+        }
+    finally:
+        try:
+            if got_lock:
+                cur.execute("SELECT pg_advisory_unlock(%s)", (ADVISORY_LOCK_RELATED,))
+        except Exception:
+            logger.exception("debug_sync_related_for_document unlock")
+        try:
+            cur.close()
+        except Exception:
+            pass
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def _parse_iso_to_date(s: str) -> date:

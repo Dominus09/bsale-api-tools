@@ -54,6 +54,15 @@ _FIRST_SYNC_CUTOFF = datetime(2010, 1, 1, tzinfo=timezone.utc)
 _token_missing_logged = False
 
 
+def _sales_sliding_window_days() -> int:
+    """Días hacia atrás desde hoy (UTC) para ``sync_bsale_distribuidora_sales_incremental``."""
+    try:
+        n = int(os.getenv("SALES_SYNC_WINDOW_DAYS", "10"))
+    except ValueError:
+        n = 10
+    return max(1, min(366, n))
+
+
 def _bsale_token() -> str:
     return (os.getenv("BSALE_TOKEN") or "").strip() or (os.getenv("BSALE_TOKEN_SPA") or "").strip()
 
@@ -684,6 +693,7 @@ def _fetch_documents_window(
     hasta_ts: int,
     stats: dict[str, Any],
     log_id: int | None,
+    raw_items_counter_key: str | None = None,
 ) -> None:
     """Paginación por ``offset``; mismo cliente robusto que resync (429/5xx/red)."""
     offset = 0
@@ -698,6 +708,9 @@ def _fetch_documents_window(
         items = data.get("items") or []
         if not items:
             break
+
+        if raw_items_counter_key:
+            stats[raw_items_counter_key] = int(stats.get(raw_items_counter_key) or 0) + len(items)
 
         _append_items_from_bsale_response(items, pending, stats)
         _flush_pending_when_large(client, cur, conn, pending, stats)
@@ -807,19 +820,46 @@ def sync_bsale_distribuidora_incremental(
             last_sync = last_sync.replace(tzinfo=timezone.utc)
 
         now = datetime.now(timezone.utc)
-        if last_sync < _FIRST_SYNC_CUTOFF:
-            desde = now - timedelta(days=30)
+        raw_items_counter_key: str | None = None
+
+        if process_name == PROCESS_SALES:
+            # Ventana fija en calendario UTC: captura NC u otros con emission_date antigua
+            # pero creados recientemente (no basta el cursor last_sync).
+            window_days = _sales_sliding_window_days()
+            today_utc = now.date()
+            from_day = today_utc - timedelta(days=window_days)
+            desde = datetime(from_day.year, from_day.month, from_day.day, 0, 0, 0, tzinfo=timezone.utc)
+            desde_ts = int(desde.timestamp())
+            hasta_ts = int(now.timestamp())
+            if desde_ts >= hasta_ts:
+                desde_ts = hasta_ts - 3600
+            stats["sales_sync_window_days"] = window_days
+            stats["sales_window_from_date"] = from_day.isoformat()
+            stats["sales_window_to_date"] = today_utc.isoformat()
+            stats["sales_window_api_docs"] = 0
+            raw_items_counter_key = "sales_window_api_docs"
             logger.info(
-                "sync incremental (%s): primer ciclo amplio (30 días)",
+                "distribuidora sync incremental (%s): ventana deslizante %s días UTC "
+                "(SALES_SYNC_WINDOW_DAYS) | epoch [%s, %s]",
                 process_name,
+                window_days,
+                desde_ts,
+                hasta_ts,
             )
         else:
-            desde = last_sync - timedelta(hours=2)
+            if last_sync < _FIRST_SYNC_CUTOFF:
+                desde = now - timedelta(days=30)
+                logger.info(
+                    "sync incremental (%s): primer ciclo amplio (30 días)",
+                    process_name,
+                )
+            else:
+                desde = last_sync - timedelta(hours=2)
 
-        desde_ts = int(desde.timestamp())
-        hasta_ts = int(now.timestamp())
-        if desde_ts >= hasta_ts:
-            desde_ts = hasta_ts - 3600
+            desde_ts = int(desde.timestamp())
+            hasta_ts = int(now.timestamp())
+            if desde_ts >= hasta_ts:
+                desde_ts = hasta_ts - 3600
 
         if allowed_document_type_ids is not None:
             stats["_allowed_document_type_ids"] = allowed_document_type_ids
@@ -836,8 +876,25 @@ def sync_bsale_distribuidora_incremental(
             hasta_ts,
         )
         _fetch_documents_window(
-            client, cur, conn, desde_ts=desde_ts, hasta_ts=hasta_ts, stats=stats, log_id=log_id
+            client,
+            cur,
+            conn,
+            desde_ts=desde_ts,
+            hasta_ts=hasta_ts,
+            stats=stats,
+            log_id=log_id,
+            raw_items_counter_key=raw_items_counter_key,
         )
+
+        if process_name == PROCESS_SALES:
+            logger.info(
+                "[SYNC SALES WINDOW] Rango: %s → %s | Docs API: %s | Insertados: %s | Actualizados: %s",
+                stats.get("sales_window_from_date"),
+                stats.get("sales_window_to_date"),
+                int(stats.get("sales_window_api_docs") or 0),
+                int(stats.get("documents_inserted") or 0),
+                int(stats.get("updated_documents") or 0),
+            )
 
         stats.pop("_allowed_document_type_ids", None)
 
@@ -982,7 +1039,13 @@ def sync_bsale_distribuidora_orders_incremental(*, strict_token: bool = False) -
 
 
 def sync_bsale_distribuidora_sales_incremental(*, strict_token: bool = False) -> dict[str, Any]:
-    """Boletas (1), facturas (6) y notas de crédito (9)."""
+    """
+    Boletas (1), facturas (6) y notas de crédito (9).
+
+    Usa siempre una ventana deslizante en ``emissiondaterange`` (últimos N días UTC,
+    N = ``SALES_SYNC_WINDOW_DAYS``, default 10), además del upsert habitual, para capturar
+    documentos creados hoy con ``emission_date`` antigua (p. ej. NC).
+    """
     return sync_bsale_distribuidora_incremental(
         strict_token=strict_token,
         process_name=PROCESS_SALES,
