@@ -1030,12 +1030,17 @@ export async function getDistribuidoraTrucks(params?: {
   return res.json() as Promise<{ items: DistribuidoraTruck[] }>
 }
 
-/** POST /distribuidora/sync-orders | /distribuidora/sync-sales (202 ``queued`` o error). */
+/** POST /distribuidora/sync-orders (200 síncrono) | /distribuidora/sync-sales (202 ``queued`` o error). */
 export type DistribuidoraTypedSyncResponse = {
   ok: boolean
   status?: string
   stats?: Record<string, unknown>
   error?: string
+  /** Solo sync-orders (respuesta 200). */
+  orders_processed?: number
+  /** Filas insertadas en ``document_related`` tras sync-orders. */
+  related_processed?: number
+  message?: string
 }
 
 function _detailFromBody(data: unknown): string | undefined {
@@ -1071,9 +1076,23 @@ export async function postDistribuidoraSyncOrders(params?: {
     }
   }
   const st = typeof data.status === "string" ? data.status : undefined
+  const orders_processed =
+    typeof data.orders_processed === "number" ? data.orders_processed : undefined
+  const related_processed =
+    typeof data.related_processed === "number" ? data.related_processed : undefined
+  const message = typeof data.message === "string" ? data.message : undefined
   return {
     ok: true,
-    status: st ?? (res.status === 202 ? "queued" : undefined),
+    status:
+      st ??
+      (res.status === 200
+        ? "complete"
+        : res.status === 202
+          ? "queued"
+          : undefined),
+    orders_processed,
+    related_processed,
+    message,
     stats: data.stats as Record<string, unknown> | undefined,
   }
 }
@@ -1131,9 +1150,23 @@ export async function postDistribuidoraSyncSales(params?: {
     }
   }
   const st = typeof data.status === "string" ? data.status : undefined
+  const orders_processed =
+    typeof data.orders_processed === "number" ? data.orders_processed : undefined
+  const related_processed =
+    typeof data.related_processed === "number" ? data.related_processed : undefined
+  const message = typeof data.message === "string" ? data.message : undefined
   return {
     ok: true,
-    status: st ?? (res.status === 202 ? "queued" : undefined),
+    status:
+      st ??
+      (res.status === 200
+        ? "complete"
+        : res.status === 202
+          ? "queued"
+          : undefined),
+    orders_processed,
+    related_processed,
+    message,
     stats: data.stats as Record<string, unknown> | undefined,
   }
 }

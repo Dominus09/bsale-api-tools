@@ -501,7 +501,7 @@ export default function DistribuidoraOrdersPage() {
       const r = await postDistribuidoraSyncOrders({ signal: ac.signal })
       if (!r.ok) {
         toast({
-          title: "No se pudo encolar sync",
+          title: "No se pudo sincronizar",
           description: r.error ?? "Error desconocido",
           variant: "destructive",
         })
@@ -516,7 +516,9 @@ export default function DistribuidoraOrdersPage() {
       await loadSyncStatus(ac.signal)
       toast({
         title: "Órdenes actualizadas",
-        description: "Sync en servidor completado. Resumen, observaciones y tabla recargados.",
+        description:
+          r.message ??
+          "Sync en servidor completado. Resumen, observaciones y tabla recargados.",
       })
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") return

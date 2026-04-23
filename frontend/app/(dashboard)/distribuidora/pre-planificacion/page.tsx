@@ -206,7 +206,7 @@ export default function PrePlanificacionDespachoPage() {
       })
       await loadPlanificacionRows(ac.signal)
       await loadSyncStatus(ac.signal)
-      setFeedback("Órdenes sincronizadas. Tabla actualizada.")
+      setFeedback(r.message ?? "Órdenes sincronizadas. Tabla actualizada.")
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") return
       setFeedback(e instanceof Error ? e.message : "Error al sincronizar.")

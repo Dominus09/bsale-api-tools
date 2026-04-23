@@ -32,6 +32,7 @@ from backend.services.distribuidora.distribuidora_sync_status_service import (
 )
 from backend.services.distribuidora.sync_related_service import (
     run_sync_distribuidora_related_background,
+    sync_distribuidora_related_documents,
 )
 from backend.services.distribuidora.sync_service import (
     bsale_token_distribuidora_configured,
@@ -44,34 +45,6 @@ logger = logging.getLogger(__name__)
 
 # Ventana corta (días calendario UTC) para traer documentos recientes desde Bsale.
 _RESYNC_OC_CALENDAR_DAYS = 2
-
-
-def _run_distribuidora_sync_orders_task() -> None:
-    """Ejecutado vía ``BackgroundTasks`` (no bloquea HTTP)."""
-    t0 = time.perf_counter()
-    logger.info("distribuidora sync-orders background: inicio")
-    try:
-        stats = sync_bsale_distribuidora_orders_incremental(strict_token=True)
-        if stats.get("skipped"):
-            logger.warning(
-                "distribuidora sync-orders background: omitido %s",
-                stats.get("skip_reason"),
-            )
-            return
-        if stats.get("omitido_concurrencia"):
-            logger.warning("distribuidora sync-orders background: omitido por lock")
-            return
-        try:
-            run_sync_distribuidora_related_background()
-        except Exception:
-            logger.exception("distribuidora sync-orders background: related falló")
-    except Exception:
-        logger.exception("distribuidora sync-orders background: error")
-    finally:
-        logger.info(
-            "distribuidora sync-orders background: fin duracion_s=%.3f",
-            time.perf_counter() - t0,
-        )
 
 
 def _run_distribuidora_sync_sales_task() -> None:
@@ -175,17 +148,53 @@ def get_distribuidora_sync_status():
 
 
 @router.post("/sync-orders")
-def post_distribuidora_sync_orders(background_tasks: BackgroundTasks):
+def post_distribuidora_sync_orders():
     """
-    Encola sync incremental de órdenes (tipo 33) + relaciones; **no bloquea** el HTTP (202).
-
-    El cliente debe hacer polling a ``GET /distribuidora/sync-status`` y recargar datos al avanzar
-    ``orders.last_run`` o ver ``orders.status``.
+    Sync incremental de órdenes (tipo 33) y, si termina bien, sync de ``document_related``
+    (secuencial, misma petición HTTP).
     """
     if not bsale_token_distribuidora_configured():
         raise HTTPException(status_code=503, detail="sin_token")
-    background_tasks.add_task(_run_distribuidora_sync_orders_task)
-    return JSONResponse({"ok": True, "status": "queued"}, status_code=202)
+
+    order_stats = sync_bsale_distribuidora_orders_incremental(strict_token=True)
+    if order_stats.get("skipped"):
+        raise HTTPException(
+            status_code=503,
+            detail=str(order_stats.get("skip_reason") or "sync_omitido"),
+        )
+    if order_stats.get("omitido_concurrencia"):
+        raise HTTPException(status_code=409, detail="sync_en_curso")
+
+    orders_processed = int(order_stats.get("documents_processed") or 0)
+    logger.info("[SYNC ORDERS] documentos procesados: %s", orders_processed)
+
+    related_stats = sync_distribuidora_related_documents(strict_token=True)
+    related_processed = int(related_stats.get("rows_inserted") or 0)
+
+    if related_stats.get("skipped"):
+        logger.warning(
+            "[SYNC RELATED] omitido: %s",
+            related_stats.get("skip_reason"),
+        )
+        msg = (
+            "Órdenes sincronizadas correctamente. Relaciones no ejecutadas (sin token u otro motivo)."
+        )
+    elif related_stats.get("omitido_concurrencia"):
+        logger.warning("[SYNC RELATED] omitido por lock de concurrencia")
+        msg = (
+            "Órdenes sincronizadas correctamente. Relaciones omitidas porque otro proceso "
+            "tiene el lock de document_related."
+        )
+    else:
+        logger.info("[SYNC RELATED] relaciones insertadas: %s", related_processed)
+        msg = "Órdenes y relaciones sincronizadas correctamente"
+
+    return {
+        "ok": True,
+        "orders_processed": orders_processed,
+        "related_processed": related_processed,
+        "message": msg,
+    }
 
 
 @router.post("/sync-sales")
