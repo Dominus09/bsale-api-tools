@@ -5,25 +5,9 @@ git push
 
 eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImNiYmUyMzViYTNhNzQ2Zjg5YWY4YzQ4OGZmMTZmOTZjIiwiaCI6Im11cm11cjY0In0=
 
-import requests
+import bcrypt
 
-API_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImNiYmUyMzViYTNhNzQ2Zjg5YWY4YzQ4OGZmMTZmOTZjIiwiaCI6Im11cm11cjY0In0="
+password = "Laquillotana123".encode("utf-8")
+hashed = bcrypt.hashpw(password, bcrypt.gensalt())
 
-url = "https://api.openrouteservice.org/v2/directions/driving-car"
-
-headers = {
-    "Authorization": API_KEY,
-    "Content-Type": "application/json"
-}
-
-body = {
-    "coordinates": [
-        [-73.623, -43.119],  # punto 1
-        [-73.620, -43.120]   # punto 2
-    ]
-}
-
-res = requests.post(url, json=body, headers=headers)
-
-print(res.status_code)
-print(res.text)
+print(hashed.decode("utf-8"))
