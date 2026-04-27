@@ -11,20 +11,31 @@ Salida: ``oc_analysis.xlsx`` en el directorio de trabajo.
 
 from __future__ import annotations
 
+import os
+import sys
 import time
+from pathlib import Path
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
 import pandas as pd
 
+if __package__ is None or __package__ == "":
+    # Permite ejecutar: python backend/jobs/export_oc_analysis_to_excel.py
+    sys.path.append(str(Path(__file__).resolve().parents[2]))
+
 from backend.db import get_connection
 from backend.services.distribuidora.bsale_client import BsaleClient
 from backend.services.distribuidora.sync_related_service import OFFICE_ID
-from backend.services.distribuidora.sync_service import _bsale_token
+
+BSALE_TOKEN = os.getenv("BSALE_TOKEN") or os.getenv("3d46d0ac6f42455660f2504d27399d5da3550e25")
+
+if not BSALE_TOKEN:
+    raise Exception("Falta BSALE_TOKEN en variables de entorno")
 
 DOC_TYPE_OC = 33
-OC_LIMIT = 300
+OC_LIMIT = 50
 DETAILS_PAGE = 50
 MAX_DETAIL_IDS_FOR_RELATED = 3
 RELATED_PAGE = 50
@@ -190,11 +201,9 @@ def _tiene_venta_bd(
     return cur.fetchone() is not None
 
 
-def main() -> int:
-    token = _bsale_token()
-    if not token:
-        _log("[ERROR] Sin token: defina BSALE_TOKEN o BSALE_TOKEN_SPA")
-        return 1
+def run_export() -> int:
+    print(f"🚀 Iniciando export de {OC_LIMIT} OC...")
+    print(f"Token cargado: {'SI' if BSALE_TOKEN else 'NO'}")
 
     conn = get_connection()
     cur0 = conn.cursor()
@@ -232,7 +241,7 @@ def main() -> int:
             (int(r[0]), r[1], r[2] if r[2] is not None else None, r[3], _as_date(e))
         )
 
-    client = BsaleClient(token)
+    client = BsaleClient(BSALE_TOKEN)
     rows: list[dict[str, Any]] = []
     qcur = conn.cursor()
     for document_id, number, client_id_db, total_db, emission_date in ocs_parsed:
@@ -275,7 +284,7 @@ def main() -> int:
                 oc_date=emission_date,
             )
         except Exception as e:
-            _log(f"document_id={document_id} error: {e}")
+            print(f"❌ Error en OC {number}: {str(e)}")
             oc_num = number
             if total_db is not None:
                 try:
@@ -311,10 +320,11 @@ def main() -> int:
     conn.close()
 
     df = pd.DataFrame(rows)
-    df.to_excel(OUT_XLSX, index=False, engine="openpyxl")
-    _log(f"Excel generado: {OUT_XLSX}")
+    output_file = "oc_analysis.xlsx"
+    df.to_excel(output_file, index=False)
+    print(f"✅ Excel generado en: {output_file}")
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run_export())
