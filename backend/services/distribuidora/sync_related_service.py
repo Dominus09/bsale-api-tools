@@ -12,14 +12,10 @@ Incluye ``sync_related_documents_range`` para rellenar histórico por rango de e
 
 Depuración por número de OC: ``debug_sync_related_for_document`` o
 ``python -m backend.jobs.debug_sync_related_oc [número]``.
-
-Logs usan prefijo ``[RELATED][OC …]``. JSON completo de Bsale para la OC de depuración
-(``_RELATED_DEBUG_OC_NUMBER``, hoy 66080) en ``details.json`` / ``relateddetailid``.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import random
@@ -54,11 +50,6 @@ RELATED_DOCUMENT_TYPES_ALLOWED = frozenset({1, 6, 9})
 RELATED_DETAIL_PAGE_LIMIT = 50
 DETAILS_PAGE_LIMIT = 50
 
-# Depuración temporal: volcar JSON Bsale completo para esta OC (número de documento).
-_RELATED_DEBUG_OC_NUMBER = 66080
-_RELATED_DEBUG_JSON_MAX = 400_000
-
-
 def _utc_day_emission_bounds(d: date) -> tuple[datetime, datetime]:
     """Inicio UTC del día y fin exclusivo (``[start, end)``) para filtrar ``emission_date``."""
     start = datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=timezone.utc)
@@ -73,16 +64,6 @@ def _safe_int(v: Any) -> int | None:
         return int(v)
     except (TypeError, ValueError):
         return None
-
-
-def _json_debug_chunk(obj: Any) -> str:
-    try:
-        s = json.dumps(obj, ensure_ascii=False, default=str)
-    except TypeError:
-        s = repr(obj)
-    if len(s) > _RELATED_DEBUG_JSON_MAX:
-        return s[:_RELATED_DEBUG_JSON_MAX] + f"... [truncado, total {len(s)} chars]"
-    return s
 
 
 def _oc_number_for_document(cur, document_id: int) -> int | None:
@@ -366,8 +347,6 @@ def _reference_items_to_related_triples(
         if not isinstance(it, dict):
             logger.warning("%s references ítem no dict: %r", log_ctx, it)
             continue
-        logger.warning(f"[RELATED DEBUG RAW] item={json.dumps(it)[:1000]}")
-        logger.warning(f"[RELATED DEBUG KEYS] keys={list(it.keys())}")
 
         rid, tid, office_blob, parse_motivo = _parse_related_document_blob(it)
         if parse_motivo is not None or rid is None:
@@ -386,11 +365,7 @@ def _reference_items_to_related_triples(
             )
             continue
         if tid not in RELATED_DOCUMENT_TYPES_ALLOWED:
-            logger.warning(
-                "[RELATED IGNORE] tipo inválido: %s item=%s",
-                tid,
-                json.dumps(it)[:1000],
-            )
+            logger.warning("%s references relación descartada: tipo inválido=%s", log_ctx, tid)
             continue
 
         allow_office, office_motivo = _office_allows_relation(cur, rid, office_blob)
@@ -453,12 +428,6 @@ def _reference_items_to_related_triples(
                 rid,
             )
             continue
-        logger.warning(
-            "[RELATED INSERT TRY] detail_id=%s related_id=%s type=%s",
-            detail_id,
-            rid,
-            tid,
-        )
         out.append((detail_id, rid, tid))
     return out
 
@@ -504,23 +473,8 @@ def _insert_related_triples(
         )
         if ins > 0:
             inserted_new += ins
-            logger.info(
-                "%s INSERT OK (fila nueva) detail_id=%s related_document_id=%s type=%s",
-                log_ctx,
-                detail_id,
-                rid,
-                tid,
-            )
         else:
             conflicts += 1
-            logger.info(
-                "%s INSERT sin fila nueva (ON CONFLICT duplicate) detail_id=%s "
-                "related_document_id=%s type=%s",
-                log_ctx,
-                detail_id,
-                rid,
-                tid,
-            )
 
     logger.info(
         "%s INSERT resumen intentos=%s insertadas=%s conflictos_duplicado=%s",
@@ -605,18 +559,6 @@ def _append_triple_from_ref_entry(
         )
         return False
 
-    logger.warning(
-        "[RELATED FROM REFERENCES] detail_id=%s related_id=%s type=%s",
-        detail_id,
-        related_id,
-        related_type,
-    )
-    logger.warning(
-        "[RELATED INSERT TRY] detail_id=%s related_id=%s type=%s",
-        detail_id,
-        related_id,
-        related_type,
-    )
     out.append((detail_id, related_id, related_type))
     return True
 
@@ -636,8 +578,6 @@ def _documents_json_items_to_triples(
         if not isinstance(it, dict):
             logger.warning("%s[detail %s] ítem no dict: %r", log_ctx, detail_id, it)
             continue
-        logger.warning(f"[RELATED DEBUG RAW] item={json.dumps(it)[:1000]}")
-        logger.warning(f"[RELATED DEBUG KEYS] keys={list(it.keys())}")
 
         added_from_refs = False
         for ref in _references_list_from_relateddetail_item(it):
@@ -669,9 +609,10 @@ def _documents_json_items_to_triples(
             continue
         if tid not in RELATED_DOCUMENT_TYPES_ALLOWED:
             logger.warning(
-                "[RELATED IGNORE] tipo inválido: %s item=%s",
+                "%s[detail %s] relación descartada: tipo inválido=%s",
+                log_ctx,
+                detail_id,
                 tid,
-                json.dumps(it)[:1000],
             )
             continue
 
@@ -709,12 +650,6 @@ def _documents_json_items_to_triples(
             rid,
             tid,
         )
-        logger.warning(
-            "[RELATED INSERT TRY] detail_id=%s related_id=%s type=%s",
-            detail_id,
-            rid,
-            tid,
-        )
         out.append((detail_id, rid, tid))
     return out
 
@@ -724,7 +659,6 @@ def _fetch_detail_ids_from_bsale_details(
     document_id: int,
     *,
     throttle: float,
-    related_debug: bool = False,
     log_ctx: str = "",
 ) -> tuple[list[int], int]:
     """
@@ -745,14 +679,6 @@ def _fetch_detail_ids_from_bsale_details(
             logger.warning("%s details.json document_id=%s offset=%s: %s", log_ctx, document_id, offset, e)
             break
         api_calls += 1
-        if related_debug:
-            logger.info(
-                "%s[DEBUG] details.json document_id=%s offset=%s JSON=%s",
-                log_ctx,
-                document_id,
-                offset,
-                _json_debug_chunk(data),
-            )
         items = data.get("items") or []
         if not isinstance(items, list):
             break
@@ -781,7 +707,6 @@ def _fetch_and_persist_relateddetailid_for_detail(
     throttle: float,
     stats: dict[str, Any] | None,
     log_ctx: str,
-    related_debug: bool,
 ) -> tuple[int, int, int]:
     """
     GET ``/documents.json?relateddetailid=`` paginado; inserta en ``document_related``.
@@ -807,14 +732,6 @@ def _fetch_and_persist_relateddetailid_for_detail(
             logger.warning("%s relateddetailid=%s offset=%s: %s", log_ctx, detail_id, offset, e)
             break
         api_calls += 1
-        if related_debug:
-            logger.info(
-                "%s[DEBUG] relateddetailid=%s offset=%s JSON=%s",
-                log_ctx,
-                detail_id,
-                offset,
-                _json_debug_chunk(data),
-            )
         items = data.get("items") or []
         if not items:
             break
@@ -850,7 +767,6 @@ def _sync_related_by_detail_for_oc_document(
     throttle: float,
     stats: dict[str, Any] | None,
     log_ctx: str,
-    related_debug: bool,
 ) -> tuple[int, int, int, int]:
     """
     ``details.json`` + ``relateddetailid`` por línea.
@@ -861,7 +777,6 @@ def _sync_related_by_detail_for_oc_document(
         client,
         document_id,
         throttle=throttle,
-        related_debug=related_debug,
         log_ctx=log_ctx,
     )
     logger.info("%s details encontrados=%s detail_ids=%s", log_ctx, len(detail_ids), detail_ids)
@@ -893,7 +808,6 @@ def _sync_related_by_detail_for_oc_document(
             throttle=throttle,
             stats=stats,
             log_ctx=log_ctx,
-            related_debug=related_debug,
         )
         items_total += it_tot
         rows_ins += ins
@@ -932,8 +846,6 @@ def _fetch_and_persist_related_for_document(
     """
     oc_number = _oc_number_for_document(cur, document_id)
     log_ctx = _related_log_ctx(oc_number, document_id)
-    related_debug = oc_number is not None and oc_number == _RELATED_DEBUG_OC_NUMBER
-
     detail_ids_bd = _detail_ids_for_document(cur, document_id)
     logger.info(
         "%s document_id=%s número_OC=%s detail_ids_en_BD=%s",
@@ -965,9 +877,6 @@ def _fetch_and_persist_related_for_document(
         items_metric += n_items
         if stats is not None:
             stats["references_items_total"] = int(stats.get("references_items_total") or 0) + n_items
-
-        if related_debug:
-            logger.info("%s[DEBUG] references.json JSON=%s", log_ctx, _json_debug_chunk(data))
 
         detail_list = _detail_ids_for_document(cur, document_id)
         valid = set(detail_list)
@@ -1008,7 +917,6 @@ def _fetch_and_persist_related_for_document(
         throttle=throttle,
         stats=stats,
         log_ctx=log_ctx,
-        related_debug=related_debug,
     )
     api_calls += calls_det
     rows_inserted += ins_det

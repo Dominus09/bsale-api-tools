@@ -1,7 +1,5 @@
-import asyncio
 import logging
 import os
-from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 
@@ -25,6 +23,7 @@ from backend.routers import distribuidora_planning
 from backend.routers import distribuidora_route_picking
 from backend.routers import distribuidora_route_planning
 from backend.routers import distribuidora_sync
+from backend.routers.distribuidora_sync import sync_router
 from backend.routers import distribuidora_trucks
 from backend.routers.app_distribuidora import router as app_distribuidora_router
 from backend.routers import margin_export
@@ -67,67 +66,9 @@ def _cors_allow_origin_regex() -> str | None:
     return r"https://[a-z0-9-]+\.quillotana\.cl$"
 
 
-async def _distribuidora_bsale_sync_background_loop() -> None:
-    """
-    Ejecuta ``sync_bsale_distribuidora`` (sync-orders + sync-sales + related) cada
-    ``DISTRIBUIDORA_BSALE_SYNC_INTERVAL_SEC`` (default 10 min).
-    """
-    from backend.jobs.sync_bsale_distribuidora import sync_bsale_distribuidora
-
-    delay_first = int(os.getenv("DISTRIBUIDORA_BSALE_SYNC_START_DELAY_SEC", "45"))
-    interval = int(os.getenv("DISTRIBUIDORA_BSALE_SYNC_INTERVAL_SEC", str(10 * 60)))
-    if interval < 120:
-        interval = 120
-    await asyncio.sleep(max(0, delay_first))
-    while True:
-        try:
-            sync_bsale_distribuidora()
-        except Exception:
-            logger.exception("sync_bsale_distribuidora (job programado) falló")
-        await asyncio.sleep(interval)
-
-
-async def _rutero_sync_background_loop() -> None:
-    """Ejecuta sync_rutero cada RUTERO_SYNC_INTERVAL_SEC (default 6 h)."""
-    from backend.jobs.sync_rutero import sync_rutero
-
-    delay_first = int(os.getenv("RUTERO_SYNC_START_DELAY_SEC", "15"))
-    interval = int(os.getenv("RUTERO_SYNC_INTERVAL_SEC", str(6 * 3600)))
-    if interval < 60:
-        interval = 60
-    await asyncio.sleep(max(0, delay_first))
-    while True:
-        try:
-            sync_rutero()
-        except Exception:
-            logger.exception("sync_rutero (job programado) falló")
-        await asyncio.sleep(interval)
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    tasks: list[asyncio.Task] = []
-    rutero_disabled = os.getenv("RUTERO_SYNC_DISABLED", "").strip().lower() in ("1", "true", "yes")
-    if not rutero_disabled:
-        tasks.append(asyncio.create_task(_rutero_sync_background_loop()))
-    dist_disabled = os.getenv("DISTRIBUIDORA_BSALE_SYNC_DISABLED", "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-    )
-    if not dist_disabled:
-        tasks.append(asyncio.create_task(_distribuidora_bsale_sync_background_loop()))
-    yield
-    for task in tasks:
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
-
-
 app = FastAPI(
     title="Quillotana Analytics API",
     version="1.0",
-    lifespan=lifespan,
 )
 # CORS: middleware ASGI propio (preflight + ACAO en cada respuesta) además de ser tolerante
 # con proxies; el panel usa Bearer, sin cookies → no hace falta Access-Control-Allow-Credentials.
@@ -168,6 +109,7 @@ app.include_router(margin_export.router)
 # --- Distribuidora ---
 app.include_router(distribuidora.router)
 app.include_router(distribuidora_sync.router)
+app.include_router(sync_router)
 app.include_router(distribuidora_orders.router)
 app.include_router(distribuidora_planificacion.router)
 app.include_router(distribuidora_planning.router)

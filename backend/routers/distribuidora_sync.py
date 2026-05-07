@@ -17,10 +17,19 @@ from backend.services.distribuidora.sync_service import (
     bsale_token_distribuidora_configured,
     run_incremental_distribuidora_background,
     run_resync_distribuidora_background,
+    sync_bsale_distribuidora_sales_incremental,
 )
 
 router = APIRouter(prefix="/erp", tags=["ERP Distribuidora"])
+sync_router = APIRouter(prefix="/sync", tags=["Manual Sync"])
 logger = logging.getLogger(__name__)
+
+
+def _run_sales_sync_background() -> None:
+    try:
+        sync_bsale_distribuidora_sales_incremental(strict_token=True)
+    except Exception:
+        logger.exception("sync sales manual falló")
 
 
 class ResyncRequest(BaseModel):
@@ -114,6 +123,12 @@ def post_sync_distribuidora(background_tasks: BackgroundTasks):
     return {"status": "incremental encolado"}
 
 
+@sync_router.post("/documents")
+def post_sync_documents(background_tasks: BackgroundTasks):
+    """Dispara sync manual de documentos (órdenes + ventas + related)."""
+    return post_sync_distribuidora(background_tasks)
+
+
 @router.post(
     "/resync-distribuidora",
     response_model=ResyncDistribuidoraResponse,
@@ -203,6 +218,24 @@ def post_sync_distribuidora_related(background_tasks: BackgroundTasks):
         )
     background_tasks.add_task(run_sync_distribuidora_related_background)
     return {"status": "related encolado"}
+
+
+@sync_router.post("/sales")
+def post_sync_sales(background_tasks: BackgroundTasks):
+    """Dispara sync manual enfocado en ventas."""
+    if not bsale_token_distribuidora_configured():
+        raise HTTPException(
+            status_code=400,
+            detail="Defina BSALE_TOKEN o BSALE_TOKEN_SPA para ejecutar el sync.",
+        )
+    background_tasks.add_task(_run_sales_sync_background)
+    return {"status": "sales encolado"}
+
+
+@sync_router.post("/details")
+def post_sync_details(background_tasks: BackgroundTasks):
+    """Dispara sync manual de relaciones/detalles documentales."""
+    return post_sync_distribuidora_related(background_tasks)
 
 
 @router.get("/sync-distribuidora/status")

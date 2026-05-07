@@ -29,7 +29,7 @@ from backend.db import get_connection
 from backend.services.distribuidora.bsale_client import BsaleClient
 from backend.services.distribuidora.sync_related_service import OFFICE_ID
 
-BSALE_TOKEN = os.getenv("BSALE_TOKEN") or os.getenv("3d46d0ac6f42455660f2504d27399d5da3550e25")
+BSALE_TOKEN = os.getenv("BSALE_TOKEN")
 
 if not BSALE_TOKEN:
     raise Exception("Falta BSALE_TOKEN en variables de entorno")

@@ -382,9 +382,6 @@ def _append_items_from_bsale_response(
             _notify_progress(stats)
             continue
         if row is None:
-            did = d.get("id")
-            if did is not None:
-                logger.info("document skipped %s", did)
             continue
         row["_bsale_document"] = d
         pending.append(row)
@@ -405,10 +402,9 @@ def _process_one_pending_document_row(
     stats: dict[str, Any],
 ) -> None:
     doc_log_id = _document_log_id_from_row(row)
-    logger.info("processing document %s", doc_log_id)
     try:
         try:
-            _, row_was_existing = upsert_documents(cur, [row], stats)
+            upsert_documents(cur, [row], stats)
         except Exception as e:
             stats["document_upsert_failures"] = int(stats.get("document_upsert_failures") or 0) + 1
             stats["document_errors"] = int(stats.get("document_errors") or 0) + 1
@@ -437,10 +433,6 @@ def _process_one_pending_document_row(
         )
         conn.commit()
         stats["documents_processed"] += 1
-        if int(row_was_existing or 0) > 0:
-            logger.info("document updated %s", doc_log_id)
-        else:
-            logger.info("document inserted %s", doc_log_id)
         _notify_progress(stats)
     except Exception as e:
         stats["document_errors"] = int(stats.get("document_errors") or 0) + 1
@@ -504,20 +496,10 @@ def _fetch_documents_single_day_resync(
     """Un día UTC completo: paginación con offset reiniciado y pausas entre llamadas a Bsale."""
     pl = page_limit if page_limit is not None else _resync_page_limit()
     desde_ts, hasta_ts = _utc_day_timestamp_bounds(day)
-    day_start = datetime(day.year, day.month, day.day, 0, 0, 0, tzinfo=timezone.utc)
-    day_end = datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=timezone.utc)
-    logger.info(
-        "➡️ Rango enviado a Bsale (UTC): %s → %s | emissiondaterange epoch [%s,%s]",
-        day_start.isoformat(),
-        day_end.isoformat(),
-        desde_ts,
-        hasta_ts,
-    )
-    logger.info("📅 Procesando día: %s", day.isoformat())
+    logger.info("resync día=%s", day.isoformat())
     pending: list[dict[str, Any]] = []
     offset = 0
     while True:
-        logger.info("📄 Offset: %s (día %s)", offset, day.isoformat())
         params = {
             "limit": pl,
             "offset": offset,
@@ -525,11 +507,6 @@ def _fetch_documents_single_day_resync(
         }
         data = _documents_get_resync(client, params)
         items = data.get("items") or []
-        logger.info(
-            "📊 Docs en respuesta API (officeId=%s + validación backend): %s",
-            OFFICE_ID,
-            len(items),
-        )
         if not items:
             break
         _append_items_from_bsale_response(items, pending, stats)
@@ -537,7 +514,7 @@ def _fetch_documents_single_day_resync(
         offset += len(items)
         time.sleep(random.uniform(0.2, 0.5))
     _flush_pending_tail(client, cur, conn, pending, stats)
-    logger.info("✅ Día completado: %s", day.isoformat())
+    logger.info("resync día completado=%s", day.isoformat())
 
 
 def _seller_tuples_from_bsale_document_json(
@@ -568,18 +545,6 @@ def _seller_tuples_from_bsale_document_json(
     return []
 
 
-def _sellers_raw_for_log(value: Any, max_len: int = 4000) -> str:
-    if value is None:
-        return "null"
-    try:
-        s = json.dumps(value, ensure_ascii=False, default=str)
-    except (TypeError, ValueError):
-        s = repr(value)
-    if len(s) > max_len:
-        return f"{s[:max_len]}...(truncated)"
-    return s
-
-
 def _sync_document_sellers(
     client: BsaleClient,
     cur,
@@ -592,13 +557,6 @@ def _sync_document_sellers(
 
     Si ``sellers`` viene vacío, solo se eliminan filas previas (ningún INSERT).
     """
-    sellers_raw = raw_document.get("sellers") if isinstance(raw_document, dict) else None
-    logger.info(
-        "[document_sellers] pre document_id=%s sellers_raw=%s",
-        document_id,
-        _sellers_raw_for_log(sellers_raw),
-    )
-
     tuples: list[tuple[int | None, str | None]] = []
     if isinstance(raw_document, dict):
         tuples = _seller_tuples_from_bsale_document_json(client, raw_document)
@@ -608,25 +566,6 @@ def _sync_document_sellers(
             tuples = seller_tuples_from_sellers_api_response(data)
         except Exception as e:
             logger.warning("sellers.json document_id=%s: %s", document_id, e)
-
-    logger.info(
-        "[document_sellers] parsed document_id=%s sellers_count=%s",
-        document_id,
-        len(tuples),
-    )
-    if not tuples:
-        logger.info(
-            "No sellers found for document_id=%s",
-            document_id,
-        )
-    else:
-        for sid, name in tuples:
-            logger.info(
-                "[document_sellers] insert_row document_id=%s seller_id=%s seller_name=%s",
-                document_id,
-                sid,
-                name,
-            )
 
     try:
         n = replace_document_sellers(cur, document_id, tuples)
