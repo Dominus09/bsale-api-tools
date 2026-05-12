@@ -2,17 +2,22 @@
 """
 Auditoría READ-ONLY de ``distribuidora.document_related``.
 
-Ejecuta consultas de integridad, cuenta anomalías y exporta métricas a JSON y Excel.
-No ejecuta DELETE, TRUNCATE ni INSERT.
-
-Uso (desde la raíz del repo, con variables PG_* o .env y dependencias instaladas, p. ej. ``pandas`` / ``openpyxl``):
+Ejecuta consultas de integridad, cuenta anomalías y exporta métricas a JSON y Excel
+(opcionales). Siempre imprime un resumen estructurado por stdout (adecuado para Coolify /
+contenedores sin volumen en ``exports/``).
 
     python backend/scripts/audit_document_related.py
+    python backend/scripts/audit_document_related.py --stdout-only
 
-Salidas por defecto:
+Salidas opcionales (por defecto, si no ``--stdout-only``):
 
     exports/document_related_audit.json
     exports/document_related_audit.xlsx
+
+Si Excel o JSON fallan al escribir, se emite un aviso y el script continúa (el resumen por
+consola ya se mostró).
+
+No ejecuta DELETE, TRUNCATE ni INSERT.
 
 Tipos relacionados considerados válidos (alineado con ``sync_related_service``): 1, 6, 9.
 """
@@ -21,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,7 +43,10 @@ from dotenv import load_dotenv
 
 from backend.db import get_connection
 
+logger = logging.getLogger(__name__)
+
 RELATED_TYPES_ALLOWED = frozenset({1, 6, 9})
+SAMPLE_TOP = 10
 OC_TYPE = 33
 
 RECONSTRUCTION_PLAN_LINES = [
@@ -301,8 +310,67 @@ def _write_excel(path: Path, audit: dict[str, Any], metrics: dict[str, Any]) -> 
         )
 
 
+def _print_audit_summary(audit: dict[str, Any], metrics: dict[str, Any], *, out: Any = None) -> None:
+    """Resumen legible en logs (Coolify / stdout)."""
+    if out is None:
+        out = sys.stdout
+
+    def p(msg: str = "") -> None:
+        print(msg, file=out)
+
+    m = metrics
+    p("=" * 50)
+    p("DOCUMENT RELATED AUDIT SUMMARY")
+    p("=" * 50)
+    p()
+    p(f"total_rows:                      {m['total_rows']}")
+    p(f"count_invalid_parent_type:       {m['count_invalid_parent_type']}")
+    p(f"count_invalid_related_types:     {m['count_invalid_related_types']}")
+    p(f"count_orphan_related_documents: {m['count_orphan_related_documents']}")
+    p(f"count_cross_office_relations:    {m['count_cross_office_relations']}")
+    p(f"count_type_mismatches:           {m['count_type_mismatches']}")
+    p(f"count_orphan_detail_id:          {m['count_orphan_detail_id']}")
+    p(f"count_duplicate_logical_pairs:   {m['count_duplicate_logical_pairs']}")
+    p()
+    p("related_type_distribution:")
+    dist = m.get("related_type_distribution") or []
+    if not dist:
+        p("  (vacío)")
+    else:
+        for row in dist:
+            tid = row.get("related_document_type")
+            n = row.get("n")
+            p(f"  type={tid!r}  n={n}")
+    p()
+
+    def _sample_block(title: str, key: str) -> None:
+        rows: list[dict[str, Any]] = audit.get(key) or []
+        n = len(rows)
+        take = min(SAMPLE_TOP, n)
+        p(f"TOP {SAMPLE_TOP} ejemplos — {title} (total={n}, mostrando={take}):")
+        if take == 0:
+            p("  (sin filas)")
+            p()
+            return
+        for i, row in enumerate(rows[:SAMPLE_TOP], start=1):
+            line = json.dumps(row, ensure_ascii=False, default=str)
+            p(f"  [{i}] {line}")
+        p()
+
+    _sample_block("invalid_parent_type", "invalid_parent_type")
+    _sample_block("orphan_detail_id (detail inexistente)", "orphan_detail_rows")
+    _sample_block("orphan_related_documents", "orphan_related_documents")
+    _sample_block("type_mismatches", "type_mismatches")
+    p("=" * 50)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Auditoría read-only de document_related.")
+    parser.add_argument(
+        "--stdout-only",
+        action="store_true",
+        help="Solo resumen y muestras por consola; no escribe JSON ni Excel.",
+    )
     parser.add_argument(
         "--json-out",
         type=Path,
@@ -322,6 +390,8 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+
     load_dotenv(REPO_ROOT / ".env")
     load_dotenv()
 
@@ -335,21 +405,30 @@ def main() -> int:
     metrics = audit["metrics"]
     generated_at = datetime.now(timezone.utc).isoformat()
 
-    json_payload: dict[str, Any] = {
-        "generated_at_utc": generated_at,
-        "metrics": metrics,
-        "reconstruction_plan_notes": RECONSTRUCTION_PLAN_LINES,
-    }
+    _print_audit_summary(audit, metrics)
 
-    args.json_out.parent.mkdir(parents=True, exist_ok=True)
-    with open(args.json_out, "w", encoding="utf-8") as f:
-        json.dump(json_payload, f, indent=2, ensure_ascii=False, default=str)
+    if args.stdout_only:
+        print("Modo --stdout-only: no se escriben JSON ni Excel.", file=sys.stderr)
 
-    _write_excel(args.xlsx_out, audit, metrics)
+    if not args.stdout_only:
+        json_payload: dict[str, Any] = {
+            "generated_at_utc": generated_at,
+            "metrics": metrics,
+            "reconstruction_plan_notes": RECONSTRUCTION_PLAN_LINES,
+        }
+        try:
+            args.json_out.parent.mkdir(parents=True, exist_ok=True)
+            with open(args.json_out, "w", encoding="utf-8") as f:
+                json.dump(json_payload, f, indent=2, ensure_ascii=False, default=str)
+            print(f"JSON escrito: {args.json_out.resolve()}")
+        except Exception as e:
+            logger.warning("No se pudo escribir JSON (%s): %s", args.json_out, e)
 
-    print(f"JSON:  {args.json_out.resolve()}")
-    print(f"Excel: {args.xlsx_out.resolve()}")
-    print("Métricas:", json.dumps(metrics, indent=2, ensure_ascii=False, default=str))
+        try:
+            _write_excel(args.xlsx_out, audit, metrics)
+            print(f"Excel escrito: {args.xlsx_out.resolve()}")
+        except Exception as e:
+            logger.warning("No se pudo escribir Excel (%s): %s", args.xlsx_out, e)
 
     if not args.no_plan_print:
         print()
