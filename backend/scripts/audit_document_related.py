@@ -86,6 +86,42 @@ def _rows(cur) -> list[dict[str, Any]]:
     return [dict(zip(cols, row)) for row in cur.fetchall()]
 
 
+def _make_excel_safe(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    openpyxl no admite datetimes con timezone. Convierte columnas datetime
+    con tz a naive (UTC) antes de ``to_excel``. Columnas no datetime: sin cambios.
+    """
+    if df.empty:
+        return df
+    out = df.copy()
+    for col in out.columns:
+        s = out[col]
+        if pd.api.types.is_datetime64_any_dtype(s):
+            tz = getattr(s.dtype, "tz", None)
+            if tz is not None:
+                # Serie tz-aware: primero UTC, luego naive (``tz_localize(None)`` solo no aplica en aware).
+                out[col] = s.dt.tz_convert("UTC").dt.tz_localize(None)
+            continue
+        if s.dtype != object:
+            continue
+        sample = s.dropna().head(20)
+        needs_strip = any(
+            isinstance(v, datetime) and v.tzinfo is not None for v in sample
+        )
+        if not needs_strip:
+            continue
+
+        def _cell_naive_utc(v: Any) -> Any:
+            if v is None or (isinstance(v, float) and pd.isna(v)):
+                return v
+            if isinstance(v, datetime) and v.tzinfo is not None:
+                return v.astimezone(timezone.utc).replace(tzinfo=None)
+            return v
+
+        out[col] = s.map(_cell_naive_utc)
+    return out
+
+
 def _scalar(cur, sql: str, params: tuple | None = None) -> Any:
     cur.execute(sql, params or ())
     row = cur.fetchone()
@@ -238,7 +274,7 @@ def _summary_dataframe(metrics: dict[str, Any]) -> pd.DataFrame:
 
 def _write_excel(path: Path, audit: dict[str, Any], metrics: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    summary_df = _summary_dataframe(metrics)
+    summary_df = _make_excel_safe(_summary_dataframe(metrics))
 
     def _df(key: str) -> pd.DataFrame:
         data = audit.get(key) or []
@@ -248,11 +284,21 @@ def _write_excel(path: Path, audit: dict[str, Any], metrics: dict[str, Any]) -> 
 
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         summary_df.to_excel(writer, sheet_name="summary", index=False)
-        _df("invalid_parent_type").to_excel(writer, sheet_name="invalid_parent_type", index=False)
-        _df("invalid_related_types").to_excel(writer, sheet_name="invalid_related_types", index=False)
-        _df("orphan_related_documents").to_excel(writer, sheet_name="orphan_related_documents", index=False)
-        _df("cross_office_relations").to_excel(writer, sheet_name="cross_office_relations", index=False)
-        _df("type_mismatches").to_excel(writer, sheet_name="type_mismatches", index=False)
+        _make_excel_safe(_df("invalid_parent_type")).to_excel(
+            writer, sheet_name="invalid_parent_type", index=False
+        )
+        _make_excel_safe(_df("invalid_related_types")).to_excel(
+            writer, sheet_name="invalid_related_types", index=False
+        )
+        _make_excel_safe(_df("orphan_related_documents")).to_excel(
+            writer, sheet_name="orphan_related_documents", index=False
+        )
+        _make_excel_safe(_df("cross_office_relations")).to_excel(
+            writer, sheet_name="cross_office_relations", index=False
+        )
+        _make_excel_safe(_df("type_mismatches")).to_excel(
+            writer, sheet_name="type_mismatches", index=False
+        )
 
 
 def main() -> int:
