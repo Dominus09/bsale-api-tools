@@ -1,0 +1,87 @@
+{
+  "address": "Baquedano 201",
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3698634/attributes.json"
+  },
+  "cancellationDate": null,
+  "cancellationStatus": 0,
+  "city": "Ancud",
+  "client": {
+    "href": "https://api.bsale.io/v1/clients/844.json",
+    "id": "844"
+  },
+  "coin": {
+    "href": "https://api.bsale.io/v1/coins/1.json",
+    "id": "1"
+  },
+  "commercialState": 0,
+  "commissionNetAmount": 0,
+  "commissionRate": 0,
+  "commissionTaxAmount": 0,
+  "commissionTotalAmount": 0,
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3698634/details.json"
+  },
+  "document_taxes": {
+    "href": "https://api.bsale.io/v1/documents/3698634/document_taxes.json"
+  },
+  "document_type": {
+    "href": "https://api.bsale.io/v1/document_types/9.json",
+    "id": "9"
+  },
+  "emissionDate": 1775001600,
+  "exemptAmount": 0,
+  "expirationDate": 1775001600,
+  "exportExemptAmount": 0,
+  "exportNetAmount": 0,
+  "exportTaxAmount": 0,
+  "exportTotalAmount": 0,
+  "generationDate": 1775169192,
+  "href": "https://api.bsale.io/v1/documents/3698634.json",
+  "id": 3698634,
+  "informedSii": 0,
+  "municipality": "Ancud",
+  "netAmount": 7553,
+  "notExemptAmount": 7553,
+  "number": 17591,
+  "office": {
+    "href": "https://api.bsale.io/v1/offices/1.json",
+    "id": "1"
+  },
+  "payments": {
+    "href": "https://api.bsale.io/v1/documents/3698634/payments.json"
+  },
+  "percentageTaxWithheld": 0.0,
+  "priceList": {
+    "href": "https://api.bsale.io/v1/price_lists/14.json",
+    "id": "14"
+  },
+  "purchaseTaxAmount": 0,
+  "purchaseTotalAmount": 0,
+  "rcofDate": 1775088000,
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3698634/references.json"
+  },
+  "responseMsgSii": "Proceso Finalizado Correctamente!",
+  "salesId": null,
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3698634/sellers.json"
+  },
+  "serialNumber": null,
+  "state": 0,
+  "taxAmount": 1435,
+  "ted": "<TED version=\"1.0\"><DD><RE>76885233-2</RE><TD>61</TD><F>17591</F><FE>2026-04-01</FE><RR>11592959-3</RR><RSR>VICTOR AMERICO CARDENAS</RSR><MNT>8988</MNT><IT1>PEPSI ZERO DESECHABLE 2 0 LT SEC 6 </IT1><CAF version=\"1.0\"><DA><RE>76885233-2</RE><RS>LA QUILLOTANA SPA</RS><TD>61</TD><RNG><D>17045</D><H>18142</H></RNG><FA>2025-12-26</FA><RSAPK><M>37IokeaTcASKLOmm8bON54pNj9C7ZKolkqTdZpibge1nU4nw23t3q2WXKsXpfa/LUPn2PD73S4jBOSJ02KS4pw==</M><E>Aw==</E></RSAPK><IDK>300</IDK></DA><FRMA algoritmo=\"SHA1withRSA\">X4kmUMyA/EgAU5N7FeH7+MYnRicVtJtMVFBW2o2WPkgmFK+xA0OOYWBQXbOmg22LQloMT+w1HNuV34DJ27uVPA==</FRMA></CAF><TSTED>2026-04-02T19:33:14</TSTED></DD><FRMT algoritmo=\"SHA1withRSA\">vM7pbs7oKSJX4K44jB361rQE3c0baPFkFXW5WPZfXePz+ONjoYP1vrSQWNOamc3t7q6v0jE8cE/WOkWukZJyHg==</FRMT></TED>",
+  "token": "c5c215f6bc23",
+  "totalAmount": 8988,
+  "trackingNumber": "",
+  "urlPdf": "https://app2.bsale.cl/view/21884/c5c215f6bc23.pdf?sfd=99",
+  "urlPdfOriginal": "https://app2.bsale.cl/view/21884/c5c215f6bc23.pdf",
+  "urlPublicView": "https://app2.bsale.cl/view/21884/c5c215f6bc23?sfd=99",
+  "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/c5c215f6bc23",
+  "urlTimbre": "https://s3.amazonaws.com/bsale/21884/timbres/c5c215f6bc23.png",
+  "urlXml": "https://api.bsale.cl/v1/21884/files/c5c215f6bc23.xml",
+  "user": {
+    "href": "https://api.bsale.io/v1/users/81.json",
+    "id": "81"
+  }
+}

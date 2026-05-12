@@ -1,0 +1,17 @@
+{
+  "body": {
+    "count": 1,
+    "href": "https://api.bsale.io/v1/documents/3696760/payments.json",
+    "items": [
+      {
+        "amount": 114246.0,
+        "href": "https://api.bsale.io/v1/payment_types/8.json",
+        "id": 8,
+        "name": "TRANSFERENCIA BANCARIA"
+      }
+    ],
+    "limit": 25,
+    "offset": 0
+  },
+  "http_status": 200
+}

@@ -1,0 +1,42 @@
+{
+  "document_id": 3698622,
+  "pages": [
+    {
+      "body": {
+        "count": 1,
+        "href": "https://api.bsale.io/v1/documents/3698622/details.json",
+        "items": [
+          {
+            "discountId": 0,
+            "discountPercentage": 2.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3698622/details/8657732.json",
+            "id": 8657732,
+            "lineNumber": 0,
+            "netAmount": 7577,
+            "netDiscount": 154,
+            "netUnitValue": 758,
+            "netUnitValueRaw": 757.6470588235294,
+            "note": "",
+            "quantity": 10.0,
+            "relatedDetailId": 8652975,
+            "taxAmount": 1440,
+            "totalAmount": 9017,
+            "totalDiscount": 184,
+            "totalUnitValue": 902,
+            "variant": {
+              "code": "7801505000280",
+              "description": "1 KG (SEC 10)",
+              "href": "https://api.bsale.io/v1/variants/8814.json",
+              "id": 8814
+            }
+          }
+        ],
+        "limit": 50,
+        "offset": 0
+      },
+      "http_status": 200,
+      "offset": 0
+    }
+  ]
+}

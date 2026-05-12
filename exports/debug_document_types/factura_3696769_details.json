@@ -1,0 +1,67 @@
+{
+  "document_id": 3696769,
+  "pages": [
+    {
+      "body": {
+        "count": 2,
+        "href": "https://api.bsale.io/v1/documents/3696769/details.json",
+        "items": [
+          {
+            "discountId": 0,
+            "discountPercentage": 0.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3696769/details/8652982.json",
+            "id": 8652982,
+            "lineNumber": 0,
+            "netAmount": 15412,
+            "netDiscount": 0,
+            "netUnitValue": 15412,
+            "netUnitValueRaw": 15412.213740458,
+            "note": "",
+            "quantity": 1.0,
+            "relatedDetailId": 8652014,
+            "taxAmount": 4777,
+            "totalAmount": 20189,
+            "totalDiscount": 0,
+            "totalUnitValue": 20189,
+            "variant": {
+              "code": "70932004860409",
+              "description": "T/ USO PAPEL 25 KG (SEC 1)",
+              "href": "https://api.bsale.io/v1/variants/28216.json",
+              "id": 28216
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 0.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3696769/details/8652983.json",
+            "id": 8652983,
+            "lineNumber": 0,
+            "netAmount": 15756,
+            "netDiscount": 0,
+            "netUnitValue": 1050,
+            "netUnitValueRaw": 1050.42016806723,
+            "note": "",
+            "quantity": 15.0,
+            "relatedDetailId": 8652015,
+            "taxAmount": 2994,
+            "totalAmount": 18750,
+            "totalDiscount": 0,
+            "totalUnitValue": 1250,
+            "variant": {
+              "code": "7790326000312",
+              "description": "250 GR (SEC 24)",
+              "href": "https://api.bsale.io/v1/variants/9084.json",
+              "id": 9084
+            }
+          }
+        ],
+        "limit": 50,
+        "offset": 0
+      },
+      "http_status": 200,
+      "offset": 0
+    }
+  ]
+}

@@ -1,0 +1,86 @@
+{
+  "address": "Gabriela mistral s/n",
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3696463/attributes.json"
+  },
+  "cancellationDate": null,
+  "cancellationStatus": 0,
+  "city": "Melinka",
+  "client": {
+    "href": "https://api.bsale.io/v1/clients/3011.json",
+    "id": "3011"
+  },
+  "coin": {
+    "href": "https://api.bsale.io/v1/coins/1.json",
+    "id": "1"
+  },
+  "commercialState": 0,
+  "commissionNetAmount": 0,
+  "commissionRate": 0,
+  "commissionTaxAmount": 0,
+  "commissionTotalAmount": 0,
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3696463/details.json"
+  },
+  "document_taxes": {
+    "href": "https://api.bsale.io/v1/documents/3696463/document_taxes.json"
+  },
+  "document_type": {
+    "href": "https://api.bsale.io/v1/document_types/33.json",
+    "id": "33"
+  },
+  "emissionDate": 1775001600,
+  "exemptAmount": 0,
+  "expirationDate": 1775001600,
+  "exportExemptAmount": 0,
+  "exportNetAmount": 0,
+  "exportTaxAmount": 0,
+  "exportTotalAmount": 0,
+  "generationDate": 1775042403,
+  "href": "https://api.bsale.io/v1/documents/3696463.json",
+  "id": 3696463,
+  "informedSii": 2,
+  "municipality": "Melinka",
+  "netAmount": 144241,
+  "notExemptAmount": 144241,
+  "number": 65638,
+  "office": {
+    "href": "https://api.bsale.io/v1/offices/1.json",
+    "id": "1"
+  },
+  "payments": {
+    "href": "https://api.bsale.io/v1/documents/3696463/payments.json"
+  },
+  "percentageTaxWithheld": 0.0,
+  "priceList": {
+    "href": "https://api.bsale.io/v1/price_lists/16.json",
+    "id": "16"
+  },
+  "purchaseTaxAmount": 0,
+  "purchaseTotalAmount": 0,
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3696463/references.json"
+  },
+  "responseMsgSii": null,
+  "salesId": null,
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3696463/sellers.json"
+  },
+  "serialNumber": null,
+  "state": 0,
+  "taxAmount": 56975,
+  "ted": null,
+  "token": "40ff69a39ed8",
+  "totalAmount": 201216,
+  "trackingNumber": "",
+  "urlPdf": "https://app2.bsale.cl/view/21884/40ff69a39ed8.pdf?sfd=99",
+  "urlPdfOriginal": "https://app2.bsale.cl/view/21884/40ff69a39ed8.pdf",
+  "urlPublicView": "https://app2.bsale.cl/view/21884/40ff69a39ed8?sfd=99",
+  "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/40ff69a39ed8",
+  "urlTimbre": null,
+  "urlXml": "https://api.bsale.cl/v1/21884/files/40ff69a39ed8.xml",
+  "user": {
+    "href": "https://api.bsale.io/v1/users/80.json",
+    "id": "80"
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "address": "Jorgue alexandri #474",
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3696769/attributes.json"
+  },
+  "cancellationDate": null,
+  "cancellationStatus": 0,
+  "city": "Castro",
+  "client": {
+    "href": "https://api.bsale.io/v1/clients/3613.json",
+    "id": "3613"
+  },
+  "coin": {
+    "href": "https://api.bsale.io/v1/coins/1.json",
+    "id": "1"
+  },
+  "commercialState": 0,
+  "commissionNetAmount": 0,
+  "commissionRate": 0,
+  "commissionTaxAmount": 0,
+  "commissionTotalAmount": 0,
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3696769/details.json"
+  },
+  "document_taxes": {
+    "href": "https://api.bsale.io/v1/documents/3696769/document_taxes.json"
+  },
+  "document_type": {
+    "href": "https://api.bsale.io/v1/document_types/6.json",
+    "id": "6"
+  },
+  "emissionDate": 1775001600,
+  "exemptAmount": 0,
+  "expirationDate": 1775001600,
+  "exportExemptAmount": 0,
+  "exportNetAmount": 0,
+  "exportTaxAmount": 0,
+  "exportTotalAmount": 0,
+  "generationDate": 1775067117,
+  "href": "https://api.bsale.io/v1/documents/3696769.json",
+  "id": 3696769,
+  "informedSii": 0,
+  "municipality": "Castro",
+  "netAmount": 31168,
+  "notExemptAmount": 31168,
+  "number": 48483,
+  "office": {
+    "href": "https://api.bsale.io/v1/offices/1.json",
+    "id": "1"
+  },
+  "payments": {
+    "href": "https://api.bsale.io/v1/documents/3696769/payments.json"
+  },
+  "percentageTaxWithheld": 0.0,
+  "priceList": {
+    "href": "https://api.bsale.io/v1/price_lists/13.json",
+    "id": "13"
+  },
+  "purchaseTaxAmount": 0,
+  "purchaseTotalAmount": 0,
+  "rcofDate": 1775001600,
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3696769/references.json"
+  },
+  "responseMsgSii": "Proceso Finalizado Correctamente!",
+  "salesId": null,
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3696769/sellers.json"
+  },
+  "serialNumber": null,
+  "state": 0,
+  "taxAmount": 7771,
+  "ted": "<TED version=\"1.0\"><DD><RE>76885233-2</RE><TD>33</TD><F>48483</F><FE>2026-04-01</FE><RR>9425891-K</RR><RSR>CARMEN GONZALEZ VALLE</RSR><MNT>38939</MNT><IT1>HARINA MARIPOSA T USO PAPEL 25 KG SEC 1</IT1><CAF version=\"1.0\"><DA><RE>76885233-2</RE><RS>LA QUILLOTANA SPA</RS><TD>33</TD><RNG><D>46949</D><H>49514</H></RNG><FA>2025-12-07</FA><RSAPK><M>oKfWprzg372Xxff/aATP9KRvJM2uHsx/LfUfE9NYHWiLWhgrt4CB/Zlyl2qBkWRdrUoil5y9NnMLvWUNPoW1zQ==</M><E>Aw==</E></RSAPK><IDK>300</IDK></DA><FRMA algoritmo=\"SHA1withRSA\">OJ66iUG124lJrEqGCONMbESOFgj3d9T1UnL5w9BtMsh9ufsWS6Xx7qlTSrJu1dBNT1rOjg9oxnGDk51nM7uB0Q==</FRMA></CAF><TSTED>2026-04-01T15:11:57</TSTED></DD><FRMT algoritmo=\"SHA1withRSA\">F7oEd0Rc13ZjQ1oJfWwR1O2iIM6t/E/ibCxC0rRpv/dddc+sMThLwOuoiWysRQpprxZotqupLykOx1dM/p8Hpw==</FRMT></TED>",
+  "token": "5c7e5bd6a137",
+  "totalAmount": 38939,
+  "trackingNumber": "",
+  "urlPdf": "https://app2.bsale.cl/view/21884/5c7e5bd6a137.pdf?sfd=99",
+  "urlPdfOriginal": "https://app2.bsale.cl/view/21884/5c7e5bd6a137.pdf",
+  "urlPublicView": "https://app2.bsale.cl/view/21884/5c7e5bd6a137?sfd=99",
+  "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/5c7e5bd6a137",
+  "urlTimbre": "https://s3.amazonaws.com/bsale/21884/timbres/5c7e5bd6a137.png",
+  "urlXml": "https://api.bsale.cl/v1/21884/files/5c7e5bd6a137.xml",
+  "user": {
+    "href": "https://api.bsale.io/v1/users/81.json",
+    "id": "81"
+  }
+}

@@ -1,0 +1,142 @@
+{
+  "document_id": 3697214,
+  "pages": [
+    {
+      "body": {
+        "count": 5,
+        "href": "https://api.bsale.io/v1/documents/3697214/details.json",
+        "items": [
+          {
+            "discountId": 0,
+            "discountPercentage": 0.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3697214/details/8654059.json",
+            "id": 8654059,
+            "lineNumber": 0,
+            "netAmount": 46237,
+            "netDiscount": 0,
+            "netUnitValue": 15412,
+            "netUnitValueRaw": 15412.213740458,
+            "note": "",
+            "quantity": 3.0,
+            "relatedDetailId": 8652118,
+            "taxAmount": 14333,
+            "totalAmount": 60570,
+            "totalDiscount": 0,
+            "totalUnitValue": 20190,
+            "variant": {
+              "code": "70932004860409",
+              "description": "T/ USO PAPEL 25 KG (SEC 1)",
+              "href": "https://api.bsale.io/v1/variants/28216.json",
+              "id": 28216
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 0.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3697214/details/8654060.json",
+            "id": 8654060,
+            "lineNumber": 0,
+            "netAmount": 16639,
+            "netDiscount": 0,
+            "netUnitValue": 832,
+            "netUnitValueRaw": 831.932773109244,
+            "note": "",
+            "quantity": 20.0,
+            "relatedDetailId": 0,
+            "taxAmount": 3161,
+            "totalAmount": 19800,
+            "totalDiscount": 0,
+            "totalUnitValue": 990,
+            "variant": {
+              "code": "74681739849500",
+              "description": "GRADO 2 LARGO 1 KG (SEC 10)",
+              "href": "https://api.bsale.io/v1/variants/29799.json",
+              "id": 29799
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 0.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3697214/details/8654061.json",
+            "id": 8654061,
+            "lineNumber": 0,
+            "netAmount": 13581,
+            "netDiscount": 0,
+            "netUnitValue": 566,
+            "netUnitValueRaw": 565.891472868217,
+            "note": "",
+            "quantity": 24.0,
+            "relatedDetailId": 0,
+            "taxAmount": 3939,
+            "totalAmount": 17520,
+            "totalDiscount": 0,
+            "totalUnitValue": 730,
+            "variant": {
+              "code": "1484758689262",
+              "description": "CERO RADLER LATA 350 CC (SEC 24)",
+              "href": "https://api.bsale.io/v1/variants/12871.json",
+              "id": 12871
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 0.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3697214/details/8654062.json",
+            "id": 8654062,
+            "lineNumber": 0,
+            "netAmount": 13581,
+            "netDiscount": 0,
+            "netUnitValue": 566,
+            "netUnitValueRaw": 565.891472868217,
+            "note": "",
+            "quantity": 24.0,
+            "relatedDetailId": 0,
+            "taxAmount": 3939,
+            "totalAmount": 17520,
+            "totalDiscount": 0,
+            "totalUnitValue": 730,
+            "variant": {
+              "code": "7802100001115",
+              "description": "CERO LATA 350 CC (SEC 24)",
+              "href": "https://api.bsale.io/v1/variants/10778.json",
+              "id": 10778
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 0.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3697214/details/8654063.json",
+            "id": 8654063,
+            "lineNumber": 0,
+            "netAmount": 24538,
+            "netDiscount": 0,
+            "netUnitValue": 1227,
+            "netUnitValueRaw": 1226.89075630252,
+            "note": "",
+            "quantity": 20.0,
+            "relatedDetailId": 0,
+            "taxAmount": 4662,
+            "totalAmount": 29200,
+            "totalDiscount": 0,
+            "totalUnitValue": 1460,
+            "variant": {
+              "code": "7790387100310",
+              "description": "250 GR (SEC 10)",
+              "href": "https://api.bsale.io/v1/variants/9099.json",
+              "id": 9099
+            }
+          }
+        ],
+        "limit": 50,
+        "offset": 0
+      },
+      "http_status": 200,
+      "offset": 0
+    }
+  ]
+}

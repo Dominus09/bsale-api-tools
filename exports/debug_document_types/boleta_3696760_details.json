@@ -1,0 +1,42 @@
+{
+  "document_id": 3696760,
+  "pages": [
+    {
+      "body": {
+        "count": 1,
+        "href": "https://api.bsale.io/v1/documents/3696760/details.json",
+        "items": [
+          {
+            "discountId": 0,
+            "discountPercentage": 1.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3696760/details/8652941.json",
+            "id": 8652941,
+            "lineNumber": 0,
+            "netAmount": 96005,
+            "netDiscount": 970,
+            "netUnitValue": 4800,
+            "netUnitValueRaw": 4800.252100840336,
+            "note": "",
+            "quantity": 20.0,
+            "relatedDetailId": 8652885,
+            "taxAmount": 18241,
+            "totalAmount": 114246,
+            "totalDiscount": 1154,
+            "totalUnitValue": 5712,
+            "variant": {
+              "code": "7802100000583",
+              "description": "PACK X 12 UNID LATA 350 CC (SEC 2)",
+              "href": "https://api.bsale.io/v1/variants/23179.json",
+              "id": 23179
+            }
+          }
+        ],
+        "limit": 50,
+        "offset": 0
+      },
+      "http_status": 200,
+      "offset": 0
+    }
+  ]
+}

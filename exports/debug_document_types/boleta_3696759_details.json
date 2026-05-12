@@ -1,0 +1,217 @@
+{
+  "document_id": 3696759,
+  "pages": [
+    {
+      "body": {
+        "count": 8,
+        "href": "https://api.bsale.io/v1/documents/3696759/details.json",
+        "items": [
+          {
+            "discountId": 0,
+            "discountPercentage": 2.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3696759/details/8652933.json",
+            "id": 8652933,
+            "lineNumber": 0,
+            "netAmount": 10732,
+            "netDiscount": 219,
+            "netUnitValue": 894,
+            "netUnitValueRaw": 894.352941176471,
+            "note": "",
+            "quantity": 12.0,
+            "relatedDetailId": 8652893,
+            "taxAmount": 2039,
+            "totalAmount": 12771,
+            "totalDiscount": 261,
+            "totalUnitValue": 1064,
+            "variant": {
+              "code": "66266476621244",
+              "description": "LATA 710 CC (SEC 12)",
+              "href": "https://api.bsale.io/v1/variants/26389.json",
+              "id": 26389
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 2.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3696759/details/8652934.json",
+            "id": 8652934,
+            "lineNumber": 0,
+            "netAmount": 10861,
+            "netDiscount": 221,
+            "netUnitValue": 905,
+            "netUnitValueRaw": 905.0588235294118,
+            "note": "",
+            "quantity": 12.0,
+            "relatedDetailId": 8652894,
+            "taxAmount": 2064,
+            "totalAmount": 12924,
+            "totalDiscount": 264,
+            "totalUnitValue": 1077,
+            "variant": {
+              "code": "68753572146784",
+              "description": "LATA 710 CC (SEC 12)",
+              "href": "https://api.bsale.io/v1/variants/27530.json",
+              "id": 27530
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 2.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3696759/details/8652935.json",
+            "id": 8652935,
+            "lineNumber": 0,
+            "netAmount": 41506,
+            "netDiscount": 847,
+            "netUnitValue": 576,
+            "netUnitValueRaw": 576.470588235294,
+            "note": "",
+            "quantity": 72.0,
+            "relatedDetailId": 8652895,
+            "taxAmount": 7887,
+            "totalAmount": 49392,
+            "totalDiscount": 1008,
+            "totalUnitValue": 686,
+            "variant": {
+              "code": "7802100505323",
+              "description": "LATA 470 CC (SEC 24)",
+              "href": "https://api.bsale.io/v1/variants/11053.json",
+              "id": 11053
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 2.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3696759/details/8652936.json",
+            "id": 8652936,
+            "lineNumber": 0,
+            "netAmount": 31228,
+            "netDiscount": 638,
+            "netUnitValue": 651,
+            "netUnitValueRaw": 650.5882352941172,
+            "note": "",
+            "quantity": 48.0,
+            "relatedDetailId": 8652896,
+            "taxAmount": 5933,
+            "totalAmount": 37162,
+            "totalDiscount": 758,
+            "totalUnitValue": 774,
+            "variant": {
+              "code": "1503514167531",
+              "description": "LATA 470 CC (SEC 24)",
+              "href": "https://api.bsale.io/v1/variants/16387.json",
+              "id": 16387
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 2.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3696759/details/8652937.json",
+            "id": 8652937,
+            "lineNumber": 0,
+            "netAmount": 31228,
+            "netDiscount": 638,
+            "netUnitValue": 651,
+            "netUnitValueRaw": 650.5882352941172,
+            "note": "",
+            "quantity": 48.0,
+            "relatedDetailId": 8652897,
+            "taxAmount": 5933,
+            "totalAmount": 37162,
+            "totalDiscount": 758,
+            "totalUnitValue": 774,
+            "variant": {
+              "code": "1487272736549",
+              "description": "LATA 470 CC (SEC 24)",
+              "href": "https://api.bsale.io/v1/variants/13108.json",
+              "id": 13108
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 1.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3696759/details/8652938.json",
+            "id": 8652938,
+            "lineNumber": 0,
+            "netAmount": 7727,
+            "netDiscount": 78,
+            "netUnitValue": 1288,
+            "netUnitValueRaw": 1287.8319327731053,
+            "note": "",
+            "quantity": 6.0,
+            "relatedDetailId": 8652898,
+            "taxAmount": 1468,
+            "totalAmount": 9195,
+            "totalDiscount": 93,
+            "totalUnitValue": 1533,
+            "variant": {
+              "code": "7801620300210",
+              "description": "DESECHABLE 2.0 LT (SEC 6)",
+              "href": "https://api.bsale.io/v1/variants/10939.json",
+              "id": 10939
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 1.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3696759/details/8652939.json",
+            "id": 8652939,
+            "lineNumber": 0,
+            "netAmount": 7727,
+            "netDiscount": 78,
+            "netUnitValue": 1288,
+            "netUnitValueRaw": 1287.8319327731053,
+            "note": "",
+            "quantity": 6.0,
+            "relatedDetailId": 8652899,
+            "taxAmount": 1468,
+            "totalAmount": 9195,
+            "totalDiscount": 93,
+            "totalUnitValue": 1533,
+            "variant": {
+              "code": "1617224454734",
+              "description": "DESECHABLE 2.0 LT (SEC 6)",
+              "href": "https://api.bsale.io/v1/variants/24078.json",
+              "id": 24078
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 1.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3696759/details/8652940.json",
+            "id": 8652940,
+            "lineNumber": 0,
+            "netAmount": 7727,
+            "netDiscount": 78,
+            "netUnitValue": 1288,
+            "netUnitValueRaw": 1287.8319327731053,
+            "note": "",
+            "quantity": 6.0,
+            "relatedDetailId": 8652900,
+            "taxAmount": 1468,
+            "totalAmount": 9195,
+            "totalDiscount": 93,
+            "totalUnitValue": 1533,
+            "variant": {
+              "code": "7801620014681",
+              "description": "DESECHABLE 2.0 LT (SEC 6)",
+              "href": "https://api.bsale.io/v1/variants/10948.json",
+              "id": 10948
+            }
+          }
+        ],
+        "limit": 50,
+        "offset": 0
+      },
+      "http_status": 200,
+      "offset": 0
+    }
+  ]
+}

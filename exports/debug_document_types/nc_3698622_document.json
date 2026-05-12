@@ -1,0 +1,87 @@
+{
+  "address": "Tenaun Alto S/N",
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3698622/attributes.json"
+  },
+  "cancellationDate": null,
+  "cancellationStatus": 0,
+  "city": "Dalcahue costa",
+  "client": {
+    "href": "https://api.bsale.io/v1/clients/1589.json",
+    "id": "1589"
+  },
+  "coin": {
+    "href": "https://api.bsale.io/v1/coins/1.json",
+    "id": "1"
+  },
+  "commercialState": 0,
+  "commissionNetAmount": 0,
+  "commissionRate": 0,
+  "commissionTaxAmount": 0,
+  "commissionTotalAmount": 0,
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3698622/details.json"
+  },
+  "document_taxes": {
+    "href": "https://api.bsale.io/v1/documents/3698622/document_taxes.json"
+  },
+  "document_type": {
+    "href": "https://api.bsale.io/v1/document_types/9.json",
+    "id": "9"
+  },
+  "emissionDate": 1775001600,
+  "exemptAmount": 0,
+  "expirationDate": 1775001600,
+  "exportExemptAmount": 0,
+  "exportNetAmount": 0,
+  "exportTaxAmount": 0,
+  "exportTotalAmount": 0,
+  "generationDate": 1775168886,
+  "href": "https://api.bsale.io/v1/documents/3698622.json",
+  "id": 3698622,
+  "informedSii": 0,
+  "municipality": "Dalcahue",
+  "netAmount": 7577,
+  "notExemptAmount": 7577,
+  "number": 17590,
+  "office": {
+    "href": "https://api.bsale.io/v1/offices/1.json",
+    "id": "1"
+  },
+  "payments": {
+    "href": "https://api.bsale.io/v1/documents/3698622/payments.json"
+  },
+  "percentageTaxWithheld": 0.0,
+  "priceList": {
+    "href": "https://api.bsale.io/v1/price_lists/13.json",
+    "id": "13"
+  },
+  "purchaseTaxAmount": 0,
+  "purchaseTotalAmount": 0,
+  "rcofDate": 1775088000,
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3698622/references.json"
+  },
+  "responseMsgSii": "Proceso Finalizado Correctamente!",
+  "salesId": null,
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3698622/sellers.json"
+  },
+  "serialNumber": null,
+  "state": 0,
+  "taxAmount": 1440,
+  "ted": "<TED version=\"1.0\"><DD><RE>76885233-2</RE><TD>61</TD><F>17590</F><FE>2026-04-01</FE><RR>13169322-2</RR><RSR>GLADYS JEANETTE CONUECAR ULLOA</RSR><MNT>9017</MNT><IT1>AZUCAR LA PATRONA 1 KG SEC 10 </IT1><CAF version=\"1.0\"><DA><RE>76885233-2</RE><RS>LA QUILLOTANA SPA</RS><TD>61</TD><RNG><D>17045</D><H>18142</H></RNG><FA>2025-12-26</FA><RSAPK><M>37IokeaTcASKLOmm8bON54pNj9C7ZKolkqTdZpibge1nU4nw23t3q2WXKsXpfa/LUPn2PD73S4jBOSJ02KS4pw==</M><E>Aw==</E></RSAPK><IDK>300</IDK></DA><FRMA algoritmo=\"SHA1withRSA\">X4kmUMyA/EgAU5N7FeH7+MYnRicVtJtMVFBW2o2WPkgmFK+xA0OOYWBQXbOmg22LQloMT+w1HNuV34DJ27uVPA==</FRMA></CAF><TSTED>2026-04-02T19:28:09</TSTED></DD><FRMT algoritmo=\"SHA1withRSA\">uxR6U9MidzJnWvLY4gmgDdEJgapIBD2DyB7Dh85z/4Tbdi3/I1W41G+8L4Z+muziw0eOjtQ96XLkCz9YzTXMqQ==</FRMT></TED>",
+  "token": "0fcd3b6fc32f",
+  "totalAmount": 9017,
+  "trackingNumber": "",
+  "urlPdf": "https://app2.bsale.cl/view/21884/0fcd3b6fc32f.pdf?sfd=99",
+  "urlPdfOriginal": "https://app2.bsale.cl/view/21884/0fcd3b6fc32f.pdf",
+  "urlPublicView": "https://app2.bsale.cl/view/21884/0fcd3b6fc32f?sfd=99",
+  "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/0fcd3b6fc32f",
+  "urlTimbre": "https://s3.amazonaws.com/bsale/21884/timbres/0fcd3b6fc32f.png",
+  "urlXml": "https://api.bsale.cl/v1/21884/files/0fcd3b6fc32f.xml",
+  "user": {
+    "href": "https://api.bsale.io/v1/users/81.json",
+    "id": "81"
+  }
+}

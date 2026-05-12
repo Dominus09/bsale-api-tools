@@ -1,0 +1,42 @@
+{
+  "document_id": 3698634,
+  "pages": [
+    {
+      "body": {
+        "count": 1,
+        "href": "https://api.bsale.io/v1/documents/3698634/details.json",
+        "items": [
+          {
+            "discountId": 0,
+            "discountPercentage": 0.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3698634/details/8657758.json",
+            "id": 8657758,
+            "lineNumber": 0,
+            "netAmount": 7553,
+            "netDiscount": 0,
+            "netUnitValue": 1259,
+            "netUnitValueRaw": 1258.82352941176,
+            "note": "",
+            "quantity": 6.0,
+            "relatedDetailId": 8652952,
+            "taxAmount": 1435,
+            "totalAmount": 8988,
+            "totalDiscount": 0,
+            "totalUnitValue": 1498,
+            "variant": {
+              "code": "1536169415370",
+              "description": "ZERO DESECHABLE 2.0 LT (SEC 6)",
+              "href": "https://api.bsale.io/v1/variants/20680.json",
+              "id": 20680
+            }
+          }
+        ],
+        "limit": 50,
+        "offset": 0
+      },
+      "http_status": 200,
+      "offset": 0
+    }
+  ]
+}

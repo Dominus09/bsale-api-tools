@@ -1,0 +1,87 @@
+{
+  "address": "Ruta 5 s/n Canaan",
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3696770/attributes.json"
+  },
+  "cancellationDate": null,
+  "cancellationStatus": 0,
+  "city": "Castro",
+  "client": {
+    "href": "https://api.bsale.io/v1/clients/3187.json",
+    "id": "3187"
+  },
+  "coin": {
+    "href": "https://api.bsale.io/v1/coins/1.json",
+    "id": "1"
+  },
+  "commercialState": 0,
+  "commissionNetAmount": 0,
+  "commissionRate": 0,
+  "commissionTaxAmount": 0,
+  "commissionTotalAmount": 0,
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3696770/details.json"
+  },
+  "document_taxes": {
+    "href": "https://api.bsale.io/v1/documents/3696770/document_taxes.json"
+  },
+  "document_type": {
+    "href": "https://api.bsale.io/v1/document_types/6.json",
+    "id": "6"
+  },
+  "emissionDate": 1775001600,
+  "exemptAmount": 0,
+  "expirationDate": 1775001600,
+  "exportExemptAmount": 0,
+  "exportNetAmount": 0,
+  "exportTaxAmount": 0,
+  "exportTotalAmount": 0,
+  "generationDate": 1775067154,
+  "href": "https://api.bsale.io/v1/documents/3696770.json",
+  "id": 3696770,
+  "informedSii": 0,
+  "municipality": "Castro Carretera",
+  "netAmount": 127529,
+  "notExemptAmount": 127529,
+  "number": 48484,
+  "office": {
+    "href": "https://api.bsale.io/v1/offices/1.json",
+    "id": "1"
+  },
+  "payments": {
+    "href": "https://api.bsale.io/v1/documents/3696770/payments.json"
+  },
+  "percentageTaxWithheld": 0.0,
+  "priceList": {
+    "href": "https://api.bsale.io/v1/price_lists/13.json",
+    "id": "13"
+  },
+  "purchaseTaxAmount": 0,
+  "purchaseTotalAmount": 0,
+  "rcofDate": 1775001600,
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3696770/references.json"
+  },
+  "responseMsgSii": "Proceso Finalizado Correctamente!",
+  "salesId": null,
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3696770/sellers.json"
+  },
+  "serialNumber": null,
+  "state": 0,
+  "taxAmount": 50374,
+  "ted": "<TED version=\"1.0\"><DD><RE>76885233-2</RE><TD>33</TD><F>48484</F><FE>2026-04-01</FE><RR>77873749-3</RR><RSR>SOCIEDAD COMERCIAL DEJAVU 2 SPA</RSR><MNT>177903</MNT><IT1>CRISTAL PACK X 12 UNID LATA 350 CC SEC </IT1><CAF version=\"1.0\"><DA><RE>76885233-2</RE><RS>LA QUILLOTANA SPA</RS><TD>33</TD><RNG><D>46949</D><H>49514</H></RNG><FA>2025-12-07</FA><RSAPK><M>oKfWprzg372Xxff/aATP9KRvJM2uHsx/LfUfE9NYHWiLWhgrt4CB/Zlyl2qBkWRdrUoil5y9NnMLvWUNPoW1zQ==</M><E>Aw==</E></RSAPK><IDK>300</IDK></DA><FRMA algoritmo=\"SHA1withRSA\">OJ66iUG124lJrEqGCONMbESOFgj3d9T1UnL5w9BtMsh9ufsWS6Xx7qlTSrJu1dBNT1rOjg9oxnGDk51nM7uB0Q==</FRMA></CAF><TSTED>2026-04-01T15:12:35</TSTED></DD><FRMT algoritmo=\"SHA1withRSA\">JqlHve8sKpWQgG+FPJQ6LXNMGWcvCQsPRAfpSzQJGPAw9hPnM93dFa1MzWW7V3UcL9sx5elAOtPusKc4hMOkSQ==</FRMT></TED>",
+  "token": "4ba2315a5913",
+  "totalAmount": 177903,
+  "trackingNumber": "",
+  "urlPdf": "https://app2.bsale.cl/view/21884/4ba2315a5913.pdf?sfd=99",
+  "urlPdfOriginal": "https://app2.bsale.cl/view/21884/4ba2315a5913.pdf",
+  "urlPublicView": "https://app2.bsale.cl/view/21884/4ba2315a5913?sfd=99",
+  "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/4ba2315a5913",
+  "urlTimbre": "https://s3.amazonaws.com/bsale/21884/timbres/4ba2315a5913.png",
+  "urlXml": "https://api.bsale.cl/v1/21884/files/4ba2315a5913.xml",
+  "user": {
+    "href": "https://api.bsale.io/v1/users/81.json",
+    "id": "81"
+  }
+}

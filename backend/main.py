@@ -7,6 +7,7 @@ logger = logging.getLogger(__name__)
 
 from backend.cors_middleware import QuillotanaCorsMiddleware
 from backend.middleware.distribuidora_request_log import DistribuidoraRequestLogMiddleware
+from backend.diagnostics.middleware import DiagnosticsRequestLogMiddleware
 from backend.routers import auth
 from backend.routers import orders
 from backend.routers.catalog import router as catalog_router
@@ -41,6 +42,7 @@ from backend.routers import uploads
 
 # ERP (prefijo /erp: dashboard, alertas, márgenes internos)
 from backend.routers.erp import router as erp_router
+from backend.routers import diagnostics as diagnostics_router
 
 def _cors_allow_origins() -> list[str]:
     """Orígenes permitidos para el front (subdominios quillotana + local)."""
@@ -79,6 +81,8 @@ app.add_middleware(
 )
 # Log de duración en ``/distribuidora`` (añadido después de CORS → capa exterior).
 app.add_middleware(DistribuidoraRequestLogMiddleware)
+# Diagnóstico: capa más externa para registrar status final y tiempos (sin payloads sensibles).
+app.add_middleware(DiagnosticsRequestLogMiddleware)
 
 # --- Auth (login staff + login-client) ---
 app.include_router(auth.router)
@@ -123,6 +127,16 @@ app.include_router(app_distribuidora_router, prefix="/app_distribuidora")
 
 # --- ERP ---
 app.include_router(erp_router)
+
+# --- Diagnóstico interno (JWT admin + ENABLE_DIAGNOSTICS en prod/staging) ---
+app.include_router(diagnostics_router.router)
+
+
+@app.on_event("startup")
+def _startup_attach_diagnostics_log_handler() -> None:
+    from backend.diagnostics.logging_handler import attach_memory_log_handler
+
+    attach_memory_log_handler()
 
 
 @app.get("/")

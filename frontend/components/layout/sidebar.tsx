@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import {
@@ -36,6 +36,7 @@ import {
   Percent,
   UserCircle2,
   UserX,
+  Stethoscope,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -124,6 +125,24 @@ const navSections: { title: string; items: NavItem[] }[] = [
   },
 ]
 
+const ADMIN_DIAGNOSTIC_ROLES = new Set(["admin", "superadmin", "super_admin", "administrator"])
+
+function buildNavSectionsForRole(role: string | null) {
+  const r = role?.trim().toLowerCase() ?? ""
+  const isAdmin = ADMIN_DIAGNOSTIC_ROLES.has(r)
+  if (!isAdmin) return navSections
+  return navSections.map((section) => {
+    if (section.title !== "Administración") return section
+    return {
+      ...section,
+      items: [
+        ...section.items,
+        { href: "/admin/diagnostico", label: "Diagnóstico ERP", icon: Stethoscope },
+      ],
+    }
+  })
+}
+
 type SidebarProps = {
   compact?: boolean
   onToggleCompact?: () => void
@@ -142,11 +161,19 @@ function sectionContainsPath(
 export function Sidebar({ compact = false, onToggleCompact }: SidebarProps) {
   const pathname = usePathname()
   const [openSection, setOpenSection] = useState<string | null>("Distribuidora")
+  const [staffRole, setStaffRole] = useState<string | null>(null)
 
   useEffect(() => {
-    const active = navSections.find((s) => sectionContainsPath(s, pathname))
+    if (typeof window === "undefined") return
+    setStaffRole(localStorage.getItem("role"))
+  }, [])
+
+  const sections = useMemo(() => buildNavSectionsForRole(staffRole), [staffRole])
+
+  useEffect(() => {
+    const active = sections.find((s) => sectionContainsPath(s, pathname))
     if (active) setOpenSection(active.title)
-  }, [pathname])
+  }, [pathname, sections])
 
   return (
     <aside
@@ -188,7 +215,7 @@ export function Sidebar({ compact = false, onToggleCompact }: SidebarProps) {
       </div>
 
       <nav className="flex-1 overflow-y-auto overflow-x-hidden p-2">
-        {navSections.map((section) => {
+        {sections.map((section) => {
           const renderItem = (item: NavItem) => {
             const isActive =
               !item.disabled &&

@@ -1,0 +1,87 @@
+{
+  "address": "Tenaun Alto S/N",
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3696768/attributes.json"
+  },
+  "cancellationDate": null,
+  "cancellationStatus": 0,
+  "city": "Dalcahue costa",
+  "client": {
+    "href": "https://api.bsale.io/v1/clients/1589.json",
+    "id": "1589"
+  },
+  "coin": {
+    "href": "https://api.bsale.io/v1/coins/1.json",
+    "id": "1"
+  },
+  "commercialState": 0,
+  "commissionNetAmount": 0,
+  "commissionRate": 0,
+  "commissionTaxAmount": 0,
+  "commissionTotalAmount": 0,
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3696768/details.json"
+  },
+  "document_taxes": {
+    "href": "https://api.bsale.io/v1/documents/3696768/document_taxes.json"
+  },
+  "document_type": {
+    "href": "https://api.bsale.io/v1/document_types/6.json",
+    "id": "6"
+  },
+  "emissionDate": 1775001600,
+  "exemptAmount": 0,
+  "expirationDate": 1775001600,
+  "exportExemptAmount": 0,
+  "exportNetAmount": 0,
+  "exportTaxAmount": 0,
+  "exportTotalAmount": 0,
+  "generationDate": 1775067076,
+  "href": "https://api.bsale.io/v1/documents/3696768.json",
+  "id": 3696768,
+  "informedSii": 0,
+  "municipality": "Dalcahue",
+  "netAmount": 203248,
+  "notExemptAmount": 203248,
+  "number": 48482,
+  "office": {
+    "href": "https://api.bsale.io/v1/offices/1.json",
+    "id": "1"
+  },
+  "payments": {
+    "href": "https://api.bsale.io/v1/documents/3696768/payments.json"
+  },
+  "percentageTaxWithheld": 0.0,
+  "priceList": {
+    "href": "https://api.bsale.io/v1/price_lists/13.json",
+    "id": "13"
+  },
+  "purchaseTaxAmount": 0,
+  "purchaseTotalAmount": 0,
+  "rcofDate": 1775001600,
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3696768/references.json"
+  },
+  "responseMsgSii": "Proceso Finalizado Correctamente!",
+  "salesId": null,
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3696768/sellers.json"
+  },
+  "serialNumber": null,
+  "state": 0,
+  "taxAmount": 39721,
+  "ted": "<TED version=\"1.0\"><DD><RE>76885233-2</RE><TD>33</TD><F>48482</F><FE>2026-04-01</FE><RR>13169322-2</RR><RSR>GLADYS JEANETTE CONUECAR ULLOA</RSR><MNT>242969</MNT><IT1>ASTILLAS LA QUILLOTANA MALLA 2 KL - 0 3</IT1><CAF version=\"1.0\"><DA><RE>76885233-2</RE><RS>LA QUILLOTANA SPA</RS><TD>33</TD><RNG><D>46949</D><H>49514</H></RNG><FA>2025-12-07</FA><RSAPK><M>oKfWprzg372Xxff/aATP9KRvJM2uHsx/LfUfE9NYHWiLWhgrt4CB/Zlyl2qBkWRdrUoil5y9NnMLvWUNPoW1zQ==</M><E>Aw==</E></RSAPK><IDK>300</IDK></DA><FRMA algoritmo=\"SHA1withRSA\">OJ66iUG124lJrEqGCONMbESOFgj3d9T1UnL5w9BtMsh9ufsWS6Xx7qlTSrJu1dBNT1rOjg9oxnGDk51nM7uB0Q==</FRMA></CAF><TSTED>2026-04-01T15:11:16</TSTED></DD><FRMT algoritmo=\"SHA1withRSA\">gS+bPJm120OmPgs4QAjZIIo1Ux4S/iJiYY2mgB9zE+C8LVh+wI2fXeapKj1fI/yREBCRDVdQQAhtn3ITSv0Oyw==</FRMT></TED>",
+  "token": "bf1207dfb02d",
+  "totalAmount": 242969,
+  "trackingNumber": "",
+  "urlPdf": "https://app2.bsale.cl/view/21884/bf1207dfb02d.pdf?sfd=99",
+  "urlPdfOriginal": "https://app2.bsale.cl/view/21884/bf1207dfb02d.pdf",
+  "urlPublicView": "https://app2.bsale.cl/view/21884/bf1207dfb02d?sfd=99",
+  "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/bf1207dfb02d",
+  "urlTimbre": "https://s3.amazonaws.com/bsale/21884/timbres/bf1207dfb02d.png",
+  "urlXml": "https://api.bsale.cl/v1/21884/files/bf1207dfb02d.xml",
+  "user": {
+    "href": "https://api.bsale.io/v1/users/81.json",
+    "id": "81"
+  }
+}

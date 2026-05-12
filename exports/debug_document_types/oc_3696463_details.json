@@ -1,0 +1,92 @@
+{
+  "document_id": 3696463,
+  "pages": [
+    {
+      "body": {
+        "count": 3,
+        "href": "https://api.bsale.io/v1/documents/3696463/details.json",
+        "items": [
+          {
+            "discountId": 0,
+            "discountPercentage": 0.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3696463/details/8652115.json",
+            "id": 8652115,
+            "lineNumber": 0,
+            "netAmount": 48069,
+            "netDiscount": 0,
+            "netUnitValue": 1001,
+            "netUnitValueRaw": 1001.43369175627,
+            "note": "",
+            "quantity": 48.0,
+            "relatedDetailId": 0,
+            "taxAmount": 18987,
+            "totalAmount": 67056,
+            "totalDiscount": 0,
+            "totalUnitValue": 1397,
+            "variant": {
+              "code": "7802100430007",
+              "description": "RETORNABLE 1.0 LT (SEC 12)",
+              "href": "https://api.bsale.io/v1/variants/11160.json",
+              "id": 11160
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 0.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3696463/details/8652116.json",
+            "id": 8652116,
+            "lineNumber": 0,
+            "netAmount": 48069,
+            "netDiscount": 0,
+            "netUnitValue": 1001,
+            "netUnitValueRaw": 1001.43369175627,
+            "note": "",
+            "quantity": 48.0,
+            "relatedDetailId": 0,
+            "taxAmount": 18987,
+            "totalAmount": 67056,
+            "totalDiscount": 0,
+            "totalUnitValue": 1397,
+            "variant": {
+              "code": "7802100002242",
+              "description": "RETORNABLE 970 CC (SEC 12)",
+              "href": "https://api.bsale.io/v1/variants/11080.json",
+              "id": 11080
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 0.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3696463/details/8652117.json",
+            "id": 8652117,
+            "lineNumber": 0,
+            "netAmount": 48103,
+            "netDiscount": 0,
+            "netUnitValue": 1002,
+            "netUnitValueRaw": 1002.15053763441,
+            "note": "",
+            "quantity": 48.0,
+            "relatedDetailId": 0,
+            "taxAmount": 19001,
+            "totalAmount": 67104,
+            "totalDiscount": 0,
+            "totalUnitValue": 1398,
+            "variant": {
+              "code": "7802100001719",
+              "description": "RETORNABLE 1.2 LT (SEC 10)",
+              "href": "https://api.bsale.io/v1/variants/11058.json",
+              "id": 11058
+            }
+          }
+        ],
+        "limit": 50,
+        "offset": 0
+      },
+      "http_status": 200,
+      "offset": 0
+    }
+  ]
+}

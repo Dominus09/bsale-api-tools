@@ -1,0 +1,86 @@
+{
+  "address": "Almirante Latorre 1385",
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3696755/attributes.json"
+  },
+  "cancellationDate": null,
+  "cancellationStatus": 0,
+  "city": "Ancud",
+  "client": {
+    "href": "https://api.bsale.io/v1/clients/2473.json",
+    "id": "2473"
+  },
+  "coin": {
+    "href": "https://api.bsale.io/v1/coins/1.json",
+    "id": "1"
+  },
+  "commercialState": 0,
+  "commissionNetAmount": 0,
+  "commissionRate": 0,
+  "commissionTaxAmount": 0,
+  "commissionTotalAmount": 0,
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3696755/details.json"
+  },
+  "document_taxes": {
+    "href": "https://api.bsale.io/v1/documents/3696755/document_taxes.json"
+  },
+  "document_type": {
+    "href": "https://api.bsale.io/v1/document_types/1.json",
+    "id": "1"
+  },
+  "emissionDate": 1775001600,
+  "exemptAmount": 0,
+  "expirationDate": 1775001600,
+  "exportExemptAmount": 0,
+  "exportNetAmount": 0,
+  "exportTaxAmount": 0,
+  "exportTotalAmount": 0,
+  "generationDate": 1775066706,
+  "href": "https://api.bsale.io/v1/documents/3696755.json",
+  "id": 3696755,
+  "informedSii": 0,
+  "municipality": "Ancud",
+  "netAmount": 42829,
+  "notExemptAmount": 42829,
+  "number": 2562062,
+  "office": {
+    "href": "https://api.bsale.io/v1/offices/1.json",
+    "id": "1"
+  },
+  "payments": {
+    "href": "https://api.bsale.io/v1/documents/3696755/payments.json"
+  },
+  "percentageTaxWithheld": 0.0,
+  "priceList": {
+    "href": "https://api.bsale.io/v1/price_lists/13.json",
+    "id": "13"
+  },
+  "purchaseTaxAmount": 0,
+  "purchaseTotalAmount": 0,
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3696755/references.json"
+  },
+  "responseMsgSii": "Documento Recibido por el SII. Datos Coinciden con los Registrados",
+  "salesId": null,
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3696755/sellers.json"
+  },
+  "serialNumber": null,
+  "state": 0,
+  "taxAmount": 8137,
+  "ted": null,
+  "token": "fd6d54fada75",
+  "totalAmount": 50966,
+  "trackingNumber": "69cd5e53c94d8454b0b587a4",
+  "urlPdf": "https://app2.bsale.cl/view/21884/fd6d54fada75.pdf?sfd=99",
+  "urlPdfOriginal": "https://app2.bsale.cl/view/21884/fd6d54fada75.pdf",
+  "urlPublicView": "https://app2.bsale.cl/view/21884/fd6d54fada75?sfd=99",
+  "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/fd6d54fada75",
+  "urlTimbre": "https://s3.amazonaws.com/bsale/21884/timbres/fd6d54fada75.png",
+  "urlXml": "https://api.bsale.cl/v1/21884/files/fd6d54fada75.xml",
+  "user": {
+    "href": "https://api.bsale.io/v1/users/81.json",
+    "id": "81"
+  }
+}

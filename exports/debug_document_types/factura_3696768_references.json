@@ -1,0 +1,10 @@
+{
+  "body": {
+    "count": 0,
+    "href": "https://api.bsale.io/v1/documents/3696768/references.json",
+    "items": [],
+    "limit": 25,
+    "offset": 0
+  },
+  "http_status": 200
+}

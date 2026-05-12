@@ -1,0 +1,242 @@
+{
+  "document_id": 3697209,
+  "pages": [
+    {
+      "body": {
+        "count": 9,
+        "href": "https://api.bsale.io/v1/documents/3697209/details.json",
+        "items": [
+          {
+            "discountId": 0,
+            "discountPercentage": 0.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3697209/details/8654035.json",
+            "id": 8654035,
+            "lineNumber": 0,
+            "netAmount": 30065,
+            "netDiscount": 0,
+            "netUnitValue": 1002,
+            "netUnitValueRaw": 1002.15053763441,
+            "note": "",
+            "quantity": 30.0,
+            "relatedDetailId": 8652123,
+            "taxAmount": 11875,
+            "totalAmount": 41940,
+            "totalDiscount": 0,
+            "totalUnitValue": 1398,
+            "variant": {
+              "code": "7802100001887",
+              "description": "RETORNABLE 1.2 LT (SEC 10)",
+              "href": "https://api.bsale.io/v1/variants/11074.json",
+              "id": 11074
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 0.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3697209/details/8654036.json",
+            "id": 8654036,
+            "lineNumber": 0,
+            "netAmount": 30065,
+            "netDiscount": 0,
+            "netUnitValue": 1002,
+            "netUnitValueRaw": 1002.15053763441,
+            "note": "",
+            "quantity": 30.0,
+            "relatedDetailId": 0,
+            "taxAmount": 11875,
+            "totalAmount": 41940,
+            "totalDiscount": 0,
+            "totalUnitValue": 1398,
+            "variant": {
+              "code": "7802100001719",
+              "description": "RETORNABLE 1.2 LT (SEC 10)",
+              "href": "https://api.bsale.io/v1/variants/11058.json",
+              "id": 11058
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 0.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3697209/details/8654037.json",
+            "id": 8654037,
+            "lineNumber": 0,
+            "netAmount": 36052,
+            "netDiscount": 0,
+            "netUnitValue": 1001,
+            "netUnitValueRaw": 1001.43369175627,
+            "note": "",
+            "quantity": 36.0,
+            "relatedDetailId": 0,
+            "taxAmount": 14240,
+            "totalAmount": 50292,
+            "totalDiscount": 0,
+            "totalUnitValue": 1397,
+            "variant": {
+              "code": "7802100430007",
+              "description": "RETORNABLE 1.0 LT (SEC 12)",
+              "href": "https://api.bsale.io/v1/variants/11160.json",
+              "id": 11160
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 0.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3697209/details/8654038.json",
+            "id": 8654038,
+            "lineNumber": 0,
+            "netAmount": 41725,
+            "netDiscount": 0,
+            "netUnitValue": 20863,
+            "netUnitValueRaw": 20862.4584717608,
+            "note": "",
+            "quantity": 2.0,
+            "relatedDetailId": 0,
+            "taxAmount": 21071,
+            "totalAmount": 62796,
+            "totalDiscount": 0,
+            "totalUnitValue": 31398,
+            "variant": {
+              "code": "82184090442",
+              "description": "1.0 LT (SEC 12)",
+              "href": "https://api.bsale.io/v1/variants/11771.json",
+              "id": 11771
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 0.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3697209/details/8654039.json",
+            "id": 8654039,
+            "lineNumber": 0,
+            "netAmount": 15611,
+            "netDiscount": 0,
+            "netUnitValue": 3122,
+            "netUnitValueRaw": 3122.25913621262,
+            "note": "",
+            "quantity": 5.0,
+            "relatedDetailId": 0,
+            "taxAmount": 7884,
+            "totalAmount": 23495,
+            "totalDiscount": 0,
+            "totalUnitValue": 4699,
+            "variant": {
+              "code": "7802150000557",
+              "description": "750 CC (SEC 6)",
+              "href": "https://api.bsale.io/v1/variants/11479.json",
+              "id": 11479
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 0.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3697209/details/8654040.json",
+            "id": 8654040,
+            "lineNumber": 0,
+            "netAmount": 18331,
+            "netDiscount": 0,
+            "netUnitValue": 1528,
+            "netUnitValueRaw": 1527.59856630824,
+            "note": "",
+            "quantity": 12.0,
+            "relatedDetailId": 0,
+            "taxAmount": 7241,
+            "totalAmount": 25572,
+            "totalDiscount": 0,
+            "totalUnitValue": 2131,
+            "variant": {
+              "code": "7804330231119",
+              "description": "TINTO 700 CC (SEC 12)",
+              "href": "https://api.bsale.io/v1/variants/11264.json",
+              "id": 11264
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 0.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3697209/details/8654041.json",
+            "id": 8654041,
+            "lineNumber": 0,
+            "netAmount": 14711,
+            "netDiscount": 0,
+            "netUnitValue": 7356,
+            "netUnitValueRaw": 7355.48172757475,
+            "note": "",
+            "quantity": 2.0,
+            "relatedDetailId": 0,
+            "taxAmount": 7429,
+            "totalAmount": 22140,
+            "totalDiscount": 0,
+            "totalUnitValue": 11070,
+            "variant": {
+              "code": "1632952038948",
+              "description": "750 CC (SEC 12)",
+              "href": "https://api.bsale.io/v1/variants/25017.json",
+              "id": 25017
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 0.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3697209/details/8654042.json",
+            "id": 8654042,
+            "lineNumber": 0,
+            "netAmount": 23510,
+            "netDiscount": 0,
+            "netUnitValue": 11755,
+            "netUnitValueRaw": 11754.8172757475,
+            "note": "",
+            "quantity": 2.0,
+            "relatedDetailId": 0,
+            "taxAmount": 11872,
+            "totalAmount": 35382,
+            "totalDiscount": 0,
+            "totalUnitValue": 17691,
+            "variant": {
+              "code": "1502221115924",
+              "description": "1 LT (SEC 6)",
+              "href": "https://api.bsale.io/v1/variants/16081.json",
+              "id": 16081
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 0.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3697209/details/8654043.json",
+            "id": 8654043,
+            "lineNumber": 0,
+            "netAmount": 90321,
+            "netDiscount": 0,
+            "netUnitValue": 1505,
+            "netUnitValueRaw": 1505.37634408602,
+            "note": "",
+            "quantity": 60.0,
+            "relatedDetailId": 0,
+            "taxAmount": 35679,
+            "totalAmount": 126000,
+            "totalDiscount": 0,
+            "totalUnitValue": 2100,
+            "variant": {
+              "code": "7804335341219",
+              "description": "BLANCO 1.0 LT (SEC 12)",
+              "href": "https://api.bsale.io/v1/variants/11436.json",
+              "id": 11436
+            }
+          }
+        ],
+        "limit": 50,
+        "offset": 0
+      },
+      "http_status": 200,
+      "offset": 0
+    }
+  ]
+}

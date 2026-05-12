@@ -1,0 +1,86 @@
+{
+  "address": "Felipe Westhoff s/ n",
+  "attributes": {
+    "href": "https://api.bsale.io/v1/documents/3697214/attributes.json"
+  },
+  "cancellationDate": null,
+  "cancellationStatus": 0,
+  "city": "Melinka",
+  "client": {
+    "href": "https://api.bsale.io/v1/clients/3329.json",
+    "id": "3329"
+  },
+  "coin": {
+    "href": "https://api.bsale.io/v1/coins/1.json",
+    "id": "1"
+  },
+  "commercialState": 0,
+  "commissionNetAmount": 0,
+  "commissionRate": 0,
+  "commissionTaxAmount": 0,
+  "commissionTotalAmount": 0,
+  "details": {
+    "href": "https://api.bsale.io/v1/documents/3697214/details.json"
+  },
+  "document_taxes": {
+    "href": "https://api.bsale.io/v1/documents/3697214/document_taxes.json"
+  },
+  "document_type": {
+    "href": "https://api.bsale.io/v1/document_types/33.json",
+    "id": "33"
+  },
+  "emissionDate": 1775001600,
+  "exemptAmount": 0,
+  "expirationDate": 1775001600,
+  "exportExemptAmount": 0,
+  "exportNetAmount": 0,
+  "exportTaxAmount": 0,
+  "exportTotalAmount": 0,
+  "generationDate": 1775082889,
+  "href": "https://api.bsale.io/v1/documents/3697214.json",
+  "id": 3697214,
+  "informedSii": 2,
+  "municipality": "Melinka",
+  "netAmount": 114576,
+  "notExemptAmount": 114576,
+  "number": 65639,
+  "office": {
+    "href": "https://api.bsale.io/v1/offices/1.json",
+    "id": "1"
+  },
+  "payments": {
+    "href": "https://api.bsale.io/v1/documents/3697214/payments.json"
+  },
+  "percentageTaxWithheld": 0.0,
+  "priceList": {
+    "href": "https://api.bsale.io/v1/price_lists/16.json",
+    "id": "16"
+  },
+  "purchaseTaxAmount": 0,
+  "purchaseTotalAmount": 0,
+  "references": {
+    "href": "https://api.bsale.io/v1/documents/3697214/references.json"
+  },
+  "responseMsgSii": null,
+  "salesId": null,
+  "sellers": {
+    "href": "https://api.bsale.io/v1/documents/3697214/sellers.json"
+  },
+  "serialNumber": null,
+  "state": 0,
+  "taxAmount": 30034,
+  "ted": null,
+  "token": "8e1f91053f31",
+  "totalAmount": 144610,
+  "trackingNumber": "",
+  "urlPdf": "https://app2.bsale.cl/view/21884/8e1f91053f31.pdf?sfd=99",
+  "urlPdfOriginal": "https://app2.bsale.cl/view/21884/8e1f91053f31.pdf",
+  "urlPublicView": "https://app2.bsale.cl/view/21884/8e1f91053f31?sfd=99",
+  "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/8e1f91053f31",
+  "urlTimbre": null,
+  "urlXml": "https://api.bsale.cl/v1/21884/files/8e1f91053f31.xml",
+  "user": {
+    "href": "https://api.bsale.io/v1/users/56.json",
+    "id": "56"
+  }
+}

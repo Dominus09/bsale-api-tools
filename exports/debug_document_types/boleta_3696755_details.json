@@ -1,0 +1,142 @@
+{
+  "document_id": 3696755,
+  "pages": [
+    {
+      "body": {
+        "count": 5,
+        "href": "https://api.bsale.io/v1/documents/3696755/details.json",
+        "items": [
+          {
+            "discountId": 0,
+            "discountPercentage": 1.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3696755/details/8652901.json",
+            "id": 8652901,
+            "lineNumber": 0,
+            "netAmount": 11481,
+            "netDiscount": 116,
+            "netUnitValue": 1148,
+            "netUnitValueRaw": 1148.0672268907579,
+            "note": "",
+            "quantity": 10.0,
+            "relatedDetailId": 8652888,
+            "taxAmount": 2181,
+            "totalAmount": 13662,
+            "totalDiscount": 138,
+            "totalUnitValue": 1366,
+            "variant": {
+              "code": "7801505231912",
+              "description": "1.0 KG (SEC 10)",
+              "href": "https://api.bsale.io/v1/variants/8812.json",
+              "id": 8812
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 1.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3696755/details/8652902.json",
+            "id": 8652902,
+            "lineNumber": 0,
+            "netAmount": 7837,
+            "netDiscount": 79,
+            "netUnitValue": 1306,
+            "netUnitValueRaw": 1306.1344537815155,
+            "note": "",
+            "quantity": 6.0,
+            "relatedDetailId": 8652889,
+            "taxAmount": 1489,
+            "totalAmount": 9326,
+            "totalDiscount": 94,
+            "totalUnitValue": 1554,
+            "variant": {
+              "code": "7801620011611",
+              "description": "DURAZNO DESECHABLE 1.5 LT (SEC 6)",
+              "href": "https://api.bsale.io/v1/variants/10259.json",
+              "id": 10259
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 1.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3696755/details/8652903.json",
+            "id": 8652903,
+            "lineNumber": 0,
+            "netAmount": 7837,
+            "netDiscount": 79,
+            "netUnitValue": 1306,
+            "netUnitValueRaw": 1306.1344537815155,
+            "note": "",
+            "quantity": 6.0,
+            "relatedDetailId": 8652890,
+            "taxAmount": 1489,
+            "totalAmount": 9326,
+            "totalDiscount": 94,
+            "totalUnitValue": 1554,
+            "variant": {
+              "code": "7801620011604",
+              "description": "NARANJA DESECHABLE 1.5 LT (SEC 6)",
+              "href": "https://api.bsale.io/v1/variants/10260.json",
+              "id": 10260
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 1.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3696755/details/8652904.json",
+            "id": 8652904,
+            "lineNumber": 0,
+            "netAmount": 7837,
+            "netDiscount": 79,
+            "netUnitValue": 1306,
+            "netUnitValueRaw": 1306.1344537815155,
+            "note": "",
+            "quantity": 6.0,
+            "relatedDetailId": 8652891,
+            "taxAmount": 1489,
+            "totalAmount": 9326,
+            "totalDiscount": 94,
+            "totalUnitValue": 1554,
+            "variant": {
+              "code": "7801620001841",
+              "description": "TUTTI FRUTILLA DESECHABLE 1.5 LT (SEC 6)",
+              "href": "https://api.bsale.io/v1/variants/10267.json",
+              "id": 10267
+            }
+          },
+          {
+            "discountId": 0,
+            "discountPercentage": 1.0,
+            "gratuity": 0,
+            "href": "https://api.bsale.io/v1/documents/3696755/details/8652905.json",
+            "id": 8652905,
+            "lineNumber": 0,
+            "netAmount": 7837,
+            "netDiscount": 79,
+            "netUnitValue": 1306,
+            "netUnitValueRaw": 1306.1344537815155,
+            "note": "",
+            "quantity": 6.0,
+            "relatedDetailId": 8652892,
+            "taxAmount": 1489,
+            "totalAmount": 9326,
+            "totalDiscount": 94,
+            "totalUnitValue": 1554,
+            "variant": {
+              "code": "7801620011635",
+              "description": "PIÑA DESECHABLE 1.5 LT (SEC 6)",
+              "href": "https://api.bsale.io/v1/variants/10257.json",
+              "id": 10257
+            }
+          }
+        ],
+        "limit": 50,
+        "offset": 0
+      },
+      "http_status": 200,
+      "offset": 0
+    }
+  ]
+}
