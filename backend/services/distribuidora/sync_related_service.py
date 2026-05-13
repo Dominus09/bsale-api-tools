@@ -853,6 +853,8 @@ def sync_related_documents_range(
         "duration_seconds": 0.0,
         "omitido_concurrencia": False,
         "errors": None,
+        "related_insert_conflicts": 0,
+        "related_insert_attempts": 0,
     }
 
     conn = get_connection()
@@ -950,6 +952,206 @@ def sync_related_documents_range(
             pass
 
     stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
+    return stats
+
+
+BACKFILL_RELATED_MAY_2026_START = date(2026, 5, 1)
+BACKFILL_RELATED_MAY_2026_END = date(2026, 5, 31)
+BACKFILL_RELATED_MAY_LOG_PROCESS = "backfill_related_may_2026"
+
+
+def backfill_distribuidora_related_may_2026_only(*, strict_token: bool = True) -> dict[str, Any]:
+    """
+    Backfill oficial ``distribuidora.document_related`` para OC (tipo 33) con emisión UTC
+    **2026-05-01 … 2026-05-31** (día a día), solo vía **relateddetailid** (mismo núcleo que
+    ``sync_related_documents_range``).
+
+    Registra ``sync_logs``, ``sync_status`` (ya lo hace el rango) y ``sync_state`` operacional
+    (``related`` + ``backfill``). Requiere documents + ``document_details`` mayo ya cargados.
+    """
+    from backend.repositories.distribuidora.sync_repo import (
+        finish_sync_log,
+        insert_sync_status_row,
+        start_sync_log,
+    )
+    from backend.utils.sync_state import MODE_BACKFILL, update_sync_state_error, update_sync_state_success
+
+    log_id: int | None = None
+    conn0 = get_connection()
+    try:
+        c0 = conn0.cursor()
+        ensure_distribuidora_schema(c0)
+        conn0.commit()
+        log_id = start_sync_log(c0, BACKFILL_RELATED_MAY_LOG_PROCESS)
+        conn0.commit()
+        c0.close()
+    finally:
+        conn0.close()
+
+    def _finish_stats(s: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "documents_processed": int(s.get("documents_processed") or 0),
+            "documents_inserted": 0,
+            "documents_updated": 0,
+            "details_inserted": int(s.get("relateddetail_details_processed") or 0),
+            "attributes_inserted": 0,
+            "references_inserted": int(s.get("rows_inserted") or 0),
+        }
+
+    emission_from = datetime(2026, 5, 1, 0, 0, 0, tzinfo=timezone.utc)
+    emission_to_excl = datetime(2026, 6, 1, 0, 0, 0, tzinfo=timezone.utc)
+
+    stats: dict[str, Any]
+    try:
+        stats = sync_related_documents_range(
+            start_date=BACKFILL_RELATED_MAY_2026_START,
+            end_date=BACKFILL_RELATED_MAY_2026_END,
+            strict_token=strict_token,
+        )
+    except ValueError as e:
+        stats = {
+            "mode": "related_range",
+            "skipped": True,
+            "skip_reason": str(e),
+            "rows_inserted": 0,
+            "documents_processed": 0,
+            "relateddetail_details_processed": 0,
+            "relateddetail_items_total": 0,
+            "related_insert_conflicts": 0,
+            "related_insert_attempts": 0,
+            "omitido_concurrencia": False,
+        }
+    except Exception as e:
+        stats = {
+            "mode": "related_range",
+            "errors": str(e),
+            "rows_inserted": 0,
+            "documents_processed": 0,
+            "relateddetail_details_processed": 0,
+            "relateddetail_items_total": 0,
+            "related_insert_conflicts": 0,
+            "related_insert_attempts": 0,
+            "omitido_concurrencia": False,
+        }
+        conn_e = get_connection()
+        try:
+            ce = conn_e.cursor()
+            if log_id is not None:
+                finish_sync_log(
+                    ce,
+                    log_id,
+                    status="error",
+                    stats=_finish_stats(stats),
+                    message=str(e),
+                )
+            update_sync_state_error(
+                ce,
+                sync_type="related",
+                mode=MODE_BACKFILL,
+                office_id=OFFICE_ID,
+                error_summary=str(e),
+                status="error",
+                items_processed=int(stats.get("rows_inserted") or 0),
+            )
+            insert_sync_status_row(
+                ce,
+                sync_type="related",
+                records_processed=int(stats.get("rows_inserted") or 0),
+                status="error",
+            )
+            conn_e.commit()
+            ce.close()
+        finally:
+            conn_e.close()
+        raise
+
+    conn1 = get_connection()
+    try:
+        c1 = conn1.cursor()
+        fs = _finish_stats(stats)
+        if stats.get("skipped"):
+            if log_id is not None:
+                finish_sync_log(
+                    c1,
+                    log_id,
+                    status="error",
+                    stats=fs,
+                    message=str(stats.get("skip_reason") or "skipped"),
+                )
+            insert_sync_status_row(
+                c1,
+                sync_type="related",
+                records_processed=0,
+                status="error",
+            )
+            update_sync_state_error(
+                c1,
+                sync_type="related",
+                mode=MODE_BACKFILL,
+                office_id=OFFICE_ID,
+                error_summary=str(stats.get("skip_reason") or "skipped"),
+                status="error",
+                items_processed=0,
+            )
+            conn1.commit()
+            c1.close()
+            return stats
+
+        if stats.get("omitido_concurrencia"):
+            if log_id is not None:
+                finish_sync_log(
+                    c1,
+                    log_id,
+                    status="ok",
+                    stats=fs,
+                    message="omitido: advisory lock related ocupado",
+                )
+            insert_sync_status_row(
+                c1,
+                sync_type="related",
+                records_processed=0,
+                status="error",
+            )
+            update_sync_state_error(
+                c1,
+                sync_type="related",
+                mode=MODE_BACKFILL,
+                office_id=OFFICE_ID,
+                error_summary="advisory lock related ocupado (sin procesar)",
+                status="error",
+                items_processed=0,
+            )
+            conn1.commit()
+            c1.close()
+            return stats
+
+        update_sync_state_success(
+            c1,
+            sync_type="related",
+            mode=MODE_BACKFILL,
+            office_id=OFFICE_ID,
+            last_window_from=emission_from,
+            last_window_to=emission_to_excl - timedelta(seconds=1),
+            last_watermark=emission_to_excl - timedelta(seconds=1),
+            overlap_days=None,
+            overlap_seconds=None,
+            items_processed=int(stats.get("rows_inserted") or 0),
+            status="success",
+        )
+        if log_id is not None:
+            finish_sync_log(
+                c1,
+                log_id,
+                status="ok",
+                stats=fs,
+                message="backfill_related_may_2026 OK",
+            )
+        conn1.commit()
+        c1.close()
+    finally:
+        conn1.close()
+
+    stats["backfill_may_2026"] = True
     return stats
 
 
