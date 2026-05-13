@@ -21,6 +21,29 @@ END
 $rename_legacy$;
 -- +go
 
+-- Tras RENAME TABLE, el constraint UNIQUE conserva el nombre antiguo en el esquema.
+-- ``001_schema`` vuelve a ejecutar ``CREATE TABLE IF NOT EXISTS distribuidora.sync_state`` con ese
+-- mismo nombre de constraint si la tabla operacional aún no existe → ``DuplicateObject`` /
+-- ``relation ... already exists``. Renombrar el constraint en ``sync_process_cursor`` libera el nombre.
+DO $rename_legacy_uq$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM pg_constraint c
+        JOIN pg_class t ON c.conrelid = t.oid
+        JOIN pg_namespace n ON t.relnamespace = n.oid
+        WHERE n.nspname = 'distribuidora'
+          AND t.relname = 'sync_process_cursor'
+          AND c.conname = 'uq_distribuidora_sync_state_process'
+    ) THEN
+        ALTER TABLE distribuidora.sync_process_cursor
+            RENAME CONSTRAINT uq_distribuidora_sync_state_process
+            TO uq_distribuidora_sync_process_cursor_process;
+    END IF;
+END
+$rename_legacy_uq$;
+-- +go
+
 CREATE TABLE IF NOT EXISTS distribuidora.sync_state (
     id BIGSERIAL PRIMARY KEY,
     sync_type TEXT NOT NULL,

@@ -23,7 +23,7 @@ BEGIN
             last_status TEXT,
             last_message TEXT,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            CONSTRAINT uq_distribuidora_sync_state_process UNIQUE (process_name)
+            CONSTRAINT uq_distribuidora_sync_process_cursor_by_process UNIQUE (process_name)
         );
         INSERT INTO distribuidora.sync_state_new (process_name, last_sync)
         VALUES (
@@ -44,28 +44,38 @@ CREATE TABLE IF NOT EXISTS distribuidora.sync_state (
     last_status TEXT,
     last_message TEXT,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_distribuidora_sync_state_process UNIQUE (process_name)
+    CONSTRAINT uq_distribuidora_sync_process_cursor_by_process UNIQUE (process_name)
 );
 -- +go
 
-INSERT INTO distribuidora.sync_state (process_name, last_sync, last_status)
-VALUES ('documents_incremental', TIMESTAMPTZ '2000-01-01 00:00:00+00', NULL)
-ON CONFLICT (process_name) DO NOTHING;
--- +go
+-- Solo si ``sync_state`` es la tabla legada (columna ``process_name``). Tras 013 la tabla
+-- ``sync_state`` es operacional y estos INSERT no aplican.
+DO $legacy_sync_state_seed$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'distribuidora'
+          AND table_name = 'sync_state'
+          AND column_name = 'process_name'
+    ) THEN
+        INSERT INTO distribuidora.sync_state (process_name, last_sync, last_status)
+        VALUES ('documents_incremental', TIMESTAMPTZ '2000-01-01 00:00:00+00', NULL)
+        ON CONFLICT (process_name) DO NOTHING;
 
-INSERT INTO distribuidora.sync_state (process_name, last_sync, last_status)
-VALUES ('documents_resync', NULL, NULL)
-ON CONFLICT (process_name) DO NOTHING;
--- +go
+        INSERT INTO distribuidora.sync_state (process_name, last_sync, last_status)
+        VALUES ('documents_resync', NULL, NULL)
+        ON CONFLICT (process_name) DO NOTHING;
 
-INSERT INTO distribuidora.sync_state (process_name, last_sync, last_status)
-VALUES ('documents_orders', TIMESTAMPTZ '2000-01-01 00:00:00+00', NULL)
-ON CONFLICT (process_name) DO NOTHING;
--- +go
+        INSERT INTO distribuidora.sync_state (process_name, last_sync, last_status)
+        VALUES ('documents_orders', TIMESTAMPTZ '2000-01-01 00:00:00+00', NULL)
+        ON CONFLICT (process_name) DO NOTHING;
 
-INSERT INTO distribuidora.sync_state (process_name, last_sync, last_status)
-VALUES ('documents_sales', TIMESTAMPTZ '2000-01-01 00:00:00+00', NULL)
-ON CONFLICT (process_name) DO NOTHING;
+        INSERT INTO distribuidora.sync_state (process_name, last_sync, last_status)
+        VALUES ('documents_sales', TIMESTAMPTZ '2000-01-01 00:00:00+00', NULL)
+        ON CONFLICT (process_name) DO NOTHING;
+    END IF;
+END
+$legacy_sync_state_seed$;
 -- +go
 
 CREATE TABLE IF NOT EXISTS distribuidora.sync_logs (
