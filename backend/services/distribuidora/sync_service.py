@@ -1532,6 +1532,344 @@ def backfill_distribuidora_documents_may_2026_documents_only(
     return stats
 
 
+BACKFILL_MAY_DETAILS_LOG_PROCESS = "backfill_details_may_2026"
+
+
+def _backfill_may_details_overlap_days() -> int:
+    try:
+        n = int(os.getenv("BACKFILL_MAY_DETAILS_OVERLAP_DAYS", "0"))
+    except ValueError:
+        n = 0
+    return max(0, min(n, 7))
+
+
+def _backfill_may_details_document_batch() -> int:
+    try:
+        n = int(os.getenv("BACKFILL_MAY_DETAILS_DOCUMENT_BATCH", "250"))
+    except ValueError:
+        n = 250
+    return max(1, min(n, 2000))
+
+
+def _backfill_may_details_doc_retries() -> int:
+    try:
+        n = int(os.getenv("BACKFILL_MAY_DETAILS_DOC_RETRIES", "4"))
+    except ValueError:
+        n = 4
+    return max(1, min(10, n))
+
+
+def _backfill_may_details_extra_sleep() -> float:
+    try:
+        return max(0.0, float(os.getenv("BACKFILL_MAY_DETAILS_EXTRA_SLEEP_SEC", "0")))
+    except ValueError:
+        return 0.0
+
+
+def _count_document_details_rows(cur, document_id: int) -> int:
+    cur.execute(
+        """
+        SELECT COUNT(*)::int
+        FROM distribuidora.document_details
+        WHERE document_id = %s
+        """,
+        (document_id,),
+    )
+    row = cur.fetchone()
+    return int(row[0] or 0) if row else 0
+
+
+def backfill_distribuidora_document_details_may_2026_only(
+    *,
+    strict_token: bool = True,
+) -> dict[str, Any]:
+    """
+    Backfill oficial **solo** ``distribuidora.document_details`` para documentos ya
+    presentes en BD con emisión UTC mayo 2026 (2026-05-01 … 2026-05-31 inclusive, más
+    ``BACKFILL_MAY_DETAILS_OVERLAP_DAYS`` hacia atrás desde el 1).
+
+    Por cada ``document_id``: ``GET /documents/{id}/details.json`` y ``replace_document_details``
+    (DELETE + INSERT por documento; idempotente en re-ejecución). Company 3, office 1.
+
+    Usa el mismo advisory lock que documentos para no solaparse con sync que toque details.
+    """
+    t0 = time.perf_counter()
+    token = _bsale_token()
+    if not token:
+        if strict_token:
+            raise ValueError("Ningún token Bsale: defina BSALE_TOKEN o BSALE_TOKEN_SPA.")
+        return {
+            "skipped": True,
+            "skip_reason": "sin token",
+            "duration_seconds": round(time.perf_counter() - t0, 3),
+            "omitido_concurrencia": False,
+        }
+
+    overlap = _backfill_may_details_overlap_days()
+    start_d = BACKFILL_MAY_2026_START - timedelta(days=overlap)
+    end_d = BACKFILL_MAY_2026_END
+    batch = _backfill_may_details_document_batch()
+    max_retries = _backfill_may_details_doc_retries()
+    extra_sleep = _backfill_may_details_extra_sleep()
+
+    try:
+        max_docs = int(os.getenv("BACKFILL_MAY_DETAILS_MAX_DOCUMENTS", "0"))
+    except ValueError:
+        max_docs = 0
+    max_docs = max(0, min(max_docs, 500_000))
+
+    resume_after_raw = (os.getenv("BACKFILL_MAY_DETAILS_RESUME_AFTER_DOCUMENT_ID") or "").strip()
+    resume_after: int | None = None
+    if resume_after_raw:
+        try:
+            resume_after = int(resume_after_raw)
+        except ValueError:
+            resume_after = None
+
+    emission_from = datetime(
+        start_d.year, start_d.month, start_d.day, 0, 0, 0, tzinfo=timezone.utc
+    )
+    emission_to_excl = datetime(
+        end_d.year, end_d.month, end_d.day, 0, 0, 0, tzinfo=timezone.utc
+    ) + timedelta(days=1)
+
+    stats: dict[str, Any] = {
+        "mode": "backfill_details_may_2026_only",
+        "documents_processed": 0,
+        "documents_with_zero_lines_after": 0,
+        "documents_first_fill": 0,
+        "documents_refreshed": 0,
+        "details_rows_written": 0,
+        "details_rows_replaced_proxy": 0,
+        "document_errors": 0,
+        "details_inserted": 0,
+        "documents_inserted": 0,
+        "documents_updated": 0,
+        "attributes_inserted": 0,
+        "references_inserted": 0,
+        "calendar_start": start_d.isoformat(),
+        "calendar_end": end_d.isoformat(),
+        "overlap_days": overlap,
+        "document_batches": 0,
+        "duration_seconds": 0.0,
+        "omitido_concurrencia": False,
+        "errors": None,
+    }
+
+    conn = get_connection()
+    got_lock = False
+    log_id: int | None = None
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT pg_try_advisory_lock(%s)", (ADVISORY_LOCK_KEY,))
+        got_lock = bool(cur.fetchone()[0])
+        if not got_lock:
+            stats["omitido_concurrencia"] = True
+            cur.close()
+            stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
+            return stats
+
+        ensure_distribuidora_schema(cur)
+        conn.commit()
+
+        log_id = start_sync_log(cur, BACKFILL_MAY_DETAILS_LOG_PROCESS)
+        conn.commit()
+
+        logger.info(
+            "backfill_details_may_2026: company_id=%s office_id=%s emission [%s, %s) overlap_days=%s",
+            COMPANY_ID,
+            OFFICE_ID,
+            emission_from.isoformat(),
+            emission_to_excl.isoformat(),
+            overlap,
+        )
+
+        client = BsaleClient(token)
+        processed_cap = 0
+        last_id = resume_after if resume_after is not None else 0
+
+        while True:
+            cur.execute(
+                """
+                SELECT d.document_id
+                FROM distribuidora.documents d
+                WHERE d.company_id = %s
+                  AND d.office_id = %s
+                  AND d.emission_date >= %s
+                  AND d.emission_date < %s
+                  AND d.document_id > %s
+                ORDER BY d.document_id
+                LIMIT %s
+                """,
+                (COMPANY_ID, OFFICE_ID, emission_from, emission_to_excl, last_id, batch),
+            )
+            id_rows = cur.fetchall() or []
+            if not id_rows:
+                break
+            stats["document_batches"] = int(stats.get("document_batches") or 0) + 1
+
+            for (document_id,) in id_rows:
+                if max_docs and processed_cap >= max_docs:
+                    break
+                doc_id = int(document_id)
+                before_n = _count_document_details_rows(cur, doc_id)
+                last_err: Exception | None = None
+                written = 0
+                for attempt in range(max_retries):
+                    try:
+                        det = client.get(f"/documents/{doc_id}/details.json", timeout=90)
+                        items = det.get("items") if isinstance(det, dict) else []
+                        if not isinstance(items, list):
+                            items = []
+                        written = replace_document_details(cur, doc_id, items)
+                        conn.commit()
+                        last_err = None
+                        break
+                    except Exception as e:
+                        last_err = e
+                        logger.warning(
+                            "backfill_details doc_id=%s intento %s/%s: %s",
+                            doc_id,
+                            attempt + 1,
+                            max_retries,
+                            e,
+                        )
+                        try:
+                            conn.rollback()
+                        except Exception:
+                            pass
+                        time.sleep(min(45.0, 2.0 * (attempt + 1)))
+
+                if last_err is not None:
+                    stats["document_errors"] = int(stats.get("document_errors") or 0) + 1
+                    logger.error(
+                        "backfill_details doc_id=%s falló tras %s intentos: %s",
+                        doc_id,
+                        max_retries,
+                        last_err,
+                    )
+                    processed_cap += 1
+                    stats["documents_processed"] = int(stats.get("documents_processed") or 0) + 1
+                    time.sleep(random.uniform(0.15, 0.45) + extra_sleep)
+                    last_id = doc_id
+                    continue
+
+                stats["documents_processed"] = int(stats.get("documents_processed") or 0) + 1
+                stats["details_rows_written"] = int(stats.get("details_rows_written") or 0) + int(
+                    written
+                )
+                if before_n == 0 and written > 0:
+                    stats["documents_first_fill"] = int(stats.get("documents_first_fill") or 0) + 1
+                elif before_n > 0:
+                    stats["documents_refreshed"] = int(stats.get("documents_refreshed") or 0) + 1
+                    stats["details_rows_replaced_proxy"] = int(
+                        stats.get("details_rows_replaced_proxy") or 0
+                    ) + min(before_n, written)
+                if written == 0:
+                    stats["documents_with_zero_lines_after"] = (
+                        int(stats.get("documents_with_zero_lines_after") or 0) + 1
+                    )
+
+                processed_cap += 1
+                time.sleep(random.uniform(0.15, 0.45) + extra_sleep)
+                last_id = doc_id
+
+            if max_docs and processed_cap >= max_docs:
+                logger.info("backfill_details_may_2026: tope MAX_DOCUMENTS=%s alcanzado", max_docs)
+                break
+            if len(id_rows) < batch:
+                break
+
+        stats["details_inserted"] = int(stats.get("details_rows_written") or 0)
+
+        insert_sync_status_row(
+            cur,
+            sync_type="details",
+            records_processed=int(stats.get("details_rows_written") or 0),
+            status="success",
+        )
+        update_sync_state_success(
+            cur,
+            sync_type="details",
+            mode=MODE_BACKFILL,
+            office_id=OFFICE_ID,
+            last_window_from=emission_from,
+            last_window_to=emission_to_excl - timedelta(seconds=1),
+            last_watermark=emission_to_excl - timedelta(seconds=1),
+            overlap_days=overlap if overlap else None,
+            overlap_seconds=None,
+            items_processed=int(stats.get("details_rows_written") or 0),
+            status="success",
+        )
+        if log_id is not None:
+            finish_sync_log(
+                cur,
+                log_id,
+                status="ok",
+                stats=stats,
+                message="backfill_details_may_2026 OK",
+            )
+        conn.commit()
+        cur.close()
+        logger.info(
+            "backfill_details_may_2026 OK: docs=%s filas_details=%s sin_lineas=%s "
+            "primer_llenado=%s refresco_docs=%s errores=%s s=%.2f",
+            int(stats.get("documents_processed") or 0),
+            int(stats.get("details_rows_written") or 0),
+            int(stats.get("documents_with_zero_lines_after") or 0),
+            int(stats.get("documents_first_fill") or 0),
+            int(stats.get("documents_refreshed") or 0),
+            int(stats.get("document_errors") or 0),
+            time.perf_counter() - t0,
+        )
+    except Exception as e:
+        logger.exception("backfill_details_may_2026: %s", e)
+        stats["errors"] = str(e)
+        try:
+            c2 = conn.cursor()
+            if log_id is not None:
+                finish_sync_log(c2, log_id, status="error", stats=stats, message=str(e))
+            update_sync_state_error(
+                c2,
+                sync_type="details",
+                mode=MODE_BACKFILL,
+                office_id=OFFICE_ID,
+                error_summary=str(e),
+                status="error",
+                items_processed=int(stats.get("details_rows_written") or 0),
+            )
+            insert_sync_status_row(
+                c2,
+                sync_type="details",
+                records_processed=int(stats.get("details_rows_written") or 0),
+                status="error",
+            )
+            conn.commit()
+            c2.close()
+        except Exception:
+            logger.exception("backfill_details_may_2026: error al persistir fallo")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        raise
+    finally:
+        try:
+            if got_lock:
+                c3 = conn.cursor()
+                c3.execute("SELECT pg_advisory_unlock(%s)", (ADVISORY_LOCK_KEY,))
+                c3.close()
+        except Exception:
+            logger.exception("backfill_details_may advisory unlock")
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
+    return stats
+
+
 def run_incremental_distribuidora_background() -> None:
     """Mismo flujo que el job programado: órdenes (33), ventas (1/6/9), luego relaciones."""
     try:
