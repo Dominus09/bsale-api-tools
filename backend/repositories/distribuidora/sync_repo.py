@@ -1,4 +1,4 @@
-"""DDL Distribuidora y estado de sync (sync_state, sync_logs)."""
+"""DDL Distribuidora y estado de sync (``sync_process_cursor``, ``sync_state``, ``sync_logs``)."""
 
 from __future__ import annotations
 
@@ -42,6 +42,7 @@ def ensure_distribuidora_schema(cur) -> None:
         "010_document_sellers.sql",
         "011_v_sales_document_sellers.sql",
         "012_trucks.sql",
+        "013_operational_sync_state.sql",
     ):
         _run_sql_file(cur, fn)
 
@@ -50,7 +51,7 @@ def get_last_sync(cur, process_name: str) -> Any:
     cur.execute(
         """
         SELECT last_sync
-        FROM distribuidora.sync_state
+        FROM distribuidora.sync_process_cursor
         WHERE process_name = %s
         """,
         (process_name,),
@@ -69,7 +70,7 @@ def set_sync_state(
 ) -> None:
     cur.execute(
         """
-        UPDATE distribuidora.sync_state
+        UPDATE distribuidora.sync_process_cursor
         SET last_sync = COALESCE(%s, last_sync),
             last_status = COALESCE(%s, last_status),
             last_message = COALESCE(%s, last_message),
@@ -87,13 +88,13 @@ def ensure_sync_state_row(
     default_last_sync: Any = None,
 ) -> None:
     """
-    Garantiza una fila en ``sync_state`` para ``process_name`` (``set_sync_state`` solo hace UPDATE).
+    Garantiza una fila en ``sync_process_cursor`` para ``process_name`` (``set_sync_state`` solo hace UPDATE).
     """
     if default_last_sync is None:
         default_last_sync = "2000-01-01 00:00:00+00"
     cur.execute(
         """
-        INSERT INTO distribuidora.sync_state (process_name, last_sync, last_status)
+        INSERT INTO distribuidora.sync_process_cursor (process_name, last_sync, last_status)
         VALUES (%s, %s::timestamptz, NULL)
         ON CONFLICT (process_name) DO NOTHING
         """,

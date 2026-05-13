@@ -19,7 +19,14 @@ logger = logging.getLogger(__name__)
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-SECRET = "quillotana_secret_key"
+# Producción: definir JWT_SECRET_KEY o SECRET_KEY. Sin ellas se usa fallback solo desarrollo.
+SECRET = (os.getenv("JWT_SECRET_KEY") or os.getenv("SECRET_KEY") or "").strip()
+if not SECRET:
+    SECRET = "quillotana_secret_key"
+    logger.warning(
+        "JWT_SECRET_KEY / SECRET_KEY no definidas: se usa clave de desarrollo para firmar JWT. "
+        "Configure JWT_SECRET_KEY en producción."
+    )
 
 _LOGIN_DEBUG = os.getenv("AUTH_LOGIN_DEBUG", "").strip().lower() in ("1", "true", "yes")
 

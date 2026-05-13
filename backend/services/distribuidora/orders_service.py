@@ -271,7 +271,7 @@ def get_sync_status_payload() -> dict[str, Any]:
         cur.execute(
             """
             SELECT process_name, last_sync, last_status, last_message, updated_at
-            FROM distribuidora.sync_state
+            FROM distribuidora.sync_process_cursor
             ORDER BY process_name
             """
         )

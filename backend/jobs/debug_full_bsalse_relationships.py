@@ -1,6 +1,8 @@
-"""Compat: nombre con typo; usar ``backend.jobs.debug_full_bsale_relationships``."""
+"""Shim de compatibilidad (typo histórico): reenvía a ``backend.debug.debug_full_bsale_relationships``."""
 
-from backend.jobs.debug_full_bsale_relationships import main
+from __future__ import annotations
+
+from backend.debug.debug_full_bsale_relationships import main
 
 if __name__ == "__main__":
     raise SystemExit(main())

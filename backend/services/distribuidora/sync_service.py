@@ -35,6 +35,11 @@ from backend.repositories.distribuidora.sync_repo import (
     start_sync_log,
 )
 from backend.services.distribuidora.bsale_client import BASE_BSALE, BsaleClient
+from backend.utils.sync_state import (
+    MODE_BACKFILL,
+    update_sync_state_error,
+    update_sync_state_success,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -423,14 +428,15 @@ def _process_one_pending_document_row(
                 )
             _notify_progress(stats)
             return
-        _refresh_document_children(
-            client,
-            cur,
-            int(row["document_id"]),
-            row.get("document_type_id"),
-            stats,
-            raw_document=row.get("_bsale_document"),
-        )
+        if not stats.get("_documents_only_skip_children"):
+            _refresh_document_children(
+                client,
+                cur,
+                int(row["document_id"]),
+                row.get("document_type_id"),
+                stats,
+                raw_document=row.get("_bsale_document"),
+            )
         conn.commit()
         stats["documents_processed"] += 1
         _notify_progress(stats)
@@ -492,6 +498,7 @@ def _fetch_documents_single_day_resync(
     stats: dict[str, Any],
     *,
     page_limit: int | None = None,
+    extra_page_sleep_sec: float = 0.0,
 ) -> None:
     """Un día UTC completo: paginación con offset reiniciado y pausas entre llamadas a Bsale."""
     pl = page_limit if page_limit is not None else _resync_page_limit()
@@ -506,13 +513,15 @@ def _fetch_documents_single_day_resync(
             "emissiondaterange": f"[{desde_ts},{hasta_ts}]",
         }
         data = _documents_get_resync(client, params)
+        if stats.get("_count_document_pages"):
+            stats["document_api_pages"] = int(stats.get("document_api_pages") or 0) + 1
         items = data.get("items") or []
         if not items:
             break
         _append_items_from_bsale_response(items, pending, stats)
         _flush_pending_when_large(client, cur, conn, pending, stats)
         offset += len(items)
-        time.sleep(random.uniform(0.2, 0.5))
+        time.sleep(random.uniform(0.2, 0.5) + max(0.0, float(extra_page_sleep_sec or 0.0)))
     _flush_pending_tail(client, cur, conn, pending, stats)
     logger.info("resync día completado=%s", day.isoformat())
 
@@ -1250,6 +1259,275 @@ def resync_bsale_distribuidora_range(
             pass
 
     stats.pop("_on_progress", None)
+    stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
+    return stats
+
+
+BACKFILL_MAY_2026_START = date(2026, 5, 1)
+BACKFILL_MAY_2026_END = date(2026, 5, 31)
+BACKFILL_MAY_LOG_PROCESS = "backfill_documents_may_2026"
+
+
+def _backfill_may_overlap_days() -> int:
+    try:
+        n = int(os.getenv("BACKFILL_MAY_OVERLAP_DAYS", "0"))
+    except ValueError:
+        n = 0
+    return max(0, min(n, 7))
+
+
+def _backfill_may_extra_page_sleep() -> float:
+    try:
+        return max(0.0, float(os.getenv("BACKFILL_MAY_EXTRA_PAGE_SLEEP_SEC", "0")))
+    except ValueError:
+        return 0.0
+
+
+def _backfill_may_day_max_retries() -> int:
+    try:
+        n = int(os.getenv("BACKFILL_MAY_DAY_MAX_RETRIES", "5"))
+    except ValueError:
+        n = 5
+    return max(1, min(20, n))
+
+
+def _backfill_may_page_limit() -> int:
+    raw = os.getenv("BACKFILL_MAY_PAGE_LIMIT")
+    if raw is None or not str(raw).strip():
+        return _resync_page_limit()
+    try:
+        return max(25, min(50, int(raw)))
+    except ValueError:
+        return _resync_page_limit()
+
+
+def backfill_distribuidora_documents_may_2026_documents_only(
+    *,
+    strict_token: bool = True,
+) -> dict[str, Any]:
+    """
+    Backfill oficial **solo tabla** ``distribuidora.documents`` (company 3, office 1),
+    emisión por día UTC **2026-05-01 … 2026-05-31** (más días opcionales hacia atrás vía
+    ``BACKFILL_MAY_OVERLAP_DAYS``).
+
+    No sincroniza details, attributes, references ni sellers (FASE 7.5). Idempotente vía
+    ``upsert_documents`` / ``ON CONFLICT``. Usa advisory lock principal de documentos,
+    ``sync_status`` y ``sync_state`` (``documents`` + ``backfill``).
+    """
+    t0 = time.perf_counter()
+    token = _bsale_token()
+    if not token:
+        if strict_token:
+            raise ValueError("Ningún token Bsale: defina BSALE_TOKEN o BSALE_TOKEN_SPA.")
+        return {
+            "skipped": True,
+            "skip_reason": "sin token",
+            "duration_seconds": round(time.perf_counter() - t0, 3),
+            "omitido_concurrencia": False,
+        }
+
+    overlap = _backfill_may_overlap_days()
+    start_d = BACKFILL_MAY_2026_START - timedelta(days=overlap)
+    end_d = BACKFILL_MAY_2026_END
+    extra_sleep = _backfill_may_extra_page_sleep()
+    page_lim = _backfill_may_page_limit()
+    max_day_retries = _backfill_may_day_max_retries()
+
+    stats: dict[str, Any] = {
+        "mode": "backfill_documents_may_2026_documents_only",
+        "documents_processed": 0,
+        "documents_inserted": 0,
+        "documents_updated": 0,
+        "updated_documents": 0,
+        "document_errors": 0,
+        "document_upsert_failures": 0,
+        "seller_sync_failures": 0,
+        "details_rows": 0,
+        "attributes_rows": 0,
+        "references_rows": 0,
+        "details_inserted": 0,
+        "attributes_inserted": 0,
+        "references_inserted": 0,
+        "skipped_other_office": 0,
+        "skipped_other_company": 0,
+        "skipped_document_type_filter": 0,
+        "days_processed": 0,
+        "document_api_pages": 0,
+        "calendar_start": start_d.isoformat(),
+        "calendar_end": end_d.isoformat(),
+        "overlap_days": overlap,
+        "duration_seconds": 0.0,
+        "omitido_concurrencia": False,
+        "errors": None,
+        "_documents_only_skip_children": True,
+        "_count_document_pages": True,
+    }
+
+    conn = get_connection()
+    got_lock = False
+    log_id: int | None = None
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT pg_try_advisory_lock(%s)", (ADVISORY_LOCK_KEY,))
+        got_lock = bool(cur.fetchone()[0])
+        if not got_lock:
+            stats["omitido_concurrencia"] = True
+            cur.close()
+            stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
+            return stats
+
+        ensure_distribuidora_schema(cur)
+        conn.commit()
+
+        log_id = start_sync_log(cur, BACKFILL_MAY_LOG_PROCESS)
+        conn.commit()
+
+        logger.info(
+            "backfill_documents_may_2026: company_id=%s office_id=%s rango %s..%s overlap_days=%s",
+            COMPANY_ID,
+            OFFICE_ID,
+            start_d.isoformat(),
+            end_d.isoformat(),
+            overlap,
+        )
+
+        client = BsaleClient(token)
+        current = start_d
+        while current <= end_d:
+            day_ok = False
+            last_err: Exception | None = None
+            for attempt in range(max_day_retries):
+                try:
+                    _fetch_documents_single_day_resync(
+                        client,
+                        cur,
+                        conn,
+                        current,
+                        stats,
+                        page_limit=page_lim,
+                        extra_page_sleep_sec=extra_sleep,
+                    )
+                    stats["days_processed"] = int(stats.get("days_processed") or 0) + 1
+                    logger.info(
+                        "backfill_may día OK %s (docs_proc=%s páginas=%s)",
+                        current.isoformat(),
+                        int(stats.get("documents_processed") or 0),
+                        int(stats.get("document_api_pages") or 0),
+                    )
+                    day_ok = True
+                    break
+                except Exception as e:
+                    last_err = e
+                    logger.warning(
+                        "backfill_may día %s intento %s/%s: %s",
+                        current.isoformat(),
+                        attempt + 1,
+                        max_day_retries,
+                        e,
+                        exc_info=attempt + 1 == max_day_retries,
+                    )
+                    time.sleep(min(60.0, 5.0 * (attempt + 1)))
+            if not day_ok:
+                raise RuntimeError(
+                    f"backfill_may: día {current.isoformat()} falló tras {max_day_retries} intentos"
+                ) from last_err
+            current += timedelta(days=1)
+
+        upd = int(stats.get("updated_documents", 0) or 0)
+        proc = int(stats.get("documents_processed", 0) or 0)
+        stats["documents_updated"] = upd
+        stats["documents_inserted"] = max(0, proc - upd)
+
+        window_from = datetime(
+            start_d.year, start_d.month, start_d.day, 0, 0, 0, tzinfo=timezone.utc
+        )
+        window_to = datetime(
+            end_d.year, end_d.month, end_d.day, 23, 59, 59, tzinfo=timezone.utc
+        )
+        insert_sync_status_row(
+            cur,
+            sync_type="documents",
+            records_processed=proc,
+            status="success",
+        )
+        update_sync_state_success(
+            cur,
+            sync_type="documents",
+            mode=MODE_BACKFILL,
+            office_id=OFFICE_ID,
+            last_window_from=window_from,
+            last_window_to=window_to,
+            last_watermark=window_to,
+            overlap_days=overlap if overlap else None,
+            overlap_seconds=None,
+            items_processed=proc,
+            status="success",
+        )
+        if log_id is not None:
+            finish_sync_log(
+                cur,
+                log_id,
+                status="ok",
+                stats=stats,
+                message="backfill_documents_may_2026 documents_only OK",
+            )
+        conn.commit()
+        cur.close()
+        logger.info(
+            "backfill_documents_may_2026 OK: days=%s processed=%s inserted≈%s updated≈%s "
+            "errors=%s páginas_api=%s s=%.2f",
+            stats["days_processed"],
+            proc,
+            stats["documents_inserted"],
+            upd,
+            int(stats.get("document_errors") or 0),
+            int(stats.get("document_api_pages") or 0),
+            time.perf_counter() - t0,
+        )
+    except Exception as e:
+        logger.exception("backfill_documents_may_2026: %s", e)
+        stats["errors"] = str(e)
+        try:
+            c2 = conn.cursor()
+            if log_id is not None:
+                finish_sync_log(c2, log_id, status="error", stats=stats, message=str(e))
+            update_sync_state_error(
+                c2,
+                sync_type="documents",
+                mode=MODE_BACKFILL,
+                office_id=OFFICE_ID,
+                error_summary=str(e),
+                status="error",
+                items_processed=int(stats.get("documents_processed") or 0),
+            )
+            insert_sync_status_row(
+                c2,
+                sync_type="documents",
+                records_processed=int(stats.get("documents_processed") or 0),
+                status="error",
+            )
+            conn.commit()
+            c2.close()
+        except Exception:
+            logger.exception("backfill_documents_may_2026: error al persistir fallo")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        raise
+    finally:
+        try:
+            if got_lock:
+                c3 = conn.cursor()
+                c3.execute("SELECT pg_advisory_unlock(%s)", (ADVISORY_LOCK_KEY,))
+                c3.close()
+        except Exception:
+            logger.exception("backfill_may advisory unlock")
+        try:
+            conn.close()
+        except Exception:
+            pass
+
     stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
     return stats
 

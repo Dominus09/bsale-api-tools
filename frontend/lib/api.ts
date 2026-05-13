@@ -1097,7 +1097,7 @@ export async function postDistribuidoraSyncOrders(params?: {
   }
 }
 
-/** GET /distribuidora/sync-status — estado ``sync_state`` + último ``sync_logs`` por proceso. */
+/** GET /distribuidora/sync-status — cursores ``sync_process_cursor`` + último ``sync_logs`` por proceso. */
 export type DistribuidoraSyncStatusBranch = {
   last_run: string | null
   processed: number

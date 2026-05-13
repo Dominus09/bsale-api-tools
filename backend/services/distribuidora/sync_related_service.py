@@ -13,7 +13,7 @@ Escribe ``distribuidora.document_related`` con deduplicación (``ON CONFLICT``) 
 Incluye ``sync_related_documents_range`` para rellenar histórico por rango de emisión (día a día).
 
 Depuración por número de OC: ``debug_sync_related_for_document`` o
-``python -m backend.jobs.debug_sync_related_oc [número]``.
+``python -m backend.debug.debug_sync_related_oc [número]``.
 """
 
 from __future__ import annotations
@@ -713,6 +713,7 @@ def sync_distribuidora_related_documents(
         "rows_inserted": 0,
         "api_calls": 0,
         "related_skipped_other_office": 0,
+        "document_errors": 0,
         "duration_seconds": 0.0,
         "skipped": False,
         "omitido_concurrencia": False,
@@ -755,6 +756,7 @@ def sync_distribuidora_related_documents(
                 )
             except Exception as e:
                 logger.warning("sync_related document_id=%s: %s", doc_id, e)
+                stats["document_errors"] = int(stats.get("document_errors") or 0) + 1
                 continue
             stats["api_calls"] += calls
             stats["rows_inserted"] += ins
@@ -955,7 +957,7 @@ def debug_sync_related_for_document(document_number: int) -> dict[str, Any]:
     """
     Ejecuta **solo** el flujo ``document_related`` para una OC identificada por ``number`` en BD.
 
-    Útil para depurar (p. ej. ``python -m backend.jobs.debug_sync_related_oc 66080``).
+    Útil para depurar (p. ej. ``python -m backend.debug.debug_sync_related_oc 66080``).
     Requiere el mismo advisory lock que el sync incremental de relaciones.
     """
     token = _bsale_token()

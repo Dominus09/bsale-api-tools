@@ -1,4 +1,4 @@
-"""Estado UI de sync tipado (órdenes / ventas) desde ``sync_state`` y ``sync_logs``."""
+"""Estado UI de sync tipado (órdenes / ventas) desde ``sync_process_cursor`` y ``sync_logs``."""
 
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ def _ui_status_from_log_row(
     ``ok`` | ``running`` | ``error``.
 
     * ``running``: último log sin ``finished_at`` y ``started_at`` reciente.
-    * ``error``: último log terminado en error, o ``sync_state.last_status``.
+    * ``error``: último log terminado en error, o ``sync_process_cursor.last_status``.
     """
     if sync_state_status and str(sync_state_status).lower() == "error":
         return "error"
@@ -94,7 +94,7 @@ def _fetch_sync_state_row(cur, process_name: str) -> dict[str, Any] | None:
     cur.execute(
         """
         SELECT process_name, last_sync, last_status, last_message, updated_at
-        FROM distribuidora.sync_state
+        FROM distribuidora.sync_process_cursor
         WHERE process_name = %s
         """,
         (process_name,),
@@ -113,7 +113,7 @@ def _fetch_sync_state_row(cur, process_name: str) -> dict[str, Any] | None:
 
 def get_distribuidora_sync_status_payload() -> dict[str, Any]:
     """
-    Combina ``sync_state`` (``documents_orders``, ``documents_sales``) con el último ``sync_logs``.
+    Combina ``sync_process_cursor`` (``documents_orders``, ``documents_sales``) con el último ``sync_logs``.
 
     Métricas numéricas provienen del JSON en ``last_message`` escrito al finalizar cada sync OK.
     """

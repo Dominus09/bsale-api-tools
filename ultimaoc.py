@@ -1,11 +1,21 @@
 import requests
 import json
 import time
+import os
 
-BSALE_TOKEN = "3d46d0ac6f42455660f2504d27399d5da3550e25"
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
+
+_BSALE = (os.getenv("BSALE_TOKEN") or os.getenv("BSALE_TOKEN_SPA") or "").strip()
+if not _BSALE:
+    raise SystemExit("Defina BSALE_TOKEN o BSALE_TOKEN_SPA en .env o entorno.")
 
 HEADERS = {
-    "access_token": BSALE_TOKEN,
+    "access_token": _BSALE,
     "Content-Type": "application/json"
 }
 

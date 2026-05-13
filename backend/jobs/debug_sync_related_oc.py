@@ -1,23 +1,13 @@
-"""
-Depuración: sync solo ``document_related`` para una OC por número (Bsale ``number``).
+"""Shim de compatibilidad: el módulo vive en ``backend.debug``.
 
-Uso:
-  python -m backend.jobs.debug_sync_related_oc [66080]
+Ejecute preferentemente::
+
+    python -m backend.debug.debug_sync_related_oc [número]
 """
 
 from __future__ import annotations
 
-import json
-import sys
-
-from backend.services.distribuidora.sync_related_service import debug_sync_related_for_document
-
-
-def main() -> None:
-    n = int(sys.argv[1]) if len(sys.argv) > 1 else 66080
-    out = debug_sync_related_for_document(n)
-    print(json.dumps(out, ensure_ascii=False, indent=2, default=str))
-
+from backend.debug.debug_sync_related_oc import main
 
 if __name__ == "__main__":
     main()

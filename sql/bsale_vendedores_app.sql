@@ -31,7 +31,7 @@ COMMENT ON COLUMN bsale.vendedores_app.tipo_usuario IS
 
 -- -----------------------------------------------------------------------------
 -- Datos iniciales (contraseña en claro para todos: Laquillotana123)
--- Hash generado con bcrypt (cost 12). Para regenerar: backend/scripts/gen_vendedores_app_password_hash.py
+-- Hash generado con bcrypt (cost 12). Para regenerar: backend/maintenance/gen_vendedores_app_password_hash.py (o ``python -m backend.maintenance.gen_vendedores_app_password_hash``)
 -- -----------------------------------------------------------------------------
 INSERT INTO bsale.vendedores_app (codigo, nombre, password_hash, tipo_usuario)
 VALUES
