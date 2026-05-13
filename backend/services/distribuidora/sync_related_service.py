@@ -29,6 +29,7 @@ import psycopg2.errors
 from psycopg2.extensions import connection as PgConnection
 
 from backend.db import get_connection
+from backend.repositories.distribuidora.details_repo import replace_document_details
 from backend.repositories.distribuidora.sync_repo import (
     ensure_distribuidora_schema,
     insert_sync_status_row,
@@ -198,6 +199,202 @@ def _detail_ids_for_document(cur, document_id: int) -> list[int]:
         (document_id,),
     )
     return [int(r[0]) for r in cur.fetchall()]
+
+
+def _detail_ids_missing_for_document(
+    cur,
+    document_id: int,
+    candidate_ids: list[int],
+) -> list[int]:
+    """
+    ``detail_id`` presentes en ``candidate_ids`` que aún no están en ``document_details``
+    para este ``document_id`` (evita FK al insertar ``document_related``).
+    """
+    uniq = list(dict.fromkeys(int(x) for x in candidate_ids if x is not None))
+    if not uniq:
+        return []
+    cur.execute(
+        """
+        SELECT x.detail_id::bigint
+        FROM unnest(%s::bigint[]) AS x(detail_id)
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM distribuidora.document_details dd
+            WHERE dd.document_id = %s
+              AND dd.detail_id = x.detail_id
+        )
+        ORDER BY 1
+        """,
+        (uniq, document_id),
+    )
+    return [int(r[0]) for r in cur.fetchall()]
+
+
+def _fetch_all_detail_items_from_bsale(
+    client: BsaleClient,
+    document_id: int,
+    *,
+    throttle: float,
+    log_ctx: str,
+) -> tuple[list[dict[str, Any]], int]:
+    """Paginación completa de ``details.json`` (items crudos para ``replace_document_details``)."""
+    items_out: list[dict[str, Any]] = []
+    api_calls = 0
+    offset = 0
+    while True:
+        try:
+            data = client.get(
+                f"/documents/{document_id}/details.json",
+                {"limit": DETAILS_PAGE_LIMIT, "offset": offset},
+            )
+        except Exception as e:
+            logger.warning(
+                "%s details.json (self-heal) document_id=%s offset=%s: %s",
+                log_ctx,
+                document_id,
+                offset,
+                e,
+            )
+            break
+        api_calls += 1
+        items = data.get("items") or []
+        if not isinstance(items, list):
+            break
+        for it in items:
+            if isinstance(it, dict):
+                items_out.append(it)
+        if len(items) < DETAILS_PAGE_LIMIT:
+            break
+        offset += len(items)
+        if throttle > 0:
+            time.sleep(throttle)
+    return items_out, api_calls
+
+
+def _self_heal_document_details_if_needed(
+    client: BsaleClient,
+    conn: PgConnection,
+    cur,
+    document_id: int,
+    candidate_detail_ids: list[int],
+    *,
+    throttle: float,
+    log_ctx: str,
+    stats: dict[str, Any] | None,
+) -> tuple[list[int], int]:
+    """
+    Si ``details.json`` expone ``detail_id`` que aún no están en BD, refresca **solo** este documento
+    con ``replace_document_details`` y revalida. Retorna ``(still_missing, api_calls_extra)``.
+    """
+    try:
+        max_attempts = int(os.getenv("RELATED_DETAILS_SELF_HEAL_MAX_ATTEMPTS", "2"))
+    except ValueError:
+        max_attempts = 2
+    max_attempts = max(1, min(max_attempts, 5))
+
+    extra_calls = 0
+    missing = _detail_ids_missing_for_document(cur, document_id, candidate_detail_ids)
+    if not missing:
+        return [], 0
+
+    logger.warning(
+        "%s self-heal details: document_id=%s detail_ids_en_api_sin_BD=%s (n=%s)",
+        log_ctx,
+        document_id,
+        missing,
+        len(missing),
+    )
+    if stats is not None:
+        stats["details_self_heal_missing_detected"] = int(
+            stats.get("details_self_heal_missing_detected") or 0
+        ) + len(missing)
+
+    still_missing = list(missing)
+    for attempt in range(1, max_attempts + 1):
+        items, c_fetch = _fetch_all_detail_items_from_bsale(
+            client,
+            document_id,
+            throttle=throttle,
+            log_ctx=log_ctx,
+        )
+        extra_calls += c_fetch
+        try:
+            n_written = replace_document_details(cur, document_id, items)
+        except Exception as e:
+            logger.error(
+                "%s self-heal replace_document_details falló document_id=%s intento=%s: %s",
+                log_ctx,
+                document_id,
+                attempt,
+                e,
+                exc_info=True,
+            )
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            if stats is not None:
+                stats["details_self_heal_refresh_failures"] = int(
+                    stats.get("details_self_heal_refresh_failures") or 0
+                ) + 1
+            break
+
+        conn.commit()
+        if stats is not None:
+            stats["details_self_heal_refreshes"] = int(stats.get("details_self_heal_refreshes") or 0) + 1
+            stats["details_self_heal_rows_written"] = int(
+                stats.get("details_self_heal_rows_written") or 0
+            ) + int(n_written)
+
+        prev_still = set(still_missing)
+        still_missing = _detail_ids_missing_for_document(cur, document_id, candidate_detail_ids)
+        recovered_this_attempt = sorted(prev_still - set(still_missing))
+        logger.info(
+            "%s self-heal details: document_id=%s intento=%s/%s filas_escritas=%s "
+            "detail_ids_recuperados=%s",
+            log_ctx,
+            document_id,
+            attempt,
+            max_attempts,
+            n_written,
+            recovered_this_attempt,
+        )
+        if not still_missing:
+            logger.info(
+                "%s self-heal details OK: document_id=%s tras %s intento(s)",
+                log_ctx,
+                document_id,
+                attempt,
+            )
+            break
+
+        logger.warning(
+            "%s self-heal details: document_id=%s tras intento %s siguen faltando detail_ids=%s",
+            log_ctx,
+            document_id,
+            attempt,
+            still_missing,
+        )
+        if attempt < max_attempts:
+            if stats is not None:
+                stats["details_self_heal_retries"] = int(stats.get("details_self_heal_retries") or 0) + 1
+            if throttle > 0:
+                time.sleep(min(2.0, throttle * 3))
+
+    if still_missing:
+        logger.error(
+            "%s self-heal details agotado: document_id=%s detail_ids_aún_sin_BD=%s — "
+            "se omitirá relateddetailid para esos ids",
+            log_ctx,
+            document_id,
+            still_missing,
+        )
+        if stats is not None:
+            stats["details_self_heal_still_missing"] = int(
+                stats.get("details_self_heal_still_missing") or 0
+            ) + len(still_missing)
+
+    return still_missing, extra_calls
 
 
 def _coerce_document_type_id(raw: Any) -> int | None:
@@ -593,10 +790,35 @@ def _sync_related_by_detail_for_oc_document(
         else:
             logger.warning("%s sin detail_ids (API ni BD) document_id=%s", log_ctx, document_id)
 
+    still_missing_fk, heal_calls = _self_heal_document_details_if_needed(
+        client,
+        conn,
+        cur,
+        document_id,
+        detail_ids,
+        throttle=throttle,
+        log_ctx=log_ctx,
+        stats=stats,
+    )
+    calls_details += heal_calls
+    still_missing_set = frozenset(still_missing_fk)
+    if still_missing_set:
+        logger.warning(
+            "%s relateddetailid omitido para detail_ids sin fila en document_details "
+            "(tras self-heal) document_id=%s detail_ids=%s",
+            log_ctx,
+            document_id,
+            sorted(still_missing_set),
+        )
+
     items_total = 0
     rows_ins = 0
     calls_rel = 0
+    details_processed = 0
     for did in detail_ids:
+        if did in still_missing_set:
+            continue
+        details_processed += 1
         if stats is not None:
             stats["relateddetail_details_processed"] = (
                 int(stats.get("relateddetail_details_processed") or 0) + 1
@@ -620,15 +842,18 @@ def _sync_related_by_detail_for_oc_document(
 
     calls_total = calls_details + calls_rel
     logger.info(
-        "%s relateddetail flujo: document_id=%s details=%s items=%s insertadas=%s api=%s",
+        "%s relateddetail flujo: document_id=%s details_api=%s details_procesados=%s "
+        "omitidos_sin_fila=%s items=%s insertadas=%s api=%s",
         log_ctx,
         document_id,
         len(detail_ids),
+        details_processed,
+        len(still_missing_set),
         items_total,
         rows_ins,
         calls_total,
     )
-    return len(detail_ids), items_total, rows_ins, calls_total
+    return details_processed, items_total, rows_ins, calls_total
 
 
 def _fetch_and_persist_related_for_document(
@@ -718,6 +943,12 @@ def sync_distribuidora_related_documents(
         "skipped": False,
         "omitido_concurrencia": False,
         "errors": None,
+        "details_self_heal_missing_detected": 0,
+        "details_self_heal_refreshes": 0,
+        "details_self_heal_rows_written": 0,
+        "details_self_heal_retries": 0,
+        "details_self_heal_refresh_failures": 0,
+        "details_self_heal_still_missing": 0,
     }
 
     conn = get_connection()
@@ -855,6 +1086,12 @@ def sync_related_documents_range(
         "errors": None,
         "related_insert_conflicts": 0,
         "related_insert_attempts": 0,
+        "details_self_heal_missing_detected": 0,
+        "details_self_heal_refreshes": 0,
+        "details_self_heal_rows_written": 0,
+        "details_self_heal_retries": 0,
+        "details_self_heal_refresh_failures": 0,
+        "details_self_heal_still_missing": 0,
     }
 
     conn = get_connection()
