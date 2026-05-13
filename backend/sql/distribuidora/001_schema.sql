@@ -6,6 +6,7 @@ CREATE SCHEMA IF NOT EXISTS distribuidora;
 -- +go
 
 -- Migra sync_state legado (id + last_sync) → modelo por process_name.
+-- No debe ejecutarse si ``sync_state`` es ya la tabla operacional post-013 (sin ``last_sync`` / con ``sync_type``).
 DO $mig_sync$
 BEGIN
     IF EXISTS (
@@ -15,6 +16,14 @@ BEGIN
         SELECT 1 FROM information_schema.columns
         WHERE table_schema = 'distribuidora' AND table_name = 'sync_state'
           AND column_name = 'process_name'
+    ) AND EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'distribuidora' AND table_name = 'sync_state'
+          AND column_name = 'last_sync'
+    ) AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'distribuidora' AND table_name = 'sync_state'
+          AND column_name = 'sync_type'
     ) THEN
         CREATE TABLE distribuidora.sync_state_new (
             id SERIAL PRIMARY KEY,
