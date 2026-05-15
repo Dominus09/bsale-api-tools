@@ -284,6 +284,90 @@ def _write_markdown(
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+RECOMMENDATION_STDOUT: dict[str, str] = {
+    "A": "A) relateddetailid puro",
+    "B": "B) relateddetailid + recursión 33",
+    "C": "C) relateddetailid + references híbrido",
+    "D": "D) references obligatorio",
+}
+
+
+def _terminal_types_str(g: dict[str, Any]) -> str:
+    terms = g.get("terminal_documents") or []
+    ids = sorted(
+        {int(t["document_type_id"]) for t in terms if t.get("document_type_id") is not None},
+    )
+    return ",".join(str(x) for x in ids) if ids else "-"
+
+
+def _print_stdout_summary(
+    *,
+    d0: date,
+    d1: date,
+    stats: dict[str, Any],
+    class_counter: Counter[str],
+    recommendation: str,
+    rationale: str,
+    per_oc: list[dict[str, Any]],
+) -> None:
+    cc = class_counter
+    sep = "=" * 60
+    print()
+    print(sep)
+    print("RELATED GRAPH ANALYSIS — SUMMARY")
+    print(sep)
+    print(f"date_range_utc: {d0.isoformat()} .. {d1.isoformat()} (inclusive)")
+    print()
+    print(f"total_oc:                 {stats['total_oc']}")
+    print(f"total_with_related:       {stats['total_with_related']}")
+    print(f"total_without_related:    {stats['total_without_related']}")
+    print()
+    print(f"NO_RELATIONS:             {cc.get('NO_RELATIONS', 0)}")
+    print(f"ONLY_TYPE_33:             {cc.get('ONLY_TYPE_33', 0)}")
+    print(f"ENDS_IN_1_6_9:            {cc.get('ENDS_IN_1_6_9', 0)}")
+    print(f"MULTI_LEVEL_33_CHAIN:     {cc.get('MULTI_LEVEL_33_CHAIN', 0)}")
+    print(f"LOOP_DETECTED:            {cc.get('LOOP_DETECTED', 0)}")
+    print(f"UNRESOLVED_BRANCH:      {cc.get('UNRESOLVED_BRANCH', 0)}")
+    print(f"MIXED_BRANCHES:           {cc.get('MIXED_BRANCHES', 0)}")
+    print()
+    print(f"total_terminal_1 (edges): {stats.get('total_terminal_1', 0)}")
+    print(f"total_terminal_6 (edges): {stats.get('total_terminal_6', 0)}")
+    print(f"total_terminal_9 (edges): {stats.get('total_terminal_9', 0)}")
+    print()
+    print(f"max_depth_found:          {stats['max_depth_found']}")
+    print(f"average_depth:            {round(stats['average_depth'], 6)}")
+    print()
+    print(f"total_nodes:              {stats['total_nodes']}")
+    print(f"total_edges:              {stats['total_edges']}")
+    print(f"total_api_calls:          {stats.get('total_api_calls', 0)}")
+    print()
+    rec_line = RECOMMENDATION_STDOUT.get(recommendation, f"{recommendation} (desconocido)")
+    print("recommendation:")
+    print(f"  {rec_line}")
+    print(f"  ({rationale})")
+    print(sep)
+
+    def _top(flag: str, title: str) -> None:
+        print()
+        print(f"TOP 10 — {title}")
+        rows = [r for r in per_oc if flag in (r.get("classifications") or [])][:10]
+        if not rows:
+            print("  (ninguno)")
+            return
+        for r in rows:
+            print(
+                f"  OC {r.get('number')} / doc_id {r.get('document_id')} / "
+                f"depth {r.get('max_edge_depth')} / terminal_types {r.get('terminal_types', '-')}",
+            )
+
+    _top("ONLY_TYPE_33", "ONLY_TYPE_33")
+    _top("ENDS_IN_1_6_9", "ENDS_IN_1_6_9")
+    _top("UNRESOLVED_BRANCH", "UNRESOLVED_BRANCH")
+    print()
+    print(sep)
+    print()
+
+
 def _excel_df(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
@@ -392,6 +476,7 @@ def main() -> int:
             "unresolved_count": len(g.get("unresolved_branches") or []),
             "max_edge_depth": md,
             "graph_conclusion": (g.get("summary") or {}).get("conclusion"),
+            "terminal_types": _terminal_types_str(g),
         }
         if args.full_graph:
             entry["nodes"] = g.get("nodes")
@@ -522,6 +607,16 @@ def main() -> int:
 
     _write_markdown(MD_OUT, d0=d0, d1=d1, class_counts=class_counter, stats=stats, questions=questions)
     print(f"Markdown: {MD_OUT}")
+
+    _print_stdout_summary(
+        d0=d0,
+        d1=d1,
+        stats=stats,
+        class_counter=class_counter,
+        recommendation=recommendation,
+        rationale=rationale,
+        per_oc=per_oc,
+    )
     return 0
 
 
