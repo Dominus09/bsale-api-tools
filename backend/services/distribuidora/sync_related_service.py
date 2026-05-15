@@ -4,6 +4,11 @@ Sync incremental de relaciones **operacionales** OC → ventas/NC:
 - ``GET /v1/documents/{document_id}/details.json`` y por cada ``detail.id``:
   ``GET /v1/documents.json?relateddetailid=``.
 
+Si Bsale devuelve una OC intermedia (``document_type_id = 33``), se expande **solo** vía
+``relateddetailid`` hasta ``RELATED_MAX_TYPE33_DEPTH`` (default 1) y se persisten únicamente
+aristas hacia documentos terminales **1 / 6 / 9** desde el ``detail_id`` de la OC original
+(no se guardan relaciones 33→33).
+
 **No** se usa ``references.json`` aquí: la fuente de verdad para ``document_related`` es solo
 ``relateddetailid``. Las referencias tributarias/XML siguen en ``sync_service`` →
 ``distribuidora.document_references``.
@@ -565,22 +570,243 @@ def _insert_related_triples(
     return inserted_new
 
 
+def _fetch_all_items_for_relateddetailid(
+    client: BsaleClient,
+    detail_id: int,
+    *,
+    throttle: float,
+    log_ctx: str,
+) -> tuple[list[dict[str, Any]], int]:
+    """Todas las páginas de ``/documents.json?relateddetailid=`` para un ``detail_id``."""
+    merged: list[dict[str, Any]] = []
+    api_calls = 0
+    offset = 0
+    while True:
+        try:
+            data = client.get(
+                "/documents.json",
+                {
+                    "relateddetailid": detail_id,
+                    "limit": RELATED_DETAIL_PAGE_LIMIT,
+                    "offset": offset,
+                    "officeId": OFFICE_ID,
+                },
+            )
+        except Exception as e:
+            logger.warning("%s relateddetailid=%s offset=%s: %s", log_ctx, detail_id, offset, e)
+            break
+        api_calls += 1
+        items = data.get("items") or []
+        if not items:
+            break
+        for it in items:
+            if isinstance(it, dict):
+                merged.append(it)
+        if len(items) < RELATED_DETAIL_PAGE_LIMIT:
+            break
+        offset += len(items)
+        if throttle > 0:
+            time.sleep(throttle)
+    return merged, api_calls
+
+
+def _collect_terminal_triples_from_related_oc(
+    client: BsaleClient,
+    cur,
+    *,
+    root_detail_id: int,
+    root_oc_document_id: int,
+    related_oc_document_id: int,
+    depth: int,
+    max_depth: int,
+    visited: set[int],
+    throttle: float,
+    stats: dict[str, Any] | None,
+    log_ctx: str,
+) -> tuple[list[tuple[int, int, int]], int]:
+    """
+    Desde una OC intermedia (33), recorre ``details.json`` + ``relateddetailid`` y devuelve
+    triples ``(root_detail_id, terminal_document_id, tipo 1|6|9)`` únicamente para terminales.
+    No persiste vínculos 33→33.
+    """
+    api_calls = 0
+    if related_oc_document_id in visited:
+        if stats is not None:
+            stats["related_type33_loops"] = int(stats.get("related_type33_loops") or 0) + 1
+        logger.warning(
+            "%s [RELATED][TYPE33_RESOLUTION] loops_detected=1 root_oc=%s current_depth=%s related_oc=%s",
+            log_ctx,
+            root_oc_document_id,
+            depth,
+            related_oc_document_id,
+        )
+        return [], api_calls
+
+    loc = set(visited)
+    loc.add(related_oc_document_id)
+    if stats is not None:
+        stats["related_type33_resolutions"] = int(stats.get("related_type33_resolutions") or 0) + 1
+
+    logger.info(
+        "%s [RELATED][TYPE33_RESOLUTION] root_oc=%s root_detail=%s current_depth=%s related_oc=%s max_depth=%s",
+        log_ctx,
+        root_oc_document_id,
+        root_detail_id,
+        depth,
+        related_oc_document_id,
+        max_depth,
+    )
+
+    detail_ids, c_det = _fetch_detail_ids_from_bsale_details(
+        client,
+        related_oc_document_id,
+        throttle=throttle,
+        log_ctx=log_ctx,
+    )
+    api_calls += c_det
+
+    out: list[tuple[int, int, int]] = []
+    branches_seen = 0
+    terminals_here = 0
+
+    for child_detail_id in detail_ids:
+        items, c_rel = _fetch_all_items_for_relateddetailid(
+            client,
+            child_detail_id,
+            throttle=throttle,
+            log_ctx=log_ctx,
+        )
+        api_calls += c_rel
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            rid, tid, office_blob, parse_motivo = _parse_related_document_blob(it)
+            if parse_motivo is not None or rid is None:
+                continue
+            if rid in (root_oc_document_id, related_oc_document_id):
+                continue
+            if tid is None:
+                continue
+            if tid in RELATED_DOCUMENT_TYPES_ALLOWED:
+                allow_office, office_motivo = _office_allows_relation(cur, rid, office_blob)
+                if not allow_office:
+                    if stats is not None:
+                        stats["related_skipped_other_office"] = (
+                            int(stats.get("related_skipped_other_office") or 0) + 1
+                        )
+                    continue
+                out.append((root_detail_id, rid, tid))
+                terminals_here += 1
+                if stats is not None:
+                    stats["related_type33_terminal_found"] = (
+                        int(stats.get("related_type33_terminal_found") or 0) + 1
+                    )
+                    if depth == 0:
+                        stats["related_type33_depth1_hits"] = (
+                            int(stats.get("related_type33_depth1_hits") or 0) + 1
+                        )
+                logger.info(
+                    "%s [RELATED][TYPE33_RESOLUTION] terminal_found=1 root_oc=%s root_detail=%s "
+                    "related_oc=%s current_depth=%s terminal_doc=%s terminal_type=%s (%s)",
+                    log_ctx,
+                    root_oc_document_id,
+                    root_detail_id,
+                    related_oc_document_id,
+                    depth,
+                    rid,
+                    tid,
+                    office_motivo,
+                )
+                continue
+
+            if tid != DOC_TYPE_OC:
+                continue
+
+            branches_seen += 1
+            if stats is not None:
+                stats["related_type33_branches"] = int(stats.get("related_type33_branches") or 0) + 1
+
+            if rid in loc:
+                if stats is not None:
+                    stats["related_type33_loops"] = int(stats.get("related_type33_loops") or 0) + 1
+                logger.warning(
+                    "%s [RELATED][TYPE33_RESOLUTION] loops_detected=1 root_oc=%s related_oc=%s nested_oc=%s",
+                    log_ctx,
+                    root_oc_document_id,
+                    related_oc_document_id,
+                    rid,
+                )
+                continue
+
+            if depth + 1 >= max_depth:
+                logger.info(
+                    "%s [RELATED][TYPE33_RESOLUTION] max_depth alcanzado root_oc=%s depth=%s nested_oc=%s",
+                    log_ctx,
+                    root_oc_document_id,
+                    depth,
+                    rid,
+                )
+                continue
+
+            allow_office, office_motivo = _office_allows_relation(cur, rid, office_blob)
+            if not allow_office:
+                if stats is not None:
+                    stats["related_skipped_other_office"] = (
+                        int(stats.get("related_skipped_other_office") or 0) + 1
+                    )
+                continue
+
+            sub, ac_sub = _collect_terminal_triples_from_related_oc(
+                client,
+                cur,
+                root_detail_id=root_detail_id,
+                root_oc_document_id=root_oc_document_id,
+                related_oc_document_id=rid,
+                depth=depth + 1,
+                max_depth=max_depth,
+                visited=loc,
+                throttle=throttle,
+                stats=stats,
+                log_ctx=log_ctx,
+            )
+            api_calls += ac_sub
+            out.extend(sub)
+
+    logger.info(
+        "%s [RELATED][TYPE33_RESOLUTION] branches_resolved summary related_oc=%s depth=%s "
+        "child_details=%s branches_seen=%s terminals_here=%s triples_out=%s",
+        log_ctx,
+        related_oc_document_id,
+        depth,
+        len(detail_ids),
+        branches_seen,
+        terminals_here,
+        len(out),
+    )
+    return out, api_calls
+
+
 def _documents_json_items_to_triples(
+    client: BsaleClient,
     cur,
     detail_id: int,
     items: list[Any],
     *,
     oc_document_id: int,
+    throttle: float,
+    max_type33_depth: int,
     stats: dict[str, Any] | None,
     log_ctx: str,
-) -> list[tuple[int, int, int]]:
+) -> tuple[list[tuple[int, int, int]], int]:
     """
-    Parsea cada ítem raíz de ``/documents.json?relateddetailid=`` (documento devuelto por Bsale).
+    Parsea cada ítem de ``/documents.json?relateddetailid=``.
 
-    No expande sub-objetos ``references`` embebidos en el ítem: solo el documento de la raíz
-    (formato plano o ``document`` anidado vía ``_parse_related_document_blob``).
+    - Tipos **1 / 6 / 9**: triple directo ``(detail_id raíz OC, related_id, tipo)``.
+    - Tipo **33** (OC mutada): expande ``details.json`` + ``relateddetailid`` hasta ``max_type33_depth``
+      y solo añade triples hacia terminales 1/6/9 (``detail_id`` sigue siendo el de la OC original).
     """
     out: list[tuple[int, int, int]] = []
+    api_extra = 0
     logger.info("%s[detail %s] related items API=%s", log_ctx, detail_id, len(items))
     for it in items:
         if not isinstance(it, dict):
@@ -613,51 +839,93 @@ def _documents_json_items_to_triples(
                 rid,
             )
             continue
-        if tid not in RELATED_DOCUMENT_TYPES_ALLOWED:
-            logger.warning(
-                "%s[detail %s] relación descartada: tipo inválido=%s",
+
+        if tid in RELATED_DOCUMENT_TYPES_ALLOWED:
+            allow_office, office_motivo = _office_allows_relation(cur, rid, office_blob)
+            if not allow_office:
+                if stats is not None:
+                    stats["related_skipped_other_office"] = (
+                        int(stats.get("related_skipped_other_office") or 0) + 1
+                    )
+                logger.warning(
+                    "%s[detail %s] relación descartada por office: related_document_id=%s → %s",
+                    log_ctx,
+                    detail_id,
+                    rid,
+                    office_motivo,
+                )
+                continue
+            if allow_office and (
+                "aceptado por BD" in office_motivo
+                or "pese a API" in office_motivo
+                or "API reportaba" in office_motivo
+            ):
+                logger.info(
+                    "%s[detail %s] office eval related_document_id=%s → %s",
+                    log_ctx,
+                    detail_id,
+                    rid,
+                    office_motivo,
+                )
+
+            logger.info(
+                "%s[detail %s] parsed relation (relateddetailid) → doc_id=%s type=%s",
                 log_ctx,
                 detail_id,
+                rid,
                 tid,
             )
+            out.append((detail_id, rid, tid))
             continue
 
-        allow_office, office_motivo = _office_allows_relation(cur, rid, office_blob)
-        if not allow_office:
-            if stats is not None:
-                stats["related_skipped_other_office"] = (
-                    int(stats.get("related_skipped_other_office") or 0) + 1
+        if tid == DOC_TYPE_OC:
+            if max_type33_depth <= 0:
+                logger.info(
+                    "%s [RELATED][TYPE33_RESOLUTION] omitido RELATED_MAX_TYPE33_DEPTH=0 detail=%s related_oc=%s",
+                    log_ctx,
+                    detail_id,
+                    rid,
                 )
-            logger.warning(
-                "%s[detail %s] relación descartada por office: related_document_id=%s → %s",
-                log_ctx,
-                detail_id,
-                rid,
-                office_motivo,
+                continue
+            allow_office, office_motivo = _office_allows_relation(cur, rid, office_blob)
+            if not allow_office:
+                if stats is not None:
+                    stats["related_skipped_other_office"] = (
+                        int(stats.get("related_skipped_other_office") or 0) + 1
+                    )
+                logger.warning(
+                    "%s[detail %s] OC intermedia descartada por office: related_document_id=%s → %s",
+                    log_ctx,
+                    detail_id,
+                    rid,
+                    office_motivo,
+                )
+                continue
+            visited0: set[int] = {oc_document_id}
+            ext, ac = _collect_terminal_triples_from_related_oc(
+                client,
+                cur,
+                root_detail_id=detail_id,
+                root_oc_document_id=oc_document_id,
+                related_oc_document_id=rid,
+                depth=0,
+                max_depth=max_type33_depth,
+                visited=visited0,
+                throttle=throttle,
+                stats=stats,
+                log_ctx=log_ctx,
             )
+            api_extra += ac
+            out.extend(ext)
             continue
-        if allow_office and (
-            "aceptado por BD" in office_motivo
-            or "pese a API" in office_motivo
-            or "API reportaba" in office_motivo
-        ):
-            logger.info(
-                "%s[detail %s] office eval related_document_id=%s → %s",
-                log_ctx,
-                detail_id,
-                rid,
-                office_motivo,
-            )
 
-        logger.info(
-            "%s[detail %s] parsed relation (relateddetailid) → doc_id=%s type=%s",
+        logger.warning(
+            "%s[detail %s] relación descartada: tipo no terminal ni OC=%s",
             log_ctx,
             detail_id,
-            rid,
             tid,
         )
-        out.append((detail_id, rid, tid))
-    return out
+    return out, api_extra
 
 
 def _fetch_detail_ids_from_bsale_details(
@@ -723,6 +991,7 @@ def _fetch_and_persist_relateddetailid_for_detail(
     items_api_total = 0
     rows_inserted = 0
     api_calls = 0
+    max_type33_depth = _related_max_type33_depth()
     offset = 0
     while True:
         try:
@@ -743,14 +1012,18 @@ def _fetch_and_persist_relateddetailid_for_detail(
         if not items:
             break
         items_api_total += len(items)
-        triples = _documents_json_items_to_triples(
+        triples, tc = _documents_json_items_to_triples(
+            client,
             cur,
             detail_id,
             items,
             oc_document_id=oc_document_id,
+            throttle=throttle,
+            max_type33_depth=max_type33_depth,
             stats=stats,
             log_ctx=log_ctx,
         )
+        api_calls += tc
         rows_inserted += _insert_related_triples(conn, cur, triples, stats=stats, log_ctx=log_ctx)
         offset += len(items)
         if throttle > 0:
@@ -959,6 +1232,11 @@ def sync_distribuidora_related_documents(
         "details_self_heal_retries": 0,
         "details_self_heal_refresh_failures": 0,
         "details_self_heal_still_missing": 0,
+        "related_type33_resolutions": 0,
+        "related_type33_terminal_found": 0,
+        "related_type33_branches": 0,
+        "related_type33_loops": 0,
+        "related_type33_depth1_hits": 0,
     }
 
     conn = get_connection()
@@ -978,7 +1256,7 @@ def sync_distribuidora_related_documents(
 
         logger.info(
             "sync related distribuidora: office_id=%s; por OC: details.json + "
-            "relateddetailid (company_id=%s office_id=%s)",
+            "relateddetailid + resolución OC 33 (company_id=%s office_id=%s)",
             OFFICE_ID,
             COMPANY_ID,
             OFFICE_ID,
@@ -1102,6 +1380,11 @@ def sync_related_documents_range(
         "details_self_heal_retries": 0,
         "details_self_heal_refresh_failures": 0,
         "details_self_heal_still_missing": 0,
+        "related_type33_resolutions": 0,
+        "related_type33_terminal_found": 0,
+        "related_type33_branches": 0,
+        "related_type33_loops": 0,
+        "related_type33_depth1_hits": 0,
     }
 
     conn = get_connection()
