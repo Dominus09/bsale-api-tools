@@ -53,6 +53,16 @@ RELATED_DOCUMENT_TYPES_ALLOWED = frozenset({1, 6, 9})
 RELATED_DETAIL_PAGE_LIMIT = 50
 DETAILS_PAGE_LIMIT = 50
 
+
+def _related_max_type33_depth() -> int:
+    """Profundidad máxima de expansión OC (33) vía ``relateddetailid`` (default 1)."""
+    try:
+        v = int(os.getenv("RELATED_MAX_TYPE33_DEPTH", "1"))
+    except ValueError:
+        v = 1
+    return max(0, min(v, 5))
+
+
 def _utc_day_emission_bounds(d: date) -> tuple[datetime, datetime]:
     """Inicio UTC del día y fin exclusivo (``[start, end)``) para filtrar ``emission_date``."""
     start = datetime(d.year, d.month, d.day, 0, 0, 0, tzinfo=timezone.utc)
