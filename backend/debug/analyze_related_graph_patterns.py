@@ -1,10 +1,11 @@
 """
-FASE 7.9 — Análisis masivo del grafo ``relateddetailid`` sobre OCs reales (solo lectura).
+FASE 7.9 / 7.10 — Análisis masivo del grafo ``relateddetailid`` sobre OCs reales (solo lectura).
 
-Rango por defecto: emisión UTC 2026-05-13 y 2026-05-14 (inclusive).
+Rango por defecto (7.10): emisión UTC **todo mayo 2026** (2026-05-01 … 2026-05-31 inclusive).
 
 Uso:
   python -m backend.debug.analyze_related_graph_patterns
+  python -m backend.debug.analyze_related_graph_patterns --date-from 2026-05-01 --date-to 2026-05-31
   python -m backend.debug.analyze_related_graph_patterns --date-from 2026-05-13 --date-to 2026-05-14
 """
 
@@ -36,13 +37,21 @@ from backend.debug.debug_related_graph_oc import (
 from backend.services.distribuidora.bsale_client import BsaleClient
 from backend.utils.bsale_token_env import load_dotenv_if_available, read_bsale_token_from_env
 
-DEFAULT_DATE_FROM = date(2026, 5, 13)
-DEFAULT_DATE_TO = date(2026, 5, 14)
-JSON_OUT = _REPO / "exports" / "related_graph_analysis_2026_05_13_14.json"
-XLSX_OUT = _REPO / "exports" / "related_graph_analysis_2026_05_13_14.xlsx"
-MD_OUT = _REPO / "RELATED_GRAPH_PATTERN_REPORT.md"
+DEFAULT_DATE_FROM = date(2026, 5, 1)
+DEFAULT_DATE_TO = date(2026, 5, 31)
 
 BETWEEN_OCS_SLEEP = float(__import__("os").getenv("RELATED_GRAPH_ANALYSIS_DELAY_SEC", "0.15"))
+
+
+def _export_paths(d0: date, d1: date) -> tuple[Path, Path, Path]:
+    """Rutas bajo ``exports/`` según ventana (etiqueta ``YYYY_MM_DD_YYYY_MM_DD``)."""
+    tag = f"{d0.year:04d}_{d0.month:02d}_{d0.day:02d}_{d1.year:04d}_{d1.month:02d}_{d1.day:02d}"
+    base = _REPO / "exports"
+    return (
+        base / f"related_graph_analysis_{tag}.json",
+        base / f"related_graph_analysis_{tag}.xlsx",
+        base / f"RELATED_GRAPH_PATTERN_REPORT_{tag}.md",
+    )
 
 
 def _utc_day_start(d: date) -> datetime:
@@ -71,6 +80,29 @@ def _fetch_oc_document_ids(cur, d0: date, d1: date) -> list[tuple[int, int | Non
     for r in cur.fetchall():
         rows.append((int(r[0]), int(r[1]) if r[1] is not None else None, r[2]))
     return rows
+
+
+def _fetch_oc_ids_with_terminal_in_document_related(cur, oc_document_ids: list[int]) -> set[int]:
+    """
+    OCs (por ``document_id`` de la OC) que ya tienen al menos un vínculo en
+    ``document_related`` hacia documento tipo 1/6/9 en BD (solo lectura).
+    """
+    if not oc_document_ids:
+        return set()
+    cur.execute(
+        """
+        SELECT DISTINCT dd.document_id
+        FROM distribuidora.document_details dd
+        INNER JOIN distribuidora.document_related dr ON dr.detail_id = dd.detail_id
+        INNER JOIN distribuidora.documents d2 ON d2.document_id = dr.related_document_id
+        WHERE dd.document_id = ANY(%s)
+          AND d2.company_id = %s
+          AND d2.office_id = %s
+          AND d2.document_type_id IN (1, 6, 9)
+        """,
+        (oc_document_ids, COMPANY_ID, OFFICE_ID),
+    )
+    return {int(r[0]) for r in cur.fetchall()}
 
 
 def _classify_graph(g: dict[str, Any]) -> tuple[list[str], str]:
@@ -162,8 +194,8 @@ def _sample_path_string(g: dict[str, Any], root_id: int) -> str | None:
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Análisis masivo grafo relateddetailid (OC 33).")
-    p.add_argument("--date-from", type=str, default=None, help="YYYY-MM-DD UTC (default 2026-05-13)")
-    p.add_argument("--date-to", type=str, default=None, help="YYYY-MM-DD UTC inclusive (default 2026-05-14)")
+    p.add_argument("--date-from", type=str, default=None, help="YYYY-MM-DD UTC (default 2026-05-01)")
+    p.add_argument("--date-to", type=str, default=None, help="YYYY-MM-DD UTC inclusive (default 2026-05-31)")
     p.add_argument(
         "--full-graph",
         action="store_true",
@@ -186,9 +218,11 @@ def _write_markdown(
     class_counts: Counter,
     stats: dict[str, Any],
     questions: dict[str, Any],
+    json_path: Path,
+    xlsx_path: Path,
 ) -> None:
     lines = [
-        "# RELATED_GRAPH_PATTERN_REPORT — FASE 7.9",
+        "# RELATED_GRAPH_PATTERN_REPORT — FASE 7.10",
         "",
         "Generado automáticamente por `backend/debug/analyze_related_graph_patterns.py`.",
         "",
@@ -210,6 +244,19 @@ def _write_markdown(
         f"- **Aristas y nodos agregados (suma por OC):** edges={stats['total_edges']}, nodes={stats['total_nodes']}",
         f"- **Profundidad máxima de arista observada:** {stats['max_depth_found']}",
         f"- **Profundidad media (por OC, máx. prof. arista):** {round(stats['average_depth'], 4)}",
+        "",
+        "**Porcentajes (sobre total OCs):**",
+        "",
+        f"- `percentage_with_related`: **{stats.get('percentage_with_related', 0)} %**",
+        f"- `percentage_terminal` (flag ENDS_IN_1_6_9): **{stats.get('percentage_terminal', 0)} %**",
+        f"- `percentage_only_33` (OCs con flag): **{stats.get('percentage_only_33', 0)} %**",
+        f"- `percentage_unresolved` (OCs con flag): **{stats.get('percentage_unresolved', 0)} %**",
+        f"- `percentage_no_relations` (flag NO_RELATIONS): **{stats.get('percentage_no_relations', 0)} %**",
+        "",
+        "**Validación lectura ERP (`document_related` → tipo 1/6/9):**",
+        "",
+        f"- OCs `UNRESOLVED_BRANCH` en API pero con terminal ya en BD: **{questions.get('validation_a_count', 0)}**",
+        f"- OCs `ONLY_TYPE_33` en API pero con terminal ya en BD: **{questions.get('validation_b_count', 0)}**",
         "",
         "Distribución por **bucket primario** (`primary_bucket`):",
         "",
@@ -278,8 +325,8 @@ def _write_markdown(
     lines.append("")
     lines.append("## Anexos")
     lines.append("")
-    lines.append(f"- JSON: `{JSON_OUT.relative_to(_REPO)}`")
-    lines.append(f"- Excel: `{XLSX_OUT.relative_to(_REPO)}`")
+    lines.append(f"- JSON: `{json_path.relative_to(_REPO)}`")
+    lines.append(f"- Excel: `{xlsx_path.relative_to(_REPO)}`")
     lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -309,6 +356,8 @@ def _print_stdout_summary(
     recommendation: str,
     rationale: str,
     per_oc: list[dict[str, Any]],
+    edge_cases: dict[str, Any],
+    validation: dict[str, Any],
 ) -> None:
     cc = class_counter
     sep = "=" * 60
@@ -327,7 +376,7 @@ def _print_stdout_summary(
     print(f"ENDS_IN_1_6_9:            {cc.get('ENDS_IN_1_6_9', 0)}")
     print(f"MULTI_LEVEL_33_CHAIN:     {cc.get('MULTI_LEVEL_33_CHAIN', 0)}")
     print(f"LOOP_DETECTED:            {cc.get('LOOP_DETECTED', 0)}")
-    print(f"UNRESOLVED_BRANCH:      {cc.get('UNRESOLVED_BRANCH', 0)}")
+    print(f"UNRESOLVED_BRANCH:        {cc.get('UNRESOLVED_BRANCH', 0)}")
     print(f"MIXED_BRANCHES:           {cc.get('MIXED_BRANCHES', 0)}")
     print()
     print(f"total_terminal_1 (edges): {stats.get('total_terminal_1', 0)}")
@@ -340,6 +389,15 @@ def _print_stdout_summary(
     print(f"total_nodes:              {stats['total_nodes']}")
     print(f"total_edges:              {stats['total_edges']}")
     print(f"total_api_calls:          {stats.get('total_api_calls', 0)}")
+    print()
+    print(sep)
+    print("NUEVAS MÉTRICAS (porcentajes sobre total_oc)")
+    print(sep)
+    print(f"percentage_with_related:   {stats.get('percentage_with_related', 0)} %")
+    print(f"percentage_terminal:       {stats.get('percentage_terminal', 0)} %")
+    print(f"percentage_only_33:        {stats.get('percentage_only_33', 0)} %")
+    print(f"percentage_unresolved:     {stats.get('percentage_unresolved', 0)} %")
+    print(f"percentage_no_relations:   {stats.get('percentage_no_relations', 0)} %")
     print()
     rec_line = RECOMMENDATION_STDOUT.get(recommendation, f"{recommendation} (desconocido)")
     print("recommendation:")
@@ -363,6 +421,60 @@ def _print_stdout_summary(
     _top("ONLY_TYPE_33", "ONLY_TYPE_33")
     _top("ENDS_IN_1_6_9", "ENDS_IN_1_6_9")
     _top("UNRESOLVED_BRANCH", "UNRESOLVED_BRANCH")
+
+    print()
+    print(sep)
+    print("EDGE CASES (ejemplos)")
+    print(sep)
+    print("deepest_chain_examples (max depth):")
+    for r in edge_cases.get("deepest_chain_examples") or []:
+        print(
+            f"  OC {r.get('number')} / doc_id {r.get('document_id')} / depth {r.get('max_edge_depth')} / "
+            f"classifications={','.join(r.get('classifications') or [])} / path={r.get('sample_path') or '-'}",
+        )
+    if not edge_cases.get("deepest_chain_examples"):
+        print("  (ninguno)")
+    print()
+    print("unresolved_with_related_examples (UNRESOLVED + total_edges>0):")
+    for r in edge_cases.get("unresolved_with_related_examples") or []:
+        print(
+            f"  OC {r.get('number')} / doc_id {r.get('document_id')} / depth {r.get('max_edge_depth')} / "
+            f"edges={r.get('total_edges')} / terminal_types={r.get('terminal_types')} / erp_terminal_bd={r.get('erp_document_related_has_terminal')}",
+        )
+    if not edge_cases.get("unresolved_with_related_examples"):
+        print("  (ninguno)")
+    print()
+    print("unresolved_without_related_examples (UNRESOLVED + sin aristas):")
+    for r in edge_cases.get("unresolved_without_related_examples") or []:
+        print(
+            f"  OC {r.get('number')} / doc_id {r.get('document_id')} / depth {r.get('max_edge_depth')} / "
+            f"edges={r.get('total_edges')} / erp_terminal_bd={r.get('erp_document_related_has_terminal')}",
+        )
+    if not edge_cases.get("unresolved_without_related_examples"):
+        print("  (ninguno)")
+
+    print()
+    print(sep)
+    print("VALIDACIÓN (lectura document_related en BD)")
+    print(sep)
+    print(
+        "A) UNRESOLVED_BRANCH en grafo API pero terminal 1/6/9 ya en document_related (ERP): "
+        f"{validation.get('unresolved_but_erp_terminal_count', 0)}",
+    )
+    for r in (validation.get("unresolved_but_erp_terminal_sample") or [])[:8]:
+        print(
+            f"  OC {r.get('number')} / doc_id {r.get('document_id')} / depth {r.get('max_edge_depth')} / "
+            f"edges={r.get('total_edges')} / terminal_types_api={r.get('terminal_types')}",
+        )
+    print(
+        "B) ONLY_TYPE_33 en grafo API pero terminal 1/6/9 ya en document_related (indirecto ERP): "
+        f"{validation.get('only_33_but_erp_terminal_count', 0)}",
+    )
+    for r in (validation.get("only_33_but_erp_terminal_sample") or [])[:8]:
+        print(
+            f"  OC {r.get('number')} / doc_id {r.get('document_id')} / depth {r.get('max_edge_depth')} / "
+            f"edges={r.get('total_edges')}",
+        )
     print()
     print(sep)
     print()
@@ -386,6 +498,8 @@ def main() -> int:
     d1 = _parse_day(args.date_to, DEFAULT_DATE_TO)
     if d1 < d0:
         d0, d1 = d1, d0
+
+    json_path, xlsx_path, md_path = _export_paths(d0, d1)
 
     token = read_bsale_token_from_env()
     if not token:
@@ -518,7 +632,65 @@ def main() -> int:
     pct_ends = round(100.0 * ends_terminal_oc_count / total_oc, 2) if total_oc else 0.0
     pct_no_rel = round(100.0 * total_without_related / total_oc, 2) if total_oc else 0.0
 
-    # Heurística recomendación A/B/C/D
+    def _pct(n: int, den: int) -> float:
+        return round(100.0 * n / den, 4) if den else 0.0
+
+    # --- Lectura ERP: document_related hacia 1/6/9 (solo diagnóstico) ---
+    conn_v = get_connection()
+    cur_v = conn_v.cursor()
+    try:
+        all_doc_ids = [e["document_id"] for e in per_oc]
+        erp_has_terminal = _fetch_oc_ids_with_terminal_in_document_related(cur_v, all_doc_ids)
+    finally:
+        cur_v.close()
+        conn_v.close()
+
+    for e in per_oc:
+        e["erp_document_related_has_terminal"] = e["document_id"] in erp_has_terminal
+
+    validation_a_full = [
+        e
+        for e in per_oc
+        if "UNRESOLVED_BRANCH" in (e.get("classifications") or []) and e.get("erp_document_related_has_terminal")
+    ]
+    validation_b_full = [
+        e
+        for e in per_oc
+        if "ONLY_TYPE_33" in (e.get("classifications") or []) and e.get("erp_document_related_has_terminal")
+    ]
+    va_count = len(validation_a_full)
+    vb_count = len(validation_b_full)
+
+    edge_cases: dict[str, Any] = {
+        "deepest_chain_examples": sorted(
+            per_oc,
+            key=lambda x: (int(x.get("max_edge_depth") or 0), int(x.get("total_edges") or 0)),
+            reverse=True,
+        )[:15],
+        "unresolved_with_related_examples": [
+            e
+            for e in per_oc
+            if "UNRESOLVED_BRANCH" in (e.get("classifications") or [])
+            and int(e.get("total_edges") or 0) > 0
+        ][:15],
+        "unresolved_without_related_examples": [
+            e
+            for e in per_oc
+            if "UNRESOLVED_BRANCH" in (e.get("classifications") or [])
+            and int(e.get("total_edges") or 0) == 0
+        ][:15],
+    }
+
+    validation_block: dict[str, Any] = {
+        "unresolved_but_erp_terminal_count": va_count,
+        "only_33_but_erp_terminal_count": vb_count,
+        "unresolved_but_erp_terminal_sample": validation_a_full[:40],
+        "only_33_but_erp_terminal_sample": validation_b_full[:40],
+        "nota": "A) API marca UNRESOLVED pero en BD ya existe fila document_related→tipo 1/6/9. "
+        "B) API solo ve 33 pero BD ya tiene terminal vinculado (sync previo o línea no recorrida en API).",
+    }
+
+    # Heurística recomendación A/B/C/D (ventana completa mayo u otra)
     pct_terminalish = (class_counter.get("ENDS_IN_1_6_9", 0) / total_oc) if total_oc else 0
     pct_only33 = (class_counter.get("ONLY_TYPE_33", 0) / total_oc) if total_oc else 0
     pct_no_rel_class = (class_counter.get("NO_RELATIONS", 0) / total_oc) if total_oc else 0
@@ -532,6 +704,14 @@ def main() -> int:
         recommendation, rationale = "D", "Muy pocas OCs con terminal 1/6/9 y muchas sin aristas relateddetailid"
     else:
         recommendation, rationale = "C", "Distribución mixta por defecto"
+
+    if total_oc and va_count > max(5, int(total_oc * 0.02)):
+        if recommendation == "A":
+            recommendation = "B"
+        rationale = (
+            f"{rationale} | Ajuste mayo: {va_count} OCs UNRESOLVED en API pero con terminal 1/6/9 ya en "
+            f"document_related (revisar drift/cola sync)."
+        )
 
     stats = {
         "total_oc": total_oc,
@@ -552,6 +732,13 @@ def main() -> int:
         "total_api_calls": sum_api,
         "primary_bucket_counts": dict(primary_counter),
         "classification_flag_counts": dict(class_counter),
+        "percentage_with_related": _pct(total_with_related, total_oc),
+        "percentage_terminal": _pct(ends_terminal_oc_count, total_oc),
+        "percentage_only_33": _pct(total_only_33, total_oc),
+        "percentage_unresolved": _pct(total_unresolved_oc, total_oc),
+        "percentage_no_relations": _pct(int(class_counter.get("NO_RELATIONS", 0)), total_oc),
+        "validation_unresolved_but_erp_terminal_oc": va_count,
+        "validation_only33_but_erp_terminal_oc": vb_count,
     }
 
     questions = {
@@ -561,6 +748,8 @@ def main() -> int:
         "pct_no_rel": pct_no_rel,
         "recommendation": recommendation,
         "recommendation_rationale": rationale,
+        "validation_a_count": va_count,
+        "validation_b_count": vb_count,
     }
 
     out_json = {
@@ -571,18 +760,23 @@ def main() -> int:
             "office_id": OFFICE_ID,
             "document_type_oc": DOC_TYPE_OC,
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "export_json": str(json_path.relative_to(_REPO)),
+            "export_xlsx": str(xlsx_path.relative_to(_REPO)),
+            "export_markdown": str(md_path.relative_to(_REPO)),
         },
         "summary": stats,
         "classifications": dict(class_counter),
         "per_oc_analysis": per_oc,
         "statistics": stats,
+        "edge_cases": edge_cases,
+        "validation": validation_block,
         "sample_paths": sample_paths,
         "unresolved_cases": unresolved_cases,
     }
 
-    JSON_OUT.parent.mkdir(parents=True, exist_ok=True)
-    JSON_OUT.write_text(json.dumps(out_json, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    print(f"JSON: {JSON_OUT}")
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(out_json, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    print(f"JSON: {json_path}")
 
     df_all = pd.DataFrame(per_oc)
     df_summary = pd.DataFrame([stats])
@@ -592,8 +786,13 @@ def main() -> int:
     df_unres = df_all[df_all["classifications"].apply(lambda x: "UNRESOLVED_BRANCH" in x)]
     df_multi = df_all[df_all["classifications"].apply(lambda x: "MULTI_LEVEL_33_CHAIN" in x)]
     df_paths = pd.DataFrame(sample_paths)
+    df_deep = pd.DataFrame(edge_cases["deepest_chain_examples"])
+    df_uwr = pd.DataFrame(edge_cases["unresolved_with_related_examples"])
+    df_uwor = pd.DataFrame(edge_cases["unresolved_without_related_examples"])
+    df_val_a = pd.DataFrame(validation_a_full[:200])
+    df_val_b = pd.DataFrame(validation_b_full[:200])
 
-    with pd.ExcelWriter(XLSX_OUT, engine="openpyxl") as xw:
+    with pd.ExcelWriter(xlsx_path, engine="openpyxl") as xw:
         _excel_df(df_summary).to_excel(xw, sheet_name="summary", index=False)
         _excel_df(df_all).to_excel(xw, sheet_name="all_oc", index=False)
         _excel_df(df_only33).to_excel(xw, sheet_name="only_33", index=False)
@@ -602,11 +801,25 @@ def main() -> int:
         _excel_df(df_unres).to_excel(xw, sheet_name="unresolved", index=False)
         _excel_df(df_multi).to_excel(xw, sheet_name="multi_level_chains", index=False)
         _excel_df(df_paths).to_excel(xw, sheet_name="sample_paths", index=False)
+        _excel_df(df_deep).to_excel(xw, sheet_name="deepest_chains", index=False)
+        _excel_df(df_uwr).to_excel(xw, sheet_name="unresolved_with_related", index=False)
+        _excel_df(df_uwor).to_excel(xw, sheet_name="unresolved_no_related", index=False)
+        _excel_df(df_val_a).to_excel(xw, sheet_name="validation_A_erp_terminal", index=False)
+        _excel_df(df_val_b).to_excel(xw, sheet_name="validation_B_only33_erp", index=False)
 
-    print(f"Excel: {XLSX_OUT}")
+    print(f"Excel: {xlsx_path}")
 
-    _write_markdown(MD_OUT, d0=d0, d1=d1, class_counts=class_counter, stats=stats, questions=questions)
-    print(f"Markdown: {MD_OUT}")
+    _write_markdown(
+        md_path,
+        d0=d0,
+        d1=d1,
+        class_counts=class_counter,
+        stats=stats,
+        questions=questions,
+        json_path=json_path,
+        xlsx_path=xlsx_path,
+    )
+    print(f"Markdown: {md_path}")
 
     _print_stdout_summary(
         d0=d0,
@@ -616,6 +829,13 @@ def main() -> int:
         recommendation=recommendation,
         rationale=rationale,
         per_oc=per_oc,
+        edge_cases=edge_cases,
+        validation={
+            "unresolved_but_erp_terminal_count": va_count,
+            "only_33_but_erp_terminal_count": vb_count,
+            "unresolved_but_erp_terminal_sample": validation_a_full[:8],
+            "only_33_but_erp_terminal_sample": validation_b_full[:8],
+        },
     )
     return 0
 

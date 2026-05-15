@@ -96,10 +96,15 @@ Si los casos 1–4 confirman que **A** es frecuente cuando el negocio dice “fa
 
 ## FASE 7.9 — Análisis masivo por ventana de emisión
 
-Script: `backend/debug/analyze_related_graph_patterns.py` (por defecto OCs 33 con emisión UTC **2026-05-13** y **2026-05-14**).
+Script: `backend/debug/analyze_related_graph_patterns.py` (por defecto OCs 33 con emisión UTC **todo mayo 2026**).
 
-Salidas:
+```bash
+python -m backend.debug.analyze_related_graph_patterns
+python -m backend.debug.analyze_related_graph_patterns --date-from 2026-05-01 --date-to 2026-05-31
+```
 
-- `exports/related_graph_analysis_2026_05_13_14.json`
-- `exports/related_graph_analysis_2026_05_13_14.xlsx`
-- `RELATED_GRAPH_PATTERN_REPORT.md` (regenerado al finalizar el análisis, con secciones 1–6 y métricas reales).
+Salidas (nombres según ventana, por defecto todo mayo → sufijo `2026_05_01_2026_05_31`):
+
+- `exports/related_graph_analysis_<desde>_<hasta>.json`
+- `exports/related_graph_analysis_<desde>_<hasta>.xlsx`
+- `exports/RELATED_GRAPH_PATTERN_REPORT_<desde>_<hasta>.md`
