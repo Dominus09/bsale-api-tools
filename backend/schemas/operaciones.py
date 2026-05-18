@@ -52,6 +52,8 @@ class VendedorOperacionesRow(BaseModel):
     bateria_pct: int | None = None
     gps: GpsActual | None = None
     kilometros_recorridos: float = 0.0
+    usa_heartbeat: bool = False
+    conexion_red: str | None = None
 
 
 class VendedoresListResponse(BaseModel):
@@ -148,3 +150,24 @@ class OperacionesMetricasResponse(BaseModel):
     fecha: date
     dashboard: OperacionesDashboardKpis
     por_vendedor: list[VendedorOperacionesRow] = Field(default_factory=list)
+
+
+class HeartbeatRequest(BaseModel):
+    """Telemetría desde app móvil (POST /operaciones/heartbeat)."""
+
+    vendedor_id: str = Field(..., min_length=1, max_length=64)
+    timestamp: datetime
+    lat: float | None = None
+    lng: float | None = None
+    bateria: int | None = Field(None, ge=0, le=100)
+    conexion: str | None = Field(None, max_length=32)
+    pendientes: int | None = Field(None, ge=0)
+    app_version: str | None = Field(None, max_length=64)
+    dispositivo: str | None = Field(None, max_length=128)
+
+
+class HeartbeatResponse(BaseModel):
+    ok: bool = True
+    id: int
+    vendedor_id: str
+    timestamp: datetime

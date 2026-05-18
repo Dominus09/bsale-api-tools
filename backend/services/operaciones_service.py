@@ -19,6 +19,11 @@ from backend.services.operaciones_visitas import (
     es_visita_realizada,
     sql_in_estados_realizados,
 )
+from backend.services.heartbeat_service import (
+    HeartbeatSnapshot,
+    estado_conexion_desde_heartbeat,
+    load_snapshots,
+)
 from backend.services.visita_foto_service import resolve_foto_display
 from backend.schemas.operaciones import (
     GpsActual,
@@ -69,7 +74,12 @@ def _estado_conexion(
     return "activo"
 
 
-def _row_to_vendedor(row: tuple, nombres: dict[str, str]) -> VendedorOperacionesRow:
+def _row_to_vendedor(
+    row: tuple,
+    nombres: dict[str, str],
+    hb: HeartbeatSnapshot | None,
+    fecha: date,
+) -> VendedorOperacionesRow:
     (
         codigo,
         nombre,
@@ -93,20 +103,48 @@ def _row_to_vendedor(row: tuple, nombres: dict[str, str]) -> VendedorOperaciones
     pct_f = float(pct or 0)
     pending = int(pending_sync or 0)
     tiene_ruta = ruta_id is not None
-    estado = _estado_conexion(
-        activo=bool(activo),
-        updated_at=ruta_updated,
-        porcentaje=pct_f,
-        pending_sync=pending,
-        tiene_ruta=tiene_ruta,
+
+    estado_hb = estado_conexion_desde_heartbeat(
+        hb.last_timestamp if hb else None,
+        fecha_operativa=fecha,
     )
-    gps = None
-    if gps_lat is not None and gps_lon is not None:
-        gps = GpsActual(
-            lat=float(gps_lat),
-            lon=float(gps_lon),
-            updated_at=gps_at,
+    if estado_hb is not None:
+        estado = estado_hb
+    else:
+        estado = _estado_conexion(
+            activo=bool(activo),
+            updated_at=ruta_updated,
+            porcentaje=pct_f,
+            pending_sync=pending,
+            tiene_ruta=tiene_ruta,
         )
+
+    ultima_sync = ruta_updated
+    km_m = float(km or 0)
+    gps_lat_use, gps_lon_use, gps_at_use = gps_lat, gps_lon, gps_at
+    bateria = None
+    conexion_red = None
+    usa_hb = hb is not None
+
+    if hb is not None:
+        ultima_sync = hb.last_timestamp
+        km_m = hb.km_metros
+        if hb.lat is not None and hb.lng is not None:
+            gps_lat_use, gps_lon_use = hb.lat, hb.lng
+            gps_at_use = hb.last_timestamp
+        bateria = hb.bateria
+        conexion_red = hb.conexion
+        if hb.pendientes is not None:
+            pending = hb.pendientes
+
+    gps = None
+    if gps_lat_use is not None and gps_lon_use is not None:
+        gps = GpsActual(
+            lat=float(gps_lat_use),
+            lon=float(gps_lon_use),
+            updated_at=gps_at_use,
+        )
+
     return VendedorOperacionesRow(
         codigo=cod,
         nombre=str(nombre or nombres.get(cod, cod)),
@@ -118,11 +156,13 @@ def _row_to_vendedor(row: tuple, nombres: dict[str, str]) -> VendedorOperaciones
         visitas_pendientes=int(pendientes or 0),
         incidencias=int(incidencias or 0),
         porcentaje_avance=round(pct_f, 2),
-        ultima_sync=ruta_updated,
+        ultima_sync=ultima_sync,
         pending_sync_count=pending,
-        bateria_pct=None,
+        bateria_pct=bateria,
         gps=gps,
-        kilometros_recorridos=round(float(km or 0) / 1000.0, 2),
+        kilometros_recorridos=round(km_m / 1000.0, 2),
+        usa_heartbeat=usa_hb,
+        conexion_red=conexion_red,
     )
 
 
@@ -196,20 +236,30 @@ ORDER BY va.nombre NULLS LAST, va.codigo
 
 
 def _fetch_vendedores_rows(cur, fecha: date) -> list[VendedorOperacionesRow]:
+    try:
+        hb_map = load_snapshots(cur, fecha)
+    except Exception as e:
+        logger.warning("heartbeat snapshots no disponibles (¿tabla creada?): %s", e)
+        hb_map = {}
+
     cur.execute(_SQL_VENDEDORES_BASE, (fecha,))
     rows = cur.fetchall()
-    items = [_row_to_vendedor(r, {}) for r in rows]
+    items = [_row_to_vendedor(r, {}, hb_map.get(str(r[0])), fecha) for r in rows]
     if logger.isEnabledFor(logging.DEBUG):
         visitados = sum(i.visitas_realizadas for i in items)
         inc = sum(i.incidencias for i in items)
         pend = sum(i.visitas_pendientes for i in items)
+        online = sum(1 for i in items if i.estado_conexion == "activo")
+        con_hb = sum(1 for i in items if i.usa_heartbeat)
         logger.debug(
-            "operaciones vendedores fecha=%s filas=%s visitas_realizadas=%s incidencias=%s pendientes=%s",
+            "operaciones vendedores fecha=%s filas=%s visitas=%s inc=%s pend=%s online=%s con_heartbeat=%s",
             fecha,
             len(items),
             visitados,
             inc,
             pend,
+            online,
+            con_hb,
         )
     return items
 
@@ -364,6 +414,20 @@ def get_vendedor_detalle(codigo: str, fecha: date | None = None) -> VendedorDeta
                 tiene_ruta=True,
             )
 
+        hb_det = None
+        try:
+            hb_map = load_snapshots(cur, f)
+            hb_det = hb_map.get(codigo)
+        except Exception:
+            hb_det = None
+
+        if hb_det is not None:
+            ultima_sync = hb_det.last_timestamp
+            km = hb_det.km_metros
+            est_hb = estado_conexion_desde_heartbeat(hb_det.last_timestamp, fecha_operativa=f)
+            if est_hb is not None:
+                estado_conexion = est_hb  # type: ignore[assignment]
+
         cur.close()
     finally:
         conn.close()
@@ -449,19 +513,41 @@ def get_ruta_mapa(ruta_id: int) -> RutaMapaResponse | None:
             """,
             (ruta_id,),
         )
-        gps = cur.fetchone()
+        f_date = fecha if isinstance(fecha, date) else fecha.date()  # type: ignore[union-attr]
+        items = _fetch_vendedores_rows(cur, f_date)
+        row_v = next((i for i in items if i.codigo == vendedor), None)
+
         vendedor_ubicacion = None
-        if gps:
-            items = _fetch_vendedores_rows(cur, fecha if isinstance(fecha, date) else fecha.date())  # type: ignore[union-attr]
-            row_v = next((i for i in items if i.codigo == vendedor), None)
+        if row_v and row_v.gps and row_v.gps.lat is not None and row_v.gps.lon is not None:
             vendedor_ubicacion = VendedorUbicacionMapa(
                 codigo=vendedor,
                 nombre=str(nombre or vendedor),
-                lat=float(gps[0]),
-                lon=float(gps[1]),
-                estado_conexion=row_v.estado_conexion if row_v else "offline",
-                updated_at=gps[2],
+                lat=float(row_v.gps.lat),
+                lon=float(row_v.gps.lon),
+                estado_conexion=row_v.estado_conexion,
+                updated_at=row_v.gps.updated_at,
             )
+        else:
+            cur.execute(
+                """
+                SELECT lat_visita, lon_visita, fecha_hora_visita
+                FROM bsale.visitas
+                WHERE ruta_id = %s AND lat_visita IS NOT NULL AND lon_visita IS NOT NULL
+                ORDER BY fecha_hora_visita DESC NULLS LAST
+                LIMIT 1
+                """,
+                (ruta_id,),
+            )
+            gps = cur.fetchone()
+            if gps:
+                vendedor_ubicacion = VendedorUbicacionMapa(
+                    codigo=vendedor,
+                    nombre=str(nombre or vendedor),
+                    lat=float(gps[0]),
+                    lon=float(gps[1]),
+                    estado_conexion=row_v.estado_conexion if row_v else "offline",
+                    updated_at=gps[2],
+                )
         cur.close()
     finally:
         conn.close()

@@ -32,6 +32,7 @@ Prefijo: `/operaciones`. Todos requieren header `Authorization: Bearer <token>` 
 | GET | `/operaciones/incidencias?fecha=&vendedor=&limit=` | Listado filtrable |
 | GET | `/operaciones/metricas?fecha=` | KPIs + desglose por vendedor |
 | GET | `/operaciones/foto/{visita_id}` | Imagen evidencia (JWT, archivo o redirect URL) |
+| POST | `/operaciones/heartbeat` | Telemetría app móvil (sin JWT staff; opcional `X-Heartbeat-Key`) |
 
 Documentación interactiva: `http://localhost:8000/docs` (tag **Operaciones Quillotana**).
 
@@ -42,10 +43,10 @@ Documentación interactiva: `http://localhost:8000/docs` (tag **Operaciones Quil
 - **GPS actual**: última visita del día con `lat`/`lon` no nulos (no hay tracking en tiempo real en BD).
 - **Batería**: `null` hasta que la app envíe ese campo.
 - **Fotos incidencias**: al sincronizar, si `foto_url` es `data:image/...;base64,...` se guarda en disco (`VISITA_FOTOS_DIR`, default `data/uploads/visitas/`) y en BD queda clave `visitas/{id}.jpg`. El panel las sirve en `GET /operaciones/foto/{visita_id}` (JWT). Legacy: `data:` en BD sigue mostrándose; sin imagen → placeholder en UI.
-- **Estado conexión** (`activo` / `atrasado` / `offline`):
-  - `offline`: vendedor inactivo, sin ruta, o `updated_at` de ruta > `OPERACIONES_OFFLINE_MINUTES` (default 15).
-  - `atrasado`: cumplimiento &lt; `OPERACIONES_ATRASADO_PCT` (default 50%) con ruta activa.
-  - `activo`: resto.
+- **Estado conexión** (prioridad heartbeat, fallback legacy):
+  - Con filas en `bsale.operaciones_heartbeat` del día: último pulso &lt; **2 min** → `activo` (Online); **2–10 min** → `atrasado`; **&gt; 10 min** → `offline`.
+  - Sin heartbeat: lógica anterior (`rutas_dia.updated_at`, cumplimiento, `OPERACIONES_OFFLINE_MINUTES`).
+- **Última sync / GPS / km / batería**: si hay heartbeat del día, se usan `MAX(timestamp)`, último `lat/lng`, km Haversine entre puntos heartbeat y `bateria` del último pulso.
 
 ## Variables de entorno
 
@@ -58,6 +59,9 @@ Documentación interactiva: `http://localhost:8000/docs` (tag **Operaciones Quil
 | `OPERACIONES_OFFLINE_MINUTES` | `15` | Umbral offline |
 | `OPERACIONES_ATRASADO_PCT` | `50` | Umbral atrasado (%) |
 | `VISITA_FOTOS_DIR` | `data/uploads/visitas` | Directorio fotos incidencias (filesystem) |
+| `OPERACIONES_HEARTBEAT_ONLINE_MINUTES` | `2` | Umbral Online |
+| `OPERACIONES_HEARTBEAT_ATRASADO_MINUTES` | `10` | Umbral Offline (mayor a esto) |
+| `OPERACIONES_HEARTBEAT_API_KEY` | — | Si se define, la app debe enviar `X-Heartbeat-Key` |
 
 ### Frontend (`frontend/.env.local`)
 
@@ -85,6 +89,33 @@ npm run dev
 ```
 
 Abrir `http://localhost:3000`, iniciar sesión en el panel ERP, luego **Operaciones → Panel operaciones** (`/operaciones/dashboard`).
+
+## Migración heartbeat
+
+```bash
+psql -f sql/bsale_operaciones_heartbeat.sql
+```
+
+## Prueba heartbeat (app / curl)
+
+```bash
+curl -X POST http://localhost:8000/operaciones/heartbeat \
+  -H "Content-Type: application/json" \
+  -H "X-Heartbeat-Key: TU_CLAVE_OPCIONAL" \
+  -d '{
+    "vendedor_id": "vendedor_1",
+    "timestamp": "2026-05-18T15:00:00Z",
+    "lat": -33.45,
+    "lng": -71.23,
+    "bateria": 87,
+    "conexion": "wifi",
+    "pendientes": 2,
+    "app_version": "1.2.0",
+    "dispositivo": "Android 14"
+  }'
+```
+
+Repetir cada 30–60 s y abrir el dashboard (hoy): badge **Online** si el último pulso &lt; 2 min.
 
 ## Prueba del dashboard completo
 
@@ -117,6 +148,7 @@ backend/
   utils/auth_staff.py
   schemas/operaciones.py
   services/operaciones_service.py
+  services/heartbeat_service.py
   services/operaciones_visitas.py
   services/visita_foto_service.py
   routers/operaciones.py
@@ -140,6 +172,7 @@ frontend/
     incidencias/page.tsx
   components/layout/sidebar.tsx    # enlaces Operaciones
 
+sql/bsale_operaciones_heartbeat.sql
 docs/backend/OPERACIONES_PANEL.md   # este archivo
 ```
 

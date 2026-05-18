@@ -43,7 +43,7 @@ export function OperacionesKpiCards({ kpis }: { kpis: OperacionesDashboardKpis }
       <KpiCard
         title="Cumplimiento"
         value={`${kpis.porcentaje_cumplimiento.toFixed(1)}%`}
-        sub={`${kpis.vendedores_activos}/${kpis.vendedores_total} vendedores activos`}
+        sub={`${kpis.vendedores_activos}/${kpis.vendedores_total} online (heartbeat)`}
         icon={CheckCircle2}
       />
       <KpiCard title="Km recorridos" value={kpis.kilometros_recorridos.toFixed(1)} icon={MapPin} />

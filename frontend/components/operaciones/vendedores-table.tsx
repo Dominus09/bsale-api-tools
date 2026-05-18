@@ -38,6 +38,7 @@ export function VendedoresOperacionesTable({ items }: { items: VendedorOperacion
           <TableHead className="text-right">Inc.</TableHead>
           <TableHead className="text-right">Avance</TableHead>
           <TableHead>Última sync</TableHead>
+          <TableHead className="text-right">Bat.</TableHead>
           <TableHead className="text-right">Km</TableHead>
           <TableHead className="text-right">GPS</TableHead>
           <TableHead />
@@ -58,6 +59,9 @@ export function VendedoresOperacionesTable({ items }: { items: VendedorOperacion
             <TableCell className="text-right tabular-nums">{v.incidencias}</TableCell>
             <TableCell className="text-right tabular-nums">{v.porcentaje_avance.toFixed(0)}%</TableCell>
             <TableCell className="text-sm">{formatSync(v.ultima_sync)}</TableCell>
+            <TableCell className="text-right tabular-nums text-muted-foreground">
+              {v.bateria_pct != null ? `${v.bateria_pct}%` : "—"}
+            </TableCell>
             <TableCell className="text-right tabular-nums">{v.kilometros_recorridos.toFixed(1)}</TableCell>
             <TableCell className="text-right text-xs text-muted-foreground">
               {v.gps?.lat != null ? `${v.gps.lat.toFixed(4)}, ${v.gps.lon?.toFixed(4)}` : "—"}

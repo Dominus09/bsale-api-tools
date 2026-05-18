@@ -11,7 +11,7 @@ const STYLES: Record<EstadoConexion, string> = {
 }
 
 const LABELS: Record<EstadoConexion, string> = {
-  activo: "Activo",
+  activo: "Online",
   atrasado: "Atrasado",
   offline: "Offline",
 }

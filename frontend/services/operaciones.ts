@@ -27,6 +27,8 @@ export interface VendedorOperacionesRow {
   bateria_pct: number | null
   gps: GpsActual | null
   kilometros_recorridos: number
+  usa_heartbeat?: boolean
+  conexion_red?: string | null
 }
 
 export interface OperacionesDashboardKpis {
