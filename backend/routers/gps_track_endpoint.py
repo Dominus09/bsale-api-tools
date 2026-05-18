@@ -20,20 +20,24 @@ async def handle_gps_track(
     x_heartbeat_key: Annotated[str | None, Header(alias="X-Heartbeat-Key")] = None,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
 ) -> TelemetryAckResponse:
+    logger.info(
+        "[GPS-Track] request recibido vendedor=%s ts=%s lat=%s lng=%s",
+        body.vendedor_id,
+        body.timestamp,
+        body.lat,
+        body.lng,
+    )
     verify_operaciones_mobile_auth(x_heartbeat_key, authorization)
     server_ts = datetime.now(timezone.utc)
 
-    if logger.isEnabledFor(logging.DEBUG):
-        logger.debug(
-            "gps_track payload vendedor=%s ts=%s lat=%s lng=%s accuracy=%s speed=%s battery=%s",
-            body.vendedor_id,
-            body.timestamp,
-            body.lat,
-            body.lng,
-            body.accuracy,
-            body.speed,
-            body.battery,
-        )
+    logger.debug(
+        "gps_track payload vendedor=%s accuracy=%s speed=%s battery=%s app=%s",
+        body.vendedor_id,
+        body.accuracy,
+        body.speed,
+        body.battery,
+        body.app_version,
+    )
 
     try:
         track_id = gps_track_service.insert_gps_track(
@@ -59,12 +63,11 @@ async def handle_gps_track(
         logger.exception("gps_track insert falló: %s", e)
         raise HTTPException(status_code=500, detail="No se pudo registrar gps_track") from e
 
-    if logger.isEnabledFor(logging.DEBUG):
-        logger.debug(
-            "gps_track ACK id=%s vendedor=%s server_ts=%s",
-            track_id,
-            body.vendedor_id,
-            server_ts.isoformat(),
-        )
+    logger.info(
+        "[GPS-Track] insert OK id=%s vendedor=%s → ACK server_ts=%s",
+        track_id,
+        body.vendedor_id,
+        server_ts.isoformat(),
+    )
 
     return TelemetryAckResponse(ack=True, server_timestamp=server_ts)

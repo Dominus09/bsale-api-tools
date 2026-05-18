@@ -66,6 +66,7 @@ async def post_operaciones_heartbeat(
     "/gps_track",
     response_model=TelemetryAckResponse,
     summary="Punto GPS tracking (cola móvil)",
+    operation_id="operaciones_router_gps_track",
     responses={
         200: {"description": "ACK"},
         400: {"description": "Payload inválido"},
@@ -74,6 +75,21 @@ async def post_operaciones_heartbeat(
     },
 )
 async def post_operaciones_gps_track(
+    body: GpsTrackRequest,
+    x_heartbeat_key: Annotated[str | None, Header(alias="X-Heartbeat-Key")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> TelemetryAckResponse:
+    logger.info("[GPS-Track] operaciones.router → vendedor=%s", body.vendedor_id)
+    return await handle_gps_track(body, x_heartbeat_key, authorization)
+
+
+@router.post(
+    "/gps_track/",
+    response_model=TelemetryAckResponse,
+    summary="GPS track (con slash final)",
+    include_in_schema=False,
+)
+async def post_operaciones_gps_track_slash(
     body: GpsTrackRequest,
     x_heartbeat_key: Annotated[str | None, Header(alias="X-Heartbeat-Key")] = None,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,

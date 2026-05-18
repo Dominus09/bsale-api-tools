@@ -764,3 +764,31 @@ async def post_app_operaciones_gps_track(
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
 ) -> TelemetryAckResponse:
     return await handle_gps_track(body, x_heartbeat_key, authorization)
+
+
+@router.post(
+    "/gps-track",
+    response_model=TelemetryAckResponse,
+    summary="GPS track alias guión (app móvil)",
+    tags=["App Distribuidora", "Operaciones Quillotana"],
+)
+async def post_app_gps_track_kebab(
+    body: GpsTrackRequest,
+    x_heartbeat_key: Annotated[str | None, Header(alias="X-Heartbeat-Key")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> TelemetryAckResponse:
+    return await handle_gps_track(body, x_heartbeat_key, authorization)
+
+
+@router.post(
+    "/operaciones/gps-track",
+    response_model=TelemetryAckResponse,
+    summary="GPS track ruta relativa con guión",
+    tags=["App Distribuidora", "Operaciones Quillotana"],
+)
+async def post_app_operaciones_gps_track_kebab(
+    body: GpsTrackRequest,
+    x_heartbeat_key: Annotated[str | None, Header(alias="X-Heartbeat-Key")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> TelemetryAckResponse:
+    return await handle_gps_track(body, x_heartbeat_key, authorization)

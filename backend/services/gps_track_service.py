@@ -120,7 +120,7 @@ def insert_gps_track(
         conn.close()
 
     logger.info(
-        "gps_track recibido id=%s vendedor=%s ts=%s lat=%s lng=%s battery=%s",
+        "[GPS-Track] SQL insert OK id=%s vendedor=%s ts=%s lat=%s lng=%s battery=%s",
         track_id,
         vid,
         ts.isoformat(),

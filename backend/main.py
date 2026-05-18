@@ -1,7 +1,9 @@
 import logging
 import os
 
-from fastapi import FastAPI
+from typing import Annotated
+
+from fastapi import FastAPI, Header
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +30,7 @@ from backend.routers.distribuidora_sync import sync_router
 from backend.routers import distribuidora_trucks
 from backend.routers.app_distribuidora import router as app_distribuidora_router
 from backend.routers.operaciones import router as operaciones_router
+from backend.routers.operaciones_telemetry import router as operaciones_telemetry_router
 from backend.routers import margin_export
 from backend.routers import margin_problems
 from backend.routers import margins
@@ -128,6 +131,8 @@ app.include_router(app_distribuidora_router, prefix="/app_distribuidora")
 
 # --- Panel operaciones (monitoreo vendedores / rutas; JWT staff) ---
 app.include_router(operaciones_router)
+# Telemetría móvil (heartbeat + gps_track) — router dedicado además del de operaciones
+app.include_router(operaciones_telemetry_router)
 
 # --- ERP ---
 app.include_router(erp_router)
@@ -136,11 +141,55 @@ app.include_router(erp_router)
 app.include_router(diagnostics_router.router)
 
 
+def _register_gps_track_on_app() -> None:
+    """Montaje explícito en la app raíz (respaldo si falla include_router)."""
+    from backend.routers.gps_track_endpoint import handle_gps_track
+    from backend.schemas.operaciones import GpsTrackRequest, TelemetryAckResponse
+
+    @app.post(
+        "/operaciones/gps_track",
+        response_model=TelemetryAckResponse,
+        tags=["Operaciones Telemetría Móvil"],
+        summary="GPS track (registro directo main.app)",
+        include_in_schema=True,
+    )
+    async def _main_gps_track(
+        body: GpsTrackRequest,
+        x_heartbeat_key: Annotated[str | None, Header(alias="X-Heartbeat-Key")] = None,
+        authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+    ) -> TelemetryAckResponse:
+        logger.info("[GPS-Track] main.app route handler vendedor=%s", body.vendedor_id)
+        return await handle_gps_track(body, x_heartbeat_key, authorization)
+
+
+_register_gps_track_on_app()
+
+
 @app.on_event("startup")
 def _startup_attach_diagnostics_log_handler() -> None:
     from backend.diagnostics.logging_handler import attach_memory_log_handler
 
     attach_memory_log_handler()
+
+
+@app.on_event("startup")
+def _startup_log_operaciones_telemetry_routes() -> None:
+    """Confirma en logs que gps_track está en OpenAPI (revisar tras deploy)."""
+    wanted = ("/operaciones/gps_track", "/operaciones/heartbeat", "/operaciones/gps-track")
+    found: list[str] = []
+    for route in app.routes:
+        path = getattr(route, "path", None)
+        methods = getattr(route, "methods", None) or set()
+        if path in wanted and "POST" in methods:
+            found.append(path)
+    logger.info(
+        "Operaciones telemetría POST registradas: %s (esperadas: %s)",
+        sorted(found),
+        list(wanted),
+    )
+    missing = [p for p in wanted if p not in found]
+    if missing:
+        logger.error("FALTAN rutas telemetría en app: %s", missing)
 
 
 @app.get("/")
