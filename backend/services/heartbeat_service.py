@@ -155,6 +155,40 @@ def load_snapshots(cur, fecha: date) -> dict[str, HeartbeatSnapshot]:
     return out
 
 
+_table_ready = False
+
+
+def ensure_heartbeat_table(cur) -> None:
+    """Crea la tabla si no existe (idempotente; útil si falta migración manual)."""
+    global _table_ready
+    if _table_ready:
+        return
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS bsale.operaciones_heartbeat (
+          id BIGSERIAL PRIMARY KEY,
+          vendedor_id VARCHAR(64) NOT NULL,
+          timestamp TIMESTAMPTZ NOT NULL,
+          lat DOUBLE PRECISION NULL,
+          lng DOUBLE PRECISION NULL,
+          bateria SMALLINT NULL,
+          conexion VARCHAR(32) NULL,
+          pendientes INTEGER NULL,
+          app_version VARCHAR(64) NULL,
+          dispositivo VARCHAR(128) NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+        )
+        """,
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_operaciones_heartbeat_vendedor_ts
+          ON bsale.operaciones_heartbeat (vendedor_id, timestamp DESC)
+        """,
+    )
+    _table_ready = True
+
+
 def insert_heartbeat(
     *,
     vendedor_id: str,
@@ -176,17 +210,18 @@ def insert_heartbeat(
     conn = get_connection()
     try:
         cur = conn.cursor()
+        ensure_heartbeat_table(cur)
         cur.execute(
             """
             SELECT 1 FROM bsale.vendedores_app
-            WHERE codigo = %s AND tipo_usuario = 'vendedor' AND activo = TRUE
+            WHERE codigo = %s AND tipo_usuario = 'vendedor'
             LIMIT 1
             """,
             (vid,),
         )
         if not cur.fetchone():
             cur.close()
-            raise ValueError("Vendedor no encontrado o inactivo")
+            raise ValueError(f"Vendedor no encontrado: {vid}")
 
         cur.execute(
             """

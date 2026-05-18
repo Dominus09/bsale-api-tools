@@ -32,7 +32,9 @@ Prefijo: `/operaciones`. Todos requieren header `Authorization: Bearer <token>` 
 | GET | `/operaciones/incidencias?fecha=&vendedor=&limit=` | Listado filtrable |
 | GET | `/operaciones/metricas?fecha=` | KPIs + desglose por vendedor |
 | GET | `/operaciones/foto/{visita_id}` | Imagen evidencia (JWT, archivo o redirect URL) |
-| POST | `/operaciones/heartbeat` | Telemetría app móvil (sin JWT staff; opcional `X-Heartbeat-Key`) |
+| POST | `/operaciones/heartbeat` | Telemetría app móvil → `{ "ack": true, "server_timestamp": "..." }` |
+| POST | `/app_distribuidora/heartbeat` | **Alias** (misma lógica; si la app usa esa base URL) |
+| POST | `/app_distribuidora/operaciones/heartbeat` | **Alias** (path relativo `operaciones/heartbeat`) |
 
 Documentación interactiva: `http://localhost:8000/docs` (tag **Operaciones Quillotana**).
 
@@ -113,6 +115,12 @@ curl -X POST http://localhost:8000/operaciones/heartbeat \
     "app_version": "1.2.0",
     "dispositivo": "Android 14"
   }'
+
+# Respuesta esperada:
+# {"ack":true,"server_timestamp":"2026-05-18T15:00:01.123456+00:00"}
+
+# Si la app usa base /app_distribuidora:
+curl -X POST http://localhost:8000/app_distribuidora/heartbeat ...
 ```
 
 Repetir cada 30–60 s y abrir el dashboard (hoy): badge **Online** si el último pulso &lt; 2 min.

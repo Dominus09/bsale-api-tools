@@ -1,14 +1,14 @@
 """
 Panel operacional Quillotana: monitoreo vendedores, rutas e incidencias.
 
-Montaje: ``/operaciones`` (JWT staff requerido).
-Datos desde app móvil: ``bsale.rutas_dia`` + ``bsale.visitas`` (sin tocar ``/app_distribuidora``).
+Montaje: ``/operaciones``
+- GET*: JWT staff
+- POST ``/heartbeat``: app móvil (sin JWT staff; ver heartbeat_endpoint)
 """
 
 from __future__ import annotations
 
 import logging
-import os
 import time
 from datetime import date
 from typing import Annotated
@@ -16,9 +16,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import FileResponse
 
+from backend.routers.heartbeat_endpoint import handle_heartbeat
 from backend.schemas.operaciones import (
+    HeartbeatAckResponse,
     HeartbeatRequest,
-    HeartbeatResponse,
     IncidenciasListResponse,
     OperacionesDashboardResponse,
     OperacionesMetricasResponse,
@@ -27,7 +28,6 @@ from backend.schemas.operaciones import (
     VendedoresListResponse,
 )
 from backend.services import operaciones_service
-from backend.services import heartbeat_service
 from backend.services.visita_foto_service import path_for_key, path_for_visita_id
 from backend.utils.auth_staff import require_staff_user
 
@@ -40,53 +40,23 @@ def _parse_fecha(fecha: date | None) -> date:
     return fecha or date.today()
 
 
-def _verify_heartbeat_caller(
-    x_heartbeat_key: Annotated[str | None, Header(alias="X-Heartbeat-Key")] = None,
-    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
-) -> None:
-    """Opcional: ``OPERACIONES_HEARTBEAT_API_KEY`` exige header coincidente (app móvil)."""
-    secret = os.getenv("OPERACIONES_HEARTBEAT_API_KEY", "").strip()
-    if not secret:
-        return
-    token = (x_heartbeat_key or "").strip()
-    if not token and authorization and authorization.lower().startswith("bearer "):
-        token = authorization[7:].strip()
-    if token != secret:
-        raise HTTPException(status_code=401, detail="Clave heartbeat inválida")
-
-
 @router.post(
     "/heartbeat",
-    response_model=HeartbeatResponse,
+    response_model=HeartbeatAckResponse,
     summary="Telemetría app móvil (GPS, batería, pendientes)",
+    responses={
+        200: {"description": "ACK"},
+        400: {"description": "Payload inválido"},
+        401: {"description": "Auth heartbeat"},
+        503: {"description": "Tabla no migrada"},
+    },
 )
-def post_operaciones_heartbeat(
+async def post_operaciones_heartbeat(
     body: HeartbeatRequest,
-    _: None = Depends(_verify_heartbeat_caller),
-) -> HeartbeatResponse:
-    try:
-        hb_id = heartbeat_service.insert_heartbeat(
-            vendedor_id=body.vendedor_id,
-            timestamp=body.timestamp,
-            lat=body.lat,
-            lng=body.lng,
-            bateria=body.bateria,
-            conexion=body.conexion,
-            pendientes=body.pendientes,
-            app_version=body.app_version,
-            dispositivo=body.dispositivo,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    except Exception as e:
-        logger.exception("heartbeat insert: %s", e)
-        raise HTTPException(status_code=500, detail="No se pudo registrar heartbeat") from e
-
-    return HeartbeatResponse(
-        id=hb_id,
-        vendedor_id=body.vendedor_id.strip(),
-        timestamp=body.timestamp,
-    )
+    x_heartbeat_key: Annotated[str | None, Header(alias="X-Heartbeat-Key")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> HeartbeatAckResponse:
+    return await handle_heartbeat(body, x_heartbeat_key, authorization)
 
 
 @router.get(
@@ -191,7 +161,6 @@ def get_operaciones_visita_foto(
     visita_id: int,
     _user: dict = Depends(require_staff_user),
 ):
-    """Sirve archivo en disco o redirige si la BD guarda URL http(s) (consulta en servicio)."""
     from backend.db import get_connection
 
     conn = get_connection()

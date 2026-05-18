@@ -11,11 +11,11 @@ from __future__ import annotations
 import logging
 import time
 from datetime import date
-from typing import cast
+from typing import Annotated, cast
 
 import bcrypt
 import psycopg2
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from backend.db import get_connection
 from backend.schemas.distribuidora import (
     LoginRequest,
@@ -27,6 +27,8 @@ from backend.schemas.distribuidora import (
     VisitaAltaResponse,
     VisitaUpdate,
 )
+from backend.routers.heartbeat_endpoint import handle_heartbeat
+from backend.schemas.operaciones import HeartbeatAckResponse, HeartbeatRequest
 from backend.services.visita_foto_service import normalize_and_persist_foto_url
 from backend.utils.geo import coordenadas_visita_validas, distancia_y_estado_validacion
 
@@ -698,3 +700,33 @@ def post_visitas_sync(body: SyncRequest):
             conn.close()
 
     return SyncResponse(sincronizados=sincronizados, errores=errores)
+
+
+@router.post(
+    "/heartbeat",
+    response_model=HeartbeatAckResponse,
+    summary="Telemetría operacional (alias app móvil)",
+    tags=["App Distribuidora", "Operaciones Quillotana"],
+)
+async def post_app_heartbeat(
+    body: HeartbeatRequest,
+    x_heartbeat_key: Annotated[str | None, Header(alias="X-Heartbeat-Key")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> HeartbeatAckResponse:
+    """Misma lógica que ``POST /operaciones/heartbeat`` (base URL ``/app_distribuidora``)."""
+    return await handle_heartbeat(body, x_heartbeat_key, authorization)
+
+
+@router.post(
+    "/operaciones/heartbeat",
+    response_model=HeartbeatAckResponse,
+    summary="Telemetría operacional (ruta relativa desde app)",
+    tags=["App Distribuidora", "Operaciones Quillotana"],
+)
+async def post_app_operaciones_heartbeat(
+    body: HeartbeatRequest,
+    x_heartbeat_key: Annotated[str | None, Header(alias="X-Heartbeat-Key")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> HeartbeatAckResponse:
+    """Si la app usa base ``/app_distribuidora`` + path ``operaciones/heartbeat``."""
+    return await handle_heartbeat(body, x_heartbeat_key, authorization)

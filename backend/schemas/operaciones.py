@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 
 EstadoConexion = Literal["activo", "atrasado", "offline"]
 EstadoVisitaMapa = Literal["visitado", "pendiente", "incidencia"]
@@ -155,19 +155,39 @@ class OperacionesMetricasResponse(BaseModel):
 class HeartbeatRequest(BaseModel):
     """Telemetría desde app móvil (POST /operaciones/heartbeat)."""
 
-    vendedor_id: str = Field(..., min_length=1, max_length=64)
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    vendedor_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        validation_alias=AliasChoices("vendedor_id", "vendedorId"),
+    )
     timestamp: datetime
     lat: float | None = None
     lng: float | None = None
     bateria: int | None = Field(None, ge=0, le=100)
     conexion: str | None = Field(None, max_length=32)
     pendientes: int | None = Field(None, ge=0)
-    app_version: str | None = Field(None, max_length=64)
+    app_version: str | None = Field(
+        None,
+        max_length=64,
+        validation_alias=AliasChoices("app_version", "appVersion"),
+    )
     dispositivo: str | None = Field(None, max_length=128)
 
+    @field_validator("vendedor_id", mode="before")
+    @classmethod
+    def _strip_vendedor(cls, v: object) -> object:
+        if isinstance(v, str):
+            return v.strip()
+        return v
 
-class HeartbeatResponse(BaseModel):
-    ok: bool = True
-    id: int
-    vendedor_id: str
-    timestamp: datetime
+
+class HeartbeatAckResponse(BaseModel):
+    """Respuesta ACK esperada por la app móvil."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    ack: bool = True
+    server_timestamp: datetime
