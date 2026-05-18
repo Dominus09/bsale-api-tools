@@ -31,14 +31,17 @@ Prefijo: `/operaciones`. Todos requieren header `Authorization: Bearer <token>` 
 | GET | `/operaciones/ruta/{ruta_id}` | Marcadores mapa (visitado / pendiente / incidencia) |
 | GET | `/operaciones/incidencias?fecha=&vendedor=&limit=` | Listado filtrable |
 | GET | `/operaciones/metricas?fecha=` | KPIs + desglose por vendedor |
+| GET | `/operaciones/foto/{visita_id}` | Imagen evidencia (JWT, archivo o redirect URL) |
 
 Documentación interactiva: `http://localhost:8000/docs` (tag **Operaciones Quillotana**).
 
 ## Datos y reglas de negocio
 
-- **Incidencias**: filas en `bsale.visitas` con `estado = 'incidencia'` (no hay tabla separada).
+- **Visitas realizadas** (KPIs, tabla vendedores, avance): `COUNT` en `bsale.visitas` con `estado IN ('visitado', 'incidencia')`. Las incidencias **sí cuentan** como cierre operacional. **Pendientes** = `total_clientes - visitas_realizadas` (no se usa `rutas_dia.clientes_visitados`, que la app móvil no recalcula en sync).
+- **Incidencias** (contador aparte): filas con `estado = 'incidencia'`.
 - **GPS actual**: última visita del día con `lat`/`lon` no nulos (no hay tracking en tiempo real en BD).
 - **Batería**: `null` hasta que la app envíe ese campo.
+- **Fotos incidencias**: al sincronizar, si `foto_url` es `data:image/...;base64,...` se guarda en disco (`VISITA_FOTOS_DIR`, default `data/uploads/visitas/`) y en BD queda clave `visitas/{id}.jpg`. El panel las sirve en `GET /operaciones/foto/{visita_id}` (JWT). Legacy: `data:` en BD sigue mostrándose; sin imagen → placeholder en UI.
 - **Estado conexión** (`activo` / `atrasado` / `offline`):
   - `offline`: vendedor inactivo, sin ruta, o `updated_at` de ruta > `OPERACIONES_OFFLINE_MINUTES` (default 15).
   - `atrasado`: cumplimiento &lt; `OPERACIONES_ATRASADO_PCT` (default 50%) con ruta activa.
@@ -54,6 +57,7 @@ Documentación interactiva: `http://localhost:8000/docs` (tag **Operaciones Quil
 | `JWT_SECRET_KEY` o el `SECRET` usado en `backend/routers/auth.py` | — | Validar JWT staff |
 | `OPERACIONES_OFFLINE_MINUTES` | `15` | Umbral offline |
 | `OPERACIONES_ATRASADO_PCT` | `50` | Umbral atrasado (%) |
+| `VISITA_FOTOS_DIR` | `data/uploads/visitas` | Directorio fotos incidencias (filesystem) |
 
 ### Frontend (`frontend/.env.local`)
 
@@ -113,6 +117,8 @@ backend/
   utils/auth_staff.py
   schemas/operaciones.py
   services/operaciones_service.py
+  services/operaciones_visitas.py
+  services/visita_foto_service.py
   routers/operaciones.py
   main.py                          # include_router(operaciones_router)
 
@@ -124,6 +130,7 @@ frontend/
     kpi-cards.tsx
     vendedores-table.tsx
     mapa-operacional-client.tsx
+    incidencia-foto.tsx
   app/(dashboard)/operaciones/
     page.tsx                       # redirect → dashboard
     dashboard/page.tsx

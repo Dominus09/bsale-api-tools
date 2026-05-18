@@ -27,6 +27,7 @@ from backend.schemas.distribuidora import (
     VisitaAltaResponse,
     VisitaUpdate,
 )
+from backend.services.visita_foto_service import normalize_and_persist_foto_url
 from backend.utils.geo import coordenadas_visita_validas, distancia_y_estado_validacion
 
 logger = logging.getLogger(__name__)
@@ -429,6 +430,10 @@ def _actualizar_visita_sql(cur, body: VisitaUpdate) -> bool:
         lon_ve,
     )
 
+    foto_persistida = body.foto_url
+    if body.foto_url is not None and str(body.foto_url).strip():
+        foto_persistida = normalize_and_persist_foto_url(body.id, body.foto_url)
+
     logger.info(
         "Actualizar visita id=%s con_compra=%r (enviado en request) estado=%s",
         body.id,
@@ -458,7 +463,7 @@ def _actualizar_visita_sql(cur, body: VisitaUpdate) -> bool:
             body.estado,
             body.tipo_incidencia,
             body.observacion,
-            body.foto_url,
+            foto_persistida,
             body.con_compra,
             body.lat_visita,
             body.lon_visita,

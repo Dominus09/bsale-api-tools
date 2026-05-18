@@ -14,6 +14,12 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from backend.db import get_connection
+from backend.services.operaciones_visitas import (
+    ESTADO_INCIDENCIA,
+    es_visita_realizada,
+    sql_in_estados_realizados,
+)
+from backend.services.visita_foto_service import resolve_foto_display
 from backend.schemas.operaciones import (
     GpsActual,
     IncidenciaRow,
@@ -120,20 +126,33 @@ def _row_to_vendedor(row: tuple, nombres: dict[str, str]) -> VendedorOperaciones
     )
 
 
-_SQL_VENDEDORES_BASE = """
+_SQL_ESTADOS_REALIZADOS = sql_in_estados_realizados()
+
+_SQL_VENDEDORES_BASE = f"""
 SELECT
     va.codigo,
     va.nombre,
     va.activo,
     rd.id AS ruta_id,
     rd.estado AS estado_ruta,
-    COALESCE(rd.total_clientes, 0),
-    COALESCE(rd.clientes_visitados, 0),
-    COALESCE(rd.clientes_pendientes, 0),
-    COALESCE(rd.porcentaje_cumplimiento, 0),
+    COALESCE(vst.total_cli, rd.total_clientes, 0),
+    COALESCE(vst.visitados, 0),
+    GREATEST(
+        0,
+        COALESCE(vst.total_cli, rd.total_clientes, 0) - COALESCE(vst.visitados, 0)
+    ),
+    CASE
+        WHEN COALESCE(vst.total_cli, rd.total_clientes, 0) > 0
+        THEN ROUND(
+            100.0 * COALESCE(vst.visitados, 0)
+                / COALESCE(vst.total_cli, rd.total_clientes, 0)::numeric,
+            2
+        )
+        ELSE 0
+    END,
     rd.hora_inicio,
     rd.updated_at AS ruta_updated,
-    COALESCE(inc.cnt, 0) AS incidencias,
+    COALESCE(vst.incidencias, 0) AS incidencias,
     COALESCE(ps.cnt, 0) AS pending_sync,
     COALESCE(km.sum_m, 0) AS km_metros,
     gps.lat AS gps_lat,
@@ -143,22 +162,25 @@ FROM bsale.vendedores_app va
 LEFT JOIN bsale.rutas_dia rd
     ON rd.vendedor = va.codigo AND rd.fecha = %s
 LEFT JOIN LATERAL (
-    SELECT COUNT(*)::int AS cnt
+    SELECT
+        COUNT(*)::int AS total_cli,
+        COUNT(*) FILTER (WHERE v.estado IN ({_SQL_ESTADOS_REALIZADOS}))::int AS visitados,
+        COUNT(*) FILTER (WHERE v.estado = '{ESTADO_INCIDENCIA}')::int AS incidencias
     FROM bsale.visitas v
-    WHERE v.ruta_id = rd.id AND v.estado = 'incidencia'
-) inc ON TRUE
+    WHERE v.ruta_id = rd.id
+) vst ON rd.id IS NOT NULL
 LEFT JOIN LATERAL (
     SELECT COUNT(*)::int AS cnt
     FROM bsale.visitas v
     WHERE v.ruta_id = rd.id AND v.sync_status = 'pending_sync'
-) ps ON TRUE
+) ps ON rd.id IS NOT NULL
 LEFT JOIN LATERAL (
     SELECT COALESCE(SUM(v.distancia_metros), 0) AS sum_m
     FROM bsale.visitas v
     WHERE v.ruta_id = rd.id
-      AND v.estado IN ('visitado', 'incidencia')
+      AND v.estado IN ({_SQL_ESTADOS_REALIZADOS})
       AND v.distancia_metros IS NOT NULL
-) km ON TRUE
+) km ON rd.id IS NOT NULL
 LEFT JOIN LATERAL (
     SELECT v.lat_visita AS lat, v.lon_visita AS lon, v.fecha_hora_visita
     FROM bsale.visitas v
@@ -167,7 +189,7 @@ LEFT JOIN LATERAL (
       AND v.lon_visita IS NOT NULL
     ORDER BY v.fecha_hora_visita DESC NULLS LAST, v.updated_at DESC
     LIMIT 1
-) gps ON TRUE
+) gps ON rd.id IS NOT NULL
 WHERE va.tipo_usuario = 'vendedor'
 ORDER BY va.nombre NULLS LAST, va.codigo
 """
@@ -176,7 +198,20 @@ ORDER BY va.nombre NULLS LAST, va.codigo
 def _fetch_vendedores_rows(cur, fecha: date) -> list[VendedorOperacionesRow]:
     cur.execute(_SQL_VENDEDORES_BASE, (fecha,))
     rows = cur.fetchall()
-    return [_row_to_vendedor(r, {}) for r in rows]
+    items = [_row_to_vendedor(r, {}) for r in rows]
+    if logger.isEnabledFor(logging.DEBUG):
+        visitados = sum(i.visitas_realizadas for i in items)
+        inc = sum(i.incidencias for i in items)
+        pend = sum(i.visitas_pendientes for i in items)
+        logger.debug(
+            "operaciones vendedores fecha=%s filas=%s visitas_realizadas=%s incidencias=%s pendientes=%s",
+            fecha,
+            len(items),
+            visitados,
+            inc,
+            pend,
+        )
+    return items
 
 
 def _aggregate_kpis(items: list[VendedorOperacionesRow], fecha: date) -> OperacionesDashboardKpis:
@@ -215,7 +250,15 @@ def get_dashboard(fecha: date | None = None) -> OperacionesDashboardResponse:
         cur.close()
     finally:
         conn.close()
-    logger.info("operaciones dashboard fecha=%s vendedores=%s ms=%.0f", f, len(items), (time.perf_counter() - t0) * 1000)
+    logger.info(
+        "operaciones dashboard fecha=%s vendedores=%s visitados=%s incidencias=%s pendientes=%s ms=%.0f",
+        f,
+        len(items),
+        kpis.clientes_visitados,
+        kpis.incidencias,
+        kpis.clientes_pendientes,
+        (time.perf_counter() - t0) * 1000,
+    )
     return OperacionesDashboardResponse(kpis=kpis, vendedores_resumen=items)
 
 
@@ -280,8 +323,11 @@ def get_vendedor_detalle(codigo: str, fecha: date | None = None) -> VendedorDeta
             )
             pending = 0
             for row in cur.fetchall():
+                vid = int(row[0])
+                foto_raw = row[9]
+                foto_disp, _ = resolve_foto_display(foto_raw, vid)
                 item = VisitaTimelineItem(
-                    id=int(row[0]),
+                    id=vid,
                     cliente_id=str(row[1]),
                     nombre_fantasia=row[2],
                     direccion=row[3],
@@ -290,7 +336,7 @@ def get_vendedor_detalle(codigo: str, fecha: date | None = None) -> VendedorDeta
                     estado=str(row[6]),
                     tipo_incidencia=row[7],
                     observacion=row[8],
-                    foto_url=row[9],
+                    foto_url=foto_disp,
                     fecha_hora_visita=row[10],
                     lat_visita=float(row[11]) if row[11] is not None else None,
                     lon_visita=float(row[12]) if row[12] is not None else None,
@@ -298,17 +344,18 @@ def get_vendedor_detalle(codigo: str, fecha: date | None = None) -> VendedorDeta
                     sync_status=str(row[14]),
                 )
                 timeline.append(item)
-                if item.estado == "incidencia":
+                if item.estado == ESTADO_INCIDENCIA:
                     incidencias.append(item)
-                if item.distancia_metros:
+                if item.distancia_metros and es_visita_realizada(item.estado):
                     km += float(item.distancia_metros)
                 if item.sync_status == "pending_sync":
                     pending += 1
 
             ultima_sync = rd[5]
-            pct = float(rd[4] or 0)
-            visitados = sum(1 for t in timeline if t.estado == "visitado")
-            pend = sum(1 for t in timeline if t.estado == "pendiente")
+            total_vis = len(timeline)
+            visitados = sum(1 for t in timeline if es_visita_realizada(t.estado))
+            pend = max(0, total_vis - visitados)
+            pct = round(100.0 * visitados / total_vis, 2) if total_vis else 0.0
             estado_conexion = _estado_conexion(
                 activo=True,
                 updated_at=ultima_sync,
@@ -373,7 +420,12 @@ def get_ruta_mapa(ruta_id: int) -> RutaMapaResponse | None:
         marcadores: list[MarcadorMapa] = []
         for r in cur.fetchall():
             est = str(r[5])
-            map_est = "incidencia" if est == "incidencia" else ("visitado" if est == "visitado" else "pendiente")
+            if est == ESTADO_INCIDENCIA:
+                map_est = "incidencia"
+            elif es_visita_realizada(est):
+                map_est = "visitado"
+            else:
+                map_est = "pendiente"
             marcadores.append(
                 MarcadorMapa(
                     visita_id=int(r[0]),
@@ -457,23 +509,42 @@ def get_incidencias(
             """,
             tuple(params),
         )
-        items = [
-            IncidenciaRow(
-                id=int(r[0]),
-                ruta_id=int(r[1]),
-                vendedor=str(r[2]),
-                vendedor_nombre=r[3],
-                cliente_id=str(r[4]),
-                nombre_fantasia=r[5],
-                comuna=r[6],
-                tipo_incidencia=r[7],
-                observacion=r[8],
-                foto_url=r[9],
-                fecha_hora_visita=r[10],
-                sync_status=str(r[11]),
+        items: list[IncidenciaRow] = []
+        fotos_ok = 0
+        fotos_miss = 0
+        for r in cur.fetchall():
+            vid = int(r[0])
+            foto_raw = r[9]
+            foto_disp, tiene = resolve_foto_display(foto_raw, vid)
+            if tiene:
+                fotos_ok += 1
+            else:
+                fotos_miss += 1
+            items.append(
+                IncidenciaRow(
+                    id=vid,
+                    ruta_id=int(r[1]),
+                    vendedor=str(r[2]),
+                    vendedor_nombre=r[3],
+                    cliente_id=str(r[4]),
+                    nombre_fantasia=r[5],
+                    comuna=r[6],
+                    tipo_incidencia=r[7],
+                    observacion=r[8],
+                    foto_url=foto_disp,
+                    tiene_foto=tiene,
+                    fecha_hora_visita=r[10],
+                    sync_status=str(r[11]),
+                ),
             )
-            for r in cur.fetchall()
-        ]
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "operaciones incidencias fecha=%s total=%s fotos_ok=%s fotos_sin=%s",
+                f,
+                len(items),
+                fotos_ok,
+                fotos_miss,
+            )
         cur.close()
     finally:
         conn.close()

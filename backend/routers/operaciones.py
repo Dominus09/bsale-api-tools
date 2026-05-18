@@ -13,6 +13,7 @@ from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 
 from backend.schemas.operaciones import (
     IncidenciasListResponse,
@@ -23,6 +24,7 @@ from backend.schemas.operaciones import (
     VendedoresListResponse,
 )
 from backend.services import operaciones_service
+from backend.services.visita_foto_service import path_for_key, path_for_visita_id
 from backend.utils.auth_staff import require_staff_user
 
 logger = logging.getLogger(__name__)
@@ -125,6 +127,46 @@ def get_operaciones_incidencias(
     except Exception as e:
         logger.exception("operaciones incidencias: %s", e)
         raise HTTPException(status_code=500, detail="Error al listar incidencias") from e
+
+
+@router.get(
+    "/foto/{visita_id}",
+    summary="Evidencia fotográfica de una visita (JWT staff)",
+    responses={404: {"description": "Sin imagen"}},
+)
+def get_operaciones_visita_foto(
+    visita_id: int,
+    _user: dict = Depends(require_staff_user),
+):
+    """Sirve archivo en disco o redirige si la BD guarda URL http(s) (consulta en servicio)."""
+    from backend.db import get_connection
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT foto_url FROM bsale.visitas WHERE id = %s", (visita_id,))
+        row = cur.fetchone()
+        cur.close()
+    finally:
+        conn.close()
+
+    stored = str(row[0]).strip() if row and row[0] else None
+    if stored and (stored.startswith("http://") or stored.startswith("https://")):
+        from fastapi.responses import RedirectResponse
+
+        return RedirectResponse(stored, status_code=302)
+
+    path = path_for_key(stored) if stored else None
+    if path is None:
+        path = path_for_visita_id(visita_id)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Sin imagen para esta visita")
+    media = "image/jpeg"
+    if path.suffix.lower() == ".png":
+        media = "image/png"
+    elif path.suffix.lower() == ".webp":
+        media = "image/webp"
+    return FileResponse(path, media_type=media)
 
 
 @router.get(

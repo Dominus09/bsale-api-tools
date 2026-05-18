@@ -133,6 +133,7 @@ class IncidenciaRow(BaseModel):
     tipo_incidencia: str | None = None
     observacion: str | None = None
     foto_url: str | None = None
+    tiene_foto: bool = False
     fecha_hora_visita: datetime | None = None
     sync_status: str
 
@@ -145,6 +146,5 @@ class IncidenciasListResponse(BaseModel):
 
 class OperacionesMetricasResponse(BaseModel):
     fecha: date
-    type33_resolution_note: str | None = None
     dashboard: OperacionesDashboardKpis
     por_vendedor: list[VendedorOperacionesRow] = Field(default_factory=list)

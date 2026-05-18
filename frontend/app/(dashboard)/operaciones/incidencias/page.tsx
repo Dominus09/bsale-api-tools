@@ -13,6 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { IncidenciaFoto } from "@/components/operaciones/incidencia-foto"
 import { useOperacionesPoll } from "@/hooks/use-operaciones-poll"
 import { getOperacionesIncidencias, localIsoDate } from "@/services/operaciones"
 
@@ -80,13 +81,12 @@ export default function OperacionesIncidenciasPage() {
                         : "—"}
                     </TableCell>
                     <TableCell>
-                      {row.foto_url ? (
-                        <a href={row.foto_url} target="_blank" rel="noreferrer" className="text-primary text-sm">
-                          Ver
-                        </a>
-                      ) : (
-                        "—"
-                      )}
+                      <IncidenciaFoto
+                        visitaId={row.id}
+                        fotoUrl={row.foto_url}
+                        tieneFoto={row.tiene_foto}
+                        alt={row.nombre_fantasia || row.cliente_id}
+                      />
                     </TableCell>
                   </TableRow>
                 ))}

@@ -120,6 +120,7 @@ export interface IncidenciaRow {
   tipo_incidencia: string | null
   observacion: string | null
   foto_url: string | null
+  tiene_foto?: boolean
   fecha_hora_visita: string | null
   sync_status: string
 }
