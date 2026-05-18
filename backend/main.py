@@ -27,6 +27,7 @@ from backend.routers import distribuidora_sync
 from backend.routers.distribuidora_sync import sync_router
 from backend.routers import distribuidora_trucks
 from backend.routers.app_distribuidora import router as app_distribuidora_router
+from backend.routers.operaciones import router as operaciones_router
 from backend.routers import margin_export
 from backend.routers import margin_problems
 from backend.routers import margins
@@ -124,6 +125,9 @@ app.include_router(distribuidora_trucks.router)
 
 # --- App móvil / rutas del día (bsale.rutas_dia + visitas, sync offline) ---
 app.include_router(app_distribuidora_router, prefix="/app_distribuidora")
+
+# --- Panel operaciones (monitoreo vendedores / rutas; JWT staff) ---
+app.include_router(operaciones_router)
 
 # --- ERP ---
 app.include_router(erp_router)
