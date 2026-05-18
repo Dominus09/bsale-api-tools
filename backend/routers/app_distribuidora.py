@@ -27,8 +27,14 @@ from backend.schemas.distribuidora import (
     VisitaAltaResponse,
     VisitaUpdate,
 )
+from backend.routers.gps_track_endpoint import handle_gps_track
 from backend.routers.heartbeat_endpoint import handle_heartbeat
-from backend.schemas.operaciones import HeartbeatAckResponse, HeartbeatRequest
+from backend.schemas.operaciones import (
+    GpsTrackRequest,
+    HeartbeatAckResponse,
+    HeartbeatRequest,
+    TelemetryAckResponse,
+)
 from backend.services.visita_foto_service import normalize_and_persist_foto_url
 from backend.utils.geo import coordenadas_visita_validas, distancia_y_estado_validacion
 
@@ -712,7 +718,7 @@ async def post_app_heartbeat(
     body: HeartbeatRequest,
     x_heartbeat_key: Annotated[str | None, Header(alias="X-Heartbeat-Key")] = None,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
-) -> HeartbeatAckResponse:
+) -> TelemetryAckResponse:
     """Misma lógica que ``POST /operaciones/heartbeat`` (base URL ``/app_distribuidora``)."""
     return await handle_heartbeat(body, x_heartbeat_key, authorization)
 
@@ -727,6 +733,34 @@ async def post_app_operaciones_heartbeat(
     body: HeartbeatRequest,
     x_heartbeat_key: Annotated[str | None, Header(alias="X-Heartbeat-Key")] = None,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
-) -> HeartbeatAckResponse:
+) -> TelemetryAckResponse:
     """Si la app usa base ``/app_distribuidora`` + path ``operaciones/heartbeat``."""
     return await handle_heartbeat(body, x_heartbeat_key, authorization)
+
+
+@router.post(
+    "/gps_track",
+    response_model=TelemetryAckResponse,
+    summary="GPS track (alias app móvil)",
+    tags=["App Distribuidora", "Operaciones Quillotana"],
+)
+async def post_app_gps_track(
+    body: GpsTrackRequest,
+    x_heartbeat_key: Annotated[str | None, Header(alias="X-Heartbeat-Key")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> TelemetryAckResponse:
+    return await handle_gps_track(body, x_heartbeat_key, authorization)
+
+
+@router.post(
+    "/operaciones/gps_track",
+    response_model=TelemetryAckResponse,
+    summary="GPS track (ruta relativa desde app)",
+    tags=["App Distribuidora", "Operaciones Quillotana"],
+)
+async def post_app_operaciones_gps_track(
+    body: GpsTrackRequest,
+    x_heartbeat_key: Annotated[str | None, Header(alias="X-Heartbeat-Key")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> TelemetryAckResponse:
+    return await handle_gps_track(body, x_heartbeat_key, authorization)

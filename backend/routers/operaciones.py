@@ -3,7 +3,7 @@ Panel operacional Quillotana: monitoreo vendedores, rutas e incidencias.
 
 Montaje: ``/operaciones``
 - GET*: JWT staff
-- POST ``/heartbeat``: app móvil (sin JWT staff; ver heartbeat_endpoint)
+- POST ``/heartbeat``, ``/gps_track``: app móvil (sin JWT staff)
 """
 
 from __future__ import annotations
@@ -16,10 +16,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import FileResponse
 
+from backend.routers.gps_track_endpoint import handle_gps_track
 from backend.routers.heartbeat_endpoint import handle_heartbeat
 from backend.schemas.operaciones import (
+    GpsTrackRequest,
     HeartbeatAckResponse,
     HeartbeatRequest,
+    TelemetryAckResponse,
     IncidenciasListResponse,
     OperacionesDashboardResponse,
     OperacionesMetricasResponse,
@@ -55,8 +58,27 @@ async def post_operaciones_heartbeat(
     body: HeartbeatRequest,
     x_heartbeat_key: Annotated[str | None, Header(alias="X-Heartbeat-Key")] = None,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
-) -> HeartbeatAckResponse:
+) -> TelemetryAckResponse:
     return await handle_heartbeat(body, x_heartbeat_key, authorization)
+
+
+@router.post(
+    "/gps_track",
+    response_model=TelemetryAckResponse,
+    summary="Punto GPS tracking (cola móvil)",
+    responses={
+        200: {"description": "ACK"},
+        400: {"description": "Payload inválido"},
+        401: {"description": "Auth telemetría"},
+        503: {"description": "Tabla no migrada"},
+    },
+)
+async def post_operaciones_gps_track(
+    body: GpsTrackRequest,
+    x_heartbeat_key: Annotated[str | None, Header(alias="X-Heartbeat-Key")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> TelemetryAckResponse:
+    return await handle_gps_track(body, x_heartbeat_key, authorization)
 
 
 @router.get(

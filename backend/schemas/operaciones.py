@@ -184,10 +184,50 @@ class HeartbeatRequest(BaseModel):
         return v
 
 
-class HeartbeatAckResponse(BaseModel):
-    """Respuesta ACK esperada por la app móvil."""
+class TelemetryAckResponse(BaseModel):
+    """ACK telemetría móvil (heartbeat, gps_track)."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     ack: bool = True
     server_timestamp: datetime
+
+
+# Alias retrocompatible
+HeartbeatAckResponse = TelemetryAckResponse
+
+
+class GpsTrackRequest(BaseModel):
+    """POST /operaciones/gps_track — un punto GPS."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    vendedor_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        validation_alias=AliasChoices("vendedor_id", "vendedorId"),
+    )
+    timestamp: datetime
+    lat: float
+    lng: float
+    accuracy: float | None = None
+    speed: float | None = None
+    battery: int | None = Field(
+        None,
+        ge=0,
+        le=100,
+        validation_alias=AliasChoices("battery", "bateria", "bateria_pct"),
+    )
+    app_version: str | None = Field(
+        None,
+        max_length=64,
+        validation_alias=AliasChoices("app_version", "appVersion"),
+    )
+
+    @field_validator("vendedor_id", mode="before")
+    @classmethod
+    def _strip_vendedor_gps(cls, v: object) -> object:
+        if isinstance(v, str):
+            return v.strip()
+        return v

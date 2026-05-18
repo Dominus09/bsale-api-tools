@@ -35,6 +35,9 @@ Prefijo: `/operaciones`. Todos requieren header `Authorization: Bearer <token>` 
 | POST | `/operaciones/heartbeat` | Telemetría app móvil → `{ "ack": true, "server_timestamp": "..." }` |
 | POST | `/app_distribuidora/heartbeat` | **Alias** (misma lógica; si la app usa esa base URL) |
 | POST | `/app_distribuidora/operaciones/heartbeat` | **Alias** (path relativo `operaciones/heartbeat`) |
+| POST | `/operaciones/gps_track` | Punto GPS tracking → `{ "ack": true, "server_timestamp": "..." }` |
+| POST | `/app_distribuidora/gps_track` | **Alias** GPS track |
+| POST | `/app_distribuidora/operaciones/gps_track` | **Alias** path relativo |
 
 Documentación interactiva: `http://localhost:8000/docs` (tag **Operaciones Quillotana**).
 
@@ -48,7 +51,7 @@ Documentación interactiva: `http://localhost:8000/docs` (tag **Operaciones Quil
 - **Estado conexión** (prioridad heartbeat, fallback legacy):
   - Con filas en `bsale.operaciones_heartbeat` del día: último pulso &lt; **2 min** → `activo` (Online); **2–10 min** → `atrasado`; **&gt; 10 min** → `offline`.
   - Sin heartbeat: lógica anterior (`rutas_dia.updated_at`, cumplimiento, `OPERACIONES_OFFLINE_MINUTES`).
-- **Última sync / GPS / km / batería**: si hay heartbeat del día, se usan `MAX(timestamp)`, último `lat/lng`, km Haversine entre puntos heartbeat y `bateria` del último pulso.
+- **Última sync / GPS / km / batería**: heartbeat + **`operaciones_gps_track`**; km preferente desde trazas GPS; posición = punto más reciente entre ambas fuentes.
 
 ## Variables de entorno
 
@@ -121,6 +124,24 @@ curl -X POST http://localhost:8000/operaciones/heartbeat \
 
 # Si la app usa base /app_distribuidora:
 curl -X POST http://localhost:8000/app_distribuidora/heartbeat ...
+
+## Prueba gps_track (vacía cola móvil)
+
+```bash
+curl -X POST http://localhost:8000/operaciones/gps_track \
+  -H "Content-Type: application/json" \
+  -d '{
+    "vendedor_id": "vendedor_1",
+    "timestamp": "2026-05-18T20:05:00Z",
+    "lat": -33.451,
+    "lng": -71.231,
+    "accuracy": 12.5,
+    "speed": 4.2,
+    "battery": 78,
+    "app_version": "1.0.0"
+  }'
+# {"ack":true,"server_timestamp":"..."}
+```
 ```
 
 Repetir cada 30–60 s y abrir el dashboard (hoy): badge **Online** si el último pulso &lt; 2 min.

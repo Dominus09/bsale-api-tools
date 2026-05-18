@@ -108,8 +108,63 @@ def _km_por_vendedor(rows: list[tuple]) -> dict[str, float]:
     return out
 
 
+def _merge_gps_track_into_snapshots(
+    out: dict[str, HeartbeatSnapshot],
+    fecha: date,
+    cur,
+) -> dict[str, HeartbeatSnapshot]:
+    """Enriquece con ``operaciones_gps_track`` (km preferente, GPS más reciente)."""
+    try:
+        from backend.services.gps_track_service import load_day_stats
+
+        gps_map = load_day_stats(cur, fecha)
+    except Exception as e:
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("gps_track snapshots no disponibles: %s", e)
+        return out
+
+    for vid, gps in gps_map.items():
+        existing = out.get(vid)
+        use_gps_pos = existing is None or gps.last_timestamp >= existing.last_timestamp
+        km = gps.km_metros if gps.km_metros > 0 else (existing.km_metros if existing else 0.0)
+        if existing is None:
+            out[vid] = HeartbeatSnapshot(
+                vendedor_id=vid,
+                last_timestamp=gps.last_timestamp,
+                lat=gps.lat,
+                lng=gps.lng,
+                bateria=gps.battery,
+                conexion=None,
+                pendientes=None,
+                km_metros=km,
+                app_version=gps.app_version,
+                dispositivo=None,
+            )
+        else:
+            out[vid] = HeartbeatSnapshot(
+                vendedor_id=vid,
+                last_timestamp=gps.last_timestamp if use_gps_pos else existing.last_timestamp,
+                lat=gps.lat if use_gps_pos else existing.lat,
+                lng=gps.lng if use_gps_pos else existing.lng,
+                bateria=gps.battery if gps.battery is not None else existing.bateria,
+                conexion=existing.conexion,
+                pendientes=existing.pendientes,
+                km_metros=km,
+                app_version=gps.app_version or existing.app_version,
+                dispositivo=existing.dispositivo,
+            )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "telemetría merge vendedor=%s gps_puntos=%s km_m=%.0f",
+                vid,
+                gps.point_count,
+                km,
+            )
+    return out
+
+
 def load_snapshots(cur, fecha: date) -> dict[str, HeartbeatSnapshot]:
-    """Último heartbeat del día + km acumulados por Haversine en el día."""
+    """Último heartbeat del día + km (heartbeat + gps_track, preferir gps_track)."""
     day_start = fecha
     cur.execute(
         """
@@ -152,7 +207,7 @@ def load_snapshots(cur, fecha: date) -> dict[str, HeartbeatSnapshot]:
             app_version=str(row[7]) if row[7] else None,
             dispositivo=str(row[8]) if row[8] else None,
         )
-    return out
+    return _merge_gps_track_into_snapshots(out, fecha, cur)
 
 
 _table_ready = False
