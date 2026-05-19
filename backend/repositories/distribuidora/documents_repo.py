@@ -94,7 +94,7 @@ def document_dict_from_bsale(
     Mapea JSON documento Bsale → fila ``documents``.
 
     * Solo ``company_id`` y ``office_id`` configurados (Distribuidora): si el JSON trae otra
-      empresa u otra sucursal, no se persiste (defensa adicional al filtro ``officeId`` en API).
+      empresa u otra sucursal, no se persiste (defensa adicional al filtro ``officeid`` en API).
     * No filtra por tipo de documento (1/6/9/33/…): el filtrado fino va en vistas.
     """
     doc_id = d.get("id")

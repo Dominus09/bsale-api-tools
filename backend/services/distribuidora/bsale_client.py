@@ -8,6 +8,11 @@ from typing import Any
 
 import requests
 
+from backend.services.distribuidora.bsale_params import (
+    BSALE_QUERY_OFFICE_ID,
+    log_office_filter_debug_response,
+)
+
 logger = logging.getLogger(__name__)
 
 BASE_BSALE = "https://api.bsale.io/v1"
@@ -74,6 +79,15 @@ class BsaleClient:
 
             if not (200 <= r.status_code < 300):
                 raise RuntimeError(f"Bsale HTTP {r.status_code}: {(r.text or '')[:500]}")
+
+            if BSALE_QUERY_OFFICE_ID in params:
+                log_office_filter_debug_response(
+                    method="GET",
+                    path=path,
+                    params=params,
+                    response_url=getattr(r.request, "url", None),
+                    context="BsaleClient.get",
+                )
 
             transient = 0
             return r.json()

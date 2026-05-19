@@ -27,6 +27,7 @@ if __package__ is None or __package__ == "":
 
 from backend.db import get_connection
 from backend.services.distribuidora.bsale_client import BsaleClient
+from backend.services.distribuidora.bsale_params import merge_bsale_office_query
 from backend.services.distribuidora.sync_related_service import OFFICE_ID
 
 BSALE_TOKEN = os.getenv("BSALE_TOKEN")
@@ -140,12 +141,14 @@ def _related_types_and_items(
         data = _get(
             client,
             "/documents.json",
-            {
-                "relateddetailid": detail_id,
-                "limit": RELATED_PAGE,
-                "offset": offset,
-                "officeId": OFFICE_ID,
-            },
+            merge_bsale_office_query(
+                {
+                    "relateddetailid": detail_id,
+                    "limit": RELATED_PAGE,
+                    "offset": offset,
+                },
+                OFFICE_ID,
+            ),
         )
         items = data.get("items") or []
         if not items:

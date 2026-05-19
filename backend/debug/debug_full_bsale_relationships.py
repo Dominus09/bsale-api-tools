@@ -18,6 +18,7 @@ from typing import Any
 
 from backend.db import get_connection
 from backend.services.distribuidora.bsale_client import BsaleClient
+from backend.services.distribuidora.bsale_params import merge_bsale_office_query
 from backend.services.distribuidora.sync_related_service import OFFICE_ID
 from backend.services.distribuidora.sync_service import _bsale_token, _utc_day_timestamp_bounds
 
@@ -166,12 +167,14 @@ def _fetch_relateddetail_all(client: BsaleClient, detail_id: int) -> list[dict[s
     while True:
         data = client.get(
             "/documents.json",
-            {
-                "relateddetailid": detail_id,
-                "limit": RELATED_LIMIT,
-                "offset": offset,
-                "officeId": OFFICE_ID,
-            },
+            merge_bsale_office_query(
+                {
+                    "relateddetailid": detail_id,
+                    "limit": RELATED_LIMIT,
+                    "offset": offset,
+                },
+                OFFICE_ID,
+            ),
         )
         items = data.get("items") or []
         if not items:
@@ -378,12 +381,14 @@ def main() -> int:
         try:
             data = client.get(
                 "/documents.json",
-                {
-                    "limit": 50,
-                    "offset": 0,
-                    "emissiondaterange": rng,
-                    "officeId": OFFICE_ID,
-                },
+                merge_bsale_office_query(
+                    {
+                        "limit": 50,
+                        "offset": 0,
+                        "emissiondaterange": rng,
+                    },
+                    OFFICE_ID,
+                ),
             )
         except Exception as e:
             _log(f"  error: {e}")

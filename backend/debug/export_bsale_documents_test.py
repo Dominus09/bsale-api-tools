@@ -3,7 +3,7 @@
 Extracción FULL RAW Bsale → Excel (análisis de estructura real).
 
 - NO PostgreSQL, NO FastAPI, NO inserts.
-- Listado por ``/documents.json`` (officeId + rango emisión), luego por cada id:
+- Listado por ``/documents.json`` (officeid + rango emisión), luego por cada id:
   ``/documents/{id}.json``, ``details``, ``references``, ``payments``,
   ``taxes`` o ``document_taxes``, ``sellers`` (incl. ``href``), ``attributes``.
 - Sin PDF binario: solo URLs que vengan en JSON.
@@ -36,6 +36,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from backend.services.distribuidora.bsale_params import merge_bsale_office_query
 from backend.utils.bsale_token_env import require_bsale_token
 
 # ---------------------------------------------------------------------------
@@ -580,12 +581,14 @@ def main() -> None:
         prev_list_fp: str | None = None
         prev_list_ids: tuple[Any, ...] | None = None
         while True:
-            params = {
-                "limit": LIMIT_BSALE,
-                "offset": offset,
-                "emissiondaterange": f"[{start_ts},{end_ts}]",
-                "officeId": OFFICE_ID,
-            }
+            params = merge_bsale_office_query(
+                {
+                    "limit": LIMIT_BSALE,
+                    "offset": offset,
+                    "emissiondaterange": f"[{start_ts},{end_ts}]",
+                },
+                OFFICE_ID,
+            )
             try:
                 data = _get_json(
                     session,

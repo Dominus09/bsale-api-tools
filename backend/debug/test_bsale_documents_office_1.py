@@ -51,6 +51,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from backend.services.distribuidora.bsale_params import merge_bsale_office_query
 from backend.utils.bsale_token_env import require_bsale_token
 
 try:
@@ -327,12 +328,14 @@ def main() -> None:
         desde_ts, hasta_ts = _utc_day_epoch_bounds(d)
         offset = 0
         while True:
-            params = {
-                "limit": LIMIT_BSALE,
-                "offset": offset,
-                "emissiondaterange": f"[{desde_ts},{hasta_ts}]",
-                "officeId": OFFICE_ID,
-            }
+            params = merge_bsale_office_query(
+                {
+                    "limit": LIMIT_BSALE,
+                    "offset": offset,
+                    "emissiondaterange": f"[{desde_ts},{hasta_ts}]",
+                },
+                OFFICE_ID,
+            )
             try:
                 data = bsale_get(session, token, "/documents.json", params)
             except Exception as e:

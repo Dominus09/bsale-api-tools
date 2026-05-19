@@ -24,6 +24,7 @@ if str(_REPO) not in sys.path:
 
 from backend.db import get_connection
 from backend.services.distribuidora.bsale_client import BsaleClient
+from backend.services.distribuidora.bsale_params import merge_bsale_office_query
 from backend.services.distribuidora.sync_related_service import (
     _parse_related_document_blob,
     _safe_int,
@@ -102,12 +103,14 @@ def _fetch_related_items(client: BsaleClient, detail_id: int) -> tuple[list[dict
     while True:
         data = client.get(
             "/documents.json",
-            {
-                "relateddetailid": detail_id,
-                "limit": RELATED_LIMIT,
-                "offset": offset,
-                "officeId": OFFICE_ID,
-            },
+            merge_bsale_office_query(
+                {
+                    "relateddetailid": detail_id,
+                    "limit": RELATED_LIMIT,
+                    "offset": offset,
+                },
+                OFFICE_ID,
+            ),
         )
         calls += 1
         items = data.get("items") or []

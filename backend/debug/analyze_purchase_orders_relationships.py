@@ -22,6 +22,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
+from backend.services.distribuidora.bsale_params import merge_bsale_office_query
 from backend.utils.bsale_token_env import require_bsale_token
 
 # ---------------------------------------------------------------------------
@@ -181,12 +182,14 @@ def _fetch_related_by_detail_id(
             session,
             token,
             "/documents.json",
-            {
-                "relateddetailid": detail_id,
-                "limit": RELATED_LIST_LIMIT,
-                "offset": offset,
-                "officeId": OFFICE_ID,
-            },
+            merge_bsale_office_query(
+                {
+                    "relateddetailid": detail_id,
+                    "limit": RELATED_LIST_LIMIT,
+                    "offset": offset,
+                },
+                OFFICE_ID,
+            ),
         )
         time.sleep(SLEEP_SEC)
         if st != 200 or not isinstance(data, dict):
@@ -249,12 +252,14 @@ def _list_ocs_type_33(
                 session,
                 token,
                 "/documents.json",
-                {
-                    "limit": LIST_LIMIT,
-                    "offset": offset,
-                    "emissiondaterange": f"[{start_ts},{end_ts}]",
-                    "officeId": OFFICE_ID,
-                },
+                merge_bsale_office_query(
+                    {
+                        "limit": LIST_LIMIT,
+                        "offset": offset,
+                        "emissiondaterange": f"[{start_ts},{end_ts}]",
+                    },
+                    OFFICE_ID,
+                ),
             )
             time.sleep(SLEEP_SEC)
             if st != 200 or not isinstance(data, dict):

@@ -118,7 +118,7 @@ Los valores absolutos dependen del volumen Bsale; la segunda corrida debería mo
 | `401` / `ValueError` sin token | Definir `BSALE_TOKEN` o `BSALE_TOKEN_SPA`. |
 | Día repetido fallando | Revisar logs Bsale; subir `BACKFILL_MAY_DAY_MAX_RETRIES` o `BACKFILL_MAY_EXTRA_PAGE_SLEEP_SEC`; re-ejecutar el job (idempotente). |
 | `relation "distribuidora.sync_process_cursor" does not exist` | Aplicar migraciones (`ensure_distribuidora_schema` / `013_operational_sync_state.sql`). |
-| Conteos mayo bajos vs Bsale | Comprobar que `officeId` en API es 1 y que las fechas de emisión en Bsale son UTC coherentes con el rango. |
+| Conteos mayo bajos vs Bsale | Comprobar que `officeid` en API es 1 y que las fechas de emisión en Bsale son UTC coherentes con el rango. |
 | ERP sin líneas OC | Este job **no** carga `document_details`; hasta FASE details, las pantallas que dependan solo de cabeceras pueden verse incompletas. |
 
 ---

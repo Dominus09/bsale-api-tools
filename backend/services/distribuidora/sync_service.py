@@ -35,6 +35,10 @@ from backend.repositories.distribuidora.sync_repo import (
     start_sync_log,
 )
 from backend.services.distribuidora.bsale_client import BASE_BSALE, BsaleClient
+from backend.services.distribuidora.bsale_params import (
+    log_office_filter_debug_response,
+    merge_bsale_office_query,
+)
 from backend.utils.sync_state import (
     MODE_BACKFILL,
     update_sync_state_error,
@@ -98,9 +102,9 @@ def _documents_get_resync(client: BsaleClient, params: dict[str, Any]) -> dict[s
     GET ``/documents.json`` con reintentos ante 502/503/504, 500 y errores de red.
     Hasta 5 intentos con backoff 3 → 5 → 10 → 20 → 30 s entre reintentos.
 
-    Siempre envía ``officeId`` = sucursal Distribuidora (``OFFICE_ID``).
+    Siempre envía ``officeid`` = sucursal Distribuidora (``OFFICE_ID``), según doc Bsale.
     """
-    params = {**params, "officeId": OFFICE_ID}
+    params = merge_bsale_office_query(params, OFFICE_ID, context="documents_get_resync")
     url = f"{BASE_BSALE}/documents.json"
     backoffs = RESYNC_BSALE_BACKOFFS_SEC
     http_retries = 0
@@ -111,6 +115,13 @@ def _documents_get_resync(client: BsaleClient, params: dict[str, Any]) -> dict[s
                 headers={"access_token": client.access_token},
                 params=params,
                 timeout=90,
+            )
+            log_office_filter_debug_response(
+                method="GET",
+                path="/documents.json",
+                params=params,
+                response_url=getattr(r.request, "url", None),
+                context="documents_get_resync",
             )
         except requests.RequestException as e:
             if http_retries >= RESYNC_HTTP_MAX_ATTEMPTS - 1:
@@ -814,7 +825,7 @@ def sync_bsale_distribuidora_incremental(
 
         client = BsaleClient(token)
         logger.info(
-            "distribuidora sync incremental (%s): company_id=%s office_id=%s officeId=%s | "
+            "distribuidora sync incremental (%s): company_id=%s office_id=%s officeid=%s | "
             "epoch [%s, %s]",
             process_name,
             COMPANY_ID,
@@ -1123,7 +1134,7 @@ def resync_bsale_distribuidora_range(
         )
         logger.info(
             "distribuidora resync documentos: procesando solo company_id=%s office_id=%s "
-            "(Bsale GET /documents.json con officeId=%s)",
+            "(Bsale GET /documents.json con officeid=%s)",
             COMPANY_ID,
             OFFICE_ID,
             OFFICE_ID,

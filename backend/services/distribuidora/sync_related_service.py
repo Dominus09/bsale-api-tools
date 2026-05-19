@@ -40,6 +40,7 @@ from backend.repositories.distribuidora.sync_repo import (
     insert_sync_status_row,
 )
 from backend.services.distribuidora.bsale_client import BsaleClient
+from backend.services.distribuidora.bsale_params import merge_bsale_office_query
 
 logger = logging.getLogger(__name__)
 
@@ -585,12 +586,15 @@ def _fetch_all_items_for_relateddetailid(
         try:
             data = client.get(
                 "/documents.json",
-                {
-                    "relateddetailid": detail_id,
-                    "limit": RELATED_DETAIL_PAGE_LIMIT,
-                    "offset": offset,
-                    "officeId": OFFICE_ID,
-                },
+                merge_bsale_office_query(
+                    {
+                        "relateddetailid": detail_id,
+                        "limit": RELATED_DETAIL_PAGE_LIMIT,
+                        "offset": offset,
+                    },
+                    OFFICE_ID,
+                    context="relateddetailid_pages",
+                ),
             )
         except Exception as e:
             logger.warning("%s relateddetailid=%s offset=%s: %s", log_ctx, detail_id, offset, e)
@@ -997,12 +1001,15 @@ def _fetch_and_persist_relateddetailid_for_detail(
         try:
             data = client.get(
                 "/documents.json",
-                {
-                    "relateddetailid": detail_id,
-                    "limit": RELATED_DETAIL_PAGE_LIMIT,
-                    "offset": offset,
-                    "officeId": OFFICE_ID,
-                },
+                merge_bsale_office_query(
+                    {
+                        "relateddetailid": detail_id,
+                        "limit": RELATED_DETAIL_PAGE_LIMIT,
+                        "offset": offset,
+                    },
+                    OFFICE_ID,
+                    context="relateddetailid_triples",
+                ),
             )
         except Exception as e:
             logger.warning("%s relateddetailid=%s offset=%s: %s", log_ctx, detail_id, offset, e)
