@@ -118,6 +118,40 @@ def _compute_window(
     return window_from, window_to
 
 
+def _live_details_debug_enabled() -> bool:
+    return os.getenv("LIVE_DETAILS_DEBUG", "").strip().lower() in ("1", "true", "yes")
+
+
+def _child_sync_stats_template() -> dict[str, Any]:
+    """Contadores que espera ``_refresh_document_children`` (sync_service)."""
+    return {
+        "details_rows": 0,
+        "attributes_rows": 0,
+        "references_rows": 0,
+        "document_sellers_rows": 0,
+        "sellers_filled": 0,
+        "seller_sync_failures": 0,
+    }
+
+
+def _extract_bsale_detail_items(det: Any) -> tuple[list[dict[str, Any]], str]:
+    """
+    Normaliza respuesta de ``GET /documents/{id}/details.json``.
+
+    Bsale estándar: ``{"items": [...], "count": N}``.
+    """
+    if isinstance(det, list):
+        return det, "list_root"
+    if not isinstance(det, dict):
+        return [], f"unexpected_{type(det).__name__}"
+    items = det.get("items")
+    if isinstance(items, list):
+        return items, "items"
+    if items is None and "count" in det:
+        return [], "dict_count_no_items"
+    return [], "dict_no_items"
+
+
 def _base_stats(sync_type: str, window_from: datetime, window_to: datetime, **extra: Any) -> dict[str, Any]:
     return {
         "sync_type": sync_type,
@@ -349,8 +383,17 @@ def live_sync_details(*, strict_token: bool = True) -> dict[str, Any]:
             overlap_seconds=overlap_sec,
             documents_reviewed=0,
             details_rows_written=0,
+            details_replace_calls=0,
+            details_api_items_total=0,
             document_errors=0,
         )
+
+        if _live_details_debug_enabled():
+            logger.info(
+                "[LIVE_DETAILS_DEBUG] window_from=%s window_to=%s docs_query=emission in range",
+                window_from.isoformat(),
+                window_to.isoformat(),
+            )
 
         cur.execute(
             """
@@ -368,37 +411,83 @@ def live_sync_details(*, strict_token: bool = True) -> dict[str, Any]:
 
         client = BsaleClient(token)
         for document_id, document_type_id in rows:
+            doc_id = int(document_id)
+            doc_type = int(document_type_id) if document_type_id is not None else None
+            child_stats = _child_sync_stats_template()
             try:
-                before = 0
                 cur.execute(
                     "SELECT COUNT(*)::int FROM distribuidora.document_details WHERE document_id = %s",
-                    (document_id,),
+                    (doc_id,),
                 )
                 br = cur.fetchone()
-                if br:
-                    before = int(br[0] or 0)
+                rows_before = int(br[0] or 0) if br else 0
+
+                det_payload: Any = None
+                parser_key = "not_fetched"
+                details_api_count = 0
+                if _live_details_debug_enabled():
+                    det_payload = client.get(f"/documents/{doc_id}/details.json")
+                    items_dbg, parser_key = _extract_bsale_detail_items(det_payload)
+                    details_api_count = len(items_dbg)
+                    logger.info(
+                        "[LIVE_DETAILS_DEBUG] doc=%s type=%s pre_fetch api_count=%s parser=%s",
+                        doc_id,
+                        doc_type,
+                        details_api_count,
+                        parser_key,
+                    )
+
                 _refresh_document_children(
                     client,
                     cur,
-                    int(document_id),
-                    int(document_type_id) if document_type_id is not None else None,
-                    stats,
+                    doc_id,
+                    doc_type,
+                    child_stats,
                     raw_document=None,
                 )
                 conn.commit()
+
                 cur.execute(
                     "SELECT COUNT(*)::int FROM distribuidora.document_details WHERE document_id = %s",
-                    (document_id,),
+                    (doc_id,),
                 )
                 ar = cur.fetchone()
-                after = int(ar[0] or 0) if ar else 0
-                stats["details_rows_written"] = int(stats.get("details_rows_written") or 0) + max(
-                    after - before, after
+                rows_after = int(ar[0] or 0) if ar else 0
+                rows_written = int(child_stats.get("details_rows") or 0)
+
+                stats["details_replace_calls"] = int(stats.get("details_replace_calls") or 0) + 1
+                stats["details_rows_written"] = int(stats.get("details_rows_written") or 0) + rows_written
+                stats["details_api_items_total"] = int(stats.get("details_api_items_total") or 0) + (
+                    details_api_count if _live_details_debug_enabled() else rows_written
                 )
+
+                if _live_details_debug_enabled():
+                    logger.info(
+                        "[LIVE_DETAILS_DEBUG] doc=%s replace_called=yes rows_deleted_then_inserted=%s "
+                        "rows_before=%s rows_after=%s attributes_rows=%s references_rows=%s",
+                        doc_id,
+                        rows_written,
+                        rows_before,
+                        rows_after,
+                        child_stats.get("attributes_rows"),
+                        child_stats.get("references_rows"),
+                    )
+                elif rows_written == 0 and rows_after == 0:
+                    logger.warning(
+                        "live_sync_details document_id=%s: replace OK pero 0 líneas "
+                        "(type=%s); revisar API details",
+                        doc_id,
+                        doc_type,
+                    )
             except Exception as e:
                 conn.rollback()
                 stats["document_errors"] = int(stats.get("document_errors") or 0) + 1
-                logger.warning("live_sync_details document_id=%s: %s", document_id, e)
+                logger.warning(
+                    "live_sync_details document_id=%s: %s",
+                    doc_id,
+                    e,
+                    exc_info=_live_details_debug_enabled(),
+                )
 
         items = int(stats.get("documents_reviewed") or 0)
         _finalize_success(

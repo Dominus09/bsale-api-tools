@@ -616,7 +616,7 @@ def _refresh_document_children(
         det = client.get(f"/documents/{document_id}/details.json")
         items = det.get("items") or []
         n = replace_document_details(cur, document_id, items)
-        stats["details_rows"] += n
+        stats["details_rows"] = int(stats.get("details_rows") or 0) + n
     except Exception as e:
         logger.warning("details document_id=%s: %s", document_id, e)
 
@@ -626,7 +626,7 @@ def _refresh_document_children(
             if not isinstance(ad, dict):
                 ad = {"_raw": ad}
             n = replace_document_attributes(cur, document_id, ad)
-            stats["attributes_rows"] += n
+            stats["attributes_rows"] = int(stats.get("attributes_rows") or 0) + n
         except Exception as e:
             logger.warning("attributes document_id=%s: %s", document_id, e)
 
@@ -636,7 +636,7 @@ def _refresh_document_children(
             if not isinstance(rd, dict):
                 rd = {"_raw": rd}
             n = replace_document_references(cur, document_id, rd)
-            stats["references_rows"] += n
+            stats["references_rows"] = int(stats.get("references_rows") or 0) + n
         except Exception as e:
             logger.warning("references document_id=%s: %s", document_id, e)
 

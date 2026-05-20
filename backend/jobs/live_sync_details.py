@@ -46,6 +46,14 @@ def main() -> int:
         return 1
 
     _print_summary("LIVE SYNC DETAILS — SUMMARY", stats)
+    print(
+        f"  details_replace_calls: {stats.get('details_replace_calls', 0)}",
+        flush=True,
+    )
+    print(
+        f"  details_rows_written (replace): {stats.get('details_rows_written', 0)}",
+        flush=True,
+    )
     if stats.get("omitido_concurrencia"):
         return int(os.getenv("LIVE_SYNC_EXIT_CODE_ON_LOCK", "0"))
     if stats.get("skipped") or stats.get("errors"):
