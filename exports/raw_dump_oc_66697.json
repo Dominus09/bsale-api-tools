@@ -1,0 +1,981 @@
+{
+  "meta": {
+    "label": "oc_66697",
+    "document_id": 3755778,
+    "document_number": 66697,
+    "fetched_at_utc": "2026-05-20T19:12:13.975331+00:00",
+    "read_only": true
+  },
+  "auxiliary_number_search": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/documents.json",
+        "params": {
+          "number": 66697,
+          "officeid": 1,
+          "limit": 50,
+          "offset": 0
+        }
+      },
+      "response": {
+        "href": "https://api.bsale.io/v1/documents.json",
+        "count": 1,
+        "limit": 50,
+        "offset": 0,
+        "items": [
+          {
+            "href": "https://api.bsale.io/v1/documents/3756730.json",
+            "id": 3756730,
+            "emissionDate": 1779062400,
+            "expirationDate": 1779062400,
+            "generationDate": 1779208246,
+            "number": 66697,
+            "serialNumber": null,
+            "trackingNumber": "",
+            "totalAmount": 3268548,
+            "netAmount": 2343045,
+            "taxAmount": 925503,
+            "exemptAmount": 0,
+            "notExemptAmount": 2343045,
+            "exportTotalAmount": 0,
+            "exportNetAmount": 0,
+            "exportTaxAmount": 0,
+            "exportExemptAmount": 0,
+            "commissionRate": 0,
+            "commissionNetAmount": 0,
+            "commissionTaxAmount": 0,
+            "commissionTotalAmount": 0,
+            "percentageTaxWithheld": 0.0,
+            "purchaseTaxAmount": 0,
+            "purchaseTotalAmount": 0,
+            "address": "San Agustín rural ",
+            "municipality": "Puqueldon ",
+            "city": "Puqueldon ",
+            "urlTimbre": null,
+            "urlPublicView": "https://app2.bsale.cl/view/21884/49af36872950?sfd=99",
+            "urlPdf": "https://app2.bsale.cl/view/21884/49af36872950.pdf?sfd=99",
+            "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/49af36872950",
+            "urlPdfOriginal": "https://app2.bsale.cl/view/21884/49af36872950.pdf",
+            "token": "49af36872950",
+            "state": 0,
+            "commercialState": 0,
+            "cancellationStatus": 0,
+            "cancellationDate": null,
+            "urlXml": "https://api.bsale.cl/v1/21884/files/49af36872950.xml",
+            "ted": null,
+            "salesId": null,
+            "informedSii": 2,
+            "responseMsgSii": null,
+            "document_type": {
+              "href": "https://api.bsale.io/v1/document_types/33.json",
+              "id": "33"
+            },
+            "client": {
+              "href": "https://api.bsale.io/v1/clients/1473.json",
+              "id": "1473"
+            },
+            "office": {
+              "href": "https://api.bsale.io/v1/offices/1.json",
+              "id": "1"
+            },
+            "user": {
+              "href": "https://api.bsale.io/v1/users/39.json",
+              "id": "39"
+            },
+            "coin": {
+              "href": "https://api.bsale.io/v1/coins/1.json",
+              "id": "1"
+            },
+            "priceList": {
+              "href": "https://api.bsale.io/v1/price_lists/14.json",
+              "id": "14"
+            },
+            "references": {
+              "href": "https://api.bsale.io/v1/documents/3756730/references.json"
+            },
+            "document_taxes": {
+              "href": "https://api.bsale.io/v1/documents/3756730/document_taxes.json"
+            },
+            "details": {
+              "href": "https://api.bsale.io/v1/documents/3756730/details.json"
+            },
+            "sellers": {
+              "href": "https://api.bsale.io/v1/documents/3756730/sellers.json"
+            },
+            "attributes": {
+              "href": "https://api.bsale.io/v1/documents/3756730/attributes.json"
+            },
+            "payments": {
+              "href": "https://api.bsale.io/v1/documents/3756730/payments.json"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "document_json": {
+    "request": {
+      "method": "GET",
+      "path": "/documents/3755778.json",
+      "params": null
+    },
+    "response": {
+      "href": "https://api.bsale.io/v1/documents/3755778.json",
+      "id": 3755778,
+      "emissionDate": 1779062400,
+      "expirationDate": 1779062400,
+      "generationDate": 1779120801,
+      "number": 0,
+      "serialNumber": null,
+      "trackingNumber": "",
+      "totalAmount": 1507970,
+      "netAmount": 1080982,
+      "taxAmount": 426988,
+      "exemptAmount": 0,
+      "notExemptAmount": 1080982,
+      "exportTotalAmount": 0,
+      "exportNetAmount": 0,
+      "exportTaxAmount": 0,
+      "exportExemptAmount": 0,
+      "commissionRate": 0,
+      "commissionNetAmount": 0,
+      "commissionTaxAmount": 0,
+      "commissionTotalAmount": 0,
+      "percentageTaxWithheld": 0.0,
+      "purchaseTaxAmount": 0,
+      "purchaseTotalAmount": 0,
+      "address": "San Agustín rural ",
+      "municipality": "Puqueldon ",
+      "city": "Puqueldon ",
+      "urlTimbre": null,
+      "urlPublicView": "https://app2.bsale.cl/view/21884/bff014faa28a?sfd=99",
+      "urlPdf": "https://app2.bsale.cl/view/21884/bff014faa28a.pdf?sfd=99",
+      "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/bff014faa28a",
+      "urlPdfOriginal": "https://app2.bsale.cl/view/21884/bff014faa28a.pdf",
+      "token": "bff014faa28a",
+      "state": 8888,
+      "commercialState": 0,
+      "cancellationStatus": 0,
+      "cancellationDate": null,
+      "urlXml": "https://api.bsale.cl/v1/21884/files/bff014faa28a.xml",
+      "ted": null,
+      "salesId": null,
+      "informedSii": 2,
+      "responseMsgSii": null,
+      "document_type": {
+        "href": "https://api.bsale.io/v1/document_types/33.json",
+        "id": "33"
+      },
+      "client": {
+        "href": "https://api.bsale.io/v1/clients/1473.json",
+        "id": "1473"
+      },
+      "office": {
+        "href": "https://api.bsale.io/v1/offices/1.json",
+        "id": "1"
+      },
+      "user": {
+        "href": "https://api.bsale.io/v1/users/85.json",
+        "id": "85"
+      },
+      "coin": {
+        "href": "https://api.bsale.io/v1/coins/1.json",
+        "id": "1"
+      },
+      "priceList": {
+        "href": "https://api.bsale.io/v1/price_lists/14.json",
+        "id": "14"
+      },
+      "references": {
+        "href": "https://api.bsale.io/v1/documents/3755778/references.json"
+      },
+      "document_taxes": {
+        "href": "https://api.bsale.io/v1/documents/3755778/document_taxes.json"
+      },
+      "details": {
+        "href": "https://api.bsale.io/v1/documents/3755778/details.json"
+      },
+      "sellers": {
+        "href": "https://api.bsale.io/v1/documents/3755778/sellers.json"
+      },
+      "attributes": {
+        "href": "https://api.bsale.io/v1/documents/3755778/attributes.json"
+      },
+      "payments": {
+        "href": "https://api.bsale.io/v1/documents/3755778/payments.json"
+      }
+    }
+  },
+  "details_json_pages": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/documents/3755778/details.json",
+        "params": {
+          "limit": 50,
+          "offset": 0
+        }
+      },
+      "response": {
+        "href": "https://api.bsale.io/v1/documents/3755778/details.json",
+        "count": 4,
+        "limit": 50,
+        "offset": 0,
+        "items": [
+          {
+            "href": "https://api.bsale.io/v1/documents/3755778/details/8791738.json",
+            "id": 8791738,
+            "lineNumber": 0,
+            "quantity": 30.0,
+            "netUnitValue": 8602,
+            "netUnitValueRaw": 8602.15053763441,
+            "totalUnitValue": 12000,
+            "netAmount": 258065,
+            "taxAmount": 101935,
+            "totalAmount": 360000,
+            "netDiscount": 0,
+            "totalDiscount": 0,
+            "variant": {
+              "href": "https://api.bsale.io/v1/variants/23178.json",
+              "id": 23178,
+              "description": "PACK DESECHABLE X 24 UND GRANEL 355 CC (SEC 1)",
+              "code": "7802100002648"
+            },
+            "note": "",
+            "relatedDetailId": 0,
+            "gratuity": 0,
+            "discountId": 0,
+            "discountPercentage": 0.0
+          },
+          {
+            "href": "https://api.bsale.io/v1/documents/3755778/details/8791739.json",
+            "id": 8791739,
+            "lineNumber": 0,
+            "quantity": 80.0,
+            "netUnitValue": 5799,
+            "netUnitValueRaw": 5799.28315412186,
+            "totalUnitValue": 8090,
+            "netAmount": 463942,
+            "taxAmount": 183258,
+            "totalAmount": 647200,
+            "netDiscount": 0,
+            "totalDiscount": 0,
+            "variant": {
+              "href": "https://api.bsale.io/v1/variants/24705.json",
+              "id": 24705,
+              "description": "(SEC 2)",
+              "code": "1629925467900"
+            },
+            "note": "",
+            "relatedDetailId": 0,
+            "gratuity": 0,
+            "discountId": 0,
+            "discountPercentage": 0.0
+          },
+          {
+            "href": "https://api.bsale.io/v1/documents/3755778/details/8791740.json",
+            "id": 8791740,
+            "lineNumber": 0,
+            "quantity": 40.0,
+            "netUnitValue": 4136,
+            "netUnitValueRaw": 4136.20071684588,
+            "totalUnitValue": 5770,
+            "netAmount": 165448,
+            "taxAmount": 65352,
+            "totalAmount": 230800,
+            "netDiscount": 0,
+            "totalDiscount": 0,
+            "variant": {
+              "href": "https://api.bsale.io/v1/variants/23179.json",
+              "id": 23179,
+              "description": "PACK X 12 UNID LATA 350 CC (SEC 2)",
+              "code": "7802100000583"
+            },
+            "note": "",
+            "relatedDetailId": 0,
+            "gratuity": 0,
+            "discountId": 0,
+            "discountPercentage": 0.0
+          },
+          {
+            "href": "https://api.bsale.io/v1/documents/3755778/details/8791741.json",
+            "id": 8791741,
+            "lineNumber": 0,
+            "quantity": 30.0,
+            "netUnitValue": 6451,
+            "netUnitValueRaw": 6450.89605734767,
+            "totalUnitValue": 8999,
+            "netAmount": 193527,
+            "taxAmount": 76443,
+            "totalAmount": 269970,
+            "netDiscount": 0,
+            "totalDiscount": 0,
+            "variant": {
+              "href": "https://api.bsale.io/v1/variants/23584.json",
+              "id": 23584,
+              "description": "X 18 UNID (SEC 1)",
+              "code": "1608742336163"
+            },
+            "note": "",
+            "relatedDetailId": 0,
+            "gratuity": 0,
+            "discountId": 0,
+            "discountPercentage": 0.0
+          }
+        ]
+      }
+    }
+  ],
+  "references_json": {
+    "request": {
+      "method": "GET",
+      "path": "/documents/3755778/references.json",
+      "params": null
+    },
+    "response": {
+      "href": "https://api.bsale.io/v1/documents/3755778/references.json",
+      "count": 0,
+      "limit": 25,
+      "offset": 0,
+      "items": []
+    }
+  },
+  "relateddetailid_responses": [
+    {
+      "detail_id": 8791738,
+      "pages": [
+        {
+          "request": {
+            "method": "GET",
+            "path": "/documents.json",
+            "params": {
+              "relateddetailid": 8791738,
+              "officeid": 1,
+              "limit": 50,
+              "offset": 0
+            }
+          },
+          "response": {
+            "href": "https://api.bsale.io/v1/documents.json",
+            "count": 0,
+            "limit": 50,
+            "offset": 0,
+            "items": []
+          }
+        }
+      ]
+    },
+    {
+      "detail_id": 8791739,
+      "pages": [
+        {
+          "request": {
+            "method": "GET",
+            "path": "/documents.json",
+            "params": {
+              "relateddetailid": 8791739,
+              "officeid": 1,
+              "limit": 50,
+              "offset": 0
+            }
+          },
+          "response": {
+            "href": "https://api.bsale.io/v1/documents.json",
+            "count": 0,
+            "limit": 50,
+            "offset": 0,
+            "items": []
+          }
+        }
+      ]
+    },
+    {
+      "detail_id": 8791740,
+      "pages": [
+        {
+          "request": {
+            "method": "GET",
+            "path": "/documents.json",
+            "params": {
+              "relateddetailid": 8791740,
+              "officeid": 1,
+              "limit": 50,
+              "offset": 0
+            }
+          },
+          "response": {
+            "href": "https://api.bsale.io/v1/documents.json",
+            "count": 0,
+            "limit": 50,
+            "offset": 0,
+            "items": []
+          }
+        }
+      ]
+    },
+    {
+      "detail_id": 8791741,
+      "pages": [
+        {
+          "request": {
+            "method": "GET",
+            "path": "/documents.json",
+            "params": {
+              "relateddetailid": 8791741,
+              "officeid": 1,
+              "limit": 50,
+              "offset": 0
+            }
+          },
+          "response": {
+            "href": "https://api.bsale.io/v1/documents.json",
+            "count": 0,
+            "limit": 50,
+            "offset": 0,
+            "items": []
+          }
+        }
+      ]
+    }
+  ],
+  "key_scan": {
+    "keys_detected": [
+      "address",
+      "attributes",
+      "cancellationDate",
+      "cancellationStatus",
+      "city",
+      "client",
+      "coin",
+      "commercialState",
+      "commissionNetAmount",
+      "commissionRate",
+      "commissionTaxAmount",
+      "commissionTotalAmount",
+      "count",
+      "details",
+      "document_taxes",
+      "document_type",
+      "emissionDate",
+      "exemptAmount",
+      "expirationDate",
+      "exportExemptAmount",
+      "exportNetAmount",
+      "exportTaxAmount",
+      "exportTotalAmount",
+      "generationDate",
+      "href",
+      "id",
+      "informedSii",
+      "items",
+      "limit",
+      "municipality",
+      "netAmount",
+      "notExemptAmount",
+      "number",
+      "office",
+      "offset",
+      "payments",
+      "percentageTaxWithheld",
+      "priceList",
+      "purchaseTaxAmount",
+      "purchaseTotalAmount",
+      "references",
+      "responseMsgSii",
+      "salesId",
+      "sellers",
+      "serialNumber",
+      "state",
+      "taxAmount",
+      "ted",
+      "token",
+      "totalAmount",
+      "trackingNumber",
+      "urlPdf",
+      "urlPdfOriginal",
+      "urlPublicView",
+      "urlPublicViewOriginal",
+      "urlTimbre",
+      "urlXml",
+      "user"
+    ],
+    "all_paths_count": 164,
+    "all_paths_sample": [
+      "address",
+      "attributes",
+      "attributes.href",
+      "cancellationDate",
+      "cancellationStatus",
+      "city",
+      "client",
+      "client.href",
+      "client.id",
+      "coin",
+      "coin.href",
+      "coin.id",
+      "commercialState",
+      "commissionNetAmount",
+      "commissionRate",
+      "commissionTaxAmount",
+      "commissionTotalAmount",
+      "count",
+      "details",
+      "details.href",
+      "document_taxes",
+      "document_taxes.href",
+      "document_type",
+      "document_type.href",
+      "document_type.id",
+      "emissionDate",
+      "exemptAmount",
+      "expirationDate",
+      "exportExemptAmount",
+      "exportNetAmount",
+      "exportTaxAmount",
+      "exportTotalAmount",
+      "generationDate",
+      "href",
+      "id",
+      "informedSii",
+      "items",
+      "items[0].discountId",
+      "items[0].discountPercentage",
+      "items[0].gratuity",
+      "items[0].href",
+      "items[0].id",
+      "items[0].lineNumber",
+      "items[0].netAmount",
+      "items[0].netDiscount",
+      "items[0].netUnitValue",
+      "items[0].netUnitValueRaw",
+      "items[0].note",
+      "items[0].quantity",
+      "items[0].relatedDetailId",
+      "items[0].taxAmount",
+      "items[0].totalAmount",
+      "items[0].totalDiscount",
+      "items[0].totalUnitValue",
+      "items[0].variant",
+      "items[0].variant.code",
+      "items[0].variant.description",
+      "items[0].variant.href",
+      "items[0].variant.id",
+      "items[1].discountId",
+      "items[1].discountPercentage",
+      "items[1].gratuity",
+      "items[1].href",
+      "items[1].id",
+      "items[1].lineNumber",
+      "items[1].netAmount",
+      "items[1].netDiscount",
+      "items[1].netUnitValue",
+      "items[1].netUnitValueRaw",
+      "items[1].note",
+      "items[1].quantity",
+      "items[1].relatedDetailId",
+      "items[1].taxAmount",
+      "items[1].totalAmount",
+      "items[1].totalDiscount",
+      "items[1].totalUnitValue",
+      "items[1].variant",
+      "items[1].variant.code",
+      "items[1].variant.description",
+      "items[1].variant.href",
+      "items[1].variant.id",
+      "items[2].discountId",
+      "items[2].discountPercentage",
+      "items[2].gratuity",
+      "items[2].href",
+      "items[2].id",
+      "items[2].lineNumber",
+      "items[2].netAmount",
+      "items[2].netDiscount",
+      "items[2].netUnitValue",
+      "items[2].netUnitValueRaw",
+      "items[2].note",
+      "items[2].quantity",
+      "items[2].relatedDetailId",
+      "items[2].taxAmount",
+      "items[2].totalAmount",
+      "items[2].totalDiscount",
+      "items[2].totalUnitValue",
+      "items[2].variant",
+      "items[2].variant.code",
+      "items[2].variant.description",
+      "items[2].variant.href",
+      "items[2].variant.id",
+      "items[3].discountId",
+      "items[3].discountPercentage",
+      "items[3].gratuity",
+      "items[3].href",
+      "items[3].id",
+      "items[3].lineNumber",
+      "items[3].netAmount",
+      "items[3].netDiscount",
+      "items[3].netUnitValue",
+      "items[3].netUnitValueRaw",
+      "items[3].note",
+      "items[3].quantity",
+      "items[3].relatedDetailId",
+      "items[3].taxAmount",
+      "items[3].totalAmount",
+      "items[3].totalDiscount",
+      "items[3].totalUnitValue",
+      "items[3].variant",
+      "items[3].variant.code",
+      "items[3].variant.description",
+      "items[3].variant.href",
+      "items[3].variant.id",
+      "limit",
+      "municipality",
+      "netAmount",
+      "notExemptAmount",
+      "number",
+      "office",
+      "office.href",
+      "office.id",
+      "offset",
+      "payments",
+      "payments.href",
+      "percentageTaxWithheld",
+      "priceList",
+      "priceList.href",
+      "priceList.id",
+      "purchaseTaxAmount",
+      "purchaseTotalAmount",
+      "references",
+      "references.href",
+      "responseMsgSii",
+      "salesId",
+      "sellers",
+      "sellers.href",
+      "serialNumber",
+      "state",
+      "taxAmount",
+      "ted",
+      "token",
+      "totalAmount",
+      "trackingNumber",
+      "urlPdf",
+      "urlPdfOriginal",
+      "urlPublicView",
+      "urlPublicViewOriginal",
+      "urlTimbre",
+      "urlXml",
+      "user",
+      "user.href",
+      "user.id"
+    ],
+    "nested_keys": {
+      "document_type": [
+        "href",
+        "id"
+      ],
+      "client": [
+        "href",
+        "id"
+      ],
+      "office": [
+        "href",
+        "id"
+      ],
+      "user": [
+        "href",
+        "id"
+      ],
+      "coin": [
+        "href",
+        "id"
+      ],
+      "priceList": [
+        "href",
+        "id"
+      ],
+      "references": [
+        "href"
+      ],
+      "document_taxes": [
+        "href"
+      ],
+      "details": [
+        "href"
+      ],
+      "sellers": [
+        "href"
+      ],
+      "attributes": [
+        "href"
+      ],
+      "payments": [
+        "href"
+      ],
+      "items": [
+        "discountId",
+        "discountPercentage",
+        "gratuity",
+        "href",
+        "id",
+        "lineNumber",
+        "netAmount",
+        "netDiscount",
+        "netUnitValue",
+        "netUnitValueRaw",
+        "note",
+        "quantity",
+        "relatedDetailId",
+        "taxAmount",
+        "totalAmount",
+        "totalDiscount",
+        "totalUnitValue",
+        "variant"
+      ]
+    },
+    "suspicious_fields": [
+      {
+        "path": "attributes",
+        "segment": "attributes"
+      },
+      {
+        "path": "trackingNumber",
+        "segment": "trackingNumber"
+      },
+      {
+        "path": "urlPdfOriginal",
+        "segment": "urlPdfOriginal"
+      },
+      {
+        "path": "urlPublicViewOriginal",
+        "segment": "urlPublicViewOriginal"
+      }
+    ],
+    "sorted_all_paths": [
+      "address",
+      "attributes",
+      "attributes.href",
+      "cancellationDate",
+      "cancellationStatus",
+      "city",
+      "client",
+      "client.href",
+      "client.id",
+      "coin",
+      "coin.href",
+      "coin.id",
+      "commercialState",
+      "commissionNetAmount",
+      "commissionRate",
+      "commissionTaxAmount",
+      "commissionTotalAmount",
+      "count",
+      "details",
+      "details.href",
+      "document_taxes",
+      "document_taxes.href",
+      "document_type",
+      "document_type.href",
+      "document_type.id",
+      "emissionDate",
+      "exemptAmount",
+      "expirationDate",
+      "exportExemptAmount",
+      "exportNetAmount",
+      "exportTaxAmount",
+      "exportTotalAmount",
+      "generationDate",
+      "href",
+      "id",
+      "informedSii",
+      "items",
+      "items[0].discountId",
+      "items[0].discountPercentage",
+      "items[0].gratuity",
+      "items[0].href",
+      "items[0].id",
+      "items[0].lineNumber",
+      "items[0].netAmount",
+      "items[0].netDiscount",
+      "items[0].netUnitValue",
+      "items[0].netUnitValueRaw",
+      "items[0].note",
+      "items[0].quantity",
+      "items[0].relatedDetailId",
+      "items[0].taxAmount",
+      "items[0].totalAmount",
+      "items[0].totalDiscount",
+      "items[0].totalUnitValue",
+      "items[0].variant",
+      "items[0].variant.code",
+      "items[0].variant.description",
+      "items[0].variant.href",
+      "items[0].variant.id",
+      "items[1].discountId",
+      "items[1].discountPercentage",
+      "items[1].gratuity",
+      "items[1].href",
+      "items[1].id",
+      "items[1].lineNumber",
+      "items[1].netAmount",
+      "items[1].netDiscount",
+      "items[1].netUnitValue",
+      "items[1].netUnitValueRaw",
+      "items[1].note",
+      "items[1].quantity",
+      "items[1].relatedDetailId",
+      "items[1].taxAmount",
+      "items[1].totalAmount",
+      "items[1].totalDiscount",
+      "items[1].totalUnitValue",
+      "items[1].variant",
+      "items[1].variant.code",
+      "items[1].variant.description",
+      "items[1].variant.href",
+      "items[1].variant.id",
+      "items[2].discountId",
+      "items[2].discountPercentage",
+      "items[2].gratuity",
+      "items[2].href",
+      "items[2].id",
+      "items[2].lineNumber",
+      "items[2].netAmount",
+      "items[2].netDiscount",
+      "items[2].netUnitValue",
+      "items[2].netUnitValueRaw",
+      "items[2].note",
+      "items[2].quantity",
+      "items[2].relatedDetailId",
+      "items[2].taxAmount",
+      "items[2].totalAmount",
+      "items[2].totalDiscount",
+      "items[2].totalUnitValue",
+      "items[2].variant",
+      "items[2].variant.code",
+      "items[2].variant.description",
+      "items[2].variant.href",
+      "items[2].variant.id",
+      "items[3].discountId",
+      "items[3].discountPercentage",
+      "items[3].gratuity",
+      "items[3].href",
+      "items[3].id",
+      "items[3].lineNumber",
+      "items[3].netAmount",
+      "items[3].netDiscount",
+      "items[3].netUnitValue",
+      "items[3].netUnitValueRaw",
+      "items[3].note",
+      "items[3].quantity",
+      "items[3].relatedDetailId",
+      "items[3].taxAmount",
+      "items[3].totalAmount",
+      "items[3].totalDiscount",
+      "items[3].totalUnitValue",
+      "items[3].variant",
+      "items[3].variant.code",
+      "items[3].variant.description",
+      "items[3].variant.href",
+      "items[3].variant.id",
+      "limit",
+      "municipality",
+      "netAmount",
+      "notExemptAmount",
+      "number",
+      "office",
+      "office.href",
+      "office.id",
+      "offset",
+      "payments",
+      "payments.href",
+      "percentageTaxWithheld",
+      "priceList",
+      "priceList.href",
+      "priceList.id",
+      "purchaseTaxAmount",
+      "purchaseTotalAmount",
+      "references",
+      "references.href",
+      "responseMsgSii",
+      "salesId",
+      "sellers",
+      "sellers.href",
+      "serialNumber",
+      "state",
+      "taxAmount",
+      "ted",
+      "token",
+      "totalAmount",
+      "trackingNumber",
+      "urlPdf",
+      "urlPdfOriginal",
+      "urlPublicView",
+      "urlPublicViewOriginal",
+      "urlTimbre",
+      "urlXml",
+      "user",
+      "user.href",
+      "user.id"
+    ]
+  },
+  "leaf_values": {
+    "href": "https://api.bsale.io/v1/documents/3755778.json",
+    "id": 3755778,
+    "emissionDate": 1779062400,
+    "expirationDate": 1779062400,
+    "generationDate": 1779120801,
+    "number": 0,
+    "serialNumber": null,
+    "trackingNumber": "",
+    "totalAmount": 1507970,
+    "netAmount": 1080982,
+    "taxAmount": 426988,
+    "exemptAmount": 0,
+    "notExemptAmount": 1080982,
+    "exportTotalAmount": 0,
+    "exportNetAmount": 0,
+    "exportTaxAmount": 0,
+    "exportExemptAmount": 0,
+    "commissionRate": 0,
+    "commissionNetAmount": 0,
+    "commissionTaxAmount": 0,
+    "commissionTotalAmount": 0,
+    "percentageTaxWithheld": 0.0,
+    "purchaseTaxAmount": 0,
+    "purchaseTotalAmount": 0,
+    "address": "San Agustín rural ",
+    "municipality": "Puqueldon ",
+    "city": "Puqueldon ",
+    "urlTimbre": null,
+    "urlPublicView": "https://app2.bsale.cl/view/21884/bff014faa28a?sfd=99",
+    "urlPdf": "https://app2.bsale.cl/view/21884/bff014faa28a.pdf?sfd=99",
+    "urlPublicViewOriginal": "https://app2.bsale.cl/view/21884/bff014faa28a",
+    "urlPdfOriginal": "https://app2.bsale.cl/view/21884/bff014faa28a.pdf",
+    "token": "bff014faa28a",
+    "state": 8888,
+    "commercialState": 0,
+    "cancellationStatus": 0,
+    "cancellationDate": null,
+    "urlXml": "https://api.bsale.cl/v1/21884/files/bff014faa28a.xml",
+    "ted": null,
+    "salesId": null,
+    "informedSii": 2,
+    "responseMsgSii": null,
+    "document_type.href": "https://api.bsale.io/v1/document_types/33.json",
+    "document_type.id": "33",
+    "client.href": "https://api.bsale.io/v1/clients/1473.json",
+    "client.id": "1473",
+    "office.href": "https://api.bsale.io/v1/offices/1.json",
+    "office.id": "1",
+    "user.href": "https://api.bsale.io/v1/users/85.json",
+    "user.id": "85",
+    "coin.href": "https://api.bsale.io/v1/coins/1.json",
+    "coin.id": "1",
+    "priceList.href": "https://api.bsale.io/v1/price_lists/14.json",
+    "priceList.id": "14",
+    "references.href": "https://api.bsale.io/v1/documents/3755778/references.json",
+    "document_taxes.href": "https://api.bsale.io/v1/documents/3755778/document_taxes.json",
+    "details.href": "https://api.bsale.io/v1/documents/3755778/details.json",
+    "sellers.href": "https://api.bsale.io/v1/documents/3755778/sellers.json",
+    "attributes.href": "https://api.bsale.io/v1/documents/3755778/attributes.json",
+    "payments.href": "https://api.bsale.io/v1/documents/3755778/payments.json"
+  }
+}

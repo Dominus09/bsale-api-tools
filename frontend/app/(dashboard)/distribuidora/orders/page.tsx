@@ -24,6 +24,7 @@ import {
 } from "@/lib/dispatch-prep-tags"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
+import { PurchaseInvoiceStatusBadge } from "@/components/distribuidora/orders/PurchaseInvoiceStatusBadge"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -260,11 +261,7 @@ function PlanningTableRow({
         {r.seller_name?.trim() || "—"}
       </TableCell>
       <TableCell className="whitespace-nowrap text-xs">
-        {r.estado_real === "Facturada" ? (
-          <Badge className="bg-emerald-600 hover:bg-emerald-600">Facturada</Badge>
-        ) : (
-          <Badge variant="secondary">Pendiente</Badge>
-        )}
+        <PurchaseInvoiceStatusBadge row={r} />
       </TableCell>
       <TableCell className="text-right tabular-nums">
         {formatClp(Number(r.total_amount ?? 0))}

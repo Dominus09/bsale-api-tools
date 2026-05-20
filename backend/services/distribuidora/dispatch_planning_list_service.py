@@ -114,8 +114,13 @@ def list_dispatch_planning_orders(
                         ),
                         NULLIF(BTRIM(d.raw_data->>'comments'), '')
                     ) AS observations,
-                    ({OC_PURCHASE_ESTADO_REAL_SQL}) AS estado_real
+                    COALESCE(ps.estado_real, ({OC_PURCHASE_ESTADO_REAL_SQL})) AS estado_real,
+                    ps.status AS purchase_status,
+                    ps.probable_score,
+                    ps.probable_tier
                 FROM distribuidora.v_documents_latest d
+                LEFT JOIN distribuidora.v_purchase_document_status ps
+                    ON ps.document_id = d.document_id
                 LEFT JOIN bsale.clients c
                     ON c.company_id = d.company_id
                    AND c.bsale_id = d.client_id
@@ -195,8 +200,13 @@ def list_dispatch_planning_orders(
                         ),
                         NULLIF(BTRIM(d.raw_data->>'comments'), '')
                     ) AS observations,
-                    ({OC_PURCHASE_ESTADO_REAL_SQL}) AS estado_real
+                    COALESCE(ps.estado_real, ({OC_PURCHASE_ESTADO_REAL_SQL})) AS estado_real,
+                    ps.status AS purchase_status,
+                    ps.probable_score,
+                    ps.probable_tier
                 FROM distribuidora.v_documents_latest d
+                LEFT JOIN distribuidora.v_purchase_document_status ps
+                    ON ps.document_id = d.document_id
                 LEFT JOIN bsale.clients c
                     ON c.company_id = d.company_id
                    AND c.bsale_id = d.client_id

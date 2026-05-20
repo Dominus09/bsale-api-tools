@@ -840,8 +840,15 @@ export type DistribuidoraPurchaseOrder = {
   forma_pago?: string | null
   observaciones?: string | null
   is_invoiced?: boolean | null
-  /** Facturada / Pendiente según ``document_related`` (no ``state``). */
+  /** FACTURADA_CONFIRMADA | PROBABLE_FACTURADA | PENDIENTE (vista unificada). */
+  purchase_status?: string | null
+  /** Facturada | Probable facturada | Pendiente (UI). */
   estado_real?: string | null
+  probable_document_id?: number | null
+  probable_document_type_id?: number | null
+  probable_number?: number | null
+  probable_score?: number | null
+  probable_tier?: string | null
   /** Nombre a mostrar: prioriza ``seller_name`` en API. */
   seller?: string | null
   [key: string]: unknown
@@ -967,6 +974,9 @@ export type DistribuidoraDispatchPrepPlanningRow = {
   lat?: number | null
   lng?: number | null
   estado_real?: string | null
+  purchase_status?: string | null
+  probable_score?: number | null
+  probable_tier?: string | null
 }
 
 export type DistribuidoraDispatchPrepPlanningRowsResponse = {
@@ -1362,6 +1372,9 @@ export type DistribuidoraPlanificacionOrderRow = {
   lng?: number | null
   observations?: string | null
   estado_real?: string | null
+  purchase_status?: string | null
+  probable_score?: number | null
+  probable_tier?: string | null
 }
 
 export async function getDistribuidoraPlanificacionOrders(params: {

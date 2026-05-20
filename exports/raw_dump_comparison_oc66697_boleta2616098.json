@@ -1,0 +1,626 @@
+{
+  "document_a": {
+    "label": "oc_66697",
+    "document_id": 3755778,
+    "document_number": 66697,
+    "fetched_at_utc": "2026-05-20T19:12:13.975331+00:00",
+    "read_only": true
+  },
+  "document_b": {
+    "label": "boleta_2616098",
+    "document_id": 3756913,
+    "document_number": 2616098,
+    "fetched_at_utc": "2026-05-20T19:12:17.527393+00:00",
+    "read_only": true
+  },
+  "common_top_level_keys": [
+    "address",
+    "attributes",
+    "cancellationDate",
+    "cancellationStatus",
+    "city",
+    "client",
+    "coin",
+    "commercialState",
+    "commissionNetAmount",
+    "commissionRate",
+    "commissionTaxAmount",
+    "commissionTotalAmount",
+    "count",
+    "details",
+    "document_taxes",
+    "document_type",
+    "emissionDate",
+    "exemptAmount",
+    "expirationDate",
+    "exportExemptAmount",
+    "exportNetAmount",
+    "exportTaxAmount",
+    "exportTotalAmount",
+    "generationDate",
+    "href",
+    "id",
+    "informedSii",
+    "items",
+    "limit",
+    "municipality",
+    "netAmount",
+    "notExemptAmount",
+    "number",
+    "office",
+    "offset",
+    "payments",
+    "percentageTaxWithheld",
+    "priceList",
+    "purchaseTaxAmount",
+    "purchaseTotalAmount",
+    "references",
+    "responseMsgSii",
+    "salesId",
+    "sellers",
+    "serialNumber",
+    "state",
+    "taxAmount",
+    "ted",
+    "token",
+    "totalAmount",
+    "trackingNumber",
+    "urlPdf",
+    "urlPdfOriginal",
+    "urlPublicView",
+    "urlPublicViewOriginal",
+    "urlTimbre",
+    "urlXml",
+    "user"
+  ],
+  "only_in_a_top_level_keys": [],
+  "only_in_b_top_level_keys": [],
+  "common_leaf_paths_count": 60,
+  "common_leaf_same_value": [
+    {
+      "path": "address",
+      "value_a": "San Agustín rural ",
+      "value_b": "San Agustín rural "
+    },
+    {
+      "path": "cancellationDate",
+      "value_a": null,
+      "value_b": null
+    },
+    {
+      "path": "cancellationStatus",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "city",
+      "value_a": "Puqueldon ",
+      "value_b": "Puqueldon "
+    },
+    {
+      "path": "client.href",
+      "value_a": "https://api.bsale.io/v1/clients/1473.json",
+      "value_b": "https://api.bsale.io/v1/clients/1473.json"
+    },
+    {
+      "path": "client.id",
+      "value_a": "1473",
+      "value_b": "1473"
+    },
+    {
+      "path": "coin.href",
+      "value_a": "https://api.bsale.io/v1/coins/1.json",
+      "value_b": "https://api.bsale.io/v1/coins/1.json"
+    },
+    {
+      "path": "coin.id",
+      "value_a": "1",
+      "value_b": "1"
+    },
+    {
+      "path": "commercialState",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "commissionNetAmount",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "commissionRate",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "commissionTaxAmount",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "commissionTotalAmount",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "exemptAmount",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "exportExemptAmount",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "exportNetAmount",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "exportTaxAmount",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "exportTotalAmount",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "municipality",
+      "value_a": "Puqueldon ",
+      "value_b": "Puqueldon "
+    },
+    {
+      "path": "office.href",
+      "value_a": "https://api.bsale.io/v1/offices/1.json",
+      "value_b": "https://api.bsale.io/v1/offices/1.json"
+    },
+    {
+      "path": "office.id",
+      "value_a": "1",
+      "value_b": "1"
+    },
+    {
+      "path": "percentageTaxWithheld",
+      "value_a": 0.0,
+      "value_b": 0.0
+    },
+    {
+      "path": "priceList.href",
+      "value_a": "https://api.bsale.io/v1/price_lists/14.json",
+      "value_b": "https://api.bsale.io/v1/price_lists/14.json"
+    },
+    {
+      "path": "priceList.id",
+      "value_a": "14",
+      "value_b": "14"
+    },
+    {
+      "path": "purchaseTaxAmount",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "purchaseTotalAmount",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "salesId",
+      "value_a": null,
+      "value_b": null
+    },
+    {
+      "path": "serialNumber",
+      "value_a": null,
+      "value_b": null
+    },
+    {
+      "path": "ted",
+      "value_a": null,
+      "value_b": null
+    }
+  ],
+  "common_leaf_diff_value": [
+    {
+      "path": "attributes.href",
+      "value_a": "https://api.bsale.io/v1/documents/3755778/attributes.json",
+      "value_b": "https://api.bsale.io/v1/documents/3756913/attributes.json"
+    },
+    {
+      "path": "details.href",
+      "value_a": "https://api.bsale.io/v1/documents/3755778/details.json",
+      "value_b": "https://api.bsale.io/v1/documents/3756913/details.json"
+    },
+    {
+      "path": "document_taxes.href",
+      "value_a": "https://api.bsale.io/v1/documents/3755778/document_taxes.json",
+      "value_b": "https://api.bsale.io/v1/documents/3756913/document_taxes.json"
+    },
+    {
+      "path": "document_type.href",
+      "value_a": "https://api.bsale.io/v1/document_types/33.json",
+      "value_b": "https://api.bsale.io/v1/document_types/1.json"
+    },
+    {
+      "path": "document_type.id",
+      "value_a": "33",
+      "value_b": "1"
+    },
+    {
+      "path": "emissionDate",
+      "value_a": 1779062400,
+      "value_b": 1779148800
+    },
+    {
+      "path": "expirationDate",
+      "value_a": 1779062400,
+      "value_b": 1779148800
+    },
+    {
+      "path": "generationDate",
+      "value_a": 1779120801,
+      "value_b": 1779218645
+    },
+    {
+      "path": "href",
+      "value_a": "https://api.bsale.io/v1/documents/3755778.json",
+      "value_b": "https://api.bsale.io/v1/documents/3756913.json"
+    },
+    {
+      "path": "id",
+      "value_a": 3755778,
+      "value_b": 3756913
+    },
+    {
+      "path": "informedSii",
+      "value_a": 2,
+      "value_b": 0
+    },
+    {
+      "path": "netAmount",
+      "value_a": 1080982,
+      "value_b": 2746679
+    },
+    {
+      "path": "notExemptAmount",
+      "value_a": 1080982,
+      "value_b": 2746679
+    },
+    {
+      "path": "number",
+      "value_a": 0,
+      "value_b": 2616098
+    },
+    {
+      "path": "payments.href",
+      "value_a": "https://api.bsale.io/v1/documents/3755778/payments.json",
+      "value_b": "https://api.bsale.io/v1/documents/3756913/payments.json"
+    },
+    {
+      "path": "references.href",
+      "value_a": "https://api.bsale.io/v1/documents/3755778/references.json",
+      "value_b": "https://api.bsale.io/v1/documents/3756913/references.json"
+    },
+    {
+      "path": "responseMsgSii",
+      "value_a": null,
+      "value_b": "Documento Recibido por el SII. Datos Coinciden con los Registrados"
+    },
+    {
+      "path": "sellers.href",
+      "value_a": "https://api.bsale.io/v1/documents/3755778/sellers.json",
+      "value_b": "https://api.bsale.io/v1/documents/3756913/sellers.json"
+    },
+    {
+      "path": "state",
+      "value_a": 8888,
+      "value_b": 0
+    },
+    {
+      "path": "taxAmount",
+      "value_a": 426988,
+      "value_b": 521869
+    },
+    {
+      "path": "token",
+      "value_a": "bff014faa28a",
+      "value_b": "b300683c7b87"
+    },
+    {
+      "path": "totalAmount",
+      "value_a": 1507970,
+      "value_b": 3268548
+    },
+    {
+      "path": "trackingNumber",
+      "value_a": "",
+      "value_b": "6a0cb8d6f7b50d9709f8ded3"
+    },
+    {
+      "path": "urlPdf",
+      "value_a": "https://app2.bsale.cl/view/21884/bff014faa28a.pdf?sfd=99",
+      "value_b": "https://app2.bsale.cl/view/21884/b300683c7b87.pdf?sfd=99"
+    },
+    {
+      "path": "urlPdfOriginal",
+      "value_a": "https://app2.bsale.cl/view/21884/bff014faa28a.pdf",
+      "value_b": "https://app2.bsale.cl/view/21884/b300683c7b87.pdf"
+    },
+    {
+      "path": "urlPublicView",
+      "value_a": "https://app2.bsale.cl/view/21884/bff014faa28a?sfd=99",
+      "value_b": "https://app2.bsale.cl/view/21884/b300683c7b87?sfd=99"
+    },
+    {
+      "path": "urlPublicViewOriginal",
+      "value_a": "https://app2.bsale.cl/view/21884/bff014faa28a",
+      "value_b": "https://app2.bsale.cl/view/21884/b300683c7b87"
+    },
+    {
+      "path": "urlTimbre",
+      "value_a": null,
+      "value_b": "https://s3.amazonaws.com/bsale/21884/timbres/b300683c7b87.png"
+    },
+    {
+      "path": "urlXml",
+      "value_a": "https://api.bsale.cl/v1/21884/files/bff014faa28a.xml",
+      "value_b": "https://api.bsale.cl/v1/21884/files/b300683c7b87.xml"
+    },
+    {
+      "path": "user.href",
+      "value_a": "https://api.bsale.io/v1/users/85.json",
+      "value_b": "https://api.bsale.io/v1/users/49.json"
+    },
+    {
+      "path": "user.id",
+      "value_a": "85",
+      "value_b": "49"
+    }
+  ],
+  "common_value_hashes": [
+    {
+      "path": "address",
+      "hash": "3a2425ac0d1f6f69",
+      "value_a": "San Agustín rural ",
+      "value_b": "San Agustín rural "
+    },
+    {
+      "path": "cancellationStatus",
+      "hash": "5feceb66ffc86f38",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "city",
+      "hash": "3da18ad94f626319",
+      "value_a": "Puqueldon ",
+      "value_b": "Puqueldon "
+    },
+    {
+      "path": "client.href",
+      "hash": "d03e86e02f1b5ae1",
+      "value_a": "https://api.bsale.io/v1/clients/1473.json",
+      "value_b": "https://api.bsale.io/v1/clients/1473.json"
+    },
+    {
+      "path": "client.id",
+      "hash": "fda26c09ec74e81c",
+      "value_a": "1473",
+      "value_b": "1473"
+    },
+    {
+      "path": "coin.href",
+      "hash": "49558515af9d55f1",
+      "value_a": "https://api.bsale.io/v1/coins/1.json",
+      "value_b": "https://api.bsale.io/v1/coins/1.json"
+    },
+    {
+      "path": "coin.id",
+      "hash": "391552c099c101b1",
+      "value_a": "1",
+      "value_b": "1"
+    },
+    {
+      "path": "commercialState",
+      "hash": "5feceb66ffc86f38",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "commissionNetAmount",
+      "hash": "5feceb66ffc86f38",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "commissionRate",
+      "hash": "5feceb66ffc86f38",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "commissionTaxAmount",
+      "hash": "5feceb66ffc86f38",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "commissionTotalAmount",
+      "hash": "5feceb66ffc86f38",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "exemptAmount",
+      "hash": "5feceb66ffc86f38",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "exportExemptAmount",
+      "hash": "5feceb66ffc86f38",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "exportNetAmount",
+      "hash": "5feceb66ffc86f38",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "exportTaxAmount",
+      "hash": "5feceb66ffc86f38",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "exportTotalAmount",
+      "hash": "5feceb66ffc86f38",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "municipality",
+      "hash": "3da18ad94f626319",
+      "value_a": "Puqueldon ",
+      "value_b": "Puqueldon "
+    },
+    {
+      "path": "office.href",
+      "hash": "a94e1a0dfacef2c0",
+      "value_a": "https://api.bsale.io/v1/offices/1.json",
+      "value_b": "https://api.bsale.io/v1/offices/1.json"
+    },
+    {
+      "path": "office.id",
+      "hash": "391552c099c101b1",
+      "value_a": "1",
+      "value_b": "1"
+    },
+    {
+      "path": "percentageTaxWithheld",
+      "hash": "8aed642bf5118b9d",
+      "value_a": 0.0,
+      "value_b": 0.0
+    },
+    {
+      "path": "priceList.href",
+      "hash": "7597274d9ed2632a",
+      "value_a": "https://api.bsale.io/v1/price_lists/14.json",
+      "value_b": "https://api.bsale.io/v1/price_lists/14.json"
+    },
+    {
+      "path": "priceList.id",
+      "hash": "789d9e7dc67f9866",
+      "value_a": "14",
+      "value_b": "14"
+    },
+    {
+      "path": "purchaseTaxAmount",
+      "hash": "5feceb66ffc86f38",
+      "value_a": 0,
+      "value_b": 0
+    },
+    {
+      "path": "purchaseTotalAmount",
+      "hash": "5feceb66ffc86f38",
+      "value_a": 0,
+      "value_b": 0
+    }
+  ],
+  "entity_subtrees": {
+    "client": {
+      "a": {
+        "href": "https://api.bsale.io/v1/clients/1473.json",
+        "id": "1473"
+      },
+      "b": {
+        "href": "https://api.bsale.io/v1/clients/1473.json",
+        "id": "1473"
+      },
+      "equal": true
+    },
+    "user": {
+      "a": {
+        "href": "https://api.bsale.io/v1/users/85.json",
+        "id": "85"
+      },
+      "b": {
+        "href": "https://api.bsale.io/v1/users/49.json",
+        "id": "49"
+      },
+      "equal": false
+    },
+    "office": {
+      "a": {
+        "href": "https://api.bsale.io/v1/offices/1.json",
+        "id": "1"
+      },
+      "b": {
+        "href": "https://api.bsale.io/v1/offices/1.json",
+        "id": "1"
+      },
+      "equal": true
+    },
+    "documentType": {
+      "a": null,
+      "b": null,
+      "equal": true
+    },
+    "seller": {
+      "a": null,
+      "b": null,
+      "equal": true
+    }
+  },
+  "suspicious_paths_union": [
+    "attributes",
+    "attributes",
+    "trackingNumber",
+    "trackingNumber",
+    "urlPdfOriginal",
+    "urlPdfOriginal",
+    "urlPublicViewOriginal",
+    "urlPublicViewOriginal"
+  ],
+  "suspicious_a": [
+    {
+      "path": "attributes",
+      "segment": "attributes"
+    },
+    {
+      "path": "trackingNumber",
+      "segment": "trackingNumber"
+    },
+    {
+      "path": "urlPdfOriginal",
+      "segment": "urlPdfOriginal"
+    },
+    {
+      "path": "urlPublicViewOriginal",
+      "segment": "urlPublicViewOriginal"
+    }
+  ],
+  "suspicious_b": [
+    {
+      "path": "attributes",
+      "segment": "attributes"
+    },
+    {
+      "path": "trackingNumber",
+      "segment": "trackingNumber"
+    },
+    {
+      "path": "urlPdfOriginal",
+      "segment": "urlPdfOriginal"
+    },
+    {
+      "path": "urlPublicViewOriginal",
+      "segment": "urlPublicViewOriginal"
+    }
+  ]
+}

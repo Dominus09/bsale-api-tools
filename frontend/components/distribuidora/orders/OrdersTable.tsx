@@ -1,7 +1,7 @@
 "use client"
 
 import { Checkbox } from "@/components/ui/checkbox"
-import { Badge } from "@/components/ui/badge"
+import { PurchaseInvoiceStatusBadge } from "@/components/distribuidora/orders/PurchaseInvoiceStatusBadge"
 import { Button } from "@/components/ui/button"
 import {
   Table,
@@ -112,12 +112,6 @@ export function OrdersTable({
               </TableRow>
             ) : (
               items.map((row) => {
-                const estadoReal =
-                  typeof row.estado_real === "string" && row.estado_real.trim() !== ""
-                    ? row.estado_real.trim()
-                    : row.is_invoiced === true
-                      ? "Facturada"
-                      : "Pendiente"
                 const seller =
                   row.seller_name?.trim() ||
                   row.seller?.trim() ||
@@ -148,13 +142,7 @@ export function OrdersTable({
                     </TableCell>
                     <TableCell className="max-w-[180px] truncate">{seller}</TableCell>
                     <TableCell>
-                      {estadoReal === "Facturada" ? (
-                        <Badge className="bg-emerald-600 hover:bg-emerald-600">
-                          Facturada
-                        </Badge>
-                      ) : (
-                        <Badge variant="secondary">Pendiente</Badge>
-                      )}
+                      <PurchaseInvoiceStatusBadge row={row} />
                     </TableCell>
                   </TableRow>
                 )
