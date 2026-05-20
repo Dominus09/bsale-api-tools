@@ -24,7 +24,11 @@ import {
 } from "@/lib/dispatch-prep-tags"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
-import { PurchaseInvoiceStatusBadge } from "@/components/distribuidora/orders/PurchaseInvoiceStatusBadge"
+import {
+  PurchaseAssociatedDocumentCell,
+  PurchaseInvoiceScoreCell,
+  PurchaseInvoiceStatusCell,
+} from "@/components/distribuidora/orders/PurchaseInvoiceTableCells"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -261,7 +265,13 @@ function PlanningTableRow({
         {r.seller_name?.trim() || "—"}
       </TableCell>
       <TableCell className="whitespace-nowrap text-xs">
-        <PurchaseInvoiceStatusBadge row={r} />
+        <PurchaseInvoiceStatusCell row={r} />
+      </TableCell>
+      <TableCell>
+        <PurchaseAssociatedDocumentCell row={r} />
+      </TableCell>
+      <TableCell className="text-right">
+        <PurchaseInvoiceScoreCell row={r} />
       </TableCell>
       <TableCell className="text-right tabular-nums">
         {formatClp(Number(r.total_amount ?? 0))}
@@ -1268,7 +1278,9 @@ export default function DistribuidoraOrdersPage() {
                   <TableHead>Comuna</TableHead>
                   <TableHead>Dirección</TableHead>
                   <TableHead>Vendedor</TableHead>
-                  <TableHead>Estado real</TableHead>
+                  <TableHead>Estado</TableHead>
+                  <TableHead>Documento asociado</TableHead>
+                  <TableHead className="text-right">Score</TableHead>
                   <TableHead className="text-right">Monto</TableHead>
                   <TableHead>Georef</TableHead>
                   <TableHead>Cluster</TableHead>
@@ -1279,7 +1291,7 @@ export default function DistribuidoraOrdersPage() {
                 {planningRows.length === 0 && !loading ? (
                   <TableRow>
                     <TableCell
-                      colSpan={10}
+                      colSpan={12}
                       className="py-10 text-center text-muted-foreground"
                     >
                       Sin filas para mostrar (ajuste fechas o filtro de día).

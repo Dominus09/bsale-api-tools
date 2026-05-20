@@ -44,6 +44,7 @@ def ensure_distribuidora_schema(cur) -> None:
         "012_trucks.sql",
         "013_operational_sync_state.sql",
         "014_document_probable_matches.sql",
+        "015_v_purchase_document_status_full.sql",
     ):
         _run_sql_file(cur, fn)
 

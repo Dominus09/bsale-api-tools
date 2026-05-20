@@ -22,7 +22,11 @@ import {
 } from "@/lib/planificacion-despacho-storage"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
-import { PurchaseInvoiceStatusBadge } from "@/components/distribuidora/orders/PurchaseInvoiceStatusBadge"
+import {
+  PurchaseAssociatedDocumentCell,
+  PurchaseInvoiceScoreCell,
+  PurchaseInvoiceStatusCell,
+} from "@/components/distribuidora/orders/PurchaseInvoiceTableCells"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
@@ -477,7 +481,9 @@ export default function PrePlanificacionDespachoPage() {
               <TableHead>Dirección</TableHead>
               <TableHead>Comuna</TableHead>
               <TableHead>Vendedor</TableHead>
-              <TableHead>Estado real</TableHead>
+              <TableHead>Estado</TableHead>
+              <TableHead>Documento asociado</TableHead>
+              <TableHead className="text-right">Score</TableHead>
               <TableHead className="text-right">Monto</TableHead>
               <TableHead>Georef</TableHead>
               <TableHead className="min-w-[9rem]">Camión</TableHead>
@@ -486,7 +492,7 @@ export default function PrePlanificacionDespachoPage() {
           <TableBody>
             {rows.length === 0 && !loading ? (
               <TableRow>
-                <TableCell colSpan={11} className="py-10 text-center text-muted-foreground">
+                <TableCell colSpan={13} className="py-10 text-center text-muted-foreground">
                   Sin resultados en el rango y filtro de día.
                 </TableCell>
               </TableRow>
@@ -525,7 +531,13 @@ export default function PrePlanificacionDespachoPage() {
                       {r.seller_name?.trim() || "—"}
                     </TableCell>
                     <TableCell className="whitespace-nowrap text-xs">
-                      <PurchaseInvoiceStatusBadge row={r} />
+                      <PurchaseInvoiceStatusCell row={r} />
+                    </TableCell>
+                    <TableCell>
+                      <PurchaseAssociatedDocumentCell row={r} />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <PurchaseInvoiceScoreCell row={r} />
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {formatCLP(Number(r.total_amount ?? 0))}

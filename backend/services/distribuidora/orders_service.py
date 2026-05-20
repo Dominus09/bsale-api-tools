@@ -111,9 +111,23 @@ def _split_csv_terms(raw: str | None) -> list[str]:
     return [t.strip() for t in raw.split(",") if t.strip()]
 
 
+_PURCHASE_STATUS_FILTER_SQL = {
+    "confirmed": "e.purchase_status = 'FACTURADA_CONFIRMADA'",
+    "probable": (
+        "e.purchase_status IN ("
+        "'PROBABLE_FACTURADA_HIGH', "
+        "'PROBABLE_FACTURADA_MEDIUM', "
+        "'PROBABLE_FACTURADA_LOW'"
+        ")"
+    ),
+    "pending": "e.purchase_status = 'PENDIENTE'",
+}
+
+
 def list_purchase_orders(
     *,
     only_not_invoiced: bool = False,
+    invoice_status: str | None = None,
     emission_date_from: date | None = None,
     emission_date_to: date | None = None,
     delivery_search: str | None = None,
@@ -127,6 +141,9 @@ def list_purchase_orders(
     params: list[Any] = []
     if only_not_invoiced:
         where.append("COALESCE(e.is_invoiced, FALSE) = FALSE")
+    status_key = (invoice_status or "").strip().lower()
+    if status_key in _PURCHASE_STATUS_FILTER_SQL:
+        where.append(_PURCHASE_STATUS_FILTER_SQL[status_key])
     if emission_date_from is not None:
         params.append(emission_date_from)
         where.append("e.emission_date >= %s::date")
@@ -470,7 +487,9 @@ def list_dispatch_prep_planning_rows(
                 COALESCE(ps.estado_real, ({OC_PURCHASE_ESTADO_REAL_SQL})) AS estado_real,
                 ps.status AS purchase_status,
                 ps.probable_score,
-                ps.probable_tier
+                ps.probable_tier,
+                ps.associated_document_label,
+                ps.display_score
             FROM distribuidora.v_documents_latest d
             LEFT JOIN distribuidora.v_purchase_document_status ps
                 ON ps.document_id = d.document_id

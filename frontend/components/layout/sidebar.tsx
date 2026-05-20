@@ -93,6 +93,7 @@ const navSections: { title: string; items: NavItem[] }[] = [
         label: "Análisis despacho",
         icon: PieChart,
       },
+      { href: "/distribuidora/ordenes-compra", label: "Órdenes de compra", icon: ShoppingCart },
       { href: "/distribuidora/orders", label: "Pre‑despacho OC", icon: ShoppingCart },
       { href: "/distribuidora/pre-planificacion", label: "Pre‑planif. despacho", icon: ClipboardList },
       { href: "/distribuidora/planificacion", label: "Planif. mapa ORS", icon: MapPin },

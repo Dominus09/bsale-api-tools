@@ -239,6 +239,10 @@ def get_orders_purchase(
         False,
         description="Si true: solo OC sin factura/boleta en document_related (vista enriquecida).",
     ),
+    invoice_status: str | None = Query(
+        None,
+        description="Filtro rápido: confirmed | probable | pending (estado unificado).",
+    ),
     emission_date_from: date | None = Query(None),
     emission_date_to: date | None = Query(None),
     delivery_search: str | None = Query(
@@ -256,6 +260,7 @@ def get_orders_purchase(
 ):
     rows, total = list_purchase_orders(
         only_not_invoiced=only_not_invoiced,
+        invoice_status=invoice_status,
         emission_date_from=emission_date_from,
         emission_date_to=emission_date_to,
         delivery_search=delivery_search,

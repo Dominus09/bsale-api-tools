@@ -12,6 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { cn } from "@/lib/utils"
+import type { PurchaseInvoiceStatusFilter } from "@/lib/purchase-invoice-status"
 
 export type SellerOption = { user_id: number; label: string }
 
@@ -46,6 +47,8 @@ type OrdersFiltersProps = {
   onClearMunicipalities: () => void
   onlyNotInvoiced: boolean
   onOnlyNotInvoicedChange: (value: boolean) => void
+  invoiceStatusFilter: PurchaseInvoiceStatusFilter
+  onInvoiceStatusFilterChange: (value: PurchaseInvoiceStatusFilter) => void
   loading?: boolean
 }
 
@@ -68,6 +71,8 @@ export function OrdersFilters({
   onClearMunicipalities,
   onlyNotInvoiced,
   onOnlyNotInvoicedChange,
+  invoiceStatusFilter,
+  onInvoiceStatusFilterChange,
   loading,
 }: OrdersFiltersProps) {
   const allMunicipalities =
@@ -101,15 +106,35 @@ export function OrdersFilters({
             disabled={loading}
           />
         </div>
-        <div className="flex items-end pb-1 lg:col-span-2">
+        <div className="flex flex-col gap-3 pb-1 lg:col-span-2">
           <label className="flex cursor-pointer items-center gap-2 text-sm">
             <Checkbox
               checked={onlyNotInvoiced}
               onCheckedChange={(c) => onOnlyNotInvoicedChange(c === true)}
               disabled={loading}
             />
-            Solo no facturadas
+            Solo sin factura confirmada (related)
           </label>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Estado facturación</Label>
+            <Select
+              value={invoiceStatusFilter}
+              onValueChange={(v) =>
+                onInvoiceStatusFilterChange(v as PurchaseInvoiceStatusFilter)
+              }
+              disabled={loading}
+            >
+              <SelectTrigger className="h-9 w-full max-w-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos</SelectItem>
+                <SelectItem value="confirmed">Solo confirmadas</SelectItem>
+                <SelectItem value="probable">Solo probables</SelectItem>
+                <SelectItem value="pending">Solo pendientes</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </div>
       </div>
 

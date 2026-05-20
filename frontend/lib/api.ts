@@ -840,15 +840,25 @@ export type DistribuidoraPurchaseOrder = {
   forma_pago?: string | null
   observaciones?: string | null
   is_invoiced?: boolean | null
-  /** FACTURADA_CONFIRMADA | PROBABLE_FACTURADA | PENDIENTE (vista unificada). */
+  /** FACTURADA_CONFIRMADA | PROBABLE_FACTURADA_* | PENDIENTE. */
   purchase_status?: string | null
-  /** Facturada | Probable facturada | Pendiente (UI). */
   estado_real?: string | null
+  oc_number?: number | null
+  oc_client_name?: string | null
+  associated_document_label?: string | null
+  display_score?: number | null
+  candidate_number?: number | null
+  candidate_document_type?: number | null
+  candidate_document_type_label?: string | null
+  score?: number | null
+  match_products_pct?: number | null
   probable_document_id?: number | null
   probable_document_type_id?: number | null
   probable_number?: number | null
   probable_score?: number | null
   probable_tier?: string | null
+  invoicing_number?: number | null
+  invoicing_document_type_id?: number | null
   /** Nombre a mostrar: prioriza ``seller_name`` en API. */
   seller?: string | null
   [key: string]: unknown
@@ -865,6 +875,8 @@ export async function getDistribuidoraOrdersPurchase(params: {
   emission_date_from: string
   emission_date_to: string
   only_not_invoiced?: boolean
+  /** confirmed | probable | pending */
+  invoice_status?: string
   user_id?: number
   delivery_search?: string
   municipality?: string
@@ -876,6 +888,8 @@ export async function getDistribuidoraOrdersPurchase(params: {
   qs.set("emission_date_from", params.emission_date_from)
   qs.set("emission_date_to", params.emission_date_to)
   if (params.only_not_invoiced) qs.set("only_not_invoiced", "true")
+  if (params.invoice_status?.trim())
+    qs.set("invoice_status", params.invoice_status.trim())
   if (params.user_id != null) qs.set("user_id", String(params.user_id))
   if (params.delivery_search?.trim())
     qs.set("delivery_search", params.delivery_search.trim())
@@ -975,6 +989,8 @@ export type DistribuidoraDispatchPrepPlanningRow = {
   lng?: number | null
   estado_real?: string | null
   purchase_status?: string | null
+  associated_document_label?: string | null
+  display_score?: number | null
   probable_score?: number | null
   probable_tier?: string | null
 }
@@ -1373,6 +1389,8 @@ export type DistribuidoraPlanificacionOrderRow = {
   observations?: string | null
   estado_real?: string | null
   purchase_status?: string | null
+  associated_document_label?: string | null
+  display_score?: number | null
   probable_score?: number | null
   probable_tier?: string | null
 }

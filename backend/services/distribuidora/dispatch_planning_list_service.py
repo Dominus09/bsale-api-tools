@@ -117,7 +117,9 @@ def list_dispatch_planning_orders(
                     COALESCE(ps.estado_real, ({OC_PURCHASE_ESTADO_REAL_SQL})) AS estado_real,
                     ps.status AS purchase_status,
                     ps.probable_score,
-                    ps.probable_tier
+                    ps.probable_tier,
+                    ps.associated_document_label,
+                    ps.display_score
                 FROM distribuidora.v_documents_latest d
                 LEFT JOIN distribuidora.v_purchase_document_status ps
                     ON ps.document_id = d.document_id
@@ -203,7 +205,9 @@ def list_dispatch_planning_orders(
                     COALESCE(ps.estado_real, ({OC_PURCHASE_ESTADO_REAL_SQL})) AS estado_real,
                     ps.status AS purchase_status,
                     ps.probable_score,
-                    ps.probable_tier
+                    ps.probable_tier,
+                    ps.associated_document_label,
+                    ps.display_score
                 FROM distribuidora.v_documents_latest d
                 LEFT JOIN distribuidora.v_purchase_document_status ps
                     ON ps.document_id = d.document_id
