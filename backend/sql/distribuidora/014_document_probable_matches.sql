@@ -33,7 +33,4 @@ CREATE INDEX IF NOT EXISTS idx_document_probable_matches_oc_score
 
 CREATE INDEX IF NOT EXISTS idx_document_probable_matches_candidate
     ON distribuidora.document_probable_matches (candidate_document_id);
--- +go
-
--- Vistas de estado: ver ``015_v_purchase_document_status_full.sql`` (aplicado después de esta tabla).
--- +go
+-- Vistas de estado: ver ``015_v_purchase_document_status_full.sql`` (migración 015).

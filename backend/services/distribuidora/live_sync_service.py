@@ -221,6 +221,20 @@ def live_sync_documents(*, strict_token: bool = True) -> dict[str, Any]:
         if desde_ts >= hasta_ts:
             desde_ts = hasta_ts - 3600
 
+        if os.getenv("LIVE_SYNC_DEBUG", "").strip().lower() in ("1", "true", "yes"):
+            wm = (state or {}).get("last_watermark")
+            logger.info(
+                "[LIVE_SYNC_DEBUG] live_sync_documents state_exists=%s watermark=%s "
+                "window_from=%s window_to=%s emissiondaterange=[%s,%s] overlap_sec=%s",
+                state is not None,
+                wm.isoformat() if isinstance(wm, datetime) else wm,
+                window_from.isoformat(),
+                window_to.isoformat(),
+                desde_ts,
+                hasta_ts,
+                overlap_sec,
+            )
+
         stats: dict[str, Any] = _base_stats(
             SYNC_TYPE_DOCUMENTS_LIVE,
             window_from,

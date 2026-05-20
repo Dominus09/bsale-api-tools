@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -15,15 +16,62 @@ _STMT_SPLIT_GO = re.compile(r"^\s*--\s*\+go\s*$", re.MULTILINE)
 _SQL_DIR = Path(__file__).resolve().parents[2] / "sql" / "distribuidora"
 
 
+def _live_sync_debug_enabled() -> bool:
+    return os.getenv("LIVE_SYNC_DEBUG", "").strip().lower() in ("1", "true", "yes")
+
+
+def _sql_chunk_has_executable_sql(stmt: str) -> bool:
+    """
+    True si el fragmento tiene SQL ejecutable (no solo comentarios o whitespace).
+
+    psycopg2 falla con ``can't execute an empty query`` si se envía solo ``-- comentario``.
+    """
+    for line in stmt.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if s.startswith("--"):
+            continue
+        return True
+    return False
+
+
 def _run_sql_file(cur, name: str) -> None:
     path = _SQL_DIR / name
     if not path.is_file():
         raise FileNotFoundError(f"SQL no encontrado: {path}")
     text = path.read_text(encoding="utf-8")
+    chunk_idx = 0
     for chunk in _STMT_SPLIT_GO.split(text):
+        chunk_idx += 1
         stmt = chunk.strip()
         if not stmt:
+            if _live_sync_debug_enabled():
+                logger.info(
+                    "[LIVE_SYNC_DEBUG] skip empty chunk file=%s idx=%s",
+                    name,
+                    chunk_idx,
+                )
             continue
+        if not _sql_chunk_has_executable_sql(stmt):
+            if _live_sync_debug_enabled():
+                preview = stmt.replace("\n", " ")[:120]
+                logger.info(
+                    "[LIVE_SYNC_DEBUG] skip comment-only chunk file=%s idx=%s preview=%r",
+                    name,
+                    chunk_idx,
+                    preview,
+                )
+            continue
+        if _live_sync_debug_enabled():
+            preview = stmt.replace("\n", " ")[:200]
+            logger.info(
+                "[LIVE_SYNC_DEBUG] execute file=%s idx=%s len=%s preview=%r",
+                name,
+                chunk_idx,
+                len(stmt),
+                preview,
+            )
         cur.execute(stmt)
     logger.info("SQL aplicado: %s", name)
 
