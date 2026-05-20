@@ -175,10 +175,16 @@ def get_distribuidora_sync_status_payload() -> dict[str, Any]:
         }
 
         cur.close()
+
+        from backend.services.distribuidora.live_sync_service import (
+            get_live_sync_panel_payload,
+        )
+
         return {
             "orders": orders_out,
             "sales": sales_out,
             "sync_lock_active": lock_busy,
+            **get_live_sync_panel_payload(),
         }
     finally:
         if conn is not None:

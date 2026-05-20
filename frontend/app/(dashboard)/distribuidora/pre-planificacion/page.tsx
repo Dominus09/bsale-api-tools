@@ -3,15 +3,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import { Loader2, RefreshCw } from "lucide-react"
+import { Loader2 } from "lucide-react"
 
 import {
   distribuidoraTruckCapacityLabel,
   getDistribuidoraPlanificacionOrders,
   getDistribuidoraSyncStatus,
   getDistribuidoraTrucks,
-  postDistribuidoraSyncOrders,
-  waitDistribuidoraTypedSyncComplete,
   type DistribuidoraPlanificacionOrderRow,
   type DistribuidoraSyncStatusResponse,
   type DistribuidoraTruck,
@@ -22,6 +20,7 @@ import {
 } from "@/lib/planificacion-despacho-storage"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
+import { LiveBsaleSyncPanel } from "@/components/distribuidora/orders/LiveBsaleSyncPanel"
 import {
   PurchaseAssociatedDocumentCell,
   PurchaseInvoiceScoreCell,
@@ -95,7 +94,6 @@ export default function PrePlanificacionDespachoPage() {
 
   const [rows, setRows] = useState<DistribuidoraPlanificacionOrderRow[]>([])
   const [loading, setLoading] = useState(true)
-  const [loadingSync, setLoadingSync] = useState(false)
   const [lastOrdersLoadAt, setLastOrdersLoadAt] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<string | null>(null)
@@ -186,39 +184,6 @@ export default function PrePlanificacionDespachoPage() {
       window.clearInterval(id)
     }
   }, [loadSyncStatus])
-
-  const onSyncOrdersFromBsale = useCallback(async () => {
-    const ac = new AbortController()
-    setLoadingSync(true)
-    setFeedback(null)
-    let baseline: string | null = null
-    try {
-      try {
-        const st0 = await getDistribuidoraSyncStatus({ signal: ac.signal })
-        baseline = st0.orders.last_run ?? null
-      } catch {
-        baseline = null
-      }
-      const r = await postDistribuidoraSyncOrders({ signal: ac.signal })
-      if (!r.ok) {
-        setFeedback(r.error ?? "No se pudo encolar sync de órdenes.")
-        return
-      }
-      await waitDistribuidoraTypedSyncComplete({
-        branch: "orders",
-        baselineLastRun: baseline,
-        signal: ac.signal,
-      })
-      await loadPlanificacionRows(ac.signal)
-      await loadSyncStatus(ac.signal)
-      setFeedback(r.message ?? "Órdenes sincronizadas. Tabla actualizada.")
-    } catch (e: unknown) {
-      if (e instanceof Error && e.name === "AbortError") return
-      setFeedback(e instanceof Error ? e.message : "Error al sincronizar.")
-    } finally {
-      setLoadingSync(false)
-    }
-  }, [loadPlanificacionRows, loadSyncStatus])
 
   const toggle = useCallback((id: number, checked: boolean, canSelect: boolean) => {
     if (!canSelect) return
@@ -379,28 +344,12 @@ export default function PrePlanificacionDespachoPage() {
         </div>
       ) : null}
 
-      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={loading || loadingSync}
-          onClick={() => void onSyncOrdersFromBsale()}
-          className="w-fit gap-2"
-        >
-          {loadingSync ? (
-            <Loader2 className="size-4 animate-spin" aria-hidden />
-          ) : (
-            <RefreshCw className="size-4" aria-hidden />
-          )}
-          Actualizar órdenes
-        </Button>
-        {loadingSync ? (
-          <span className="text-xs text-muted-foreground">
-            Sincronizando órdenes de compra desde Bsale (tipo 33)…
-          </span>
-        ) : null}
-      </div>
+      <LiveBsaleSyncPanel
+        onSyncComplete={() => {
+          void loadPlanificacionRows()
+          void loadSyncStatus()
+        }}
+      />
       <div className="mb-2 space-y-1 text-xs text-muted-foreground">
         {lastOrdersLoadAt ? (
           <p>Última actualización: {lastOrdersLoadAt}</p>

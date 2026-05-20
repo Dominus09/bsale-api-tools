@@ -34,6 +34,7 @@ from backend.services.distribuidora.sync_related_service import (
     run_sync_distribuidora_related_background,
     sync_distribuidora_related_documents,
 )
+from backend.services.distribuidora.live_sync_service import run_live_sync_on_demand
 from backend.services.distribuidora.sync_service import (
     bsale_token_distribuidora_configured,
     sync_bsale_distribuidora_orders_incremental,
@@ -145,6 +146,26 @@ def get_distribuidora_sync_status():
     ``last_message`` (JSON) y ``sync_logs`` para ``running`` / ``error``.
     """
     return get_distribuidora_sync_status_payload()
+
+
+@router.post("/sync/live-now")
+def post_distribuidora_sync_live_now():
+    """
+    Sync on-demand: cadena live documents → details → related → probable_matches.
+    No ejecuta backfills mensuales.
+    """
+    if not bsale_token_distribuidora_configured():
+        raise HTTPException(status_code=503, detail="sin_token")
+
+    result = run_live_sync_on_demand(strict_token=True)
+    if result.get("status") == "already_running":
+        return JSONResponse(status_code=409, content=result)
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=500,
+            detail=result.get("message") or "live_sync_error",
+        )
+    return result
 
 
 @router.post("/sync-orders")

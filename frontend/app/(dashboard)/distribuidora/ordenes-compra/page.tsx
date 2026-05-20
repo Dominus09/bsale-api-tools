@@ -8,6 +8,7 @@ import {
   type DistribuidoraPurchaseOrder,
 } from "@/lib/api"
 import type { PurchaseInvoiceStatusFilter } from "@/lib/purchase-invoice-status"
+import { LiveBsaleSyncPanel } from "@/components/distribuidora/orders/LiveBsaleSyncPanel"
 import { OrdersFilters, type SellerOption } from "@/components/distribuidora/orders/OrdersFilters"
 import { OrdersTable } from "@/components/distribuidora/orders/OrdersTable"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -157,6 +158,8 @@ export default function OrdenesCompraPage() {
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       ) : null}
+
+      <LiveBsaleSyncPanel onSyncComplete={() => void load()} />
 
       <OrdersFilters
         dateFrom={dateFrom}

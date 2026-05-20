@@ -1136,10 +1136,40 @@ export type DistribuidoraSyncStatusBranch = {
   status: "ok" | "running" | "error"
 }
 
+export type DistribuidoraLiveSyncLayerStatus = {
+  label: string
+  last_success_at: string | null
+  status: string
+  items_processed?: number
+  error_summary?: string | null
+  last_window_from?: string | null
+  last_window_to?: string | null
+}
+
 export type DistribuidoraSyncStatusResponse = {
   orders: DistribuidoraSyncStatusBranch
   sales: DistribuidoraSyncStatusBranch
   sync_lock_active: boolean
+  live_sync?: {
+    documents_live?: DistribuidoraLiveSyncLayerStatus
+    details_live?: DistribuidoraLiveSyncLayerStatus
+    related_live?: DistribuidoraLiveSyncLayerStatus
+    probable_live?: DistribuidoraLiveSyncLayerStatus
+  }
+  live_sync_global_busy?: boolean
+}
+
+export type DistribuidoraLiveSyncNowResponse = {
+  ok: boolean
+  status: string
+  message?: string
+  started_at?: string
+  finished_at?: string
+  duration_seconds?: number
+  documents?: Record<string, unknown>
+  details?: Record<string, unknown>
+  related?: Record<string, unknown>
+  probable_matches?: Record<string, unknown>
 }
 
 export async function getDistribuidoraSyncStatus(params?: {
@@ -1155,6 +1185,37 @@ export async function getDistribuidoraSyncStatus(params?: {
     throw new Error(t || `HTTP ${res.status}`)
   }
   return res.json() as Promise<DistribuidoraSyncStatusResponse>
+}
+
+/** POST /distribuidora/sync/live-now — cadena sync live on-demand. */
+export async function postDistribuidoraSyncLiveNow(params?: {
+  signal?: AbortSignal
+}): Promise<DistribuidoraLiveSyncNowResponse> {
+  const res = await fetch(`${API_URL}/distribuidora/sync/live-now`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    signal: params?.signal,
+  })
+  const data = (await res.json().catch(() => ({}))) as DistribuidoraLiveSyncNowResponse
+  if (res.status === 409) {
+    return {
+      ok: false,
+      status: "already_running",
+      message:
+        data.message ?? "Ya hay una sincronización en ejecución",
+    }
+  }
+  if (!res.ok) {
+    return {
+      ok: false,
+      status: "error",
+      message:
+        typeof data === "object" && data && "detail" in data
+          ? String((data as { detail?: unknown }).detail)
+          : `HTTP ${res.status}`,
+    }
+  }
+  return { ...data, ok: data.ok !== false }
 }
 
 export async function postDistribuidoraSyncSales(params?: {
