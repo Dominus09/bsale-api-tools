@@ -17,7 +17,21 @@ export type PlanificacionStoredOrder = {
 
 export type PlanificacionStoredPayload = {
   submittedAt: string
+  /** Identificador de sesión para persistir dotación/costos en backend. */
+  planSessionId: string
   orders: PlanificacionStoredOrder[]
+}
+
+export function createPlanSessionId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID()
+  }
+  return `plan-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+export function ensurePlanSessionId(payload: PlanificacionStoredPayload): PlanificacionStoredPayload {
+  if (payload.planSessionId?.trim().length >= 8) return payload
+  return { ...payload, planSessionId: createPlanSessionId() }
 }
 
 export function readPlanificacionPayload(): PlanificacionStoredPayload | null {
@@ -27,7 +41,11 @@ export function readPlanificacionPayload(): PlanificacionStoredPayload | null {
     if (!raw?.trim()) return null
     const data = JSON.parse(raw) as PlanificacionStoredPayload
     if (!data || !Array.isArray(data.orders)) return null
-    return data
+    const normalized = ensurePlanSessionId(data)
+    if (!data.planSessionId?.trim()) {
+      sessionStorage.setItem(PLANIFICACION_STORAGE_KEY, JSON.stringify(normalized))
+    }
+    return normalized
   } catch {
     return null
   }
@@ -35,7 +53,10 @@ export function readPlanificacionPayload(): PlanificacionStoredPayload | null {
 
 export function writePlanificacionPayload(payload: PlanificacionStoredPayload): void {
   if (typeof window === "undefined") return
-  sessionStorage.setItem(PLANIFICACION_STORAGE_KEY, JSON.stringify(payload))
+  sessionStorage.setItem(
+    PLANIFICACION_STORAGE_KEY,
+    JSON.stringify(ensurePlanSessionId(payload)),
+  )
 }
 
 export function clearPlanificacionPayload(): void {

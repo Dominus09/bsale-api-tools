@@ -11,7 +11,7 @@ import { distribuidoraTruckCapacityLabel } from "@/lib/api"
 import {
   computeAmountThresholds,
   priorityBadgeClass,
-  priorityLabel,
+  priorityShortLabel,
   resolveRowPriority,
   type PreDespachoAmountThresholds,
 } from "@/lib/pre-despacho-priority"
@@ -31,14 +31,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
-import {
   Tooltip,
   TooltipContent,
   TooltipTrigger,
@@ -46,6 +38,10 @@ import {
 import { cn } from "@/lib/utils"
 
 const TRUCK_UNSET = "__unset__"
+
+const TH =
+  "h-8 px-1.5 text-left align-middle text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+const TD = "px-1.5 py-1.5 align-middle text-xs"
 
 const clp = new Intl.NumberFormat("es-CL", {
   style: "currency",
@@ -73,6 +69,26 @@ function isValidTruckId(
   )
 }
 
+function TruncateTooltip({
+  text,
+  className,
+}: {
+  text: string
+  className?: string
+}) {
+  const display = text?.trim() || "—"
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className={cn("block min-w-0 truncate", className)}>{display}</span>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-sm text-xs">
+        {display}
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
 function GroupTruckAssignMenu({
   municipalityLabel,
   groupRows,
@@ -97,23 +113,22 @@ function GroupTruckAssignMenu({
           size="sm"
           variant="outline"
           disabled={disabled}
-          className="h-8 gap-1 text-xs"
-          aria-label={`Asignar camión a pedidos con georef en ${municipalityLabel}`}
+          className="h-7 gap-0.5 px-2 text-[10px]"
+          aria-label={`Asignar camión en ${municipalityLabel}`}
         >
-          Asignar camión
-          <ChevronDown className="size-3.5 opacity-70" aria-hidden />
+          Asignar
+          <ChevronDown className="size-3 opacity-70" aria-hidden />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="end"
-        className="w-[min(22rem,calc(100vw-2rem))] p-2"
+        className="w-[min(20rem,calc(100vw-2rem))] p-2"
       >
         {noGeoCount > 0 ? (
           <Alert className="mb-2 border-amber-500/40 bg-amber-50/90 dark:bg-amber-950/40">
             <AlertTitle className="text-xs">Georreferencia</AlertTitle>
             <AlertDescription className="text-xs">
-              {noGeoCount} cliente{noGeoCount !== 1 ? "s" : ""} no tienen
-              coordenadas y no serán asignados
+              {noGeoCount} sin coordenadas (omitidos)
             </AlertDescription>
           </Alert>
         ) : null}
@@ -123,21 +138,12 @@ function GroupTruckAssignMenu({
               key={t.id}
               onSelect={() => onPickTruck(t.id)}
               className={cn(
-                "cursor-pointer",
+                "cursor-pointer text-xs",
                 lastSuggestedTruckId === t.id &&
                   "bg-muted/70 ring-1 ring-inset ring-primary/30",
               )}
             >
-              <span className="flex w-full items-center justify-between gap-2 pr-1">
-                <span>
-                  {t.name} ({t.plate})
-                </span>
-                {lastSuggestedTruckId === t.id ? (
-                  <Badge variant="outline" className="text-[10px] font-normal">
-                    Reciente
-                  </Badge>
-                ) : null}
-              </span>
+              {t.name} ({t.plate})
             </DropdownMenuItem>
           ))}
         </div>
@@ -153,24 +159,27 @@ function PriorityCell({
   row: DistribuidoraDispatchPrepPlanningRow
   thresholds: PreDespachoAmountThresholds
 }) {
-  const { flags, primary } = resolveRowPriority(row, thresholds)
+  const { primary } = resolveRowPriority(row, thresholds)
   if (!primary) {
-    return <span className="text-xs text-muted-foreground/50">—</span>
+    return <span className="text-[10px] text-muted-foreground/40">—</span>
   }
   return (
-    <div className="flex flex-col gap-0.5">
-      <Badge
-        variant="outline"
-        className={cn("w-fit text-[10px] font-medium", priorityBadgeClass(primary))}
-      >
-        {priorityLabel(primary)}
-      </Badge>
-      {flags.length > 1 ? (
-        <span className="text-[10px] text-muted-foreground">
-          +{flags.length - 1}
-        </span>
-      ) : null}
-    </div>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Badge
+          variant="outline"
+          className={cn(
+            "max-w-full truncate px-1 py-0 text-[9px] font-medium leading-4",
+            priorityBadgeClass(primary),
+          )}
+        >
+          {priorityShortLabel(primary)}
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="text-xs">
+        {priorityShortLabel(primary)}
+      </TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -196,80 +205,99 @@ function PlanningTableRow({
   const capLabel = truck ? distribuidoraTruckCapacityLabel(truck) : null
   const inPlan = geo && isValidTruckId(tid, trucks)
   const priority = resolveRowPriority(r, thresholds)
+  const dir = r.direccion?.trim() || "—"
+  const seller = r.seller_name?.trim() || "—"
+  const clusterShort =
+    clusterLabel.length > 12 ? `${clusterLabel.slice(0, 11)}…` : clusterLabel
 
   return (
-    <TableRow
+    <tr
       className={cn(
-        "text-sm transition-colors duration-100",
-        geo ? "hover:bg-muted/50" : "bg-destructive/5 hover:bg-destructive/10",
+        "border-b border-border/50 transition-colors duration-75",
+        geo ? "hover:bg-muted/40" : "bg-destructive/5 hover:bg-destructive/10",
         inPlan && "border-l-2 border-l-primary bg-primary/[0.04]",
-        priority.primary === "high_amount" && !inPlan && "bg-amber-50/30 dark:bg-amber-950/15",
-        priority.primary === "stale_pending" && !inPlan && "bg-slate-50/50 dark:bg-slate-900/30",
+        priority.primary === "high_amount" &&
+          !inPlan &&
+          "bg-amber-50/25 dark:bg-amber-950/10",
+        priority.primary === "stale_pending" &&
+          !inPlan &&
+          "bg-slate-50/40 dark:bg-slate-900/25",
       )}
     >
-      <TableCell className="py-3">
+      <td className={TD}>
         <PriorityCell row={r} thresholds={thresholds} />
-      </TableCell>
-      <TableCell className="py-3 font-mono text-sm font-medium tabular-nums">
+      </td>
+      <td className={cn(TD, "font-mono text-[11px] font-semibold tabular-nums")}>
         {r.oc ?? "—"}
-      </TableCell>
-      <TableCell className="max-w-[10rem] truncate py-3">
-        {r.nombre_fantasia?.trim() || "—"}
-      </TableCell>
-      <TableCell className="max-w-[8rem] truncate py-3 text-muted-foreground">
-        {r.municipality?.trim() || "—"}
-      </TableCell>
-      <TableCell className="max-w-[12rem] truncate py-3 text-muted-foreground">
-        {r.direccion?.trim() || "—"}
-      </TableCell>
-      <TableCell className="max-w-[8rem] truncate py-3">
-        {r.seller_name?.trim() || "—"}
-      </TableCell>
-      <TableCell className="whitespace-nowrap py-3">
-        <PurchaseInvoiceStatusCell row={r} />
-      </TableCell>
-      <TableCell className="py-3">
-        <PurchaseAssociatedDocumentCell row={r} />
-      </TableCell>
-      <TableCell className="py-3 text-right">
-        <PurchaseInvoiceScoreCell row={r} />
-      </TableCell>
-      <TableCell className="py-3 text-right font-medium tabular-nums">
+      </td>
+      <td className={cn(TD, "max-w-0")}>
+        <TruncateTooltip
+          text={r.nombre_fantasia?.trim() || "—"}
+          className="font-medium text-foreground"
+        />
+      </td>
+      <td className={cn(TD, "max-w-0 text-muted-foreground")}>
+        <TruncateTooltip text={r.municipality?.trim() || "—"} />
+      </td>
+      <td className={cn(TD, "max-w-0 text-muted-foreground")}>
+        <TruncateTooltip text={dir} />
+      </td>
+      <td className={cn(TD, "max-w-0")}>
+        <TruncateTooltip text={seller} />
+      </td>
+      <td className={cn(TD, "whitespace-nowrap")}>
+        <PurchaseInvoiceStatusCell row={r} compact />
+      </td>
+      <td className={cn(TD, "max-w-0 whitespace-nowrap")}>
+        <PurchaseAssociatedDocumentCell row={r} compact />
+      </td>
+      <td className={cn(TD, "text-right")}>
+        <PurchaseInvoiceScoreCell row={r} compact />
+      </td>
+      <td className={cn(TD, "text-right text-[11px] font-medium tabular-nums")}>
         {formatClp(Number(r.total_amount ?? 0))}
-      </TableCell>
-      <TableCell className="py-3">
+      </td>
+      <td className={cn(TD, "text-center")}>
         {geo ? (
           <Badge
             variant="outline"
-            className="border-emerald-200 bg-emerald-50 text-emerald-800 text-[10px] dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200"
+            className="border-emerald-200 bg-emerald-50 px-1 py-0 text-[9px] text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200"
           >
             OK
           </Badge>
         ) : (
           <Tooltip>
             <TooltipTrigger asChild>
-              <span className="inline-flex cursor-help">
-                <Badge variant="destructive" className="text-[10px]">
-                  Sin geo
-                </Badge>
-              </span>
+              <Badge
+                variant="destructive"
+                className="cursor-help px-1 py-0 text-[9px]"
+              >
+                No
+              </Badge>
             </TooltipTrigger>
-            <TooltipContent side="top" className="max-w-xs">
-              Este cliente no puede ser planificado
+            <TooltipContent side="top" className="text-xs">
+              Sin georreferencia
             </TooltipContent>
           </Tooltip>
         )}
-      </TableCell>
-      <TableCell className="max-w-[9rem] truncate py-3 text-xs text-muted-foreground">
-        {clusterLabel}
-      </TableCell>
-      <TableCell className="py-3">
-        <div className="flex min-w-[11rem] flex-col gap-1.5">
+      </td>
+      <td className={cn(TD, "max-w-0 text-[10px] text-muted-foreground")}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="block truncate">{clusterShort}</span>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="text-xs">
+            {clusterLabel}
+          </TooltipContent>
+        </Tooltip>
+      </td>
+      <td className={cn(TD, "max-w-0")}>
+        <div className="flex min-w-0 flex-col gap-0.5">
           {trucks.length === 0 ? (
-            <span className="text-xs text-muted-foreground">Sin camiones</span>
+            <span className="text-[10px] text-muted-foreground">—</span>
           ) : (
             <select
-              className="h-8 max-w-[16rem] rounded-md border border-input bg-background px-2 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+              className="h-7 w-full min-w-0 max-w-full truncate rounded border border-input bg-background px-1 text-[10px] shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
               value={
                 tid != null && trucks.some((x) => x.id === tid)
                   ? String(tid)
@@ -278,27 +306,19 @@ function PlanningTableRow({
               onChange={(e) => onTruckChange(r, e.target.value)}
               disabled={!geo}
               aria-label={`Camión OC ${r.oc ?? docId}`}
+              title={capLabel ?? undefined}
             >
-              <option value={TRUCK_UNSET}>Asignar</option>
+              <option value={TRUCK_UNSET}>—</option>
               {trucks.map((t) => (
                 <option key={t.id} value={t.id}>
-                  {t.name} ({t.plate})
+                  {t.name}
                 </option>
               ))}
             </select>
           )}
-          {capLabel && geo ? (
-            <Badge
-              variant="secondary"
-              className="w-fit max-w-[16rem] truncate text-[10px] font-normal"
-              title={capLabel}
-            >
-              {capLabel}
-            </Badge>
-          ) : null}
         </div>
-      </TableCell>
-    </TableRow>
+      </td>
+    </tr>
   )
 }
 
@@ -353,76 +373,63 @@ export function PreDespachoPlanningTable({
   }
 
   return (
-    <div className="relative max-h-[min(70vh,52rem)] overflow-auto rounded-lg border border-border/70 bg-card shadow-sm">
-      <Table>
-        <TableHeader className="sticky top-0 z-10 bg-card/95 shadow-[0_1px_0_0_hsl(var(--border))] backdrop-blur-sm">
-          <TableRow className="hover:bg-transparent">
-            <TableHead className="h-10 whitespace-nowrap text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Prioridad
-            </TableHead>
-            <TableHead className="h-10 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              OC
-            </TableHead>
-            <TableHead className="h-10 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Cliente
-            </TableHead>
-            <TableHead className="h-10 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Comuna
-            </TableHead>
-            <TableHead className="h-10 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Dirección
-            </TableHead>
-            <TableHead className="h-10 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Vendedor
-            </TableHead>
-            <TableHead className="h-10 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Estado
-            </TableHead>
-            <TableHead className="h-10 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Doc. asoc.
-            </TableHead>
-            <TableHead className="h-10 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Score
-            </TableHead>
-            <TableHead className="h-10 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Monto
-            </TableHead>
-            <TableHead className="h-10 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Georef
-            </TableHead>
-            <TableHead className="h-10 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Cluster
-            </TableHead>
-            <TableHead className="h-10 min-w-[12rem] text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Camión
-            </TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
+    <div className="relative w-full max-h-[min(72vh,56rem)] overflow-y-auto overflow-x-auto rounded-md border border-border/70 bg-card shadow-sm sm:overflow-x-hidden">
+      <table className="w-full min-w-[960px] table-fixed border-collapse sm:min-w-0">
+        <colgroup>
+          <col className="w-[4%]" />
+          <col className="w-[5%]" />
+          <col className="w-[11%]" />
+          <col className="w-[7%]" />
+          <col className="w-[13%]" />
+          <col className="w-[8%]" />
+          <col className="w-[7%]" />
+          <col className="w-[8%]" />
+          <col className="w-[4%]" />
+          <col className="w-[8%]" />
+          <col className="w-[4%]" />
+          <col className="w-[6%]" />
+          <col className="w-[15%]" />
+        </colgroup>
+        <thead className="sticky top-0 z-10 bg-card/98 shadow-[0_1px_0_0_hsl(var(--border))] backdrop-blur-sm">
+          <tr className="border-b border-border/80 hover:bg-transparent">
+            <th className={TH}>Prio</th>
+            <th className={TH}>OC</th>
+            <th className={TH}>Cliente</th>
+            <th className={TH}>Comuna</th>
+            <th className={TH}>Dirección</th>
+            <th className={TH}>Vendedor</th>
+            <th className={TH}>Estado</th>
+            <th className={TH}>Doc.</th>
+            <th className={cn(TH, "text-right")}>Sc</th>
+            <th className={cn(TH, "text-right")}>Monto</th>
+            <th className={cn(TH, "text-center")}>Geo</th>
+            <th className={TH}>Clust.</th>
+            <th className={TH}>Camión</th>
+          </tr>
+        </thead>
+        <tbody>
           {loading ? (
-            <TableRow>
-              <TableCell
+            <tr>
+              <td
                 colSpan={13}
-                className="py-16 text-center text-sm text-muted-foreground"
+                className="px-2 py-12 text-center text-xs text-muted-foreground"
               >
                 Cargando órdenes…
-              </TableCell>
-            </TableRow>
+              </td>
+            </tr>
           ) : (
             blocks.map((block) => (
               <Fragment key={block.key}>
                 {groupByMunicipality && block.key !== "_all" ? (
-                  <TableRow className="bg-muted/60 hover:bg-muted/60">
-                    <TableCell colSpan={13} className="py-2.5">
-                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                        <div>
-                          <span className="text-sm font-semibold">
-                            {block.key}
+                  <tr className="bg-muted/50 hover:bg-muted/50">
+                    <td colSpan={13} className="px-2 py-1.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-xs font-semibold">
+                          {block.key}
+                          <span className="ml-2 font-normal text-muted-foreground">
+                            {block.rows.length} ped. · {formatClp(block.total)}
                           </span>
-                          <span className="ml-2 text-xs text-muted-foreground">
-                            {block.rows.length} pedidos · {formatClp(block.total)}
-                          </span>
-                        </div>
+                        </span>
                         <GroupTruckAssignMenu
                           municipalityLabel={block.key}
                           groupRows={block.rows}
@@ -434,8 +441,8 @@ export function PreDespachoPlanningTable({
                           }
                         />
                       </div>
-                    </TableCell>
-                  </TableRow>
+                    </td>
+                  </tr>
                 ) : null}
                 {block.rows.map((r) => (
                   <PlanningTableRow
@@ -451,8 +458,8 @@ export function PreDespachoPlanningTable({
               </Fragment>
             ))
           )}
-        </TableBody>
-      </Table>
+        </tbody>
+      </table>
     </div>
   )
 }

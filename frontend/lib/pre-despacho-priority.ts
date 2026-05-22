@@ -89,6 +89,18 @@ export function priorityLabel(flag: PreDespachoPriorityFlag): string {
   }
 }
 
+/** Etiqueta corta para tabla compacta (solo UI). */
+export function priorityShortLabel(flag: PreDespachoPriorityFlag): string {
+  switch (flag) {
+    case "recent":
+      return "Rec."
+    case "high_amount":
+      return "Alto $"
+    case "stale_pending":
+      return "Ant."
+  }
+}
+
 export function priorityBadgeClass(flag: PreDespachoPriorityFlag): string {
   switch (flag) {
     case "recent":

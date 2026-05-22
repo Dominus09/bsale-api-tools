@@ -18,15 +18,17 @@ Documentación de la simplificación del sidebar del módulo **Distribuidora** e
 | Pre‑planif. despacho | `/distribuidora/pre-planificacion` | Paso intermedio; flujo consolidado en pre-despacho y ORS |
 | Planificación | `/distribuidora/planning` | Duplicado conceptual con **Planif. mapa ORS** (`/distribuidora/planificacion`) |
 
-### Ocultos adicionales (misma fase, foco operacional)
+### Restaurados (bugfix UI — operación vendedores)
 
-No estaban en la lista explícita de eliminación del brief, pero se ocultaron para evitar scroll y ruido en un menú de 4 ítems:
+Estos ítems se habían ocultado por error en la fase 1; **vuelven al menú** por ser herramientas operativas en uso:
 
-| Etiqueta | Ruta | Notas |
-|----------|------|--------|
-| Mapa rutero | `/distribuidora/mapa` | Visualización geográfica; acceso directo por URL |
-| Resumen vendedor | `/distribuidora/resumen-vendedor` | Informe por vendedor; no flujo OC/ORS |
-| Rutero | `/distribuidora/rutero` | Legacy / pendientes redirigen aquí |
+| Etiqueta | Ruta |
+|----------|------|
+| Rutero vendedores | `/distribuidora/rutero` |
+| Mapa rutero | `/distribuidora/mapa` |
+| Resumen vendedor | `/distribuidora/resumen-vendedor` |
+
+La sección **Operaciones** (`/operaciones/*`) no se modificó en la fase 1.
 
 ---
 
@@ -38,6 +40,9 @@ No estaban en la lista explícita de eliminación del brief, pero se ocultaron p
 | Órdenes de compra | `/distribuidora/ordenes-compra` | Entrada del flujo: OC desde proveedor |
 | Pre‑despacho OC | `/distribuidora/orders` | Preparación de despacho sobre OC |
 | Planif. mapa ORS | `/distribuidora/planificacion` | Planificación operativa en mapa (ORS) |
+| Rutero vendedores | `/distribuidora/rutero` | Operación diaria de rutas por vendedor |
+| Mapa rutero | `/distribuidora/mapa` | Vista geográfica del rutero |
+| Resumen vendedor | `/distribuidora/resumen-vendedor` | Resumen operativo por vendedor |
 
 Iconografía: **Órdenes de compra** (`ShoppingCart`) y **Pre‑despacho OC** (`PackageCheck`) para distinguir pasos del mismo flujo.
 
@@ -46,7 +51,7 @@ Iconografía: **Órdenes de compra** (`ShoppingCart`) y **Pre‑despacho OC** (`
 ## Rationale UX
 
 1. **Foco operacional** — El ERP en Distribuidora se usa hoy para el circuito OC → pre-despacho → planificación ORS. Mostrar módulos incompletos o poco usados genera fricción y sensación de producto “a medias”.
-2. **Menú minimalista** — Cuatro entradas caben sin scroll en viewport estándar; la sección Distribuidora se lee de un vistazo.
+2. **Menú minimalista** — Siete entradas (despacho OC + rutero/vendedores); sin módulos de cartera ni planificación legacy en el menú.
 3. **Sin deuda técnica** — Ocultar en `navSections` no borra código: equipos pueden seguir probando rutas, bookmarks y links internos en páginas.
 4. **Estados visuales** — Activo con `bg-primary/10` y texto primario (sin bloque sólido ni chevron); hover `muted/70` con transición 150ms; padding uniforme `px-3 py-2.5`; iconos 18px alineados; submenú con borde izquierdo más definido y `space-y-0.5`.
 
@@ -63,7 +68,6 @@ Cuando estén maduros o con demanda operativa, candidatos a volver al menú (ord
 | Análisis despacho | `/distribuidora/dispatch-analysis` | KPIs de cumplimiento estables |
 | Pre‑planif. despacho | `/distribuidora/pre-planificacion` | Si el paso vuelve a ser obligatorio antes de ORS |
 | Planificación (legacy) | `/distribuidora/planning` | Solo si diverge de `planificacion` y ambos coexisten |
-| Mapa rutero / Rutero / Resumen vendedor | `/distribuidora/mapa`, `rutero`, `resumen-vendedor` | Operaciones de campo y supervisión en ruta |
 
 **Implementación futura:** añadir de nuevo entradas en el array `items` de la sección `"Distribuidora"` en `sidebar.tsx`, o introducir flag por rol (`hidden?: boolean` / feature flags) sin tocar rutas.
 

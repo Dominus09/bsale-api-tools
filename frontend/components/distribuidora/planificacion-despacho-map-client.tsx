@@ -28,10 +28,17 @@ export type PlanificacionMapRoute = {
   stops: PlanificacionMapStop[]
 }
 
-function FitBoundsInner({ routes }: { routes: PlanificacionMapRoute[] }) {
+function FitBoundsInner({
+  routes,
+  depot,
+}: {
+  routes: PlanificacionMapRoute[]
+  depot?: { lat: number; lng: number } | null
+}) {
   const map = useMap()
   useEffect(() => {
     const pts: L.LatLngExpression[] = []
+    if (depot) pts.push([depot.lat, depot.lng])
     for (const r of routes) {
       for (const [lat, lng] of r.positions) pts.push([lat, lng])
       for (const s of r.stops) pts.push([s.lat, s.lng])
@@ -42,7 +49,7 @@ function FitBoundsInner({ routes }: { routes: PlanificacionMapRoute[] }) {
       return
     }
     map.fitBounds(L.latLngBounds(pts as L.LatLngTuple[]), { padding: [40, 40], maxZoom: 14 })
-  }, [map, routes])
+  }, [map, routes, depot])
   return null
 }
 
@@ -61,16 +68,28 @@ const DEFAULT_CENTER: [number, number] = [-33.0, -71.5]
 
 type PlanificacionDespachoMapClientProps = {
   routes: PlanificacionMapRoute[]
+  depot?: { lat: number; lng: number } | null
   className?: string
   highlightedStopKey?: string | null
 }
 
+function depotIcon() {
+  return L.divIcon({
+    className: "planificacion-depot-marker-wrap",
+    html: `<div style="width:28px;height:28px;border-radius:4px;background:#1e293b;color:#fff;font:700 9px/28px system-ui,sans-serif;text-align:center;border:2.5px solid #f8fafc;box-shadow:0 2px 8px rgba(0,0,0,.45)">BD</div>`,
+    iconSize: [28, 28],
+    iconAnchor: [14, 14],
+  })
+}
+
 export function PlanificacionDespachoMapClient({
   routes,
+  depot,
   className,
   highlightedStopKey,
 }: PlanificacionDespachoMapClientProps) {
   const center = useMemo((): [number, number] => {
+    if (depot) return [depot.lat, depot.lng]
     for (const r of routes) {
       const s0 = r.stops[0]
       if (s0) return [s0.lat, s0.lng]
@@ -78,7 +97,7 @@ export function PlanificacionDespachoMapClient({
       if (p0) return p0
     }
     return DEFAULT_CENTER
-  }, [routes])
+  }, [routes, depot])
 
   return (
     <div
@@ -97,7 +116,15 @@ export function PlanificacionDespachoMapClient({
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
           url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
         />
-        <FitBoundsInner routes={routes} />
+        <FitBoundsInner routes={routes} depot={depot} />
+        {depot ? (
+          <Marker position={[depot.lat, depot.lng]} icon={depotIcon()} zIndexOffset={2000}>
+            <Tooltip direction="top" opacity={1}>
+              <span className="text-xs font-semibold">Bodega</span>
+              <span className="block text-[10px] opacity-80">Inicio y fin de ruta</span>
+            </Tooltip>
+          </Marker>
+        ) : null}
         {routes.map((r) => (
           <Polyline
             key={r.camion}

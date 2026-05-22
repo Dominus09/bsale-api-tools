@@ -9,20 +9,26 @@ import { PurchaseInvoiceStatusBadge } from "@/components/distribuidora/orders/Pu
 
 export function PurchaseInvoiceStatusCell({
   row,
+  compact,
 }: {
   row: PurchaseInvoiceStatusFields
+  compact?: boolean
 }) {
-  return <PurchaseInvoiceStatusBadge row={row} />
+  return <PurchaseInvoiceStatusBadge row={row} compact={compact} />
 }
 
 export function PurchaseAssociatedDocumentCell({
   row,
+  compact,
 }: {
   row: PurchaseInvoiceStatusFields
+  compact?: boolean
 }) {
   const label = associatedDocumentLabel(row)
   return (
-    <span className="text-sm tabular-nums">
+    <span
+      className={compact ? "text-[10px] tabular-nums" : "text-sm tabular-nums"}
+    >
       {label ?? "—"}
     </span>
   )
@@ -30,12 +36,20 @@ export function PurchaseAssociatedDocumentCell({
 
 export function PurchaseInvoiceScoreCell({
   row,
+  compact,
 }: {
   row: PurchaseInvoiceStatusFields
+  compact?: boolean
 }) {
   const score = displayScoreValue(row)
   return (
-    <span className="text-sm tabular-nums text-muted-foreground">
+    <span
+      className={
+        compact
+          ? "text-[10px] tabular-nums text-muted-foreground"
+          : "text-sm tabular-nums text-muted-foreground"
+      }
+    >
       {score != null ? String(score) : "—"}
     </span>
   )

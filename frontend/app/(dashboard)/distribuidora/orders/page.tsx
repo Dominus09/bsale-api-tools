@@ -678,7 +678,7 @@ export default function DistribuidoraOrdersPage() {
   }, [loadDispatchPrep])
 
   return (
-    <div className="mx-auto flex max-w-[1400px] flex-col gap-6 p-4 pb-16 md:p-6">
+    <div className="-m-6 flex w-full max-w-none flex-col gap-4 px-3 pb-12 md:px-4">
       <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border/60 pb-4">
         <div className="space-y-1">
           <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
@@ -860,12 +860,12 @@ export default function DistribuidoraOrdersPage() {
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_min(20rem,100%)] lg:items-start">
-        <section className="min-w-0 space-y-3">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+      <div className="grid w-full gap-3 xl:grid-cols-2">
+        <section className="min-w-0 space-y-2">
+          <h2 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
             Por comuna
           </h2>
-          <div className="overflow-x-auto rounded-xl border border-border/50 bg-background/80">
+          <div className="overflow-x-auto rounded-md border border-border/60 bg-background/80">
             <table className="w-full min-w-[28rem] border-collapse text-sm">
               <thead>
                 <tr className="text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -920,8 +920,8 @@ export default function DistribuidoraOrdersPage() {
           </div>
         </section>
 
-        <aside className="space-y-3 rounded-xl border border-border/50 bg-muted/20 p-5">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+        <aside className="space-y-2 rounded-md border border-border/60 bg-muted/15 p-3">
+          <h2 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
             Observaciones
           </h2>
           <p className="text-xs leading-relaxed text-muted-foreground">
@@ -984,7 +984,7 @@ export default function DistribuidoraOrdersPage() {
 
       <TooltipProvider delayDuration={200}>
         <section
-          className="space-y-4 rounded-lg border border-border/70 bg-card p-4 shadow-sm md:p-5"
+          className="w-full min-w-0 space-y-3 rounded-md border border-border/70 bg-card p-3 shadow-sm"
           data-route-stubs={routeStubsPreview.length}
         >
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -1066,7 +1066,7 @@ export default function DistribuidoraOrdersPage() {
               </Label>
             </div>
           </div>
-          <div className="grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-1.5 text-xs sm:grid-cols-2 lg:grid-cols-4">
             <div className="flex justify-between rounded-md border border-border/50 bg-background/80 px-3 py-2">
               <span className="text-muted-foreground">Camiones usados</span>
               <strong className="tabular-nums">{logisticsKpis.trucksUsed}</strong>

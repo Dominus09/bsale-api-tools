@@ -1,9 +1,10 @@
 "use client"
 
 import { useMemo, useState } from "react"
-import { Clock, MapPin, Route, ScrollText } from "lucide-react"
+import { Clock, MapPin, Route, ScrollText, Users } from "lucide-react"
 
 import type { OrsVisitRow } from "@/lib/ors-map-ui"
+import { formatClp } from "@/lib/ors-map-ui"
 import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -16,19 +17,39 @@ import {
 
 type RouteLegStats = {
   camion: string
+  truck_name?: string | null
   distance_km: number
   duration_min: number
+  km_per_liter_used?: number
+  liters_estimated?: number
+  fuel_cost_clp?: number
+  crew_cost_clp?: number
+  driver_count?: number
+  assistant_count?: number
+  driver_cost_clp?: number
+  assistant_cost_clp?: number
+  total_cost_clp?: number
 }
+
+const CREW_COUNT_OPTIONS = [0, 1, 2, 3, 4, 5] as const
 
 type OrsClientPanelProps = {
   visits: OrsVisitRow[]
   routeStats: RouteLegStats[]
   kmTotal: number
   durationMin: number
+  litersTotal: number
+  fuelCostTotal: number
+  crewCostTotal?: number
+  routeCostTotal?: number
+  dieselPricePerLiter?: number
+  driverRatePerTrip?: number
+  assistantRatePerTrip?: number
   truckOptions: string[]
   loading?: boolean
   selectedVisitId?: number | null
   onSelectVisit?: (documentId: number) => void
+  onCrewChange?: (camion: string, driverCount: number, assistantCount: number) => void
 }
 
 function ClientCard({
@@ -84,10 +105,18 @@ export function OrsClientPanel({
   routeStats,
   kmTotal,
   durationMin,
+  litersTotal,
+  fuelCostTotal,
+  crewCostTotal = 0,
+  routeCostTotal,
+  dieselPricePerLiter,
+  driverRatePerTrip,
+  assistantRatePerTrip,
   truckOptions,
   loading,
   selectedVisitId,
   onSelectVisit,
+  onCrewChange,
 }: OrsClientPanelProps) {
   const [truckFilter, setTruckFilter] = useState<string>("__all__")
 
@@ -107,6 +136,31 @@ export function OrsClientPanel({
     const r = routeStats.find((x) => x.camion === truckFilter)
     return r?.duration_min ?? 0
   }, [truckFilter, durationMin, routeStats])
+
+  const activeLeg = useMemo(
+    () =>
+      truckFilter === "__all__"
+        ? null
+        : routeStats.find((x) => x.camion === truckFilter) ?? null,
+    [truckFilter, routeStats],
+  )
+
+  const panelKpl = activeLeg?.km_per_liter_used
+  const panelLiters =
+    truckFilter === "__all__" ? litersTotal : (activeLeg?.liters_estimated ?? 0)
+  const panelFuel =
+    truckFilter === "__all__" ? fuelCostTotal : (activeLeg?.fuel_cost_clp ?? 0)
+  const panelCrew =
+    truckFilter === "__all__" ? crewCostTotal : (activeLeg?.crew_cost_clp ?? 0)
+  const panelTotal =
+    truckFilter === "__all__"
+      ? (routeCostTotal ?? fuelCostTotal + crewCostTotal)
+      : (activeLeg?.total_cost_clp ?? panelFuel + panelCrew)
+
+  const panelDriverCount = activeLeg?.driver_count ?? 1
+  const panelAssistantCount = activeLeg?.assistant_count ?? 0
+  const panelDriverRate = activeLeg?.driver_cost_clp ?? driverRatePerTrip
+  const panelAssistantRate = activeLeg?.assistant_cost_clp ?? assistantRatePerTrip
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-muted/15">
@@ -137,6 +191,11 @@ export function OrsClientPanel({
               </SelectContent>
             </Select>
 
+            {activeLeg?.truck_name ? (
+              <p className="text-[11px] text-muted-foreground">
+                Unidad: <span className="font-medium text-foreground">{activeLeg.truck_name}</span>
+              </p>
+            ) : null}
             <dl className="grid grid-cols-2 gap-2 text-xs">
               <div className="rounded-md border border-border/60 bg-background/80 px-2.5 py-2">
                 <dt className="text-muted-foreground">Kilómetros</dt>
@@ -148,6 +207,103 @@ export function OrsClientPanel({
                 <dt className="text-muted-foreground">Tiempo est.</dt>
                 <dd className="font-semibold tabular-nums text-foreground">
                   {Math.round(panelMin)} min
+                </dd>
+              </div>
+              <div className="rounded-md border border-border/60 bg-background/80 px-2.5 py-2">
+                <dt className="text-muted-foreground">Rendimiento</dt>
+                <dd className="font-semibold tabular-nums text-foreground">
+                  {panelKpl != null ? `${panelKpl.toFixed(1)} km/L` : "—"}
+                </dd>
+              </div>
+              <div className="rounded-md border border-border/60 bg-background/80 px-2.5 py-2">
+                <dt className="text-muted-foreground">Litros est.</dt>
+                <dd className="font-semibold tabular-nums text-foreground">
+                  {panelLiters.toFixed(1)} L
+                </dd>
+              </div>
+              <div className="col-span-2 rounded-md border border-primary/20 bg-primary/5 px-2.5 py-2">
+                <dt className="text-muted-foreground">Costo combustible</dt>
+                <dd className="text-sm font-semibold tabular-nums text-foreground">
+                  {formatClp(panelFuel)}
+                </dd>
+                {dieselPricePerLiter != null && panelKpl != null ? (
+                  <dd className="mt-0.5 text-[10px] text-muted-foreground">
+                    {panelKm.toFixed(1)} km ÷ {panelKpl.toFixed(1)} km/L ×{" "}
+                    {Math.round(dieselPricePerLiter).toLocaleString("es-CL")} CLP/L
+                  </dd>
+                ) : null}
+              </div>
+
+              {truckFilter !== "__all__" && onCrewChange ? (
+                <div className="col-span-2 space-y-2 rounded-md border border-border/70 bg-background/90 px-2.5 py-2.5">
+                  <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                    <Users className="size-3.5 text-primary" aria-hidden />
+                    Personal por vuelta
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="space-y-1">
+                      <span className="text-[10px] text-muted-foreground">Choferes</span>
+                      <Select
+                        value={String(panelDriverCount)}
+                        onValueChange={(v) =>
+                          onCrewChange(truckFilter, Number(v), panelAssistantCount)
+                        }
+                      >
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {CREW_COUNT_OPTIONS.map((n) => (
+                            <SelectItem key={`d-${n}`} value={String(n)}>
+                              {n}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </label>
+                    <label className="space-y-1">
+                      <span className="text-[10px] text-muted-foreground">Peonetas</span>
+                      <Select
+                        value={String(panelAssistantCount)}
+                        onValueChange={(v) =>
+                          onCrewChange(truckFilter, panelDriverCount, Number(v))
+                        }
+                      >
+                        <SelectTrigger className="h-8 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {CREW_COUNT_OPTIONS.map((n) => (
+                            <SelectItem key={`a-${n}`} value={String(n)}>
+                              {n}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </label>
+                  </div>
+                  {panelDriverRate != null && panelAssistantRate != null ? (
+                    <p className="text-[10px] leading-snug text-muted-foreground">
+                      {panelDriverCount}×{formatClp(panelDriverRate)} + {panelAssistantCount}×
+                      {formatClp(panelAssistantRate)}
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+
+              <div className="rounded-md border border-border/60 bg-background/80 px-2.5 py-2">
+                <dt className="text-muted-foreground">Subtotal personal</dt>
+                <dd className="font-semibold tabular-nums text-foreground">
+                  {formatClp(panelCrew)}
+                </dd>
+              </div>
+              <div className="rounded-md border border-emerald-500/25 bg-emerald-500/5 px-2.5 py-2">
+                <dt className="text-muted-foreground">Total ruta</dt>
+                <dd className="text-sm font-semibold tabular-nums text-foreground">
+                  {formatClp(panelTotal)}
+                </dd>
+                <dd className="mt-0.5 text-[10px] text-muted-foreground">
+                  Combustible + personal
                 </dd>
               </div>
             </dl>

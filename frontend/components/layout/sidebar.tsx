@@ -25,6 +25,8 @@ import {
   ScrollText,
   Store,
   MapPin,
+  Route,
+  CalendarDays,
   ChevronsLeft,
   ChevronsRight,
   Percent,
@@ -81,6 +83,13 @@ const navSections: { title: string; items: NavItem[] }[] = [
       { href: "/distribuidora/ordenes-compra", label: "Órdenes de compra", icon: ShoppingCart },
       { href: "/distribuidora/orders", label: "Pre‑despacho OC", icon: PackageCheck },
       { href: "/distribuidora/planificacion", label: "Planif. mapa ORS", icon: MapPin },
+      { href: "/distribuidora/rutero", label: "Rutero vendedores", icon: Route },
+      { href: "/distribuidora/mapa", label: "Mapa rutero", icon: MapPin },
+      {
+        href: "/distribuidora/resumen-vendedor",
+        label: "Resumen vendedor",
+        icon: CalendarDays,
+      },
     ],
   },
   {

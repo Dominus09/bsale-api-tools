@@ -8,9 +8,25 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from backend.routers.distribuidora import _ors_route_merge_chunks
 from backend.services.distribuidora.dispatch_planning_list_service import (
     list_dispatch_planning_orders,
+)
+from backend.services.distribuidora.logistics_cost_service import (
+    crew_config_as_dict,
+    get_logistics_cost_settings,
+    update_logistics_cost_settings,
+)
+from backend.services.distribuidora.planificacion_ors_service import (
+    BODEGA_LAT,
+    BODEGA_LNG,
+    compute_planificacion_ors_routes,
+    depot_base,
+    get_plan_route_crew,
+    save_plan_route_crew,
+)
+from backend.services.distribuidora.system_config_service import (
+    get_diesel_price_per_liter,
+    set_diesel_price_per_liter,
 )
 
 router = APIRouter(prefix="/distribuidora/planificacion", tags=["Distribuidora planificación despacho"])
@@ -33,57 +49,153 @@ def get_planificacion_orders(
     return {"items": items}
 
 
+@router.get("/fuel-config")
+def get_fuel_config():
+    clp = get_diesel_price_per_liter()
+    d = depot_base()
+    return {
+        "diesel_price_per_liter": round(clp, 2),
+        "depot": {"lat": d["lat"], "lng": d["lon"]},
+    }
+
+
+class FuelConfigBody(BaseModel):
+    diesel_price_per_liter: float = Field(..., gt=0, description="CLP por litro diesel")
+
+
+@router.put("/fuel-config")
+def put_fuel_config(body: FuelConfigBody):
+    try:
+        clp = set_diesel_price_per_liter(body.diesel_price_per_liter)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    d = depot_base()
+    return {
+        "diesel_price_per_liter": round(clp, 2),
+        "depot": {"lat": d["lat"], "lng": d["lon"]},
+    }
+
+
+@router.get("/crew-config")
+def get_crew_config():
+    """Tarifas base chofer/peoneta por vuelta (system_config)."""
+    return crew_config_as_dict(get_logistics_cost_settings())
+
+
+class CrewConfigBody(BaseModel):
+    driver_cost_clp_per_trip: int | None = Field(None, ge=0)
+    assistant_cost_clp_per_trip: int | None = Field(None, ge=0)
+
+
+@router.put("/crew-config")
+def put_crew_config(body: CrewConfigBody):
+    patch: dict[str, Any] = {}
+    if body.driver_cost_clp_per_trip is not None:
+        patch["driver_cost_clp_per_trip"] = body.driver_cost_clp_per_trip
+    if body.assistant_cost_clp_per_trip is not None:
+        patch["assistant_cost_clp_per_trip"] = body.assistant_cost_clp_per_trip
+    if not patch:
+        raise HTTPException(status_code=400, detail="Indique al menos una tarifa.")
+    settings = update_logistics_cost_settings(patch)
+    return crew_config_as_dict(settings)
+
+
+class OrsStopInput(BaseModel):
+    document_id: int
+    lat: float
+    lng: float
+
+
 class OrsRouteInput(BaseModel):
     camion: str = Field(..., min_length=1, max_length=64)
-    coordinates: list[list[float]] = Field(
-        ...,
-        description="Secuencia [lon, lat] en orden de visita (mínimo 2 puntos distintos).",
+    truck_id: int | None = None
+    stops: list[OrsStopInput] = Field(..., min_length=1)
+    driver_count: int | None = Field(None, ge=0, le=10)
+    assistant_count: int | None = Field(None, ge=0, le=10)
+    coordinates: list[list[float]] | None = Field(
+        default=None,
+        description="Legacy: ignorado si hay stops; use stops para optimización con bodega.",
     )
 
 
 class OrsRoutesRequestBody(BaseModel):
     routes: list[OrsRouteInput] = Field(..., min_length=1, max_length=10)
+    plan_session_id: str | None = Field(
+        None,
+        min_length=8,
+        max_length=64,
+        description="Id de sesión para persistir dotación por camión.",
+    )
 
 
-def _dedupe_adjacent_coords(coords: list[list[float]]) -> list[list[float]]:
-    out: list[list[float]] = []
-    for p in coords:
-        if len(p) < 2:
-            continue
-        lon, lat = float(p[0]), float(p[1])
-        if out and abs(out[-1][0] - lon) < 1e-7 and abs(out[-1][1] - lat) < 1e-7:
-            continue
-        out.append([lon, lat])
+def _leg_to_service_dict(leg: OrsRouteInput) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "camion": leg.camion,
+        "truck_id": leg.truck_id,
+        "stops": [
+            {"document_id": s.document_id, "lat": s.lat, "lng": s.lng}
+            for s in leg.stops
+        ],
+    }
+    if leg.driver_count is not None:
+        out["driver_count"] = leg.driver_count
+    if leg.assistant_count is not None:
+        out["assistant_count"] = leg.assistant_count
     return out
 
 
 @router.post("/ors-routes")
 def post_planificacion_ors_routes(body: OrsRoutesRequestBody):
     """
-    Calcula geometría y métricas ORS por camión (misma lógica de troceo que el mapa rutero).
+    Ruta cerrada BODEGA → clientes (orden optimizado) → BODEGA.
+    Métricas ORS reales + litros/costo según ``trucks.km_per_liter``, diesel y personal.
     """
-    out_routes: list[dict[str, Any]] = []
-    for leg in body.routes:
-        coords = _dedupe_adjacent_coords(leg.coordinates)
-        if len(coords) < 2:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Camión {leg.camion!r}: se requieren al menos 2 coordenadas distintas.",
-            )
-        merged = _ors_route_merge_chunks(coords, None)
-        if merged is None:
-            raise HTTPException(
-                status_code=502,
-                detail=f"No se pudo calcular la ruta ORS para {leg.camion!r}.",
-            )
-        geometry, km, mins = merged
-        out_routes.append(
-            {
-                "camion": leg.camion,
-                "distance_km": round(float(km), 3),
-                "duration_min": round(float(mins), 2),
-                "geometry": geometry,
-                "coordinates": coords,
-            }
+    legs = [_leg_to_service_dict(leg) for leg in body.routes]
+    result = compute_planificacion_ors_routes(
+        legs,
+        plan_session_id=body.plan_session_id,
+        persist_crew=bool(body.plan_session_id),
+    )
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=502,
+            detail=result.get("error") or "Error ORS",
         )
-    return {"routes": out_routes}
+    depot = result.get("depot") or depot_base()
+    return {
+        "routes": result["routes"],
+        "depot": {
+            "lat": float(depot.get("lat", BODEGA_LAT)),
+            "lng": float(depot.get("lon", depot.get("lng", BODEGA_LNG))),
+        },
+        "diesel_price_per_liter": result.get("diesel_price_per_liter"),
+        "crew_defaults": result.get("crew_defaults"),
+        "totals": result.get("totals"),
+    }
+
+
+class RouteCrewRow(BaseModel):
+    camion: str = Field(..., min_length=1, max_length=64)
+    truck_id: int | None = None
+    driver_count: int = Field(1, ge=0, le=10)
+    assistant_count: int = Field(0, ge=0, le=10)
+    driver_cost_clp: int | None = Field(None, ge=0)
+    assistant_cost_clp: int | None = Field(None, ge=0)
+
+
+class RouteCrewSaveBody(BaseModel):
+    plan_session_id: str = Field(..., min_length=8, max_length=64)
+    routes: list[RouteCrewRow] = Field(..., min_length=0, max_length=10)
+
+
+@router.get("/route-crew")
+def get_route_crew(plan_session_id: str = Query(..., min_length=8, max_length=64)):
+    return get_plan_route_crew(plan_session_id.strip())
+
+
+@router.put("/route-crew")
+def put_route_crew(body: RouteCrewSaveBody):
+    return save_plan_route_crew(
+        body.plan_session_id.strip(),
+        [r.model_dump() for r in body.routes],
+    )

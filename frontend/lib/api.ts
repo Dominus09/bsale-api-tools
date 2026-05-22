@@ -1034,6 +1034,8 @@ export type DistribuidoraTruck = {
   name: string
   plate: string
   max_weight_kg: number
+  km_per_liter?: number
+  fuel_type?: string
 }
 
 export function distribuidoraTruckCapacityLabel(
@@ -1477,29 +1479,212 @@ export async function getDistribuidoraPlanificacionOrders(params: {
   return res.json() as Promise<{ items: DistribuidoraPlanificacionOrderRow[] }>
 }
 
+export type OrsStopOrdered = {
+  document_id: number
+  stop_index: number
+  lat: number
+  lng: number
+}
+
+export type OrsRouteCostBreakdown = {
+  fuel_clp: number
+  ferry_clp: number
+  toll_clp: number
+  driver_clp: number
+  crew_clp?: number
+  bonus_clp?: number
+  per_diem_clp?: number
+  lodging_clp?: number
+  total_clp: number
+}
+
 export type DistribuidoraPlanificacionOrsRoute = {
   camion: string
+  truck_id?: number | null
+  truck_name?: string | null
   distance_km: number
   duration_min: number
   geometry: { type: string; coordinates: number[][] }
   coordinates: number[][]
+  stops_ordered?: OrsStopOrdered[]
+  liters_estimated?: number
+  fuel_cost_clp?: number
+  km_per_liter_used?: number
+  fuel_type?: string
+  driver_count?: number
+  assistant_count?: number
+  driver_cost_clp?: number
+  assistant_cost_clp?: number
+  crew_cost_clp?: number
+  cost_breakdown?: OrsRouteCostBreakdown
+  includes_depot_return?: boolean
+}
+
+export type DistribuidoraPlanificacionOrsTotals = {
+  distance_km: number
+  duration_min: number
+  liters_estimated: number
+  fuel_cost_clp: number
+  crew_cost_clp?: number
+  total_cost_clp?: number
+}
+
+export type DistribuidoraPlanificacionCrewDefaults = {
+  driver_cost_clp_per_trip: number
+  assistant_cost_clp_per_trip: number
+  bonus_clp_per_route?: number
+  per_diem_clp_per_day?: number
+  lodging_clp_per_night?: number
+  enabled_modules?: string[]
+}
+
+export type DistribuidoraPlanificacionOrsResponse = {
+  routes: DistribuidoraPlanificacionOrsRoute[]
+  depot: { lat: number; lng: number }
+  diesel_price_per_liter: number
+  crew_defaults?: DistribuidoraPlanificacionCrewDefaults
+  totals: DistribuidoraPlanificacionOrsTotals
+}
+
+export async function getDistribuidoraPlanificacionFuelConfig(params?: {
+  signal?: AbortSignal
+}): Promise<{ diesel_price_per_liter: number; depot: { lat: number; lng: number } }> {
+  const res = await fetch(`${API_URL}/distribuidora/planificacion/fuel-config`, {
+    headers: getAuthHeaders(),
+    signal: params?.signal,
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar configuración combustible")
+  }
+  return res.json() as Promise<{
+    diesel_price_per_liter: number
+    depot: { lat: number; lng: number }
+  }>
+}
+
+export async function putDistribuidoraPlanificacionFuelConfig(
+  diesel_price_per_liter: number,
+  params?: { signal?: AbortSignal },
+): Promise<{ diesel_price_per_liter: number; depot: { lat: number; lng: number } }> {
+  const res = await fetch(`${API_URL}/distribuidora/planificacion/fuel-config`, {
+    method: "PUT",
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ diesel_price_per_liter }),
+    signal: params?.signal,
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al guardar configuración combustible")
+  }
+  return res.json() as Promise<{
+    diesel_price_per_liter: number
+    depot: { lat: number; lng: number }
+  }>
+}
+
+export async function getDistribuidoraPlanificacionCrewConfig(params?: {
+  signal?: AbortSignal
+}): Promise<DistribuidoraPlanificacionCrewDefaults> {
+  const res = await fetch(`${API_URL}/distribuidora/planificacion/crew-config`, {
+    headers: getAuthHeaders(),
+    signal: params?.signal,
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar tarifas de personal")
+  }
+  return res.json() as Promise<DistribuidoraPlanificacionCrewDefaults>
+}
+
+export type PlanificacionRouteCrewRow = {
+  camion: string
+  truck_id?: number | null
+  driver_count: number
+  assistant_count: number
+  driver_cost_clp?: number
+  assistant_cost_clp?: number
+}
+
+export async function getDistribuidoraPlanificacionRouteCrew(params: {
+  planSessionId: string
+  signal?: AbortSignal
+}): Promise<{
+  plan_session_id: string
+  routes: PlanificacionRouteCrewRow[]
+  defaults: DistribuidoraPlanificacionCrewDefaults
+}> {
+  const qs = new URLSearchParams({ plan_session_id: params.planSessionId })
+  const res = await fetch(
+    `${API_URL}/distribuidora/planificacion/route-crew?${qs}`,
+    { headers: getAuthHeaders(), signal: params.signal },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar dotación de rutas")
+  }
+  return res.json() as Promise<{
+    plan_session_id: string
+    routes: PlanificacionRouteCrewRow[]
+    defaults: DistribuidoraPlanificacionCrewDefaults
+  }>
+}
+
+export async function putDistribuidoraPlanificacionRouteCrew(params: {
+  planSessionId: string
+  routes: PlanificacionRouteCrewRow[]
+  signal?: AbortSignal
+}): Promise<{
+  plan_session_id: string
+  routes: PlanificacionRouteCrewRow[]
+  defaults: DistribuidoraPlanificacionCrewDefaults
+}> {
+  const res = await fetch(`${API_URL}/distribuidora/planificacion/route-crew`, {
+    method: "PUT",
+    headers: getAuthHeaders(),
+    body: JSON.stringify({
+      plan_session_id: params.planSessionId,
+      routes: params.routes,
+    }),
+    signal: params.signal,
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al guardar dotación de rutas")
+  }
+  return res.json() as Promise<{
+    plan_session_id: string
+    routes: PlanificacionRouteCrewRow[]
+    defaults: DistribuidoraPlanificacionCrewDefaults
+  }>
 }
 
 export async function postDistribuidoraPlanificacionOrsRoutes(params: {
-  routes: { camion: string; coordinates: number[][] }[]
+  planSessionId?: string | null
+  routes: {
+    camion: string
+    truck_id?: number | null
+    driver_count?: number
+    assistant_count?: number
+    stops: { document_id: number; lat: number; lng: number }[]
+  }[]
   signal?: AbortSignal
-}): Promise<{ routes: DistribuidoraPlanificacionOrsRoute[] }> {
+}): Promise<DistribuidoraPlanificacionOrsResponse> {
+  const body: Record<string, unknown> = { routes: params.routes }
+  if (params.planSessionId?.trim()) {
+    body.plan_session_id = params.planSessionId.trim()
+  }
   const res = await fetch(`${API_URL}/distribuidora/planificacion/ors-routes`, {
     method: "POST",
     headers: getAuthHeaders(),
-    body: JSON.stringify({ routes: params.routes }),
+    body: JSON.stringify(body),
     signal: params.signal,
   })
   if (!res.ok) {
     const msg = await res.text().catch(() => "")
     throw new Error(msg || "Error al calcular rutas ORS")
   }
-  return res.json() as Promise<{ routes: DistribuidoraPlanificacionOrsRoute[] }>
+  return res.json() as Promise<DistribuidoraPlanificacionOrsResponse>
 }
 
 /** Fila de GET /distribuidora/orders/purchase/by-document-ids (preview planificación). */

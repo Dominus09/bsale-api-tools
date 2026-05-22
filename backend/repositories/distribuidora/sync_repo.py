@@ -93,6 +93,11 @@ def ensure_distribuidora_schema(cur) -> None:
         "013_operational_sync_state.sql",
         "014_document_probable_matches.sql",
         "015_v_purchase_document_status_full.sql",
+        "016_system_config.sql",
+        "017_trucks_fuel.sql",
+        "018_trucks_real_consumption.sql",
+        "019_logistics_cost_settings.sql",
+        "020_ors_route_crew_costs.sql",
     ):
         _run_sql_file(cur, fn)
 

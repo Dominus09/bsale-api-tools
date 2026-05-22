@@ -1,8 +1,8 @@
-import type { DistribuidoraPlanificacionOrsRoute } from "@/lib/api"
+import type {
+  DistribuidoraPlanificacionOrsRoute,
+  OrsStopOrdered,
+} from "@/lib/api"
 import type { PlanificacionStoredOrder } from "@/lib/planificacion-despacho-storage"
-
-/** Estimación solo UI (no backend). CLP por km — ajustable en futuro vía config. */
-export const ORS_FUEL_CLP_PER_KM = 180
 
 export type OrsVisitRow = {
   document_id: number
@@ -24,11 +24,6 @@ export function formatOrsEta(minutesFromStart: number): string {
   return r > 0 ? `~${h}h ${r}m` : `~${h}h`
 }
 
-export function estimateFuelCostClp(distanceKm: number): number {
-  const km = Number.isFinite(distanceKm) ? distanceKm : 0
-  return Math.round(km * ORS_FUEL_CLP_PER_KM)
-}
-
 export function formatClp(n: number): string {
   return new Intl.NumberFormat("es-CL", {
     style: "currency",
@@ -37,22 +32,29 @@ export function formatClp(n: number): string {
   }).format(Number.isFinite(n) ? n : 0)
 }
 
-/** Reparte duration_min de ORS entre paradas (heurística UI, sin alterar ORS). */
+function orderIndexByDoc(stopsOrdered: OrsStopOrdered[] | undefined): Map<number, number> {
+  const m = new Map<number, number>()
+  if (!stopsOrdered?.length) return m
+  for (const s of stopsOrdered) {
+    m.set(s.document_id, s.stop_index)
+  }
+  return m
+}
+
+/** Visitas en orden ORS optimizado (stops_ordered) con ETA por reparto de duration_min. */
 export function buildOrsVisitRows(
   orders: PlanificacionStoredOrder[],
   orsRoutes: DistribuidoraPlanificacionOrsRoute[],
   truckColors: Map<string, string>,
 ): OrsVisitRow[] {
   const routeByCamion = new Map(orsRoutes.map((r) => [r.camion, r]))
+  const orderByCamionDoc = new Map<string, Map<number, number>>()
+  for (const r of orsRoutes) {
+    orderByCamionDoc.set(r.camion, orderIndexByDoc(r.stops_ordered))
+  }
+
   const byTruck = new Map<string, PlanificacionStoredOrder[]>()
-
-  const sorted = [...orders].sort((a, b) => {
-    const c = a.camion.localeCompare(b.camion, "es")
-    if (c !== 0) return c
-    return a.stop_index - b.stop_index
-  })
-
-  for (const o of sorted) {
+  for (const o of orders) {
     const arr = byTruck.get(o.camion)
     if (arr) arr.push(o)
     else byTruck.set(o.camion, [o])
@@ -62,15 +64,22 @@ export function buildOrsVisitRows(
 
   for (const [camion, stops] of byTruck) {
     const route = routeByCamion.get(camion)
+    const idxMap = orderByCamionDoc.get(camion)
+    const sorted = [...stops].sort((a, b) => {
+      const ia = idxMap?.get(a.document_id) ?? a.stop_index
+      const ib = idxMap?.get(b.document_id) ?? b.stop_index
+      return ia - ib
+    })
     const durationMin = Number(route?.duration_min) || 0
-    const legMin =
-      stops.length > 1 ? durationMin / (stops.length - 1) : durationMin > 0 ? durationMin : 0
+    const n = sorted.length
+    const legMin = n > 1 ? durationMin / (n - 1) : durationMin > 0 ? durationMin : 0
     let cumulative = 0
 
-    for (const stop of stops) {
+    for (const stop of sorted) {
+      const visitIndex = idxMap?.get(stop.document_id) ?? stop.stop_index
       rows.push({
         document_id: stop.document_id,
-        stop_index: stop.stop_index,
+        stop_index: visitIndex,
         camion,
         nombre: stop.nombre_fantasia?.trim() || "Cliente",
         ocLabel: stop.oc != null ? `OC ${stop.oc}` : `Doc ${stop.document_id}`,
@@ -83,5 +92,9 @@ export function buildOrsVisitRows(
     }
   }
 
-  return rows
+  return rows.sort((a, b) => {
+    const c = a.camion.localeCompare(b.camion, "es")
+    if (c !== 0) return c
+    return a.stop_index - b.stop_index
+  })
 }

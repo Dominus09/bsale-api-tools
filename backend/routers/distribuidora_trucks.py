@@ -26,7 +26,9 @@ def get_trucks():
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT id, name, plate, max_weight_kg
+            SELECT id, name, plate, max_weight_kg,
+                   COALESCE(km_per_liter, 8.0) AS km_per_liter,
+                   COALESCE(fuel_type, 'diesel') AS fuel_type
             FROM distribuidora.trucks
             WHERE active = TRUE
             ORDER BY name ASC
@@ -42,6 +44,9 @@ def get_trucks():
             rid = r.get("id")
             if rid is not None:
                 r["id"] = int(rid)
+            kpl = r.get("km_per_liter")
+            if kpl is not None:
+                r["km_per_liter"] = float(kpl)
         return {"items": rows}
     except Exception as e:
         logger.error("Error cargando trucks: %s", e, exc_info=True)
