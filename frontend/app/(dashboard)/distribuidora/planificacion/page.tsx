@@ -3,28 +3,35 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import dynamic from "next/dynamic"
 import Link from "next/link"
-import { Loader2 } from "lucide-react"
+import { Loader2, RefreshCw, Trash2 } from "lucide-react"
 
 import {
   postDistribuidoraPlanificacionOrsRoutes,
   type DistribuidoraPlanificacionOrsRoute,
 } from "@/lib/api"
 import {
+  buildOrsVisitRows,
+  estimateFuelCostClp,
+} from "@/lib/ors-map-ui"
+import {
   readPlanificacionPayload,
   clearPlanificacionPayload,
   type PlanificacionStoredOrder,
 } from "@/lib/planificacion-despacho-storage"
 import type { PlanificacionMapRoute } from "@/components/distribuidora/planificacion-despacho-map-client"
+import { OrsClientPanel } from "@/components/distribuidora/planificacion/OrsClientPanel"
+import { OrsDispatchEmptyState } from "@/components/distribuidora/planificacion/OrsDispatchEmptyState"
+import { OrsMapSkeleton } from "@/components/distribuidora/planificacion/OrsMapSkeleton"
+import { OrsTopBar } from "@/components/distribuidora/planificacion/OrsTopBar"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
 const PlanificacionMap = dynamic(
   () =>
     import("@/components/distribuidora/planificacion-despacho-map-client").then((m) => ({
       default: m.PlanificacionDespachoMapClient,
     })),
-  { ssr: false, loading: () => <div className="text-sm text-muted-foreground">Cargando mapa…</div> },
+  { ssr: false, loading: () => <OrsMapSkeleton /> },
 )
 
 const TRUCK_COLORS = ["#2563eb", "#16a34a", "#ca8a04", "#9333ea", "#db2777", "#0891b2"]
@@ -56,6 +63,7 @@ export default function PlanificacionDespachoPage() {
   const [orsRoutes, setOrsRoutes] = useState<DistribuidoraPlanificacionOrsRoute[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [selectedVisitId, setSelectedVisitId] = useState<number | null>(null)
 
   const reloadFromStorage = useCallback(() => {
     const p = readPlanificacionPayload()
@@ -98,9 +106,13 @@ export default function PlanificacionDespachoPage() {
     void fetchRoutes(orders)
   }, [orders, fetchRoutes])
 
+  const truckColorMap = useMemo(() => {
+    const keys = Array.from(groupOrdersByTruck(orders).keys())
+    return new Map(keys.map((k, i) => [k, TRUCK_COLORS[i % TRUCK_COLORS.length]!]))
+  }, [orders])
+
   const mapRoutes: PlanificacionMapRoute[] = useMemo(() => {
     const byT = groupOrdersByTruck(orders)
-    const truckKeys = Array.from(byT.keys())
     return orsRoutes.map((r, i) => {
       const color = TRUCK_COLORS[i % TRUCK_COLORS.length]!
       const stops = byT.get(r.camion) ?? []
@@ -126,175 +138,142 @@ export default function PlanificacionDespachoPage() {
       min += Number(r.duration_min) || 0
     }
     const clients = new Set<number>()
-    let amount = 0
     for (const o of orders) {
       if (o.client_id != null && Number.isFinite(Number(o.client_id))) {
         clients.add(Number(o.client_id))
       }
-      amount += Number(o.total_amount ?? 0)
     }
     return {
       km,
       min,
       clientCount: clients.size,
-      amount,
+      fuelClp: estimateFuelCostClp(km),
     }
   }, [orders, orsRoutes])
 
-  const perTruck = useMemo(() => {
-    return orsRoutes.map((r) => {
-      const stops = orders.filter((o) => o.camion === r.camion)
-      const amt = stops.reduce((s, o) => s + Number(o.total_amount ?? 0), 0)
-      return {
+  const visits = useMemo(
+    () => buildOrsVisitRows(orders, orsRoutes, truckColorMap),
+    [orders, orsRoutes, truckColorMap],
+  )
+
+  const truckOptions = useMemo(
+    () => Array.from(groupOrdersByTruck(orders).keys()),
+    [orders],
+  )
+
+  const highlightedStopKey = useMemo(() => {
+    if (selectedVisitId == null) return null
+    const v = visits.find((x) => x.document_id === selectedVisitId)
+    if (!v) return null
+    return `${v.camion}-${v.stop_index}`
+  }, [selectedVisitId, visits])
+
+  const routeStats = useMemo(
+    () =>
+      orsRoutes.map((r) => ({
         camion: r.camion,
-        km: r.distance_km,
-        min: r.duration_min,
-        stops: stops.length,
-        amount: amt,
-      }
-    })
-  }, [orders, orsRoutes])
+        distance_km: r.distance_km,
+        duration_min: r.duration_min,
+      })),
+    [orsRoutes],
+  )
 
   if (!loading && orders.length === 0) {
-    return (
-      <div className="mx-auto flex max-w-lg flex-col gap-6 py-16">
-        <h1 className="text-2xl font-semibold">Planificación de despacho</h1>
-        <p className="text-sm text-muted-foreground">
-          No hay órdenes en cola. Seleccione documentos con georreferencia y camión en la pantalla
-          previa y pulse &quot;Enviar a planificación&quot;.
-        </p>
-        <Button asChild>
-          <Link href="/distribuidora/pre-planificacion">Ir a pre‑planificación</Link>
-        </Button>
-      </div>
-    )
+    return <OrsDispatchEmptyState />
   }
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-8 pb-16">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Planificación de despacho</h1>
-          <p className="text-sm text-muted-foreground">
-            Rutas ORS por camión, distancias y mapa con paradas numeradas.
-          </p>
+    <div className="-m-6 flex h-[calc(100dvh-4rem)] min-h-[640px] flex-col overflow-hidden bg-background">
+      <header className="shrink-0 border-b border-border/80 bg-card/95 px-4 py-3 backdrop-blur-sm md:px-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Dispatch center · ORS
+            </p>
+            <h1 className="text-lg font-semibold tracking-tight md:text-xl">
+              Planif. mapa ORS
+            </h1>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 gap-1.5 text-xs"
+              disabled={loading}
+              onClick={() => void fetchRoutes(orders)}
+            >
+              {loading ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              ) : (
+                <RefreshCw className="size-3.5" aria-hidden />
+              )}
+              Recalcular rutas
+            </Button>
+            <Button asChild variant="outline" size="sm" className="h-8 text-xs">
+              <Link href="/distribuidora/orders">Pre-despacho</Link>
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-8 gap-1 text-xs text-muted-foreground"
+              onClick={() => {
+                clearPlanificacionPayload()
+                setOrders([])
+                setOrsRoutes([])
+                setSelectedVisitId(null)
+              }}
+            >
+              <Trash2 className="size-3.5" aria-hidden />
+              Limpiar cola
+            </Button>
+          </div>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button asChild variant="outline" size="sm">
-            <Link href="/distribuidora/pre-planificacion">Volver a selección</Link>
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              clearPlanificacionPayload()
-              setOrders([])
-              setOrsRoutes([])
-            }}
-          >
-            Limpiar cola
-          </Button>
+        <div className="mt-3">
+          <OrsTopBar
+            kmTotal={totals.km}
+            clientCount={totals.clientCount}
+            durationMin={totals.min}
+            fuelCostClp={totals.fuelClp}
+            loading={loading}
+          />
         </div>
-      </div>
+      </header>
 
       {error ? (
-        <Alert variant="destructive">
-          <AlertTitle>Error</AlertTitle>
+        <Alert variant="destructive" className="mx-4 mt-2 shrink-0 md:mx-5">
+          <AlertTitle>Error ORS</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       ) : null}
 
-      {loading ? (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="size-4 animate-spin" />
-          Calculando rutas…
-        </div>
-      ) : null}
+      <div className="flex min-h-0 flex-1">
+        <aside className="flex w-[min(100%,20rem)] shrink-0 flex-col border-r border-border/80 md:w-80 lg:w-[22rem]">
+          <OrsClientPanel
+            visits={visits}
+            routeStats={routeStats}
+            kmTotal={totals.km}
+            durationMin={totals.min}
+            truckOptions={truckOptions}
+            loading={loading}
+            selectedVisitId={selectedVisitId}
+            onSelectVisit={setSelectedVisitId}
+          />
+        </aside>
 
-      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Card className="border-0 bg-muted/30 py-4 shadow-sm">
-          <CardHeader className="pb-1">
-            <CardTitle className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Km total
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="pt-0 text-2xl font-semibold tabular-nums">
-            {totals.km.toFixed(1)}
-          </CardContent>
-        </Card>
-        <Card className="border-0 bg-muted/30 py-4 shadow-sm">
-          <CardHeader className="pb-1">
-            <CardTitle className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Tiempo conducción (min)
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="pt-0 text-2xl font-semibold tabular-nums">
-            {Math.round(totals.min)}
-          </CardContent>
-        </Card>
-        <Card className="border-0 bg-muted/30 py-4 shadow-sm">
-          <CardHeader className="pb-1">
-            <CardTitle className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Clientes únicos
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="pt-0 text-2xl font-semibold tabular-nums">
-            {totals.clientCount}
-          </CardContent>
-        </Card>
-        <Card className="border-0 bg-muted/30 py-4 shadow-sm">
-          <CardHeader className="pb-1">
-            <CardTitle className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-              Monto total
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="pt-0 text-xl font-semibold tabular-nums sm:text-2xl">
-            {totals.amount.toLocaleString("es-CL", {
-              style: "currency",
-              currency: "CLP",
-              maximumFractionDigits: 0,
-            })}
-          </CardContent>
-        </Card>
-      </section>
-
-      <PlanificacionMap routes={mapRoutes} />
-
-      <section className="space-y-3">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-          Resumen por camión
-        </h2>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {perTruck.map((t, i) => (
-            <Card
-              key={t.camion}
-              className="border-l-4 py-3 shadow-sm"
-              style={{ borderLeftColor: TRUCK_COLORS[i % TRUCK_COLORS.length] }}
-            >
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base">{t.camion}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-1 text-sm text-muted-foreground">
-                <p>
-                  <span className="text-foreground">{t.km.toFixed(1)}</span> km ·{" "}
-                  <span className="text-foreground">{Math.round(t.min)}</span> min
-                </p>
-                <p>
-                  Paradas: <span className="font-medium text-foreground">{t.stops}</span>
-                </p>
-                <p className="tabular-nums font-medium text-foreground">
-                  {t.amount.toLocaleString("es-CL", {
-                    style: "currency",
-                    currency: "CLP",
-                    maximumFractionDigits: 0,
-                  })}
-                </p>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      </section>
+        <main className="relative min-w-0 flex-1 p-2 md:p-3">
+          {loading ? (
+            <OrsMapSkeleton />
+          ) : (
+            <PlanificacionMap
+              routes={mapRoutes}
+              highlightedStopKey={highlightedStopKey}
+              className="h-full min-h-0 w-full overflow-hidden rounded-lg border border-border/80 bg-slate-950/5 shadow-md dark:bg-slate-950/50"
+            />
+          )}
+        </main>
+      </div>
     </div>
   )
 }

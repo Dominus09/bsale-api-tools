@@ -60,28 +60,26 @@ export function resolvePurchaseStatusCode(
 export function purchaseStatusBadgeLabel(code: PurchaseInvoiceStatusCode): string {
   switch (code) {
     case CONFIRMED:
-      return "✔ Facturada"
+      return "Facturada"
     case HIGH:
     case MEDIUM:
     case LOW:
-      return "⚠ Probable Facturada"
+      return "Probable facturada"
     default:
-      return "○ Pendiente"
+      return "Pendiente"
   }
 }
 
 export function purchaseStatusBadgeClass(code: PurchaseInvoiceStatusCode): string {
   switch (code) {
     case CONFIRMED:
-      return "bg-green-100 text-green-800 border-green-200 hover:bg-green-100"
+      return "border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/50 dark:text-emerald-200"
     case HIGH:
-      return "bg-yellow-200 text-yellow-900 border-yellow-300 hover:bg-yellow-200"
     case MEDIUM:
-      return "bg-yellow-100 text-yellow-800 border-yellow-200 hover:bg-yellow-100"
     case LOW:
-      return "bg-orange-100 text-orange-800 border-orange-200 hover:bg-orange-100"
+      return "border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100"
     default:
-      return "bg-gray-100 text-gray-700 border-gray-200 hover:bg-gray-100"
+      return "border-slate-200 bg-slate-100 text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300"
   }
 }
 

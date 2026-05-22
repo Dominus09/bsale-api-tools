@@ -46,12 +46,14 @@ function FitBoundsInner({ routes }: { routes: PlanificacionMapRoute[] }) {
   return null
 }
 
-function numberedIcon(n: number, color: string) {
+function numberedIcon(n: number, color: string, highlighted?: boolean) {
+  const ring = highlighted ? "box-shadow:0 0 0 3px rgba(255,255,255,.95),0 0 0 5px " + color + "55,0 2px 8px rgba(0,0,0,.4)" : "box-shadow:0 2px 6px rgba(0,0,0,.35)"
+  const scale = highlighted ? "transform:scale(1.12)" : ""
   return L.divIcon({
     className: "planificacion-num-marker-wrap",
-    html: `<div style="width:22px;height:22px;border-radius:9999px;background:${color};color:#fff;font:700 11px/22px system-ui,sans-serif;text-align:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35)">${n}</div>`,
-    iconSize: [22, 22],
-    iconAnchor: [11, 11],
+    html: `<div style="width:26px;height:26px;border-radius:9999px;background:${color};color:#fff;font:700 12px/26px system-ui,sans-serif;text-align:center;border:2.5px solid #fff;${ring};${scale}">${n}</div>`,
+    iconSize: [26, 26],
+    iconAnchor: [13, 13],
   })
 }
 
@@ -59,9 +61,15 @@ const DEFAULT_CENTER: [number, number] = [-33.0, -71.5]
 
 type PlanificacionDespachoMapClientProps = {
   routes: PlanificacionMapRoute[]
+  className?: string
+  highlightedStopKey?: string | null
 }
 
-export function PlanificacionDespachoMapClient({ routes }: PlanificacionDespachoMapClientProps) {
+export function PlanificacionDespachoMapClient({
+  routes,
+  className,
+  highlightedStopKey,
+}: PlanificacionDespachoMapClientProps) {
   const center = useMemo((): [number, number] => {
     for (const r of routes) {
       const s0 = r.stops[0]
@@ -73,33 +81,54 @@ export function PlanificacionDespachoMapClient({ routes }: PlanificacionDespacho
   }, [routes])
 
   return (
-    <div className="h-[min(520px,70vh)] w-full overflow-hidden rounded-xl border border-border/60">
-      <MapContainer center={center} zoom={11} className="h-full w-full" scrollWheelZoom>
+    <div
+      className={
+        className ??
+        "h-full min-h-[420px] w-full overflow-hidden rounded-lg border border-border/80 bg-slate-950/5 shadow-inner dark:bg-slate-950/40"
+      }
+    >
+      <MapContainer
+        center={center}
+        zoom={11}
+        className="h-full w-full [&_.leaflet-control-zoom]:border-border/80 [&_.leaflet-control-zoom]:shadow-md"
+        scrollWheelZoom
+      >
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
         />
         <FitBoundsInner routes={routes} />
         {routes.map((r) => (
           <Polyline
             key={r.camion}
             positions={r.positions}
-            pathOptions={{ color: r.color, weight: 5, opacity: 0.85 }}
+            pathOptions={{
+              color: r.color,
+              weight: 6,
+              opacity: 0.92,
+              lineCap: "round",
+              lineJoin: "round",
+            }}
           />
         ))}
         {routes.flatMap((r) =>
-          r.stops.map((s) => (
-            <Marker
-              key={`${r.camion}-${s.num}-${s.lat}-${s.lng}`}
-              position={[s.lat, s.lng]}
-              icon={numberedIcon(s.num, r.color)}
-            >
-              <Tooltip direction="top" offset={[0, -8]} opacity={0.95}>
-                <span className="text-xs font-medium">{s.label}</span>
-                <span className="block text-[10px] text-muted-foreground">{r.camion}</span>
-              </Tooltip>
-            </Marker>
-          )),
+          r.stops.map((s) => {
+            const key = `${r.camion}-${s.num}`
+            const hi = highlightedStopKey === key
+            return (
+              <Marker
+                key={`${r.camion}-${s.num}-${s.lat}-${s.lng}`}
+                position={[s.lat, s.lng]}
+                icon={numberedIcon(s.num, r.color, hi)}
+                zIndexOffset={hi ? 1000 : s.num}
+              >
+                <Tooltip direction="top" offset={[0, -10]} opacity={1}>
+                  <span className="text-xs font-semibold">{s.label}</span>
+                  <span className="block text-[10px] opacity-80">{r.camion}</span>
+                </Tooltip>
+              </Marker>
+            )
+          }),
         )}
       </MapContainer>
     </div>

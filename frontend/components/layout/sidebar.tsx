@@ -10,10 +10,8 @@ import {
   Package,
   ShoppingCart,
   Warehouse,
-  DollarSign,
   Users,
   Settings,
-  ChevronRight,
   Plus,
   Minus,
   ClipboardList,
@@ -27,16 +25,12 @@ import {
   ScrollText,
   Store,
   MapPin,
-  Route,
-  CalendarDays,
   ChevronsLeft,
   ChevronsRight,
-  PieChart,
-  Truck,
   Percent,
   UserCircle2,
-  UserX,
   Stethoscope,
+  PackageCheck,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -84,23 +78,9 @@ const navSections: { title: string; items: NavItem[] }[] = [
     title: "Distribuidora",
     items: [
       { href: "/distribuidora/dashboard", label: "Dashboard comercial", icon: BarChart3 },
-      { href: "/distribuidora/clientes", label: "Clientes", icon: Users },
-      { href: "/distribuidora/clientes/analisis", label: "Análisis clientes", icon: FileSpreadsheet },
-      { href: "/distribuidora/clientes/inactivos", label: "Clientes inactivos", icon: UserX },
-      { href: "/distribuidora/vendedores", label: "Vendedores", icon: UserCircle2 },
-      {
-        href: "/distribuidora/dispatch-analysis",
-        label: "Análisis despacho",
-        icon: PieChart,
-      },
       { href: "/distribuidora/ordenes-compra", label: "Órdenes de compra", icon: ShoppingCart },
-      { href: "/distribuidora/orders", label: "Pre‑despacho OC", icon: ShoppingCart },
-      { href: "/distribuidora/pre-planificacion", label: "Pre‑planif. despacho", icon: ClipboardList },
+      { href: "/distribuidora/orders", label: "Pre‑despacho OC", icon: PackageCheck },
       { href: "/distribuidora/planificacion", label: "Planif. mapa ORS", icon: MapPin },
-      { href: "/distribuidora/planning", label: "Planificación", icon: Truck },
-      { href: "/distribuidora/mapa", label: "Mapa rutero", icon: MapPin },
-      { href: "/distribuidora/resumen-vendedor", label: "Resumen vendedor", icon: CalendarDays },
-      { href: "/distribuidora/rutero", label: "Rutero", icon: Route },
     ],
   },
   {
@@ -217,7 +197,7 @@ export function Sidebar({ compact = false, onToggleCompact }: SidebarProps) {
         ) : null}
       </div>
 
-      <nav className="flex-1 overflow-y-auto overflow-x-hidden p-2">
+      <nav className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-3">
         {sections.map((section) => {
           const renderItem = (item: NavItem) => {
             const isActive =
@@ -230,11 +210,11 @@ export function Sidebar({ compact = false, onToggleCompact }: SidebarProps) {
               const disabledNode = (
                 <div
                   className={cn(
-                    "flex cursor-not-allowed items-center rounded-lg text-sm font-medium text-muted-foreground/50",
-                    compact ? "justify-center px-2 py-2.5" : "gap-3 px-3 py-2",
+                    "flex cursor-not-allowed items-center rounded-md text-sm font-medium text-muted-foreground/50",
+                    compact ? "justify-center px-2.5 py-2.5" : "gap-3 px-3 py-2.5",
                   )}
                 >
-                  <item.icon className="h-4 w-4 shrink-0" />
+                  <item.icon className="h-[1.125rem] w-[1.125rem] shrink-0" />
                   {!compact ? item.label : null}
                 </div>
               )
@@ -253,19 +233,16 @@ export function Sidebar({ compact = false, onToggleCompact }: SidebarProps) {
               <Link
                 href={item.href}
                 className={cn(
-                  "flex items-center rounded-lg text-sm font-medium transition-colors",
-                  compact ? "justify-center px-2 py-2.5" : "gap-3 px-3 py-2",
+                  "flex items-center rounded-md text-sm font-medium transition-colors duration-150",
+                  compact ? "justify-center px-2.5 py-2.5" : "gap-3 px-3 py-2.5",
                   isActive
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
+                    ? "bg-primary/10 text-primary shadow-none"
+                    : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
                 )}
               >
-                <item.icon className="h-4 w-4 shrink-0" />
+                <item.icon className="h-[1.125rem] w-[1.125rem] shrink-0" />
                 {!compact ? (
-                  <>
-                    <span className="min-w-0 flex-1 truncate">{item.label}</span>
-                    {isActive ? <ChevronRight className="ml-auto h-4 w-4 shrink-0" /> : null}
-                  </>
+                  <span className="min-w-0 flex-1 truncate leading-snug">{item.label}</span>
                 ) : null}
               </Link>
             )
@@ -294,7 +271,7 @@ export function Sidebar({ compact = false, onToggleCompact }: SidebarProps) {
           const isOpen = openSection === section.title
 
           return (
-            <div key={section.title} className="mb-1">
+            <div key={section.title} className="mb-2">
               <button
                 type="button"
                 aria-expanded={isOpen}
@@ -302,19 +279,19 @@ export function Sidebar({ compact = false, onToggleCompact }: SidebarProps) {
                   setOpenSection((prev) => (prev === section.title ? null : section.title))
                 }
                 className={cn(
-                  "flex w-full cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-muted-foreground transition-colors",
-                  "hover:bg-accent hover:text-accent-foreground",
+                  "flex w-full cursor-pointer items-center justify-between rounded-md px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground transition-colors duration-150",
+                  "hover:bg-muted/60 hover:text-foreground",
                 )}
               >
                 <span className="truncate">{section.title}</span>
                 {isOpen ? (
-                  <Minus className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+                  <Minus className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden />
                 ) : (
-                  <Plus className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+                  <Plus className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden />
                 )}
               </button>
               {isOpen ? (
-                <div className="mt-1 space-y-1 border-l border-border pl-2 ml-2">
+                <div className="mt-1 space-y-0.5 border-l-2 border-border/70 pl-3 ml-3">
                   {section.items.map((item) => renderItem(item))}
                 </div>
               ) : null}

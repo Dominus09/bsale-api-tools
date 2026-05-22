@@ -1,8 +1,8 @@
 "use client"
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
-import { ChevronDown, Loader2, MapPin, Package, RefreshCw, Truck } from "lucide-react"
+import { Loader2, MapPin, Package, RefreshCw, Truck } from "lucide-react"
 
 import {
   distribuidoraTruckCapacityLabel,
@@ -23,26 +23,10 @@ import {
   weekdayTokenFromTagLabel,
 } from "@/lib/dispatch-prep-tags"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
-import {
-  PurchaseAssociatedDocumentCell,
-  PurchaseInvoiceScoreCell,
-  PurchaseInvoiceStatusCell,
-} from "@/components/distribuidora/orders/PurchaseInvoiceTableCells"
+import { PreDespachoKpiStrip } from "@/components/distribuidora/orders/PreDespachoKpiStrip"
+import { PreDespachoPlanningTable } from "@/components/distribuidora/orders/PreDespachoPlanningTable"
+import { PreDespachoStatusChips } from "@/components/distribuidora/orders/PreDespachoStatusChips"
 import { Button } from "@/components/ui/button"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -70,21 +54,17 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
+import { TooltipProvider } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
+import {
+  computePreDespachoStats,
+  filterPlanningRowsByStatus,
+} from "@/lib/pre-despacho-stats"
+import {
+  matchesPurchaseStatusFilter,
+  type PurchaseInvoiceStatusFilter,
+  type PurchaseInvoiceStatusFields,
+} from "@/lib/purchase-invoice-status"
 import {
   buildClusterLabelByDocumentId,
   buildRouteStubsFromAssignments,
@@ -149,198 +129,13 @@ function isValidTruckId(
   )
 }
 
-function GroupTruckAssignMenu({
-  municipalityLabel,
-  groupRows,
-  trucksOrdered,
-  lastSuggestedTruckId,
-  disabled,
-  onPickTruck,
-}: {
-  municipalityLabel: string
-  groupRows: DistribuidoraDispatchPrepPlanningRow[]
-  trucksOrdered: DistribuidoraTruck[]
-  lastSuggestedTruckId: number | null
-  disabled: boolean
-  onPickTruck: (truckId: number) => void
-}) {
-  const noGeoCount = groupRows.filter((r) => !rowHasGeo(r)).length
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={disabled}
-          className="gap-1"
-          aria-label={`Asignar camión a pedidos con georef en ${municipalityLabel}`}
-        >
-          Asignar camión
-          <ChevronDown className="size-4 opacity-70" aria-hidden />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        className="w-[min(22rem,calc(100vw-2rem))] p-2"
-      >
-        {noGeoCount > 0 ? (
-          <Alert className="mb-2 border-amber-500/40 bg-amber-50/90 dark:bg-amber-950/40">
-            <AlertTitle className="text-xs">Georreferencia</AlertTitle>
-            <AlertDescription className="text-xs">
-              {noGeoCount} cliente{noGeoCount !== 1 ? "s" : ""} no tienen
-              coordenadas y no serán asignados
-            </AlertDescription>
-          </Alert>
-        ) : null}
-        <div className="flex flex-col gap-0.5">
-          {trucksOrdered.map((t) => (
-            <DropdownMenuItem
-              key={t.id}
-              onSelect={() => onPickTruck(t.id)}
-              className={cn(
-                "cursor-pointer",
-                lastSuggestedTruckId === t.id &&
-                  "bg-muted/70 ring-1 ring-inset ring-primary/30",
-              )}
-            >
-              <span className="flex w-full items-center justify-between gap-2 pr-1">
-                <span>
-                  {t.name} ({t.plate})
-                </span>
-                {lastSuggestedTruckId === t.id ? (
-                  <Badge variant="outline" className="text-[10px] font-normal">
-                    Reciente
-                  </Badge>
-                ) : null}
-              </span>
-            </DropdownMenuItem>
-          ))}
-        </div>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
-
-function PlanningTableRow({
-  r,
-  trucks,
-  truckIdByDoc,
-  clusterLabel,
-  onTruckChange,
-}: {
-  r: DistribuidoraDispatchPrepPlanningRow
-  trucks: DistribuidoraTruck[]
-  truckIdByDoc: Record<number, number | null>
-  clusterLabel: string
-  onTruckChange: (row: DistribuidoraDispatchPrepPlanningRow, raw: string) => void
-}) {
-  const geo = rowHasGeo(r)
-  const docId = r.document_id
-  const tid = truckIdByDoc[docId]
-  const truck =
-    tid != null ? trucks.find((t) => t.id === tid) : undefined
-  const capLabel = truck ? distribuidoraTruckCapacityLabel(truck) : null
-  const inPlan = geo && isValidTruckId(tid, trucks)
-
-  return (
-    <TableRow
-      className={cn(
-        "text-sm transition-colors",
-        geo ? "hover:bg-muted/70" : "bg-destructive/10 hover:bg-destructive/15",
-        inPlan && "border-l-2 border-l-primary bg-primary/[0.06]",
-      )}
-    >
-      <TableCell className="font-mono tabular-nums">{r.oc ?? "—"}</TableCell>
-      <TableCell className="max-w-[10rem] truncate">
-        {r.nombre_fantasia?.trim() || "—"}
-      </TableCell>
-      <TableCell className="max-w-[8rem] truncate">
-        {r.municipality?.trim() || "—"}
-      </TableCell>
-      <TableCell className="max-w-[12rem] truncate">
-        {r.direccion?.trim() || "—"}
-      </TableCell>
-      <TableCell className="max-w-[8rem] truncate">
-        {r.seller_name?.trim() || "—"}
-      </TableCell>
-      <TableCell className="whitespace-nowrap text-xs">
-        <PurchaseInvoiceStatusCell row={r} />
-      </TableCell>
-      <TableCell>
-        <PurchaseAssociatedDocumentCell row={r} />
-      </TableCell>
-      <TableCell className="text-right">
-        <PurchaseInvoiceScoreCell row={r} />
-      </TableCell>
-      <TableCell className="text-right tabular-nums">
-        {formatClp(Number(r.total_amount ?? 0))}
-      </TableCell>
-      <TableCell>
-        {geo ? (
-          <Badge className="bg-emerald-600 hover:bg-emerald-600">OK</Badge>
-        ) : (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="inline-flex cursor-help">
-                <Badge variant="destructive">Sin coordenadas</Badge>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="top" className="max-w-xs">
-              Este cliente no puede ser planificado
-            </TooltipContent>
-          </Tooltip>
-        )}
-      </TableCell>
-      <TableCell className="max-w-[9rem] truncate text-xs text-muted-foreground">
-        {clusterLabel}
-      </TableCell>
-      <TableCell>
-        <div className="flex min-w-[11rem] flex-col gap-1.5">
-          {trucks.length === 0 ? (
-            <span className="text-xs text-muted-foreground">
-              ⚠️ No hay camiones disponibles
-            </span>
-          ) : (
-            <select
-              className="h-9 max-w-[16rem] rounded-md border border-input bg-background px-2 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-              value={
-                tid != null && trucks.some((x) => x.id === tid)
-                  ? String(tid)
-                  : TRUCK_UNSET
-              }
-              onChange={(e) => onTruckChange(r, e.target.value)}
-              disabled={!geo}
-              aria-label={`Camión OC ${r.oc ?? docId}`}
-            >
-              <option value={TRUCK_UNSET}>Asignar</option>
-              {trucks.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name} ({t.plate})
-                </option>
-              ))}
-            </select>
-          )}
-          {capLabel && geo ? (
-            <Badge
-              variant="secondary"
-              className="w-fit max-w-[16rem] truncate text-[10px] font-normal"
-              title={capLabel}
-            >
-              {capLabel}
-            </Badge>
-          ) : null}
-        </div>
-      </TableCell>
-    </TableRow>
-  )
-}
-
 export default function DistribuidoraOrdersPage() {
   const router = useRouter()
   const [dateFrom, setDateFrom] = useState(() => localIsoDate())
   const [dateTo, setDateTo] = useState(() => localIsoDate())
   const [onlyNotInvoiced, setOnlyNotInvoiced] = useState(true)
+  const [statusQuickFilter, setStatusQuickFilter] =
+    useState<PurchaseInvoiceStatusFilter>("all")
   const [activeDayFilter, setActiveDayFilter] = useState<string | null>(null)
 
   const [rows, setRows] = useState<DistribuidoraDispatchPrepMunicipalityRow[]>([])
@@ -564,13 +359,54 @@ export default function DistribuidoraOrdersPage() {
     }
   }, [rows])
 
+  const operationalStats = useMemo(
+    () => computePreDespachoStats(planningRows),
+    [planningRows],
+  )
+
+  const statusFilterCounts = useMemo((): Record<
+    PurchaseInvoiceStatusFilter,
+    number
+  > => {
+    const counts: Record<PurchaseInvoiceStatusFilter, number> = {
+      all: planningRows.length,
+      pending: 0,
+      probable: 0,
+      confirmed: 0,
+    }
+    for (const r of planningRows) {
+      if (
+        matchesPurchaseStatusFilter(r as PurchaseInvoiceStatusFields, "pending")
+      ) {
+        counts.pending += 1
+      } else if (
+        matchesPurchaseStatusFilter(r as PurchaseInvoiceStatusFields, "probable")
+      ) {
+        counts.probable += 1
+      } else if (
+        matchesPurchaseStatusFilter(
+          r as PurchaseInvoiceStatusFields,
+          "confirmed",
+        )
+      ) {
+        counts.confirmed += 1
+      }
+    }
+    return counts
+  }, [planningRows])
+
+  const filteredPlanningRows = useMemo(
+    () => filterPlanningRowsByStatus(planningRows, statusQuickFilter),
+    [planningRows, statusQuickFilter],
+  )
+
   const validTruckIdSet = useMemo(
     () => new Set(trucks.map((t) => t.id)),
     [trucks],
   )
 
   const sortedPlanningRows = useMemo(() => {
-    const list = [...planningRows]
+    const list = [...filteredPlanningRows]
     if (planningSortBy === "oc") {
       list.sort((a, b) => {
         const na = Number(a.oc)
@@ -597,7 +433,7 @@ export default function DistribuidoraOrdersPage() {
       })
     }
     return list
-  }, [planningRows, planningSortBy])
+  }, [filteredPlanningRows, planningSortBy])
 
   const clusterByDoc = useMemo(
     () => buildClusterLabelByDocumentId(sortedPlanningRows),
@@ -837,17 +673,58 @@ export default function DistribuidoraOrdersPage() {
     setDetailOpen(true)
   }, [])
 
+  const onRefreshData = useCallback(() => {
+    void loadDispatchPrep()
+  }, [loadDispatchPrep])
+
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-10 pb-16">
-      <header className="space-y-2">
-        <h1 className="text-3xl font-semibold tracking-tight">
-          Pre‑planificación de despacho
-        </h1>
-        <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
-          Análisis por comuna, observaciones con filtro por día y tabla de pre‑planificación
-          (órdenes de compra).
-        </p>
+    <div className="mx-auto flex max-w-[1400px] flex-col gap-6 p-4 pb-16 md:p-6">
+      <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border/60 pb-4">
+        <div className="space-y-1">
+          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Distribuidora · Operaciones
+          </p>
+          <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">
+            Pre‑despacho OC
+          </h1>
+          <p className="max-w-2xl text-sm text-muted-foreground">
+            Revisión de órdenes, asignación de camiones y validación antes del despacho.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="gap-2"
+            disabled={loading}
+            onClick={onRefreshData}
+          >
+            {loading ? (
+              <Loader2 className="size-4 animate-spin" aria-hidden />
+            ) : (
+              <RefreshCw className="size-4" aria-hidden />
+            )}
+            Recargar vista
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            className="gap-2"
+            disabled={loading || loadingSync}
+            onClick={() => void onSyncOrdersFromBsale()}
+          >
+            {loadingSync ? (
+              <Loader2 className="size-4 animate-spin" aria-hidden />
+            ) : (
+              <RefreshCw className="size-4" aria-hidden />
+            )}
+            Sync Bsale
+          </Button>
+        </div>
       </header>
+
+      <PreDespachoKpiStrip stats={operationalStats} loading={loading} />
 
       {error ? (
         <Alert variant="destructive">
@@ -894,34 +771,18 @@ export default function DistribuidoraOrdersPage() {
         </div>
       ) : null}
 
-      <section className="rounded-2xl border border-border/60 bg-card/40 p-6 shadow-sm backdrop-blur-sm">
-        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={loading || loadingSync}
-            onClick={() => void onSyncOrdersFromBsale()}
-            className="shrink-0 gap-2"
-          >
-            {loadingSync ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden />
-            ) : (
-              <RefreshCw className="size-4" aria-hidden />
-            )}
-            Actualizar órdenes
-          </Button>
-          {loadingSync ? (
-            <span className="text-xs text-muted-foreground">
-              Sincronizando órdenes de compra desde Bsale (solo tipo 33)…
-            </span>
-          ) : null}
-        </div>
-        <div className="mb-4 space-y-1 text-xs text-muted-foreground">
-          {lastOrdersLoadAt ? (
-            <p>Última actualización: {lastOrdersLoadAt}</p>
-          ) : null}
-        </div>
+      <section className="rounded-lg border border-border/70 bg-card p-4 shadow-sm md:p-5">
+        {loadingSync ? (
+          <p className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="size-3.5 animate-spin" aria-hidden />
+            Sincronizando órdenes de compra desde Bsale (tipo 33)…
+          </p>
+        ) : null}
+        {lastOrdersLoadAt ? (
+          <p className="mb-3 text-xs text-muted-foreground">
+            Datos cargados: {lastOrdersLoadAt}
+          </p>
+        ) : null}
         <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
           <div className="grid gap-5 sm:grid-cols-2">
             <div className="space-y-2">
@@ -975,44 +836,31 @@ export default function DistribuidoraOrdersPage() {
         </div>
       </section>
 
-      <section className="grid gap-4 sm:grid-cols-3">
-        <Card className="border-0 bg-muted/30 py-5 shadow-sm">
-          <CardHeader className="pb-2">
-            <CardDescription>Comunas con movimiento</CardDescription>
-            <CardTitle className="flex items-center gap-2 text-2xl tabular-nums">
-              <MapPin className="size-5 text-muted-foreground" />
-              {loading ? "—" : kpis.comunas}
-            </CardTitle>
-          </CardHeader>
-        </Card>
-        <Card className="border-0 bg-muted/30 py-5 shadow-sm">
-          <CardHeader className="pb-2">
-            <CardDescription>Pedidos (OC)</CardDescription>
-            <CardTitle className="flex items-center gap-2 text-2xl tabular-nums">
-              <Package className="size-5 text-muted-foreground" />
-              {loading ? "—" : kpis.pedidos.toLocaleString("es-CL")}
-            </CardTitle>
-          </CardHeader>
-        </Card>
-        <Card className="border-0 bg-muted/30 py-5 shadow-sm">
-          <CardHeader className="pb-2">
-            <CardDescription>Monto total</CardDescription>
-            <CardTitle className="flex items-center gap-2 text-xl tabular-nums sm:text-2xl">
-              <Truck className="size-5 shrink-0 text-muted-foreground" />
-              {loading ? "—" : formatClp(kpis.ventas)}
-            </CardTitle>
-          </CardHeader>
-        </Card>
-      </section>
-
-      {loading ? (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="size-4 animate-spin" />
-          Cargando resumen…
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2.5 text-sm">
+          <span className="text-xs text-muted-foreground">Comunas</span>
+          <p className="flex items-center gap-2 font-semibold tabular-nums">
+            <MapPin className="size-4 text-muted-foreground" aria-hidden />
+            {loading ? "—" : kpis.comunas}
+          </p>
         </div>
-      ) : null}
+        <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2.5 text-sm">
+          <span className="text-xs text-muted-foreground">Pedidos agregados</span>
+          <p className="flex items-center gap-2 font-semibold tabular-nums">
+            <Package className="size-4 text-muted-foreground" aria-hidden />
+            {loading ? "—" : kpis.pedidos.toLocaleString("es-CL")}
+          </p>
+        </div>
+        <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2.5 text-sm">
+          <span className="text-xs text-muted-foreground">Venta por comuna</span>
+          <p className="flex items-center gap-2 text-sm font-semibold tabular-nums">
+            <Truck className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            {loading ? "—" : formatClp(kpis.ventas)}
+          </p>
+        </div>
+      </div>
 
-      <div className="grid gap-10 lg:grid-cols-[1fr_min(22rem,100%)] lg:items-start">
+      <div className="grid gap-6 lg:grid-cols-[1fr_min(20rem,100%)] lg:items-start">
         <section className="min-w-0 space-y-3">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
             Por comuna
@@ -1134,46 +982,18 @@ export default function DistribuidoraOrdersPage() {
         </aside>
       </div>
 
-      <section className="space-y-3">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-          Resumen compacto
-        </h2>
-        <div className="max-w-xl overflow-x-auto rounded-lg border border-border/40 bg-background/90 text-xs">
-          <table className="w-full border-collapse">
-            <thead>
-              <tr className="border-b border-border/50 bg-muted/40 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                <th className="px-2 py-1.5">Comuna</th>
-                <th className="px-2 py-1.5 text-right">Clientes únicos</th>
-                <th className="px-2 py-1.5 text-right">Venta total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={`sum-${r.municipality}`} className="border-t border-border/30">
-                  <td className="px-2 py-1 font-medium">{r.municipality}</td>
-                  <td className="px-2 py-1 text-right tabular-nums">
-                    {Number(r.clientes_unicos).toLocaleString("es-CL")}
-                  </td>
-                  <td className="px-2 py-1 text-right tabular-nums">
-                    {formatClp(Number(r.total_ventas))}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
       <TooltipProvider delayDuration={200}>
-        <section className="space-y-4" data-route-stubs={routeStubsPreview.length}>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <section
+          className="space-y-4 rounded-lg border border-border/70 bg-card p-4 shadow-sm md:p-5"
+          data-route-stubs={routeStubsPreview.length}
+        >
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-                Pre‑planificación
+              <h2 className="text-sm font-semibold tracking-tight text-foreground">
+                Órdenes · pre‑despacho
               </h2>
               <p className="text-xs text-muted-foreground">
-                Asignar camión incluye el pedido en el envío. Sin georreferencia no se puede
-                planificar.
+                Filtre por estado, asigne camión y pase a planificación ORS.
               </p>
             </div>
             <Button
@@ -1209,7 +1029,14 @@ export default function DistribuidoraOrdersPage() {
               </AlertDescription>
             </Alert>
           ) : null}
-          <div className="flex flex-col gap-4 rounded-lg border border-border/50 bg-muted/20 p-4 sm:flex-row sm:flex-wrap sm:items-end">
+          <PreDespachoStatusChips
+            value={statusQuickFilter}
+            onChange={setStatusQuickFilter}
+            counts={statusFilterCounts}
+            disabled={loading}
+          />
+
+          <div className="flex flex-col gap-3 rounded-md border border-border/60 bg-muted/20 p-3 sm:flex-row sm:flex-wrap sm:items-end">
             <div className="space-y-2">
               <Label className="text-xs">Ordenar por</Label>
               <Select
@@ -1239,116 +1066,39 @@ export default function DistribuidoraOrdersPage() {
               </Label>
             </div>
           </div>
-          <div className="grid gap-3 rounded-lg border border-border/50 bg-card/50 px-4 py-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
-            <div className="flex items-center gap-2">
-              <span aria-hidden>🚛</span>
+          <div className="grid gap-2 text-xs sm:grid-cols-2 lg:grid-cols-4">
+            <div className="flex justify-between rounded-md border border-border/50 bg-background/80 px-3 py-2">
               <span className="text-muted-foreground">Camiones usados</span>
-              <strong className="ml-auto tabular-nums">
-                {logisticsKpis.trucksUsed}
-              </strong>
+              <strong className="tabular-nums">{logisticsKpis.trucksUsed}</strong>
             </div>
-            <div className="flex items-center gap-2">
-              <span aria-hidden>📦</span>
-              <span className="text-muted-foreground">Pedidos en plan</span>
-              <strong className="ml-auto tabular-nums">
-                {logisticsKpis.orders}
-              </strong>
+            <div className="flex justify-between rounded-md border border-border/50 bg-background/80 px-3 py-2">
+              <span className="text-muted-foreground">En plan</span>
+              <strong className="tabular-nums">{logisticsKpis.orders}</strong>
             </div>
-            <div className="flex items-center gap-2">
-              <span aria-hidden>💰</span>
-              <span className="text-muted-foreground">Monto total</span>
-              <strong className="ml-auto tabular-nums text-xs sm:text-sm">
-                {formatClp(logisticsKpis.amount)}
-              </strong>
+            <div className="flex justify-between rounded-md border border-border/50 bg-background/80 px-3 py-2">
+              <span className="text-muted-foreground">Monto en plan</span>
+              <strong className="tabular-nums">{formatClp(logisticsKpis.amount)}</strong>
             </div>
-            <div className="flex items-center gap-2">
-              <span aria-hidden>📍</span>
+            <div className="flex justify-between rounded-md border border-border/50 bg-background/80 px-3 py-2">
               <span className="text-muted-foreground">Comunas activas</span>
-              <strong className="ml-auto tabular-nums">
-                {logisticsKpis.comunas}
-              </strong>
+              <strong className="tabular-nums">{logisticsKpis.comunas}</strong>
             </div>
           </div>
-          <div className="overflow-x-auto rounded-xl border border-border/50">
-            <Table>
-              <TableHeader>
-                <TableRow className="hover:bg-transparent">
-                  <TableHead>OC</TableHead>
-                  <TableHead>Nombre fantasía</TableHead>
-                  <TableHead>Comuna</TableHead>
-                  <TableHead>Dirección</TableHead>
-                  <TableHead>Vendedor</TableHead>
-                  <TableHead>Estado</TableHead>
-                  <TableHead>Documento asociado</TableHead>
-                  <TableHead className="text-right">Score</TableHead>
-                  <TableHead className="text-right">Monto</TableHead>
-                  <TableHead>Georef</TableHead>
-                  <TableHead>Cluster</TableHead>
-                  <TableHead className="min-w-[12rem]">Camión</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {planningRows.length === 0 && !loading ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={12}
-                      className="py-10 text-center text-muted-foreground"
-                    >
-                      Sin filas para mostrar (ajuste fechas o filtro de día).
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  groupedBlocks.map((block) => (
-                    <Fragment key={block.key}>
-                      {groupByMunicipality && block.key !== "_all" ? (
-                        <TableRow className="bg-muted/70 hover:bg-muted/70">
-                          <TableCell colSpan={10} className="py-3">
-                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                              <div>
-                                <span className="text-sm font-semibold tracking-wide">
-                                  {block.key}
-                                </span>
-                                <span className="ml-2 text-xs text-muted-foreground">
-                                  ({block.rows.length} pedidos) ·{" "}
-                                  {formatClp(block.total)}
-                                </span>
-                              </div>
-                              <GroupTruckAssignMenu
-                                municipalityLabel={block.key}
-                                groupRows={block.rows}
-                                trucksOrdered={trucksOrderedForGroupMenu}
-                                lastSuggestedTruckId={lastSuggestedGroupTruckId}
-                                disabled={trucks.length === 0}
-                                onPickTruck={(truckId) =>
-                                  assignTruckToGroupWithChoice(
-                                    block.key,
-                                    truckId,
-                                    block.rows,
-                                  )
-                                }
-                              />
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ) : null}
-                      {block.rows.map((r) => (
-                        <PlanningTableRow
-                          key={r.document_id}
-                          r={r}
-                          trucks={trucks}
-                          truckIdByDoc={truckIdByDoc}
-                          clusterLabel={
-                            clusterByDoc.get(r.document_id) ?? "—"
-                          }
-                          onTruckChange={onPlanningTruckChange}
-                        />
-                      ))}
-                    </Fragment>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </div>
+
+          <PreDespachoPlanningTable
+            blocks={groupedBlocks}
+            groupByMunicipality={groupByMunicipality}
+            trucks={trucks}
+            trucksOrderedForGroupMenu={trucksOrderedForGroupMenu}
+            lastSuggestedGroupTruckId={lastSuggestedGroupTruckId}
+            truckIdByDoc={truckIdByDoc}
+            clusterByDoc={clusterByDoc}
+            allRowsForThresholds={planningRows}
+            loading={loading}
+            statusFilterActive={statusQuickFilter !== "all"}
+            onGroupTruckPick={assignTruckToGroupWithChoice}
+            onTruckChange={onPlanningTruckChange}
+          />
         </section>
       </TooltipProvider>
 

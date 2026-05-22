@@ -87,11 +87,11 @@ export function OrdersTable({
           </span>
         </div>
       </div>
-      <div className="rounded-md border">
+      <div className="relative max-h-[min(65vh,40rem)] overflow-auto rounded-lg border border-border/70 bg-card shadow-sm">
         <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-10">
+          <TableHeader className="sticky top-0 z-10 bg-card/95 shadow-[0_1px_0_0_hsl(var(--border))] backdrop-blur-sm">
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="h-10 w-10 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 <Checkbox
                   checked={allSelected ? true : someSelected ? "indeterminate" : false}
                   onCheckedChange={(c) => onToggleAll(c === true)}
@@ -99,14 +99,30 @@ export function OrdersTable({
                   aria-label="Seleccionar todas"
                 />
               </TableHead>
-              <TableHead>OC</TableHead>
-              <TableHead>Cliente</TableHead>
-              <TableHead>Comuna</TableHead>
-              <TableHead className="text-right">Total</TableHead>
-              <TableHead>Vendedor</TableHead>
-              <TableHead>Estado</TableHead>
-              <TableHead>Documento asociado</TableHead>
-              <TableHead className="text-right">Score</TableHead>
+              <TableHead className="h-10 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                OC
+              </TableHead>
+              <TableHead className="h-10 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Cliente
+              </TableHead>
+              <TableHead className="h-10 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Comuna
+              </TableHead>
+              <TableHead className="h-10 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Total
+              </TableHead>
+              <TableHead className="h-10 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Vendedor
+              </TableHead>
+              <TableHead className="h-10 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Estado
+              </TableHead>
+              <TableHead className="h-10 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Doc. asoc.
+              </TableHead>
+              <TableHead className="h-10 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Score
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -130,8 +146,11 @@ export function OrdersTable({
                   row.nombre_fantasia?.trim() ||
                   "—"
                 return (
-                  <TableRow key={row.document_id}>
-                    <TableCell>
+                  <TableRow
+                    key={row.document_id}
+                    className="transition-colors duration-100 hover:bg-muted/50"
+                  >
+                    <TableCell className="py-3">
                       <Checkbox
                         checked={pageSelectedIds.has(row.document_id)}
                         onCheckedChange={(c) =>
@@ -141,26 +160,28 @@ export function OrdersTable({
                         aria-label={`Seleccionar OC ${row.number ?? row.document_id}`}
                       />
                     </TableCell>
-                    <TableCell className="tabular-nums font-medium">
+                    <TableCell className="py-3 font-mono text-sm font-medium tabular-nums">
                       {row.number ?? row.oc_number ?? "—"}
                     </TableCell>
-                    <TableCell className="max-w-[220px] truncate">
+                    <TableCell className="max-w-[220px] truncate py-3">
                       {clientLabel}
                     </TableCell>
-                    <TableCell className="max-w-[160px] truncate">
+                    <TableCell className="max-w-[160px] truncate py-3 text-muted-foreground">
                       {row.municipality?.trim() || row.city?.trim() || "—"}
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">
+                    <TableCell className="py-3 text-right font-medium tabular-nums">
                       {formatClp(row.total_amount)}
                     </TableCell>
-                    <TableCell className="max-w-[180px] truncate">{seller}</TableCell>
-                    <TableCell>
+                    <TableCell className="max-w-[180px] truncate py-3">
+                      {seller}
+                    </TableCell>
+                    <TableCell className="py-3">
                       <PurchaseInvoiceStatusCell row={row} />
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="py-3">
                       <PurchaseAssociatedDocumentCell row={row} />
                     </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="py-3 text-right">
                       <PurchaseInvoiceScoreCell row={row} />
                     </TableCell>
                   </TableRow>
