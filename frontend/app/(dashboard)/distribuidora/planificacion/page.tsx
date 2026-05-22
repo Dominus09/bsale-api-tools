@@ -6,8 +6,11 @@ import Link from "next/link"
 import { Loader2, RefreshCw, Trash2 } from "lucide-react"
 
 import {
+  confirmDispatchPlan,
+  getDispatchPlansBySession,
   getDistribuidoraPlanificacionRouteCrew,
   postDistribuidoraPlanificacionOrsRoutes,
+  type DispatchPlanSummary,
   type DistribuidoraPlanificacionCrewDefaults,
   type DistribuidoraPlanificacionOrsResponse,
   type DistribuidoraPlanificacionOrsRoute,
@@ -24,6 +27,8 @@ import { OrsDispatchEmptyState } from "@/components/distribuidora/planificacion/
 import { OrsFuelConfigBar } from "@/components/distribuidora/planificacion/OrsFuelConfigBar"
 import { OrsMapSkeleton } from "@/components/distribuidora/planificacion/OrsMapSkeleton"
 import { OrsTopBar } from "@/components/distribuidora/planificacion/OrsTopBar"
+import { OrsTruckSidebar } from "@/components/distribuidora/planificacion/OrsTruckSidebar"
+import { OrsDispatchWorkflow } from "@/components/distribuidora/planificacion/OrsDispatchWorkflow"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 
@@ -102,6 +107,8 @@ export default function PlanificacionDespachoPage() {
   const [crewByCamion, setCrewByCamion] = useState<Map<string, CrewCounts>>(new Map())
   const [crewDefaults, setCrewDefaults] =
     useState<DistribuidoraPlanificacionCrewDefaults | null>(null)
+  const [selectedCamion, setSelectedCamion] = useState<string | null>(null)
+  const [sessionPlans, setSessionPlans] = useState<DispatchPlanSummary[]>([])
 
   const reloadFromStorage = useCallback(() => {
     const p = readPlanificacionPayload()
@@ -113,13 +120,33 @@ export default function PlanificacionDespachoPage() {
     reloadFromStorage()
   }, [reloadFromStorage])
 
+  const loadSessionPlans = useCallback(async (sessionId: string | null) => {
+    if (!sessionId) {
+      setSessionPlans([])
+      return
+    }
+    try {
+      const { items } = await getDispatchPlansBySession(sessionId)
+      setSessionPlans(items)
+    } catch {
+      setSessionPlans([])
+    }
+  }, [])
+
   const fetchRoutes = useCallback(
     async (
       list: PlanificacionStoredOrder[],
+      camion: string | null,
       sessionId: string | null,
       crewMap: Map<string, CrewCounts>,
     ) => {
-      if (list.length === 0) {
+      if (!camion || list.length === 0) {
+        setOrsPayload(null)
+        setLoading(false)
+        return
+      }
+      const truckOrders = list.filter((o) => o.camion === camion)
+      if (truckOrders.length === 0) {
         setOrsPayload(null)
         setLoading(false)
         return
@@ -127,34 +154,31 @@ export default function PlanificacionDespachoPage() {
       setLoading(true)
       setError(null)
       try {
-        const byT = groupOrdersByTruck(list)
-        const truckEntries = Array.from(byT.entries()) as [
-          string,
-          PlanificacionStoredOrder[],
-        ][]
-        const routesPayload = truckEntries.map(([camion, stops]) => {
-          const crew = crewMap.get(camion) ?? { driverCount: 1, assistantCount: 0 }
-          return {
+        const crew = crewMap.get(camion) ?? { driverCount: 1, assistantCount: 0 }
+        const routesPayload = [
+          {
             camion,
-            truck_id: stops[0]?.truck_id ?? null,
+            truck_id: truckOrders[0]?.truck_id ?? null,
             driver_count: crew.driverCount,
             assistant_count: crew.assistantCount,
-            stops: stops.map((o) => ({
+            stops: truckOrders.map((o) => ({
               document_id: o.document_id,
               lat: o.lat,
               lng: o.lng,
             })),
-          }
-        })
+          },
+        ]
         const res = await postDistribuidoraPlanificacionOrsRoutes({
           planSessionId: sessionId,
           routes: routesPayload,
         })
         setOrsPayload(res)
         if (res.crew_defaults) setCrewDefaults(res.crew_defaults)
-        setOrders(applyOptimizedStopOrder(list, res.routes))
-        const nextCrew = crewMapFromOrders(list, crewMap)
-        setCrewByCamion(nextCrew)
+        const truckOnly = list.filter((o) => o.camion === camion)
+        const optimized = applyOptimizedStopOrder(truckOnly, res.routes)
+        const optMap = new Map(optimized.map((o) => [o.document_id, o]))
+        setOrders(list.map((o) => optMap.get(o.document_id) ?? o))
+        setCrewByCamion(crewMapFromOrders(list, crewMap))
       } catch (e: unknown) {
         setError(e instanceof Error ? e.message : "Error ORS")
         setOrsPayload(null)
@@ -199,14 +223,19 @@ export default function PlanificacionDespachoPage() {
       } else {
         setCrewByCamion(crewMap)
       }
-      if (!cancelled) void fetchRoutes(initial, sessionId, crewMap)
+      const camiones = Array.from(groupOrdersByTruck(initial).keys())
+      const first = camiones[0] ?? null
+      if (!cancelled) setSelectedCamion(first)
+      if (!cancelled && first) void fetchRoutes(initial, first, sessionId, crewMap)
+      if (!cancelled && sessionId) void loadSessionPlans(sessionId)
     })()
     return () => {
       cancelled = true
     }
-  }, [fetchRoutes])
+  }, [fetchRoutes, loadSessionPlans])
 
   const orsRoutes = orsPayload?.routes ?? []
+  const activeRoute = orsRoutes[0] ?? null
   const depot = orsPayload?.depot ?? null
 
   const truckColorMap = useMemo(() => {
@@ -214,40 +243,64 @@ export default function PlanificacionDespachoPage() {
     return new Map(keys.map((k, i) => [k, TRUCK_COLORS[i % TRUCK_COLORS.length]!]))
   }, [orders])
 
-  const mapRoutes: PlanificacionMapRoute[] = useMemo(() => {
+  const truckSidebarRows = useMemo(() => {
     const byT = groupOrdersByTruck(orders)
-    return orsRoutes.map((r, i) => {
-      const color = TRUCK_COLORS[i % TRUCK_COLORS.length]!
-      const stopsOrdered = r.stops_ordered ?? []
-      const stopsFromOrder =
-        stopsOrdered.length > 0
-          ? stopsOrdered.map((s) => {
-              const o = (byT.get(r.camion) ?? []).find(
-                (x) => x.document_id === s.document_id,
-              )
-              return {
-                lat: s.lat,
-                lng: s.lng,
-                num: s.stop_index,
-                label: `${o?.nombre_fantasia?.trim() || "Cliente"} · OC ${o?.oc ?? s.document_id}`,
-              }
-            })
-          : (byT.get(r.camion) ?? [])
-              .sort((a, b) => a.stop_index - b.stop_index)
-              .map((s) => ({
-                lat: s.lat,
-                lng: s.lng,
-                num: s.stop_index,
-                label: `${s.nombre_fantasia?.trim() || "Cliente"} · OC ${s.oc ?? s.document_id}`,
-              }))
-      return {
+    const planByTruck = new Map<number, DispatchPlanSummary>()
+    for (const p of sessionPlans) {
+      if (p.truck_id != null) planByTruck.set(Number(p.truck_id), p)
+    }
+    return Array.from(byT.entries()).map(([camion, stops]) => ({
+      camion,
+      truckId: stops[0]?.truck_id ?? 0,
+      stopCount: stops.length,
+      plan: planByTruck.get(stops[0]?.truck_id ?? -1) ?? null,
+    }))
+  }, [orders, sessionPlans])
+
+  const activePlan = useMemo(() => {
+    const row = truckSidebarRows.find((t) => t.camion === selectedCamion)
+    return row?.plan ?? null
+  }, [truckSidebarRows, selectedCamion])
+
+  const ordersForTruck = useMemo(
+    () => (selectedCamion ? orders.filter((o) => o.camion === selectedCamion) : []),
+    [orders, selectedCamion],
+  )
+
+  const mapRoutes: PlanificacionMapRoute[] = useMemo(() => {
+    if (!selectedCamion || !activeRoute) return []
+    const byT = groupOrdersByTruck(orders)
+    const r = activeRoute
+    const color = truckColorMap.get(selectedCamion) ?? TRUCK_COLORS[0]!
+    const stopsOrdered = r.stops_ordered ?? []
+    const stopsFromOrder =
+      stopsOrdered.length > 0
+        ? stopsOrdered.map((s) => {
+            const o = (byT.get(r.camion) ?? []).find((x) => x.document_id === s.document_id)
+            return {
+              lat: s.lat,
+              lng: s.lng,
+              num: s.stop_index,
+              label: `${o?.nombre_fantasia?.trim() || "Cliente"} · OC ${o?.oc ?? s.document_id}`,
+            }
+          })
+        : (byT.get(r.camion) ?? [])
+            .sort((a, b) => a.stop_index - b.stop_index)
+            .map((s) => ({
+              lat: s.lat,
+              lng: s.lng,
+              num: s.stop_index,
+              label: `${s.nombre_fantasia?.trim() || "Cliente"} · OC ${s.oc ?? s.document_id}`,
+            }))
+    return [
+      {
         camion: r.camion,
         color,
         positions: lineStringToLatLngs(r.geometry),
         stops: stopsFromOrder,
-      }
-    })
-  }, [orders, orsRoutes])
+      },
+    ]
+  }, [orders, activeRoute, selectedCamion, truckColorMap])
 
   const totals = useMemo(() => {
     if (orsPayload?.totals) {
@@ -290,22 +343,22 @@ export default function PlanificacionDespachoPage() {
 
   const clientCount = useMemo(() => {
     const clients = new Set<number>()
-    for (const o of orders) {
+    for (const o of ordersForTruck) {
       if (o.client_id != null && Number.isFinite(Number(o.client_id))) {
         clients.add(Number(o.client_id))
       }
     }
     return clients.size
-  }, [orders])
+  }, [ordersForTruck])
 
   const visits = useMemo(
-    () => buildOrsVisitRows(orders, orsRoutes, truckColorMap),
-    [orders, orsRoutes, truckColorMap],
+    () => buildOrsVisitRows(ordersForTruck, orsRoutes, truckColorMap),
+    [ordersForTruck, orsRoutes, truckColorMap],
   )
 
   const truckOptions = useMemo(
-    () => Array.from(groupOrdersByTruck(orders).keys()),
-    [orders],
+    () => (selectedCamion ? [selectedCamion] : []),
+    [selectedCamion],
   )
 
   const highlightedStopKey = useMemo(() => {
@@ -340,10 +393,58 @@ export default function PlanificacionDespachoPage() {
       const next = new Map(crewByCamion)
       next.set(camion, { driverCount, assistantCount })
       setCrewByCamion(next)
-      void fetchRoutes(orders, planSessionId, next)
+      void fetchRoutes(orders, camion, planSessionId, next)
     },
     [crewByCamion, fetchRoutes, orders, planSessionId],
   )
+
+  const handleConfirmPlan = useCallback(async () => {
+    if (!selectedCamion || !activeRoute || !planSessionId) return
+    const truckOrders = orders.filter((o) => o.camion === selectedCamion)
+    const truckId = truckOrders[0]?.truck_id
+    if (!truckId) throw new Error("Camión sin truck_id")
+    const crew = crewByCamion.get(selectedCamion) ?? { driverCount: 1, assistantCount: 0 }
+    const bd = activeRoute.cost_breakdown
+    await confirmDispatchPlan({
+      plan_session_id: planSessionId,
+      truck_id: truckId,
+      route_name: selectedCamion,
+      driver_count: crew.driverCount,
+      assistant_count: crew.assistantCount,
+      driver_cost_clp: activeRoute.driver_cost_clp ?? 0,
+      assistant_cost_clp: activeRoute.assistant_cost_clp ?? 0,
+      diesel_price_per_liter: orsPayload?.diesel_price_per_liter ?? 1200,
+      km_total: activeRoute.distance_km,
+      duration_min: activeRoute.duration_min,
+      liters_estimated: activeRoute.liters_estimated ?? 0,
+      fuel_cost_clp: activeRoute.fuel_cost_clp ?? 0,
+      ferry_cost_clp: bd?.ferry_clp ?? 0,
+      toll_cost_clp: bd?.toll_clp ?? 0,
+      extras_cost_clp: 0,
+      crew_cost_clp: activeRoute.crew_cost_clp ?? 0,
+      total_route_cost_clp: bd?.total_clp ?? activeRoute.fuel_cost_clp ?? 0,
+      route_geometry: activeRoute.geometry ?? null,
+      orders: truckOrders.map((o) => ({
+        oc_document_id: o.document_id,
+        oc_number: o.oc ?? null,
+        route_order: o.stop_index,
+        client_id: o.client_id ?? null,
+        client_name: o.nombre_fantasia ?? null,
+        oc_total_amount: o.total_amount ?? null,
+        lat: o.lat,
+        lng: o.lng,
+      })),
+    })
+    await loadSessionPlans(planSessionId)
+  }, [
+    selectedCamion,
+    activeRoute,
+    planSessionId,
+    orders,
+    crewByCamion,
+    orsPayload,
+    loadSessionPlans,
+  ])
 
   if (!loading && orders.length === 0) {
     return <OrsDispatchEmptyState />
@@ -364,7 +465,9 @@ export default function PlanificacionDespachoPage() {
           <div className="flex flex-wrap items-center gap-2">
             <OrsFuelConfigBar
               onSaved={() => {
-                if (orders.length > 0) void fetchRoutes(orders, planSessionId, crewByCamion)
+                if (selectedCamion && orders.length > 0) {
+                  void fetchRoutes(orders, selectedCamion, planSessionId, crewByCamion)
+                }
               }}
             />
             <Button
@@ -373,7 +476,11 @@ export default function PlanificacionDespachoPage() {
               size="sm"
               className="h-8 gap-1.5 text-xs"
               disabled={loading}
-              onClick={() => void fetchRoutes(orders, planSessionId, crewByCamion)}
+              onClick={() => {
+                if (selectedCamion) {
+                  void fetchRoutes(orders, selectedCamion, planSessionId, crewByCamion)
+                }
+              }}
             >
               {loading ? (
                 <Loader2 className="size-3.5 animate-spin" aria-hidden />
@@ -427,6 +534,15 @@ export default function PlanificacionDespachoPage() {
       ) : null}
 
       <div className="flex min-h-0 flex-1">
+        <OrsTruckSidebar
+          trucks={truckSidebarRows}
+          selectedCamion={selectedCamion}
+          onSelect={(c) => {
+            setSelectedCamion(c)
+            void fetchRoutes(orders, c, planSessionId, crewByCamion)
+          }}
+          loading={loading}
+        />
         <aside className="flex w-[min(100%,20rem)] shrink-0 flex-col border-r border-border/80 md:w-80 lg:w-[22rem]">
           <OrsClientPanel
             visits={visits}
@@ -445,6 +561,15 @@ export default function PlanificacionDespachoPage() {
             selectedVisitId={selectedVisitId}
             onSelectVisit={setSelectedVisitId}
             onCrewChange={handleCrewChange}
+            activeCamion={selectedCamion}
+          />
+          <OrsDispatchWorkflow
+            plan={activePlan}
+            canConfirm={!loading && !!activeRoute && !activePlan}
+            onConfirm={handleConfirmPlan}
+            onPlanUpdated={() => {
+              if (planSessionId) void loadSessionPlans(planSessionId)
+            }}
           />
         </aside>
 

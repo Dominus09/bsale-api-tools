@@ -50,6 +50,8 @@ type OrsClientPanelProps = {
   selectedVisitId?: number | null
   onSelectVisit?: (documentId: number) => void
   onCrewChange?: (camion: string, driverCount: number, assistantCount: number) => void
+  /** Si se define, el panel opera solo para este camión (sin filtro “todos”). */
+  activeCamion?: string | null
 }
 
 function ClientCard({
@@ -117,43 +119,46 @@ export function OrsClientPanel({
   selectedVisitId,
   onSelectVisit,
   onCrewChange,
+  activeCamion,
 }: OrsClientPanelProps) {
-  const [truckFilter, setTruckFilter] = useState<string>("__all__")
+  const [truckFilter, setTruckFilter] = useState<string>(activeCamion ?? "__all__")
+
+  const effectiveFilter = activeCamion ?? truckFilter
 
   const filtered = useMemo(() => {
-    if (truckFilter === "__all__") return visits
-    return visits.filter((v) => v.camion === truckFilter)
-  }, [visits, truckFilter])
+    if (effectiveFilter === "__all__") return visits
+    return visits.filter((v) => v.camion === effectiveFilter)
+  }, [visits, effectiveFilter])
 
   const panelKm = useMemo(() => {
-    if (truckFilter === "__all__") return kmTotal
-    const r = routeStats.find((x) => x.camion === truckFilter)
+    if (effectiveFilter === "__all__") return kmTotal
+    const r = routeStats.find((x) => x.camion === effectiveFilter)
     return r?.distance_km ?? 0
-  }, [truckFilter, kmTotal, routeStats])
+  }, [effectiveFilter, kmTotal, routeStats])
 
   const panelMin = useMemo(() => {
-    if (truckFilter === "__all__") return durationMin
-    const r = routeStats.find((x) => x.camion === truckFilter)
+    if (effectiveFilter === "__all__") return durationMin
+    const r = routeStats.find((x) => x.camion === effectiveFilter)
     return r?.duration_min ?? 0
-  }, [truckFilter, durationMin, routeStats])
+  }, [effectiveFilter, durationMin, routeStats])
 
   const activeLeg = useMemo(
     () =>
-      truckFilter === "__all__"
+      effectiveFilter === "__all__"
         ? null
-        : routeStats.find((x) => x.camion === truckFilter) ?? null,
-    [truckFilter, routeStats],
+        : routeStats.find((x) => x.camion === effectiveFilter) ?? null,
+    [effectiveFilter, routeStats],
   )
 
   const panelKpl = activeLeg?.km_per_liter_used
   const panelLiters =
-    truckFilter === "__all__" ? litersTotal : (activeLeg?.liters_estimated ?? 0)
+    effectiveFilter === "__all__" ? litersTotal : (activeLeg?.liters_estimated ?? 0)
   const panelFuel =
-    truckFilter === "__all__" ? fuelCostTotal : (activeLeg?.fuel_cost_clp ?? 0)
+    effectiveFilter === "__all__" ? fuelCostTotal : (activeLeg?.fuel_cost_clp ?? 0)
   const panelCrew =
-    truckFilter === "__all__" ? crewCostTotal : (activeLeg?.crew_cost_clp ?? 0)
+    effectiveFilter === "__all__" ? crewCostTotal : (activeLeg?.crew_cost_clp ?? 0)
   const panelTotal =
-    truckFilter === "__all__"
+    effectiveFilter === "__all__"
       ? (routeCostTotal ?? fuelCostTotal + crewCostTotal)
       : (activeLeg?.total_cost_clp ?? panelFuel + panelCrew)
 
@@ -177,19 +182,25 @@ export function OrsClientPanel({
           </div>
         ) : (
           <>
-            <Select value={truckFilter} onValueChange={setTruckFilter}>
-              <SelectTrigger className="h-9 text-xs">
-                <SelectValue placeholder="Camión" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__all__">Todos los camiones</SelectItem>
-                {truckOptions.map((t) => (
-                  <SelectItem key={t} value={t}>
-                    {t}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {!activeCamion ? (
+              <Select value={truckFilter} onValueChange={setTruckFilter}>
+                <SelectTrigger className="h-9 text-xs">
+                  <SelectValue placeholder="Camión" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">Todos los camiones</SelectItem>
+                  {truckOptions.map((t) => (
+                    <SelectItem key={t} value={t}>
+                      {t}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <p className="rounded-md border border-border/60 bg-background/80 px-2.5 py-2 text-xs font-medium">
+                {activeCamion}
+              </p>
+            )}
 
             {activeLeg?.truck_name ? (
               <p className="text-[11px] text-muted-foreground">
@@ -234,7 +245,7 @@ export function OrsClientPanel({
                 ) : null}
               </div>
 
-              {truckFilter !== "__all__" && onCrewChange ? (
+              {effectiveFilter !== "__all__" && onCrewChange ? (
                 <div className="col-span-2 space-y-2 rounded-md border border-border/70 bg-background/90 px-2.5 py-2.5">
                   <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
                     <Users className="size-3.5 text-primary" aria-hidden />
@@ -246,7 +257,7 @@ export function OrsClientPanel({
                       <Select
                         value={String(panelDriverCount)}
                         onValueChange={(v) =>
-                          onCrewChange(truckFilter, Number(v), panelAssistantCount)
+                          onCrewChange(effectiveFilter, Number(v), panelAssistantCount)
                         }
                       >
                         <SelectTrigger className="h-8 text-xs">
@@ -266,7 +277,7 @@ export function OrsClientPanel({
                       <Select
                         value={String(panelAssistantCount)}
                         onValueChange={(v) =>
-                          onCrewChange(truckFilter, panelDriverCount, Number(v))
+                          onCrewChange(effectiveFilter, panelDriverCount, Number(v))
                         }
                       >
                         <SelectTrigger className="h-8 text-xs">

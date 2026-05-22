@@ -1687,6 +1687,200 @@ export async function postDistribuidoraPlanificacionOrsRoutes(params: {
   return res.json() as Promise<DistribuidoraPlanificacionOrsResponse>
 }
 
+export type DispatchPlanStatus =
+  | "draft"
+  | "planned"
+  | "invoicing"
+  | "ready_for_picking"
+  | "picking_generated"
+  | "dispatched"
+
+export type DispatchPlanSummary = {
+  id: number
+  plan_session_id?: string | null
+  planning_date: string
+  truck_id?: number | null
+  truck_name?: string | null
+  route_name: string
+  status: DispatchPlanStatus
+  driver_count: number
+  assistant_count: number
+  km_total?: number
+  total_route_cost_clp?: number
+  confirmed_at?: string | null
+}
+
+export type DispatchPlanInvoicedRow = {
+  oc_document_id: number
+  oc_number?: number | null
+  route_order?: number
+  status: "confirmed" | "probable" | "missing"
+  relation_source?: string | null
+  related_document_id?: number | null
+  related_document_number?: number | null
+  related_document_type_label?: string | null
+  probable_document_number?: number | null
+  probable_score?: number | null
+}
+
+export async function getDispatchPlansBySession(planSessionId: string): Promise<{
+  items: DispatchPlanSummary[]
+}> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/by-session/${encodeURIComponent(planSessionId)}`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar planes de despacho")
+  }
+  return res.json() as Promise<{ items: DispatchPlanSummary[] }>
+}
+
+export async function confirmDispatchPlan(body: {
+  plan_session_id: string
+  truck_id: number
+  route_name: string
+  driver_count: number
+  assistant_count: number
+  driver_cost_clp: number
+  assistant_cost_clp: number
+  diesel_price_per_liter: number
+  km_total: number
+  duration_min: number
+  liters_estimated: number
+  fuel_cost_clp: number
+  ferry_cost_clp: number
+  toll_cost_clp: number
+  extras_cost_clp: number
+  crew_cost_clp: number
+  total_route_cost_clp: number
+  route_geometry?: Record<string, unknown> | null
+  orders: {
+    oc_document_id: number
+    oc_number?: number | null
+    route_order: number
+    client_id?: number | null
+    client_name?: string | null
+    address?: string | null
+    city?: string | null
+    seller_name?: string | null
+    oc_total_amount?: number | null
+    lat?: number | null
+    lng?: number | null
+  }[]
+}): Promise<{ plan: DispatchPlanSummary; orders: unknown[] }> {
+  const res = await fetch(`${API_URL}/distribuidora/dispatch-plans/confirm`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al confirmar planificación")
+  }
+  return res.json() as Promise<{ plan: DispatchPlanSummary; orders: unknown[] }>
+}
+
+export async function getDispatchPlanInvoicedDocuments(planId: number): Promise<{
+  dispatch_plan_id: number
+  items: DispatchPlanInvoicedRow[]
+  summary: { confirmed: number; probable: number; missing: number; total: number }
+  warnings: { oc_document_id: number; oc_number?: number | null; message: string }[]
+  probable_notes: {
+    oc_document_id: number
+    message: string
+    probable_document_number?: number | null
+    probable_score?: number | null
+  }[]
+  ready_for_picking: boolean
+}> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/invoiced-documents`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al revisar facturación")
+  }
+  return res.json() as Promise<{
+    dispatch_plan_id: number
+    items: DispatchPlanInvoicedRow[]
+    summary: { confirmed: number; probable: number; missing: number; total: number }
+    warnings: { oc_document_id: number; oc_number?: number | null; message: string }[]
+    probable_notes: {
+      oc_document_id: number
+      message: string
+      probable_document_number?: number | null
+      probable_score?: number | null
+    }[]
+    ready_for_picking: boolean
+  }>
+}
+
+export async function downloadDispatchPlanBillingExcel(planId: number): Promise<void> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/billing-export`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al descargar Excel de facturación")
+  }
+  const blob = await res.blob()
+  const cd = res.headers.get("Content-Disposition")
+  const m = cd?.match(/filename="([^"]+)"/)
+  const name = m?.[1] ?? `facturacion_plan_${planId}.xlsx`
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = name
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+export async function getDispatchPlanPickingByClient(planId: number): Promise<{
+  dispatch_plan_id: number
+  clients: unknown[]
+}> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/picking-by-client?validate=true`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al generar picking por cliente")
+  }
+  return res.json() as Promise<{ dispatch_plan_id: number; clients: unknown[] }>
+}
+
+export async function getDispatchPlanPickingByProduct(planId: number): Promise<{
+  dispatch_plan_id: number
+  items: unknown[]
+}> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/picking-by-product?validate=true`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al generar picking por producto")
+  }
+  return res.json() as Promise<{ dispatch_plan_id: number; items: unknown[] }>
+}
+
+export async function markDispatchPlanPickingGenerated(planId: number): Promise<unknown> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/picking-generated`,
+    { method: "POST", headers: getAuthHeaders() },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al actualizar estado del plan")
+  }
+  return res.json()
+}
+
 /** Fila de GET /distribuidora/orders/purchase/by-document-ids (preview planificación). */
 export type DistribuidoraPlanningPreviewItem = {
   document_id: number
