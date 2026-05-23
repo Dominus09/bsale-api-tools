@@ -100,6 +100,9 @@ def ensure_distribuidora_schema(cur) -> None:
         "020_ors_route_crew_costs.sql",
         "021_dispatch_plan.sql",
         "022_dispatch_plan_invoiced_view.sql",
+        "023_dispatch_plan_identity.sql",
+        "024_dispatch_plan_picking_snapshots.sql",
+        "025_dispatch_plan_margin_and_snapshot.sql",
     ):
         _run_sql_file(cur, fn)
 

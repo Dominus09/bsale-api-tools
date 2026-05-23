@@ -24,13 +24,15 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 type OrsDispatchWorkflowProps = {
   plan: DispatchPlanSummary | null | undefined
   canConfirm: boolean
-  onConfirm: () => Promise<void>
+  defaultPlanningName?: string
+  onConfirm: (planningName: string) => Promise<void>
   onPlanUpdated: () => void
 }
 
 export function OrsDispatchWorkflow({
   plan,
   canConfirm,
+  defaultPlanningName = "",
   onConfirm,
   onPlanUpdated,
 }: OrsDispatchWorkflowProps) {
@@ -58,25 +60,38 @@ export function OrsDispatchWorkflow({
       </p>
 
       {!isPlanned ? (
-        <Button
-          type="button"
-          size="sm"
-          className="h-8 w-full gap-1.5 text-xs"
-          disabled={!canConfirm || busy != null}
-          onClick={() =>
-            void run("confirm", async () => {
-              try {
-                await onConfirm()
-                onPlanUpdated()
-                setInvoiceMsg("Planificación confirmada. Puede descargar Excel de facturación.")
-                setInvoiceAlert("default")
-              } catch (e: unknown) {
-                setInvoiceMsg(e instanceof Error ? e.message : "Error al confirmar")
-                setInvoiceAlert("destructive")
-              }
-            })
-          }
-        >
+        <>
+          <label className="block space-y-1">
+            <span className="text-[10px] text-muted-foreground">Nombre planificación</span>
+            <input
+              type="text"
+              className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"
+              placeholder="Ej. Castro Sur"
+              defaultValue={defaultPlanningName}
+              id="ors-planning-name"
+            />
+          </label>
+          <Button
+            type="button"
+            size="sm"
+            className="h-8 w-full gap-1.5 text-xs"
+            disabled={!canConfirm || busy != null}
+            onClick={() =>
+              void run("confirm", async () => {
+                try {
+                  const el = document.getElementById("ors-planning-name") as HTMLInputElement | null
+                  const name = el?.value?.trim() || defaultPlanningName || "Ruta"
+                  await onConfirm(name)
+                  onPlanUpdated()
+                  setInvoiceMsg("Planificación confirmada y guardada en historial.")
+                  setInvoiceAlert("default")
+                } catch (e: unknown) {
+                  setInvoiceMsg(e instanceof Error ? e.message : "Error al confirmar")
+                  setInvoiceAlert("destructive")
+                }
+              })
+            }
+          >
           {busy === "confirm" ? (
             <Loader2 className="size-3.5 animate-spin" aria-hidden />
           ) : (
@@ -84,6 +99,24 @@ export function OrsDispatchWorkflow({
           )}
           Confirmar planificación
         </Button>
+        </>
+      ) : plan?.planning_code ? (
+        <p className="text-[11px] text-muted-foreground">
+          Guardado como{" "}
+          <span className="font-mono font-medium text-foreground">{plan.planning_code}</span>
+          {plan.id ? (
+            <>
+              {" "}
+              ·{" "}
+              <a
+                href={`/distribuidora/planificaciones/${plan.id}`}
+                className="text-primary underline-offset-2 hover:underline"
+              >
+                Ver historial
+              </a>
+            </>
+          ) : null}
+        </p>
       ) : (
         <div className="flex flex-col gap-1.5">
           <Button

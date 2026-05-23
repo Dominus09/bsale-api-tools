@@ -398,7 +398,7 @@ export default function PlanificacionDespachoPage() {
     [crewByCamion, fetchRoutes, orders, planSessionId],
   )
 
-  const handleConfirmPlan = useCallback(async () => {
+  const handleConfirmPlan = useCallback(async (planningName: string) => {
     if (!selectedCamion || !activeRoute || !planSessionId) return
     const truckOrders = orders.filter((o) => o.camion === selectedCamion)
     const truckId = truckOrders[0]?.truck_id
@@ -409,6 +409,7 @@ export default function PlanificacionDespachoPage() {
       plan_session_id: planSessionId,
       truck_id: truckId,
       route_name: selectedCamion,
+      planning_name: planningName.trim() || selectedCamion,
       driver_count: crew.driverCount,
       assistant_count: crew.assistantCount,
       driver_cost_clp: activeRoute.driver_cost_clp ?? 0,
@@ -435,7 +436,8 @@ export default function PlanificacionDespachoPage() {
         lng: o.lng,
       })),
     })
-    await loadSessionPlans(planSessionId)
+    const { items } = await getDispatchPlansBySession(planSessionId)
+    setSessionPlans(items)
   }, [
     selectedCamion,
     activeRoute,
@@ -488,6 +490,9 @@ export default function PlanificacionDespachoPage() {
                 <RefreshCw className="size-3.5" aria-hidden />
               )}
               Recalcular rutas
+            </Button>
+            <Button asChild variant="outline" size="sm" className="h-8 text-xs">
+              <Link href="/distribuidora/planificaciones">Historial</Link>
             </Button>
             <Button asChild variant="outline" size="sm" className="h-8 text-xs">
               <Link href="/distribuidora/orders">Pre-despacho</Link>
@@ -566,6 +571,7 @@ export default function PlanificacionDespachoPage() {
           <OrsDispatchWorkflow
             plan={activePlan}
             canConfirm={!loading && !!activeRoute && !activePlan}
+            defaultPlanningName={selectedCamion ?? ""}
             onConfirm={handleConfirmPlan}
             onPlanUpdated={() => {
               if (planSessionId) void loadSessionPlans(planSessionId)

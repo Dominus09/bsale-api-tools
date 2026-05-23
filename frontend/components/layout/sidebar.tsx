@@ -27,6 +27,7 @@ import {
   MapPin,
   Route,
   CalendarDays,
+  History,
   ChevronsLeft,
   ChevronsRight,
   Percent,
@@ -83,6 +84,7 @@ const navSections: { title: string; items: NavItem[] }[] = [
       { href: "/distribuidora/ordenes-compra", label: "Órdenes de compra", icon: ShoppingCart },
       { href: "/distribuidora/orders", label: "Pre‑despacho OC", icon: PackageCheck },
       { href: "/distribuidora/planificacion", label: "Planif. mapa ORS", icon: MapPin },
+      { href: "/distribuidora/planificaciones", label: "Planificaciones", icon: History },
       { href: "/distribuidora/rutero", label: "Rutero vendedores", icon: Route },
       { href: "/distribuidora/mapa", label: "Mapa rutero", icon: MapPin },
       {

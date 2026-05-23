@@ -14,6 +14,10 @@ import pandas as pd
 
 from backend.db import get_connection
 from backend.repositories.distribuidora import dispatch_plan_repo as repo
+from backend.services.distribuidora.dispatch_commercial_margin_service import (
+    audit_bsale_margin_fields,
+    compute_plan_commercial_margin,
+)
 
 VALID_STATUSES = frozenset(
     {
@@ -23,30 +27,120 @@ VALID_STATUSES = frozenset(
         "ready_for_picking",
         "picking_generated",
         "dispatched",
+        "delivered",
+    }
+)
+
+MARGIN_VIEW_ROLES = frozenset(
+    {
+        "admin",
+        "superadmin",
+        "super_admin",
+        "administrator",
+        "finanzas",
+        "finance",
+        "gerencia",
     }
 )
 
 
-def _enrich_orders_from_purchase(cur, orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _pick(*values: Any) -> Any:
+    for v in values:
+        if v is None:
+            continue
+        if isinstance(v, str) and not v.strip():
+            continue
+        return v
+    return None
+
+
+def _enrich_orders_snapshot(cur, orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Congela datos operativos desde OC + atributos + vendedores (no solo vista parcial)."""
     ids = [int(o["oc_document_id"]) for o in orders if o.get("oc_document_id")]
     if not ids:
         return orders
     cur.execute(
         """
         SELECT
-            document_id,
-            number,
-            client_id,
-            forma_pago,
-            tipo_documento_a_generar,
-            COALESCE(NULLIF(BTRIM(nombre_fantasia), ''), '') AS nombre_fantasia,
-            municipality,
-            city,
-            address,
-            seller_name,
-            total_amount
-        FROM distribuidora.v_orders_purchase
-        WHERE document_id = ANY(%s)
+            d.document_id,
+            d.number,
+            d.client_id,
+            COALESCE(
+                NULLIF(BTRIM(p.nombre_fantasia), ''),
+                NULLIF(BTRIM(fa.nombre_fantasia), ''),
+                NULLIF(BTRIM(c.nombre_fantasia), ''),
+                NULLIF(BTRIM(c.company), ''),
+                CONCAT_WS(
+                    ' ',
+                    NULLIF(BTRIM(c.first_name), ''),
+                    NULLIF(BTRIM(c.last_name), '')
+                )
+            ) AS client_name,
+            COALESCE(
+                NULLIF(BTRIM(p.nombre_fantasia), ''),
+                NULLIF(BTRIM(fa.nombre_fantasia), ''),
+                NULLIF(BTRIM(c.nombre_fantasia), '')
+            ) AS fantasy_name,
+            COALESCE(
+                NULLIF(BTRIM(p.address), ''),
+                NULLIF(BTRIM(d.address), ''),
+                NULLIF(BTRIM(c.address), '')
+            ) AS address,
+            COALESCE(
+                NULLIF(BTRIM(p.city), ''),
+                NULLIF(BTRIM(p.municipality), ''),
+                NULLIF(BTRIM(d.municipality), ''),
+                NULLIF(BTRIM(d.city), ''),
+                NULLIF(BTRIM(c.municipality), ''),
+                NULLIF(BTRIM(c.city), '')
+            ) AS city,
+            COALESCE(
+                NULLIF(BTRIM(p.forma_pago), ''),
+                NULLIF(BTRIM(attr_pay.attribute_value), '')
+            ) AS payment_method,
+            COALESCE(
+                NULLIF(BTRIM(p.tipo_documento_a_generar), ''),
+                NULLIF(BTRIM(attr_tipo.attribute_value), '')
+            ) AS document_type_to_generate,
+            COALESCE(
+                NULLIF(BTRIM(p.seller_name), ''),
+                NULLIF(BTRIM(ds.seller_name), ''),
+                NULLIF(BTRIM(d.seller_name), '')
+            ) AS seller_name,
+            COALESCE(p.total_amount, d.total_amount) AS total_amount
+        FROM distribuidora.v_documents_latest d
+        LEFT JOIN distribuidora.v_orders_purchase p ON p.document_id = d.document_id
+        LEFT JOIN distribuidora.v_oc_attributes_flat fa ON fa.document_id = d.document_id
+        LEFT JOIN bsale.clients c
+            ON c.company_id = 3 AND c.bsale_id = d.client_id
+        LEFT JOIN LATERAL (
+            SELECT s.seller_name
+            FROM distribuidora.document_sellers s
+            WHERE s.document_id = d.document_id
+            ORDER BY s.id ASC
+            LIMIT 1
+        ) ds ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT da.attribute_value
+            FROM distribuidora.document_attributes da
+            WHERE da.document_id = d.document_id
+              AND UPPER(BTRIM(da.attribute_name)) = 'FORMA DE PAGO'
+            ORDER BY da.id DESC NULLS LAST
+            LIMIT 1
+        ) attr_pay ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT da.attribute_value
+            FROM distribuidora.document_attributes da
+            WHERE da.document_id = d.document_id
+              AND UPPER(BTRIM(da.attribute_name)) IN (
+                  'TIPO DE DOCUMENTO A GENERAR',
+                  'TIPO DOCUMENTO A GENERAR'
+              )
+            ORDER BY da.id DESC NULLS LAST
+            LIMIT 1
+        ) attr_tipo ON TRUE
+        WHERE d.document_id = ANY(%s)
+          AND d.company_id = 3
         """,
         (ids,),
     )
@@ -55,17 +149,20 @@ def _enrich_orders_from_purchase(cur, orders: list[dict[str, Any]]) -> list[dict
     out: list[dict[str, Any]] = []
     for o in orders:
         row = dict(o)
-        src = by_id.get(int(row["oc_document_id"]))
-        if src:
-            row.setdefault("oc_number", src.get("number"))
-            row.setdefault("client_id", src.get("client_id"))
-            row.setdefault("client_name", src.get("nombre_fantasia") or row.get("client_name"))
-            row.setdefault("payment_method", src.get("forma_pago"))
-            row.setdefault("document_type_to_generate", src.get("tipo_documento_a_generar"))
-            row.setdefault("city", src.get("city") or src.get("municipality") or row.get("city"))
-            row.setdefault("address", src.get("address") or row.get("address"))
-            row.setdefault("seller_name", src.get("seller_name") or row.get("seller_name"))
-            row.setdefault("oc_total_amount", src.get("total_amount") or row.get("oc_total_amount"))
+        src = by_id.get(int(row["oc_document_id"])) or {}
+        row["oc_number"] = _pick(row.get("oc_number"), src.get("number"))
+        row["client_id"] = _pick(row.get("client_id"), src.get("client_id"))
+        row["client_name"] = _pick(row.get("client_name"), src.get("client_name"))
+        row["fantasy_name"] = _pick(row.get("fantasy_name"), src.get("fantasy_name"))
+        row["address"] = _pick(row.get("address"), src.get("address"))
+        row["city"] = _pick(row.get("city"), src.get("city"))
+        row["payment_method"] = _pick(row.get("payment_method"), src.get("payment_method"))
+        row["document_type_to_generate"] = _pick(
+            row.get("document_type_to_generate"),
+            src.get("document_type_to_generate"),
+        )
+        row["seller_name"] = _pick(row.get("seller_name"), src.get("seller_name"))
+        row["oc_total_amount"] = _pick(row.get("oc_total_amount"), src.get("total_amount"))
         out.append(row)
     return out
 
@@ -85,6 +182,17 @@ def _slug_filename_part(text: str) -> str:
     s = "".join(c for c in s if not unicodedata.combining(c))
     s = re.sub(r"[^a-zA-Z0-9]+", "_", s).strip("_").lower()
     return s[:48] or "ruta"
+
+
+def list_recent_plans(*, limit: int = 50) -> list[dict[str, Any]]:
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        rows = repo.list_recent_plans(cur, limit=limit)
+        cur.close()
+        return [_serialize(r) for r in rows]
+    finally:
+        conn.close()
 
 
 def list_session_plans(plan_session_id: str) -> list[dict[str, Any]]:
@@ -118,6 +226,7 @@ def confirm_dispatch_plan(
     plan_session_id: str,
     truck_id: int,
     route_name: str,
+    planning_name: str | None = None,
     driver_count: int,
     assistant_count: int,
     driver_cost_clp: int,
@@ -138,17 +247,33 @@ def confirm_dispatch_plan(
 ) -> dict[str, Any]:
     if not orders:
         raise ValueError("Se requiere al menos una OC para confirmar el plan.")
-    pname = (route_name or "").strip() or f"Camión {truck_id}"
+    pname = (planning_name or route_name or "").strip() or f"Camión {truck_id}"
     now = datetime.now(timezone.utc)
     pdate = planning_date or date.today()
 
     conn = get_connection()
     try:
         cur = conn.cursor()
+        cur.execute(
+            "SELECT name FROM distribuidora.trucks WHERE id = %s",
+            (truck_id,),
+        )
+        truck_row = cur.fetchone()
+        frozen_truck_name = (
+            str(truck_row[0]).strip() if truck_row and truck_row[0] else route_name
+        )
+        planning_code = repo.next_planning_code(cur)
         existing = repo.get_latest_plan_for_truck_session(
             cur, plan_session_id=plan_session_id, truck_id=truck_id
         )
-        if existing and existing.get("status") in ("planned", "invoicing", "ready_for_picking", "picking_generated", "dispatched"):
+        if existing and existing.get("status") in (
+            "planned",
+            "invoicing",
+            "ready_for_picking",
+            "picking_generated",
+            "dispatched",
+            "delivered",
+        ):
             raise ValueError(
                 f"Ya existe un plan confirmado para este camión (id={existing['id']}, "
                 f"estado={existing['status']})."
@@ -158,7 +283,10 @@ def confirm_dispatch_plan(
             "plan_session_id": plan_session_id.strip(),
             "planning_date": pdate,
             "truck_id": truck_id,
-            "route_name": pname,
+            "route_name": (route_name or "").strip() or pname,
+            "planning_code": planning_code,
+            "planning_name": pname,
+            "truck_name": frozen_truck_name,
             "status": "planned",
             "driver_count": max(0, int(driver_count)),
             "assistant_count": max(0, int(assistant_count)),
@@ -177,7 +305,7 @@ def confirm_dispatch_plan(
             "route_geometry": json.dumps(route_geometry) if route_geometry else None,
             "confirmed_at": now,
         }
-        enriched = _enrich_orders_from_purchase(cur, orders)
+        enriched = _enrich_orders_snapshot(cur, orders)
         plan_id = repo.insert_dispatch_plan(cur, fields)
         repo.insert_plan_orders(cur, plan_id, enriched)
         conn.commit()
@@ -206,6 +334,149 @@ def update_dispatch_plan_status(plan_id: int, status: str) -> dict[str, Any]:
     if not data:
         raise ValueError("Plan no encontrado")
     return data
+
+
+def compute_plan_margin(plan_id: int) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        plan = repo.get_plan_by_id(cur, plan_id)
+        if not plan:
+            raise ValueError("Plan no encontrado")
+        cm = compute_plan_commercial_margin(cur, plan_id)
+        route_cost = int(plan.get("total_route_cost_clp") or 0)
+        net_op = (
+            int(cm.commercial_margin_clp) - route_cost
+            if cm.commercial_margin_clp is not None
+            else None
+        )
+        repo.update_plan_margin(
+            cur,
+            plan_id,
+            invoiced_sales_clp=cm.invoiced_revenue_clp,
+            commercial_margin_clp=cm.commercial_margin_clp,
+            final_margin_clp=net_op if net_op is not None else None,
+            net_operational_clp=net_op,
+            margin_computation_source=cm.source,
+            margin_lines_with_cost=cm.lines_with_cost,
+            margin_lines_total=cm.lines_total,
+        )
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+    out = cm.as_dict()
+    out["route_cost_clp"] = route_cost
+    out["net_operational_clp"] = net_op
+    out["dispatch_plan_id"] = plan_id
+    return out
+
+
+def get_margin_audit() -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        data = audit_bsale_margin_fields(cur)
+        cur.close()
+        return data
+    finally:
+        conn.close()
+
+
+def get_plan_dashboard(plan_id: int, *, user_role: str | None = None) -> dict[str, Any]:
+    data = get_dispatch_plan(plan_id)
+    if not data:
+        raise ValueError("Plan no encontrado")
+    plan = data["plan"]
+    orders = data["orders"]
+    inv = get_invoiced_documents(plan_id)
+
+    total_oc_amount = sum(float(o.get("oc_total_amount") or 0) for o in orders)
+    confirmed_amount = 0.0
+    probable_amount = 0.0
+    pending_amount = 0.0
+    by_oc = {int(o["oc_document_id"]): o for o in orders}
+    for item in inv["items"]:
+        oc_id = int(item["oc_document_id"])
+        oc = by_oc.get(oc_id) or {}
+        amt = float(oc.get("oc_total_amount") or 0)
+        st = item.get("status")
+        if st == "confirmed":
+            confirmed_amount += amt
+        elif st == "probable":
+            probable_amount += amt
+        else:
+            pending_amount += amt
+
+    inv_summary = inv["summary"]
+    can_calc_margin = (
+        inv_summary["total"] > 0
+        and inv_summary["missing"] == 0
+        and inv_summary["confirmed"] > 0
+    )
+    margin_block: dict[str, Any] | None = None
+    role = (user_role or "").strip().lower()
+    show_margin = role in MARGIN_VIEW_ROLES
+    if can_calc_margin:
+        margin_data = compute_plan_margin(plan_id)
+        if show_margin:
+            margin_block = {
+                "visible": True,
+                "commercial_margin_clp": margin_data.get("commercial_margin_clp"),
+                "invoiced_revenue_clp": margin_data.get("invoiced_revenue_clp"),
+                "invoiced_cost_clp": margin_data.get("invoiced_cost_clp"),
+                "route_cost_clp": margin_data.get("route_cost_clp"),
+                "net_operational_clp": margin_data.get("net_operational_clp"),
+                "source": margin_data.get("source"),
+                "partial": margin_data.get("partial"),
+                "unavailable": margin_data.get("commercial_margin_clp") is None,
+                "message": margin_data.get("message"),
+            }
+        else:
+            margin_block = {"visible": False, "restricted": True}
+    elif plan.get("commercial_margin_clp") is not None and show_margin:
+        margin_block = {
+            "visible": True,
+            "commercial_margin_clp": plan.get("commercial_margin_clp"),
+            "invoiced_revenue_clp": plan.get("invoiced_sales_clp"),
+            "route_cost_clp": plan.get("total_route_cost_clp"),
+            "net_operational_clp": plan.get("net_operational_clp") or plan.get("final_margin_clp"),
+            "source": plan.get("margin_computation_source"),
+            "partial": False,
+            "message": "Margen almacenado.",
+        }
+
+    plan_out = get_dispatch_plan(plan_id)
+    plan = plan_out["plan"] if plan_out else plan
+
+    return {
+        "plan": plan,
+        "invoicing": {
+            "total_orders": len(orders),
+            "total_oc_amount_clp": int(round(total_oc_amount)),
+            "confirmed": {
+                "count": inv_summary["confirmed"],
+                "amount_clp": int(round(confirmed_amount)),
+            },
+            "probable": {
+                "count": inv_summary["probable"],
+                "amount_clp": int(round(probable_amount)),
+            },
+            "pending": {
+                "count": inv_summary["missing"],
+                "amount_clp": int(round(pending_amount)),
+            },
+        },
+        "invoiced_items": inv["items"],
+        "warnings": inv["warnings"],
+        "probable_notes": inv["probable_notes"],
+        "margin": margin_block,
+        "picking": {
+            "client_endpoint": f"/distribuidora/dispatch-plans/{plan_id}/picking-by-client",
+            "product_endpoint": f"/distribuidora/dispatch-plans/{plan_id}/picking-by-product",
+            "ready": inv.get("ready_for_picking", False),
+        },
+    }
 
 
 def get_invoiced_documents(plan_id: int) -> dict[str, Any]:
@@ -275,15 +546,16 @@ def build_billing_excel_bytes(plan_id: int) -> tuple[bytes, str]:
     for o in orders:
         rows.append(
             {
+                "numero_oc": o.get("oc_number") or o.get("oc_document_id"),
+                "forma_pago": o.get("payment_method") or "",
+                "tipo_documento_generar": o.get("document_type_to_generate") or "",
+                "cliente": o.get("client_name") or "",
+                "nombre_fantasia": o.get("fantasy_name") or o.get("client_name") or "",
+                "direccion": o.get("address") or "",
+                "ciudad": o.get("city") or "",
+                "vendedor": o.get("seller_name") or "",
+                "total": o.get("oc_total_amount"),
                 "orden_ruta": o.get("route_order"),
-                "numero_orden": o.get("oc_number") or o.get("oc_document_id"),
-                "forma_pago": o.get("payment_method"),
-                "tipo_documento_generar": o.get("document_type_to_generate"),
-                "cliente": o.get("client_name"),
-                "total_oc": o.get("oc_total_amount"),
-                "vendedor": o.get("seller_name"),
-                "ciudad": o.get("city"),
-                "direccion": o.get("address"),
                 "camion": plan.get("truck_name") or plan.get("route_name"),
                 "tripulacion": crew_label,
             }
@@ -295,6 +567,8 @@ def build_billing_excel_bytes(plan_id: int) -> tuple[bytes, str]:
         meta = pd.DataFrame(
             [
                 {"campo": "plan_id", "valor": plan_id},
+                {"campo": "planning_code", "valor": plan.get("planning_code")},
+                {"campo": "planning_name", "valor": plan.get("planning_name")},
                 {"campo": "ruta", "valor": plan.get("route_name")},
                 {"campo": "km_total", "valor": plan.get("km_total")},
                 {"campo": "costo_total_ruta", "valor": plan.get("total_route_cost_clp")},
@@ -326,6 +600,7 @@ def get_picking_by_client(plan_id: int, *, validate: bool = True) -> dict[str, A
                 dpo.route_order,
                 dpo.client_id,
                 dpo.client_name,
+                dpo.fantasy_name,
                 dpo.address,
                 dpo.city,
                 NULLIF(BTRIM(cl.phone), '') AS phone,
@@ -400,11 +675,25 @@ def get_picking_by_client(plan_id: int, *, validate: bool = True) -> dict[str, A
             }
         )
 
-    return {
+    result = {
         "dispatch_plan_id": plan_id,
         "clients": clients,
         "validation": inv_check if validate else None,
     }
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        repo.insert_picking_snapshot(
+            cur,
+            plan_id=plan_id,
+            picking_type="client",
+            payload=json.dumps(result, default=str),
+        )
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+    return result
 
 
 def get_picking_by_product(plan_id: int, *, validate: bool = True) -> dict[str, Any]:
@@ -452,8 +741,68 @@ def get_picking_by_product(plan_id: int, *, validate: bool = True) -> dict[str, 
     finally:
         conn.close()
 
-    return {"dispatch_plan_id": plan_id, "items": items}
+    result = {"dispatch_plan_id": plan_id, "items": items}
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        repo.insert_picking_snapshot(
+            cur,
+            plan_id=plan_id,
+            picking_type="product",
+            payload=json.dumps(result, default=str),
+        )
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+    return result
 
 
 def mark_picking_generated(plan_id: int) -> dict[str, Any]:
     return update_dispatch_plan_status(plan_id, "picking_generated")
+
+
+def repair_order_snapshots(plan_id: int) -> dict[str, Any]:
+    """
+    Rellena solo campos vacíos en órdenes ya guardadas (fix planes históricos con Excel incompleto).
+    No sobrescribe valores ya congelados.
+    """
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        orders = repo.list_plan_orders(cur, plan_id)
+        if not orders:
+            raise ValueError("Plan sin órdenes")
+        enriched = _enrich_orders_snapshot(cur, orders)
+        for o in enriched:
+            cur.execute(
+                """
+                UPDATE distribuidora.dispatch_plan_orders
+                SET                     client_name = COALESCE(NULLIF(BTRIM(client_name), ''), %s),
+                    fantasy_name = COALESCE(NULLIF(BTRIM(fantasy_name), ''), %s),
+                    address = COALESCE(NULLIF(BTRIM(address), ''), %s),
+                    city = COALESCE(NULLIF(BTRIM(city), ''), %s),
+                    seller_name = COALESCE(NULLIF(BTRIM(seller_name), ''), %s),
+                    payment_method = COALESCE(NULLIF(BTRIM(payment_method), ''), %s),
+                    document_type_to_generate = COALESCE(
+                        NULLIF(BTRIM(document_type_to_generate), ''), %s
+                    )
+                WHERE dispatch_plan_id = %s AND oc_document_id = %s
+                """,
+                (
+                    o.get("client_name"),
+                    o.get("fantasy_name"),
+                    o.get("address"),
+                    o.get("city"),
+                    o.get("seller_name"),
+                    o.get("payment_method"),
+                    o.get("document_type_to_generate"),
+                    plan_id,
+                    int(o["oc_document_id"]),
+                ),
+            )
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+    return get_dispatch_plan(plan_id) or {}

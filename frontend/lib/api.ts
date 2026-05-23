@@ -1694,20 +1694,99 @@ export type DispatchPlanStatus =
   | "ready_for_picking"
   | "picking_generated"
   | "dispatched"
+  | "delivered"
 
 export type DispatchPlanSummary = {
   id: number
   plan_session_id?: string | null
+  planning_code?: string | null
+  planning_name?: string | null
   planning_date: string
   truck_id?: number | null
   truck_name?: string | null
   route_name: string
   status: DispatchPlanStatus
-  driver_count: number
-  assistant_count: number
+  driver_count?: number
+  assistant_count?: number
   km_total?: number
   total_route_cost_clp?: number
+  final_margin_clp?: number | null
+  net_operational_clp?: number | null
+  order_count?: number
+  total_oc_amount?: number
+  invoiced_confirmed?: number
+  invoiced_probable?: number
+  invoiced_pending?: number
   confirmed_at?: string | null
+  created_at?: string
+}
+
+export async function listDispatchPlansRecent(params?: {
+  limit?: number
+}): Promise<{ items: DispatchPlanSummary[] }> {
+  const qs = new URLSearchParams()
+  qs.set("limit", String(params?.limit ?? 50))
+  const res = await fetch(`${API_URL}/distribuidora/dispatch-plans?${qs}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al listar planificaciones")
+  }
+  return res.json() as Promise<{ items: DispatchPlanSummary[] }>
+}
+
+export type DispatchPlanDashboard = {
+  plan: DispatchPlanSummary
+  invoicing: {
+    total_orders: number
+    total_oc_amount_clp: number
+    confirmed: { count: number; amount_clp: number }
+    probable: { count: number; amount_clp: number }
+    pending: { count: number; amount_clp: number }
+  }
+  invoiced_items: DispatchPlanInvoicedRow[]
+  warnings: { oc_document_id: number; message: string }[]
+  probable_notes: { oc_document_id: number; message: string }[]
+  margin: {
+    visible: boolean
+    restricted?: boolean
+    unavailable?: boolean
+    partial?: boolean
+    message?: string
+    commercial_margin_clp?: number | null
+    invoiced_revenue_clp?: number
+    invoiced_cost_clp?: number | null
+    route_cost_clp?: number
+    net_operational_clp?: number | null
+    source?: string
+  } | null
+  picking: { client_endpoint: string; product_endpoint: string; ready: boolean }
+}
+
+export async function getDispatchPlanDashboard(
+  planId: number,
+): Promise<DispatchPlanDashboard> {
+  const res = await fetch(`${API_URL}/distribuidora/dispatch-plans/${planId}/dashboard`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar dashboard del plan")
+  }
+  return res.json() as Promise<DispatchPlanDashboard>
+}
+
+export async function repairDispatchPlanSnapshot(planId: number): Promise<unknown> {
+  const res = await fetch(`${API_URL}/distribuidora/dispatch-plans/${planId}/repair-snapshot`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al reparar snapshot")
+  }
+  return res.json()
 }
 
 export type DispatchPlanInvoicedRow = {
@@ -1741,6 +1820,7 @@ export async function confirmDispatchPlan(body: {
   plan_session_id: string
   truck_id: number
   route_name: string
+  planning_name?: string | null
   driver_count: number
   assistant_count: number
   driver_cost_clp: number
