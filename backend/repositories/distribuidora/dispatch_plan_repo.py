@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+_HISTORY_SCHEMA_CAPS: dict[str, bool] | None = None
 
 
 def _cols(cur) -> list[str]:
@@ -98,31 +103,120 @@ def insert_dispatch_plan(cur, fields: dict[str, Any]) -> int:
     return int(cur.fetchone()[0])
 
 
-def list_recent_plans(cur, *, limit: int = 50) -> list[dict[str, Any]]:
+def _history_schema_caps(cur) -> dict[str, bool]:
+    """Detecta columnas/vistas disponibles (migraciones 021–025 pueden estar parciales)."""
+    global _HISTORY_SCHEMA_CAPS
+    if _HISTORY_SCHEMA_CAPS is not None:
+        return _HISTORY_SCHEMA_CAPS
+
     cur.execute(
         """
-        SELECT
-            dp.id,
-            dp.planning_code,
-            dp.planning_name,
-            dp.planning_date,
-            dp.truck_id,
-            COALESCE(NULLIF(BTRIM(dp.truck_name), ''), t.name, dp.route_name) AS truck_name,
-            dp.route_name,
-            dp.status,
-            dp.created_at,
-            dp.confirmed_at,
-            dp.total_route_cost_clp,
-            dp.final_margin_clp,
-            dp.net_operational_clp,
-            COUNT(dpo.id)::int AS order_count,
-            COALESCE(SUM(dpo.oc_total_amount), 0) AS total_oc_amount,
-            inv.invoiced_confirmed,
-            inv.invoiced_probable,
-            inv.invoiced_pending
-        FROM distribuidora.dispatch_plan dp
-        LEFT JOIN distribuidora.trucks t ON t.id = dp.truck_id
-        LEFT JOIN distribuidora.dispatch_plan_orders dpo ON dpo.dispatch_plan_id = dp.id
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = 'distribuidora'
+              AND table_name = 'dispatch_plan'
+        )
+        """
+    )
+    has_plan_table = bool(cur.fetchone()[0])
+
+    dp_cols: set[str] = set()
+    if has_plan_table:
+        cur.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'distribuidora'
+              AND table_name = 'dispatch_plan'
+            """
+        )
+        dp_cols = {r[0] for r in cur.fetchall()}
+
+    cur.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = 'distribuidora'
+              AND table_name = 'dispatch_plan_orders'
+        )
+        """
+    )
+    has_orders_table = bool(cur.fetchone()[0])
+
+    cur.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.views
+            WHERE table_schema = 'distribuidora'
+              AND table_name = 'v_dispatch_plan_invoiced_documents'
+        )
+        """
+    )
+    has_invoiced_view = bool(cur.fetchone()[0])
+
+    caps = {
+        "has_plan_table": has_plan_table,
+        "has_orders_table": has_orders_table,
+        "planning_code": "planning_code" in dp_cols,
+        "planning_name": "planning_name" in dp_cols,
+        "truck_name_col": "truck_name" in dp_cols,
+        "final_margin_clp": "final_margin_clp" in dp_cols,
+        "net_operational_clp": "net_operational_clp" in dp_cols,
+        "invoiced_view": has_invoiced_view,
+    }
+    _HISTORY_SCHEMA_CAPS = caps
+    logger.info("[PLANNING_HISTORY_DEBUG] schema_caps=%s", caps)
+    return caps
+
+
+def _build_list_recent_plans_sql(caps: dict[str, bool]) -> str:
+    planning_code = (
+        "dp.planning_code"
+        if caps["planning_code"]
+        else "('PLAN-' || LPAD(dp.id::text, 5, '0')) AS planning_code"
+    )
+    planning_name = (
+        "dp.planning_name"
+        if caps["planning_name"]
+        else "dp.route_name AS planning_name"
+    )
+    if caps["truck_name_col"]:
+        truck_name = (
+            "COALESCE(NULLIF(BTRIM(MAX(dp.truck_name)), ''), "
+            "NULLIF(BTRIM(MAX(t.name)), ''), MAX(dp.route_name)) AS truck_name"
+        )
+    else:
+        truck_name = (
+            "COALESCE(NULLIF(BTRIM(MAX(t.name)), ''), MAX(dp.route_name)) AS truck_name"
+        )
+    final_margin = (
+        "dp.final_margin_clp"
+        if caps["final_margin_clp"]
+        else "NULL::integer AS final_margin_clp"
+    )
+    net_operational = (
+        "dp.net_operational_clp"
+        if caps["net_operational_clp"]
+        else "NULL::integer AS net_operational_clp"
+    )
+
+    orders_join = ""
+    order_count = "0::int AS order_count"
+    total_oc = "0::numeric AS total_oc_amount"
+    if caps["has_orders_table"]:
+        orders_join = (
+            "LEFT JOIN distribuidora.dispatch_plan_orders dpo "
+            "ON dpo.dispatch_plan_id = dp.id"
+        )
+        order_count = "COUNT(dpo.id)::int AS order_count"
+        total_oc = "COALESCE(SUM(dpo.oc_total_amount), 0) AS total_oc_amount"
+
+    inv_join = ""
+    if caps["invoiced_view"]:
+        inv_join = """
         LEFT JOIN LATERAL (
             SELECT
                 COUNT(*) FILTER (WHERE v.status = 'confirmed')::int AS invoiced_confirmed,
@@ -131,14 +225,144 @@ def list_recent_plans(cur, *, limit: int = 50) -> list[dict[str, Any]]:
             FROM distribuidora.v_dispatch_plan_invoiced_documents v
             WHERE v.dispatch_plan_id = dp.id
         ) inv ON TRUE
-        WHERE dp.status <> 'draft'
-        GROUP BY dp.id, t.name, inv.invoiced_confirmed, inv.invoiced_probable, inv.invoiced_pending
-        ORDER BY dp.created_at DESC
+        """
+        inv_select = """
+            COALESCE(MAX(inv.invoiced_confirmed), 0)::int AS invoiced_confirmed,
+            COALESCE(MAX(inv.invoiced_probable), 0)::int AS invoiced_probable,
+            COALESCE(MAX(inv.invoiced_pending), 0)::int AS invoiced_pending
+        """
+    else:
+        inv_select = """
+            0::int AS invoiced_confirmed,
+            0::int AS invoiced_probable,
+            0::int AS invoiced_pending
+        """
+
+    return f"""
+        SELECT
+            dp.id,
+            {planning_code},
+            {planning_name},
+            dp.planning_date,
+            dp.truck_id,
+            {truck_name},
+            dp.route_name,
+            dp.status,
+            dp.created_at,
+            dp.confirmed_at,
+            COALESCE(dp.total_route_cost_clp, 0) AS total_route_cost_clp,
+            {final_margin},
+            {net_operational},
+            {order_count},
+            {total_oc},
+            {inv_select}
+        FROM distribuidora.dispatch_plan dp
+        LEFT JOIN distribuidora.trucks t ON t.id = dp.truck_id
+        {orders_join}
+        {inv_join}
+        GROUP BY dp.id
+        ORDER BY dp.created_at DESC NULLS LAST
+        LIMIT %s
+    """
+
+
+def list_recent_plans(cur, *, limit: int = 50) -> list[dict[str, Any]]:
+    lim = max(1, min(int(limit), 200))
+    caps = _history_schema_caps(cur)
+    if not caps["has_plan_table"]:
+        logger.warning("[PLANNING_HISTORY_DEBUG] dispatch_plan table missing — empty list")
+        return []
+
+    sql = _build_list_recent_plans_sql(caps)
+    logger.info(
+        "[PLANNING_HISTORY_DEBUG] executing list_recent_plans limit=%s invoiced_view=%s",
+        lim,
+        caps["invoiced_view"],
+    )
+    try:
+        cur.execute(sql, (lim,))
+        rows = [dict(zip(_cols(cur), r)) for r in cur.fetchall()]
+        logger.info(
+            "[PLANNING_HISTORY_DEBUG] rows=%s planning_ids=%s",
+            len(rows),
+            [r.get("id") for r in rows[:25]],
+        )
+        return rows
+    except Exception as exc:
+        logger.exception(
+            "[PLANNING_HISTORY_DEBUG] primary query failed: %s",
+            exc,
+        )
+        return list_recent_plans_minimal(cur, limit=lim)
+
+
+def list_recent_plans_minimal(cur, *, limit: int = 50) -> list[dict[str, Any]]:
+    """Fallback sin vistas ni columnas opcionales (migraciones parciales)."""
+    lim = max(1, min(int(limit), 200))
+    caps = _history_schema_caps(cur)
+    logger.info("[PLANNING_HISTORY_DEBUG] fallback minimal query limit=%s", lim)
+
+    if caps["has_orders_table"]:
+        order_count_sql = """
+            (SELECT COUNT(*)::int
+             FROM distribuidora.dispatch_plan_orders dpo
+             WHERE dpo.dispatch_plan_id = dp.id) AS order_count
+        """
+        total_oc_sql = """
+            (SELECT COALESCE(SUM(dpo.oc_total_amount), 0)
+             FROM distribuidora.dispatch_plan_orders dpo
+             WHERE dpo.dispatch_plan_id = dp.id) AS total_oc_amount
+        """
+    else:
+        order_count_sql = "0::int AS order_count"
+        total_oc_sql = "0::numeric AS total_oc_amount"
+
+    planning_code_sql = (
+        "dp.planning_code"
+        if caps["planning_code"]
+        else "('PLAN-' || LPAD(dp.id::text, 5, '0')) AS planning_code"
+    )
+    planning_name_sql = (
+        "dp.planning_name"
+        if caps["planning_name"]
+        else "dp.route_name AS planning_name"
+    )
+
+    cur.execute(
+        f"""
+        SELECT
+            dp.id,
+            {planning_code_sql},
+            {planning_name_sql},
+            dp.planning_date,
+            dp.truck_id,
+            COALESCE(NULLIF(BTRIM(t.name), ''), dp.route_name) AS truck_name,
+            dp.route_name,
+            dp.status,
+            dp.created_at,
+            dp.confirmed_at,
+            COALESCE(dp.total_route_cost_clp, 0) AS total_route_cost_clp,
+            NULL::integer AS final_margin_clp,
+            NULL::integer AS net_operational_clp,
+            {order_count_sql},
+            {total_oc_sql},
+            0::int AS invoiced_confirmed,
+            0::int AS invoiced_probable,
+            0::int AS invoiced_pending
+        FROM distribuidora.dispatch_plan dp
+        LEFT JOIN distribuidora.trucks t ON t.id = dp.truck_id
+        ORDER BY dp.created_at DESC NULLS LAST
         LIMIT %s
         """,
-        (max(1, min(int(limit), 200)),),
+        (lim,),
     )
-    return [dict(zip(_cols(cur), r)) for r in cur.fetchall()]
+    rows = [dict(zip(_cols(cur), r)) for r in cur.fetchall()]
+    logger.info(
+        "[PLANNING_HISTORY_DEBUG] fallback rows=%s planning_ids=%s",
+        len(rows),
+        [r.get("id") for r in rows[:25]],
+    )
+    return rows
 
 
 def update_plan_margin(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import unicodedata
 from datetime import date, datetime, timezone
@@ -18,6 +19,8 @@ from backend.services.distribuidora.dispatch_commercial_margin_service import (
     audit_bsale_margin_fields,
     compute_plan_commercial_margin,
 )
+
+logger = logging.getLogger(__name__)
 
 VALID_STATUSES = frozenset(
     {
@@ -188,7 +191,14 @@ def list_recent_plans(*, limit: int = 50) -> list[dict[str, Any]]:
     conn = get_connection()
     try:
         cur = conn.cursor()
-        rows = repo.list_recent_plans(cur, limit=limit)
+        try:
+            rows = repo.list_recent_plans(cur, limit=limit)
+        except Exception as exc:
+            logger.exception(
+                "[PLANNING_HISTORY_DEBUG] list_recent_plans service error: %s",
+                exc,
+            )
+            rows = repo.list_recent_plans_minimal(cur, limit=limit)
         cur.close()
         return [_serialize(r) for r in rows]
     finally:

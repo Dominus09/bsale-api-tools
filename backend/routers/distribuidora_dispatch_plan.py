@@ -65,7 +65,14 @@ class StatusBody(BaseModel):
 
 @router.get("")
 def list_recent_plans(limit: int = Query(50, ge=1, le=200)):
-    return {"items": svc.list_recent_plans(limit=limit)}
+    try:
+        items = svc.list_recent_plans(limit=limit)
+        return {"items": items}
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al cargar historial de planificaciones: {exc}",
+        ) from exc
 
 
 @router.get("/margin-audit")
