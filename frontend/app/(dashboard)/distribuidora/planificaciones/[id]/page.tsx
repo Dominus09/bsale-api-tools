@@ -139,6 +139,10 @@ export default function PlanificacionDetallePage() {
         </Alert>
       ) : null}
 
+      {!loading && !error && !data ? (
+        <p className="text-sm text-muted-foreground">Plan no encontrado o sin datos.</p>
+      ) : null}
+
       {data ? (
         <>
           <div className="grid gap-3 sm:grid-cols-3 text-sm">

@@ -86,7 +86,9 @@ export default function PlanificacionesHistorialPage() {
           Cargando…
         </div>
       ) : items.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No hay planificaciones confirmadas aún.</p>
+        <p className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
+          No hay planificaciones guardadas aún. Confirme una ruta desde planificación ORS.
+        </p>
       ) : (
         <div className="overflow-hidden rounded-lg border border-border/80">
           <Table>

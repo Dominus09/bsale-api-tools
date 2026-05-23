@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from backend.services.distribuidora import dispatch_plan_service as svc
 from backend.utils.auth_staff import BearerDep, decode_staff_token, require_staff_user
+from backend.utils.ors_stability import log_error
 
 router = APIRouter(prefix="/distribuidora/dispatch-plans", tags=["Distribuidora dispatch plan"])
 
@@ -69,10 +70,8 @@ def list_recent_plans(limit: int = Query(50, ge=1, le=200)):
         items = svc.list_recent_plans(limit=limit)
         return {"items": items}
     except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error al cargar historial de planificaciones: {exc}",
-        ) from exc
+        log_error("GET /dispatch-plans", exc)
+        return {"items": []}
 
 
 @router.get("/margin-audit")
@@ -83,7 +82,11 @@ def margin_audit():
 
 @router.get("/by-session/{plan_session_id}")
 def list_plans_by_session(plan_session_id: str):
-    return {"items": svc.list_session_plans(plan_session_id)}
+    try:
+        return {"items": svc.list_session_plans(plan_session_id)}
+    except Exception as exc:
+        log_error("GET /dispatch-plans/by-session", exc)
+        return {"items": []}
 
 
 @router.post("/confirm")
@@ -136,6 +139,12 @@ def get_plan_dashboard(plan_id: int, authorization: BearerDep = None):
         return svc.get_plan_dashboard(plan_id, user_role=role)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as exc:
+        log_error("GET /dispatch-plans/dashboard", exc, planning_id=plan_id)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al cargar dashboard: {exc}",
+        ) from exc
 
 
 @router.patch("/{plan_id}/status")

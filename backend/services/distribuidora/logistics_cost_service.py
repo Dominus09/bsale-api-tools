@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
 from backend.db import get_connection
+
+logger = logging.getLogger(__name__)
 from backend.services.distribuidora.system_config_service import (
     DEFAULT_DIESEL_CLP_PER_LITER,
     get_diesel_price_per_liter,
@@ -133,15 +136,22 @@ def get_logistics_cost_settings(conn=None) -> LogisticsCostSettings:
         conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT value_json
-            FROM distribuidora.system_config
-            WHERE key = %s
-            """,
-            (LOGISTICS_SETTINGS_KEY,),
-        )
-        row = cur.fetchone()
+        try:
+            cur.execute(
+                """
+                SELECT value_json
+                FROM distribuidora.system_config
+                WHERE key = %s
+                """,
+                (LOGISTICS_SETTINGS_KEY,),
+            )
+            row = cur.fetchone()
+        except Exception as exc:
+            logger.warning(
+                "[ORS_STABILITY_DEBUG] get_logistics_cost_settings fallback: %s",
+                exc,
+            )
+            row = None
         cur.close()
         return _parse_logistics_settings(row[0] if row else None)
     finally:
@@ -213,33 +223,41 @@ def load_active_trucks(conn=None) -> tuple[dict[int, dict[str, Any]], dict[str, 
         conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT id, name, plate, max_weight_kg,
-                   COALESCE(km_per_liter, %s) AS km_per_liter,
-                   COALESCE(fuel_type, 'diesel') AS fuel_type
-            FROM distribuidora.trucks
-            WHERE active = TRUE
-            ORDER BY name
-            """,
-            (DEFAULT_KM_PER_LITER,),
-        )
-        cols = [d[0] for d in cur.description]
-        by_id: dict[int, dict[str, Any]] = {}
-        by_name: dict[str, dict[str, Any]] = {}
-        for r in cur.fetchall():
-            row = dict(zip(cols, r))
-            rid = int(row["id"])
-            kpl = float(row.get("km_per_liter") or DEFAULT_KM_PER_LITER)
-            if kpl <= 0:
-                kpl = DEFAULT_KM_PER_LITER
-            row["id"] = rid
-            row["km_per_liter"] = kpl
-            row["fuel_type"] = str(row.get("fuel_type") or "diesel")
-            by_id[rid] = row
-            by_name[str(row["name"]).strip().lower()] = row
-        cur.close()
-        return by_id, by_name
+        try:
+            cur.execute(
+                """
+                SELECT id, name, plate, max_weight_kg,
+                       COALESCE(km_per_liter, %s) AS km_per_liter,
+                       COALESCE(fuel_type, 'diesel') AS fuel_type
+                FROM distribuidora.trucks
+                WHERE active = TRUE
+                ORDER BY name
+                """,
+                (DEFAULT_KM_PER_LITER,),
+            )
+            cols = [d[0] for d in cur.description]
+            by_id: dict[int, dict[str, Any]] = {}
+            by_name: dict[str, dict[str, Any]] = {}
+            for r in cur.fetchall():
+                row = dict(zip(cols, r))
+                rid = int(row["id"])
+                kpl = float(row.get("km_per_liter") or DEFAULT_KM_PER_LITER)
+                if kpl <= 0:
+                    kpl = DEFAULT_KM_PER_LITER
+                row["id"] = rid
+                row["km_per_liter"] = kpl
+                row["fuel_type"] = str(row.get("fuel_type") or "diesel")
+                by_id[rid] = row
+                by_name[str(row["name"]).strip().lower()] = row
+            cur.close()
+            return by_id, by_name
+        except Exception as exc:
+            logger.warning(
+                "[ORS_STABILITY_DEBUG] load_active_trucks fallback empty: %s",
+                exc,
+            )
+            cur.close()
+            return {}, {}
     finally:
         if own and conn is not None:
             conn.close()

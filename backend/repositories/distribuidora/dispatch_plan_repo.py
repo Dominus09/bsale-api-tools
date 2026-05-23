@@ -69,13 +69,19 @@ def get_latest_plan_for_truck_session(
     return dict(zip(_cols(cur), row))
 
 
-def next_planning_code(cur) -> str:
-    cur.execute("SELECT nextval('distribuidora.dispatch_plan_code_seq')")
-    n = int(cur.fetchone()[0])
-    return f"PLAN-{n:05d}"
+def planning_code_from_id(plan_id: int) -> str:
+    """Código único derivado del BIGSERIAL (seguro bajo concurrencia)."""
+    return f"PLAN-{int(plan_id):05d}"
 
 
-def insert_dispatch_plan(cur, fields: dict[str, Any]) -> int:
+def insert_dispatch_plan(cur, fields: dict[str, Any]) -> tuple[int, str]:
+    """
+    Inserta el plan y asigna planning_code desde el id generado (misma transacción).
+    No usar secuencias ni MAX() — evita UniqueViolation en uq_dispatch_plan_planning_code.
+    """
+    payload = dict(fields)
+    payload.pop("planning_code", None)
+
     cur.execute(
         """
         INSERT INTO distribuidora.dispatch_plan (
@@ -88,7 +94,7 @@ def insert_dispatch_plan(cur, fields: dict[str, Any]) -> int:
         )
         VALUES (
             %(plan_session_id)s, %(planning_date)s, %(truck_id)s, %(route_name)s,
-            %(status)s, %(planning_code)s, %(planning_name)s, %(truck_name)s,
+            %(status)s, NULL, %(planning_name)s, %(truck_name)s,
             %(driver_count)s, %(assistant_count)s,
             %(driver_cost_clp)s, %(assistant_cost_clp)s,
             %(diesel_price_per_liter)s, %(km_total)s, %(duration_min)s,
@@ -98,9 +104,24 @@ def insert_dispatch_plan(cur, fields: dict[str, Any]) -> int:
         )
         RETURNING id
         """,
-        fields,
+        payload,
     )
-    return int(cur.fetchone()[0])
+    plan_id = int(cur.fetchone()[0])
+    planning_code = planning_code_from_id(plan_id)
+    cur.execute(
+        """
+        UPDATE distribuidora.dispatch_plan
+        SET planning_code = %s, updated_at = NOW()
+        WHERE id = %s
+        """,
+        (planning_code, plan_id),
+    )
+    logger.info(
+        "[PLANNING_CODE_DEBUG] inserted id=%s generated planning_code=%s",
+        plan_id,
+        planning_code,
+    )
+    return plan_id, planning_code
 
 
 def _history_schema_caps(cur) -> dict[str, bool]:

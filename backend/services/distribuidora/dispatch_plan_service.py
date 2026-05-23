@@ -19,6 +19,8 @@ from backend.services.distribuidora.dispatch_commercial_margin_service import (
     audit_bsale_margin_fields,
     compute_plan_commercial_margin,
 )
+from backend.utils.json_safe import serialize_row, serialize_rows
+from backend.utils.ors_stability import empty_invoicing_payload, log_debug, log_error
 
 logger = logging.getLogger(__name__)
 
@@ -171,13 +173,7 @@ def _enrich_orders_snapshot(cur, orders: list[dict[str, Any]]) -> list[dict[str,
 
 
 def _serialize(d: dict[str, Any]) -> dict[str, Any]:
-    out = dict(d)
-    for k, v in list(out.items()):
-        if isinstance(v, Decimal):
-            out[k] = float(v)
-        elif hasattr(v, "isoformat"):
-            out[k] = v.isoformat()
-    return out
+    return serialize_row(d)
 
 
 def _slug_filename_part(text: str) -> str:
@@ -188,45 +184,69 @@ def _slug_filename_part(text: str) -> str:
 
 
 def list_recent_plans(*, limit: int = 50) -> list[dict[str, Any]]:
+    log_debug("GET /dispatch-plans", extra={"limit": limit})
     conn = get_connection()
     try:
         cur = conn.cursor()
         try:
             rows = repo.list_recent_plans(cur, limit=limit)
         except Exception as exc:
-            logger.exception(
-                "[PLANNING_HISTORY_DEBUG] list_recent_plans service error: %s",
-                exc,
-            )
+            log_error("GET /dispatch-plans", exc, extra={"phase": "primary"})
             rows = repo.list_recent_plans_minimal(cur, limit=limit)
         cur.close()
-        return [_serialize(r) for r in rows]
+        out = serialize_rows(rows)
+        log_debug("GET /dispatch-plans", rows=len(out))
+        return out
+    except Exception as exc:
+        log_error("GET /dispatch-plans", exc, extra={"phase": "connection"})
+        return []
     finally:
         conn.close()
 
 
 def list_session_plans(plan_session_id: str) -> list[dict[str, Any]]:
+    log_debug("GET /dispatch-plans/by-session", extra={"session": plan_session_id[:12]})
     conn = get_connection()
     try:
         cur = conn.cursor()
-        rows = repo.list_plans_by_session(cur, plan_session_id)
+        try:
+            rows = repo.list_plans_by_session(cur, plan_session_id)
+        except Exception as exc:
+            log_error(
+                "GET /dispatch-plans/by-session",
+                exc,
+                extra={"session": plan_session_id[:12]},
+            )
+            rows = []
         cur.close()
-        return [_serialize(r) for r in rows]
+        out = serialize_rows(rows)
+        log_debug("GET /dispatch-plans/by-session", rows=len(out))
+        return out
+    except Exception as exc:
+        log_error("GET /dispatch-plans/by-session", exc)
+        return []
     finally:
         conn.close()
 
 
 def get_dispatch_plan(plan_id: int) -> dict[str, Any] | None:
+    log_debug("GET /dispatch-plans/{id}", planning_id=plan_id)
     conn = get_connection()
     try:
         cur = conn.cursor()
-        plan = repo.get_plan_by_id(cur, plan_id)
-        if not plan:
-            cur.close()
+        try:
+            plan = repo.get_plan_by_id(cur, plan_id)
+            if not plan:
+                cur.close()
+                return None
+            orders = repo.list_plan_orders(cur, plan_id)
+        except Exception as exc:
+            log_error("GET /dispatch-plans/{id}", exc, planning_id=plan_id)
             return None
-        orders = repo.list_plan_orders(cur, plan_id)
         cur.close()
-        return {"plan": _serialize(plan), "orders": [_serialize(o) for o in orders]}
+        out = {"plan": _serialize(plan), "orders": serialize_rows(orders)}
+        log_debug("GET /dispatch-plans/{id}", planning_id=plan_id, rows=len(orders))
+        return out
     finally:
         conn.close()
 
@@ -272,7 +292,6 @@ def confirm_dispatch_plan(
         frozen_truck_name = (
             str(truck_row[0]).strip() if truck_row and truck_row[0] else route_name
         )
-        planning_code = repo.next_planning_code(cur)
         existing = repo.get_latest_plan_for_truck_session(
             cur, plan_session_id=plan_session_id, truck_id=truck_id
         )
@@ -294,7 +313,6 @@ def confirm_dispatch_plan(
             "planning_date": pdate,
             "truck_id": truck_id,
             "route_name": (route_name or "").strip() or pname,
-            "planning_code": planning_code,
             "planning_name": pname,
             "truck_name": frozen_truck_name,
             "status": "planned",
@@ -316,7 +334,12 @@ def confirm_dispatch_plan(
             "confirmed_at": now,
         }
         enriched = _enrich_orders_snapshot(cur, orders)
-        plan_id = repo.insert_dispatch_plan(cur, fields)
+        plan_id, planning_code = repo.insert_dispatch_plan(cur, fields)
+        logger.info(
+            "[PLANNING_CODE_DEBUG] confirm_dispatch_plan plan_id=%s planning_code=%s",
+            plan_id,
+            planning_code,
+        )
         repo.insert_plan_orders(cur, plan_id, enriched)
         conn.commit()
         cur.close()
@@ -394,12 +417,22 @@ def get_margin_audit() -> dict[str, Any]:
 
 
 def get_plan_dashboard(plan_id: int, *, user_role: str | None = None) -> dict[str, Any]:
+    log_debug("GET /dispatch-plans/{id}/dashboard", planning_id=plan_id)
     data = get_dispatch_plan(plan_id)
     if not data:
         raise ValueError("Plan no encontrado")
     plan = data["plan"]
-    orders = data["orders"]
-    inv = get_invoiced_documents(plan_id)
+    orders = data["orders"] or []
+    try:
+        inv = get_invoiced_documents(plan_id)
+    except Exception as exc:
+        log_error(
+            "GET /dispatch-plans/{id}/dashboard",
+            exc,
+            planning_id=plan_id,
+            extra={"phase": "invoicing"},
+        )
+        inv = empty_invoicing_payload(plan_id, orders)
 
     total_oc_amount = sum(float(o.get("oc_total_amount") or 0) for o in orders)
     confirmed_amount = 0.0
@@ -428,7 +461,20 @@ def get_plan_dashboard(plan_id: int, *, user_role: str | None = None) -> dict[st
     role = (user_role or "").strip().lower()
     show_margin = role in MARGIN_VIEW_ROLES
     if can_calc_margin:
-        margin_data = compute_plan_margin(plan_id)
+        try:
+            margin_data = compute_plan_margin(plan_id)
+        except Exception as exc:
+            log_error(
+                "GET /dispatch-plans/{id}/dashboard",
+                exc,
+                planning_id=plan_id,
+                extra={"phase": "margin"},
+            )
+            margin_data = {
+                "commercial_margin_clp": None,
+                "partial": True,
+                "message": "No se pudo calcular margen (costos o migración pendiente).",
+            }
         if show_margin:
             margin_block = {
                 "visible": True,
@@ -490,18 +536,29 @@ def get_plan_dashboard(plan_id: int, *, user_role: str | None = None) -> dict[st
 
 
 def get_invoiced_documents(plan_id: int) -> dict[str, Any]:
+    log_debug("GET /dispatch-plans/{id}/invoiced-documents", planning_id=plan_id)
     conn = get_connection()
     try:
         cur = conn.cursor()
         plan = repo.get_plan_by_id(cur, plan_id)
         if not plan:
             raise ValueError("Plan no encontrado")
-        rows = repo.list_invoiced_documents(cur, plan_id)
+        try:
+            rows = repo.list_invoiced_documents(cur, plan_id)
+        except Exception as exc:
+            log_error(
+                "GET /dispatch-plans/{id}/invoiced-documents",
+                exc,
+                planning_id=plan_id,
+            )
+            orders = repo.list_plan_orders(cur, plan_id)
+            cur.close()
+            return empty_invoicing_payload(plan_id, serialize_rows(orders))
         cur.close()
     finally:
         conn.close()
 
-    items = [_serialize(r) for r in rows]
+    items = serialize_rows(rows)
     summary = {
         "confirmed": sum(1 for x in items if x.get("status") == "confirmed"),
         "probable": sum(1 for x in items if x.get("status") == "probable"),

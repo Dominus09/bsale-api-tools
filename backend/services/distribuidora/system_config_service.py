@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from backend.db import get_connection
+
+logger = logging.getLogger(__name__)
 
 DIESEL_PRICE_KEY = "diesel_price_per_liter"
 DEFAULT_DIESEL_CLP_PER_LITER = 1200.0
@@ -37,15 +40,22 @@ def get_diesel_price_per_liter(conn=None) -> float:
         conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT value_json
-            FROM distribuidora.system_config
-            WHERE key = %s
-            """,
-            (DIESEL_PRICE_KEY,),
-        )
-        row = cur.fetchone()
+        try:
+            cur.execute(
+                """
+                SELECT value_json
+                FROM distribuidora.system_config
+                WHERE key = %s
+                """,
+                (DIESEL_PRICE_KEY,),
+            )
+            row = cur.fetchone()
+        except Exception as exc:
+            logger.warning(
+                "[ORS_STABILITY_DEBUG] get_diesel_price_per_liter fallback: %s",
+                exc,
+            )
+            row = None
         cur.close()
         if not row:
             return DEFAULT_DIESEL_CLP_PER_LITER

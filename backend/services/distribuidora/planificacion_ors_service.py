@@ -2,23 +2,33 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from backend.db import get_connection
+from backend.utils.json_safe import serialize_row
+from backend.utils.ors_stability import log_debug, log_error
 from backend.repositories.distribuidora.ors_plan_route_crew_repo import (
     get_route_crew_by_session,
     upsert_route_crew,
 )
 from backend.routers.distribuidora import _ors_route_merge_chunks
 from backend.services.distribuidora.logistics_cost_service import (
+    DEFAULT_ASSISTANT_COST_CLP_PER_TRIP,
+    DEFAULT_DRIVER_COST_CLP_PER_TRIP,
     compute_route_costs,
     crew_config_as_dict,
     get_logistics_cost_settings,
     load_active_trucks,
     resolve_truck,
 )
-from backend.services.distribuidora.system_config_service import get_diesel_price_per_liter
+from backend.services.distribuidora.system_config_service import (
+    DEFAULT_DIESEL_CLP_PER_LITER,
+    get_diesel_price_per_liter,
+)
 from backend.utils.ruta_optimizador_local import optimizar_secuencia_cerrado
+
+logger = logging.getLogger(__name__)
 
 # Bodega Quillotana — depot fijo inicio/fin de cada ruta.
 BODEGA_LAT = -43.13147486008401
@@ -155,17 +165,52 @@ def compute_planificacion_ors_routes(
     """
     ``legs``: { camion, truck_id?, stops, driver_count?, assistant_count? }
     """
+    log_debug("POST /planificacion/ors-routes", extra={"legs": len(legs or [])})
+    if not legs:
+        depot = depot_base()
+        return {
+            "ok": True,
+            "routes": [],
+            "depot": depot,
+            "diesel_price_per_liter": round(DEFAULT_DIESEL_CLP_PER_LITER, 2),
+            "crew_defaults": {
+                "driver_cost_clp_per_trip": DEFAULT_DRIVER_COST_CLP_PER_TRIP,
+                "assistant_cost_clp_per_trip": DEFAULT_ASSISTANT_COST_CLP_PER_TRIP,
+            },
+            "totals": {
+                "distance_km": 0.0,
+                "duration_min": 0.0,
+                "liters_estimated": 0.0,
+                "fuel_cost_clp": 0,
+                "crew_cost_clp": 0,
+                "total_cost_clp": 0,
+            },
+        }
+
     conn = get_connection()
     try:
-        diesel_clp = get_diesel_price_per_liter(conn)
-        trucks_by_id, trucks_by_name = load_active_trucks(conn)
-        logistics_settings = get_logistics_cost_settings(conn)
+        try:
+            diesel_clp = get_diesel_price_per_liter(conn)
+            trucks_by_id, trucks_by_name = load_active_trucks(conn)
+            logistics_settings = get_logistics_cost_settings(conn)
+        except Exception as exc:
+            log_error("POST /planificacion/ors-routes", exc, extra={"phase": "config"})
+            diesel_clp = DEFAULT_DIESEL_CLP_PER_LITER
+            trucks_by_id, trucks_by_name = {}, {}
+            logistics_settings = get_logistics_cost_settings()
         default_d, default_a = logistics_settings.crew_rates()
         saved: dict[str, dict[str, Any]] = {}
         if plan_session_id and str(plan_session_id).strip():
-            cur = conn.cursor()
-            saved = get_route_crew_by_session(cur, str(plan_session_id).strip())
-            cur.close()
+            try:
+                cur = conn.cursor()
+                saved = get_route_crew_by_session(cur, str(plan_session_id).strip())
+                cur.close()
+            except Exception as exc:
+                log_error(
+                    "POST /planificacion/ors-routes",
+                    exc,
+                    extra={"phase": "route_crew_load"},
+                )
     finally:
         conn.close()
 
@@ -248,9 +293,9 @@ def compute_planificacion_ors_routes(
         if conn_persist is not None:
             conn_persist.close()
 
-    return {
+    result = {
         "ok": True,
-        "routes": routes,
+        "routes": [serialize_row(r) for r in routes],
         "depot": depot_base(),
         "diesel_price_per_liter": round(diesel_clp, 2),
         "crew_defaults": crew_config_as_dict(logistics_settings),
@@ -263,15 +308,25 @@ def compute_planificacion_ors_routes(
             "total_cost_clp": int(tot_route),
         },
     }
+    log_debug(
+        "POST /planificacion/ors-routes",
+        rows=len(routes),
+        extra={"ok": True},
+    )
+    return result
 
 
 def get_plan_route_crew(plan_session_id: str) -> dict[str, Any]:
+    log_debug("GET /planificacion/route-crew", extra={"session": plan_session_id[:12]})
     conn = get_connection()
     try:
         cur = conn.cursor()
         rows = get_route_crew_by_session(cur, plan_session_id.strip())
         cur.close()
-        settings = get_logistics_cost_settings(conn)
+        try:
+            settings = get_logistics_cost_settings(conn)
+        except Exception:
+            settings = get_logistics_cost_settings()
         defaults = crew_config_as_dict(settings)
         routes = []
         for camion, rec in rows.items():
@@ -287,7 +342,20 @@ def get_plan_route_crew(plan_session_id: str) -> dict[str, Any]:
                     ),
                 }
             )
-        return {"plan_session_id": plan_session_id.strip(), "routes": routes, "defaults": defaults}
+        out = {
+            "plan_session_id": plan_session_id.strip(),
+            "routes": routes,
+            "defaults": defaults,
+        }
+        log_debug("GET /planificacion/route-crew", rows=len(routes))
+        return out
+    except Exception as exc:
+        log_error("GET /planificacion/route-crew", exc)
+        return {
+            "plan_session_id": plan_session_id.strip(),
+            "routes": [],
+            "defaults": crew_config_as_dict(get_logistics_cost_settings()),
+        }
     finally:
         conn.close()
 

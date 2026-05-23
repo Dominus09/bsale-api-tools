@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 from typing import Any
 
@@ -25,9 +26,13 @@ from backend.services.distribuidora.planificacion_ors_service import (
     save_plan_route_crew,
 )
 from backend.services.distribuidora.system_config_service import (
+    DEFAULT_DIESEL_CLP_PER_LITER,
     get_diesel_price_per_liter,
     set_diesel_price_per_liter,
 )
+from backend.utils.ors_stability import log_error
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/distribuidora/planificacion", tags=["Distribuidora planificación despacho"])
 
@@ -41,18 +46,26 @@ def get_planificacion_orders(
         description="todos | lunes | martes | miercoles | jueves | viernes | sabado",
     ),
 ):
-    items = list_dispatch_planning_orders(
-        emission_date_from=emission_date_from,
-        emission_date_to=emission_date_to,
-        delivery_day=delivery_day.strip().lower(),
-    )
-    return {"items": items}
+    try:
+        items = list_dispatch_planning_orders(
+            emission_date_from=emission_date_from,
+            emission_date_to=emission_date_to,
+            delivery_day=delivery_day.strip().lower(),
+        )
+        return {"items": items}
+    except Exception as exc:
+        log_error("GET /planificacion/orders", exc)
+        return {"items": []}
 
 
 @router.get("/fuel-config")
 def get_fuel_config():
-    clp = get_diesel_price_per_liter()
     d = depot_base()
+    try:
+        clp = get_diesel_price_per_liter()
+    except Exception as exc:
+        log_error("GET /planificacion/fuel-config", exc)
+        clp = DEFAULT_DIESEL_CLP_PER_LITER
     return {
         "diesel_price_per_liter": round(clp, 2),
         "depot": {"lat": d["lat"], "lng": d["lon"]},
@@ -79,7 +92,15 @@ def put_fuel_config(body: FuelConfigBody):
 @router.get("/crew-config")
 def get_crew_config():
     """Tarifas base chofer/peoneta por vuelta (system_config)."""
-    return crew_config_as_dict(get_logistics_cost_settings())
+    try:
+        return crew_config_as_dict(get_logistics_cost_settings())
+    except Exception as exc:
+        log_error("GET /planificacion/crew-config", exc)
+        from backend.services.distribuidora.logistics_cost_service import (
+            LogisticsCostSettings,
+        )
+
+        return crew_config_as_dict(LogisticsCostSettings())
 
 
 class CrewConfigBody(BaseModel):
@@ -150,12 +171,19 @@ def post_planificacion_ors_routes(body: OrsRoutesRequestBody):
     Ruta cerrada BODEGA → clientes (orden optimizado) → BODEGA.
     Métricas ORS reales + litros/costo según ``trucks.km_per_liter``, diesel y personal.
     """
-    legs = [_leg_to_service_dict(leg) for leg in body.routes]
-    result = compute_planificacion_ors_routes(
-        legs,
-        plan_session_id=body.plan_session_id,
-        persist_crew=bool(body.plan_session_id),
-    )
+    try:
+        legs = [_leg_to_service_dict(leg) for leg in body.routes]
+        result = compute_planificacion_ors_routes(
+            legs,
+            plan_session_id=body.plan_session_id,
+            persist_crew=bool(body.plan_session_id),
+        )
+    except Exception as exc:
+        log_error("POST /planificacion/ors-routes", exc)
+        raise HTTPException(
+            status_code=502,
+            detail=f"Error al calcular rutas ORS: {exc}",
+        ) from exc
     if not result.get("ok"):
         raise HTTPException(
             status_code=502,
@@ -163,14 +191,14 @@ def post_planificacion_ors_routes(body: OrsRoutesRequestBody):
         )
     depot = result.get("depot") or depot_base()
     return {
-        "routes": result["routes"],
+        "routes": result.get("routes") or [],
         "depot": {
             "lat": float(depot.get("lat", BODEGA_LAT)),
             "lng": float(depot.get("lon", depot.get("lng", BODEGA_LNG))),
         },
         "diesel_price_per_liter": result.get("diesel_price_per_liter"),
         "crew_defaults": result.get("crew_defaults"),
-        "totals": result.get("totals"),
+        "totals": result.get("totals") or {},
     }
 
 
@@ -190,7 +218,15 @@ class RouteCrewSaveBody(BaseModel):
 
 @router.get("/route-crew")
 def get_route_crew(plan_session_id: str = Query(..., min_length=8, max_length=64)):
-    return get_plan_route_crew(plan_session_id.strip())
+    try:
+        return get_plan_route_crew(plan_session_id.strip())
+    except Exception as exc:
+        log_error("GET /planificacion/route-crew", exc)
+        return {
+            "plan_session_id": plan_session_id.strip(),
+            "routes": [],
+            "defaults": crew_config_as_dict(None),
+        }
 
 
 @router.put("/route-crew")
