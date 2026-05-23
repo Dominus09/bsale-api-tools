@@ -1,4 +1,9 @@
 import { getApiBaseUrl } from "@/lib/api-base"
+import {
+  DEFAULT_FETCH_TIMEOUT_MS,
+  fetchWithTimeout,
+  ORS_FETCH_TIMEOUT_MS,
+} from "@/lib/fetch-timeout"
 
 const API_URL = getApiBaseUrl()
 
@@ -1674,12 +1679,16 @@ export async function postDistribuidoraPlanificacionOrsRoutes(params: {
   if (params.planSessionId?.trim()) {
     body.plan_session_id = params.planSessionId.trim()
   }
-  const res = await fetch(`${API_URL}/distribuidora/planificacion/ors-routes`, {
-    method: "POST",
-    headers: getAuthHeaders(),
-    body: JSON.stringify(body),
-    signal: params.signal,
-  })
+  const res = await fetchWithTimeout(
+    `${API_URL}/distribuidora/planificacion/ors-routes`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: JSON.stringify(body),
+      signal: params.signal,
+    },
+    ORS_FETCH_TIMEOUT_MS,
+  )
   if (!res.ok) {
     const msg = await res.text().catch(() => "")
     throw new Error(msg || "Error al calcular rutas ORS")
@@ -1723,17 +1732,36 @@ export type DispatchPlanSummary = {
 
 export async function listDispatchPlansRecent(params?: {
   limit?: number
+  signal?: AbortSignal
 }): Promise<{ items: DispatchPlanSummary[] }> {
   const qs = new URLSearchParams()
   qs.set("limit", String(params?.limit ?? 50))
-  const res = await fetch(`${API_URL}/distribuidora/dispatch-plans?${qs}`, {
-    headers: getAuthHeaders(),
-  })
+  const res = await fetchWithTimeout(
+    `${API_URL}/distribuidora/dispatch-plans?${qs}`,
+    { headers: getAuthHeaders(), signal: params?.signal },
+    DEFAULT_FETCH_TIMEOUT_MS,
+  )
   if (!res.ok) {
     const msg = await res.text().catch(() => "")
     throw new Error(msg || "Error al listar planificaciones")
   }
   return res.json() as Promise<{ items: DispatchPlanSummary[] }>
+}
+
+export async function getDispatchPlanHeader(
+  planId: number,
+  signal?: AbortSignal,
+): Promise<{ plan: DispatchPlanSummary }> {
+  const res = await fetchWithTimeout(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/header`,
+    { headers: getAuthHeaders(), signal },
+    DEFAULT_FETCH_TIMEOUT_MS,
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar cabecera del plan")
+  }
+  return res.json() as Promise<{ plan: DispatchPlanSummary }>
 }
 
 export type DispatchPlanDashboard = {
@@ -1766,10 +1794,13 @@ export type DispatchPlanDashboard = {
 
 export async function getDispatchPlanDashboard(
   planId: number,
+  signal?: AbortSignal,
 ): Promise<DispatchPlanDashboard> {
-  const res = await fetch(`${API_URL}/distribuidora/dispatch-plans/${planId}/dashboard`, {
-    headers: getAuthHeaders(),
-  })
+  const res = await fetchWithTimeout(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/dashboard`,
+    { headers: getAuthHeaders(), signal },
+    DEFAULT_FETCH_TIMEOUT_MS,
+  )
   if (!res.ok) {
     const msg = await res.text().catch(() => "")
     throw new Error(msg || "Error al cargar dashboard del plan")
@@ -1802,12 +1833,16 @@ export type DispatchPlanInvoicedRow = {
   probable_score?: number | null
 }
 
-export async function getDispatchPlansBySession(planSessionId: string): Promise<{
+export async function getDispatchPlansBySession(
+  planSessionId: string,
+  signal?: AbortSignal,
+): Promise<{
   items: DispatchPlanSummary[]
 }> {
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${API_URL}/distribuidora/dispatch-plans/by-session/${encodeURIComponent(planSessionId)}`,
-    { headers: getAuthHeaders() },
+    { headers: getAuthHeaders(), signal },
+    DEFAULT_FETCH_TIMEOUT_MS,
   )
   if (!res.ok) {
     const msg = await res.text().catch(() => "")

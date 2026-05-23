@@ -48,7 +48,25 @@ Incluyen: endpoint, `planning_id`, filas, fase del error.
 
 Módulo `backend/utils/json_safe.py` — usado en `dispatch_plan_service` y respuestas ORS.
 
+## Listado liviano vs dashboard
+
+| Endpoint | Payload | Cuándo |
+|----------|---------|--------|
+| `GET /dispatch-plans?limit=N` | ~8 campos por fila, sin vista facturación | Historial |
+| `GET /dispatch-plans/{id}/header` | Cabecera sin `route_geometry` | Detalle (fase 1) |
+| `GET /dispatch-plans/{id}/dashboard` | Facturación + margen (sin `invoiced_items` por defecto) | Detalle (fase 2, lazy) |
+
+El listado **ya no** ejecuta `v_dispatch_plan_invoiced_documents` por cada fila (era la causa principal de timeout).
+
+## Frontend (loops / ECONNRESET)
+
+- `frontend/lib/planificacion-fetch.ts` — dedupe `by-session` e historial; logs `[FRONTEND_PLAN_DEBUG]`
+- `frontend/lib/fetch-timeout.ts` — timeout 90s (ORS 180s) en fetch críticos
+- `planificacion/page.tsx` — bootstrap **una vez** al montar; abort ORS anterior; debounce crew 450ms
+- `planificaciones/page.tsx` — una petición concurrente al listado
+- Evitar `useEffect` con deps `[fetchRoutes, loadSessionPlans]` (re-disparaba ORS + by-session en loop)
+
 ## Frontend
 
 - Historial y detalle: empty states si API vacía o error
-- Planificación ORS: ya captura errores en `fetchRoutes` y `route-crew`
+- Planificación ORS: captura errores en `fetchRoutes` y `route-crew`

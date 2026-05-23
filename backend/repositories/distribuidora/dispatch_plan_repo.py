@@ -32,9 +32,31 @@ def get_plan_by_id(cur, plan_id: int) -> dict[str, Any] | None:
 
 
 def list_plans_by_session(cur, plan_session_id: str) -> list[dict[str, Any]]:
+    """Listado liviano por sesión (sin route_geometry ni joins pesados)."""
     cur.execute(
         """
-        SELECT dp.*, t.name AS truck_name
+        SELECT
+            dp.id,
+            dp.plan_session_id,
+            dp.planning_code,
+            dp.planning_name,
+            dp.planning_date,
+            dp.truck_id,
+            dp.route_name,
+            dp.status,
+            COALESCE(NULLIF(BTRIM(dp.truck_name), ''), NULLIF(BTRIM(t.name), ''), dp.route_name) AS truck_name,
+            dp.created_at,
+            dp.confirmed_at,
+            dp.km_total,
+            dp.total_route_cost_clp,
+            dp.driver_count,
+            dp.assistant_count,
+            (SELECT COUNT(*)::int
+             FROM distribuidora.dispatch_plan_orders o
+             WHERE o.dispatch_plan_id = dp.id) AS order_count,
+            (SELECT COALESCE(SUM(o.oc_total_amount), 0)
+             FROM distribuidora.dispatch_plan_orders o
+             WHERE o.dispatch_plan_id = dp.id) AS total_oc_amount
         FROM distribuidora.dispatch_plan dp
         LEFT JOIN distribuidora.trucks t ON t.id = dp.truck_id
         WHERE dp.plan_session_id = %s
@@ -43,6 +65,76 @@ def list_plans_by_session(cur, plan_session_id: str) -> list[dict[str, Any]]:
         (plan_session_id.strip(),),
     )
     return [dict(zip(_cols(cur), r)) for r in cur.fetchall()]
+
+
+def get_plan_header(cur, plan_id: int) -> dict[str, Any] | None:
+    """Cabecera del plan sin route_geometry (payload liviano)."""
+    caps = _history_schema_caps(cur)
+    planning_code = (
+        "dp.planning_code"
+        if caps["planning_code"]
+        else "('PLAN-' || LPAD(dp.id::text, 5, '0')) AS planning_code"
+    )
+    planning_name = (
+        "dp.planning_name"
+        if caps["planning_name"]
+        else "dp.route_name AS planning_name"
+    )
+    margin_select = ""
+    if caps["commercial_margin_clp"]:
+        margin_select = """
+            dp.commercial_margin_clp,
+            dp.net_operational_clp,
+            dp.final_margin_clp,
+            dp.margin_computation_source,
+        """
+    order_sub = (
+        """
+            (SELECT COUNT(*)::int
+             FROM distribuidora.dispatch_plan_orders o
+             WHERE o.dispatch_plan_id = dp.id) AS order_count,
+            (SELECT COALESCE(SUM(o.oc_total_amount), 0)
+             FROM distribuidora.dispatch_plan_orders o
+             WHERE o.dispatch_plan_id = dp.id) AS total_oc_amount
+        """
+        if caps["has_orders_table"]
+        else "0::int AS order_count, 0::numeric AS total_oc_amount"
+    )
+    cur.execute(
+        f"""
+        SELECT
+            dp.id,
+            dp.plan_session_id,
+            {planning_code},
+            {planning_name},
+            dp.planning_date,
+            dp.truck_id,
+            dp.route_name,
+            dp.status,
+            COALESCE(NULLIF(BTRIM(dp.truck_name), ''), NULLIF(BTRIM(t.name), ''), dp.route_name) AS truck_name,
+            dp.created_at,
+            dp.confirmed_at,
+            dp.km_total,
+            dp.duration_min,
+            dp.total_route_cost_clp,
+            dp.driver_count,
+            dp.assistant_count,
+            dp.driver_cost_clp,
+            dp.assistant_cost_clp,
+            dp.fuel_cost_clp,
+            dp.crew_cost_clp,
+            {margin_select}
+            {order_sub}
+        FROM distribuidora.dispatch_plan dp
+        LEFT JOIN distribuidora.trucks t ON t.id = dp.truck_id
+        WHERE dp.id = %s
+        """,
+        (plan_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    return dict(zip(_cols(cur), row))
 
 
 def get_latest_plan_for_truck_session(
@@ -185,6 +277,7 @@ def _history_schema_caps(cur) -> dict[str, bool]:
         "planning_name": "planning_name" in dp_cols,
         "truck_name_col": "truck_name" in dp_cols,
         "final_margin_clp": "final_margin_clp" in dp_cols,
+        "commercial_margin_clp": "commercial_margin_clp" in dp_cols,
         "net_operational_clp": "net_operational_clp" in dp_cols,
         "invoiced_view": has_invoiced_view,
     }
@@ -287,22 +380,65 @@ def _build_list_recent_plans_sql(caps: dict[str, bool]) -> str:
     """
 
 
-def list_recent_plans(cur, *, limit: int = 50) -> list[dict[str, Any]]:
+def list_recent_plans_light(cur, *, limit: int = 50) -> list[dict[str, Any]]:
+    """Historial liviano: sin vista facturación ni route_geometry."""
     lim = max(1, min(int(limit), 200))
     caps = _history_schema_caps(cur)
     if not caps["has_plan_table"]:
         logger.warning("[PLANNING_HISTORY_DEBUG] dispatch_plan table missing — empty list")
         return []
 
-    sql = _build_list_recent_plans_sql(caps)
-    logger.info(
-        "[PLANNING_HISTORY_DEBUG] executing list_recent_plans limit=%s invoiced_view=%s",
-        lim,
-        caps["invoiced_view"],
+    planning_code = (
+        "COALESCE(NULLIF(BTRIM(dp.planning_code), ''), 'PLAN-' || LPAD(dp.id::text, 5, '0'))"
+        if caps["planning_code"]
+        else "('PLAN-' || LPAD(dp.id::text, 5, '0'))"
     )
+    planning_name = (
+        "COALESCE(NULLIF(BTRIM(dp.planning_name), ''), dp.route_name)"
+        if caps["planning_name"]
+        else "dp.route_name"
+    )
+    truck_name = (
+        "COALESCE(NULLIF(BTRIM(dp.truck_name), ''), NULLIF(BTRIM(t.name), ''), dp.route_name)"
+        if caps["truck_name_col"]
+        else "COALESCE(NULLIF(BTRIM(t.name), ''), dp.route_name)"
+    )
+    order_sub = ""
+    if caps["has_orders_table"]:
+        order_sub = """
+            (SELECT COUNT(*)::int
+             FROM distribuidora.dispatch_plan_orders o
+             WHERE o.dispatch_plan_id = dp.id) AS order_count,
+            (SELECT COALESCE(SUM(o.oc_total_amount), 0)
+             FROM distribuidora.dispatch_plan_orders o
+             WHERE o.dispatch_plan_id = dp.id) AS total_oc_amount
+        """
+    else:
+        order_sub = "0::int AS order_count, 0::numeric AS total_oc_amount"
+
+    sql = f"""
+        SELECT
+            dp.id,
+            {planning_code} AS planning_code,
+            {planning_name} AS planning_name,
+            {truck_name} AS truck_name,
+            dp.status,
+            dp.created_at,
+            {order_sub}
+        FROM distribuidora.dispatch_plan dp
+        LEFT JOIN distribuidora.trucks t ON t.id = dp.truck_id
+        ORDER BY dp.created_at DESC NULLS LAST
+        LIMIT %s
+    """
+    logger.info("[PLANNING_HISTORY_DEBUG] list_recent_plans_light limit=%s", lim)
+    cur.execute(sql, (lim,))
+    return [dict(zip(_cols(cur), r)) for r in cur.fetchall()]
+
+
+def list_recent_plans(cur, *, limit: int = 50) -> list[dict[str, Any]]:
+    lim = max(1, min(int(limit), 200))
     try:
-        cur.execute(sql, (lim,))
-        rows = [dict(zip(_cols(cur), r)) for r in cur.fetchall()]
+        rows = list_recent_plans_light(cur, limit=lim)
         logger.info(
             "[PLANNING_HISTORY_DEBUG] rows=%s planning_ids=%s",
             len(rows),
@@ -311,7 +447,7 @@ def list_recent_plans(cur, *, limit: int = 50) -> list[dict[str, Any]]:
         return rows
     except Exception as exc:
         logger.exception(
-            "[PLANNING_HISTORY_DEBUG] primary query failed: %s",
+            "[PLANNING_HISTORY_DEBUG] light list failed: %s",
             exc,
         )
         return list_recent_plans_minimal(cur, limit=lim)

@@ -4,7 +4,11 @@ import { useEffect, useState } from "react"
 import Link from "next/link"
 import { History, Loader2 } from "lucide-react"
 
-import { listDispatchPlansRecent, type DispatchPlanSummary } from "@/lib/api"
+import type { DispatchPlanSummary } from "@/lib/api"
+import {
+  fetchDispatchPlansRecentDeduped,
+  trackPlanPageRender,
+} from "@/lib/planificacion-fetch"
 import { formatClp } from "@/lib/ors-map-ui"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -27,37 +31,34 @@ const STATUS_LABEL: Record<string, string> = {
   draft: "Borrador",
 }
 
-function invoicingLabel(p: DispatchPlanSummary): string {
-  const c = p.invoiced_confirmed ?? 0
-  const pr = p.invoiced_probable ?? 0
-  const pe = p.invoiced_pending ?? 0
-  const total = p.order_count ?? c + pr + pe
-  if (total === 0) return "—"
-  if (pe > 0) return `${c}✓ · ${pr}? · ${pe} pend.`
-  if (pr > 0) return `${c}✓ · ${pr} probable`
-  return `${c}/${total} facturadas`
-}
-
 export default function PlanificacionesHistorialPage() {
   const [items, setItems] = useState<DispatchPlanSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  trackPlanPageRender("planificaciones-list")
+
   useEffect(() => {
     let cancelled = false
+    const ac = new AbortController()
     ;(async () => {
       setLoading(true)
+      setError(null)
       try {
-        const res = await listDispatchPlansRecent({ limit: 80 })
-        if (!cancelled) setItems(res.items)
+        const res = await fetchDispatchPlansRecentDeduped({ limit: 80 })
+        if (!cancelled && !ac.signal.aborted) setItems(res.items ?? [])
       } catch (e: unknown) {
-        if (!cancelled) setError(e instanceof Error ? e.message : "Error")
+        if (!cancelled && !ac.signal.aborted) {
+          setError(e instanceof Error ? e.message : "Error al cargar historial")
+          setItems([])
+        }
       } finally {
         if (!cancelled) setLoading(false)
       }
     })()
     return () => {
       cancelled = true
+      ac.abort()
     }
   }, [])
 
@@ -101,7 +102,6 @@ export default function PlanificacionesHistorialPage() {
                 <TableHead>Estado</TableHead>
                 <TableHead className="text-right">OCs</TableHead>
                 <TableHead className="text-right">Monto OCs</TableHead>
-                <TableHead>Facturación</TableHead>
                 <TableHead />
               </TableRow>
             </TableHeader>
@@ -122,9 +122,6 @@ export default function PlanificacionesHistorialPage() {
                   <TableCell className="text-right tabular-nums">{p.order_count ?? 0}</TableCell>
                   <TableCell className="text-right tabular-nums">
                     {formatClp(Number(p.total_oc_amount) || 0)}
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {invoicingLabel(p)}
                   </TableCell>
                   <TableCell className="text-right">
                     <Button asChild variant="ghost" size="sm" className="h-8 gap-1 text-xs">

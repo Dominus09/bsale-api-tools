@@ -1,13 +1,12 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import dynamic from "next/dynamic"
 import Link from "next/link"
 import { Loader2, RefreshCw, Trash2 } from "lucide-react"
 
 import {
   confirmDispatchPlan,
-  getDispatchPlansBySession,
   getDistribuidoraPlanificacionRouteCrew,
   postDistribuidoraPlanificacionOrsRoutes,
   type DispatchPlanSummary,
@@ -15,6 +14,11 @@ import {
   type DistribuidoraPlanificacionOrsResponse,
   type DistribuidoraPlanificacionOrsRoute,
 } from "@/lib/api"
+import {
+  fetchDispatchPlansBySessionDeduped,
+  invalidateSessionPlansCache,
+  logFrontendPlanDebug,
+} from "@/lib/planificacion-fetch"
 import { buildOrsVisitRows } from "@/lib/ors-map-ui"
 import {
   readPlanificacionPayload,
@@ -110,23 +114,30 @@ export default function PlanificacionDespachoPage() {
   const [selectedCamion, setSelectedCamion] = useState<string | null>(null)
   const [sessionPlans, setSessionPlans] = useState<DispatchPlanSummary[]>([])
 
-  const reloadFromStorage = useCallback(() => {
-    const p = readPlanificacionPayload()
-    setOrders(p?.orders ?? [])
-    setPlanSessionId(p?.planSessionId ?? null)
-  }, [])
+  const orsAbortRef = useRef<AbortController | null>(null)
+  const orsInFlightKeyRef = useRef<string | null>(null)
+  const sessionLoadedForRef = useRef<string | null>(null)
+  const bootstrapDoneRef = useRef(false)
+  const crewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const ordersRef = useRef(orders)
+  const planSessionIdRef = useRef(planSessionId)
+  const crewByCamionRef = useRef(crewByCamion)
+  ordersRef.current = orders
+  planSessionIdRef.current = planSessionId
+  crewByCamionRef.current = crewByCamion
 
-  useEffect(() => {
-    reloadFromStorage()
-  }, [reloadFromStorage])
-
-  const loadSessionPlans = useCallback(async (sessionId: string | null) => {
+  const loadSessionPlans = useCallback(async (sessionId: string | null, force = false) => {
     if (!sessionId) {
       setSessionPlans([])
       return
     }
+    logFrontendPlanDebug("loadSessionPlans", {
+      plan_session_id: sessionId,
+      force,
+      trigger: "callback",
+    })
     try {
-      const { items } = await getDispatchPlansBySession(sessionId)
+      const { items } = await fetchDispatchPlansBySessionDeduped(sessionId, { force })
       setSessionPlans(items)
     } catch {
       setSessionPlans([])
@@ -151,53 +162,83 @@ export default function PlanificacionDespachoPage() {
         setLoading(false)
         return
       }
+
+      const routeKey = `${camion}:${truckOrders.map((o) => o.document_id).join(",")}`
+      if (orsInFlightKeyRef.current === routeKey) {
+        logFrontendPlanDebug("ors-routes", { camion, skipped: "inflight-same-key" })
+        return
+      }
+
+      orsAbortRef.current?.abort()
+      const ac = new AbortController()
+      orsAbortRef.current = ac
+      orsInFlightKeyRef.current = routeKey
+
       setLoading(true)
       setError(null)
+      logFrontendPlanDebug("ors-routes", {
+        camion,
+        plan_session_id: sessionId,
+        stops: truckOrders.length,
+        trigger: "fetchRoutes",
+      })
+
       try {
         const crew = crewMap.get(camion) ?? { driverCount: 1, assistantCount: 0 }
-        const routesPayload = [
-          {
-            camion,
-            truck_id: truckOrders[0]?.truck_id ?? null,
-            driver_count: crew.driverCount,
-            assistant_count: crew.assistantCount,
-            stops: truckOrders.map((o) => ({
-              document_id: o.document_id,
-              lat: o.lat,
-              lng: o.lng,
-            })),
-          },
-        ]
         const res = await postDistribuidoraPlanificacionOrsRoutes({
           planSessionId: sessionId,
-          routes: routesPayload,
+          routes: [
+            {
+              camion,
+              truck_id: truckOrders[0]?.truck_id ?? null,
+              driver_count: crew.driverCount,
+              assistant_count: crew.assistantCount,
+              stops: truckOrders.map((o) => ({
+                document_id: o.document_id,
+                lat: o.lat,
+                lng: o.lng,
+              })),
+            },
+          ],
+          signal: ac.signal,
         })
+        if (ac.signal.aborted) return
         setOrsPayload(res)
         if (res.crew_defaults) setCrewDefaults(res.crew_defaults)
-        const truckOnly = list.filter((o) => o.camion === camion)
-        const optimized = applyOptimizedStopOrder(truckOnly, res.routes)
+        const optimized = applyOptimizedStopOrder(truckOrders, res.routes)
         const optMap = new Map(optimized.map((o) => [o.document_id, o]))
         setOrders(list.map((o) => optMap.get(o.document_id) ?? o))
         setCrewByCamion(crewMapFromOrders(list, crewMap))
       } catch (e: unknown) {
+        if (ac.signal.aborted) return
         setError(e instanceof Error ? e.message : "Error ORS")
         setOrsPayload(null)
       } finally {
-        setLoading(false)
+        if (orsInFlightKeyRef.current === routeKey) {
+          orsInFlightKeyRef.current = null
+        }
+        if (!ac.signal.aborted) setLoading(false)
       }
     },
     [],
   )
 
+  /** Bootstrap único al montar (evita loop por deps de fetchRoutes/loadSessionPlans). */
   useEffect(() => {
+    if (bootstrapDoneRef.current) return
+    bootstrapDoneRef.current = true
+
     const p = readPlanificacionPayload()
     const initial = p?.orders ?? []
     const sessionId = p?.planSessionId ?? null
+    setOrders(initial)
     setPlanSessionId(sessionId)
+
     if (initial.length === 0) {
       setLoading(false)
       return
     }
+
     let cancelled = false
     ;(async () => {
       let crewMap = crewMapFromOrders(initial)
@@ -216,23 +257,33 @@ export default function PlanificacionDespachoPage() {
             })
           }
           crewMap = crewMapFromOrders(initial, fromDb)
-          setCrewByCamion(crewMap)
         } catch {
-          setCrewByCamion(crewMap)
+          /* defaults locales */
         }
-      } else {
-        setCrewByCamion(crewMap)
       }
+      if (cancelled) return
+      setCrewByCamion(crewMap)
+
       const camiones = Array.from(groupOrdersByTruck(initial).keys())
       const first = camiones[0] ?? null
-      if (!cancelled) setSelectedCamion(first)
-      if (!cancelled && first) void fetchRoutes(initial, first, sessionId, crewMap)
-      if (!cancelled && sessionId) void loadSessionPlans(sessionId)
+      setSelectedCamion(first)
+
+      if (sessionId && sessionLoadedForRef.current !== sessionId) {
+        sessionLoadedForRef.current = sessionId
+        void loadSessionPlans(sessionId)
+      }
+
+      if (first) void fetchRoutes(initial, first, sessionId, crewMap)
     })()
+
     return () => {
       cancelled = true
+      orsAbortRef.current?.abort()
+      if (crewDebounceRef.current) clearTimeout(crewDebounceRef.current)
     }
-  }, [fetchRoutes, loadSessionPlans])
+    // Solo al montar — no re-ejecutar cuando cambian callbacks
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const orsRoutes = orsPayload?.routes ?? []
   const activeRoute = orsRoutes[0] ?? null
@@ -390,12 +441,20 @@ export default function PlanificacionDespachoPage() {
 
   const handleCrewChange = useCallback(
     (camion: string, driverCount: number, assistantCount: number) => {
-      const next = new Map(crewByCamion)
+      const next = new Map(crewByCamionRef.current)
       next.set(camion, { driverCount, assistantCount })
       setCrewByCamion(next)
-      void fetchRoutes(orders, camion, planSessionId, next)
+      if (crewDebounceRef.current) clearTimeout(crewDebounceRef.current)
+      crewDebounceRef.current = setTimeout(() => {
+        void fetchRoutes(
+          ordersRef.current,
+          camion,
+          planSessionIdRef.current,
+          next,
+        )
+      }, 450)
     },
-    [crewByCamion, fetchRoutes, orders, planSessionId],
+    [fetchRoutes],
   )
 
   const handleConfirmPlan = useCallback(async (planningName: string) => {
@@ -436,8 +495,8 @@ export default function PlanificacionDespachoPage() {
         lng: o.lng,
       })),
     })
-    const { items } = await getDispatchPlansBySession(planSessionId)
-    setSessionPlans(items)
+    invalidateSessionPlansCache(planSessionId)
+    await loadSessionPlans(planSessionId, true)
   }, [
     selectedCamion,
     activeRoute,
@@ -574,7 +633,7 @@ export default function PlanificacionDespachoPage() {
             defaultPlanningName={selectedCamion ?? ""}
             onConfirm={handleConfirmPlan}
             onPlanUpdated={() => {
-              if (planSessionId) void loadSessionPlans(planSessionId)
+              if (planSessionId) void loadSessionPlans(planSessionId, true)
             }}
           />
         </aside>

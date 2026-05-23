@@ -127,8 +127,25 @@ def get_plan(plan_id: int):
     return data
 
 
+@router.get("/{plan_id}/header")
+def get_plan_header(plan_id: int):
+    """Cabecera liviana (sin geometry, sin órdenes)."""
+    try:
+        plan = svc.get_plan_header(plan_id)
+    except Exception as exc:
+        log_error("GET /dispatch-plans/header", exc, planning_id=plan_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan no encontrado")
+    return {"plan": plan}
+
+
 @router.get("/{plan_id}/dashboard")
-def get_plan_dashboard(plan_id: int, authorization: BearerDep = None):
+def get_plan_dashboard(
+    plan_id: int,
+    authorization: BearerDep = None,
+    include_items: bool = Query(False, description="Incluir filas invoiced_items (más pesado)"),
+):
     role: str | None = None
     if authorization:
         try:
@@ -136,7 +153,11 @@ def get_plan_dashboard(plan_id: int, authorization: BearerDep = None):
         except HTTPException:
             role = None
     try:
-        return svc.get_plan_dashboard(plan_id, user_role=role)
+        return svc.get_plan_dashboard(
+            plan_id,
+            user_role=role,
+            include_items=include_items,
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as exc:

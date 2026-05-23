@@ -82,7 +82,6 @@ export function OrsDispatchWorkflow({
                   const el = document.getElementById("ors-planning-name") as HTMLInputElement | null
                   const name = el?.value?.trim() || defaultPlanningName || "Ruta"
                   await onConfirm(name)
-                  onPlanUpdated()
                   setInvoiceMsg("Planificación confirmada y guardada en historial.")
                   setInvoiceAlert("default")
                 } catch (e: unknown) {

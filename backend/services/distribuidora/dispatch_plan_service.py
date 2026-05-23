@@ -229,6 +229,24 @@ def list_session_plans(plan_session_id: str) -> list[dict[str, Any]]:
         conn.close()
 
 
+def get_plan_header(plan_id: int) -> dict[str, Any] | None:
+    log_debug("GET /dispatch-plans/{id}/header", planning_id=plan_id)
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        try:
+            plan = repo.get_plan_header(cur, plan_id)
+        except Exception as exc:
+            log_error("GET /dispatch-plans/{id}/header", exc, planning_id=plan_id)
+            return None
+        cur.close()
+        if not plan:
+            return None
+        return _serialize(plan)
+    finally:
+        conn.close()
+
+
 def get_dispatch_plan(plan_id: int) -> dict[str, Any] | None:
     log_debug("GET /dispatch-plans/{id}", planning_id=plan_id)
     conn = get_connection()
@@ -416,13 +434,31 @@ def get_margin_audit() -> dict[str, Any]:
         conn.close()
 
 
-def get_plan_dashboard(plan_id: int, *, user_role: str | None = None) -> dict[str, Any]:
+def get_plan_dashboard(
+    plan_id: int,
+    *,
+    user_role: str | None = None,
+    include_items: bool = False,
+) -> dict[str, Any]:
     log_debug("GET /dispatch-plans/{id}/dashboard", planning_id=plan_id)
-    data = get_dispatch_plan(plan_id)
-    if not data:
+    plan = get_plan_header(plan_id)
+    if not plan:
         raise ValueError("Plan no encontrado")
-    plan = data["plan"]
-    orders = data["orders"] or []
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        orders = repo.list_plan_orders(cur, plan_id)
+        cur.close()
+    except Exception as exc:
+        log_error(
+            "GET /dispatch-plans/{id}/dashboard",
+            exc,
+            planning_id=plan_id,
+            extra={"phase": "orders"},
+        )
+        orders = []
+    orders = serialize_rows(orders)
     try:
         inv = get_invoiced_documents(plan_id)
     except Exception as exc:
@@ -502,9 +538,6 @@ def get_plan_dashboard(plan_id: int, *, user_role: str | None = None) -> dict[st
             "message": "Margen almacenado.",
         }
 
-    plan_out = get_dispatch_plan(plan_id)
-    plan = plan_out["plan"] if plan_out else plan
-
     return {
         "plan": plan,
         "invoicing": {
@@ -523,7 +556,7 @@ def get_plan_dashboard(plan_id: int, *, user_role: str | None = None) -> dict[st
                 "amount_clp": int(round(pending_amount)),
             },
         },
-        "invoiced_items": inv["items"],
+        "invoiced_items": inv["items"] if include_items else [],
         "warnings": inv["warnings"],
         "probable_notes": inv["probable_notes"],
         "margin": margin_block,
