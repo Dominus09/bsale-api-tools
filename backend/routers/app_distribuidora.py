@@ -152,7 +152,23 @@ _RUTA_DIA_BY_ID_SELECT = """
             WHERE id = %s
 """
 
-_VISITAS_POR_RUTA_SELECT = """
+# Visitas creadas en servidor sin edición offline: no deben exponerse como pending_sync.
+_SQL_SYNC_STATUS_EXPOSICION = """
+                    CASE
+                      WHEN sync_status = 'pending_sync'
+                       AND estado = 'pendiente'
+                       AND fecha_hora_visita IS NULL
+                       AND lat_visita IS NULL
+                       AND lon_visita IS NULL
+                       AND (observacion IS NULL OR TRIM(observacion) = '')
+                       AND (foto_url IS NULL OR TRIM(foto_url::text) = '')
+                       AND tipo_incidencia IS NULL
+                      THEN 'synced'
+                      ELSE sync_status
+                    END AS sync_status
+"""
+
+_VISITAS_POR_RUTA_SELECT = f"""
                 SELECT
                     id,
                     ruta_id,
@@ -174,7 +190,7 @@ _VISITAS_POR_RUTA_SELECT = """
                     distancia_metros,
                     validacion_estado,
                     fecha_hora_visita,
-                    sync_status,
+                    {_SQL_SYNC_STATUS_EXPOSICION},
                     local_action_id,
                     created_at,
                     updated_at
@@ -193,6 +209,30 @@ def _count_visitas_por_ruta(cur, ruta_id: int) -> int:
     if not row or row[0] is None:
         return 0
     return int(row[0])
+
+
+def _normalizar_sync_status_visitas_servidor(cur, ruta_id: int) -> int:
+    """
+    Corrige filas legacy con default ``pending_sync`` sin cambios locales reales.
+    """
+    cur.execute(
+        """
+        UPDATE bsale.visitas
+        SET sync_status = 'synced',
+            updated_at = updated_at
+        WHERE ruta_id = %s
+          AND sync_status = 'pending_sync'
+          AND estado = 'pendiente'
+          AND fecha_hora_visita IS NULL
+          AND lat_visita IS NULL
+          AND lon_visita IS NULL
+          AND (observacion IS NULL OR TRIM(observacion) = '')
+          AND (foto_url IS NULL OR TRIM(foto_url::text) = '')
+          AND tipo_incidencia IS NULL
+        """,
+        (ruta_id,),
+    )
+    return cur.rowcount
 
 
 def _fetch_visitas_por_ruta(cur, ruta_id: int) -> list[dict]:
@@ -351,8 +391,9 @@ def _poblar_visitas_desde_rutero(cur, ruta_id: int, fecha: date, v: str) -> int:
                 estado,
                 lat_cliente,
                 lon_cliente,
-                local_action_id
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'pendiente', %s, %s, %s)
+                local_action_id,
+                sync_status
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'pendiente', %s, %s, %s, 'synced')
             """,
             (
                 ruta_id,
@@ -463,7 +504,7 @@ def _actualizar_visita_sql(cur, body: VisitaUpdate) -> bool:
             distancia_metros = %s,
             validacion_estado = %s,
             fecha_hora_visita = COALESCE(%s, fecha_hora_visita),
-            sync_status = COALESCE(%s, sync_status),
+            sync_status = 'synced',
             updated_at = clock_timestamp()
         WHERE id = %s
         """,
@@ -478,7 +519,6 @@ def _actualizar_visita_sql(cur, body: VisitaUpdate) -> bool:
             distancia,
             estado_val,
             body.fecha_hora_visita,
-            body.sync_status,
             body.id,
         ),
     )
@@ -595,6 +635,14 @@ def get_ruta_del_dia(
             if _count_visitas_por_ruta(cur, ruta_id) == 0:
                 _poblar_visitas_desde_rutero(cur, ruta_id, fecha, v)
 
+            n_fix = _normalizar_sync_status_visitas_servidor(cur, ruta_id)
+            if n_fix:
+                logger.info(
+                    "GET /vendedor/ruta: normalizados sync_status→synced ruta_id=%s filas=%s",
+                    ruta_id,
+                    n_fix,
+                )
+
             cur.execute(_RUTA_DIA_BY_ID_SELECT, (ruta_id,))
             ruta_row = cur.fetchone()
             cols_r = [c[0] for c in cur.description]
@@ -706,6 +754,28 @@ def post_visitas_sync(body: SyncRequest):
             conn.close()
 
     return SyncResponse(sincronizados=sincronizados, errores=errores)
+
+
+@router.post(
+    "/visita_sync",
+    response_model=SyncResponse,
+    summary="Sync visitas (alias cola móvil visita_sync)",
+)
+@router.post(
+    "/visita-sync",
+    response_model=SyncResponse,
+    summary="Sync visitas (alias kebab visita-sync)",
+    include_in_schema=True,
+)
+@router.post(
+    "/sync/visitas",
+    response_model=SyncResponse,
+    summary="Sync visitas (alias path sync/visitas)",
+    include_in_schema=True,
+)
+def post_visita_sync_alias(body: SyncRequest):
+    """Misma lógica que ``POST /visitas/sync`` (evita 404 si la app usa el nombre de la cola SQLite)."""
+    return post_visitas_sync(body)
 
 
 @router.post(

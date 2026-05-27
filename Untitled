@@ -11,3 +11,9 @@ password = "Laquillotana123".encode("utf-8")
 hashed = bcrypt.hashpw(password, bcrypt.gensalt())
 
 print(hashed.decode("utf-8"))
+
+python -m backend.jobs.backfill_documents_may_2026
+
+python -m backend.jobs.backfill_details_may_2026
+
+python -m backend.jobs.backfill_related_may_2026

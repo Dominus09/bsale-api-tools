@@ -127,6 +127,7 @@ class RutaResponse(BaseModel):
 class SyncResponse(BaseModel):
     """Resumen del procesamiento de un lote de sincronización (solo actualizaciones)."""
 
+    ack: bool = True
     sincronizados: int
     errores: int
 

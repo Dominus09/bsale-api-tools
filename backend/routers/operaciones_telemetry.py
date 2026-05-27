@@ -16,6 +16,7 @@ from fastapi import APIRouter, Header
 
 from backend.routers.gps_track_endpoint import handle_gps_track
 from backend.routers.heartbeat_endpoint import handle_heartbeat
+from backend.schemas.distribuidora import SyncRequest, SyncResponse
 from backend.schemas.operaciones import (
     GpsTrackRequest,
     HeartbeatRequest,
@@ -76,6 +77,24 @@ async def telemetry_gps_track_kebab(
     return await handle_gps_track(body, x_heartbeat_key, authorization)
 
 
+@router.post(
+    "/visita_sync",
+    response_model=SyncResponse,
+    summary="Sync visitas (alias cola móvil bajo /operaciones)",
+    operation_id="operaciones_telemetry_visita_sync",
+)
+@router.post(
+    "/visita-sync",
+    response_model=SyncResponse,
+    summary="Sync visitas (alias kebab)",
+    include_in_schema=True,
+)
+def telemetry_visita_sync(body: SyncRequest) -> SyncResponse:
+    from backend.routers.app_distribuidora import post_visitas_sync
+
+    return post_visitas_sync(body)
+
+
 @router.get(
     "/telemetry/health",
     summary="Comprobar que telemetría está montada",
@@ -88,5 +107,6 @@ def telemetry_health() -> dict:
             "POST /operaciones/heartbeat",
             "POST /operaciones/gps_track",
             "POST /operaciones/gps-track",
+            "POST /operaciones/visita_sync",
         ],
     }

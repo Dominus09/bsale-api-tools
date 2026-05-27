@@ -150,7 +150,7 @@ CREATE TABLE bsale.visitas (
 
   fecha_hora_visita timestamptz NULL,
 
-  sync_status varchar(32) NOT NULL DEFAULT 'pending_sync',
+  sync_status varchar(32) NOT NULL DEFAULT 'synced',
   CONSTRAINT chk_visitas_sync_status CHECK (
     sync_status IN ('synced', 'pending_sync')
   ),
