@@ -30,13 +30,18 @@ from backend.schemas.distribuidora import (
 from backend.routers.gps_track_endpoint import handle_gps_track
 from backend.routers.heartbeat_endpoint import handle_heartbeat
 from backend.schemas.operaciones import (
+    GeorefActualizarRequest,
+    GeorefActualizarResponse,
+    GeorefPendientesResponse,
     GpsTrackRequest,
     HeartbeatAckResponse,
     HeartbeatRequest,
     TelemetryAckResponse,
 )
+from backend.utils.operaciones_mobile_auth import verify_operaciones_mobile_auth
 from backend.services.visita_foto_service import normalize_and_persist_foto_url
 from backend.utils.geo import coordenadas_visita_validas, distancia_y_estado_validacion
+from backend.utils.rutero_coords_sql import R_LAT_AS, R_LON_AS
 
 logger = logging.getLogger(__name__)
 
@@ -339,8 +344,11 @@ def _poblar_visitas_desde_rutero(cur, ruta_id: int, fecha: date, v: str) -> int:
                 r.address,
                 r.municipality,
                 r.rut_clean,
-                r.lat,
-                r.lon
+                """
+        + R_LAT_AS
+        + ",\n                "
+        + R_LON_AS
+        + """
             FROM bsale.rutero r
             WHERE r.company_id = 3
               AND r.activo = TRUE
@@ -862,3 +870,68 @@ async def post_app_operaciones_gps_track_kebab(
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
 ) -> TelemetryAckResponse:
     return await handle_gps_track(body, x_heartbeat_key, authorization)
+
+
+@router.get(
+    "/georef-pendientes",
+    response_model=GeorefPendientesResponse,
+    summary="Georef pendientes (alias app móvil)",
+    tags=["App Distribuidora", "Operaciones Quillotana"],
+)
+def app_get_georef_pendientes(
+    vendedor: Annotated[str, Query(min_length=1, description="Código vendedor logueado")],
+    x_heartbeat_key: Annotated[str | None, Header(alias="X-Heartbeat-Key")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> GeorefPendientesResponse:
+    verify_operaciones_mobile_auth(x_heartbeat_key, authorization)
+    from backend.routers.operaciones import get_georef_pendientes
+
+    return get_georef_pendientes(
+        vendedor=vendedor,
+        vista=None,
+        auth_mode="mobile",
+    )
+
+
+@router.get(
+    "/operaciones/georef-pendientes",
+    response_model=GeorefPendientesResponse,
+    summary="Georef pendientes (ruta relativa operaciones/)",
+    tags=["App Distribuidora", "Operaciones Quillotana"],
+)
+def app_get_operaciones_georef_pendientes(
+    vendedor: Annotated[str, Query(min_length=1)],
+    x_heartbeat_key: Annotated[str | None, Header(alias="X-Heartbeat-Key")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> GeorefPendientesResponse:
+    return app_get_georef_pendientes(vendedor, x_heartbeat_key, authorization)
+
+
+@router.post(
+    "/georef-actualizar",
+    response_model=GeorefActualizarResponse,
+    summary="Captura georef en rutero (alias app móvil)",
+    tags=["App Distribuidora", "Operaciones Quillotana"],
+)
+def app_post_georef_actualizar(
+    body: GeorefActualizarRequest,
+    x_heartbeat_key: Annotated[str | None, Header(alias="X-Heartbeat-Key")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> GeorefActualizarResponse:
+    from backend.routers.operaciones import post_georef_actualizar
+
+    return post_georef_actualizar(body, x_heartbeat_key, authorization)
+
+
+@router.post(
+    "/operaciones/georef-actualizar",
+    response_model=GeorefActualizarResponse,
+    summary="Captura georef (ruta relativa operaciones/)",
+    tags=["App Distribuidora", "Operaciones Quillotana"],
+)
+def app_post_operaciones_georef_actualizar(
+    body: GeorefActualizarRequest,
+    x_heartbeat_key: Annotated[str | None, Header(alias="X-Heartbeat-Key")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> GeorefActualizarResponse:
+    return app_post_georef_actualizar(body, x_heartbeat_key, authorization)

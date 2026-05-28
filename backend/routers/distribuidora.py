@@ -15,6 +15,16 @@ from backend.utils.ruta_optimizador_local import (
 )
 from backend.utils.ruta_zonas import haversine_m
 from backend.utils.ruta_sugerencias_locales import sugerencias_swap_adyacentes
+from backend.utils.rutero_coords_sql import (
+    B_LAT_AS,
+    B_LON_AS,
+    R_LAT_AS,
+    R_LON_AS,
+    WHERE_HAS_GEOREF_BARE,
+    WHERE_HAS_GEOREF_R,
+    WHERE_SIN_GEOREF_BARE,
+    WHERE_SIN_GEOREF_R,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -663,8 +673,11 @@ def _cargar_contexto_ruta(v: str, d: str) -> tuple[dict, list[dict], list[dict]]
             + _SQL_DIA_OPERATIVO_SQL_BARE
             + """ AS dia_operativo,
                 municipality,
-                lat,
-                lon,
+                """
+            + B_LAT_AS
+            + ",\n                "
+            + B_LON_AS
+            + """,
                 tipo_atencion,
                 orden_ruta,
                 orden_manual
@@ -674,9 +687,8 @@ def _cargar_contexto_ruta(v: str, d: str) -> tuple[dict, list[dict], list[dict]]
               AND LOWER(TRIM(COALESCE(vendedor::text, ''))) = %s
             """
             + _SQL_MATCH_DIA_OPERATIVO_BARE
-            + """
-              AND lat IS NOT NULL
-              AND lon IS NOT NULL
+            + f"""
+              AND {WHERE_HAS_GEOREF_BARE}
             """
             + _SQL_RUTA_EXCL_DIA_TELEFONICO
             + _SQL_RUTA_EXCL_TIPO_TELEFONICO
@@ -704,8 +716,11 @@ def _cargar_contexto_ruta(v: str, d: str) -> tuple[dict, list[dict], list[dict]]
             + _SQL_DIA_OPERATIVO_SQL_BARE
             + """ AS dia_operativo,
                 municipality,
-                lat,
-                lon,
+                """
+            + B_LAT_AS
+            + ",\n                "
+            + B_LON_AS
+            + """,
                 tipo_atencion,
                 orden_ruta,
                 orden_manual
@@ -715,9 +730,8 @@ def _cargar_contexto_ruta(v: str, d: str) -> tuple[dict, list[dict], list[dict]]
               AND LOWER(TRIM(COALESCE(vendedor::text, ''))) = %s
             """
             + _SQL_MATCH_DIA_OPERATIVO_BARE
-            + """
-              AND lat IS NOT NULL
-              AND lon IS NOT NULL
+            + f"""
+              AND {WHERE_HAS_GEOREF_BARE}
             """
             + _SQL_RUTA_EXCL_DIA_TELEFONICO
             + _SQL_RUTA_EXCL_TIPO_TELEFONICO
@@ -1276,8 +1290,9 @@ def get_analisis_km(
                 FROM bsale.rutero
                 WHERE company_id = 3
                   AND activo = TRUE
-                  AND lat IS NOT NULL
-                  AND lon IS NOT NULL
+                  AND """
+            + WHERE_HAS_GEOREF_BARE
+            + """
                   AND TRIM(COALESCE(vendedor::text, '')) <> ''
             """
             + _SQL_RUTA_EXCL_DIA_TELEFONICO
@@ -1353,8 +1368,11 @@ def get_analisis_km(
                     dia_atencion,
                     dia_extra,
                     municipality,
-                    lat,
-                    lon,
+                    """
+                + B_LAT_AS
+                + ",\n                    "
+                + B_LON_AS
+                + """,
                     tipo_atencion,
                     orden_ruta
                 FROM bsale.rutero
@@ -1363,9 +1381,8 @@ def get_analisis_km(
                   AND LOWER(TRIM(COALESCE(vendedor::text, ''))) = %s
                 """
                 + _SQL_MATCH_DIA_OPERATIVO_BARE
-                + """
-                  AND lat IS NOT NULL
-                  AND lon IS NOT NULL
+                + f"""
+                  AND {WHERE_HAS_GEOREF_BARE}
                 """
                 + _SQL_RUTA_EXCL_DIA_TELEFONICO
                 + _SQL_RUTA_EXCL_TIPO_TELEFONICO
@@ -1459,7 +1476,8 @@ def get_analisis_km(
 
 
 # SELECT compartido: GET /rutero y POST /observacion (fila actualizada).
-_RUTERO_FILA_SELECT = """
+_RUTERO_FILA_SELECT = (
+    """
             SELECT
                 r.id,
                 LOWER(TRIM(COALESCE(r.vendedor::text, ''))) AS vendedor,
@@ -1479,8 +1497,11 @@ _RUTERO_FILA_SELECT = """
                 NULLIF(TRIM(r.phone), '') AS telefono,
                 r.tipo_atencion,
                 r.activo,
-                r.lat,
-                r.lon,
+                """
+    + R_LAT_AS
+    + ",\n                "
+    + R_LON_AS
+    + """,
                 r.observaciones,
                 COALESCE(
                     NULLIF(TRIM(r.nombre_fantasia), ''),
@@ -1498,6 +1519,7 @@ _RUTERO_FILA_SELECT = """
                 ) AS cliente_nombre
             FROM bsale.rutero r
 """
+)
 
 
 def _rutero_list_where_order(
@@ -1553,15 +1575,9 @@ def _rutero_list_where_order(
 
     geo_f = (geo or "").strip().lower()
     if geo_f == "con":
-        wheres.append(
-            "r.lat IS NOT NULL AND r.lon IS NOT NULL "
-            "AND NOT (r.lat::double precision = 0 AND r.lon::double precision = 0)"
-        )
+        wheres.append(WHERE_HAS_GEOREF_R)
     elif geo_f == "sin":
-        wheres.append(
-            "(r.lat IS NULL OR r.lon IS NULL "
-            "OR (r.lat::double precision = 0 AND r.lon::double precision = 0))"
-        )
+        wheres.append(WHERE_SIN_GEOREF_R)
 
     sab = (sabado or "").strip().lower()
     if sab == "con":
@@ -1790,7 +1806,9 @@ def get_sin_georef_export():
             FROM bsale.rutero
             WHERE company_id = 3
               AND activo = TRUE
-              AND (lat IS NULL OR lon IS NULL)
+              AND """
+            + WHERE_SIN_GEOREF_BARE
+            + """
             ORDER BY LOWER(TRIM(COALESCE(vendedor::text, ''))),
                      municipality NULLS LAST,
                      bsale_id
@@ -1825,7 +1843,9 @@ def get_sin_georef():
             FROM bsale.rutero
             WHERE company_id = 3
               AND activo = TRUE
-              AND (lat IS NULL OR lon IS NULL)
+              AND """
+            + WHERE_SIN_GEOREF_BARE
+            + """
             """
         )
         data = _rows_to_json(cur)
@@ -1958,16 +1978,20 @@ def get_mapa():
             + _SQL_DIA_OPERATIVO_SQL_BARE
             + """ AS dia_operativo,
                 municipality,
-                lat,
-                lon,
+                """
+            + B_LAT_AS
+            + ",\n                "
+            + B_LON_AS
+            + """,
                 tipo_atencion,
                 orden_ruta,
                 orden_manual
             FROM bsale.rutero
             WHERE company_id = 3
               AND activo = TRUE
-              AND lat IS NOT NULL
-              AND lon IS NOT NULL
+              AND """
+            + WHERE_HAS_GEOREF_BARE
+            + """
             """
             + _SQL_RUTA_EXCL_DIA_TELEFONICO
             + _SQL_RUTA_EXCL_TIPO_TELEFONICO
@@ -1985,8 +2009,9 @@ def get_mapa():
                 FROM bsale.rutero
                 WHERE company_id = 3
                   AND activo = TRUE
-                  AND lat IS NOT NULL
-                  AND lon IS NOT NULL
+                  AND """
+            + WHERE_HAS_GEOREF_BARE
+            + """
             """
             + _SQL_RUTA_EXCL_DIA_TELEFONICO
             + _SQL_RUTA_EXCL_TIPO_TELEFONICO

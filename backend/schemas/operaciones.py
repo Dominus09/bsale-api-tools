@@ -231,3 +231,84 @@ class GpsTrackRequest(BaseModel):
         if isinstance(v, str):
             return v.strip()
         return v
+
+
+GeorefEstado = Literal["pendiente", "capturada", "aplicada"]
+
+
+class ClienteGeorefRow(BaseModel):
+    """Fila de georef operacional (view o rutero)."""
+
+    cliente_codigo: str
+    cliente_nombre: str
+    vendedor_codigo: str
+    ruta_id: int = Field(description="PK bsale.rutero.id")
+    direccion: str | None = None
+    lat: float | None = None
+    lon: float | None = None
+    georef_estado: GeorefEstado | str = "pendiente"
+    georef_actualizada_at: datetime | None = None
+    georef_actualizada_por: str | None = None
+
+
+class GeorefPendientesResponse(BaseModel):
+    total: int
+    items: list[ClienteGeorefRow] = Field(default_factory=list)
+
+
+class GeorefActualizarRequest(BaseModel):
+    """Captura GPS desde app móvil."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    ruta_id: int = Field(..., ge=1, validation_alias=AliasChoices("ruta_id", "rutero_id"))
+    lat: float
+    lon: float = Field(validation_alias=AliasChoices("lon", "lng"))
+    vendedor_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=50,
+        validation_alias=AliasChoices("vendedor_id", "vendedorId", "vendedor"),
+    )
+    actualizada_por: str | None = Field(
+        None,
+        max_length=50,
+        validation_alias=AliasChoices("actualizada_por", "actualizadaPor"),
+    )
+
+    @field_validator("vendedor_id", mode="before")
+    @classmethod
+    def _strip_v(cls, v: object) -> object:
+        if isinstance(v, str):
+            return v.strip()
+        return v
+
+
+class GeorefActualizarResponse(BaseModel):
+    ack: bool = True
+    ruta_id: int
+    cliente_codigo: str
+    lat: float
+    lon: float
+    georef_estado: str
+    georef_actualizada_at: datetime | None = None
+    georef_actualizada_por: str | None = None
+
+
+class GeorefEstadoPatchRequest(BaseModel):
+    """ERP: marcar aplicada o volver a pendiente."""
+
+    ruta_id: int = Field(..., ge=1, validation_alias=AliasChoices("ruta_id", "rutero_id"))
+    georef_estado: Literal["pendiente", "aplicada"]
+    actualizada_por: str | None = Field(None, max_length=50)
+
+
+class GeorefEstadoPatchResponse(BaseModel):
+    ok: bool = True
+    ruta_id: int
+    cliente_codigo: str
+    lat: float | None = None
+    lon: float | None = None
+    georef_estado: str
+    georef_actualizada_at: datetime | None = None
+    georef_actualizada_por: str | None = None

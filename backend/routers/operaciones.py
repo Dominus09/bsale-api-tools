@@ -19,6 +19,11 @@ from fastapi.responses import FileResponse
 from backend.routers.gps_track_endpoint import handle_gps_track
 from backend.routers.heartbeat_endpoint import handle_heartbeat
 from backend.schemas.operaciones import (
+    GeorefActualizarRequest,
+    GeorefActualizarResponse,
+    GeorefEstadoPatchRequest,
+    GeorefEstadoPatchResponse,
+    GeorefPendientesResponse,
     GpsTrackRequest,
     HeartbeatAckResponse,
     HeartbeatRequest,
@@ -31,8 +36,10 @@ from backend.schemas.operaciones import (
     VendedoresListResponse,
 )
 from backend.services import operaciones_service
+from backend.services import rutero_georef_service as georef_service
 from backend.services.visita_foto_service import path_for_key, path_for_visita_id
-from backend.utils.auth_staff import require_staff_user
+from backend.utils.auth_staff import decode_staff_token, require_staff_user
+from backend.utils.operaciones_mobile_auth import verify_operaciones_mobile_auth
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +48,24 @@ router = APIRouter(prefix="/operaciones", tags=["Operaciones Quillotana"])
 
 def _parse_fecha(fecha: date | None) -> date:
     return fecha or date.today()
+
+
+def _auth_staff_o_movil(
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+    x_heartbeat_key: Annotated[str | None, Header(alias="X-Heartbeat-Key")] = None,
+) -> str:
+    """
+    Staff JWT → ``staff``.
+    Telemetría móvil / sin clave → ``mobile``.
+    """
+    if authorization and authorization.lower().startswith("bearer "):
+        try:
+            decode_staff_token(authorization)
+            return "staff"
+        except HTTPException:
+            pass
+    verify_operaciones_mobile_auth(x_heartbeat_key, authorization)
+    return "mobile"
 
 
 @router.post(
@@ -243,3 +268,108 @@ def get_operaciones_metricas(
     except Exception as e:
         logger.exception("operaciones metricas: %s", e)
         raise HTTPException(status_code=500, detail="Error al cargar métricas") from e
+
+
+@router.get(
+    "/georef-pendientes",
+    response_model=GeorefPendientesResponse,
+    summary="Clientes sin georef (view rutero; app móvil o ERP)",
+)
+def get_georef_pendientes(
+    vendedor: Annotated[
+        str | None,
+        Query(description="Código vendedor (obligatorio para app móvil)"),
+    ] = None,
+    vista: Annotated[
+        str | None,
+        Query(
+            description="erp = incluye capturadas para panel; omitir = solo view pendientes",
+        ),
+    ] = None,
+    auth_mode: str = Depends(_auth_staff_o_movil),
+) -> GeorefPendientesResponse:
+    v = (vendedor or "").strip()
+    if auth_mode == "mobile" and not v:
+        raise HTTPException(
+            status_code=400,
+            detail="Parámetro vendedor es obligatorio para la app móvil.",
+        )
+    try:
+        if (vista or "").strip().lower() == "erp" and auth_mode == "staff":
+            items = georef_service.list_georef_operativa(vendedor_codigo=v or None)
+        else:
+            items = georef_service.list_pendientes_desde_view(
+                vendedor_codigo=v or None,
+            )
+        return GeorefPendientesResponse(total=len(items), items=items)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        logger.exception("georef-pendientes vendedor=%s", v)
+        raise HTTPException(status_code=500, detail="Error al listar georef pendientes") from e
+
+
+@router.post(
+    "/georef-actualizar",
+    response_model=GeorefActualizarResponse,
+    summary="Captura georef en rutero (app móvil)",
+)
+def post_georef_actualizar(
+    body: GeorefActualizarRequest,
+    x_heartbeat_key: Annotated[str | None, Header(alias="X-Heartbeat-Key")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> GeorefActualizarResponse:
+    verify_operaciones_mobile_auth(x_heartbeat_key, authorization)
+    por = (body.actualizada_por or body.vendedor_id).strip()
+    try:
+        out = georef_service.capturar_georef(
+            rutero_id=body.ruta_id,
+            lat=body.lat,
+            lon=body.lon,
+            actualizada_por=por,
+            vendedor_esperado=body.vendedor_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        logger.exception("georef-actualizar ruta_id=%s", body.ruta_id)
+        raise HTTPException(status_code=500, detail="Error al guardar georef") from e
+
+    if out is None:
+        raise HTTPException(status_code=404, detail="Cliente rutero no encontrado")
+    return GeorefActualizarResponse(**out)
+
+
+@router.patch(
+    "/georef-estado",
+    response_model=GeorefEstadoPatchResponse,
+    summary="ERP: marcar georef aplicada o volver a pendiente",
+)
+def patch_georef_estado(
+    body: GeorefEstadoPatchRequest,
+    user: dict = Depends(require_staff_user),
+) -> GeorefEstadoPatchResponse:
+    por = (body.actualizada_por or user.get("email") or user.get("username") or "erp")
+    if isinstance(por, str):
+        por = por.strip()[:50]
+    else:
+        por = "erp"
+    try:
+        out = georef_service.actualizar_estado_georef(
+            rutero_id=body.ruta_id,
+            georef_estado=body.georef_estado,
+            actualizada_por=por,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        logger.exception("georef-estado ruta_id=%s", body.ruta_id)
+        raise HTTPException(status_code=500, detail="Error al actualizar estado georef") from e
+
+    if out is None:
+        raise HTTPException(status_code=404, detail="Cliente rutero no encontrado")
+    return GeorefEstadoPatchResponse(**out)

@@ -183,3 +183,44 @@ export function getOperacionesMetricas(fecha?: string) {
 }
 
 export const OPERACIONES_POLL_MS = Number(process.env.NEXT_PUBLIC_OPERACIONES_POLL_MS || "30000")
+
+export type GeorefEstado = "pendiente" | "capturada" | "aplicada"
+
+export interface ClienteGeorefRow {
+  cliente_codigo: string
+  cliente_nombre: string
+  vendedor_codigo: string
+  ruta_id: number
+  direccion: string | null
+  lat: number | null
+  lon: number | null
+  georef_estado: GeorefEstado | string
+  georef_actualizada_at?: string | null
+  georef_actualizada_por?: string | null
+}
+
+export function getOperacionesGeorefPendientes(opts?: { vendedor?: string; vista?: "erp" }) {
+  return operacionesFetch<{ total: number; items: ClienteGeorefRow[] }>("/georef-pendientes", {
+    vendedor: opts?.vendedor,
+    vista: opts?.vista,
+  })
+}
+
+export async function patchOperacionesGeorefEstado(
+  rutaId: number,
+  georefEstado: "pendiente" | "aplicada",
+) {
+  const res = await fetch(`${API_URL}/operaciones/georef-estado`, {
+    method: "PATCH",
+    headers: {
+      ...getAuthHeaders(),
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ ruta_id: rutaId, georef_estado: georefEstado }),
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  return res.json()
+}

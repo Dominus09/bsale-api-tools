@@ -34,6 +34,7 @@ import {
   UserCircle2,
   Stethoscope,
   PackageCheck,
+  Crosshair,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -101,6 +102,7 @@ const navSections: { title: string; items: NavItem[] }[] = [
       { href: "/operaciones/vendedores", label: "Vendedores en ruta", icon: UserCircle2 },
       { href: "/operaciones/mapa", label: "Mapa operacional", icon: MapPin },
       { href: "/operaciones/incidencias", label: "Incidencias", icon: AlertTriangle },
+      { href: "/operaciones/georreferencias", label: "Georreferencias", icon: Crosshair },
       { href: "/orders", label: "Pedidos", icon: Package },
       { href: "#", label: "Stock", icon: Warehouse, disabled: true },
     ],
