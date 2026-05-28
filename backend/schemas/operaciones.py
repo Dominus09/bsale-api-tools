@@ -244,6 +244,7 @@ class ClienteGeorefRow(BaseModel):
     vendedor_codigo: str
     ruta_id: int = Field(description="PK bsale.rutero.id")
     direccion: str | None = None
+    comuna: str | None = None
     lat: float | None = None
     lon: float | None = None
     georef_estado: GeorefEstado | str = "pendiente"
@@ -251,9 +252,17 @@ class ClienteGeorefRow(BaseModel):
     georef_actualizada_por: str | None = None
 
 
+class GeorefResumen(BaseModel):
+    total: int = 0
+    pendientes: int = 0
+    capturados: int = 0
+    aplicados: int = 0
+
+
 class GeorefPendientesResponse(BaseModel):
     total: int
     items: list[ClienteGeorefRow] = Field(default_factory=list)
+    resumen: GeorefResumen = Field(default_factory=GeorefResumen)
 
 
 class GeorefActualizarRequest(BaseModel):

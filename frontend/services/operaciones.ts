@@ -192,6 +192,7 @@ export interface ClienteGeorefRow {
   vendedor_codigo: string
   ruta_id: number
   direccion: string | null
+  comuna?: string | null
   lat: number | null
   lon: number | null
   georef_estado: GeorefEstado | string
@@ -199,11 +200,51 @@ export interface ClienteGeorefRow {
   georef_actualizada_por?: string | null
 }
 
-export function getOperacionesGeorefPendientes(opts?: { vendedor?: string; vista?: "erp" }) {
-  return operacionesFetch<{ total: number; items: ClienteGeorefRow[] }>("/georef-pendientes", {
+export interface GeorefResumen {
+  total: number
+  pendientes: number
+  capturados: number
+  aplicados: number
+}
+
+export interface GeorefPendientesResponse {
+  total: number
+  items: ClienteGeorefRow[]
+  resumen: GeorefResumen
+}
+
+export function getOperacionesGeorefPendientes(opts?: {
+  vendedor?: string
+  vista?: "erp"
+  solo_pendientes?: boolean
+}) {
+  return operacionesFetch<GeorefPendientesResponse>("/georef-pendientes", {
     vendedor: opts?.vendedor,
     vista: opts?.vista,
+    solo_pendientes: opts?.solo_pendientes === false ? "false" : "true",
   })
+}
+
+export async function downloadOperacionesGeorefExport(opts?: {
+  vendedor?: string
+  solo_pendientes?: boolean
+}) {
+  const q = new URLSearchParams()
+  if (opts?.vendedor) q.set("vendedor", opts.vendedor)
+  q.set("solo_pendientes", opts?.solo_pendientes === false ? "false" : "true")
+  const url = `${API_URL}/operaciones/georef-export?${q}`
+  const res = await fetch(url, { headers: getAuthHeaders() })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(text || `HTTP ${res.status}`)
+  }
+  const blob = await res.blob()
+  const href = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = href
+  a.download = opts?.solo_pendientes === false ? "georef_seguimiento.csv" : "georef_pendientes.csv"
+  a.click()
+  URL.revokeObjectURL(href)
 }
 
 export async function patchOperacionesGeorefEstado(

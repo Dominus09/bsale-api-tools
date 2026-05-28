@@ -36,3 +36,8 @@ WHERE_SIN_GEOREF_BARE = (
     f"(({B_LAT}) IS NULL OR ({B_LON}) IS NULL "
     f"OR (({B_LAT})::double precision = 0 AND ({B_LON})::double precision = 0))"
 )
+
+# Pendiente operacional ERP/app: sin coords efectivas o estado pendiente
+WHERE_SOLO_PENDIENTE_GEOREF_R = (
+    f"(({R_LAT}) IS NULL OR ({R_LON}) IS NULL OR r.georef_estado = 'pendiente')"
+)

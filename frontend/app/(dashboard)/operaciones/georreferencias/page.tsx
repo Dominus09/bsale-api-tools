@@ -1,11 +1,13 @@
 "use client"
 
-import { useCallback, useState } from "react"
-import { Loader2 } from "lucide-react"
+import { useCallback, useEffect, useState } from "react"
+import { Download, Loader2, RefreshCw } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
   Table,
   TableBody,
@@ -14,12 +16,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { useOperacionesPoll } from "@/hooks/use-operaciones-poll"
 import {
+  downloadOperacionesGeorefExport,
   getOperacionesGeorefPendientes,
   patchOperacionesGeorefEstado,
   type ClienteGeorefRow,
+  type GeorefPendientesResponse,
 } from "@/services/operaciones"
+import { cn } from "@/lib/utils"
 
 function GeorefEstadoBadge({ estado }: { estado: string }) {
   const e = estado.toLowerCase()
@@ -36,28 +40,57 @@ function GeorefEstadoBadge({ estado }: { estado: string }) {
   )
 }
 
-function formatCoords(row: ClienteGeorefRow) {
-  if (row.lat == null || row.lon == null) return "—"
-  return `${row.lat.toFixed(6)}, ${row.lon.toFixed(6)}`
+function isPendienteOperacional(row: ClienteGeorefRow) {
+  const sinCoords = row.lat == null || row.lon == null
+  return sinCoords || String(row.georef_estado).toLowerCase() === "pendiente"
+}
+
+function KpiCard({ label, value, accent }: { label: string; value: number; accent?: string }) {
+  return (
+    <div className="rounded-lg border bg-card px-4 py-3">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className={cn("text-2xl font-semibold tabular-nums", accent)}>{value}</p>
+    </div>
+  )
 }
 
 export default function OperacionesGeorreferenciasPage() {
   const [vendedor, setVendedor] = useState("")
+  const [soloPendientes, setSoloPendientes] = useState(true)
+  const [data, setData] = useState<GeorefPendientesResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<number | null>(null)
+  const [exporting, setExporting] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
 
-  const loader = useCallback(
-    () => getOperacionesGeorefPendientes({ vendedor: vendedor || undefined, vista: "erp" }),
-    [vendedor],
-  )
-  const { data, loading, error, refresh } = useOperacionesPoll(loader, [vendedor])
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await getOperacionesGeorefPendientes({
+        vendedor: vendedor || undefined,
+        vista: "erp",
+        solo_pendientes: soloPendientes,
+      })
+      setData(res)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error al cargar georreferencias")
+    } finally {
+      setLoading(false)
+    }
+  }, [vendedor, soloPendientes])
+
+  useEffect(() => {
+    void load()
+  }, [load])
 
   async function onEstado(row: ClienteGeorefRow, estado: "pendiente" | "aplicada") {
     setActionError(null)
     setBusyId(row.ruta_id)
     try {
       await patchOperacionesGeorefEstado(row.ruta_id, estado)
-      await refresh()
+      await load()
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Error al actualizar estado")
     } finally {
@@ -65,25 +98,79 @@ export default function OperacionesGeorreferenciasPage() {
     }
   }
 
+  async function onExport() {
+    setExporting(true)
+    setActionError(null)
+    try {
+      await downloadOperacionesGeorefExport({
+        vendedor: vendedor || undefined,
+        solo_pendientes: soloPendientes,
+      })
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Error al exportar")
+    } finally {
+      setExporting(false)
+    }
+  }
+
+  const resumen = data?.resumen
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Georreferencias</h1>
-        <p className="text-sm text-muted-foreground">
-          Capa operacional <code className="rounded bg-muted px-1 text-xs">bsale.rutero</code> — la app
-          guarda en <code className="rounded bg-muted px-1 text-xs">lat_operacional</code>; las columnas
-          mostradas son coordenadas efectivas (operacional o réplica BSALE). Marcar aplicada tras actualizar
-          BSALE manualmente.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Georreferencias</h1>
+          <p className="text-sm text-muted-foreground max-w-2xl">
+            Gestión operacional de clientes sin georef efectiva. Coordenadas mostradas =
+            operacional o réplica BSALE.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
+            <RefreshCw className={cn("mr-2 h-4 w-4", loading && "animate-spin")} />
+            Actualizar
+          </Button>
+          <Button size="sm" onClick={() => void onExport()} disabled={exporting || loading}>
+            {exporting ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Download className="mr-2 h-4 w-4" />
+            )}
+            {soloPendientes ? "Descargar pendientes" : "Descargar CSV"}
+          </Button>
+        </div>
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        <Input
-          placeholder="Filtrar vendedor (código)"
-          value={vendedor}
-          onChange={(e) => setVendedor(e.target.value)}
-          className="max-w-xs"
-        />
+      {resumen ? (
+        <div className="grid gap-3 grid-cols-2 sm:grid-cols-4">
+          <KpiCard label="Total clientes" value={resumen.total} />
+          <KpiCard label="Pendientes georef" value={resumen.pendientes} accent="text-amber-700" />
+          <KpiCard label="Capturados" value={resumen.capturados} accent="text-sky-700" />
+          <KpiCard label="Aplicados" value={resumen.aplicados} accent="text-emerald-700" />
+        </div>
+      ) : null}
+
+      <div className="flex flex-wrap items-end gap-4">
+        <div className="space-y-2">
+          <Label htmlFor="georef-vendedor">Vendedor</Label>
+          <Input
+            id="georef-vendedor"
+            placeholder="Código (vacío = todos)"
+            value={vendedor}
+            onChange={(e) => setVendedor(e.target.value)}
+            className="max-w-xs"
+          />
+        </div>
+        <div className="flex items-center gap-2 pb-2">
+          <Checkbox
+            id="solo-pendientes"
+            checked={soloPendientes}
+            onCheckedChange={(c) => setSoloPendientes(c === true)}
+          />
+          <Label htmlFor="solo-pendientes" className="cursor-pointer font-normal">
+            Mostrar solo pendientes georreferencia
+          </Label>
+        </div>
       </div>
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
@@ -91,69 +178,81 @@ export default function OperacionesGeorreferenciasPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Clientes ({data?.total ?? 0})</CardTitle>
+          <CardTitle>
+            {soloPendientes ? "Pendientes" : "Seguimiento georef"} ({data?.total ?? 0})
+          </CardTitle>
         </CardHeader>
         <CardContent>
           {loading && !data ? (
             <div className="flex justify-center py-12">
               <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
             </div>
+          ) : (data?.items ?? []).length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">
+              No hay clientes con el filtro actual.
+            </p>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Cliente</TableHead>
                   <TableHead>Vendedor</TableHead>
+                  <TableHead>Cliente</TableHead>
                   <TableHead>Dirección</TableHead>
+                  <TableHead>Comuna</TableHead>
                   <TableHead>Estado</TableHead>
-                  <TableHead>Coordenadas</TableHead>
-                  <TableHead>Actualizado</TableHead>
                   <TableHead className="text-right">Acciones</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(data?.items ?? []).map((row) => (
-                  <TableRow key={row.ruta_id}>
-                    <TableCell>
-                      <div className="font-medium">{row.cliente_nombre}</div>
-                      <div className="text-xs text-muted-foreground">{row.cliente_codigo}</div>
-                    </TableCell>
-                    <TableCell>{row.vendedor_codigo || "—"}</TableCell>
-                    <TableCell className="max-w-[220px] truncate">{row.direccion || "—"}</TableCell>
-                    <TableCell>
-                      <GeorefEstadoBadge estado={row.georef_estado} />
-                    </TableCell>
-                    <TableCell className="font-mono text-xs whitespace-nowrap">
-                      {formatCoords(row)}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                      {row.georef_actualizada_at
-                        ? new Date(row.georef_actualizada_at).toLocaleString("es-CL")
-                        : "—"}
-                      {row.georef_actualizada_por ? (
-                        <div>{row.georef_actualizada_por}</div>
-                      ) : null}
-                    </TableCell>
-                    <TableCell className="text-right space-x-1">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={busyId === row.ruta_id || row.georef_estado === "aplicada"}
-                        onClick={() => onEstado(row, "aplicada")}
-                      >
-                        Marcar aplicada
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={busyId === row.ruta_id || row.georef_estado === "pendiente"}
-                        onClick={() => onEstado(row, "pendiente")}
-                      >
-                        Volver pendiente
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {(data?.items ?? []).map((row) => {
+                  const pendiente = isPendienteOperacional(row)
+                  const estado = String(row.georef_estado).toLowerCase()
+                  return (
+                    <TableRow
+                      key={row.ruta_id}
+                      className={pendiente ? "bg-amber-50/80 dark:bg-amber-950/20" : undefined}
+                    >
+                      <TableCell className="font-mono text-xs whitespace-nowrap">
+                        {row.vendedor_codigo || "—"}
+                      </TableCell>
+                      <TableCell>
+                        <div className="font-medium">{row.cliente_nombre}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {row.cliente_codigo} · #{row.ruta_id}
+                        </div>
+                      </TableCell>
+                      <TableCell className="max-w-[200px] truncate text-sm">
+                        {row.direccion || "—"}
+                      </TableCell>
+                      <TableCell className="text-sm">{row.comuna || "—"}</TableCell>
+                      <TableCell>
+                        <GeorefEstadoBadge estado={row.georef_estado} />
+                      </TableCell>
+                      <TableCell className="text-right space-x-1">
+                        {estado !== "aplicada" ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={busyId === row.ruta_id}
+                            onClick={() => onEstado(row, "aplicada")}
+                          >
+                            Marcar aplicada
+                          </Button>
+                        ) : null}
+                        {estado !== "pendiente" ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={busyId === row.ruta_id}
+                            onClick={() => onEstado(row, "pendiente")}
+                          >
+                            Volver pendiente
+                          </Button>
+                        ) : null}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
               </TableBody>
             </Table>
           )}

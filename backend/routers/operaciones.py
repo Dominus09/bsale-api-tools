@@ -13,8 +13,11 @@ import time
 from datetime import date
 from typing import Annotated
 
+import csv
+import io
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from backend.routers.gps_track_endpoint import handle_gps_track
 from backend.routers.heartbeat_endpoint import handle_heartbeat
@@ -24,6 +27,7 @@ from backend.schemas.operaciones import (
     GeorefEstadoPatchRequest,
     GeorefEstadoPatchResponse,
     GeorefPendientesResponse,
+    GeorefResumen,
     GpsTrackRequest,
     HeartbeatAckResponse,
     HeartbeatRequest,
@@ -283,9 +287,13 @@ def get_georef_pendientes(
     vista: Annotated[
         str | None,
         Query(
-            description="erp = incluye capturadas para panel; omitir = solo view pendientes",
+            description="erp = panel ERP (usa solo_pendientes); omitir = view app móvil",
         ),
     ] = None,
+    solo_pendientes: Annotated[
+        bool,
+        Query(description="ERP: solo clientes sin georef efectiva o estado pendiente"),
+    ] = True,
     auth_mode: str = Depends(_auth_staff_o_movil),
 ) -> GeorefPendientesResponse:
     v = (vendedor or "").strip()
@@ -296,17 +304,80 @@ def get_georef_pendientes(
         )
     try:
         if (vista or "").strip().lower() == "erp" and auth_mode == "staff":
-            items = georef_service.list_georef_operativa(vendedor_codigo=v or None)
+            resumen_dict = georef_service.get_georef_resumen(vendedor_codigo=v or None)
+            items = georef_service.list_georef_erp(
+                vendedor_codigo=v or None,
+                solo_pendientes=solo_pendientes,
+            )
+            resumen = GeorefResumen(**resumen_dict)
         else:
             items = georef_service.list_pendientes_desde_view(
                 vendedor_codigo=v or None,
             )
-        return GeorefPendientesResponse(total=len(items), items=items)
+            resumen = GeorefResumen(
+                total=len(items),
+                pendientes=len(items),
+                capturados=0,
+                aplicados=0,
+            )
+        return GeorefPendientesResponse(
+            total=len(items),
+            items=items,
+            resumen=resumen,
+        )
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:
         logger.exception("georef-pendientes vendedor=%s", v)
         raise HTTPException(status_code=500, detail="Error al listar georef pendientes") from e
+
+
+@router.get(
+    "/georef-export",
+    summary="Exportar CSV de georef (pendientes por defecto)",
+)
+def get_georef_export(
+    vendedor: Annotated[str | None, Query()] = None,
+    solo_pendientes: Annotated[bool, Query()] = True,
+    _user: dict = Depends(require_staff_user),
+) -> StreamingResponse:
+    v = (vendedor or "").strip() or None
+    try:
+        rows = georef_service.list_georef_erp(
+            vendedor_codigo=v,
+            solo_pendientes=solo_pendientes,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        logger.exception("georef-export vendedor=%s", v)
+        raise HTTPException(status_code=500, detail="Error al exportar georef") from e
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        ["vendedor", "cliente", "cliente_codigo", "direccion", "comuna", "estado", "ruta_id"]
+    )
+    for r in rows:
+        writer.writerow(
+            [
+                r.get("vendedor_codigo") or "",
+                r.get("cliente_nombre") or "",
+                r.get("cliente_codigo") or "",
+                r.get("direccion") or "",
+                r.get("comuna") or "",
+                r.get("georef_estado") or "",
+                r.get("ruta_id") or "",
+            ]
+        )
+    buf.seek(0)
+    suffix = "pendientes" if solo_pendientes else "georef"
+    filename = f"georef_{suffix}.csv"
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post(
