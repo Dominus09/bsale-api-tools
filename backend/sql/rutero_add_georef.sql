@@ -85,7 +85,11 @@ WHERE r.company_id = 3
   AND (
         COALESCE(r.lat_operacional, r.lat) IS NULL
      OR COALESCE(r.lon_operacional, r.lon) IS NULL
+     OR (
+            COALESCE(r.lat_operacional, r.lat)::double precision = 0
+        AND COALESCE(r.lon_operacional, r.lon)::double precision = 0
+        )
   );
 
 COMMENT ON VIEW bsale.v_clientes_sin_georef IS
-    'Clientes sin coordenadas efectivas (operacional o BSALE); no usa georef_estado.';
+    'Sin georef efectiva (NULL o 0,0); no usa georef_estado. Validar listados móvil contra esta vista.';

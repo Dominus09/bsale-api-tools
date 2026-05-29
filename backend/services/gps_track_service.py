@@ -139,6 +139,72 @@ def insert_gps_track(
     return track_id
 
 
+def insert_gps_track_batch(
+    *,
+    vendedor_id: str,
+    default_timestamp: datetime,
+    puntos: list,
+    battery: int | None = None,
+    app_version: str | None = None,
+) -> int:
+    """
+    Inserta múltiples puntos en una transacción.
+    ``puntos``: elementos con ``lat``, ``lng_efectivo()``, ``accuracy_m``, ``timestamp``, ``speed``.
+    """
+    vid = vendedor_id.strip()
+    if not vid:
+        raise ValueError("vendedor_id vacío")
+    if not puntos:
+        raise ValueError("puntos[] vacío")
+
+    conn = get_connection()
+    insertados = 0
+    try:
+        cur = conn.cursor()
+        ensure_gps_track_table(cur)
+        _validate_vendedor(cur, vid)
+        for p in puntos:
+            lat = float(p.lat)
+            lng = float(p.lng_efectivo())
+            ts = _ensure_utc(p.timestamp if p.timestamp is not None else default_timestamp)
+            acc = getattr(p, "accuracy_m", None)
+            if acc is None:
+                acc = getattr(p, "accuracy", None)
+            spd = getattr(p, "speed", None)
+            cur.execute(
+                """
+                INSERT INTO bsale.operaciones_gps_track (
+                    vendedor_id, timestamp, lat, lng, accuracy, speed, battery, app_version
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    vid,
+                    ts,
+                    lat,
+                    lng,
+                    float(acc) if acc is not None else None,
+                    float(spd) if spd is not None else None,
+                    battery,
+                    (app_version or "").strip()[:64] or None,
+                ),
+            )
+            insertados += 1
+        conn.commit()
+        cur.close()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    logger.info(
+        "[GPS-Track] SQL batch OK vendedor=%s insertados=%s",
+        vid,
+        insertados,
+    )
+    return insertados
+
+
 def load_day_stats(cur, fecha: date) -> dict[str, GpsTrackDayStats]:
     """Último punto y km Haversine del día por vendedor."""
     day_start = fecha

@@ -26,6 +26,7 @@ from backend.schemas.operaciones import (
     GeorefActualizarResponse,
     GeorefEstadoPatchRequest,
     GeorefEstadoPatchResponse,
+    GeorefPendientesDebug,
     GeorefPendientesResponse,
     GeorefResumen,
     GpsTrackRequest,
@@ -287,13 +288,23 @@ def get_georef_pendientes(
     vista: Annotated[
         str | None,
         Query(
-            description="erp = panel ERP (usa solo_pendientes); omitir = view app móvil",
+            description="erp = panel ERP (usa solo_pendientes); omitir = listado app móvil",
         ),
     ] = None,
     solo_pendientes: Annotated[
         bool,
-        Query(description="ERP: solo clientes sin georef efectiva o estado pendiente"),
+        Query(description="ERP: solo clientes sin georef efectiva"),
     ] = True,
+    fecha: Annotated[
+        date | None,
+        Query(
+            description="App: opcional, filtra por día operativo (misma regla que /vendedor/ruta)",
+        ),
+    ] = None,
+    debug: Annotated[
+        bool,
+        Query(description="Diagnóstico: total_sql (vista), total_post_filtro, duplicados"),
+    ] = False,
     auth_mode: str = Depends(_auth_staff_o_movil),
 ) -> GeorefPendientesResponse:
     v = (vendedor or "").strip()
@@ -303,6 +314,7 @@ def get_georef_pendientes(
             detail="Parámetro vendedor es obligatorio para la app móvil.",
         )
     try:
+        debug_out: GeorefPendientesDebug | None = None
         if (vista or "").strip().lower() == "erp" and auth_mode == "staff":
             resumen_dict = georef_service.get_georef_resumen(vendedor_codigo=v or None)
             items = georef_service.list_georef_erp(
@@ -311,19 +323,33 @@ def get_georef_pendientes(
             )
             resumen = GeorefResumen(**resumen_dict)
         else:
-            items = georef_service.list_pendientes_desde_view(
-                vendedor_codigo=v or None,
+            fecha_movil = fecha if fecha is not None else (
+                date.today() if auth_mode == "mobile" else None
             )
+            items, dbg = georef_service.list_georef_pendientes_movil(
+                v,
+                fecha=fecha_movil,
+                debug=debug,
+            )
+            if dbg is not None:
+                debug_out = GeorefPendientesDebug(**dbg)
             resumen = GeorefResumen(
                 total=len(items),
                 pendientes=len(items),
                 capturados=0,
                 aplicados=0,
             )
+        if debug and debug_out is None:
+            debug_out = GeorefPendientesDebug(
+                total_sql=0,
+                total_post_filtro=len(items),
+                duplicados=0,
+            )
         return GeorefPendientesResponse(
             total=len(items),
             items=items,
             resumen=resumen,
+            debug=debug_out,
         )
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e

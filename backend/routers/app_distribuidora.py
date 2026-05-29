@@ -880,6 +880,11 @@ async def post_app_operaciones_gps_track_kebab(
 )
 def app_get_georef_pendientes(
     vendedor: Annotated[str, Query(min_length=1, description="Código vendedor logueado")],
+    fecha: Annotated[
+        date | None,
+        Query(description="Opcional: día operativo (YYYY-MM-DD), alinea con ruta del día"),
+    ] = None,
+    debug: Annotated[bool, Query(description="Diagnóstico total_sql / post_filtro / duplicados")] = False,
     x_heartbeat_key: Annotated[str | None, Header(alias="X-Heartbeat-Key")] = None,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
 ) -> GeorefPendientesResponse:
@@ -889,6 +894,8 @@ def app_get_georef_pendientes(
     return get_georef_pendientes(
         vendedor=vendedor,
         vista=None,
+        fecha=fecha,
+        debug=debug,
         auth_mode="mobile",
     )
 
@@ -901,10 +908,14 @@ def app_get_georef_pendientes(
 )
 def app_get_operaciones_georef_pendientes(
     vendedor: Annotated[str, Query(min_length=1)],
+    fecha: Annotated[date | None, Query()] = None,
+    debug: Annotated[bool, Query()] = False,
     x_heartbeat_key: Annotated[str | None, Header(alias="X-Heartbeat-Key")] = None,
     authorization: Annotated[str | None, Header(alias="Authorization")] = None,
 ) -> GeorefPendientesResponse:
-    return app_get_georef_pendientes(vendedor, x_heartbeat_key, authorization)
+    return app_get_georef_pendientes(
+        vendedor, fecha, debug, x_heartbeat_key, authorization
+    )
 
 
 @router.post(

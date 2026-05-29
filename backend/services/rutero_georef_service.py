@@ -6,9 +6,11 @@ Coordenadas de captura en lat_operacional / lon_operacional (sync_rutero no las 
 from __future__ import annotations
 
 import logging
+from datetime import date
 from typing import Any
 
 from backend.db import get_connection
+from backend.utils.rutero_dia_sql import dia_atencion_desde_fecha, where_dia_operativo_r
 from backend.utils.rutero_coords_sql import (
     R_LAT,
     R_LAT_AS,
@@ -86,6 +88,7 @@ def _ensure_georef_schema(cur) -> None:
 
 
 def _vendedor_clause(vendedor_codigo: str | None) -> tuple[str, list[Any]]:
+    """ERP: código en columna vendedor o company (COALESCE)."""
     v = _norm_vendedor(vendedor_codigo) if vendedor_codigo else ""
     if not v:
         return "", []
@@ -93,6 +96,34 @@ def _vendedor_clause(vendedor_codigo: str | None) -> tuple[str, list[Any]]:
         "LOWER(TRIM(COALESCE(r.vendedor::text, r.company::text, ''))) = %s",
         [v],
     )
+
+
+def _vendedor_clause_ruta(vendedor_codigo: str) -> tuple[str, list[Any]]:
+    """App móvil / ruta del día: company o vendedor coincide (misma regla que visitas)."""
+    v = _norm_vendedor(vendedor_codigo)
+    if not v:
+        return "", []
+    return (
+        """(
+            LOWER(TRIM(COALESCE(r.company::text, ''))) = %s
+         OR LOWER(TRIM(COALESCE(r.vendedor::text, ''))) = %s
+        )""",
+        [v, v],
+    )
+
+
+def _count_view_sin_georef(cur, vendedor: str) -> int:
+    """Filas en ``v_clientes_sin_georef`` con ``vendedor_codigo`` (COALESCE vendedor|company)."""
+    cur.execute(
+        """
+        SELECT COUNT(*)::int
+        FROM bsale.v_clientes_sin_georef
+        WHERE vendedor_codigo = %s
+        """,
+        [vendedor],
+    )
+    row = cur.fetchone()
+    return int(row[0] or 0) if row else 0
 
 
 def get_georef_resumen(vendedor_codigo: str | None = None) -> dict[str, int]:
@@ -184,44 +215,115 @@ def list_georef_erp(
         conn.close()
 
 
-def list_pendientes_desde_view(
-    vendedor_codigo: str | None = None,
-) -> list[dict[str, Any]]:
-    """Filas de ``bsale.v_clientes_sin_georef`` (app móvil)."""
+def list_georef_pendientes_movil(
+    vendedor_codigo: str,
+    *,
+    fecha: date | None = None,
+    debug: bool = False,
+) -> tuple[list[dict[str, Any]], dict[str, int] | None]:
+    """
+    Pendientes reales para app móvil.
+
+    - Georef efectiva: ``WHERE_SIN_GEOREF_EFECTIVA_R`` (NULL o 0,0), alineado a Rutero geo=sin.
+    - Vendedor: ``company`` o ``vendedor`` = código (igual que GET /vendedor/ruta).
+    - Una fila por ``bsale_id`` (evita duplicados si hubiera más de un rutero activo).
+    - ``fecha`` opcional: filtra por día operativo (sábado vía ``dia_extra``).
+    """
+    v = _norm_vendedor(vendedor_codigo)
+    if not v:
+        raise ValueError("vendedor_codigo es obligatorio")
+
     conn = get_connection()
     try:
         cur = conn.cursor()
         _ensure_georef_schema(cur)
-        wheres = ["1=1"]
+
+        wheres = [
+            "r.company_id = 3",
+            "r.activo = TRUE",
+            WHERE_SIN_GEOREF_EFECTIVA_R,
+        ]
         params: list[Any] = []
-        v = _norm_vendedor(vendedor_codigo) if vendedor_codigo else ""
-        if v:
-            wheres.append("vendedor_codigo = %s")
-            params.append(v)
+
+        v_clause, v_params = _vendedor_clause_ruta(v)
+        wheres.append(v_clause)
+        params.extend(v_params)
+
+        if fecha is not None:
+            dia_clause, dia_params = where_dia_operativo_r(dia_atencion_desde_fecha(fecha))
+            wheres.append(dia_clause)
+            params.extend(dia_params)
+
+        where_sql = " AND ".join(wheres)
+
+        debug_info: dict[str, int] | None = None
+        if debug:
+            total_sql = _count_view_sin_georef(cur, v)
+            cur.execute(
+                f"""
+                SELECT
+                    COUNT(*)::int,
+                    COUNT(DISTINCT r.bsale_id)::int
+                FROM bsale.rutero r
+                WHERE {where_sql}
+                """,
+                params,
+            )
+            cnt_row = cur.fetchone()
+            total_antes = int(cnt_row[0] or 0) if cnt_row else 0
+            distinct_antes = int(cnt_row[1] or 0) if cnt_row else 0
+            debug_info = {
+                "total_sql": total_sql,
+                "total_post_filtro": 0,
+                "duplicados": max(0, total_antes - distinct_antes),
+            }
+
         cur.execute(
             f"""
-            SELECT
-                cliente_codigo,
-                cliente_nombre,
-                vendedor_codigo,
-                ruta_id,
-                direccion,
-                NULL::text AS comuna,
-                lat,
-                lon,
-                georef_estado
-            FROM bsale.v_clientes_sin_georef
-            WHERE {' AND '.join(wheres)}
-            ORDER BY vendedor_codigo, ruta_id, cliente_nombre
+            SELECT DISTINCT ON (r.bsale_id)
+                r.bsale_id::text AS cliente_codigo,
+                {_CLIENTE_NOMBRE_SQL} AS cliente_nombre,
+                LOWER(TRIM(COALESCE(r.vendedor::text, r.company::text, ''))) AS vendedor_codigo,
+                r.id AS ruta_id,
+                NULLIF(TRIM(r.address), '') AS direccion,
+                NULLIF(TRIM(r.municipality), '') AS comuna,
+                {R_LAT_AS},
+                {R_LON_AS},
+                r.georef_estado
+            FROM bsale.rutero r
+            WHERE {where_sql}
+            ORDER BY r.bsale_id, r.id DESC
             """,
             params,
         )
         cols = [c[0] for c in cur.description]
         rows = [_row_to_item(r, cols) for r in cur.fetchall()]
+        if debug_info is not None:
+            debug_info["total_post_filtro"] = len(rows)
+        logger.info(
+            "georef_pendientes_movil vendedor=%s fecha=%s items=%s debug=%s",
+            v,
+            fecha.isoformat() if fecha else None,
+            len(rows),
+            debug_info,
+        )
         cur.close()
-        return rows
+        return rows, debug_info
     finally:
         conn.close()
+
+
+def list_pendientes_desde_view(
+    vendedor_codigo: str | None = None,
+    *,
+    fecha: date | None = None,
+    debug: bool = False,
+) -> tuple[list[dict[str, Any]], dict[str, int] | None]:
+    """Retrocompatible: delega en ``list_georef_pendientes_movil``."""
+    v = _norm_vendedor(vendedor_codigo) if vendedor_codigo else ""
+    if not v:
+        return [], {"total_sql": 0, "total_post_filtro": 0, "duplicados": 0} if debug else None
+    return list_georef_pendientes_movil(v, fecha=fecha, debug=debug)
 
 
 def list_georef_operativa(

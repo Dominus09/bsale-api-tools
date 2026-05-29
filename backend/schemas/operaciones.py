@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 EstadoConexion = Literal["activo", "atrasado", "offline"]
 EstadoVisitaMapa = Literal["visitado", "pendiente", "incidencia"]
@@ -190,15 +190,41 @@ class TelemetryAckResponse(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     ack: bool = True
-    server_timestamp: datetime
+    server_timestamp: datetime | None = None
+    insertados: int | None = None
 
 
 # Alias retrocompatible
 HeartbeatAckResponse = TelemetryAckResponse
 
 
+class GpsTrackPunto(BaseModel):
+    """Un punto dentro de ``puntos[]`` (formato batch app móvil)."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+    lat: float
+    lon: float | None = Field(default=None, validation_alias=AliasChoices("lon", "lng"))
+    lng: float | None = Field(default=None, validation_alias=AliasChoices("lng", "lon"))
+    accuracy_m: float | None = Field(
+        None,
+        validation_alias=AliasChoices("accuracy_m", "accuracy"),
+    )
+    speed: float | None = None
+    timestamp: datetime | None = None
+
+    def lng_efectivo(self) -> float:
+        if self.lon is not None:
+            return float(self.lon)
+        if self.lng is not None:
+            return float(self.lng)
+        raise ValueError("Cada punto requiere lon o lng")
+
+
 class GpsTrackRequest(BaseModel):
-    """POST /operaciones/gps_track — un punto GPS."""
+    """
+  POST /operaciones/gps_track — formato legacy (lat/lng) o batch (puntos[]).
+    """
 
     model_config = ConfigDict(populate_by_name=True, extra="ignore")
 
@@ -209,9 +235,20 @@ class GpsTrackRequest(BaseModel):
         validation_alias=AliasChoices("vendedor_id", "vendedorId"),
     )
     timestamp: datetime
-    lat: float
-    lng: float
-    accuracy: float | None = None
+    session_id: str | None = Field(
+        None,
+        max_length=128,
+        validation_alias=AliasChoices("session_id", "sessionId"),
+    )
+    point_ids: list[str] = Field(default_factory=list)
+    puntos: list[GpsTrackPunto] = Field(default_factory=list)
+    lat: float | None = None
+    lon: float | None = Field(default=None, validation_alias=AliasChoices("lon", "lng"))
+    lng: float | None = Field(default=None, validation_alias=AliasChoices("lng", "lon"))
+    accuracy: float | None = Field(
+        None,
+        validation_alias=AliasChoices("accuracy", "accuracy_m"),
+    )
     speed: float | None = None
     battery: int | None = Field(
         None,
@@ -231,6 +268,21 @@ class GpsTrackRequest(BaseModel):
         if isinstance(v, str):
             return v.strip()
         return v
+
+    def lng_efectivo(self) -> float:
+        if self.lon is not None:
+            return float(self.lon)
+        if self.lng is not None:
+            return float(self.lng)
+        raise ValueError("lat/lng requeridos en formato single")
+
+    @model_validator(mode="after")
+    def _formato_single_o_batch(self) -> "GpsTrackRequest":
+        if self.puntos:
+            return self
+        if self.lat is not None and (self.lng is not None or self.lon is not None):
+            return self
+        raise ValueError("Se requiere lat/lng (formato single) o puntos[] (formato batch)")
 
 
 GeorefEstado = Literal["pendiente", "capturada", "aplicada"]
@@ -259,10 +311,25 @@ class GeorefResumen(BaseModel):
     aplicados: int = 0
 
 
+class GeorefPendientesDebug(BaseModel):
+    """Diagnóstico temporal (?debug=true)."""
+
+    total_sql: int = Field(
+        description="Filas en bsale.v_clientes_sin_georef con vendedor_codigo (vista legacy)"
+    )
+    total_post_filtro: int = Field(
+        description="Filas devueltas tras filtro rutero (georef + vendedor ruta + dedupe)"
+    )
+    duplicados: int = Field(
+        description="Filas rutero extra antes de DISTINCT ON (bsale_id)"
+    )
+
+
 class GeorefPendientesResponse(BaseModel):
     total: int
     items: list[ClienteGeorefRow] = Field(default_factory=list)
     resumen: GeorefResumen = Field(default_factory=GeorefResumen)
+    debug: GeorefPendientesDebug | None = None
 
 
 class GeorefActualizarRequest(BaseModel):
