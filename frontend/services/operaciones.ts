@@ -294,6 +294,8 @@ export const OPERACIONES_POLL_MS = Number(process.env.NEXT_PUBLIC_OPERACIONES_PO
 
 export type GeorefEstado = "pendiente" | "capturada" | "aplicada"
 
+export type GeorefFiltroEstado = "todas" | GeorefEstado
+
 export interface ClienteGeorefRow {
   cliente_codigo: string
   cliente_nombre: string
@@ -324,23 +326,23 @@ export interface GeorefPendientesResponse {
 export function getOperacionesGeorefPendientes(opts?: {
   vendedor?: string
   vista?: "erp"
-  solo_pendientes?: boolean
+  estado?: GeorefFiltroEstado
 }) {
   const q: Record<string, string | undefined> = {
     vendedor: opts?.vendedor,
     vista: opts?.vista,
-    solo_pendientes: opts?.solo_pendientes === false ? "false" : "true",
+    estado: opts?.estado ?? "todas",
   }
   return operacionesFetch<GeorefPendientesResponse>("/georef-pendientes", q)
 }
 
 export async function downloadOperacionesGeorefExport(opts?: {
   vendedor?: string
-  solo_pendientes?: boolean
+  estado?: GeorefFiltroEstado
 }) {
   const q = new URLSearchParams()
   if (opts?.vendedor) q.set("vendedor", opts.vendedor)
-  q.set("solo_pendientes", opts?.solo_pendientes === false ? "false" : "true")
+  q.set("estado", opts?.estado ?? "todas")
   const url = `${API_URL}/operaciones/georef-export?${q}`
   const res = await fetch(url, { headers: getAuthHeaders() })
   if (!res.ok) {
@@ -351,7 +353,7 @@ export async function downloadOperacionesGeorefExport(opts?: {
   const href = URL.createObjectURL(blob)
   const a = document.createElement("a")
   a.href = href
-  a.download = opts?.solo_pendientes === false ? "georef_seguimiento.csv" : "georef_pendientes.csv"
+  a.download = `georef_${opts?.estado ?? "todas"}.csv`
   a.click()
   URL.revokeObjectURL(href)
 }

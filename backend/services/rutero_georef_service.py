@@ -139,7 +139,8 @@ def get_georef_resumen(vendedor_codigo: str | None = None) -> dict[str, int]:
             SELECT
                 COUNT(*)::int AS total,
                 COUNT(*) FILTER (
-                    WHERE {WHERE_SIN_GEOREF_EFECTIVA_R}
+                    WHERE r.georef_estado = 'pendiente'
+                      AND {WHERE_SIN_GEOREF_EFECTIVA_R}
                 )::int AS pendientes,
                 COUNT(*) FILTER (
                     WHERE r.georef_estado = 'capturada'
@@ -169,36 +170,59 @@ def get_georef_resumen(vendedor_codigo: str | None = None) -> dict[str, int]:
         conn.close()
 
 
+_GEOREF_ERP_FILTROS = frozenset({"todas", "pendiente", "capturada", "aplicada"})
+
+_WHERE_GEOREF_PENDIENTE_OPERATIVO = (
+    f"(r.georef_estado = 'pendiente' AND {WHERE_SIN_GEOREF_EFECTIVA_R})"
+)
+
+_WHERE_GEOREF_TODAS_OPERATIVO = (
+    f"({_WHERE_GEOREF_PENDIENTE_OPERATIVO} "
+    "OR r.georef_estado = 'capturada' "
+    "OR r.georef_estado = 'aplicada')"
+)
+
+
+def _where_georef_erp_estado(estado: str | None) -> str:
+    est = (estado or "todas").strip().lower()
+    if est not in _GEOREF_ERP_FILTROS:
+        raise ValueError("estado inválido")
+    if est == "pendiente":
+        return _WHERE_GEOREF_PENDIENTE_OPERATIVO
+    if est == "capturada":
+        return "r.georef_estado = 'capturada'"
+    if est == "aplicada":
+        return "r.georef_estado = 'aplicada'"
+    return _WHERE_GEOREF_TODAS_OPERATIVO
+
+
 def list_georef_erp(
     vendedor_codigo: str | None = None,
-    solo_pendientes: bool = True,
+    estado: str | None = "todas",
+    *,
+    solo_pendientes: bool | None = None,
 ) -> list[dict[str, Any]]:
     """
-    Listado panel ERP.
+    Listado panel ERP (flujo operacional georef).
 
-    - ``solo_pendientes=True``: solo sin georef efectiva (NULL o 0,0).
-    - ``solo_pendientes=False``: seguimiento (pendientes + capturadas + aplicadas).
-      Incluye ``georef_estado='pendiente'`` aunque ya tenga coords (volver pendiente).
+  - ``pendiente``: ``georef_estado='pendiente'`` y sin coords efectivas.
+  - ``capturada`` / ``aplicada``: por estado.
+  - ``todas``: unión de los tres (no el universo completo del rutero).
     """
+    if solo_pendientes is not None:
+        estado = "pendiente" if solo_pendientes else "todas"
+
     conn = get_connection()
     try:
         cur = conn.cursor()
         _ensure_georef_schema(cur)
-        wheres = ["r.company_id = 3", "r.activo = TRUE"]
+        wheres = ["r.company_id = 3", "r.activo = TRUE", _where_georef_erp_estado(estado)]
         params: list[Any] = []
 
         v_clause, v_params = _vendedor_clause(vendedor_codigo)
         if v_clause:
             wheres.append(v_clause)
             params.extend(v_params)
-
-        if solo_pendientes:
-            wheres.append(WHERE_SIN_GEOREF_EFECTIVA_R)
-        else:
-            wheres.append(
-                "(r.georef_estado IN ('capturada', 'aplicada', 'pendiente') "
-                f"OR {WHERE_SIN_GEOREF_EFECTIVA_R})"
-            )
 
         cur.execute(
             f"""
@@ -332,40 +356,14 @@ def list_georef_operativa(
     estado: str | None = None,
     solo_pendientes: bool = False,
 ) -> list[dict[str, Any]]:
-    """Retrocompatible: delega en ``list_georef_erp`` si no hay filtro por estado."""
+    """Retrocompatible: delega en ``list_georef_erp``."""
     est = (estado or "").strip().lower()
-    if not est:
-        return list_georef_erp(vendedor_codigo, solo_pendientes=solo_pendientes)
-
-    conn = get_connection()
-    try:
-        cur = conn.cursor()
-        _ensure_georef_schema(cur)
-        wheres = ["r.company_id = 3", "r.activo = TRUE", "r.georef_estado = %s"]
-        params: list[Any] = [est]
-
-        v_clause, v_params = _vendedor_clause(vendedor_codigo)
-        if v_clause:
-            wheres.append(v_clause)
-            params.extend(v_params)
-
-        if solo_pendientes:
-            wheres.append(WHERE_SIN_GEOREF_EFECTIVA_R)
-
-        cur.execute(
-            f"""
-            {_SELECT_GEOREF_ERP}
-            WHERE {' AND '.join(wheres)}
-            ORDER BY vendedor_codigo, ruta_id, cliente_nombre
-            """,
-            params,
-        )
-        cols = [c[0] for c in cur.description]
-        rows = [_row_to_item(r, cols) for r in cur.fetchall()]
-        cur.close()
-        return rows
-    finally:
-        conn.close()
+    if est:
+        return list_georef_erp(vendedor_codigo, estado=est)
+    return list_georef_erp(
+        vendedor_codigo,
+        solo_pendientes=solo_pendientes,
+    )
 
 
 def _coords_efectivas_validas(lat, lon) -> bool:

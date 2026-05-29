@@ -347,13 +347,19 @@ def get_georef_pendientes(
     vista: Annotated[
         str | None,
         Query(
-            description="erp = panel ERP (usa solo_pendientes); omitir = listado app móvil",
+            description="erp = panel ERP (usa estado); omitir = listado app móvil",
         ),
     ] = None,
+    estado: Annotated[
+        str | None,
+        Query(
+            description="ERP: todas | pendiente | capturada | aplicada",
+        ),
+    ] = "todas",
     solo_pendientes: Annotated[
-        bool,
-        Query(description="ERP: solo clientes sin georef efectiva"),
-    ] = True,
+        bool | None,
+        Query(description="ERP legacy: true→pendiente, false→todas"),
+    ] = None,
     fecha: Annotated[
         date | None,
         Query(
@@ -378,6 +384,7 @@ def get_georef_pendientes(
             resumen_dict = georef_service.get_georef_resumen(vendedor_codigo=v or None)
             items = georef_service.list_georef_erp(
                 vendedor_codigo=v or None,
+                estado=estado,
                 solo_pendientes=solo_pendientes,
             )
             resumen = GeorefResumen(**resumen_dict)
@@ -423,13 +430,15 @@ def get_georef_pendientes(
 )
 def get_georef_export(
     vendedor: Annotated[str | None, Query()] = None,
-    solo_pendientes: Annotated[bool, Query()] = True,
+    estado: Annotated[str | None, Query()] = "todas",
+    solo_pendientes: Annotated[bool | None, Query()] = None,
     _user: dict = Depends(require_staff_user),
 ) -> StreamingResponse:
     v = (vendedor or "").strip() or None
     try:
         rows = georef_service.list_georef_erp(
             vendedor_codigo=v,
+            estado=estado,
             solo_pendientes=solo_pendientes,
         )
     except RuntimeError as e:
@@ -456,8 +465,12 @@ def get_georef_export(
             ]
         )
     buf.seek(0)
-    suffix = "pendientes" if solo_pendientes else "georef"
-    filename = f"georef_{suffix}.csv"
+    est = (estado or "todas").strip().lower()
+    if solo_pendientes is True:
+        est = "pendiente"
+    elif solo_pendientes is False and est == "todas":
+        pass
+    filename = f"georef_{est}.csv"
     return StreamingResponse(
         iter([buf.getvalue()]),
         media_type="text/csv; charset=utf-8",

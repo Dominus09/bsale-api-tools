@@ -1,11 +1,10 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
-import { ClipboardCopy, Download, ExternalLink, Loader2, RefreshCw } from "lucide-react"
+import { Download, Loader2, RefreshCw } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -24,9 +23,18 @@ import {
   patchOperacionesGeorefEstado,
   tieneGeorefEfectiva,
   type ClienteGeorefRow,
+  type GeorefEstado,
+  type GeorefFiltroEstado,
   type GeorefPendientesResponse,
 } from "@/services/operaciones"
 import { cn } from "@/lib/utils"
+
+const FILTROS: { id: GeorefFiltroEstado; label: string }[] = [
+  { id: "todas", label: "Todas" },
+  { id: "pendiente", label: "Pendientes" },
+  { id: "capturada", label: "Capturadas" },
+  { id: "aplicada", label: "Aplicadas" },
+]
 
 function GeorefEstadoBadge({ estado }: { estado: string }) {
   const e = estado.toLowerCase()
@@ -47,12 +55,31 @@ function isPendienteGeoref(row: ClienteGeorefRow) {
   return !tieneGeorefEfectiva(row)
 }
 
-function KpiCard({ label, value, accent }: { label: string; value: number; accent?: string }) {
+function KpiCard({
+  label,
+  value,
+  accent,
+  active,
+  onClick,
+}: {
+  label: string
+  value: number
+  accent?: string
+  active?: boolean
+  onClick: () => void
+}) {
   return (
-    <div className="rounded-lg border bg-card px-4 py-3">
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "rounded-lg border bg-card px-4 py-3 text-left transition-colors hover:bg-muted/50",
+        active && "ring-2 ring-primary border-primary",
+      )}
+    >
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className={cn("text-2xl font-semibold tabular-nums", accent)}>{value}</p>
-    </div>
+    </button>
   )
 }
 
@@ -63,7 +90,7 @@ function formatCoord(n: number | null | undefined) {
 
 export default function OperacionesGeorreferenciasPage() {
   const [vendedor, setVendedor] = useState("")
-  const [soloPendientes, setSoloPendientes] = useState(true)
+  const [filtroEstado, setFiltroEstado] = useState<GeorefFiltroEstado>("todas")
   const [data, setData] = useState<GeorefPendientesResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -78,7 +105,7 @@ export default function OperacionesGeorreferenciasPage() {
       const res = await getOperacionesGeorefPendientes({
         vendedor: vendedor || undefined,
         vista: "erp",
-        solo_pendientes: soloPendientes,
+        estado: filtroEstado,
       })
       setData(res)
     } catch (e) {
@@ -86,7 +113,7 @@ export default function OperacionesGeorreferenciasPage() {
     } finally {
       setLoading(false)
     }
-  }, [vendedor, soloPendientes])
+  }, [vendedor, filtroEstado])
 
   useEffect(() => {
     void load()
@@ -101,7 +128,8 @@ export default function OperacionesGeorreferenciasPage() {
     setBusyId(row.ruta_id)
     try {
       await patchOperacionesGeorefEstado(row.ruta_id, estado)
-      if (estado === "pendiente") setSoloPendientes(false)
+      if (estado === "pendiente") setFiltroEstado("todas")
+      else if (estado === "aplicada") setFiltroEstado("aplicada")
       await load()
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Error al actualizar estado")
@@ -126,7 +154,7 @@ export default function OperacionesGeorreferenciasPage() {
     try {
       await downloadOperacionesGeorefExport({
         vendedor: vendedor || undefined,
-        solo_pendientes: soloPendientes,
+        estado: filtroEstado,
       })
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Error al exportar")
@@ -136,6 +164,7 @@ export default function OperacionesGeorreferenciasPage() {
   }
 
   const resumen = data?.resumen
+  const kpiFiltro = (est: GeorefEstado) => setFiltroEstado(est)
 
   return (
     <div className="space-y-6">
@@ -143,7 +172,8 @@ export default function OperacionesGeorreferenciasPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Georreferencias</h1>
           <p className="text-sm text-muted-foreground max-w-2xl">
-            Gestión de coordenadas operacionales. Volver a pendiente conserva latitud y longitud.
+            Flujo operacional: pendientes, capturadas y aplicadas. Volver a pendiente conserva
+            coordenadas.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -164,9 +194,27 @@ export default function OperacionesGeorreferenciasPage() {
 
       {resumen ? (
         <div className="grid gap-3 grid-cols-1 sm:grid-cols-3">
-          <KpiCard label="Pendientes" value={resumen.pendientes} accent="text-amber-700" />
-          <KpiCard label="Capturadas" value={resumen.capturados} accent="text-sky-700" />
-          <KpiCard label="Aplicadas" value={resumen.aplicados} accent="text-emerald-700" />
+          <KpiCard
+            label="Pendientes"
+            value={resumen.pendientes}
+            accent="text-amber-700"
+            active={filtroEstado === "pendiente"}
+            onClick={() => kpiFiltro("pendiente")}
+          />
+          <KpiCard
+            label="Capturadas"
+            value={resumen.capturados}
+            accent="text-sky-700"
+            active={filtroEstado === "capturada"}
+            onClick={() => kpiFiltro("capturada")}
+          />
+          <KpiCard
+            label="Aplicadas"
+            value={resumen.aplicados}
+            accent="text-emerald-700"
+            active={filtroEstado === "aplicada"}
+            onClick={() => kpiFiltro("aplicada")}
+          />
         </div>
       ) : null}
 
@@ -181,15 +229,21 @@ export default function OperacionesGeorreferenciasPage() {
             className="max-w-xs"
           />
         </div>
-        <div className="flex items-center gap-2 pb-2">
-          <Checkbox
-            id="solo-pendientes"
-            checked={soloPendientes}
-            onCheckedChange={(c) => setSoloPendientes(c === true)}
-          />
-          <Label htmlFor="solo-pendientes" className="cursor-pointer font-normal">
-            Mostrar solo pendientes georreferencia
-          </Label>
+        <div className="space-y-2">
+          <Label>Estado</Label>
+          <div className="flex flex-wrap gap-1">
+            {FILTROS.map((f) => (
+              <Button
+                key={f.id}
+                type="button"
+                size="sm"
+                variant={filtroEstado === f.id ? "default" : "outline"}
+                onClick={() => setFiltroEstado(f.id)}
+              >
+                {f.label}
+              </Button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -228,6 +282,8 @@ export default function OperacionesGeorreferenciasPage() {
                   const estado = String(row.georef_estado).toLowerCase()
                   const puedeAplicada = tieneGeorefEfectiva(row)
                   const coords = coordsGeorefText(row)
+                  const muestraCoords =
+                    coords && (estado === "capturada" || estado === "aplicada" || puedeAplicada)
                   return (
                     <TableRow
                       key={row.ruta_id}
@@ -246,8 +302,12 @@ export default function OperacionesGeorreferenciasPage() {
                       <TableCell>
                         <GeorefEstadoBadge estado={row.georef_estado} />
                       </TableCell>
-                      <TableCell className="font-mono text-xs">{formatCoord(row.lat)}</TableCell>
-                      <TableCell className="font-mono text-xs">{formatCoord(row.lon)}</TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {muestraCoords ? formatCoord(row.lat) : "—"}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {muestraCoords ? formatCoord(row.lon) : "—"}
+                      </TableCell>
                       <TableCell className="text-right">
                         <div className="flex flex-wrap justify-end gap-1">
                           {coords ? (
@@ -257,8 +317,7 @@ export default function OperacionesGeorreferenciasPage() {
                                 variant="outline"
                                 onClick={() => void copiarCoords(row)}
                               >
-                                <ClipboardCopy className="mr-1 h-3.5 w-3.5" />
-                                Copiar coordenadas
+                                📋 Copiar coordenadas
                               </Button>
                               <Button size="sm" variant="outline" asChild>
                                 <a
@@ -266,8 +325,7 @@ export default function OperacionesGeorreferenciasPage() {
                                   target="_blank"
                                   rel="noopener noreferrer"
                                 >
-                                  <ExternalLink className="mr-1 h-3.5 w-3.5" />
-                                  Abrir Google Maps
+                                  🗺 Google Maps
                                 </a>
                               </Button>
                             </>
@@ -282,7 +340,9 @@ export default function OperacionesGeorreferenciasPage() {
                               Aplicada
                             </Button>
                           ) : null}
-                          {estado !== "pendiente" ? (
+                          {(estado === "capturada" ||
+                            estado === "aplicada" ||
+                            (estado === "pendiente" && puedeAplicada)) ? (
                             <Button
                               size="sm"
                               variant="ghost"
