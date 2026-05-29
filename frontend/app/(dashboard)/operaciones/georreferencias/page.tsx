@@ -9,13 +9,6 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import {
   Table,
   TableBody,
   TableCell,
@@ -26,14 +19,11 @@ import {
 import {
   coordsGeorefText,
   downloadOperacionesGeorefExport,
-  getOperacionesGeorefHistorial,
   getOperacionesGeorefPendientes,
   googleMapsUrl,
   patchOperacionesGeorefEstado,
   tieneGeorefEfectiva,
   type ClienteGeorefRow,
-  type GeorefEstado,
-  type GeorefHistorialRow,
   type GeorefPendientesResponse,
 } from "@/services/operaciones"
 import { cn } from "@/lib/utils"
@@ -41,13 +31,11 @@ import { cn } from "@/lib/utils"
 function GeorefEstadoBadge({ estado }: { estado: string }) {
   const e = estado.toLowerCase()
   const cls =
-    e === "rechazada"
-      ? "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200"
-      : e === "aplicada"
-        ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
-        : e === "capturada"
-          ? "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-200"
-          : "bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200"
+    e === "aplicada"
+      ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200"
+      : e === "capturada"
+        ? "bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-200"
+        : "bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200"
   return (
     <span className={`inline-flex rounded px-2 py-0.5 text-xs font-medium ${cls}`}>
       {estado}
@@ -75,19 +63,13 @@ function formatCoord(n: number | null | undefined) {
 
 export default function OperacionesGeorreferenciasPage() {
   const [vendedor, setVendedor] = useState("")
-  const [comuna, setComuna] = useState("")
-  const [filtroEstado, setFiltroEstado] = useState<string>("")
-  const [soloPendientes, setSoloPendientes] = useState(false)
+  const [soloPendientes, setSoloPendientes] = useState(true)
   const [data, setData] = useState<GeorefPendientesResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<number | null>(null)
   const [exporting, setExporting] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
-  const [rechazoId, setRechazoId] = useState<number | null>(null)
-  const [motivoRechazo, setMotivoRechazo] = useState("")
-  const [historialId, setHistorialId] = useState<number | null>(null)
-  const [historial, setHistorial] = useState<GeorefHistorialRow[]>([])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -96,9 +78,7 @@ export default function OperacionesGeorreferenciasPage() {
       const res = await getOperacionesGeorefPendientes({
         vendedor: vendedor || undefined,
         vista: "erp",
-        solo_pendientes: filtroEstado ? false : soloPendientes,
-        estado: (filtroEstado as GeorefEstado) || undefined,
-        comuna: comuna || undefined,
+        solo_pendientes: soloPendientes,
       })
       setData(res)
     } catch (e) {
@@ -106,20 +86,16 @@ export default function OperacionesGeorreferenciasPage() {
     } finally {
       setLoading(false)
     }
-  }, [vendedor, soloPendientes, filtroEstado, comuna])
+  }, [vendedor, soloPendientes])
 
   useEffect(() => {
     void load()
   }, [load])
 
-  async function onEstado(row: ClienteGeorefRow, estado: GeorefEstado | "capturada") {
+  async function onEstado(row: ClienteGeorefRow, estado: "pendiente" | "aplicada") {
     setActionError(null)
     if (estado === "aplicada" && !tieneGeorefEfectiva(row)) {
       setActionError("No se puede marcar aplicada sin georreferencia.")
-      return
-    }
-    if (estado === "rechazada") {
-      setRechazoId(row.ruta_id)
       return
     }
     setBusyId(row.ruta_id)
@@ -129,27 +105,6 @@ export default function OperacionesGeorreferenciasPage() {
       await load()
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Error al actualizar estado")
-    } finally {
-      setBusyId(null)
-    }
-  }
-
-  async function confirmarRechazo(row: ClienteGeorefRow) {
-    if (!motivoRechazo.trim()) {
-      setActionError("Indique el motivo de rechazo.")
-      return
-    }
-    setBusyId(row.ruta_id)
-    try {
-      await patchOperacionesGeorefEstado(row.ruta_id, "rechazada", {
-        motivo_rechazo: motivoRechazo.trim(),
-      })
-      setRechazoId(null)
-      setMotivoRechazo("")
-      setFiltroEstado("rechazada")
-      await load()
-    } catch (e) {
-      setActionError(e instanceof Error ? e.message : "Error al rechazar")
     } finally {
       setBusyId(null)
     }
@@ -188,8 +143,7 @@ export default function OperacionesGeorreferenciasPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Georreferencias</h1>
           <p className="text-sm text-muted-foreground max-w-2xl">
-            Coordenadas efectivas = COALESCE(lat_operacional, lat). Volver a pendiente conserva
-            coordenadas; use filtro de estado o desactive “solo pendientes”.
+            Gestión de coordenadas operacionales. Volver a pendiente conserva latitud y longitud.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -209,22 +163,10 @@ export default function OperacionesGeorreferenciasPage() {
       </div>
 
       {resumen ? (
-        <div className="grid gap-3 grid-cols-2 sm:grid-cols-5">
-          <button type="button" onClick={() => { setFiltroEstado("pendiente"); setSoloPendientes(false) }}>
-            <KpiCard label="Pendientes georef" value={resumen.pendientes} accent="text-amber-700" />
-          </button>
-          <button type="button" onClick={() => { setFiltroEstado("capturada"); setSoloPendientes(false) }}>
-            <KpiCard label="Capturadas (revisión)" value={resumen.capturados} accent="text-sky-700" />
-          </button>
-          <button type="button" onClick={() => { setFiltroEstado("rechazada"); setSoloPendientes(false) }}>
-            <KpiCard label="Rechazadas" value={resumen.rechazados ?? 0} accent="text-red-700" />
-          </button>
-          <button type="button" onClick={() => { setFiltroEstado("aplicada"); setSoloPendientes(false) }}>
-            <KpiCard label="Aplicadas" value={resumen.aplicados} accent="text-emerald-700" />
-          </button>
-          <button type="button" onClick={() => { setFiltroEstado(""); setSoloPendientes(false) }}>
-            <KpiCard label="Total rutero" value={resumen.total} />
-          </button>
+        <div className="grid gap-3 grid-cols-1 sm:grid-cols-3">
+          <KpiCard label="Pendientes" value={resumen.pendientes} accent="text-amber-700" />
+          <KpiCard label="Capturadas" value={resumen.capturados} accent="text-sky-700" />
+          <KpiCard label="Aplicadas" value={resumen.aplicados} accent="text-emerald-700" />
         </div>
       ) : null}
 
@@ -239,46 +181,16 @@ export default function OperacionesGeorreferenciasPage() {
             className="max-w-xs"
           />
         </div>
-        <div className="space-y-2">
-          <Label htmlFor="georef-comuna">Comuna</Label>
-          <Input
-            id="georef-comuna"
-            placeholder="Filtrar comuna"
-            value={comuna}
-            onChange={(e) => setComuna(e.target.value)}
-            className="max-w-xs"
+        <div className="flex items-center gap-2 pb-2">
+          <Checkbox
+            id="solo-pendientes"
+            checked={soloPendientes}
+            onCheckedChange={(c) => setSoloPendientes(c === true)}
           />
+          <Label htmlFor="solo-pendientes" className="cursor-pointer font-normal">
+            Mostrar solo pendientes georreferencia
+          </Label>
         </div>
-        <div className="space-y-2">
-          <Label>Estado</Label>
-          <Select
-            value={filtroEstado || "todos"}
-            onValueChange={(v) => setFiltroEstado(v === "todos" ? "" : v)}
-          >
-            <SelectTrigger className="w-[180px]">
-              <SelectValue placeholder="Todos" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="todos">Todos (seguimiento)</SelectItem>
-              <SelectItem value="pendiente">Solo pendientes</SelectItem>
-              <SelectItem value="capturada">Solo capturadas</SelectItem>
-              <SelectItem value="rechazada">Solo rechazadas</SelectItem>
-              <SelectItem value="aplicada">Solo aplicadas</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-        {!filtroEstado ? (
-          <div className="flex items-center gap-2 pb-2">
-            <Checkbox
-              id="solo-pendientes"
-              checked={soloPendientes}
-              onCheckedChange={(c) => setSoloPendientes(c === true)}
-            />
-            <Label htmlFor="solo-pendientes" className="cursor-pointer font-normal">
-              Mostrar solo pendientes georreferencia
-            </Label>
-          </div>
-        ) : null}
       </div>
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
@@ -301,12 +213,12 @@ export default function OperacionesGeorreferenciasPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Vendedor</TableHead>
                   <TableHead>Cliente</TableHead>
                   <TableHead>Dirección</TableHead>
+                  <TableHead>Comuna</TableHead>
+                  <TableHead>Estado</TableHead>
                   <TableHead>Latitud</TableHead>
                   <TableHead>Longitud</TableHead>
-                  <TableHead>Estado</TableHead>
                   <TableHead className="text-right">Acciones</TableHead>
                 </TableRow>
               </TableHeader>
@@ -319,34 +231,23 @@ export default function OperacionesGeorreferenciasPage() {
                   return (
                     <TableRow
                       key={row.ruta_id}
-                      className={cn(
-                        pendiente && "bg-amber-50/80 dark:bg-amber-950/20",
-                        estado === "rechazada" && "bg-red-50/60 dark:bg-red-950/20",
-                      )}
+                      className={cn(pendiente && "bg-amber-50/80 dark:bg-amber-950/20")}
                     >
-                      <TableCell className="font-mono text-xs whitespace-nowrap">
-                        {row.vendedor_codigo || "—"}
-                      </TableCell>
                       <TableCell>
                         <div className="font-medium">{row.cliente_nombre}</div>
                         <div className="text-xs text-muted-foreground">
                           {row.cliente_codigo} · #{row.ruta_id}
                         </div>
-                        {row.motivo_rechazo ? (
-                          <p className="text-xs text-red-700 mt-1">Rechazo: {row.motivo_rechazo}</p>
-                        ) : null}
                       </TableCell>
-                      <TableCell className="max-w-[160px] truncate text-sm">
+                      <TableCell className="max-w-[200px] truncate text-sm">
                         {row.direccion || "—"}
-                        {row.comuna ? (
-                          <span className="block text-xs text-muted-foreground">{row.comuna}</span>
-                        ) : null}
                       </TableCell>
-                      <TableCell className="font-mono text-xs">{formatCoord(row.lat)}</TableCell>
-                      <TableCell className="font-mono text-xs">{formatCoord(row.lon)}</TableCell>
+                      <TableCell className="text-sm">{row.comuna || "—"}</TableCell>
                       <TableCell>
                         <GeorefEstadoBadge estado={row.georef_estado} />
                       </TableCell>
+                      <TableCell className="font-mono text-xs">{formatCoord(row.lat)}</TableCell>
+                      <TableCell className="font-mono text-xs">{formatCoord(row.lon)}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex flex-wrap justify-end gap-1">
                           {coords ? (
@@ -354,19 +255,19 @@ export default function OperacionesGeorreferenciasPage() {
                               <Button
                                 size="sm"
                                 variant="outline"
-                                title="Copiar coordenadas"
                                 onClick={() => void copiarCoords(row)}
                               >
-                                <ClipboardCopy className="h-3.5 w-3.5" />
+                                <ClipboardCopy className="mr-1 h-3.5 w-3.5" />
+                                Copiar coordenadas
                               </Button>
                               <Button size="sm" variant="outline" asChild>
                                 <a
                                   href={googleMapsUrl(row.lat!, row.lon!)}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  title="Ver en Google Maps"
                                 >
-                                  <ExternalLink className="h-3.5 w-3.5" />
+                                  <ExternalLink className="mr-1 h-3.5 w-3.5" />
+                                  Abrir Google Maps
                                 </a>
                               </Button>
                             </>
@@ -376,100 +277,22 @@ export default function OperacionesGeorreferenciasPage() {
                               size="sm"
                               variant="outline"
                               disabled={busyId === row.ruta_id || !puedeAplicada}
-                              onClick={() => onEstado(row, "aplicada")}
+                              onClick={() => void onEstado(row, "aplicada")}
                             >
                               Aplicada
                             </Button>
                           ) : null}
-                          {estado === "rechazada" ? (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              disabled={busyId === row.ruta_id || !puedeAplicada}
-                              onClick={() => onEstado(row, "capturada")}
-                            >
-                              Rehabilitar
-                            </Button>
-                          ) : null}
-                          {estado !== "rechazada" && estado !== "pendiente" && puedeAplicada ? (
+                          {estado !== "pendiente" ? (
                             <Button
                               size="sm"
                               variant="ghost"
                               disabled={busyId === row.ruta_id}
-                              onClick={() => onEstado(row, "rechazada")}
+                              onClick={() => void onEstado(row, "pendiente")}
                             >
-                              Rechazar
+                              Volver pendiente
                             </Button>
                           ) : null}
-                        {estado !== "pendiente" ? (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            disabled={busyId === row.ruta_id}
-                            onClick={() => onEstado(row, "pendiente")}
-                          >
-                            Volver pendiente
-                          </Button>
-                        ) : null}
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={async () => {
-                            if (historialId === row.ruta_id) {
-                              setHistorialId(null)
-                              return
-                            }
-                            setHistorialId(row.ruta_id)
-                            const h = await getOperacionesGeorefHistorial(row.ruta_id)
-                            setHistorial(h.items)
-                          }}
-                        >
-                          Historial
-                        </Button>
                         </div>
-                        {historialId === row.ruta_id ? (
-                          <div className="mt-2 w-full text-left text-xs space-y-1 border rounded p-2 bg-muted/30">
-                            {historial.length === 0 ? (
-                              <p className="text-muted-foreground">Sin registros</p>
-                            ) : (
-                              historial.map((h) => (
-                                <p key={h.id}>
-                                  {new Date(h.fecha).toLocaleString("es-CL")} — {h.usuario}:{" "}
-                                  {h.estado_anterior ?? "—"} → {h.estado_nuevo}
-                                  {h.motivo ? ` (${h.motivo})` : ""}
-                                </p>
-                              ))
-                            )}
-                          </div>
-                        ) : null}
-                        {rechazoId === row.ruta_id ? (
-                          <div className="mt-2 flex gap-1 justify-end">
-                            <Input
-                              className="h-8 max-w-[200px] text-xs"
-                              placeholder="Motivo rechazo"
-                              value={motivoRechazo}
-                              onChange={(e) => setMotivoRechazo(e.target.value)}
-                            />
-                            <Button
-                              size="sm"
-                              variant="destructive"
-                              disabled={busyId === row.ruta_id}
-                              onClick={() => void confirmarRechazo(row)}
-                            >
-                              OK
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => {
-                                setRechazoId(null)
-                                setMotivoRechazo("")
-                              }}
-                            >
-                              ×
-                            </Button>
-                          </div>
-                        ) : null}
                       </TableCell>
                     </TableRow>
                   )

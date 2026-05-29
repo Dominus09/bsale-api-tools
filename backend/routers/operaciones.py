@@ -353,12 +353,7 @@ def get_georef_pendientes(
     solo_pendientes: Annotated[
         bool,
         Query(description="ERP: solo clientes sin georef efectiva"),
-    ] = False,
-    estado: Annotated[
-        str | None,
-        Query(description="ERP: pendiente | capturada | rechazada | aplicada"),
-    ] = None,
-    comuna: Annotated[str | None, Query(description="ERP: filtrar por comuna")] = None,
+    ] = True,
     fecha: Annotated[
         date | None,
         Query(
@@ -384,8 +379,6 @@ def get_georef_pendientes(
             items = georef_service.list_georef_erp(
                 vendedor_codigo=v or None,
                 solo_pendientes=solo_pendientes,
-                estado=estado,
-                comuna=comuna,
             )
             resumen = GeorefResumen(**resumen_dict)
         else:
@@ -524,7 +517,6 @@ def patch_georef_estado(
             rutero_id=body.ruta_id,
             georef_estado=body.georef_estado,
             actualizada_por=por,
-            motivo_rechazo=body.motivo_rechazo,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e

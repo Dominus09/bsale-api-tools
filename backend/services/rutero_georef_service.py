@@ -24,7 +24,7 @@ from backend.utils.rutero_coords_sql import (
 
 logger = logging.getLogger(__name__)
 
-_GEOREF_ESTADOS = frozenset({"pendiente", "capturada", "aplicada", "rechazada"})
+_GEOREF_ESTADOS = frozenset({"pendiente", "capturada", "aplicada"})
 
 _CLIENTE_NOMBRE_SQL = """
     COALESCE(
@@ -55,10 +55,7 @@ _SELECT_GEOREF_ERP = f"""
         {R_LON_AS},
         r.georef_estado,
         r.georef_actualizada_at,
-        r.georef_actualizada_por,
-        r.motivo_rechazo,
-        r.fecha_rechazo,
-        r.usuario_rechazo
+        r.georef_actualizada_por
     FROM bsale.rutero r
 """
 
@@ -150,10 +147,7 @@ def get_georef_resumen(vendedor_codigo: str | None = None) -> dict[str, int]:
                 )::int AS capturados,
                 COUNT(*) FILTER (
                     WHERE r.georef_estado = 'aplicada'
-                )::int AS aplicados,
-                COUNT(*) FILTER (
-                    WHERE r.georef_estado = 'rechazada'
-                )::int AS rechazados
+                )::int AS aplicados
             FROM bsale.rutero r
             WHERE r.company_id = 3
               AND r.activo = TRUE
@@ -164,19 +158,12 @@ def get_georef_resumen(vendedor_codigo: str | None = None) -> dict[str, int]:
         row = cur.fetchone()
         cur.close()
         if not row:
-            return {
-                "total": 0,
-                "pendientes": 0,
-                "capturados": 0,
-                "aplicados": 0,
-                "rechazados": 0,
-            }
+            return {"total": 0, "pendientes": 0, "capturados": 0, "aplicados": 0}
         return {
             "total": int(row[0] or 0),
             "pendientes": int(row[1] or 0),
             "capturados": int(row[2] or 0),
             "aplicados": int(row[3] or 0),
-            "rechazados": int(row[4] or 0) if len(row) > 4 else 0,
         }
     finally:
         conn.close()
@@ -184,15 +171,14 @@ def get_georef_resumen(vendedor_codigo: str | None = None) -> dict[str, int]:
 
 def list_georef_erp(
     vendedor_codigo: str | None = None,
-    solo_pendientes: bool = False,
-    estado: str | None = None,
-    comuna: str | None = None,
+    solo_pendientes: bool = True,
 ) -> list[dict[str, Any]]:
     """
-    Listado panel ERP (incluye capturadas para revisión antes de BSALE).
+    Listado panel ERP.
 
-    - Por defecto: pendientes sin coords + todos los estados de gestión.
-    - ``estado``: pendiente | capturada | rechazada | aplicada.
+    - ``solo_pendientes=True``: solo sin georef efectiva (NULL o 0,0).
+    - ``solo_pendientes=False``: seguimiento (pendientes + capturadas + aplicadas).
+      Incluye ``georef_estado='pendiente'`` aunque ya tenga coords (volver pendiente).
     """
     conn = get_connection()
     try:
@@ -206,27 +192,12 @@ def list_georef_erp(
             wheres.append(v_clause)
             params.extend(v_params)
 
-        com = (comuna or "").strip()
-        if com:
-            wheres.append("LOWER(TRIM(COALESCE(r.municipality, ''))) = %s")
-            params.append(com.lower())
-
-        est = (estado or "").strip().lower()
-        if est == "pendiente":
-            wheres.append(WHERE_SIN_GEOREF_EFECTIVA_R)
-        elif est == "capturada":
-            wheres.append("r.georef_estado = 'capturada'")
-            wheres.append(WHERE_HAS_GEOREF_R)
-        elif est == "rechazada":
-            wheres.append("r.georef_estado = 'rechazada'")
-        elif est == "aplicada":
-            wheres.append("r.georef_estado = 'aplicada'")
-        elif solo_pendientes:
+        if solo_pendientes:
             wheres.append(WHERE_SIN_GEOREF_EFECTIVA_R)
         else:
             wheres.append(
-                f"({WHERE_SIN_GEOREF_EFECTIVA_R} "
-                "OR r.georef_estado IN ('pendiente', 'capturada', 'rechazada', 'aplicada'))"
+                "(r.georef_estado IN ('capturada', 'aplicada', 'pendiente') "
+                f"OR {WHERE_SIN_GEOREF_EFECTIVA_R})"
             )
 
         cur.execute(
@@ -468,9 +439,6 @@ def capturar_georef(
             if ve and v_row != ve:
                 raise ValueError("El cliente no pertenece al vendedor indicado")
 
-        prev = _fetch_estado_coords(cur, rutero_id)
-        est_ant = prev[0] if prev else None
-
         cur.execute(
             f"""
             UPDATE bsale.rutero
@@ -498,18 +466,6 @@ def capturar_georef(
             conn.rollback()
             cur.close()
             return None
-        from backend.services.rutero_georef_historial_service import registrar_cambio
-
-        registrar_cambio(
-            cur,
-            ruta_id=rutero_id,
-            estado_anterior=est_ant,
-            estado_nuevo="capturada",
-            lat=float(row[1]) if row[1] is not None else lat,
-            lon=float(row[2]) if row[2] is not None else lon,
-            usuario=por,
-            motivo="captura app",
-        )
         conn.commit()
         cur.close()
         return {
@@ -532,142 +488,64 @@ def actualizar_estado_georef(
     rutero_id: int,
     georef_estado: str,
     actualizada_por: str,
-    motivo_rechazo: str | None = None,
 ) -> dict[str, Any] | None:
-    """ERP staff: cambiar estado sin borrar lat_operacional/lon_operacional."""
+    """ERP staff: marcar aplicada o volver a pendiente (no borra coordenadas operacionales)."""
     est = (georef_estado or "").strip().lower()
-    if est not in ("pendiente", "aplicada", "rechazada", "capturada"):
-        raise ValueError("georef_estado inválido")
+    if est not in ("pendiente", "aplicada"):
+        raise ValueError("georef_estado debe ser pendiente o aplicada")
 
     por = (actualizada_por or "").strip()[:50] or "erp"
-    motivo = (motivo_rechazo or "").strip()[:500] if motivo_rechazo else None
 
     conn = get_connection()
     try:
         cur = conn.cursor()
         _ensure_georef_schema(cur)
 
-        prev = _fetch_estado_coords(cur, rutero_id)
-        if prev is None:
-            cur.close()
-            return None
-        est_ant, lat_prev, lon_prev = prev
-
-        if est == "aplicada" and not _coords_efectivas_validas(lat_prev, lon_prev):
-            cur.close()
-            raise ValueError("No se puede marcar aplicada sin georreferencia.")
-
-        if est == "rechazada" and not motivo:
-            cur.close()
-            raise ValueError("motivo_rechazo es obligatorio para rechazada.")
-
-        if est == "capturada" and not _coords_efectivas_validas(lat_prev, lon_prev):
-            cur.close()
-            raise ValueError("No se puede marcar capturada sin coordenadas.")
-
-        if est == "rechazada":
+        if est == "aplicada":
             cur.execute(
                 f"""
-                UPDATE bsale.rutero
-                SET
-                    georef_estado = 'rechazada',
-                    georef_actualizada_at = clock_timestamp(),
-                    georef_actualizada_por = %s,
-                    motivo_rechazo = %s,
-                    fecha_rechazo = clock_timestamp(),
-                    usuario_rechazo = %s
-                WHERE id = %s
-                  AND company_id = 3
-                  AND activo = TRUE
-                RETURNING
-                    bsale_id::text,
-                    {RET_LAT},
-                    {RET_LON},
-                    georef_estado,
-                    georef_actualizada_at,
-                    georef_actualizada_por,
-                    motivo_rechazo,
-                    fecha_rechazo,
-                    usuario_rechazo
+                SELECT {RET_LAT}, {RET_LON}
+                FROM bsale.rutero
+                WHERE id = %s AND company_id = 3 AND activo = TRUE
                 """,
-                (por, motivo, por, rutero_id),
+                (rutero_id,),
             )
-        elif est == "capturada":
-            cur.execute(
-                f"""
-                UPDATE bsale.rutero
-                SET
-                    georef_estado = 'capturada',
-                    georef_actualizada_at = clock_timestamp(),
-                    georef_actualizada_por = %s,
-                    motivo_rechazo = NULL,
-                    fecha_rechazo = NULL,
-                    usuario_rechazo = NULL
-                WHERE id = %s
-                  AND company_id = 3
-                  AND activo = TRUE
-                RETURNING
-                    bsale_id::text,
-                    {RET_LAT},
-                    {RET_LON},
-                    georef_estado,
-                    georef_actualizada_at,
-                    georef_actualizada_por,
-                    motivo_rechazo,
-                    fecha_rechazo,
-                    usuario_rechazo
-                """,
-                (por, rutero_id),
-            )
-        else:
-            cur.execute(
-                f"""
-                UPDATE bsale.rutero
-                SET
-                    georef_estado = %s,
-                    georef_actualizada_at = clock_timestamp(),
-                    georef_actualizada_por = %s,
-                    motivo_rechazo = NULL,
-                    fecha_rechazo = NULL,
-                    usuario_rechazo = NULL
-                WHERE id = %s
-                  AND company_id = 3
-                  AND activo = TRUE
-                RETURNING
-                    bsale_id::text,
-                    {RET_LAT},
-                    {RET_LON},
-                    georef_estado,
-                    georef_actualizada_at,
-                    georef_actualizada_por,
-                    motivo_rechazo,
-                    fecha_rechazo,
-                    usuario_rechazo
-                """,
-                (est, por, rutero_id),
-            )
+            coords = cur.fetchone()
+            if coords is None:
+                cur.close()
+                return None
+            if not _coords_efectivas_validas(coords[0], coords[1]):
+                cur.close()
+                raise ValueError("No se puede marcar aplicada sin georreferencia.")
+
+        cur.execute(
+            f"""
+            UPDATE bsale.rutero
+            SET
+                georef_estado = %s,
+                georef_actualizada_at = clock_timestamp(),
+                georef_actualizada_por = %s
+            WHERE id = %s
+              AND company_id = 3
+              AND activo = TRUE
+            RETURNING
+                bsale_id::text,
+                {RET_LAT},
+                {RET_LON},
+                georef_estado,
+                georef_actualizada_at,
+                georef_actualizada_por
+            """,
+            (est, por, rutero_id),
+        )
         row = cur.fetchone()
         if not row:
             conn.rollback()
             cur.close()
             return None
-        from backend.services.rutero_georef_historial_service import registrar_cambio
-
-        lat_out = float(row[1]) if row[1] is not None else None
-        lon_out = float(row[2]) if row[2] is not None else None
-        registrar_cambio(
-            cur,
-            ruta_id=rutero_id,
-            estado_anterior=est_ant,
-            estado_nuevo=str(row[3]),
-            lat=lat_out,
-            lon=lon_out,
-            usuario=por,
-            motivo=motivo if est == "rechazada" else None,
-        )
         conn.commit()
         cur.close()
-        out: dict[str, Any] = {
+        return {
             "ruta_id": rutero_id,
             "cliente_codigo": row[0],
             "lat": row[1],
@@ -676,11 +554,6 @@ def actualizar_estado_georef(
             "georef_actualizada_at": row[4],
             "georef_actualizada_por": row[5],
         }
-        if len(row) > 6:
-            out["motivo_rechazo"] = row[6]
-            out["fecha_rechazo"] = row[7]
-            out["usuario_rechazo"] = row[8]
-        return out
     except Exception:
         conn.rollback()
         raise

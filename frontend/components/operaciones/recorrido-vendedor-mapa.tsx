@@ -1,9 +1,17 @@
 "use client"
 
+import dynamic from "next/dynamic"
 import { useEffect, useMemo, useState } from "react"
 import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from "react-leaflet"
 import L from "leaflet"
 import "leaflet/dist/leaflet.css"
+import "react-leaflet-cluster/dist/assets/MarkerCluster.css"
+import "react-leaflet-cluster/dist/assets/MarkerCluster.Default.css"
+
+const MarkerClusterGroup = dynamic(
+  () => import("react-leaflet-cluster").then((m) => m.default),
+  { ssr: false },
+)
 
 import {
   getOperacionesVendedorRecorrido,
@@ -16,12 +24,22 @@ import { Label } from "@/components/ui/label"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 
+function recorridoClusterIcon(cluster: { getChildCount(): number }) {
+  const count = cluster.getChildCount()
+  return L.divIcon({
+    className: "",
+    html: `<div style="width:24px;height:24px;border-radius:50%;background:#6366f1;color:#fff;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35)">${count}</div>`,
+    iconSize: [24, 24],
+    iconAnchor: [12, 12],
+  })
+}
+
 function numberedIcon(n: number, bg: string) {
   return new L.DivIcon({
     className: "",
-    html: `<div style="width:26px;height:26px;border-radius:50%;background:${bg};color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35)">${n}</div>`,
-    iconSize: [26, 26],
-    iconAnchor: [13, 13],
+    html: `<div style="width:20px;height:20px;border-radius:50%;background:${bg};color:#fff;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35)">${n}</div>`,
+    iconSize: [20, 20],
+    iconAnchor: [10, 10],
   })
 }
 
@@ -286,19 +304,25 @@ export default function RecorridoVendedorMapa({
                         <Popup>Inicio</Popup>
                       </Marker>
                     ) : null}
-                    {puntosVisibles.map((p) => (
-                      <Marker
-                        key={`${p.orden}-${p.visita_id}`}
-                        position={[p.lat, p.lon]}
-                        icon={numberedIcon(p.orden, puntoColor(p.tipo))}
-                      >
-                        <Popup>
-                          <strong>{p.cliente}</strong>
-                          <br />
-                          {formatHora(p.timestamp)} — {p.tipo}
-                        </Popup>
-                      </Marker>
-                    ))}
+                    <MarkerClusterGroup
+                      chunkedLoading
+                      showCoverageOnHover={false}
+                      iconCreateFunction={recorridoClusterIcon}
+                    >
+                      {puntosVisibles.map((p) => (
+                        <Marker
+                          key={`${p.orden}-${p.visita_id}`}
+                          position={[p.lat, p.lon]}
+                          icon={numberedIcon(p.orden, puntoColor(p.tipo))}
+                        >
+                          <Popup>
+                            <strong>{p.cliente}</strong>
+                            <br />
+                            {formatHora(p.timestamp)} — {p.tipo}
+                          </Popup>
+                        </Marker>
+                      ))}
+                    </MarkerClusterGroup>
                     {data.ultima_posicion?.lat != null && data.ultima_posicion.lon != null ? (
                       <Marker
                         position={[data.ultima_posicion.lat, data.ultima_posicion.lon]}

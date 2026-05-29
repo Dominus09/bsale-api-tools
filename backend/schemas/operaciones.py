@@ -405,7 +405,7 @@ class GpsTrackRequest(BaseModel):
         raise ValueError("Se requiere lat/lng (formato single) o puntos[] (formato batch)")
 
 
-GeorefEstado = Literal["pendiente", "capturada", "aplicada", "rechazada"]
+GeorefEstado = Literal["pendiente", "capturada", "aplicada"]
 
 
 class ClienteGeorefRow(BaseModel):
@@ -422,9 +422,6 @@ class ClienteGeorefRow(BaseModel):
     georef_estado: GeorefEstado | str = "pendiente"
     georef_actualizada_at: datetime | None = None
     georef_actualizada_por: str | None = None
-    motivo_rechazo: str | None = None
-    fecha_rechazo: datetime | None = None
-    usuario_rechazo: str | None = None
 
 
 class GeorefResumen(BaseModel):
@@ -432,7 +429,6 @@ class GeorefResumen(BaseModel):
     pendientes: int = 0
     capturados: int = 0
     aplicados: int = 0
-    rechazados: int = 0
 
 
 class GeorefPendientesDebug(BaseModel):
@@ -499,9 +495,8 @@ class GeorefEstadoPatchRequest(BaseModel):
     """ERP: cambiar estado de gestión georef."""
 
     ruta_id: int = Field(..., ge=1, validation_alias=AliasChoices("ruta_id", "rutero_id"))
-    georef_estado: Literal["pendiente", "aplicada", "rechazada", "capturada"]
+    georef_estado: Literal["pendiente", "aplicada"]
     actualizada_por: str | None = Field(None, max_length=50)
-    motivo_rechazo: str | None = Field(None, max_length=500)
 
 
 class GeorefEstadoPatchResponse(BaseModel):
