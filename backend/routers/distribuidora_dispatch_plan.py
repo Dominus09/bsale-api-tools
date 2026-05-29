@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import time
 from datetime import date
 from typing import Any
 
@@ -11,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from backend.services.distribuidora import dispatch_plan_service as svc
 from backend.utils.auth_staff import BearerDep, decode_staff_token, require_staff_user
+from backend.utils.dashboard_debug import log_dashboard_debug
 from backend.utils.ors_stability import log_error
 
 router = APIRouter(prefix="/distribuidora/dispatch-plans", tags=["Distribuidora dispatch plan"])
@@ -134,7 +137,7 @@ def get_plan_header(plan_id: int):
         plan = svc.get_plan_header(plan_id)
     except Exception as exc:
         log_error("GET /dispatch-plans/header", exc, planning_id=plan_id)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        plan = None
     if not plan:
         raise HTTPException(status_code=404, detail="Plan no encontrado")
     return {"plan": plan}
@@ -145,27 +148,57 @@ def get_plan_dashboard(
     plan_id: int,
     authorization: BearerDep = None,
     include_items: bool = Query(False, description="Incluir filas invoiced_items (más pesado)"),
+    include_margin: bool = Query(
+        False,
+        description="Calcular margen comercial en esta petición (lento; usar bajo demanda)",
+    ),
 ):
+    """Solo facturación y métricas; pickings en /picking-cliente y /picking-producto."""
     role: str | None = None
     if authorization:
         try:
             role = str(decode_staff_token(authorization).get("role") or "")
         except HTTPException:
             role = None
+    t0 = time.perf_counter()
+    picking_client_rows = svc.count_picking_client_rows(plan_id)
+    picking_product_rows = svc.count_picking_product_rows(plan_id)
     try:
-        return svc.get_plan_dashboard(
+        result = svc.get_plan_dashboard(
             plan_id,
             user_role=role,
             include_items=include_items,
+            include_margin=include_margin,
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as exc:
         log_error("GET /dispatch-plans/dashboard", exc, planning_id=plan_id)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error al cargar dashboard: {exc}",
-        ) from exc
+        plan = svc.get_plan_header(plan_id)
+        from backend.utils.ors_stability import empty_plan_dashboard
+
+        result = empty_plan_dashboard(
+            plan_id,
+            plan,
+            degraded_message=f"Error al cargar dashboard: {exc}",
+        )
+    duration_ms = (time.perf_counter() - t0) * 1000.0
+    try:
+        payload_bytes = len(json.dumps(result, default=str).encode("utf-8"))
+    except Exception:
+        payload_bytes = 0
+    invoice_rows = len(result.get("invoiced_items") or [])
+    log_dashboard_debug(
+        planning_id=plan_id,
+        duration_ms=duration_ms,
+        invoice_rows=invoice_rows,
+        picking_client_rows=picking_client_rows,
+        picking_product_rows=picking_product_rows,
+        payload_bytes=payload_bytes,
+        include_margin=include_margin,
+        include_items=include_items,
+    )
+    return result
 
 
 @router.patch("/{plan_id}/status")
@@ -178,10 +211,16 @@ def patch_plan_status(plan_id: int, body: StatusBody):
 
 @router.get("/{plan_id}/invoiced-documents")
 def get_invoiced_documents(plan_id: int):
+    """Facturación vinculada (equivalente operacional a /facturacion)."""
     try:
         return svc.get_invoiced_documents(plan_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as exc:
+        log_error("GET /dispatch-plans/invoiced-documents", exc, planning_id=plan_id)
+        from backend.utils.ors_stability import empty_invoiced_documents_response
+
+        return empty_invoiced_documents_response(plan_id)
 
 
 @router.get("/{plan_id}/billing-export")
@@ -197,21 +236,98 @@ def export_billing_excel(plan_id: int):
     )
 
 
+def _picking_by_client_handler(plan_id: int, validate: bool) -> dict[str, Any]:
+    t0 = time.perf_counter()
+    try:
+        result = svc.get_picking_by_client(plan_id, validate=validate)
+    except ValueError:
+        raise
+    except Exception as exc:
+        log_error("GET /dispatch-plans/picking-cliente", exc, planning_id=plan_id)
+        from backend.utils.ors_stability import empty_picking_by_client_response
+
+        result = empty_picking_by_client_response(plan_id)
+    duration_ms = (time.perf_counter() - t0) * 1000.0
+    clients = result.get("clients") if isinstance(result.get("clients"), list) else []
+    try:
+        payload_bytes = len(json.dumps(result, default=str).encode("utf-8"))
+    except Exception:
+        payload_bytes = 0
+    log_dashboard_debug(
+        planning_id=plan_id,
+        duration_ms=duration_ms,
+        invoice_rows=0,
+        picking_client_rows=len(clients),
+        picking_product_rows=0,
+        payload_bytes=payload_bytes,
+    )
+    return result
+
+
+def _picking_by_product_handler(plan_id: int, validate: bool) -> dict[str, Any]:
+    t0 = time.perf_counter()
+    try:
+        result = svc.get_picking_by_product(plan_id, validate=validate)
+    except ValueError:
+        raise
+    except Exception as exc:
+        log_error("GET /dispatch-plans/picking-producto", exc, planning_id=plan_id)
+        from backend.utils.ors_stability import empty_picking_by_product_response
+
+        result = empty_picking_by_product_response(plan_id)
+    duration_ms = (time.perf_counter() - t0) * 1000.0
+    items = result.get("items") if isinstance(result.get("items"), list) else []
+    try:
+        payload_bytes = len(json.dumps(result, default=str).encode("utf-8"))
+    except Exception:
+        payload_bytes = 0
+    log_dashboard_debug(
+        planning_id=plan_id,
+        duration_ms=duration_ms,
+        invoice_rows=0,
+        picking_client_rows=0,
+        picking_product_rows=len(items),
+        payload_bytes=payload_bytes,
+    )
+    return result
+
+
+@router.get("/{plan_id}/picking-cliente")
+def picking_cliente(
+    plan_id: int,
+    validate: bool = Query(True, description="Advertir OCs sin documento confirmado"),
+):
+    try:
+        return _picking_by_client_handler(plan_id, validate)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.get("/{plan_id}/picking-producto")
+def picking_producto(plan_id: int, validate: bool = Query(True)):
+    try:
+        return _picking_by_product_handler(plan_id, validate)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 @router.get("/{plan_id}/picking-by-client")
 def picking_by_client(
     plan_id: int,
     validate: bool = Query(True, description="Advertir OCs sin documento confirmado"),
 ):
+    """Retrocompatible: alias de /picking-cliente."""
     try:
-        return svc.get_picking_by_client(plan_id, validate=validate)
+        return _picking_by_client_handler(plan_id, validate)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.get("/{plan_id}/picking-by-product")
 def picking_by_product(plan_id: int, validate: bool = Query(True)):
+    """Retrocompatible: alias de /picking-producto."""
     try:
-        return svc.get_picking_by_product(plan_id, validate=validate)
+        return _picking_by_product_handler(plan_id, validate)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 

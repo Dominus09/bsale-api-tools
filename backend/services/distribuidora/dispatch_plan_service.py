@@ -20,7 +20,16 @@ from backend.services.distribuidora.dispatch_commercial_margin_service import (
     compute_plan_commercial_margin,
 )
 from backend.utils.json_safe import serialize_row, serialize_rows
-from backend.utils.ors_stability import empty_invoicing_payload, log_debug, log_error
+from backend.utils.ors_stability import (
+    empty_invoicing_payload,
+    empty_invoiced_documents_response,
+    empty_picking_by_client_response,
+    empty_picking_by_product_response,
+    empty_plan_dashboard,
+    log_debug,
+    log_error,
+)
+from backend.utils.plan_detail_debug import log_plan_detail_debug, plan_detail_step
 
 logger = logging.getLogger(__name__)
 
@@ -434,49 +443,159 @@ def get_margin_audit() -> dict[str, Any]:
         conn.close()
 
 
-def get_plan_dashboard(
-    plan_id: int,
-    *,
-    user_role: str | None = None,
-    include_items: bool = False,
-) -> dict[str, Any]:
-    log_debug("GET /dispatch-plans/{id}/dashboard", planning_id=plan_id)
-    plan = get_plan_header(plan_id)
-    if not plan:
-        raise ValueError("Plan no encontrado")
+def _load_plan_orders_safe(plan_id: int) -> list[dict[str, Any]]:
+    endpoint = "GET /dispatch-plans/{id}/dashboard"
+    try:
+        with plan_detail_step(
+            endpoint,
+            planning_id=plan_id,
+            query="repo.list_plan_orders(dispatch_plan_orders)",
+        ):
+            conn = get_connection()
+            try:
+                cur = conn.cursor()
+                orders = repo.list_plan_orders(cur, plan_id)
+                cur.close()
+            finally:
+                conn.close()
+        rows = serialize_rows(orders)
+        log_plan_detail_debug(
+            endpoint,
+            planning_id=plan_id,
+            query="repo.list_plan_orders",
+            rows=len(rows),
+        )
+        return rows
+    except Exception as exc:
+        log_plan_detail_debug(
+            endpoint,
+            planning_id=plan_id,
+            query="repo.list_plan_orders",
+            rows=0,
+            error=repr(exc),
+        )
+        log_error(endpoint, exc, planning_id=plan_id, extra={"phase": "orders"})
+        return []
 
+
+def count_picking_client_rows(plan_id: int) -> int:
+    """Conteo liviano (no carga líneas ni payload de picking)."""
     conn = get_connection()
     try:
         cur = conn.cursor()
-        orders = repo.list_plan_orders(cur, plan_id)
-        cur.close()
-    except Exception as exc:
-        log_error(
-            "GET /dispatch-plans/{id}/dashboard",
-            exc,
-            planning_id=plan_id,
-            extra={"phase": "orders"},
+        cur.execute(
+            """
+            SELECT COUNT(*)::int
+            FROM distribuidora.dispatch_plan_orders dpo
+            INNER JOIN distribuidora.v_dispatch_plan_invoiced_documents inv
+                ON inv.dispatch_plan_id = dpo.dispatch_plan_id
+               AND inv.oc_document_id = dpo.oc_document_id
+               AND inv.status = 'confirmed'
+            WHERE dpo.dispatch_plan_id = %s
+            """,
+            (plan_id,),
         )
-        orders = []
-    orders = serialize_rows(orders)
+        row = cur.fetchone()
+        cur.close()
+        return int(row[0] or 0) if row else 0
+    except Exception:
+        return 0
+    finally:
+        conn.close()
+
+
+def count_picking_product_rows(plan_id: int) -> int:
+    """Filas consolidadas por producto (misma agrupación que picking-by-product)."""
+    conn = get_connection()
     try:
-        inv = get_invoiced_documents(plan_id)
-    except Exception as exc:
-        log_error(
-            "GET /dispatch-plans/{id}/dashboard",
-            exc,
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT COUNT(*)::int
+            FROM (
+                SELECT 1
+                FROM distribuidora.dispatch_plan_orders dpo
+                INNER JOIN distribuidora.v_dispatch_plan_invoiced_documents inv
+                    ON inv.dispatch_plan_id = dpo.dispatch_plan_id
+                   AND inv.oc_document_id = dpo.oc_document_id
+                   AND inv.status = 'confirmed'
+                INNER JOIN distribuidora.document_details dd
+                    ON dd.document_id = inv.related_document_id
+                LEFT JOIN bsale.products_master pm
+                    ON pm.barcode = NULLIF(BTRIM(dd.variant_code), '')
+                WHERE dpo.dispatch_plan_id = %s
+                GROUP BY
+                    COALESCE(pm.product_type_name, 'Sin tipo'),
+                    dd.variant_description,
+                    NULLIF(BTRIM(dd.variant_code), '')
+            ) g
+            """,
+            (plan_id,),
+        )
+        row = cur.fetchone()
+        cur.close()
+        return int(row[0] or 0) if row else 0
+    except Exception:
+        return 0
+    finally:
+        conn.close()
+
+
+def _build_plan_dashboard(
+    plan_id: int,
+    plan: dict[str, Any],
+    *,
+    user_role: str | None = None,
+    include_items: bool = False,
+    include_margin: bool = False,
+) -> dict[str, Any]:
+    endpoint = "GET /dispatch-plans/{id}/dashboard"
+    orders = _load_plan_orders_safe(plan_id)
+
+    try:
+        with plan_detail_step(
+            endpoint,
             planning_id=plan_id,
-            extra={"phase": "invoicing"},
+            query="get_invoiced_documents (v_dispatch_plan_invoiced_documents)",
+        ):
+            inv = get_invoiced_documents(plan_id)
+    except ValueError:
+        raise
+    except Exception as exc:
+        log_plan_detail_debug(
+            endpoint,
+            planning_id=plan_id,
+            query="get_invoiced_documents",
+            error=repr(exc),
         )
         inv = empty_invoicing_payload(plan_id, orders)
+
+    inv_items = inv.get("items") if isinstance(inv.get("items"), list) else []
+    inv_summary = inv.get("summary") if isinstance(inv.get("summary"), dict) else {}
+    inv_summary = {
+        "confirmed": int(inv_summary.get("confirmed") or 0),
+        "probable": int(inv_summary.get("probable") or 0),
+        "missing": int(inv_summary.get("missing") or 0),
+        "total": int(inv_summary.get("total") or len(inv_items)),
+    }
 
     total_oc_amount = sum(float(o.get("oc_total_amount") or 0) for o in orders)
     confirmed_amount = 0.0
     probable_amount = 0.0
     pending_amount = 0.0
-    by_oc = {int(o["oc_document_id"]): o for o in orders}
-    for item in inv["items"]:
-        oc_id = int(item["oc_document_id"])
+    by_oc: dict[int, dict[str, Any]] = {}
+    for o in orders:
+        try:
+            oc_id = int(o.get("oc_document_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if oc_id:
+            by_oc[oc_id] = o
+    for item in inv_items:
+        try:
+            oc_id = int(item.get("oc_document_id") or 0)
+        except (TypeError, ValueError):
+            continue
         oc = by_oc.get(oc_id) or {}
         amt = float(oc.get("oc_total_amount") or 0)
         st = item.get("status")
@@ -487,9 +606,9 @@ def get_plan_dashboard(
         else:
             pending_amount += amt
 
-    inv_summary = inv["summary"]
     can_calc_margin = (
-        inv_summary["total"] > 0
+        include_margin
+        and inv_summary["total"] > 0
         and inv_summary["missing"] == 0
         and inv_summary["confirmed"] > 0
     )
@@ -498,13 +617,18 @@ def get_plan_dashboard(
     show_margin = role in MARGIN_VIEW_ROLES
     if can_calc_margin:
         try:
-            margin_data = compute_plan_margin(plan_id)
-        except Exception as exc:
-            log_error(
-                "GET /dispatch-plans/{id}/dashboard",
-                exc,
+            with plan_detail_step(
+                endpoint,
                 planning_id=plan_id,
-                extra={"phase": "margin"},
+                query="compute_plan_margin",
+            ):
+                margin_data = compute_plan_margin(plan_id)
+        except Exception as exc:
+            log_plan_detail_debug(
+                endpoint,
+                planning_id=plan_id,
+                query="compute_plan_margin",
+                error=repr(exc),
             )
             margin_data = {
                 "commercial_margin_clp": None,
@@ -538,6 +662,11 @@ def get_plan_dashboard(
             "message": "Margen almacenado.",
         }
 
+    warnings = inv.get("warnings") if isinstance(inv.get("warnings"), list) else []
+    probable_notes = (
+        inv.get("probable_notes") if isinstance(inv.get("probable_notes"), list) else []
+    )
+
     return {
         "plan": plan,
         "invoicing": {
@@ -556,20 +685,84 @@ def get_plan_dashboard(
                 "amount_clp": int(round(pending_amount)),
             },
         },
-        "invoiced_items": inv["items"] if include_items else [],
-        "warnings": inv["warnings"],
-        "probable_notes": inv["probable_notes"],
+        "invoiced_items": inv_items if include_items else [],
+        "warnings": warnings,
+        "probable_notes": probable_notes,
         "margin": margin_block,
         "picking": {
-            "client_endpoint": f"/distribuidora/dispatch-plans/{plan_id}/picking-by-client",
-            "product_endpoint": f"/distribuidora/dispatch-plans/{plan_id}/picking-by-product",
-            "ready": inv.get("ready_for_picking", False),
+            "client_endpoint": f"/distribuidora/dispatch-plans/{plan_id}/picking-cliente",
+            "product_endpoint": f"/distribuidora/dispatch-plans/{plan_id}/picking-producto",
+            "ready": bool(inv.get("ready_for_picking", False)),
         },
+        "degraded": False,
     }
 
 
+def get_plan_dashboard(
+    plan_id: int,
+    *,
+    user_role: str | None = None,
+    include_items: bool = False,
+    include_margin: bool = False,
+) -> dict[str, Any]:
+    """Dashboard del plan; nunca debe propagar 500 al cliente."""
+    endpoint = "GET /dispatch-plans/{id}/dashboard"
+    log_plan_detail_debug(endpoint, planning_id=plan_id, query="start")
+    try:
+        with plan_detail_step(
+            endpoint,
+            planning_id=plan_id,
+            query="get_plan_header",
+        ):
+            plan = get_plan_header(plan_id)
+    except Exception as exc:
+        log_plan_detail_debug(
+            endpoint,
+            planning_id=plan_id,
+            query="get_plan_header",
+            error=repr(exc),
+        )
+        raise ValueError("Plan no encontrado") from exc
+
+    if not plan:
+        raise ValueError("Plan no encontrado")
+
+    try:
+        return _build_plan_dashboard(
+            plan_id,
+            plan,
+            user_role=user_role,
+            include_items=include_items,
+            include_margin=include_margin,
+        )
+    except ValueError:
+        raise
+    except Exception as exc:
+        log_plan_detail_debug(
+            endpoint,
+            planning_id=plan_id,
+            query="_build_plan_dashboard",
+            error=repr(exc),
+        )
+        log_error(endpoint, exc, planning_id=plan_id)
+        return empty_plan_dashboard(
+            plan_id,
+            plan,
+            degraded_message=(
+                "No se pudo cargar facturación o métricas completas; "
+                "se muestran valores en cero."
+            ),
+        )
+
+
 def get_invoiced_documents(plan_id: int) -> dict[str, Any]:
-    log_debug("GET /dispatch-plans/{id}/invoiced-documents", planning_id=plan_id)
+    """Facturación vinculada (alias operacional: /facturacion)."""
+    endpoint = "GET /dispatch-plans/{id}/invoiced-documents"
+    log_plan_detail_debug(
+        endpoint,
+        planning_id=plan_id,
+        query="v_dispatch_plan_invoiced_documents",
+    )
     conn = get_connection()
     try:
         cur = conn.cursor()
@@ -577,21 +770,45 @@ def get_invoiced_documents(plan_id: int) -> dict[str, Any]:
         if not plan:
             raise ValueError("Plan no encontrado")
         try:
-            rows = repo.list_invoiced_documents(cur, plan_id)
-        except Exception as exc:
-            log_error(
-                "GET /dispatch-plans/{id}/invoiced-documents",
-                exc,
+            with plan_detail_step(
+                endpoint,
                 planning_id=plan_id,
+                query="SELECT * FROM v_dispatch_plan_invoiced_documents",
+            ):
+                rows = repo.list_invoiced_documents(cur, plan_id)
+        except Exception as exc:
+            log_plan_detail_debug(
+                endpoint,
+                planning_id=plan_id,
+                query="list_invoiced_documents",
+                rows=0,
+                error=repr(exc),
             )
+            log_error(endpoint, exc, planning_id=plan_id)
             orders = repo.list_plan_orders(cur, plan_id)
             cur.close()
             return empty_invoicing_payload(plan_id, serialize_rows(orders))
         cur.close()
+    except ValueError:
+        raise
+    except Exception as exc:
+        log_plan_detail_debug(
+            endpoint,
+            planning_id=plan_id,
+            error=repr(exc),
+        )
+        log_error(endpoint, exc, planning_id=plan_id)
+        return empty_invoiced_documents_response(plan_id)
     finally:
         conn.close()
 
     items = serialize_rows(rows)
+    log_plan_detail_debug(
+        endpoint,
+        planning_id=plan_id,
+        query="list_invoiced_documents",
+        rows=len(items),
+    )
     summary = {
         "confirmed": sum(1 for x in items if x.get("status") == "confirmed"),
         "probable": sum(1 for x in items if x.get("status") == "probable"),
@@ -689,12 +906,27 @@ def _validate_picking_ready(plan_id: int) -> dict[str, Any]:
 
 
 def get_picking_by_client(plan_id: int, *, validate: bool = True) -> dict[str, Any]:
-    inv_check = _validate_picking_ready(plan_id) if validate else get_invoiced_documents(plan_id)
+    endpoint = "GET /dispatch-plans/{id}/picking-by-client"
+    log_plan_detail_debug(endpoint, planning_id=plan_id, query="start")
+    try:
+        inv_check = (
+            _validate_picking_ready(plan_id) if validate else get_invoiced_documents(plan_id)
+        )
+    except ValueError:
+        raise
+    except Exception as exc:
+        log_plan_detail_debug(endpoint, planning_id=plan_id, error=repr(exc))
+        inv_check = None
 
     conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute(
+        with plan_detail_step(
+            endpoint,
+            planning_id=plan_id,
+            query="picking-by-client stops SQL",
+        ):
+            cur.execute(
             """
             SELECT
                 dpo.route_order,
@@ -726,42 +958,51 @@ def get_picking_by_client(plan_id: int, *, validate: bool = True) -> dict[str, A
             WHERE dpo.dispatch_plan_id = %s
             ORDER BY dpo.route_order ASC, dpo.oc_document_id ASC
             """,
-            (plan_id,),
-        )
-        cols = [c[0] for c in cur.description]
-        stops = [dict(zip(cols, r)) for r in cur.fetchall()]
-
-        lines_by_doc: dict[int, list[dict[str, Any]]] = {}
-        for stop in stops:
-            doc_id = int(stop["related_document_id"])
-            if doc_id in lines_by_doc:
-                continue
-            cur.execute(
-                """
-                SELECT
-                    dd.line_number,
-                    dd.variant_description AS producto,
-                    dd.variant_description AS variante,
-                    NULLIF(BTRIM(dd.variant_code), '') AS codigo_barras,
-                    dd.quantity AS unidades,
-                    CASE
-                        WHEN pm.units_per_box IS NOT NULL AND pm.units_per_box > 0
-                        THEN CEIL(dd.quantity / pm.units_per_box::numeric)
-                        ELSE NULL
-                    END AS cajas,
-                    dd.total_amount AS monto_linea,
-                    pm.product_type_name AS tipo_producto
-                FROM distribuidora.document_details dd
-                LEFT JOIN bsale.products_master pm
-                    ON pm.barcode = NULLIF(BTRIM(dd.variant_code), '')
-                WHERE dd.document_id = %s
-                ORDER BY dd.line_number ASC NULLS LAST, dd.detail_id ASC
-                """,
-                (doc_id,),
+                (plan_id,),
             )
-            lcols = [c[0] for c in cur.description]
-            lines_by_doc[doc_id] = [dict(zip(lcols, r)) for r in cur.fetchall()]
+            cols = [c[0] for c in cur.description]
+            stops = [dict(zip(cols, r)) for r in cur.fetchall()]
+
+            lines_by_doc: dict[int, list[dict[str, Any]]] = {}
+            for stop in stops:
+                doc_id = int(stop["related_document_id"])
+                if doc_id in lines_by_doc:
+                    continue
+                cur.execute(
+                    """
+                    SELECT
+                        dd.line_number,
+                        dd.variant_description AS producto,
+                        dd.variant_description AS variante,
+                        NULLIF(BTRIM(dd.variant_code), '') AS codigo_barras,
+                        dd.quantity AS unidades,
+                        CASE
+                            WHEN pm.units_per_box IS NOT NULL AND pm.units_per_box > 0
+                            THEN CEIL(dd.quantity / pm.units_per_box::numeric)
+                            ELSE NULL
+                        END AS cajas,
+                        dd.total_amount AS monto_linea,
+                        pm.product_type_name AS tipo_producto
+                    FROM distribuidora.document_details dd
+                    LEFT JOIN bsale.products_master pm
+                        ON pm.barcode = NULLIF(BTRIM(dd.variant_code), '')
+                    WHERE dd.document_id = %s
+                    ORDER BY dd.line_number ASC NULLS LAST, dd.detail_id ASC
+                    """,
+                    (doc_id,),
+                )
+                lcols = [c[0] for c in cur.description]
+                lines_by_doc[doc_id] = [dict(zip(lcols, r)) for r in cur.fetchall()]
         cur.close()
+    except Exception as exc:
+        log_plan_detail_debug(
+            endpoint,
+            planning_id=plan_id,
+            rows=0,
+            error=repr(exc),
+        )
+        log_error(endpoint, exc, planning_id=plan_id)
+        return empty_picking_by_client_response(plan_id)
     finally:
         conn.close()
 
@@ -774,87 +1015,136 @@ def get_picking_by_client(plan_id: int, *, validate: bool = True) -> dict[str, A
                 "lines": [_serialize(x) for x in lines_by_doc.get(doc_id, [])],
             }
         )
+    log_plan_detail_debug(
+        endpoint,
+        planning_id=plan_id,
+        rows=len(clients),
+    )
 
     result = {
         "dispatch_plan_id": plan_id,
         "clients": clients,
         "validation": inv_check if validate else None,
+        "degraded": False,
     }
-    conn = get_connection()
     try:
-        cur = conn.cursor()
-        repo.insert_picking_snapshot(
-            cur,
-            plan_id=plan_id,
-            picking_type="client",
-            payload=json.dumps(result, default=str),
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+            repo.insert_picking_snapshot(
+                cur,
+                plan_id=plan_id,
+                picking_type="client",
+                payload=json.dumps(result, default=str),
+            )
+            conn.commit()
+            cur.close()
+        finally:
+            conn.close()
+    except Exception as exc:
+        log_plan_detail_debug(
+            endpoint,
+            planning_id=plan_id,
+            query="insert_picking_snapshot",
+            error=repr(exc),
         )
-        conn.commit()
-        cur.close()
-    finally:
-        conn.close()
     return result
 
 
 def get_picking_by_product(plan_id: int, *, validate: bool = True) -> dict[str, Any]:
+    endpoint = "GET /dispatch-plans/{id}/picking-by-product"
+    log_plan_detail_debug(endpoint, planning_id=plan_id, query="start")
     if validate:
-        _validate_picking_ready(plan_id)
+        try:
+            _validate_picking_ready(plan_id)
+        except ValueError:
+            raise
+        except Exception as exc:
+            log_plan_detail_debug(endpoint, planning_id=plan_id, error=repr(exc))
+            return empty_picking_by_product_response(plan_id)
 
     conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT
-                COALESCE(pm.product_type_name, 'Sin tipo') AS tipo_producto,
-                dd.variant_description AS producto,
-                dd.variant_description AS variante,
-                NULLIF(BTRIM(dd.variant_code), '') AS codigo_barras,
-                SUM(dd.quantity) AS unidades,
-                CASE
-                    WHEN MAX(pm.units_per_box) IS NOT NULL AND MAX(pm.units_per_box) > 0
-                    THEN CEIL(SUM(dd.quantity) / MAX(pm.units_per_box)::numeric)
-                    ELSE NULL
-                END AS cajas,
-                SUM(dd.total_amount) AS total_monto
-            FROM distribuidora.dispatch_plan_orders dpo
-            INNER JOIN distribuidora.v_dispatch_plan_invoiced_documents inv
-                ON inv.dispatch_plan_id = dpo.dispatch_plan_id
-               AND inv.oc_document_id = dpo.oc_document_id
-               AND inv.status = 'confirmed'
-            INNER JOIN distribuidora.document_details dd
-                ON dd.document_id = inv.related_document_id
-            LEFT JOIN bsale.products_master pm
-                ON pm.barcode = NULLIF(BTRIM(dd.variant_code), '')
-            WHERE dpo.dispatch_plan_id = %s
-            GROUP BY
-                COALESCE(pm.product_type_name, 'Sin tipo'),
-                dd.variant_description,
-                NULLIF(BTRIM(dd.variant_code), '')
-            ORDER BY tipo_producto, producto, codigo_barras NULLS LAST
-            """,
-            (plan_id,),
-        )
-        cols = [c[0] for c in cur.description]
-        items = [_serialize(dict(zip(cols, r))) for r in cur.fetchall()]
+        with plan_detail_step(
+            endpoint,
+            planning_id=plan_id,
+            query="picking-by-product consolidated SQL",
+        ):
+            cur.execute(
+                """
+                SELECT
+                    COALESCE(pm.product_type_name, 'Sin tipo') AS tipo_producto,
+                    dd.variant_description AS producto,
+                    dd.variant_description AS variante,
+                    NULLIF(BTRIM(dd.variant_code), '') AS codigo_barras,
+                    SUM(dd.quantity) AS unidades,
+                    CASE
+                        WHEN MAX(pm.units_per_box) IS NOT NULL AND MAX(pm.units_per_box) > 0
+                        THEN CEIL(SUM(dd.quantity) / MAX(pm.units_per_box)::numeric)
+                        ELSE NULL
+                    END AS cajas,
+                    SUM(dd.total_amount) AS total_monto
+                FROM distribuidora.dispatch_plan_orders dpo
+                INNER JOIN distribuidora.v_dispatch_plan_invoiced_documents inv
+                    ON inv.dispatch_plan_id = dpo.dispatch_plan_id
+                   AND inv.oc_document_id = dpo.oc_document_id
+                   AND inv.status = 'confirmed'
+                INNER JOIN distribuidora.document_details dd
+                    ON dd.document_id = inv.related_document_id
+                LEFT JOIN bsale.products_master pm
+                    ON pm.barcode = NULLIF(BTRIM(dd.variant_code), '')
+                WHERE dpo.dispatch_plan_id = %s
+                GROUP BY
+                    COALESCE(pm.product_type_name, 'Sin tipo'),
+                    dd.variant_description,
+                    NULLIF(BTRIM(dd.variant_code), '')
+                ORDER BY tipo_producto, producto, codigo_barras NULLS LAST
+                """,
+                (plan_id,),
+            )
+            cols = [c[0] for c in cur.description]
+            items = [_serialize(dict(zip(cols, r))) for r in cur.fetchall()]
         cur.close()
+    except Exception as exc:
+        log_plan_detail_debug(
+            endpoint,
+            planning_id=plan_id,
+            rows=0,
+            error=repr(exc),
+        )
+        log_error(endpoint, exc, planning_id=plan_id)
+        return empty_picking_by_product_response(plan_id)
     finally:
         conn.close()
 
-    result = {"dispatch_plan_id": plan_id, "items": items}
-    conn = get_connection()
+    log_plan_detail_debug(
+        endpoint,
+        planning_id=plan_id,
+        rows=len(items),
+    )
+    result = {"dispatch_plan_id": plan_id, "items": items, "degraded": False}
     try:
-        cur = conn.cursor()
-        repo.insert_picking_snapshot(
-            cur,
-            plan_id=plan_id,
-            picking_type="product",
-            payload=json.dumps(result, default=str),
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+            repo.insert_picking_snapshot(
+                cur,
+                plan_id=plan_id,
+                picking_type="product",
+                payload=json.dumps(result, default=str),
+            )
+            conn.commit()
+            cur.close()
+        finally:
+            conn.close()
+    except Exception as exc:
+        log_plan_detail_debug(
+            endpoint,
+            planning_id=plan_id,
+            query="insert_picking_snapshot",
+            error=repr(exc),
         )
-        conn.commit()
-        cur.close()
-    finally:
-        conn.close()
     return result
 
 

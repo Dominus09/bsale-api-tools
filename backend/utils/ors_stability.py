@@ -77,3 +77,70 @@ def empty_invoicing_payload(plan_id: int, orders: list[dict[str, Any]]) -> dict[
         "probable_notes": [],
         "ready_for_picking": False,
     }
+
+
+def empty_plan_dashboard(
+    plan_id: int,
+    plan: dict[str, Any] | None,
+    *,
+    degraded_message: str | None = None,
+) -> dict[str, Any]:
+    """Dashboard seguro cuando falla facturación, margen o vistas SQL."""
+    warnings: list[dict[str, Any]] = []
+    if degraded_message:
+        warnings.append(
+            {
+                "oc_document_id": 0,
+                "message": degraded_message,
+            }
+        )
+    base_plan = plan if plan else {"id": plan_id}
+    return {
+        "plan": base_plan,
+        "invoicing": {
+            "total_orders": 0,
+            "total_oc_amount_clp": 0,
+            "confirmed": {"count": 0, "amount_clp": 0},
+            "probable": {"count": 0, "amount_clp": 0},
+            "pending": {"count": 0, "amount_clp": 0},
+        },
+        "invoiced_items": [],
+        "warnings": warnings,
+        "probable_notes": [],
+        "margin": None,
+        "picking": {
+            "client_endpoint": f"/distribuidora/dispatch-plans/{plan_id}/picking-cliente",
+            "product_endpoint": f"/distribuidora/dispatch-plans/{plan_id}/picking-producto",
+            "ready": False,
+        },
+        "degraded": True,
+    }
+
+
+def empty_invoiced_documents_response(plan_id: int) -> dict[str, Any]:
+    return {
+        "dispatch_plan_id": plan_id,
+        "items": [],
+        "summary": {"confirmed": 0, "probable": 0, "missing": 0, "total": 0},
+        "warnings": [],
+        "probable_notes": [],
+        "ready_for_picking": False,
+        "degraded": True,
+    }
+
+
+def empty_picking_by_client_response(plan_id: int) -> dict[str, Any]:
+    return {
+        "dispatch_plan_id": plan_id,
+        "clients": [],
+        "validation": None,
+        "degraded": True,
+    }
+
+
+def empty_picking_by_product_response(plan_id: int) -> dict[str, Any]:
+    return {
+        "dispatch_plan_id": plan_id,
+        "items": [],
+        "degraded": True,
+    }

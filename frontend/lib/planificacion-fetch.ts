@@ -16,7 +16,7 @@ const renderCounts = new Map<string, number>()
 
 const sessionInflight = new Map<string, Promise<{ items: DispatchPlanSummary[] }>>()
 let recentInflightRef: Promise<{ items: DispatchPlanSummary[] }> | null = null
-const dashboardInflight = new Map<number, Promise<DispatchPlanDashboard>>()
+const dashboardInflight = new Map<string, Promise<DispatchPlanDashboard>>()
 
 let lastSessionFetchAt = 0
 const SESSION_MIN_INTERVAL_MS = 1500
@@ -121,23 +121,28 @@ export async function fetchDispatchPlanHeaderDeduped(
 export async function fetchDispatchPlanDashboardDeduped(
   planId: number,
   signal?: AbortSignal,
+  opts?: { include_margin?: boolean; force?: boolean },
 ): Promise<DispatchPlanDashboard> {
   logFrontendPlanDebug("dispatch-plans-dashboard", {
     planning_id: planId,
     trigger: "fetch",
+    include_margin: opts?.include_margin ?? false,
   })
-  const existing = dashboardInflight.get(planId)
+  const cacheKey = `${planId}:${opts?.include_margin ? "m" : "s"}`
+  const existing = !opts?.force ? dashboardInflight.get(cacheKey) : undefined
   if (existing) return existing
 
-  const promise = getDispatchPlanDashboard(planId, signal)
+  const promise = getDispatchPlanDashboard(planId, signal, {
+    include_margin: opts?.include_margin,
+  })
     .then((res) => {
       logPayloadSize("dispatch-plans-dashboard", res)
       return res
     })
     .finally(() => {
-      dashboardInflight.delete(planId)
+      dashboardInflight.delete(cacheKey)
     })
-  dashboardInflight.set(planId, promise)
+  dashboardInflight.set(cacheKey, promise)
   return promise
 }
 
@@ -148,6 +153,9 @@ export function invalidateSessionPlansCache(planSessionId?: string): void {
 }
 
 export function invalidateDashboardCache(planId?: number): void {
-  if (planId != null) dashboardInflight.delete(planId)
-  else dashboardInflight.clear()
+  if (planId != null) {
+    for (const k of [...dashboardInflight.keys()]) {
+      if (k.startsWith(`${planId}:`)) dashboardInflight.delete(k)
+    }
+  } else dashboardInflight.clear()
 }

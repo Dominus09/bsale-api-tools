@@ -1790,16 +1790,25 @@ export type DispatchPlanDashboard = {
     source?: string
   } | null
   picking: { client_endpoint: string; product_endpoint: string; ready: boolean }
+  /** true si el backend degradó la respuesta por error interno */
+  degraded?: boolean
 }
+
+/** Dashboard liviano (sin pickings; margen opcional). */
+export const DASHBOARD_FETCH_TIMEOUT_MS = 120_000
 
 export async function getDispatchPlanDashboard(
   planId: number,
   signal?: AbortSignal,
+  opts?: { include_margin?: boolean },
 ): Promise<DispatchPlanDashboard> {
+  const qs = new URLSearchParams()
+  if (opts?.include_margin) qs.set("include_margin", "true")
+  const q = qs.toString()
   const res = await fetchWithTimeout(
-    `${API_URL}/distribuidora/dispatch-plans/${planId}/dashboard`,
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/dashboard${q ? `?${q}` : ""}`,
     { headers: getAuthHeaders(), signal },
-    DEFAULT_FETCH_TIMEOUT_MS,
+    DASHBOARD_FETCH_TIMEOUT_MS,
   )
   if (!res.ok) {
     const msg = await res.text().catch(() => "")
@@ -1954,34 +1963,68 @@ export async function downloadDispatchPlanBillingExcel(planId: number): Promise<
   URL.revokeObjectURL(url)
 }
 
+export type DispatchPlanPickingClientResponse = {
+  dispatch_plan_id: number
+  clients: unknown[]
+  degraded?: boolean
+}
+
+export type DispatchPlanPickingProductResponse = {
+  dispatch_plan_id: number
+  items: unknown[]
+  degraded?: boolean
+}
+
+export async function getDispatchPlanPickingCliente(
+  planId: number,
+  opts?: { validate?: boolean; signal?: AbortSignal },
+): Promise<DispatchPlanPickingClientResponse> {
+  const qs = new URLSearchParams()
+  qs.set("validate", opts?.validate === false ? "false" : "true")
+  const res = await fetchWithTimeout(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/picking-cliente?${qs}`,
+    { headers: getAuthHeaders(), signal: opts?.signal },
+    DASHBOARD_FETCH_TIMEOUT_MS,
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar picking por cliente")
+  }
+  return res.json() as Promise<DispatchPlanPickingClientResponse>
+}
+
+export async function getDispatchPlanPickingProducto(
+  planId: number,
+  opts?: { validate?: boolean; signal?: AbortSignal },
+): Promise<DispatchPlanPickingProductResponse> {
+  const qs = new URLSearchParams()
+  qs.set("validate", opts?.validate === false ? "false" : "true")
+  const res = await fetchWithTimeout(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/picking-producto?${qs}`,
+    { headers: getAuthHeaders(), signal: opts?.signal },
+    DASHBOARD_FETCH_TIMEOUT_MS,
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar picking por producto")
+  }
+  return res.json() as Promise<DispatchPlanPickingProductResponse>
+}
+
+/** @deprecated Usar getDispatchPlanPickingCliente */
 export async function getDispatchPlanPickingByClient(planId: number): Promise<{
   dispatch_plan_id: number
   clients: unknown[]
 }> {
-  const res = await fetch(
-    `${API_URL}/distribuidora/dispatch-plans/${planId}/picking-by-client?validate=true`,
-    { headers: getAuthHeaders() },
-  )
-  if (!res.ok) {
-    const msg = await res.text().catch(() => "")
-    throw new Error(msg || "Error al generar picking por cliente")
-  }
-  return res.json() as Promise<{ dispatch_plan_id: number; clients: unknown[] }>
+  return getDispatchPlanPickingCliente(planId)
 }
 
+/** @deprecated Usar getDispatchPlanPickingProducto */
 export async function getDispatchPlanPickingByProduct(planId: number): Promise<{
   dispatch_plan_id: number
   items: unknown[]
 }> {
-  const res = await fetch(
-    `${API_URL}/distribuidora/dispatch-plans/${planId}/picking-by-product?validate=true`,
-    { headers: getAuthHeaders() },
-  )
-  if (!res.ok) {
-    const msg = await res.text().catch(() => "")
-    throw new Error(msg || "Error al generar picking por producto")
-  }
-  return res.json() as Promise<{ dispatch_plan_id: number; items: unknown[] }>
+  return getDispatchPlanPickingProducto(planId)
 }
 
 export async function markDispatchPlanPickingGenerated(planId: number): Promise<unknown> {

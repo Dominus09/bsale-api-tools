@@ -7,14 +7,11 @@ import { ArrowLeft, Loader2, Wrench } from "lucide-react"
 
 import {
   downloadDispatchPlanBillingExcel,
-  getDispatchPlanInvoicedDocuments,
-  getDispatchPlanPickingByClient,
-  getDispatchPlanPickingByProduct,
-  markDispatchPlanPickingGenerated,
   repairDispatchPlanSnapshot,
   type DispatchPlanDashboard,
   type DispatchPlanSummary,
 } from "@/lib/api"
+import { DispatchPlanDetailTabs } from "@/components/distribuidora/planificacion/DispatchPlanDetailTabs"
 import {
   fetchDispatchPlanDashboardDeduped,
   fetchDispatchPlanHeaderDeduped,
@@ -22,11 +19,38 @@ import {
   logFrontendPlanDebug,
   trackPlanPageRender,
 } from "@/lib/planificacion-fetch"
-import { DispatchPlanInvoicingDashboard } from "@/components/distribuidora/planificacion/DispatchPlanInvoicingDashboard"
 import { formatClp } from "@/lib/ors-map-ui"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+
+function emptyDashboardFromPlan(plan: DispatchPlanSummary): DispatchPlanDashboard {
+  return {
+    plan,
+    invoicing: {
+      total_orders: 0,
+      total_oc_amount_clp: 0,
+      confirmed: { count: 0, amount_clp: 0 },
+      probable: { count: 0, amount_clp: 0 },
+      pending: { count: 0, amount_clp: 0 },
+    },
+    invoiced_items: [],
+    warnings: [
+      {
+        oc_document_id: 0,
+        message: "No se pudo cargar el dashboard de facturación.",
+      },
+    ],
+    probable_notes: [],
+    margin: null,
+    picking: {
+      client_endpoint: `/distribuidora/dispatch-plans/${plan.id}/picking-by-client`,
+      product_endpoint: `/distribuidora/dispatch-plans/${plan.id}/picking-by-product`,
+      ready: false,
+    },
+    degraded: true,
+  }
+}
 
 export default function PlanificacionDetallePage() {
   const params = useParams()
@@ -79,7 +103,18 @@ export default function PlanificacionDetallePage() {
           planning_id: planId,
           phase: "dashboard",
         })
-        const dash = await fetchDispatchPlanDashboardDeduped(planId, ac.signal)
+        let dash: DispatchPlanDashboard
+        try {
+          dash = await fetchDispatchPlanDashboardDeduped(planId, ac.signal)
+        } catch (dashErr: unknown) {
+          if (ac.signal.aborted) return
+          logFrontendPlanDebug("dispatch-plans-dashboard", {
+            planning_id: planId,
+            fallback: "empty",
+            error: dashErr instanceof Error ? dashErr.message : String(dashErr),
+          })
+          dash = emptyDashboardFromPlan(headerPlan)
+        }
         if (ac.signal.aborted) return
         setDashboard(dash)
       } catch (e: unknown) {
@@ -98,15 +133,24 @@ export default function PlanificacionDetallePage() {
     }
   }, [planId])
 
-  const reloadDashboard = async () => {
+  const reloadDashboard = async (opts?: { include_margin?: boolean }) => {
     if (!Number.isFinite(planId) || planId <= 0) return
     invalidateDashboardCache(planId)
     setDashboardLoading(true)
     try {
-      const dash = await fetchDispatchPlanDashboardDeduped(planId)
+      const dash = await fetchDispatchPlanDashboardDeduped(planId, undefined, {
+        include_margin: opts?.include_margin,
+        force: true,
+      })
       setDashboard(dash)
+      setError(null)
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Error")
+      if (plan) {
+        setDashboard(emptyDashboardFromPlan(plan))
+        setMsg(e instanceof Error ? e.message : "No se pudo actualizar facturación")
+      } else {
+        setError(e instanceof Error ? e.message : "Error")
+      }
     } finally {
       setDashboardLoading(false)
     }
@@ -235,97 +279,31 @@ export default function PlanificacionDetallePage() {
             </div>
           </div>
 
+          {dashboard?.degraded ? (
+            <Alert variant="default" className="border-amber-200 bg-amber-50/80 dark:border-amber-900 dark:bg-amber-950/30">
+              <AlertTitle>Facturación parcial</AlertTitle>
+              <AlertDescription className="text-sm">
+                El encabezado del plan cargó correctamente, pero facturación o métricas no
+                estuvieron disponibles. Puede usar los botones inferiores para reintentar.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
           {dashboardLoading && !dashboard ? (
             <div className="flex items-center gap-2 rounded-lg border border-dashed border-border px-4 py-8 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" aria-hidden />
               Cargando facturación y métricas…
             </div>
           ) : dashboard ? (
-            <DispatchPlanInvoicingDashboard data={dashboard} />
+            <DispatchPlanDetailTabs
+              planId={planId}
+              dashboard={dashboard}
+              dashboardLoading={dashboardLoading}
+              pickingReady={Boolean(dashboard.picking?.ready)}
+              onReloadDashboard={reloadDashboard}
+              onMessage={setMsg}
+            />
           ) : null}
-
-          <div className="flex flex-wrap gap-2 border-t pt-4">
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              disabled={!!busy || dashboardLoading}
-              onClick={() => void reloadDashboard()}
-            >
-              Actualizar facturación
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              disabled={!!busy || !dashboard?.picking.ready}
-              onClick={() =>
-                void (async () => {
-                  setBusy("inv")
-                  try {
-                    const r = await getDispatchPlanInvoicedDocuments(planId)
-                    setMsg(
-                      `Facturación: ${r.summary.confirmed} confirmadas, ${r.summary.probable} probables, ${r.summary.missing} pendientes.`,
-                    )
-                  } catch (e: unknown) {
-                    setMsg(e instanceof Error ? e.message : "Error")
-                  } finally {
-                    setBusy(null)
-                  }
-                })()
-              }
-            >
-              Revisar facturación
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              disabled={!!busy || !dashboard?.picking.ready}
-              onClick={() =>
-                void (async () => {
-                  setBusy("pc")
-                  try {
-                    const r = await getDispatchPlanPickingByClient(planId)
-                    await markDispatchPlanPickingGenerated(planId)
-                    setMsg(
-                      `Picking cliente: ${(r.clients as unknown[]).length} paradas (docs reales).`,
-                    )
-                    await reloadDashboard()
-                  } catch (e: unknown) {
-                    setMsg(e instanceof Error ? e.message : "Error picking")
-                  } finally {
-                    setBusy(null)
-                  }
-                })()
-              }
-            >
-              Picking cliente
-            </Button>
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              disabled={!!busy || !dashboard?.picking.ready}
-              onClick={() =>
-                void (async () => {
-                  setBusy("pp")
-                  try {
-                    const r = await getDispatchPlanPickingByProduct(planId)
-                    setMsg(
-                      `Picking producto: ${(r.items as unknown[]).length} líneas consolidadas.`,
-                    )
-                  } catch (e: unknown) {
-                    setMsg(e instanceof Error ? e.message : "Error picking")
-                  } finally {
-                    setBusy(null)
-                  }
-                })()
-              }
-            >
-              Picking producto
-            </Button>
-          </div>
         </>
       ) : !headerLoading ? (
         <p className="text-sm text-muted-foreground">Plan no encontrado o sin datos.</p>
