@@ -15,7 +15,8 @@ import { getApiOrigin } from "@/lib/api-base"
  * (NEXT_PUBLIC_API_URL / default), si no los fetch del front fallan.
  *
  * img-src incluye el host del logo en Vercel Blob usado en la home.
- * img-src incluye CARTO basemaps (Leaflet Mapa Rutero / distribuidora).
+ * img-src incluye CARTO basemaps (Leaflet Mapa Rutero / distribuidora) y OSM tiles
+ * (operaciones recorrido / mapa operacional: {s}.tile.openstreetmap.org).
  *
  * default-src 'none' NO sale de este repo. Si el navegador lo muestra, lo añade el proxy
  * (p. ej. Cloudflare Transform Rules): hay que quitar esa regla; varias CSP se aplican todas.
@@ -26,7 +27,7 @@ function contentSecurityPolicy(): string {
     "default-src 'self'",
     "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://static.cloudflareinsights.com",
     `connect-src 'self' https://static.cloudflareinsights.com https://cloudflareinsights.com ${apiOrigin}`,
-    "img-src 'self' data: blob: https://hebbkx1anhila5yf.public.blob.vercel-storage.com https://*.basemaps.cartocdn.com https://cartodb-basemaps-a.global.ssl.fastly.net https://cartodb-basemaps-b.global.ssl.fastly.net https://cartodb-basemaps-c.global.ssl.fastly.net https://cartodb-basemaps-d.global.ssl.fastly.net",
+    "img-src 'self' data: blob: https://hebbkx1anhila5yf.public.blob.vercel-storage.com https://*.tile.openstreetmap.org https://tile.openstreetmap.org https://*.basemaps.cartocdn.com https://cartodb-basemaps-a.global.ssl.fastly.net https://cartodb-basemaps-b.global.ssl.fastly.net https://cartodb-basemaps-c.global.ssl.fastly.net https://cartodb-basemaps-d.global.ssl.fastly.net",
     "style-src 'self' 'unsafe-inline'",
     "font-src 'self' data:",
   ].join("; ")
