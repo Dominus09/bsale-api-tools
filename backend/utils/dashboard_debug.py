@@ -15,8 +15,6 @@ def log_dashboard_debug(
     planning_id: int,
     duration_ms: float,
     invoice_rows: int,
-    picking_client_rows: int,
-    picking_product_rows: int,
     payload_bytes: int,
     include_margin: bool = False,
     include_items: bool = False,
@@ -26,16 +24,13 @@ def log_dashboard_debug(
         "planning_id=%s\n"
         "duration_ms=%.0f\n"
         "invoice_rows=%s\n"
-        "picking_client_rows=%s\n"
-        "picking_product_rows=%s\n"
         "payload_bytes=%s\n"
         "include_margin=%s\n"
-        "include_items=%s",
+        "include_items=%s\n"
+        "picking_counts=deferred (use /picking-cliente /picking-producto)",
         planning_id,
         duration_ms,
         invoice_rows,
-        picking_client_rows,
-        picking_product_rows,
         payload_bytes,
         include_margin,
         include_items,

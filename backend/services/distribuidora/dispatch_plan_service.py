@@ -35,6 +35,8 @@ from backend.utils.ors_stability import (
     log_error,
 )
 from backend.utils.dashboard_stage import (
+    PICKING_CLIENT_COUNT_SQL,
+    PICKING_PRODUCT_COUNT_SQL,
     DashboardStageRun,
     dashboard_connection,
     log_repo_end,
@@ -546,16 +548,8 @@ def count_picking_client_rows(
     *,
     stage_run: DashboardStageRun | None = None,
 ) -> int:
-    """Conteo liviano (no carga líneas ni payload de picking)."""
-    sql = """
-            SELECT COUNT(*)::int
-            FROM distribuidora.dispatch_plan_orders dpo
-            INNER JOIN distribuidora.v_dispatch_plan_invoiced_documents inv
-                ON inv.dispatch_plan_id = dpo.dispatch_plan_id
-               AND inv.oc_document_id = dpo.oc_document_id
-               AND inv.status = 'confirmed'
-            WHERE dpo.dispatch_plan_id = %s
-            """
+    """Conteo liviano; no usar en GET /dashboard (lento: join a vista facturación)."""
+    sql = PICKING_CLIENT_COUNT_SQL
 
     def _run(cur: Any) -> int:
         cur.execute(sql, (plan_id,))
@@ -585,27 +579,8 @@ def count_picking_product_rows(
     *,
     stage_run: DashboardStageRun | None = None,
 ) -> int:
-    """Filas consolidadas por producto (misma agrupación que picking-by-product)."""
-    sql = """
-            SELECT COUNT(*)::int
-            FROM (
-                SELECT 1
-                FROM distribuidora.dispatch_plan_orders dpo
-                INNER JOIN distribuidora.v_dispatch_plan_invoiced_documents inv
-                    ON inv.dispatch_plan_id = dpo.dispatch_plan_id
-                   AND inv.oc_document_id = dpo.oc_document_id
-                   AND inv.status = 'confirmed'
-                INNER JOIN distribuidora.document_details dd
-                    ON dd.document_id = inv.related_document_id
-                LEFT JOIN bsale.products_master pm
-                    ON pm.barcode = NULLIF(BTRIM(dd.variant_code), '')
-                WHERE dpo.dispatch_plan_id = %s
-                GROUP BY
-                    COALESCE(pm.product_type_name, 'Sin tipo'),
-                    dd.variant_description,
-                    NULLIF(BTRIM(dd.variant_code), '')
-            ) g
-            """
+    """Filas consolidadas por producto; no usar en GET /dashboard."""
+    sql = PICKING_PRODUCT_COUNT_SQL
 
     def _run(cur: Any) -> int:
         cur.execute(sql, (plan_id,))
@@ -709,7 +684,7 @@ def _build_plan_dashboard(
     show_margin = role in MARGIN_VIEW_ROLES
     if can_calc_margin:
         if stage_run:
-            stage_run.log_stage(4, "load_margin")
+            stage_run.log_stage("margin", "load_margin")
         try:
             with plan_detail_step(
                 endpoint,
@@ -762,7 +737,7 @@ def _build_plan_dashboard(
     )
 
     if stage_run:
-        stage_run.log_stage(5, "build_response")
+        stage_run.log_stage(4, "build_response")
 
     payload = {
         "plan": plan,
@@ -806,7 +781,6 @@ def get_plan_dashboard(
 ) -> dict[str, Any]:
     """Dashboard del plan."""
     endpoint = "GET /dispatch-plans/{id}/dashboard"
-    ctx = log_plan_debug_context(plan_id, endpoint)
     log_plan_detail_debug(endpoint, planning_id=plan_id, query="start")
     if stage_run:
         stage_run.log_stage(2, "load_header")
@@ -841,7 +815,12 @@ def get_plan_dashboard(
     except ValueError:
         raise
     except Exception as exc:
-        plan_debug_on_error(endpoint, plan_id, exc, ctx)
+        plan_debug_on_error(
+            endpoint,
+            plan_id,
+            exc,
+            log_plan_debug_context(plan_id, endpoint),
+        )
         log_plan_detail_debug(
             endpoint,
             planning_id=plan_id,

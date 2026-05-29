@@ -15,6 +15,52 @@ logger = logging.getLogger(__name__)
 DASHBOARD_STATEMENT_TIMEOUT = "30s"
 SQL_SLOW_MS = 500.0
 
+# Referencia para optimización (NO ejecutar en GET /dashboard).
+PICKING_CLIENT_COUNT_SQL = """
+SELECT COUNT(*)::int
+FROM distribuidora.dispatch_plan_orders dpo
+INNER JOIN distribuidora.v_dispatch_plan_invoiced_documents inv
+    ON inv.dispatch_plan_id = dpo.dispatch_plan_id
+   AND inv.oc_document_id = dpo.oc_document_id
+   AND inv.status = 'confirmed'
+WHERE dpo.dispatch_plan_id = %s
+""".strip()
+
+PICKING_PRODUCT_COUNT_SQL = """
+SELECT COUNT(*)::int
+FROM (
+    SELECT 1
+    FROM distribuidora.dispatch_plan_orders dpo
+    INNER JOIN distribuidora.v_dispatch_plan_invoiced_documents inv
+        ON inv.dispatch_plan_id = dpo.dispatch_plan_id
+       AND inv.oc_document_id = dpo.oc_document_id
+       AND inv.status = 'confirmed'
+    INNER JOIN distribuidora.document_details dd
+        ON dd.document_id = inv.related_document_id
+    LEFT JOIN bsale.products_master pm
+        ON pm.barcode = NULLIF(BTRIM(dd.variant_code), '')
+    WHERE dpo.dispatch_plan_id = %s
+    GROUP BY
+        COALESCE(pm.product_type_name, 'Sin tipo'),
+        dd.variant_description,
+        NULLIF(BTRIM(dd.variant_code), '')
+) g
+""".strip()
+
+
+def log_picking_count_sql_reference(plan_id: int) -> None:
+    """Solo log; no ejecuta (evita bloquear dashboard por métricas de picking)."""
+    logger.info(
+        "[DASHBOARD_PICKING_SQL_REF] plan_id=%s metric=picking_client_count\n%s",
+        plan_id,
+        PICKING_CLIENT_COUNT_SQL,
+    )
+    logger.info(
+        "[DASHBOARD_PICKING_SQL_REF] plan_id=%s metric=picking_product_count\n%s",
+        plan_id,
+        PICKING_PRODUCT_COUNT_SQL,
+    )
+
 
 class DashboardStageRun:
     """Marca etapas del dashboard con tiempo acumulado desde el inicio del request."""

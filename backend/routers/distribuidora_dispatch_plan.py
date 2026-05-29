@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from backend.services.distribuidora import dispatch_plan_service as svc
 from backend.utils.auth_staff import BearerDep, decode_staff_token, require_staff_user
 from backend.utils.dashboard_debug import log_dashboard_debug
-from backend.utils.dashboard_stage import DashboardStageRun
+from backend.utils.dashboard_stage import DashboardStageRun, log_picking_count_sql_reference
 from backend.utils.ors_stability import log_error
 from backend.utils.plan_debug import PLAN_DEBUG_RERAISE, log_plan_debug_context, plan_debug_on_error
 
@@ -158,8 +158,8 @@ def get_plan_dashboard(
     """Solo facturación y métricas; pickings en /picking-cliente y /picking-producto."""
     stage_run = DashboardStageRun(plan_id)
     stage_run.log_stage(1, "start_endpoint")
-    stage_run.log_stage("1a", "plan_debug_context")
-    ctx = log_plan_debug_context(plan_id, "GET /dispatch-plans/{id}/dashboard")
+    log_picking_count_sql_reference(plan_id)
+    ctx: dict[str, Any] | None = None
     role: str | None = None
     if authorization:
         try:
@@ -167,13 +167,7 @@ def get_plan_dashboard(
         except HTTPException:
             role = None
     t0 = time.perf_counter()
-    picking_client_rows = 0
-    picking_product_rows = 0
     try:
-        stage_run.log_stage("1b", "picking_client_count")
-        picking_client_rows = svc.count_picking_client_rows(plan_id, stage_run=stage_run)
-        stage_run.log_stage("1c", "picking_product_count")
-        picking_product_rows = svc.count_picking_product_rows(plan_id, stage_run=stage_run)
         result = svc.get_plan_dashboard(
             plan_id,
             user_role=role,
@@ -186,6 +180,7 @@ def get_plan_dashboard(
     except Exception as exc:
         stuck = stage_run.last_stage or "unknown"
         stuck_label = stage_run.last_label or "unknown"
+        ctx = log_plan_debug_context(plan_id, "GET /dispatch-plans/{id}/dashboard")
         plan_debug_on_error("GET /dispatch-plans/{id}/dashboard", plan_id, exc, ctx)
         log_error(
             "GET /dispatch-plans/dashboard",
@@ -209,11 +204,13 @@ def get_plan_dashboard(
             plan,
             degraded_message=f"Error al cargar dashboard: {exc}",
         )
-    stage_run.log_stage(6, "response_ready")
+    stage_run.log_stage(5, "response_ready")
     duration_ms = (time.perf_counter() - t0) * 1000.0
     try:
         payload_bytes = len(json.dumps(result, default=str).encode("utf-8"))
     except Exception as json_exc:
+        if ctx is None:
+            ctx = log_plan_debug_context(plan_id, "GET /dispatch-plans/{id}/dashboard")
         plan_debug_on_error(
             "GET /dispatch-plans/{id}/dashboard#json",
             plan_id,
@@ -231,8 +228,6 @@ def get_plan_dashboard(
         planning_id=plan_id,
         duration_ms=duration_ms,
         invoice_rows=invoice_rows,
-        picking_client_rows=picking_client_rows,
-        picking_product_rows=picking_product_rows,
         payload_bytes=payload_bytes,
         include_margin=include_margin,
         include_items=include_items,
@@ -303,8 +298,6 @@ def _picking_by_client_handler(plan_id: int, validate: bool) -> dict[str, Any]:
         planning_id=plan_id,
         duration_ms=duration_ms,
         invoice_rows=0,
-        picking_client_rows=len(clients),
-        picking_product_rows=0,
         payload_bytes=payload_bytes,
     )
     return result
@@ -338,8 +331,6 @@ def _picking_by_product_handler(plan_id: int, validate: bool) -> dict[str, Any]:
         planning_id=plan_id,
         duration_ms=duration_ms,
         invoice_rows=0,
-        picking_client_rows=0,
-        picking_product_rows=len(items),
         payload_bytes=payload_bytes,
     )
     return result
