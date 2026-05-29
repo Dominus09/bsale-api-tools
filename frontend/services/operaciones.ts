@@ -247,6 +247,23 @@ export async function downloadOperacionesGeorefExport(opts?: {
   URL.revokeObjectURL(href)
 }
 
+function parseApiErrorMessage(text: string, status: number): string {
+  try {
+    const j = JSON.parse(text) as { detail?: string | { msg?: string }[] }
+    if (typeof j.detail === "string") return j.detail
+    if (Array.isArray(j.detail) && j.detail[0]?.msg) return j.detail[0].msg
+  } catch {
+    /* texto plano */
+  }
+  return text.trim() || `HTTP ${status}`
+}
+
+export function tieneGeorefEfectiva(row: Pick<ClienteGeorefRow, "lat" | "lon">): boolean {
+  if (row.lat == null || row.lon == null) return false
+  if (row.lat === 0 && row.lon === 0) return false
+  return Number.isFinite(row.lat) && Number.isFinite(row.lon)
+}
+
 export async function patchOperacionesGeorefEstado(
   rutaId: number,
   georefEstado: "pendiente" | "aplicada",
@@ -261,7 +278,7 @@ export async function patchOperacionesGeorefEstado(
   })
   if (!res.ok) {
     const text = await res.text()
-    throw new Error(text || `HTTP ${res.status}`)
+    throw new Error(parseApiErrorMessage(text, res.status))
   }
   return res.json()
 }

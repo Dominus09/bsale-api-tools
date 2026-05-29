@@ -85,8 +85,7 @@ WHERE r.company_id = 3
   AND (
         COALESCE(r.lat_operacional, r.lat) IS NULL
      OR COALESCE(r.lon_operacional, r.lon) IS NULL
-     OR r.georef_estado = 'pendiente'
   );
 
 COMMENT ON VIEW bsale.v_clientes_sin_georef IS
-    'Pendientes de georef: sin coordenadas efectivas o estado pendiente (no clients API).';
+    'Clientes sin coordenadas efectivas (operacional o BSALE); no usa georef_estado.';

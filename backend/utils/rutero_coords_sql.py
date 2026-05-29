@@ -37,7 +37,9 @@ WHERE_SIN_GEOREF_BARE = (
     f"OR (({B_LAT})::double precision = 0 AND ({B_LON})::double precision = 0))"
 )
 
-# Pendiente operacional ERP/app: sin coords efectivas o estado pendiente
-WHERE_SOLO_PENDIENTE_GEOREF_R = (
-    f"(({R_LAT}) IS NULL OR ({R_LON}) IS NULL OR r.georef_estado = 'pendiente')"
-)
+# Sin georef efectiva (misma regla que filtro geo=sin en Rutero: incluye 0,0)
+WHERE_SIN_GEOREF_EFECTIVA_R = WHERE_SIN_GEOREF_R
+
+# RETURNING tras UPDATE (sin alias de tabla)
+RET_LAT = "COALESCE(lat_operacional, lat)"
+RET_LON = "COALESCE(lon_operacional, lon)"

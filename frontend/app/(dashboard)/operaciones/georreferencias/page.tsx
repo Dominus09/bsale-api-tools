@@ -20,6 +20,7 @@ import {
   downloadOperacionesGeorefExport,
   getOperacionesGeorefPendientes,
   patchOperacionesGeorefEstado,
+  tieneGeorefEfectiva,
   type ClienteGeorefRow,
   type GeorefPendientesResponse,
 } from "@/services/operaciones"
@@ -40,9 +41,8 @@ function GeorefEstadoBadge({ estado }: { estado: string }) {
   )
 }
 
-function isPendienteOperacional(row: ClienteGeorefRow) {
-  const sinCoords = row.lat == null || row.lon == null
-  return sinCoords || String(row.georef_estado).toLowerCase() === "pendiente"
+function isPendienteGeoref(row: ClienteGeorefRow) {
+  return !tieneGeorefEfectiva(row)
 }
 
 function KpiCard({ label, value, accent }: { label: string; value: number; accent?: string }) {
@@ -87,6 +87,10 @@ export default function OperacionesGeorreferenciasPage() {
 
   async function onEstado(row: ClienteGeorefRow, estado: "pendiente" | "aplicada") {
     setActionError(null)
+    if (estado === "aplicada" && !tieneGeorefEfectiva(row)) {
+      setActionError("No se puede marcar aplicada sin georreferencia.")
+      return
+    }
     setBusyId(row.ruta_id)
     try {
       await patchOperacionesGeorefEstado(row.ruta_id, estado)
@@ -104,7 +108,7 @@ export default function OperacionesGeorreferenciasPage() {
     try {
       await downloadOperacionesGeorefExport({
         vendedor: vendedor || undefined,
-        solo_pendientes: soloPendientes,
+        solo_pendientes: true,
       })
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Error al exportar")
@@ -205,8 +209,9 @@ export default function OperacionesGeorreferenciasPage() {
               </TableHeader>
               <TableBody>
                 {(data?.items ?? []).map((row) => {
-                  const pendiente = isPendienteOperacional(row)
+                  const pendiente = isPendienteGeoref(row)
                   const estado = String(row.georef_estado).toLowerCase()
+                  const puedeAplicada = tieneGeorefEfectiva(row)
                   return (
                     <TableRow
                       key={row.ruta_id}
@@ -233,7 +238,12 @@ export default function OperacionesGeorreferenciasPage() {
                           <Button
                             size="sm"
                             variant="outline"
-                            disabled={busyId === row.ruta_id}
+                            disabled={busyId === row.ruta_id || !puedeAplicada}
+                            title={
+                              !puedeAplicada
+                                ? "No se puede marcar aplicada sin georreferencia."
+                                : undefined
+                            }
                             onClick={() => onEstado(row, "aplicada")}
                           >
                             Marcar aplicada

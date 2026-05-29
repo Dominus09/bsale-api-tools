@@ -14,8 +14,10 @@ from backend.utils.rutero_coords_sql import (
     R_LAT_AS,
     R_LON,
     R_LON_AS,
+    RET_LAT,
+    RET_LON,
     WHERE_HAS_GEOREF_R,
-    WHERE_SOLO_PENDIENTE_GEOREF_R,
+    WHERE_SIN_GEOREF_EFECTIVA_R,
 )
 
 logger = logging.getLogger(__name__)
@@ -106,7 +108,7 @@ def get_georef_resumen(vendedor_codigo: str | None = None) -> dict[str, int]:
             SELECT
                 COUNT(*)::int AS total,
                 COUNT(*) FILTER (
-                    WHERE {WHERE_SOLO_PENDIENTE_GEOREF_R}
+                    WHERE {WHERE_SIN_GEOREF_EFECTIVA_R}
                 )::int AS pendientes,
                 COUNT(*) FILTER (
                     WHERE r.georef_estado = 'capturada'
@@ -143,8 +145,8 @@ def list_georef_erp(
     """
     Listado panel ERP.
 
-    - ``solo_pendientes=True``: sin coords efectivas o ``georef_estado = pendiente``.
-    - ``solo_pendientes=False``: pendientes + capturados + aplicados (seguimiento).
+    - ``solo_pendientes=True``: sin coordenadas efectivas (NULL o 0,0).
+    - ``solo_pendientes=False``: sin georef + capturados + aplicados (seguimiento).
     """
     conn = get_connection()
     try:
@@ -159,11 +161,11 @@ def list_georef_erp(
             params.extend(v_params)
 
         if solo_pendientes:
-            wheres.append(WHERE_SOLO_PENDIENTE_GEOREF_R)
+            wheres.append(WHERE_SIN_GEOREF_EFECTIVA_R)
         else:
             wheres.append(
                 "(r.georef_estado IN ('capturada', 'aplicada') "
-                f"OR {WHERE_SOLO_PENDIENTE_GEOREF_R})"
+                f"OR {WHERE_SIN_GEOREF_EFECTIVA_R})"
             )
 
         cur.execute(
@@ -245,7 +247,7 @@ def list_georef_operativa(
             params.extend(v_params)
 
         if solo_pendientes:
-            wheres.append(WHERE_SOLO_PENDIENTE_GEOREF_R)
+            wheres.append(WHERE_SIN_GEOREF_EFECTIVA_R)
 
         cur.execute(
             f"""
@@ -261,6 +263,18 @@ def list_georef_operativa(
         return rows
     finally:
         conn.close()
+
+
+def _coords_efectivas_validas(lat, lon) -> bool:
+    if lat is None or lon is None:
+        return False
+    try:
+        la, lo = float(lat), float(lon)
+    except (TypeError, ValueError):
+        return False
+    if la == 0.0 and lo == 0.0:
+        return False
+    return True
 
 
 def _fetch_rutero_vendedor(cur, rutero_id: int) -> tuple[str, str] | None:
@@ -321,8 +335,8 @@ def capturar_georef(
               AND activo = TRUE
             RETURNING
                 bsale_id::text,
-                {R_LAT},
-                {R_LON},
+                {RET_LAT},
+                {RET_LON},
                 georef_estado,
                 georef_actualizada_at,
                 georef_actualizada_por
@@ -368,6 +382,24 @@ def actualizar_estado_georef(
     try:
         cur = conn.cursor()
         _ensure_georef_schema(cur)
+
+        if est == "aplicada":
+            cur.execute(
+                f"""
+                SELECT {RET_LAT}, {RET_LON}
+                FROM bsale.rutero
+                WHERE id = %s AND company_id = 3 AND activo = TRUE
+                """,
+                (rutero_id,),
+            )
+            coords = cur.fetchone()
+            if coords is None:
+                cur.close()
+                return None
+            if not _coords_efectivas_validas(coords[0], coords[1]):
+                cur.close()
+                raise ValueError("No se puede marcar aplicada sin georreferencia.")
+
         cur.execute(
             f"""
             UPDATE bsale.rutero
@@ -380,8 +412,8 @@ def actualizar_estado_georef(
               AND activo = TRUE
             RETURNING
                 bsale_id::text,
-                {R_LAT},
-                {R_LON},
+                {RET_LAT},
+                {RET_LON},
                 georef_estado,
                 georef_actualizada_at,
                 georef_actualizada_por
