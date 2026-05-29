@@ -79,6 +79,66 @@ class VisitaTimelineItem(BaseModel):
     sync_status: str
 
 
+class VendedorDetalleMetricas(BaseModel):
+    clientes_asignados: int = 0
+    visitados: int = 0
+    incidencias: int = 0
+    km_recorridos: float = 0.0
+    primera_visita: datetime | None = None
+    ultima_visita: datetime | None = None
+    tiempo_activo_minutos: int | None = None
+    gps_puntos_recibidos: int = 0
+
+
+class RecorridoPosicion(BaseModel):
+    lat: float | None = None
+    lon: float | None = None
+    timestamp: datetime | None = None
+    fuente: str | None = None
+
+
+class RecorridoPunto(BaseModel):
+    orden: int
+    tipo: Literal["visita", "incidencia", "inicio", "gps"]
+    cliente: str | None = None
+    cliente_id: str | None = None
+    visita_id: int | None = None
+    lat: float
+    lon: float
+    timestamp: datetime | None = None
+    detalle: str | None = None
+
+
+class RecorridoGpsPunto(BaseModel):
+    lat: float
+    lon: float
+    timestamp: datetime | None = None
+
+
+class VendedorRecorridoMetricas(BaseModel):
+    clientes_asignados: int = 0
+    visitados: int = 0
+    incidencias: int = 0
+    km_recorridos: float = 0.0
+    primera_visita: datetime | None = None
+    ultima_visita: datetime | None = None
+    tiempo_activo_minutos: int | None = None
+    gps_puntos_recibidos: int = 0
+
+
+class VendedorRecorridoResponse(BaseModel):
+    vendedor_id: str
+    vendedor_nombre: str | None = None
+    fecha: date
+    ruta_id: int | None = None
+    inicio: RecorridoPosicion | None = None
+    ultima_posicion: RecorridoPosicion | None = None
+    puntos: list[RecorridoPunto] = Field(default_factory=list)
+    linea_gps: list[RecorridoGpsPunto] = Field(default_factory=list)
+    km_recorridos: float = 0.0
+    metricas: VendedorRecorridoMetricas = Field(default_factory=VendedorRecorridoMetricas)
+
+
 class VendedorDetalleResponse(BaseModel):
     codigo: str
     nombre: str
@@ -93,6 +153,7 @@ class VendedorDetalleResponse(BaseModel):
     ultima_sync: datetime | None = None
     timeline: list[VisitaTimelineItem] = Field(default_factory=list)
     incidencias: list[VisitaTimelineItem] = Field(default_factory=list)
+    metricas: VendedorDetalleMetricas = Field(default_factory=VendedorDetalleMetricas)
 
 
 class MarcadorMapa(BaseModel):
@@ -285,7 +346,7 @@ class GpsTrackRequest(BaseModel):
         raise ValueError("Se requiere lat/lng (formato single) o puntos[] (formato batch)")
 
 
-GeorefEstado = Literal["pendiente", "capturada", "aplicada"]
+GeorefEstado = Literal["pendiente", "capturada", "aplicada", "rechazada"]
 
 
 class ClienteGeorefRow(BaseModel):
@@ -302,6 +363,9 @@ class ClienteGeorefRow(BaseModel):
     georef_estado: GeorefEstado | str = "pendiente"
     georef_actualizada_at: datetime | None = None
     georef_actualizada_por: str | None = None
+    motivo_rechazo: str | None = None
+    fecha_rechazo: datetime | None = None
+    usuario_rechazo: str | None = None
 
 
 class GeorefResumen(BaseModel):
@@ -309,6 +373,7 @@ class GeorefResumen(BaseModel):
     pendientes: int = 0
     capturados: int = 0
     aplicados: int = 0
+    rechazados: int = 0
 
 
 class GeorefPendientesDebug(BaseModel):
@@ -372,11 +437,12 @@ class GeorefActualizarResponse(BaseModel):
 
 
 class GeorefEstadoPatchRequest(BaseModel):
-    """ERP: marcar aplicada o volver a pendiente."""
+    """ERP: cambiar estado de gestión georef."""
 
     ruta_id: int = Field(..., ge=1, validation_alias=AliasChoices("ruta_id", "rutero_id"))
-    georef_estado: Literal["pendiente", "aplicada"]
+    georef_estado: Literal["pendiente", "aplicada", "rechazada", "capturada"]
     actualizada_por: str | None = Field(None, max_length=50)
+    motivo_rechazo: str | None = Field(None, max_length=500)
 
 
 class GeorefEstadoPatchResponse(BaseModel):

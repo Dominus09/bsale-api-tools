@@ -16,18 +16,29 @@ ALTER TABLE bsale.rutero
 ALTER TABLE bsale.rutero
     ADD COLUMN IF NOT EXISTS georef_actualizada_por VARCHAR(50);
 
+ALTER TABLE bsale.rutero
+    ADD COLUMN IF NOT EXISTS motivo_rechazo TEXT;
+
+ALTER TABLE bsale.rutero
+    ADD COLUMN IF NOT EXISTS fecha_rechazo TIMESTAMPTZ;
+
+ALTER TABLE bsale.rutero
+    ADD COLUMN IF NOT EXISTS usuario_rechazo VARCHAR(50);
+
 DO $$
 BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint
         WHERE conname = 'chk_rutero_georef_estado'
           AND conrelid = 'bsale.rutero'::regclass
     ) THEN
-        ALTER TABLE bsale.rutero
-            ADD CONSTRAINT chk_rutero_georef_estado
-            CHECK (georef_estado IN ('pendiente', 'capturada', 'aplicada'));
+        ALTER TABLE bsale.rutero DROP CONSTRAINT chk_rutero_georef_estado;
     END IF;
+    ALTER TABLE bsale.rutero
+        ADD CONSTRAINT chk_rutero_georef_estado
+        CHECK (georef_estado IN ('pendiente', 'capturada', 'aplicada', 'rechazada'));
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
 END $$;
 
 COMMENT ON COLUMN bsale.rutero.lat IS 'Coordenadas réplica desde bsale.clients (sync_rutero).';

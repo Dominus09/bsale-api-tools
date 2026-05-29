@@ -68,6 +68,17 @@ export interface VisitaTimelineItem {
   sync_status: string
 }
 
+export interface VendedorDetalleMetricas {
+  clientes_asignados: number
+  visitados: number
+  incidencias: number
+  km_recorridos: number
+  primera_visita: string | null
+  ultima_visita: string | null
+  tiempo_activo_minutos: number | null
+  gps_puntos_recibidos: number
+}
+
 export interface VendedorDetalleResponse {
   codigo: string
   nombre: string
@@ -82,6 +93,44 @@ export interface VendedorDetalleResponse {
   ultima_sync: string | null
   timeline: VisitaTimelineItem[]
   incidencias: VisitaTimelineItem[]
+  metricas?: VendedorDetalleMetricas
+}
+
+export interface RecorridoPunto {
+  orden: number
+  tipo: "visita" | "incidencia" | "inicio" | "gps"
+  cliente: string | null
+  cliente_id: string | null
+  visita_id: number | null
+  lat: number
+  lon: number
+  timestamp: string | null
+  detalle: string | null
+}
+
+export interface VendedorRecorridoResponse {
+  vendedor_id: string
+  vendedor_nombre: string | null
+  fecha: string
+  ruta_id: number | null
+  inicio: { lat: number | null; lon: number | null; timestamp: string | null; fuente: string | null } | null
+  ultima_posicion: {
+    lat: number | null
+    lon: number | null
+    timestamp: string | null
+    fuente: string | null
+  } | null
+  puntos: RecorridoPunto[]
+  linea_gps: { lat: number; lon: number; timestamp: string | null }[]
+  km_recorridos: number
+  metricas: VendedorDetalleMetricas
+}
+
+export function getOperacionesVendedorRecorrido(codigo: string, fecha?: string) {
+  return operacionesFetch<VendedorRecorridoResponse>(
+    `/vendedor/${encodeURIComponent(codigo)}/recorrido`,
+    { fecha },
+  )
 }
 
 export interface MarcadorMapa {
@@ -184,7 +233,7 @@ export function getOperacionesMetricas(fecha?: string) {
 
 export const OPERACIONES_POLL_MS = Number(process.env.NEXT_PUBLIC_OPERACIONES_POLL_MS || "30000")
 
-export type GeorefEstado = "pendiente" | "capturada" | "aplicada"
+export type GeorefEstado = "pendiente" | "capturada" | "aplicada" | "rechazada"
 
 export interface ClienteGeorefRow {
   cliente_codigo: string
@@ -198,6 +247,9 @@ export interface ClienteGeorefRow {
   georef_estado: GeorefEstado | string
   georef_actualizada_at?: string | null
   georef_actualizada_por?: string | null
+  motivo_rechazo?: string | null
+  fecha_rechazo?: string | null
+  usuario_rechazo?: string | null
 }
 
 export interface GeorefResumen {
@@ -205,6 +257,7 @@ export interface GeorefResumen {
   pendientes: number
   capturados: number
   aplicados: number
+  rechazados?: number
 }
 
 export interface GeorefPendientesResponse {
@@ -217,12 +270,17 @@ export function getOperacionesGeorefPendientes(opts?: {
   vendedor?: string
   vista?: "erp"
   solo_pendientes?: boolean
+  estado?: GeorefEstado | ""
+  comuna?: string
 }) {
-  return operacionesFetch<GeorefPendientesResponse>("/georef-pendientes", {
+  const q: Record<string, string | undefined> = {
     vendedor: opts?.vendedor,
     vista: opts?.vista,
     solo_pendientes: opts?.solo_pendientes === false ? "false" : "true",
-  })
+    comuna: opts?.comuna || undefined,
+  }
+  if (opts?.estado) q.estado = opts.estado
+  return operacionesFetch<GeorefPendientesResponse>("/georef-pendientes", q)
 }
 
 export async function downloadOperacionesGeorefExport(opts?: {
@@ -264,9 +322,19 @@ export function tieneGeorefEfectiva(row: Pick<ClienteGeorefRow, "lat" | "lon">):
   return Number.isFinite(row.lat) && Number.isFinite(row.lon)
 }
 
+export function coordsGeorefText(row: Pick<ClienteGeorefRow, "lat" | "lon">): string | null {
+  if (!tieneGeorefEfectiva(row)) return null
+  return `${row.lat},${row.lon}`
+}
+
+export function googleMapsUrl(lat: number, lon: number) {
+  return `https://maps.google.com/?q=${lat},${lon}`
+}
+
 export async function patchOperacionesGeorefEstado(
   rutaId: number,
-  georefEstado: "pendiente" | "aplicada",
+  georefEstado: GeorefEstado | "capturada",
+  opts?: { motivo_rechazo?: string },
 ) {
   const res = await fetch(`${API_URL}/operaciones/georef-estado`, {
     method: "PATCH",
@@ -274,7 +342,11 @@ export async function patchOperacionesGeorefEstado(
       ...getAuthHeaders(),
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ ruta_id: rutaId, georef_estado: georefEstado }),
+    body: JSON.stringify({
+      ruta_id: rutaId,
+      georef_estado: georefEstado,
+      motivo_rechazo: opts?.motivo_rechazo,
+    }),
   })
   if (!res.ok) {
     const text = await res.text()

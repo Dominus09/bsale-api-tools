@@ -255,3 +255,22 @@ def load_day_stats(cur, fecha: date) -> dict[str, GpsTrackDayStats]:
             point_count=counts.get(vid, 0),
         )
     return out
+
+
+def km_for_vendedor_day(cur, vendedor_id: str, fecha: date) -> tuple[float, int]:
+    """Metros recorridos y cantidad de puntos GPS del día (Haversine)."""
+    ensure_gps_track_table(cur)
+    vid = vendedor_id.strip()
+    cur.execute(
+        """
+        SELECT lat, lng
+        FROM bsale.operaciones_gps_track
+        WHERE vendedor_id = %s
+          AND timestamp >= %s::date
+          AND timestamp < (%s::date + interval '1 day')
+        ORDER BY timestamp ASC
+        """,
+        (vid, fecha, fecha),
+    )
+    pts = [(float(r[0]), float(r[1])) for r in cur.fetchall()]
+    return km_desde_puntos(pts), len(pts)

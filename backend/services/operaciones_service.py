@@ -34,6 +34,7 @@ from backend.schemas.operaciones import (
     OperacionesDashboardResponse,
     OperacionesMetricasResponse,
     RutaMapaResponse,
+    VendedorDetalleMetricas,
     VendedorDetalleResponse,
     VendedorOperacionesRow,
     VendedorUbicacionMapa,
@@ -128,7 +129,8 @@ def _row_to_vendedor(
 
     if hb is not None:
         ultima_sync = hb.last_timestamp
-        km_m = hb.km_metros
+        if hb.km_metros > 0:
+            km_m = hb.km_metros
         if hb.lat is not None and hb.lng is not None:
             gps_lat_use, gps_lon_use = hb.lat, hb.lng
             gps_at_use = hb.last_timestamp
@@ -354,9 +356,11 @@ def get_vendedor_detalle(codigo: str, fecha: date | None = None) -> VendedorDeta
         timeline: list[VisitaTimelineItem] = []
         incidencias: list[VisitaTimelineItem] = []
         km = 0.0
+        gps_puntos = 0
         estado_conexion = "offline"
         ultima_sync = None
         pct = 0.0
+        metricas = VendedorDetalleMetricas()
 
         if ruta_id is not None:
             cur.execute(
@@ -421,12 +425,51 @@ def get_vendedor_detalle(codigo: str, fecha: date | None = None) -> VendedorDeta
         except Exception:
             hb_det = None
 
+        try:
+            from backend.services.gps_track_service import km_for_vendedor_day
+
+            km_gps, gps_puntos = km_for_vendedor_day(cur, codigo, f)
+            if km_gps > 0:
+                km = km_gps
+        except Exception as e:
+            logger.debug("km gps_track detalle vendedor=%s: %s", codigo, e)
+
         if hb_det is not None:
             ultima_sync = hb_det.last_timestamp
-            km = hb_det.km_metros
+            if hb_det.km_metros > 0 and km <= 0:
+                km = hb_det.km_metros
             est_hb = estado_conexion_desde_heartbeat(hb_det.last_timestamp, fecha_operativa=f)
             if est_hb is not None:
                 estado_conexion = est_hb  # type: ignore[assignment]
+
+        visitados_cnt = sum(1 for t in timeline if es_visita_realizada(t.estado))
+        incidencias_cnt = len(incidencias)
+        total_asignados = len(timeline)
+        ts_realizadas = [
+            t.fecha_hora_visita
+            for t in timeline
+            if t.fecha_hora_visita and (es_visita_realizada(t.estado) or t.estado == ESTADO_INCIDENCIA)
+        ]
+        primera_visita = min(ts_realizadas) if ts_realizadas else None
+        ultima_visita_ts = max(ts_realizadas) if ts_realizadas else None
+        tiempo_activo_min: int | None = None
+        if primera_visita and ultima_visita_ts:
+            try:
+                delta = ultima_visita_ts - primera_visita
+                tiempo_activo_min = max(0, int(delta.total_seconds() / 60))
+            except (TypeError, ValueError):
+                tiempo_activo_min = None
+
+        metricas = VendedorDetalleMetricas(
+            clientes_asignados=total_asignados,
+            visitados=visitados_cnt,
+            incidencias=incidencias_cnt,
+            km_recorridos=round(km / 1000.0, 2),
+            primera_visita=primera_visita,
+            ultima_visita=ultima_visita_ts,
+            tiempo_activo_minutos=tiempo_activo_min,
+            gps_puntos_recibidos=gps_puntos,
+        )
 
         cur.close()
     finally:
@@ -446,6 +489,7 @@ def get_vendedor_detalle(codigo: str, fecha: date | None = None) -> VendedorDeta
         ultima_sync=ultima_sync,
         timeline=timeline,
         incidencias=incidencias,
+        metricas=metricas,
     )
 
 

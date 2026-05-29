@@ -1,9 +1,10 @@
 "use client"
 
+import dynamic from "next/dynamic"
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import { useParams } from "next/navigation"
-import { ArrowLeft, Loader2, MapPin } from "lucide-react"
+import { ArrowLeft, Loader2 } from "lucide-react"
 
 import { EstadoConexionBadge } from "@/components/operaciones/estado-badge"
 import { Button } from "@/components/ui/button"
@@ -18,6 +19,11 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { getOperacionesVendedor, localIsoDate, type VendedorDetalleResponse } from "@/services/operaciones"
+
+const RecorridoVendedorMapa = dynamic(
+  () => import("@/components/operaciones/recorrido-vendedor-mapa"),
+  { ssr: false, loading: () => <div className="h-[420px] animate-pulse rounded-xl bg-muted" /> },
+)
 
 export default function OperacionesVendedorDetallePage() {
   const params = useParams()
@@ -45,6 +51,8 @@ export default function OperacionesVendedorDetallePage() {
     void load()
   }, [load])
 
+  const m = data?.metricas
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center gap-3">
@@ -55,14 +63,6 @@ export default function OperacionesVendedorDetallePage() {
           </Link>
         </Button>
         <Input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className="w-[160px]" />
-        {data?.ruta_id ? (
-          <Button variant="outline" size="sm" asChild>
-            <Link href={`/operaciones/mapa?ruta=${data.ruta_id}`}>
-              <MapPin className="mr-1 h-4 w-4" />
-              Mapa
-            </Link>
-          </Button>
-        ) : null}
       </div>
 
       {loading ? (
@@ -88,27 +88,66 @@ export default function OperacionesVendedorDetallePage() {
             </Card>
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-muted-foreground">Km recorridos</CardTitle>
+                <CardTitle className="text-sm text-muted-foreground">Km recorridos (GPS)</CardTitle>
               </CardHeader>
               <CardContent className="text-2xl font-bold">{data.kilometros_recorridos}</CardContent>
             </Card>
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-muted-foreground">Inicio</CardTitle>
+                <CardTitle className="text-sm text-muted-foreground">Visitados</CardTitle>
               </CardHeader>
-              <CardContent className="text-sm">
-                {data.hora_inicio ? new Date(data.hora_inicio).toLocaleString("es-CL") : "—"}
+              <CardContent className="text-2xl font-bold">
+                {m?.visitados ?? "—"} / {m?.clientes_asignados ?? "—"}
               </CardContent>
             </Card>
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-muted-foreground">Última sync</CardTitle>
+                <CardTitle className="text-sm text-muted-foreground">Puntos GPS</CardTitle>
+              </CardHeader>
+              <CardContent className="text-2xl font-bold">{m?.gps_puntos_recibidos ?? 0}</CardContent>
+            </Card>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm text-muted-foreground">Incidencias</CardTitle>
+              </CardHeader>
+              <CardContent className="text-xl font-semibold">{m?.incidencias ?? data.incidencias.length}</CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm text-muted-foreground">Primera visita</CardTitle>
               </CardHeader>
               <CardContent className="text-sm">
-                {data.ultima_sync ? new Date(data.ultima_sync).toLocaleString("es-CL") : "—"}
+                {m?.primera_visita
+                  ? new Date(m.primera_visita).toLocaleTimeString("es-CL")
+                  : data.hora_inicio
+                    ? new Date(data.hora_inicio).toLocaleString("es-CL")
+                    : "—"}
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm text-muted-foreground">Última visita</CardTitle>
+              </CardHeader>
+              <CardContent className="text-sm">
+                {m?.ultima_visita
+                  ? new Date(m.ultima_visita).toLocaleTimeString("es-CL")
+                  : "—"}
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm text-muted-foreground">Tiempo activo</CardTitle>
+              </CardHeader>
+              <CardContent className="text-sm">
+                {m?.tiempo_activo_minutos != null ? `${m.tiempo_activo_minutos} min` : "—"}
               </CardContent>
             </Card>
           </div>
+
+          <RecorridoVendedorMapa codigo={codigo} fecha={fecha} />
 
           <Card>
             <CardHeader>

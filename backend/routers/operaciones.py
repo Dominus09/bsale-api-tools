@@ -29,6 +29,7 @@ from backend.schemas.operaciones import (
     GeorefPendientesDebug,
     GeorefPendientesResponse,
     GeorefResumen,
+    VendedorRecorridoResponse,
     GpsTrackRequest,
     HeartbeatAckResponse,
     HeartbeatRequest,
@@ -40,6 +41,7 @@ from backend.schemas.operaciones import (
     VendedorDetalleResponse,
     VendedoresListResponse,
 )
+from backend.services import operaciones_recorrido_service as recorrido_service
 from backend.services import operaciones_service
 from backend.services import rutero_georef_service as georef_service
 from backend.services.visita_foto_service import path_for_key, path_for_visita_id
@@ -184,6 +186,26 @@ def get_operaciones_vendedor(
 
 
 @router.get(
+    "/vendedor/{codigo}/recorrido",
+    response_model=VendedorRecorridoResponse,
+    summary="Recorrido cronológico del día (visitas, incidencias, GPS)",
+)
+def get_operaciones_vendedor_recorrido(
+    codigo: str,
+    fecha: Annotated[date | None, Query()] = None,
+    _user: dict = Depends(require_staff_user),
+) -> VendedorRecorridoResponse:
+    try:
+        raw = recorrido_service.get_vendedor_recorrido(codigo.strip(), _parse_fecha(fecha))
+    except Exception as e:
+        logger.exception("operaciones recorrido %s: %s", codigo, e)
+        raise HTTPException(status_code=500, detail="Error al cargar recorrido") from e
+    if raw is None:
+        raise HTTPException(status_code=404, detail="Vendedor no encontrado")
+    return VendedorRecorridoResponse.model_validate(raw)
+
+
+@router.get(
     "/ruta/{ruta_id}",
     response_model=RutaMapaResponse,
     summary="Marcadores de ruta para mapa operacional",
@@ -295,6 +317,11 @@ def get_georef_pendientes(
         bool,
         Query(description="ERP: solo clientes sin georef efectiva"),
     ] = True,
+    estado: Annotated[
+        str | None,
+        Query(description="ERP: pendiente | capturada | rechazada | aplicada"),
+    ] = None,
+    comuna: Annotated[str | None, Query(description="ERP: filtrar por comuna")] = None,
     fecha: Annotated[
         date | None,
         Query(
@@ -320,6 +347,8 @@ def get_georef_pendientes(
             items = georef_service.list_georef_erp(
                 vendedor_codigo=v or None,
                 solo_pendientes=solo_pendientes,
+                estado=estado,
+                comuna=comuna,
             )
             resumen = GeorefResumen(**resumen_dict)
         else:
@@ -458,6 +487,7 @@ def patch_georef_estado(
             rutero_id=body.ruta_id,
             georef_estado=body.georef_estado,
             actualizada_por=por,
+            motivo_rechazo=body.motivo_rechazo,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
