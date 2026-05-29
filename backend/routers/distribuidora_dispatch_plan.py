@@ -15,6 +15,7 @@ from backend.services.distribuidora import dispatch_plan_service as svc
 from backend.utils.auth_staff import BearerDep, decode_staff_token, require_staff_user
 from backend.utils.dashboard_debug import log_dashboard_debug
 from backend.utils.ors_stability import log_error
+from backend.utils.plan_debug import PLAN_DEBUG_RERAISE, log_plan_debug_context, plan_debug_on_error
 
 router = APIRouter(prefix="/distribuidora/dispatch-plans", tags=["Distribuidora dispatch plan"])
 
@@ -154,6 +155,7 @@ def get_plan_dashboard(
     ),
 ):
     """Solo facturación y métricas; pickings en /picking-cliente y /picking-producto."""
+    ctx = log_plan_debug_context(plan_id, "GET /dispatch-plans/{id}/dashboard")
     role: str | None = None
     if authorization:
         try:
@@ -161,9 +163,11 @@ def get_plan_dashboard(
         except HTTPException:
             role = None
     t0 = time.perf_counter()
-    picking_client_rows = svc.count_picking_client_rows(plan_id)
-    picking_product_rows = svc.count_picking_product_rows(plan_id)
+    picking_client_rows = 0
+    picking_product_rows = 0
     try:
+        picking_client_rows = svc.count_picking_client_rows(plan_id)
+        picking_product_rows = svc.count_picking_product_rows(plan_id)
         result = svc.get_plan_dashboard(
             plan_id,
             user_role=role,
@@ -173,10 +177,16 @@ def get_plan_dashboard(
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as exc:
+        plan_debug_on_error("GET /dispatch-plans/{id}/dashboard", plan_id, exc, ctx)
         log_error("GET /dispatch-plans/dashboard", exc, planning_id=plan_id)
-        plan = svc.get_plan_header(plan_id)
+        if PLAN_DEBUG_RERAISE:
+            raise HTTPException(
+                status_code=500,
+                detail=f"{type(exc).__name__}: {exc}",
+            ) from exc
         from backend.utils.ors_stability import empty_plan_dashboard
 
+        plan = svc.get_plan_header(plan_id)
         result = empty_plan_dashboard(
             plan_id,
             plan,
@@ -185,9 +195,20 @@ def get_plan_dashboard(
     duration_ms = (time.perf_counter() - t0) * 1000.0
     try:
         payload_bytes = len(json.dumps(result, default=str).encode("utf-8"))
-    except Exception:
+    except Exception as json_exc:
+        plan_debug_on_error(
+            "GET /dispatch-plans/{id}/dashboard#json",
+            plan_id,
+            json_exc,
+            ctx,
+        )
+        if PLAN_DEBUG_RERAISE:
+            raise HTTPException(
+                status_code=500,
+                detail=f"JSON serialize: {json_exc}",
+            ) from json_exc
         payload_bytes = 0
-    invoice_rows = len(result.get("invoiced_items") or [])
+    invoice_rows = len(result.get("invoiced_items") or []) if isinstance(result, dict) else 0
     log_dashboard_debug(
         planning_id=plan_id,
         duration_ms=duration_ms,
@@ -237,13 +258,20 @@ def export_billing_excel(plan_id: int):
 
 
 def _picking_by_client_handler(plan_id: int, validate: bool) -> dict[str, Any]:
+    ctx = log_plan_debug_context(plan_id, "GET /dispatch-plans/{id}/picking-cliente")
     t0 = time.perf_counter()
     try:
         result = svc.get_picking_by_client(plan_id, validate=validate)
     except ValueError:
         raise
     except Exception as exc:
+        plan_debug_on_error("GET /dispatch-plans/{id}/picking-cliente", plan_id, exc, ctx)
         log_error("GET /dispatch-plans/picking-cliente", exc, planning_id=plan_id)
+        if PLAN_DEBUG_RERAISE:
+            raise HTTPException(
+                status_code=500,
+                detail=f"{type(exc).__name__}: {exc}",
+            ) from exc
         from backend.utils.ors_stability import empty_picking_by_client_response
 
         result = empty_picking_by_client_response(plan_id)
@@ -265,13 +293,20 @@ def _picking_by_client_handler(plan_id: int, validate: bool) -> dict[str, Any]:
 
 
 def _picking_by_product_handler(plan_id: int, validate: bool) -> dict[str, Any]:
+    ctx = log_plan_debug_context(plan_id, "GET /dispatch-plans/{id}/picking-producto")
     t0 = time.perf_counter()
     try:
         result = svc.get_picking_by_product(plan_id, validate=validate)
     except ValueError:
         raise
     except Exception as exc:
+        plan_debug_on_error("GET /dispatch-plans/{id}/picking-producto", plan_id, exc, ctx)
         log_error("GET /dispatch-plans/picking-producto", exc, planning_id=plan_id)
+        if PLAN_DEBUG_RERAISE:
+            raise HTTPException(
+                status_code=500,
+                detail=f"{type(exc).__name__}: {exc}",
+            ) from exc
         from backend.utils.ors_stability import empty_picking_by_product_response
 
         result = empty_picking_by_product_response(plan_id)

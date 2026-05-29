@@ -652,9 +652,26 @@ def update_plan_status(cur, plan_id: int, status: str) -> None:
 
 
 def list_invoiced_documents(cur, plan_id: int) -> list[dict[str, Any]]:
+    """Columnas explícitas (evita SELECT * si la vista tiene tipos problemáticos)."""
     cur.execute(
         """
-        SELECT *
+        SELECT
+            dispatch_plan_id,
+            oc_document_id,
+            oc_number,
+            route_order,
+            is_invoiced_confirmed,
+            related_document_id,
+            related_document_number,
+            related_document_type_id,
+            related_document_type_label,
+            probable_document_id,
+            probable_document_number,
+            probable_document_type_id,
+            probable_document_type_label,
+            probable_score,
+            status,
+            relation_source
         FROM distribuidora.v_dispatch_plan_invoiced_documents
         WHERE dispatch_plan_id = %s
         ORDER BY route_order ASC, oc_document_id ASC

@@ -19,7 +19,12 @@ from backend.services.distribuidora.dispatch_commercial_margin_service import (
     audit_bsale_margin_fields,
     compute_plan_commercial_margin,
 )
-from backend.utils.json_safe import serialize_row, serialize_rows
+from backend.utils.json_safe import serialize_row, serialize_rows, serialize_value
+from backend.utils.plan_debug import (
+    PLAN_DEBUG_RERAISE,
+    log_plan_debug_context,
+    plan_debug_on_error,
+)
 from backend.utils.ors_stability import (
     empty_invoicing_payload,
     empty_invoiced_documents_response,
@@ -667,7 +672,7 @@ def _build_plan_dashboard(
         inv.get("probable_notes") if isinstance(inv.get("probable_notes"), list) else []
     )
 
-    return {
+    payload = {
         "plan": plan,
         "invoicing": {
             "total_orders": len(orders),
@@ -696,6 +701,7 @@ def _build_plan_dashboard(
         },
         "degraded": False,
     }
+    return serialize_value(payload)
 
 
 def get_plan_dashboard(
@@ -705,8 +711,9 @@ def get_plan_dashboard(
     include_items: bool = False,
     include_margin: bool = False,
 ) -> dict[str, Any]:
-    """Dashboard del plan; nunca debe propagar 500 al cliente."""
+    """Dashboard del plan."""
     endpoint = "GET /dispatch-plans/{id}/dashboard"
+    ctx = log_plan_debug_context(plan_id, endpoint)
     log_plan_detail_debug(endpoint, planning_id=plan_id, query="start")
     try:
         with plan_detail_step(
@@ -738,6 +745,7 @@ def get_plan_dashboard(
     except ValueError:
         raise
     except Exception as exc:
+        plan_debug_on_error(endpoint, plan_id, exc, ctx)
         log_plan_detail_debug(
             endpoint,
             planning_id=plan_id,
@@ -745,13 +753,17 @@ def get_plan_dashboard(
             error=repr(exc),
         )
         log_error(endpoint, exc, planning_id=plan_id)
-        return empty_plan_dashboard(
-            plan_id,
-            plan,
-            degraded_message=(
-                "No se pudo cargar facturación o métricas completas; "
-                "se muestran valores en cero."
-            ),
+        if PLAN_DEBUG_RERAISE:
+            raise
+        return serialize_value(
+            empty_plan_dashboard(
+                plan_id,
+                plan,
+                degraded_message=(
+                    "No se pudo cargar facturación o métricas completas; "
+                    "se muestran valores en cero."
+                ),
+            )
         )
 
 
@@ -907,6 +919,7 @@ def _validate_picking_ready(plan_id: int) -> dict[str, Any]:
 
 def get_picking_by_client(plan_id: int, *, validate: bool = True) -> dict[str, Any]:
     endpoint = "GET /dispatch-plans/{id}/picking-by-client"
+    ctx = log_plan_debug_context(plan_id, endpoint)
     log_plan_detail_debug(endpoint, planning_id=plan_id, query="start")
     try:
         inv_check = (
@@ -995,6 +1008,7 @@ def get_picking_by_client(plan_id: int, *, validate: bool = True) -> dict[str, A
                 lines_by_doc[doc_id] = [dict(zip(lcols, r)) for r in cur.fetchall()]
         cur.close()
     except Exception as exc:
+        plan_debug_on_error(endpoint, plan_id, exc, ctx)
         log_plan_detail_debug(
             endpoint,
             planning_id=plan_id,
@@ -1002,6 +1016,8 @@ def get_picking_by_client(plan_id: int, *, validate: bool = True) -> dict[str, A
             error=repr(exc),
         )
         log_error(endpoint, exc, planning_id=plan_id)
+        if PLAN_DEBUG_RERAISE:
+            raise
         return empty_picking_by_client_response(plan_id)
     finally:
         conn.close()
@@ -1048,11 +1064,12 @@ def get_picking_by_client(plan_id: int, *, validate: bool = True) -> dict[str, A
             query="insert_picking_snapshot",
             error=repr(exc),
         )
-    return result
+    return serialize_value(result)
 
 
 def get_picking_by_product(plan_id: int, *, validate: bool = True) -> dict[str, Any]:
     endpoint = "GET /dispatch-plans/{id}/picking-by-product"
+    ctx = log_plan_debug_context(plan_id, endpoint)
     log_plan_detail_debug(endpoint, planning_id=plan_id, query="start")
     if validate:
         try:
@@ -1107,6 +1124,7 @@ def get_picking_by_product(plan_id: int, *, validate: bool = True) -> dict[str, 
             items = [_serialize(dict(zip(cols, r))) for r in cur.fetchall()]
         cur.close()
     except Exception as exc:
+        plan_debug_on_error(endpoint, plan_id, exc, ctx)
         log_plan_detail_debug(
             endpoint,
             planning_id=plan_id,
@@ -1114,6 +1132,8 @@ def get_picking_by_product(plan_id: int, *, validate: bool = True) -> dict[str, 
             error=repr(exc),
         )
         log_error(endpoint, exc, planning_id=plan_id)
+        if PLAN_DEBUG_RERAISE:
+            raise
         return empty_picking_by_product_response(plan_id)
     finally:
         conn.close()
@@ -1145,7 +1165,7 @@ def get_picking_by_product(plan_id: int, *, validate: bool = True) -> dict[str, 
             query="insert_picking_snapshot",
             error=repr(exc),
         )
-    return result
+    return serialize_value(result)
 
 
 def mark_picking_generated(plan_id: int) -> dict[str, Any]:
