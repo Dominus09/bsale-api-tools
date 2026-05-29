@@ -9,6 +9,7 @@ import {
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { PreDespachoOperationalStats } from "@/lib/pre-despacho-stats"
+import type { PurchaseInvoiceStatusFilter } from "@/lib/purchase-invoice-status"
 
 function formatClp(n: number): string {
   return new Intl.NumberFormat("es-CL", {
@@ -25,6 +26,8 @@ type KpiCardProps = {
   icon: React.ElementType
   accent?: "default" | "muted" | "green" | "yellow" | "slate"
   loading?: boolean
+  active?: boolean
+  onClick?: () => void
 }
 
 function KpiCard({
@@ -34,6 +37,8 @@ function KpiCard({
   icon: Icon,
   accent = "default",
   loading,
+  active,
+  onClick,
 }: KpiCardProps) {
   const accentBorder = {
     default: "border-border/70",
@@ -51,11 +56,17 @@ function KpiCard({
     slate: "text-slate-500 dark:text-slate-400",
   }[accent]
 
+  const Wrapper = onClick ? "button" : "div"
+
   return (
-    <div
+    <Wrapper
+      type={onClick ? "button" : undefined}
+      onClick={onClick}
       className={cn(
-        "flex min-w-[9.5rem] flex-1 flex-col gap-1 rounded-lg border bg-card/80 px-3.5 py-3 shadow-sm",
+        "flex min-w-[9.5rem] flex-1 flex-col gap-1 rounded-lg border bg-card/80 px-3.5 py-3 text-left shadow-sm transition-colors",
         accentBorder,
+        onClick && "hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        active && "ring-2 ring-primary border-primary",
       )}
     >
       <div className="flex items-center justify-between gap-2">
@@ -70,16 +81,23 @@ function KpiCard({
       {sub ? (
         <p className="text-[11px] leading-snug text-muted-foreground">{sub}</p>
       ) : null}
-    </div>
+    </Wrapper>
   )
 }
 
 type PreDespachoKpiStripProps = {
   stats: PreDespachoOperationalStats
   loading?: boolean
+  estadoResumen?: PurchaseInvoiceStatusFilter
+  onEstadoResumenChange?: (filter: PurchaseInvoiceStatusFilter) => void
 }
 
-export function PreDespachoKpiStrip({ stats, loading }: PreDespachoKpiStripProps) {
+export function PreDespachoKpiStrip({
+  stats,
+  loading,
+  estadoResumen,
+  onEstadoResumenChange,
+}: PreDespachoKpiStripProps) {
   return (
     <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
       <KpiCard
@@ -101,6 +119,10 @@ export function PreDespachoKpiStrip({ stats, loading }: PreDespachoKpiStripProps
         icon={Timer}
         accent="slate"
         loading={loading}
+        active={estadoResumen === "pending"}
+        onClick={
+          onEstadoResumenChange ? () => onEstadoResumenChange("pending") : undefined
+        }
       />
       <KpiCard
         label="Probables"
@@ -109,6 +131,10 @@ export function PreDespachoKpiStrip({ stats, loading }: PreDespachoKpiStripProps
         icon={HelpCircle}
         accent="yellow"
         loading={loading}
+        active={estadoResumen === "probable"}
+        onClick={
+          onEstadoResumenChange ? () => onEstadoResumenChange("probable") : undefined
+        }
       />
       <KpiCard
         label="Facturadas"
@@ -117,6 +143,10 @@ export function PreDespachoKpiStrip({ stats, loading }: PreDespachoKpiStripProps
         icon={FileCheck2}
         accent="green"
         loading={loading}
+        active={estadoResumen === "confirmed"}
+        onClick={
+          onEstadoResumenChange ? () => onEstadoResumenChange("confirmed") : undefined
+        }
       />
     </div>
   )

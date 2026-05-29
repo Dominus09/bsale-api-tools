@@ -6,16 +6,13 @@ import { Loader2, MapPin, Package, RefreshCw, Truck } from "lucide-react"
 
 import {
   distribuidoraTruckCapacityLabel,
-  getDistribuidoraDispatchPrepByMunicipality,
   getDistribuidoraDispatchPrepObservaciones,
   getDistribuidoraDispatchPrepPlanningRows,
-  getDistribuidoraSyncStatus,
   getDistribuidoraTrucks,
   postDistribuidoraSyncOrders,
   waitDistribuidoraTypedSyncComplete,
   type DistribuidoraDispatchPrepMunicipalityRow,
   type DistribuidoraDispatchPrepPlanningRow,
-  type DistribuidoraSyncStatusResponse,
   type DistribuidoraTruck,
 } from "@/lib/api"
 import {
@@ -57,7 +54,9 @@ import { Switch } from "@/components/ui/switch"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import {
+  aggregateDispatchPrepByMunicipality,
   computePreDespachoStats,
+  computeResumenKpis,
   filterPlanningRowsByStatus,
 } from "@/lib/pre-despacho-stats"
 import {
@@ -93,18 +92,15 @@ function formatClp(n: number): string {
   return clp.format(Number.isFinite(n) ? n : 0)
 }
 
-function syncStatusEmoji(st: string | undefined): string {
-  if (st === "running") return "🟡"
-  if (st === "error") return "🔴"
-  return "🟢"
-}
-
-function formatSyncLastRun(iso: string | null | undefined): string {
-  if (!iso) return "—"
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  return d.toLocaleString("es-CL", { dateStyle: "short", timeStyle: "short" })
-}
+const RESUMEN_ESTADO_OPTIONS: {
+  value: PurchaseInvoiceStatusFilter
+  label: string
+}[] = [
+  { value: "pending", label: "Pendientes" },
+  { value: "probable", label: "Probables" },
+  { value: "confirmed", label: "Facturadas" },
+  { value: "all", label: "Todos" },
+]
 
 /** Valor sentinela en `<select>` nativo para “sin camión”. */
 const TRUCK_UNSET = "__unset__"
@@ -134,19 +130,16 @@ export default function DistribuidoraOrdersPage() {
   const [dateFrom, setDateFrom] = useState(() => localIsoDate())
   const [dateTo, setDateTo] = useState(() => localIsoDate())
   const [onlyNotInvoiced, setOnlyNotInvoiced] = useState(true)
-  const [statusQuickFilter, setStatusQuickFilter] =
-    useState<PurchaseInvoiceStatusFilter>("all")
+  const [estadoResumen, setEstadoResumen] =
+    useState<PurchaseInvoiceStatusFilter>("pending")
   const [activeDayFilter, setActiveDayFilter] = useState<string | null>(null)
 
-  const [rows, setRows] = useState<DistribuidoraDispatchPrepMunicipalityRow[]>([])
   const [observationTexts, setObservationTexts] = useState<string[]>([])
   const [planningRows, setPlanningRows] = useState<DistribuidoraDispatchPrepPlanningRow[]>([])
   const [loading, setLoading] = useState(true)
   const [loadingSync, setLoadingSync] = useState(false)
   const [lastOrdersLoadAt, setLastOrdersLoadAt] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [syncStatus, setSyncStatus] = useState<DistribuidoraSyncStatusResponse | null>(null)
-  const [syncStatusError, setSyncStatusError] = useState<string | null>(null)
   const [trucks, setTrucks] = useState<DistribuidoraTruck[]>([])
   const [trucksError, setTrucksError] = useState<string | null>(null)
   const [planificacionFeedback, setPlanificacionFeedback] = useState<string | null>(null)
@@ -209,14 +202,7 @@ export default function DistribuidoraOrdersPage() {
       setError(null)
       try {
         const dayParam = activeDayFilter ?? undefined
-        const [byMuni, obs, plan] = await Promise.all([
-          getDistribuidoraDispatchPrepByMunicipality({
-            emission_date_from: dateFrom,
-            emission_date_to: dateTo,
-            only_not_invoiced: onlyNotInvoiced,
-            day_filter: dayParam,
-            signal,
-          }),
+        const [obs, plan] = await Promise.all([
           getDistribuidoraDispatchPrepObservaciones({
             emission_date_from: dateFrom,
             emission_date_to: dateTo,
@@ -232,7 +218,6 @@ export default function DistribuidoraOrdersPage() {
             signal,
           }),
         ])
-        setRows(byMuni.items)
         setObservationTexts(obs.items)
         setPlanningRows(plan.items ?? [])
         if (plan.has_more) {
@@ -249,7 +234,6 @@ export default function DistribuidoraOrdersPage() {
       } catch (e: unknown) {
         if (e instanceof Error && e.name === "AbortError") return
         setError(e instanceof Error ? e.message : "Error al cargar datos")
-        setRows([])
         setObservationTexts([])
         setPlanningRows([])
       } finally {
@@ -265,41 +249,10 @@ export default function DistribuidoraOrdersPage() {
     return () => ac.abort()
   }, [loadDispatchPrep])
 
-  const loadSyncStatus = useCallback(async (signal?: AbortSignal) => {
-    try {
-      const s = await getDistribuidoraSyncStatus({ signal })
-      setSyncStatus(s)
-      setSyncStatusError(null)
-    } catch (e: unknown) {
-      if (e instanceof Error && e.name === "AbortError") return
-      setSyncStatus(null)
-      setSyncStatusError(e instanceof Error ? e.message : "No se pudo leer el estado de sync.")
-    }
-  }, [])
-
-  useEffect(() => {
-    const ac = new AbortController()
-    void loadSyncStatus(ac.signal)
-    const id = window.setInterval(() => {
-      void loadSyncStatus()
-    }, 30_000)
-    return () => {
-      ac.abort()
-      window.clearInterval(id)
-    }
-  }, [loadSyncStatus])
-
   const onSyncOrdersFromBsale = useCallback(async () => {
     const ac = new AbortController()
     setLoadingSync(true)
-    let baseline: string | null = null
     try {
-      try {
-        const st0 = await getDistribuidoraSyncStatus({ signal: ac.signal })
-        baseline = st0.orders.last_run ?? null
-      } catch {
-        baseline = null
-      }
       const r = await postDistribuidoraSyncOrders({ signal: ac.signal })
       if (!r.ok) {
         toast({
@@ -311,11 +264,10 @@ export default function DistribuidoraOrdersPage() {
       }
       await waitDistribuidoraTypedSyncComplete({
         branch: "orders",
-        baselineLastRun: baseline,
+        baselineLastRun: null,
         signal: ac.signal,
       })
       await loadDispatchPrep(ac.signal)
-      await loadSyncStatus(ac.signal)
       toast({
         title: "Órdenes actualizadas",
         description:
@@ -332,7 +284,7 @@ export default function DistribuidoraOrdersPage() {
     } finally {
       setLoadingSync(false)
     }
-  }, [loadDispatchPrep, loadSyncStatus])
+  }, [loadDispatchPrep])
 
   const tagStats = useMemo(
     () => aggregateObservationTags(observationTexts),
@@ -345,19 +297,12 @@ export default function DistribuidoraOrdersPage() {
     setActiveDayFilter((prev) => (prev === token ? null : token))
   }, [])
 
-  const kpis = useMemo(() => {
-    let pedidos = 0
-    let ventas = 0
-    for (const r of rows) {
-      pedidos += Number(r.pedidos) || 0
-      ventas += Number(r.total_ventas) || 0
-    }
-    return {
-      comunas: rows.length,
-      pedidos,
-      ventas,
-    }
-  }, [rows])
+  const resumenRows = useMemo(
+    () => aggregateDispatchPrepByMunicipality(planningRows, estadoResumen),
+    [planningRows, estadoResumen],
+  )
+
+  const kpis = useMemo(() => computeResumenKpis(resumenRows), [resumenRows])
 
   const operationalStats = useMemo(
     () => computePreDespachoStats(planningRows),
@@ -396,8 +341,8 @@ export default function DistribuidoraOrdersPage() {
   }, [planningRows])
 
   const filteredPlanningRows = useMemo(
-    () => filterPlanningRowsByStatus(planningRows, statusQuickFilter),
-    [planningRows, statusQuickFilter],
+    () => filterPlanningRowsByStatus(planningRows, estadoResumen),
+    [planningRows, estadoResumen],
   )
 
   const validTruckIdSet = useMemo(
@@ -724,7 +669,12 @@ export default function DistribuidoraOrdersPage() {
         </div>
       </header>
 
-      <PreDespachoKpiStrip stats={operationalStats} loading={loading} />
+      <PreDespachoKpiStrip
+        stats={operationalStats}
+        loading={loading}
+        estadoResumen={estadoResumen}
+        onEstadoResumenChange={setEstadoResumen}
+      />
 
       {error ? (
         <Alert variant="destructive">
@@ -733,51 +683,7 @@ export default function DistribuidoraOrdersPage() {
         </Alert>
       ) : null}
 
-      {syncStatusError ? (
-        <p className="text-xs text-amber-700 dark:text-amber-400">{syncStatusError}</p>
-      ) : null}
-      {syncStatus ? (
-        <div className="rounded-lg border border-border/70 bg-muted/30 px-4 py-3 text-sm">
-          <p className="font-medium text-foreground">
-            {syncStatusEmoji(syncStatus.orders.status)} Sync órdenes (Bsale tipo 33)
-            {syncStatus.orders.status === "running"
-              ? " — ejecutando"
-              : syncStatus.orders.status === "error"
-                ? " — error"
-                : " — OK"}
-            {syncStatus.sync_lock_active ? " · lock activo" : ""}
-          </p>
-          <ul className="mt-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
-            <li>
-              Última actualización:{" "}
-              <span className="text-foreground">{formatSyncLastRun(syncStatus.orders.last_run)}</span>
-            </li>
-            <li>
-              Procesados (último ciclo):{" "}
-              <span className="tabular-nums text-foreground">{syncStatus.orders.processed}</span>
-            </li>
-            <li>
-              OC visibles (ventana último sync):{" "}
-              <span className="tabular-nums text-foreground">{syncStatus.orders.visibles ?? 0}</span>
-            </li>
-            <li>
-              OC ocultas (con boleta/factura):{" "}
-              <span className="tabular-nums text-foreground">{syncStatus.orders.ocultas ?? 0}</span>
-            </li>
-          </ul>
-          <p className="mt-2 text-[11px] text-muted-foreground">
-            Actualización automática del estado cada 30 s.
-          </p>
-        </div>
-      ) : null}
-
       <section className="rounded-lg border border-border/70 bg-card p-4 shadow-sm md:p-5">
-        {loadingSync ? (
-          <p className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="size-3.5 animate-spin" aria-hidden />
-            Sincronizando órdenes de compra desde Bsale (tipo 33)…
-          </p>
-        ) : null}
         {lastOrdersLoadAt ? (
           <p className="mb-3 text-xs text-muted-foreground">
             Datos cargados: {lastOrdersLoadAt}
@@ -836,6 +742,30 @@ export default function DistribuidoraOrdersPage() {
         </div>
       </section>
 
+      <div className="flex flex-wrap items-end gap-4">
+        <div className="space-y-2">
+          <Label htmlFor="resumen-estado">Estado resumen</Label>
+          <Select
+            value={estadoResumen}
+            onValueChange={(v) =>
+              setEstadoResumen(v as PurchaseInvoiceStatusFilter)
+            }
+            disabled={loading}
+          >
+            <SelectTrigger id="resumen-estado" className="h-9 w-[180px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {RESUMEN_ESTADO_OPTIONS.map((o) => (
+                <SelectItem key={o.value} value={o.value}>
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
       <div className="grid gap-3 sm:grid-cols-3">
         <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2.5 text-sm">
           <span className="text-xs text-muted-foreground">Comunas</span>
@@ -876,7 +806,7 @@ export default function DistribuidoraOrdersPage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.length === 0 && !loading ? (
+                {resumenRows.length === 0 && !loading ? (
                   <tr>
                     <td
                       colSpan={4}
@@ -886,7 +816,7 @@ export default function DistribuidoraOrdersPage() {
                     </td>
                   </tr>
                 ) : (
-                  rows.map((r) => (
+                  resumenRows.map((r) => (
                     <tr
                       key={r.municipality}
                       className={cn(
@@ -1030,8 +960,8 @@ export default function DistribuidoraOrdersPage() {
             </Alert>
           ) : null}
           <PreDespachoStatusChips
-            value={statusQuickFilter}
-            onChange={setStatusQuickFilter}
+            value={estadoResumen}
+            onChange={setEstadoResumen}
             counts={statusFilterCounts}
             disabled={loading}
           />
