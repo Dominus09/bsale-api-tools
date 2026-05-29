@@ -13,7 +13,8 @@ export default function OperacionesMapaPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Mapa operacional</h1>
         <p className="text-sm text-muted-foreground">
-          Abra desde la tabla de vendedores o use <code className="text-xs">?ruta=ID</code>
+          Vista global de vendedores activos con última posición. Use{" "}
+          <code className="text-xs">?ruta=ID</code> para una ruta puntual.
         </p>
       </div>
       <MapaOperacionalClient />

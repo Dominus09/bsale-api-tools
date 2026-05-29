@@ -10,7 +10,8 @@ from typing import Any
 
 from backend.db import get_connection
 from backend.services.gps_track_service import ensure_gps_track_table, km_for_vendedor_day
-from backend.services.heartbeat_service import _ensure_utc, load_snapshots
+from backend.services.heartbeat_service import _ensure_utc, ensure_heartbeat_table, load_snapshots
+from backend.services.operaciones_km_service import km_ruta_planificada
 from backend.services.operaciones_visitas import ESTADO_INCIDENCIA, es_visita_realizada
 
 logger = logging.getLogger(__name__)
@@ -180,7 +181,54 @@ def get_vendedor_recorrido(codigo: str, fecha: date | None = None) -> dict[str, 
             for r in gps_rows
         ]
 
+        ensure_heartbeat_table(cur)
+        cur.execute(
+            """
+            SELECT lat, lng, timestamp
+            FROM bsale.operaciones_heartbeat
+            WHERE vendedor_id = %s
+              AND timestamp >= %s::date
+              AND timestamp < (%s::date + interval '1 day')
+              AND lat IS NOT NULL AND lng IS NOT NULL
+            ORDER BY timestamp ASC
+            """,
+            (cod, f, f),
+        )
+        hb_rows = cur.fetchall()
+        linea_heartbeat = [
+            {"lat": float(r[0]), "lon": float(r[1]), "timestamp": _ensure_utc(r[2])}
+            for r in hb_rows
+        ]
+        heartbeat_count = len(hb_rows)
+
         km_m, _ = km_for_vendedor_day(cur, cod, f)
+        km_plan_m = km_ruta_planificada(cur, ruta_id)
+        km_gps_k = round(km_m / 1000.0, 2)
+        km_plan_k = round(km_plan_m / 1000.0, 2)
+        desviacion_km = round(km_gps_k - km_plan_k, 2)
+
+        intervalos: list[dict[str, Any]] = []
+        visitas_ts = [
+            e for e in eventos if e["tipo"] == "visita" and e.get("timestamp") is not None
+        ]
+        visitas_ts.sort(key=lambda e: _ts_key(e.get("timestamp")))
+        for i in range(1, len(visitas_ts)):
+            a, b = visitas_ts[i - 1], visitas_ts[i]
+            mins = max(0, int((_ts_key(b["timestamp"]) - _ts_key(a["timestamp"])) / 60))
+            intervalos.append(
+                {
+                    "desde_cliente": a["cliente"],
+                    "hasta_cliente": b["cliente"],
+                    "desde_ts": a["timestamp"],
+                    "hasta_ts": b["timestamp"],
+                    "minutos": mins,
+                }
+            )
+        promedio_entre_visitas: float | None = None
+        if intervalos:
+            promedio_entre_visitas = round(
+                sum(x["minutos"] for x in intervalos) / len(intervalos), 1
+            )
 
         clientes_asignados = 0
         visitados = 0
@@ -221,15 +269,26 @@ def get_vendedor_recorrido(codigo: str, fecha: date | None = None) -> dict[str, 
         "ultima_posicion": ultima,
         "puntos": puntos,
         "linea_gps": linea_gps,
-        "km_recorridos": round(km_m / 1000.0, 2),
+        "linea_heartbeat": linea_heartbeat,
+        "km_recorridos": km_gps_k,
+        "km_gps": km_gps_k,
+        "km_ruta_planificada": km_plan_k,
+        "desviacion_km": desviacion_km,
+        "intervalos_entre_visitas": intervalos,
+        "promedio_minutos_entre_visitas": promedio_entre_visitas,
         "metricas": {
             "clientes_asignados": clientes_asignados,
             "visitados": visitados,
             "incidencias": incidencias_count,
-            "km_recorridos": round(km_m / 1000.0, 2),
+            "km_recorridos": km_gps_k,
+            "km_gps": km_gps_k,
+            "km_ruta_planificada": km_plan_k,
+            "desviacion_km": desviacion_km,
             "primera_visita": primera_visita,
             "ultima_visita": ultima_visita,
             "tiempo_activo_minutos": tiempo_activo_min,
             "gps_puntos_recibidos": gps_count,
+            "heartbeat_puntos": heartbeat_count,
+            "promedio_minutos_entre_visitas": promedio_entre_visitas,
         },
     }

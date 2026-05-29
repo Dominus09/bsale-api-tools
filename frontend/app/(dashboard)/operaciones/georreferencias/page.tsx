@@ -26,12 +26,14 @@ import {
 import {
   coordsGeorefText,
   downloadOperacionesGeorefExport,
+  getOperacionesGeorefHistorial,
   getOperacionesGeorefPendientes,
   googleMapsUrl,
   patchOperacionesGeorefEstado,
   tieneGeorefEfectiva,
   type ClienteGeorefRow,
   type GeorefEstado,
+  type GeorefHistorialRow,
   type GeorefPendientesResponse,
 } from "@/services/operaciones"
 import { cn } from "@/lib/utils"
@@ -75,7 +77,7 @@ export default function OperacionesGeorreferenciasPage() {
   const [vendedor, setVendedor] = useState("")
   const [comuna, setComuna] = useState("")
   const [filtroEstado, setFiltroEstado] = useState<string>("")
-  const [soloPendientes, setSoloPendientes] = useState(true)
+  const [soloPendientes, setSoloPendientes] = useState(false)
   const [data, setData] = useState<GeorefPendientesResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -84,6 +86,8 @@ export default function OperacionesGeorreferenciasPage() {
   const [actionError, setActionError] = useState<string | null>(null)
   const [rechazoId, setRechazoId] = useState<number | null>(null)
   const [motivoRechazo, setMotivoRechazo] = useState("")
+  const [historialId, setHistorialId] = useState<number | null>(null)
+  const [historial, setHistorial] = useState<GeorefHistorialRow[]>([])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -206,11 +210,21 @@ export default function OperacionesGeorreferenciasPage() {
 
       {resumen ? (
         <div className="grid gap-3 grid-cols-2 sm:grid-cols-5">
-          <KpiCard label="Total clientes" value={resumen.total} />
-          <KpiCard label="Pendientes georef" value={resumen.pendientes} accent="text-amber-700" />
-          <KpiCard label="Capturados" value={resumen.capturados} accent="text-sky-700" />
-          <KpiCard label="Rechazados" value={resumen.rechazados ?? 0} accent="text-red-700" />
-          <KpiCard label="Aplicados" value={resumen.aplicados} accent="text-emerald-700" />
+          <button type="button" onClick={() => { setFiltroEstado("pendiente"); setSoloPendientes(false) }}>
+            <KpiCard label="Pendientes georef" value={resumen.pendientes} accent="text-amber-700" />
+          </button>
+          <button type="button" onClick={() => { setFiltroEstado("capturada"); setSoloPendientes(false) }}>
+            <KpiCard label="Capturadas (revisión)" value={resumen.capturados} accent="text-sky-700" />
+          </button>
+          <button type="button" onClick={() => { setFiltroEstado("rechazada"); setSoloPendientes(false) }}>
+            <KpiCard label="Rechazadas" value={resumen.rechazados ?? 0} accent="text-red-700" />
+          </button>
+          <button type="button" onClick={() => { setFiltroEstado("aplicada"); setSoloPendientes(false) }}>
+            <KpiCard label="Aplicadas" value={resumen.aplicados} accent="text-emerald-700" />
+          </button>
+          <button type="button" onClick={() => { setFiltroEstado(""); setSoloPendientes(false) }}>
+            <KpiCard label="Total rutero" value={resumen.total} />
+          </button>
         </div>
       ) : null}
 
@@ -387,17 +401,47 @@ export default function OperacionesGeorreferenciasPage() {
                               Rechazar
                             </Button>
                           ) : null}
-                          {estado !== "pendiente" ? (
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              disabled={busyId === row.ruta_id}
-                              onClick={() => onEstado(row, "pendiente")}
-                            >
-                              Volver pendiente
-                            </Button>
-                          ) : null}
+                        {estado !== "pendiente" ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={busyId === row.ruta_id}
+                            onClick={() => onEstado(row, "pendiente")}
+                          >
+                            Volver pendiente
+                          </Button>
+                        ) : null}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={async () => {
+                            if (historialId === row.ruta_id) {
+                              setHistorialId(null)
+                              return
+                            }
+                            setHistorialId(row.ruta_id)
+                            const h = await getOperacionesGeorefHistorial(row.ruta_id)
+                            setHistorial(h.items)
+                          }}
+                        >
+                          Historial
+                        </Button>
                         </div>
+                        {historialId === row.ruta_id ? (
+                          <div className="mt-2 w-full text-left text-xs space-y-1 border rounded p-2 bg-muted/30">
+                            {historial.length === 0 ? (
+                              <p className="text-muted-foreground">Sin registros</p>
+                            ) : (
+                              historial.map((h) => (
+                                <p key={h.id}>
+                                  {new Date(h.fecha).toLocaleString("es-CL")} — {h.usuario}:{" "}
+                                  {h.estado_anterior ?? "—"} → {h.estado_nuevo}
+                                  {h.motivo ? ` (${h.motivo})` : ""}
+                                </p>
+                              ))
+                            )}
+                          </div>
+                        ) : null}
                         {rechazoId === row.ruta_id ? (
                           <div className="mt-2 flex gap-1 justify-end">
                             <Input

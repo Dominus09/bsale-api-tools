@@ -88,9 +88,21 @@ export default function OperacionesVendedorDetallePage() {
             </Card>
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-muted-foreground">Km recorridos (GPS)</CardTitle>
+                <CardTitle className="text-sm text-muted-foreground">Km GPS / planificado</CardTitle>
               </CardHeader>
-              <CardContent className="text-2xl font-bold">{data.kilometros_recorridos}</CardContent>
+              <CardContent className="text-sm">
+                <div className="text-xl font-bold">{m?.km_gps ?? data.kilometros_recorridos} km</div>
+                <div className="text-muted-foreground">
+                  Planificado: {m?.km_ruta_planificada ?? "—"} km
+                  {m?.desviacion_km != null ? (
+                    <span>
+                      {" "}
+                      · Desv. {m.desviacion_km >= 0 ? "+" : ""}
+                      {m.desviacion_km} km
+                    </span>
+                  ) : null}
+                </div>
+              </CardContent>
             </Card>
             <Card>
               <CardHeader className="pb-2">
@@ -139,10 +151,15 @@ export default function OperacionesVendedorDetallePage() {
             </Card>
             <Card>
               <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-muted-foreground">Tiempo activo</CardTitle>
+                <CardTitle className="text-sm text-muted-foreground">Tiempo activo / entre visitas</CardTitle>
               </CardHeader>
               <CardContent className="text-sm">
-                {m?.tiempo_activo_minutos != null ? `${m.tiempo_activo_minutos} min` : "—"}
+                {m?.tiempo_activo_minutos != null ? `${m.tiempo_activo_minutos} min activo` : "—"}
+                {m?.promedio_minutos_entre_visitas != null ? (
+                  <div className="text-muted-foreground">
+                    Prom. entre visitas: {m.promedio_minutos_entre_visitas} min
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
           </div>

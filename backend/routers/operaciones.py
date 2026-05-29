@@ -27,8 +27,10 @@ from backend.schemas.operaciones import (
     GeorefEstadoPatchRequest,
     GeorefEstadoPatchResponse,
     GeorefPendientesDebug,
+    GeorefHistorialResponse,
     GeorefPendientesResponse,
     GeorefResumen,
+    MapaGlobalResponse,
     VendedorRecorridoResponse,
     GpsTrackRequest,
     HeartbeatAckResponse,
@@ -44,6 +46,7 @@ from backend.schemas.operaciones import (
 from backend.services import operaciones_recorrido_service as recorrido_service
 from backend.services import operaciones_service
 from backend.services import rutero_georef_service as georef_service
+from backend.services.rutero_georef_historial_service import list_historial
 from backend.services.visita_foto_service import path_for_key, path_for_visita_id
 from backend.utils.auth_staff import decode_staff_token, require_staff_user
 from backend.utils.operaciones_mobile_auth import verify_operaciones_mobile_auth
@@ -206,6 +209,40 @@ def get_operaciones_vendedor_recorrido(
 
 
 @router.get(
+    "/mapa-global",
+    response_model=MapaGlobalResponse,
+    summary="Mapa operacional: todos los vendedores activos con GPS",
+)
+def get_operaciones_mapa_global(
+    fecha: Annotated[date | None, Query()] = None,
+    _user: dict = Depends(require_staff_user),
+) -> MapaGlobalResponse:
+    try:
+        return operaciones_service.get_mapa_global(_parse_fecha(fecha))
+    except Exception as e:
+        logger.exception("operaciones mapa-global: %s", e)
+        raise HTTPException(status_code=500, detail="Error al cargar mapa global") from e
+
+
+@router.get(
+    "/georef-historial/{ruta_id}",
+    response_model=GeorefHistorialResponse,
+    summary="Historial de cambios georef de un cliente rutero",
+)
+def get_georef_historial(
+    ruta_id: int,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    _user: dict = Depends(require_staff_user),
+) -> GeorefHistorialResponse:
+    try:
+        items = list_historial(ruta_id, limit=limit)
+        return GeorefHistorialResponse(ruta_id=ruta_id, items=items)
+    except Exception as e:
+        logger.exception("georef-historial ruta_id=%s: %s", ruta_id, e)
+        raise HTTPException(status_code=500, detail="Error al cargar historial georef") from e
+
+
+@router.get(
     "/ruta/{ruta_id}",
     response_model=RutaMapaResponse,
     summary="Marcadores de ruta para mapa operacional",
@@ -316,7 +353,7 @@ def get_georef_pendientes(
     solo_pendientes: Annotated[
         bool,
         Query(description="ERP: solo clientes sin georef efectiva"),
-    ] = True,
+    ] = False,
     estado: Annotated[
         str | None,
         Query(description="ERP: pendiente | capturada | rechazada | aplicada"),

@@ -73,10 +73,14 @@ export interface VendedorDetalleMetricas {
   visitados: number
   incidencias: number
   km_recorridos: number
+  km_gps: number
+  km_ruta_planificada: number
+  desviacion_km: number
   primera_visita: string | null
   ultima_visita: string | null
   tiempo_activo_minutos: number | null
   gps_puntos_recibidos: number
+  promedio_minutos_entre_visitas: number | null
 }
 
 export interface VendedorDetalleResponse {
@@ -108,6 +112,14 @@ export interface RecorridoPunto {
   detalle: string | null
 }
 
+export interface IntervaloEntreVisitas {
+  desde_cliente: string
+  hasta_cliente: string
+  desde_ts: string | null
+  hasta_ts: string | null
+  minutos: number
+}
+
 export interface VendedorRecorridoResponse {
   vendedor_id: string
   vendedor_nombre: string | null
@@ -122,8 +134,55 @@ export interface VendedorRecorridoResponse {
   } | null
   puntos: RecorridoPunto[]
   linea_gps: { lat: number; lon: number; timestamp: string | null }[]
+  linea_heartbeat: { lat: number; lon: number; timestamp: string | null }[]
   km_recorridos: number
+  km_gps: number
+  km_ruta_planificada: number
+  desviacion_km: number
+  intervalos_entre_visitas: IntervaloEntreVisitas[]
+  promedio_minutos_entre_visitas: number | null
   metricas: VendedorDetalleMetricas
+}
+
+export interface MapaGlobalVendedor {
+  codigo: string
+  nombre: string
+  lat: number
+  lon: number
+  color: string
+  estado_conexion: EstadoConexion
+  ultima_sync: string | null
+  bateria_pct: number | null
+  visitas_realizadas: number
+  incidencias: number
+  km_gps: number
+}
+
+export interface MapaGlobalResponse {
+  fecha: string
+  vendedores: MapaGlobalVendedor[]
+}
+
+export function getOperacionesMapaGlobal(fecha?: string) {
+  return operacionesFetch<MapaGlobalResponse>("/mapa-global", { fecha })
+}
+
+export interface GeorefHistorialRow {
+  id: number
+  ruta_id: number
+  estado_anterior: string | null
+  estado_nuevo: string
+  lat: number | null
+  lon: number | null
+  usuario: string | null
+  fecha: string
+  motivo: string | null
+}
+
+export function getOperacionesGeorefHistorial(rutaId: number) {
+  return operacionesFetch<{ ruta_id: number; items: GeorefHistorialRow[] }>(
+    `/georef-historial/${rutaId}`,
+  )
 }
 
 export function getOperacionesVendedorRecorrido(codigo: string, fecha?: string) {
@@ -276,7 +335,7 @@ export function getOperacionesGeorefPendientes(opts?: {
   const q: Record<string, string | undefined> = {
     vendedor: opts?.vendedor,
     vista: opts?.vista,
-    solo_pendientes: opts?.solo_pendientes === false ? "false" : "true",
+    solo_pendientes: opts?.solo_pendientes === true ? "true" : "false",
     comuna: opts?.comuna || undefined,
   }
   if (opts?.estado) q.estado = opts.estado

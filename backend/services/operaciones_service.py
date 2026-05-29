@@ -34,6 +34,8 @@ from backend.schemas.operaciones import (
     OperacionesDashboardResponse,
     OperacionesMetricasResponse,
     RutaMapaResponse,
+    MapaGlobalResponse,
+    MapaGlobalVendedor,
     VendedorDetalleMetricas,
     VendedorDetalleResponse,
     VendedorOperacionesRow,
@@ -425,12 +427,15 @@ def get_vendedor_detalle(codigo: str, fecha: date | None = None) -> VendedorDeta
         except Exception:
             hb_det = None
 
+        km_plan_m = 0.0
         try:
             from backend.services.gps_track_service import km_for_vendedor_day
+            from backend.services.operaciones_km_service import km_ruta_planificada
 
             km_gps, gps_puntos = km_for_vendedor_day(cur, codigo, f)
             if km_gps > 0:
                 km = km_gps
+            km_plan_m = km_ruta_planificada(cur, ruta_id)
         except Exception as e:
             logger.debug("km gps_track detalle vendedor=%s: %s", codigo, e)
 
@@ -460,15 +465,41 @@ def get_vendedor_detalle(codigo: str, fecha: date | None = None) -> VendedorDeta
             except (TypeError, ValueError):
                 tiempo_activo_min = None
 
+        km_gps_k = round(km / 1000.0, 2)
+        km_plan_k = round(km_plan_m / 1000.0, 2)
+        intervalos_min: list[int] = []
+        visitas_ord = sorted(
+            [
+                t
+                for t in timeline
+                if t.fecha_hora_visita
+                and (es_visita_realizada(t.estado) or t.estado == ESTADO_INCIDENCIA)
+            ],
+            key=lambda t: t.fecha_hora_visita or datetime.min.replace(tzinfo=timezone.utc),
+        )
+        for i in range(1, len(visitas_ord)):
+            try:
+                delta = visitas_ord[i].fecha_hora_visita - visitas_ord[i - 1].fecha_hora_visita  # type: ignore[operator]
+                intervalos_min.append(max(0, int(delta.total_seconds() / 60)))
+            except (TypeError, ValueError):
+                pass
+        prom_visitas = (
+            round(sum(intervalos_min) / len(intervalos_min), 1) if intervalos_min else None
+        )
+
         metricas = VendedorDetalleMetricas(
             clientes_asignados=total_asignados,
             visitados=visitados_cnt,
             incidencias=incidencias_cnt,
-            km_recorridos=round(km / 1000.0, 2),
+            km_recorridos=km_gps_k,
+            km_gps=km_gps_k,
+            km_ruta_planificada=km_plan_k,
+            desviacion_km=round(km_gps_k - km_plan_k, 2),
             primera_visita=primera_visita,
             ultima_visita=ultima_visita_ts,
             tiempo_activo_minutos=tiempo_activo_min,
             gps_puntos_recibidos=gps_puntos,
+            promedio_minutos_entre_visitas=prom_visitas,
         )
 
         cur.close()
@@ -689,3 +720,55 @@ def get_metricas(fecha: date | None = None) -> OperacionesMetricasResponse:
         dashboard=dash.kpis,
         por_vendedor=dash.vendedores_resumen,
     )
+
+
+_MAPA_COLORES = (
+    "#2563eb",
+    "#dc2626",
+    "#16a34a",
+    "#9333ea",
+    "#ea580c",
+    "#0891b2",
+    "#ca8a04",
+    "#db2777",
+    "#4f46e5",
+    "#0d9488",
+)
+
+
+def get_mapa_global(fecha: date | None = None) -> MapaGlobalResponse:
+    """Posición actual de vendedores con ruta/telemetría del día."""
+    f = fecha or date.today()
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        items = _fetch_vendedores_rows(cur, f)
+        cur.close()
+    finally:
+        conn.close()
+
+    vendedores: list[MapaGlobalVendedor] = []
+    idx = 0
+    for v in items:
+        if not v.activo:
+            continue
+        if v.gps is None or v.gps.lat is None or v.gps.lon is None:
+            continue
+        color = _MAPA_COLORES[idx % len(_MAPA_COLORES)]
+        idx += 1
+        vendedores.append(
+            MapaGlobalVendedor(
+                codigo=v.codigo,
+                nombre=v.nombre,
+                lat=float(v.gps.lat),
+                lon=float(v.gps.lon),
+                color=color,
+                estado_conexion=v.estado_conexion,
+                ultima_sync=v.ultima_sync,
+                bateria_pct=v.bateria_pct,
+                visitas_realizadas=v.visitas_realizadas,
+                incidencias=v.incidencias,
+                km_gps=v.kilometros_recorridos,
+            ),
+        )
+    return MapaGlobalResponse(fecha=f, vendedores=vendedores)

@@ -79,15 +79,27 @@ class VisitaTimelineItem(BaseModel):
     sync_status: str
 
 
+class IntervaloEntreVisitas(BaseModel):
+    desde_cliente: str
+    hasta_cliente: str
+    desde_ts: datetime | None = None
+    hasta_ts: datetime | None = None
+    minutos: int = 0
+
+
 class VendedorDetalleMetricas(BaseModel):
     clientes_asignados: int = 0
     visitados: int = 0
     incidencias: int = 0
     km_recorridos: float = 0.0
+    km_gps: float = 0.0
+    km_ruta_planificada: float = 0.0
+    desviacion_km: float = 0.0
     primera_visita: datetime | None = None
     ultima_visita: datetime | None = None
     tiempo_activo_minutos: int | None = None
     gps_puntos_recibidos: int = 0
+    promedio_minutos_entre_visitas: float | None = None
 
 
 class RecorridoPosicion(BaseModel):
@@ -99,7 +111,7 @@ class RecorridoPosicion(BaseModel):
 
 class RecorridoPunto(BaseModel):
     orden: int
-    tipo: Literal["visita", "incidencia", "inicio", "gps"]
+    tipo: Literal["visita", "incidencia", "inicio", "gps", "heartbeat"]
     cliente: str | None = None
     cliente_id: str | None = None
     visita_id: int | None = None
@@ -120,10 +132,15 @@ class VendedorRecorridoMetricas(BaseModel):
     visitados: int = 0
     incidencias: int = 0
     km_recorridos: float = 0.0
+    km_gps: float = 0.0
+    km_ruta_planificada: float = 0.0
+    desviacion_km: float = 0.0
     primera_visita: datetime | None = None
     ultima_visita: datetime | None = None
     tiempo_activo_minutos: int | None = None
     gps_puntos_recibidos: int = 0
+    heartbeat_puntos: int = 0
+    promedio_minutos_entre_visitas: float | None = None
 
 
 class VendedorRecorridoResponse(BaseModel):
@@ -135,8 +152,50 @@ class VendedorRecorridoResponse(BaseModel):
     ultima_posicion: RecorridoPosicion | None = None
     puntos: list[RecorridoPunto] = Field(default_factory=list)
     linea_gps: list[RecorridoGpsPunto] = Field(default_factory=list)
+    linea_heartbeat: list[RecorridoGpsPunto] = Field(default_factory=list)
     km_recorridos: float = 0.0
+    km_gps: float = 0.0
+    km_ruta_planificada: float = 0.0
+    desviacion_km: float = 0.0
+    intervalos_entre_visitas: list[IntervaloEntreVisitas] = Field(default_factory=list)
+    promedio_minutos_entre_visitas: float | None = None
     metricas: VendedorRecorridoMetricas = Field(default_factory=VendedorRecorridoMetricas)
+
+
+class MapaGlobalVendedor(BaseModel):
+    codigo: str
+    nombre: str
+    lat: float
+    lon: float
+    color: str
+    estado_conexion: EstadoConexion = "offline"
+    ultima_sync: datetime | None = None
+    bateria_pct: int | None = None
+    visitas_realizadas: int = 0
+    incidencias: int = 0
+    km_gps: float = 0.0
+
+
+class MapaGlobalResponse(BaseModel):
+    fecha: date
+    vendedores: list[MapaGlobalVendedor] = Field(default_factory=list)
+
+
+class GeorefHistorialRow(BaseModel):
+    id: int
+    ruta_id: int
+    estado_anterior: str | None = None
+    estado_nuevo: str
+    lat: float | None = None
+    lon: float | None = None
+    usuario: str | None = None
+    fecha: datetime
+    motivo: str | None = None
+
+
+class GeorefHistorialResponse(BaseModel):
+    ruta_id: int
+    items: list[GeorefHistorialRow] = Field(default_factory=list)
 
 
 class VendedorDetalleResponse(BaseModel):
