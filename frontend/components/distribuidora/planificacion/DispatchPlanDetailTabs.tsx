@@ -4,6 +4,8 @@ import { useCallback, useState } from "react"
 import { Loader2 } from "lucide-react"
 
 import {
+  DISPATCH_PLAN_PICKING_NO_CONFIRMED_MESSAGE,
+  DISPATCH_PLAN_PICKING_WAIT_MESSAGE,
   getDispatchPlanInvoicedDocuments,
   getDispatchPlanPickingCliente,
   getDispatchPlanPickingProducto,
@@ -22,6 +24,7 @@ type DispatchPlanDetailTabsProps = {
   dashboard: DispatchPlanDashboard
   dashboardLoading: boolean
   pickingReady: boolean
+  pickingReason?: string | null
   onReloadDashboard: (opts?: { include_margin?: boolean }) => Promise<void>
   onMessage: (msg: string) => void
 }
@@ -31,9 +34,14 @@ export function DispatchPlanDetailTabs({
   dashboard,
   dashboardLoading,
   pickingReady,
+  pickingReason,
   onReloadDashboard,
   onMessage,
 }: DispatchPlanDetailTabsProps) {
+  const pickingBlockedMessage =
+    pickingReason?.trim() ||
+    DISPATCH_PLAN_PICKING_NO_CONFIRMED_MESSAGE ||
+    DISPATCH_PLAN_PICKING_WAIT_MESSAGE
   const [tab, setTab] = useState("facturacion")
   const [busy, setBusy] = useState<string | null>(null)
   const [pickingClient, setPickingClient] = useState<DispatchPlanPickingClientResponse | null>(
@@ -51,7 +59,7 @@ export function DispatchPlanDetailTabs({
     if (pickingClientLoaded && pickingClient) return
     setPickingClientLoading(true)
     try {
-      const r = await getDispatchPlanPickingCliente(planId, { validate: pickingReady })
+      const r = await getDispatchPlanPickingCliente(planId, { validate: true })
       setPickingClient(r)
       setPickingClientLoaded(true)
     } catch (e: unknown) {
@@ -59,13 +67,13 @@ export function DispatchPlanDetailTabs({
     } finally {
       setPickingClientLoading(false)
     }
-  }, [planId, pickingReady, pickingClientLoaded, pickingClient, onMessage])
+  }, [planId, pickingClientLoaded, pickingClient, onMessage])
 
   const loadPickingProducto = useCallback(async () => {
     if (pickingProductLoaded && pickingProduct) return
     setPickingProductLoading(true)
     try {
-      const r = await getDispatchPlanPickingProducto(planId, { validate: pickingReady })
+      const r = await getDispatchPlanPickingProducto(planId, { validate: true })
       setPickingProduct(r)
       setPickingProductLoaded(true)
     } catch (e: unknown) {
@@ -73,7 +81,7 @@ export function DispatchPlanDetailTabs({
     } finally {
       setPickingProductLoading(false)
     }
-  }, [planId, pickingReady, pickingProductLoaded, pickingProduct, onMessage])
+  }, [planId, pickingProductLoaded, pickingProduct, onMessage])
 
   const onTabChange = (value: string) => {
     setTab(value)
@@ -147,8 +155,13 @@ export function DispatchPlanDetailTabs({
         {!pickingReady ? (
           <Alert>
             <AlertTitle>Picking no disponible</AlertTitle>
+            <AlertDescription className="text-sm">{pickingBlockedMessage}</AlertDescription>
+          </Alert>
+        ) : null}
+        {pickingClient?.ready === false ? (
+          <Alert variant="default">
             <AlertDescription className="text-sm">
-              Confirme facturación en Bsale antes de generar picking.
+              {pickingClient.reason ?? pickingBlockedMessage}
             </AlertDescription>
           </Alert>
         ) : null}
@@ -197,8 +210,13 @@ export function DispatchPlanDetailTabs({
         {!pickingReady ? (
           <Alert>
             <AlertTitle>Picking no disponible</AlertTitle>
+            <AlertDescription className="text-sm">{pickingBlockedMessage}</AlertDescription>
+          </Alert>
+        ) : null}
+        {pickingProduct?.ready === false ? (
+          <Alert variant="default">
             <AlertDescription className="text-sm">
-              Confirme facturación en Bsale antes de generar picking.
+              {pickingProduct.reason ?? pickingBlockedMessage}
             </AlertDescription>
           </Alert>
         ) : null}

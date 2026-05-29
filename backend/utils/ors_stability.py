@@ -42,8 +42,13 @@ def log_error(
     logger.exception("[ORS_STABILITY_DEBUG] %s", " ".join(parts))
 
 
-def empty_invoicing_payload(plan_id: int, orders: list[dict[str, Any]]) -> dict[str, Any]:
-    """Dashboard/facturación sin vista v_dispatch_plan_invoiced_documents."""
+def empty_invoicing_payload(
+    plan_id: int,
+    orders: list[dict[str, Any]],
+    *,
+    invoicing_error: str | None = None,
+) -> dict[str, Any]:
+    """Dashboard/facturación cuando fallan vista completa y consulta lite."""
     items = [
         {
             "dispatch_plan_id": plan_id,
@@ -57,6 +62,10 @@ def empty_invoicing_payload(plan_id: int, orders: list[dict[str, Any]]) -> dict[
         if o.get("oc_document_id") is not None
     ]
     n = len(items)
+    msg = (
+        invoicing_error
+        or "No se pudo consultar facturación (timeout, vista o migración pendiente)"
+    )
     return {
         "dispatch_plan_id": plan_id,
         "items": items,
@@ -70,12 +79,16 @@ def empty_invoicing_payload(plan_id: int, orders: list[dict[str, Any]]) -> dict[
             {
                 "oc_document_id": x["oc_document_id"],
                 "oc_number": x.get("oc_number"),
-                "message": "Facturación no disponible (vista o migración pendiente)",
+                "message": msg,
             }
             for x in items
         ],
         "probable_notes": [],
         "ready_for_picking": False,
+        "invoicing_unavailable": True,
+        "invoicing_error": msg,
+        "invoicing_degraded": True,
+        "invoicing_source": "unavailable",
     }
 
 
@@ -112,6 +125,8 @@ def empty_plan_dashboard(
             "client_endpoint": f"/distribuidora/dispatch-plans/{plan_id}/picking-cliente",
             "product_endpoint": f"/distribuidora/dispatch-plans/{plan_id}/picking-producto",
             "ready": False,
+            "reason": degraded_message
+            or "No se pudo cargar facturación para evaluar picking.",
         },
         "degraded": True,
     }
@@ -129,18 +144,32 @@ def empty_invoiced_documents_response(plan_id: int) -> dict[str, Any]:
     }
 
 
-def empty_picking_by_client_response(plan_id: int) -> dict[str, Any]:
+def empty_picking_by_client_response(
+    plan_id: int,
+    *,
+    reason: str | None = None,
+    ready: bool = False,
+) -> dict[str, Any]:
     return {
         "dispatch_plan_id": plan_id,
+        "ready": ready,
+        "reason": reason,
         "clients": [],
         "validation": None,
         "degraded": True,
     }
 
 
-def empty_picking_by_product_response(plan_id: int) -> dict[str, Any]:
+def empty_picking_by_product_response(
+    plan_id: int,
+    *,
+    reason: str | None = None,
+    ready: bool = False,
+) -> dict[str, Any]:
     return {
         "dispatch_plan_id": plan_id,
+        "ready": ready,
+        "reason": reason,
         "items": [],
         "degraded": True,
     }

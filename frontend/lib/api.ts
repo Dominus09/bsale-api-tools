@@ -1789,7 +1789,13 @@ export type DispatchPlanDashboard = {
     net_operational_clp?: number | null
     source?: string
   } | null
-  picking: { client_endpoint: string; product_endpoint: string; ready: boolean }
+  picking: {
+    client_endpoint: string
+    product_endpoint: string
+    ready: boolean
+    reason?: string | null
+  }
+  invoicing_source?: string
   /** true si el backend degradó la respuesta por error interno */
   degraded?: boolean
 }
@@ -1965,15 +1971,25 @@ export async function downloadDispatchPlanBillingExcel(planId: number): Promise<
 
 export type DispatchPlanPickingClientResponse = {
   dispatch_plan_id: number
+  ready?: boolean
+  reason?: string | null
   clients: unknown[]
   degraded?: boolean
 }
 
 export type DispatchPlanPickingProductResponse = {
   dispatch_plan_id: number
+  ready?: boolean
+  reason?: string | null
   items: unknown[]
   degraded?: boolean
 }
+
+export const DISPATCH_PLAN_PICKING_WAIT_MESSAGE =
+  "Los pickings estarán disponibles una vez existan documentos facturados o relacionados."
+
+export const DISPATCH_PLAN_PICKING_NO_CONFIRMED_MESSAGE =
+  "No hay documentos facturados confirmados para este plan."
 
 export async function getDispatchPlanPickingCliente(
   planId: number,
@@ -1990,7 +2006,11 @@ export async function getDispatchPlanPickingCliente(
     const msg = await res.text().catch(() => "")
     throw new Error(msg || "Error al cargar picking por cliente")
   }
-  return res.json() as Promise<DispatchPlanPickingClientResponse>
+  const data = (await res.json()) as DispatchPlanPickingClientResponse
+  if (data.ready === false && data.reason) {
+    return data
+  }
+  return data
 }
 
 export async function getDispatchPlanPickingProducto(
@@ -2008,7 +2028,11 @@ export async function getDispatchPlanPickingProducto(
     const msg = await res.text().catch(() => "")
     throw new Error(msg || "Error al cargar picking por producto")
   }
-  return res.json() as Promise<DispatchPlanPickingProductResponse>
+  const data = (await res.json()) as DispatchPlanPickingProductResponse
+  if (data.ready === false && data.reason) {
+    return data
+  }
+  return data
 }
 
 /** @deprecated Usar getDispatchPlanPickingCliente */

@@ -300,6 +300,7 @@ export default function PlanificacionDetallePage() {
               dashboard={dashboard}
               dashboardLoading={dashboardLoading}
               pickingReady={Boolean(dashboard.picking?.ready)}
+              pickingReason={dashboard.picking?.reason}
               onReloadDashboard={reloadDashboard}
               onMessage={setMsg}
             />

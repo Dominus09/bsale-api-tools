@@ -275,19 +275,16 @@ def _picking_by_client_handler(plan_id: int, validate: bool) -> dict[str, Any]:
     t0 = time.perf_counter()
     try:
         result = svc.get_picking_by_client(plan_id, validate=validate)
-    except ValueError:
-        raise
     except Exception as exc:
         plan_debug_on_error("GET /dispatch-plans/{id}/picking-cliente", plan_id, exc, ctx)
         log_error("GET /dispatch-plans/picking-cliente", exc, planning_id=plan_id)
-        if PLAN_DEBUG_RERAISE:
-            raise HTTPException(
-                status_code=500,
-                detail=f"{type(exc).__name__}: {exc}",
-            ) from exc
-        from backend.utils.ors_stability import empty_picking_by_client_response
-
-        result = empty_picking_by_client_response(plan_id)
+        result = {
+            "dispatch_plan_id": plan_id,
+            "ready": False,
+            "reason": str(exc),
+            "clients": [],
+            "degraded": True,
+        }
     duration_ms = (time.perf_counter() - t0) * 1000.0
     clients = result.get("clients") if isinstance(result.get("clients"), list) else []
     try:
@@ -308,19 +305,16 @@ def _picking_by_product_handler(plan_id: int, validate: bool) -> dict[str, Any]:
     t0 = time.perf_counter()
     try:
         result = svc.get_picking_by_product(plan_id, validate=validate)
-    except ValueError:
-        raise
     except Exception as exc:
         plan_debug_on_error("GET /dispatch-plans/{id}/picking-producto", plan_id, exc, ctx)
         log_error("GET /dispatch-plans/picking-producto", exc, planning_id=plan_id)
-        if PLAN_DEBUG_RERAISE:
-            raise HTTPException(
-                status_code=500,
-                detail=f"{type(exc).__name__}: {exc}",
-            ) from exc
-        from backend.utils.ors_stability import empty_picking_by_product_response
-
-        result = empty_picking_by_product_response(plan_id)
+        result = {
+            "dispatch_plan_id": plan_id,
+            "ready": False,
+            "reason": str(exc),
+            "items": [],
+            "degraded": True,
+        }
     duration_ms = (time.perf_counter() - t0) * 1000.0
     items = result.get("items") if isinstance(result.get("items"), list) else []
     try:
@@ -339,20 +333,14 @@ def _picking_by_product_handler(plan_id: int, validate: bool) -> dict[str, Any]:
 @router.get("/{plan_id}/picking-cliente")
 def picking_cliente(
     plan_id: int,
-    validate: bool = Query(True, description="Advertir OCs sin documento confirmado"),
+    validate: bool = Query(True, description="Si false, intenta SQL aunque no esté listo"),
 ):
-    try:
-        return _picking_by_client_handler(plan_id, validate)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    return _picking_by_client_handler(plan_id, validate)
 
 
 @router.get("/{plan_id}/picking-producto")
 def picking_producto(plan_id: int, validate: bool = Query(True)):
-    try:
-        return _picking_by_product_handler(plan_id, validate)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    return _picking_by_product_handler(plan_id, validate)
 
 
 @router.get("/{plan_id}/picking-by-client")
@@ -361,19 +349,13 @@ def picking_by_client(
     validate: bool = Query(True, description="Advertir OCs sin documento confirmado"),
 ):
     """Retrocompatible: alias de /picking-cliente."""
-    try:
-        return _picking_by_client_handler(plan_id, validate)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    return _picking_by_client_handler(plan_id, validate)
 
 
 @router.get("/{plan_id}/picking-by-product")
 def picking_by_product(plan_id: int, validate: bool = Query(True)):
     """Retrocompatible: alias de /picking-producto."""
-    try:
-        return _picking_by_product_handler(plan_id, validate)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+    return _picking_by_product_handler(plan_id, validate)
 
 
 @router.post("/{plan_id}/repair-snapshot")

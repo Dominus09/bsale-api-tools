@@ -41,7 +41,7 @@ FROM (
         ON pm.barcode = NULLIF(BTRIM(dd.variant_code), '')
     WHERE dpo.dispatch_plan_id = %s
     GROUP BY
-        COALESCE(pm.product_type_name, 'Sin tipo'),
+        COALESCE(NULLIF(BTRIM(pm.product_type), ''), 'Sin tipo'),
         dd.variant_description,
         NULLIF(BTRIM(dd.variant_code), '')
 ) g

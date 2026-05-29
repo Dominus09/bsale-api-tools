@@ -42,6 +42,20 @@ from backend.utils.dashboard_stage import (
     log_repo_end,
     log_repo_start,
 )
+from backend.utils.deadlock_debug import timed_execute
+from backend.utils.picking_readiness import (
+    PICKING_WAIT_MESSAGE,
+    evaluate_picking_readiness,
+    picking_block_from_invoicing,
+    picking_not_ready_payload,
+)
+from backend.utils.picking_sql import (
+    CAJAS_AGG_EXPR,
+    CAJAS_LINE_EXPR,
+    PM_JOIN,
+    PM_TIPO_PRODUCTO_EXPR,
+    VARIANTS_JOIN,
+)
 from backend.utils.plan_detail_debug import log_plan_detail_debug, plan_detail_step
 
 logger = logging.getLogger(__name__)
@@ -761,12 +775,9 @@ def _build_plan_dashboard(
         "warnings": warnings,
         "probable_notes": probable_notes,
         "margin": margin_block,
-        "picking": {
-            "client_endpoint": f"/distribuidora/dispatch-plans/{plan_id}/picking-cliente",
-            "product_endpoint": f"/distribuidora/dispatch-plans/{plan_id}/picking-producto",
-            "ready": bool(inv.get("ready_for_picking", False)),
-        },
-        "degraded": False,
+        "picking": picking_block_from_invoicing(plan_id, inv),
+        "degraded": bool(inv.get("invoicing_degraded")),
+        "invoicing_source": inv.get("invoicing_source"),
     }
     return serialize_value(payload)
 
@@ -842,131 +853,23 @@ def get_plan_dashboard(
         )
 
 
-def get_invoiced_documents(
+def _invoicing_payload_from_rows(
     plan_id: int,
+    rows: list[dict[str, Any]],
     *,
-    stage_run: DashboardStageRun | None = None,
+    invoicing_source: str = "full",
+    invoicing_degraded: bool = False,
+    extra_warnings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Facturación vinculada (alias operacional: /facturacion)."""
-    endpoint = "GET /dispatch-plans/{id}/invoiced-documents"
-    log_plan_detail_debug(
-        endpoint,
-        planning_id=plan_id,
-        query="v_dispatch_plan_invoiced_documents",
-    )
-
-    def _load(cur: Any) -> list[dict[str, Any]]:
-        t0 = log_repo_start(plan_id, "repo.list_invoiced_documents")
-        try:
-            rows = repo.list_invoiced_documents(cur, plan_id)
-            log_repo_end(
-                plan_id,
-                "repo.list_invoiced_documents",
-                t0,
-                rows=len(rows),
-            )
-            return rows
-        except Exception as exc:
-            log_repo_end(
-                plan_id,
-                "repo.list_invoiced_documents",
-                t0,
-                error=repr(exc),
-            )
-            raise
-
-    if stage_run:
-        try:
-            with dashboard_connection(plan_id, stage_run) as (cur, _conn):
-                t0 = log_repo_start(plan_id, "repo.get_plan_by_id")
-                plan = repo.get_plan_by_id(cur, plan_id)
-                log_repo_end(plan_id, "repo.get_plan_by_id", t0, rows=1 if plan else 0)
-                if not plan:
-                    raise ValueError("Plan no encontrado")
-                with plan_detail_step(
-                    endpoint,
-                    planning_id=plan_id,
-                    query="v_dispatch_plan_invoiced_documents",
-                ):
-                    rows = _load(cur)
-        except ValueError:
-            raise
-        except Exception as exc:
-            log_plan_detail_debug(
-                endpoint,
-                planning_id=plan_id,
-                query="list_invoiced_documents",
-                rows=0,
-                error=repr(exc),
-            )
-            log_error(endpoint, exc, planning_id=plan_id)
-            try:
-                with dashboard_connection(plan_id, stage_run) as (cur, _conn):
-                    t0 = log_repo_start(plan_id, "repo.list_plan_orders")
-                    orders = repo.list_plan_orders(cur, plan_id)
-                    log_repo_end(
-                        plan_id,
-                        "repo.list_plan_orders",
-                        t0,
-                        rows=len(orders),
-                    )
-            except Exception:
-                orders = []
-            return empty_invoicing_payload(plan_id, serialize_rows(orders))
-    else:
-        conn = get_connection()
-        try:
-            cur = conn.cursor()
-            plan = repo.get_plan_by_id(cur, plan_id)
-            if not plan:
-                raise ValueError("Plan no encontrado")
-            try:
-                with plan_detail_step(
-                    endpoint,
-                    planning_id=plan_id,
-                    query="SELECT * FROM v_dispatch_plan_invoiced_documents",
-                ):
-                    rows = repo.list_invoiced_documents(cur, plan_id)
-            except Exception as exc:
-                log_plan_detail_debug(
-                    endpoint,
-                    planning_id=plan_id,
-                    query="list_invoiced_documents",
-                    rows=0,
-                    error=repr(exc),
-                )
-                log_error(endpoint, exc, planning_id=plan_id)
-                orders = repo.list_plan_orders(cur, plan_id)
-                cur.close()
-                return empty_invoicing_payload(plan_id, serialize_rows(orders))
-            cur.close()
-        except ValueError:
-            raise
-        except Exception as exc:
-            log_plan_detail_debug(
-                endpoint,
-                planning_id=plan_id,
-                error=repr(exc),
-            )
-            log_error(endpoint, exc, planning_id=plan_id)
-            return empty_invoiced_documents_response(plan_id)
-        finally:
-            conn.close()
-
     items = serialize_rows(rows)
-    log_plan_detail_debug(
-        endpoint,
-        planning_id=plan_id,
-        query="list_invoiced_documents",
-        rows=len(items),
-    )
     summary = {
         "confirmed": sum(1 for x in items if x.get("status") == "confirmed"),
         "probable": sum(1 for x in items if x.get("status") == "probable"),
         "missing": sum(1 for x in items if x.get("status") == "missing"),
         "total": len(items),
     }
-    warnings = [
+    warnings = list(extra_warnings or [])
+    warnings.extend(
         {
             "oc_document_id": x["oc_document_id"],
             "oc_number": x.get("oc_number"),
@@ -974,7 +877,7 @@ def get_invoiced_documents(
         }
         for x in items
         if x.get("status") == "missing"
-    ]
+    )
     probable_notes = [
         {
             "oc_document_id": x["oc_document_id"],
@@ -994,7 +897,168 @@ def get_invoiced_documents(
         "warnings": warnings,
         "probable_notes": probable_notes,
         "ready_for_picking": ready and summary["confirmed"] == summary["total"],
+        "invoicing_source": invoicing_source,
+        "invoicing_degraded": invoicing_degraded,
     }
+
+
+def _load_invoiced_rows_with_fallback(
+    cur: Any,
+    plan_id: int,
+) -> tuple[list[dict[str, Any]], str, bool]:
+    """Vista completa; si falla, consulta lite por document_related."""
+    t0 = log_repo_start(plan_id, "repo.list_invoiced_documents")
+    try:
+        rows = repo.list_invoiced_documents(cur, plan_id)
+        log_repo_end(plan_id, "repo.list_invoiced_documents", t0, rows=len(rows))
+        return rows, "full", False
+    except Exception as exc_full:
+        log_repo_end(
+            plan_id,
+            "repo.list_invoiced_documents",
+            t0,
+            error=repr(exc_full),
+        )
+        logger.warning(
+            "[INVOICING_FALLBACK] plan_id=%s full_view_failed error=%s",
+            plan_id,
+            exc_full,
+        )
+    t1 = log_repo_start(plan_id, "repo.list_invoiced_documents_lite")
+    try:
+        rows = repo.list_invoiced_documents_lite(cur, plan_id)
+        log_repo_end(plan_id, "repo.list_invoiced_documents_lite", t1, rows=len(rows))
+        return rows, "lite", True
+    except Exception as exc_lite:
+        log_repo_end(
+            plan_id,
+            "repo.list_invoiced_documents_lite",
+            t1,
+            error=repr(exc_lite),
+        )
+        raise exc_lite
+
+
+def get_invoiced_documents(
+    plan_id: int,
+    *,
+    stage_run: DashboardStageRun | None = None,
+) -> dict[str, Any]:
+    """Facturación vinculada (alias operacional: /facturacion)."""
+    endpoint = "GET /dispatch-plans/{id}/invoiced-documents"
+    log_plan_detail_debug(
+        endpoint,
+        planning_id=plan_id,
+        query="v_dispatch_plan_invoiced_documents",
+    )
+
+    def _fetch(cur: Any) -> dict[str, Any]:
+        rows, source, degraded = _load_invoiced_rows_with_fallback(cur, plan_id)
+        extra: list[dict[str, Any]] = []
+        if source == "lite":
+            extra.append(
+                {
+                    "oc_document_id": 0,
+                    "oc_number": None,
+                    "message": (
+                        "Facturación en modo rápido (document_related). "
+                        "Coincidencias probables no evaluadas."
+                    ),
+                }
+            )
+        return _invoicing_payload_from_rows(
+            plan_id,
+            rows,
+            invoicing_source=source,
+            invoicing_degraded=degraded,
+            extra_warnings=extra,
+        )
+
+    if stage_run:
+        try:
+            with dashboard_connection(plan_id, stage_run) as (cur, _conn):
+                t0 = log_repo_start(plan_id, "repo.get_plan_by_id")
+                plan = repo.get_plan_by_id(cur, plan_id)
+                log_repo_end(plan_id, "repo.get_plan_by_id", t0, rows=1 if plan else 0)
+                if not plan:
+                    raise ValueError("Plan no encontrado")
+                with plan_detail_step(
+                    endpoint,
+                    planning_id=plan_id,
+                    query="invoiced_documents",
+                ):
+                    return _fetch(cur)
+        except ValueError:
+            raise
+        except Exception as exc:
+            log_plan_detail_debug(
+                endpoint,
+                planning_id=plan_id,
+                query="invoiced_documents",
+                rows=0,
+                error=repr(exc),
+            )
+            log_error(endpoint, exc, planning_id=plan_id)
+            try:
+                with dashboard_connection(plan_id, stage_run) as (cur, _conn):
+                    orders = repo.list_plan_orders(cur, plan_id)
+            except Exception:
+                orders = []
+            return empty_invoicing_payload(
+                plan_id,
+                serialize_rows(orders),
+                invoicing_error=str(exc),
+            )
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        plan = repo.get_plan_by_id(cur, plan_id)
+        if not plan:
+            raise ValueError("Plan no encontrado")
+        try:
+            with plan_detail_step(
+                endpoint,
+                planning_id=plan_id,
+                query="invoiced_documents",
+            ):
+                payload = _fetch(cur)
+        except Exception as exc:
+            log_plan_detail_debug(
+                endpoint,
+                planning_id=plan_id,
+                query="invoiced_documents",
+                rows=0,
+                error=repr(exc),
+            )
+            log_error(endpoint, exc, planning_id=plan_id)
+            orders = repo.list_plan_orders(cur, plan_id)
+            cur.close()
+            return empty_invoicing_payload(
+                plan_id,
+                serialize_rows(orders),
+                invoicing_error=str(exc),
+            )
+        cur.close()
+        log_plan_detail_debug(
+            endpoint,
+            planning_id=plan_id,
+            query="list_invoiced_documents",
+            rows=len(payload.get("items") or []),
+        )
+        return payload
+    except ValueError:
+        raise
+    except Exception as exc:
+        log_plan_detail_debug(
+            endpoint,
+            planning_id=plan_id,
+            error=repr(exc),
+        )
+        log_error(endpoint, exc, planning_id=plan_id)
+        return empty_invoiced_documents_response(plan_id)
+    finally:
+        conn.close()
 
 
 def build_billing_excel_bytes(plan_id: int) -> tuple[bytes, str]:
@@ -1049,37 +1113,7 @@ def build_billing_excel_bytes(plan_id: int) -> tuple[bytes, str]:
     return buf.getvalue(), fname
 
 
-def _validate_picking_ready(plan_id: int) -> dict[str, Any]:
-    inv = get_invoiced_documents(plan_id)
-    if inv["summary"]["confirmed"] == 0:
-        raise ValueError("No hay documentos facturados confirmados para generar picking.")
-    return inv
-
-
-def get_picking_by_client(plan_id: int, *, validate: bool = True) -> dict[str, Any]:
-    endpoint = "GET /dispatch-plans/{id}/picking-by-client"
-    ctx = log_plan_debug_context(plan_id, endpoint)
-    log_plan_detail_debug(endpoint, planning_id=plan_id, query="start")
-    try:
-        inv_check = (
-            _validate_picking_ready(plan_id) if validate else get_invoiced_documents(plan_id)
-        )
-    except ValueError:
-        raise
-    except Exception as exc:
-        log_plan_detail_debug(endpoint, planning_id=plan_id, error=repr(exc))
-        inv_check = None
-
-    conn = get_connection()
-    try:
-        cur = conn.cursor()
-        with plan_detail_step(
-            endpoint,
-            planning_id=plan_id,
-            query="picking-by-client stops SQL",
-        ):
-            cur.execute(
-            """
+_PICKING_CLIENT_SQL_VIEW = """
             SELECT
                 dpo.route_order,
                 dpo.client_id,
@@ -1109,8 +1143,133 @@ def get_picking_by_client(plan_id: int, *, validate: bool = True) -> dict[str, A
                 ON cl.company_id = 3 AND cl.bsale_id = dpo.client_id
             WHERE dpo.dispatch_plan_id = %s
             ORDER BY dpo.route_order ASC, dpo.oc_document_id ASC
-            """,
+            """
+
+_PICKING_CLIENT_SQL_LITE = """
+            SELECT
+                dpo.route_order,
+                dpo.client_id,
+                dpo.client_name,
+                dpo.fantasy_name,
+                dpo.address,
+                dpo.city,
+                NULLIF(BTRIM(cl.phone), '') AS phone,
+                st.invoicing_document_id AS related_document_id,
+                st.invoicing_number AS related_document_number,
+                CASE st.invoicing_document_type_id
+                    WHEN 1 THEN 'Boleta'
+                    WHEN 6 THEN 'Factura'
+                    ELSE NULL
+                END AS related_document_type_label,
+                d_pay.forma_pago,
+                d_pay.tipo_documento_a_generar,
+                COALESCE(NULLIF(BTRIM(d.seller_name), ''), dpo.seller_name) AS seller_name,
+                d.total_amount AS document_total,
+                d.document_type_id
+            FROM distribuidora.dispatch_plan_orders dpo
+            INNER JOIN distribuidora.v_orders_purchase_status st
+                ON st.document_id = dpo.oc_document_id
+               AND COALESCE(st.is_invoiced, FALSE) = TRUE
+            INNER JOIN distribuidora.v_documents_latest d
+                ON d.document_id = st.invoicing_document_id
+            LEFT JOIN distribuidora.v_orders_purchase d_pay
+                ON d_pay.document_id = dpo.oc_document_id
+            LEFT JOIN bsale.clients cl
+                ON cl.company_id = 3 AND cl.bsale_id = dpo.client_id
+            WHERE dpo.dispatch_plan_id = %s
+            ORDER BY dpo.route_order ASC, dpo.oc_document_id ASC
+            """
+
+_PICKING_PRODUCT_SQL_VIEW = f"""
+                SELECT
+                    {PM_TIPO_PRODUCTO_EXPR} AS tipo_producto,
+                    dd.variant_description AS producto,
+                    dd.variant_description AS variante,
+                    NULLIF(BTRIM(dd.variant_code), '') AS codigo_barras,
+                    SUM(dd.quantity) AS unidades,
+                    {CAJAS_AGG_EXPR} AS cajas,
+                    SUM(dd.total_amount) AS total_monto
+                FROM distribuidora.dispatch_plan_orders dpo
+                INNER JOIN distribuidora.v_dispatch_plan_invoiced_documents inv
+                    ON inv.dispatch_plan_id = dpo.dispatch_plan_id
+                   AND inv.oc_document_id = dpo.oc_document_id
+                   AND inv.status = 'confirmed'
+                INNER JOIN distribuidora.document_details dd
+                    ON dd.document_id = inv.related_document_id
+                {PM_JOIN}
+                {VARIANTS_JOIN}
+                WHERE dpo.dispatch_plan_id = %s
+                GROUP BY
+                    {PM_TIPO_PRODUCTO_EXPR},
+                    dd.variant_description,
+                    NULLIF(BTRIM(dd.variant_code), '')
+                ORDER BY tipo_producto, producto, codigo_barras NULLS LAST
+                """
+
+_PICKING_PRODUCT_SQL_LITE = f"""
+                SELECT
+                    {PM_TIPO_PRODUCTO_EXPR} AS tipo_producto,
+                    dd.variant_description AS producto,
+                    dd.variant_description AS variante,
+                    NULLIF(BTRIM(dd.variant_code), '') AS codigo_barras,
+                    SUM(dd.quantity) AS unidades,
+                    {CAJAS_AGG_EXPR} AS cajas,
+                    SUM(dd.total_amount) AS total_monto
+                FROM distribuidora.dispatch_plan_orders dpo
+                INNER JOIN distribuidora.v_orders_purchase_status st
+                    ON st.document_id = dpo.oc_document_id
+                   AND COALESCE(st.is_invoiced, FALSE) = TRUE
+                INNER JOIN distribuidora.document_details dd
+                    ON dd.document_id = st.invoicing_document_id
+                {PM_JOIN}
+                {VARIANTS_JOIN}
+                WHERE dpo.dispatch_plan_id = %s
+                GROUP BY
+                    {PM_TIPO_PRODUCTO_EXPR},
+                    dd.variant_description,
+                    NULLIF(BTRIM(dd.variant_code), '')
+                ORDER BY tipo_producto, producto, codigo_barras NULLS LAST
+                """
+
+
+def get_picking_by_client(plan_id: int, *, validate: bool = True) -> dict[str, Any]:
+    endpoint = "GET /dispatch-plans/{id}/picking-by-client"
+    ctx = log_plan_debug_context(plan_id, endpoint)
+    log_plan_detail_debug(endpoint, planning_id=plan_id, query="start")
+    try:
+        inv_check = get_invoiced_documents(plan_id)
+    except Exception as exc:
+        log_plan_detail_debug(endpoint, planning_id=plan_id, error=repr(exc))
+        inv_check = {
+            "summary": {"confirmed": 0, "probable": 0, "missing": 0, "total": 0},
+            "invoicing_unavailable": True,
+            "invoicing_error": str(exc),
+        }
+
+    readiness = evaluate_picking_readiness(inv_check)
+    if validate and not readiness["ready"]:
+        out = picking_not_ready_payload(plan_id, inv_check, kind="client")
+        out["ready"] = False
+        out["reason"] = readiness["reason"] or PICKING_WAIT_MESSAGE
+        return serialize_value(out)
+
+    use_lite = inv_check.get("invoicing_source") == "lite"
+    stops_sql = _PICKING_CLIENT_SQL_LITE if use_lite else _PICKING_CLIENT_SQL_VIEW
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        with plan_detail_step(
+            endpoint,
+            planning_id=plan_id,
+            query="picking-by-client stops SQL",
+        ):
+            timed_execute(
+                cur,
+                stops_sql,
                 (plan_id,),
+                plan_id=plan_id,
+                endpoint=endpoint,
             )
             cols = [c[0] for c in cur.description]
             stops = [dict(zip(cols, r)) for r in cur.fetchall()]
@@ -1120,28 +1279,28 @@ def get_picking_by_client(plan_id: int, *, validate: bool = True) -> dict[str, A
                 doc_id = int(stop["related_document_id"])
                 if doc_id in lines_by_doc:
                     continue
-                cur.execute(
-                    """
+                line_sql = f"""
                     SELECT
                         dd.line_number,
                         dd.variant_description AS producto,
                         dd.variant_description AS variante,
                         NULLIF(BTRIM(dd.variant_code), '') AS codigo_barras,
                         dd.quantity AS unidades,
-                        CASE
-                            WHEN pm.units_per_box IS NOT NULL AND pm.units_per_box > 0
-                            THEN CEIL(dd.quantity / pm.units_per_box::numeric)
-                            ELSE NULL
-                        END AS cajas,
+                        {CAJAS_LINE_EXPR} AS cajas,
                         dd.total_amount AS monto_linea,
-                        pm.product_type_name AS tipo_producto
+                        {PM_TIPO_PRODUCTO_EXPR} AS tipo_producto
                     FROM distribuidora.document_details dd
-                    LEFT JOIN bsale.products_master pm
-                        ON pm.barcode = NULLIF(BTRIM(dd.variant_code), '')
+                    {PM_JOIN}
+                    {VARIANTS_JOIN}
                     WHERE dd.document_id = %s
                     ORDER BY dd.line_number ASC NULLS LAST, dd.detail_id ASC
-                    """,
+                    """
+                timed_execute(
+                    cur,
+                    line_sql,
                     (doc_id,),
+                    plan_id=plan_id,
+                    endpoint=f"{endpoint}#lines",
                 )
                 lcols = [c[0] for c in cur.description]
                 lines_by_doc[doc_id] = [dict(zip(lcols, r)) for r in cur.fetchall()]
@@ -1157,7 +1316,15 @@ def get_picking_by_client(plan_id: int, *, validate: bool = True) -> dict[str, A
         log_error(endpoint, exc, planning_id=plan_id)
         if PLAN_DEBUG_RERAISE:
             raise
-        return empty_picking_by_client_response(plan_id)
+        return serialize_value(
+            {
+                "dispatch_plan_id": plan_id,
+                "ready": False,
+                "reason": f"No se pudo generar picking cliente: {exc}",
+                "clients": [],
+                "degraded": True,
+            }
+        )
     finally:
         conn.close()
 
@@ -1178,6 +1345,8 @@ def get_picking_by_client(plan_id: int, *, validate: bool = True) -> dict[str, A
 
     result = {
         "dispatch_plan_id": plan_id,
+        "ready": True,
+        "reason": None,
         "clients": clients,
         "validation": inv_check if validate else None,
         "degraded": False,
@@ -1210,14 +1379,25 @@ def get_picking_by_product(plan_id: int, *, validate: bool = True) -> dict[str, 
     endpoint = "GET /dispatch-plans/{id}/picking-by-product"
     ctx = log_plan_debug_context(plan_id, endpoint)
     log_plan_detail_debug(endpoint, planning_id=plan_id, query="start")
-    if validate:
-        try:
-            _validate_picking_ready(plan_id)
-        except ValueError:
-            raise
-        except Exception as exc:
-            log_plan_detail_debug(endpoint, planning_id=plan_id, error=repr(exc))
-            return empty_picking_by_product_response(plan_id)
+    try:
+        inv_check = get_invoiced_documents(plan_id)
+    except Exception as exc:
+        log_plan_detail_debug(endpoint, planning_id=plan_id, error=repr(exc))
+        inv_check = {
+            "summary": {"confirmed": 0, "probable": 0, "missing": 0, "total": 0},
+            "invoicing_unavailable": True,
+            "invoicing_error": str(exc),
+        }
+
+    readiness = evaluate_picking_readiness(inv_check)
+    if validate and not readiness["ready"]:
+        out = picking_not_ready_payload(plan_id, inv_check, kind="product")
+        out["ready"] = False
+        out["reason"] = readiness["reason"] or PICKING_WAIT_MESSAGE
+        return serialize_value(out)
+
+    use_lite = inv_check.get("invoicing_source") == "lite"
+    product_sql = _PICKING_PRODUCT_SQL_LITE if use_lite else _PICKING_PRODUCT_SQL_VIEW
 
     conn = get_connection()
     try:
@@ -1227,37 +1407,12 @@ def get_picking_by_product(plan_id: int, *, validate: bool = True) -> dict[str, 
             planning_id=plan_id,
             query="picking-by-product consolidated SQL",
         ):
-            cur.execute(
-                """
-                SELECT
-                    COALESCE(pm.product_type_name, 'Sin tipo') AS tipo_producto,
-                    dd.variant_description AS producto,
-                    dd.variant_description AS variante,
-                    NULLIF(BTRIM(dd.variant_code), '') AS codigo_barras,
-                    SUM(dd.quantity) AS unidades,
-                    CASE
-                        WHEN MAX(pm.units_per_box) IS NOT NULL AND MAX(pm.units_per_box) > 0
-                        THEN CEIL(SUM(dd.quantity) / MAX(pm.units_per_box)::numeric)
-                        ELSE NULL
-                    END AS cajas,
-                    SUM(dd.total_amount) AS total_monto
-                FROM distribuidora.dispatch_plan_orders dpo
-                INNER JOIN distribuidora.v_dispatch_plan_invoiced_documents inv
-                    ON inv.dispatch_plan_id = dpo.dispatch_plan_id
-                   AND inv.oc_document_id = dpo.oc_document_id
-                   AND inv.status = 'confirmed'
-                INNER JOIN distribuidora.document_details dd
-                    ON dd.document_id = inv.related_document_id
-                LEFT JOIN bsale.products_master pm
-                    ON pm.barcode = NULLIF(BTRIM(dd.variant_code), '')
-                WHERE dpo.dispatch_plan_id = %s
-                GROUP BY
-                    COALESCE(pm.product_type_name, 'Sin tipo'),
-                    dd.variant_description,
-                    NULLIF(BTRIM(dd.variant_code), '')
-                ORDER BY tipo_producto, producto, codigo_barras NULLS LAST
-                """,
+            timed_execute(
+                cur,
+                product_sql,
                 (plan_id,),
+                plan_id=plan_id,
+                endpoint=endpoint,
             )
             cols = [c[0] for c in cur.description]
             items = [_serialize(dict(zip(cols, r))) for r in cur.fetchall()]
@@ -1273,7 +1428,15 @@ def get_picking_by_product(plan_id: int, *, validate: bool = True) -> dict[str, 
         log_error(endpoint, exc, planning_id=plan_id)
         if PLAN_DEBUG_RERAISE:
             raise
-        return empty_picking_by_product_response(plan_id)
+        return serialize_value(
+            {
+                "dispatch_plan_id": plan_id,
+                "ready": False,
+                "reason": f"No se pudo generar picking producto: {exc}",
+                "items": [],
+                "degraded": True,
+            }
+        )
     finally:
         conn.close()
 
@@ -1282,7 +1445,13 @@ def get_picking_by_product(plan_id: int, *, validate: bool = True) -> dict[str, 
         planning_id=plan_id,
         rows=len(items),
     )
-    result = {"dispatch_plan_id": plan_id, "items": items, "degraded": False}
+    result = {
+        "dispatch_plan_id": plan_id,
+        "ready": True,
+        "reason": None,
+        "items": items,
+        "degraded": False,
+    }
     try:
         conn = get_connection()
         try:

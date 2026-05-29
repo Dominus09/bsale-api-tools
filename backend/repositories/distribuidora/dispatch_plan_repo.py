@@ -679,3 +679,48 @@ def list_invoiced_documents(cur, plan_id: int) -> list[dict[str, Any]]:
         (plan_id,),
     )
     return [dict(zip(_cols(cur), r)) for r in cur.fetchall()]
+
+
+def list_invoiced_documents_lite(cur, plan_id: int) -> list[dict[str, Any]]:
+    """
+    Facturación por document_related (v_orders_purchase_status).
+    Sin v_purchase_document_status_full — más rápido que la vista completa.
+    """
+    cur.execute(
+        """
+        SELECT
+            dpo.dispatch_plan_id,
+            dpo.oc_document_id,
+            dpo.oc_number,
+            dpo.route_order,
+            COALESCE(st.is_invoiced, FALSE) AS is_invoiced_confirmed,
+            st.invoicing_document_id AS related_document_id,
+            st.invoicing_number AS related_document_number,
+            st.invoicing_document_type_id AS related_document_type_id,
+            CASE st.invoicing_document_type_id
+                WHEN 1 THEN 'Boleta'
+                WHEN 6 THEN 'Factura'
+                ELSE NULL
+            END AS related_document_type_label,
+            NULL::bigint AS probable_document_id,
+            NULL::bigint AS probable_document_number,
+            NULL::integer AS probable_document_type_id,
+            NULL::text AS probable_document_type_label,
+            NULL::numeric AS probable_score,
+            CASE
+                WHEN COALESCE(st.is_invoiced, FALSE) THEN 'confirmed'
+                ELSE 'missing'
+            END AS status,
+            CASE
+                WHEN COALESCE(st.is_invoiced, FALSE) THEN 'relateddetailid'
+                ELSE NULL
+            END AS relation_source
+        FROM distribuidora.dispatch_plan_orders dpo
+        LEFT JOIN distribuidora.v_orders_purchase_status st
+            ON st.document_id = dpo.oc_document_id
+        WHERE dpo.dispatch_plan_id = %s
+        ORDER BY dpo.route_order ASC, dpo.oc_document_id ASC
+        """,
+        (plan_id,),
+    )
+    return [dict(zip(_cols(cur), r)) for r in cur.fetchall()]

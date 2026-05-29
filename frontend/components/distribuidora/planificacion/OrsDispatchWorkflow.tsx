@@ -178,7 +178,15 @@ export function OrsDispatchWorkflow({
             onClick={() =>
               void run("pick-client", async () => {
                 if (!planId) return
-                await getDispatchPlanPickingByClient(planId)
+                const r = await getDispatchPlanPickingByClient(planId)
+                if (r.ready === false) {
+                  setInvoiceMsg(
+                    r.reason ??
+                      "Los pickings estarán disponibles una vez existan documentos facturados o relacionados.",
+                  )
+                  setInvoiceAlert("destructive")
+                  return
+                }
                 await markDispatchPlanPickingGenerated(planId)
                 onPlanUpdated()
                 setInvoiceMsg("Picking por cliente generado (documentos reales confirmados).")
@@ -202,7 +210,15 @@ export function OrsDispatchWorkflow({
             onClick={() =>
               void run("pick-product", async () => {
                 if (!planId) return
-                await getDispatchPlanPickingByProduct(planId)
+                const r = await getDispatchPlanPickingByProduct(planId)
+                if (r.ready === false) {
+                  setInvoiceMsg(
+                    r.reason ??
+                      "Los pickings estarán disponibles una vez existan documentos facturados o relacionados.",
+                  )
+                  setInvoiceAlert("destructive")
+                  return
+                }
                 setInvoiceMsg("Picking por producto consolidado (boletas/facturas reales).")
                 setInvoiceAlert("default")
               })
