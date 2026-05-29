@@ -34,6 +34,12 @@ from backend.utils.ors_stability import (
     log_debug,
     log_error,
 )
+from backend.utils.dashboard_stage import (
+    DashboardStageRun,
+    dashboard_connection,
+    log_repo_end,
+    log_repo_start,
+)
 from backend.utils.plan_detail_debug import log_plan_detail_debug, plan_detail_step
 
 logger = logging.getLogger(__name__)
@@ -243,22 +249,41 @@ def list_session_plans(plan_session_id: str) -> list[dict[str, Any]]:
         conn.close()
 
 
-def get_plan_header(plan_id: int) -> dict[str, Any] | None:
+def get_plan_header(
+    plan_id: int,
+    *,
+    stage_run: DashboardStageRun | None = None,
+) -> dict[str, Any] | None:
     log_debug("GET /dispatch-plans/{id}/header", planning_id=plan_id)
-    conn = get_connection()
-    try:
-        cur = conn.cursor()
+
+    def _fetch(cur: Any) -> dict[str, Any] | None:
+        t0 = log_repo_start(plan_id, "repo.get_plan_header")
         try:
             plan = repo.get_plan_header(cur, plan_id)
+            log_repo_end(plan_id, "repo.get_plan_header", t0, rows=1 if plan else 0)
+            return plan
         except Exception as exc:
-            log_error("GET /dispatch-plans/{id}/header", exc, planning_id=plan_id)
-            return None
-        cur.close()
-        if not plan:
-            return None
-        return _serialize(plan)
-    finally:
-        conn.close()
+            log_repo_end(plan_id, "repo.get_plan_header", t0, error=repr(exc))
+            raise
+
+    try:
+        if stage_run:
+            with dashboard_connection(plan_id, stage_run) as (cur, _conn):
+                plan = _fetch(cur)
+        else:
+            conn = get_connection()
+            try:
+                cur = conn.cursor()
+                plan = _fetch(cur)
+                cur.close()
+            finally:
+                conn.close()
+    except Exception as exc:
+        log_error("GET /dispatch-plans/{id}/header", exc, planning_id=plan_id)
+        return None
+    if not plan:
+        return None
+    return _serialize(plan)
 
 
 def get_dispatch_plan(plan_id: int) -> dict[str, Any] | None:
@@ -401,20 +426,27 @@ def update_dispatch_plan_status(plan_id: int, status: str) -> dict[str, Any]:
     return data
 
 
-def compute_plan_margin(plan_id: int) -> dict[str, Any]:
-    conn = get_connection()
-    try:
-        cur = conn.cursor()
+def compute_plan_margin(
+    plan_id: int,
+    *,
+    stage_run: DashboardStageRun | None = None,
+) -> dict[str, Any]:
+    def _compute(cur: Any, conn: Any) -> dict[str, Any]:
+        t0 = log_repo_start(plan_id, "repo.get_plan_by_id")
         plan = repo.get_plan_by_id(cur, plan_id)
+        log_repo_end(plan_id, "repo.get_plan_by_id", t0, rows=1 if plan else 0)
         if not plan:
             raise ValueError("Plan no encontrado")
+        t1 = log_repo_start(plan_id, "compute_plan_commercial_margin")
         cm = compute_plan_commercial_margin(cur, plan_id)
+        log_repo_end(plan_id, "compute_plan_commercial_margin", t1)
         route_cost = int(plan.get("total_route_cost_clp") or 0)
         net_op = (
             int(cm.commercial_margin_clp) - route_cost
             if cm.commercial_margin_clp is not None
             else None
         )
+        t2 = log_repo_start(plan_id, "repo.update_plan_margin")
         repo.update_plan_margin(
             cur,
             plan_id,
@@ -426,10 +458,21 @@ def compute_plan_margin(plan_id: int) -> dict[str, Any]:
             margin_lines_with_cost=cm.lines_with_cost,
             margin_lines_total=cm.lines_total,
         )
+        log_repo_end(plan_id, "repo.update_plan_margin", t2)
         conn.commit()
-        cur.close()
-    finally:
-        conn.close()
+        return cm, route_cost, net_op
+
+    if stage_run:
+        with dashboard_connection(plan_id, stage_run) as (cur, conn):
+            cm, route_cost, net_op = _compute(cur, conn)
+    else:
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+            cm, route_cost, net_op = _compute(cur, conn)
+            cur.close()
+        finally:
+            conn.close()
     out = cm.as_dict()
     out["route_cost_clp"] = route_cost
     out["net_operational_clp"] = net_op
@@ -448,7 +491,11 @@ def get_margin_audit() -> dict[str, Any]:
         conn.close()
 
 
-def _load_plan_orders_safe(plan_id: int) -> list[dict[str, Any]]:
+def _load_plan_orders_safe(
+    plan_id: int,
+    *,
+    stage_run: DashboardStageRun | None = None,
+) -> list[dict[str, Any]]:
     endpoint = "GET /dispatch-plans/{id}/dashboard"
     try:
         with plan_detail_step(
@@ -456,13 +503,24 @@ def _load_plan_orders_safe(plan_id: int) -> list[dict[str, Any]]:
             planning_id=plan_id,
             query="repo.list_plan_orders(dispatch_plan_orders)",
         ):
-            conn = get_connection()
-            try:
-                cur = conn.cursor()
-                orders = repo.list_plan_orders(cur, plan_id)
-                cur.close()
-            finally:
-                conn.close()
+            if stage_run:
+                with dashboard_connection(plan_id, stage_run) as (cur, _conn):
+                    t0 = log_repo_start(plan_id, "repo.list_plan_orders")
+                    orders = repo.list_plan_orders(cur, plan_id)
+                    log_repo_end(
+                        plan_id,
+                        "repo.list_plan_orders",
+                        t0,
+                        rows=len(orders),
+                    )
+            else:
+                conn = get_connection()
+                try:
+                    cur = conn.cursor()
+                    orders = repo.list_plan_orders(cur, plan_id)
+                    cur.close()
+                finally:
+                    conn.close()
         rows = serialize_rows(orders)
         log_plan_detail_debug(
             endpoint,
@@ -483,13 +541,13 @@ def _load_plan_orders_safe(plan_id: int) -> list[dict[str, Any]]:
         return []
 
 
-def count_picking_client_rows(plan_id: int) -> int:
+def count_picking_client_rows(
+    plan_id: int,
+    *,
+    stage_run: DashboardStageRun | None = None,
+) -> int:
     """Conteo liviano (no carga líneas ni payload de picking)."""
-    conn = get_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
+    sql = """
             SELECT COUNT(*)::int
             FROM distribuidora.dispatch_plan_orders dpo
             INNER JOIN distribuidora.v_dispatch_plan_invoiced_documents inv
@@ -497,25 +555,38 @@ def count_picking_client_rows(plan_id: int) -> int:
                AND inv.oc_document_id = dpo.oc_document_id
                AND inv.status = 'confirmed'
             WHERE dpo.dispatch_plan_id = %s
-            """,
-            (plan_id,),
-        )
-        row = cur.fetchone()
-        cur.close()
-        return int(row[0] or 0) if row else 0
-    except Exception:
-        return 0
-    finally:
-        conn.close()
-
-
-def count_picking_product_rows(plan_id: int) -> int:
-    """Filas consolidadas por producto (misma agrupación que picking-by-product)."""
-    conn = get_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute(
             """
+
+    def _run(cur: Any) -> int:
+        cur.execute(sql, (plan_id,))
+        row = cur.fetchone()
+        return int(row[0] or 0) if row else 0
+
+    try:
+        if stage_run:
+            with dashboard_connection(plan_id, stage_run) as (cur, _conn):
+                return _run(cur)
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+            n = _run(cur)
+            cur.close()
+            return n
+        finally:
+            conn.close()
+    except Exception:
+        if stage_run:
+            raise
+        return 0
+
+
+def count_picking_product_rows(
+    plan_id: int,
+    *,
+    stage_run: DashboardStageRun | None = None,
+) -> int:
+    """Filas consolidadas por producto (misma agrupación que picking-by-product)."""
+    sql = """
             SELECT COUNT(*)::int
             FROM (
                 SELECT 1
@@ -534,16 +605,29 @@ def count_picking_product_rows(plan_id: int) -> int:
                     dd.variant_description,
                     NULLIF(BTRIM(dd.variant_code), '')
             ) g
-            """,
-            (plan_id,),
-        )
+            """
+
+    def _run(cur: Any) -> int:
+        cur.execute(sql, (plan_id,))
         row = cur.fetchone()
-        cur.close()
         return int(row[0] or 0) if row else 0
+
+    try:
+        if stage_run:
+            with dashboard_connection(plan_id, stage_run) as (cur, _conn):
+                return _run(cur)
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+            n = _run(cur)
+            cur.close()
+            return n
+        finally:
+            conn.close()
     except Exception:
+        if stage_run:
+            raise
         return 0
-    finally:
-        conn.close()
 
 
 def _build_plan_dashboard(
@@ -553,9 +637,12 @@ def _build_plan_dashboard(
     user_role: str | None = None,
     include_items: bool = False,
     include_margin: bool = False,
+    stage_run: DashboardStageRun | None = None,
 ) -> dict[str, Any]:
     endpoint = "GET /dispatch-plans/{id}/dashboard"
-    orders = _load_plan_orders_safe(plan_id)
+    if stage_run:
+        stage_run.log_stage(3, "load_invoiced_documents")
+    orders = _load_plan_orders_safe(plan_id, stage_run=stage_run)
 
     try:
         with plan_detail_step(
@@ -563,7 +650,7 @@ def _build_plan_dashboard(
             planning_id=plan_id,
             query="get_invoiced_documents (v_dispatch_plan_invoiced_documents)",
         ):
-            inv = get_invoiced_documents(plan_id)
+            inv = get_invoiced_documents(plan_id, stage_run=stage_run)
     except ValueError:
         raise
     except Exception as exc:
@@ -621,13 +708,15 @@ def _build_plan_dashboard(
     role = (user_role or "").strip().lower()
     show_margin = role in MARGIN_VIEW_ROLES
     if can_calc_margin:
+        if stage_run:
+            stage_run.log_stage(4, "load_margin")
         try:
             with plan_detail_step(
                 endpoint,
                 planning_id=plan_id,
                 query="compute_plan_margin",
             ):
-                margin_data = compute_plan_margin(plan_id)
+                margin_data = compute_plan_margin(plan_id, stage_run=stage_run)
         except Exception as exc:
             log_plan_detail_debug(
                 endpoint,
@@ -672,6 +761,9 @@ def _build_plan_dashboard(
         inv.get("probable_notes") if isinstance(inv.get("probable_notes"), list) else []
     )
 
+    if stage_run:
+        stage_run.log_stage(5, "build_response")
+
     payload = {
         "plan": plan,
         "invoicing": {
@@ -710,18 +802,21 @@ def get_plan_dashboard(
     user_role: str | None = None,
     include_items: bool = False,
     include_margin: bool = False,
+    stage_run: DashboardStageRun | None = None,
 ) -> dict[str, Any]:
     """Dashboard del plan."""
     endpoint = "GET /dispatch-plans/{id}/dashboard"
     ctx = log_plan_debug_context(plan_id, endpoint)
     log_plan_detail_debug(endpoint, planning_id=plan_id, query="start")
+    if stage_run:
+        stage_run.log_stage(2, "load_header")
     try:
         with plan_detail_step(
             endpoint,
             planning_id=plan_id,
             query="get_plan_header",
         ):
-            plan = get_plan_header(plan_id)
+            plan = get_plan_header(plan_id, stage_run=stage_run)
     except Exception as exc:
         log_plan_detail_debug(
             endpoint,
@@ -741,6 +836,7 @@ def get_plan_dashboard(
             user_role=user_role,
             include_items=include_items,
             include_margin=include_margin,
+            stage_run=stage_run,
         )
     except ValueError:
         raise
@@ -767,7 +863,11 @@ def get_plan_dashboard(
         )
 
 
-def get_invoiced_documents(plan_id: int) -> dict[str, Any]:
+def get_invoiced_documents(
+    plan_id: int,
+    *,
+    stage_run: DashboardStageRun | None = None,
+) -> dict[str, Any]:
     """Facturación vinculada (alias operacional: /facturacion)."""
     endpoint = "GET /dispatch-plans/{id}/invoiced-documents"
     log_plan_detail_debug(
@@ -775,19 +875,43 @@ def get_invoiced_documents(plan_id: int) -> dict[str, Any]:
         planning_id=plan_id,
         query="v_dispatch_plan_invoiced_documents",
     )
-    conn = get_connection()
-    try:
-        cur = conn.cursor()
-        plan = repo.get_plan_by_id(cur, plan_id)
-        if not plan:
-            raise ValueError("Plan no encontrado")
+
+    def _load(cur: Any) -> list[dict[str, Any]]:
+        t0 = log_repo_start(plan_id, "repo.list_invoiced_documents")
         try:
-            with plan_detail_step(
-                endpoint,
-                planning_id=plan_id,
-                query="SELECT * FROM v_dispatch_plan_invoiced_documents",
-            ):
-                rows = repo.list_invoiced_documents(cur, plan_id)
+            rows = repo.list_invoiced_documents(cur, plan_id)
+            log_repo_end(
+                plan_id,
+                "repo.list_invoiced_documents",
+                t0,
+                rows=len(rows),
+            )
+            return rows
+        except Exception as exc:
+            log_repo_end(
+                plan_id,
+                "repo.list_invoiced_documents",
+                t0,
+                error=repr(exc),
+            )
+            raise
+
+    if stage_run:
+        try:
+            with dashboard_connection(plan_id, stage_run) as (cur, _conn):
+                t0 = log_repo_start(plan_id, "repo.get_plan_by_id")
+                plan = repo.get_plan_by_id(cur, plan_id)
+                log_repo_end(plan_id, "repo.get_plan_by_id", t0, rows=1 if plan else 0)
+                if not plan:
+                    raise ValueError("Plan no encontrado")
+                with plan_detail_step(
+                    endpoint,
+                    planning_id=plan_id,
+                    query="v_dispatch_plan_invoiced_documents",
+                ):
+                    rows = _load(cur)
+        except ValueError:
+            raise
         except Exception as exc:
             log_plan_detail_debug(
                 endpoint,
@@ -797,22 +921,58 @@ def get_invoiced_documents(plan_id: int) -> dict[str, Any]:
                 error=repr(exc),
             )
             log_error(endpoint, exc, planning_id=plan_id)
-            orders = repo.list_plan_orders(cur, plan_id)
-            cur.close()
+            try:
+                with dashboard_connection(plan_id, stage_run) as (cur, _conn):
+                    t0 = log_repo_start(plan_id, "repo.list_plan_orders")
+                    orders = repo.list_plan_orders(cur, plan_id)
+                    log_repo_end(
+                        plan_id,
+                        "repo.list_plan_orders",
+                        t0,
+                        rows=len(orders),
+                    )
+            except Exception:
+                orders = []
             return empty_invoicing_payload(plan_id, serialize_rows(orders))
-        cur.close()
-    except ValueError:
-        raise
-    except Exception as exc:
-        log_plan_detail_debug(
-            endpoint,
-            planning_id=plan_id,
-            error=repr(exc),
-        )
-        log_error(endpoint, exc, planning_id=plan_id)
-        return empty_invoiced_documents_response(plan_id)
-    finally:
-        conn.close()
+    else:
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+            plan = repo.get_plan_by_id(cur, plan_id)
+            if not plan:
+                raise ValueError("Plan no encontrado")
+            try:
+                with plan_detail_step(
+                    endpoint,
+                    planning_id=plan_id,
+                    query="SELECT * FROM v_dispatch_plan_invoiced_documents",
+                ):
+                    rows = repo.list_invoiced_documents(cur, plan_id)
+            except Exception as exc:
+                log_plan_detail_debug(
+                    endpoint,
+                    planning_id=plan_id,
+                    query="list_invoiced_documents",
+                    rows=0,
+                    error=repr(exc),
+                )
+                log_error(endpoint, exc, planning_id=plan_id)
+                orders = repo.list_plan_orders(cur, plan_id)
+                cur.close()
+                return empty_invoicing_payload(plan_id, serialize_rows(orders))
+            cur.close()
+        except ValueError:
+            raise
+        except Exception as exc:
+            log_plan_detail_debug(
+                endpoint,
+                planning_id=plan_id,
+                error=repr(exc),
+            )
+            log_error(endpoint, exc, planning_id=plan_id)
+            return empty_invoiced_documents_response(plan_id)
+        finally:
+            conn.close()
 
     items = serialize_rows(rows)
     log_plan_detail_debug(

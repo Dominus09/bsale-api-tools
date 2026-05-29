@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from backend.services.distribuidora import dispatch_plan_service as svc
 from backend.utils.auth_staff import BearerDep, decode_staff_token, require_staff_user
 from backend.utils.dashboard_debug import log_dashboard_debug
+from backend.utils.dashboard_stage import DashboardStageRun
 from backend.utils.ors_stability import log_error
 from backend.utils.plan_debug import PLAN_DEBUG_RERAISE, log_plan_debug_context, plan_debug_on_error
 
@@ -155,6 +156,9 @@ def get_plan_dashboard(
     ),
 ):
     """Solo facturación y métricas; pickings en /picking-cliente y /picking-producto."""
+    stage_run = DashboardStageRun(plan_id)
+    stage_run.log_stage(1, "start_endpoint")
+    stage_run.log_stage("1a", "plan_debug_context")
     ctx = log_plan_debug_context(plan_id, "GET /dispatch-plans/{id}/dashboard")
     role: str | None = None
     if authorization:
@@ -166,23 +170,36 @@ def get_plan_dashboard(
     picking_client_rows = 0
     picking_product_rows = 0
     try:
-        picking_client_rows = svc.count_picking_client_rows(plan_id)
-        picking_product_rows = svc.count_picking_product_rows(plan_id)
+        stage_run.log_stage("1b", "picking_client_count")
+        picking_client_rows = svc.count_picking_client_rows(plan_id, stage_run=stage_run)
+        stage_run.log_stage("1c", "picking_product_count")
+        picking_product_rows = svc.count_picking_product_rows(plan_id, stage_run=stage_run)
         result = svc.get_plan_dashboard(
             plan_id,
             user_role=role,
             include_items=include_items,
             include_margin=include_margin,
+            stage_run=stage_run,
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except Exception as exc:
+        stuck = stage_run.last_stage or "unknown"
+        stuck_label = stage_run.last_label or "unknown"
         plan_debug_on_error("GET /dispatch-plans/{id}/dashboard", plan_id, exc, ctx)
-        log_error("GET /dispatch-plans/dashboard", exc, planning_id=plan_id)
+        log_error(
+            "GET /dispatch-plans/dashboard",
+            exc,
+            planning_id=plan_id,
+            extra={"last_stage": stuck, "last_label": stuck_label},
+        )
         if PLAN_DEBUG_RERAISE:
             raise HTTPException(
                 status_code=500,
-                detail=f"{type(exc).__name__}: {exc}",
+                detail=(
+                    f"{type(exc).__name__}: {exc} "
+                    f"(last_stage={stuck} {stuck_label})"
+                ),
             ) from exc
         from backend.utils.ors_stability import empty_plan_dashboard
 
@@ -192,6 +209,7 @@ def get_plan_dashboard(
             plan,
             degraded_message=f"Error al cargar dashboard: {exc}",
         )
+    stage_run.log_stage(6, "response_ready")
     duration_ms = (time.perf_counter() - t0) * 1000.0
     try:
         payload_bytes = len(json.dumps(result, default=str).encode("utf-8"))
