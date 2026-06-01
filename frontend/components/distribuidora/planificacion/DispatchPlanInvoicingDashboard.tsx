@@ -50,7 +50,11 @@ export function DispatchPlanInvoicingDashboard({
           </p>
         </div>
         <StatCard
-          label="Confirmadas (document_related)"
+          label={
+            inv.confirmed.auto_confirmed_count
+              ? `Confirmadas (${inv.confirmed.auto_confirmed_count} auto ≥75)`
+              : "Confirmadas (Bsale + auto ≥75)"
+          }
           count={inv.confirmed.count}
           amount={inv.confirmed.amount_clp}
           dotClass="bg-emerald-500"
@@ -137,7 +141,7 @@ export function DispatchPlanInvoicingDashboard({
 
       {data.probable_notes.length > 0 ? (
         <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
-          <p className="font-medium">Coincidencias probables (no confirmadas)</p>
+          <p className="font-medium">Coincidencias probables (score 60–74)</p>
           <ul className="mt-1 list-inside list-disc">
             {data.probable_notes.slice(0, 6).map((n) => (
               <li key={n.oc_document_id}>

@@ -34,10 +34,10 @@ export function PurchaseInvoiceStatusBadge({
 }) {
   const code = resolvePurchaseStatusCode(row)
   const label = compact
-    ? (COMPACT_STATUS_LABEL[code] ?? purchaseStatusBadgeLabel(code))
-    : purchaseStatusBadgeLabel(code)
+    ? (COMPACT_STATUS_LABEL[code] ?? purchaseStatusBadgeLabel(code, row))
+    : purchaseStatusBadgeLabel(code, row)
   const className = purchaseStatusBadgeClass(code)
-  const tooltip = purchaseStatusTooltip(code)
+  const tooltip = purchaseStatusTooltip(code, row)
 
   return (
     <Tooltip>

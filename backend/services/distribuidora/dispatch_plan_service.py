@@ -43,6 +43,10 @@ from backend.utils.dashboard_stage import (
     log_repo_start,
 )
 from backend.utils.deadlock_debug import timed_execute
+from backend.utils.invoicing_auto_confirm import (
+    apply_operational_invoicing_rows,
+    invoicing_summary_counts,
+)
 from backend.utils.picking_readiness import (
     PICKING_WAIT_MESSAGE,
     evaluate_picking_readiness,
@@ -692,6 +696,7 @@ def _build_plan_dashboard(
     inv_summary = inv.get("summary") if isinstance(inv.get("summary"), dict) else {}
     inv_summary = {
         "confirmed": int(inv_summary.get("confirmed") or 0),
+        "auto_confirmed": int(inv_summary.get("auto_confirmed") or 0),
         "probable": int(inv_summary.get("probable") or 0),
         "missing": int(inv_summary.get("missing") or 0),
         "total": int(inv_summary.get("total") or len(inv_items)),
@@ -723,6 +728,8 @@ def _build_plan_dashboard(
             probable_amount += amt
         else:
             pending_amount += amt
+
+    inv_auto_confirmed = int(inv_summary.get("auto_confirmed") or 0)
 
     can_calc_margin = (
         include_margin
@@ -798,6 +805,7 @@ def _build_plan_dashboard(
             "confirmed": {
                 "count": inv_summary["confirmed"],
                 "amount_clp": int(round(confirmed_amount)),
+                "auto_confirmed_count": inv_auto_confirmed,
             },
             "probable": {
                 "count": inv_summary["probable"],
@@ -898,13 +906,8 @@ def _invoicing_payload_from_rows(
     invoicing_degraded: bool = False,
     extra_warnings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    items = serialize_rows(rows)
-    summary = {
-        "confirmed": sum(1 for x in items if x.get("status") == "confirmed"),
-        "probable": sum(1 for x in items if x.get("status") == "probable"),
-        "missing": sum(1 for x in items if x.get("status") == "missing"),
-        "total": len(items),
-    }
+    items = serialize_rows(apply_operational_invoicing_rows(rows))
+    summary = invoicing_summary_counts(items)
     warnings = list(extra_warnings or [])
     warnings.extend(
         {

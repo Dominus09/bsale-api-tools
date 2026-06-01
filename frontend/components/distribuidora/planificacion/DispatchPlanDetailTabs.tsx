@@ -15,6 +15,8 @@ import {
   type DispatchPlanPickingProductResponse,
 } from "@/lib/api"
 import { DispatchPlanInvoicingDashboard } from "@/components/distribuidora/planificacion/DispatchPlanInvoicingDashboard"
+import { DispatchPlanInvoicedItemsTable } from "@/components/distribuidora/planificacion/DispatchPlanInvoicedItemsTable"
+import type { DispatchPlanInvoicedRow } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -54,6 +56,13 @@ export function DispatchPlanDetailTabs({
   const [pickingProductLoading, setPickingProductLoading] = useState(false)
   const [pickingClientLoaded, setPickingClientLoaded] = useState(false)
   const [pickingProductLoaded, setPickingProductLoaded] = useState(false)
+  const [reviewItems, setReviewItems] = useState<DispatchPlanInvoicedRow[] | null>(null)
+  const [reviewSummary, setReviewSummary] = useState<{
+    confirmed: number
+    auto_confirmed?: number
+    probable: number
+    missing: number
+  } | null>(null)
 
   const loadPickingCliente = useCallback(async () => {
     if (pickingClientLoaded && pickingClient) return
@@ -135,8 +144,13 @@ export function DispatchPlanDetailTabs({
                 setBusy("inv")
                 try {
                   const r = await getDispatchPlanInvoicedDocuments(planId)
+                  setReviewItems(r.items)
+                  setReviewSummary(r.summary)
+                  const auto = r.summary.auto_confirmed ?? 0
+                  const autoPart =
+                    auto > 0 ? ` (${auto} auto-confirmadas ≥75)` : ""
                   onMessage(
-                    `Facturación: ${r.summary.confirmed} confirmadas, ${r.summary.probable} probables, ${r.summary.missing} pendientes.`,
+                    `Facturación: ${r.summary.confirmed} confirmadas${autoPart}, ${r.summary.probable} probables (60–74), ${r.summary.missing} pendientes.`,
                   )
                 } catch (e: unknown) {
                   onMessage(e instanceof Error ? e.message : "Error")
@@ -149,6 +163,20 @@ export function DispatchPlanDetailTabs({
             Revisar facturación
           </Button>
         </div>
+        {reviewItems && reviewItems.length > 0 ? (
+          <div className="space-y-2 border-t pt-4">
+            <p className="text-xs font-medium text-muted-foreground">
+              Revisión facturación
+              {reviewSummary
+                ? ` — ${reviewSummary.confirmed} confirmadas`
+                : ""}
+              {reviewSummary?.auto_confirmed
+                ? ` (${reviewSummary.auto_confirmed} auto)`
+                : ""}
+            </p>
+            <DispatchPlanInvoicedItemsTable items={reviewItems} />
+          </div>
+        ) : null}
       </TabsContent>
 
       <TabsContent value="picking-cliente" className="mt-4 space-y-3">

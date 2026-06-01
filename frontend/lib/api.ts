@@ -1769,7 +1769,11 @@ export type DispatchPlanDashboard = {
   invoicing: {
     total_orders: number
     total_oc_amount_clp: number
-    confirmed: { count: number; amount_clp: number }
+    confirmed: {
+      count: number
+      amount_clp: number
+      auto_confirmed_count?: number
+    }
     probable: { count: number; amount_clp: number }
     pending: { count: number; amount_clp: number }
   }
@@ -1841,6 +1845,8 @@ export type DispatchPlanInvoicedRow = {
   route_order?: number
   status: "confirmed" | "probable" | "missing"
   relation_source?: string | null
+  is_invoiced_confirmed?: boolean | null
+  is_auto_confirmed?: boolean | null
   related_document_id?: number | null
   related_document_number?: number | null
   related_document_type_label?: string | null
@@ -1915,7 +1921,13 @@ export async function confirmDispatchPlan(body: {
 export async function getDispatchPlanInvoicedDocuments(planId: number): Promise<{
   dispatch_plan_id: number
   items: DispatchPlanInvoicedRow[]
-  summary: { confirmed: number; probable: number; missing: number; total: number }
+  summary: {
+    confirmed: number
+    auto_confirmed?: number
+    probable: number
+    missing: number
+    total: number
+  }
   warnings: { oc_document_id: number; oc_number?: number | null; message: string }[]
   probable_notes: {
     oc_document_id: number
@@ -1936,7 +1948,13 @@ export async function getDispatchPlanInvoicedDocuments(planId: number): Promise<
   return res.json() as Promise<{
     dispatch_plan_id: number
     items: DispatchPlanInvoicedRow[]
-    summary: { confirmed: number; probable: number; missing: number; total: number }
+    summary: {
+      confirmed: number
+      auto_confirmed?: number
+      probable: number
+      missing: number
+      total: number
+    }
     warnings: { oc_document_id: number; oc_number?: number | null; message: string }[]
     probable_notes: {
       oc_document_id: number

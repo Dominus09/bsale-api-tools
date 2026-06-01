@@ -147,10 +147,13 @@ export function OrsDispatchWorkflow({
               void run("invoice", async () => {
                 if (!planId) return
                 const r = await getDispatchPlanInvoicedDocuments(planId)
+                const auto = r.summary.auto_confirmed ?? 0
                 const parts = [
-                  `Confirmadas: ${r.summary.confirmed}`,
-                  `Probables: ${r.summary.probable}`,
-                  `Sin documento: ${r.summary.missing}`,
+                  `Confirmadas: ${r.summary.confirmed}${
+                    auto > 0 ? ` (${auto} auto ≥75)` : ""
+                  }`,
+                  `Probables (60–74): ${r.summary.probable}`,
+                  `Pendientes: ${r.summary.missing}`,
                 ]
                 setInvoiceAlert(r.summary.missing > 0 ? "destructive" : "default")
                 setInvoiceMsg(parts.join(" · "))

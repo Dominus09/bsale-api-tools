@@ -30,7 +30,7 @@ function emptyDashboardFromPlan(plan: DispatchPlanSummary): DispatchPlanDashboar
     invoicing: {
       total_orders: 0,
       total_oc_amount_clp: 0,
-      confirmed: { count: 0, amount_clp: 0 },
+      confirmed: { count: 0, amount_clp: 0, auto_confirmed_count: 0 },
       probable: { count: 0, amount_clp: 0 },
       pending: { count: 0, amount_clp: 0 },
     },

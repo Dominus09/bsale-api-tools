@@ -36,6 +36,10 @@ const MEDIUM: PurchaseInvoiceStatusCode = "PROBABLE_FACTURADA_MEDIUM"
 const LOW: PurchaseInvoiceStatusCode = "PROBABLE_FACTURADA_LOW"
 const PENDING: PurchaseInvoiceStatusCode = "PENDIENTE"
 
+/** Umbrales operacionales (alineados con backend invoicing_auto_confirm). */
+export const AUTO_CONFIRM_MIN_SCORE = 75
+export const PROBABLE_MIN_SCORE = 60
+
 export function resolvePurchaseStatusCode(
   row: PurchaseInvoiceStatusFields,
 ): PurchaseInvoiceStatusCode {
@@ -53,11 +57,47 @@ export function resolvePurchaseStatusCode(
   const estado =
     typeof row.estado_real === "string" ? row.estado_real.trim() : ""
   if (estado === "Facturada" || row.is_invoiced === true) return CONFIRMED
-  if (estado === "Probable facturada") return HIGH
+
+  const sc = operationalScore(row)
+  if (sc != null && sc >= AUTO_CONFIRM_MIN_SCORE) return CONFIRMED
+  if (estado === "Probable facturada" || (sc != null && sc >= PROBABLE_MIN_SCORE)) {
+    if (sc != null && sc >= 90) return HIGH
+    if (sc != null && sc >= PROBABLE_MIN_SCORE) return MEDIUM
+    return LOW
+  }
   return PENDING
 }
 
-export function purchaseStatusBadgeLabel(code: PurchaseInvoiceStatusCode): string {
+function operationalScore(row: PurchaseInvoiceStatusFields): number | null {
+  const sc = row.probable_score ?? row.display_score
+  if (sc == null || !Number.isFinite(Number(sc))) return null
+  return Number(sc)
+}
+
+export function isAutoConfirmedOperational(row: PurchaseInvoiceStatusFields): boolean {
+  if (row.is_invoiced === true) return false
+  const sc = operationalScore(row)
+  return sc != null && sc >= AUTO_CONFIRM_MIN_SCORE
+}
+
+export function isBsaleConfirmed(row: PurchaseInvoiceStatusFields): boolean {
+  if (row.is_invoiced === true) return true
+  const raw =
+    typeof row.purchase_status === "string" ? row.purchase_status.trim() : ""
+  if (raw === CONFIRMED) return true
+  const estado =
+    typeof row.estado_real === "string" ? row.estado_real.trim() : ""
+  return estado === "Facturada"
+}
+
+export function purchaseStatusBadgeLabel(
+  code: PurchaseInvoiceStatusCode,
+  row?: PurchaseInvoiceStatusFields,
+): string {
+  if (code === CONFIRMED && row && isAutoConfirmedOperational(row)) {
+    const sc = operationalScore(row)
+    return sc != null ? `Auto-confirmada (score ${Math.round(sc)})` : "Auto-confirmada"
+  }
   switch (code) {
     case CONFIRMED:
       return "Facturada"
@@ -83,7 +123,13 @@ export function purchaseStatusBadgeClass(code: PurchaseInvoiceStatusCode): strin
   }
 }
 
-export function purchaseStatusTooltip(code: PurchaseInvoiceStatusCode): string {
+export function purchaseStatusTooltip(
+  code: PurchaseInvoiceStatusCode,
+  row?: PurchaseInvoiceStatusFields,
+): string {
+  if (code === CONFIRMED && row && isAutoConfirmedOperational(row)) {
+    return "Coincidencia operacional con score ≥75; tratada como facturada para picking y KPIs"
+  }
   switch (code) {
     case CONFIRMED:
       return "Relación confirmada vía relateddetailid"
@@ -148,4 +194,37 @@ export function matchesPurchaseStatusFilter(
   if (filter === "probable")
     return code === HIGH || code === MEDIUM || code === LOW
   return code === PENDING
+}
+
+/** Fila de plan dispatch (GET invoiced-documents / dashboard items). */
+export type DispatchInvoicingRowFields = {
+  status?: string | null
+  relation_source?: string | null
+  is_invoiced_confirmed?: boolean | null
+  is_auto_confirmed?: boolean | null
+  probable_score?: number | null
+}
+
+export function dispatchInvoicingBadgeLabel(row: DispatchInvoicingRowFields): string {
+  if (row.relation_source === "auto_match" || row.is_auto_confirmed) {
+    const sc = row.probable_score
+    const n =
+      sc != null && Number.isFinite(Number(sc)) ? Math.round(Number(sc)) : null
+    return n != null ? `Auto-confirmada (score ${n})` : "Auto-confirmada"
+  }
+  if (row.status === "confirmed" || row.is_invoiced_confirmed) return "Facturada"
+  if (row.status === "probable") return "Probable"
+  return "Pendiente"
+}
+
+export function dispatchInvoicingBadgeClass(row: DispatchInvoicingRowFields): string {
+  if (
+    row.status === "confirmed" ||
+    row.is_invoiced_confirmed ||
+    row.relation_source === "auto_match"
+  ) {
+    return purchaseStatusBadgeClass(CONFIRMED)
+  }
+  if (row.status === "probable") return purchaseStatusBadgeClass(MEDIUM)
+  return purchaseStatusBadgeClass(PENDING)
 }

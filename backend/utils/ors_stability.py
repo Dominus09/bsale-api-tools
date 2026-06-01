@@ -102,6 +102,7 @@ def empty_invoicing_payload(
         "items": items,
         "summary": {
             "confirmed": 0,
+            "auto_confirmed": 0,
             "probable": 0,
             "missing": n,
             "total": n,
@@ -139,7 +140,7 @@ def empty_plan_dashboard(
         "invoicing": {
             "total_orders": 0,
             "total_oc_amount_clp": 0,
-            "confirmed": {"count": 0, "amount_clp": 0},
+            "confirmed": {"count": 0, "amount_clp": 0, "auto_confirmed_count": 0},
             "probable": {"count": 0, "amount_clp": 0},
             "pending": {"count": 0, "amount_clp": 0},
         },

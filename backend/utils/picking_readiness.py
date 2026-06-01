@@ -52,8 +52,8 @@ def evaluate_picking_readiness(inv: dict[str, Any]) -> dict[str, Any]:
             return {
                 "ready": False,
                 "reason": (
-                    "Hay coincidencias probables pero ningún documento confirmado "
-                    "en Bsale (relateddetailid)."
+                    "Hay coincidencias probables (60–74) pero ninguna facturación "
+                    "confirmada ni auto-confirmada (≥75)."
                 ),
             }
         return {
@@ -74,8 +74,8 @@ def evaluate_picking_readiness(inv: dict[str, Any]) -> dict[str, Any]:
         return {
             "ready": False,
             "reason": (
-                f"Hay {probable} OC con coincidencia probable; "
-                "confirme en Bsale antes del picking."
+                f"Hay {probable} OC con coincidencia probable (score 60–74); "
+                "confirme en Bsale o espere auto-confirmación ≥75."
             ),
         }
 
