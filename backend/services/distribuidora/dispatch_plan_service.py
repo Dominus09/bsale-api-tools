@@ -60,6 +60,39 @@ from backend.utils.plan_detail_debug import log_plan_detail_debug, plan_detail_s
 
 logger = logging.getLogger(__name__)
 
+
+class InvoicingDocumentsUnavailable(Exception):
+    """Vista full y fallback lite fallaron; el dashboard debe degradar, no 500."""
+
+    def __init__(
+        self,
+        full_view_error: str,
+        lite_exc: Exception | None = None,
+    ) -> None:
+        self.full_view_error = full_view_error
+        self.lite_error = (
+            f"{type(lite_exc).__name__}: {lite_exc}" if lite_exc is not None else None
+        )
+        super().__init__(full_view_error)
+
+
+def _invoicing_connection_rollback(conn: Any, *, plan_id: int, label: str) -> None:
+    try:
+        conn.rollback()
+        logger.info("[INVOICING_ROLLBACK] plan_id=%s label=%s", plan_id, label)
+    except Exception as rb_exc:
+        logger.warning(
+            "[INVOICING_ROLLBACK] plan_id=%s label=%s failed: %s",
+            plan_id,
+            label,
+            rb_exc,
+        )
+
+
+def _format_invoicing_exc(exc: Exception) -> str:
+    return f"{type(exc).__name__}: {exc}"
+
+
 VALID_STATUSES = frozenset(
     {
         "draft",
@@ -649,7 +682,11 @@ def _build_plan_dashboard(
             query="get_invoiced_documents",
             error=repr(exc),
         )
-        inv = empty_invoicing_payload(plan_id, orders)
+        inv = empty_invoicing_payload(
+            plan_id,
+            orders,
+            full_view_error=_format_invoicing_exc(exc),
+        )
 
     inv_items = inv.get("items") if isinstance(inv.get("items"), list) else []
     inv_summary = inv.get("summary") if isinstance(inv.get("summary"), dict) else {}
@@ -903,40 +940,58 @@ def _invoicing_payload_from_rows(
 
 
 def _load_invoiced_rows_with_fallback(
+    conn: Any,
     cur: Any,
     plan_id: int,
-) -> tuple[list[dict[str, Any]], str, bool]:
-    """Vista completa; si falla, consulta lite por document_related."""
+) -> tuple[list[dict[str, Any]], str, bool, str | None]:
+    """
+    Vista completa; si falla, rollback y consulta lite por document_related.
+
+    Returns:
+        rows, source ('full' | 'lite'), degraded, full_view_error (si full falló y lite OK).
+    """
+    full_view_error: str | None = None
+    exc_full: Exception | None = None
+
     t0 = log_repo_start(plan_id, "repo.list_invoiced_documents")
     try:
         rows = repo.list_invoiced_documents(cur, plan_id)
         log_repo_end(plan_id, "repo.list_invoiced_documents", t0, rows=len(rows))
-        return rows, "full", False
-    except Exception as exc_full:
+        return rows, "full", False, None
+    except Exception as e:
+        exc_full = e
+        full_view_error = _format_invoicing_exc(e)
         log_repo_end(
             plan_id,
             "repo.list_invoiced_documents",
             t0,
-            error=repr(exc_full),
+            error=full_view_error,
         )
         logger.warning(
             "[INVOICING_FALLBACK] plan_id=%s full_view_failed error=%s",
             plan_id,
-            exc_full,
+            full_view_error,
+            exc_info=e,
         )
+        _invoicing_connection_rollback(conn, plan_id=plan_id, label="after_full_view_failed")
+
     t1 = log_repo_start(plan_id, "repo.list_invoiced_documents_lite")
     try:
         rows = repo.list_invoiced_documents_lite(cur, plan_id)
         log_repo_end(plan_id, "repo.list_invoiced_documents_lite", t1, rows=len(rows))
-        return rows, "lite", True
+        return rows, "lite", True, full_view_error
     except Exception as exc_lite:
         log_repo_end(
             plan_id,
             "repo.list_invoiced_documents_lite",
             t1,
-            error=repr(exc_lite),
+            error=_format_invoicing_exc(exc_lite),
         )
-        raise exc_lite
+        _invoicing_connection_rollback(conn, plan_id=plan_id, label="after_lite_failed")
+        raise InvoicingDocumentsUnavailable(
+            full_view_error or _format_invoicing_exc(exc_lite),
+            exc_lite,
+        ) from exc_full
 
 
 def get_invoiced_documents(
@@ -952,10 +1007,23 @@ def get_invoiced_documents(
         query="v_dispatch_plan_invoiced_documents",
     )
 
-    def _fetch(cur: Any) -> dict[str, Any]:
-        rows, source, degraded = _load_invoiced_rows_with_fallback(cur, plan_id)
+    def _fetch(cur: Any, conn: Any) -> dict[str, Any]:
+        rows, source, degraded, full_err = _load_invoiced_rows_with_fallback(
+            conn, cur, plan_id
+        )
         extra: list[dict[str, Any]] = []
         if source == "lite":
+            if full_err:
+                extra.append(
+                    {
+                        "oc_document_id": 0,
+                        "oc_number": None,
+                        "message": (
+                            "Error en v_dispatch_plan_invoiced_documents (vista full): "
+                            f"{full_err}"
+                        ),
+                    }
+                )
             extra.append(
                 {
                     "oc_document_id": 0,
@@ -974,9 +1042,24 @@ def get_invoiced_documents(
             extra_warnings=extra,
         )
 
+    def _empty_from_invoicing_failure(
+        orders: list[dict[str, Any]],
+        *,
+        full_view_error: str | None = None,
+        lite_error: str | None = None,
+        summary_error: str | None = None,
+    ) -> dict[str, Any]:
+        return empty_invoicing_payload(
+            plan_id,
+            orders,
+            invoicing_error=summary_error or full_view_error,
+            full_view_error=full_view_error,
+            lite_error=lite_error,
+        )
+
     if stage_run:
         try:
-            with dashboard_connection(plan_id, stage_run) as (cur, _conn):
+            with dashboard_connection(plan_id, stage_run) as (cur, conn):
                 t0 = log_repo_start(plan_id, "repo.get_plan_by_id")
                 plan = repo.get_plan_by_id(cur, plan_id)
                 log_repo_end(plan_id, "repo.get_plan_by_id", t0, rows=1 if plan else 0)
@@ -987,9 +1070,33 @@ def get_invoiced_documents(
                     planning_id=plan_id,
                     query="invoiced_documents",
                 ):
-                    return _fetch(cur)
+                    return _fetch(cur, conn)
         except ValueError:
             raise
+        except InvoicingDocumentsUnavailable as inv_exc:
+            log_plan_detail_debug(
+                endpoint,
+                planning_id=plan_id,
+                query="invoiced_documents",
+                rows=0,
+                error=inv_exc.full_view_error,
+            )
+            logger.warning(
+                "[INVOICING_UNAVAILABLE] plan_id=%s full=%s lite=%s",
+                plan_id,
+                inv_exc.full_view_error,
+                inv_exc.lite_error,
+            )
+            try:
+                with dashboard_connection(plan_id, stage_run) as (cur, _conn):
+                    orders = repo.list_plan_orders(cur, plan_id)
+            except Exception:
+                orders = []
+            return _empty_from_invoicing_failure(
+                serialize_rows(orders),
+                full_view_error=inv_exc.full_view_error,
+                lite_error=inv_exc.lite_error,
+            )
         except Exception as exc:
             log_plan_detail_debug(
                 endpoint,
@@ -1004,10 +1111,9 @@ def get_invoiced_documents(
                     orders = repo.list_plan_orders(cur, plan_id)
             except Exception:
                 orders = []
-            return empty_invoicing_payload(
-                plan_id,
+            return _empty_from_invoicing_failure(
                 serialize_rows(orders),
-                invoicing_error=str(exc),
+                full_view_error=_format_invoicing_exc(exc),
             )
 
     conn = get_connection()
@@ -1022,7 +1128,32 @@ def get_invoiced_documents(
                 planning_id=plan_id,
                 query="invoiced_documents",
             ):
-                payload = _fetch(cur)
+                payload = _fetch(cur, conn)
+        except InvoicingDocumentsUnavailable as inv_exc:
+            log_plan_detail_debug(
+                endpoint,
+                planning_id=plan_id,
+                query="invoiced_documents",
+                rows=0,
+                error=inv_exc.full_view_error,
+            )
+            logger.warning(
+                "[INVOICING_UNAVAILABLE] plan_id=%s full=%s lite=%s",
+                plan_id,
+                inv_exc.full_view_error,
+                inv_exc.lite_error,
+            )
+            _invoicing_connection_rollback(conn, plan_id=plan_id, label="invoicing_unavailable")
+            try:
+                orders = repo.list_plan_orders(cur, plan_id)
+            except Exception:
+                orders = []
+            cur.close()
+            return _empty_from_invoicing_failure(
+                serialize_rows(orders),
+                full_view_error=inv_exc.full_view_error,
+                lite_error=inv_exc.lite_error,
+            )
         except Exception as exc:
             log_plan_detail_debug(
                 endpoint,
@@ -1032,12 +1163,15 @@ def get_invoiced_documents(
                 error=repr(exc),
             )
             log_error(endpoint, exc, planning_id=plan_id)
-            orders = repo.list_plan_orders(cur, plan_id)
+            _invoicing_connection_rollback(conn, plan_id=plan_id, label="invoiced_documents_failed")
+            try:
+                orders = repo.list_plan_orders(cur, plan_id)
+            except Exception:
+                orders = []
             cur.close()
-            return empty_invoicing_payload(
-                plan_id,
+            return _empty_from_invoicing_failure(
                 serialize_rows(orders),
-                invoicing_error=str(exc),
+                full_view_error=_format_invoicing_exc(exc),
             )
         cur.close()
         log_plan_detail_debug(

@@ -150,9 +150,6 @@ export default function DistribuidoraOrdersPage() {
   const [onlyNotInvoiced, setOnlyNotInvoiced] = useState(true)
   const [estadoResumen, setEstadoResumen] =
     useState<PurchaseInvoiceStatusFilter>("pending")
-  /** Alias legacy `statusQuickFilter` (rename incompleto). Fuente de verdad: `estadoResumen`. */
-  const statusQuickFilter: PurchaseInvoiceStatusFilter =
-    estadoResumen ?? "pending"
   const [activeDayFilter, setActiveDayFilter] = useState<string | null>(null)
 
   const [observationTexts, setObservationTexts] = useState<string[]>([])
@@ -324,8 +321,8 @@ export default function DistribuidoraOrdersPage() {
   }, [])
 
   const resumenRows = useMemo(
-    () => aggregateDispatchPrepByMunicipality(safePlanningRows, statusQuickFilter),
-    [safePlanningRows, statusQuickFilter],
+    () => aggregateDispatchPrepByMunicipality(safePlanningRows, estadoResumen),
+    [safePlanningRows, estadoResumen],
   )
 
   const kpis = useMemo(
@@ -370,8 +367,8 @@ export default function DistribuidoraOrdersPage() {
   }, [safePlanningRows])
 
   const filteredPlanningRows = useMemo(
-    () => filterPlanningRowsByStatus(safePlanningRows, statusQuickFilter),
-    [safePlanningRows, statusQuickFilter],
+    () => filterPlanningRowsByStatus(safePlanningRows, estadoResumen),
+    [safePlanningRows, estadoResumen],
   )
 
   const validTruckIdSet = useMemo(
@@ -642,16 +639,6 @@ export default function DistribuidoraOrdersPage() {
     [safePlanningRows, trucks],
   )
 
-  useEffect(() => {
-    console.log("PRE_DESPACHO_DATA", {
-      planningRows: safePlanningRows,
-      resumenRows: resumenRows ?? [],
-      operationalStats: operationalStats ?? {},
-    })
-    console.log("SUMMARY_DATA", kpis ?? {})
-    console.log("FILTER_STATE", statusQuickFilter)
-  }, [safePlanningRows, resumenRows, operationalStats, kpis, statusQuickFilter])
-
   const openDetail = useCallback((r: DistribuidoraDispatchPrepMunicipalityRow) => {
     setDetailRow(r)
     setDetailOpen(true)
@@ -711,7 +698,7 @@ export default function DistribuidoraOrdersPage() {
       <PreDespachoKpiStrip
         stats={operationalStats ?? EMPTY_OPERATIONAL_STATS}
         loading={loading}
-        estadoResumen={statusQuickFilter}
+        estadoResumen={estadoResumen}
         onEstadoResumenChange={setEstadoResumen}
       />
 
@@ -785,7 +772,7 @@ export default function DistribuidoraOrdersPage() {
         <div className="space-y-2">
           <Label htmlFor="resumen-estado">Estado resumen</Label>
           <Select
-            value={statusQuickFilter}
+            value={estadoResumen}
             onValueChange={(v) =>
               setEstadoResumen(v as PurchaseInvoiceStatusFilter)
             }
@@ -999,7 +986,7 @@ export default function DistribuidoraOrdersPage() {
             </Alert>
           ) : null}
           <PreDespachoStatusChips
-            value={statusQuickFilter}
+            value={estadoResumen}
             onChange={setEstadoResumen}
             counts={statusFilterCounts ?? EMPTY_STATUS_COUNTS}
             disabled={loading}
@@ -1064,7 +1051,7 @@ export default function DistribuidoraOrdersPage() {
             clusterByDoc={clusterByDoc}
             allRowsForThresholds={safePlanningRows}
             loading={loading}
-            statusFilterActive={statusQuickFilter !== "all"}
+            statusFilterActive={estadoResumen !== "all"}
             onGroupTruckPick={assignTruckToGroupWithChoice}
             onTruckChange={onPlanningTruckChange}
           />

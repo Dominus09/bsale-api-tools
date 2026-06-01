@@ -47,6 +47,8 @@ def empty_invoicing_payload(
     orders: list[dict[str, Any]],
     *,
     invoicing_error: str | None = None,
+    full_view_error: str | None = None,
+    lite_error: str | None = None,
 ) -> dict[str, Any]:
     """Dashboard/facturación cuando fallan vista completa y consulta lite."""
     items = [
@@ -64,7 +66,36 @@ def empty_invoicing_payload(
     n = len(items)
     msg = (
         invoicing_error
+        or full_view_error
         or "No se pudo consultar facturación (timeout, vista o migración pendiente)"
+    )
+    warnings: list[dict[str, Any]] = []
+    if full_view_error:
+        warnings.append(
+            {
+                "oc_document_id": 0,
+                "oc_number": None,
+                "message": (
+                    "Error en v_dispatch_plan_invoiced_documents (vista full): "
+                    f"{full_view_error}"
+                ),
+            }
+        )
+    if lite_error:
+        warnings.append(
+            {
+                "oc_document_id": 0,
+                "oc_number": None,
+                "message": f"Fallback document_related también falló: {lite_error}",
+            }
+        )
+    warnings.extend(
+        {
+            "oc_document_id": x["oc_document_id"],
+            "oc_number": x.get("oc_number"),
+            "message": msg,
+        }
+        for x in items
     )
     return {
         "dispatch_plan_id": plan_id,
@@ -75,18 +106,13 @@ def empty_invoicing_payload(
             "missing": n,
             "total": n,
         },
-        "warnings": [
-            {
-                "oc_document_id": x["oc_document_id"],
-                "oc_number": x.get("oc_number"),
-                "message": msg,
-            }
-            for x in items
-        ],
+        "warnings": warnings,
         "probable_notes": [],
         "ready_for_picking": False,
         "invoicing_unavailable": True,
         "invoicing_error": msg,
+        "invoicing_full_error": full_view_error,
+        "invoicing_lite_error": lite_error,
         "invoicing_degraded": True,
         "invoicing_source": "unavailable",
     }

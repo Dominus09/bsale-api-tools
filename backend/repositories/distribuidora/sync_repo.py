@@ -103,6 +103,7 @@ def ensure_distribuidora_schema(cur) -> None:
         "023_dispatch_plan_identity.sql",
         "024_dispatch_plan_picking_snapshots.sql",
         "025_dispatch_plan_margin_and_snapshot.sql",
+        "026_dispatch_plan_invoiced_view_perf.sql",
     ):
         _run_sql_file(cur, fn)
 
