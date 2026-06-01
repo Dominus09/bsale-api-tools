@@ -18,14 +18,15 @@ export type PreDespachoOperationalStats = {
 }
 
 export function computePreDespachoStats(
-  rows: DistribuidoraDispatchPrepPlanningRow[],
+  rows: DistribuidoraDispatchPrepPlanningRow[] | null | undefined,
 ): PreDespachoOperationalStats {
+  const list = Array.isArray(rows) ? rows : []
   let totalAmount = 0
   let pending = 0
   let invoiced = 0
   let probable = 0
 
-  for (const row of rows) {
+  for (const row of list) {
     const amt = Number(row.total_amount)
     if (Number.isFinite(amt)) totalAmount += amt
     const code = resolvePurchaseStatusCode(row as PurchaseInvoiceStatusFields)
@@ -40,7 +41,7 @@ export function computePreDespachoStats(
   }
 
   return {
-    totalOrders: rows.length,
+    totalOrders: list.length,
     totalAmount,
     pending,
     invoiced,
@@ -49,11 +50,12 @@ export function computePreDespachoStats(
 }
 
 export function filterPlanningRowsByStatus(
-  rows: DistribuidoraDispatchPrepPlanningRow[],
+  rows: DistribuidoraDispatchPrepPlanningRow[] | null | undefined,
   filter: PurchaseInvoiceStatusFilter,
 ): DistribuidoraDispatchPrepPlanningRow[] {
-  if (filter === "all") return rows
-  return rows.filter((r) =>
+  const list = Array.isArray(rows) ? rows : []
+  if (filter === "all") return list
+  return list.filter((r) =>
     matchesPurchaseStatusFilter(r as PurchaseInvoiceStatusFields, filter),
   )
 }
@@ -65,10 +67,10 @@ function municipalityLabel(row: DistribuidoraDispatchPrepPlanningRow): string {
 
 /** Resumen por comuna a partir de filas de planificación (respeta filtro de estado). */
 export function aggregateDispatchPrepByMunicipality(
-  rows: DistribuidoraDispatchPrepPlanningRow[],
+  rows: DistribuidoraDispatchPrepPlanningRow[] | null | undefined,
   filter: PurchaseInvoiceStatusFilter,
 ): DistribuidoraDispatchPrepMunicipalityRow[] {
-  const filtered = filterPlanningRowsByStatus(rows, filter)
+  const filtered = filterPlanningRowsByStatus(rows ?? [], filter)
   const map = new Map<
     string,
     { clientes: Set<number>; pedidos: number; ventas: number }
@@ -103,12 +105,15 @@ export function aggregateDispatchPrepByMunicipality(
     })
 }
 
-export function computeResumenKpis(rows: DistribuidoraDispatchPrepMunicipalityRow[]) {
+export function computeResumenKpis(
+  rows: DistribuidoraDispatchPrepMunicipalityRow[] | null | undefined,
+) {
+  const list = Array.isArray(rows) ? rows : []
   let pedidos = 0
   let ventas = 0
-  for (const r of rows) {
+  for (const r of list) {
     pedidos += Number(r.pedidos) || 0
     ventas += Number(r.total_ventas) || 0
   }
-  return { comunas: rows.length, pedidos, ventas }
+  return { comunas: list.length, pedidos, ventas }
 }

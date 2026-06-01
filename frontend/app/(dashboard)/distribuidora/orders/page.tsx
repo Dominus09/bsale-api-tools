@@ -58,6 +58,7 @@ import {
   computePreDespachoStats,
   computeResumenKpis,
   filterPlanningRowsByStatus,
+  type PreDespachoOperationalStats,
 } from "@/lib/pre-despacho-stats"
 import {
   matchesPurchaseStatusFilter,
@@ -102,6 +103,23 @@ const RESUMEN_ESTADO_OPTIONS: {
   { value: "all", label: "Todos" },
 ]
 
+const EMPTY_STATUS_COUNTS: Record<PurchaseInvoiceStatusFilter, number> = {
+  all: 0,
+  pending: 0,
+  probable: 0,
+  confirmed: 0,
+}
+
+const EMPTY_OPERATIONAL_STATS: PreDespachoOperationalStats = {
+  totalOrders: 0,
+  totalAmount: 0,
+  pending: 0,
+  invoiced: 0,
+  probable: 0,
+}
+
+const EMPTY_RESUMEN_KPIS = { comunas: 0, pedidos: 0, ventas: 0 }
+
 /** Valor sentinela en `<select>` nativo para “sin camión”. */
 const TRUCK_UNSET = "__unset__"
 
@@ -132,6 +150,9 @@ export default function DistribuidoraOrdersPage() {
   const [onlyNotInvoiced, setOnlyNotInvoiced] = useState(true)
   const [estadoResumen, setEstadoResumen] =
     useState<PurchaseInvoiceStatusFilter>("pending")
+  /** Alias legacy `statusQuickFilter` (rename incompleto). Fuente de verdad: `estadoResumen`. */
+  const statusQuickFilter: PurchaseInvoiceStatusFilter =
+    estadoResumen ?? "pending"
   const [activeDayFilter, setActiveDayFilter] = useState<string | null>(null)
 
   const [observationTexts, setObservationTexts] = useState<string[]>([])
@@ -186,7 +207,7 @@ export default function DistribuidoraOrdersPage() {
       setTrucksError(null)
       try {
         const res = await getDistribuidoraTrucks({ signal: ac.signal })
-        setTrucks(res.items)
+        setTrucks(Array.isArray(res.items) ? res.items : [])
       } catch (e: unknown) {
         if (e instanceof Error && e.name === "AbortError") return
         setTrucks([])
@@ -218,8 +239,8 @@ export default function DistribuidoraOrdersPage() {
             signal,
           }),
         ])
-        setObservationTexts(obs.items)
-        setPlanningRows(plan.items ?? [])
+        setObservationTexts(Array.isArray(obs.items) ? obs.items : [])
+        setPlanningRows(Array.isArray(plan.items) ? plan.items : [])
         if (plan.has_more) {
           console.warn("Pre-planificación: hay más filas; paginación offset no implementada en UI.")
         }
@@ -286,8 +307,13 @@ export default function DistribuidoraOrdersPage() {
     }
   }, [loadDispatchPrep])
 
+  const safePlanningRows = useMemo(
+    () => (Array.isArray(planningRows) ? planningRows : []),
+    [planningRows],
+  )
+
   const tagStats = useMemo(
-    () => aggregateObservationTags(observationTexts),
+    () => aggregateObservationTags(observationTexts ?? []),
     [observationTexts],
   )
 
@@ -298,15 +324,18 @@ export default function DistribuidoraOrdersPage() {
   }, [])
 
   const resumenRows = useMemo(
-    () => aggregateDispatchPrepByMunicipality(planningRows, estadoResumen),
-    [planningRows, estadoResumen],
+    () => aggregateDispatchPrepByMunicipality(safePlanningRows, statusQuickFilter),
+    [safePlanningRows, statusQuickFilter],
   )
 
-  const kpis = useMemo(() => computeResumenKpis(resumenRows), [resumenRows])
+  const kpis = useMemo(
+    () => computeResumenKpis(resumenRows ?? []),
+    [resumenRows],
+  )
 
   const operationalStats = useMemo(
-    () => computePreDespachoStats(planningRows),
-    [planningRows],
+    () => computePreDespachoStats(safePlanningRows),
+    [safePlanningRows],
   )
 
   const statusFilterCounts = useMemo((): Record<
@@ -314,12 +343,12 @@ export default function DistribuidoraOrdersPage() {
     number
   > => {
     const counts: Record<PurchaseInvoiceStatusFilter, number> = {
-      all: planningRows.length,
+      all: safePlanningRows.length,
       pending: 0,
       probable: 0,
       confirmed: 0,
     }
-    for (const r of planningRows) {
+    for (const r of safePlanningRows) {
       if (
         matchesPurchaseStatusFilter(r as PurchaseInvoiceStatusFields, "pending")
       ) {
@@ -338,11 +367,11 @@ export default function DistribuidoraOrdersPage() {
       }
     }
     return counts
-  }, [planningRows])
+  }, [safePlanningRows])
 
   const filteredPlanningRows = useMemo(
-    () => filterPlanningRowsByStatus(planningRows, estadoResumen),
-    [planningRows, estadoResumen],
+    () => filterPlanningRowsByStatus(safePlanningRows, statusQuickFilter),
+    [safePlanningRows, statusQuickFilter],
   )
 
   const validTruckIdSet = useMemo(
@@ -448,7 +477,7 @@ export default function DistribuidoraOrdersPage() {
   const canPassToPlanificacion = useMemo(() => {
     if (trucks.length === 0) return false
     let anyInPlan = false
-    for (const r of planningRows) {
+    for (const r of safePlanningRows) {
       const tid = truckIdByDoc[r.document_id]
       const assigned = tid != null
       const valid = isValidTruckId(tid, trucks)
@@ -456,7 +485,7 @@ export default function DistribuidoraOrdersPage() {
       if (valid && rowHasGeo(r)) anyInPlan = true
     }
     return anyInPlan
-  }, [trucks, planningRows, truckIdByDoc])
+  }, [trucks, safePlanningRows, truckIdByDoc])
 
   const onPassToPlanificacion = useCallback(() => {
     setPlanificacionFeedback(null)
@@ -467,7 +496,7 @@ export default function DistribuidoraOrdersPage() {
     const byTruck: Record<number, number> = {}
     const stored: PlanificacionStoredOrder[] = []
 
-    for (const r of planningRows) {
+    for (const r of safePlanningRows) {
       if (!rowHasGeo(r)) continue
       const tid = truckIdByDoc[r.document_id]
       const truck =
@@ -501,7 +530,7 @@ export default function DistribuidoraOrdersPage() {
       orders: stored,
     })
     router.push("/distribuidora/planificacion")
-  }, [trucks, planningRows, truckIdByDoc, router])
+  }, [trucks, safePlanningRows, truckIdByDoc, router])
 
   const trucksOrderedForGroupMenu = useMemo(() => {
     const list = [...trucks]
@@ -566,7 +595,7 @@ export default function DistribuidoraOrdersPage() {
     const { municipality, truckId } = sug
     setTruckIdByDoc((prev) => {
       const next = { ...prev }
-      for (const x of planningRows) {
+      for (const x of safePlanningRows) {
         if (normMunicipality(x.municipality) !== municipality) continue
         if (!rowHasGeo(x)) continue
         const t = prev[x.document_id]
@@ -575,7 +604,7 @@ export default function DistribuidoraOrdersPage() {
       return next
     })
     setBulkTruckSuggest(null)
-  }, [bulkTruckSuggest, planningRows, trucks])
+  }, [bulkTruckSuggest, safePlanningRows, trucks])
 
   const onPlanningTruckChange = useCallback(
     (row: DistribuidoraDispatchPrepPlanningRow, raw: string) => {
@@ -590,7 +619,7 @@ export default function DistribuidoraOrdersPage() {
         if (coerced != null && rowHasGeo(row)) {
           const muni = normMunicipality(row.municipality)
           let c = 0
-          for (const x of planningRows) {
+          for (const x of safePlanningRows) {
             if (x.document_id === row.document_id) continue
             if (normMunicipality(x.municipality) !== muni) continue
             if (!rowHasGeo(x)) continue
@@ -610,8 +639,18 @@ export default function DistribuidoraOrdersPage() {
         return merged
       })
     },
-    [planningRows, trucks],
+    [safePlanningRows, trucks],
   )
+
+  useEffect(() => {
+    console.log("PRE_DESPACHO_DATA", {
+      planningRows: safePlanningRows,
+      resumenRows: resumenRows ?? [],
+      operationalStats: operationalStats ?? {},
+    })
+    console.log("SUMMARY_DATA", kpis ?? {})
+    console.log("FILTER_STATE", statusQuickFilter)
+  }, [safePlanningRows, resumenRows, operationalStats, kpis, statusQuickFilter])
 
   const openDetail = useCallback((r: DistribuidoraDispatchPrepMunicipalityRow) => {
     setDetailRow(r)
@@ -670,9 +709,9 @@ export default function DistribuidoraOrdersPage() {
       </header>
 
       <PreDespachoKpiStrip
-        stats={operationalStats}
+        stats={operationalStats ?? EMPTY_OPERATIONAL_STATS}
         loading={loading}
-        estadoResumen={estadoResumen}
+        estadoResumen={statusQuickFilter}
         onEstadoResumenChange={setEstadoResumen}
       />
 
@@ -746,7 +785,7 @@ export default function DistribuidoraOrdersPage() {
         <div className="space-y-2">
           <Label htmlFor="resumen-estado">Estado resumen</Label>
           <Select
-            value={estadoResumen}
+            value={statusQuickFilter}
             onValueChange={(v) =>
               setEstadoResumen(v as PurchaseInvoiceStatusFilter)
             }
@@ -771,21 +810,21 @@ export default function DistribuidoraOrdersPage() {
           <span className="text-xs text-muted-foreground">Comunas</span>
           <p className="flex items-center gap-2 font-semibold tabular-nums">
             <MapPin className="size-4 text-muted-foreground" aria-hidden />
-            {loading ? "—" : kpis.comunas}
+            {loading ? "—" : (kpis?.comunas ?? 0)}
           </p>
         </div>
         <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2.5 text-sm">
           <span className="text-xs text-muted-foreground">Pedidos agregados</span>
           <p className="flex items-center gap-2 font-semibold tabular-nums">
             <Package className="size-4 text-muted-foreground" aria-hidden />
-            {loading ? "—" : kpis.pedidos.toLocaleString("es-CL")}
+            {loading ? "—" : (kpis?.pedidos ?? 0).toLocaleString("es-CL")}
           </p>
         </div>
         <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2.5 text-sm">
           <span className="text-xs text-muted-foreground">Venta por comuna</span>
           <p className="flex items-center gap-2 text-sm font-semibold tabular-nums">
             <Truck className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-            {loading ? "—" : formatClp(kpis.ventas)}
+            {loading ? "—" : formatClp(kpis?.ventas ?? 0)}
           </p>
         </div>
       </div>
@@ -935,7 +974,7 @@ export default function DistribuidoraOrdersPage() {
               Pasar a planificación
             </Button>
           </div>
-          {!canPassToPlanificacion && planningRows.length > 0 ? (
+          {!canPassToPlanificacion && safePlanningRows.length > 0 ? (
             <p className="text-xs text-amber-700 dark:text-amber-500">
               Faltan camiones o georreferencias para continuar
             </p>
@@ -960,9 +999,9 @@ export default function DistribuidoraOrdersPage() {
             </Alert>
           ) : null}
           <PreDespachoStatusChips
-            value={estadoResumen}
+            value={statusQuickFilter}
             onChange={setEstadoResumen}
-            counts={statusFilterCounts}
+            counts={statusFilterCounts ?? EMPTY_STATUS_COUNTS}
             disabled={loading}
           />
 
@@ -1023,7 +1062,7 @@ export default function DistribuidoraOrdersPage() {
             lastSuggestedGroupTruckId={lastSuggestedGroupTruckId}
             truckIdByDoc={truckIdByDoc}
             clusterByDoc={clusterByDoc}
-            allRowsForThresholds={planningRows}
+            allRowsForThresholds={safePlanningRows}
             loading={loading}
             statusFilterActive={statusQuickFilter !== "all"}
             onGroupTruckPick={assignTruckToGroupWithChoice}

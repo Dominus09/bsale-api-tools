@@ -17,12 +17,20 @@ type PreDespachoStatusChipsProps = {
   disabled?: boolean
 }
 
+const EMPTY_COUNTS: Record<PurchaseInvoiceStatusFilter, number> = {
+  all: 0,
+  pending: 0,
+  probable: 0,
+  confirmed: 0,
+}
+
 export function PreDespachoStatusChips({
   value,
   onChange,
   counts,
   disabled,
 }: PreDespachoStatusChipsProps) {
+  const safeCounts = counts ?? EMPTY_COUNTS
   return (
     <div
       className="flex flex-wrap gap-1.5"
@@ -53,7 +61,7 @@ export function PreDespachoStatusChips({
                 active ? "bg-primary/15" : "bg-muted/80 text-muted-foreground",
               )}
             >
-              {counts[chip.id]}
+              {safeCounts[chip.id] ?? 0}
             </span>
           </button>
         )

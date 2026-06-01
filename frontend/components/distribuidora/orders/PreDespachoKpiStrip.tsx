@@ -92,29 +92,38 @@ type PreDespachoKpiStripProps = {
   onEstadoResumenChange?: (filter: PurchaseInvoiceStatusFilter) => void
 }
 
+const EMPTY_STATS: PreDespachoOperationalStats = {
+  totalOrders: 0,
+  totalAmount: 0,
+  pending: 0,
+  invoiced: 0,
+  probable: 0,
+}
+
 export function PreDespachoKpiStrip({
   stats,
   loading,
   estadoResumen,
   onEstadoResumenChange,
 }: PreDespachoKpiStripProps) {
+  const s = stats ?? EMPTY_STATS
   return (
     <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
       <KpiCard
         label="Total órdenes"
-        value={stats.totalOrders.toLocaleString("es-CL")}
+        value={s.totalOrders.toLocaleString("es-CL")}
         icon={ClipboardList}
         loading={loading}
       />
       <KpiCard
         label="Total monto"
-        value={formatClp(stats.totalAmount)}
+        value={formatClp(s.totalAmount)}
         icon={CircleDollarSign}
         loading={loading}
       />
       <KpiCard
         label="Pendientes"
-        value={stats.pending.toLocaleString("es-CL")}
+        value={s.pending.toLocaleString("es-CL")}
         sub="Sin factura confirmada"
         icon={Timer}
         accent="slate"
@@ -126,7 +135,7 @@ export function PreDespachoKpiStrip({
       />
       <KpiCard
         label="Probables"
-        value={stats.probable.toLocaleString("es-CL")}
+        value={s.probable.toLocaleString("es-CL")}
         sub="Heurística operacional"
         icon={HelpCircle}
         accent="yellow"
@@ -138,7 +147,7 @@ export function PreDespachoKpiStrip({
       />
       <KpiCard
         label="Facturadas"
-        value={stats.invoiced.toLocaleString("es-CL")}
+        value={s.invoiced.toLocaleString("es-CL")}
         sub="Relación confirmada"
         icon={FileCheck2}
         accent="green"
