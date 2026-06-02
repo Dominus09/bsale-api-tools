@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import { Loader2, MapPin, Package, RefreshCw, Truck } from "lucide-react"
 
@@ -76,6 +76,13 @@ import {
   type PlanificacionStoredOrder,
 } from "@/lib/planificacion-despacho-storage"
 import { toast } from "@/hooks/use-toast"
+import {
+  isWidePreDespachoRange,
+  PRE_DESPACHO_PAGE_LIMIT,
+  PRE_DESPACHO_TIMEOUT_MESSAGE,
+  PRE_DESPACHO_WIDE_RANGE_HINT,
+  rangeSpanDays,
+} from "@/lib/pre-despacho-range"
 
 function localIsoDate(d = new Date()): string {
   const y = d.getFullYear()
@@ -144,10 +151,30 @@ function isValidTruckId(
   )
 }
 
+function dispatchPrepLoadErrorMessage(e: unknown): string {
+  if (!(e instanceof Error)) return PRE_DESPACHO_TIMEOUT_MESSAGE
+  const m = e.message.toLowerCase()
+  if (
+    m.includes("tardó demasiado") ||
+    m.includes("cancelada") ||
+    m.includes("timeout") ||
+    m.includes("socket hang up") ||
+    m.includes("econnreset") ||
+    m.includes("failed to fetch") ||
+    m.includes("network")
+  ) {
+    return PRE_DESPACHO_TIMEOUT_MESSAGE
+  }
+  return e.message || PRE_DESPACHO_TIMEOUT_MESSAGE
+}
+
 export default function DistribuidoraOrdersPage() {
   const router = useRouter()
-  const [dateFrom, setDateFrom] = useState(() => localIsoDate())
-  const [dateTo, setDateTo] = useState(() => localIsoDate())
+  const todayIso = localIsoDate()
+  const [draftDateFrom, setDraftDateFrom] = useState(todayIso)
+  const [draftDateTo, setDraftDateTo] = useState(todayIso)
+  const [appliedDateFrom, setAppliedDateFrom] = useState(todayIso)
+  const [appliedDateTo, setAppliedDateTo] = useState(todayIso)
   const [onlyNotInvoiced, setOnlyNotInvoiced] = useState(true)
   const [estadoResumen, setEstadoResumen] =
     useState<PurchaseInvoiceStatusFilter>("pending")
@@ -155,8 +182,14 @@ export default function DistribuidoraOrdersPage() {
 
   const [observationTexts, setObservationTexts] = useState<string[]>([])
   const [planningRows, setPlanningRows] = useState<DistribuidoraDispatchPrepPlanningRow[]>([])
+  const [planningHasMore, setPlanningHasMore] = useState(false)
+  const [rangeWarning, setRangeWarning] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
   const [loadingSync, setLoadingSync] = useState(false)
+  const [wideRangeConfirmOpen, setWideRangeConfirmOpen] = useState(false)
+  const initialLoadDone = useRef(false)
+  const skipFilterReload = useRef(true)
   const [lastOrdersLoadAt, setLastOrdersLoadAt] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [trucks, setTrucks] = useState<DistribuidoraTruck[]>([])
@@ -215,59 +248,124 @@ export default function DistribuidoraOrdersPage() {
     return () => ac.abort()
   }, [])
 
-  /** Solo fechas / solo-no-facturadas / chip día recargan API. Estado (Pendientes/Probables/Facturadas) es filtro local. */
+  const draftRangeDays = useMemo(
+    () => rangeSpanDays(draftDateFrom, draftDateTo),
+    [draftDateFrom, draftDateTo],
+  )
+  const draftIsWide = draftRangeDays > 7
+  const draftDatesDirty =
+    draftDateFrom !== appliedDateFrom || draftDateTo !== appliedDateTo
+
+  /** Fechas aplicadas + solo-no-facturadas + chip día → API. Estado KPI/tabla es filtro local. */
   const loadDispatchPrep = useCallback(
-    async (signal?: AbortSignal) => {
-      setLoading(true)
-      setError(null)
+    async (opts?: {
+      signal?: AbortSignal
+      append?: boolean
+      offset?: number
+      dateFrom?: string
+      dateTo?: string
+    }) => {
+      const from = opts?.dateFrom ?? appliedDateFrom
+      const to = opts?.dateTo ?? appliedDateTo
+      const append = opts?.append === true
+      const offset = opts?.offset ?? 0
+      if (append) setLoadingMore(true)
+      else {
+        setLoading(true)
+        setError(null)
+      }
       try {
         const dayParam = activeDayFilter ?? undefined
-        const [obs, plan] = await Promise.all([
-          getDistribuidoraDispatchPrepObservaciones({
-            emission_date_from: dateFrom,
-            emission_date_to: dateTo,
+        const plan = await getDistribuidoraDispatchPrepPlanningRows({
+          emission_date_from: from,
+          emission_date_to: to,
+          only_not_invoiced: onlyNotInvoiced,
+          day_filter: dayParam,
+          limit: PRE_DESPACHO_PAGE_LIMIT,
+          offset,
+          signal: opts?.signal,
+        })
+        if (!append) {
+          const obs = await getDistribuidoraDispatchPrepObservaciones({
+            emission_date_from: from,
+            emission_date_to: to,
             only_not_invoiced: onlyNotInvoiced,
             day_filter: dayParam,
-            signal,
-          }),
-          getDistribuidoraDispatchPrepPlanningRows({
-            emission_date_from: dateFrom,
-            emission_date_to: dateTo,
-            only_not_invoiced: onlyNotInvoiced,
-            day_filter: dayParam,
-            signal,
-          }),
-        ])
-        setObservationTexts(Array.isArray(obs.items) ? obs.items : [])
-        setPlanningRows(Array.isArray(plan.items) ? plan.items : [])
-        if (plan.has_more) {
-          console.warn("Pre-planificación: hay más filas; paginación offset no implementada en UI.")
+            limit: PRE_DESPACHO_PAGE_LIMIT,
+            offset: 0,
+            signal: opts?.signal,
+          })
+          setObservationTexts(Array.isArray(obs.items) ? obs.items : [])
+          setRangeWarning(plan.warning ?? obs.warning ?? null)
+        } else {
+          setRangeWarning(plan.warning ?? null)
         }
-        console.log("📋 Órdenes cargadas:", plan.items?.length ?? 0)
-        setLastOrdersLoadAt(
-          new Date().toLocaleString("es-CL", {
-            dateStyle: "short",
-            timeStyle: "medium",
-          }),
-        )
-        setTruckIdByDoc({})
+        const newItems = Array.isArray(plan.items) ? plan.items : []
+        setPlanningRows((prev) => (append ? [...prev, ...newItems] : newItems))
+        setPlanningHasMore(Boolean(plan.has_more))
+        if (!append) {
+          setLastOrdersLoadAt(
+            new Date().toLocaleString("es-CL", {
+              dateStyle: "short",
+              timeStyle: "medium",
+            }),
+          )
+          setTruckIdByDoc({})
+        }
       } catch (e: unknown) {
         if (e instanceof Error && e.name === "AbortError") return
-        setError(e instanceof Error ? e.message : "Error al cargar datos")
-        setObservationTexts([])
-        setPlanningRows([])
+        setError(dispatchPrepLoadErrorMessage(e))
       } finally {
-        setLoading(false)
+        if (append) setLoadingMore(false)
+        else setLoading(false)
       }
     },
-    [dateFrom, dateTo, onlyNotInvoiced, activeDayFilter],
+    [appliedDateFrom, appliedDateTo, onlyNotInvoiced, activeDayFilter],
   )
 
+  const applyDraftRange = useCallback(async () => {
+    setAppliedDateFrom(draftDateFrom)
+    setAppliedDateTo(draftDateTo)
+    setPlanningHasMore(false)
+    await loadDispatchPrep({
+      dateFrom: draftDateFrom,
+      dateTo: draftDateTo,
+      offset: 0,
+    })
+  }, [draftDateFrom, draftDateTo, loadDispatchPrep])
+
+  const onRequestApplyRange = useCallback(() => {
+    if (isWidePreDespachoRange(draftDateFrom, draftDateTo)) {
+      setWideRangeConfirmOpen(true)
+      return
+    }
+    void applyDraftRange()
+  }, [draftDateFrom, draftDateTo, applyDraftRange])
+
   useEffect(() => {
+    if (initialLoadDone.current) return
+    initialLoadDone.current = true
     const ac = new AbortController()
-    void loadDispatchPrep(ac.signal)
+    void loadDispatchPrep({ signal: ac.signal })
     return () => ac.abort()
   }, [loadDispatchPrep])
+
+  useEffect(() => {
+    if (skipFilterReload.current) {
+      skipFilterReload.current = false
+      return
+    }
+    const ac = new AbortController()
+    void loadDispatchPrep({ signal: ac.signal, offset: 0 })
+    return () => ac.abort()
+  }, [activeDayFilter, onlyNotInvoiced, loadDispatchPrep])
+
+  const loadMorePlanning = useCallback(() => {
+    void loadDispatchPrep({
+      append: true,
+      offset: planningRows.length,
+    })
+  }, [loadDispatchPrep, planningRows.length])
 
   const onSyncOrdersFromBsale = useCallback(async () => {
     const ac = new AbortController()
@@ -707,8 +805,22 @@ export default function DistribuidoraOrdersPage() {
 
       {error ? (
         <Alert variant="destructive">
-          <AlertTitle>Error</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
+          <AlertTitle>No se pudieron actualizar los datos</AlertTitle>
+          <AlertDescription>
+            {error}
+            {safePlanningRows.length > 0 ? (
+              <span className="mt-2 block text-sm">
+                Se mantienen las últimas {safePlanningRows.length} órdenes cargadas.
+              </span>
+            ) : null}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {rangeWarning ? (
+        <Alert>
+          <AlertTitle>Rango amplio</AlertTitle>
+          <AlertDescription>{rangeWarning}</AlertDescription>
         </Alert>
       ) : null}
 
@@ -716,30 +828,54 @@ export default function DistribuidoraOrdersPage() {
         {lastOrdersLoadAt ? (
           <p className="mb-3 text-xs text-muted-foreground">
             Datos cargados: {lastOrdersLoadAt}
+            {" · "}
+            Rango aplicado: {appliedDateFrom} — {appliedDateTo}
           </p>
         ) : null}
+        {draftIsWide ? (
+          <Alert className="mb-4 border-amber-500/40 bg-amber-500/5">
+            <AlertTitle>Rango amplio</AlertTitle>
+            <AlertDescription>{PRE_DESPACHO_WIDE_RANGE_HINT}</AlertDescription>
+          </Alert>
+        ) : null}
         <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-          <div className="grid gap-5 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="prep-from">Fecha desde</Label>
-              <Input
-                id="prep-from"
-                type="date"
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
-                disabled={loading}
-              />
+          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+            <div className="grid gap-5 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="prep-from">Fecha desde</Label>
+                <Input
+                  id="prep-from"
+                  type="date"
+                  value={draftDateFrom}
+                  onChange={(e) => setDraftDateFrom(e.target.value)}
+                  disabled={loading && !loadingMore}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="prep-to">Fecha hasta</Label>
+                <Input
+                  id="prep-to"
+                  type="date"
+                  value={draftDateTo}
+                  onChange={(e) => setDraftDateTo(e.target.value)}
+                  disabled={loading && !loadingMore}
+                />
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="prep-to">Fecha hasta</Label>
-              <Input
-                id="prep-to"
-                type="date"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-                disabled={loading}
-              />
-            </div>
+            <Button
+              type="button"
+              size="sm"
+              className="shrink-0"
+              disabled={(loading && !loadingMore) || (!draftDatesDirty && !draftIsWide)}
+              onClick={() => onRequestApplyRange()}
+            >
+              {draftIsWide ? "Cargar rango completo" : "Aplicar rango"}
+            </Button>
+            {draftDatesDirty ? (
+              <p className="text-xs text-muted-foreground sm:basis-full">
+                Cambió el rango en los campos; pulse el botón para cargar desde el servidor.
+              </p>
+            ) : null}
           </div>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-6">
             <div className="flex items-center gap-3">
@@ -1058,8 +1194,52 @@ export default function DistribuidoraOrdersPage() {
             onGroupTruckPick={assignTruckToGroupWithChoice}
             onTruckChange={onPlanningTruckChange}
           />
+          {planningHasMore ? (
+            <div className="flex flex-col items-center gap-2 border-t border-border/60 pt-4">
+              <p className="text-center text-xs text-muted-foreground">
+                Hay más órdenes en este rango ({safePlanningRows.length} cargadas, máx.{" "}
+                {PRE_DESPACHO_PAGE_LIMIT} por página).
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={loading || loadingMore}
+                onClick={() => loadMorePlanning()}
+              >
+                {loadingMore ? (
+                  <Loader2 className="mr-2 size-4 animate-spin" aria-hidden />
+                ) : null}
+                Cargar más órdenes
+              </Button>
+            </div>
+          ) : null}
         </section>
       </TooltipProvider>
+
+      <AlertDialog open={wideRangeConfirmOpen} onOpenChange={setWideRangeConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>¿Cargar rango amplio?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {PRE_DESPACHO_WIDE_RANGE_HINT} El servidor devolverá hasta{" "}
+              {PRE_DESPACHO_PAGE_LIMIT} órdenes por página; puede usar &quot;Cargar más&quot;
+              para el resto.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                setWideRangeConfirmOpen(false)
+                void applyDraftRange()
+              }}
+            >
+              Sí, cargar rango
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog
         open={bulkTruckSuggest != null}

@@ -1,6 +1,7 @@
 import { getApiBaseUrl } from "@/lib/api-base"
 import {
   DEFAULT_FETCH_TIMEOUT_MS,
+  DISPATCH_PREP_FETCH_TIMEOUT_MS,
   fetchWithTimeout,
   ORS_FETCH_TIMEOUT_MS,
 } from "@/lib/fetch-timeout"
@@ -950,17 +951,27 @@ export async function getDistribuidoraDispatchPrepByMunicipality(params: {
   return res.json() as Promise<DistribuidoraDispatchPrepByMunicipalityResponse>
 }
 
-export type DistribuidoraDispatchPrepObservacionesResponse = {
-  items: string[]
+export type DistribuidoraDispatchPrepPaginatedMeta = {
+  has_more: boolean
+  limit: number
+  offset: number
+  range_days?: number
+  wide_range?: boolean
+  warning?: string | null
 }
+
+export type DistribuidoraDispatchPrepObservacionesResponse =
+  DistribuidoraDispatchPrepPaginatedMeta & {
+    items: string[]
+  }
 
 export async function getDistribuidoraDispatchPrepObservaciones(params: {
   emission_date_from: string
   emission_date_to: string
   only_not_invoiced?: boolean
   day_filter?: string | null
-  /** Máximo 300 (default API). */
   limit?: number
+  offset?: number
   signal?: AbortSignal
 }): Promise<DistribuidoraDispatchPrepObservacionesResponse> {
   const qs = new URLSearchParams()
@@ -968,10 +979,12 @@ export async function getDistribuidoraDispatchPrepObservaciones(params: {
   qs.set("emission_date_to", params.emission_date_to)
   if (params.only_not_invoiced === false) qs.set("only_not_invoiced", "false")
   if (params.day_filter?.trim()) qs.set("day_filter", params.day_filter.trim())
-  qs.set("limit", String(params.limit ?? 300))
-  const res = await fetch(
+  qs.set("limit", String(params.limit ?? 500))
+  if (params.offset != null) qs.set("offset", String(params.offset))
+  const res = await fetchWithTimeout(
     `${API_URL}/distribuidora/orders/dispatch-prep/observaciones?${qs}`,
     { headers: getAuthHeaders(), signal: params.signal },
+    DISPATCH_PREP_FETCH_TIMEOUT_MS,
   )
   if (!res.ok) {
     const msg = await res.text().catch(() => "")
@@ -1000,12 +1013,10 @@ export type DistribuidoraDispatchPrepPlanningRow = {
   probable_tier?: string | null
 }
 
-export type DistribuidoraDispatchPrepPlanningRowsResponse = {
-  items: DistribuidoraDispatchPrepPlanningRow[]
-  has_more: boolean
-  limit: number
-  offset: number
-}
+export type DistribuidoraDispatchPrepPlanningRowsResponse =
+  DistribuidoraDispatchPrepPaginatedMeta & {
+    items: DistribuidoraDispatchPrepPlanningRow[]
+  }
 
 export async function getDistribuidoraDispatchPrepPlanningRows(params: {
   emission_date_from: string
@@ -1021,11 +1032,12 @@ export async function getDistribuidoraDispatchPrepPlanningRows(params: {
   qs.set("emission_date_to", params.emission_date_to)
   if (params.only_not_invoiced === false) qs.set("only_not_invoiced", "false")
   if (params.day_filter?.trim()) qs.set("day_filter", params.day_filter.trim())
-  if (params.limit != null) qs.set("limit", String(params.limit))
+  qs.set("limit", String(params.limit ?? 500))
   if (params.offset != null) qs.set("offset", String(params.offset))
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${API_URL}/distribuidora/orders/dispatch-prep/planning-rows?${qs}`,
     { headers: getAuthHeaders(), signal: params.signal },
+    DISPATCH_PREP_FETCH_TIMEOUT_MS,
   )
   if (!res.ok) {
     const msg = await res.text().catch(() => "")

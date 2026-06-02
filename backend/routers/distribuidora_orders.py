@@ -340,24 +340,30 @@ def get_dispatch_prep_observaciones(
         description="Si true: solo textos de OC sin factura/boleta en document_related.",
     ),
     limit: int = Query(
-        300,
+        500,
         ge=1,
-        le=300,
-        description="Máximo de textos devueltos (capado a 300 para aligerar el endpoint).",
+        le=500,
+        description="Tamaño de página (máx. 500).",
+    ),
+    offset: int = Query(
+        0,
+        ge=0,
+        le=500_000,
+        description="Desplazamiento para paginación.",
     ),
     day_filter: str | None = Query(
         None,
         description="Opcional: día de la semana (mismo criterio que by-municipality).",
     ),
 ):
-    texts = list_dispatch_prep_observation_texts(
+    return list_dispatch_prep_observation_texts(
         emission_date_from=emission_date_from,
         emission_date_to=emission_date_to,
         only_not_invoiced=only_not_invoiced,
         limit=limit,
+        offset=offset,
         day_filter=day_filter,
     )
-    return {"items": texts}
 
 
 @router.get("/orders/dispatch-prep/planning-rows")
@@ -370,10 +376,10 @@ def get_dispatch_prep_planning_rows(
     ),
     day_filter: str | None = Query(None),
     limit: int = Query(
-        400,
+        500,
         ge=1,
-        le=1500,
-        description="Tamaño de página (máx. 1500).",
+        le=500,
+        description="Tamaño de página (máx. 500; rangos >7 días devuelven aviso).",
     ),
     offset: int = Query(
         0,
@@ -382,8 +388,7 @@ def get_dispatch_prep_planning_rows(
         description="Desplazamiento para paginación.",
     ),
 ):
-    t0 = time.perf_counter()
-    result = list_dispatch_prep_planning_rows(
+    return list_dispatch_prep_planning_rows(
         emission_date_from=emission_date_from,
         emission_date_to=emission_date_to,
         only_not_invoiced=only_not_invoiced,
@@ -391,14 +396,6 @@ def get_dispatch_prep_planning_rows(
         limit=limit,
         offset=offset,
     )
-    elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
-    n = len(result.get("items") or []) if isinstance(result, dict) else 0
-    logging.getLogger(__name__).info(
-        "[PLANNING_ROWS_DEBUG] http_done endpoint=planning-rows total_ms=%s rows=%s",
-        elapsed_ms,
-        n,
-    )
-    return result
 
 
 @router.post("/resync-oc")

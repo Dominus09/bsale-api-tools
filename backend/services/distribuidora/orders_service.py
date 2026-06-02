@@ -9,12 +9,25 @@ from decimal import Decimal
 from typing import Any
 
 from backend.db import get_connection
-from backend.utils.planning_rows_debug import (
-    PlanningRowsTimer,
-    explain_analyze_enabled,
-    log_planning_rows,
-    rank_explain_nodes,
-    run_explain_analyze,
+from backend.utils.dispatch_prep_common import (
+    DEFAULT_DISPATCH_PREP_LIMIT,
+    effective_page_limit,
+    log_dispatch_prep,
+    payload_size_bytes,
+    wide_range_meta,
+)
+from backend.utils.planning_rows_debug import PlanningRowsTimer, log_planning_rows
+
+_DISPATCH_PREP_DOC_FILTER = """
+    d.company_id = 3
+    AND d.office_id = 1
+    AND d.document_type_id = 33
+    AND d.emission_date >= %s::date
+    AND d.emission_date < (%s::date + interval '1 day')
+""".strip()
+
+_DISPATCH_PREP_NOT_INVOICED_FILTER = (
+    "(%s = FALSE OR NOT COALESCE(conf_f.is_invoiced, FALSE))"
 )
 
 _DAY_FILTER_ALLOW = frozenset({"lunes", "martes", "miercoles", "jueves", "viernes", "sabado"})
@@ -487,59 +500,33 @@ def list_dispatch_prep_by_municipality(
         conn.close()
 
 
-def list_dispatch_prep_observation_texts(
-    *,
-    emission_date_from: date,
-    emission_date_to: date,
-    only_not_invoiced: bool = True,
-    limit: int = 300,
-    day_filter: str | None = None,
-) -> list[str]:
-    """Textos de observaciones (atributo OBSERVACIONES en OC) para análisis en frontend."""
-    d0, d1 = _normalize_date_range(emission_date_from, emission_date_to)
-    lim = max(1, min(int(limit), 300))
-    skip_day, day_like = _day_filter_sql_params(day_filter)
-    conn = get_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            f"""
-            SELECT p.observaciones
-            FROM distribuidora.v_orders_purchase p
-            INNER JOIN distribuidora.v_documents_latest d ON d.document_id = p.document_id
-            WHERE p.observaciones IS NOT NULL
-              AND BTRIM(p.observaciones) <> ''
-              AND d.emission_date >= %s::date
-              AND d.emission_date < (%s::date + interval '1 day')
-              AND (%s = FALSE OR {OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL})
-              AND CASE WHEN %s THEN TRUE ELSE {_OBS_NORMALIZED_P} LIKE %s END
-            LIMIT %s
-            """,
-            (d0, d1, only_not_invoiced, skip_day, day_like, lim),
-        )
-        out: list[str] = []
-        for (text,) in cur.fetchall():
-            if text is None:
-                continue
-            s = str(text).strip()
-            if s:
-                out.append(s)
-        cur.close()
-        return out
-    finally:
-        conn.close()
+def _planning_rows_ids_sql(*, with_day_obs: bool) -> str:
+    """Fase 1: IDs paginados sobre ``documents`` (filtro de fecha primero)."""
+    obs_join = (
+        ""
+        if not with_day_obs
+        else """
+            INNER JOIN distribuidora.v_oc_attributes_flat obs_a
+                ON obs_a.document_id = d.document_id
+        """
+    )
+    day_clause = "TRUE" if not with_day_obs else f"{_PLANNING_ROWS_OBS_TEXT} LIKE %s"
+    return f"""
+            SELECT d.document_id
+            FROM distribuidora.documents d
+            {obs_join}
+            LEFT JOIN distribuidora.v_orders_purchase_status conf_f
+                ON conf_f.document_id = d.document_id
+            WHERE {_DISPATCH_PREP_DOC_FILTER}
+              AND {_DISPATCH_PREP_NOT_INVOICED_FILTER}
+              AND CASE WHEN %s THEN TRUE ELSE {day_clause} END
+            ORDER BY d.number DESC NULLS LAST, d.document_id DESC
+            LIMIT %s OFFSET %s
+            """
 
 
-def _planning_rows_main_sql(*, use_documents_base: bool = False) -> str:
-    """SQL principal planning-rows (optimizado: sin v_purchase_document_status)."""
-    doc_from = (
-        "distribuidora.documents d"
-        if use_documents_base
-        else "distribuidora.v_documents_latest d"
-    )
-    not_inv_filter = (
-        "(%s = FALSE OR NOT COALESCE(conf.is_invoiced, FALSE))"
-    )
+def _planning_rows_enrich_sql() -> str:
+    """Fase 2: enriquecer solo los IDs de la página."""
     return f"""
             SELECT
                 d.document_id,
@@ -560,21 +547,93 @@ def _planning_rows_main_sql(*, use_documents_base: bool = False) -> str:
                 c.lat::double precision AS lat,
                 c.lon::double precision AS lng,
                 {_PLANNING_ROWS_STATUS_SELECT}
-            FROM {doc_from}
+            FROM distribuidora.documents d
             {_PLANNING_ROWS_STATUS_JOINS}
             LEFT JOIN bsale.clients c
                 ON c.company_id = d.company_id
                AND c.bsale_id = d.client_id
-            WHERE d.company_id = 3
-              AND d.office_id = 1
-              AND d.document_type_id = 33
-              AND d.emission_date >= %s::date
-              AND d.emission_date < (%s::date + interval '1 day')
-              AND {not_inv_filter}
-              AND CASE WHEN %s THEN TRUE ELSE {_PLANNING_ROWS_OBS_TEXT} LIKE %s END
+            WHERE d.document_id = ANY(%s::bigint[])
             ORDER BY d.number DESC NULLS LAST, d.document_id DESC
-            LIMIT %s OFFSET %s
             """
+
+
+def list_dispatch_prep_observation_texts(
+    *,
+    emission_date_from: date,
+    emission_date_to: date,
+    only_not_invoiced: bool = True,
+    limit: int = DEFAULT_DISPATCH_PREP_LIMIT,
+    offset: int = 0,
+    day_filter: str | None = None,
+) -> dict[str, Any]:
+    """Textos de observaciones (OC) paginados; filtra por ``documents`` antes de agregar."""
+    t0 = time.perf_counter()
+    d0, d1 = _normalize_date_range(emission_date_from, emission_date_to)
+    lim = effective_page_limit(limit, d0, d1)
+    off = max(0, int(offset))
+    fetch = lim + 1
+    skip_day, day_like = _day_filter_sql_params(day_filter)
+    day_clause = "TRUE" if skip_day else f"{_PLANNING_ROWS_OBS_TEXT} LIKE %s"
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        t_sql = time.perf_counter()
+        params: tuple[Any, ...] = (d0, d1, only_not_invoiced, skip_day)
+        if not skip_day:
+            params = (*params, day_like)
+        params = (*params, fetch, off)
+        cur.execute(
+            f"""
+            SELECT obs_a.observaciones
+            FROM distribuidora.documents d
+            INNER JOIN distribuidora.v_oc_attributes_flat obs_a
+                ON obs_a.document_id = d.document_id
+            LEFT JOIN distribuidora.v_orders_purchase_status conf_f
+                ON conf_f.document_id = d.document_id
+            WHERE {_DISPATCH_PREP_DOC_FILTER}
+              AND obs_a.observaciones IS NOT NULL
+              AND BTRIM(obs_a.observaciones) <> ''
+              AND {_DISPATCH_PREP_NOT_INVOICED_FILTER}
+              AND CASE WHEN %s THEN TRUE ELSE {day_clause} END
+            ORDER BY obs_a.observaciones
+            LIMIT %s OFFSET %s
+            """,
+            params,
+        )
+        raw = cur.fetchall() or []
+        sql_ms = round((time.perf_counter() - t_sql) * 1000.0, 2)
+        has_more = len(raw) > lim
+        out: list[str] = []
+        for (text,) in raw[:lim]:
+            if text is None:
+                continue
+            s = str(text).strip()
+            if s:
+                out.append(s)
+        cur.close()
+        meta = wide_range_meta(d0, d1)
+        payload: dict[str, Any] = {
+            "items": out,
+            "has_more": has_more,
+            "limit": lim,
+            "offset": off,
+            **meta,
+        }
+        total_ms = round((time.perf_counter() - t0) * 1000.0, 2)
+        log_dispatch_prep(
+            "observaciones",
+            date_from=d0,
+            date_to=d1,
+            sql_ms=sql_ms,
+            total_ms=total_ms,
+            rows_count=len(out),
+            payload_bytes=payload_size_bytes(payload),
+            limit=lim,
+            offset=off,
+        )
+        return payload
+    finally:
+        conn.close()
 
 
 def list_dispatch_prep_planning_rows(
@@ -583,89 +642,101 @@ def list_dispatch_prep_planning_rows(
     emission_date_to: date,
     only_not_invoiced: bool = True,
     day_filter: str | None = None,
-    limit: int = 400,
+    limit: int = DEFAULT_DISPATCH_PREP_LIMIT,
     offset: int = 0,
 ) -> dict[str, Any]:
     """
     Filas OC (33) para tabla de pre‑planificación.
 
-    Estado de facturación: ``v_orders_purchase_status`` + LATERAL ``document_probable_matches``
-    (no ``v_purchase_document_status`` / ``_full``).
+    Dos fases: paginar IDs en ``documents`` (filtro fecha + índice 028), luego joins de estado.
     """
     timer = PlanningRowsTimer()
+    t0 = time.perf_counter()
     d0, d1 = _normalize_date_range(emission_date_from, emission_date_to)
     skip_day, day_like = _day_filter_sql_params(day_filter)
-    lim = max(1, min(int(limit), 1500))
+    lim = effective_page_limit(limit, d0, d1)
     off = max(0, int(offset))
     fetch = lim + 1
-    sql = _planning_rows_main_sql()
-    params = (d0, d1, only_not_invoiced, skip_day, day_like, fetch, off)
-
-    log_planning_rows(
-        "start",
-        date_from=str(d0),
-        date_to=str(d1),
-        only_not_invoiced=only_not_invoiced,
-        day_filter=day_filter or "",
-        limit=lim,
-        offset=off,
-    )
+    ids_sql = _planning_rows_ids_sql(with_day_obs=not skip_day)
+    ids_params: tuple[Any, ...] = (d0, d1, only_not_invoiced, skip_day)
+    if not skip_day:
+        ids_params = (*ids_params, day_like)
+    ids_params = (*ids_params, fetch, off)
 
     conn = get_connection()
-    explain_ranking: list[dict[str, Any]] = []
+    sql_ms = 0.0
     try:
         cur = conn.cursor()
-        if explain_analyze_enabled():
-            try:
-                nodes = run_explain_analyze(cur, sql, params)
-                explain_ranking = rank_explain_nodes(nodes)
-                log_planning_rows(
-                    "explain_analyze",
-                    top_node=explain_ranking[0] if explain_ranking else None,
-                    node_count=len(nodes),
-                )
-            except Exception as exc:
-                log_planning_rows("explain_failed", error=repr(exc))
-                conn.rollback()
-
         t_sql = time.perf_counter()
-        cur.execute(sql, params)
-        raw = cur.fetchall() or []
+        cur.execute(ids_sql, ids_params)
+        id_rows = cur.fetchall() or []
         sql_ms = round((time.perf_counter() - t_sql) * 1000.0, 2)
-        timer.mark("sql_fetch")
+        timer.mark("sql_ids")
 
-        has_more = len(raw) > lim
-        slice_rows = raw[:lim]
-        rows = [_serialize_row(_row_to_dict(cur, r)) for r in slice_rows]
+        has_more = len(id_rows) > lim
+        doc_ids = [int(r[0]) for r in id_rows[:lim]]
+        if not doc_ids:
+            cur.close()
+            meta = wide_range_meta(d0, d1)
+            payload: dict[str, Any] = {
+                "items": [],
+                "has_more": False,
+                "limit": lim,
+                "offset": off,
+                **meta,
+            }
+            total_ms = round((time.perf_counter() - t0) * 1000.0, 2)
+            log_dispatch_prep(
+                "planning-rows",
+                date_from=d0,
+                date_to=d1,
+                sql_ms=sql_ms,
+                total_ms=total_ms,
+                rows_count=0,
+                payload_bytes=payload_size_bytes(payload),
+                limit=lim,
+                offset=off,
+            )
+            return payload
+
+        t_enrich = time.perf_counter()
+        cur.execute(_planning_rows_enrich_sql(), (doc_ids,))
+        raw = cur.fetchall() or []
+        sql_ms += round((time.perf_counter() - t_enrich) * 1000.0, 2)
+        timer.mark("sql_enrich")
+
+        rows = [_serialize_row(_row_to_dict(cur, r)) for r in raw]
         timer.mark("serialize")
         cur.close()
 
-        import json as _json
-
+        meta = wide_range_meta(d0, d1)
         payload = {
             "items": rows,
             "has_more": has_more,
             "limit": lim,
             "offset": off,
+            **meta,
         }
-        payload_bytes = len(_json.dumps(payload, default=str).encode("utf-8"))
-        total_ms = timer.total_ms()
-
+        total_ms = round((time.perf_counter() - t0) * 1000.0, 2)
+        log_dispatch_prep(
+            "planning-rows",
+            date_from=d0,
+            date_to=d1,
+            sql_ms=sql_ms,
+            total_ms=total_ms,
+            rows_count=len(rows),
+            payload_bytes=payload_size_bytes(payload),
+            limit=lim,
+            offset=off,
+        )
         log_planning_rows(
             "done",
             total_ms=total_ms,
             sql_ms=sql_ms,
             row_count=len(rows),
-            payload_bytes=payload_bytes,
+            payload_bytes=payload_size_bytes(payload),
             phases=timer.phases,
         )
-
-        if explain_ranking:
-            payload["_debug"] = {
-                "explain_top": explain_ranking[:8],
-                "timing_ms": {"total": total_ms, "sql": sql_ms, **timer.phases},
-            }
-
         return payload
     finally:
         conn.close()

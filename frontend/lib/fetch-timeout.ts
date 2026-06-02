@@ -1,6 +1,7 @@
 /** fetch con timeout y composición de AbortSignal externo. */
 
 export const DEFAULT_FETCH_TIMEOUT_MS = 90_000
+export const DISPATCH_PREP_FETCH_TIMEOUT_MS = 90_000
 export const ORS_FETCH_TIMEOUT_MS = 180_000
 
 export async function fetchWithTimeout(
