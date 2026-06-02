@@ -1987,19 +1987,87 @@ export async function downloadDispatchPlanBillingExcel(planId: number): Promise<
   URL.revokeObjectURL(url)
 }
 
+export type DispatchPlanPickingHeader = {
+  plan_id: number
+  planning_number: string
+  planning_name?: string
+  delivery_date: string
+  route_name: string
+  communes: string
+  truck_name: string
+  driver_label: string
+  assistant_label: string
+  sello: string
+}
+
+export type DispatchPlanPickingClientRow = {
+  route_order?: number | null
+  city?: string
+  client_name?: string
+  fantasy_name?: string
+  address?: string
+  phone?: string
+  document_number?: number | null
+  document_type?: string
+  payment_method?: string
+  seller_name?: string
+  observations?: string
+  document_total?: number | null
+  related_document_id?: number
+  relation_source?: string | null
+  inclusion?: string
+  is_probable_included?: boolean
+  probable_score?: number | null
+}
+
+export type DispatchPlanPickingProductRow = {
+  sucursal_bodega?: string
+  unidades?: number | null
+  tipo_producto?: string
+  cajas?: number | null
+  sin_unidad_caja?: boolean
+  units_per_box?: number | null
+  producto_variante?: string
+  codigo_barras?: string | null
+  total_monto?: number | null
+}
+
 export type DispatchPlanPickingClientResponse = {
   dispatch_plan_id: number
+  picking_id?: number
+  version?: number
+  is_current?: boolean
+  generated_at?: string
+  source?: string
   ready?: boolean
   reason?: string | null
-  clients: unknown[]
+  header?: DispatchPlanPickingHeader
+  clients: DispatchPlanPickingClientRow[]
+  warnings?: string[]
+  include_probable?: boolean
+  totals?: { stops: number; document_total_clp: number }
   degraded?: boolean
 }
 
 export type DispatchPlanPickingProductResponse = {
   dispatch_plan_id: number
+  picking_id?: number
+  version?: number
+  is_current?: boolean
+  generated_at?: string
+  source?: string
   ready?: boolean
   reason?: string | null
-  items: unknown[]
+  header?: DispatchPlanPickingHeader
+  items: DispatchPlanPickingProductRow[]
+  warnings?: string[]
+  include_probable?: boolean
+  totals?: {
+    lines: number
+    unidades: number
+    cajas: number
+    total_monto_clp: number
+  }
   degraded?: boolean
 }
 
@@ -2009,12 +2077,111 @@ export const DISPATCH_PLAN_PICKING_WAIT_MESSAGE =
 export const DISPATCH_PLAN_PICKING_NO_CONFIRMED_MESSAGE =
   "No hay documentos facturados confirmados para este plan."
 
-export async function getDispatchPlanPickingCliente(
+export type DispatchPlanPickingGenerateResponse = DispatchPlanPickingClientResponse & {
+  items?: DispatchPlanPickingProductRow[]
+}
+
+export async function generateDispatchPlanPicking(
   planId: number,
-  opts?: { validate?: boolean; signal?: AbortSignal },
-): Promise<DispatchPlanPickingClientResponse> {
+  opts?: { validate?: boolean; includeProbable?: boolean },
+): Promise<DispatchPlanPickingGenerateResponse> {
   const qs = new URLSearchParams()
   qs.set("validate", opts?.validate === false ? "false" : "true")
+  if (opts?.includeProbable) qs.set("include_probable", "true")
+  const res = await fetchWithTimeout(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/picking/generate?${qs}`,
+    { method: "POST", headers: getAuthHeaders() },
+    DASHBOARD_FETCH_TIMEOUT_MS,
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al generar picking")
+  }
+  return res.json() as Promise<DispatchPlanPickingGenerateResponse>
+}
+
+export async function listDispatchPlanPickings(
+  planId: number,
+): Promise<{
+  dispatch_plan_id: number
+  items: {
+    picking_id: number
+    version: number
+    is_current?: boolean
+    generated_at?: string
+  }[]
+}> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/pickings`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al listar versiones de picking")
+  }
+  return res.json() as Promise<{
+    dispatch_plan_id: number
+    items: { picking_id: number; version: number; is_current?: boolean }[]
+  }>
+}
+
+async function downloadDispatchPlanPickingExport(
+  planId: number,
+  kind: "cliente" | "producto",
+  opts?: { version?: number; pickingId?: number },
+): Promise<void> {
+  const qs = new URLSearchParams()
+  if (opts?.version != null) qs.set("version", String(opts.version))
+  if (opts?.pickingId != null) qs.set("picking_id", String(opts.pickingId))
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/picking-${kind}/export?${qs}`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al descargar Excel de picking")
+  }
+  const blob = await res.blob()
+  const cd = res.headers.get("Content-Disposition")
+  const m = cd?.match(/filename="([^"]+)"/)
+  const name = m?.[1] ?? `picking_${kind}_${planId}.xlsx`
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = name
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+export async function downloadDispatchPlanPickingClienteExcel(
+  planId: number,
+  opts?: { version?: number; pickingId?: number },
+): Promise<void> {
+  return downloadDispatchPlanPickingExport(planId, "cliente", opts)
+}
+
+export async function downloadDispatchPlanPickingProductoExcel(
+  planId: number,
+  opts?: { version?: number; pickingId?: number },
+): Promise<void> {
+  return downloadDispatchPlanPickingExport(planId, "producto", opts)
+}
+
+export async function getDispatchPlanPickingCliente(
+  planId: number,
+  opts?: {
+    validate?: boolean
+    includeProbable?: boolean
+    version?: number
+    pickingId?: number
+    signal?: AbortSignal
+  },
+): Promise<DispatchPlanPickingClientResponse> {
+  const qs = new URLSearchParams()
+  if (opts?.validate === true) qs.set("validate", "true")
+  if (opts?.includeProbable) qs.set("include_probable", "true")
+  if (opts?.version != null) qs.set("version", String(opts.version))
+  if (opts?.pickingId != null) qs.set("picking_id", String(opts.pickingId))
   const res = await fetchWithTimeout(
     `${API_URL}/distribuidora/dispatch-plans/${planId}/picking-cliente?${qs}`,
     { headers: getAuthHeaders(), signal: opts?.signal },
@@ -2033,10 +2200,19 @@ export async function getDispatchPlanPickingCliente(
 
 export async function getDispatchPlanPickingProducto(
   planId: number,
-  opts?: { validate?: boolean; signal?: AbortSignal },
+  opts?: {
+    validate?: boolean
+    includeProbable?: boolean
+    version?: number
+    pickingId?: number
+    signal?: AbortSignal
+  },
 ): Promise<DispatchPlanPickingProductResponse> {
   const qs = new URLSearchParams()
-  qs.set("validate", opts?.validate === false ? "false" : "true")
+  if (opts?.validate === true) qs.set("validate", "true")
+  if (opts?.includeProbable) qs.set("include_probable", "true")
+  if (opts?.version != null) qs.set("version", String(opts.version))
+  if (opts?.pickingId != null) qs.set("picking_id", String(opts.pickingId))
   const res = await fetchWithTimeout(
     `${API_URL}/distribuidora/dispatch-plans/${planId}/picking-producto?${qs}`,
     { headers: getAuthHeaders(), signal: opts?.signal },

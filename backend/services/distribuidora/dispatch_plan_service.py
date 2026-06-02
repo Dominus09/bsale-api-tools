@@ -14,6 +14,7 @@ from typing import Any
 import pandas as pd
 
 from backend.db import get_connection
+from backend.repositories.distribuidora import dispatch_plan_picking_repo as picking_repo
 from backend.repositories.distribuidora import dispatch_plan_repo as repo
 from backend.services.distribuidora.dispatch_commercial_margin_service import (
     audit_bsale_margin_fields,
@@ -46,6 +47,15 @@ from backend.utils.deadlock_debug import timed_execute
 from backend.utils.invoicing_auto_confirm import (
     apply_operational_invoicing_rows,
     invoicing_summary_counts,
+)
+from backend.utils.dispatch_plan_picking import (
+    build_picking_client_excel,
+    build_picking_product_excel,
+    fetch_picking_header,
+    inv_status_sql_filter,
+    normalize_client_stop,
+    normalize_product_row,
+    picking_warnings_from_stops,
 )
 from backend.utils.picking_readiness import (
     PICKING_WAIT_MESSAGE,
@@ -1250,20 +1260,48 @@ def build_billing_excel_bytes(plan_id: int) -> tuple[bytes, str]:
     return buf.getvalue(), fname
 
 
-_PICKING_CLIENT_SQL_VIEW = """
+def _picking_doc_id_expr() -> str:
+    return """
+        COALESCE(
+            inv.related_document_id,
+            CASE WHEN inv.status = 'probable' THEN inv.probable_document_id END
+        )
+    """
+
+
+def _picking_client_sql_view(*, include_probable: bool) -> str:
+    status_filter = inv_status_sql_filter(include_probable=include_probable)
+    doc_id = _picking_doc_id_expr()
+    return f"""
             SELECT
                 dpo.route_order,
+                dpo.oc_document_id,
+                dpo.lat,
+                dpo.lng,
                 dpo.client_id,
                 dpo.client_name,
                 dpo.fantasy_name,
                 dpo.address,
                 dpo.city,
                 NULLIF(BTRIM(cl.phone), '') AS phone,
-                inv.related_document_id,
-                inv.related_document_number,
-                inv.related_document_type_label,
+                {doc_id} AS related_document_id,
+                COALESCE(
+                    inv.related_document_number,
+                    inv.probable_document_number
+                ) AS related_document_number,
+                COALESCE(
+                    inv.related_document_type_label,
+                    inv.probable_document_type_label
+                ) AS related_document_type_label,
+                inv.relation_source,
+                inv.status AS invoicing_status,
+                inv.probable_score,
                 d_pay.forma_pago,
                 d_pay.tipo_documento_a_generar,
+                COALESCE(
+                    NULLIF(BTRIM(d_pay.observaciones), ''),
+                    NULLIF(BTRIM(d.tracking_number), '')
+                ) AS observaciones,
                 COALESCE(NULLIF(BTRIM(d.seller_name), ''), dpo.seller_name) AS seller_name,
                 d.total_amount AS document_total,
                 d.document_type_id
@@ -1271,9 +1309,10 @@ _PICKING_CLIENT_SQL_VIEW = """
             INNER JOIN distribuidora.v_dispatch_plan_invoiced_documents inv
                 ON inv.dispatch_plan_id = dpo.dispatch_plan_id
                AND inv.oc_document_id = dpo.oc_document_id
-               AND inv.status = 'confirmed'
+               {status_filter}
+               AND {doc_id} IS NOT NULL
             INNER JOIN distribuidora.v_documents_latest d
-                ON d.document_id = inv.related_document_id
+                ON d.document_id = {doc_id}
             LEFT JOIN distribuidora.v_orders_purchase d_pay
                 ON d_pay.document_id = dpo.oc_document_id
             LEFT JOIN bsale.clients cl
@@ -1285,6 +1324,9 @@ _PICKING_CLIENT_SQL_VIEW = """
 _PICKING_CLIENT_SQL_LITE = """
             SELECT
                 dpo.route_order,
+                dpo.oc_document_id,
+                dpo.lat,
+                dpo.lng,
                 dpo.client_id,
                 dpo.client_name,
                 dpo.fantasy_name,
@@ -1298,8 +1340,12 @@ _PICKING_CLIENT_SQL_LITE = """
                     WHEN 6 THEN 'Factura'
                     ELSE NULL
                 END AS related_document_type_label,
+                'relateddetailid' AS relation_source,
+                'confirmed' AS invoicing_status,
+                NULL::numeric AS probable_score,
                 d_pay.forma_pago,
                 d_pay.tipo_documento_a_generar,
+                COALESCE(NULLIF(BTRIM(d_pay.observaciones), ''), NULLIF(BTRIM(d.tracking_number), '')) AS observaciones,
                 COALESCE(NULLIF(BTRIM(d.seller_name), ''), dpo.seller_name) AS seller_name,
                 d.total_amount AS document_total,
                 d.document_type_id
@@ -1317,26 +1363,39 @@ _PICKING_CLIENT_SQL_LITE = """
             ORDER BY dpo.route_order ASC, dpo.oc_document_id ASC
             """
 
-_PICKING_PRODUCT_SQL_VIEW = f"""
+def _picking_product_sql_view(*, include_probable: bool) -> str:
+    status_filter = inv_status_sql_filter(include_probable=include_probable)
+    doc_id = _picking_doc_id_expr()
+    return f"""
                 SELECT
+                    COALESCE(NULLIF(BTRIM(t.name), ''), 'Centro de despacho') AS sucursal_bodega,
                     {PM_TIPO_PRODUCTO_EXPR} AS tipo_producto,
                     dd.variant_description AS producto,
                     dd.variant_description AS variante,
                     NULLIF(BTRIM(dd.variant_code), '') AS codigo_barras,
                     SUM(dd.quantity) AS unidades,
                     {CAJAS_AGG_EXPR} AS cajas,
+                    MAX(v.units_per_box) AS units_per_box,
+                    (
+                        MAX(v.units_per_box) IS NULL OR MAX(v.units_per_box) <= 0
+                    ) AS sin_unidad_caja,
                     SUM(dd.total_amount) AS total_monto
                 FROM distribuidora.dispatch_plan_orders dpo
+                INNER JOIN distribuidora.dispatch_plan dp
+                    ON dp.id = dpo.dispatch_plan_id
+                LEFT JOIN distribuidora.trucks t ON t.id = dp.truck_id
                 INNER JOIN distribuidora.v_dispatch_plan_invoiced_documents inv
                     ON inv.dispatch_plan_id = dpo.dispatch_plan_id
                    AND inv.oc_document_id = dpo.oc_document_id
-                   AND inv.status = 'confirmed'
+                   {status_filter}
+                   AND {doc_id} IS NOT NULL
                 INNER JOIN distribuidora.document_details dd
-                    ON dd.document_id = inv.related_document_id
+                    ON dd.document_id = {doc_id}
                 {PM_JOIN}
                 {VARIANTS_JOIN}
                 WHERE dpo.dispatch_plan_id = %s
                 GROUP BY
+                    COALESCE(NULLIF(BTRIM(t.name), ''), 'Centro de despacho'),
                     {PM_TIPO_PRODUCTO_EXPR},
                     dd.variant_description,
                     NULLIF(BTRIM(dd.variant_code), '')
@@ -1369,199 +1428,182 @@ _PICKING_PRODUCT_SQL_LITE = f"""
                 """
 
 
-def get_picking_by_client(plan_id: int, *, validate: bool = True) -> dict[str, Any]:
-    endpoint = "GET /dispatch-plans/{id}/picking-by-client"
-    ctx = log_plan_debug_context(plan_id, endpoint)
-    log_plan_detail_debug(endpoint, planning_id=plan_id, query="start")
-    try:
-        inv_check = get_invoiced_documents(plan_id)
-    except Exception as exc:
-        log_plan_detail_debug(endpoint, planning_id=plan_id, error=repr(exc))
-        inv_check = {
-            "summary": {"confirmed": 0, "probable": 0, "missing": 0, "total": 0},
-            "invoicing_unavailable": True,
-            "invoicing_error": str(exc),
-        }
-
-    readiness = evaluate_picking_readiness(inv_check)
-    if validate and not readiness["ready"]:
-        out = picking_not_ready_payload(plan_id, inv_check, kind="client")
-        out["ready"] = False
-        out["reason"] = readiness["reason"] or PICKING_WAIT_MESSAGE
-        return serialize_value(out)
-
-    use_lite = inv_check.get("invoicing_source") == "lite"
-    stops_sql = _PICKING_CLIENT_SQL_LITE if use_lite else _PICKING_CLIENT_SQL_VIEW
-
+def _resolve_picking_row(
+    plan_id: int,
+    *,
+    version: int | None = None,
+    picking_id: int | None = None,
+) -> dict[str, Any] | None:
     conn = get_connection()
     try:
         cur = conn.cursor()
-        with plan_detail_step(
-            endpoint,
-            planning_id=plan_id,
-            query="picking-by-client stops SQL",
-        ):
-            timed_execute(
-                cur,
-                stops_sql,
-                (plan_id,),
-                plan_id=plan_id,
-                endpoint=endpoint,
-            )
-            cols = [c[0] for c in cur.description]
-            stops = [dict(zip(cols, r)) for r in cur.fetchall()]
-
-            lines_by_doc: dict[int, list[dict[str, Any]]] = {}
-            for stop in stops:
-                doc_id = int(stop["related_document_id"])
-                if doc_id in lines_by_doc:
-                    continue
-                line_sql = f"""
-                    SELECT
-                        dd.line_number,
-                        dd.variant_description AS producto,
-                        dd.variant_description AS variante,
-                        NULLIF(BTRIM(dd.variant_code), '') AS codigo_barras,
-                        dd.quantity AS unidades,
-                        {CAJAS_LINE_EXPR} AS cajas,
-                        dd.total_amount AS monto_linea,
-                        {PM_TIPO_PRODUCTO_EXPR} AS tipo_producto
-                    FROM distribuidora.document_details dd
-                    {PM_JOIN}
-                    {VARIANTS_JOIN}
-                    WHERE dd.document_id = %s
-                    ORDER BY dd.line_number ASC NULLS LAST, dd.detail_id ASC
-                    """
-                timed_execute(
-                    cur,
-                    line_sql,
-                    (doc_id,),
-                    plan_id=plan_id,
-                    endpoint=f"{endpoint}#lines",
-                )
-                lcols = [c[0] for c in cur.description]
-                lines_by_doc[doc_id] = [dict(zip(lcols, r)) for r in cur.fetchall()]
+        row = picking_repo.get_picking_row(
+            cur,
+            plan_id,
+            version=version,
+            picking_id=picking_id,
+            current_only=version is None and picking_id is None,
+        )
         cur.close()
-    except Exception as exc:
-        plan_debug_on_error(endpoint, plan_id, exc, ctx)
-        log_plan_detail_debug(
-            endpoint,
-            planning_id=plan_id,
-            rows=0,
-            error=repr(exc),
-        )
-        log_error(endpoint, exc, planning_id=plan_id)
-        if PLAN_DEBUG_RERAISE:
-            raise
-        return serialize_value(
-            {
-                "dispatch_plan_id": plan_id,
-                "ready": False,
-                "reason": f"No se pudo generar picking cliente: {exc}",
-                "clients": [],
-                "degraded": True,
-            }
-        )
+        return row
     finally:
         conn.close()
 
-    clients = []
-    for stop in stops:
-        doc_id = int(stop["related_document_id"])
-        clients.append(
-            {
-                **_serialize(stop),
-                "lines": [_serialize(x) for x in lines_by_doc.get(doc_id, [])],
-            }
-        )
-    log_plan_detail_debug(
-        endpoint,
-        planning_id=plan_id,
-        rows=len(clients),
-    )
 
-    result = {
+def _load_persisted_picking_bundle(
+    plan_id: int,
+    picking_row: dict[str, Any],
+) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        pid = int(picking_row["id"])
+        client_rows = picking_repo.list_picking_clients(cur, pid)
+        product_rows = picking_repo.list_picking_products(cur, pid)
+        cur.close()
+    finally:
+        conn.close()
+
+    meta = picking_repo.picking_meta_to_api(picking_row)
+    clients = [picking_repo.client_row_to_api(r) for r in client_rows]
+    items = [picking_repo.product_row_to_api(r) for r in product_rows]
+    header = meta.get("header") or {}
+    warnings = meta.get("warnings") or []
+    return {
         "dispatch_plan_id": plan_id,
+        "picking_id": meta["picking_id"],
+        "version": meta["version"],
+        "is_current": meta.get("is_current"),
+        "generated_at": meta.get("generated_at"),
         "ready": True,
         "reason": None,
+        "header": header,
         "clients": clients,
-        "validation": inv_check if validate else None,
-        "degraded": False,
+        "items": items,
+        "warnings": warnings,
+        "include_probable": meta.get("include_probable"),
+        "source": "persisted",
+        "totals": {
+            "stops": len(clients),
+            "document_total_clp": meta.get("document_total_clp"),
+            "lines": len(items),
+            "unidades": sum(float(i.get("unidades") or 0) for i in items),
+            "cajas": sum(
+                float(i.get("cajas") or 0)
+                for i in items
+                if not i.get("sin_unidad_caja")
+            ),
+            "total_monto_clp": meta.get("product_total_monto_clp"),
+        },
     }
+
+
+def _compute_picking_from_invoicing(
+    plan_id: int,
+    *,
+    include_probable: bool,
+    inv_check: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    use_lite = inv_check.get("invoicing_source") == "lite" and not include_probable
+    stops_sql = (
+        _PICKING_CLIENT_SQL_LITE
+        if use_lite
+        else _picking_client_sql_view(include_probable=include_probable)
+    )
+    product_sql = (
+        _PICKING_PRODUCT_SQL_LITE
+        if use_lite
+        else _picking_product_sql_view(include_probable=include_probable)
+    )
+    conn = get_connection()
     try:
-        conn = get_connection()
-        try:
-            cur = conn.cursor()
-            repo.insert_picking_snapshot(
-                cur,
-                plan_id=plan_id,
-                picking_type="client",
-                payload=json.dumps(result, default=str),
-            )
-            conn.commit()
-            cur.close()
-        finally:
-            conn.close()
-    except Exception as exc:
-        log_plan_detail_debug(
-            endpoint,
-            planning_id=plan_id,
-            query="insert_picking_snapshot",
-            error=repr(exc),
-        )
-    return serialize_value(result)
+        cur = conn.cursor()
+        timed_execute(cur, stops_sql, (plan_id,), plan_id=plan_id, endpoint="compute-picking")
+        cols = [c[0] for c in cur.description]
+        stops = [dict(zip(cols, r)) for r in cur.fetchall()]
+        timed_execute(cur, product_sql, (plan_id,), plan_id=plan_id, endpoint="compute-picking")
+        pcols = [c[0] for c in cur.description]
+        products = [dict(zip(pcols, r)) for r in cur.fetchall()]
+        cur.close()
+    finally:
+        conn.close()
+    clients = [normalize_client_stop(_serialize(s)) for s in stops]
+    items = [normalize_product_row(_serialize(p)) for p in products]
+    return clients, items
 
 
-def get_picking_by_product(plan_id: int, *, validate: bool = True) -> dict[str, Any]:
-    endpoint = "GET /dispatch-plans/{id}/picking-by-product"
-    ctx = log_plan_debug_context(plan_id, endpoint)
-    log_plan_detail_debug(endpoint, planning_id=plan_id, query="start")
+def generate_plan_picking(
+    plan_id: int,
+    *,
+    validate: bool = True,
+    include_probable: bool = False,
+) -> dict[str, Any]:
+    """Calcula picking desde facturación y persiste nueva versión (cliente + producto)."""
+    endpoint = "POST /dispatch-plans/{id}/picking/generate"
     try:
         inv_check = get_invoiced_documents(plan_id)
     except Exception as exc:
-        log_plan_detail_debug(endpoint, planning_id=plan_id, error=repr(exc))
         inv_check = {
             "summary": {"confirmed": 0, "probable": 0, "missing": 0, "total": 0},
             "invoicing_unavailable": True,
             "invoicing_error": str(exc),
         }
 
-    readiness = evaluate_picking_readiness(inv_check)
+    readiness = evaluate_picking_readiness(
+        inv_check, include_probable=include_probable
+    )
     if validate and not readiness["ready"]:
-        out = picking_not_ready_payload(plan_id, inv_check, kind="product")
-        out["ready"] = False
-        out["reason"] = readiness["reason"] or PICKING_WAIT_MESSAGE
-        return serialize_value(out)
+        return serialize_value(
+            {
+                "dispatch_plan_id": plan_id,
+                "ready": False,
+                "reason": readiness["reason"] or PICKING_WAIT_MESSAGE,
+                "include_probable": include_probable,
+            }
+        )
 
-    use_lite = inv_check.get("invoicing_source") == "lite"
-    product_sql = _PICKING_PRODUCT_SQL_LITE if use_lite else _PICKING_PRODUCT_SQL_VIEW
+    clients, items = _compute_picking_from_invoicing(
+        plan_id, include_probable=include_probable, inv_check=inv_check
+    )
+    header = fetch_picking_header(plan_id)
+    warnings = picking_warnings_from_stops(clients)
+    if include_probable and int((inv_check.get("summary") or {}).get("probable") or 0) > 0:
+        warnings.append(
+            "El consolidado incluye documentos con coincidencia probable (60–74)."
+        )
+    if readiness.get("reason"):
+        warnings.insert(0, readiness["reason"])
+
+    doc_total = sum(float(c.get("document_total") or 0) for c in clients)
+    prod_total = sum(float(i.get("total_monto") or 0) for i in items)
 
     conn = get_connection()
     try:
         cur = conn.cursor()
-        with plan_detail_step(
-            endpoint,
-            planning_id=plan_id,
-            query="picking-by-product consolidated SQL",
-        ):
-            timed_execute(
-                cur,
-                product_sql,
-                (plan_id,),
-                plan_id=plan_id,
-                endpoint=endpoint,
-            )
-            cols = [c[0] for c in cur.description]
-            items = [_serialize(dict(zip(cols, r))) for r in cur.fetchall()]
+        version = picking_repo.get_next_picking_version(cur, plan_id)
+        picking_repo.supersede_current_pickings(cur, plan_id)
+        new_picking_id = picking_repo.insert_picking(
+            cur,
+            plan_id=plan_id,
+            version=version,
+            include_probable=include_probable,
+            header=header,
+            warnings=warnings,
+            stops_count=len(clients),
+            product_lines_count=len(items),
+            document_total_clp=doc_total,
+            product_total_monto_clp=prod_total,
+        )
+        picking_repo.insert_picking_clients(
+            cur, picking_id=new_picking_id, plan_id=plan_id, clients=clients
+        )
+        picking_repo.insert_picking_products(
+            cur, picking_id=new_picking_id, plan_id=plan_id, items=items
+        )
+        conn.commit()
         cur.close()
     except Exception as exc:
-        plan_debug_on_error(endpoint, plan_id, exc, ctx)
-        log_plan_detail_debug(
-            endpoint,
-            planning_id=plan_id,
-            rows=0,
-            error=repr(exc),
-        )
+        conn.rollback()
         log_error(endpoint, exc, planning_id=plan_id)
         if PLAN_DEBUG_RERAISE:
             raise
@@ -1569,52 +1611,191 @@ def get_picking_by_product(plan_id: int, *, validate: bool = True) -> dict[str, 
             {
                 "dispatch_plan_id": plan_id,
                 "ready": False,
-                "reason": f"No se pudo generar picking producto: {exc}",
-                "items": [],
-                "degraded": True,
+                "reason": f"No se pudo persistir picking: {exc}",
             }
         )
     finally:
         conn.close()
 
-    log_plan_detail_debug(
-        endpoint,
-        planning_id=plan_id,
-        rows=len(items),
-    )
-    result = {
-        "dispatch_plan_id": plan_id,
-        "ready": True,
-        "reason": None,
-        "items": items,
-        "degraded": False,
-    }
+    mark_picking_generated(plan_id)
+    row = _resolve_picking_row(plan_id, picking_id=new_picking_id)
+    if not row:
+        raise ValueError("Picking persistido no encontrado tras generar")
+    bundle = _load_persisted_picking_bundle(plan_id, row)
+    bundle["validation"] = inv_check if validate else None
+    return serialize_value(bundle)
+
+
+def list_plan_pickings(plan_id: int, *, limit: int = 30) -> dict[str, Any]:
+    conn = get_connection()
     try:
-        conn = get_connection()
-        try:
-            cur = conn.cursor()
-            repo.insert_picking_snapshot(
-                cur,
-                plan_id=plan_id,
-                picking_type="product",
-                payload=json.dumps(result, default=str),
-            )
-            conn.commit()
-            cur.close()
-        finally:
-            conn.close()
-    except Exception as exc:
-        log_plan_detail_debug(
-            endpoint,
-            planning_id=plan_id,
-            query="insert_picking_snapshot",
-            error=repr(exc),
+        cur = conn.cursor()
+        versions = picking_repo.list_picking_versions(cur, plan_id, limit=limit)
+        cur.close()
+    finally:
+        conn.close()
+    return serialize_value(
+        {
+            "dispatch_plan_id": plan_id,
+            "items": [
+                {
+                    "picking_id": v["id"],
+                    "version": v["version"],
+                    "is_current": v.get("is_current"),
+                    "include_probable": v.get("include_probable"),
+                    "generated_at": v.get("generated_at"),
+                    "superseded_at": v.get("superseded_at"),
+                    "stops_count": v.get("stops_count"),
+                    "product_lines_count": v.get("product_lines_count"),
+                }
+                for v in versions
+            ],
+        }
+    )
+
+
+def get_picking_by_client(
+    plan_id: int,
+    *,
+    validate: bool = True,
+    include_probable: bool = False,
+    version: int | None = None,
+    picking_id: int | None = None,
+) -> dict[str, Any]:
+    endpoint = "GET /dispatch-plans/{id}/picking-by-client"
+    row = _resolve_picking_row(plan_id, version=version, picking_id=picking_id)
+    if not row:
+        return serialize_value(
+            {
+                "dispatch_plan_id": plan_id,
+                "ready": False,
+                "reason": (
+                    "No hay picking persistido. Use POST /picking/generate "
+                    "para crear una versión."
+                ),
+                "clients": [],
+                "source": "persisted",
+            }
         )
-    return serialize_value(result)
+    bundle = _load_persisted_picking_bundle(plan_id, row)
+    out = {
+        k: v
+        for k, v in bundle.items()
+        if k in (
+            "dispatch_plan_id",
+            "picking_id",
+            "version",
+            "is_current",
+            "generated_at",
+            "ready",
+            "reason",
+            "header",
+            "warnings",
+            "include_probable",
+            "source",
+            "totals",
+        )
+    }
+    out["clients"] = bundle["clients"]
+    log_plan_detail_debug(
+        endpoint, planning_id=plan_id, rows=len(out["clients"])
+    )
+    return serialize_value(out)
+
+
+def get_picking_by_product(
+    plan_id: int,
+    *,
+    validate: bool = True,
+    include_probable: bool = False,
+    version: int | None = None,
+    picking_id: int | None = None,
+) -> dict[str, Any]:
+    endpoint = "GET /dispatch-plans/{id}/picking-by-product"
+    row = _resolve_picking_row(plan_id, version=version, picking_id=picking_id)
+    if not row:
+        return serialize_value(
+            {
+                "dispatch_plan_id": plan_id,
+                "ready": False,
+                "reason": (
+                    "No hay picking persistido. Use POST /picking/generate "
+                    "para crear una versión."
+                ),
+                "items": [],
+                "source": "persisted",
+            }
+        )
+    bundle = _load_persisted_picking_bundle(plan_id, row)
+    out = {
+        k: v
+        for k, v in bundle.items()
+        if k in (
+            "dispatch_plan_id",
+            "picking_id",
+            "version",
+            "is_current",
+            "generated_at",
+            "ready",
+            "reason",
+            "header",
+            "warnings",
+            "include_probable",
+            "source",
+            "totals",
+        )
+    }
+    out["items"] = bundle["items"]
+    log_plan_detail_debug(endpoint, planning_id=plan_id, rows=len(out["items"]))
+    return serialize_value(out)
 
 
 def mark_picking_generated(plan_id: int) -> dict[str, Any]:
     return update_dispatch_plan_status(plan_id, "picking_generated")
+
+
+def build_picking_client_excel_bytes(
+    plan_id: int,
+    *,
+    version: int | None = None,
+    picking_id: int | None = None,
+) -> tuple[bytes, str]:
+    data = get_picking_by_client(
+        plan_id, validate=False, version=version, picking_id=picking_id
+    )
+    if not data.get("ready"):
+        raise ValueError(data.get("reason") or "Picking cliente no disponible")
+    header = data.get("header") or fetch_picking_header(plan_id)
+    clients = data.get("clients") or []
+    ver = data.get("version")
+    base, _ = build_picking_client_excel(plan_id, header, clients)
+    if ver is not None:
+        slug = _slug_filename_part(str(header.get("truck_name")))
+        fname = f"picking_cliente_{slug}_v{ver}.xlsx"
+        return base, fname
+    return build_picking_client_excel(plan_id, header, clients)
+
+
+def build_picking_product_excel_bytes(
+    plan_id: int,
+    *,
+    version: int | None = None,
+    picking_id: int | None = None,
+) -> tuple[bytes, str]:
+    data = get_picking_by_product(
+        plan_id, validate=False, version=version, picking_id=picking_id
+    )
+    if not data.get("ready"):
+        raise ValueError(data.get("reason") or "Picking producto no disponible")
+    header = data.get("header") or fetch_picking_header(plan_id)
+    items = data.get("items") or []
+    ver = data.get("version")
+    base, _ = build_picking_product_excel(plan_id, header, items)
+    if ver is not None:
+        slug = _slug_filename_part(str(header.get("truck_name")))
+        fname = f"picking_producto_{slug}_v{ver}.xlsx"
+        return base, fname
+    return build_picking_product_excel(plan_id, header, items)
 
 
 def repair_order_snapshots(plan_id: int) -> dict[str, Any]:

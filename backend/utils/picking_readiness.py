@@ -14,7 +14,11 @@ PICKING_NO_CONFIRMED_MESSAGE = (
 )
 
 
-def evaluate_picking_readiness(inv: dict[str, Any]) -> dict[str, Any]:
+def evaluate_picking_readiness(
+    inv: dict[str, Any],
+    *,
+    include_probable: bool = False,
+) -> dict[str, Any]:
     """
     Devuelve ready + reason humano según payload de get_invoiced_documents / dashboard.
     """
@@ -48,7 +52,17 @@ def evaluate_picking_readiness(inv: dict[str, Any]) -> dict[str, Any]:
         }
 
     if confirmed == 0:
-        if probable > 0:
+        if probable > 0 and include_probable:
+            if missing > 0:
+                return {
+                    "ready": False,
+                    "reason": (
+                        f"Hay {missing} OC sin documento; no se puede armar picking "
+                        "solo con probables."
+                    ),
+                }
+            # Solo probables: permitido si el usuario eligió incluirlos
+        elif probable > 0:
             return {
                 "ready": False,
                 "reason": (
@@ -56,10 +70,11 @@ def evaluate_picking_readiness(inv: dict[str, Any]) -> dict[str, Any]:
                     "confirmada ni auto-confirmada (≥75)."
                 ),
             }
-        return {
-            "ready": False,
-            "reason": PICKING_NO_CONFIRMED_MESSAGE,
-        }
+        else:
+            return {
+                "ready": False,
+                "reason": PICKING_NO_CONFIRMED_MESSAGE,
+            }
 
     if missing > 0:
         return {
@@ -70,29 +85,38 @@ def evaluate_picking_readiness(inv: dict[str, Any]) -> dict[str, Any]:
             ),
         }
 
-    if probable > 0:
+    if probable > 0 and not include_probable:
         return {
             "ready": False,
             "reason": (
                 f"Hay {probable} OC con coincidencia probable (score 60–74); "
-                "confirme en Bsale o espere auto-confirmación ≥75."
+                "confirme en Bsale, espere auto-confirmación ≥75, o active "
+                "«Incluir probables» al generar picking."
             ),
         }
 
-    if not inv.get("ready_for_picking", False):
+    if not inv.get("ready_for_picking", False) and not include_probable:
         return {
             "ready": False,
             "reason": PICKING_WAIT_MESSAGE,
         }
 
-    return {"ready": True, "reason": None}
+    reason = None
+    if probable > 0 and include_probable:
+        reason = (
+            f"Incluye {probable} documento(s) con coincidencia probable (60–74); "
+            "revise advertencias antes de despachar."
+        )
+    return {"ready": True, "reason": reason}
 
 
 def picking_block_from_invoicing(
     plan_id: int,
     inv: dict[str, Any],
+    *,
+    include_probable: bool = False,
 ) -> dict[str, Any]:
-    readiness = evaluate_picking_readiness(inv)
+    readiness = evaluate_picking_readiness(inv, include_probable=include_probable)
     return {
         "client_endpoint": f"/distribuidora/dispatch-plans/{plan_id}/picking-cliente",
         "product_endpoint": f"/distribuidora/dispatch-plans/{plan_id}/picking-producto",

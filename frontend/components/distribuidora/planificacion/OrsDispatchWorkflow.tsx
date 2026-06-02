@@ -13,10 +13,8 @@ import {
 import type { DispatchPlanSummary } from "@/lib/api"
 import {
   downloadDispatchPlanBillingExcel,
+  generateDispatchPlanPicking,
   getDispatchPlanInvoicedDocuments,
-  getDispatchPlanPickingByClient,
-  getDispatchPlanPickingByProduct,
-  markDispatchPlanPickingGenerated,
 } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -181,7 +179,7 @@ export function OrsDispatchWorkflow({
             onClick={() =>
               void run("pick-client", async () => {
                 if (!planId) return
-                const r = await getDispatchPlanPickingByClient(planId)
+                const r = await generateDispatchPlanPicking(planId)
                 if (r.ready === false) {
                   setInvoiceMsg(
                     r.reason ??
@@ -190,9 +188,10 @@ export function OrsDispatchWorkflow({
                   setInvoiceAlert("destructive")
                   return
                 }
-                await markDispatchPlanPickingGenerated(planId)
                 onPlanUpdated()
-                setInvoiceMsg("Picking por cliente generado (documentos reales confirmados).")
+                setInvoiceMsg(
+                  `Picking v${r.version ?? "?"} persistido (${r.clients?.length ?? 0} paradas).`,
+                )
                 setInvoiceAlert("default")
               })
             }
@@ -213,7 +212,7 @@ export function OrsDispatchWorkflow({
             onClick={() =>
               void run("pick-product", async () => {
                 if (!planId) return
-                const r = await getDispatchPlanPickingByProduct(planId)
+                const r = await generateDispatchPlanPicking(planId)
                 if (r.ready === false) {
                   setInvoiceMsg(
                     r.reason ??
@@ -222,7 +221,9 @@ export function OrsDispatchWorkflow({
                   setInvoiceAlert("destructive")
                   return
                 }
-                setInvoiceMsg("Picking por producto consolidado (boletas/facturas reales).")
+                setInvoiceMsg(
+                  `Picking producto v${r.version ?? "?"} (${r.items?.length ?? 0} líneas).`,
+                )
                 setInvoiceAlert("default")
               })
             }

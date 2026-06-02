@@ -382,7 +382,8 @@ def get_dispatch_prep_planning_rows(
         description="Desplazamiento para paginación.",
     ),
 ):
-    return list_dispatch_prep_planning_rows(
+    t0 = time.perf_counter()
+    result = list_dispatch_prep_planning_rows(
         emission_date_from=emission_date_from,
         emission_date_to=emission_date_to,
         only_not_invoiced=only_not_invoiced,
@@ -390,6 +391,14 @@ def get_dispatch_prep_planning_rows(
         limit=limit,
         offset=offset,
     )
+    elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
+    n = len(result.get("items") or []) if isinstance(result, dict) else 0
+    logging.getLogger(__name__).info(
+        "[PLANNING_ROWS_DEBUG] http_done endpoint=planning-rows total_ms=%s rows=%s",
+        elapsed_ms,
+        n,
+    )
+    return result
 
 
 @router.post("/resync-oc")

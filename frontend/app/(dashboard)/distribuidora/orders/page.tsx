@@ -20,6 +20,7 @@ import {
   weekdayTokenFromTagLabel,
 } from "@/lib/dispatch-prep-tags"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { PlanningRowsLoadingOverlay } from "@/components/distribuidora/orders/PlanningRowsLoadingOverlay"
 import { PreDespachoKpiStrip } from "@/components/distribuidora/orders/PreDespachoKpiStrip"
 import { PreDespachoPlanningTable } from "@/components/distribuidora/orders/PreDespachoPlanningTable"
 import { PreDespachoStatusChips } from "@/components/distribuidora/orders/PreDespachoStatusChips"
@@ -214,6 +215,7 @@ export default function DistribuidoraOrdersPage() {
     return () => ac.abort()
   }, [])
 
+  /** Solo fechas / solo-no-facturadas / chip día recargan API. Estado (Pendientes/Probables/Facturadas) es filtro local. */
   const loadDispatchPrep = useCallback(
     async (signal?: AbortSignal) => {
       setLoading(true)
@@ -649,7 +651,8 @@ export default function DistribuidoraOrdersPage() {
   }, [loadDispatchPrep])
 
   return (
-    <div className="-m-6 flex w-full max-w-none flex-col gap-4 px-3 pb-12 md:px-4">
+    <div className="-m-6 relative flex w-full max-w-none flex-col gap-4 px-3 pb-12 md:px-4">
+      {loading ? <PlanningRowsLoadingOverlay /> : null}
       <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border/60 pb-4">
         <div className="space-y-1">
           <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">

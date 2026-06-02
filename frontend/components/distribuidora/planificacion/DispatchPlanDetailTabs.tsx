@@ -6,16 +6,20 @@ import { Loader2 } from "lucide-react"
 import {
   DISPATCH_PLAN_PICKING_NO_CONFIRMED_MESSAGE,
   DISPATCH_PLAN_PICKING_WAIT_MESSAGE,
+  generateDispatchPlanPicking,
   getDispatchPlanInvoicedDocuments,
   getDispatchPlanPickingCliente,
   getDispatchPlanPickingProducto,
-  markDispatchPlanPickingGenerated,
   type DispatchPlanDashboard,
   type DispatchPlanPickingClientResponse,
   type DispatchPlanPickingProductResponse,
 } from "@/lib/api"
 import { DispatchPlanInvoicingDashboard } from "@/components/distribuidora/planificacion/DispatchPlanInvoicingDashboard"
 import { DispatchPlanInvoicedItemsTable } from "@/components/distribuidora/planificacion/DispatchPlanInvoicedItemsTable"
+import {
+  DispatchPlanPickingClientePanel,
+  DispatchPlanPickingProductoPanel,
+} from "@/components/distribuidora/planificacion/DispatchPlanPickingPanel"
 import type { DispatchPlanInvoicedRow } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -64,38 +68,82 @@ export function DispatchPlanDetailTabs({
     missing: number
   } | null>(null)
 
-  const loadPickingCliente = useCallback(async () => {
-    if (pickingClientLoaded && pickingClient) return
-    setPickingClientLoading(true)
-    try {
-      const r = await getDispatchPlanPickingCliente(planId, { validate: true })
-      setPickingClient(r)
-      setPickingClientLoaded(true)
-    } catch (e: unknown) {
-      onMessage(e instanceof Error ? e.message : "Error al cargar picking cliente")
-    } finally {
-      setPickingClientLoading(false)
-    }
-  }, [planId, pickingClientLoaded, pickingClient, onMessage])
+  const refreshPickingFromDb = useCallback(async () => {
+    const [pc, pp] = await Promise.all([
+      getDispatchPlanPickingCliente(planId),
+      getDispatchPlanPickingProducto(planId),
+    ])
+    setPickingClient(pc)
+    setPickingProduct(pp)
+    setPickingClientLoaded(true)
+    setPickingProductLoaded(true)
+    return { pc, pp }
+  }, [planId])
 
-  const loadPickingProducto = useCallback(async () => {
-    if (pickingProductLoaded && pickingProduct) return
+  const generatePicking = useCallback(
+    async (opts: { includeProbable: boolean }) => {
+      setPickingClientLoading(true)
+      setPickingProductLoading(true)
+      try {
+        const r = await generateDispatchPlanPicking(planId, {
+          validate: pickingReady,
+          includeProbable: opts.includeProbable,
+        })
+        setPickingClient({
+          ...r,
+          clients: r.clients ?? [],
+        })
+        setPickingProduct({
+          dispatch_plan_id: r.dispatch_plan_id,
+          picking_id: r.picking_id,
+          version: r.version,
+          ready: r.ready,
+          header: r.header,
+          items: r.items ?? [],
+          warnings: r.warnings,
+          totals: r.totals,
+        })
+        setPickingClientLoaded(true)
+        setPickingProductLoaded(true)
+        if (r.ready) {
+          onMessage(
+            `Picking v${r.version ?? "?"} persistido: ${r.clients?.length ?? 0} paradas, ${r.items?.length ?? 0} líneas producto.`,
+          )
+          await onReloadDashboard()
+        } else {
+          onMessage(r.reason ?? "No se pudo generar picking")
+        }
+      } catch (e: unknown) {
+        onMessage(e instanceof Error ? e.message : "Error al generar picking")
+      } finally {
+        setPickingClientLoading(false)
+        setPickingProductLoading(false)
+      }
+    },
+    [planId, pickingReady, onMessage, onReloadDashboard],
+  )
+
+  const loadPickingFromDb = useCallback(async () => {
+    setPickingClientLoading(true)
     setPickingProductLoading(true)
     try {
-      const r = await getDispatchPlanPickingProducto(planId, { validate: true })
-      setPickingProduct(r)
-      setPickingProductLoaded(true)
+      await refreshPickingFromDb()
     } catch (e: unknown) {
-      onMessage(e instanceof Error ? e.message : "Error al cargar picking producto")
+      onMessage(e instanceof Error ? e.message : "Error al cargar picking")
     } finally {
+      setPickingClientLoading(false)
       setPickingProductLoading(false)
     }
-  }, [planId, pickingProductLoaded, pickingProduct, onMessage])
+  }, [refreshPickingFromDb, onMessage])
 
   const onTabChange = (value: string) => {
     setTab(value)
-    if (value === "picking-cliente") void loadPickingCliente()
-    if (value === "picking-producto") void loadPickingProducto()
+    if (
+      (value === "picking-cliente" || value === "picking-producto") &&
+      !pickingClientLoaded
+    ) {
+      void loadPickingFromDb()
+    }
   }
 
   return (
@@ -179,117 +227,29 @@ export function DispatchPlanDetailTabs({
         ) : null}
       </TabsContent>
 
-      <TabsContent value="picking-cliente" className="mt-4 space-y-3">
-        {!pickingReady ? (
-          <Alert>
-            <AlertTitle>Picking no disponible</AlertTitle>
-            <AlertDescription className="text-sm">{pickingBlockedMessage}</AlertDescription>
-          </Alert>
-        ) : null}
-        {pickingClient?.ready === false ? (
-          <Alert variant="default">
-            <AlertDescription className="text-sm">
-              {pickingClient.reason ?? pickingBlockedMessage}
-            </AlertDescription>
-          </Alert>
-        ) : null}
-        {pickingClientLoading ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" />
-            Cargando picking por cliente…
-          </div>
-        ) : pickingClient ? (
-          <p className="text-sm">
-            <strong>{pickingClient.clients.length}</strong> paradas con documentos confirmados.
-            {pickingClient.degraded ? " (respuesta degradada)" : ""}
-          </p>
-        ) : (
-          <Button type="button" size="sm" variant="outline" onClick={() => void loadPickingCliente()}>
-            Cargar picking cliente
-          </Button>
-        )}
-        <Button
-          type="button"
-          size="sm"
-          disabled={!!busy || !pickingReady || pickingClientLoading}
-          onClick={() =>
-            void (async () => {
-              setBusy("gen-pc")
-              try {
-                const r = await getDispatchPlanPickingCliente(planId)
-                setPickingClient(r)
-                setPickingClientLoaded(true)
-                await markDispatchPlanPickingGenerated(planId)
-                onMessage(`Picking cliente: ${r.clients.length} paradas.`)
-                await onReloadDashboard()
-              } catch (e: unknown) {
-                onMessage(e instanceof Error ? e.message : "Error picking")
-              } finally {
-                setBusy(null)
-              }
-            })()
-          }
-        >
-          Generar y guardar picking cliente
-        </Button>
+      <TabsContent value="picking-cliente" className="mt-4">
+        <DispatchPlanPickingClientePanel
+          planId={planId}
+          pickingReady={pickingReady}
+          blockedMessage={pickingBlockedMessage}
+          data={pickingClient}
+          loading={pickingClientLoading}
+          onGenerate={(opts) => void generatePicking(opts)}
+          onRefresh={() => void loadPickingFromDb()}
+          onMessage={onMessage}
+        />
       </TabsContent>
 
-      <TabsContent value="picking-producto" className="mt-4 space-y-3">
-        {!pickingReady ? (
-          <Alert>
-            <AlertTitle>Picking no disponible</AlertTitle>
-            <AlertDescription className="text-sm">{pickingBlockedMessage}</AlertDescription>
-          </Alert>
-        ) : null}
-        {pickingProduct?.ready === false ? (
-          <Alert variant="default">
-            <AlertDescription className="text-sm">
-              {pickingProduct.reason ?? pickingBlockedMessage}
-            </AlertDescription>
-          </Alert>
-        ) : null}
-        {pickingProductLoading ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" />
-            Cargando picking por producto…
-          </div>
-        ) : pickingProduct ? (
-          <p className="text-sm">
-            <strong>{pickingProduct.items.length}</strong> líneas consolidadas.
-            {pickingProduct.degraded ? " (respuesta degradada)" : ""}
-          </p>
-        ) : (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => void loadPickingProducto()}
-          >
-            Cargar picking producto
-          </Button>
-        )}
-        <Button
-          type="button"
-          size="sm"
-          disabled={!!busy || !pickingReady || pickingProductLoading}
-          onClick={() =>
-            void (async () => {
-              setBusy("gen-pp")
-              try {
-                const r = await getDispatchPlanPickingProducto(planId)
-                setPickingProduct(r)
-                setPickingProductLoaded(true)
-                onMessage(`Picking producto: ${r.items.length} líneas.`)
-              } catch (e: unknown) {
-                onMessage(e instanceof Error ? e.message : "Error picking")
-              } finally {
-                setBusy(null)
-              }
-            })()
-          }
-        >
-          Generar picking producto
-        </Button>
+      <TabsContent value="picking-producto" className="mt-4">
+        <DispatchPlanPickingProductoPanel
+          planId={planId}
+          pickingReady={pickingReady}
+          blockedMessage={pickingBlockedMessage}
+          data={pickingProduct}
+          loading={pickingProductLoading}
+          onRefresh={() => void loadPickingFromDb()}
+          onMessage={onMessage}
+        />
       </TabsContent>
     </Tabs>
   )

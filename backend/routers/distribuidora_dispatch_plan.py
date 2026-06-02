@@ -270,11 +270,24 @@ def export_billing_excel(plan_id: int):
     )
 
 
-def _picking_by_client_handler(plan_id: int, validate: bool) -> dict[str, Any]:
+def _picking_by_client_handler(
+    plan_id: int,
+    validate: bool,
+    *,
+    include_probable: bool = False,
+    version: int | None = None,
+    picking_id: int | None = None,
+) -> dict[str, Any]:
     ctx = log_plan_debug_context(plan_id, "GET /dispatch-plans/{id}/picking-cliente")
     t0 = time.perf_counter()
     try:
-        result = svc.get_picking_by_client(plan_id, validate=validate)
+        result = svc.get_picking_by_client(
+            plan_id,
+            validate=validate,
+            include_probable=include_probable,
+            version=version,
+            picking_id=picking_id,
+        )
     except Exception as exc:
         plan_debug_on_error("GET /dispatch-plans/{id}/picking-cliente", plan_id, exc, ctx)
         log_error("GET /dispatch-plans/picking-cliente", exc, planning_id=plan_id)
@@ -300,11 +313,24 @@ def _picking_by_client_handler(plan_id: int, validate: bool) -> dict[str, Any]:
     return result
 
 
-def _picking_by_product_handler(plan_id: int, validate: bool) -> dict[str, Any]:
+def _picking_by_product_handler(
+    plan_id: int,
+    validate: bool,
+    *,
+    include_probable: bool = False,
+    version: int | None = None,
+    picking_id: int | None = None,
+) -> dict[str, Any]:
     ctx = log_plan_debug_context(plan_id, "GET /dispatch-plans/{id}/picking-producto")
     t0 = time.perf_counter()
     try:
-        result = svc.get_picking_by_product(plan_id, validate=validate)
+        result = svc.get_picking_by_product(
+            plan_id,
+            validate=validate,
+            include_probable=include_probable,
+            version=version,
+            picking_id=picking_id,
+        )
     except Exception as exc:
         plan_debug_on_error("GET /dispatch-plans/{id}/picking-producto", plan_id, exc, ctx)
         log_error("GET /dispatch-plans/picking-producto", exc, planning_id=plan_id)
@@ -330,32 +356,141 @@ def _picking_by_product_handler(plan_id: int, validate: bool) -> dict[str, Any]:
     return result
 
 
+@router.post("/{plan_id}/picking/generate")
+def post_picking_generate(
+    plan_id: int,
+    validate: bool = Query(True),
+    include_probable: bool = Query(False),
+):
+    """Calcula y persiste picking (nueva versión; reemplaza la versión actual)."""
+    try:
+        return svc.generate_plan_picking(
+            plan_id,
+            validate=validate,
+            include_probable=include_probable,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.get("/{plan_id}/pickings")
+def list_pickings(plan_id: int, limit: int = Query(30, ge=1, le=100)):
+    try:
+        return svc.list_plan_pickings(plan_id, limit=limit)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
 @router.get("/{plan_id}/picking-cliente")
 def picking_cliente(
     plan_id: int,
-    validate: bool = Query(True, description="Si false, intenta SQL aunque no esté listo"),
+    validate: bool = Query(False, description="Ignorado si hay picking persistido"),
+    include_probable: bool = Query(False, description="Ignorado en lectura persistida"),
+    version: int | None = Query(None, ge=1),
+    picking_id: int | None = Query(None, ge=1),
 ):
-    return _picking_by_client_handler(plan_id, validate)
+    return _picking_by_client_handler(
+        plan_id,
+        validate,
+        include_probable=include_probable,
+        version=version,
+        picking_id=picking_id,
+    )
 
 
 @router.get("/{plan_id}/picking-producto")
-def picking_producto(plan_id: int, validate: bool = Query(True)):
-    return _picking_by_product_handler(plan_id, validate)
+def picking_producto(
+    plan_id: int,
+    validate: bool = Query(False),
+    include_probable: bool = Query(False),
+    version: int | None = Query(None, ge=1),
+    picking_id: int | None = Query(None, ge=1),
+):
+    return _picking_by_product_handler(
+        plan_id,
+        validate,
+        include_probable=include_probable,
+        version=version,
+        picking_id=picking_id,
+    )
+
+
+@router.get("/{plan_id}/picking-cliente/export")
+def export_picking_cliente(
+    plan_id: int,
+    version: int | None = Query(None, ge=1),
+    picking_id: int | None = Query(None, ge=1),
+):
+    try:
+        data, fname = svc.build_picking_client_excel_bytes(
+            plan_id,
+            version=version,
+            picking_id=picking_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return StreamingResponse(
+        iter([data]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@router.get("/{plan_id}/picking-producto/export")
+def export_picking_producto(
+    plan_id: int,
+    version: int | None = Query(None, ge=1),
+    picking_id: int | None = Query(None, ge=1),
+):
+    try:
+        data, fname = svc.build_picking_product_excel_bytes(
+            plan_id,
+            version=version,
+            picking_id=picking_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return StreamingResponse(
+        iter([data]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
 
 
 @router.get("/{plan_id}/picking-by-client")
 def picking_by_client(
     plan_id: int,
-    validate: bool = Query(True, description="Advertir OCs sin documento confirmado"),
+    validate: bool = Query(False),
+    include_probable: bool = Query(False),
+    version: int | None = Query(None, ge=1),
+    picking_id: int | None = Query(None, ge=1),
 ):
     """Retrocompatible: alias de /picking-cliente."""
-    return _picking_by_client_handler(plan_id, validate)
+    return _picking_by_client_handler(
+        plan_id,
+        validate,
+        include_probable=include_probable,
+        version=version,
+        picking_id=picking_id,
+    )
 
 
 @router.get("/{plan_id}/picking-by-product")
-def picking_by_product(plan_id: int, validate: bool = Query(True)):
+def picking_by_product(
+    plan_id: int,
+    validate: bool = Query(False),
+    include_probable: bool = Query(False),
+    version: int | None = Query(None, ge=1),
+    picking_id: int | None = Query(None, ge=1),
+):
     """Retrocompatible: alias de /picking-producto."""
-    return _picking_by_product_handler(plan_id, validate)
+    return _picking_by_product_handler(
+        plan_id,
+        validate,
+        include_probable=include_probable,
+        version=version,
+        picking_id=picking_id,
+    )
 
 
 @router.post("/{plan_id}/repair-snapshot")

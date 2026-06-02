@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import time
 import unicodedata
 from datetime import date
 from decimal import Decimal
 from typing import Any
 
 from backend.db import get_connection
+from backend.utils.planning_rows_debug import (
+    PlanningRowsTimer,
+    explain_analyze_enabled,
+    log_planning_rows,
+    rank_explain_nodes,
+    run_explain_analyze,
+)
 
 _DAY_FILTER_ALLOW = frozenset({"lunes", "martes", "miercoles", "jueves", "viernes", "sabado"})
 
@@ -64,6 +72,87 @@ _OBS_NORMALIZED_P = """translate(lower(
         NULLIF(BTRIM(d.raw_data->>'comments'), '')
     )
 ), 'áéíóúü', 'aeiouu')"""
+
+# Pre-planificación: observaciones vía v_oc_attributes_flat (evita subquery por fila).
+_PLANNING_ROWS_OBS_TEXT = """translate(lower(
+    COALESCE(
+        NULLIF(BTRIM(obs_a.observaciones), ''),
+        NULLIF(BTRIM(d.raw_data->>'comments'), '')
+    )
+), 'áéíóúü', 'aeiouu')"""
+
+# Estado OC sin materializar v_purchase_document_status_full (LATERAL prob + conf).
+_PLANNING_ROWS_STATUS_JOINS = """
+LEFT JOIN distribuidora.v_oc_attributes_flat obs_a
+    ON obs_a.document_id = d.document_id
+LEFT JOIN distribuidora.v_orders_purchase_status conf
+    ON conf.document_id = d.document_id
+LEFT JOIN LATERAL (
+    SELECT
+        pm.score,
+        pm.candidate_document_id,
+        dinv.number AS candidate_number,
+        dinv.document_type_id AS candidate_document_type,
+        CASE dinv.document_type_id
+            WHEN 1 THEN 'Boleta'
+            WHEN 6 THEN 'Factura'
+            ELSE 'Tipo ' || dinv.document_type_id::text
+        END AS candidate_document_type_label
+    FROM distribuidora.document_probable_matches pm
+    INNER JOIN distribuidora.documents dinv
+        ON dinv.document_id = pm.candidate_document_id
+       AND dinv.document_type_id IN (1, 6)
+       AND dinv.company_id = 3
+       AND dinv.office_id = 1
+    WHERE pm.oc_document_id = d.document_id
+      AND pm.score >= 60
+      AND NOT COALESCE(conf.is_invoiced, FALSE)
+    ORDER BY pm.score DESC, pm.candidate_document_id DESC
+    LIMIT 1
+) prob ON TRUE
+"""
+
+_PLANNING_ROWS_STATUS_SELECT = """
+                CASE
+                    WHEN COALESCE(conf.is_invoiced, FALSE) THEN 'FACTURADA_CONFIRMADA'
+                    WHEN prob.score >= 90 THEN 'PROBABLE_FACTURADA_HIGH'
+                    WHEN prob.score >= 75 THEN 'PROBABLE_FACTURADA_MEDIUM'
+                    WHEN prob.score >= 60 THEN 'PROBABLE_FACTURADA_LOW'
+                    ELSE 'PENDIENTE'
+                END AS purchase_status,
+                CASE
+                    WHEN COALESCE(conf.is_invoiced, FALSE) THEN 'Facturada'
+                    WHEN prob.score >= 60 THEN 'Probable facturada'
+                    ELSE 'Pendiente'
+                END AS estado_real,
+                prob.score AS probable_score,
+                CASE
+                    WHEN prob.score >= 90 THEN 'PROBABLE_FACTURADA_HIGH'
+                    WHEN prob.score >= 75 THEN 'PROBABLE_FACTURADA_MEDIUM'
+                    WHEN prob.score >= 60 THEN 'PROBABLE_FACTURADA_LOW'
+                    ELSE NULL
+                END AS probable_tier,
+                CASE
+                    WHEN COALESCE(conf.is_invoiced, FALSE) THEN
+                        CASE conf.invoicing_document_type_id
+                            WHEN 1 THEN 'Boleta'
+                            WHEN 6 THEN 'Factura'
+                            ELSE 'Documento'
+                        END
+                        || ' '
+                        || COALESCE(conf.invoicing_number::text, conf.invoicing_document_id::text)
+                    WHEN prob.score >= 60 THEN
+                        prob.candidate_document_type_label
+                        || ' '
+                        || COALESCE(prob.candidate_number::text, prob.candidate_document_id::text)
+                    ELSE NULL
+                END AS associated_document_label,
+                CASE
+                    WHEN COALESCE(conf.is_invoiced, FALSE) THEN 100::numeric
+                    WHEN prob.score >= 60 THEN prob.score
+                    ELSE NULL
+                END AS display_score
+"""
 
 
 def _sanitize_day_filter(raw: str | None) -> str | None:
@@ -441,31 +530,17 @@ def list_dispatch_prep_observation_texts(
         conn.close()
 
 
-def list_dispatch_prep_planning_rows(
-    *,
-    emission_date_from: date,
-    emission_date_to: date,
-    only_not_invoiced: bool = True,
-    day_filter: str | None = None,
-    limit: int = 400,
-    offset: int = 0,
-) -> dict[str, Any]:
-    """
-    Filas OC (33) para tabla de pre‑planificación: join ``bsale.clients`` (no existe ``clientes``).
-
-    Observaciones: mismo criterio que el resumen por comuna (atributo + ``comments`` en JSON).
-    Paginación: ``limit`` + ``offset``; se pide ``limit + 1`` filas para inferir ``has_more``.
-    """
-    d0, d1 = _normalize_date_range(emission_date_from, emission_date_to)
-    skip_day, day_like = _day_filter_sql_params(day_filter)
-    lim = max(1, min(int(limit), 1500))
-    off = max(0, int(offset))
-    fetch = lim + 1
-    conn = get_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            f"""
+def _planning_rows_main_sql(*, use_documents_base: bool = False) -> str:
+    """SQL principal planning-rows (optimizado: sin v_purchase_document_status)."""
+    doc_from = (
+        "distribuidora.documents d"
+        if use_documents_base
+        else "distribuidora.v_documents_latest d"
+    )
+    not_inv_filter = (
+        "(%s = FALSE OR NOT COALESCE(conf.is_invoiced, FALSE))"
+    )
+    return f"""
             SELECT
                 d.document_id,
                 d.number AS oc,
@@ -484,15 +559,9 @@ def list_dispatch_prep_planning_rows(
                 (c.lat IS NOT NULL AND c.lon IS NOT NULL) AS has_georef,
                 c.lat::double precision AS lat,
                 c.lon::double precision AS lng,
-                COALESCE(ps.estado_real, ({OC_PURCHASE_ESTADO_REAL_SQL})) AS estado_real,
-                ps.status AS purchase_status,
-                ps.probable_score,
-                ps.probable_tier,
-                ps.associated_document_label,
-                ps.display_score
-            FROM distribuidora.v_documents_latest d
-            LEFT JOIN distribuidora.v_purchase_document_status ps
-                ON ps.document_id = d.document_id
+                {_PLANNING_ROWS_STATUS_SELECT}
+            FROM {doc_from}
+            {_PLANNING_ROWS_STATUS_JOINS}
             LEFT JOIN bsale.clients c
                 ON c.company_id = d.company_id
                AND c.bsale_id = d.client_id
@@ -501,23 +570,102 @@ def list_dispatch_prep_planning_rows(
               AND d.document_type_id = 33
               AND d.emission_date >= %s::date
               AND d.emission_date < (%s::date + interval '1 day')
-              AND (%s = FALSE OR {OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL})
-              AND CASE WHEN %s THEN TRUE ELSE {_OBS_NORMALIZED_D} LIKE %s END
+              AND {not_inv_filter}
+              AND CASE WHEN %s THEN TRUE ELSE {_PLANNING_ROWS_OBS_TEXT} LIKE %s END
             ORDER BY d.number DESC NULLS LAST, d.document_id DESC
             LIMIT %s OFFSET %s
-            """,
-            (d0, d1, only_not_invoiced, skip_day, day_like, fetch, off),
-        )
+            """
+
+
+def list_dispatch_prep_planning_rows(
+    *,
+    emission_date_from: date,
+    emission_date_to: date,
+    only_not_invoiced: bool = True,
+    day_filter: str | None = None,
+    limit: int = 400,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """
+    Filas OC (33) para tabla de pre‑planificación.
+
+    Estado de facturación: ``v_orders_purchase_status`` + LATERAL ``document_probable_matches``
+    (no ``v_purchase_document_status`` / ``_full``).
+    """
+    timer = PlanningRowsTimer()
+    d0, d1 = _normalize_date_range(emission_date_from, emission_date_to)
+    skip_day, day_like = _day_filter_sql_params(day_filter)
+    lim = max(1, min(int(limit), 1500))
+    off = max(0, int(offset))
+    fetch = lim + 1
+    sql = _planning_rows_main_sql()
+    params = (d0, d1, only_not_invoiced, skip_day, day_like, fetch, off)
+
+    log_planning_rows(
+        "start",
+        date_from=str(d0),
+        date_to=str(d1),
+        only_not_invoiced=only_not_invoiced,
+        day_filter=day_filter or "",
+        limit=lim,
+        offset=off,
+    )
+
+    conn = get_connection()
+    explain_ranking: list[dict[str, Any]] = []
+    try:
+        cur = conn.cursor()
+        if explain_analyze_enabled():
+            try:
+                nodes = run_explain_analyze(cur, sql, params)
+                explain_ranking = rank_explain_nodes(nodes)
+                log_planning_rows(
+                    "explain_analyze",
+                    top_node=explain_ranking[0] if explain_ranking else None,
+                    node_count=len(nodes),
+                )
+            except Exception as exc:
+                log_planning_rows("explain_failed", error=repr(exc))
+                conn.rollback()
+
+        t_sql = time.perf_counter()
+        cur.execute(sql, params)
         raw = cur.fetchall() or []
+        sql_ms = round((time.perf_counter() - t_sql) * 1000.0, 2)
+        timer.mark("sql_fetch")
+
         has_more = len(raw) > lim
         slice_rows = raw[:lim]
         rows = [_serialize_row(_row_to_dict(cur, r)) for r in slice_rows]
+        timer.mark("serialize")
         cur.close()
-        return {
+
+        import json as _json
+
+        payload = {
             "items": rows,
             "has_more": has_more,
             "limit": lim,
             "offset": off,
         }
+        payload_bytes = len(_json.dumps(payload, default=str).encode("utf-8"))
+        total_ms = timer.total_ms()
+
+        log_planning_rows(
+            "done",
+            total_ms=total_ms,
+            sql_ms=sql_ms,
+            row_count=len(rows),
+            payload_bytes=payload_bytes,
+            phases=timer.phases,
+        )
+
+        if explain_ranking:
+            payload["_debug"] = {
+                "explain_top": explain_ranking[:8],
+                "timing_ms": {"total": total_ms, "sql": sql_ms, **timer.phases},
+            }
+
+        return payload
     finally:
         conn.close()

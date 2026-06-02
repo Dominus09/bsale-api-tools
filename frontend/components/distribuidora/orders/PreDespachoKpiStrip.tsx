@@ -130,7 +130,9 @@ export function PreDespachoKpiStrip({
         loading={loading}
         active={estadoResumen === "pending"}
         onClick={
-          onEstadoResumenChange ? () => onEstadoResumenChange("pending") : undefined
+          onEstadoResumenChange && !loading
+            ? () => onEstadoResumenChange("pending")
+            : undefined
         }
       />
       <KpiCard
@@ -142,7 +144,9 @@ export function PreDespachoKpiStrip({
         loading={loading}
         active={estadoResumen === "probable"}
         onClick={
-          onEstadoResumenChange ? () => onEstadoResumenChange("probable") : undefined
+          onEstadoResumenChange && !loading
+            ? () => onEstadoResumenChange("probable")
+            : undefined
         }
       />
       <KpiCard
@@ -154,7 +158,9 @@ export function PreDespachoKpiStrip({
         loading={loading}
         active={estadoResumen === "confirmed"}
         onClick={
-          onEstadoResumenChange ? () => onEstadoResumenChange("confirmed") : undefined
+          onEstadoResumenChange && !loading
+            ? () => onEstadoResumenChange("confirmed")
+            : undefined
         }
       />
     </div>
