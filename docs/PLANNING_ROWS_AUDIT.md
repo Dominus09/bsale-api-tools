@@ -1,97 +1,60 @@
-# Auditoría `GET /distribuidora/orders/dispatch-prep/planning-rows`
+# Auditoría `GET .../dispatch-prep/planning-rows`
 
-## Síntoma (producción)
+## Diagnóstico (34 s en un día, limit=500)
 
-| Request | Tiempo |
-|---------|--------|
-| `planning-rows` | 20–26 s |
-| `observaciones` | 2–3 s |
+Causas típicas en la versión anterior:
 
-## Causa raíz (código anterior)
+| Patrón | Impacto |
+|--------|---------|
+| `LEFT JOIN v_orders_purchase_status` | Vista con `v_documents_latest` + **LATERAL** por OC |
+| `LEFT JOIN LATERAL` probables en fase 2 | **500×** subconsultas a `document_probable_matches` |
+| `v_oc_attributes_flat` en enrich | Atributos vía `v_documents_latest` innecesarios en fase 2 |
+| Fase 1 con join a vista de status | Filtra “no facturadas” después de materializar status |
 
-La consulta hacía:
+`observaciones`, resumen por comuna y KPIs **no** están en este endpoint; el frontend los hace en paralelo o en local.
 
-```sql
-LEFT JOIN distribuidora.v_purchase_document_status ps ON ps.document_id = d.document_id
-```
+## SQL actual (optimizado)
 
-Esa vista envuelve `v_purchase_document_status_full`, que por **cada OC**:
+1. **Fase `sql_ids`**: `documents` + filtro fecha + `NOT EXISTS` facturación (tablas base) + `LIMIT/OFFSET`.
+2. **Fase `sql_enrich`**: `WITH page_ids` + `DISTINCT ON` facturación y probables en **una pasada** + `clients`.
 
-- Lee `v_orders_purchase` + cliente Bsale
-- `LATERAL` sobre **todas** las filas de `document_probable_matches` candidatas
-- Calcula status / score / etiquetas
+Índices: `028_planning_rows_indexes.sql`, `029_planning_rows_sort_index.sql`.
 
-Con 300–400 OCs en rango de fechas, el costo se multiplica y domina el tiempo total.
-
-Además, por fila:
-
-- `NOT EXISTS (document_related …)` para “solo no facturadas”
-- Subquery correlacionada a `document_attributes` para filtro de observaciones (`translate(lower(...))`)
-
-## Cambios aplicados
-
-### 1. SQL optimizado (`orders_service.py`)
-
-- **Sin** `v_purchase_document_status` / `_full`
-- `v_orders_purchase_status` (confirmación Bsale, indexable por `document_id`)
-- `LATERAL` probable solo si no está facturada (`score >= 60`, `LIMIT 1`)
-- `v_oc_attributes_flat` para observaciones (sin subquery por fila)
-- Filtro no facturadas: `NOT COALESCE(conf.is_invoiced, FALSE)` (misma semántica que `document_related`)
-
-### 2. Índices (`028_planning_rows_indexes.sql`)
-
-- `documents (company_id, office_id, document_type_id, emission_date DESC)` parcial OC
-- `document_attributes (document_id)` filtro OBSERVACIONES
-
-### 3. Instrumentación `[PLANNING_ROWS_DEBUG]`
-
-Logs en servicio y router:
-
-- `total_ms`, `sql_ms`, `row_count`, `payload_bytes`, `phases`
-- Con `PLANNING_ROWS_EXPLAIN=true`: ranking EXPLAIN en `_debug.explain_top`
-
-### 4. Script auditoría
+## Medir en contenedor
 
 ```bash
-PLANNING_ROWS_EXPLAIN=true python audit_planning_rows.py --from 2026-05-20 --to 2026-05-22
+export PLANNING_ROWS_EXPLAIN=true
+python audit_planning_rows.py --from 2026-06-02 --to 2026-06-02 --limit 500
 ```
 
-### 5. Frontend
+### Etapas `[PLANNING_ROWS_STAGE]` (activo por defecto)
 
-- Pendientes / Probables / Facturadas: **solo** `filterPlanningRowsByStatus` (memoria)
-- Recarga API solo: fechas, “solo no facturadas”, chip día en observaciones, sync, recargar
-- Overlay “Cargando órdenes…” con logo `/placeholder-logo.png`
+| stage | Qué mide |
+|-------|----------|
+| `load_base_orders` | Paginación IDs + (modo staged) filas base `documents` |
+| `load_purchase_status` | SQL facturación `document_related` |
+| `load_probable_matches` | SQL `document_probable_matches` |
+| `load_observaciones` | SQL atributos OBSERVACIONES (diagnóstico; no va en JSON items) |
+| `load_georef` | SQL `bsale.clients` |
+| `build_rows` | Merge Python + serialización filas |
+| `build_summary` | Metadatos `has_more`, `range_days`, warning |
+| `serialize_response` | Tamaño JSON respuesta |
+| `request_total` | Tiempo total del endpoint |
 
-## Ranking esperado (antes del fix)
+Modos:
 
-| Consulta / nodo | Tiempo estimado | Filas | Índice / scan |
-|-----------------|-----------------|-------|----------------|
-| `v_purchase_document_status` (materializada por join) | **15–22 s** | N × OC | Seq Scan + LATERAL prob |
-| `NOT EXISTS document_related` | 2–4 s | por OC | Index Scan `document_details` |
-| Subquery `document_attributes` OBSERVACIONES | 1–2 s | por OC | Index Scan attributes |
-| `v_documents_latest` + filtro fecha | 0.5–1 s | 300–400 | Bitmap/Index `emission` |
-| `bsale.clients` | < 0.2 s | 300–400 | Index `bsale_id` |
+- **Por defecto** (`PLANNING_ROWS_STAGE=true`): consultas **desglosadas** por etapa + ranking en logs.
+- **Histórico ~35s** (`PLANNING_ROWS_MONOLITH_ENRICH=1`): un solo SQL enrich; etapas 2–5 aparecen como `monolith_enrich_combined`.
 
-## Ranking esperado (después del fix + índice 028)
+Desactivar logs: `PLANNING_ROWS_STAGE=false`.
 
-| Consulta / nodo | Tiempo objetivo | Índice |
-|-----------------|-----------------|--------|
-| `documents` filtro fecha+tipo | **< 500 ms** | `idx_distribuidora_documents_planning_rows` Index Scan |
-| `v_orders_purchase_status` | < 300 ms | `document_id` |
-| `LATERAL document_probable_matches` | < 400 ms | `idx_document_probable_matches_oc_score` |
-| `bsale.clients` | < 200 ms | PK / bsale_id |
-| **Total HTTP** | **< 2 s** | — |
+Logs adicionales:
 
-## Verificación en producción
+- `[DISPATCH_PREP_DEBUG]` — `sql_ids_ms`, `sql_enrich_ms`, `slowest_stage`
+- `[PLANNING_ROWS_DEBUG]` — `phase_ranking`, `explain` con Seq Scan / Nested Loop
 
-1. Aplicar migración **028** (o `ensure_distribuidora_schema`)
-2. Desplegar backend con SQL nuevo
-3. Logs: buscar `[PLANNING_ROWS_DEBUG] done total_ms=...`
-4. Chrome Network: un solo `planning-rows` al cambiar fechas; **ninguno** al cambiar KPI Pendientes/Probables/Facturadas
+Respuesta JSON incluye `_perf` si `PLANNING_ROWS_EXPLAIN=true` (solo diagnóstico; quitar en prod si molesta).
 
-## Variables de entorno
+## Objetivo &lt; 2 s
 
-| Variable | Default | Efecto |
-|----------|---------|--------|
-| `PLANNING_ROWS_DEBUG` | true | Logs `[PLANNING_ROWS_DEBUG]` |
-| `PLANNING_ROWS_EXPLAIN` | false | EXPLAIN ANALYZE + `_debug` en JSON (solo auditoría) |
+Tras deploy + migraciones 028/029, esperar `sql_enrich` &lt; 1 s y `sql_ids` &lt; 500 ms para un día con ~500 filas. Si `sql_ids` sigue alto, revisar EXPLAIN: Seq Scan en `documents` → índice 028 no aplicado.

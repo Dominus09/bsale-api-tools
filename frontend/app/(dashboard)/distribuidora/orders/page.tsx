@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
-import { Loader2, MapPin, Package, RefreshCw, Truck } from "lucide-react"
+import { Loader2, MapPin, Package, RefreshCw, Search, Truck } from "lucide-react"
 
 import {
   distribuidoraTruckCapacityLabel,
@@ -20,7 +20,10 @@ import {
   weekdayTokenFromTagLabel,
 } from "@/lib/dispatch-prep-tags"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { PlanningRowsLoadingOverlay } from "@/components/distribuidora/orders/PlanningRowsLoadingOverlay"
+import {
+  PreDespachoLoadingOverlay,
+  type PreDespachoLoadingPhase,
+} from "@/components/distribuidora/orders/PreDespachoLoadingOverlay"
 import { PreDespachoKpiStrip } from "@/components/distribuidora/orders/PreDespachoKpiStrip"
 import { PreDespachoPlanningTable } from "@/components/distribuidora/orders/PreDespachoPlanningTable"
 import { PreDespachoStatusChips } from "@/components/distribuidora/orders/PreDespachoStatusChips"
@@ -173,23 +176,30 @@ export default function DistribuidoraOrdersPage() {
   const todayIso = localIsoDate()
   const [draftDateFrom, setDraftDateFrom] = useState(todayIso)
   const [draftDateTo, setDraftDateTo] = useState(todayIso)
+  const [draftOnlyNotInvoiced, setDraftOnlyNotInvoiced] = useState(true)
+  const [draftEstadoResumen, setDraftEstadoResumen] =
+    useState<PurchaseInvoiceStatusFilter>("pending")
+  const [draftDayFilter, setDraftDayFilter] = useState<string | null>(null)
+
   const [appliedDateFrom, setAppliedDateFrom] = useState(todayIso)
   const [appliedDateTo, setAppliedDateTo] = useState(todayIso)
-  const [onlyNotInvoiced, setOnlyNotInvoiced] = useState(true)
-  const [estadoResumen, setEstadoResumen] =
+  const [appliedOnlyNotInvoiced, setAppliedOnlyNotInvoiced] = useState(true)
+  const [appliedEstadoResumen, setAppliedEstadoResumen] =
     useState<PurchaseInvoiceStatusFilter>("pending")
-  const [activeDayFilter, setActiveDayFilter] = useState<string | null>(null)
+  const [appliedDayFilter, setAppliedDayFilter] = useState<string | null>(null)
 
   const [observationTexts, setObservationTexts] = useState<string[]>([])
   const [planningRows, setPlanningRows] = useState<DistribuidoraDispatchPrepPlanningRow[]>([])
   const [planningHasMore, setPlanningHasMore] = useState(false)
   const [rangeWarning, setRangeWarning] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
+  const [loadingPhase, setLoadingPhase] =
+    useState<PreDespachoLoadingPhase>("consulting-orders")
   const [loadingMore, setLoadingMore] = useState(false)
   const [loadingSync, setLoadingSync] = useState(false)
+  const [hasSearched, setHasSearched] = useState(false)
   const [wideRangeConfirmOpen, setWideRangeConfirmOpen] = useState(false)
-  const initialLoadDone = useRef(false)
-  const skipFilterReload = useRef(true)
+  const searchAbortRef = useRef<AbortController | null>(null)
   const [lastOrdersLoadAt, setLastOrdersLoadAt] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [trucks, setTrucks] = useState<DistribuidoraTruck[]>([])
@@ -253,20 +263,125 @@ export default function DistribuidoraOrdersPage() {
     [draftDateFrom, draftDateTo],
   )
   const draftIsWide = draftRangeDays > 7
-  const draftDatesDirty =
-    draftDateFrom !== appliedDateFrom || draftDateTo !== appliedDateTo
 
-  /** Fechas aplicadas + solo-no-facturadas + chip día → API. Estado KPI/tabla es filtro local. */
-  const loadDispatchPrep = useCallback(
-    async (opts?: {
+  const hasPendingChanges = useMemo(
+    () =>
+      draftDateFrom !== appliedDateFrom ||
+      draftDateTo !== appliedDateTo ||
+      draftOnlyNotInvoiced !== appliedOnlyNotInvoiced ||
+      draftEstadoResumen !== appliedEstadoResumen ||
+      draftDayFilter !== appliedDayFilter,
+    [
+      draftDateFrom,
+      draftDateTo,
+      draftOnlyNotInvoiced,
+      draftEstadoResumen,
+      draftDayFilter,
+      appliedDateFrom,
+      appliedDateTo,
+      appliedOnlyNotInvoiced,
+      appliedEstadoResumen,
+      appliedDayFilter,
+    ],
+  )
+
+  const loadPlanningRows = useCallback(
+    async (opts: {
       signal?: AbortSignal
       append?: boolean
       offset?: number
-      dateFrom?: string
-      dateTo?: string
+      dateFrom: string
+      dateTo: string
+      onlyNotInvoiced: boolean
+      dayFilter: string | null
     }) => {
-      const from = opts?.dateFrom ?? appliedDateFrom
-      const to = opts?.dateTo ?? appliedDateTo
+      const append = opts.append === true
+      const offset = opts.offset ?? 0
+      const dayParam = opts.dayFilter ?? undefined
+      const plan = await getDistribuidoraDispatchPrepPlanningRows({
+        emission_date_from: opts.dateFrom,
+        emission_date_to: opts.dateTo,
+        only_not_invoiced: opts.onlyNotInvoiced,
+        day_filter: dayParam,
+        limit: PRE_DESPACHO_PAGE_LIMIT,
+        offset,
+        signal: opts.signal,
+      })
+      const newItems = Array.isArray(plan.items) ? plan.items : []
+      setPlanningRows((prev) => (append ? [...prev, ...newItems] : newItems))
+      setPlanningHasMore(Boolean(plan.has_more))
+      setRangeWarning(plan.warning ?? null)
+      return plan
+    },
+    [],
+  )
+
+  const loadObservaciones = useCallback(
+    async (opts: {
+      signal?: AbortSignal
+      dateFrom: string
+      dateTo: string
+      onlyNotInvoiced: boolean
+      dayFilter: string | null
+    }) => {
+      const dayParam = opts.dayFilter ?? undefined
+      const obs = await getDistribuidoraDispatchPrepObservaciones({
+        emission_date_from: opts.dateFrom,
+        emission_date_to: opts.dateTo,
+        only_not_invoiced: opts.onlyNotInvoiced,
+        day_filter: dayParam,
+        limit: PRE_DESPACHO_PAGE_LIMIT,
+        offset: 0,
+        signal: opts.signal,
+      })
+      setObservationTexts(Array.isArray(obs.items) ? obs.items : [])
+      return obs
+    },
+    [],
+  )
+
+  /** Resumen por comuna / KPI tabla: solo estado aplicado (sin API). */
+  const applyLocalResumenFilters = useCallback(
+    (estado: PurchaseInvoiceStatusFilter) => {
+      setAppliedEstadoResumen(estado)
+    },
+    [],
+  )
+
+  const yieldResumenPhase = useCallback(() => {
+    setLoadingPhase("communal-summary")
+    return new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+    })
+  }, [])
+
+  type PreDespachoApiOpts = {
+    signal?: AbortSignal
+    dateFrom: string
+    dateTo: string
+    onlyNotInvoiced: boolean
+    dayFilter: string | null
+    offset?: number
+  }
+
+  const fetchPreDespachoBundle = useCallback(
+    async (apiOpts: PreDespachoApiOpts) => {
+      setLoadingPhase("consulting-orders")
+      const plan = await loadPlanningRows({ ...apiOpts, offset: apiOpts.offset ?? 0 })
+      setLoadingPhase("analyzing-billing")
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 150)
+      })
+      setLoadingPhase("generating-observations")
+      const obs = await loadObservaciones(apiOpts)
+      await yieldResumenPhase()
+      return { plan, obs }
+    },
+    [loadPlanningRows, loadObservaciones, yieldResumenPhase],
+  )
+
+  const loadDispatchPrepFromServer = useCallback(
+    async (opts?: { signal?: AbortSignal; append?: boolean; offset?: number }) => {
       const append = opts?.append === true
       const offset = opts?.offset ?? 0
       if (append) setLoadingMore(true)
@@ -275,35 +390,16 @@ export default function DistribuidoraOrdersPage() {
         setError(null)
       }
       try {
-        const dayParam = activeDayFilter ?? undefined
-        const plan = await getDistribuidoraDispatchPrepPlanningRows({
-          emission_date_from: from,
-          emission_date_to: to,
-          only_not_invoiced: onlyNotInvoiced,
-          day_filter: dayParam,
-          limit: PRE_DESPACHO_PAGE_LIMIT,
-          offset,
+        const apiOpts: PreDespachoApiOpts = {
           signal: opts?.signal,
-        })
-        if (!append) {
-          const obs = await getDistribuidoraDispatchPrepObservaciones({
-            emission_date_from: from,
-            emission_date_to: to,
-            only_not_invoiced: onlyNotInvoiced,
-            day_filter: dayParam,
-            limit: PRE_DESPACHO_PAGE_LIMIT,
-            offset: 0,
-            signal: opts?.signal,
-          })
-          setObservationTexts(Array.isArray(obs.items) ? obs.items : [])
-          setRangeWarning(plan.warning ?? obs.warning ?? null)
-        } else {
-          setRangeWarning(plan.warning ?? null)
+          dateFrom: appliedDateFrom,
+          dateTo: appliedDateTo,
+          onlyNotInvoiced: appliedOnlyNotInvoiced,
+          dayFilter: appliedDayFilter,
         }
-        const newItems = Array.isArray(plan.items) ? plan.items : []
-        setPlanningRows((prev) => (append ? [...prev, ...newItems] : newItems))
-        setPlanningHasMore(Boolean(plan.has_more))
         if (!append) {
+          const { plan, obs } = await fetchPreDespachoBundle(apiOpts)
+          setRangeWarning(plan.warning ?? obs.warning ?? null)
           setLastOrdersLoadAt(
             new Date().toLocaleString("es-CL", {
               dateStyle: "short",
@@ -311,6 +407,9 @@ export default function DistribuidoraOrdersPage() {
             }),
           )
           setTruckIdByDoc({})
+        } else {
+          setLoadingPhase("consulting-orders")
+          await loadPlanningRows({ ...apiOpts, append: true, offset })
         }
       } catch (e: unknown) {
         if (e instanceof Error && e.name === "AbortError") return
@@ -320,52 +419,104 @@ export default function DistribuidoraOrdersPage() {
         else setLoading(false)
       }
     },
-    [appliedDateFrom, appliedDateTo, onlyNotInvoiced, activeDayFilter],
+    [
+      appliedDateFrom,
+      appliedDateTo,
+      appliedOnlyNotInvoiced,
+      appliedDayFilter,
+      fetchPreDespachoBundle,
+      loadPlanningRows,
+    ],
   )
 
-  const applyDraftRange = useCallback(async () => {
-    setAppliedDateFrom(draftDateFrom)
-    setAppliedDateTo(draftDateTo)
-    setPlanningHasMore(false)
-    await loadDispatchPrep({
-      dateFrom: draftDateFrom,
-      dateTo: draftDateTo,
-      offset: 0,
-    })
-  }, [draftDateFrom, draftDateTo, loadDispatchPrep])
+  const executeSearch = useCallback(async () => {
+    searchAbortRef.current?.abort()
+    const ac = new AbortController()
+    searchAbortRef.current = ac
 
-  const onRequestApplyRange = useCallback(() => {
+    const nextFrom = draftDateFrom
+    const nextTo = draftDateTo
+    const nextOnly = draftOnlyNotInvoiced
+    const nextDay = draftDayFilter
+    const nextEstado = draftEstadoResumen
+    const needsApi =
+      !hasSearched ||
+      nextFrom !== appliedDateFrom ||
+      nextTo !== appliedDateTo ||
+      nextOnly !== appliedOnlyNotInvoiced ||
+      nextDay !== appliedDayFilter
+
+    setAppliedDateFrom(nextFrom)
+    setAppliedDateTo(nextTo)
+    setAppliedOnlyNotInvoiced(nextOnly)
+    setAppliedDayFilter(nextDay)
+    applyLocalResumenFilters(nextEstado)
+    setHasSearched(true)
+
+    if (!needsApi) {
+      setLoading(true)
+      setError(null)
+      try {
+        await yieldResumenPhase()
+      } finally {
+        setLoading(false)
+      }
+      return
+    }
+
+    setPlanningHasMore(false)
+    setLoading(true)
+    setError(null)
+    try {
+      const apiOpts: PreDespachoApiOpts = {
+        signal: ac.signal,
+        dateFrom: nextFrom,
+        dateTo: nextTo,
+        onlyNotInvoiced: nextOnly,
+        dayFilter: nextDay,
+      }
+      const { plan, obs } = await fetchPreDespachoBundle(apiOpts)
+      setRangeWarning(plan.warning ?? obs.warning ?? null)
+      setLastOrdersLoadAt(
+        new Date().toLocaleString("es-CL", {
+          dateStyle: "short",
+          timeStyle: "medium",
+        }),
+      )
+      setTruckIdByDoc({})
+    } catch (e: unknown) {
+      if (e instanceof Error && e.name === "AbortError") return
+      setError(dispatchPrepLoadErrorMessage(e))
+    } finally {
+      setLoading(false)
+    }
+  }, [
+    draftDateFrom,
+    draftDateTo,
+    draftOnlyNotInvoiced,
+    draftDayFilter,
+    draftEstadoResumen,
+    hasSearched,
+    appliedDateFrom,
+    appliedDateTo,
+    appliedOnlyNotInvoiced,
+    appliedDayFilter,
+    applyLocalResumenFilters,
+    fetchPreDespachoBundle,
+    yieldResumenPhase,
+  ])
+
+  const onBuscar = useCallback(() => {
     if (isWidePreDespachoRange(draftDateFrom, draftDateTo)) {
       setWideRangeConfirmOpen(true)
       return
     }
-    void applyDraftRange()
-  }, [draftDateFrom, draftDateTo, applyDraftRange])
-
-  useEffect(() => {
-    if (initialLoadDone.current) return
-    initialLoadDone.current = true
-    const ac = new AbortController()
-    void loadDispatchPrep({ signal: ac.signal })
-    return () => ac.abort()
-  }, [loadDispatchPrep])
-
-  useEffect(() => {
-    if (skipFilterReload.current) {
-      skipFilterReload.current = false
-      return
-    }
-    const ac = new AbortController()
-    void loadDispatchPrep({ signal: ac.signal, offset: 0 })
-    return () => ac.abort()
-  }, [activeDayFilter, onlyNotInvoiced, loadDispatchPrep])
+    void executeSearch()
+  }, [draftDateFrom, draftDateTo, executeSearch])
 
   const loadMorePlanning = useCallback(() => {
-    void loadDispatchPrep({
-      append: true,
-      offset: planningRows.length,
-    })
-  }, [loadDispatchPrep, planningRows.length])
+    void loadDispatchPrepFromServer({ append: true, offset: planningRows.length })
+  }, [loadDispatchPrepFromServer, planningRows.length])
 
   const onSyncOrdersFromBsale = useCallback(async () => {
     const ac = new AbortController()
@@ -385,7 +536,8 @@ export default function DistribuidoraOrdersPage() {
         baselineLastRun: null,
         signal: ac.signal,
       })
-      await loadDispatchPrep(ac.signal)
+      setHasSearched(true)
+      await loadDispatchPrepFromServer({ signal: ac.signal })
       toast({
         title: "Órdenes actualizadas",
         description:
@@ -402,7 +554,7 @@ export default function DistribuidoraOrdersPage() {
     } finally {
       setLoadingSync(false)
     }
-  }, [loadDispatchPrep])
+  }, [loadDispatchPrepFromServer])
 
   const safePlanningRows = useMemo(
     () => (Array.isArray(planningRows) ? planningRows : []),
@@ -417,12 +569,13 @@ export default function DistribuidoraOrdersPage() {
   const onChipClick = useCallback((tag: string) => {
     const token = weekdayTokenFromTagLabel(tag)
     if (!token) return
-    setActiveDayFilter((prev) => (prev === token ? null : token))
+    setDraftDayFilter((prev) => (prev === token ? null : token))
   }, [])
 
   const resumenRows = useMemo(
-    () => aggregateDispatchPrepByMunicipality(safePlanningRows, estadoResumen),
-    [safePlanningRows, estadoResumen],
+    () =>
+      aggregateDispatchPrepByMunicipality(safePlanningRows, appliedEstadoResumen),
+    [safePlanningRows, appliedEstadoResumen],
   )
 
   const kpis = useMemo(
@@ -467,8 +620,8 @@ export default function DistribuidoraOrdersPage() {
   }, [safePlanningRows])
 
   const filteredPlanningRows = useMemo(
-    () => filterPlanningRowsByStatus(safePlanningRows, estadoResumen),
-    [safePlanningRows, estadoResumen],
+    () => filterPlanningRowsByStatus(safePlanningRows, appliedEstadoResumen),
+    [safePlanningRows, appliedEstadoResumen],
   )
 
   const validTruckIdSet = useMemo(
@@ -745,12 +898,26 @@ export default function DistribuidoraOrdersPage() {
   }, [])
 
   const onRefreshData = useCallback(() => {
-    void loadDispatchPrep()
-  }, [loadDispatchPrep])
+    if (!hasSearched) {
+      void onBuscar()
+      return
+    }
+    void loadDispatchPrepFromServer()
+  }, [hasSearched, onBuscar, loadDispatchPrepFromServer])
 
   return (
     <div className="-m-6 relative flex w-full max-w-none flex-col gap-4 px-3 pb-12 md:px-4">
-      {loading ? <PlanningRowsLoadingOverlay /> : null}
+      {loading || loadingSync || loadingMore ? (
+        <PreDespachoLoadingOverlay
+          phase={
+            loadingSync
+              ? "syncing-bsale"
+              : loadingMore
+                ? "consulting-orders"
+                : loadingPhase
+          }
+        />
+      ) : null}
       <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border/60 pb-4">
         <div className="space-y-1">
           <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
@@ -799,8 +966,8 @@ export default function DistribuidoraOrdersPage() {
       <PreDespachoKpiStrip
         stats={operationalStats ?? EMPTY_OPERATIONAL_STATS}
         loading={loading}
-        estadoResumen={estadoResumen}
-        onEstadoResumenChange={setEstadoResumen}
+        estadoResumen={draftEstadoResumen}
+        onEstadoResumenChange={setDraftEstadoResumen}
       />
 
       {error ? (
@@ -830,6 +997,12 @@ export default function DistribuidoraOrdersPage() {
             Datos cargados: {lastOrdersLoadAt}
             {" · "}
             Rango aplicado: {appliedDateFrom} — {appliedDateTo}
+          </p>
+        ) : null}
+        {hasPendingChanges ? (
+          <p className="mb-3 flex items-center gap-2 text-sm font-medium text-amber-700 dark:text-amber-400">
+            <span aria-hidden>⚠</span>
+            Cambios pendientes — pulse Buscar para aplicar
           </p>
         ) : null}
         {draftIsWide ? (
@@ -864,26 +1037,22 @@ export default function DistribuidoraOrdersPage() {
             </div>
             <Button
               type="button"
-              size="sm"
-              className="shrink-0"
-              disabled={(loading && !loadingMore) || (!draftDatesDirty && !draftIsWide)}
-              onClick={() => onRequestApplyRange()}
+              size="default"
+              className="shrink-0 gap-2"
+              disabled={loading && !loadingMore}
+              onClick={() => onBuscar()}
             >
-              {draftIsWide ? "Cargar rango completo" : "Aplicar rango"}
+              <Search className="size-4" aria-hidden />
+              Buscar
             </Button>
-            {draftDatesDirty ? (
-              <p className="text-xs text-muted-foreground sm:basis-full">
-                Cambió el rango en los campos; pulse el botón para cargar desde el servidor.
-              </p>
-            ) : null}
           </div>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-6">
             <div className="flex items-center gap-3">
               <Switch
                 id="prep-only-open"
-                checked={onlyNotInvoiced}
-                onCheckedChange={(v) => setOnlyNotInvoiced(v === true)}
-                disabled={loading}
+                checked={draftOnlyNotInvoiced}
+                onCheckedChange={(v) => setDraftOnlyNotInvoiced(v === true)}
+                disabled={loading && !loadingMore}
               />
               <Label htmlFor="prep-only-open" className="text-sm font-medium">
                 Solo no facturadas{" "}
@@ -898,8 +1067,8 @@ export default function DistribuidoraOrdersPage() {
               variant="outline"
               size="sm"
               className="shrink-0 self-start"
-              disabled={loading || !onlyNotInvoiced}
-              onClick={() => setOnlyNotInvoiced(false)}
+              disabled={(loading && !loadingMore) || !draftOnlyNotInvoiced}
+              onClick={() => setDraftOnlyNotInvoiced(false)}
             >
               Mostrar todo
             </Button>
@@ -911,11 +1080,11 @@ export default function DistribuidoraOrdersPage() {
         <div className="space-y-2">
           <Label htmlFor="resumen-estado">Estado resumen</Label>
           <Select
-            value={estadoResumen}
+            value={draftEstadoResumen}
             onValueChange={(v) =>
-              setEstadoResumen(v as PurchaseInvoiceStatusFilter)
+              setDraftEstadoResumen(v as PurchaseInvoiceStatusFilter)
             }
-            disabled={loading}
+            disabled={loading && !loadingMore}
           >
             <SelectTrigger id="resumen-estado" className="h-9 w-[180px]">
               <SelectValue />
@@ -977,7 +1146,9 @@ export default function DistribuidoraOrdersPage() {
                       colSpan={4}
                       className="px-4 py-10 text-center text-muted-foreground"
                     >
-                      Sin datos en el rango seleccionado.
+                      {!hasSearched
+                        ? "Configure los filtros y pulse Buscar para ver el resumen por comuna."
+                        : "Sin datos en el rango seleccionado."}
                     </td>
                   </tr>
                 ) : (
@@ -1020,17 +1191,21 @@ export default function DistribuidoraOrdersPage() {
             Observaciones
           </h2>
           <p className="text-xs leading-relaxed text-muted-foreground">
-            Pulse un chip para filtrar por ese día en observaciones (otro clic limpia el filtro).
-            {activeDayFilter ? (
+            Elija un chip y pulse Buscar para filtrar por día en observaciones y órdenes.
+            {draftDayFilter ? (
               <span className="mt-1 flex flex-wrap items-center gap-2 font-medium text-foreground">
-                Filtro: <code className="text-xs">{activeDayFilter}</code>
+                Filtro (pendiente): <code className="text-xs">{draftDayFilter}</code>
                 <button
                   type="button"
                   className="text-xs font-normal text-primary underline-offset-2 hover:underline"
-                  onClick={() => setActiveDayFilter(null)}
+                  onClick={() => setDraftDayFilter(null)}
                 >
                   Quitar filtro
                 </button>
+              </span>
+            ) : appliedDayFilter ? (
+              <span className="mt-1 block text-xs text-muted-foreground">
+                Aplicado: <code>{appliedDayFilter}</code>
               </span>
             ) : null}
           </p>
@@ -1042,7 +1217,7 @@ export default function DistribuidoraOrdersPage() {
             ) : (
               tagStats.map(({ tag, count }) => {
                 const token = weekdayTokenFromTagLabel(tag)
-                const active = token != null && activeDayFilter === token
+                const active = token != null && draftDayFilter === token
                 const clickable = token != null
                 return (
                   <button
@@ -1125,8 +1300,8 @@ export default function DistribuidoraOrdersPage() {
             </Alert>
           ) : null}
           <PreDespachoStatusChips
-            value={estadoResumen}
-            onChange={setEstadoResumen}
+            value={draftEstadoResumen}
+            onChange={setDraftEstadoResumen}
             counts={statusFilterCounts ?? EMPTY_STATUS_COUNTS}
             disabled={loading}
           />
@@ -1190,7 +1365,7 @@ export default function DistribuidoraOrdersPage() {
             clusterByDoc={clusterByDoc}
             allRowsForThresholds={safePlanningRows}
             loading={loading}
-            statusFilterActive={estadoResumen !== "all"}
+            statusFilterActive={appliedEstadoResumen !== "all"}
             onGroupTruckPick={assignTruckToGroupWithChoice}
             onTruckChange={onPlanningTruckChange}
           />
@@ -1222,9 +1397,8 @@ export default function DistribuidoraOrdersPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>¿Cargar rango amplio?</AlertDialogTitle>
             <AlertDialogDescription>
-              {PRE_DESPACHO_WIDE_RANGE_HINT} El servidor devolverá hasta{" "}
-              {PRE_DESPACHO_PAGE_LIMIT} órdenes por página; puede usar &quot;Cargar más&quot;
-              para el resto.
+              {PRE_DESPACHO_WIDE_RANGE_HINT} Al confirmar se ejecutará Buscar (hasta{" "}
+              {PRE_DESPACHO_PAGE_LIMIT} órdenes por página; puede usar Cargar más después).
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1232,10 +1406,10 @@ export default function DistribuidoraOrdersPage() {
             <AlertDialogAction
               onClick={() => {
                 setWideRangeConfirmOpen(false)
-                void applyDraftRange()
+                void executeSearch()
               }}
             >
-              Sí, cargar rango
+              Sí, buscar
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

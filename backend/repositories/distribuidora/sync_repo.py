@@ -106,6 +106,7 @@ def ensure_distribuidora_schema(cur) -> None:
         "026_dispatch_plan_invoiced_view_perf.sql",
         "027_dispatch_plan_pickings.sql",
         "028_planning_rows_indexes.sql",
+        "029_planning_rows_sort_index.sql",
     ):
         _run_sql_file(cur, fn)
 

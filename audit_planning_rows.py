@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Auditoría planning-rows: EXPLAIN ANALYZE + ranking de nodos.
+Auditoría planning-rows: fases + EXPLAIN ANALYZE (dos consultas).
 
-Uso (en servidor o local con DATABASE_URL / PG_*):
+Uso:
   set PLANNING_ROWS_EXPLAIN=true
-  python audit_planning_rows.py --from 2026-05-20 --to 2026-05-22
+  python audit_planning_rows.py --from 2026-06-02 --to 2026-06-02 --limit 500
 
 Salida: /tmp/planning_rows_audit.txt
 """
@@ -12,8 +12,10 @@ Salida: /tmp/planning_rows_audit.txt
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
+import time
 from datetime import date
 from pathlib import Path
 
@@ -29,7 +31,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Auditoría planning-rows")
     parser.add_argument("--from", dest="d0", required=True, help="YYYY-MM-DD")
     parser.add_argument("--to", dest="d1", required=True, help="YYYY-MM-DD")
-    parser.add_argument("--limit", type=int, default=401)
+    parser.add_argument("--limit", type=int, default=500)
     parser.add_argument("--only-not-invoiced", action="store_true", default=True)
     parser.add_argument("--out", default="/tmp/planning_rows_audit.txt")
     args = parser.parse_args()
@@ -42,8 +44,9 @@ def main() -> int:
     )
 
     lines: list[str] = []
-    lines.append(f"=== planning-rows audit {d0} .. {d1} ===\n")
+    lines.append(f"=== planning-rows audit {d0} .. {d1} limit={args.limit} ===\n")
 
+    t0 = time.perf_counter()
     payload = list_dispatch_prep_planning_rows(
         emission_date_from=d0,
         emission_date_to=d1,
@@ -51,31 +54,64 @@ def main() -> int:
         limit=args.limit,
         offset=0,
     )
-    lines.append(f"rows_returned={len(payload.get('items') or [])}")
-    dbg = payload.get("_debug") or {}
-    timing = dbg.get("timing_ms") or {}
-    lines.append(f"timing_ms={timing}\n")
+    wall_s = time.perf_counter() - t0
+    lines.append(f"wall_seconds={wall_s:.2f}")
+    lines.append(f"rows_returned={len(payload.get('items') or [])}\n")
 
-    lines.append("--- EXPLAIN ranking (top nodes by actual time) ---\n")
-    lines.append(
-        f"{'Consulta / nodo':<42} | {'Tiempo ms':>10} | {'Filas':>8} | Índice / tipo"
-    )
-    lines.append("-" * 95)
-    for n in dbg.get("explain_top") or []:
-        rel = n.get("relation") or n.get("node_type") or "?"
-        idx = n.get("index") or n.get("node_type") or "—"
-        t = n.get("actual_time_ms")
-        rows = n.get("rows")
-        lines.append(f"{str(rel)[:42]:<42} | {t!s:>10} | {rows!s:>8} | {idx}")
+    stage_profile = payload.get("_stage_profile") or {}
+    if stage_profile.get("stages"):
+        lines.append("--- [PLANNING_ROWS_STAGE] ranking ---\n")
+        for i, rec in enumerate(stage_profile["stages"], start=1):
+            lines.append(
+                f"  {i}. {rec.get('stage')}: {rec.get('elapsed_ms')} ms "
+                f"(rows={rec.get('rows_count')})"
+            )
+        lines.append(f"  total: {stage_profile.get('total_ms')} ms\n")
 
-    lines.append("\n--- Recomendaciones ---")
-    lines.append("1. Aplicar migración 028_planning_rows_indexes.sql en producción.")
-    lines.append("2. Confirmar que el deploy usa SQL sin v_purchase_document_status.")
-    lines.append("3. Filtros Pendientes/Probables/Facturadas: solo en frontend (sin re-fetch).")
+    perf = payload.get("_perf") or {}
+    lines.append("--- Ranking fases (solo endpoint planning-rows) ---\n")
+    for row in perf.get("phase_ranking") or []:
+        lines.append(
+            f"  {row.get('phase'):<16} {row.get('ms'):>8} ms  "
+            f"({row.get('pct_of_total')}%)  {row.get('description')}"
+        )
+    lines.append("\n--- No medidos en este endpoint (frontend) ---")
+    for k, v in (perf.get("not_in_endpoint") or {}).items():
+        lines.append(f"  {k}: {v}")
+
+    lines.append("\n--- EXPLAIN ANALYZE por consulta ---\n")
+    for block in perf.get("explain") or []:
+        label = block.get("label", "?")
+        lines.append(f"### {label}")
+        issues = block.get("issues") or {}
+        lines.append(f"  seq_scan: {issues.get('seq_scan_tables')}")
+        lines.append(f"  nested_loops: {issues.get('nested_loop_count')}")
+        lines.append(f"  lateral/subplan: {issues.get('lateral_subplan_count')}")
+        lines.append(f"  materialize/cte: {issues.get('materialize_cte_count')}")
+        lines.append(
+            f"{'Nodo':<40} | {'ms':>8} | {'rows':>8} | tipo / índice"
+        )
+        lines.append("-" * 80)
+        for n in block.get("top_nodes") or []:
+            rel = n.get("relation") or n.get("node_type") or "?"
+            idx = n.get("index") or n.get("node_type") or "—"
+            lines.append(
+                f"{str(rel)[:40]:<40} | {n.get('actual_time_ms')!s:>8} | "
+                f"{n.get('rows')!s:>8} | {idx}"
+            )
+        lines.append("")
+
+    lines.append("--- Recomendaciones ---")
+    lines.append("1. Migraciones 028 + 029 en BD de producción.")
+    lines.append("2. Fase 2 usa batch DISTINCT ON (sin LATERAL x500).")
+    lines.append("3. Sin v_orders_purchase_status / v_documents_latest en planning-rows.")
+    lines.append("4. KPI / comunas / observaciones: otros endpoints o cliente local.")
 
     out_path = Path(args.out)
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print(f"Written {out_path}")
+    print(f"Written {out_path} ({wall_s:.2f}s)")
+    if perf:
+        print(json.dumps(perf.get("phase_ranking"), indent=2, ensure_ascii=False))
     return 0
 
 

@@ -16,7 +16,17 @@ from backend.utils.dispatch_prep_common import (
     payload_size_bytes,
     wide_range_meta,
 )
-from backend.utils.planning_rows_debug import PlanningRowsTimer, log_planning_rows
+from backend.utils.planning_rows_debug import (
+    PlanningRowsTimer,
+    attach_perf_debug,
+    explain_analyze_enabled,
+    log_planning_rows,
+    run_explain_analyze,
+)
+from backend.utils.planning_rows_stage import (
+    PlanningRowsStageCollector,
+    planning_rows_stage_enabled,
+)
 
 _DISPATCH_PREP_DOC_FILTER = """
     d.company_id = 3
@@ -26,9 +36,22 @@ _DISPATCH_PREP_DOC_FILTER = """
     AND d.emission_date < (%s::date + interval '1 day')
 """.strip()
 
-_DISPATCH_PREP_NOT_INVOICED_FILTER = (
-    "(%s = FALSE OR NOT COALESCE(conf_f.is_invoiced, FALSE))"
+# Facturación OC sin v_orders_purchase_status / v_documents_latest (misma semántica que 026).
+_OC_IS_INVOICED_SQL = """
+EXISTS (
+    SELECT 1
+    FROM distribuidora.document_details dd
+    INNER JOIN distribuidora.document_related dr ON dr.detail_id = dd.detail_id
+    INNER JOIN distribuidora.documents inv
+        ON inv.document_id = dr.related_document_id
+       AND inv.document_type_id IN (1, 6)
+       AND inv.company_id = d.company_id
+       AND inv.office_id = d.office_id
+    WHERE dd.document_id = d.document_id
 )
+""".strip()
+
+_DISPATCH_PREP_NOT_INVOICED_FILTER = f"(%s = FALSE OR NOT {_OC_IS_INVOICED_SQL})"
 
 _DAY_FILTER_ALLOW = frozenset({"lunes", "martes", "miercoles", "jueves", "viernes", "sabado"})
 
@@ -38,7 +61,7 @@ NOT EXISTS (
     SELECT 1
     FROM distribuidora.document_related dr
     INNER JOIN distribuidora.document_details dd ON dd.detail_id = dr.detail_id
-    INNER JOIN distribuidora.v_documents_latest inv
+    INNER JOIN distribuidora.documents inv
         ON inv.document_id = dr.related_document_id
        AND inv.document_type_id IN (1, 6)
        AND inv.company_id = d.company_id
@@ -53,7 +76,7 @@ CASE
         SELECT 1
         FROM distribuidora.document_related dr
         INNER JOIN distribuidora.document_details dd ON dd.detail_id = dr.detail_id
-        INNER JOIN distribuidora.v_documents_latest inv
+        INNER JOIN distribuidora.documents inv
             ON inv.document_id = dr.related_document_id
            AND inv.document_type_id IN (1, 6)
            AND inv.company_id = d.company_id
@@ -94,14 +117,28 @@ _PLANNING_ROWS_OBS_TEXT = """translate(lower(
     )
 ), 'áéíóúü', 'aeiouu')"""
 
-# Estado OC sin materializar v_purchase_document_status_full (LATERAL prob + conf).
-_PLANNING_ROWS_STATUS_JOINS = """
-LEFT JOIN distribuidora.v_oc_attributes_flat obs_a
-    ON obs_a.document_id = d.document_id
-LEFT JOIN distribuidora.v_orders_purchase_status conf
-    ON conf.document_id = d.document_id
-LEFT JOIN LATERAL (
-    SELECT
+# Fase 2: facturación + probables en batch (sin LATERAL por fila ni vistas pesadas).
+_PLANNING_ROWS_ENRICH_STATUS_JOINS = """
+LEFT JOIN (
+    SELECT DISTINCT ON (dd.document_id)
+        dd.document_id AS oc_document_id,
+        TRUE AS is_invoiced,
+        inv.document_id AS invoicing_document_id,
+        inv.document_type_id AS invoicing_document_type_id,
+        inv.number AS invoicing_number
+    FROM distribuidora.document_details dd
+    INNER JOIN distribuidora.document_related dr ON dr.detail_id = dd.detail_id
+    INNER JOIN distribuidora.documents inv
+        ON inv.document_id = dr.related_document_id
+       AND inv.document_type_id IN (1, 6)
+       AND inv.company_id = 3
+       AND inv.office_id = 1
+    INNER JOIN page_ids p ON p.document_id = dd.document_id
+    ORDER BY dd.document_id, inv.emission_date DESC NULLS LAST, inv.document_id DESC
+) conf ON conf.oc_document_id = d.document_id
+LEFT JOIN (
+    SELECT DISTINCT ON (pm.oc_document_id)
+        pm.oc_document_id,
         pm.score,
         pm.candidate_document_id,
         dinv.number AS candidate_number,
@@ -117,12 +154,11 @@ LEFT JOIN LATERAL (
        AND dinv.document_type_id IN (1, 6)
        AND dinv.company_id = 3
        AND dinv.office_id = 1
-    WHERE pm.oc_document_id = d.document_id
-      AND pm.score >= 60
-      AND NOT COALESCE(conf.is_invoiced, FALSE)
-    ORDER BY pm.score DESC, pm.candidate_document_id DESC
-    LIMIT 1
-) prob ON TRUE
+    INNER JOIN page_ids p ON p.document_id = pm.oc_document_id
+    WHERE pm.score >= 60
+    ORDER BY pm.oc_document_id, pm.score DESC, pm.candidate_document_id DESC
+) prob ON prob.oc_document_id = d.document_id
+   AND NOT COALESCE(conf.is_invoiced, FALSE)
 """
 
 _PLANNING_ROWS_STATUS_SELECT = """
@@ -515,8 +551,6 @@ def _planning_rows_ids_sql(*, with_day_obs: bool) -> str:
             SELECT d.document_id
             FROM distribuidora.documents d
             {obs_join}
-            LEFT JOIN distribuidora.v_orders_purchase_status conf_f
-                ON conf_f.document_id = d.document_id
             WHERE {_DISPATCH_PREP_DOC_FILTER}
               AND {_DISPATCH_PREP_NOT_INVOICED_FILTER}
               AND CASE WHEN %s THEN TRUE ELSE {day_clause} END
@@ -526,8 +560,11 @@ def _planning_rows_ids_sql(*, with_day_obs: bool) -> str:
 
 
 def _planning_rows_enrich_sql() -> str:
-    """Fase 2: enriquecer solo los IDs de la página."""
+    """Fase 2: enriquecer solo los IDs de la página (CTE page_ids + joins batch)."""
     return f"""
+            WITH page_ids AS (
+                SELECT unnest(%s::bigint[]) AS document_id
+            )
             SELECT
                 d.document_id,
                 d.number AS oc,
@@ -548,13 +585,286 @@ def _planning_rows_enrich_sql() -> str:
                 c.lon::double precision AS lng,
                 {_PLANNING_ROWS_STATUS_SELECT}
             FROM distribuidora.documents d
-            {_PLANNING_ROWS_STATUS_JOINS}
+            INNER JOIN page_ids pi ON pi.document_id = d.document_id
+            {_PLANNING_ROWS_ENRICH_STATUS_JOINS}
             LEFT JOIN bsale.clients c
                 ON c.company_id = d.company_id
                AND c.bsale_id = d.client_id
-            WHERE d.document_id = ANY(%s::bigint[])
             ORDER BY d.number DESC NULLS LAST, d.document_id DESC
             """
+
+
+def _planning_rows_use_monolith_enrich() -> bool:
+    import os
+
+    return os.environ.get("PLANNING_ROWS_MONOLITH_ENRICH", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _planning_rows_base_orders_sql() -> str:
+    return """
+            WITH page_ids AS (
+                SELECT unnest(%s::bigint[]) AS document_id
+            )
+            SELECT
+                d.document_id,
+                d.number AS oc,
+                d.client_id,
+                d.company_id,
+                NULLIF(BTRIM(d.municipality), '') AS municipality,
+                NULLIF(BTRIM(d.address), '') AS direccion,
+                NULLIF(BTRIM(d.seller_name), '') AS seller_name,
+                d.total_amount
+            FROM distribuidora.documents d
+            INNER JOIN page_ids pi ON pi.document_id = d.document_id
+            ORDER BY d.number DESC NULLS LAST, d.document_id DESC
+            """
+
+
+def _planning_rows_purchase_status_sql() -> str:
+    return """
+            WITH page_ids AS (
+                SELECT unnest(%s::bigint[]) AS document_id
+            )
+            SELECT DISTINCT ON (dd.document_id)
+                dd.document_id AS oc_document_id,
+                TRUE AS is_invoiced,
+                inv.document_id AS invoicing_document_id,
+                inv.document_type_id AS invoicing_document_type_id,
+                inv.number AS invoicing_number
+            FROM distribuidora.document_details dd
+            INNER JOIN distribuidora.document_related dr ON dr.detail_id = dd.detail_id
+            INNER JOIN distribuidora.documents inv
+                ON inv.document_id = dr.related_document_id
+               AND inv.document_type_id IN (1, 6)
+               AND inv.company_id = 3
+               AND inv.office_id = 1
+            INNER JOIN page_ids p ON p.document_id = dd.document_id
+            ORDER BY dd.document_id, inv.emission_date DESC NULLS LAST, inv.document_id DESC
+            """
+
+
+def _planning_rows_probable_matches_sql() -> str:
+    return """
+            WITH page_ids AS (
+                SELECT unnest(%s::bigint[]) AS document_id
+            )
+            SELECT DISTINCT ON (pm.oc_document_id)
+                pm.oc_document_id,
+                pm.score,
+                pm.candidate_document_id,
+                dinv.number AS candidate_number,
+                dinv.document_type_id AS candidate_document_type,
+                CASE dinv.document_type_id
+                    WHEN 1 THEN 'Boleta'
+                    WHEN 6 THEN 'Factura'
+                    ELSE 'Tipo ' || dinv.document_type_id::text
+                END AS candidate_document_type_label
+            FROM distribuidora.document_probable_matches pm
+            INNER JOIN distribuidora.documents dinv
+                ON dinv.document_id = pm.candidate_document_id
+               AND dinv.document_type_id IN (1, 6)
+               AND dinv.company_id = 3
+               AND dinv.office_id = 1
+            INNER JOIN page_ids p ON p.document_id = pm.oc_document_id
+            WHERE pm.score >= 60
+            ORDER BY pm.oc_document_id, pm.score DESC, pm.candidate_document_id DESC
+            """
+
+
+def _planning_rows_observaciones_sql() -> str:
+    return """
+            SELECT
+                obs_a.document_id,
+                obs_a.observaciones
+            FROM distribuidora.v_oc_attributes_flat obs_a
+            WHERE obs_a.document_id = ANY(%s::bigint[])
+              AND obs_a.observaciones IS NOT NULL
+              AND BTRIM(obs_a.observaciones) <> ''
+            """
+
+
+def _planning_rows_georef_sql() -> str:
+    return """
+            SELECT
+                c.company_id,
+                c.bsale_id AS client_id,
+                NULLIF(BTRIM(c.nombre_fantasia), '') AS nombre_fantasia,
+                NULLIF(BTRIM(c.municipality), '') AS municipality,
+                NULLIF(BTRIM(c.address), '') AS address,
+                c.lat,
+                c.lon
+            FROM bsale.clients c
+            WHERE c.company_id = %s
+              AND c.bsale_id = ANY(%s::bigint[])
+            """
+
+
+def _apply_status_fields_to_row(
+    row: dict[str, Any],
+    conf: dict[str, Any] | None,
+    prob: dict[str, Any] | None,
+) -> None:
+    is_inv = bool(conf and conf.get("is_invoiced"))
+    score = prob.get("score") if prob and not is_inv else None
+    score_f = float(score) if score is not None else None
+
+    if is_inv:
+        purchase_status = "FACTURADA_CONFIRMADA"
+        estado_real = "Facturada"
+        probable_tier = None
+    elif score_f is not None and score_f >= 90:
+        purchase_status = "PROBABLE_FACTURADA_HIGH"
+        estado_real = "Probable facturada"
+        probable_tier = "PROBABLE_FACTURADA_HIGH"
+    elif score_f is not None and score_f >= 75:
+        purchase_status = "PROBABLE_FACTURADA_MEDIUM"
+        estado_real = "Probable facturada"
+        probable_tier = "PROBABLE_FACTURADA_MEDIUM"
+    elif score_f is not None and score_f >= 60:
+        purchase_status = "PROBABLE_FACTURADA_LOW"
+        estado_real = "Probable facturada"
+        probable_tier = "PROBABLE_FACTURADA_LOW"
+    else:
+        purchase_status = "PENDIENTE"
+        estado_real = "Pendiente"
+        probable_tier = None
+
+    row["purchase_status"] = purchase_status
+    row["estado_real"] = estado_real
+    row["probable_score"] = score if score_f is not None and score_f >= 60 else None
+    row["probable_tier"] = probable_tier
+
+    if is_inv and conf:
+        tipo = conf.get("invoicing_document_type_id")
+        tipo_lbl = (
+            "Boleta"
+            if tipo == 1
+            else "Factura"
+            if tipo == 6
+            else "Documento"
+        )
+        num = conf.get("invoicing_number") or conf.get("invoicing_document_id")
+        row["associated_document_label"] = f"{tipo_lbl} {num}"
+        row["display_score"] = 100
+    elif score_f is not None and score_f >= 60 and prob:
+        lbl = prob.get("candidate_document_type_label") or ""
+        num = prob.get("candidate_number") or prob.get("candidate_document_id")
+        row["associated_document_label"] = f"{lbl} {num}".strip()
+        row["display_score"] = score
+    else:
+        row["associated_document_label"] = None
+        row["display_score"] = None
+
+
+def _merge_planning_rows_staged(
+    base_rows: list[dict[str, Any]],
+    conf_by_doc: dict[int, dict[str, Any]],
+    prob_by_doc: dict[int, dict[str, Any]],
+    geo_by_client: dict[tuple[int, int], dict[str, Any]],
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for base in base_rows:
+        doc_id = int(base["document_id"])
+        company_id = int(base.get("company_id") or 3)
+        client_id = base.get("client_id")
+        conf = conf_by_doc.get(doc_id)
+        prob = prob_by_doc.get(doc_id) if not (conf and conf.get("is_invoiced")) else None
+        geo = (
+            geo_by_client.get((company_id, int(client_id)))
+            if client_id is not None
+            else None
+        )
+        row: dict[str, Any] = {
+            "document_id": doc_id,
+            "oc": base.get("oc"),
+            "client_id": client_id,
+            "nombre_fantasia": (geo or {}).get("nombre_fantasia"),
+            "municipality": base.get("municipality")
+            or (geo or {}).get("municipality"),
+            "direccion": base.get("direccion") or (geo or {}).get("address"),
+            "seller_name": base.get("seller_name"),
+            "total_amount": base.get("total_amount"),
+            "has_georef": bool(
+                geo and geo.get("lat") is not None and geo.get("lon") is not None
+            ),
+            "lat": float(geo["lat"]) if geo and geo.get("lat") is not None else None,
+            "lng": float(geo["lon"]) if geo and geo.get("lon") is not None else None,
+        }
+        _apply_status_fields_to_row(row, conf, prob)
+        out.append(row)
+    return out
+
+
+def _fetch_planning_rows_staged(
+    cur,
+    doc_ids: list[int],
+    stages: PlanningRowsStageCollector,
+) -> list[dict[str, Any]]:
+    """Carga por etapas instrumentadas (misma semántica que enrich monolítico)."""
+    params = (doc_ids,)
+
+    t0 = time.perf_counter()
+    cur.execute(_planning_rows_base_orders_sql(), params)
+    base_raw = cur.fetchall() or []
+    base_rows = [_row_to_dict(cur, r) for r in base_raw]
+    stages.record(
+        "load_base_orders",
+        elapsed_ms=(time.perf_counter() - t0) * 1000.0,
+        rows_count=len(base_rows),
+        step="document_fields",
+    )
+
+    t0 = time.perf_counter()
+    cur.execute(_planning_rows_purchase_status_sql(), params)
+    conf_rows = [_row_to_dict(cur, r) for r in cur.fetchall() or []]
+    conf_by_doc = {int(r["oc_document_id"]): r for r in conf_rows}
+    stages.record(
+        "load_purchase_status",
+        elapsed_ms=(time.perf_counter() - t0) * 1000.0,
+        rows_count=len(conf_rows),
+    )
+
+    t0 = time.perf_counter()
+    cur.execute(_planning_rows_probable_matches_sql(), params)
+    prob_rows = [_row_to_dict(cur, r) for r in cur.fetchall() or []]
+    prob_by_doc = {int(r["oc_document_id"]): r for r in prob_rows}
+    stages.record(
+        "load_probable_matches",
+        elapsed_ms=(time.perf_counter() - t0) * 1000.0,
+        rows_count=len(prob_rows),
+    )
+
+    t0 = time.perf_counter()
+    cur.execute(_planning_rows_observaciones_sql(), params)
+    obs_rows = cur.fetchall() or []
+    stages.record(
+        "load_observaciones",
+        elapsed_ms=(time.perf_counter() - t0) * 1000.0,
+        rows_count=len(obs_rows),
+    )
+
+    client_ids = sorted(
+        {int(r["client_id"]) for r in base_rows if r.get("client_id") is not None}
+    )
+    geo_by_client: dict[tuple[int, int], dict[str, Any]] = {}
+    t0 = time.perf_counter()
+    if client_ids:
+        cur.execute(_planning_rows_georef_sql(), (3, client_ids))
+        for r in cur.fetchall() or []:
+            d = _row_to_dict(cur, r)
+            geo_by_client[(int(d["company_id"]), int(d["client_id"]))] = d
+    stages.record(
+        "load_georef",
+        elapsed_ms=(time.perf_counter() - t0) * 1000.0,
+        rows_count=len(geo_by_client),
+    )
+
+    return _merge_planning_rows_staged(base_rows, conf_by_doc, prob_by_doc, geo_by_client)
 
 
 def list_dispatch_prep_observation_texts(
@@ -588,8 +898,6 @@ def list_dispatch_prep_observation_texts(
             FROM distribuidora.documents d
             INNER JOIN distribuidora.v_oc_attributes_flat obs_a
                 ON obs_a.document_id = d.document_id
-            LEFT JOIN distribuidora.v_orders_purchase_status conf_f
-                ON conf_f.document_id = d.document_id
             WHERE {_DISPATCH_PREP_DOC_FILTER}
               AND obs_a.observaciones IS NOT NULL
               AND BTRIM(obs_a.observaciones) <> ''
@@ -648,36 +956,55 @@ def list_dispatch_prep_planning_rows(
     """
     Filas OC (33) para tabla de pre‑planificación.
 
-    Dos fases: paginar IDs en ``documents`` (filtro fecha + índice 028), luego joins de estado.
+    Instrumentación ``[PLANNING_ROWS_STAGE]`` por etapa (ver ``planning_rows_stage.py``).
+    Por defecto carga desglosada por etapa; ``PLANNING_ROWS_MONOLITH_ENRICH=1`` usa un
+    solo SQL enrich (comparable con latencia histórica ~35s).
     """
     timer = PlanningRowsTimer()
-    t0 = time.perf_counter()
+    stages = PlanningRowsStageCollector()
     d0, d1 = _normalize_date_range(emission_date_from, emission_date_to)
     skip_day, day_like = _day_filter_sql_params(day_filter)
     lim = effective_page_limit(limit, d0, d1)
     off = max(0, int(offset))
     fetch = lim + 1
     ids_sql = _planning_rows_ids_sql(with_day_obs=not skip_day)
+    enrich_sql = _planning_rows_enrich_sql()
     ids_params: tuple[Any, ...] = (d0, d1, only_not_invoiced, skip_day)
     if not skip_day:
         ids_params = (*ids_params, day_like)
     ids_params = (*ids_params, fetch, off)
+    use_monolith = _planning_rows_use_monolith_enrich()
 
     conn = get_connection()
-    sql_ms = 0.0
+    sql_ids_ms = 0.0
+    sql_enrich_ms = 0.0
+    explains: list[dict[str, Any]] = []
     try:
         cur = conn.cursor()
-        t_sql = time.perf_counter()
+        if explain_analyze_enabled():
+            try:
+                explains.append(
+                    run_explain_analyze(
+                        cur, ids_sql, ids_params, label="sql_ids"
+                    ),
+                )
+            except Exception as exc:
+                log_planning_rows("explain_ids_failed", error=repr(exc))
+                conn.rollback()
+
+        t_ids = time.perf_counter()
         cur.execute(ids_sql, ids_params)
         id_rows = cur.fetchall() or []
-        sql_ms = round((time.perf_counter() - t_sql) * 1000.0, 2)
+        sql_ids_ms = round((time.perf_counter() - t_ids) * 1000.0, 2)
         timer.mark("sql_ids")
 
         has_more = len(id_rows) > lim
         doc_ids = [int(r[0]) for r in id_rows[:lim]]
+        meta = wide_range_meta(d0, d1)
+
         if not doc_ids:
             cur.close()
-            meta = wide_range_meta(d0, d1)
+            t_sum = time.perf_counter()
             payload: dict[str, Any] = {
                 "items": [],
                 "has_more": False,
@@ -685,58 +1012,199 @@ def list_dispatch_prep_planning_rows(
                 "offset": off,
                 **meta,
             }
-            total_ms = round((time.perf_counter() - t0) * 1000.0, 2)
+            stages.record(
+                "build_summary",
+                elapsed_ms=(time.perf_counter() - t_sum) * 1000.0,
+                rows_count=0,
+            )
+            t_json = time.perf_counter()
+            pbytes = payload_size_bytes(payload)
+            stages.record(
+                "serialize_response",
+                elapsed_ms=(time.perf_counter() - t_json) * 1000.0,
+                rows_count=0,
+                payload_size=pbytes,
+            )
+            stage_report = stages.finish(rows_count=0)
+            if explain_analyze_enabled():
+                attach_perf_debug(
+                    payload,
+                    timer=timer,
+                    sql_ids_ms=sql_ids_ms,
+                    sql_enrich_ms=0.0,
+                    serialize_ms=0.0,
+                    json_ms=0.0,
+                    explains=explains if explain_analyze_enabled() else None,
+                )
+            if planning_rows_stage_enabled():
+                payload["_stage_profile"] = stage_report
             log_dispatch_prep(
                 "planning-rows",
                 date_from=d0,
                 date_to=d1,
-                sql_ms=sql_ms,
-                total_ms=total_ms,
+                sql_ms=sql_ids_ms,
+                total_ms=stage_report["total_ms"],
                 rows_count=0,
-                payload_bytes=payload_size_bytes(payload),
+                payload_bytes=pbytes,
                 limit=lim,
                 offset=off,
             )
             return payload
 
-        t_enrich = time.perf_counter()
-        cur.execute(_planning_rows_enrich_sql(), (doc_ids,))
-        raw = cur.fetchall() or []
-        sql_ms += round((time.perf_counter() - t_enrich) * 1000.0, 2)
-        timer.mark("sql_enrich")
+        if use_monolith:
+            enrich_params: tuple[Any, ...] = (doc_ids,)
+            if explain_analyze_enabled():
+                try:
+                    explains.append(
+                        run_explain_analyze(
+                            cur, enrich_sql, enrich_params, label="sql_enrich"
+                        ),
+                    )
+                except Exception as exc:
+                    log_planning_rows("explain_enrich_failed", error=repr(exc))
+                    conn.rollback()
+            t_enrich = time.perf_counter()
+            cur.execute(enrich_sql, enrich_params)
+            raw = cur.fetchall() or []
+            sql_enrich_ms = round((time.perf_counter() - t_enrich) * 1000.0, 2)
+            timer.mark("sql_enrich")
+            enrich_ms = sql_enrich_ms
+            stages.record(
+                "load_base_orders",
+                elapsed_ms=sql_ids_ms,
+                rows_count=len(doc_ids),
+                step="pagination",
+            )
+            stages.record(
+                "load_purchase_status",
+                elapsed_ms=enrich_ms,
+                rows_count=len(raw),
+                mode="monolith_enrich_combined",
+            )
+            stages.record(
+                "load_probable_matches",
+                elapsed_ms=0.0,
+                rows_count=0,
+                mode="included_in_monolith",
+            )
+            stages.record(
+                "load_observaciones",
+                elapsed_ms=0.0,
+                rows_count=0,
+                mode="not_in_endpoint",
+            )
+            stages.record(
+                "load_georef",
+                elapsed_ms=0.0,
+                rows_count=len(raw),
+                mode="included_in_monolith",
+            )
+            t_build = time.perf_counter()
+            merged = [_serialize_row(_row_to_dict(cur, r)) for r in raw]
+            stages.record(
+                "build_rows",
+                elapsed_ms=(time.perf_counter() - t_build) * 1000.0,
+                rows_count=len(merged),
+                mode="monolith",
+            )
+        else:
+            if planning_rows_stage_enabled():
+                stages.record(
+                    "load_base_orders",
+                    elapsed_ms=sql_ids_ms,
+                    rows_count=len(doc_ids),
+                    step="pagination",
+                )
+            merged_raw = _fetch_planning_rows_staged(cur, doc_ids, stages)
+            t_build = time.perf_counter()
+            merged = [_serialize_row(r) for r in merged_raw]
+            stages.record(
+                "build_rows",
+                elapsed_ms=(time.perf_counter() - t_build) * 1000.0,
+                rows_count=len(merged),
+            )
+            sql_enrich_ms = stages.sum_elapsed(
+                "load_purchase_status",
+                "load_probable_matches",
+                "load_observaciones",
+                "load_georef",
+            )
 
-        rows = [_serialize_row(_row_to_dict(cur, r)) for r in raw]
-        timer.mark("serialize")
         cur.close()
 
-        meta = wide_range_meta(d0, d1)
+        t_sum = time.perf_counter()
         payload = {
-            "items": rows,
+            "items": merged,
             "has_more": has_more,
             "limit": lim,
             "offset": off,
             **meta,
         }
-        total_ms = round((time.perf_counter() - t0) * 1000.0, 2)
+        stages.record(
+            "build_summary",
+            elapsed_ms=(time.perf_counter() - t_sum) * 1000.0,
+            rows_count=len(merged),
+        )
+
+        t_json = time.perf_counter()
+        pbytes = payload_size_bytes(payload)
+        json_ms = round((time.perf_counter() - t_json) * 1000.0, 2)
+        stages.record(
+            "serialize_response",
+            elapsed_ms=json_ms,
+            rows_count=len(merged),
+            payload_size=pbytes,
+        )
+        stage_report = stages.finish(rows_count=len(merged))
+
+        if explain_analyze_enabled():
+            attach_perf_debug(
+                payload,
+                timer=timer,
+                sql_ids_ms=sql_ids_ms,
+                sql_enrich_ms=sql_enrich_ms,
+                serialize_ms=json_ms,
+                json_ms=json_ms,
+                explains=explains,
+            )
+        if planning_rows_stage_enabled():
+            payload["_stage_profile"] = stage_report
+
+        total_ms = stage_report["total_ms"]
+        top_stage = (
+            stage_report["stages"][0]["stage"] if stage_report.get("stages") else None
+        )
         log_dispatch_prep(
             "planning-rows",
             date_from=d0,
             date_to=d1,
-            sql_ms=sql_ms,
+            sql_ms=round(sql_ids_ms + sql_enrich_ms, 2),
             total_ms=total_ms,
-            rows_count=len(rows),
-            payload_bytes=payload_size_bytes(payload),
+            rows_count=len(merged),
+            payload_bytes=pbytes,
             limit=lim,
             offset=off,
+            sql_ids_ms=sql_ids_ms,
+            sql_enrich_ms=sql_enrich_ms,
+            slowest_stage=top_stage,
+            enrich_mode="monolith" if use_monolith else "staged",
         )
         log_planning_rows(
-            "done",
+            "phase_ranking",
             total_ms=total_ms,
-            sql_ms=sql_ms,
-            row_count=len(rows),
-            payload_bytes=payload_size_bytes(payload),
-            phases=timer.phases,
+            sql_ids_ms=sql_ids_ms,
+            sql_enrich_ms=sql_enrich_ms,
+            row_count=len(merged),
+            stage_profile=stage_report,
         )
+        if explains:
+            for ex in explains:
+                log_planning_rows(
+                    "explain",
+                    label=ex.get("label"),
+                    issues=ex.get("issues"),
+                    top_node=(ex.get("top_nodes") or [None])[0],
+                )
         return payload
     finally:
         conn.close()
