@@ -1776,8 +1776,67 @@ export async function getDispatchPlanHeader(
   return res.json() as Promise<{ plan: DispatchPlanSummary }>
 }
 
+export type DispatchPlanLoadSummary = {
+  header: {
+    planning_code: string
+    planning_date: string
+    planning_name: string
+    truck_name: string
+    driver_name?: string
+    driver_label?: string
+    assistant_label?: string
+    assistant_names?: string[]
+    route_name: string
+    communes?: string
+    sello?: string
+  }
+  kpis: {
+    clients: number
+    documents: number
+    sales_total_clp: number
+    distinct_products: number
+    total_units: number
+    estimated_boxes: number
+  }
+  invoicing: {
+    confirmed_manual: number
+    confirmed_auto: number
+    confirmed_total: number
+    probable: number
+    pending: number
+    confirmed_amount_clp: number
+    probable_amount_clp: number
+    pending_amount_clp: number
+  }
+  costs: {
+    fuel_clp: number
+    crew_clp: number
+    tolls_clp: number
+    ferry_clp: number
+    extras_clp: number
+    route_total_clp: number
+  }
+  results: {
+    commercial_margin_clp?: number | null
+    net_operational_clp?: number | null
+    margin_visible: boolean
+    margin_message?: string | null
+  }
+  picking: {
+    has_snapshot: boolean
+    version?: number | null
+    picking_id?: number | null
+    generated_at?: string | null
+    ready_to_generate: boolean
+    ready_reason?: string | null
+  }
+  operational_status: string
+  operational_status_label: string
+}
+
 export type DispatchPlanDashboard = {
   plan: DispatchPlanSummary
+  load_summary?: DispatchPlanLoadSummary
   invoicing: {
     total_orders: number
     total_oc_amount_clp: number
@@ -2007,9 +2066,19 @@ export type DispatchPlanPickingHeader = {
   route_name: string
   communes: string
   truck_name: string
+  driver_name?: string
   driver_label: string
   assistant_label: string
+  assistant_names?: string[]
   sello: string
+  load_kpis?: {
+    clients: number
+    documents: number
+    sales_total_clp: number
+    distinct_products: number
+    total_units: number
+    estimated_boxes: number
+  }
 }
 
 export type DispatchPlanPickingClientRow = {

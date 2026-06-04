@@ -94,12 +94,13 @@ def insert_picking_clients(
                 related_document_id, client_id, client_name, fantasy_name,
                 address, city, lat, lng, phone, document_number,
                 document_type_label, payment_method, seller_name, observations,
+                delivery_notes, stop_status,
                 document_total, relation_source, inclusion,
                 is_probable_included, probable_score
             )
             VALUES (
                 %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             """,
             (
@@ -121,6 +122,8 @@ def insert_picking_clients(
                 c.get("payment_method"),
                 c.get("seller_name"),
                 c.get("observations"),
+                c.get("delivery_notes"),
+                c.get("stop_status") or "pending",
                 c.get("document_total"),
                 c.get("relation_source"),
                 c.get("inclusion"),
@@ -151,12 +154,13 @@ def insert_picking_products(
             """
             INSERT INTO distribuidora.dispatch_plan_picking_products (
                 picking_id, dispatch_plan_id, sort_order, sucursal_bodega,
+                product_id, variant_id,
                 tipo_producto, producto, variante, producto_variante,
                 codigo_barras, unidades, cajas, units_per_box,
                 sin_unidad_caja, total_monto
             )
             VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
             """,
             (
@@ -164,6 +168,8 @@ def insert_picking_products(
                 plan_id,
                 idx,
                 item.get("sucursal_bodega"),
+                item.get("product_id"),
+                item.get("variant_id"),
                 item.get("tipo_producto"),
                 producto or prod_var,
                 variante or producto,
@@ -272,6 +278,7 @@ def client_row_to_api(row: dict[str, Any]) -> dict[str, Any]:
         "route_order": row.get("route_order"),
         "oc_document_id": row.get("oc_document_id"),
         "city": row.get("city") or "",
+        "client_id": row.get("client_id"),
         "client_name": row.get("client_name") or "",
         "fantasy_name": row.get("fantasy_name") or "",
         "address": row.get("address") or "",
@@ -283,6 +290,8 @@ def client_row_to_api(row: dict[str, Any]) -> dict[str, Any]:
         "payment_method": row.get("payment_method") or "",
         "seller_name": row.get("seller_name") or "",
         "observations": row.get("observations") or "",
+        "delivery_notes": row.get("delivery_notes") or "",
+        "stop_status": row.get("stop_status") or "pending",
         "document_total": row.get("document_total"),
         "related_document_id": row.get("related_document_id"),
         "relation_source": row.get("relation_source"),
@@ -295,6 +304,8 @@ def client_row_to_api(row: dict[str, Any]) -> dict[str, Any]:
 def product_row_to_api(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": row.get("id"),
+        "product_id": row.get("product_id"),
+        "variant_id": row.get("variant_id"),
         "sucursal_bodega": row.get("sucursal_bodega") or "",
         "unidades": row.get("unidades"),
         "tipo_producto": row.get("tipo_producto") or "",

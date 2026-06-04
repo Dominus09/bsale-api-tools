@@ -50,6 +50,8 @@ def fetch_picking_header(plan_id: int) -> dict[str, Any]:
         communes = (communes_row[0] if communes_row else None) or ""
 
         sello = ""
+        driver_name = ""
+        assistant_names: list[str] = []
         truck_key = (plan.get("truck_name") or plan.get("route_name") or "").strip()
         pdate = plan.get("planning_date")
         if truck_key and pdate:
@@ -66,6 +68,11 @@ def fetch_picking_header(plan_id: int) -> dict[str, Any]:
             srow = cur.fetchone()
             if srow:
                 sello = (srow[0] or "").strip()
+                driver_name = (srow[1] or "").strip()
+                for a in (srow[2], srow[3]):
+                    name = (a or "").strip()
+                    if name:
+                        assistant_names.append(name)
         cur.close()
     finally:
         conn.close()
@@ -84,8 +91,14 @@ def fetch_picking_header(plan_id: int) -> dict[str, Any]:
         "route_name": plan.get("route_name") or "",
         "communes": communes,
         "truck_name": plan.get("truck_name") or plan.get("route_name") or "",
-        "driver_label": f"{driver_n} chofer{'es' if driver_n != 1 else ''}",
-        "assistant_label": f"{assistant_n} peoneta{'s' if assistant_n != 1 else ''}",
+        "driver_name": driver_name,
+        "driver_label": driver_name or f"{driver_n} chofer{'es' if driver_n != 1 else ''}",
+        "assistant_label": (
+            ", ".join(assistant_names)
+            if assistant_names
+            else f"{assistant_n} peoneta{'s' if assistant_n != 1 else ''}"
+        ),
+        "assistant_names": assistant_names,
         "sello": sello,
     }
 
@@ -142,6 +155,8 @@ def normalize_product_row(raw: dict[str, Any]) -> dict[str, Any]:
     variante = (raw.get("variante") or "").strip()
     prod_var = producto if producto == variante else f"{producto} — {variante}".strip(" —")
     return {
+        "product_id": raw.get("product_id"),
+        "variant_id": raw.get("variant_id"),
         "sucursal_bodega": raw.get("sucursal_bodega") or "Centro de despacho",
         "unidades": raw.get("unidades"),
         "tipo_producto": raw.get("tipo_producto") or "Sin tipo",

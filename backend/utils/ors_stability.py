@@ -135,8 +135,27 @@ def empty_plan_dashboard(
             }
         )
     base_plan = plan if plan else {"id": plan_id}
+    from backend.utils.load_summary import build_load_summary
+
+    inv_stub = {
+        "summary": {"confirmed": 0, "auto_confirmed": 0, "probable": 0, "missing": 0, "total": 0},
+    }
+    invoicing_block = {
+        "confirmed": {"count": 0, "amount_clp": 0, "auto_confirmed_count": 0},
+        "probable": {"count": 0, "amount_clp": 0},
+        "pending": {"count": 0, "amount_clp": 0},
+    }
     return {
         "plan": base_plan,
+        "load_summary": build_load_summary(
+            plan=base_plan,
+            inv=inv_stub,
+            invoicing_block=invoicing_block,
+            margin_block=None,
+            picking_meta=None,
+            picking_kpis=None,
+            header=None,
+        ),
         "invoicing": {
             "total_orders": 0,
             "total_oc_amount_clp": 0,

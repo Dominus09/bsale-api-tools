@@ -12,6 +12,7 @@ import {
   type DispatchPlanSummary,
 } from "@/lib/api"
 import { DispatchPlanDetailTabs } from "@/components/distribuidora/planificacion/DispatchPlanDetailTabs"
+import { DispatchPlanLoadSummaryBlock } from "@/components/distribuidora/planificacion/DispatchPlanLoadSummary"
 import {
   fetchDispatchPlanDashboardDeduped,
   fetchDispatchPlanHeaderDeduped,
@@ -105,7 +106,9 @@ export default function PlanificacionDetallePage() {
         })
         let dash: DispatchPlanDashboard
         try {
-          dash = await fetchDispatchPlanDashboardDeduped(planId, ac.signal)
+          dash = await fetchDispatchPlanDashboardDeduped(planId, ac.signal, {
+            include_margin: true,
+          })
         } catch (dashErr: unknown) {
           if (ac.signal.aborted) return
           logFrontendPlanDebug("dispatch-plans-dashboard", {
@@ -139,7 +142,7 @@ export default function PlanificacionDetallePage() {
     setDashboardLoading(true)
     try {
       const dash = await fetchDispatchPlanDashboardDeduped(planId, undefined, {
-        include_margin: opts?.include_margin,
+        include_margin: opts?.include_margin ?? true,
         force: true,
       })
       setDashboard(dash)
@@ -295,6 +298,8 @@ export default function PlanificacionDetallePage() {
               Cargando facturación y métricas…
             </div>
           ) : dashboard ? (
+            <>
+            <DispatchPlanLoadSummaryBlock dashboard={dashboard} />
             <DispatchPlanDetailTabs
               planId={planId}
               dashboard={dashboard}
@@ -304,6 +309,7 @@ export default function PlanificacionDetallePage() {
               onReloadDashboard={reloadDashboard}
               onMessage={setMsg}
             />
+            </>
           ) : null}
         </>
       ) : !headerLoading ? (

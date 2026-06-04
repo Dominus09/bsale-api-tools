@@ -57,6 +57,7 @@ from backend.utils.dispatch_plan_picking import (
     normalize_product_row,
     picking_warnings_from_stops,
 )
+from backend.utils.load_summary import build_load_summary
 from backend.utils.picking_readiness import (
     PICKING_WAIT_MESSAGE,
     evaluate_picking_readiness,
@@ -466,6 +467,7 @@ def confirm_dispatch_plan(
     finally:
         conn.close()
 
+    _try_auto_generate_picking_snapshot(plan_id)
     return get_dispatch_plan(plan_id) or {"plan": {"id": plan_id}}
 
 
@@ -666,6 +668,131 @@ def count_picking_product_rows(
         return 0
 
 
+def _try_auto_generate_picking_snapshot(plan_id: int) -> None:
+    """Genera picking v1 (solo confirmados + auto ≥75) si la facturación ya está lista."""
+    try:
+        inv = get_invoiced_documents(plan_id)
+    except Exception as exc:
+        logger.info(
+            "auto_picking_skip plan_id=%s invoicing_error=%s",
+            plan_id,
+            exc,
+        )
+        return
+    readiness = evaluate_picking_readiness(inv, include_probable=False)
+    if not readiness["ready"]:
+        logger.info(
+            "auto_picking_skip plan_id=%s reason=%s",
+            plan_id,
+            readiness.get("reason"),
+        )
+        return
+    existing = _resolve_picking_row(plan_id)
+    if existing:
+        return
+    result = generate_plan_picking(
+        plan_id, validate=True, include_probable=False
+    )
+    if result.get("ready"):
+        logger.info(
+            "auto_picking_ok plan_id=%s version=%s",
+            plan_id,
+            result.get("version"),
+        )
+
+
+def _aggregate_picking_kpis(cur: Any, picking_id: int) -> dict[str, Any]:
+    cur.execute(
+        """
+        SELECT
+            COUNT(DISTINCT NULLIF(client_id, 0)) AS clients,
+            COUNT(*) AS documents
+        FROM distribuidora.dispatch_plan_picking_clients
+        WHERE picking_id = %s
+        """,
+        (picking_id,),
+    )
+    crow = cur.fetchone()
+    cur.execute(
+        """
+        SELECT
+            COALESCE(SUM(unidades), 0) AS total_units,
+            COALESCE(SUM(cajas) FILTER (WHERE NOT sin_unidad_caja), 0) AS estimated_boxes,
+            COUNT(DISTINCT NULLIF(BTRIM(codigo_barras), '')) AS distinct_products
+        FROM distribuidora.dispatch_plan_picking_products
+        WHERE picking_id = %s
+        """,
+        (picking_id,),
+    )
+    prow = cur.fetchone()
+    clients = int(crow[0] or 0) if crow else 0
+    documents = int(crow[1] or 0) if crow else 0
+    total_units = float(prow[0] or 0) if prow else 0.0
+    estimated_boxes = float(prow[1] or 0) if prow else 0.0
+    distinct_products = int(prow[2] or 0) if prow else 0
+    return {
+        "clients": clients,
+        "documents": documents,
+        "total_units": total_units,
+        "estimated_boxes": estimated_boxes,
+        "distinct_products": distinct_products,
+    }
+
+
+def _load_summary_context(
+    plan_id: int,
+    plan: dict[str, Any],
+    inv: dict[str, Any],
+    invoicing_block: dict[str, Any],
+    margin_block: dict[str, Any] | None,
+    *,
+    stage_run: DashboardStageRun | None = None,
+) -> dict[str, Any]:
+    picking_meta: dict[str, Any] | None = None
+    picking_kpis: dict[str, Any] | None = None
+
+    def _load(cur: Any) -> None:
+        nonlocal picking_meta, picking_kpis
+        row = picking_repo.get_picking_row(cur, plan_id, current_only=True)
+        if not row:
+            return
+        meta = picking_repo.picking_meta_to_api(row)
+        picking_meta = meta
+        picking_kpis = _aggregate_picking_kpis(cur, int(row["id"]))
+        picking_kpis["sales_total_clp"] = meta.get("document_total_clp")
+
+    try:
+        if stage_run:
+            with dashboard_connection(plan_id, stage_run) as (cur, _conn):
+                _load(cur)
+        else:
+            conn = get_connection()
+            try:
+                cur = conn.cursor()
+                _load(cur)
+                cur.close()
+            finally:
+                conn.close()
+    except Exception:
+        picking_meta = None
+        picking_kpis = None
+
+    try:
+        header = fetch_picking_header(plan_id)
+    except ValueError:
+        header = None
+
+    return build_load_summary(
+        plan=plan,
+        inv=inv,
+        invoicing_block=invoicing_block,
+        margin_block=margin_block,
+        picking_meta=picking_meta,
+        picking_kpis=picking_kpis,
+        header=header,
+    )
+
+
 def _build_plan_dashboard(
     plan_id: int,
     plan: dict[str, Any],
@@ -807,25 +934,37 @@ def _build_plan_dashboard(
     if stage_run:
         stage_run.log_stage(4, "build_response")
 
+    invoicing_payload = {
+        "total_orders": len(orders),
+        "total_oc_amount_clp": int(round(total_oc_amount)),
+        "confirmed": {
+            "count": inv_summary["confirmed"],
+            "amount_clp": int(round(confirmed_amount)),
+            "auto_confirmed_count": inv_auto_confirmed,
+        },
+        "probable": {
+            "count": inv_summary["probable"],
+            "amount_clp": int(round(probable_amount)),
+        },
+        "pending": {
+            "count": inv_summary["missing"],
+            "amount_clp": int(round(pending_amount)),
+        },
+    }
+
+    load_summary = _load_summary_context(
+        plan_id,
+        plan,
+        inv,
+        invoicing_payload,
+        margin_block,
+        stage_run=stage_run,
+    )
+
     payload = {
         "plan": plan,
-        "invoicing": {
-            "total_orders": len(orders),
-            "total_oc_amount_clp": int(round(total_oc_amount)),
-            "confirmed": {
-                "count": inv_summary["confirmed"],
-                "amount_clp": int(round(confirmed_amount)),
-                "auto_confirmed_count": inv_auto_confirmed,
-            },
-            "probable": {
-                "count": inv_summary["probable"],
-                "amount_clp": int(round(probable_amount)),
-            },
-            "pending": {
-                "count": inv_summary["missing"],
-                "amount_clp": int(round(pending_amount)),
-            },
-        },
+        "load_summary": load_summary,
+        "invoicing": invoicing_payload,
         "invoiced_items": inv_items if include_items else [],
         "warnings": warnings,
         "probable_notes": probable_notes,
@@ -1298,10 +1437,8 @@ def _picking_client_sql_view(*, include_probable: bool) -> str:
                 inv.probable_score,
                 d_pay.forma_pago,
                 d_pay.tipo_documento_a_generar,
-                COALESCE(
-                    NULLIF(BTRIM(d_pay.observaciones), ''),
-                    NULLIF(BTRIM(d.tracking_number), '')
-                ) AS observaciones,
+                NULLIF(BTRIM(d_pay.observaciones), '') AS observaciones,
+                NULLIF(BTRIM(d.tracking_number), '') AS delivery_notes,
                 COALESCE(NULLIF(BTRIM(d.seller_name), ''), dpo.seller_name) AS seller_name,
                 d.total_amount AS document_total,
                 d.document_type_id
@@ -1345,7 +1482,8 @@ _PICKING_CLIENT_SQL_LITE = """
                 NULL::numeric AS probable_score,
                 d_pay.forma_pago,
                 d_pay.tipo_documento_a_generar,
-                COALESCE(NULLIF(BTRIM(d_pay.observaciones), ''), NULLIF(BTRIM(d.tracking_number), '')) AS observaciones,
+                NULLIF(BTRIM(d_pay.observaciones), '') AS observaciones,
+                NULLIF(BTRIM(d.tracking_number), '') AS delivery_notes,
                 COALESCE(NULLIF(BTRIM(d.seller_name), ''), dpo.seller_name) AS seller_name,
                 d.total_amount AS document_total,
                 d.document_type_id
@@ -1369,6 +1507,8 @@ def _picking_product_sql_view(*, include_probable: bool) -> str:
     return f"""
                 SELECT
                     COALESCE(NULLIF(BTRIM(t.name), ''), 'Centro de despacho') AS sucursal_bodega,
+                    MAX(pm.id) AS product_id,
+                    MAX(dd.variant_id) AS variant_id,
                     {PM_TIPO_PRODUCTO_EXPR} AS tipo_producto,
                     dd.variant_description AS producto,
                     dd.variant_description AS variante,
@@ -1404,6 +1544,8 @@ def _picking_product_sql_view(*, include_probable: bool) -> str:
 
 _PICKING_PRODUCT_SQL_LITE = f"""
                 SELECT
+                    MAX(pm.id) AS product_id,
+                    MAX(dd.variant_id) AS variant_id,
                     {PM_TIPO_PRODUCTO_EXPR} AS tipo_producto,
                     dd.variant_description AS producto,
                     dd.variant_description AS variante,
@@ -1565,7 +1707,21 @@ def generate_plan_picking(
     clients, items = _compute_picking_from_invoicing(
         plan_id, include_probable=include_probable, inv_check=inv_check
     )
+    doc_total = sum(float(c.get("document_total") or 0) for c in clients)
+    prod_total = sum(float(i.get("total_monto") or 0) for i in items)
     header = fetch_picking_header(plan_id)
+    header["load_kpis"] = {
+        "clients": len({c.get("client_id") for c in clients if c.get("client_id")}),
+        "documents": len(clients),
+        "sales_total_clp": int(round(doc_total)),
+        "distinct_products": len(items),
+        "total_units": sum(float(i.get("unidades") or 0) for i in items),
+        "estimated_boxes": sum(
+            float(i.get("cajas") or 0)
+            for i in items
+            if not i.get("sin_unidad_caja")
+        ),
+    }
     warnings = picking_warnings_from_stops(clients)
     if include_probable and int((inv_check.get("summary") or {}).get("probable") or 0) > 0:
         warnings.append(
@@ -1573,9 +1729,6 @@ def generate_plan_picking(
         )
     if readiness.get("reason"):
         warnings.insert(0, readiness["reason"])
-
-    doc_total = sum(float(c.get("document_total") or 0) for c in clients)
-    prod_total = sum(float(i.get("total_monto") or 0) for i in items)
 
     conn = get_connection()
     try:
