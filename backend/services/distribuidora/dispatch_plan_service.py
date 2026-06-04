@@ -58,6 +58,11 @@ from backend.utils.dispatch_plan_picking import (
     picking_warnings_from_stops,
 )
 from backend.utils.load_summary import build_load_summary
+from backend.utils.picking_display import (
+    compute_items_totals,
+    count_snapshot_clients,
+    enrich_picking_product_rows,
+)
 from backend.utils.picking_readiness import (
     PICKING_WAIT_MESSAGE,
     evaluate_picking_readiness,
@@ -702,40 +707,24 @@ def _try_auto_generate_picking_snapshot(plan_id: int) -> None:
 
 
 def _aggregate_picking_kpis(cur: Any, picking_id: int) -> dict[str, Any]:
-    cur.execute(
-        """
-        SELECT
-            COUNT(DISTINCT NULLIF(client_id, 0)) AS clients,
-            COUNT(*) AS documents
-        FROM distribuidora.dispatch_plan_picking_clients
-        WHERE picking_id = %s
-        """,
-        (picking_id,),
-    )
-    crow = cur.fetchone()
-    cur.execute(
-        """
-        SELECT
-            COALESCE(SUM(unidades), 0) AS total_units,
-            COALESCE(SUM(cajas) FILTER (WHERE NOT sin_unidad_caja), 0) AS estimated_boxes,
-            COUNT(DISTINCT NULLIF(BTRIM(codigo_barras), '')) AS distinct_products
-        FROM distribuidora.dispatch_plan_picking_products
-        WHERE picking_id = %s
-        """,
-        (picking_id,),
-    )
-    prow = cur.fetchone()
-    clients = int(crow[0] or 0) if crow else 0
-    documents = int(crow[1] or 0) if crow else 0
-    total_units = float(prow[0] or 0) if prow else 0.0
-    estimated_boxes = float(prow[1] or 0) if prow else 0.0
-    distinct_products = int(prow[2] or 0) if prow else 0
+    client_rows = picking_repo.list_picking_clients(cur, picking_id)
+    product_rows = picking_repo.list_picking_products(cur, picking_id)
+    clients_api = [picking_repo.client_row_to_api(r) for r in client_rows]
+    enriched_products = enrich_picking_product_rows(cur, product_rows)
+    items_api = [picking_repo.product_row_to_api(r) for r in enriched_products]
+    totals = compute_items_totals(items_api)
+    clients_n = count_snapshot_clients(clients_api)
+    if clients_n == 0 and clients_api:
+        clients_n = len(clients_api)
     return {
-        "clients": clients,
-        "documents": documents,
-        "total_units": total_units,
-        "estimated_boxes": estimated_boxes,
-        "distinct_products": distinct_products,
+        "clients": clients_n,
+        "documents": len(clients_api),
+        "total_units": totals["unidades"],
+        "estimated_boxes": totals["cajas"],
+        "distinct_products": totals["distinct_products"],
+        "sales_total_clp": float(
+            sum(float(c.get("document_total") or 0) for c in clients_api)
+        ),
     }
 
 
@@ -1602,14 +1591,27 @@ def _load_persisted_picking_bundle(
         pid = int(picking_row["id"])
         client_rows = picking_repo.list_picking_clients(cur, pid)
         product_rows = picking_repo.list_picking_products(cur, pid)
+        enriched_products = enrich_picking_product_rows(cur, product_rows)
         cur.close()
     finally:
         conn.close()
 
     meta = picking_repo.picking_meta_to_api(picking_row)
     clients = [picking_repo.client_row_to_api(r) for r in client_rows]
-    items = [picking_repo.product_row_to_api(r) for r in product_rows]
-    header = meta.get("header") or {}
+    items = [picking_repo.product_row_to_api(r) for r in enriched_products]
+    item_totals = compute_items_totals(items)
+    clients_n = count_snapshot_clients(clients)
+    header = dict(meta.get("header") or {})
+    header["load_kpis"] = {
+        "clients": clients_n or len(clients),
+        "documents": len(clients),
+        "sales_total_clp": int(
+            round(sum(float(c.get("document_total") or 0) for c in clients))
+        ),
+        "distinct_products": item_totals["distinct_products"],
+        "total_units": item_totals["unidades"],
+        "estimated_boxes": item_totals["cajas"],
+    }
     warnings = meta.get("warnings") or []
     return {
         "dispatch_plan_id": plan_id,
@@ -1627,15 +1629,12 @@ def _load_persisted_picking_bundle(
         "source": "persisted",
         "totals": {
             "stops": len(clients),
+            "clients": clients_n or len(clients),
             "document_total_clp": meta.get("document_total_clp"),
-            "lines": len(items),
-            "unidades": sum(float(i.get("unidades") or 0) for i in items),
-            "cajas": sum(
-                float(i.get("cajas") or 0)
-                for i in items
-                if not i.get("sin_unidad_caja")
-            ),
-            "total_monto_clp": meta.get("product_total_monto_clp"),
+            "lines": item_totals["lines"],
+            "unidades": item_totals["unidades"],
+            "cajas": item_totals["cajas"],
+            "total_monto_clp": item_totals["total_monto_clp"],
         },
     }
 

@@ -302,7 +302,7 @@ def client_row_to_api(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def product_row_to_api(row: dict[str, Any]) -> dict[str, Any]:
-    return {
+    out = {
         "id": row.get("id"),
         "product_id": row.get("product_id"),
         "variant_id": row.get("variant_id"),
@@ -311,13 +311,33 @@ def product_row_to_api(row: dict[str, Any]) -> dict[str, Any]:
         "tipo_producto": row.get("tipo_producto") or "",
         "producto": row.get("producto"),
         "variante": row.get("variante"),
+        "product_name": row.get("product_name"),
+        "variant_name": row.get("variant_name"),
         "producto_variante": row.get("producto_variante") or "",
+        "display_name": row.get("display_name"),
         "codigo_barras": row.get("codigo_barras"),
-        "cajas": row.get("cajas"),
-        "units_per_box": row.get("units_per_box"),
+        "cajas": row.get("cajas_efectivas") if row.get("cajas_efectivas") is not None else row.get("cajas"),
+        "cajas_efectivas": row.get("cajas_efectivas"),
+        "units_per_box": row.get("units_per_box_efectivo")
+        if row.get("units_per_box_efectivo") is not None
+        else row.get("units_per_box"),
+        "units_per_box_efectivo": row.get("units_per_box_efectivo"),
         "sin_unidad_caja": row.get("sin_unidad_caja"),
         "total_monto": row.get("total_monto"),
     }
+    if not out.get("display_name"):
+        from backend.utils.picking_display import format_product_display
+
+        out["display_name"] = format_product_display(
+            pm={
+                "product_name": out.get("product_name"),
+                "variant_name": out.get("variant_name"),
+            },
+            producto=(out.get("producto") or ""),
+            variante=(out.get("variante") or ""),
+            producto_variante=(out.get("producto_variante") or ""),
+        )
+    return out
 
 
 def picking_meta_to_api(row: dict[str, Any]) -> dict[str, Any]:

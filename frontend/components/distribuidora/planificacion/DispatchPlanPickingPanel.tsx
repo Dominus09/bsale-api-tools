@@ -14,6 +14,7 @@ import {
   exportDispatchPlanPickingClientePdf,
   exportDispatchPlanPickingProductoPdf,
 } from "@/lib/dispatch-plan-picking-pdf"
+import { effectiveBoxes } from "@/lib/picking-display"
 import { formatClp } from "@/lib/ors-map-ui"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -103,6 +104,8 @@ export function DispatchPlanPickingClientePanel({
             header: data.header,
             clients: data.clients,
             warnings: data.warnings,
+            version: data.version,
+            generatedAt: data.generated_at,
           })
           onMessage("PDF de picking cliente generado.")
         }
@@ -238,7 +241,7 @@ export function DispatchPlanPickingClientePanel({
                   <th className="px-2 py-2">Tipo</th>
                   <th className="px-2 py-2">Pago</th>
                   <th className="px-2 py-2">Vendedor</th>
-                  <th className="px-2 py-2">Obs.</th>
+                  <th className="px-2 py-2">Obs. entrega</th>
                   <th className="px-2 py-2 text-right">Total</th>
                 </tr>
               </thead>
@@ -261,8 +264,10 @@ export function DispatchPlanPickingClientePanel({
                     <td className="px-2 py-1.5">{row.document_type}</td>
                     <td className="px-2 py-1.5">{row.payment_method || "—"}</td>
                     <td className="px-2 py-1.5">{row.seller_name}</td>
-                    <td className="px-2 py-1.5 max-w-[100px] truncate">
-                      {row.observations || "—"}
+                    <td className="px-2 py-1.5 max-w-[140px] truncate">
+                      {[row.delivery_notes, row.observations]
+                        .filter((x) => (x || "").trim())
+                        .join(" · ") || "—"}
                     </td>
                     <td className="px-2 py-1.5 text-right tabular-nums">
                       {formatClp(Number(row.document_total) || 0)}
@@ -328,7 +333,8 @@ export function DispatchPlanPickingProductoPanel({
           await exportDispatchPlanPickingProductoPdf({
             header: data.header,
             items: data.items,
-            warnings: data.warnings,
+            version: data.version,
+            generatedAt: data.generated_at,
           })
           onMessage("PDF de picking producto generado.")
         }
@@ -427,7 +433,10 @@ export function DispatchPlanPickingProductoPanel({
         <>
           <p className="text-xs text-muted-foreground">
             {data.totals?.lines ?? data.items.length} líneas · {data.totals?.unidades ?? 0}{" "}
-            u · {data.totals?.cajas ?? 0} cajas ·{" "}
+            u ·{" "}
+            {data.totals?.cajas ??
+              data.items.reduce((s, r) => s + effectiveBoxes(r), 0)}{" "}
+            cajas ·{" "}
             {formatClp(data.totals?.total_monto_clp ?? 0)}
           </p>
           <div className="overflow-x-auto rounded-md border">
@@ -448,7 +457,9 @@ export function DispatchPlanPickingProductoPanel({
                   <tr key={idx} className="border-t border-border/50">
                     <td className="px-2 py-1.5">{row.sucursal_bodega}</td>
                     <td className="px-2 py-1.5">{row.tipo_producto}</td>
-                    <td className="px-2 py-1.5 font-medium">{row.producto_variante}</td>
+                    <td className="px-2 py-1.5 font-medium">
+                      {row.display_name || row.producto_variante}
+                    </td>
                     <td className="px-2 py-1.5 font-mono text-[10px]">
                       {row.codigo_barras || "—"}
                     </td>
@@ -459,7 +470,7 @@ export function DispatchPlanPickingProductoPanel({
                           sin unidad caja
                         </Badge>
                       ) : (
-                        row.cajas
+                        effectiveBoxes(row)
                       )}
                     </td>
                     <td className="px-2 py-1.5 text-right tabular-nums">

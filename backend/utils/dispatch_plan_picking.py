@@ -243,7 +243,7 @@ def build_picking_product_excel(
             "tipo_producto": i.get("tipo_producto"),
             "cajas": i.get("cajas"),
             "sin_unidad_caja": "Sí" if i.get("sin_unidad_caja") else "",
-            "producto_variante": i.get("producto_variante"),
+            "producto_variante": i.get("display_name") or i.get("producto_variante"),
             "codigo_barras": i.get("codigo_barras"),
             "total_monto": i.get("total_monto"),
         }

@@ -2083,6 +2083,7 @@ export type DispatchPlanPickingHeader = {
 
 export type DispatchPlanPickingClientRow = {
   route_order?: number | null
+  client_id?: number | null
   city?: string
   client_name?: string
   fantasy_name?: string
@@ -2093,6 +2094,7 @@ export type DispatchPlanPickingClientRow = {
   payment_method?: string
   seller_name?: string
   observations?: string
+  delivery_notes?: string
   document_total?: number | null
   related_document_id?: number
   relation_source?: string | null
@@ -2105,11 +2107,18 @@ export type DispatchPlanPickingProductRow = {
   sucursal_bodega?: string
   unidades?: number | null
   tipo_producto?: string
-  cajas?: number | null
-  sin_unidad_caja?: boolean
-  units_per_box?: number | null
+  producto?: string
+  variante?: string
+  product_name?: string
+  variant_name?: string
+  display_name?: string
   producto_variante?: string
   codigo_barras?: string | null
+  cajas?: number | null
+  cajas_efectivas?: number | null
+  units_per_box?: number | null
+  units_per_box_efectivo?: number | null
+  sin_unidad_caja?: boolean
   total_monto?: number | null
 }
 
