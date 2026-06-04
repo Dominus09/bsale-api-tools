@@ -338,13 +338,14 @@ export interface ProductMasterRow {
   product_type: string | null
   supplier_id: number | null
   units_per_box?: number | null
-  peso_caja_kg?: number | null
-  alto_caja_cm?: number | null
-  ancho_caja_cm?: number | null
-  largo_caja_cm?: number | null
+  weight_box_kg?: number | null
+  height_cm?: number | null
+  width_cm?: number | null
+  length_cm?: number | null
+  weight_unit_kg?: number | null
+  volume_m3?: number | null
   logistics_completed?: boolean
   last_bsale_sync_at?: string | null
-  peso_unitario_kg?: number | null
   is_active: boolean
   created_at?: string | null
   updated_at?: string | null
@@ -3265,11 +3266,48 @@ export type ProductMasterLogisticsPatch = {
   supplier_id?: number | null
   is_active?: boolean
   units_per_box?: number | null
-  peso_caja_kg?: number | null
-  alto_caja_cm?: number | null
-  ancho_caja_cm?: number | null
-  largo_caja_cm?: number | null
+  weight_box_kg?: number | null
+  height_cm?: number | null
+  width_cm?: number | null
+  length_cm?: number | null
   logistics_completed?: boolean
+}
+
+export interface ProductsMasterLogisticsStats {
+  total: number
+  with_barcode: number
+  with_units_per_box: number
+  with_supplier: number
+  with_weight: number
+  with_dimensions: number
+  logistics_completed: number
+  completeness_pct: number
+}
+
+export async function getProductsMasterLogisticsStats(): Promise<ProductsMasterLogisticsStats> {
+  const res = await fetch(`${API_URL}/products-master/logistics-stats`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    throw new Error("Error al cargar estadísticas logísticas")
+  }
+  return res.json()
+}
+
+export async function patchProductMasterById(
+  id: number,
+  payload: ProductMasterLogisticsPatch,
+): Promise<PatchProductMasterResponse> {
+  const res = await fetch(`${API_URL}/products-master/id/${id}`, {
+    method: "PATCH",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const msg = await res.text()
+    throw new Error(msg || "Error al actualizar producto")
+  }
+  return res.json()
 }
 
 export async function getProductsMaster(
@@ -3317,14 +3355,17 @@ export async function getProductsMasterUnassignedCount(): Promise<number> {
 }
 
 export interface PatchProductMasterResponse {
+  id?: number
   barcode: string
   supplier_id: number | null
   is_active: boolean
   units_per_box?: number | null
-  peso_caja_kg?: number | null
-  alto_caja_cm?: number | null
-  ancho_caja_cm?: number | null
-  largo_caja_cm?: number | null
+  weight_box_kg?: number | null
+  height_cm?: number | null
+  width_cm?: number | null
+  length_cm?: number | null
+  weight_unit_kg?: number | null
+  volume_m3?: number | null
   logistics_completed?: boolean
   last_bsale_sync_at?: string | null
   updated_at: string | null

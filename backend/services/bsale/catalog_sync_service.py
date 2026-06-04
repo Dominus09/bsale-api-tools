@@ -113,13 +113,10 @@ upserted AS (
         NOW()
     FROM source s
     ON CONFLICT (barcode) DO UPDATE SET
-        sku = EXCLUDED.sku,
         product_id = EXCLUDED.product_id,
         variant_id = EXCLUDED.variant_id,
         product_name = EXCLUDED.product_name,
         variant_name = EXCLUDED.variant_name,
-        product_type = EXCLUDED.product_type,
-        companies = EXCLUDED.companies,
         units_per_box = EXCLUDED.units_per_box,
         updated_at = NOW(),
         last_bsale_sync_at = NOW()

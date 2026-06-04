@@ -2,10 +2,15 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.db import get_connection
+from backend.utils.product_logistics import (
+    calc_volume_m3,
+    calc_weight_unit_kg,
+    fetch_logistics_stats,
+)
 
 router = APIRouter()
 
@@ -17,23 +22,46 @@ _LOGISTICS_PATCH_FIELDS = frozenset(
         "supplier_id",
         "is_active",
         "units_per_box",
-        "peso_caja_kg",
-        "alto_caja_cm",
-        "ancho_caja_cm",
-        "largo_caja_cm",
+        "weight_box_kg",
+        "height_cm",
+        "width_cm",
+        "length_cm",
         "logistics_completed",
     }
 )
+
+_PM_SELECT = """
+    id,
+    barcode,
+    sku,
+    product_id,
+    variant_id,
+    product_name,
+    variant_name,
+    product_type,
+    companies,
+    supplier_id,
+    units_per_box,
+    weight_box_kg,
+    height_cm,
+    width_cm,
+    length_cm,
+    logistics_completed,
+    last_bsale_sync_at,
+    is_active,
+    created_at,
+    updated_at
+"""
 
 
 class ProductMasterLogisticsPatch(BaseModel):
     supplier_id: Optional[int] = None
     is_active: Optional[bool] = None
     units_per_box: Optional[int] = Field(None, ge=1)
-    peso_caja_kg: Optional[float] = Field(None, ge=0)
-    alto_caja_cm: Optional[float] = Field(None, ge=0)
-    ancho_caja_cm: Optional[float] = Field(None, ge=0)
-    largo_caja_cm: Optional[float] = Field(None, ge=0)
+    weight_box_kg: Optional[float] = Field(None, ge=0)
+    height_cm: Optional[float] = Field(None, ge=0)
+    width_cm: Optional[float] = Field(None, ge=0)
+    length_cm: Optional[float] = Field(None, ge=0)
     logistics_completed: Optional[bool] = None
 
 
@@ -99,37 +127,85 @@ def _serialize_pm_row(row: Dict[str, Any]) -> Dict[str, Any]:
             out[k] = v.isoformat()
         else:
             out[k] = v
-    upb = out.get("units_per_box")
-    peso = out.get("peso_caja_kg")
-    if upb and float(upb) > 0 and peso is not None:
-        out["peso_unitario_kg"] = round(float(peso) / float(upb), 6)
-    else:
-        out["peso_unitario_kg"] = None
+    out["weight_unit_kg"] = calc_weight_unit_kg(
+        out.get("weight_box_kg"),
+        out.get("units_per_box"),
+    )
+    out["volume_m3"] = calc_volume_m3(
+        out.get("height_cm"),
+        out.get("width_cm"),
+        out.get("length_cm"),
+    )
     return out
 
 
-_PM_SELECT = """
-    id,
-    barcode,
-    sku,
-    product_id,
-    variant_id,
-    product_name,
-    variant_name,
-    product_type,
-    companies,
-    supplier_id,
-    units_per_box,
-    peso_caja_kg,
-    alto_caja_cm,
-    ancho_caja_cm,
-    largo_caja_cm,
-    logistics_completed,
-    last_bsale_sync_at,
-    is_active,
-    created_at,
-    updated_at
-"""
+def _apply_patch(
+    row_id: int | None,
+    barcode: str | None,
+    body: ProductMasterLogisticsPatch,
+) -> Dict[str, Any]:
+    payload = body.model_dump(exclude_unset=True)
+    if not payload:
+        raise HTTPException(status_code=400, detail="Sin campos para actualizar")
+
+    updates: list[str] = []
+    params: list[Any] = []
+    for key, value in payload.items():
+        if key not in _LOGISTICS_PATCH_FIELDS:
+            raise HTTPException(status_code=400, detail=f"Campo no permitido: {key}")
+        updates.append(f"{key} = %s")
+        params.append(value)
+
+    updates.append("updated_at = NOW()")
+
+    if row_id is not None:
+        where_clause = "id = %s"
+        params.append(row_id)
+    elif barcode:
+        where_clause = "barcode = %s"
+        params.append(barcode.strip())
+    else:
+        raise HTTPException(status_code=400, detail="id o barcode requerido")
+
+    sql = f"""
+        UPDATE bsale.products_master
+        SET {", ".join(updates)}
+        WHERE {where_clause}
+        RETURNING {_PM_SELECT}
+    """
+
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(sql, tuple(params))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Producto no encontrado")
+        conn.commit()
+        columns = [desc[0] for desc in cur.description]
+        return _serialize_pm_row(dict(zip(columns, row)))
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail="Error actualizando producto")
+    finally:
+        cur.close()
+        conn.close()
+
+
+@router.get("/products-master/logistics-stats")
+def products_master_logistics_stats() -> Dict[str, Any]:
+    """KPIs del maestro logístico para dashboard Distribuidora."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        stats = fetch_logistics_stats(cur)
+        cur.close()
+    finally:
+        conn.close()
+    return stats
 
 
 @router.get("/products-master")
@@ -200,67 +276,16 @@ def count_products_master_without_supplier() -> Dict[str, Any]:
     return {"count": total}
 
 
+@router.patch("/products-master/id/{row_id}")
+def patch_product_master_by_id(row_id: int, body: ProductMasterLogisticsPatch):
+    if row_id < 1:
+        raise HTTPException(status_code=400, detail="id inválido")
+    return _apply_patch(row_id=row_id, barcode=None, body=body)
+
+
 @router.patch("/products-master/{barcode}")
 def patch_product_master(barcode: str, body: ProductMasterLogisticsPatch):
-    clean_barcode = (barcode or "").strip()
-    if not clean_barcode:
+    clean = (barcode or "").strip()
+    if not clean:
         raise HTTPException(status_code=400, detail="barcode es obligatorio")
-
-    payload = body.model_dump(exclude_unset=True)
-    if not payload:
-        raise HTTPException(status_code=400, detail="Sin campos para actualizar")
-
-    updates: list[str] = []
-    params: list[Any] = []
-
-    for key, value in payload.items():
-        if key not in _LOGISTICS_PATCH_FIELDS:
-            raise HTTPException(status_code=400, detail=f"Campo no permitido: {key}")
-        updates.append(f"{key} = %s")
-        params.append(value)
-
-    updates.append("updated_at = NOW()")
-    params.append(clean_barcode)
-
-    sql = f"""
-        UPDATE bsale.products_master
-        SET {", ".join(updates)}
-        WHERE barcode = %s
-        RETURNING barcode, supplier_id, is_active, units_per_box,
-                  peso_caja_kg, alto_caja_cm, ancho_caja_cm, largo_caja_cm,
-                  logistics_completed, updated_at, last_bsale_sync_at
-    """
-
-    conn = get_connection()
-    cur = conn.cursor()
-    try:
-        cur.execute(sql, tuple(params))
-        row = cur.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Producto no encontrado")
-        conn.commit()
-    except HTTPException:
-        conn.rollback()
-        raise
-    except Exception:
-        conn.rollback()
-        raise HTTPException(status_code=500, detail="Error actualizando producto")
-    finally:
-        cur.close()
-        conn.close()
-
-    cols = [
-        "barcode",
-        "supplier_id",
-        "is_active",
-        "units_per_box",
-        "peso_caja_kg",
-        "alto_caja_cm",
-        "ancho_caja_cm",
-        "largo_caja_cm",
-        "logistics_completed",
-        "updated_at",
-        "last_bsale_sync_at",
-    ]
-    return _serialize_pm_row(dict(zip(cols, row)))
-
+    return _apply_patch(row_id=None, barcode=clean, body=body)

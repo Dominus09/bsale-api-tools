@@ -87,7 +87,7 @@ python -m backend.jobs.sync_bsale_catalog
 
 ### DDL previo
 
-Ejecutar una vez: `backend/sql/032_products_master_logistics.sql` (ver `docs/PRODUCTS_MASTER_SYNC.md`).
+Ejecutar una vez: `backend/sql/032_products_master_logistics.sql` y `backend/sql/033_products_master_logistics_canonical.sql` (ver `docs/PRODUCTS_MASTER_SYNC.md`).
 
 ### Frecuencia y timeout
 

@@ -12,7 +12,8 @@
 - Nunca `DELETE` ni `TRUNCATE` de `products_master`.
 - UPSERT incremental por `barcode` (`ON CONFLICT DO UPDATE`).
 - En UPDATE desde Bsale: solo nombre, variante, ids, `units_per_box`, `sku`, `product_type`, `companies`, `last_bsale_sync_at`.
-- No se tocan en sync: `supplier_id`, `peso_caja_kg`, dimensiones, `logistics_completed`.
+- No se tocan en sync: `supplier_id`, `weight_box_kg`, `height_cm`, `width_cm`, `length_cm`, `logistics_completed`.
+- En UPDATE solo: `product_name`, `variant_name`, `product_id`, `variant_id`, `units_per_box`, `last_bsale_sync_at` (+ metadatos de inserción en altas nuevas).
 
 ## Migración DDL
 
@@ -20,6 +21,7 @@ Aplicar en PostgreSQL (una vez por entorno):
 
 ```bash
 psql "$DATABASE_URL" -f backend/sql/032_products_master_logistics.sql
+psql "$DATABASE_URL" -f backend/sql/033_products_master_logistics_canonical.sql
 ```
 
 Añade columnas logísticas, `units_per_box` en `variants` y `products_master`, índices y comentarios.
@@ -54,7 +56,11 @@ Frecuencia sugerida: **1–2 veces al día** (o tras cambios masivos de catálog
 
 **Distribuidora → Maestro logístico productos** (`/distribuidora/maestro-logistico`)
 
-Edición inline de CxC, peso/dimensiones de caja y proveedor. Peso unitario = `peso_caja_kg / units_per_box` (solo lectura en API).
+Edición inline de CxC, peso/dimensiones de caja y proveedor. `weight_unit_kg = weight_box_kg / units_per_box` (calculado en API, no almacenado).
+
+Vista SQL: `bsale.v_product_logistics` (App Choferes / carga camiones).
+
+KPIs: `GET /products-master/logistics-stats`.
 
 ## Código relacionado
 

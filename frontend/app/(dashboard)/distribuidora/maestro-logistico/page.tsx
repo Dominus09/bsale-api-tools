@@ -18,12 +18,14 @@ import {
 } from "@/components/ui/select"
 import {
   getProductsMaster,
+  getProductsMasterLogisticsStats,
   getSuppliers,
   patchProductMaster,
   PRODUCTS_MASTER_PAGE_SIZE,
   type GetProductsMasterParams,
   type ProductMasterLogisticsPatch,
   type ProductMasterRow,
+  type ProductsMasterLogisticsStats,
   type Supplier,
 } from "@/lib/api"
 import { cn } from "@/lib/utils"
@@ -33,10 +35,14 @@ const FILTER_ALL_SUPPLIERS = "__all__"
 
 type LogisticsField =
   | "units_per_box"
-  | "peso_caja_kg"
-  | "alto_caja_cm"
-  | "ancho_caja_cm"
-  | "largo_caja_cm"
+  | "weight_box_kg"
+  | "height_cm"
+  | "width_cm"
+  | "length_cm"
+
+function formatCount(n: number): string {
+  return n.toLocaleString("es-CL")
+}
 
 function productLabel(row: ProductMasterRow): string {
   const pn = (row.product_name || "").trim()
@@ -67,10 +73,10 @@ function parseOptionalNumber(raw: string): number | null | undefined {
 
 function logisticsPayloadFromRow(row: ProductMasterRow): ProductMasterLogisticsPatch {
   const hasCxC = row.units_per_box != null && row.units_per_box > 0
-  const hasPeso = row.peso_caja_kg != null && row.peso_caja_kg > 0
-  const hasAlto = row.alto_caja_cm != null && row.alto_caja_cm > 0
-  const hasAncho = row.ancho_caja_cm != null && row.ancho_caja_cm > 0
-  const hasLargo = row.largo_caja_cm != null && row.largo_caja_cm > 0
+  const hasPeso = row.weight_box_kg != null && row.weight_box_kg > 0
+  const hasAlto = row.height_cm != null && row.height_cm > 0
+  const hasAncho = row.width_cm != null && row.width_cm > 0
+  const hasLargo = row.length_cm != null && row.length_cm > 0
   return {
     logistics_completed: hasCxC && hasPeso && hasAlto && hasAncho && hasLargo,
   }
@@ -139,6 +145,10 @@ export default function MaestroLogisticoPage() {
   const [debouncedSearch, setDebouncedSearch] = useState("")
   const [page, setPage] = useState(0)
   const [total, setTotal] = useState(0)
+
+  const [stats, setStats] = useState<ProductsMasterLogisticsStats | null>(null)
+  const [statsLoading, setStatsLoading] = useState(true)
+  const [statsError, setStatsError] = useState("")
 
   const clearSaveSuccessFlash = useCallback((barcode: string) => {
     const id = saveFlashTimeoutsRef.current.get(barcode)
@@ -237,6 +247,29 @@ export default function MaestroLogisticoPage() {
 
   useEffect(() => {
     let cancelled = false
+    async function loadStats() {
+      setStatsLoading(true)
+      setStatsError("")
+      try {
+        const s = await getProductsMasterLogisticsStats()
+        if (!cancelled) setStats(s)
+      } catch {
+        if (!cancelled) {
+          setStats(null)
+          setStatsError("No se pudieron cargar los KPIs")
+        }
+      } finally {
+        if (!cancelled) setStatsLoading(false)
+      }
+    }
+    loadStats()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
     async function loadSuppliers() {
       setSuppliersLoading(true)
       setSuppliersError("")
@@ -299,10 +332,12 @@ export default function MaestroLogisticoPage() {
                   ...r,
                   supplier_id: updated.supplier_id ?? r.supplier_id,
                   units_per_box: updated.units_per_box ?? r.units_per_box,
-                  peso_caja_kg: updated.peso_caja_kg ?? r.peso_caja_kg,
-                  alto_caja_cm: updated.alto_caja_cm ?? r.alto_caja_cm,
-                  ancho_caja_cm: updated.ancho_caja_cm ?? r.ancho_caja_cm,
-                  largo_caja_cm: updated.largo_caja_cm ?? r.largo_caja_cm,
+                  weight_box_kg: updated.weight_box_kg ?? r.weight_box_kg,
+                  height_cm: updated.height_cm ?? r.height_cm,
+                  width_cm: updated.width_cm ?? r.width_cm,
+                  length_cm: updated.length_cm ?? r.length_cm,
+                  weight_unit_kg: updated.weight_unit_kg ?? r.weight_unit_kg,
+                  volume_m3: updated.volume_m3 ?? r.volume_m3,
                   logistics_completed:
                     updated.logistics_completed ?? r.logistics_completed,
                   updated_at: updated.updated_at ?? r.updated_at,
@@ -380,6 +415,42 @@ export default function MaestroLogisticoPage() {
           {suppliersError}
         </div>
       ) : null}
+
+      {statsError ? (
+        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {statsError}
+        </div>
+      ) : null}
+
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        {(
+          [
+            ["Productos", stats?.total],
+            ["Con proveedor", stats?.with_supplier],
+            ["Con CxC", stats?.with_units_per_box],
+            ["Con peso", stats?.with_weight],
+            ["Con dimensiones", stats?.with_dimensions],
+            ["Completitud", stats?.completeness_pct, true],
+          ] as const
+        ).map(([label, value, isPct]) => (
+          <Card key={label} className="shadow-none">
+            <CardContent className="py-4">
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                {label}
+              </p>
+              <p className="mt-1 text-2xl font-semibold tabular-nums text-foreground">
+                {statsLoading ? (
+                  <Loader2 className="size-5 animate-spin text-muted-foreground" />
+                ) : isPct ? (
+                  `${value ?? 0}%`
+                ) : (
+                  formatCount(Number(value ?? 0))
+                )}
+              </p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
 
       <Card>
         <CardHeader>
@@ -491,9 +562,9 @@ export default function MaestroLogisticoPage() {
                             <p className="text-sm font-medium leading-snug">
                               {productLabel(row)}
                             </p>
-                            {row.peso_unitario_kg != null ? (
+                            {row.weight_unit_kg != null ? (
                               <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
-                                Peso unit. ≈ {row.peso_unitario_kg.toFixed(4)} kg
+                                Peso unit. ≈ {row.weight_unit_kg.toFixed(4)} kg
                               </p>
                             ) : null}
                             {row.logistics_completed ? (
@@ -521,41 +592,41 @@ export default function MaestroLogisticoPage() {
                         </td>
                         <td className="py-2.5 pr-3 align-middle">
                           <InlineNumberInput
-                            value={row.peso_caja_kg}
+                            value={row.weight_box_kg}
                             disabled={pending}
                             onCommit={(parsed) => {
                               if (parsed === undefined || parsed === null) return
-                              void handleLogisticsField(row, "peso_caja_kg", parsed)
+                              void handleLogisticsField(row, "weight_box_kg", parsed)
                             }}
                           />
                         </td>
                         <td className="py-2.5 pr-3 align-middle">
                           <InlineNumberInput
-                            value={row.alto_caja_cm}
+                            value={row.height_cm}
                             disabled={pending}
                             onCommit={(parsed) => {
                               if (parsed === undefined || parsed === null) return
-                              void handleLogisticsField(row, "alto_caja_cm", parsed)
+                              void handleLogisticsField(row, "height_cm", parsed)
                             }}
                           />
                         </td>
                         <td className="py-2.5 pr-3 align-middle">
                           <InlineNumberInput
-                            value={row.ancho_caja_cm}
+                            value={row.width_cm}
                             disabled={pending}
                             onCommit={(parsed) => {
                               if (parsed === undefined || parsed === null) return
-                              void handleLogisticsField(row, "ancho_caja_cm", parsed)
+                              void handleLogisticsField(row, "width_cm", parsed)
                             }}
                           />
                         </td>
                         <td className="py-2.5 pr-3 align-middle">
                           <InlineNumberInput
-                            value={row.largo_caja_cm}
+                            value={row.length_cm}
                             disabled={pending}
                             onCommit={(parsed) => {
                               if (parsed === undefined || parsed === null) return
-                              void handleLogisticsField(row, "largo_caja_cm", parsed)
+                              void handleLogisticsField(row, "length_cm", parsed)
                             }}
                           />
                         </td>
