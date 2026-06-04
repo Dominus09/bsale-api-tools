@@ -65,3 +65,35 @@ El servicio usa un **advisory lock** dedicado (`pg_try_advisory_lock`) para no s
 ## Observabilidad
 
 El job escribe logs en **stdout** y un bloque final **RESUMEN JOB** con documentos considerados, detalles, items related, filas insertadas, llamadas API, duración y contadores de errores por documento.
+
+---
+
+## Job catálogo Bsale + `products_master`: `sync_bsale_catalog`
+
+Mantiene `bsale.variants` / precios / stock al día y hace UPSERT incremental en `bsale.products_master` **sin borrar filas ni pisar cubicación manual**.
+
+### Comando
+
+```bash
+python -m backend.jobs.sync_bsale_catalog
+```
+
+### Variables
+
+| Variable | Obligatoria | Descripción |
+|----------|-------------|-------------|
+| `PG_HOST`, `PG_DB`, `PG_USER`, `PG_PASSWORD` | Sí | PostgreSQL |
+| Tokens Bsale usados por `sync_catalog.py` / precios / stock | Sí | Misma convención que los scripts en la raíz del repo |
+
+### DDL previo
+
+Ejecutar una vez: `backend/sql/032_products_master_logistics.sql` (ver `docs/PRODUCTS_MASTER_SYNC.md`).
+
+### Frecuencia y timeout
+
+- **1–2 ejecuciones/día** suele bastar para catálogo estable.
+- Timeout recomendado: **45–90 min**.
+
+### Logs
+
+Prefijo `[CATALOG_SYNC]` en stdout: insertados/actualizados en `products_master`, `units_per_box` desde SEC, errores.

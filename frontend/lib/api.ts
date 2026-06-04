@@ -331,11 +331,23 @@ export interface ProductMasterRow {
   id: number
   barcode: string
   sku: string | null
+  product_id?: number | null
+  variant_id?: number | null
   product_name: string | null
   variant_name: string | null
   product_type: string | null
   supplier_id: number | null
+  units_per_box?: number | null
+  peso_caja_kg?: number | null
+  alto_caja_cm?: number | null
+  ancho_caja_cm?: number | null
+  largo_caja_cm?: number | null
+  logistics_completed?: boolean
+  last_bsale_sync_at?: string | null
+  peso_unitario_kg?: number | null
   is_active: boolean
+  created_at?: string | null
+  updated_at?: string | null
 }
 
 /** Lista de precios activa (GET /price-lists) */
@@ -3244,8 +3256,20 @@ export interface GetProductsMasterParams {
   without_supplier?: boolean
   supplier_id?: number
   search?: string
+  logistics_incomplete?: boolean
   limit?: number
   offset?: number
+}
+
+export type ProductMasterLogisticsPatch = {
+  supplier_id?: number | null
+  is_active?: boolean
+  units_per_box?: number | null
+  peso_caja_kg?: number | null
+  alto_caja_cm?: number | null
+  ancho_caja_cm?: number | null
+  largo_caja_cm?: number | null
+  logistics_completed?: boolean
 }
 
 export async function getProductsMaster(
@@ -3260,6 +3284,9 @@ export async function getProductsMaster(
   }
   if (params?.search != null && params.search.trim()) {
     qs.set("search", params.search.trim())
+  }
+  if (params?.logistics_incomplete) {
+    qs.set("logistics_incomplete", "true")
   }
   const limit = params?.limit ?? PRODUCTS_MASTER_PAGE_SIZE
   const offset = params?.offset ?? 0
@@ -3293,18 +3320,25 @@ export interface PatchProductMasterResponse {
   barcode: string
   supplier_id: number | null
   is_active: boolean
+  units_per_box?: number | null
+  peso_caja_kg?: number | null
+  alto_caja_cm?: number | null
+  ancho_caja_cm?: number | null
+  largo_caja_cm?: number | null
+  logistics_completed?: boolean
+  last_bsale_sync_at?: string | null
   updated_at: string | null
 }
 
 export async function patchProductMaster(
   barcode: string,
-  payload: { supplier_id: number | null },
+  payload: ProductMasterLogisticsPatch | { supplier_id: number | null },
 ): Promise<PatchProductMasterResponse> {
   const encoded = encodeURIComponent(barcode)
   const res = await fetch(`${API_URL}/products-master/${encoded}`, {
     method: "PATCH",
     headers: getAuthHeaders(),
-    body: JSON.stringify({ supplier_id: payload.supplier_id }),
+    body: JSON.stringify(payload),
   })
   if (!res.ok) {
     const msg = await res.text()

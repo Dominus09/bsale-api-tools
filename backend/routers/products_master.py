@@ -3,6 +3,7 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Body, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from backend.db import get_connection
 
@@ -11,9 +12,32 @@ router = APIRouter()
 _DEFAULT_PAGE_SIZE = 500
 _MAX_PAGE_SIZE = 1000
 
+_LOGISTICS_PATCH_FIELDS = frozenset(
+    {
+        "supplier_id",
+        "is_active",
+        "units_per_box",
+        "peso_caja_kg",
+        "alto_caja_cm",
+        "ancho_caja_cm",
+        "largo_caja_cm",
+        "logistics_completed",
+    }
+)
+
+
+class ProductMasterLogisticsPatch(BaseModel):
+    supplier_id: Optional[int] = None
+    is_active: Optional[bool] = None
+    units_per_box: Optional[int] = Field(None, ge=1)
+    peso_caja_kg: Optional[float] = Field(None, ge=0)
+    alto_caja_cm: Optional[float] = Field(None, ge=0)
+    ancho_caja_cm: Optional[float] = Field(None, ge=0)
+    largo_caja_cm: Optional[float] = Field(None, ge=0)
+    logistics_completed: Optional[bool] = None
+
 
 def _parse_supplier_id_query(supplier_id: Optional[str]) -> tuple[bool, Optional[int]]:
-    """Devuelve (filtrar_solo_null, id_numérico). Solo uno aplica."""
     if supplier_id is None:
         return False, None
     raw = supplier_id.strip()
@@ -33,6 +57,7 @@ def _products_master_where(
     without_supplier: bool,
     product_type: Optional[str],
     search: Optional[str],
+    logistics_incomplete: bool,
 ) -> Tuple[str, List[Any]]:
     where_parts: list[str] = []
     params: list[Any] = []
@@ -53,8 +78,13 @@ def _products_master_where(
 
     if search is not None and search.strip():
         term = f"%{search.strip()}%"
-        where_parts.append("(product_name ILIKE %s OR barcode ILIKE %s)")
-        params.extend([term, term])
+        where_parts.append(
+            "(product_name ILIKE %s OR variant_name ILIKE %s OR barcode ILIKE %s)"
+        )
+        params.extend([term, term, term])
+
+    if logistics_incomplete:
+        where_parts.append("logistics_completed = FALSE")
 
     where_sql = " WHERE " + " AND ".join(where_parts) if where_parts else ""
     return where_sql, params
@@ -69,49 +99,57 @@ def _serialize_pm_row(row: Dict[str, Any]) -> Dict[str, Any]:
             out[k] = v.isoformat()
         else:
             out[k] = v
+    upb = out.get("units_per_box")
+    peso = out.get("peso_caja_kg")
+    if upb and float(upb) > 0 and peso is not None:
+        out["peso_unitario_kg"] = round(float(peso) / float(upb), 6)
+    else:
+        out["peso_unitario_kg"] = None
     return out
+
+
+_PM_SELECT = """
+    id,
+    barcode,
+    sku,
+    product_id,
+    variant_id,
+    product_name,
+    variant_name,
+    product_type,
+    companies,
+    supplier_id,
+    units_per_box,
+    peso_caja_kg,
+    alto_caja_cm,
+    ancho_caja_cm,
+    largo_caja_cm,
+    logistics_completed,
+    last_bsale_sync_at,
+    is_active,
+    created_at,
+    updated_at
+"""
 
 
 @router.get("/products-master")
 def list_products_master(
-    supplier_id: Optional[str] = Query(
-        None,
-        description="ID numérico del proveedor, o la cadena null para supplier_id IS NULL",
-    ),
+    supplier_id: Optional[str] = Query(None),
     without_supplier: bool = Query(False),
     product_type: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
-    limit: int = Query(
-        _DEFAULT_PAGE_SIZE,
-        ge=1,
-        le=_MAX_PAGE_SIZE,
-        description="Tamaño de página (máx. 1000)",
-    ),
-    offset: int = Query(0, ge=0, description="Desplazamiento para paginación"),
+    logistics_incomplete: bool = Query(False),
+    limit: int = Query(_DEFAULT_PAGE_SIZE, ge=1, le=_MAX_PAGE_SIZE),
+    offset: int = Query(0, ge=0),
 ) -> Dict[str, Any]:
-    """
-    Lista paginada de bsale.products_master.
-    Siempre devuelve { items, total, limit, offset }.
-    """
     where_sql, params = _products_master_where(
-        supplier_id, without_supplier, product_type, search
+        supplier_id, without_supplier, product_type, search, logistics_incomplete
     )
     base = "FROM bsale.products_master"
 
     count_sql = f"SELECT COUNT(*)::bigint {base}{where_sql}"
     data_sql = f"""
-        SELECT
-            id,
-            barcode,
-            sku,
-            product_name,
-            variant_name,
-            product_type,
-            companies,
-            supplier_id,
-            is_active,
-            created_at,
-            updated_at
+        SELECT {_PM_SELECT}
         {base}{where_sql}
         ORDER BY product_name ASC NULLS LAST, barcode ASC
         LIMIT %s OFFSET %s
@@ -143,7 +181,6 @@ def list_products_master(
 
 @router.get("/products-master/count-without-supplier")
 def count_products_master_without_supplier() -> Dict[str, Any]:
-    """Cuenta filas en bsale.products_master con supplier_id IS NULL."""
     conn = get_connection()
     try:
         cur = conn.cursor()
@@ -164,39 +201,23 @@ def count_products_master_without_supplier() -> Dict[str, Any]:
 
 
 @router.patch("/products-master/{barcode}")
-def patch_product_master(barcode: str, body: Dict[str, Any] = Body(...)):
+def patch_product_master(barcode: str, body: ProductMasterLogisticsPatch):
     clean_barcode = (barcode or "").strip()
     if not clean_barcode:
         raise HTTPException(status_code=400, detail="barcode es obligatorio")
 
+    payload = body.model_dump(exclude_unset=True)
+    if not payload:
+        raise HTTPException(status_code=400, detail="Sin campos para actualizar")
+
     updates: list[str] = []
     params: list[Any] = []
 
-    if "supplier_id" in body:
-        sid = body["supplier_id"]
-        if sid is not None and not isinstance(sid, int):
-            raise HTTPException(
-                status_code=400,
-                detail="supplier_id debe ser un entero o null",
-            )
-        updates.append("supplier_id = %s")
-        params.append(sid)
-
-    if "is_active" in body:
-        active = body["is_active"]
-        if not isinstance(active, bool):
-            raise HTTPException(
-                status_code=400,
-                detail="is_active debe ser booleano",
-            )
-        updates.append("is_active = %s")
-        params.append(active)
-
-    if not updates:
-        raise HTTPException(
-            status_code=400,
-            detail="Debe enviar supplier_id o is_active",
-        )
+    for key, value in payload.items():
+        if key not in _LOGISTICS_PATCH_FIELDS:
+            raise HTTPException(status_code=400, detail=f"Campo no permitido: {key}")
+        updates.append(f"{key} = %s")
+        params.append(value)
 
     updates.append("updated_at = NOW()")
     params.append(clean_barcode)
@@ -205,7 +226,9 @@ def patch_product_master(barcode: str, body: Dict[str, Any] = Body(...)):
         UPDATE bsale.products_master
         SET {", ".join(updates)}
         WHERE barcode = %s
-        RETURNING barcode, supplier_id, is_active, updated_at
+        RETURNING barcode, supplier_id, is_active, units_per_box,
+                  peso_caja_kg, alto_caja_cm, ancho_caja_cm, largo_caja_cm,
+                  logistics_completed, updated_at, last_bsale_sync_at
     """
 
     conn = get_connection()
@@ -226,9 +249,18 @@ def patch_product_master(barcode: str, body: Dict[str, Any] = Body(...)):
         cur.close()
         conn.close()
 
-    return {
-        "barcode": row[0],
-        "supplier_id": row[1],
-        "is_active": row[2],
-        "updated_at": row[3],
-    }
+    cols = [
+        "barcode",
+        "supplier_id",
+        "is_active",
+        "units_per_box",
+        "peso_caja_kg",
+        "alto_caja_cm",
+        "ancho_caja_cm",
+        "largo_caja_cm",
+        "logistics_completed",
+        "updated_at",
+        "last_bsale_sync_at",
+    ]
+    return _serialize_pm_row(dict(zip(cols, row)))
+

@@ -79,6 +79,7 @@ backend/
 | `backend/jobs/sync_bsale_distribuidora.py` | job | alto | sí | sí | sí (cron/Coolify) | Sync incremental Distribuidora: órdenes, ventas, relaciones; delega en `sync_service` / related. |
 | `backend/jobs/sync_distribuidora_related.py` | job | medio | sí | sí | sí (cron/Coolify opcional) | Solo sync `document_related` vía `relateddetailid`; lock distinto al sync principal. |
 | `backend/jobs/sync_rutero.py` | job | medio | sí | no (solo PG) | sí (cron/Coolify) | Sync `bsale.clients` → `bsale.rutero` (empresa 3, vendedores ruta). |
+| `backend/jobs/sync_bsale_catalog.py` | job | alto | sí | sí | sí (cron/Coolify) | Catálogo Bsale: `sync_catalog` → precios → stock → SEC `units_per_box` → UPSERT `products_master` (sin borrar filas ni pisar cubicación manual). |
 | `backend/jobs/debug_sync_related_oc.py` | debug (shim) | bajo | — | — | no | Reenvía a `backend.debug.debug_sync_related_oc` (`python -m backend.jobs.debug_sync_related_oc` sigue válido). |
 | `backend/jobs/debug_full_bsale_relationships.py` | debug (shim) | bajo | — | — | no | Reenvía a `backend.debug.debug_full_bsale_relationships`. |
 | `backend/jobs/debug_full_bsalse_relationships.py` | legacy (shim) | bajo | — | — | no | Reenvía a `backend.debug` (typo histórico). |

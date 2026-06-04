@@ -32,6 +32,7 @@ def resolve_units_per_box(
 ) -> float | None:
     for src in (
         row.get("units_per_box"),
+        (pm or {}).get("units_per_box"),
         (variant or {}).get("units_per_box"),
     ):
         if src is not None:
@@ -154,7 +155,7 @@ def enrich_picking_product_rows(
     if barcodes:
         cur.execute(
             """
-            SELECT barcode, product_name, variant_name, product_type
+            SELECT barcode, product_name, variant_name, product_type, units_per_box
             FROM bsale.products_master
             WHERE barcode = ANY(%s)
             """,

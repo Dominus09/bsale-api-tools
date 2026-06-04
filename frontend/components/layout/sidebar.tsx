@@ -93,6 +93,11 @@ const navSections: { title: string; items: NavItem[] }[] = [
         label: "Resumen vendedor",
         icon: CalendarDays,
       },
+      {
+        href: "/distribuidora/maestro-logistico",
+        label: "Maestro logístico productos",
+        icon: Package,
+      },
     ],
   },
   {
