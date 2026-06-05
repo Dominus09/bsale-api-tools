@@ -4,6 +4,29 @@ import type {
   DispatchPlanPickingProductRow,
 } from "@/lib/api"
 
+/** Categoría para picking: nunca «Sin tipo» en UI/PDF. */
+export function normalizePickingCategory(tipo?: string | null): string {
+  const t = (tipo || "").trim()
+  if (!t || t.toLowerCase() === "sin tipo") return "OTROS"
+  return t
+}
+
+export function categoryStatsFromItems(
+  items: DispatchPlanPickingProductRow[],
+  category: string,
+): { skus: number; boxes: number } {
+  const cat = normalizePickingCategory(category)
+  const barcodes = new Set<string>()
+  let boxes = 0
+  for (const it of items) {
+    if (normalizePickingCategory(it.tipo_producto) !== cat) continue
+    const bc = (it.codigo_barras || "").trim()
+    if (bc) barcodes.add(bc)
+    boxes += effectiveBoxes(it)
+  }
+  return { skus: barcodes.size || items.filter((i) => normalizePickingCategory(i.tipo_producto) === cat).length, boxes: Math.round(boxes) }
+}
+
 export function productLineLabel(row: DispatchPlanPickingProductRow): string {
   if (row.display_name?.trim()) return row.display_name.trim()
   const pn = (row.product_name || row.producto || "").trim()

@@ -159,7 +159,7 @@ def normalize_product_row(raw: dict[str, Any]) -> dict[str, Any]:
         "variant_id": raw.get("variant_id"),
         "sucursal_bodega": raw.get("sucursal_bodega") or "Centro de despacho",
         "unidades": raw.get("unidades"),
-        "tipo_producto": raw.get("tipo_producto") or "Sin tipo",
+        "tipo_producto": raw.get("tipo_producto") or "OTROS",
         "producto": producto,
         "variante": variante,
         "cajas": cajas_out,

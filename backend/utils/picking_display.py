@@ -234,8 +234,11 @@ def enrich_picking_product_rows(
         enriched["cajas_efectivas"] = cajas_eff
         enriched["cajas"] = cajas_eff
         enriched["sin_unidad_caja"] = sin_caja and not upb
-        if pm and pm.get("product_type") and not (row.get("tipo_producto") or "").strip():
+        tipo = (row.get("tipo_producto") or "").strip()
+        if pm and pm.get("product_type") and not tipo:
             enriched["tipo_producto"] = pm["product_type"]
+        elif not tipo or tipo.lower() == "sin tipo":
+            enriched["tipo_producto"] = "OTROS"
         out.append(enriched)
     return out
 

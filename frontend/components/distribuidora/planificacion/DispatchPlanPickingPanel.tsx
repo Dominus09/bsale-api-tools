@@ -14,7 +14,7 @@ import {
   exportDispatchPlanPickingClientePdf,
   exportDispatchPlanPickingProductoPdf,
 } from "@/lib/dispatch-plan-picking-pdf"
-import { effectiveBoxes } from "@/lib/picking-display"
+import { effectiveBoxes, normalizePickingCategory } from "@/lib/picking-display"
 import { formatClp } from "@/lib/ors-map-ui"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -456,7 +456,7 @@ export function DispatchPlanPickingProductoPanel({
                 {data.items.map((row, idx) => (
                   <tr key={idx} className="border-t border-border/50">
                     <td className="px-2 py-1.5">{row.sucursal_bodega}</td>
-                    <td className="px-2 py-1.5">{row.tipo_producto}</td>
+                    <td className="px-2 py-1.5">{normalizePickingCategory(row.tipo_producto)}</td>
                     <td className="px-2 py-1.5 font-medium">
                       {row.display_name || row.producto_variante}
                     </td>

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 # bsale.products_master tiene product_type (TEXT), no product_type_name.
-PM_TIPO_PRODUCTO_EXPR = "COALESCE(NULLIF(BTRIM(pm.product_type), ''), 'Sin tipo')"
+PM_TIPO_PRODUCTO_EXPR = "COALESCE(NULLIF(BTRIM(pm.product_type), ''), 'OTROS')"
 
 # units_per_box vive en bsale.variants, no en products_master.
 VARIANTS_JOIN = """
