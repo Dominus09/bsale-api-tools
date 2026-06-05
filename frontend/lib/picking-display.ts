@@ -65,6 +65,10 @@ export function productLineLabel(row: DispatchPlanPickingProductRow): string {
   return pn || vn || row.producto_variante || "Sin descripción"
 }
 
+export function clientPhone(row: DispatchPlanPickingClientRow): string {
+  return (row.phone || "").trim()
+}
+
 export function clientDeliveryNotes(row: DispatchPlanPickingClientRow): string {
   const dn = (row.delivery_notes || "").trim()
   const obs = (row.observations || "").trim()

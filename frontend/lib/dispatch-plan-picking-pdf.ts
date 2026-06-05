@@ -2,6 +2,7 @@ import { formatClp } from "@/lib/ors-map-ui"
 import {
   categoryStatsFromItems,
   clientDeliveryNotes,
+  clientPhone,
   countDistinctClients,
   effectiveBoxes,
   formatOperativeBoxes,
@@ -9,12 +10,23 @@ import {
   productLineLabel,
   stablePickingKpiLine,
 } from "@/lib/picking-display"
-import { loadQuillotanaLogoForPdf } from "@/lib/quillotana-logo-pdf"
+import {
+  createPdfLogoDocState,
+  drawQuillotanaLogoOnPdf,
+  loadQuillotanaLogoForPdf,
+  PDF_LOGO_WIDTH_MM,
+  type PdfLogoDocState,
+  type PdfLogoPayload,
+} from "@/lib/quillotana-logo-pdf"
 import type {
   DispatchPlanPickingClientRow,
   DispatchPlanPickingHeader,
   DispatchPlanPickingProductRow,
 } from "@/lib/api"
+
+const MARGIN = { left: 6, right: 6, top: 6, bottom: 11 }
+const HEADER_TEXT_TOP = 13
+const HEADER_TEXT_BOTTOM = 29
 
 function slugFile(s: string): string {
   return s.replace(/[^\w\-]+/g, "_").slice(0, 40) || "plan"
@@ -46,6 +58,10 @@ function planLabel(header: DispatchPlanPickingHeader): string {
   return pn.toUpperCase().startsWith("PLAN") ? pn : `PLAN-${pn}`
 }
 
+function contentWidth(pageW: number): number {
+  return pageW - MARGIN.left - MARGIN.right
+}
+
 function applyFooters(doc: import("jspdf").jsPDF, meta: PdfMeta) {
   const total = doc.getNumberOfPages()
   const w = doc.internal.pageSize.getWidth()
@@ -56,15 +72,17 @@ function applyFooters(doc: import("jspdf").jsPDF, meta: PdfMeta) {
     doc.setPage(p)
     doc.setDrawColor(200, 200, 200)
     doc.setLineWidth(0.2)
-    doc.line(10, h - 14, w - 10, h - 14)
-    doc.setFontSize(7)
+    doc.line(MARGIN.left, h - MARGIN.bottom - 2, w - MARGIN.right, h - MARGIN.bottom - 2)
+    doc.setFontSize(6.5)
     doc.setTextColor(70, 70, 70)
     doc.setFont("helvetica", "bold")
-    doc.text("Grupo Quillotana ERP", 12, h - 9)
+    doc.text("Grupo Quillotana ERP", MARGIN.left, h - MARGIN.bottom + 1)
     doc.setFont("helvetica", "normal")
-    doc.text(plan, 12, h - 5.5)
-    doc.text(ver, w / 2, h - 9, { align: "center" })
-    doc.text(`Página ${p} de ${total}`, w - 12, h - 7, { align: "right" })
+    doc.text(plan, MARGIN.left, h - MARGIN.bottom + 4.5)
+    doc.text(ver, w / 2, h - MARGIN.bottom + 1, { align: "center" })
+    doc.text(`Página ${p} de ${total}`, w - MARGIN.right, h - MARGIN.bottom + 2.5, {
+      align: "right",
+    })
     doc.setTextColor(0, 0, 0)
   }
 }
@@ -86,18 +104,18 @@ function drawTableHeader(
   const xs = tableXBounds(cols, x0)
   const w = xs[xs.length - 1] - x0
   doc.setFillColor(30, 64, 120)
-  doc.rect(x0, y - rowH + 1.5, w, rowH, "F")
+  doc.rect(x0, y - rowH + 1.2, w, rowH, "F")
   doc.setTextColor(255, 255, 255)
   doc.setFont("helvetica", "bold")
   doc.setFontSize(fontSize)
   for (let i = 0; i < cols.length; i++) {
     const align = cols[i].align ?? "left"
-    const tx = align === "right" ? xs[i + 1] - 2 : xs[i] + 2
+    const tx = align === "right" ? xs[i + 1] - 1.5 : xs[i] + 1.5
     doc.text(cols[i].key, tx, y, { align: align === "right" ? "right" : "left" })
   }
   doc.setTextColor(0, 0, 0)
   doc.setFont("helvetica", "normal")
-  return y + 1.5
+  return y + 1.2
 }
 
 function drawRowGrid(
@@ -131,82 +149,91 @@ function drawCellText(
   fontSize: number,
   lineH: number,
 ): number {
-  const pad = 1.5
+  const pad = 1.2
   const maxW = col.w - pad * 2
-  const lines = doc.splitTextToSize(text || "—", maxW) as string[]
+  const lines = doc.splitTextToSize(text || "", maxW) as string[]
   const align = col.align ?? "left"
   for (let i = 0; i < lines.length; i++) {
     const ty = y + pad + (i + 1) * lineH - 0.5
     const tx =
       align === "right" ? x + col.w - pad : align === "center" ? x + col.w / 2 : x + pad
-    doc.text(lines[i], tx, ty, {
+    doc.text(lines[i] || "—", tx, ty, {
       align: align === "right" ? "right" : align === "center" ? "center" : "left",
     })
   }
   return Math.max(lineH * lines.length + pad * 2, lineH + pad)
 }
 
-async function drawBrandedHeader(
+function drawBrandedHeader(
   doc: import("jspdf").jsPDF,
   y: number,
   header: DispatchPlanPickingHeader,
   title: string,
   kpiLine: string,
-): Promise<number> {
+  logo: PdfLogoPayload | null,
+  logoState: PdfLogoDocState,
+): number {
   const pageW = doc.internal.pageSize.getWidth()
-  const logo = await loadQuillotanaLogoForPdf()
-  let titleX = 12
+  const textX = MARGIN.left + (logo ? PDF_LOGO_WIDTH_MM + 3 : 0)
+  const textBlockCenter = (HEADER_TEXT_TOP + HEADER_TEXT_BOTTOM) / 2
+
   if (logo) {
-    try {
-      const aspect = logo.widthPx / logo.heightPx
-      const logoH = 12
-      const logoW = Math.min(48, logoH * aspect)
-      doc.addImage(logo.dataUrl, logo.format, 12, 8, logoW, logoH)
-      titleX = 12 + logoW + 4
-    } catch {
-      /* fallback texto */
-    }
+    const logoH = PDF_LOGO_WIDTH_MM / logo.aspectRatio
+    const logoY = textBlockCenter - logoH / 2
+    drawQuillotanaLogoOnPdf(doc, logo, logoState, MARGIN.left, logoY, PDF_LOGO_WIDTH_MM)
+  } else {
+    doc.setFont("helvetica", "bold")
+    doc.setFontSize(10)
+    doc.setTextColor(30, 64, 120)
+    doc.text("GRUPO QUILLOTANA", textX, HEADER_TEXT_TOP)
   }
+
   doc.setFont("helvetica", "bold")
-  doc.setFontSize(11)
+  doc.setFontSize(12)
   doc.setTextColor(30, 64, 120)
-  if (!logo) {
-    doc.text("GRUPO QUILLOTANA", titleX, 12)
-  }
-  doc.setFontSize(13)
-  doc.text(title, titleX, 18)
+  doc.text(title, textX, HEADER_TEXT_TOP + 4)
   doc.setTextColor(0, 0, 0)
   doc.setFont("helvetica", "normal")
-  doc.setFontSize(8)
+  doc.setFontSize(7.5)
   doc.text(
     `${header.planning_number} · ${header.delivery_date} · ${header.truck_name}`,
-    titleX,
-    23,
+    textX,
+    HEADER_TEXT_TOP + 9,
   )
   doc.text(
     `Chofer: ${header.driver_name || header.driver_label} · Peonetas: ${header.assistant_label}`,
-    titleX,
-    27,
+    textX,
+    HEADER_TEXT_TOP + 13,
   )
   doc.text(
     `${header.route_name}${header.communes ? ` · ${header.communes}` : ""}`,
-    titleX,
-    31,
+    textX,
+    HEADER_TEXT_TOP + 17,
   )
 
+  const ruleY = HEADER_TEXT_BOTTOM + 2
   doc.setDrawColor(30, 64, 120)
-  doc.setLineWidth(0.35)
-  doc.line(12, 34, pageW - 12, 34)
+  doc.setLineWidth(0.3)
+  doc.line(MARGIN.left, ruleY, pageW - MARGIN.right, ruleY)
 
-  y = Math.max(y, 38)
+  y = Math.max(y, ruleY + 3)
+  const kpiH = 7.5
   doc.setFillColor(241, 245, 249)
-  doc.rect(12, y, pageW - 24, 9, "F")
+  doc.rect(MARGIN.left, y, contentWidth(pageW), kpiH, "F")
   doc.setFont("helvetica", "bold")
-  doc.setFontSize(7.5)
-  doc.text("Resumen de carga", 14, y + 3.5)
+  doc.setFontSize(7)
+  doc.text("Resumen de carga", MARGIN.left + 2, y + 3)
   doc.setFont("helvetica", "normal")
-  doc.text(kpiLine, 14, y + 7, { maxWidth: pageW - 28 })
-  return y + 12
+  doc.text(kpiLine, MARGIN.left + 2, y + 6.2, { maxWidth: contentWidth(pageW) - 4 })
+  return y + kpiH + 2
+}
+
+/** Escala columnas para ocupar el ancho útil de la página. */
+function fitColumns(cols: PdfCol[], targetWidth: number): PdfCol[] {
+  const sum = cols.reduce((s, c) => s + c.w, 0)
+  if (sum <= 0) return cols
+  const scale = targetWidth / sum
+  return cols.map((c) => ({ ...c, w: Math.round(c.w * scale * 10) / 10 }))
 }
 
 export async function exportDispatchPlanPickingClientePdf(params: {
@@ -220,52 +247,59 @@ export async function exportDispatchPlanPickingClientePdf(params: {
   const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "letter" })
   const pageW = doc.internal.pageSize.getWidth()
   const pageH = doc.internal.pageSize.getHeight()
+  const logo = await loadQuillotanaLogoForPdf()
+  const logoState = createPdfLogoDocState()
   const meta: PdfMeta = {
     version: params.version,
     generatedAt: params.generatedAt,
     planningNumber: planLabel(params.header),
   }
   const mode = layoutForRowCount(params.clients.length)
-  const fontSize = mode === "comfortable" ? 7 : mode === "compact" ? 5.5 : 6.5
+  const fontSize = mode === "comfortable" ? 6.8 : mode === "compact" ? 5.3 : 6.2
   const lineH = fontSize * 0.42
-  const bottomY = pageH - 18
-  const x0 = 10
+  const bottomY = pageH - MARGIN.bottom - 5
+  const x0 = MARGIN.left
 
-  const cols: PdfCol[] = [
-    { key: "Orden", w: 9 },
-    { key: "Ciudad", w: 18 },
-    { key: "Cliente", w: 28 },
-    { key: "Fantasía", w: 24 },
-    { key: "Dirección", w: 58 },
-    { key: "Documento", w: 16 },
-    { key: "Pago", w: 12 },
-    { key: "Vendedor", w: 14 },
-    { key: "Observaciones", w: 52 },
-    { key: "Total", w: 22, align: "right" },
-  ]
+  const cols = fitColumns(
+    [
+      { key: "Orden", w: 7 },
+      { key: "Ciudad", w: 14 },
+      { key: "Cliente", w: 22 },
+      { key: "Fantasía", w: 18 },
+      { key: "Teléfono", w: 17 },
+      { key: "Dirección", w: 52 },
+      { key: "Documento", w: 13 },
+      { key: "Pago", w: 10 },
+      { key: "Observaciones", w: 44 },
+      { key: "Total", w: 18, align: "right" },
+    ],
+    contentWidth(pageW),
+  )
 
   const kpiLine = stablePickingKpiLine(params.header, params.clients, [], formatClp)
 
-  let y = await drawBrandedHeader(
+  let y = drawBrandedHeader(
     doc,
-    14,
+    MARGIN.top,
     params.header,
     "Picking Cliente",
     kpiLine,
+    logo,
+    logoState,
   )
 
   if (params.warnings?.length) {
     doc.setTextColor(180, 83, 9)
-    doc.setFontSize(7)
-    for (const w of params.warnings.slice(0, 4)) {
-      doc.text(`⚠ ${w}`, 12, y, { maxWidth: pageW - 24 })
-      y += 4
+    doc.setFontSize(6.5)
+    for (const w of params.warnings.slice(0, 3)) {
+      doc.text(`⚠ ${w}`, MARGIN.left, y, { maxWidth: contentWidth(pageW) })
+      y += 3.5
     }
     doc.setTextColor(0, 0, 0)
-    y += 2
+    y += 1
   }
 
-  const headH = mode === "compact" ? 5 : 6
+  const headH = mode === "compact" ? 4.5 : 5.5
   const drawHead = () => {
     doc.setFontSize(fontSize)
     y = drawTableHeader(doc, cols, x0, y + headH, fontSize, headH)
@@ -280,27 +314,30 @@ export async function exportDispatchPlanPickingClientePdf(params: {
   for (const c of params.clients) {
     const city = c.city || ""
     if (city && city !== lastCity && mode !== "compact") {
-      if (y > bottomY - 10) {
+      if (y > bottomY - 8) {
         doc.addPage()
-        y = await drawBrandedHeader(
+        y = drawBrandedHeader(
           doc,
-          14,
+          MARGIN.top,
           params.header,
           "Picking Cliente (cont.)",
           kpiLine,
+          logo,
+          logoState,
         )
         drawHead()
       }
       doc.setFont("helvetica", "bold")
-      doc.setFontSize(fontSize + 0.5)
-      doc.text(city, x0, y + 3)
+      doc.setFontSize(fontSize + 0.3)
+      doc.text(city, x0, y + 2.5)
       doc.setFont("helvetica", "normal")
       doc.setFontSize(fontSize)
-      y += 5
+      y += 4
       lastCity = city
     }
 
     const notes = clientDeliveryNotes(c)
+    const tel = clientPhone(c)
     const amt = Number(c.document_total) || 0
     total += amt
     const cellTexts = [
@@ -308,30 +345,30 @@ export async function exportDispatchPlanPickingClientePdf(params: {
       city,
       c.client_name || "",
       c.fantasy_name || "",
-      c.address || "—",
+      tel,
+      c.address || "",
       String(c.document_number ?? ""),
-      c.payment_method || "—",
-      c.seller_name || "—",
+      c.payment_method || "",
       notes,
       formatClp(amt),
     ]
 
-    let maxRowH = lineH + 3
-    const splitHeights: number[] = []
+    let maxRowH = lineH + 2.5
     for (let i = 0; i < cols.length; i++) {
-      const lines = doc.splitTextToSize(cellTexts[i], cols[i].w - 3) as string[]
-      splitHeights.push(Math.max(lineH * lines.length + 3, lineH + 3))
+      const lines = doc.splitTextToSize(cellTexts[i], cols[i].w - 2.5) as string[]
+      maxRowH = Math.max(maxRowH, lineH * lines.length + 2.5)
     }
-    maxRowH = Math.max(...splitHeights, lineH + 3)
 
     if (y + maxRowH > bottomY) {
       doc.addPage()
-      y = await drawBrandedHeader(
+      y = drawBrandedHeader(
         doc,
-        14,
+        MARGIN.top,
         params.header,
         "Picking Cliente (cont.)",
         kpiLine,
+        logo,
+        logoState,
       )
       drawHead()
     }
@@ -348,11 +385,11 @@ export async function exportDispatchPlanPickingClientePdf(params: {
   }
 
   doc.setFont("helvetica", "bold")
-  doc.setFontSize(8)
+  doc.setFontSize(7.5)
   doc.text(
     `Total: ${formatClp(total)} · ${countDistinctClients(params.clients)} clientes · ${params.clients.length} documentos`,
-    12,
-    Math.min(y + 5, bottomY),
+    MARGIN.left,
+    Math.min(y + 4, bottomY),
   )
 
   applyFooters(doc, meta)
@@ -370,36 +407,43 @@ export async function exportDispatchPlanPickingProductoPdf(params: {
   const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "letter" })
   const pageW = doc.internal.pageSize.getWidth()
   const pageH = doc.internal.pageSize.getHeight()
+  const logo = await loadQuillotanaLogoForPdf()
+  const logoState = createPdfLogoDocState()
   const meta: PdfMeta = {
     version: params.version,
     generatedAt: params.generatedAt,
     planningNumber: planLabel(params.header),
   }
   const mode = layoutForRowCount(params.items.length)
-  const fontSize = mode === "comfortable" ? 7 : mode === "compact" ? 5.5 : 6.5
+  const fontSize = mode === "comfortable" ? 6.8 : mode === "compact" ? 5.3 : 6.2
   const lineH = fontSize * 0.42
-  const bottomY = pageH - 18
-  const x0 = 10
+  const bottomY = pageH - MARGIN.bottom - 5
+  const x0 = MARGIN.left
 
-  const cols: PdfCol[] = [
-    { key: "Producto", w: 118 },
-    { key: "Código barra", w: 34 },
-    { key: "Unidades", w: 22, align: "right" },
-    { key: "Cajas", w: 20, align: "right" },
-    { key: "Monto", w: 28, align: "right" },
-  ]
+  const cols = fitColumns(
+    [
+      { key: "Producto", w: 128 },
+      { key: "Código barra", w: 36 },
+      { key: "Unidades", w: 20, align: "right" },
+      { key: "Cajas", w: 18, align: "right" },
+      { key: "Monto", w: 24, align: "right" },
+    ],
+    contentWidth(pageW),
+  )
 
   const kpiLine = stablePickingKpiLine(params.header, [], params.items, formatClp)
 
-  let y = await drawBrandedHeader(
+  let y = drawBrandedHeader(
     doc,
-    14,
+    MARGIN.top,
     params.header,
     "Picking Producto",
     kpiLine,
+    logo,
+    logoState,
   )
 
-  const headH = mode === "compact" ? 5 : 6
+  const headH = mode === "compact" ? 4.5 : 5.5
   const drawHead = () => {
     doc.setFontSize(fontSize)
     y = drawTableHeader(doc, cols, x0, y + headH, fontSize, headH)
@@ -416,35 +460,37 @@ export async function exportDispatchPlanPickingProductoPdf(params: {
   for (const item of params.items) {
     const tipo = normalizePickingCategory(item.tipo_producto)
     if (tipo !== currentType) {
-      if (y > bottomY - 14) {
+      if (y > bottomY - 12) {
         doc.addPage()
-        y = await drawBrandedHeader(
+        y = drawBrandedHeader(
           doc,
-          14,
+          MARGIN.top,
           params.header,
           "Picking Producto (cont.)",
           kpiLine,
+          logo,
+          logoState,
         )
         drawHead()
       }
       currentType = tipo
       const stats = categoryStatsFromItems(params.items, tipo)
       doc.setFillColor(226, 232, 240)
-      doc.rect(x0, y, pageW - 20, 10, "F")
+      doc.rect(x0, y, contentWidth(pageW), 9, "F")
       doc.setDrawColor(180, 190, 200)
       doc.setLineWidth(0.2)
-      doc.rect(x0, y, pageW - 20, 10, "S")
+      doc.rect(x0, y, contentWidth(pageW), 9, "S")
       doc.setFont("helvetica", "bold")
-      doc.setFontSize(fontSize + 1)
-      doc.text(tipo.toUpperCase(), x0 + 2, y + 4)
+      doc.setFontSize(fontSize + 0.8)
+      doc.text(tipo.toUpperCase(), x0 + 1.5, y + 3.5)
       doc.setFont("helvetica", "normal")
       doc.setFontSize(fontSize)
       doc.text(
         `${stats.skus} SKU · ${stats.units} u · ${formatOperativeBoxes(stats.boxes)} cajas · ${formatClp(stats.monto)}`,
-        x0 + 2,
-        y + 8,
+        x0 + 1.5,
+        y + 7,
       )
-      y += 11
+      y += 9.5
     }
 
     const u = Number(item.unidades) || 0
@@ -465,26 +511,28 @@ export async function exportDispatchPlanPickingProductoPdf(params: {
       formatClp(m),
     ]
 
-    let maxRowH = lineH + 3
+    let maxRowH = lineH + 2.5
     for (let i = 0; i < cols.length; i++) {
-      const lines = doc.splitTextToSize(cellTexts[i], cols[i].w - 3) as string[]
-      maxRowH = Math.max(maxRowH, lineH * lines.length + 3)
+      const lines = doc.splitTextToSize(cellTexts[i], cols[i].w - 2.5) as string[]
+      maxRowH = Math.max(maxRowH, lineH * lines.length + 2.5)
     }
 
     if (y + maxRowH > bottomY) {
       doc.addPage()
-      y = await drawBrandedHeader(
+      y = drawBrandedHeader(
         doc,
-        14,
+        MARGIN.top,
         params.header,
         "Picking Producto (cont.)",
         kpiLine,
+        logo,
+        logoState,
       )
       drawHead()
       doc.setFont("helvetica", "bold")
-      doc.setFontSize(fontSize + 0.5)
-      doc.text(`${tipo} (cont.)`, x0, y + 3)
-      y += 5
+      doc.setFontSize(fontSize + 0.3)
+      doc.text(`${tipo} (cont.)`, x0, y + 2.5)
+      y += 4
     }
 
     drawRowGrid(doc, cols, x0, y, maxRowH, rowIdx % 2 === 1)
@@ -499,11 +547,11 @@ export async function exportDispatchPlanPickingProductoPdf(params: {
   }
 
   doc.setFont("helvetica", "bold")
-  doc.setFontSize(8)
+  doc.setFontSize(7.5)
   doc.text(
     `Totales: ${Math.round(totalUnits)} unidades · ${formatOperativeBoxes(totalBoxes)} cajas · ${formatClp(totalMonto)}`,
-    12,
-    Math.min(y + 5, bottomY),
+    MARGIN.left,
+    Math.min(y + 4, bottomY),
   )
 
   applyFooters(doc, meta)
