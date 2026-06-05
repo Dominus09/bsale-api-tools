@@ -172,14 +172,14 @@ def enrich_picking_product_rows(
         clauses: list[str] = []
         params: list[Any] = []
         if variant_ids:
-            clauses.append("id = ANY(%s)")
+            clauses.append("bsale_id = ANY(%s)")
             params.append(variant_ids)
         if barcodes:
             clauses.append("NULLIF(BTRIM(bar_code), '') = ANY(%s)")
             params.append(barcodes)
         cur.execute(
             f"""
-            SELECT id, bar_code, units_per_box, description
+            SELECT bsale_id, bar_code, units_per_box, description
             FROM bsale.variants
             WHERE company_id = 3
               AND ({' OR '.join(clauses)})
@@ -190,7 +190,7 @@ def enrich_picking_product_rows(
         for r in cur.fetchall():
             vd = dict(zip(vcols, r))
             try:
-                variants_by_id[int(vd["id"])] = vd
+                variants_by_id[int(vd["bsale_id"])] = vd
             except (TypeError, ValueError):
                 pass
             bc = (vd.get("bar_code") or "").strip()
