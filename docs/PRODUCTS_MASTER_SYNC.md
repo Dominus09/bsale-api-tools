@@ -52,6 +52,26 @@ Variables: mismas que el backend (`PG_*`, tokens Bsale de los scripts raíz).
 
 Frecuencia sugerida: **1–2 veces al día** (o tras cambios masivos de catálogo en Bsale). Timeout: **45–90 min** según volumen.
 
+`sync_catalog.py` tolera fallos por producto (ej. 502 en `product_taxes`): log `[CATALOG_SYNC_ERROR]` y continúa; resumen `[CATALOG_SYNC] products_processed/errors/omitted`.
+
+## Job SEC independiente
+
+```bash
+# Preview (sin escribir)
+python -m backend.jobs.backfill_units_per_box --dry-run
+
+# Ejecutar
+python -m backend.jobs.backfill_units_per_box
+```
+
+Validación SQL: `backend/sql/diagnostics/sec_backfill_validate.sql`
+
+Log ejemplo:
+
+```text
+[SEC_BACKFILL] dry_run=false variants_total=45210 variants_con_sec=12840 variants_actualizadas=3200 products_master_actualizados=2850 duration_ms=1240
+```
+
 ## UI
 
 **Distribuidora → Maestro logístico productos** (`/distribuidora/maestro-logistico`)

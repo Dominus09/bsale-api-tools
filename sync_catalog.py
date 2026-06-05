@@ -287,6 +287,8 @@ for company in companies:
 
     offset = 0
 
+    product_stats = {"processed": 0, "errors": 0, "omitted": 0}
+
     while True:
 
         data = bsale_get(
@@ -307,21 +309,36 @@ for company in companies:
             tax_ids = []
             tax_names = []
             tax_total = 0
+            tax_factor = 1.0
 
             if "product_taxes" in p and "href" in p["product_taxes"]:
 
-                tax_data = bsale_get(p["product_taxes"]["href"],HEAD_BSALE)
+                tax_url = p["product_taxes"]["href"]
 
-                for t in tax_data.get("items",[]):
+                try:
 
-                    tax_id = int(t["tax"]["id"])
+                    tax_data = bsale_get(tax_url, HEAD_BSALE)
 
-                    tax_ids.append(tax_id)
-                    tax_names.append(tax_map[tax_id]["name"])
+                    for t in tax_data.get("items", []):
 
-                    tax_total += tax_map[tax_id]["percentage"]
+                        tax_id = int(t["tax"]["id"])
 
-            tax_factor = 1 + (tax_total/100)
+                        tax_ids.append(tax_id)
+                        tax_names.append(tax_map[tax_id]["name"])
+
+                        tax_total += tax_map[tax_id]["percentage"]
+
+                    tax_factor = 1 + (tax_total / 100)
+
+                except Exception as exc:
+
+                    product_stats["errors"] += 1
+                    print(
+                        "[CATALOG_SYNC_ERROR]",
+                        f"product_id={product_id}",
+                        f"url={tax_url}",
+                        f"error={exc}",
+                    )
 
             rows.append((
                 company_id,
@@ -330,10 +347,19 @@ for company in companies:
                 p["product_type"]["id"] if p.get("product_type") else None,
                 json.dumps(tax_ids),
                 json.dumps(tax_names),
-                round(tax_factor,3)
+                round(tax_factor, 3),
             ))
+            product_stats["processed"] += 1
 
         offset += LIMIT
+
+    print(
+        "[CATALOG_SYNC]",
+        f"company_id={company_id}",
+        f"products_processed={product_stats['processed']}",
+        f"products_errors={product_stats['errors']}",
+        f"products_omitted={product_stats['omitted']}",
+    )
 
     upsert("""
 

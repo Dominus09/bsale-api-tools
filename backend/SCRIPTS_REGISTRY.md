@@ -80,6 +80,7 @@ backend/
 | `backend/jobs/sync_distribuidora_related.py` | job | medio | sí | sí | sí (cron/Coolify opcional) | Solo sync `document_related` vía `relateddetailid`; lock distinto al sync principal. |
 | `backend/jobs/sync_rutero.py` | job | medio | sí | no (solo PG) | sí (cron/Coolify) | Sync `bsale.clients` → `bsale.rutero` (empresa 3, vendedores ruta). |
 | `backend/jobs/sync_bsale_catalog.py` | job | alto | sí | sí | sí (cron/Coolify) | Catálogo Bsale: `sync_catalog` → precios → stock → SEC `units_per_box` → UPSERT `products_master` (sin borrar filas ni pisar cubicación manual). |
+| `backend/jobs/backfill_units_per_box.py` | job | medio | sí | no | sí (manual/cron) | Backfill `(SEC N)` → `variants.units_per_box` → `products_master`; `--dry-run` para preview. |
 | `backend/audits/audit_products_master_logistics.py` | audit | bajo | no | no | sí (staging/prod) | KPIs PM/variants/products; `--write-doc` actualiza `docs/PRODUCTS_MASTER_LOGISTICS_AUDIT.md`. |
 | `backend/jobs/debug_sync_related_oc.py` | debug (shim) | bajo | — | — | no | Reenvía a `backend.debug.debug_sync_related_oc` (`python -m backend.jobs.debug_sync_related_oc` sigue válido). |
 | `backend/jobs/debug_full_bsale_relationships.py` | debug (shim) | bajo | — | — | no | Reenvía a `backend.debug.debug_full_bsale_relationships`. |
