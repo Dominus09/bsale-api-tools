@@ -70,10 +70,14 @@ from backend.utils.picking_readiness import (
     picking_not_ready_payload,
 )
 from backend.utils.picking_sql import (
+    BARCODE_EXPR,
+    BSALE_PRODUCT_JOIN,
     CAJAS_AGG_EXPR,
     CAJAS_LINE_EXPR,
     PM_JOIN,
     PM_TIPO_PRODUCTO_EXPR,
+    PRODUCTO_EXPR,
+    VARIANTE_EXPR,
     VARIANTS_JOIN,
 )
 from backend.utils.plan_detail_debug import log_plan_detail_debug, plan_detail_step
@@ -1499,9 +1503,9 @@ def _picking_product_sql_view(*, include_probable: bool) -> str:
                     MAX(pm.id) AS product_id,
                     MAX(dd.variant_id) AS variant_id,
                     {PM_TIPO_PRODUCTO_EXPR} AS tipo_producto,
-                    dd.variant_description AS producto,
-                    dd.variant_description AS variante,
-                    NULLIF(BTRIM(dd.variant_code), '') AS codigo_barras,
+                    {PRODUCTO_EXPR} AS producto,
+                    {VARIANTE_EXPR} AS variante,
+                    {BARCODE_EXPR} AS codigo_barras,
                     SUM(dd.quantity) AS unidades,
                     {CAJAS_AGG_EXPR} AS cajas,
                     MAX(v.units_per_box) AS units_per_box,
@@ -1520,14 +1524,16 @@ def _picking_product_sql_view(*, include_probable: bool) -> str:
                    AND {doc_id} IS NOT NULL
                 INNER JOIN distribuidora.document_details dd
                     ON dd.document_id = {doc_id}
-                {PM_JOIN}
                 {VARIANTS_JOIN}
+                {BSALE_PRODUCT_JOIN}
+                {PM_JOIN}
                 WHERE dpo.dispatch_plan_id = %s
                 GROUP BY
                     COALESCE(NULLIF(BTRIM(t.name), ''), 'Centro de despacho'),
                     {PM_TIPO_PRODUCTO_EXPR},
-                    dd.variant_description,
-                    NULLIF(BTRIM(dd.variant_code), '')
+                    {PRODUCTO_EXPR},
+                    {VARIANTE_EXPR},
+                    {BARCODE_EXPR}
                 ORDER BY tipo_producto, producto, codigo_barras NULLS LAST
                 """
 
@@ -1536,9 +1542,9 @@ _PICKING_PRODUCT_SQL_LITE = f"""
                     MAX(pm.id) AS product_id,
                     MAX(dd.variant_id) AS variant_id,
                     {PM_TIPO_PRODUCTO_EXPR} AS tipo_producto,
-                    dd.variant_description AS producto,
-                    dd.variant_description AS variante,
-                    NULLIF(BTRIM(dd.variant_code), '') AS codigo_barras,
+                    {PRODUCTO_EXPR} AS producto,
+                    {VARIANTE_EXPR} AS variante,
+                    {BARCODE_EXPR} AS codigo_barras,
                     SUM(dd.quantity) AS unidades,
                     {CAJAS_AGG_EXPR} AS cajas,
                     SUM(dd.total_amount) AS total_monto
@@ -1548,13 +1554,15 @@ _PICKING_PRODUCT_SQL_LITE = f"""
                    AND COALESCE(st.is_invoiced, FALSE) = TRUE
                 INNER JOIN distribuidora.document_details dd
                     ON dd.document_id = st.invoicing_document_id
-                {PM_JOIN}
                 {VARIANTS_JOIN}
+                {BSALE_PRODUCT_JOIN}
+                {PM_JOIN}
                 WHERE dpo.dispatch_plan_id = %s
                 GROUP BY
                     {PM_TIPO_PRODUCTO_EXPR},
-                    dd.variant_description,
-                    NULLIF(BTRIM(dd.variant_code), '')
+                    {PRODUCTO_EXPR},
+                    {VARIANTE_EXPR},
+                    {BARCODE_EXPR}
                 ORDER BY tipo_producto, producto, codigo_barras NULLS LAST
                 """
 

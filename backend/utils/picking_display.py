@@ -2,11 +2,30 @@
 
 from __future__ import annotations
 
-import math
 import re
 from typing import Any
 
 _SEC_UNITS_RE = re.compile(r"\(SEC\s+(\d+)\)", re.IGNORECASE)
+
+_VARIANT_BSALE_SELECT = """
+    SELECT
+        v.bsale_id,
+        v.bar_code,
+        v.code,
+        v.units_per_box,
+        v.description AS variant_description,
+        p.name AS product_name,
+        pt.name AS product_type
+    FROM bsale.variants v
+    LEFT JOIN bsale.products p
+        ON p.company_id = v.company_id
+       AND p.bsale_id = v.product_id
+    LEFT JOIN bsale.product_types pt
+        ON pt.company_id = p.company_id
+       AND pt.bsale_id = p.product_type_id
+    WHERE v.company_id = 3
+      AND ({where_clause})
+"""
 
 
 def units_per_box_from_text(*texts: str | None) -> float | None:
@@ -45,9 +64,9 @@ def resolve_units_per_box(
     return units_per_box_from_text(
         (pm or {}).get("variant_name"),
         (pm or {}).get("product_name"),
+        (variant or {}).get("variant_description"),
         row.get("variante"),
         row.get("producto"),
-        (variant or {}).get("description"),
     )
 
 
@@ -58,42 +77,82 @@ def effective_cajas(
     *,
     sin_unidad_caja: bool,
 ) -> float:
+    """Cajas operativas = unidades / CxC con 2 decimales (sin redondear hacia arriba)."""
     if units_per_box and units_per_box > 0 and unidades > 0:
-        return float(math.ceil(unidades / units_per_box))
+        return round(float(unidades) / float(units_per_box), 2)
     if sin_unidad_caja:
         return 0.0
     try:
-        return float(stored_cajas or 0)
+        return round(float(stored_cajas or 0), 2)
     except (TypeError, ValueError):
         return 0.0
+
+
+def resolve_tipo_producto(
+    row: dict[str, Any],
+    *,
+    pm: dict[str, Any] | None = None,
+    variant: dict[str, Any] | None = None,
+) -> str:
+    snap = (row.get("tipo_producto") or "").strip()
+    if snap and snap.lower() not in ("sin tipo", "otros"):
+        return snap
+    for src in (
+        (pm or {}).get("product_type"),
+        (variant or {}).get("product_type"),
+    ):
+        if src and str(src).strip():
+            return str(src).strip()
+    return "OTROS"
+
+
+def resolve_ean_barcode(
+    row: dict[str, Any],
+    *,
+    variant: dict[str, Any] | None = None,
+) -> str:
+    """EAN desde variants.bar_code; document_details.variant_code suele ser SKU."""
+    for src in (
+        (variant or {}).get("bar_code"),
+        row.get("codigo_barras"),
+    ):
+        bc = (src or "").strip()
+        if bc:
+            return bc
+    return ""
 
 
 def format_product_display(
     *,
     pm: dict[str, Any] | None,
+    variant: dict[str, Any] | None = None,
     producto: str,
     variante: str,
     producto_variante: str = "",
 ) -> str:
-    pn = ((pm or {}).get("product_name") or "").strip()
-    vn = ((pm or {}).get("variant_name") or "").strip()
-    p = (producto or "").strip()
-    v = (variante or "").strip()
+    pn = (
+        ((pm or {}).get("product_name") or "")
+        or ((variant or {}).get("product_name") or "")
+        or (producto or "")
+    ).strip()
+    vn = (
+        ((pm or {}).get("variant_name") or "")
+        or ((variant or {}).get("variant_description") or "")
+        or (variante or "")
+    ).strip()
     pv = (producto_variante or "").strip()
 
     if pn and vn:
+        if pn.lower() == vn.lower() or pn.lower().endswith(vn.lower()):
+            return pn
         return f"{pn} {vn}".strip()
     if pn:
-        if v and v.lower() not in pn.lower():
-            return f"{pn} {v}".strip()
         return pn
-    if p and v and p != v:
-        if p.lower().endswith(v.lower()):
-            return p
-        return f"{p} {v}".strip()
+    if vn:
+        return vn
     if pv and " — " in pv:
         return pv.replace(" — ", " ").strip()
-    return p or v or pv or "Sin descripción"
+    return pv or "Sin descripción"
 
 
 def _client_identity(c: dict[str, Any]) -> str:
@@ -131,7 +190,7 @@ def compute_items_totals(items: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "lines": len(items),
         "unidades": unidades,
-        "cajas": cajas,
+        "cajas": round(cajas, 2),
         "total_monto_clp": monto,
         "distinct_products": len(barcodes) or len(items),
     }
@@ -168,22 +227,20 @@ def enrich_picking_product_rows(
 
     variants_by_id: dict[int, dict[str, Any]] = {}
     variants_by_bc: dict[str, dict[str, Any]] = {}
+    variants_by_code: dict[str, dict[str, Any]] = {}
     if variant_ids or barcodes:
         clauses: list[str] = []
         params: list[Any] = []
         if variant_ids:
-            clauses.append("bsale_id = ANY(%s)")
+            clauses.append("v.bsale_id = ANY(%s)")
             params.append(variant_ids)
         if barcodes:
-            clauses.append("NULLIF(BTRIM(bar_code), '') = ANY(%s)")
+            clauses.append("NULLIF(BTRIM(v.bar_code), '') = ANY(%s)")
+            params.append(barcodes)
+            clauses.append("NULLIF(BTRIM(v.code), '') = ANY(%s)")
             params.append(barcodes)
         cur.execute(
-            f"""
-            SELECT bsale_id, bar_code, units_per_box, description
-            FROM bsale.variants
-            WHERE company_id = 3
-              AND ({' OR '.join(clauses)})
-            """,
+            _VARIANT_BSALE_SELECT.format(where_clause=" OR ".join(clauses)),
             tuple(params),
         )
         vcols = [d[0] for d in cur.description]
@@ -196,6 +253,9 @@ def enrich_picking_product_rows(
             bc = (vd.get("bar_code") or "").strip()
             if bc:
                 variants_by_bc[bc] = vd
+            code = (vd.get("code") or "").strip()
+            if code:
+                variants_by_code[code] = vd
 
     out: list[dict[str, Any]] = []
     for row in rows:
@@ -209,7 +269,13 @@ def enrich_picking_product_rows(
             except (TypeError, ValueError):
                 variant = None
         if variant is None and bc:
-            variant = variants_by_bc.get(bc)
+            variant = variants_by_bc.get(bc) or variants_by_code.get(bc)
+
+        ean = resolve_ean_barcode(row, variant=variant)
+        if ean:
+            pm = pm_by_bc.get(ean) or pm
+            if variant is None:
+                variant = variants_by_bc.get(ean)
 
         upb = resolve_units_per_box(row, pm=pm, variant=variant)
         unidades = float(row.get("unidades") or 0)
@@ -220,25 +286,34 @@ def enrich_picking_product_rows(
             row.get("cajas"),
             sin_unidad_caja=sin_caja,
         )
+        product_name = (
+            (pm or {}).get("product_name")
+            or (variant or {}).get("product_name")
+            or row.get("producto")
+        )
+        variant_name = (
+            (pm or {}).get("variant_name")
+            or (variant or {}).get("variant_description")
+            or row.get("variante")
+        )
         display = format_product_display(
             pm=pm,
+            variant=variant,
             producto=(row.get("producto") or ""),
             variante=(row.get("variante") or ""),
             producto_variante=(row.get("producto_variante") or ""),
         )
         enriched = dict(row)
         enriched["display_name"] = display
-        enriched["product_name"] = (pm or {}).get("product_name") or row.get("producto")
-        enriched["variant_name"] = (pm or {}).get("variant_name") or row.get("variante")
+        enriched["product_name"] = product_name
+        enriched["variant_name"] = variant_name
+        enriched["tipo_producto"] = resolve_tipo_producto(row, pm=pm, variant=variant)
+        if ean:
+            enriched["codigo_barras"] = ean
         enriched["units_per_box_efectivo"] = upb
         enriched["cajas_efectivas"] = cajas_eff
         enriched["cajas"] = cajas_eff
         enriched["sin_unidad_caja"] = sin_caja and not upb
-        tipo = (row.get("tipo_producto") or "").strip()
-        if pm and pm.get("product_type") and not tipo:
-            enriched["tipo_producto"] = pm["product_type"]
-        elif not tipo or tipo.lower() == "sin tipo":
-            enriched["tipo_producto"] = "OTROS"
         out.append(enriched)
     return out
 
@@ -266,6 +341,7 @@ def enrich_product_api_row(row: dict[str, Any]) -> dict[str, Any]:
         )
     out = dict(row)
     out["display_name"] = display
+    out["tipo_producto"] = resolve_tipo_producto(out)
     out["units_per_box_efectivo"] = upb
     out["cajas_efectivas"] = cajas_eff
     out["cajas"] = cajas_eff

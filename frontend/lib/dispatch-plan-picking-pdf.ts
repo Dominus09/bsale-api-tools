@@ -4,11 +4,12 @@ import {
   clientDeliveryNotes,
   countDistinctClients,
   effectiveBoxes,
+  formatOperativeBoxes,
   normalizePickingCategory,
   productLineLabel,
-  snapshotLoadKpis,
+  stablePickingKpiLine,
 } from "@/lib/picking-display"
-import { QUILLOTANA_LOGO_GRUPO_URL } from "@/lib/quillotana-brand"
+import { loadQuillotanaLogoForPdf } from "@/lib/quillotana-logo-pdf"
 import type {
   DispatchPlanPickingClientRow,
   DispatchPlanPickingHeader,
@@ -17,30 +18,6 @@ import type {
 
 function slugFile(s: string): string {
   return s.replace(/[^\w\-]+/g, "_").slice(0, 40) || "plan"
-}
-
-let logoDataUrlCache: string | null | undefined
-
-async function quillotanaLogoDataUrl(): Promise<string | null> {
-  if (logoDataUrlCache !== undefined) return logoDataUrlCache
-  try {
-    const res = await fetch(QUILLOTANA_LOGO_GRUPO_URL)
-    if (!res.ok) {
-      logoDataUrlCache = null
-      return null
-    }
-    const blob = await res.blob()
-    logoDataUrlCache = await new Promise((resolve) => {
-      const reader = new FileReader()
-      reader.onload = () => resolve(typeof reader.result === "string" ? reader.result : null)
-      reader.onerror = () => resolve(null)
-      reader.readAsDataURL(blob)
-    })
-    return logoDataUrlCache
-  } catch {
-    logoDataUrlCache = null
-    return null
-  }
 }
 
 type PdfMeta = {
@@ -177,36 +154,43 @@ async function drawBrandedHeader(
   kpiLine: string,
 ): Promise<number> {
   const pageW = doc.internal.pageSize.getWidth()
-  const logo = await quillotanaLogoDataUrl()
+  const logo = await loadQuillotanaLogoForPdf()
+  let titleX = 12
   if (logo) {
     try {
-      doc.addImage(logo, "PNG", 12, 8, 42, 12)
+      const aspect = logo.widthPx / logo.heightPx
+      const logoH = 12
+      const logoW = Math.min(48, logoH * aspect)
+      doc.addImage(logo.dataUrl, logo.format, 12, 8, logoW, logoH)
+      titleX = 12 + logoW + 4
     } catch {
-      /* ignore */
+      /* fallback texto */
     }
   }
   doc.setFont("helvetica", "bold")
   doc.setFontSize(11)
   doc.setTextColor(30, 64, 120)
-  doc.text("GRUPO QUILLOTANA", 58, 12)
+  if (!logo) {
+    doc.text("GRUPO QUILLOTANA", titleX, 12)
+  }
   doc.setFontSize(13)
-  doc.text(title, 58, 18)
+  doc.text(title, titleX, 18)
   doc.setTextColor(0, 0, 0)
   doc.setFont("helvetica", "normal")
   doc.setFontSize(8)
   doc.text(
     `${header.planning_number} · ${header.delivery_date} · ${header.truck_name}`,
-    58,
+    titleX,
     23,
   )
   doc.text(
     `Chofer: ${header.driver_name || header.driver_label} · Peonetas: ${header.assistant_label}`,
-    58,
+    titleX,
     27,
   )
   doc.text(
     `${header.route_name}${header.communes ? ` · ${header.communes}` : ""}`,
-    58,
+    titleX,
     31,
   )
 
@@ -223,31 +207,6 @@ async function drawBrandedHeader(
   doc.setFont("helvetica", "normal")
   doc.text(kpiLine, 14, y + 7, { maxWidth: pageW - 28 })
   return y + 12
-}
-
-function buildKpiLine(
-  header: DispatchPlanPickingHeader,
-  clients: DispatchPlanPickingClientRow[],
-  items: DispatchPlanPickingProductRow[],
-): string {
-  const fromSnapshot = snapshotLoadKpis(header, clients, items)
-  const hk = header.load_kpis
-  const k =
-    items.length > 0
-      ? fromSnapshot
-      : {
-          ...fromSnapshot,
-          clients: hk?.clients ?? fromSnapshot.clients,
-          documents: clients.length || hk?.documents || fromSnapshot.documents,
-          sales_total_clp: hk?.sales_total_clp ?? fromSnapshot.sales_total_clp,
-          distinct_products: hk?.distinct_products ?? fromSnapshot.distinct_products,
-          total_units: hk?.total_units ?? fromSnapshot.total_units,
-          estimated_boxes: hk?.estimated_boxes ?? fromSnapshot.estimated_boxes,
-        }
-  return (
-    `${k.clients} clientes · ${k.documents} documentos · ${formatClp(k.sales_total_clp)} · ` +
-    `${k.distinct_products} SKU · ${Math.round(k.total_units)} u · ${Math.round(k.estimated_boxes)} cajas`
-  )
 }
 
 export async function exportDispatchPlanPickingClientePdf(params: {
@@ -275,22 +234,24 @@ export async function exportDispatchPlanPickingClientePdf(params: {
   const cols: PdfCol[] = [
     { key: "Orden", w: 9 },
     { key: "Ciudad", w: 18 },
-    { key: "Cliente", w: 30 },
-    { key: "Fantasía", w: 26 },
-    { key: "Dirección", w: 56 },
+    { key: "Cliente", w: 28 },
+    { key: "Fantasía", w: 24 },
+    { key: "Dirección", w: 58 },
     { key: "Documento", w: 16 },
-    { key: "Pago", w: 14 },
-    { key: "Vendedor", w: 16 },
-    { key: "Observaciones", w: 48 },
+    { key: "Pago", w: 12 },
+    { key: "Vendedor", w: 14 },
+    { key: "Observaciones", w: 52 },
     { key: "Total", w: 22, align: "right" },
   ]
+
+  const kpiLine = stablePickingKpiLine(params.header, params.clients, [], formatClp)
 
   let y = await drawBrandedHeader(
     doc,
     14,
     params.header,
     "Picking Cliente",
-    buildKpiLine(params.header, params.clients, []),
+    kpiLine,
   )
 
   if (params.warnings?.length) {
@@ -326,7 +287,7 @@ export async function exportDispatchPlanPickingClientePdf(params: {
           14,
           params.header,
           "Picking Cliente (cont.)",
-          buildKpiLine(params.header, params.clients, []),
+          kpiLine,
         )
         drawHead()
       }
@@ -370,7 +331,7 @@ export async function exportDispatchPlanPickingClientePdf(params: {
         14,
         params.header,
         "Picking Cliente (cont.)",
-        buildKpiLine(params.header, params.clients, []),
+        kpiLine,
       )
       drawHead()
     }
@@ -428,12 +389,14 @@ export async function exportDispatchPlanPickingProductoPdf(params: {
     { key: "Monto", w: 28, align: "right" },
   ]
 
+  const kpiLine = stablePickingKpiLine(params.header, [], params.items, formatClp)
+
   let y = await drawBrandedHeader(
     doc,
     14,
     params.header,
     "Picking Producto",
-    buildKpiLine(params.header, [], params.items),
+    kpiLine,
   )
 
   const headH = mode === "compact" ? 5 : 6
@@ -460,24 +423,28 @@ export async function exportDispatchPlanPickingProductoPdf(params: {
           14,
           params.header,
           "Picking Producto (cont.)",
-          buildKpiLine(params.header, [], params.items),
+          kpiLine,
         )
         drawHead()
       }
       currentType = tipo
       const stats = categoryStatsFromItems(params.items, tipo)
       doc.setFillColor(226, 232, 240)
-      doc.rect(x0, y, pageW - 20, 9, "F")
+      doc.rect(x0, y, pageW - 20, 10, "F")
       doc.setDrawColor(180, 190, 200)
       doc.setLineWidth(0.2)
-      doc.rect(x0, y, pageW - 20, 9, "S")
+      doc.rect(x0, y, pageW - 20, 10, "S")
       doc.setFont("helvetica", "bold")
       doc.setFontSize(fontSize + 1)
       doc.text(tipo.toUpperCase(), x0 + 2, y + 4)
       doc.setFont("helvetica", "normal")
       doc.setFontSize(fontSize)
-      doc.text(`${stats.skus} SKU · ${stats.boxes} cajas`, x0 + 2, y + 7.5)
-      y += 10
+      doc.text(
+        `${stats.skus} SKU · ${stats.units} u · ${formatOperativeBoxes(stats.boxes)} cajas · ${formatClp(stats.monto)}`,
+        x0 + 2,
+        y + 8,
+      )
+      y += 11
     }
 
     const u = Number(item.unidades) || 0
@@ -489,7 +456,7 @@ export async function exportDispatchPlanPickingProductoPdf(params: {
 
     const label = productLineLabel(item)
     const boxesStr =
-      item.sin_unidad_caja && boxes === 0 ? "—" : String(Math.round(boxes))
+      item.sin_unidad_caja && boxes === 0 ? "—" : formatOperativeBoxes(boxes)
     const cellTexts = [
       label,
       item.codigo_barras || "—",
@@ -511,7 +478,7 @@ export async function exportDispatchPlanPickingProductoPdf(params: {
         14,
         params.header,
         "Picking Producto (cont.)",
-        buildKpiLine(params.header, [], params.items),
+        kpiLine,
       )
       drawHead()
       doc.setFont("helvetica", "bold")
@@ -534,7 +501,7 @@ export async function exportDispatchPlanPickingProductoPdf(params: {
   doc.setFont("helvetica", "bold")
   doc.setFontSize(8)
   doc.text(
-    `Totales: ${Math.round(totalUnits)} unidades · ${Math.round(totalBoxes)} cajas · ${formatClp(totalMonto)}`,
+    `Totales: ${Math.round(totalUnits)} unidades · ${formatOperativeBoxes(totalBoxes)} cajas · ${formatClp(totalMonto)}`,
     12,
     Math.min(y + 5, bottomY),
   )
