@@ -128,7 +128,7 @@ function GroupTruckAssignMenu({
           <Alert className="mb-2 border-amber-500/40 bg-amber-50/90 dark:bg-amber-950/40">
             <AlertTitle className="text-xs">Georreferencia</AlertTitle>
             <AlertDescription className="text-xs">
-              {noGeoCount} sin coordenadas (omitidos)
+              {noGeoCount} sin coordenadas (se agregan como pendientes de georef)
             </AlertDescription>
           </Alert>
         ) : null}
@@ -269,14 +269,14 @@ function PlanningTableRow({
           <Tooltip>
             <TooltipTrigger asChild>
               <Badge
-                variant="destructive"
-                className="cursor-help px-1 py-0 text-[9px]"
+                variant="outline"
+                className="cursor-help border-amber-400 bg-amber-50 px-1 py-0 text-[9px] text-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
               >
-                No
+                Sin georef
               </Badge>
             </TooltipTrigger>
             <TooltipContent side="top" className="text-xs">
-              Sin georreferencia
+              Sin georreferencia — se puede planificar como pendiente
             </TooltipContent>
           </Tooltip>
         )}
@@ -304,7 +304,6 @@ function PlanningTableRow({
                   : TRUCK_UNSET
               }
               onChange={(e) => onTruckChange(r, e.target.value)}
-              disabled={!geo}
               aria-label={`Camión OC ${r.oc ?? docId}`}
               title={capLabel ?? undefined}
             >

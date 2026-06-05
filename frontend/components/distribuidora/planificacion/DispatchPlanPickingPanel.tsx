@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useState } from "react"
+import { Fragment, useCallback, useMemo, useState } from "react"
 import { Download, FileText, Loader2, RefreshCw } from "lucide-react"
 
 import {
@@ -14,7 +14,11 @@ import {
   exportDispatchPlanPickingClientePdf,
   exportDispatchPlanPickingProductoPdf,
 } from "@/lib/dispatch-plan-picking-pdf"
-import { effectiveBoxes, normalizePickingCategory } from "@/lib/picking-display"
+import {
+  effectiveBoxes,
+  groupRowsByCity,
+  normalizePickingCategory,
+} from "@/lib/picking-display"
 import { formatClp } from "@/lib/ors-map-ui"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -116,6 +120,11 @@ export function DispatchPlanPickingClientePanel({
       }
     },
     [data, planId, includeProbable, onMessage],
+  )
+
+  const cityGroups = useMemo(
+    () => (data?.clients?.length ? groupRowsByCity(data.clients) : []),
+    [data?.clients],
   )
 
   return (
@@ -246,42 +255,54 @@ export function DispatchPlanPickingClientePanel({
                 </tr>
               </thead>
               <tbody>
-                {data.clients.map((row, idx) => (
-                  <tr
-                    key={`${row.related_document_id}-${idx}`}
-                    className={cn(
-                      "border-t border-border/50",
-                      row.is_probable_included && "bg-amber-50/50 dark:bg-amber-950/20",
-                    )}
-                  >
-                    <td className="px-2 py-1.5 tabular-nums">{row.route_order}</td>
-                    <td className="px-2 py-1.5">{row.city}</td>
-                    <td className="px-2 py-1.5 font-medium">{row.client_name}</td>
-                    <td className="px-2 py-1.5">{row.fantasy_name}</td>
-                    <td className="px-2 py-1.5 max-w-[140px] truncate">{row.address}</td>
-                    <td className="px-2 py-1.5">{row.phone || "—"}</td>
-                    <td className="px-2 py-1.5 tabular-nums">{row.document_number}</td>
-                    <td className="px-2 py-1.5">{row.document_type}</td>
-                    <td className="px-2 py-1.5">{row.payment_method || "—"}</td>
-                    <td className="px-2 py-1.5">{row.seller_name}</td>
-                    <td className="px-2 py-1.5 max-w-[140px] truncate">
-                      {[row.delivery_notes, row.observations]
-                        .filter((x) => (x || "").trim())
-                        .join(" · ") || "—"}
-                    </td>
-                    <td className="px-2 py-1.5 text-right tabular-nums">
-                      {formatClp(Number(row.document_total) || 0)}
-                      {row.is_probable_included ? (
-                        <Badge variant="outline" className="ml-1 text-[9px]">
-                          probable
-                        </Badge>
-                      ) : row.inclusion === "auto_match" ? (
-                        <Badge variant="outline" className="ml-1 border-sky-300 text-[9px]">
-                          auto
-                        </Badge>
-                      ) : null}
-                    </td>
-                  </tr>
+                {cityGroups.map((group) => (
+                  <Fragment key={group.cityKey}>
+                    <tr className="bg-muted/40">
+                      <td
+                        colSpan={12}
+                        className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+                      >
+                        {group.cityLabel}
+                      </td>
+                    </tr>
+                    {group.rows.map((row, idx) => (
+                      <tr
+                        key={`${row.related_document_id}-${group.cityKey}-${idx}`}
+                        className={cn(
+                          "border-t border-border/50",
+                          row.is_probable_included && "bg-amber-50/50 dark:bg-amber-950/20",
+                        )}
+                      >
+                        <td className="px-2 py-1.5 tabular-nums">{row.route_order}</td>
+                        <td className="px-2 py-1.5">{row.city}</td>
+                        <td className="px-2 py-1.5 font-medium">{row.client_name}</td>
+                        <td className="px-2 py-1.5">{row.fantasy_name}</td>
+                        <td className="px-2 py-1.5 max-w-[140px] truncate">{row.address}</td>
+                        <td className="px-2 py-1.5">{row.phone || "—"}</td>
+                        <td className="px-2 py-1.5 tabular-nums">{row.document_number}</td>
+                        <td className="px-2 py-1.5">{row.document_type}</td>
+                        <td className="px-2 py-1.5">{row.payment_method || "—"}</td>
+                        <td className="px-2 py-1.5">{row.seller_name}</td>
+                        <td className="px-2 py-1.5 max-w-[140px] truncate">
+                          {[row.delivery_notes, row.observations]
+                            .filter((x) => (x || "").trim())
+                            .join(" · ") || "—"}
+                        </td>
+                        <td className="px-2 py-1.5 text-right tabular-nums">
+                          {formatClp(Number(row.document_total) || 0)}
+                          {row.is_probable_included ? (
+                            <Badge variant="outline" className="ml-1 text-[9px]">
+                              probable
+                            </Badge>
+                          ) : row.inclusion === "auto_match" ? (
+                            <Badge variant="outline" className="ml-1 border-sky-300 text-[9px]">
+                              auto
+                            </Badge>
+                          ) : null}
+                        </td>
+                      </tr>
+                    ))}
+                  </Fragment>
                 ))}
               </tbody>
             </table>

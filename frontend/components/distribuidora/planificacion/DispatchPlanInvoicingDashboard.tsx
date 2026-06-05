@@ -43,10 +43,13 @@ export function DispatchPlanInvoicingDashboard({
     <div className={cn("space-y-6", className)}>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-lg border border-border/70 bg-muted/20 px-4 py-3 lg:col-span-1">
-          <p className="text-xs text-muted-foreground">Total órdenes de compra</p>
+          <p className="text-xs text-muted-foreground">Venta OC total (plan)</p>
           <p className="mt-1 text-2xl font-semibold tabular-nums">{inv.total_orders}</p>
           <p className="mt-0.5 text-sm font-medium tabular-nums">
             {formatClp(inv.total_oc_amount_clp)}
+          </p>
+          <p className="mt-1 text-[10px] text-muted-foreground">
+            No descuenta costos de ruta ni mercadería
           </p>
         </div>
         <StatCard

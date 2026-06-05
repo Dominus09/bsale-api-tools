@@ -4,8 +4,10 @@ import {
   clientDeliveryNotes,
   clientPhone,
   countDistinctClients,
+  displayCityLabel,
   effectiveBoxes,
   formatOperativeBoxes,
+  normalizeCityKey,
   normalizePickingCategory,
   productLineLabel,
   stablePickingKpiLine,
@@ -307,13 +309,14 @@ export async function exportDispatchPlanPickingClientePdf(params: {
 
   drawHead()
 
-  let lastCity = ""
+  let lastCityKey = ""
   let total = 0
   let rowIdx = 0
 
   for (const c of params.clients) {
-    const city = c.city || ""
-    if (city && city !== lastCity && mode !== "compact") {
+    const cityKey = normalizeCityKey(c.city)
+    const cityLabel = displayCityLabel(c.city)
+    if (cityKey && cityKey !== lastCityKey && mode !== "compact") {
       if (y > bottomY - 8) {
         doc.addPage()
         y = drawBrandedHeader(
@@ -329,11 +332,11 @@ export async function exportDispatchPlanPickingClientePdf(params: {
       }
       doc.setFont("helvetica", "bold")
       doc.setFontSize(fontSize + 0.3)
-      doc.text(city, x0, y + 2.5)
+      doc.text(cityLabel, x0, y + 2.5)
       doc.setFont("helvetica", "normal")
       doc.setFontSize(fontSize)
       y += 4
-      lastCity = city
+      lastCityKey = cityKey
     }
 
     const notes = clientDeliveryNotes(c)
@@ -342,7 +345,7 @@ export async function exportDispatchPlanPickingClientePdf(params: {
     total += amt
     const cellTexts = [
       String(c.route_order ?? ""),
-      city,
+      cityLabel,
       c.client_name || "",
       c.fantasy_name || "",
       tel,
@@ -404,7 +407,7 @@ export async function exportDispatchPlanPickingProductoPdf(params: {
   generatedAt?: string | null
 }): Promise<void> {
   const { jsPDF } = await import("jspdf")
-  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "letter" })
+  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "letter" })
   const pageW = doc.internal.pageSize.getWidth()
   const pageH = doc.internal.pageSize.getHeight()
   const logo = await loadQuillotanaLogoForPdf()
@@ -415,18 +418,18 @@ export async function exportDispatchPlanPickingProductoPdf(params: {
     planningNumber: planLabel(params.header),
   }
   const mode = layoutForRowCount(params.items.length)
-  const fontSize = mode === "comfortable" ? 6.8 : mode === "compact" ? 5.3 : 6.2
+  const fontSize = mode === "comfortable" ? 7 : mode === "compact" ? 5.5 : 6.4
   const lineH = fontSize * 0.42
   const bottomY = pageH - MARGIN.bottom - 5
   const x0 = MARGIN.left
 
   const cols = fitColumns(
     [
-      { key: "Producto", w: 128 },
-      { key: "Código barra", w: 36 },
-      { key: "Unidades", w: 20, align: "right" },
-      { key: "Cajas", w: 18, align: "right" },
-      { key: "Monto", w: 24, align: "right" },
+      { key: "Producto", w: 92 },
+      { key: "Código barra", w: 32 },
+      { key: "Unidades", w: 18, align: "center" },
+      { key: "Cajas", w: 16, align: "center" },
+      { key: "Monto", w: 22, align: "right" },
     ],
     contentWidth(pageW),
   )

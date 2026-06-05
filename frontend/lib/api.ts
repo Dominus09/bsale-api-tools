@@ -1806,6 +1806,13 @@ export type DispatchPlanLoadSummary = {
   kpis: {
     clients: number
     documents: number
+    /** Venta OC total del plan (todas las órdenes). */
+    oc_total_amount_clp?: number
+    /** Venta facturada/confirmada (related + auto). */
+    confirmed_sales_clp?: number
+    /** Venta en picking generado (documentos incluidos). */
+    picking_sales_clp?: number
+    /** Compat: prioriza picking → confirmada → OC. */
     sales_total_clp: number
     distinct_products: number
     total_units: number
@@ -1817,6 +1824,7 @@ export type DispatchPlanLoadSummary = {
     confirmed_total: number
     probable: number
     pending: number
+    oc_total_amount_clp?: number
     confirmed_amount_clp: number
     probable_amount_clp: number
     pending_amount_clp: number

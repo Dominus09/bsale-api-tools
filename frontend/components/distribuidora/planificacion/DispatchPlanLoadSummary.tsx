@@ -72,10 +72,24 @@ export function DispatchPlanLoadSummaryBlock({ dashboard, className }: Props) {
         </Badge>
       </div>
 
-      <div className="mt-3 grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCell label="Clientes" value={String(k.clients)} />
         <KpiCell label="Documentos" value={String(k.documents)} />
-        <KpiCell label="Venta total" value={formatClp(k.sales_total_clp)} />
+        <KpiCell
+          label="Venta OC (plan)"
+          value={formatClp(k.oc_total_amount_clp ?? inv.oc_total_amount_clp ?? k.sales_total_clp)}
+          sub="Todas las órdenes del plan"
+        />
+        <KpiCell
+          label="Venta confirmada"
+          value={formatClp(k.confirmed_sales_clp ?? inv.confirmed_amount_clp)}
+          sub="Facturadas + auto ≥75"
+        />
+        <KpiCell
+          label="Venta picking"
+          value={formatClp(k.picking_sales_clp ?? 0)}
+          sub={ls.picking.has_snapshot ? "Docs en snapshot" : "Sin picking aún"}
+        />
         <KpiCell label="Productos distintos" value={String(k.distinct_products)} />
         <KpiCell
           label="Unidades"

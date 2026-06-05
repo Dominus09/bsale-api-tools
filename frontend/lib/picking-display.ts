@@ -69,6 +69,44 @@ export function clientPhone(row: DispatchPlanPickingClientRow): string {
   return (row.phone || "").trim()
 }
 
+/** Clave de agrupación: trim, espacios colapsados, sin distinguir mayúsculas. */
+export function normalizeCityKey(city?: string | null): string {
+  if (!city?.trim()) return ""
+  return city.trim().replace(/\s+/g, " ").toLowerCase()
+}
+
+/** Etiqueta visible de ciudad (trim + espacios simples, conserva capitalización). */
+export function displayCityLabel(city?: string | null): string {
+  if (!city?.trim()) return ""
+  return city.trim().replace(/\s+/g, " ")
+}
+
+export type CityGroupedRow<T> = {
+  cityKey: string
+  cityLabel: string
+  rows: T[]
+}
+
+/** Agrupa filas por ciudad normalizada; conserva la primera etiqueta vista. */
+export function groupRowsByCity<T extends { city?: string | null }>(
+  rows: T[],
+): CityGroupedRow<T>[] {
+  const map = new Map<string, CityGroupedRow<T>>()
+  const order: string[] = []
+  for (const row of rows) {
+    const key = normalizeCityKey(row.city) || "__sin_ciudad__"
+    const label = displayCityLabel(row.city) || "Sin ciudad"
+    let group = map.get(key)
+    if (!group) {
+      group = { cityKey: key, cityLabel: label, rows: [] }
+      map.set(key, group)
+      order.push(key)
+    }
+    group.rows.push(row)
+  }
+  return order.map((k) => map.get(k)!)
+}
+
 export function clientDeliveryNotes(row: DispatchPlanPickingClientRow): string {
   const dn = (row.delivery_notes || "").trim()
   const obs = (row.observations || "").trim()

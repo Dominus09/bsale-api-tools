@@ -312,7 +312,7 @@ def get_dispatch_prep_by_municipality(
     ),
     day_filter: str | None = Query(
         None,
-        description="Opcional: lunes|martes|miercoles|jueves|viernes|sabado (coincidencia en observaciones).",
+        description="Opcional: uno o más días separados por coma (OR), ej. jueves,viernes.",
     ),
     limit: int = Query(
         250,

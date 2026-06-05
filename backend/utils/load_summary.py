@@ -58,6 +58,20 @@ def build_load_summary(
     if not stops and confirmed_n:
         stops = confirmed_n
 
+    oc_total_clp = int(
+        round(float(invoicing_block.get("total_oc_amount_clp") or 0))
+    )
+    confirmed_sales_clp = int(confirmed.get("amount_clp") or 0)
+    picking_sales_clp = int(
+        round(
+            float(
+                pk.get("sales_total_clp")
+                or (picking_meta or {}).get("document_total_clp")
+                or 0
+            )
+        )
+    )
+
     out: dict[str, Any] = {
         "header": {
             "planning_code": plan.get("planning_code") or f"PLAN-{plan.get('id')}",
@@ -79,16 +93,10 @@ def build_load_summary(
         "kpis": {
             "clients": int(pk.get("clients") or stops),
             "documents": int(pk.get("documents") or stops),
-            "sales_total_clp": int(
-                round(
-                    float(
-                        pk.get("sales_total_clp")
-                        or (picking_meta or {}).get("document_total_clp")
-                        or confirmed.get("amount_clp")
-                        or 0
-                    )
-                )
-            ),
+            "oc_total_amount_clp": oc_total_clp,
+            "confirmed_sales_clp": confirmed_sales_clp,
+            "picking_sales_clp": picking_sales_clp,
+            "sales_total_clp": picking_sales_clp or confirmed_sales_clp or oc_total_clp,
             "distinct_products": int(
                 pk.get("distinct_products")
                 or (picking_meta or {}).get("product_lines_count")
@@ -103,7 +111,8 @@ def build_load_summary(
             "confirmed_total": confirmed_n,
             "probable": int(probable.get("count") or inv_summary.get("probable") or 0),
             "pending": int(pending.get("count") or inv_summary.get("missing") or 0),
-            "confirmed_amount_clp": int(confirmed.get("amount_clp") or 0),
+            "oc_total_amount_clp": oc_total_clp,
+            "confirmed_amount_clp": confirmed_sales_clp,
             "probable_amount_clp": int(probable.get("amount_clp") or 0),
             "pending_amount_clp": int(pending.get("amount_clp") or 0),
         },

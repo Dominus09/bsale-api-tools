@@ -3,8 +3,10 @@ export const PLANIFICACION_STORAGE_KEY = "distribuidora_planificacion_payload_v1
 export type PlanificacionStoredOrder = {
   document_id: number
   client_id?: number | null
-  lat: number
-  lng: number
+  lat?: number | null
+  lng?: number | null
+  /** false = pendiente de georreferenciar (no entra en ORS). */
+  has_georef?: boolean
   /** Id de ``distribuidora.trucks`` (pre-despacho). */
   truck_id: number
   /** Etiqueta para agrupar rutas (p. ej. ``Hino 3 (5600 kg)``). */

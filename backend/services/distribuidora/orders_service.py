@@ -218,12 +218,25 @@ def _sanitize_day_filter(raw: str | None) -> str | None:
     return s
 
 
-def _day_filter_sql_params(day_filter: str | None) -> tuple[bool, str]:
-    """Para ``CASE WHEN %s THEN TRUE ELSE <obs> LIKE %s END``."""
-    tok = _sanitize_day_filter(day_filter)
-    if not tok:
-        return True, ""
-    return False, f"%{tok}%"
+def _parse_day_filters(raw: str | None) -> list[str]:
+    """Uno o varios días (coma): jueves,viernes → OR en observaciones."""
+    if raw is None or not str(raw).strip():
+        return []
+    seen: list[str] = []
+    for part in str(raw).split(","):
+        tok = _sanitize_day_filter(part)
+        if tok and tok not in seen:
+            seen.append(tok)
+    return seen
+
+
+def _day_obs_match_clause(obs_expr: str, day_filter: str | None) -> tuple[str, list[str]]:
+    """Fragmento SQL + parámetros LIKE para filtro multi-día."""
+    tokens = _parse_day_filters(day_filter)
+    if not tokens:
+        return "TRUE", []
+    parts = [f"{obs_expr} LIKE %s" for _ in tokens]
+    return "(" + " OR ".join(parts) + ")", [f"%{t}%" for t in tokens]
 
 
 def _row_to_dict(cur, row: tuple) -> dict[str, Any]:
@@ -499,7 +512,7 @@ def list_dispatch_prep_by_municipality(
     vía detalles de la misma OC (no se usa ``state``).
     """
     d0, d1 = _normalize_date_range(emission_date_from, emission_date_to)
-    skip_day, day_like = _day_filter_sql_params(day_filter)
+    day_clause, day_params = _day_obs_match_clause(_OBS_NORMALIZED_D, day_filter)
     lim = max(1, min(int(limit), 300))
     conn = get_connection()
     try:
@@ -522,12 +535,12 @@ def list_dispatch_prep_by_municipality(
               AND d.emission_date >= %s::date
               AND d.emission_date < (%s::date + interval '1 day')
               AND (%s = FALSE OR {OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL})
-              AND CASE WHEN %s THEN TRUE ELSE {_OBS_NORMALIZED_D} LIKE %s END
+              AND {day_clause}
             GROUP BY 1
             ORDER BY total_ventas DESC NULLS LAST, municipality ASC
             LIMIT %s
             """,
-            (d0, d1, only_not_invoiced, skip_day, day_like, lim),
+            (d0, d1, only_not_invoiced, *day_params, lim),
         )
         rows = [_serialize_row(_row_to_dict(cur, r)) for r in cur.fetchall()]
         cur.close()
@@ -536,24 +549,29 @@ def list_dispatch_prep_by_municipality(
         conn.close()
 
 
-def _planning_rows_ids_sql(*, with_day_obs: bool) -> str:
+def _planning_rows_ids_sql(*, day_tokens: list[str]) -> str:
     """Fase 1: IDs paginados sobre ``documents`` (filtro de fecha primero)."""
+    with_obs = bool(day_tokens)
     obs_join = (
         ""
-        if not with_day_obs
+        if not with_obs
         else """
             INNER JOIN distribuidora.v_oc_attributes_flat obs_a
                 ON obs_a.document_id = d.document_id
         """
     )
-    day_clause = "TRUE" if not with_day_obs else f"{_PLANNING_ROWS_OBS_TEXT} LIKE %s"
+    if with_obs:
+        likes = " OR ".join(f"{_PLANNING_ROWS_OBS_TEXT} LIKE %s" for _ in day_tokens)
+        day_clause = f"({likes})"
+    else:
+        day_clause = "TRUE"
     return f"""
             SELECT d.document_id
             FROM distribuidora.documents d
             {obs_join}
             WHERE {_DISPATCH_PREP_DOC_FILTER}
               AND {_DISPATCH_PREP_NOT_INVOICED_FILTER}
-              AND CASE WHEN %s THEN TRUE ELSE {day_clause} END
+              AND {day_clause}
             ORDER BY d.number DESC NULLS LAST, d.document_id DESC
             LIMIT %s OFFSET %s
             """
@@ -882,16 +900,12 @@ def list_dispatch_prep_observation_texts(
     lim = effective_page_limit(limit, d0, d1)
     off = max(0, int(offset))
     fetch = lim + 1
-    skip_day, day_like = _day_filter_sql_params(day_filter)
-    day_clause = "TRUE" if skip_day else f"{_PLANNING_ROWS_OBS_TEXT} LIKE %s"
+    day_clause, day_params = _day_obs_match_clause(_PLANNING_ROWS_OBS_TEXT, day_filter)
     conn = get_connection()
     try:
         cur = conn.cursor()
         t_sql = time.perf_counter()
-        params: tuple[Any, ...] = (d0, d1, only_not_invoiced, skip_day)
-        if not skip_day:
-            params = (*params, day_like)
-        params = (*params, fetch, off)
+        params: tuple[Any, ...] = (d0, d1, only_not_invoiced, *day_params, fetch, off)
         cur.execute(
             f"""
             SELECT obs_a.observaciones
@@ -902,7 +916,7 @@ def list_dispatch_prep_observation_texts(
               AND obs_a.observaciones IS NOT NULL
               AND BTRIM(obs_a.observaciones) <> ''
               AND {_DISPATCH_PREP_NOT_INVOICED_FILTER}
-              AND CASE WHEN %s THEN TRUE ELSE {day_clause} END
+              AND {day_clause}
             ORDER BY obs_a.observaciones
             LIMIT %s OFFSET %s
             """,
@@ -963,16 +977,20 @@ def list_dispatch_prep_planning_rows(
     timer = PlanningRowsTimer()
     stages = PlanningRowsStageCollector()
     d0, d1 = _normalize_date_range(emission_date_from, emission_date_to)
-    skip_day, day_like = _day_filter_sql_params(day_filter)
+    day_tokens = _parse_day_filters(day_filter)
     lim = effective_page_limit(limit, d0, d1)
     off = max(0, int(offset))
     fetch = lim + 1
-    ids_sql = _planning_rows_ids_sql(with_day_obs=not skip_day)
+    ids_sql = _planning_rows_ids_sql(day_tokens=day_tokens)
     enrich_sql = _planning_rows_enrich_sql()
-    ids_params: tuple[Any, ...] = (d0, d1, only_not_invoiced, skip_day)
-    if not skip_day:
-        ids_params = (*ids_params, day_like)
-    ids_params = (*ids_params, fetch, off)
+    ids_params: tuple[Any, ...] = (
+        d0,
+        d1,
+        only_not_invoiced,
+        *[f"%{t}%" for t in day_tokens],
+        fetch,
+        off,
+    )
     use_monolith = _planning_rows_use_monolith_enrich()
 
     conn = get_connection()

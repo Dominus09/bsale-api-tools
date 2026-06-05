@@ -75,6 +75,7 @@ import {
   normMunicipality,
 } from "@/lib/distribuidora-logistics"
 import {
+  createPlanSessionId,
   writePlanificacionPayload,
   type PlanificacionStoredOrder,
 } from "@/lib/planificacion-despacho-storage"
@@ -142,6 +143,17 @@ function rowHasGeo(r: DistribuidoraDispatchPrepPlanningRow): boolean {
   return Boolean(r.has_georef && r.lat != null && r.lng != null)
 }
 
+function dayFiltersEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false
+  const sa = [...a].sort().join(",")
+  const sb = [...b].sort().join(",")
+  return sa === sb
+}
+
+function dayFiltersParam(filters: string[]): string | undefined {
+  return filters.length ? filters.join(",") : undefined
+}
+
 function isValidTruckId(
   tid: number | null | undefined,
   trucks: DistribuidoraTruck[],
@@ -179,14 +191,14 @@ export default function DistribuidoraOrdersPage() {
   const [draftOnlyNotInvoiced, setDraftOnlyNotInvoiced] = useState(true)
   const [draftEstadoResumen, setDraftEstadoResumen] =
     useState<PurchaseInvoiceStatusFilter>("pending")
-  const [draftDayFilter, setDraftDayFilter] = useState<string | null>(null)
+  const [draftDayFilters, setDraftDayFilters] = useState<string[]>([])
 
   const [appliedDateFrom, setAppliedDateFrom] = useState(todayIso)
   const [appliedDateTo, setAppliedDateTo] = useState(todayIso)
   const [appliedOnlyNotInvoiced, setAppliedOnlyNotInvoiced] = useState(true)
   const [appliedEstadoResumen, setAppliedEstadoResumen] =
     useState<PurchaseInvoiceStatusFilter>("pending")
-  const [appliedDayFilter, setAppliedDayFilter] = useState<string | null>(null)
+  const [appliedDayFilters, setAppliedDayFilters] = useState<string[]>([])
 
   const [observationTexts, setObservationTexts] = useState<string[]>([])
   const [planningRows, setPlanningRows] = useState<DistribuidoraDispatchPrepPlanningRow[]>([])
@@ -270,18 +282,18 @@ export default function DistribuidoraOrdersPage() {
       draftDateTo !== appliedDateTo ||
       draftOnlyNotInvoiced !== appliedOnlyNotInvoiced ||
       draftEstadoResumen !== appliedEstadoResumen ||
-      draftDayFilter !== appliedDayFilter,
+      !dayFiltersEqual(draftDayFilters, appliedDayFilters),
     [
       draftDateFrom,
       draftDateTo,
       draftOnlyNotInvoiced,
       draftEstadoResumen,
-      draftDayFilter,
+      draftDayFilters,
       appliedDateFrom,
       appliedDateTo,
       appliedOnlyNotInvoiced,
       appliedEstadoResumen,
-      appliedDayFilter,
+      appliedDayFilters,
     ],
   )
 
@@ -293,11 +305,11 @@ export default function DistribuidoraOrdersPage() {
       dateFrom: string
       dateTo: string
       onlyNotInvoiced: boolean
-      dayFilter: string | null
+      dayFilters: string[]
     }) => {
       const append = opts.append === true
       const offset = opts.offset ?? 0
-      const dayParam = opts.dayFilter ?? undefined
+      const dayParam = dayFiltersParam(opts.dayFilters)
       const plan = await getDistribuidoraDispatchPrepPlanningRows({
         emission_date_from: opts.dateFrom,
         emission_date_to: opts.dateTo,
@@ -322,9 +334,9 @@ export default function DistribuidoraOrdersPage() {
       dateFrom: string
       dateTo: string
       onlyNotInvoiced: boolean
-      dayFilter: string | null
+      dayFilters: string[]
     }) => {
-      const dayParam = opts.dayFilter ?? undefined
+      const dayParam = dayFiltersParam(opts.dayFilters)
       const obs = await getDistribuidoraDispatchPrepObservaciones({
         emission_date_from: opts.dateFrom,
         emission_date_to: opts.dateTo,
@@ -360,7 +372,7 @@ export default function DistribuidoraOrdersPage() {
     dateFrom: string
     dateTo: string
     onlyNotInvoiced: boolean
-    dayFilter: string | null
+    dayFilters: string[]
     offset?: number
   }
 
@@ -395,7 +407,7 @@ export default function DistribuidoraOrdersPage() {
           dateFrom: appliedDateFrom,
           dateTo: appliedDateTo,
           onlyNotInvoiced: appliedOnlyNotInvoiced,
-          dayFilter: appliedDayFilter,
+          dayFilters: appliedDayFilters,
         }
         if (!append) {
           const { plan, obs } = await fetchPreDespachoBundle(apiOpts)
@@ -423,7 +435,7 @@ export default function DistribuidoraOrdersPage() {
       appliedDateFrom,
       appliedDateTo,
       appliedOnlyNotInvoiced,
-      appliedDayFilter,
+      appliedDayFilters,
       fetchPreDespachoBundle,
       loadPlanningRows,
     ],
@@ -437,19 +449,19 @@ export default function DistribuidoraOrdersPage() {
     const nextFrom = draftDateFrom
     const nextTo = draftDateTo
     const nextOnly = draftOnlyNotInvoiced
-    const nextDay = draftDayFilter
+    const nextDays = [...draftDayFilters]
     const nextEstado = draftEstadoResumen
     const needsApi =
       !hasSearched ||
       nextFrom !== appliedDateFrom ||
       nextTo !== appliedDateTo ||
       nextOnly !== appliedOnlyNotInvoiced ||
-      nextDay !== appliedDayFilter
+      !dayFiltersEqual(nextDays, appliedDayFilters)
 
     setAppliedDateFrom(nextFrom)
     setAppliedDateTo(nextTo)
     setAppliedOnlyNotInvoiced(nextOnly)
-    setAppliedDayFilter(nextDay)
+    setAppliedDayFilters(nextDays)
     applyLocalResumenFilters(nextEstado)
     setHasSearched(true)
 
@@ -473,7 +485,7 @@ export default function DistribuidoraOrdersPage() {
         dateFrom: nextFrom,
         dateTo: nextTo,
         onlyNotInvoiced: nextOnly,
-        dayFilter: nextDay,
+        dayFilters: nextDays,
       }
       const { plan, obs } = await fetchPreDespachoBundle(apiOpts)
       setRangeWarning(plan.warning ?? obs.warning ?? null)
@@ -494,13 +506,13 @@ export default function DistribuidoraOrdersPage() {
     draftDateFrom,
     draftDateTo,
     draftOnlyNotInvoiced,
-    draftDayFilter,
+    draftDayFilters,
     draftEstadoResumen,
     hasSearched,
     appliedDateFrom,
     appliedDateTo,
     appliedOnlyNotInvoiced,
-    appliedDayFilter,
+    appliedDayFilters,
     applyLocalResumenFilters,
     fetchPreDespachoBundle,
     yieldResumenPhase,
@@ -569,7 +581,13 @@ export default function DistribuidoraOrdersPage() {
   const onChipClick = useCallback((tag: string) => {
     const token = weekdayTokenFromTagLabel(tag)
     if (!token) return
-    setDraftDayFilter((prev) => (prev === token ? null : token))
+    setDraftDayFilters((prev) =>
+      prev.includes(token) ? prev.filter((t) => t !== token) : [...prev, token],
+    )
+  }, [])
+
+  const clearDayFilters = useCallback(() => {
+    setDraftDayFilters([])
   }, [])
 
   const resumenRows = useMemo(
@@ -724,18 +742,22 @@ export default function DistribuidoraOrdersPage() {
     })
   }, [sortedPlanningRows, groupByMunicipality])
 
-  const canPassToPlanificacion = useMemo(() => {
-    if (trucks.length === 0) return false
-    let anyInPlan = false
+  const planificacionSelectionStats = useMemo(() => {
+    let routable = 0
+    let sinGeoref = 0
     for (const r of safePlanningRows) {
       const tid = truckIdByDoc[r.document_id]
-      const assigned = tid != null
-      const valid = isValidTruckId(tid, trucks)
-      if (assigned && (!valid || !rowHasGeo(r))) return false
-      if (valid && rowHasGeo(r)) anyInPlan = true
+      if (!isValidTruckId(tid, trucks)) continue
+      if (rowHasGeo(r)) routable += 1
+      else sinGeoref += 1
     }
-    return anyInPlan
+    return { routable, sinGeoref, total: routable + sinGeoref }
   }, [trucks, safePlanningRows, truckIdByDoc])
+
+  const canPassToPlanificacion = useMemo(() => {
+    if (trucks.length === 0) return false
+    return planificacionSelectionStats.total > 0
+  }, [trucks.length, planificacionSelectionStats.total])
 
   const onPassToPlanificacion = useCallback(() => {
     setPlanificacionFeedback(null)
@@ -747,18 +769,19 @@ export default function DistribuidoraOrdersPage() {
     const stored: PlanificacionStoredOrder[] = []
 
     for (const r of safePlanningRows) {
-      if (!rowHasGeo(r)) continue
       const tid = truckIdByDoc[r.document_id]
       const truck =
         tid != null ? trucks.find((t) => t.id === tid) : undefined
       if (!isValidTruckId(tid, trucks) || !truck) continue
+      const geo = rowHasGeo(r)
       const idx = (byTruck[tid] = (byTruck[tid] ?? 0) + 1)
       const camion = distribuidoraTruckCapacityLabel(truck)
       stored.push({
         document_id: r.document_id,
         client_id: r.client_id ?? null,
-        lat: Number(r.lat),
-        lng: Number(r.lng),
+        lat: geo ? Number(r.lat) : null,
+        lng: geo ? Number(r.lng) : null,
+        has_georef: geo,
         truck_id: tid,
         camion,
         oc: r.oc ?? null,
@@ -769,14 +792,13 @@ export default function DistribuidoraOrdersPage() {
     }
 
     if (stored.length === 0) {
-      setPlanificacionFeedback(
-        "Faltan camiones o georreferencias para continuar",
-      )
+      setPlanificacionFeedback("Asigne al menos un camión a una orden para continuar")
       return
     }
 
     writePlanificacionPayload({
       submittedAt: new Date().toISOString(),
+      planSessionId: createPlanSessionId(),
       orders: stored,
     })
     router.push("/distribuidora/planificacion")
@@ -801,20 +823,10 @@ export default function DistribuidoraOrdersPage() {
       truckId: number,
       groupRows: DistribuidoraDispatchPrepPlanningRow[],
     ) => {
-      const geoRows = groupRows.filter(rowHasGeo)
-      const noGeoCount = groupRows.length - geoRows.length
-      if (geoRows.length === 0) {
-        toast({
-          variant: "destructive",
-          title: "Sin pedidos asignables",
-          description:
-            "Ningún pedido del grupo tiene coordenadas; no se asignó camión.",
-        })
-        return
-      }
+      const noGeoCount = groupRows.filter((r) => !rowHasGeo(r)).length
       setTruckIdByDoc((prev) => {
         const next = { ...prev }
-        for (const r of geoRows) {
+        for (const r of groupRows) {
           next[r.document_id] = truckId
         }
         return next
@@ -829,9 +841,9 @@ export default function DistribuidoraOrdersPage() {
       const truckName = truck?.name ?? "Camión"
       toast({
         title: "Camión asignado al grupo",
-        description: `Camión ${truckName} asignado a ${geoRows.length} pedido(s) en ${municipalityLabel}${
+        description: `Camión ${truckName} asignado a ${groupRows.length} pedido(s) en ${municipalityLabel}${
           noGeoCount > 0
-            ? `. ${noGeoCount} sin coordenadas omitidos.`
+            ? `. ${noGeoCount} quedan como pendientes de georreferenciar.`
             : ""
         }`,
       })
@@ -1191,21 +1203,26 @@ export default function DistribuidoraOrdersPage() {
             Observaciones
           </h2>
           <p className="text-xs leading-relaxed text-muted-foreground">
-            Elija un chip y pulse Buscar para filtrar por día en observaciones y órdenes.
-            {draftDayFilter ? (
+            Seleccione uno o más chips (OR) y pulse Buscar para filtrar observaciones y órdenes.
+            {draftDayFilters.length > 0 ? (
               <span className="mt-1 flex flex-wrap items-center gap-2 font-medium text-foreground">
-                Filtro (pendiente): <code className="text-xs">{draftDayFilter}</code>
+                Pendiente:{" "}
+                {draftDayFilters.map((d) => (
+                  <code key={d} className="text-xs">
+                    {d}
+                  </code>
+                ))}
                 <button
                   type="button"
                   className="text-xs font-normal text-primary underline-offset-2 hover:underline"
-                  onClick={() => setDraftDayFilter(null)}
+                  onClick={clearDayFilters}
                 >
-                  Quitar filtro
+                  Limpiar filtros
                 </button>
               </span>
-            ) : appliedDayFilter ? (
+            ) : appliedDayFilters.length > 0 ? (
               <span className="mt-1 block text-xs text-muted-foreground">
-                Aplicado: <code>{appliedDayFilter}</code>
+                Aplicado: {appliedDayFilters.join(" OR ")}
               </span>
             ) : null}
           </p>
@@ -1217,7 +1234,7 @@ export default function DistribuidoraOrdersPage() {
             ) : (
               tagStats.map(({ tag, count }) => {
                 const token = weekdayTokenFromTagLabel(tag)
-                const active = token != null && draftDayFilter === token
+                const active = token != null && draftDayFilters.includes(token)
                 const clickable = token != null
                 return (
                   <button
@@ -1277,7 +1294,14 @@ export default function DistribuidoraOrdersPage() {
           </div>
           {!canPassToPlanificacion && safePlanningRows.length > 0 ? (
             <p className="text-xs text-amber-700 dark:text-amber-500">
-              Faltan camiones o georreferencias para continuar
+              Asigne camión a al menos una orden para pasar a planificación
+            </p>
+          ) : planificacionSelectionStats.total > 0 ? (
+            <p className="text-xs text-muted-foreground">
+              Listos: {planificacionSelectionStats.routable} ruteables
+              {planificacionSelectionStats.sinGeoref > 0
+                ? ` · ${planificacionSelectionStats.sinGeoref} sin georreferencia (pendientes en plan)`
+                : ""}
             </p>
           ) : null}
           {planificacionFeedback ? (
