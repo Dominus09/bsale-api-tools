@@ -21,6 +21,8 @@ _PRICE_LIST_SLUG_TO_ID: dict[str, int] = {
     "melinka": 16,
 }
 
+_ORDERS_COLUMNS_CACHE: frozenset[str] | None = None
+
 
 class OrderClient(BaseModel):
     id: int
@@ -104,24 +106,42 @@ def _resolve_client(body: CreateOrderBody) -> tuple[int | None, str | None, str 
     return cid, name, rut
 
 
+def _orders_table_columns(cur, *, refresh: bool = False) -> frozenset[str]:
+    """Columnas reales de ``app.orders`` (sin asumir migraciones pendientes)."""
+    global _ORDERS_COLUMNS_CACHE
+    if _ORDERS_COLUMNS_CACHE is not None and not refresh:
+        return _ORDERS_COLUMNS_CACHE
+    cur.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'app'
+          AND table_name = 'orders'
+        """
+    )
+    _ORDERS_COLUMNS_CACHE = frozenset(r[0] for r in cur.fetchall())
+    return _ORDERS_COLUMNS_CACHE
+
+
+def _pick_order_columns(
+    available: frozenset[str],
+    names: list[str],
+) -> list[str]:
+    return [c for c in names if c in available]
+
+
+def _row_to_dict(cur, row) -> dict:
+    colnames = [d[0] for d in cur.description]
+    return dict(zip(colnames, row))
+
+
 def _price_list_id_from_slug(slug: str | None) -> int | None:
     if not slug or not str(slug).strip():
         return None
     return _PRICE_LIST_SLUG_TO_ID.get(str(slug).strip().lower())
 
 
-def _effective_price_list_id(
-    slug: str | None,
-    stored_id: int | None,
-) -> int | None:
-    if stored_id is not None:
-        return int(stored_id)
-    return _price_list_id_from_slug(slug)
-
-
-def _resolve_price_list_commercial(
-    body: CreateOrderBody,
-) -> tuple[str | None, int | None]:
+def _resolve_price_list_commercial(body: CreateOrderBody) -> str:
     slug = (body.price_list or "").strip().lower() or None
     if not slug:
         raise HTTPException(status_code=400, detail="price_list es obligatorio")
@@ -130,44 +150,38 @@ def _resolve_price_list_commercial(
             status_code=400,
             detail="price_list debe ser factura, comoditi o melinka",
         )
-
     derived_id = _PRICE_LIST_SLUG_TO_ID[slug]
     if body.price_list_id is not None and int(body.price_list_id) != derived_id:
         raise HTTPException(
             status_code=400,
             detail="price_list_id no coincide con price_list",
         )
-    return slug, derived_id
+    return slug
 
 
-def _commercial_fields_from_row(
-    *,
-    price_list: str | None,
-    price_list_id_raw,
-    document_type_raw,
-    payment_method_raw,
-    seller_name_raw,
-) -> dict[str, str | int | None]:
-    pl = (str(price_list).strip() if price_list is not None else None) or None
-    plid = _effective_price_list_id(
-        pl,
-        int(price_list_id_raw) if price_list_id_raw is not None else None,
-    )
-    doc = (
-        str(document_type_raw).strip() if document_type_raw is not None else None
-    ) or None
-    pay = (
-        str(payment_method_raw).strip() if payment_method_raw is not None else None
-    ) or None
-    seller = (
-        str(seller_name_raw).strip() if seller_name_raw is not None else None
-    ) or None
+def _commercial_fields_from_row(row: dict) -> dict[str, str | int | None]:
+    pl = (str(row.get("price_list") or "").strip() or None)
+    doc = (str(row.get("document_type") or "").strip() or None)
+    pay = (str(row.get("payment_method") or "").strip() or None)
+    seller = (str(row.get("seller_name") or "").strip() or None)
     return {
         "price_list": pl,
-        "price_list_id": plid,
-        "document_type": doc,
-        "payment_method": pay,
-        "seller_name": seller,
+        # Nunca se lee de BD: la columna puede no existir; se deriva del slug.
+        "price_list_id": _price_list_id_from_slug(pl),
+        "document_type": doc or None,
+        "payment_method": pay or None,
+        "seller_name": seller or None,
+    }
+
+
+def _seller_fields_from_row(row: dict) -> dict[str, int | str | None]:
+    sid = row.get("seller_id")
+    sname = row.get("seller_name")
+    city = row.get("client_city")
+    return {
+        "seller_id": int(sid) if sid is not None else None,
+        "seller_name": (str(sname).strip() if sname is not None else None) or None,
+        "client_city": (str(city).strip() if city is not None else None) or None,
     }
 
 
@@ -232,22 +246,31 @@ def _lookup_client_seller_and_city(
     )
 
 
-def _seller_fields_from_row(
-    seller_id_raw,
-    seller_name_raw,
-    client_city_raw,
-) -> dict[str, int | str | None]:
-    return {
-        "seller_id": int(seller_id_raw) if seller_id_raw is not None else None,
-        "seller_name": (
-            str(seller_name_raw).strip() if seller_name_raw is not None else None
-        )
-        or None,
-        "client_city": (
-            str(client_city_raw).strip() if client_city_raw is not None else None
-        )
-        or None,
-    }
+def _insert_order(
+    cur,
+    *,
+    available_cols: frozenset[str],
+    values: dict[str, object],
+) -> int:
+    """INSERT solo con columnas que existen en ``app.orders``."""
+    skip = frozenset({"price_list_id", "price_list_name"})
+    cols = [k for k in values if k in available_cols and k not in skip]
+    if not cols:
+        raise HTTPException(status_code=500, detail="Sin columnas válidas para insertar pedido")
+    placeholders = ", ".join("%s" for _ in cols)
+    col_sql = ", ".join(cols)
+    cur.execute(
+        f"""
+        INSERT INTO app.orders ({col_sql})
+        VALUES ({placeholders})
+        RETURNING id
+        """,
+        tuple(values[c] for c in cols),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=500, detail="No se pudo crear el pedido")
+    return int(row[0])
 
 
 @router.get("/orders")
@@ -268,68 +291,68 @@ def get_orders(
 
     offset = (page - 1) * limit
 
-    query = """
-        SELECT
-            id,
-            client_name,
-            client_rut,
-            payment_method,
-            price_list,
-            price_list_id,
-            document_type,
-            delivery_date,
-            total,
-            status,
-            seller_id,
-            seller_name,
-            client_city,
-            created_at
-        FROM app.orders
-    """
-    params: list = []
-
-    if status_filter is not None:
-        query += " WHERE status = %s"
-        params.append(status_filter)
-
-    query += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
-    params.extend([limit, offset])
-
     conn = get_connection()
     try:
         cur = conn.cursor()
+        available = _orders_table_columns(cur)
+        select_cols = _pick_order_columns(
+            available,
+            [
+                "id",
+                "client_name",
+                "client_rut",
+                "payment_method",
+                "price_list",
+                "document_type",
+                "delivery_date",
+                "total",
+                "status",
+                "seller_id",
+                "seller_name",
+                "client_city",
+                "created_at",
+            ],
+        )
+        if not select_cols:
+            raise HTTPException(status_code=500, detail="Tabla app.orders no disponible")
+
+        query = f"""
+            SELECT {", ".join(select_cols)}
+            FROM app.orders
+        """
+        params: list = []
+
+        if status_filter is not None:
+            query += " WHERE status = %s"
+            params.append(status_filter)
+
+        query += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
+        params.extend([limit, offset])
+
         cur.execute(query, tuple(params))
-        rows = cur.fetchall()
+        rows = [_row_to_dict(cur, r) for r in cur.fetchall()]
         cur.close()
     finally:
         conn.close()
 
     out = []
-    for r in rows:
-        total_raw = r[8]
+    for row in rows:
+        total_raw = row.get("total")
         total_f = float(total_raw) if total_raw is not None else 0.0
-        created = r[13]
+        created = row.get("created_at")
         created_str = created.isoformat() if created is not None else ""
-        dd = r[7]
+        dd = row.get("delivery_date")
         delivery_str = dd.isoformat() if dd is not None else None
-        seller_extra = _seller_fields_from_row(r[10], r[11], r[12])
-        commercial = _commercial_fields_from_row(
-            price_list=r[4],
-            price_list_id_raw=r[5],
-            document_type_raw=r[6],
-            payment_method_raw=r[3],
-            seller_name_raw=r[11],
-        )
         out.append(
             {
-                "id": r[0],
-                "client_name": r[1],
-                "rut": r[2],
+                "id": row.get("id"),
+                "client_name": row.get("client_name"),
+                "rut": row.get("client_rut"),
                 "delivery_date": delivery_str,
                 "total": total_f,
-                "status": r[9],
-                **commercial,
-                **seller_extra,
+                "status": row.get("status"),
+                **_commercial_fields_from_row(row),
+                **_seller_fields_from_row(row),
                 "created_at": created_str,
             }
         )
@@ -341,34 +364,41 @@ def get_order(order_id: int):
     conn = get_connection()
     try:
         cur = conn.cursor()
+        available = _orders_table_columns(cur)
+        select_cols = _pick_order_columns(
+            available,
+            [
+                "id",
+                "client_name",
+                "client_rut",
+                "payment_method",
+                "price_list",
+                "document_type",
+                "delivery_date",
+                "notes",
+                "contact_name",
+                "contact_phone",
+                "total",
+                "status",
+                "seller_id",
+                "seller_name",
+                "client_city",
+                "created_at",
+            ],
+        )
+        col_sql = ", ".join(select_cols)
         cur.execute(
-            """
-            SELECT
-                id,
-                client_name,
-                client_rut,
-                payment_method,
-                price_list,
-                price_list_id,
-                document_type,
-                delivery_date,
-                notes,
-                contact_name,
-                contact_phone,
-                total,
-                status,
-                seller_id,
-                seller_name,
-                client_city,
-                created_at
+            f"""
+            SELECT {col_sql}
             FROM app.orders
             WHERE id = %s
             """,
             (order_id,),
         )
-        row = cur.fetchone()
-        if not row:
+        raw = cur.fetchone()
+        if not raw:
             raise HTTPException(status_code=404, detail="Pedido no encontrado")
+        row = _row_to_dict(cur, raw)
 
         cur.execute(
             """
@@ -384,21 +414,13 @@ def get_order(order_id: int):
     finally:
         conn.close()
 
-    total_raw = row[11]
+    total_raw = row.get("total")
     total_f = float(total_raw) if total_raw is not None else 0.0
-    created = row[16]
+    created = row.get("created_at")
     created_str = created.isoformat() if created is not None else ""
-    dd = row[7]
+    dd = row.get("delivery_date")
     delivery_str = dd.isoformat() if dd is not None else None
-    client_rut_val = row[2]
-    seller_extra = _seller_fields_from_row(row[13], row[14], row[15])
-    commercial = _commercial_fields_from_row(
-        price_list=row[4],
-        price_list_id_raw=row[5],
-        document_type_raw=row[6],
-        payment_method_raw=row[3],
-        seller_name_raw=row[14],
-    )
+    client_rut_val = row.get("client_rut")
 
     items = []
     for ir in item_rows:
@@ -414,18 +436,18 @@ def get_order(order_id: int):
         )
 
     return {
-        "id": row[0],
-        "client_name": row[1],
+        "id": row.get("id"),
+        "client_name": row.get("client_name"),
         "client_rut": client_rut_val,
         "rut": client_rut_val,
         "delivery_date": delivery_str,
-        "notes": row[8],
-        "contact_name": row[9],
-        "contact_phone": row[10],
+        "notes": row.get("notes"),
+        "contact_name": row.get("contact_name"),
+        "contact_phone": row.get("contact_phone"),
         "total": total_f,
-        "status": row[12],
-        **commercial,
-        **seller_extra,
+        "status": row.get("status"),
+        **_commercial_fields_from_row(row),
+        **_seller_fields_from_row(row),
         "created_at": created_str,
         "items": items,
     }
@@ -484,7 +506,7 @@ def create_order(body: CreateOrderBody):
             detail="document_type no puede ser una lista de precios",
         )
 
-    price_list_slug, price_list_id = _resolve_price_list_commercial(body)
+    price_list_slug = _resolve_price_list_commercial(body)
 
     delivery = _delivery_date_value(body.delivery_date)
 
@@ -493,58 +515,32 @@ def create_order(body: CreateOrderBody):
     conn = get_connection()
     cur = conn.cursor()
     try:
+        available = _orders_table_columns(cur)
         seller_id, seller_name, client_city = _lookup_client_seller_and_city(
             cur,
             client_id=client_id,
             client_rut=client_rut,
         )
 
-        cur.execute(
-            """
-            INSERT INTO app.orders (
-                client_id,
-                client_name,
-                client_rut,
-                price_list,
-                price_list_id,
-                payment_method,
-                document_type,
-                contact_name,
-                contact_phone,
-                delivery_date,
-                notes,
-                total,
-                status,
-                seller_id,
-                seller_name,
-                client_city
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id
-            """,
-            (
-                client_id,
-                client_name,
-                client_rut,
-                price_list_slug,
-                price_list_id,
-                pay,
-                doc,
-                (body.contact_name or "").strip() or None,
-                phone,
-                delivery,
-                (body.notes or "").strip() or None,
-                Decimal(str(body.total)),
-                "pendiente",
-                seller_id,
-                seller_name,
-                client_city,
-            ),
-        )
-        row = cur.fetchone()
-        if not row:
-            raise HTTPException(status_code=500, detail="No se pudo crear el pedido")
-        order_id = int(row[0])
+        insert_values: dict[str, object] = {
+            "client_id": client_id,
+            "client_name": client_name,
+            "client_rut": client_rut,
+            "price_list": price_list_slug,
+            "payment_method": pay,
+            "document_type": doc,
+            "contact_name": (body.contact_name or "").strip() or None,
+            "contact_phone": phone,
+            "delivery_date": delivery,
+            "notes": (body.notes or "").strip() or None,
+            "total": Decimal(str(body.total)),
+            "status": "pendiente",
+            "seller_id": seller_id,
+            "seller_name": seller_name,
+            "client_city": client_city,
+        }
+
+        order_id = _insert_order(cur, available_cols=available, values=insert_values)
 
         for it in body.items:
             qty = int(it.quantity)
