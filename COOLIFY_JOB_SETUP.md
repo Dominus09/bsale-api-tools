@@ -27,8 +27,9 @@ Opcionales (comportamiento del sync):
 
 | Variable | Default | Descripción |
 |----------|---------|-------------|
-| `DISTRIBUIDORA_RELATED_LOOKBACK_DAYS` | `7` | Días hacia atrás para elegir OC por `emission_date` |
-| `DISTRIBUIDORA_RELATED_DETAIL_LIMIT` | `250` | Máximo de **documentos** OC a considerar por corrida (nombre histórico de la variable) |
+| `DISTRIBUIDORA_RELATED_LOOKBACK_DAYS` | `10` | Días hacia atrás para elegir OC por `emission_date` |
+| `DISTRIBUIDORA_RELATED_DETAIL_LIMIT` | `250` | Cupo bucket **refresh** (OC recientes por `document_id`) |
+| `DISTRIBUIDORA_RELATED_PENDING_LIMIT` | `400` | Cupo bucket **pendientes** (OC sin factura/boleta confirmada en `document_related`) |
 | `DISTRIBUIDORA_RELATED_API_DELAY_SEC` | `0.12` | Pausa entre llamadas API para no saturar Bsale |
 | `LOG_LEVEL` | `INFO` | Nivel de logging (`DEBUG`, `INFO`, …) |
 | `DISTRIBUIDORA_RELATED_EXIT_CODE_ON_LOCK` | `0` | Si otra instancia tiene el advisory lock de related: `0` = éxito “sin trabajo”; `1` = fallo controlado para alertas |
@@ -43,7 +44,7 @@ Orientativo: **cada 15–60 minutos** en horario operativo, o **1–4 veces al d
 ## Timeout recomendado
 
 - Mínimo razonable: **15 minutos**.
-- Con `DISTRIBUIDORA_RELATED_DETAIL_LIMIT=250`, lookback 7 días y delay API por defecto, suele bastar **30–45 minutos** como techo cómodo.
+- Con `DISTRIBUIDORA_RELATED_DETAIL_LIMIT=250`, `DISTRIBUIDORA_RELATED_PENDING_LIMIT=400`, lookback 10 días y delay API por defecto, suele bastar **30–45 minutos** como techo cómodo.
 - Si suben límite o lookback, aumentar timeout proporcionalmente.
 
 ## Recursos recomendados

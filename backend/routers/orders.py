@@ -4,11 +4,22 @@ from decimal import Decimal
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 
+from backend.client_rut import clean_rut_for_lookup
 from backend.db import get_connection
 
 router = APIRouter(tags=["Pedidos"])
 
+# Empresa catálogo / distribuidora web (misma que sync_clients y rutero).
+_CLIENT_COMPANY_ID = 3
+
 _ALLOWED_ORDER_STATUSES = frozenset({"pendiente", "generado", "anulado", "revisar"})
+
+# Misma correspondencia que GET /api/catalog (slug → lista Bsale).
+_PRICE_LIST_SLUG_TO_ID: dict[str, int] = {
+    "factura": 13,
+    "comoditi": 14,
+    "melinka": 16,
+}
 
 
 class OrderClient(BaseModel):
@@ -35,6 +46,7 @@ class CreateOrderBody(BaseModel):
     items: list[OrderItemIn]
     total: float
     price_list: str
+    price_list_id: int | None = None
     payment_method: str
     document_type: str | None = None
     contact_name: str
@@ -92,6 +104,152 @@ def _resolve_client(body: CreateOrderBody) -> tuple[int | None, str | None, str 
     return cid, name, rut
 
 
+def _price_list_id_from_slug(slug: str | None) -> int | None:
+    if not slug or not str(slug).strip():
+        return None
+    return _PRICE_LIST_SLUG_TO_ID.get(str(slug).strip().lower())
+
+
+def _effective_price_list_id(
+    slug: str | None,
+    stored_id: int | None,
+) -> int | None:
+    if stored_id is not None:
+        return int(stored_id)
+    return _price_list_id_from_slug(slug)
+
+
+def _resolve_price_list_commercial(
+    body: CreateOrderBody,
+) -> tuple[str | None, int | None]:
+    slug = (body.price_list or "").strip().lower() or None
+    if not slug:
+        raise HTTPException(status_code=400, detail="price_list es obligatorio")
+    if slug not in _PRICE_LIST_SLUG_TO_ID:
+        raise HTTPException(
+            status_code=400,
+            detail="price_list debe ser factura, comoditi o melinka",
+        )
+
+    derived_id = _PRICE_LIST_SLUG_TO_ID[slug]
+    if body.price_list_id is not None and int(body.price_list_id) != derived_id:
+        raise HTTPException(
+            status_code=400,
+            detail="price_list_id no coincide con price_list",
+        )
+    return slug, derived_id
+
+
+def _commercial_fields_from_row(
+    *,
+    price_list: str | None,
+    price_list_id_raw,
+    document_type_raw,
+    payment_method_raw,
+    seller_name_raw,
+) -> dict[str, str | int | None]:
+    pl = (str(price_list).strip() if price_list is not None else None) or None
+    plid = _effective_price_list_id(
+        pl,
+        int(price_list_id_raw) if price_list_id_raw is not None else None,
+    )
+    doc = (
+        str(document_type_raw).strip() if document_type_raw is not None else None
+    ) or None
+    pay = (
+        str(payment_method_raw).strip() if payment_method_raw is not None else None
+    ) or None
+    seller = (
+        str(seller_name_raw).strip() if seller_name_raw is not None else None
+    ) or None
+    return {
+        "price_list": pl,
+        "price_list_id": plid,
+        "document_type": doc,
+        "payment_method": pay,
+        "seller_name": seller,
+    }
+
+
+def _lookup_client_seller_and_city(
+    cur,
+    *,
+    client_id: int | None,
+    client_rut: str | None,
+) -> tuple[int | None, str | None, str | None]:
+    """
+    Vendedor asignado al cliente desde bsale.clients.vendedor (atributo Bsale «Vendedor»)
+    enriquecido con bsale.vendedores_app (nombre legible e id interno).
+    """
+    rut_clean: str | None = None
+    if client_rut and str(client_rut).strip():
+        rut_clean = clean_rut_for_lookup(str(client_rut).strip())
+
+    if client_id is None and not rut_clean:
+        return None, None, None
+
+    cur.execute(
+        """
+        SELECT
+            NULLIF(BTRIM(c.city), '') AS client_city,
+            va.id AS seller_id,
+            COALESCE(
+                NULLIF(BTRIM(va.nombre), ''),
+                NULLIF(BTRIM(c.vendedor::text), '')
+            ) AS seller_name
+        FROM bsale.clients c
+        LEFT JOIN bsale.vendedores_app va
+            ON LOWER(TRIM(COALESCE(va.codigo, '')))
+             = LOWER(TRIM(COALESCE(c.vendedor::text, '')))
+           AND va.activo IS TRUE
+        WHERE c.company_id = %s
+          AND (
+              (%s IS NOT NULL AND c.bsale_id = %s)
+              OR (%s IS NOT NULL AND c.rut_clean = %s)
+          )
+        ORDER BY
+            CASE WHEN %s IS NOT NULL AND c.bsale_id = %s THEN 0 ELSE 1 END,
+            c.bsale_id
+        LIMIT 1
+        """,
+        (
+            _CLIENT_COMPANY_ID,
+            client_id,
+            client_id,
+            rut_clean,
+            rut_clean,
+            client_id,
+            client_id,
+        ),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None, None, None
+    city, seller_id, seller_name = row
+    sid = int(seller_id) if seller_id is not None else None
+    return sid, (str(seller_name).strip() if seller_name else None), (
+        str(city).strip() if city else None
+    )
+
+
+def _seller_fields_from_row(
+    seller_id_raw,
+    seller_name_raw,
+    client_city_raw,
+) -> dict[str, int | str | None]:
+    return {
+        "seller_id": int(seller_id_raw) if seller_id_raw is not None else None,
+        "seller_name": (
+            str(seller_name_raw).strip() if seller_name_raw is not None else None
+        )
+        or None,
+        "client_city": (
+            str(client_city_raw).strip() if client_city_raw is not None else None
+        )
+        or None,
+    }
+
+
 @router.get("/orders")
 def get_orders(
     page: int = Query(1, ge=1),
@@ -117,9 +275,14 @@ def get_orders(
             client_rut,
             payment_method,
             price_list,
+            price_list_id,
+            document_type,
             delivery_date,
             total,
             status,
+            seller_id,
+            seller_name,
+            client_city,
             created_at
         FROM app.orders
     """
@@ -143,22 +306,30 @@ def get_orders(
 
     out = []
     for r in rows:
-        total_raw = r[6]
+        total_raw = r[8]
         total_f = float(total_raw) if total_raw is not None else 0.0
-        created = r[8]
+        created = r[13]
         created_str = created.isoformat() if created is not None else ""
-        dd = r[5]
+        dd = r[7]
         delivery_str = dd.isoformat() if dd is not None else None
+        seller_extra = _seller_fields_from_row(r[10], r[11], r[12])
+        commercial = _commercial_fields_from_row(
+            price_list=r[4],
+            price_list_id_raw=r[5],
+            document_type_raw=r[6],
+            payment_method_raw=r[3],
+            seller_name_raw=r[11],
+        )
         out.append(
             {
                 "id": r[0],
                 "client_name": r[1],
                 "rut": r[2],
-                "payment_method": r[3],
-                "price_list": r[4],
                 "delivery_date": delivery_str,
                 "total": total_f,
-                "status": r[7],
+                "status": r[9],
+                **commercial,
+                **seller_extra,
                 "created_at": created_str,
             }
         )
@@ -178,12 +349,17 @@ def get_order(order_id: int):
                 client_rut,
                 payment_method,
                 price_list,
+                price_list_id,
+                document_type,
                 delivery_date,
                 notes,
                 contact_name,
                 contact_phone,
                 total,
                 status,
+                seller_id,
+                seller_name,
+                client_city,
                 created_at
             FROM app.orders
             WHERE id = %s
@@ -208,13 +384,21 @@ def get_order(order_id: int):
     finally:
         conn.close()
 
-    total_raw = row[9]
+    total_raw = row[11]
     total_f = float(total_raw) if total_raw is not None else 0.0
-    created = row[11]
+    created = row[16]
     created_str = created.isoformat() if created is not None else ""
-    dd = row[5]
+    dd = row[7]
     delivery_str = dd.isoformat() if dd is not None else None
     client_rut_val = row[2]
+    seller_extra = _seller_fields_from_row(row[13], row[14], row[15])
+    commercial = _commercial_fields_from_row(
+        price_list=row[4],
+        price_list_id_raw=row[5],
+        document_type_raw=row[6],
+        payment_method_raw=row[3],
+        seller_name_raw=row[14],
+    )
 
     items = []
     for ir in item_rows:
@@ -234,14 +418,14 @@ def get_order(order_id: int):
         "client_name": row[1],
         "client_rut": client_rut_val,
         "rut": client_rut_val,
-        "payment_method": row[3],
-        "price_list": row[4],
         "delivery_date": delivery_str,
-        "notes": row[6],
-        "contact_name": row[7],
-        "contact_phone": row[8],
+        "notes": row[8],
+        "contact_name": row[9],
+        "contact_phone": row[10],
         "total": total_f,
-        "status": row[10],
+        "status": row[12],
+        **commercial,
+        **seller_extra,
         "created_at": created_str,
         "items": items,
     }
@@ -292,6 +476,15 @@ def create_order(body: CreateOrderBody):
         raise HTTPException(status_code=400, detail="payment_method es obligatorio")
 
     doc = (body.document_type or "").strip() or None
+    if not doc:
+        raise HTTPException(status_code=400, detail="document_type es obligatorio")
+    if doc.lower() in _PRICE_LIST_SLUG_TO_ID:
+        raise HTTPException(
+            status_code=400,
+            detail="document_type no puede ser una lista de precios",
+        )
+
+    price_list_slug, price_list_id = _resolve_price_list_commercial(body)
 
     delivery = _delivery_date_value(body.delivery_date)
 
@@ -300,6 +493,12 @@ def create_order(body: CreateOrderBody):
     conn = get_connection()
     cur = conn.cursor()
     try:
+        seller_id, seller_name, client_city = _lookup_client_seller_and_city(
+            cur,
+            client_id=client_id,
+            client_rut=client_rut,
+        )
+
         cur.execute(
             """
             INSERT INTO app.orders (
@@ -307,6 +506,7 @@ def create_order(body: CreateOrderBody):
                 client_name,
                 client_rut,
                 price_list,
+                price_list_id,
                 payment_method,
                 document_type,
                 contact_name,
@@ -314,16 +514,20 @@ def create_order(body: CreateOrderBody):
                 delivery_date,
                 notes,
                 total,
-                status
+                status,
+                seller_id,
+                seller_name,
+                client_city
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
                 client_id,
                 client_name,
                 client_rut,
-                (body.price_list or "").strip() or None,
+                price_list_slug,
+                price_list_id,
                 pay,
                 doc,
                 (body.contact_name or "").strip() or None,
@@ -332,6 +536,9 @@ def create_order(body: CreateOrderBody):
                 (body.notes or "").strip() or None,
                 Decimal(str(body.total)),
                 "pendiente",
+                seller_id,
+                seller_name,
+                client_city,
             ),
         )
         row = cur.fetchone()

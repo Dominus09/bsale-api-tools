@@ -11,7 +11,8 @@ Ejecución manual (raíz del repo, ``PG_*`` y token Bsale en entorno o ``.env``)
     python -m backend.jobs.sync_distribuidora_related
 
 Variables útiles: ``DISTRIBUIDORA_RELATED_LOOKBACK_DAYS``, ``DISTRIBUIDORA_RELATED_DETAIL_LIMIT``,
-``DISTRIBUIDORA_RELATED_API_DELAY_SEC``, ``LOG_LEVEL``. Ver ``COOLIFY_JOB_SETUP.md`` en la raíz del repositorio.
+``DISTRIBUIDORA_RELATED_PENDING_LIMIT``, ``DISTRIBUIDORA_RELATED_API_DELAY_SEC``, ``LOG_LEVEL``.
+Ver ``COOLIFY_JOB_SETUP.md`` en la raíz del repositorio.
 """
 
 from __future__ import annotations
@@ -60,6 +61,18 @@ def _print_job_summary(
     print(f"  lookback_days:              {lookback_days}", flush=True)
     print(f"  ventana_emision_aprox_utc:  emission_date >= {window_start.isoformat()}", flush=True)
     print(f"  limite_documentos_oc:      {limit_documents}", flush=True)
+    print(
+        f"  pending_sin_factura:       {stats.get('documents_pending_without_related', 0)}",
+        flush=True,
+    )
+    print(
+        f"  refresh_recientes:         {stats.get('documents_recent_refresh', 0)}",
+        flush=True,
+    )
+    print(
+        f"  total_unicos_procesados:   {stats.get('documents_merged_unique', stats.get('documents_considered', 0))}",
+        flush=True,
+    )
     print(f"  documentos_considerados:   {stats.get('documents_considered', 0)}", flush=True)
     print(f"  detalles_procesados:       {stats.get('relateddetail_details_processed', 0)}", flush=True)
     print(f"  items_related_api:         {stats.get('relateddetail_items_total', 0)}", flush=True)
@@ -78,13 +91,14 @@ def main() -> int:
     load_dotenv_if_available()
     _configure_logging()
 
-    lookback = int(os.getenv("DISTRIBUIDORA_RELATED_LOOKBACK_DAYS", "7"))
+    lookback = int(os.getenv("DISTRIBUIDORA_RELATED_LOOKBACK_DAYS", "10"))
     limit = int(os.getenv("DISTRIBUIDORA_RELATED_DETAIL_LIMIT", "250"))
+    pending_limit = int(os.getenv("DISTRIBUIDORA_RELATED_PENDING_LIMIT", "400"))
 
     t_job = datetime.now(timezone.utc)
     print(
         f"[sync_distribuidora_related] INICIO utc={t_job.isoformat()} "
-        f"lookback_days={lookback} limit_documentos_oc={limit}",
+        f"lookback_days={lookback} limit_refresh_oc={limit} pending_limit_oc={pending_limit}",
         flush=True,
     )
 

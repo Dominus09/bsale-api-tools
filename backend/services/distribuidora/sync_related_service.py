@@ -58,6 +58,24 @@ DOC_TYPE_OC = 33
 RELATED_DOCUMENT_TYPES_ALLOWED = frozenset({1, 6, 9})
 RELATED_DETAIL_PAGE_LIMIT = 50
 DETAILS_PAGE_LIMIT = 50
+DEFAULT_RELATED_LOOKBACK_DAYS = 10
+DEFAULT_RELATED_DETAIL_LIMIT = 250
+DEFAULT_RELATED_PENDING_LIMIT = 400
+
+# OC sin boleta/factura confirmada vía ``document_related`` (tipos 1/6).
+_OC_WITHOUT_CONFIRMED_INVOICE_SQL = """
+NOT EXISTS (
+    SELECT 1
+    FROM distribuidora.document_details dd
+    INNER JOIN distribuidora.document_related dr ON dr.detail_id = dd.detail_id
+    INNER JOIN distribuidora.documents inv
+        ON inv.document_id = dr.related_document_id
+       AND inv.document_type_id IN (1, 6)
+       AND inv.company_id = d.company_id
+       AND inv.office_id = d.office_id
+    WHERE dd.document_id = d.document_id
+)
+"""
 
 
 def _related_max_type33_depth() -> int:
@@ -162,12 +180,49 @@ def _with_deadlock_retry(conn: PgConnection, label: str, fn: Callable[[], T]) ->
     raise RuntimeError("unreachable")
 
 
-def _fetch_oc_document_ids(
+def _related_pending_limit() -> int:
+    try:
+        v = int(os.getenv("DISTRIBUIDORA_RELATED_PENDING_LIMIT", str(DEFAULT_RELATED_PENDING_LIMIT)))
+    except ValueError:
+        v = DEFAULT_RELATED_PENDING_LIMIT
+    return max(1, v)
+
+
+def _fetch_oc_document_ids_for_incremental(
     cur,
     *,
     lookback_days: int,
     limit_documents: int,
-) -> list[int]:
+) -> tuple[list[int], dict[str, int]]:
+    """
+    Selección en dos buckets para el sync incremental:
+
+    1. **Pendientes**: OC en ventana sin factura/boleta confirmada en ``document_related``.
+       Orden por emisión ascendente (las más antiguas primero: más tiempo para que Bsale indexe).
+    2. **Refresh**: OC recientes por ``document_id`` para revalidar relaciones ya conocidas.
+
+    La unión prioriza pendientes y evita duplicados.
+    """
+    lb = max(1, lookback_days)
+    pending_lim = _related_pending_limit()
+    recent_lim = max(1, limit_documents)
+
+    cur.execute(
+        f"""
+        SELECT DISTINCT d.document_id
+        FROM distribuidora.documents d
+        WHERE d.document_type_id = %s
+          AND d.company_id = %s
+          AND d.office_id = %s
+          AND d.emission_date >= (NOW() AT TIME ZONE 'UTC' - (%s * interval '1 day'))
+          AND {_OC_WITHOUT_CONFIRMED_INVOICE_SQL}
+        ORDER BY d.emission_date ASC NULLS LAST, d.document_id ASC
+        LIMIT %s
+        """,
+        (DOC_TYPE_OC, COMPANY_ID, OFFICE_ID, lb, pending_lim),
+    )
+    pending_ids = [int(r[0]) for r in cur.fetchall()]
+
     cur.execute(
         """
         SELECT DISTINCT d.document_id
@@ -179,9 +234,27 @@ def _fetch_oc_document_ids(
         ORDER BY d.document_id DESC
         LIMIT %s
         """,
-        (DOC_TYPE_OC, COMPANY_ID, OFFICE_ID, max(1, lookback_days), limit_documents),
+        (DOC_TYPE_OC, COMPANY_ID, OFFICE_ID, lb, recent_lim),
     )
-    return [int(r[0]) for r in cur.fetchall()]
+    recent_ids = [int(r[0]) for r in cur.fetchall()]
+
+    seen: set[int] = set()
+    merged: list[int] = []
+    for doc_id in pending_ids:
+        if doc_id not in seen:
+            seen.add(doc_id)
+            merged.append(doc_id)
+    for doc_id in recent_ids:
+        if doc_id not in seen:
+            seen.add(doc_id)
+            merged.append(doc_id)
+
+    meta = {
+        "pending_without_related": len(pending_ids),
+        "recent_refresh_candidates": len(recent_ids),
+        "merged_unique": len(merged),
+    }
+    return merged, meta
 
 
 def _fetch_oc_document_ids_for_emission_day(cur, day: date) -> list[int]:
@@ -1205,8 +1278,9 @@ def sync_distribuidora_related_documents(
     Por cada OC reciente: ``details.json`` y ``documents.json?relateddetailid=`` por ``detail.id``.
 
     Env:
-      DISTRIBUIDORA_RELATED_LOOKBACK_DAYS (default 7)
-      DISTRIBUIDORA_RELATED_DETAIL_LIMIT (default 250) — límite de **documentos** OC a procesar
+      DISTRIBUIDORA_RELATED_LOOKBACK_DAYS (default 10)
+      DISTRIBUIDORA_RELATED_DETAIL_LIMIT (default 250) — cupo bucket refresh por ``document_id``
+      DISTRIBUIDORA_RELATED_PENDING_LIMIT (default 400) — cupo bucket OC sin factura confirmada
     """
     token = _bsale_token()
     if not token:
@@ -1214,9 +1288,17 @@ def sync_distribuidora_related_documents(
             raise ValueError("Ningún token Bsale: defina BSALE_TOKEN o BSALE_TOKEN_SPA.")
         return {"skipped": True, "skip_reason": "sin token", "inserted": 0}
 
-    lb = lookback_days if lookback_days is not None else int(os.getenv("DISTRIBUIDORA_RELATED_LOOKBACK_DAYS", "7"))
+    lb = (
+        lookback_days
+        if lookback_days is not None
+        else int(os.getenv("DISTRIBUIDORA_RELATED_LOOKBACK_DAYS", str(DEFAULT_RELATED_LOOKBACK_DAYS)))
+    )
     lim_src = limit_documents if limit_documents is not None else limit_details
-    lim = lim_src if lim_src is not None else int(os.getenv("DISTRIBUIDORA_RELATED_DETAIL_LIMIT", "250"))
+    lim = (
+        lim_src
+        if lim_src is not None
+        else int(os.getenv("DISTRIBUIDORA_RELATED_DETAIL_LIMIT", str(DEFAULT_RELATED_DETAIL_LIMIT)))
+    )
 
     t0 = time.perf_counter()
     stats: dict[str, Any] = {
@@ -1244,6 +1326,10 @@ def sync_distribuidora_related_documents(
         "related_type33_branches": 0,
         "related_type33_loops": 0,
         "related_type33_depth1_hits": 0,
+        "lookback_days": 0,
+        "documents_pending_without_related": 0,
+        "documents_recent_refresh": 0,
+        "documents_merged_unique": 0,
     }
 
     conn = get_connection()
@@ -1269,8 +1355,24 @@ def sync_distribuidora_related_documents(
             OFFICE_ID,
         )
 
-        document_ids = _fetch_oc_document_ids(cur, lookback_days=lb, limit_documents=lim)
+        document_ids, pick_meta = _fetch_oc_document_ids_for_incremental(
+            cur, lookback_days=lb, limit_documents=lim
+        )
+        stats["lookback_days"] = max(1, lb)
+        stats["documents_pending_without_related"] = pick_meta["pending_without_related"]
+        stats["documents_recent_refresh"] = pick_meta["recent_refresh_candidates"]
+        stats["documents_merged_unique"] = pick_meta["merged_unique"]
         stats["documents_considered"] = len(document_ids)
+        logger.info(
+            "sync related selección OC: lookback=%sd pending_sin_factura=%s "
+            "refresh_recientes=%s total_unicos=%s (pending_limit=%s refresh_limit=%s)",
+            stats["lookback_days"],
+            stats["documents_pending_without_related"],
+            stats["documents_recent_refresh"],
+            stats["documents_merged_unique"],
+            _related_pending_limit(),
+            lim,
+        )
 
         client = BsaleClient(token)
         throttle = float(os.getenv("DISTRIBUIDORA_RELATED_API_DELAY_SEC", "0.12"))
