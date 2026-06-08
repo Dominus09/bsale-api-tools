@@ -14,12 +14,16 @@ _CLIENT_COMPANY_ID = 3
 
 _ALLOWED_ORDER_STATUSES = frozenset({"pendiente", "generado", "anulado", "revisar"})
 
-# Misma correspondencia que GET /api/catalog (slug → lista Bsale).
+# Lista de precios (catálogo): slug → ID Bsale. Independiente del tipo de documento tributario.
 _PRICE_LIST_SLUG_TO_ID: dict[str, int] = {
     "factura": 13,
     "comoditi": 14,
     "melinka": 16,
 }
+_ALLOWED_PRICE_LISTS = frozenset(_PRICE_LIST_SLUG_TO_ID)
+
+# Tipo de documento solicitado en checkout (tributario): no se cruza con lista de precios.
+_ALLOWED_DOCUMENT_TYPES = frozenset({"factura", "boleta"})
 
 _ORDERS_COLUMNS_CACHE: frozenset[str] | None = None
 
@@ -145,7 +149,7 @@ def _resolve_price_list_commercial(body: CreateOrderBody) -> str:
     slug = (body.price_list or "").strip().lower() or None
     if not slug:
         raise HTTPException(status_code=400, detail="price_list es obligatorio")
-    if slug not in _PRICE_LIST_SLUG_TO_ID:
+    if slug not in _ALLOWED_PRICE_LISTS:
         raise HTTPException(
             status_code=400,
             detail="price_list debe ser factura, comoditi o melinka",
@@ -157,6 +161,19 @@ def _resolve_price_list_commercial(body: CreateOrderBody) -> str:
             detail="price_list_id no coincide con price_list",
         )
     return slug
+
+
+def _resolve_document_type(raw: str | None) -> str:
+    """Tipo documento tributario (factura / boleta), independiente de ``price_list``."""
+    doc = (raw or "").strip().lower() or None
+    if not doc:
+        raise HTTPException(status_code=400, detail="document_type es obligatorio")
+    if doc not in _ALLOWED_DOCUMENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail="document_type debe ser factura o boleta",
+        )
+    return doc
 
 
 def _commercial_fields_from_row(row: dict) -> dict[str, str | int | None]:
@@ -497,15 +514,7 @@ def create_order(body: CreateOrderBody):
     if not pay:
         raise HTTPException(status_code=400, detail="payment_method es obligatorio")
 
-    doc = (body.document_type or "").strip() or None
-    if not doc:
-        raise HTTPException(status_code=400, detail="document_type es obligatorio")
-    if doc.lower() in _PRICE_LIST_SLUG_TO_ID:
-        raise HTTPException(
-            status_code=400,
-            detail="document_type no puede ser una lista de precios",
-        )
-
+    document_type_slug = _resolve_document_type(body.document_type)
     price_list_slug = _resolve_price_list_commercial(body)
 
     delivery = _delivery_date_value(body.delivery_date)
@@ -528,7 +537,7 @@ def create_order(body: CreateOrderBody):
             "client_rut": client_rut,
             "price_list": price_list_slug,
             "payment_method": pay,
-            "document_type": doc,
+            "document_type": document_type_slug,
             "contact_name": (body.contact_name or "").strip() or None,
             "contact_phone": phone,
             "delivery_date": delivery,
