@@ -6,7 +6,7 @@ import { AlertTriangle, Loader2, Package } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { getOrders, ORDERS_PAGE_SIZE, type OrderRow } from "@/services/orders"
+import { getOrders, ORDERS_PAGE_SIZE, type OrderRow, documentTypeBadgeClass, formatDocumentTypeLabel } from "@/services/orders"
 
 function formatOrderId(id: number) {
   return `#${String(id).padStart(4, "0")}`
@@ -36,6 +36,14 @@ function StatusBadge({ status }: { status: string | null }) {
   return (
     <Badge variant="outline" className={cls}>
       {status?.trim() || "—"}
+    </Badge>
+  )
+}
+
+function DocumentTypeBadge({ documentType }: { documentType: string | null }) {
+  return (
+    <Badge variant="outline" className={documentTypeBadgeClass(documentType)}>
+      {formatDocumentTypeLabel(documentType)}
     </Badge>
   )
 }
@@ -177,6 +185,7 @@ export default function OrdersPage() {
                     <th className="pb-3 text-left text-sm font-medium text-muted-foreground">Cliente</th>
                     <th className="pb-3 text-left text-sm font-medium text-muted-foreground">RUT</th>
                     <th className="pb-3 text-left text-sm font-medium text-muted-foreground">Fecha</th>
+                    <th className="pb-3 text-center text-sm font-medium text-muted-foreground">Documento</th>
                     <th className="pb-3 text-right text-sm font-medium text-muted-foreground">Total</th>
                     <th className="pb-3 text-center text-sm font-medium text-muted-foreground">Estado</th>
                   </tr>
@@ -200,6 +209,9 @@ export default function OrdersPage() {
                       <td className="py-4">{order.client_name ?? "—"}</td>
                       <td className="py-4 text-muted-foreground">{order.rut ?? "—"}</td>
                       <td className="py-4 text-muted-foreground">{formatDate(order.created_at)}</td>
+                      <td className="py-4 text-center">
+                        <DocumentTypeBadge documentType={order.document_type} />
+                      </td>
                       <td className="py-4 text-right font-medium">{formatTotal(Number(order.total))}</td>
                       <td className="py-4 text-center">
                         <StatusBadge status={order.status} />

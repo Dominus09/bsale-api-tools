@@ -20,7 +20,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { getOrderById, updateOrderStatus, type OrderDetail } from "@/services/orders"
+import { getOrderById, updateOrderStatus, type OrderDetail, documentTypeBadgeClass, formatDocumentTypeLabel } from "@/services/orders"
 
 function formatOrderId(id: number) {
   return `#${String(id).padStart(4, "0")}`
@@ -55,6 +55,14 @@ function StatusBadge({ status, className }: { status: string | null; className?:
   return (
     <Badge variant="outline" className={`${cls} ${className ?? ""}`}>
       {status?.trim() || "—"}
+    </Badge>
+  )
+}
+
+function DocumentTypeBadge({ documentType }: { documentType: string | null }) {
+  return (
+    <Badge variant="outline" className={documentTypeBadgeClass(documentType)}>
+      {formatDocumentTypeLabel(documentType)}
     </Badge>
   )
 }
@@ -151,12 +159,13 @@ export default function OrderDetailPage() {
   const disableGenerar = currentStatus === "generado" || currentStatus === "anulado"
   const disableAnular = currentStatus === "anulado"
   const disableRevisar = currentStatus === "anulado"
+  const orderIdForStatus = order.id
 
   async function handleStatusChange(next: "generado" | "anulado" | "revisar") {
     setStatusError(null)
     setUpdatingStatus(true)
     try {
-      const res = await updateOrderStatus(order.id, next)
+      const res = await updateOrderStatus(orderIdForStatus, next)
       setOrder((prev) => (prev ? { ...prev, status: res.status } : prev))
     } catch {
       setStatusError("Error actualizando estado")
@@ -204,7 +213,13 @@ export default function OrderDetailPage() {
               { label: "Fecha creación", value: formatDate(order.created_at) },
               { label: "Fecha entrega", value: formatDate(order.delivery_date) },
               { label: "Lista de precios", value: formatPriceList(order.price_list) },
+              {
+                label: "Documento solicitado",
+                value: <DocumentTypeBadge documentType={order.document_type} />,
+              },
               { label: "Forma de pago", value: order.payment_method?.trim() || "—" },
+              { label: "Ciudad", value: order.client_city?.trim() || "—" },
+              { label: "Vendedor asignado", value: order.seller_name?.trim() || "—" },
             ]}
           />
           <div className="mt-6 border-t border-border pt-6">
@@ -284,22 +299,29 @@ export default function OrderDetailPage() {
         </CardContent>
       </Card>
 
-      {notesText ? (
-        <Card className="shadow-sm">
-          <CardHeader className="space-y-1 pb-4">
-            <CardTitle className="flex items-center gap-2 text-lg font-semibold">
-              <StickyNote className="h-5 w-5 shrink-0 text-primary" />
-              Observaciones
-            </CardTitle>
-            <CardDescription className="text-sm">Notas asociadas al pedido</CardDescription>
-          </CardHeader>
-          <CardContent className="pt-0">
-            <p className="rounded-md border border-border bg-muted/30 px-4 py-3 text-sm leading-relaxed text-foreground whitespace-pre-wrap">
-              {notesText}
-            </p>
-          </CardContent>
-        </Card>
-      ) : null}
+      <Card className="shadow-sm">
+        <CardHeader className="space-y-1 pb-4">
+          <CardTitle className="flex items-center gap-2 text-lg font-semibold">
+            <StickyNote className="h-5 w-5 shrink-0 text-primary" />
+            Observaciones del cliente
+          </CardTitle>
+          <CardDescription className="text-sm">
+            Indicaciones de entrega u otras notas del pedido
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="pt-0">
+          <p
+            className={cn(
+              "rounded-md border border-border px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap",
+              notesText
+                ? "bg-muted/30 text-foreground"
+                : "text-muted-foreground",
+            )}
+          >
+            {notesText || "Sin observaciones."}
+          </p>
+        </CardContent>
+      </Card>
 
       <Card className="shadow-sm">
         <CardHeader className="space-y-1 pb-4">

@@ -6,6 +6,7 @@ export type OrderRow = {
   rut: string | null
   payment_method: string | null
   price_list: string | null
+  document_type: string | null
   delivery_date: string | null
   total: number
   status: string | null
@@ -26,14 +27,39 @@ export type OrderDetail = {
   rut: string | null
   payment_method: string | null
   price_list: string | null
+  document_type: string | null
   delivery_date: string | null
   notes: string | null
   contact_name: string | null
   contact_phone: string | null
+  seller_name: string | null
+  client_city: string | null
   total: number
   status: string | null
   created_at: string
   items: OrderItemDetail[]
+}
+
+const DOCUMENT_TYPE_LABELS: Record<string, string> = {
+  factura: "Factura",
+  boleta: "Boleta",
+}
+
+export function formatDocumentTypeLabel(value: string | null | undefined): string {
+  if (!value?.trim()) return "No definido"
+  const key = value.trim().toLowerCase()
+  return DOCUMENT_TYPE_LABELS[key] ?? value.trim()
+}
+
+export function documentTypeBadgeClass(value: string | null | undefined): string {
+  const key = (value ?? "").trim().toLowerCase()
+  if (key === "factura") {
+    return "bg-blue-500/15 text-blue-800 dark:text-blue-200 border-blue-500/40"
+  }
+  if (key === "boleta") {
+    return "bg-green-500/15 text-green-800 dark:text-green-200 border-green-500/40"
+  }
+  return "bg-muted text-muted-foreground border-border"
 }
 
 const ORDERS_PAGE_SIZE = 20
