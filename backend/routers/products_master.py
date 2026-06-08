@@ -22,6 +22,8 @@ _LOGISTICS_PATCH_FIELDS = frozenset(
         "supplier_id",
         "is_active",
         "units_per_box",
+        "sale_type",
+        "quantity_step",
         "weight_box_kg",
         "height_cm",
         "width_cm",
@@ -42,6 +44,8 @@ _PM_SELECT = """
     companies,
     supplier_id,
     units_per_box,
+    sale_type,
+    quantity_step,
     weight_box_kg,
     height_cm,
     width_cm,
@@ -58,6 +62,8 @@ class ProductMasterLogisticsPatch(BaseModel):
     supplier_id: Optional[int] = None
     is_active: Optional[bool] = None
     units_per_box: Optional[int] = Field(None, ge=1)
+    sale_type: Optional[str] = Field(None, pattern=r"^(ENTERA|PARCIAL|UNITARIO)$")
+    quantity_step: Optional[int] = Field(None, ge=1)
     weight_box_kg: Optional[float] = Field(None, ge=0)
     height_cm: Optional[float] = Field(None, ge=0)
     width_cm: Optional[float] = Field(None, ge=0)

@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from backend.client_rut import require_valid_rut, city_is_melinka
 from backend.db import get_connection
+from backend.utils.catalog_admin_rut import is_catalog_admin_rut
 
 router = APIRouter()
 
@@ -97,6 +98,7 @@ def login_client(body: LoginClientRequest):
         "name": name,
         "city": city,
         "is_melinka": city_is_melinka(city),
+        "is_catalog_admin": is_catalog_admin_rut(rut_clean),
     }
 
 

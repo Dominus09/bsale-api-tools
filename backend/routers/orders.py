@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from backend.client_rut import clean_rut_for_lookup
 from backend.db import get_connection
+from backend.utils.sale_quantity import validate_order_items
 
 router = APIRouter(tags=["Pedidos"])
 
@@ -524,6 +525,31 @@ def create_order(body: CreateOrderBody):
     conn = get_connection()
     cur = conn.cursor()
     try:
+        qty_errors = validate_order_items(
+            cur,
+            [
+                {
+                    "id": it.id,
+                    "name": it.name,
+                    "quantity": it.quantity,
+                }
+                for it in body.items
+            ],
+        )
+        if qty_errors:
+            first = qty_errors[0]
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Cantidad inválida",
+                    "product": first.get("product"),
+                    "quantity": first.get("quantity"),
+                    "required_step": first.get("required_step"),
+                    "message": first.get("message"),
+                    "items": qty_errors,
+                },
+            )
+
         available = _orders_table_columns(cur)
         seller_id, seller_name, client_city = _lookup_client_seller_and_city(
             cur,

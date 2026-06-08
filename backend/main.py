@@ -13,6 +13,7 @@ from backend.diagnostics.middleware import DiagnosticsRequestLogMiddleware
 from backend.routers import auth
 from backend.routers import orders
 from backend.routers.catalog import router as catalog_router
+from backend.routers.catalog_admin import router as catalog_admin_router
 
 # Panel / analytics (rutas legacy usadas por el frontend admin)
 from backend.routers import alerts
@@ -95,8 +96,9 @@ app.include_router(auth.router)
 # --- Pedidos (app.orders) ---
 app.include_router(orders.router)
 
-# --- Catálogo público ---
+# --- Catálogo público + panel admin catálogo (RUT en CATALOG_ADMIN_RUTS) ---
 app.include_router(catalog_router, prefix="/api")
+app.include_router(catalog_admin_router, prefix="/api")
 
 # --- Analytics / empresas (no mezclar con /erp: URLs distintas) ---
 app.include_router(companies.router)
