@@ -101,8 +101,9 @@ def get_catalog(
 
     if in_stock is True:
         query = query.replace(
-            "ORDER BY",
-            "WHERE COALESCE(cv.stock, 0) > 0\nORDER BY",
+            ") pm ON TRUE\nORDER BY",
+            ") pm ON TRUE\nWHERE COALESCE(cv.stock, 0) > 0\nORDER BY",
+            1,
         )
 
     conn = get_connection()
