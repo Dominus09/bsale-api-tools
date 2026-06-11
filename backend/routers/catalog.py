@@ -38,12 +38,27 @@ FROM bsale.catalog_view cv
 LEFT JOIN bsale.variants v
     ON v.company_id = %s
    AND v.bsale_id = cv.variant_id
-LEFT JOIN bsale.products_master pm
-    ON pm.variant_id = cv.variant_id
-    OR (
+LEFT JOIN LATERAL (
+    SELECT pm_inner.*
+    FROM bsale.products_master pm_inner
+    WHERE (
         NULLIF(BTRIM(cv.bar_code), '') IS NOT NULL
-        AND pm.barcode = BTRIM(cv.bar_code)
+        AND BTRIM(pm_inner.barcode) = BTRIM(cv.bar_code)
     )
+    OR pm_inner.variant_id = cv.variant_id
+    ORDER BY
+        CASE
+            WHEN NULLIF(BTRIM(cv.bar_code), '') IS NOT NULL
+             AND BTRIM(pm_inner.barcode) = BTRIM(cv.bar_code)
+                THEN 0
+            WHEN pm_inner.variant_id = cv.variant_id
+                THEN 1
+            ELSE 2
+        END,
+        pm_inner.updated_at DESC NULLS LAST,
+        pm_inner.id DESC
+    LIMIT 1
+) pm ON TRUE
 ORDER BY
     cv.product_type ASC,
     cv.product ASC,
