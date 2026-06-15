@@ -24,11 +24,8 @@ export type LabelPrintItem = {
   productType: string
   productName: string
   variantName: string
-  /** Precio lista / precio actual */
   price: number | null
-  /** Precio oferta (formato C); fallback: price */
   sale_price?: number | null
-  /** Precio anterior tachado (formato C) */
   regular_price?: number | null
   isOffer: boolean
   quantity: number
@@ -79,10 +76,18 @@ const MARGIN_MM = 2.5
 const PAGE_W = 215.9
 const PAGE_H = 279.4
 
-const COLOR_CATEGORY = { r: 74, g: 74, b: 74 }
+const COLOR_CATEGORY = { r: 110, g: 110, b: 110 }
 const COLOR_VARIANT = { r: 55, g: 55, b: 55 }
 const COLOR_OFFER = { r: 220, g: 38, b: 38 }
 const COLOR_BORDER = { r: 190, g: 190, b: 190 }
+
+type BarcodeSpec = { w: number; h: number; bar: number; minMm: number }
+
+const BARCODE_SPECS: Record<LabelFormat, BarcodeSpec> = {
+  A: { w: 220, h: 44, bar: 1.15, minMm: 5.5 },
+  B: { w: 280, h: 58, bar: 1.45, minMm: 7.5 },
+  C: { w: 340, h: 72, bar: 1.55, minMm: 9 },
+}
 
 function formatClp(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return "—"
@@ -91,12 +96,6 @@ function formatClp(value: number | null | undefined): string {
     currency: "CLP",
     maximumFractionDigits: 0,
   }).format(value)
-}
-
-function abbreviate(text: string, max = 24): string {
-  const t = text.trim()
-  if (t.length <= max) return t
-  return `${t.slice(0, max - 1)}…`
 }
 
 function flattenItems(items: LabelPrintItem[]): LabelPrintItem[] {
@@ -113,36 +112,79 @@ function effectiveRegularPrice(item: LabelPrintItem): number | null {
   return item.regular_price ?? null
 }
 
+/** Máx. líneas con truncado elegante en la última. */
+function fitLines(
+  doc: import("jspdf").jsPDF,
+  text: string,
+  maxWidth: number,
+  maxLines: number,
+  fontSize: number,
+): string[] {
+  doc.setFontSize(fontSize)
+  const lines = doc.splitTextToSize(text.trim(), maxWidth) as string[]
+  if (lines.length <= maxLines) return lines
+  const kept = lines.slice(0, maxLines)
+  let last = kept[maxLines - 1] ?? ""
+  while (last.length > 4 && doc.getTextWidth(`${last}…`) > maxWidth) {
+    last = last.slice(0, -1)
+  }
+  kept[maxLines - 1] = `${last.replace(/\s+$/, "")}…`
+  return kept
+}
+
+function displayNameA(item: LabelPrintItem): string {
+  const variant =
+    item.variantName &&
+    item.variantName.trim().toLowerCase() !== item.productName.trim().toLowerCase()
+      ? item.variantName.trim()
+      : ""
+  return [item.productName, variant].filter(Boolean).join(" ")
+}
+
 async function barcodeDataUrl(
   code: string,
-  widthPx: number,
-  heightPx: number,
-  barWidth = 1.2,
+  spec: BarcodeSpec,
 ): Promise<string | null> {
   if (typeof window === "undefined" || !code.trim()) return null
   try {
     const JsBarcode = (await import("jsbarcode")).default
-    const canvas = document.createElement("canvas")
-    const fmt = /^\d{12,13}$/.test(code.trim()) ? "EAN13" : "CODE128"
-    JsBarcode(canvas, code.trim(), {
+    const raw = document.createElement("canvas")
+    const trimmed = code.trim()
+    const fmt = /^\d{12,13}$/.test(trimmed) ? "EAN13" : "CODE128"
+    JsBarcode(raw, trimmed, {
       format: fmt,
-      width: barWidth,
-      height: heightPx,
+      width: spec.bar,
+      height: spec.h,
       displayValue: false,
-      margin: 0,
+      margin: 2,
+      marginTop: 0,
+      marginBottom: 0,
+      flat: true,
     })
     const scaled = document.createElement("canvas")
-    scaled.width = widthPx
-    scaled.height = heightPx
+    scaled.width = spec.w
+    scaled.height = spec.h
     const ctx = scaled.getContext("2d")
     if (!ctx) return null
     ctx.fillStyle = "#ffffff"
-    ctx.fillRect(0, 0, widthPx, heightPx)
-    ctx.drawImage(canvas, 0, 0, widthPx, heightPx)
-    return scaled.toDataURL("image/png")
+    ctx.fillRect(0, 0, spec.w, spec.h)
+    ctx.imageSmoothingEnabled = false
+    ctx.drawImage(raw, 0, 0, spec.w, spec.h)
+    return scaled.toDataURL("image/jpeg", 0.9)
   } catch {
     return null
   }
+}
+
+async function buildBarcodeCache(
+  barcodes: string[],
+  spec: BarcodeSpec,
+): Promise<Map<string, string | null>> {
+  const unique = [...new Set(barcodes.map((b) => b.trim()).filter(Boolean))]
+  const pairs = await Promise.all(
+    unique.map(async (bc) => [bc, await barcodeDataUrl(bc, spec)] as const),
+  )
+  return new Map(pairs)
 }
 
 function labelGrid(format: LabelFormat) {
@@ -163,9 +205,9 @@ function drawLogo(
   ratio: number,
 ): number {
   const logoH = labelH * ratio
-  const logoW = Math.min(innerW * 0.58, logoH * logo.aspectRatio)
+  const logoW = Math.min(innerW * 0.62, logoH * logo.aspectRatio)
   drawQuillotanaLogoOnPdf(doc, logo, logoState, x, y, logoW)
-  return logoH + 0.6
+  return logoH + 0.5
 }
 
 function drawBarcodeBlock(
@@ -178,37 +220,39 @@ function drawBarcodeBlock(
   pad: number,
   barcodeImg: string | null,
   showBarcode: boolean,
-  maxHeightRatio: number,
-  fontSize: number,
+  zoneRatio: number,
+  spec: BarcodeSpec,
+  numFontSize: number,
 ) {
   if (!showBarcode) return
+  const zoneH = Math.max(h * zoneRatio, spec.minMm + numFontSize * 0.45)
   const bottom = y + h - pad
-  const maxBcH = h * maxHeightRatio
-  const numH = fontSize * 0.38
-  const bcH = Math.min(maxBcH, bottom - (y + h * 0.55) - numH - 0.5)
-  const bcY = bottom - numH - bcH - 0.3
+  const zoneTop = bottom - zoneH
+  const numY = bottom - 0.25
+  const bcH = Math.max(spec.minMm, zoneH - numFontSize * 0.5 - 0.8)
+  const bcY = zoneTop + 0.3
 
-  if (barcodeImg && bcH > 2) {
+  if (barcodeImg) {
     try {
-      doc.addImage(barcodeImg, "PNG", x + pad, bcY, w - pad * 2, bcH)
+      doc.addImage(barcodeImg, "JPEG", x + pad, bcY, w - pad * 2, bcH, undefined, "FAST")
     } catch {
-      /* texto fallback */
+      /* fallback numérico */
     }
   }
 
-  doc.setFontSize(fontSize)
+  doc.setFontSize(numFontSize)
   doc.setFont("helvetica", "normal")
-  doc.setTextColor(30, 30, 30)
-  doc.text(item.barcode, x + w / 2, bottom - 0.2, { align: "center" })
+  doc.setTextColor(20, 20, 20)
+  doc.text(item.barcode, x + w / 2, numY, { align: "center" })
 }
 
 function drawLabelBorder(doc: import("jspdf").jsPDF, x: number, y: number, w: number, h: number) {
   doc.setDrawColor(COLOR_BORDER.r, COLOR_BORDER.g, COLOR_BORDER.b)
-  doc.setLineWidth(0.12)
+  doc.setLineWidth(0.1)
   doc.rect(x, y, w, h)
 }
 
-/** Formato B — estándar 3×8 */
+/** Formato B — precio dominante, categoría discreta */
 function drawLabelB(
   doc: import("jspdf").jsPDF,
   item: LabelPrintItem,
@@ -220,54 +264,58 @@ function drawLabelB(
   logo: PdfLogoPayload,
   logoState: PdfLogoDocState,
   barcodeImg: string | null,
+  spec: BarcodeSpec,
 ) {
-  const pad = 1.6
+  const pad = 1.5
   const innerX = x + pad
   const innerW = w - pad * 2
+  const barcodeZone = 0.27
+  const contentMaxY = y + h - pad - h * barcodeZone
   let cy = y + pad
 
   drawLabelBorder(doc, x, y, w, h)
-  cy += drawLogo(doc, logo, logoState, innerX, cy, innerW, h, 0.15)
+  cy += drawLogo(doc, logo, logoState, innerX, cy, innerW, h, 0.13)
 
   if (options.showProductType && item.productType) {
-    doc.setFontSize(7)
-    doc.setFont("helvetica", "bold")
+    doc.setFontSize(5.5)
+    doc.setFont("helvetica", "normal")
     doc.setTextColor(COLOR_CATEGORY.r, COLOR_CATEGORY.g, COLOR_CATEGORY.b)
-    doc.text(item.productType.toUpperCase(), innerX, cy + 2.2, { maxWidth: innerW })
-    cy += 3.2
+    doc.text(item.productType.toUpperCase(), innerX, cy + 1.8, { maxWidth: innerW })
+    cy += 2.6
   }
 
-  doc.setFontSize(8.5)
   doc.setFont("helvetica", "bold")
   doc.setTextColor(0, 0, 0)
-  const productLines = doc.splitTextToSize(item.productName, innerW).slice(0, 2)
-  doc.text(productLines, innerX, cy + 2.5)
-  cy += productLines.length * 3.2 + 0.4
+  const productLines = fitLines(doc, item.productName, innerW, 2, 7.8)
+  doc.setFontSize(7.8)
+  doc.text(productLines, innerX, cy + 2.2)
+  cy += productLines.length * 2.9 + 0.3
 
   const variant =
-    item.variantName && item.variantName.trim().toLowerCase() !== item.productName.trim().toLowerCase()
+    item.variantName &&
+    item.variantName.trim().toLowerCase() !== item.productName.trim().toLowerCase()
       ? item.variantName
       : ""
   if (variant) {
-    doc.setFontSize(7)
+    doc.setFontSize(6.5)
     doc.setFont("helvetica", "normal")
     doc.setTextColor(COLOR_VARIANT.r, COLOR_VARIANT.g, COLOR_VARIANT.b)
-    doc.text(doc.splitTextToSize(variant, innerW).slice(0, 1), innerX, cy + 2)
-    cy += 3.2
+    doc.text(fitLines(doc, variant, innerW, 1, 6.5), innerX, cy + 2)
+    cy += 2.8
   }
 
   if (options.showPrice) {
-    doc.setFontSize(13.5)
+    const priceY = cy + (contentMaxY - cy) * 0.55
+    doc.setFontSize(16)
     doc.setFont("helvetica", "bold")
     doc.setTextColor(0, 0, 0)
-    doc.text(formatClp(item.price), x + w / 2, cy + 4.5, { align: "center" })
-    cy += 6
+    doc.text(formatClp(item.price), x + w / 2, priceY, { align: "center" })
   }
 
-  drawBarcodeBlock(doc, item, x, y, w, h, pad, barcodeImg, options.showBarcode, 0.25, 6)
+  drawBarcodeBlock(doc, item, x, y, w, h, pad, barcodeImg, options.showBarcode, barcodeZone, spec, 6)
 }
 
-/** Formato A — económico 3×10 */
+/** Formato A — 2 líneas máx. con truncado */
 function drawLabelA(
   doc: import("jspdf").jsPDF,
   item: LabelPrintItem,
@@ -279,36 +327,34 @@ function drawLabelA(
   logo: PdfLogoPayload,
   logoState: PdfLogoDocState,
   barcodeImg: string | null,
+  spec: BarcodeSpec,
 ) {
-  const pad = 1.1
+  const pad = 1
   const innerX = x + pad
   const innerW = w - pad * 2
+  const barcodeZone = 0.24
   let cy = y + pad
 
   drawLabelBorder(doc, x, y, w, h)
-  cy += drawLogo(doc, logo, logoState, innerX, cy, innerW, h, 0.11)
+  cy += drawLogo(doc, logo, logoState, innerX, cy, innerW, h, 0.1)
 
-  const line = abbreviate(
-    [item.productType, item.productName].filter(Boolean).join(" · "),
-    28,
-  )
-  doc.setFontSize(6)
   doc.setFont("helvetica", "bold")
   doc.setTextColor(0, 0, 0)
-  doc.text(doc.splitTextToSize(line, innerW).slice(0, 1), innerX, cy + 1.8)
-  cy += 2.8
+  const nameLines = fitLines(doc, displayNameA(item), innerW, 2, 5.5)
+  doc.setFontSize(5.5)
+  doc.text(nameLines, innerX, cy + 1.6)
+  cy += nameLines.length * 2.4 + 0.4
 
   if (options.showPrice) {
-    doc.setFontSize(9.5)
+    doc.setFontSize(9)
     doc.setFont("helvetica", "bold")
-    doc.text(formatClp(item.price), x + w / 2, cy + 3, { align: "center" })
-    cy += 4
+    doc.text(formatClp(item.price), x + w / 2, cy + 2.8, { align: "center" })
   }
 
-  drawBarcodeBlock(doc, item, x, y, w, h, pad, barcodeImg, options.showBarcode, 0.22, 5)
+  drawBarcodeBlock(doc, item, x, y, w, h, pad, barcodeImg, options.showBarcode, barcodeZone, spec, 5)
 }
 
-/** Formato C — oferta 2×6 */
+/** Formato C — banda OFERTA + ANTES/AHORA */
 function drawLabelC(
   doc: import("jspdf").jsPDF,
   item: LabelPrintItem,
@@ -320,79 +366,80 @@ function drawLabelC(
   logo: PdfLogoPayload,
   logoState: PdfLogoDocState,
   barcodeImg: string | null,
+  spec: BarcodeSpec,
 ) {
-  const pad = 2.2
+  const pad = 2
   const innerX = x + pad
   const innerW = w - pad * 2
+  const barcodeZone = 0.25
   let cy = y + pad
 
   drawLabelBorder(doc, x, y, w, h)
-  cy += drawLogo(doc, logo, logoState, innerX, cy, innerW, h, 0.12)
+  cy += drawLogo(doc, logo, logoState, innerX, cy, innerW, h, 0.11)
 
   doc.setFillColor(COLOR_OFFER.r, COLOR_OFFER.g, COLOR_OFFER.b)
-  doc.roundedRect(innerX, cy, innerW, 5.5, 0.8, 0.8, "F")
-  doc.setFontSize(9)
+  doc.roundedRect(innerX, cy, innerW, 5, 0.6, 0.6, "F")
+  doc.setFontSize(8.5)
   doc.setFont("helvetica", "bold")
   doc.setTextColor(255, 255, 255)
-  doc.text("OFERTA", x + w / 2, cy + 3.8, { align: "center" })
-  cy += 6.5
+  doc.text("OFERTA", x + w / 2, cy + 3.5, { align: "center" })
+  cy += 6
 
   if (options.showProductType && item.productType) {
-    doc.setFontSize(7.5)
-    doc.setFont("helvetica", "bold")
+    doc.setFontSize(6.5)
+    doc.setFont("helvetica", "normal")
     doc.setTextColor(COLOR_CATEGORY.r, COLOR_CATEGORY.g, COLOR_CATEGORY.b)
-    doc.text(item.productType.toUpperCase(), innerX, cy + 2.2, { maxWidth: innerW })
-    cy += 3.5
+    doc.text(item.productType.toUpperCase(), innerX, cy + 2, { maxWidth: innerW })
+    cy += 2.8
   }
 
-  doc.setFontSize(10)
   doc.setFont("helvetica", "bold")
   doc.setTextColor(0, 0, 0)
-  const productLines = doc.splitTextToSize(item.productName, innerW).slice(0, 2)
-  doc.text(productLines, innerX, cy + 2.5)
-  cy += productLines.length * 3.6 + 0.3
+  const productLines = fitLines(doc, item.productName, innerW, 2, 9)
+  doc.setFontSize(9)
+  doc.text(productLines, innerX, cy + 2.2)
+  cy += productLines.length * 3.2 + 0.2
 
   const variant =
-    item.variantName && item.variantName.trim().toLowerCase() !== item.productName.trim().toLowerCase()
+    item.variantName &&
+    item.variantName.trim().toLowerCase() !== item.productName.trim().toLowerCase()
       ? item.variantName
       : ""
   if (variant) {
-    doc.setFontSize(8)
+    doc.setFontSize(7.5)
     doc.setFont("helvetica", "normal")
     doc.setTextColor(COLOR_VARIANT.r, COLOR_VARIANT.g, COLOR_VARIANT.b)
-    doc.text(doc.splitTextToSize(variant, innerW).slice(0, 1), innerX, cy + 2)
-    cy += 3.5
+    doc.text(fitLines(doc, variant, innerW, 1, 7.5), innerX, cy + 2)
+    cy += 3
   }
 
   if (options.showPrice) {
     const regular = effectiveRegularPrice(item)
     const sale = effectiveSalePrice(item)
-    if (regular != null && sale != null && regular > sale) {
-      doc.setFontSize(8)
+    if (regular != null && sale != null) {
+      doc.setFontSize(7.5)
       doc.setFont("helvetica", "normal")
       doc.setTextColor(120, 120, 120)
       const antes = `ANTES ${formatClp(regular)}`
-      doc.text(antes, x + w / 2, cy + 2.5, { align: "center" })
+      doc.text(antes, x + w / 2, cy + 2.2, { align: "center" })
       const tw = doc.getTextWidth(antes)
-      doc.setDrawColor(120, 120, 120)
-      doc.setLineWidth(0.25)
-      doc.line(x + w / 2 - tw / 2, cy + 2.2, x + w / 2 + tw / 2, cy + 2.2)
-      cy += 4
-      doc.setFontSize(15)
+      doc.setDrawColor(140, 140, 140)
+      doc.setLineWidth(0.2)
+      doc.line(x + w / 2 - tw / 2, cy + 1.9, x + w / 2 + tw / 2, cy + 1.9)
+      cy += 3.8
+      doc.setFontSize(14.5)
       doc.setFont("helvetica", "bold")
       doc.setTextColor(COLOR_OFFER.r, COLOR_OFFER.g, COLOR_OFFER.b)
-      doc.text(`AHORA ${formatClp(sale)}`, x + w / 2, cy + 4.5, { align: "center" })
-      cy += 6
+      doc.text(`AHORA ${formatClp(sale)}`, x + w / 2, cy + 4, { align: "center" })
     } else {
-      doc.setFontSize(15)
+      doc.setFontSize(14.5)
       doc.setFont("helvetica", "bold")
       doc.setTextColor(COLOR_OFFER.r, COLOR_OFFER.g, COLOR_OFFER.b)
-      doc.text(formatClp(sale), x + w / 2, cy + 4.5, { align: "center" })
-      cy += 6
+      doc.text(formatClp(sale), x + w / 2, cy + 4, { align: "center" })
     }
   }
 
-  drawBarcodeBlock(doc, item, x, y, w, h, pad, barcodeImg, options.showBarcode, 0.24, 7)
+  drawBarcodeBlock(doc, item, x, y, w, h, pad, barcodeImg, options.showBarcode, barcodeZone, spec, 7)
 }
 
 function drawLabel(
@@ -407,13 +454,14 @@ function drawLabel(
   logo: PdfLogoPayload,
   logoState: PdfLogoDocState,
   barcodeImg: string | null,
+  spec: BarcodeSpec,
 ) {
   if (format === "A") {
-    drawLabelA(doc, item, x, y, w, h, options, logo, logoState, barcodeImg)
+    drawLabelA(doc, item, x, y, w, h, options, logo, logoState, barcodeImg, spec)
   } else if (format === "C") {
-    drawLabelC(doc, item, x, y, w, h, options, logo, logoState, barcodeImg)
+    drawLabelC(doc, item, x, y, w, h, options, logo, logoState, barcodeImg, spec)
   } else {
-    drawLabelB(doc, item, x, y, w, h, options, logo, logoState, barcodeImg)
+    drawLabelB(doc, item, x, y, w, h, options, logo, logoState, barcodeImg, spec)
   }
 }
 
@@ -436,33 +484,30 @@ export async function generateLabelsPdf(
     throw new Error("No se pudo cargar el logo Quillotana")
   }
 
+  const spec = BARCODE_SPECS[format]
+  const barcodeCache = await buildBarcodeCache(
+    flat.map((it) => it.barcode),
+    spec,
+  )
+
   const { jsPDF } = await import("jspdf")
-  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "letter" })
+  const doc = new jsPDF({
+    orientation: "portrait",
+    unit: "mm",
+    format: "letter",
+    compress: true,
+  })
   const grid = labelGrid(format)
   const logoState = createPdfLogoDocState()
-
-  const barcodeCache = new Map<string, string | null>()
-  const bcSpec =
-    format === "C"
-      ? { w: 320, h: 64, bar: 1.4 }
-      : format === "B"
-        ? { w: 260, h: 52, bar: 1.25 }
-        : { w: 200, h: 36, bar: 1.0 }
+  const perPage = grid.cols * grid.rows
 
   for (let i = 0; i < flat.length; i++) {
-    const posOnPage = i % (grid.cols * grid.rows)
-    const col = posOnPage % grid.cols
-    const row = Math.floor(posOnPage / grid.cols)
-
+    const posOnPage = i % perPage
     if (i > 0 && posOnPage === 0) doc.addPage()
 
+    const col = posOnPage % grid.cols
+    const row = Math.floor(posOnPage / grid.cols)
     const item = flat[i]
-    if (!barcodeCache.has(item.barcode)) {
-      barcodeCache.set(
-        item.barcode,
-        await barcodeDataUrl(item.barcode, bcSpec.w, bcSpec.h, bcSpec.bar),
-      )
-    }
 
     drawLabel(
       doc,
@@ -475,7 +520,8 @@ export async function generateLabelsPdf(
       options,
       logo,
       logoState,
-      barcodeCache.get(item.barcode) ?? null,
+      barcodeCache.get(item.barcode.trim()) ?? null,
+      spec,
     )
   }
 

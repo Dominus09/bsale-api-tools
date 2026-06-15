@@ -135,6 +135,16 @@ function parseExcelRows(buffer: ArrayBuffer): { barcode: string; quantity: numbe
 export default function EtiquetasPage() {
   const barcodeRef = useRef<HTMLInputElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+  const scanLockRef = useRef(false)
+
+  const focusBarcodeInput = useCallback(() => {
+    requestAnimationFrame(() => {
+      const el = barcodeRef.current
+      if (!el) return
+      el.focus()
+      el.select()
+    })
+  }, [])
 
   const [companies, setCompanies] = useState<Company[]>([])
   const [companyId, setCompanyId] = useState("")
@@ -195,6 +205,10 @@ export default function EtiquetasPage() {
       })
   }, [companyId, cid])
 
+  useEffect(() => {
+    focusBarcodeInput()
+  }, [focusBarcodeInput])
+
   const addResolved = useCallback(
     (product: LabelProductResolved, quantity = 1) => {
       setRows((prev) => {
@@ -213,20 +227,24 @@ export default function EtiquetasPage() {
   )
 
   const handleScan = useCallback(async () => {
+    if (scanLockRef.current) return
     const bc = barcodeInput.trim()
     if (!bc) return
     if (!configReady) {
       setScanMessage("Seleccione empresa y lista de precios")
       setScanError(true)
+      focusBarcodeInput()
       return
     }
-    setLoading(true)
+    scanLockRef.current = true
+    setBarcodeInput("")
     setScanMessage(null)
     setScanError(false)
+    setLoading(true)
     try {
       const product = await lookupLabelProduct(cid, plid, bc)
       if (!product) {
-        setScanMessage("No encontrado")
+        setScanMessage(`No encontrado: ${bc}`)
         setScanError(true)
       } else {
         addResolved(product, 1)
@@ -237,11 +255,11 @@ export default function EtiquetasPage() {
       setScanMessage("Error al buscar producto")
       setScanError(true)
     } finally {
-      setBarcodeInput("")
       setLoading(false)
-      barcodeRef.current?.focus()
+      scanLockRef.current = false
+      focusBarcodeInput()
     }
-  }, [barcodeInput, configReady, cid, plid, addResolved])
+  }, [barcodeInput, configReady, cid, plid, addResolved, focusBarcodeInput])
 
   const handleSearch = useCallback(async () => {
     const term = searchInput.trim()
@@ -280,10 +298,10 @@ export default function EtiquetasPage() {
         }
       } finally {
         setLoading(false)
-        barcodeRef.current?.focus()
+        focusBarcodeInput()
       }
     },
-    [configReady, cid, plid, addResolved],
+    [configReady, cid, plid, addResolved, focusBarcodeInput],
   )
 
   const handleExcel = useCallback(
@@ -535,7 +553,7 @@ export default function EtiquetasPage() {
                   }
                 }}
                 className="h-12 font-mono text-lg"
-                disabled={loading}
+                autoComplete="off"
                 autoFocus
               />
             </div>
@@ -831,11 +849,18 @@ export default function EtiquetasPage() {
                           ? "line-clamp-2 text-[9px]"
                           : labelFormat === "B"
                             ? "line-clamp-2 text-[8px]"
-                            : "line-clamp-1 text-[7px]"
+                            : "line-clamp-2 text-[7px]"
                       }`}
                     >
                       {labelFormat === "A"
-                        ? [item.productType, item.productName].filter(Boolean).join(" · ")
+                        ? [item.productName, item.variantName]
+                            .filter(
+                              (v, i, arr) =>
+                                v &&
+                                (i === 0 ||
+                                  v.trim().toLowerCase() !== arr[0]?.trim().toLowerCase()),
+                            )
+                            .join(" ")
                         : item.productName}
                     </p>
                     {labelFormat !== "A" &&
@@ -847,8 +872,7 @@ export default function EtiquetasPage() {
                       <div className="mt-auto pt-0.5 text-center">
                         {labelFormat === "C" &&
                         item.regular_price != null &&
-                        item.sale_price != null &&
-                        item.regular_price > item.sale_price ? (
+                        item.sale_price != null ? (
                           <>
                             <p className="text-[7px] text-slate-400 line-through">
                               ANTES {formatCurrency(item.regular_price)}
