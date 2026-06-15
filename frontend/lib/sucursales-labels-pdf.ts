@@ -4,10 +4,7 @@
  */
 
 import {
-  createPdfLogoDocState,
-  drawQuillotanaLogoOnPdf,
   loadQuillotanaLogoForPdf,
-  type PdfLogoDocState,
   type PdfLogoPayload,
 } from "@/lib/quillotana-logo-pdf"
 
@@ -194,20 +191,26 @@ function labelGrid(format: LabelFormat) {
   return { cols, rows, labelW: usableW / cols, labelH: usableH / rows }
 }
 
+/** +20 % tamaño logo respecto al diseño base aprobado */
+const LOGO_SIZE_BOOST = 1.2
+
+/**
+ * Logo por etiqueta (sin alias global de jsPDF: cada celda dibuja su propia instancia).
+ */
 function drawLogo(
   doc: import("jspdf").jsPDF,
   logo: PdfLogoPayload,
-  logoState: PdfLogoDocState,
   x: number,
   y: number,
   innerW: number,
   labelH: number,
   ratio: number,
 ): number {
-  const logoH = labelH * ratio
-  const logoW = Math.min(innerW * 0.62, logoH * logo.aspectRatio)
-  drawQuillotanaLogoOnPdf(doc, logo, logoState, x, y, logoW)
-  return logoH + 0.5
+  const logoH = labelH * ratio * LOGO_SIZE_BOOST
+  const logoW = Math.min(innerW * 0.72, logoH * logo.aspectRatio)
+  const heightMm = logoW / logo.aspectRatio
+  doc.addImage(logo.dataUrl, logo.format, x, y, logoW, heightMm, undefined, "FAST")
+  return heightMm + 0.45
 }
 
 function drawBarcodeBlock(
@@ -262,7 +265,6 @@ function drawLabelB(
   h: number,
   options: LabelPrintOptions,
   logo: PdfLogoPayload,
-  logoState: PdfLogoDocState,
   barcodeImg: string | null,
   spec: BarcodeSpec,
 ) {
@@ -274,7 +276,7 @@ function drawLabelB(
   let cy = y + pad
 
   drawLabelBorder(doc, x, y, w, h)
-  cy += drawLogo(doc, logo, logoState, innerX, cy, innerW, h, 0.13)
+  cy += drawLogo(doc, logo, innerX, cy, innerW, h, 0.13)
 
   if (options.showProductType && item.productType) {
     doc.setFontSize(5.5)
@@ -325,7 +327,6 @@ function drawLabelA(
   h: number,
   options: LabelPrintOptions,
   logo: PdfLogoPayload,
-  logoState: PdfLogoDocState,
   barcodeImg: string | null,
   spec: BarcodeSpec,
 ) {
@@ -336,7 +337,7 @@ function drawLabelA(
   let cy = y + pad
 
   drawLabelBorder(doc, x, y, w, h)
-  cy += drawLogo(doc, logo, logoState, innerX, cy, innerW, h, 0.1)
+  cy += drawLogo(doc, logo, innerX, cy, innerW, h, 0.1)
 
   doc.setFont("helvetica", "bold")
   doc.setTextColor(0, 0, 0)
@@ -364,7 +365,6 @@ function drawLabelC(
   h: number,
   options: LabelPrintOptions,
   logo: PdfLogoPayload,
-  logoState: PdfLogoDocState,
   barcodeImg: string | null,
   spec: BarcodeSpec,
 ) {
@@ -375,7 +375,7 @@ function drawLabelC(
   let cy = y + pad
 
   drawLabelBorder(doc, x, y, w, h)
-  cy += drawLogo(doc, logo, logoState, innerX, cy, innerW, h, 0.11)
+  cy += drawLogo(doc, logo, innerX, cy, innerW, h, 0.11)
 
   doc.setFillColor(COLOR_OFFER.r, COLOR_OFFER.g, COLOR_OFFER.b)
   doc.roundedRect(innerX, cy, innerW, 5, 0.6, 0.6, "F")
@@ -452,16 +452,15 @@ function drawLabel(
   format: LabelFormat,
   options: LabelPrintOptions,
   logo: PdfLogoPayload,
-  logoState: PdfLogoDocState,
   barcodeImg: string | null,
   spec: BarcodeSpec,
 ) {
   if (format === "A") {
-    drawLabelA(doc, item, x, y, w, h, options, logo, logoState, barcodeImg, spec)
+    drawLabelA(doc, item, x, y, w, h, options, logo, barcodeImg, spec)
   } else if (format === "C") {
-    drawLabelC(doc, item, x, y, w, h, options, logo, logoState, barcodeImg, spec)
+    drawLabelC(doc, item, x, y, w, h, options, logo, barcodeImg, spec)
   } else {
-    drawLabelB(doc, item, x, y, w, h, options, logo, logoState, barcodeImg, spec)
+    drawLabelB(doc, item, x, y, w, h, options, logo, barcodeImg, spec)
   }
 }
 
@@ -498,7 +497,6 @@ export async function generateLabelsPdf(
     compress: true,
   })
   const grid = labelGrid(format)
-  const logoState = createPdfLogoDocState()
   const perPage = grid.cols * grid.rows
 
   for (let i = 0; i < flat.length; i++) {
@@ -519,7 +517,6 @@ export async function generateLabelsPdf(
       format,
       options,
       logo,
-      logoState,
       barcodeCache.get(item.barcode.trim()) ?? null,
       spec,
     )
