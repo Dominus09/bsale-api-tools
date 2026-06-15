@@ -3595,3 +3595,67 @@ export function getStoredCompanyName(): string | null {
   if (typeof window === "undefined") return null
   return localStorage.getItem("company_name")
 }
+
+/** Producto resuelto para etiquetas de sucursal (GET /labels/product) */
+export interface LabelProductResolved {
+  variant_id: number
+  barcode: string
+  sku: string | null
+  product_name: string
+  variant_name: string | null
+  product_type: string | null
+  display_name: string
+  price: number | null
+  price_list_id: number | null
+  price_list_name: string | null
+}
+
+export async function lookupLabelProduct(
+  companyId: number,
+  priceListId: number,
+  barcode: string,
+): Promise<LabelProductResolved | null> {
+  const bc = barcode.trim()
+  if (!bc) return null
+  const params = new URLSearchParams({
+    company_id: String(companyId),
+    price_list_id: String(priceListId),
+    barcode: bc,
+  })
+  const res = await fetch(`${API_URL}/labels/product?${params}`, {
+    headers: getAuthHeaders(),
+  })
+  if (res.status === 404) return null
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as { detail?: string }).detail || `Error ${res.status}`)
+  }
+  return res.json()
+}
+
+export async function resolveLabelProductsBatch(
+  companyId: number,
+  priceListId: number,
+  items: { barcode: string; quantity?: number }[],
+): Promise<{
+  resolved: (LabelProductResolved & { quantity: number })[]
+  errors: { line: number; barcode: string; error: string }[]
+}> {
+  const res = await fetch(`${API_URL}/labels/resolve`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify({
+      company_id: companyId,
+      price_list_id: priceListId,
+      items: items.map((it) => ({
+        barcode: it.barcode.trim(),
+        quantity: it.quantity && it.quantity > 0 ? it.quantity : 1,
+      })),
+    }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as { detail?: string }).detail || `Error ${res.status}`)
+  }
+  return res.json()
+}

@@ -33,6 +33,7 @@ from backend.routers import distribuidora_trucks
 from backend.routers.app_distribuidora import router as app_distribuidora_router
 from backend.routers.operaciones import router as operaciones_router
 from backend.routers.operaciones_telemetry import router as operaciones_telemetry_router
+from backend.routers import labels
 from backend.routers import margin_export
 from backend.routers import margin_problems
 from backend.routers import margins
@@ -104,6 +105,7 @@ app.include_router(catalog_admin_router, prefix="/api")
 app.include_router(companies.router)
 app.include_router(dashboard.router)
 app.include_router(price_lists.router)
+app.include_router(labels.router)
 app.include_router(margins.router)
 app.include_router(offers.router)
 app.include_router(promotions.router)
