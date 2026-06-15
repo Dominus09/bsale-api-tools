@@ -1,9 +1,8 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import {
   Dialog,
@@ -14,6 +13,7 @@ import {
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import {
   Select,
   SelectContent,
@@ -52,6 +52,7 @@ import {
   type LabelFormat,
   type LabelPrintItem,
 } from "@/lib/sucursales-labels-pdf"
+import { QUILLOTANA_LOGO_GRUPO_URL } from "@/lib/quillotana-brand"
 
 type LabelRow = {
   id: string
@@ -62,6 +63,8 @@ type LabelRow = {
   variantName: string
   displayName: string
   price: number | null
+  salePrice: number | null
+  regularPrice: number | null
   quantity: number
   isOffer: boolean
 }
@@ -85,6 +88,8 @@ function resolvedToRow(p: LabelProductResolved, quantity = 1): LabelRow {
     variantName: p.variant_name || "",
     displayName: p.display_name,
     price: p.price,
+    salePrice: p.price,
+    regularPrice: null,
     quantity,
     isOffer: false,
   }
@@ -137,7 +142,6 @@ export default function EtiquetasPage() {
   const [priceListId, setPriceListId] = useState("")
   const [labelFormat, setLabelFormat] = useState<LabelFormat>("B")
 
-  const [showLogo, setShowLogo] = useState(true)
   const [showProductType, setShowProductType] = useState(true)
   const [showBarcode, setShowBarcode] = useState(true)
   const [showPrice, setShowPrice] = useState(true)
@@ -157,11 +161,6 @@ export default function EtiquetasPage() {
   const cid = parseInt(companyId, 10)
   const plid = parseInt(priceListId, 10)
   const configReady = Number.isFinite(cid) && cid > 0 && Number.isFinite(plid) && plid > 0
-
-  const companyName = useMemo(
-    () => companies.find((c) => c.company_id === cid)?.name || "",
-    [companies, cid],
-  )
 
   const totalLabels = rows.reduce((s, r) => s + r.quantity, 0)
   const estimatedPages = estimateLabelPages(totalLabels, labelFormat)
@@ -339,6 +338,8 @@ export default function EtiquetasPage() {
     productName: r.productName,
     variantName: r.variantName,
     price: r.price,
+    sale_price: labelFormat === "C" ? (r.salePrice ?? r.price) : r.price,
+    regular_price: labelFormat === "C" ? r.regularPrice : null,
     isOffer: r.isOffer,
     quantity: r.quantity,
   }))
@@ -347,11 +348,9 @@ export default function EtiquetasPage() {
     setPdfLoading(true)
     try {
       await generateLabelsPdf(printItems, labelFormat, {
-        showLogo,
         showProductType,
         showBarcode,
         showPrice,
-        companyName,
       })
     } finally {
       setPdfLoading(false)
@@ -393,76 +392,88 @@ export default function EtiquetasPage() {
         <CardHeader>
           <CardTitle className="text-base">Configuración</CardTitle>
         </CardHeader>
-        <CardContent className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-          <div className="space-y-2">
-            <Label>Empresa</Label>
-            <Select value={companyId} onValueChange={setCompanyId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Seleccionar empresa" />
-              </SelectTrigger>
-              <SelectContent>
-                {companies.map((c) => (
-                  <SelectItem key={c.company_id} value={String(c.company_id)}>
-                    {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
-            <Label>Lista de precios</Label>
-            <Select
-              value={priceListId}
-              onValueChange={setPriceListId}
-              disabled={!companyId || priceLists.length === 0}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Lista de precios" />
-              </SelectTrigger>
-              <SelectContent>
-                {priceLists.map((pl) => (
-                  <SelectItem key={pl.id} value={String(pl.id)}>
-                    {pl.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
-            <Label>Formato de etiqueta</Label>
-            <Select value={labelFormat} onValueChange={(v) => setLabelFormat(v as LabelFormat)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.values(LABEL_FORMATS).map((f) => (
-                  <SelectItem key={f.id} value={f.id}>
-                    {f.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
-            <Label>Opciones de impresión</Label>
-            <div className="grid grid-cols-2 gap-2 text-sm">
-              <label className="flex items-center gap-2">
-                <Switch checked={showLogo} onCheckedChange={setShowLogo} />
-                Logo
-              </label>
-              <label className="flex items-center gap-2">
-                <Switch checked={showProductType} onCheckedChange={setShowProductType} />
-                Tipo
-              </label>
-              <label className="flex items-center gap-2">
-                <Switch checked={showBarcode} onCheckedChange={setShowBarcode} />
-                Barras
-              </label>
-              <label className="flex items-center gap-2">
-                <Switch checked={showPrice} onCheckedChange={setShowPrice} />
-                Precio
-              </label>
+        <CardContent className="grid gap-6 lg:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2 sm:col-span-2">
+              <Label>Empresa</Label>
+              <Select value={companyId} onValueChange={setCompanyId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Seleccionar empresa" />
+                </SelectTrigger>
+                <SelectContent>
+                  {companies.map((c) => (
+                    <SelectItem key={c.company_id} value={String(c.company_id)}>
+                      {c.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
+            <div className="space-y-2">
+              <Label>Lista de precios</Label>
+              <Select
+                value={priceListId}
+                onValueChange={setPriceListId}
+                disabled={!companyId || priceLists.length === 0}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Lista de precios" />
+                </SelectTrigger>
+                <SelectContent>
+                  {priceLists.map((pl) => (
+                    <SelectItem key={pl.id} value={String(pl.id)}>
+                      {pl.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Elementos visibles</Label>
+              <div className="flex flex-wrap gap-4 text-sm">
+                <label className="flex items-center gap-2">
+                  <Switch checked={showProductType} onCheckedChange={setShowProductType} />
+                  Categoría
+                </label>
+                <label className="flex items-center gap-2">
+                  <Switch checked={showBarcode} onCheckedChange={setShowBarcode} />
+                  Código barras
+                </label>
+                <label className="flex items-center gap-2">
+                  <Switch checked={showPrice} onCheckedChange={setShowPrice} />
+                  Precio
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-3">
+            <Label>Formato de impresión</Label>
+            <RadioGroup
+              value={labelFormat}
+              onValueChange={(v) => setLabelFormat(v as LabelFormat)}
+              className="grid gap-3"
+            >
+              {(Object.keys(LABEL_FORMATS) as LabelFormat[]).map((key) => {
+                const f = LABEL_FORMATS[key]
+                return (
+                  <label
+                    key={key}
+                    className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors ${
+                      labelFormat === key
+                        ? "border-primary bg-primary/5"
+                        : "border-border hover:bg-muted/40"
+                    }`}
+                  >
+                    <RadioGroupItem value={key} className="mt-0.5" />
+                    <div>
+                      <p className="font-medium">{f.shortLabel}</p>
+                      <p className="text-xs text-muted-foreground">{f.description}</p>
+                    </div>
+                  </label>
+                )
+              })}
+            </RadioGroup>
           </div>
         </CardContent>
       </Card>
@@ -646,8 +657,13 @@ export default function EtiquetasPage() {
                     <th className="pb-3 pr-2">Producto</th>
                     <th className="pb-3 pr-2">Tipo</th>
                     <th className="pb-3 pr-2 text-right">Precio</th>
+                    {labelFormat === "C" && (
+                      <th className="pb-3 pr-2 text-right">Precio ref.</th>
+                    )}
                     <th className="pb-3 pr-2 text-center">Cant.</th>
-                    <th className="pb-3 pr-2 text-center">Oferta</th>
+                    {labelFormat === "C" && (
+                      <th className="pb-3 pr-2 text-center">Oferta</th>
+                    )}
                     <th className="pb-3" />
                   </tr>
                 </thead>
@@ -658,8 +674,31 @@ export default function EtiquetasPage() {
                       <td className="py-3 pr-2 font-medium">{row.displayName}</td>
                       <td className="py-3 pr-2 text-muted-foreground">{row.productType || "—"}</td>
                       <td className="py-3 pr-2 text-right font-semibold">
-                        {formatCurrency(row.price)}
+                        {formatCurrency(labelFormat === "C" ? row.salePrice ?? row.price : row.price)}
                       </td>
+                      {labelFormat === "C" && (
+                        <td className="py-3 pr-2">
+                          <Input
+                            type="number"
+                            className="h-8 w-24 text-right text-xs"
+                            placeholder="Antes"
+                            value={row.regularPrice ?? ""}
+                            onChange={(e) => {
+                              const v = e.target.value
+                              setRows((prev) =>
+                                prev.map((r) =>
+                                  r.id === row.id
+                                    ? {
+                                        ...r,
+                                        regularPrice: v === "" ? null : Number(v),
+                                      }
+                                    : r,
+                                ),
+                              )
+                            }}
+                          />
+                        </td>
+                      )}
                       <td className="py-3 pr-2">
                         <div className="flex items-center justify-center gap-1">
                           <Button
@@ -695,18 +734,26 @@ export default function EtiquetasPage() {
                           </Button>
                         </div>
                       </td>
-                      <td className="py-3 pr-2 text-center">
-                        <Switch
-                          checked={row.isOffer}
-                          onCheckedChange={(checked) =>
-                            setRows((prev) =>
-                              prev.map((r) =>
-                                r.id === row.id ? { ...r, isOffer: checked } : r,
-                              ),
-                            )
-                          }
-                        />
-                      </td>
+                      {labelFormat === "C" && (
+                        <td className="py-3 pr-2 text-center">
+                          <Switch
+                            checked={row.isOffer}
+                            onCheckedChange={(checked) =>
+                              setRows((prev) =>
+                                prev.map((r) =>
+                                  r.id === row.id
+                                    ? {
+                                        ...r,
+                                        isOffer: checked,
+                                        salePrice: r.salePrice ?? r.price,
+                                      }
+                                    : r,
+                                ),
+                              )
+                            }
+                          />
+                        </td>
+                      )}
                       <td className="py-3">
                         <Button
                           variant="ghost"
@@ -729,54 +776,109 @@ export default function EtiquetasPage() {
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
         <DialogContent className="max-h-[85vh] max-w-5xl overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Vista previa — Formato {labelFormat}</DialogTitle>
+            <DialogTitle>Vista previa — {LABEL_FORMATS[labelFormat].shortLabel}</DialogTitle>
             <DialogDescription>
-              {gridPreview.cols}×{gridPreview.rows} = {gridPreview.perPage} etiquetas por hoja
-              carta
+              {gridPreview.cols}×{gridPreview.rows} = {gridPreview.perPage} etiquetas por hoja carta
             </DialogDescription>
           </DialogHeader>
           <div className="rounded-lg border bg-white p-4">
             <div
-              className="grid gap-2"
+              className="grid gap-1.5"
               style={{
                 gridTemplateColumns: `repeat(${gridPreview.cols}, minmax(0, 1fr))`,
               }}
             >
               {printItems
                 .flatMap((item) =>
-                  Array.from({ length: item.quantity }, (_, i) => ({ ...item, key: `${item.barcode}-${i}` })),
+                  Array.from({ length: item.quantity }, (_, i) => ({
+                    ...item,
+                    key: `${item.barcode}-${i}`,
+                  })),
                 )
                 .slice(0, gridPreview.perPage)
                 .map((item) => (
                   <div
                     key={item.key}
-                    className={`flex min-h-[72px] flex-col items-center justify-center rounded border border-dashed p-2 text-center ${
-                      item.isOffer ? "border-red-400 bg-red-50" : ""
-                    }`}
+                    className={`flex min-h-[88px] flex-col rounded border border-slate-200 bg-white p-1.5 text-left ${
+                      labelFormat === "C" ? "min-h-[120px]" : ""
+                    } ${labelFormat === "A" ? "min-h-[64px]" : ""}`}
                   >
-                    {item.isOffer && (
-                      <Badge variant="destructive" className="mb-1 text-[10px]">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={QUILLOTANA_LOGO_GRUPO_URL}
+                      alt="Quillotana"
+                      className={`mb-0.5 object-contain object-left ${
+                        labelFormat === "C"
+                          ? "h-5"
+                          : labelFormat === "B"
+                            ? "h-4"
+                            : "h-3"
+                      }`}
+                    />
+                    {labelFormat === "C" && (
+                      <span className="mb-0.5 rounded bg-red-600 px-1 py-0.5 text-center text-[8px] font-bold text-white">
                         OFERTA
-                      </Badge>
-                    )}
-                    {showLogo && (
-                      <span className="mb-0.5 text-[8px] font-semibold text-slate-500">
-                        {companyName || "Logo"}
                       </span>
                     )}
-                    {showProductType && item.productType && (
-                      <span className="text-[8px] uppercase text-muted-foreground">
+                    {showProductType && item.productType && labelFormat !== "A" && (
+                      <span className="text-[7px] font-semibold uppercase text-slate-600">
                         {item.productType}
                       </span>
                     )}
-                    <p className="line-clamp-2 text-[10px] font-semibold leading-tight">
-                      {item.productName}
+                    <p
+                      className={`font-bold leading-tight text-slate-900 ${
+                        labelFormat === "C"
+                          ? "line-clamp-2 text-[9px]"
+                          : labelFormat === "B"
+                            ? "line-clamp-2 text-[8px]"
+                            : "line-clamp-1 text-[7px]"
+                      }`}
+                    >
+                      {labelFormat === "A"
+                        ? [item.productType, item.productName].filter(Boolean).join(" · ")
+                        : item.productName}
                     </p>
+                    {labelFormat !== "A" &&
+                      item.variantName &&
+                      item.variantName !== item.productName && (
+                        <p className="line-clamp-1 text-[7px] text-slate-600">{item.variantName}</p>
+                      )}
                     {showPrice && (
-                      <p className="text-sm font-bold text-primary">{formatCurrency(item.price)}</p>
+                      <div className="mt-auto pt-0.5 text-center">
+                        {labelFormat === "C" &&
+                        item.regular_price != null &&
+                        item.sale_price != null &&
+                        item.regular_price > item.sale_price ? (
+                          <>
+                            <p className="text-[7px] text-slate-400 line-through">
+                              ANTES {formatCurrency(item.regular_price)}
+                            </p>
+                            <p className="text-[11px] font-bold text-red-600">
+                              AHORA {formatCurrency(item.sale_price)}
+                            </p>
+                          </>
+                        ) : (
+                          <p
+                            className={`font-bold ${
+                              labelFormat === "C"
+                                ? "text-[11px] text-red-600"
+                                : labelFormat === "B"
+                                  ? "text-[10px]"
+                                  : "text-[8px]"
+                            }`}
+                          >
+                            {formatCurrency(
+                              labelFormat === "C" ? item.sale_price ?? item.price : item.price,
+                            )}
+                          </p>
+                        )}
+                      </div>
                     )}
                     {showBarcode && (
-                      <p className="mt-1 font-mono text-[9px]">{item.barcode}</p>
+                      <div className="mt-0.5 border-t border-dashed border-slate-200 pt-0.5 text-center">
+                        <div className="mx-auto mb-0.5 h-3 max-w-full bg-[repeating-linear-gradient(90deg,#000_0_2px,#fff_2px_3px)]" />
+                        <p className="font-mono text-[6px] text-slate-700">{item.barcode}</p>
+                      </div>
                     )}
                   </div>
                 ))}
