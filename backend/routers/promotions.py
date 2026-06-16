@@ -371,7 +371,8 @@ def _grid_select_sql(where_clause: str) -> str:
             COALESCE(ps.regular_price, ps.precio_normal) AS regular_price,
             COALESCE(ps.sale_price, ps.precio_oferta) AS sale_price,
             COALESCE(ps.regular_price, ps.precio_normal) AS precio_normal,
-            COALESCE(ps.sale_price, ps.precio_oferta) AS precio_oferta
+            COALESCE(ps.sale_price, ps.precio_oferta) AS precio_oferta,
+            NULLIF(BTRIM(cv_img.image_url::text), '') AS image_url
         FROM app.promotion_price_snapshot ps
         INNER JOIN app.promotions p
             ON p.id = ps.promotion_id
@@ -394,6 +395,12 @@ def _grid_select_sql(where_clause: str) -> str:
         ) vv
             ON vv.company_id = ps.company_id
            AND vv.bar_code = ps.barcode
+        LEFT JOIN LATERAL (
+            SELECT cv.image_url
+            FROM bsale.catalog_view cv
+            WHERE BTRIM(cv.bar_code) = BTRIM(ps.barcode)
+            LIMIT 1
+        ) cv_img ON TRUE
         WHERE {where_clause}
         ORDER BY p.fecha_inicio DESC,
                  COALESCE(pm.product_name, '') ASC

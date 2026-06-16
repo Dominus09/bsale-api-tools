@@ -3464,6 +3464,7 @@ export interface PromotionGridRow {
   sale_price: number | string
   precio_normal: number | string
   precio_oferta: number | string
+  image_url?: string | null
 }
 
 export interface GetPromotionsGridParams {
