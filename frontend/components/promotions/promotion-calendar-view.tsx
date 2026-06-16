@@ -1,17 +1,17 @@
 "use client"
 
 import { Loader2 } from "lucide-react"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import type { PromotionGridRow } from "@/lib/api"
 import {
+  calcDiscountPercent,
   formatCurrency,
-  formatDiscountBadge,
+  formatDateShort,
   groupPromotionsByStartDate,
   productDisplayName,
+  tipoCalendarColor,
 } from "@/lib/promotions-utils"
-import {
-  PromotionStatusBadge,
-  PromotionTipoBadge,
-} from "@/components/promotions/promotion-badges"
+import { PromotionStatusBadge, PromotionTipoBadge } from "@/components/promotions/promotion-badges"
 
 type PromotionCalendarViewProps = {
   rows: PromotionGridRow[]
@@ -46,47 +46,67 @@ export function PromotionCalendarView({
   }
 
   return (
-    <div className="space-y-8">
-      {months.map((month) => (
-        <section key={month.monthKey}>
-          <h2 className="mb-4 text-lg font-semibold capitalize">{month.monthLabel}</h2>
-          <div className="space-y-6">
-            {month.days.map((day) => (
-              <div key={day.dateKey} className="rounded-xl border bg-card p-4">
-                <h3 className="text-muted-foreground mb-3 text-sm font-semibold uppercase tracking-wide">
-                  {day.dateLabel}
-                </h3>
-                <ul className="space-y-2">
-                  {day.items.map((row) => (
-                    <li key={`${row.snapshot_id}-${row.promotion_id}`}>
-                      <button
-                        type="button"
-                        className="hover:bg-muted/60 flex w-full items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors"
-                        onClick={() => onOpen(row)}
-                      >
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate font-medium">{productDisplayName(row)}</p>
-                          <p className="text-muted-foreground text-xs">
-                            {companyNameById.get(row.company_id) ?? `Empresa ${row.company_id}`}
-                            {" · "}
-                            {formatCurrency(row.sale_price)}
-                            {" · "}
-                            {formatDiscountBadge(row.regular_price, row.sale_price)}
-                          </p>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          <PromotionTipoBadge tipo={row.tipo} />
-                          <PromotionStatusBadge estado={row.estado} />
-                        </div>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
-          </div>
-        </section>
-      ))}
-    </div>
+    <TooltipProvider delayDuration={200}>
+      <div className="space-y-8">
+        {months.map((month) => (
+          <section key={month.monthKey}>
+            <h2 className="mb-4 text-lg font-semibold capitalize">{month.monthLabel}</h2>
+            <div className="space-y-6">
+              {month.days.map((day) => (
+                <div key={day.dateKey} className="rounded-xl border bg-card p-4 shadow-sm">
+                  <h3 className="text-muted-foreground mb-3 text-sm font-semibold capitalize">
+                    {day.dateLabel}
+                  </h3>
+                  <ul className="space-y-2">
+                    {day.items.map((row) => {
+                      const empresa =
+                        companyNameById.get(row.company_id) ?? `Empresa ${row.company_id}`
+                      const pct = calcDiscountPercent(row.regular_price, row.sale_price)
+                      const tooltip = [
+                        empresa,
+                        `Antes ${formatCurrency(row.regular_price)} → Ahora ${formatCurrency(row.sale_price)}`,
+                        pct != null ? `Descuento -${pct}%` : "",
+                        `Vigencia hasta ${formatDateShort(row.fecha_fin)}`,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")
+
+                      return (
+                        <li key={`${row.snapshot_id}-${row.promotion_id}`}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button
+                                type="button"
+                                className={`hover:opacity-90 flex w-full items-center justify-between gap-3 rounded-lg border border-l-4 px-3 py-2.5 text-left transition-opacity ${tipoCalendarColor(row.tipo)}`}
+                                onClick={() => onOpen(row)}
+                              >
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate font-medium">{productDisplayName(row)}</p>
+                                  <p className="text-muted-foreground text-xs">
+                                    {empresa}
+                                    {pct != null ? ` · -${pct}%` : ""}
+                                  </p>
+                                </div>
+                                <div className="flex shrink-0 items-center gap-2">
+                                  <PromotionTipoBadge tipo={row.tipo} />
+                                  <PromotionStatusBadge estado={row.estado} />
+                                </div>
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent side="top" className="max-w-xs text-xs">
+                              {tooltip}
+                            </TooltipContent>
+                          </Tooltip>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+    </TooltipProvider>
   )
 }

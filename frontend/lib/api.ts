@@ -3465,6 +3465,8 @@ export interface PromotionGridRow {
   precio_normal: number | string
   precio_oferta: number | string
   image_url?: string | null
+  /** Preparado: etiqueta generada (local hasta backend) */
+  has_label_generated?: boolean
 }
 
 export interface GetPromotionsGridParams {

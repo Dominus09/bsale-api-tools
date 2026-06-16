@@ -55,12 +55,12 @@ export function estadoVisualClass(estado: PromotionEstadoVisual) {
     case "Activa":
       return "bg-emerald-50 text-emerald-800 border-emerald-200"
     case "Próxima":
-      return "bg-amber-50 text-amber-900 border-amber-200"
+      return "bg-sky-50 text-sky-800 border-sky-200"
     case "Vencida":
-      return "bg-red-50 text-red-800 border-red-200"
+      return "bg-zinc-100 text-zinc-600 border-zinc-200"
     case "Pausada":
     default:
-      return "bg-zinc-100 text-zinc-700 border-zinc-200"
+      return "bg-amber-50 text-amber-900 border-amber-200"
   }
 }
 
@@ -69,13 +69,110 @@ export function estadoDotClass(estado: PromotionEstadoVisual) {
     case "Activa":
       return "bg-emerald-500"
     case "Próxima":
-      return "bg-amber-400"
+      return "bg-sky-500"
     case "Vencida":
-      return "bg-red-500"
+      return "bg-zinc-400"
     case "Pausada":
     default:
-      return "bg-zinc-500"
+      return "bg-amber-400"
   }
+}
+
+export function calcSavings(
+  regular: number | string | null | undefined,
+  sale: number | string | null | undefined,
+): number | null {
+  const r = parsePrice(regular)
+  const s = parsePrice(sale)
+  if (r == null || s == null) return null
+  return Math.max(0, Math.round(r - s))
+}
+
+export type PromotionKpis = {
+  activas: number
+  proximas: number
+  vencidas: number
+  remates: number
+  empresas: number
+}
+
+export function computePromotionKpis(rows: PromotionGridRow[]): PromotionKpis {
+  const companyIds = new Set<number>()
+  let activas = 0
+  let proximas = 0
+  let vencidas = 0
+  let remates = 0
+  for (const row of rows) {
+    companyIds.add(row.company_id)
+    if (row.estado === "Activa") activas += 1
+    if (row.estado === "Programada") proximas += 1
+    if (row.estado === "Vencida") vencidas += 1
+    if (row.tipo?.toLowerCase() === "remate") remates += 1
+  }
+  return {
+    activas,
+    proximas,
+    vencidas,
+    remates,
+    empresas: companyIds.size,
+  }
+}
+
+function parseLocalDate(iso: string): Date | null {
+  const key = (iso || "").slice(0, 10)
+  if (!key) return null
+  const d = new Date(`${key}T12:00:00`)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+function startOfLocalDay(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0)
+}
+
+/** Prioridad: vence hoy → mañana → esta semana → resto */
+export function expiryUrgencyRank(fechaFin: string): number {
+  const end = parseLocalDate(fechaFin)
+  if (!end) return 99
+  const today = startOfLocalDay(new Date())
+  const endDay = startOfLocalDay(end)
+  const diffMs = endDay.getTime() - today.getTime()
+  const diffDays = Math.round(diffMs / (24 * 60 * 60 * 1000))
+  if (diffDays < 0) return 4
+  if (diffDays === 0) return 0
+  if (diffDays === 1) return 1
+  if (diffDays <= 7) return 2
+  return 3
+}
+
+export function sortByExpiryUrgency(rows: PromotionGridRow[]): PromotionGridRow[] {
+  return [...rows].sort((a, b) => {
+    const ra = expiryUrgencyRank(a.fecha_fin)
+    const rb = expiryUrgencyRank(b.fecha_fin)
+    if (ra !== rb) return ra - rb
+    return (a.fecha_fin || "").localeCompare(b.fecha_fin || "")
+  })
+}
+
+export function filterRowsForTab(
+  rows: PromotionGridRow[],
+  tab: string,
+  filterEstado: string,
+): PromotionGridRow[] {
+  let out = rows
+  if (tab === "activas") {
+    out = out.filter((r) => r.estado === "Activa")
+    return sortByExpiryUrgency(out)
+  }
+  if (filterEstado !== "all") {
+    out = out.filter((r) => r.estado === filterEstado)
+  }
+  return out
+}
+
+export function tipoCalendarColor(tipo: string): string {
+  return tipo.toLowerCase() === "remate"
+    ? "border-l-orange-500 bg-orange-50/50"
+    : "border-l-sky-500 bg-sky-50/50"
 }
 
 export function formatDateShort(iso: string | null | undefined): string {

@@ -64,11 +64,11 @@ export function PromotionDiscountBadge({
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-full bg-rose-600 px-3 py-1 text-sm font-bold text-white shadow-sm",
+        "inline-flex items-center gap-1 rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-bold text-rose-800",
         className,
       )}
     >
-      💸 {label}
+      {label}
     </span>
   )
 }

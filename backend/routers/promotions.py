@@ -352,7 +352,7 @@ def _grid_select_sql(where_clause: str) -> str:
                 2
             ) AS descuento_porcentaje,
             CASE
-                WHEN pi.tipo_descuento = 'porcentaje' THEN CONCAT(pi.valor::text, '%')
+                WHEN pi.tipo_descuento = 'porcentaje' THEN CONCAT(pi.valor::text, '%%')
                 ELSE 'precio fijo'
             END AS descuento_texto,
             p.fecha_inicio AS fecha_inicio,

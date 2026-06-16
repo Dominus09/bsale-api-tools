@@ -11,6 +11,7 @@ type PromotionActiveGridProps = {
   onOpen: (row: PromotionGridRow) => void
   onEdit: (row: PromotionGridRow) => void
   onDuplicate: (row: PromotionGridRow) => void
+  onLabels: (row: PromotionGridRow) => void
 }
 
 export function PromotionActiveGrid({
@@ -20,6 +21,7 @@ export function PromotionActiveGrid({
   onOpen,
   onEdit,
   onDuplicate,
+  onLabels,
 }: PromotionActiveGridProps) {
   if (loading) {
     return (
@@ -48,6 +50,7 @@ export function PromotionActiveGrid({
           onOpen={onOpen}
           onEdit={onEdit}
           onDuplicate={onDuplicate}
+          onLabels={onLabels}
         />
       ))}
     </div>

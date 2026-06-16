@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
+import { useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -42,12 +43,19 @@ import {
   type ProductMasterRow,
   type PromotionGridRow,
 } from "@/lib/api"
-import { parsePrice, parsePriceInput } from "@/lib/promotions-utils"
+import { parsePrice, parsePriceInput, computePromotionKpis, filterRowsForTab } from "@/lib/promotions-utils"
+import {
+  buildEtiquetasUrlFromPromotion,
+  enrichRowWithLabelStatus,
+  markPromotionLabelGenerated,
+} from "@/lib/promotion-labels-bridge"
 import { PromotionActiveGrid } from "@/components/promotions/promotion-active-grid"
-import { PromotionAdminTable } from "@/components/promotions/promotion-admin-table"
+import { PromotionHistorialTable } from "@/components/promotions/promotion-historial-table"
 import { PromotionCalendarView } from "@/components/promotions/promotion-calendar-view"
+import { PromotionCompanyChips } from "@/components/promotions/promotion-company-chips"
 import { PromotionDetailSheet } from "@/components/promotions/promotion-detail-sheet"
 import { PromotionFilters } from "@/components/promotions/promotion-filters"
+import { PromotionKpiDashboard } from "@/components/promotions/promotion-kpi-dashboard"
 import {
   CalendarDays,
   FileSpreadsheet,
@@ -86,6 +94,7 @@ function emptyLine(): ProductLine {
 }
 
 export default function PromotionsPage() {
+  const router = useRouter()
   const [rows, setRows] = useState<PromotionGridRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -134,7 +143,7 @@ export default function PromotionsPage() {
   }, [companies])
 
   const gridEstadoFilter = useMemo(() => {
-    if (activeTab === "activas" && filterEstado === "all") return "Activa"
+    if (activeTab === "activas") return undefined
     if (filterEstado === "all") return undefined
     return filterEstado
   }, [activeTab, filterEstado])
@@ -149,7 +158,7 @@ export default function PromotionsPage() {
         company_id:
           filterCompanyId === "all" ? undefined : parseInt(filterCompanyId, 10),
       })
-      setRows(data)
+      setRows(data.map(enrichRowWithLabelStatus))
     } catch (e) {
       setRows([])
       setError(e instanceof Error ? e.message : "Error al cargar datos")
@@ -356,6 +365,23 @@ export default function PromotionsPage() {
     }
   }
 
+  const kpis = useMemo(() => computePromotionKpis(rows), [rows])
+
+  const displayRows = useMemo(
+    () => filterRowsForTab(rows, activeTab, filterEstado),
+    [rows, activeTab, filterEstado],
+  )
+
+  const handleLabels = (row: PromotionGridRow) => {
+    markPromotionLabelGenerated(row.snapshot_id)
+    setRows((prev) =>
+      prev.map((r) =>
+        r.snapshot_id === row.snapshot_id ? { ...r, has_label_generated: true } : r,
+      ),
+    )
+    router.push(buildEtiquetasUrlFromPromotion(row))
+  }
+
   const handleTabChange = (tab: string) => {
     setActiveTab(tab)
     if (tab === "activas") {
@@ -365,10 +391,7 @@ export default function PromotionsPage() {
     }
   }
 
-  const activeCount = useMemo(
-    () => rows.filter((r) => r.estado === "Activa").length,
-    [rows],
-  )
+  const activeCount = kpis.activas
 
   return (
     <div className="space-y-6">
@@ -411,6 +434,16 @@ export default function PromotionsPage() {
         </Alert>
       ) : null}
 
+      <PromotionKpiDashboard kpis={kpis} loading={loading} />
+
+      <div className="space-y-3">
+        <PromotionCompanyChips
+          filterCompanyId={filterCompanyId}
+          companies={companies}
+          onSelect={setFilterCompanyId}
+        />
+      </div>
+
       <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-4">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <TabsList className="h-auto flex-wrap">
@@ -427,9 +460,9 @@ export default function PromotionsPage() {
               <CalendarDays className="h-4 w-4" />
               Calendario
             </TabsTrigger>
-            <TabsTrigger value="admin" className="gap-1.5">
+            <TabsTrigger value="historial" className="gap-1.5">
               <Table2 className="h-4 w-4" />
-              Administrativa
+              Historial
             </TabsTrigger>
           </TabsList>
 
@@ -447,27 +480,28 @@ export default function PromotionsPage() {
 
         <TabsContent value="activas" className="mt-0">
           <PromotionActiveGrid
-            rows={rows}
+            rows={displayRows}
             loading={loading}
             companyNameById={companyNameById}
             onOpen={openDetail}
             onEdit={openEditSalePrice}
             onDuplicate={openDuplicate}
+            onLabels={handleLabels}
           />
         </TabsContent>
 
         <TabsContent value="calendario" className="mt-0">
           <PromotionCalendarView
-            rows={rows}
+            rows={displayRows}
             loading={loading}
             companyNameById={companyNameById}
             onOpen={openDetail}
           />
         </TabsContent>
 
-        <TabsContent value="admin" className="mt-0">
-          <PromotionAdminTable
-            rows={rows}
+        <TabsContent value="historial" className="mt-0">
+          <PromotionHistorialTable
+            rows={displayRows}
             loading={loading}
             companyNameById={companyNameById}
             onOpen={openDetail}
@@ -485,6 +519,7 @@ export default function PromotionsPage() {
         }
         onOpenChange={setDetailOpen}
         onEditSalePrice={openEditSalePrice}
+        onLabels={handleLabels}
       />
 
       {/* Crear promoción */}

@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -55,6 +56,7 @@ import {
 } from "@/lib/sucursales-labels-pdf"
 import { QUILLOTANA_LOGO_GRUPO_URL } from "@/lib/quillotana-brand"
 import { resolveEtiquetasPriceList } from "@/lib/etiquetas-price-list-map"
+import { markPromotionLabelGenerated } from "@/lib/promotion-labels-bridge"
 
 type LabelRow = {
   id: string
@@ -135,6 +137,8 @@ function parseExcelRows(buffer: ArrayBuffer): { barcode: string; quantity: numbe
 }
 
 export default function EtiquetasPage() {
+  const searchParams = useSearchParams()
+  const promotionPrefillDone = useRef(false)
   const barcodeRef = useRef<HTMLInputElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const scanLockRef = useRef(false)
@@ -196,13 +200,17 @@ export default function EtiquetasPage() {
     getCompanies()
       .then((list) => {
         setCompanies(list)
+        const urlCompany = searchParams.get("company_id")
         const stored = getStoredCompanyId()
+        const fromUrl = urlCompany ? parseInt(urlCompany, 10) : NaN
         const defaultId =
-          list.find((c) => c.company_id === stored)?.company_id ?? list[0]?.company_id
+          Number.isFinite(fromUrl) && list.some((c) => c.company_id === fromUrl)
+            ? fromUrl
+            : list.find((c) => c.company_id === stored)?.company_id ?? list[0]?.company_id
         if (defaultId != null) setCompanyId(String(defaultId))
       })
       .catch(() => setCompanies([]))
-  }, [])
+  }, [searchParams])
 
   useEffect(() => {
     if (!companyId) {
@@ -237,6 +245,56 @@ export default function EtiquetasPage() {
   useEffect(() => {
     focusBarcodeInput()
   }, [focusBarcodeInput])
+
+  /** Prefill desde Promociones: snapshot congelado → cola de etiquetas formato C */
+  useEffect(() => {
+    if (promotionPrefillDone.current) return
+    if (searchParams.get("from") !== "promotion") return
+    if (!configReady) return
+
+    const barcode = (searchParams.get("barcode") || "").trim()
+    if (!barcode) return
+
+    const regularRaw = searchParams.get("regular_price")
+    const saleRaw = searchParams.get("sale_price")
+    const regular = regularRaw ? parseFloat(regularRaw) : NaN
+    const sale = saleRaw ? parseFloat(saleRaw) : NaN
+    const snapshotId = searchParams.get("snapshot_id")
+    const formatParam = searchParams.get("format")
+
+    promotionPrefillDone.current = true
+    if (formatParam === "A" || formatParam === "B" || formatParam === "C") {
+      setLabelFormat(formatParam)
+    } else {
+      setLabelFormat("C")
+    }
+
+    void lookupLabelProduct({
+      company_id: cid,
+      price_list_id: plid,
+      barcode,
+    })
+      .then((product) => {
+        const salePrice = Number.isFinite(sale) ? sale : product.price
+        const regularPrice = Number.isFinite(regular) ? regular : null
+        const row: LabelRow = {
+          ...resolvedToRow(product, 1),
+          isOffer: true,
+          price: salePrice,
+          salePrice,
+          regularPrice,
+        }
+        setRows([row])
+        if (snapshotId) {
+          const sid = parseInt(snapshotId, 10)
+          if (Number.isFinite(sid)) markPromotionLabelGenerated(sid)
+        }
+      })
+      .catch(() => {
+        setScanError(true)
+        setScanMessage("No se pudo cargar el producto desde la promoción")
+      })
+  }, [searchParams, configReady, cid, plid])
 
   const addResolved = useCallback(
     (product: LabelProductResolved, quantity = 1) => {
