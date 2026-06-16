@@ -3441,6 +3441,7 @@ export async function getProductsMasterWithoutSupplierCount(): Promise<number> {
 
 /** Fila de GET /promotions/grid */
 export interface PromotionGridRow {
+  snapshot_id: number
   promotion_id: number
   activa: boolean
   tipo_producto: string
@@ -3457,6 +3458,10 @@ export interface PromotionGridRow {
   estado: string
   company_id: number
   price_list: string | null
+  /** Precio lista congelado al crear (ANTES) */
+  regular_price: number | string
+  /** Precio promocional congelado (AHORA) */
+  sale_price: number | string
   precio_normal: number | string
   precio_oferta: number | string
 }
@@ -3518,6 +3523,7 @@ export async function createPromotion(payload: CreatePromotionPayload): Promise<
   id: number
   items_processed: number
   snapshots_generated: number
+  warnings?: string[]
 }> {
   const res = await fetch(`${API_URL}/promotions`, {
     method: "POST",
@@ -3538,7 +3544,96 @@ export async function createPromotion(payload: CreatePromotionPayload): Promise<
     }
     throw new Error(msg)
   }
-  return JSON.parse(text) as { id: number; items_processed: number; snapshots_generated: number }
+  return JSON.parse(text) as {
+    id: number
+    items_processed: number
+    snapshots_generated: number
+    warnings?: string[]
+  }
+}
+
+/** Snapshot vigente (precios congelados) para etiquetas / consulta puntual */
+export interface PromotionActiveSnapshot {
+  snapshot_id: number
+  promotion_id: number
+  barcode: string
+  company_id: number
+  price_list: string | null
+  regular_price: number | string
+  sale_price: number | string
+  tipo: string
+  canal: string
+  fecha_inicio: string
+  fecha_fin: string
+  estado: string
+}
+
+export async function getActivePromotionSnapshot(
+  companyId: number,
+  barcode: string,
+): Promise<PromotionActiveSnapshot> {
+  const qs = new URLSearchParams({
+    company_id: String(companyId),
+    barcode: barcode.trim(),
+  })
+  const res = await fetch(`${API_URL}/promotions/active-snapshot?${qs}`, {
+    headers: getAuthHeaders(),
+  })
+  const text = await res.text()
+  if (!res.ok) {
+    let msg = "No hay promoción activa para este producto"
+    try {
+      const j = JSON.parse(text) as { detail?: unknown }
+      if (typeof j.detail === "string") msg = j.detail
+    } catch {
+      if (text) msg = text
+    }
+    throw new Error(msg)
+  }
+  return JSON.parse(text) as PromotionActiveSnapshot
+}
+
+export async function patchPromotionSnapshotSalePrice(
+  snapshotId: number,
+  salePrice: number,
+): Promise<{
+  id: number
+  promotion_id: number
+  barcode: string
+  company_id: number
+  price_list: string | null
+  regular_price: number | string
+  sale_price: number | string
+  canal: string
+  fecha_generado: string
+}> {
+  const res = await fetch(`${API_URL}/promotions/snapshots/${snapshotId}/sale-price`, {
+    method: "PATCH",
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ sale_price: salePrice }),
+  })
+  const text = await res.text()
+  if (!res.ok) {
+    let msg = "Error al actualizar precio promocional"
+    try {
+      const j = JSON.parse(text) as { detail?: unknown }
+      if (typeof j.detail === "string") msg = j.detail
+    } catch {
+      if (text) msg = text
+    }
+    throw new Error(msg)
+  }
+  return JSON.parse(text) as {
+    id: number
+    promotion_id: number
+    barcode: string
+    company_id: number
+    price_list: string | null
+    regular_price: number | string
+    sale_price: number | string
+    canal: string
+    fecha_generado: string
+  }
 }
 
 export async function togglePromotion(promotionId: number): Promise<{

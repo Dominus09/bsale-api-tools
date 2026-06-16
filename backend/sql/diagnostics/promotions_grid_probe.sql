@@ -16,8 +16,12 @@ SELECT
     ps.barcode AS codigo_barras,
     ROUND(
         CASE
-            WHEN ps.precio_normal > 0
-            THEN ((ps.precio_normal - ps.precio_oferta) / ps.precio_normal) * 100
+            WHEN COALESCE(ps.regular_price, ps.precio_normal) > 0
+            THEN (
+                (COALESCE(ps.regular_price, ps.precio_normal)
+                 - COALESCE(ps.sale_price, ps.precio_oferta))
+                / COALESCE(ps.regular_price, ps.precio_normal)
+            ) * 100
             ELSE 0
         END,
         2
@@ -40,7 +44,9 @@ SELECT
     ps.company_id AS company_id,
     COALESCE(ps.price_list, pc.price_list) AS price_list,
     ps.precio_normal AS precio_normal,
-    ps.precio_oferta AS precio_oferta
+    ps.precio_oferta AS precio_oferta,
+    COALESCE(ps.regular_price, ps.precio_normal) AS regular_price,
+    COALESCE(ps.sale_price, ps.precio_oferta) AS sale_price
 FROM app.promotion_price_snapshot ps
 INNER JOIN app.promotions p
     ON p.id = ps.promotion_id

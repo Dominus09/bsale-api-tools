@@ -41,13 +41,14 @@ import {
   getCompanies,
   getProductsMaster,
   getPromotionsGrid,
+  patchPromotionSnapshotSalePrice,
   togglePromotion,
   type Company,
   type CreatePromotionPayload,
   type ProductMasterRow,
   type PromotionGridRow,
 } from "@/lib/api"
-import { Loader2, Plus, RefreshCw, Search, Trash2 } from "lucide-react"
+import { Loader2, Pencil, Plus, RefreshCw, Search, Trash2 } from "lucide-react"
 
 const ESTADOS = ["Activa", "Vencida", "Programada", "Inactiva"] as const
 
@@ -71,6 +72,21 @@ function emptyLine(): ProductLine {
     valor: "",
     observacion: "",
   }
+}
+
+function formatCurrency(value: number | string | null | undefined) {
+  const n = typeof value === "string" ? parseFloat(value) : value
+  if (n == null || !Number.isFinite(n)) return "—"
+  return new Intl.NumberFormat("es-CL", {
+    style: "currency",
+    currency: "CLP",
+    maximumFractionDigits: 0,
+  }).format(n)
+}
+
+function parsePriceInput(value: string): number | null {
+  const n = parseFloat(value.replace(/\./g, "").replace(",", "."))
+  return Number.isFinite(n) && n >= 0 ? n : null
 }
 
 function estadoBadgeClass(estado: string) {
@@ -145,6 +161,13 @@ export default function PromotionsPage() {
   const [searchLoading, setSearchLoading] = useState(false)
   const [searchResults, setSearchResults] = useState<ProductMasterRow[]>([])
   const [searchTargetLineId, setSearchTargetLineId] = useState<string | null>(null)
+
+  const [editPriceOpen, setEditPriceOpen] = useState(false)
+  const [editPriceRow, setEditPriceRow] = useState<PromotionGridRow | null>(null)
+  const [editSalePriceInput, setEditSalePriceInput] = useState("")
+  const [editPriceSubmitting, setEditPriceSubmitting] = useState(false)
+  const [editPriceError, setEditPriceError] = useState<string | null>(null)
+  const [createWarnings, setCreateWarnings] = useState<string[]>([])
 
   const companyNameById = useMemo(() => {
     const m = new Map<number, string>()
@@ -305,7 +328,8 @@ export default function PromotionsPage() {
 
     setCreateSubmitting(true)
     try {
-      await createPromotion(payload)
+      const result = await createPromotion(payload)
+      setCreateWarnings(result.warnings ?? [])
       setCreateOpen(false)
       resetCreateForm()
       await loadGrid()
@@ -326,6 +350,36 @@ export default function PromotionsPage() {
       setError(e instanceof Error ? e.message : "Error al cambiar estado")
     } finally {
       setTogglingId(null)
+    }
+  }
+
+  const openEditSalePrice = (row: PromotionGridRow) => {
+    setEditPriceRow(row)
+    const current =
+      typeof row.sale_price === "string" ? parseFloat(row.sale_price) : row.sale_price
+    setEditSalePriceInput(Number.isFinite(current) ? String(Math.round(current)) : "")
+    setEditPriceError(null)
+    setEditPriceOpen(true)
+  }
+
+  const submitEditSalePrice = async () => {
+    if (!editPriceRow) return
+    const sale = parsePriceInput(editSalePriceInput)
+    if (sale == null) {
+      setEditPriceError("Ingrese un precio promocional válido.")
+      return
+    }
+    setEditPriceSubmitting(true)
+    setEditPriceError(null)
+    try {
+      await patchPromotionSnapshotSalePrice(editPriceRow.snapshot_id, sale)
+      setEditPriceOpen(false)
+      setEditPriceRow(null)
+      await loadGrid()
+    } catch (e) {
+      setEditPriceError(e instanceof Error ? e.message : "Error al guardar")
+    } finally {
+      setEditPriceSubmitting(false)
     }
   }
 
@@ -354,6 +408,19 @@ export default function PromotionsPage() {
         <Alert variant="destructive">
           <AlertTitle>Error</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      {createWarnings.length > 0 ? (
+        <Alert>
+          <AlertTitle>Advertencias al crear promoción</AlertTitle>
+          <AlertDescription>
+            <ul className="mt-1 list-inside list-disc text-sm">
+              {createWarnings.map((w) => (
+                <li key={w}>{w}</li>
+              ))}
+            </ul>
+          </AlertDescription>
         </Alert>
       ) : null}
 
@@ -444,24 +511,27 @@ export default function PromotionsPage() {
                     <TableHead className="min-w-[250px]">Producto</TableHead>
                     <TableHead className="min-w-[250px]">Variante</TableHead>
                     <TableHead className="max-w-[120px]">Código barras</TableHead>
+                    <TableHead className="text-right">ANTES</TableHead>
+                    <TableHead className="text-right">AHORA</TableHead>
                     <TableHead>Tipo</TableHead>
                     <TableHead>Observación</TableHead>
                     <TableHead className="max-w-[100px]">Canal</TableHead>
                     <TableHead>Empresa</TableHead>
                     <TableHead>Lista precio</TableHead>
+                    <TableHead className="w-[52px]" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {rows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={10} className="text-center text-muted-foreground">
+                      <TableCell colSpan={13} className="text-center text-muted-foreground">
                         Sin filas para los filtros actuales.
                       </TableCell>
                     </TableRow>
                   ) : (
                     rows.map((r) => (
                       <TableRow
-                        key={`${r.promotion_id}-${r.company_id}-${r.codigo_barras}`}
+                        key={`${r.snapshot_id}-${r.promotion_id}-${r.company_id}-${r.codigo_barras}`}
                       >
                         <TableCell className="max-w-[120px] align-top">
                           <div className="flex min-w-0 max-w-[120px] flex-col gap-2">
@@ -499,6 +569,12 @@ export default function PromotionsPage() {
                         <TableCell className="max-w-[120px] truncate font-mono text-xs">
                           {r.codigo_barras}
                         </TableCell>
+                        <TableCell className="text-right text-sm text-muted-foreground line-through">
+                          {formatCurrency(r.regular_price)}
+                        </TableCell>
+                        <TableCell className="text-right text-sm font-semibold text-emerald-700">
+                          {formatCurrency(r.sale_price)}
+                        </TableCell>
                         <TableCell className="capitalize">{r.tipo}</TableCell>
                         <TableCell className="max-w-[200px] truncate text-sm">
                           {r.observacion || "—"}
@@ -511,6 +587,18 @@ export default function PromotionsPage() {
                         </TableCell>
                         <TableCell className="max-w-[140px] truncate text-sm">
                           {r.price_list || "—"}
+                        </TableCell>
+                        <TableCell className="p-2">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            title="Editar precio AHORA"
+                            onClick={() => openEditSalePrice(r)}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </Button>
                         </TableCell>
                       </TableRow>
                     ))
@@ -635,6 +723,10 @@ export default function PromotionsPage() {
                     value={formSharedPriceList}
                     onChange={(e) => setFormSharedPriceList(e.target.value)}
                   />
+                  <p className="text-muted-foreground text-xs">
+                    Si se deja vacío, se usa el mapeo automático por empresa (ej. La Quillotana
+                    Spa → Supermercado La Quillotana). El precio ANTES se congela al crear.
+                  </p>
                 </div>
               </>
             )}
@@ -831,6 +923,66 @@ export default function PromotionsPage() {
               <p className="text-muted-foreground p-4 text-center text-sm">Sin resultados.</p>
             ) : null}
           </ScrollArea>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={editPriceOpen} onOpenChange={setEditPriceOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Editar precio promocional</DialogTitle>
+            <DialogDescription>
+              Solo se modifica el precio AHORA. El precio ANTES permanece congelado desde la
+              creación.
+            </DialogDescription>
+          </DialogHeader>
+          {editPriceRow ? (
+            <div className="space-y-4 py-2">
+              <div className="rounded-md border bg-muted/40 p-3 text-sm">
+                <p className="font-medium">{editPriceRow.producto || editPriceRow.codigo_barras}</p>
+                <p className="text-muted-foreground font-mono text-xs">{editPriceRow.codigo_barras}</p>
+              </div>
+              <div className="grid gap-2">
+                <Label>ANTES (congelado)</Label>
+                <p className="text-muted-foreground text-lg line-through">
+                  {formatCurrency(editPriceRow.regular_price)}
+                </p>
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit-sale-price">AHORA</Label>
+                <Input
+                  id="edit-sale-price"
+                  inputMode="numeric"
+                  value={editSalePriceInput}
+                  onChange={(e) => setEditSalePriceInput(e.target.value)}
+                  placeholder="990"
+                />
+              </div>
+              {editPriceError ? (
+                <Alert variant="destructive">
+                  <AlertDescription>{editPriceError}</AlertDescription>
+                </Alert>
+              ) : null}
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button variant="outline" type="button" onClick={() => setEditPriceOpen(false)}>
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              disabled={editPriceSubmitting}
+              onClick={() => void submitEditSalePrice()}
+            >
+              {editPriceSubmitting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Guardando…
+                </>
+              ) : (
+                "Guardar AHORA"
+              )}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

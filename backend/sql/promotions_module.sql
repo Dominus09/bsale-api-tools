@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS app.promotion_price_snapshot (
     price_list VARCHAR(50) NULL,
     precio_normal NUMERIC(12, 2) NOT NULL,
     precio_oferta NUMERIC(12, 2) NOT NULL,
+    regular_price NUMERIC(12, 2) NOT NULL,
+    sale_price NUMERIC(12, 2) NOT NULL,
     canal VARCHAR(20) NOT NULL,
     fecha_generado TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW()
 );
