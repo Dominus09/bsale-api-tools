@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -39,6 +39,7 @@ import {
   getPriceLists,
   getProductsMaster,
   getStoredCompanyId,
+  getStoredCompanyName,
   lookupLabelProduct,
   resolveLabelProductsBatch,
   type Company,
@@ -53,6 +54,7 @@ import {
   type LabelPrintItem,
 } from "@/lib/sucursales-labels-pdf"
 import { QUILLOTANA_LOGO_GRUPO_URL } from "@/lib/quillotana-brand"
+import { resolveEtiquetasPriceList } from "@/lib/etiquetas-price-list-map"
 
 type LabelRow = {
   id: string
@@ -150,6 +152,9 @@ export default function EtiquetasPage() {
   const [companyId, setCompanyId] = useState("")
   const [priceLists, setPriceLists] = useState<PriceListRef[]>([])
   const [priceListId, setPriceListId] = useState("")
+  const [autoPriceList, setAutoPriceList] = useState(false)
+  const [appliedPriceListName, setAppliedPriceListName] = useState("")
+  const [priceListWarning, setPriceListWarning] = useState<string | null>(null)
   const [labelFormat, setLabelFormat] = useState<LabelFormat>("B")
 
   const [showProductType, setShowProductType] = useState(true)
@@ -172,6 +177,18 @@ export default function EtiquetasPage() {
   const plid = parseInt(priceListId, 10)
   const configReady = Number.isFinite(cid) && cid > 0 && Number.isFinite(plid) && plid > 0
 
+  const activeCompany = useMemo(
+    () => companies.find((c) => c.company_id === cid),
+    [companies, cid],
+  )
+  const activeCompanyName =
+    activeCompany?.name ?? getStoredCompanyName() ?? "—"
+
+  const selectedPriceListName = useMemo(
+    () => priceLists.find((pl) => pl.id === plid)?.name ?? appliedPriceListName,
+    [priceLists, plid, appliedPriceListName],
+  )
+
   const totalLabels = rows.reduce((s, r) => s + r.quantity, 0)
   const estimatedPages = estimateLabelPages(totalLabels, labelFormat)
 
@@ -191,19 +208,31 @@ export default function EtiquetasPage() {
     if (!companyId) {
       setPriceLists([])
       setPriceListId("")
+      setAutoPriceList(false)
+      setAppliedPriceListName("")
+      setPriceListWarning(null)
       return
     }
+    const company = companies.find((c) => String(c.company_id) === companyId)
+    const companyName = company?.name ?? getStoredCompanyName() ?? ""
+
     getPriceLists(cid)
       .then((lists) => {
         setPriceLists(lists)
-        if (lists.length > 0) setPriceListId(String(lists[0].id))
-        else setPriceListId("")
+        const resolved = resolveEtiquetasPriceList(companyName, lists)
+        setPriceListId(resolved.priceListId)
+        setAutoPriceList(resolved.auto)
+        setAppliedPriceListName(resolved.priceListName)
+        setPriceListWarning(resolved.warning)
       })
       .catch(() => {
         setPriceLists([])
         setPriceListId("")
+        setAutoPriceList(false)
+        setAppliedPriceListName("")
+        setPriceListWarning(null)
       })
-  }, [companyId, cid])
+  }, [companyId, cid, companies])
 
   useEffect(() => {
     focusBarcodeInput()
@@ -413,7 +442,7 @@ export default function EtiquetasPage() {
         <CardContent className="grid gap-6 lg:grid-cols-2">
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2 sm:col-span-2">
-              <Label>Empresa</Label>
+              <Label>Empresa activa</Label>
               <Select value={companyId} onValueChange={setCompanyId}>
                 <SelectTrigger>
                   <SelectValue placeholder="Seleccionar empresa" />
@@ -427,26 +456,49 @@ export default function EtiquetasPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-2">
-              <Label>Lista de precios</Label>
-              <Select
-                value={priceListId}
-                onValueChange={setPriceListId}
-                disabled={!companyId || priceLists.length === 0}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Lista de precios" />
-                </SelectTrigger>
-                <SelectContent>
-                  {priceLists.map((pl) => (
-                    <SelectItem key={pl.id} value={String(pl.id)}>
-                      {pl.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+
+            <div className="space-y-2 sm:col-span-2">
+              <Label>Lista de precios aplicada</Label>
+              {autoPriceList ? (
+                <div className="rounded-md border border-primary/25 bg-primary/5 px-3 py-2.5">
+                  <p className="text-sm font-medium text-foreground">
+                    {selectedPriceListName || "—"}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Asignada automáticamente para {activeCompanyName}
+                  </p>
+                </div>
+              ) : (
+                <Select
+                  value={priceListId}
+                  onValueChange={(v) => {
+                    setPriceListId(v)
+                    const pl = priceLists.find((p) => String(p.id) === v)
+                    setAppliedPriceListName(pl?.name ?? "")
+                  }}
+                  disabled={!companyId || priceLists.length === 0}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Seleccionar lista de precios" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {priceLists.map((pl) => (
+                      <SelectItem key={pl.id} value={String(pl.id)}>
+                        {pl.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              {priceListWarning && (
+                <p className="flex items-start gap-1.5 text-xs text-amber-700">
+                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  Seleccione la lista manualmente o revise el mapeo en consola.
+                </p>
+              )}
             </div>
-            <div className="space-y-2">
+
+            <div className="space-y-2 sm:col-span-2">
               <Label>Elementos visibles</Label>
               <div className="flex flex-wrap gap-4 text-sm">
                 <label className="flex items-center gap-2">
