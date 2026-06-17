@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter,
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
@@ -33,8 +34,13 @@ import {
   Search,
   Loader2,
   AlertCircle,
+  Download,
 } from "lucide-react"
-import * as XLSX from "xlsx"
+import {
+  downloadEtiquetasExcelTemplate,
+  mergeEtiquetasExcelRows,
+  parseEtiquetasExcel,
+} from "@/lib/etiquetas-excel"
 import {
   getCompanies,
   getPriceLists,
@@ -99,41 +105,12 @@ function resolvedToRow(p: LabelProductResolved, quantity = 1): LabelRow {
   }
 }
 
-function parseExcelRows(buffer: ArrayBuffer): { barcode: string; quantity: number }[] {
-  const wb = XLSX.read(buffer, { type: "array" })
-  const sheet = wb.Sheets[wb.SheetNames[0]]
-  if (!sheet) return []
-  const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" })
-  const out: { barcode: string; quantity: number }[] = []
-
-  for (const row of rows) {
-    const entries = Object.entries(row)
-    let barcode = ""
-    let quantity = 1
-    for (const [key, raw] of entries) {
-      const k = key.trim().toLowerCase()
-      const val = String(raw ?? "").trim()
-      if (!val) continue
-      if (
-        k.includes("barcode") ||
-        k.includes("barras") ||
-        k === "ean" ||
-        k === "codigo" ||
-        k === "código"
-      ) {
-        barcode = val
-      }
-      if (k.includes("cantidad") || k.includes("qty") || k === "quantity") {
-        const n = parseInt(val, 10)
-        if (Number.isFinite(n) && n > 0) quantity = n
-      }
-    }
-    if (!barcode && entries.length > 0) {
-      barcode = String(entries[0][1] ?? "").trim()
-    }
-    if (barcode) out.push({ barcode, quantity })
-  }
-  return out
+type ExcelImportReview = {
+  fileName: string
+  totalRead: number
+  duplicates: { barcode: string; count: number }[]
+  notFound: { barcode: string; quantity: number }[]
+  resolved: (LabelProductResolved & { quantity: number })[]
 }
 
 export default function EtiquetasPage() {
@@ -176,6 +153,8 @@ export default function EtiquetasPage() {
   const [loading, setLoading] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [pdfLoading, setPdfLoading] = useState(false)
+  const [excelReviewOpen, setExcelReviewOpen] = useState(false)
+  const [excelReview, setExcelReview] = useState<ExcelImportReview | null>(null)
 
   const cid = parseInt(companyId, 10)
   const plid = parseInt(priceListId, 10)
@@ -397,35 +376,28 @@ export default function EtiquetasPage() {
       setLoading(true)
       try {
         const buffer = await file.arrayBuffer()
-        const parsed = parseExcelRows(buffer)
-        if (parsed.length === 0) {
+        const parsed = parseEtiquetasExcel(buffer)
+        if (parsed.rows.length === 0) {
           setScanMessage("Excel sin códigos válidos")
           setScanError(true)
           return
         }
-        const { resolved, errors } = await resolveLabelProductsBatch(cid, plid, parsed)
-        setRows((prev) => {
-          let next = [...prev]
-          for (const item of resolved) {
-            const existing = next.find((r) => r.barcode === item.barcode)
-            if (existing) {
-              next = next.map((r) =>
-                r.barcode === item.barcode
-                  ? { ...r, quantity: r.quantity + item.quantity }
-                  : r,
-              )
-            } else {
-              next.push(resolvedToRow(item, item.quantity))
-            }
-          }
-          return next
+        const merged = mergeEtiquetasExcelRows(parsed.rows)
+        const { resolved, errors } = await resolveLabelProductsBatch(cid, plid, merged)
+        const qtyByBarcode = new Map(merged.map((m) => [m.barcode, m.quantity]))
+        setExcelReview({
+          fileName: file.name,
+          totalRead: parsed.rows.length,
+          duplicates: parsed.duplicates,
+          notFound: errors.map((e) => ({
+            barcode: e.barcode,
+            quantity: qtyByBarcode.get(e.barcode) ?? 1,
+          })),
+          resolved,
         })
-        setScanMessage(
-          `${resolved.length} producto(s) importado(s)${
-            errors.length ? `, ${errors.length} no encontrado(s)` : ""
-          }`,
-        )
-        setScanError(errors.length > 0 && resolved.length === 0)
+        setExcelReviewOpen(true)
+        setScanError(false)
+        setScanMessage(null)
       } catch {
         setScanMessage("Error al leer Excel")
         setScanError(true)
@@ -436,6 +408,36 @@ export default function EtiquetasPage() {
     },
     [configReady, cid, plid],
   )
+
+  const confirmExcelImport = useCallback(() => {
+    if (!excelReview) return
+    const { resolved, notFound, totalRead } = excelReview
+    setRows((prev) => {
+      let next = [...prev]
+      for (const item of resolved) {
+        const existing = next.find((r) => r.barcode === item.barcode)
+        if (existing) {
+          next = next.map((r) =>
+            r.barcode === item.barcode
+              ? { ...r, quantity: r.quantity + item.quantity }
+              : r,
+          )
+        } else {
+          next.push(resolvedToRow(item, item.quantity))
+        }
+      }
+      return next
+    })
+    setScanMessage(
+      `${resolved.length} producto(s) agregado(s) de ${totalRead} código(s) leído(s)${
+        notFound.length ? ` · ${notFound.length} no encontrado(s)` : ""
+      }`,
+    )
+    setScanError(resolved.length === 0)
+    setExcelReviewOpen(false)
+    setExcelReview(null)
+    focusBarcodeInput()
+  }, [excelReview, focusBarcodeInput])
 
   const printItems: LabelPrintItem[] = rows.map((r) => ({
     barcode: r.barcode,
@@ -724,7 +726,7 @@ export default function EtiquetasPage() {
                 </ul>
               )}
             </div>
-            <div>
+            <div className="flex flex-wrap gap-2">
               <input
                 ref={fileRef}
                 type="file"
@@ -738,6 +740,14 @@ export default function EtiquetasPage() {
               <Button
                 type="button"
                 variant="outline"
+                onClick={() => downloadEtiquetasExcelTemplate()}
+              >
+                <Download className="mr-2 h-4 w-4" />
+                Descargar plantilla Excel
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
                 onClick={() => fileRef.current?.click()}
                 disabled={loading || !configReady}
               >
@@ -746,10 +756,46 @@ export default function EtiquetasPage() {
               </Button>
             </div>
           </div>
-          <p className="text-xs text-muted-foreground">
-            Excel: columna barcode (o primera columna). Cantidad opcional. Sin cantidad → 1
-            etiqueta.
-          </p>
+
+          <div className="rounded-lg border bg-muted/30 p-4 text-sm">
+            <p className="font-semibold">Formato esperado del Excel</p>
+            <p className="text-muted-foreground mt-1">
+              Columna obligatoria: <span className="font-mono text-foreground">codigo_barra</span>
+              {" · "}
+              Columna opcional: <span className="font-mono text-foreground">cantidad</span>
+            </p>
+            <div className="mt-3 overflow-x-auto rounded-md border bg-background">
+              <table className="w-full min-w-[280px] text-xs">
+                <thead>
+                  <tr className="border-b bg-muted/50">
+                    <th className="px-3 py-2 text-left font-semibold">codigo_barra</th>
+                    <th className="px-3 py-2 text-left font-semibold">cantidad</th>
+                  </tr>
+                </thead>
+                <tbody className="font-mono">
+                  <tr className="border-b">
+                    <td className="px-3 py-2">7802100505323</td>
+                    <td className="px-3 py-2">1</td>
+                  </tr>
+                  <tr>
+                    <td className="px-3 py-2">7802100001719</td>
+                    <td className="px-3 py-2">1</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <ul className="text-muted-foreground mt-3 list-inside list-disc space-y-1 text-xs">
+              <li>El código puede venir como texto o número.</li>
+              <li>
+                También se aceptan columnas: barcode, codigo, código, cod_barra, código_barra.
+              </li>
+              <li>
+                Recomendado: formato <strong className="text-foreground">texto</strong> para evitar
+                pérdida de ceros iniciales.
+              </li>
+              <li>Si no se informa cantidad, se genera 1 etiqueta por código.</li>
+            </ul>
+          </div>
         </CardContent>
       </Card>
 
@@ -900,6 +946,102 @@ export default function EtiquetasPage() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog
+        open={excelReviewOpen}
+        onOpenChange={(open) => {
+          setExcelReviewOpen(open)
+          if (!open) setExcelReview(null)
+        }}
+      >
+        <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Resultado de importación Excel</DialogTitle>
+            <DialogDescription>
+              {excelReview?.fileName ?? "Archivo cargado"}
+            </DialogDescription>
+          </DialogHeader>
+          {excelReview ? (
+            <div className="space-y-4 text-sm">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-md border bg-muted/30 px-3 py-2">
+                  <p className="text-muted-foreground text-xs">Códigos leídos</p>
+                  <p className="text-lg font-semibold">{excelReview.totalRead}</p>
+                </div>
+                <div className="rounded-md border bg-emerald-50 px-3 py-2">
+                  <p className="text-xs text-emerald-800">Encontrados</p>
+                  <p className="text-lg font-semibold text-emerald-900">
+                    {excelReview.resolved.length}
+                  </p>
+                </div>
+              </div>
+
+              {excelReview.duplicates.length > 0 ? (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+                  <p className="font-medium text-amber-900">
+                    Duplicados en el archivo ({excelReview.duplicates.length})
+                  </p>
+                  <ul className="mt-2 max-h-28 space-y-1 overflow-y-auto font-mono text-xs text-amber-950">
+                    {excelReview.duplicates.map((d) => (
+                      <li key={d.barcode}>
+                        {d.barcode} · {d.count} veces
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="text-muted-foreground mt-2 text-xs">
+                    Las cantidades de códigos repetidos se sumarán al agregar.
+                  </p>
+                </div>
+              ) : null}
+
+              {excelReview.notFound.length > 0 ? (
+                <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2">
+                  <p className="font-medium text-destructive">
+                    No encontrados ({excelReview.notFound.length})
+                  </p>
+                  <ul className="mt-2 max-h-32 space-y-1 overflow-y-auto font-mono text-xs">
+                    {excelReview.notFound.map((nf) => (
+                      <li key={nf.barcode}>
+                        {nf.barcode}
+                        {nf.quantity > 1 ? ` · cant. ${nf.quantity}` : ""}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+
+              {excelReview.resolved.length === 0 ? (
+                <p className="text-muted-foreground text-sm">
+                  Ningún código del archivo existe en la lista de precios seleccionada.
+                </p>
+              ) : (
+                <p className="text-muted-foreground text-sm">
+                  Se agregarán solo los {excelReview.resolved.length} producto(s) encontrados.
+                </p>
+              )}
+            </div>
+          ) : null}
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setExcelReviewOpen(false)
+                setExcelReview(null)
+              }}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              onClick={confirmExcelImport}
+              disabled={!excelReview || excelReview.resolved.length === 0}
+            >
+              Agregar {excelReview?.resolved.length ?? 0} encontrados
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
         <DialogContent className="max-h-[85vh] max-w-5xl overflow-y-auto">
