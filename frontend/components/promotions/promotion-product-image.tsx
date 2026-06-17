@@ -1,24 +1,12 @@
 "use client"
 
-import { useCallback, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { Package } from "lucide-react"
 import { cn } from "@/lib/utils"
-
-export const PROMOTION_LOCAL_IMAGE_BASE = "/imagenes-productos"
-
-export function localBarcodeImageUrl(barcode: string | null | undefined): string | null {
-  const bc = (barcode || "").trim()
-  if (!bc) return null
-  return `${PROMOTION_LOCAL_IMAGE_BASE}/${bc}.webp`
-}
-
-type ImageStage = "remote" | "local" | "placeholder"
-
-function initialStage(imageUrl?: string | null, barcode?: string | null): ImageStage {
-  if (imageUrl?.trim()) return "remote"
-  if (localBarcodeImageUrl(barcode)) return "local"
-  return "placeholder"
-}
+import {
+  PRODUCT_IMAGE_PLACEHOLDER,
+  productImageFallbackUrls,
+} from "@/lib/product-photo"
 
 type PromotionProductImageProps = {
   imageUrl?: string | null
@@ -35,19 +23,24 @@ export function PromotionProductImage({
   className,
   imgClassName,
 }: PromotionProductImageProps) {
-  const remote = imageUrl?.trim() || null
-  const local = localBarcodeImageUrl(barcode)
+  const urls = useMemo(
+    () => productImageFallbackUrls(imageUrl, barcode),
+    [imageUrl, barcode],
+  )
 
-  const [stage, setStage] = useState<ImageStage>(() => initialStage(remote, barcode))
+  const [index, setIndex] = useState(0)
+
+  useEffect(() => {
+    setIndex(0)
+  }, [urls])
 
   const handleError = useCallback(() => {
-    setStage((prev) => {
-      if (prev === "remote" && local) return "local"
-      return "placeholder"
-    })
-  }, [local])
+    setIndex((prev) => prev + 1)
+  }, [])
 
-  if (stage === "placeholder") {
+  const src = index < urls.length ? urls[index] : null
+
+  if (!src) {
     return (
       <div
         className={cn(
@@ -55,17 +48,14 @@ export function PromotionProductImage({
           className,
         )}
       >
-        <Package className="h-8 w-8 opacity-40" aria-hidden />
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={PRODUCT_IMAGE_PLACEHOLDER}
+          alt=""
+          aria-hidden
+          className="h-10 w-10 opacity-30"
+        />
         <span className="text-[10px] font-medium opacity-60">Sin imagen</span>
-      </div>
-    )
-  }
-
-  const src = stage === "remote" ? remote : local
-  if (!src) {
-    return (
-      <div className={cn("flex h-full w-full items-center justify-center bg-muted/30", className)}>
-        <Package className="h-8 w-8 text-muted-foreground opacity-40" aria-hidden />
       </div>
     )
   }
