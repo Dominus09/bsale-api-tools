@@ -1,6 +1,5 @@
 "use client"
 
-import Image from "next/image"
 import { Copy, Pencil, Printer } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -18,6 +17,7 @@ import {
   PromotionTipoBadge,
 } from "@/components/promotions/promotion-badges"
 import { PromotionLabelStatusBadge } from "@/components/promotions/promotion-label-status-badge"
+import { PromotionProductImage } from "@/components/promotions/promotion-product-image"
 
 type PromotionCardProps = {
   row: PromotionGridRow
@@ -42,7 +42,6 @@ export function PromotionCard({
   const discount = formatDiscountBadge(row.regular_price, row.sale_price)
   const discountPct = calcDiscountPercent(row.regular_price, row.sale_price)
   const savings = calcSavings(row.regular_price, row.sale_price)
-  const imageUrl = row.image_url?.trim() || null
 
   return (
     <Card
@@ -59,20 +58,13 @@ export function PromotionCard({
         </div>
 
         <div className="relative flex aspect-[4/3] items-center justify-center bg-white p-3">
-          {imageUrl ? (
-            <Image
-              src={imageUrl}
-              alt={productName || row.codigo_barras}
-              fill
-              className="object-contain p-2"
-              sizes="(max-width: 640px) 50vw, 20vw"
-              unoptimized
-            />
-          ) : (
-            <div className="text-muted-foreground flex h-full w-full items-center justify-center rounded-lg bg-muted/30 text-xs">
-              Sin imagen
-            </div>
-          )}
+          <PromotionProductImage
+            key={`${row.codigo_barras}-${row.image_url ?? ""}`}
+            imageUrl={row.image_url}
+            barcode={row.codigo_barras}
+            alt={productName || row.codigo_barras}
+            className="h-full w-full"
+          />
         </div>
 
         <div className="flex flex-1 flex-col gap-2.5 p-4">

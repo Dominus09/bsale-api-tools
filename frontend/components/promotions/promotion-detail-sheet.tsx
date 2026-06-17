@@ -1,6 +1,5 @@
 "use client"
 
-import Image from "next/image"
 import { Pencil, Printer } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
@@ -26,6 +25,7 @@ import {
   PromotionTipoBadge,
 } from "@/components/promotions/promotion-badges"
 import { PromotionLabelStatusBadge } from "@/components/promotions/promotion-label-status-badge"
+import { PromotionProductImage } from "@/components/promotions/promotion-product-image"
 
 type PromotionDetailSheetProps = {
   row: PromotionGridRow | null
@@ -50,21 +50,40 @@ export function PromotionDetailSheet({
   const discount =
     discountPct != null ? `-${discountPct}%` : "—"
   const savings = calcSavings(row.regular_price, row.sale_price)
-  const imageUrl = row.image_url?.trim() || null
   const productName = (row.producto || "").trim()
   const variantName = (row.variante || "").trim()
+  const productType = (row.tipo_producto || "").trim()
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-full overflow-y-auto sm:max-w-md">
         <SheetHeader>
-          <SheetTitle className="text-left">{productDisplayName(row)}</SheetTitle>
+          <SheetTitle className="text-left">Detalle de promoción</SheetTitle>
           <SheetDescription className="text-left">
-            Detalle comercial · precios congelados
+            Precios congelados · historial comercial
           </SheetDescription>
         </SheetHeader>
 
         <div className="mt-6 space-y-6">
+          <div className="relative mx-auto aspect-square w-full max-w-[260px] overflow-hidden rounded-xl border bg-white">
+            <PromotionProductImage
+              key={`${row.codigo_barras}-${row.image_url ?? ""}`}
+              imageUrl={row.image_url}
+              barcode={row.codigo_barras}
+              alt={productDisplayName(row)}
+              className="h-full w-full"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <p className="text-lg font-bold leading-tight">
+              {(productName || "Producto").toUpperCase()}
+            </p>
+            {variantName && !productName.toLowerCase().includes(variantName.toLowerCase()) ? (
+              <p className="text-muted-foreground text-sm font-medium">{variantName}</p>
+            ) : null}
+          </div>
+
           <div className="flex flex-wrap items-center gap-2">
             <PromotionStatusBadge estado={row.estado} />
             <PromotionTipoBadge tipo={row.tipo} />
@@ -72,29 +91,11 @@ export function PromotionDetailSheet({
             <PromotionDiscountBadge label={discount} />
           </div>
 
-          <div className="relative mx-auto aspect-square w-full max-w-[240px] rounded-xl border bg-white p-4">
-            {imageUrl ? (
-              <Image
-                src={imageUrl}
-                alt={productDisplayName(row)}
-                fill
-                className="object-contain p-2"
-                sizes="240px"
-                unoptimized
-              />
-            ) : (
-              <div className="text-muted-foreground flex h-full items-center justify-center text-sm">
-                Sin imagen
-              </div>
-            )}
-          </div>
-
           <div className="grid gap-3 text-sm">
-            {productName ? <DetailRow label="Producto" value={productName} /> : null}
-            {variantName ? <DetailRow label="Variante" value={variantName} /> : null}
-            <DetailRow label="Código de barras" value={row.codigo_barras} mono />
             <DetailRow label="Empresa" value={companyName} />
             <DetailRow label="Lista de precios" value={row.price_list || "—"} />
+            <DetailRow label="Código de barras" value={row.codigo_barras} mono />
+            {productType ? <DetailRow label="Tipo producto" value={productType} /> : null}
             <DetailRow label="Canal" value={row.canal} capitalize />
             {row.observacion ? <DetailRow label="Observación" value={row.observacion} /> : null}
           </div>

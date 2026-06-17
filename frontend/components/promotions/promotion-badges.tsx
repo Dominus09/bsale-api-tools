@@ -37,18 +37,24 @@ export function PromotionTipoBadge({
   tipo: string
   className?: string
 }) {
-  const isRemate = tipo.toLowerCase() === "remate"
+  const t = tipo.toLowerCase()
+  const label =
+    t === "remate" ? "Remate" : t === "promocion" ? "Promoción" : "Oferta"
+  const colorClass =
+    t === "remate"
+      ? "bg-orange-100 text-orange-800"
+      : t === "promocion"
+        ? "bg-violet-100 text-violet-800"
+        : "bg-sky-100 text-sky-800"
   return (
     <span
       className={cn(
         "rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-        isRemate
-          ? "bg-orange-100 text-orange-800"
-          : "bg-sky-100 text-sky-800",
+        colorClass,
         className,
       )}
     >
-      {isRemate ? "Remate" : "Oferta"}
+      {label}
     </span>
   )
 }

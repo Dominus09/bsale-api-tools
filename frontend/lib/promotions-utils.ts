@@ -169,10 +169,20 @@ export function filterRowsForTab(
   return out
 }
 
+export const DEFAULT_PROMOTION_PRICE_LIST = "Supermercado La Quillotana"
+
 export function tipoCalendarColor(tipo: string): string {
-  return tipo.toLowerCase() === "remate"
-    ? "border-l-orange-500 bg-orange-50/50"
-    : "border-l-sky-500 bg-sky-50/50"
+  const t = tipo.toLowerCase()
+  if (t === "remate") return "border-l-orange-500 bg-orange-50/50"
+  if (t === "promocion") return "border-l-violet-500 bg-violet-50/50"
+  return "border-l-sky-500 bg-sky-50/50"
+}
+
+export function calendarRowClass(tipo: string, estado: string): string {
+  if (estado === "Vencida") {
+    return "border-l-zinc-400 bg-zinc-100/80 text-zinc-600 opacity-80"
+  }
+  return tipoCalendarColor(tipo)
 }
 
 export function formatDateShort(iso: string | null | undefined): string {

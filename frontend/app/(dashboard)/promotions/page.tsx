@@ -35,15 +35,28 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   createPromotion,
   getCompanies,
+  getPriceLists,
   getProductsMaster,
   getPromotionsGrid,
   patchPromotionSnapshotSalePrice,
+  resolveLabelProductsBatch,
   type Company,
   type CreatePromotionPayload,
   type ProductMasterRow,
   type PromotionGridRow,
 } from "@/lib/api"
-import { parsePrice, parsePriceInput, computePromotionKpis, filterRowsForTab } from "@/lib/promotions-utils"
+import {
+  parsePrice,
+  parsePriceInput,
+  computePromotionKpis,
+  filterRowsForTab,
+  formatCurrency,
+  DEFAULT_PROMOTION_PRICE_LIST,
+} from "@/lib/promotions-utils"
+import {
+  findPriceListByName,
+  mappedPriceListNameForCompany,
+} from "@/lib/etiquetas-price-list-map"
 import {
   buildEtiquetasUrlFromPromotion,
   enrichRowWithLabelStatus,
@@ -68,6 +81,10 @@ import {
   Trash2,
   UserPlus,
 } from "lucide-react"
+
+type ProductSearchRow = ProductMasterRow & { current_price: number | null }
+
+type PromotionTipo = "oferta" | "remate" | "promocion"
 
 type ProductLine = {
   id: string
@@ -112,19 +129,20 @@ export default function PromotionsPage() {
   const [createSubmitting, setCreateSubmitting] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
 
-  const [formTipo, setFormTipo] = useState<"oferta" | "remate">("oferta")
+  const [formTipo, setFormTipo] = useState<PromotionTipo>("oferta")
   const [formCanal, setFormCanal] = useState<"ruta" | "detalle">("detalle")
   const [formInicio, setFormInicio] = useState("")
   const [formFin, setFormFin] = useState("")
   const [formLines, setFormLines] = useState<ProductLine[]>([emptyLine()])
-  const [formRutaPriceList, setFormRutaPriceList] = useState("")
+  const [formRutaPriceList, setFormRutaPriceList] = useState(DEFAULT_PROMOTION_PRICE_LIST)
   const [selectedCompanyIds, setSelectedCompanyIds] = useState<Set<number>>(new Set())
-  const [formSharedPriceList, setFormSharedPriceList] = useState("")
+  const [formSharedPriceList, setFormSharedPriceList] = useState(DEFAULT_PROMOTION_PRICE_LIST)
+  const [formCustomPriceList, setFormCustomPriceList] = useState(false)
 
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
   const [searchLoading, setSearchLoading] = useState(false)
-  const [searchResults, setSearchResults] = useState<ProductMasterRow[]>([])
+  const [searchResults, setSearchResults] = useState<ProductSearchRow[]>([])
   const [searchTargetLineId, setSearchTargetLineId] = useState<string | null>(null)
 
   const [detailRow, setDetailRow] = useState<PromotionGridRow | null>(null)
@@ -186,17 +204,33 @@ export default function PromotionsPage() {
     }
   }, [])
 
+  const defaultCompanyIds = useMemo(() => {
+    const ids = companies
+      .filter(
+        (c) => mappedPriceListNameForCompany(c.name) === DEFAULT_PROMOTION_PRICE_LIST,
+      )
+      .map((c) => c.company_id)
+    return new Set(ids)
+  }, [companies])
+
   const resetCreateForm = () => {
     setFormTipo("oferta")
     setFormCanal("detalle")
     setFormInicio("")
     setFormFin("")
     setFormLines([emptyLine()])
-    setFormRutaPriceList("")
-    setSelectedCompanyIds(new Set())
-    setFormSharedPriceList("")
+    setFormRutaPriceList(DEFAULT_PROMOTION_PRICE_LIST)
+    setSelectedCompanyIds(new Set(defaultCompanyIds))
+    setFormSharedPriceList(DEFAULT_PROMOTION_PRICE_LIST)
+    setFormCustomPriceList(false)
     setCreateError(null)
     setCreateMode("choose")
+  }
+
+  const applyDefaultCompanies = () => {
+    if (defaultCompanyIds.size > 0) {
+      setSelectedCompanyIds(new Set(defaultCompanyIds))
+    }
   }
 
   const openCreate = () => {
@@ -207,7 +241,7 @@ export default function PromotionsPage() {
   const openDuplicate = (row: PromotionGridRow) => {
     resetCreateForm()
     setCreateMode("individual")
-    setFormTipo(row.tipo as "oferta" | "remate")
+    setFormTipo(row.tipo as PromotionTipo)
     setFormCanal(row.canal as "ruta" | "detalle")
     setFormInicio(row.fecha_inicio?.slice(0, 10) ?? "")
     setFormFin(row.fecha_fin?.slice(0, 10) ?? "")
@@ -222,9 +256,36 @@ export default function PromotionsPage() {
       },
     ])
     setSelectedCompanyIds(new Set([row.company_id]))
-    if (row.price_list) setFormSharedPriceList(row.price_list)
+    if (row.price_list) {
+      setFormSharedPriceList(row.price_list)
+      setFormCustomPriceList(row.price_list !== DEFAULT_PROMOTION_PRICE_LIST)
+    }
     setCreateOpen(true)
   }
+
+  const resolveSearchPriceContext = useCallback(async (): Promise<{
+    companyId: number
+    priceListId: number
+  } | null> => {
+    let companyId: number | null = null
+    if (selectedCompanyIds.size > 0) {
+      companyId = [...selectedCompanyIds][0] ?? null
+    } else if (defaultCompanyIds.size > 0) {
+      companyId = [...defaultCompanyIds][0] ?? null
+    } else if (companies.length > 0) {
+      companyId = companies[0].company_id
+    }
+    if (companyId == null) return null
+    try {
+      const lists = await getPriceLists(companyId)
+      const match =
+        findPriceListByName(lists, DEFAULT_PROMOTION_PRICE_LIST) ?? lists[0] ?? null
+      if (!match) return null
+      return { companyId, priceListId: match.id }
+    } catch {
+      return null
+    }
+  }, [companies, defaultCompanyIds, selectedCompanyIds])
 
   const runProductSearch = async () => {
     const q = searchQuery.trim()
@@ -235,7 +296,31 @@ export default function PromotionsPage() {
     setSearchLoading(true)
     try {
       const page = await getProductsMaster({ search: q, limit: 30, offset: 0 })
-      setSearchResults(page.items)
+      let enriched: ProductSearchRow[] = page.items.map((it) => ({
+        ...it,
+        current_price: null,
+      }))
+      const ctx = await resolveSearchPriceContext()
+      const withBarcode = page.items.filter((it) => (it.barcode || "").trim())
+      if (ctx && withBarcode.length > 0) {
+        try {
+          const batch = await resolveLabelProductsBatch(
+            ctx.companyId,
+            ctx.priceListId,
+            withBarcode.map((it) => ({ barcode: it.barcode })),
+          )
+          const priceByBarcode = new Map(
+            batch.resolved.map((r) => [r.barcode.trim(), r.price]),
+          )
+          enriched = page.items.map((it) => ({
+            ...it,
+            current_price: priceByBarcode.get((it.barcode || "").trim()) ?? null,
+          }))
+        } catch {
+          // precio opcional en búsqueda
+        }
+      }
+      setSearchResults(enriched)
     } catch {
       setSearchResults([])
     } finally {
@@ -243,7 +328,7 @@ export default function PromotionsPage() {
     }
   }
 
-  const pickSearchResult = (item: ProductMasterRow) => {
+  const pickSearchResult = (item: ProductSearchRow) => {
     const bc = (item.barcode || "").trim()
     if (!bc) return
     setFormLines((prev) => {
@@ -287,19 +372,23 @@ export default function PromotionsPage() {
     }
 
     let companiesPayload: CreatePromotionPayload["companies"] = []
+    const effectivePriceList = formCustomPriceList
+      ? formSharedPriceList.trim() || DEFAULT_PROMOTION_PRICE_LIST
+      : DEFAULT_PROMOTION_PRICE_LIST
     if (formCanal === "detalle") {
       if (selectedCompanyIds.size === 0) {
         setCreateError("Seleccione al menos una empresa.")
         return
       }
-      const pl = formSharedPriceList.trim() || null
       companiesPayload = [...selectedCompanyIds].map((company_id) => ({
         company_id,
-        price_list: pl,
+        price_list: effectivePriceList,
       }))
     } else {
-      const pl = formRutaPriceList.trim() || null
-      if (pl) companiesPayload = [{ company_id: 3, price_list: pl }]
+      const pl = formCustomPriceList
+        ? formRutaPriceList.trim() || DEFAULT_PROMOTION_PRICE_LIST
+        : DEFAULT_PROMOTION_PRICE_LIST
+      companiesPayload = [{ company_id: 3, price_list: pl }]
     }
 
     const payload: CreatePromotionPayload = {
@@ -399,7 +488,7 @@ export default function PromotionsPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Promociones</h1>
           <p className="text-muted-foreground mt-1 text-sm">
-            Ofertas y remates para sucursales · precios congelados listos para etiquetas
+            Ofertas, remates y promociones para sucursales · precios congelados listos para etiquetas
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -543,7 +632,10 @@ export default function PromotionsPage() {
                 <button
                   type="button"
                   className="hover:border-primary hover:bg-muted/40 flex flex-col items-start gap-2 rounded-xl border p-4 text-left transition-colors"
-                  onClick={() => setCreateMode("individual")}
+                  onClick={() => {
+                    setCreateMode("individual")
+                    applyDefaultCompanies()
+                  }}
                 >
                   <UserPlus className="text-primary h-8 w-8" />
                   <span className="font-semibold">Individual</span>
@@ -587,7 +679,7 @@ export default function PromotionsPage() {
                     <Label>Tipo</Label>
                     <Select
                       value={formTipo}
-                      onValueChange={(v) => setFormTipo(v as "oferta" | "remate")}
+                      onValueChange={(v) => setFormTipo(v as PromotionTipo)}
                     >
                       <SelectTrigger>
                         <SelectValue />
@@ -595,6 +687,7 @@ export default function PromotionsPage() {
                       <SelectContent>
                         <SelectItem value="oferta">Oferta</SelectItem>
                         <SelectItem value="remate">Remate</SelectItem>
+                        <SelectItem value="promocion">Promoción</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -662,23 +755,63 @@ export default function PromotionsPage() {
                         </div>
                       </ScrollArea>
                     </div>
-                    <div className="grid gap-2">
-                      <Label>Lista de precio (opcional)</Label>
-                      <Input
-                        placeholder="Auto por empresa si se deja vacío"
-                        value={formSharedPriceList}
-                        onChange={(e) => setFormSharedPriceList(e.target.value)}
-                      />
+                    <div className="rounded-md border bg-muted/20 px-3 py-2.5 text-sm">
+                      <p className="font-medium">Lista de precios</p>
+                      <p className="text-muted-foreground">{DEFAULT_PROMOTION_PRICE_LIST}</p>
                     </div>
+                    <label className="flex cursor-pointer items-center gap-2 text-sm">
+                      <Checkbox
+                        checked={formCustomPriceList}
+                        onCheckedChange={(chk) => {
+                          const on = chk === true
+                          setFormCustomPriceList(on)
+                          if (!on) {
+                            setFormSharedPriceList(DEFAULT_PROMOTION_PRICE_LIST)
+                          }
+                        }}
+                      />
+                      <span>Usar otra lista (excepcional)</span>
+                    </label>
+                    {formCustomPriceList ? (
+                      <div className="grid gap-2">
+                        <Label>Lista de precio personalizada</Label>
+                        <Input
+                          placeholder="Nombre exacto de la lista Bsale"
+                          value={formSharedPriceList}
+                          onChange={(e) => setFormSharedPriceList(e.target.value)}
+                        />
+                      </div>
+                    ) : null}
                   </>
                 ) : (
-                  <div className="grid gap-2">
-                    <Label>Lista de precio ruta (opcional)</Label>
-                    <Input
-                      value={formRutaPriceList}
-                      onChange={(e) => setFormRutaPriceList(e.target.value)}
-                    />
-                  </div>
+                  <>
+                    <div className="rounded-md border bg-muted/20 px-3 py-2.5 text-sm">
+                      <p className="font-medium">Lista de precios ruta</p>
+                      <p className="text-muted-foreground">{DEFAULT_PROMOTION_PRICE_LIST}</p>
+                    </div>
+                    <label className="flex cursor-pointer items-center gap-2 text-sm">
+                      <Checkbox
+                        checked={formCustomPriceList}
+                        onCheckedChange={(chk) => {
+                          const on = chk === true
+                          setFormCustomPriceList(on)
+                          if (!on) {
+                            setFormRutaPriceList(DEFAULT_PROMOTION_PRICE_LIST)
+                          }
+                        }}
+                      />
+                      <span>Usar otra lista (excepcional)</span>
+                    </label>
+                    {formCustomPriceList ? (
+                      <div className="grid gap-2">
+                        <Label>Lista de precio ruta personalizada</Label>
+                        <Input
+                          value={formRutaPriceList}
+                          onChange={(e) => setFormRutaPriceList(e.target.value)}
+                        />
+                      </div>
+                    ) : null}
+                  </>
                 )}
 
                 <div className="space-y-2">
@@ -819,12 +952,16 @@ export default function PromotionsPage() {
       </Dialog>
 
       <Dialog open={searchOpen} onOpenChange={setSearchOpen}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent className="sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>Buscar producto</DialogTitle>
+            <DialogDescription>
+              Lista de referencia: {DEFAULT_PROMOTION_PRICE_LIST}
+            </DialogDescription>
           </DialogHeader>
           <div className="flex gap-2">
             <Input
+              placeholder="Nombre, código de barras o SKU…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => {
@@ -835,20 +972,46 @@ export default function PromotionsPage() {
               {searchLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
             </Button>
           </div>
-          <ScrollArea className="h-64 rounded-md border">
-            <ul className="divide-y p-2">
-              {searchResults.map((it) => (
-                <li key={it.id}>
-                  <button
-                    type="button"
-                    className="hover:bg-muted flex w-full flex-col items-start rounded px-2 py-2 text-left text-sm"
-                    onClick={() => pickSearchResult(it)}
-                  >
-                    <span className="font-medium">{it.product_name || "—"}</span>
-                    <span className="text-muted-foreground text-xs">{it.barcode}</span>
-                  </button>
+          <ScrollArea className="h-80 rounded-md border">
+            <ul className="divide-y p-1">
+              {searchResults.length === 0 && !searchLoading ? (
+                <li className="text-muted-foreground px-3 py-8 text-center text-sm">
+                  Sin resultados. Escriba y pulse buscar.
                 </li>
-              ))}
+              ) : null}
+              {searchResults.map((it) => {
+                const productName = (it.product_name || "—").trim()
+                const variantName = (it.variant_name || "").trim()
+                const productType = (it.product_type || "").trim()
+                const showVariant =
+                  variantName.length > 0 &&
+                  !productName.toLowerCase().includes(variantName.toLowerCase())
+                return (
+                  <li key={it.id}>
+                    <button
+                      type="button"
+                      className="hover:bg-muted flex w-full flex-col gap-1 rounded-md px-3 py-3 text-left transition-colors"
+                      onClick={() => pickSearchResult(it)}
+                    >
+                      <p className="text-sm font-bold leading-tight">{productName.toUpperCase()}</p>
+                      {showVariant ? (
+                        <p className="text-muted-foreground text-xs font-medium leading-snug">
+                          {variantName}
+                        </p>
+                      ) : null}
+                      <p className="font-mono text-xs text-foreground/80">{it.barcode || "—"}</p>
+                      {productType ? (
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          {productType}
+                        </p>
+                      ) : null}
+                      <p className="text-sm font-semibold text-emerald-700">
+                        {it.current_price != null ? formatCurrency(it.current_price) : "Precio no disponible"}
+                      </p>
+                    </button>
+                  </li>
+                )
+              })}
             </ul>
           </ScrollArea>
         </DialogContent>

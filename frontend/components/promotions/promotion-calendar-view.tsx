@@ -9,7 +9,7 @@ import {
   formatDateShort,
   groupPromotionsByStartDate,
   productDisplayName,
-  tipoCalendarColor,
+  calendarRowClass,
 } from "@/lib/promotions-utils"
 import { PromotionStatusBadge, PromotionTipoBadge } from "@/components/promotions/promotion-badges"
 
@@ -77,7 +77,7 @@ export function PromotionCalendarView({
                             <TooltipTrigger asChild>
                               <button
                                 type="button"
-                                className={`hover:opacity-90 flex w-full items-center justify-between gap-3 rounded-lg border border-l-4 px-3 py-2.5 text-left transition-opacity ${tipoCalendarColor(row.tipo)}`}
+                                className={`hover:opacity-90 flex w-full items-center justify-between gap-3 rounded-lg border border-l-4 px-3 py-2.5 text-left transition-opacity ${calendarRowClass(row.tipo, row.estado)}`}
                                 onClick={() => onOpen(row)}
                               >
                                 <div className="min-w-0 flex-1">

@@ -51,6 +51,7 @@ export function PromotionFilters({
             <SelectItem value="all">Todos</SelectItem>
             <SelectItem value="oferta">Oferta</SelectItem>
             <SelectItem value="remate">Remate</SelectItem>
+            <SelectItem value="promocion">Promoción</SelectItem>
           </SelectContent>
         </Select>
       </div>

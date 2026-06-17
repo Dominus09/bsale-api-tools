@@ -3513,7 +3513,7 @@ export interface PromotionCompanyPayload {
 }
 
 export interface CreatePromotionPayload {
-  tipo: "oferta" | "remate"
+  tipo: "oferta" | "remate" | "promocion"
   canal: "ruta" | "detalle"
   fecha_inicio: string
   fecha_fin: string

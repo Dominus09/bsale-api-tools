@@ -163,8 +163,8 @@ def _active_snapshot_sql_extra() -> str:
 def create_promotion(body: PromotionCreateBody) -> dict[str, Any]:
     tipo = _norm(body.tipo)
     canal = _norm(body.canal)
-    if tipo not in ("oferta", "remate"):
-        raise HTTPException(status_code=400, detail="tipo debe ser oferta o remate")
+    if tipo not in ("oferta", "remate", "promocion"):
+        raise HTTPException(status_code=400, detail="tipo debe ser oferta, remate o promocion")
     if canal not in ("ruta", "detalle"):
         raise HTTPException(status_code=400, detail="canal debe ser ruta o detalle")
     if body.fecha_inicio > body.fecha_fin:
@@ -410,7 +410,7 @@ def _grid_select_sql(where_clause: str) -> str:
 @router.get("/promotions/grid")
 def promotions_grid(
     canal: str | None = Query(None, description="Filtrar por canal (ruta | detalle)"),
-    tipo: str | None = Query(None, description="Filtrar por tipo (oferta | remate)"),
+    tipo: str | None = Query(None, description="Filtrar por tipo (oferta | remate | promocion)"),
     activa: bool | None = Query(None, description="Filtrar por flag activa en cabecera"),
     estado: str | None = Query(
         None,

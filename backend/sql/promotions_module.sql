@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS app.promotions (
     fecha_fin DATE NOT NULL,
     activa BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
-    CONSTRAINT promotions_tipo_chk CHECK (tipo IN ('oferta', 'remate')),
+    CONSTRAINT promotions_tipo_chk CHECK (tipo IN ('oferta', 'remate', 'promocion')),
     CONSTRAINT promotions_canal_chk CHECK (canal IN ('ruta', 'detalle'))
 );
 
