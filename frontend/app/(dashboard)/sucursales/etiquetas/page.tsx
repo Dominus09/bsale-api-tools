@@ -398,8 +398,8 @@ export default function EtiquetasPage() {
         setExcelReviewOpen(true)
         setScanError(false)
         setScanMessage(null)
-      } catch {
-        setScanMessage("Error al leer Excel")
+      } catch (e) {
+        setScanMessage(e instanceof Error ? e.message : "Error al leer Excel")
         setScanError(true)
       } finally {
         setLoading(false)

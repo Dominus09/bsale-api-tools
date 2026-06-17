@@ -5,6 +5,16 @@ export type EtiquetasExcelRow = {
   quantity: number
 }
 
+export type LabelResolveItemInput = {
+  barcode: unknown
+  quantity?: unknown
+}
+
+export type PreparedLabelResolveItem = {
+  barcode: string
+  quantity: number
+}
+
 export type EtiquetasExcelParseResult = {
   rows: EtiquetasExcelRow[]
   duplicates: { barcode: string; count: number }[]
@@ -91,11 +101,53 @@ function formatIntegerNoScientific(n: number): string {
 function parseQuantityCell(value: unknown): number {
   if (value == null || value === "") return 1
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return Math.trunc(value)
+    return Math.min(9999, Math.trunc(value))
   }
   const text = String(value).trim().replace(",", ".")
-  const n = parseInt(text, 10)
-  return Number.isFinite(n) && n > 0 ? n : 1
+  const n = parseInt(text.split(".")[0], 10)
+  return Number.isFinite(n) && n > 0 ? Math.min(9999, n) : 1
+}
+
+/**
+ * Normaliza filas antes de POST /labels/resolve.
+ * Garantiza barcode string (sin .0, sin notación científica) y quantity entero 1..9999.
+ */
+export function prepareLabelResolveItems(
+  items: LabelResolveItemInput[],
+): PreparedLabelResolveItem[] {
+  const out: PreparedLabelResolveItem[] = []
+
+  for (const it of items) {
+    let barcode = normalizeExcelBarcodeCell(it.barcode)
+    let quantity = parseQuantityCell(it.quantity)
+
+    console.log("barcode parsed", it.barcode, "->", barcode)
+
+    const qtyRaw = it.quantity
+    const qtyLooksLikeBarcode =
+      (typeof qtyRaw === "number" && qtyRaw >= 10_000_000) ||
+      (typeof qtyRaw === "string" && /^\d{10,}$/.test(qtyRaw.trim().replace(/\.0+$/, "")))
+    const barcodeLooksLikeQty =
+      /^\d{1,4}$/.test(barcode) && barcode.length <= 4
+
+    if (!barcode && qtyLooksLikeBarcode) {
+      barcode = normalizeExcelBarcodeCell(qtyRaw)
+      quantity = 1
+    } else if (qtyLooksLikeBarcode && barcodeLooksLikeQty) {
+      const swapped = normalizeExcelBarcodeCell(qtyRaw)
+      if (swapped) {
+        barcode = swapped
+        quantity = parseQuantityCell(it.barcode)
+      }
+    }
+
+    if (!barcode || barcode.length > 50) continue
+
+    quantity = Math.max(1, Math.min(9999, Math.trunc(quantity)))
+    out.push({ barcode, quantity })
+  }
+
+  return out
 }
 
 function findDuplicates(rows: EtiquetasExcelRow[]): { barcode: string; count: number }[] {

@@ -1,4 +1,5 @@
 import { getApiBaseUrl } from "@/lib/api-base"
+import { prepareLabelResolveItems } from "@/lib/etiquetas-excel"
 import {
   DEFAULT_FETCH_TIMEOUT_MS,
   DISPATCH_PREP_FETCH_TIMEOUT_MS,
@@ -3739,21 +3740,63 @@ export async function resolveLabelProductsBatch(
   resolved: (LabelProductResolved & { quantity: number })[]
   errors: { line: number; barcode: string; error: string }[]
 }> {
-  const res = await fetch(`${API_URL}/labels/resolve`, {
-    method: "POST",
-    headers: getAuthHeaders(),
-    body: JSON.stringify({
-      company_id: companyId,
-      price_list_id: priceListId,
-      items: items.map((it) => ({
-        barcode: it.barcode.trim(),
-        quantity: it.quantity && it.quantity > 0 ? it.quantity : 1,
-      })),
-    }),
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}))
-    throw new Error((err as { detail?: string }).detail || `Error ${res.status}`)
+  const cid = Math.trunc(Number(companyId))
+  const plid = Math.trunc(Number(priceListId))
+  if (!Number.isFinite(cid) || cid < 1 || !Number.isFinite(plid) || plid < 1) {
+    throw new Error("Empresa o lista de precios inválida para resolver etiquetas.")
   }
-  return res.json()
+
+  const prepared = prepareLabelResolveItems(items)
+  if (prepared.length === 0) {
+    throw new Error("No hay códigos de barras válidos para importar.")
+  }
+
+  const resolved: (LabelProductResolved & { quantity: number })[] = []
+  const errors: { line: number; barcode: string; error: string }[] = []
+  const chunkSize = 500
+
+  for (let offset = 0; offset < prepared.length; offset += chunkSize) {
+    const chunk = prepared.slice(offset, offset + chunkSize)
+    const payload = {
+      company_id: cid,
+      price_list_id: plid,
+      items: chunk,
+    }
+    console.log("labels/resolve payload", payload)
+
+    const res = await fetch(`${API_URL}/labels/resolve`, {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}))
+      const detail = (err as { detail?: unknown }).detail
+      let msg = `Error ${res.status} al resolver etiquetas`
+      if (typeof detail === "string") {
+        msg = detail
+      } else if (Array.isArray(detail)) {
+        msg = detail
+          .map((d) => {
+            const row = d as { loc?: (string | number)[]; msg?: string }
+            return `${(row.loc ?? []).join(".")}: ${row.msg ?? "inválido"}`
+          })
+          .join("; ")
+      }
+      throw new Error(msg)
+    }
+    const data = (await res.json()) as {
+      resolved: (LabelProductResolved & { quantity: number })[]
+      errors: { line: number; barcode: string; error: string }[]
+    }
+    for (const item of data.resolved) resolved.push(item)
+    for (const item of data.errors) {
+      errors.push({
+        ...item,
+        line: item.line + offset,
+      })
+    }
+  }
+
+  return { resolved, errors }
 }

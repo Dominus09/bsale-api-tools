@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import logging
+import re
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from backend.db import get_connection
 
 router = APIRouter(tags=["labels"])
+logger = logging.getLogger(__name__)
 
 _LABEL_PRODUCT_SQL = """
 SELECT
@@ -53,6 +56,40 @@ def _to_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _normalize_barcode_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if not value.is_integer():
+            return str(value).strip()
+        return str(int(value))
+    text = str(value).strip()
+    if not text:
+        return ""
+    formula_quoted = re.match(r'^=\s*["\']([^"\']+)["\']\s*$', text, flags=re.I)
+    if formula_quoted:
+        return formula_quoted.group(1).strip()
+    if text.startswith("="):
+        text = text[1:].strip()
+        inner = re.match(r'^["\']([^"\']+)["\']$', text, flags=re.I)
+        if inner:
+            return inner.group(1).strip()
+    if re.match(r"^\d+\.0+$", text):
+        return text.split(".", 1)[0]
+    if re.match(r"^[\d.]+e[+-]?\d+$", text, flags=re.I):
+        try:
+            as_float = float(text)
+            if as_float.is_integer():
+                return str(int(as_float))
+        except ValueError:
+            pass
+    return text
 
 
 def _serialize_label_row(row: tuple) -> dict[str, Any]:
@@ -110,6 +147,27 @@ class LabelResolveItemIn(BaseModel):
     barcode: str = Field(..., min_length=1, max_length=50)
     quantity: int = Field(1, ge=1, le=9999)
 
+    @field_validator("barcode", mode="before")
+    @classmethod
+    def coerce_barcode(cls, value: Any) -> str:
+        return _normalize_barcode_value(value)
+
+    @field_validator("quantity", mode="before")
+    @classmethod
+    def coerce_quantity(cls, value: Any) -> int:
+        if value is None or value == "":
+            return 1
+        if isinstance(value, bool):
+            return 1
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        text = str(value).strip().replace(",", ".")
+        if not text:
+            return 1
+        return int(float(text))
+
 
 class LabelResolveBody(BaseModel):
     company_id: int = Field(..., ge=1)
@@ -131,7 +189,7 @@ def get_label_product(
             cur,
             company_id=company_id,
             price_list_id=price_list_id,
-            barcode=barcode,
+            barcode=_normalize_barcode_value(barcode),
         )
         cur.close()
     finally:
@@ -143,8 +201,17 @@ def get_label_product(
 
 
 @router.post("/labels/resolve")
-def resolve_label_products(body: LabelResolveBody) -> dict[str, Any]:
+async def resolve_label_products(request: Request) -> dict[str, Any]:
     """Resuelve lote de barcodes (Excel / cola de impresión)."""
+    raw_body = await request.json()
+    logger.info("labels/resolve request payload received: %s", raw_body)
+
+    try:
+        body = LabelResolveBody.model_validate(raw_body)
+    except ValidationError as exc:
+        logger.warning("labels/resolve validation error: %s", exc.errors())
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+
     conn = get_connection()
     resolved: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
