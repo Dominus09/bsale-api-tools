@@ -87,6 +87,11 @@ import {
   PRE_DESPACHO_WIDE_RANGE_HINT,
   rangeSpanDays,
 } from "@/lib/pre-despacho-range"
+import {
+  mergeTruckAssignmentsForRows,
+  readPreDespachoTruckAssignments,
+  writePreDespachoTruckAssignments,
+} from "@/lib/pre-despacho-truck-storage"
 
 function localIsoDate(d = new Date()): string {
   const y = d.getFullYear()
@@ -321,6 +326,17 @@ export default function DistribuidoraOrdersPage() {
       })
       const newItems = Array.isArray(plan.items) ? plan.items : []
       setPlanningRows((prev) => (append ? [...prev, ...newItems] : newItems))
+      const docIds = newItems.map((r) => r.document_id)
+      setTruckIdByDoc((prev) => {
+        const merged = mergeTruckAssignmentsForRows(
+          opts.dateFrom,
+          opts.dateTo,
+          docIds,
+          append ? prev : readPreDespachoTruckAssignments(opts.dateFrom, opts.dateTo),
+        )
+        writePreDespachoTruckAssignments(opts.dateFrom, opts.dateTo, merged)
+        return merged
+      })
       setPlanningHasMore(Boolean(plan.has_more))
       setRangeWarning(plan.warning ?? null)
       return plan
@@ -418,7 +434,6 @@ export default function DistribuidoraOrdersPage() {
               timeStyle: "medium",
             }),
           )
-          setTruckIdByDoc({})
         } else {
           setLoadingPhase("consulting-orders")
           await loadPlanningRows({ ...apiOpts, append: true, offset })
@@ -495,7 +510,6 @@ export default function DistribuidoraOrdersPage() {
           timeStyle: "medium",
         }),
       )
-      setTruckIdByDoc({})
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") return
       setError(dispatchPrepLoadErrorMessage(e))
@@ -829,6 +843,7 @@ export default function DistribuidoraOrdersPage() {
         for (const r of groupRows) {
           next[r.document_id] = truckId
         }
+        writePreDespachoTruckAssignments(appliedDateFrom, appliedDateTo, next)
         return next
       })
       try {
@@ -848,7 +863,7 @@ export default function DistribuidoraOrdersPage() {
         }`,
       })
     },
-    [trucks],
+    [trucks, appliedDateFrom, appliedDateTo],
   )
 
   const confirmBulkTruckSuggest = useCallback(() => {
@@ -863,10 +878,11 @@ export default function DistribuidoraOrdersPage() {
         const t = prev[x.document_id]
         if (t == null || !isValidTruckId(t, trucks)) next[x.document_id] = truckId
       }
+      writePreDespachoTruckAssignments(appliedDateFrom, appliedDateTo, next)
       return next
     })
     setBulkTruckSuggest(null)
-  }, [bulkTruckSuggest, safePlanningRows, trucks])
+  }, [bulkTruckSuggest, safePlanningRows, trucks, appliedDateFrom, appliedDateTo])
 
   const onPlanningTruckChange = useCallback(
     (row: DistribuidoraDispatchPrepPlanningRow, raw: string) => {
@@ -878,6 +894,7 @@ export default function DistribuidoraOrdersPage() {
           ...prev,
           [row.document_id]: coerced,
         }
+        writePreDespachoTruckAssignments(appliedDateFrom, appliedDateTo, merged)
         if (coerced != null && rowHasGeo(row)) {
           const muni = normMunicipality(row.municipality)
           let c = 0
@@ -901,7 +918,7 @@ export default function DistribuidoraOrdersPage() {
         return merged
       })
     },
-    [safePlanningRows, trucks],
+    [safePlanningRows, trucks, appliedDateFrom, appliedDateTo],
   )
 
   const openDetail = useCallback((r: DistribuidoraDispatchPrepMunicipalityRow) => {

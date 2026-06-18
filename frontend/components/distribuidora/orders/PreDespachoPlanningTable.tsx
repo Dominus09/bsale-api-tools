@@ -9,6 +9,11 @@ import type {
 } from "@/lib/api"
 import { distribuidoraTruckCapacityLabel } from "@/lib/api"
 import {
+  deliveryDayBadgeClass,
+  formatPreDespachoDeliveryDay,
+} from "@/lib/delivery-day-detect"
+import { normMunicipality } from "@/lib/distribuidora-logistics"
+import {
   computeAmountThresholds,
   priorityBadgeClass,
   priorityShortLabel,
@@ -35,8 +40,6 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { formatDeliveryDayLabel } from "@/lib/delivery-day-detect"
-import { normMunicipality } from "@/lib/distribuidora-logistics"
 import { cn } from "@/lib/utils"
 
 const TRUCK_UNSET = "__unset__"
@@ -44,6 +47,10 @@ const TRUCK_UNSET = "__unset__"
 const TH =
   "h-8 px-1.5 text-left align-middle text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
 const TD = "px-1.5 py-1.5 align-middle text-xs"
+const TH_STICKY_TRUCK =
+  "sticky right-0 z-20 h-8 bg-card/98 px-2 text-left align-middle text-[10px] font-semibold uppercase tracking-wide text-muted-foreground shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.12)] backdrop-blur-sm"
+const TD_STICKY_TRUCK =
+  "sticky right-0 z-10 bg-card px-2 py-1.5 align-middle text-xs shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)]"
 
 const clp = new Intl.NumberFormat("es-CL", {
   style: "currency",
@@ -118,7 +125,7 @@ function GroupTruckAssignMenu({
           className="h-7 gap-0.5 px-2 text-[10px]"
           aria-label={`Asignar camión en ${municipalityLabel}`}
         >
-          Asignar
+          Asignar grupo
           <ChevronDown className="size-3 opacity-70" aria-hidden />
         </Button>
       </DropdownMenuTrigger>
@@ -185,6 +192,63 @@ function PriorityCell({
   )
 }
 
+function DeliveryDayCell({ row }: { row: DistribuidoraDispatchPrepPlanningRow }) {
+  const label = formatPreDespachoDeliveryDay(row)
+  const token = row.dia_entrega_detectado
+  return (
+    <Badge
+      variant="outline"
+      className={cn(
+        "max-w-full truncate px-1.5 py-0 text-[10px] font-medium leading-5",
+        deliveryDayBadgeClass(token),
+      )}
+      title={row.observaciones?.trim() || undefined}
+    >
+      {label}
+    </Badge>
+  )
+}
+
+function TruckSelectCell({
+  r,
+  trucks,
+  truckIdByDoc,
+  onTruckChange,
+}: {
+  r: DistribuidoraDispatchPrepPlanningRow
+  trucks: DistribuidoraTruck[]
+  truckIdByDoc: Record<number, number | null>
+  onTruckChange: (row: DistribuidoraDispatchPrepPlanningRow, raw: string) => void
+}) {
+  const docId = r.document_id
+  const tid = truckIdByDoc[docId]
+  const truck = tid != null ? trucks.find((t) => t.id === tid) : undefined
+  const capLabel = truck ? distribuidoraTruckCapacityLabel(truck) : null
+
+  if (trucks.length === 0) {
+    return <span className="text-[10px] text-muted-foreground">Sin camiones</span>
+  }
+
+  return (
+    <select
+      className="h-8 w-full min-w-[9.5rem] max-w-[14rem] rounded-md border border-input bg-background px-2 text-xs font-medium shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+      value={
+        tid != null && trucks.some((x) => x.id === tid) ? String(tid) : TRUCK_UNSET
+      }
+      onChange={(e) => onTruckChange(r, e.target.value)}
+      aria-label={`Camión OC ${r.oc ?? docId}`}
+      title={capLabel ?? "Seleccionar camión"}
+    >
+      <option value={TRUCK_UNSET}>— Sin asignar</option>
+      {trucks.map((t) => (
+        <option key={t.id} value={t.id}>
+          {t.name} ({t.plate})
+        </option>
+      ))}
+    </select>
+  )
+}
+
 function PlanningTableRow({
   r,
   trucks,
@@ -203,16 +267,11 @@ function PlanningTableRow({
   const geo = rowHasGeo(r)
   const docId = r.document_id
   const tid = truckIdByDoc[docId]
-  const truck = tid != null ? trucks.find((t) => t.id === tid) : undefined
-  const capLabel = truck ? distribuidoraTruckCapacityLabel(truck) : null
   const inPlan = geo && isValidTruckId(tid, trucks)
   const priority = resolveRowPriority(r, thresholds)
   const dir = r.direccion?.trim() || "—"
   const seller = r.seller_name?.trim() || "—"
   const obs = r.observaciones?.trim() || "—"
-  const deliveryDay =
-    r.dia_entrega_label?.trim() ||
-    formatDeliveryDayLabel(r.dia_entrega_detectado)
   const clusterShort =
     clusterLabel.length > 12 ? `${clusterLabel.slice(0, 11)}…` : clusterLabel
 
@@ -230,44 +289,34 @@ function PlanningTableRow({
           "bg-slate-50/40 dark:bg-slate-900/25",
       )}
     >
-      <td className={TD}>
-        <PriorityCell row={r} thresholds={thresholds} />
-      </td>
       <td className={cn(TD, "font-mono text-[11px] font-semibold tabular-nums")}>
         {r.oc ?? "—"}
       </td>
-      <td className={cn(TD, "max-w-0")}>
+      <td className={cn(TD, "max-w-[8rem]")}>
         <TruncateTooltip
           text={r.nombre_fantasia?.trim() || "—"}
           className="font-medium text-foreground"
         />
       </td>
-      <td className={cn(TD, "max-w-0 text-muted-foreground")}>
+      <td className={cn(TD, "max-w-[6rem] text-muted-foreground")}>
         <TruncateTooltip text={normMunicipality(r.municipality)} />
       </td>
-      <td className={cn(TD, "max-w-0 text-muted-foreground")}>
-        <TruncateTooltip text={obs} />
+      <td className={cn(TD, "max-w-[7rem]")}>
+        <DeliveryDayCell row={r} />
       </td>
-      <td className={cn(TD, "whitespace-nowrap text-[11px] font-medium")}>
-        {deliveryDay}
+      <td className={cn(TD, "whitespace-nowrap text-right text-[11px] font-semibold tabular-nums")}>
+        {formatClp(Number(r.total_amount ?? 0))}
       </td>
-      <td className={cn(TD, "max-w-0 text-muted-foreground")}>
-        <TruncateTooltip text={dir} />
-      </td>
-      <td className={cn(TD, "max-w-0")}>
-        <TruncateTooltip text={seller} />
+      <td className={cn(TD_STICKY_TRUCK, inPlan && "bg-primary/[0.06]")}>
+        <TruckSelectCell
+          r={r}
+          trucks={trucks}
+          truckIdByDoc={truckIdByDoc}
+          onTruckChange={onTruckChange}
+        />
       </td>
       <td className={cn(TD, "whitespace-nowrap")}>
         <PurchaseInvoiceStatusCell row={r} compact />
-      </td>
-      <td className={cn(TD, "max-w-0 whitespace-nowrap")}>
-        <PurchaseAssociatedDocumentCell row={r} compact />
-      </td>
-      <td className={cn(TD, "text-right")}>
-        <PurchaseInvoiceScoreCell row={r} compact />
-      </td>
-      <td className={cn(TD, "text-right text-[11px] font-medium tabular-nums")}>
-        {formatClp(Number(r.total_amount ?? 0))}
       </td>
       <td className={cn(TD, "text-center")}>
         {geo ? (
@@ -293,7 +342,25 @@ function PlanningTableRow({
           </Tooltip>
         )}
       </td>
-      <td className={cn(TD, "max-w-0 text-[10px] text-muted-foreground")}>
+      <td className={TD}>
+        <PriorityCell row={r} thresholds={thresholds} />
+      </td>
+      <td className={cn(TD, "max-w-[8rem] text-muted-foreground")}>
+        <TruncateTooltip text={obs} />
+      </td>
+      <td className={cn(TD, "max-w-[8rem] text-muted-foreground")}>
+        <TruncateTooltip text={dir} />
+      </td>
+      <td className={cn(TD, "max-w-[6rem]")}>
+        <TruncateTooltip text={seller} />
+      </td>
+      <td className={cn(TD, "max-w-[6rem] whitespace-nowrap")}>
+        <PurchaseAssociatedDocumentCell row={r} compact />
+      </td>
+      <td className={cn(TD, "text-right")}>
+        <PurchaseInvoiceScoreCell row={r} compact />
+      </td>
+      <td className={cn(TD, "max-w-[5rem] text-[10px] text-muted-foreground")}>
         <Tooltip>
           <TooltipTrigger asChild>
             <span className="block truncate">{clusterShort}</span>
@@ -302,32 +369,6 @@ function PlanningTableRow({
             {clusterLabel}
           </TooltipContent>
         </Tooltip>
-      </td>
-      <td className={cn(TD, "max-w-0")}>
-        <div className="flex min-w-0 flex-col gap-0.5">
-          {trucks.length === 0 ? (
-            <span className="text-[10px] text-muted-foreground">—</span>
-          ) : (
-            <select
-              className="h-7 w-full min-w-0 max-w-full truncate rounded border border-input bg-background px-1 text-[10px] shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50"
-              value={
-                tid != null && trucks.some((x) => x.id === tid)
-                  ? String(tid)
-                  : TRUCK_UNSET
-              }
-              onChange={(e) => onTruckChange(r, e.target.value)}
-              aria-label={`Camión OC ${r.oc ?? docId}`}
-              title={capLabel ?? undefined}
-            >
-              <option value={TRUCK_UNSET}>—</option>
-              {trucks.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
       </td>
     </tr>
   )
@@ -358,6 +399,8 @@ type PreDespachoPlanningTableProps = {
   onTruckChange: (row: DistribuidoraDispatchPrepPlanningRow, raw: string) => void
 }
 
+const COL_COUNT = 15
+
 export function PreDespachoPlanningTable({
   blocks,
   groupByMunicipality,
@@ -384,48 +427,32 @@ export function PreDespachoPlanningTable({
   }
 
   return (
-    <div className="relative w-full max-h-[min(72vh,56rem)] overflow-y-auto overflow-x-auto rounded-md border border-border/70 bg-card shadow-sm sm:overflow-x-hidden">
-      <table className="w-full min-w-[960px] table-fixed border-collapse sm:min-w-0">
-        <colgroup>
-          <col className="w-[4%]" />
-          <col className="w-[5%]" />
-          <col className="w-[10%]" />
-          <col className="w-[7%]" />
-          <col className="w-[11%]" />
-          <col className="w-[6%]" />
-          <col className="w-[11%]" />
-          <col className="w-[7%]" />
-          <col className="w-[7%]" />
-          <col className="w-[4%]" />
-          <col className="w-[7%]" />
-          <col className="w-[4%]" />
-          <col className="w-[5%]" />
-          <col className="w-[12%]" />
-        </colgroup>
-        <thead className="sticky top-0 z-10 bg-card/98 shadow-[0_1px_0_0_hsl(var(--border))] backdrop-blur-sm">
+    <div className="relative w-full max-h-[min(72vh,56rem)] overflow-x-auto overflow-y-auto rounded-md border border-border/70 bg-card shadow-sm">
+      <table className="w-full min-w-[1080px] border-collapse">
+        <thead className="sticky top-0 z-30 bg-card/98 shadow-[0_1px_0_0_hsl(var(--border))] backdrop-blur-sm">
           <tr className="border-b border-border/80 hover:bg-transparent">
-            <th className={TH}>Prio</th>
             <th className={TH}>OC</th>
             <th className={TH}>Cliente</th>
             <th className={TH}>Comuna</th>
-            <th className={TH}>Observación</th>
             <th className={TH}>Día entrega</th>
+            <th className={cn(TH, "text-right")}>Monto</th>
+            <th className={TH_STICKY_TRUCK}>Camión</th>
+            <th className={TH}>Estado</th>
+            <th className={cn(TH, "text-center")}>Geo</th>
+            <th className={TH}>Prio</th>
+            <th className={TH}>Observación</th>
             <th className={TH}>Dirección</th>
             <th className={TH}>Vendedor</th>
-            <th className={TH}>Estado</th>
             <th className={TH}>Doc.</th>
             <th className={cn(TH, "text-right")}>Sc</th>
-            <th className={cn(TH, "text-right")}>Monto</th>
-            <th className={cn(TH, "text-center")}>Geo</th>
             <th className={TH}>Clust.</th>
-            <th className={TH}>Camión</th>
           </tr>
         </thead>
         <tbody>
           {loading ? (
             <tr>
               <td
-                colSpan={15}
+                colSpan={COL_COUNT}
                 className="px-2 py-12 text-center text-xs text-muted-foreground"
               >
                 Cargando órdenes…
@@ -436,7 +463,7 @@ export function PreDespachoPlanningTable({
               <Fragment key={block.key}>
                 {groupByMunicipality && block.key !== "_all" ? (
                   <tr className="bg-muted/50 hover:bg-muted/50">
-                    <td colSpan={15} className="px-2 py-1.5">
+                    <td colSpan={COL_COUNT} className="px-2 py-1.5">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <span className="text-xs font-semibold">
                           {block.key}
