@@ -37,6 +37,7 @@ import {
 } from "@/components/ui/tooltip"
 import { formatDeliveryDayLabel } from "@/lib/delivery-day-detect"
 import { normMunicipality } from "@/lib/distribuidora-logistics"
+import { cn } from "@/lib/utils"
 
 const TRUCK_UNSET = "__unset__"
 
