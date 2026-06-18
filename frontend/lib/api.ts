@@ -1025,6 +1025,10 @@ export type DistribuidoraDispatchPrepPlanningRow = {
   display_score?: number | null
   probable_score?: number | null
   probable_tier?: string | null
+  observaciones?: string | null
+  dia_entrega_detectado?: string | null
+  dia_entrega_label?: string | null
+  dia_entrega_fuente?: string | null
 }
 
 export type DistribuidoraDispatchPrepPlanningRowsResponse =
@@ -3707,6 +3711,12 @@ export interface LabelProductResolved {
   price: number | null
   price_list_id: number | null
   price_list_name: string | null
+  /** Código leído desde Excel (si difiere del barcode en BD) */
+  read_barcode?: string | null
+  /** Barcode canónico en BD cuando hubo corrección por ceros */
+  matched_barcode?: string | null
+  tried_barcodes?: string[] | null
+  extra_read_barcodes?: string[] | null
 }
 
 export async function lookupLabelProduct(
@@ -3738,7 +3748,13 @@ export async function resolveLabelProductsBatch(
   items: { barcode: string; quantity?: number }[],
 ): Promise<{
   resolved: (LabelProductResolved & { quantity: number })[]
-  errors: { line: number; barcode: string; error: string }[]
+  errors: {
+    line: number
+    barcode: string
+    read_barcode?: string
+    tried_barcodes?: string[]
+    error: string
+  }[]
 }> {
   const cid = Math.trunc(Number(companyId))
   const plid = Math.trunc(Number(priceListId))
@@ -3787,7 +3803,13 @@ export async function resolveLabelProductsBatch(
     }
     const data = (await res.json()) as {
       resolved: (LabelProductResolved & { quantity: number })[]
-      errors: { line: number; barcode: string; error: string }[]
+      errors: {
+        line: number
+        barcode: string
+        read_barcode?: string
+        tried_barcodes?: string[]
+        error: string
+      }[]
     }
     for (const item of data.resolved) resolved.push(item)
     for (const item of data.errors) {

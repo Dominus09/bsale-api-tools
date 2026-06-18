@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from decimal import Decimal
 from typing import Any
 
@@ -11,6 +10,10 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from backend.db import get_connection
+from backend.utils.label_barcode_variants import (
+    barcode_lookup_candidates,
+    normalize_barcode_read,
+)
 
 router = APIRouter(tags=["labels"])
 logger = logging.getLogger(__name__)
@@ -59,37 +62,7 @@ def _to_float(value: Any) -> float | None:
 
 
 def _normalize_barcode_value(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, bool):
-        return ""
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        if not value.is_integer():
-            return str(value).strip()
-        return str(int(value))
-    text = str(value).strip()
-    if not text:
-        return ""
-    formula_quoted = re.match(r'^=\s*["\']([^"\']+)["\']\s*$', text, flags=re.I)
-    if formula_quoted:
-        return formula_quoted.group(1).strip()
-    if text.startswith("="):
-        text = text[1:].strip()
-        inner = re.match(r'^["\']([^"\']+)["\']$', text, flags=re.I)
-        if inner:
-            return inner.group(1).strip()
-    if re.match(r"^\d+\.0+$", text):
-        return text.split(".", 1)[0]
-    if re.match(r"^[\d.]+e[+-]?\d+$", text, flags=re.I):
-        try:
-            as_float = float(text)
-            if as_float.is_integer():
-                return str(int(as_float))
-        except ValueError:
-            pass
-    return text
+    return normalize_barcode_read(value)
 
 
 def _serialize_label_row(row: tuple) -> dict[str, Any]:
@@ -141,6 +114,27 @@ def _fetch_label_product(
     if not row:
         return None
     return _serialize_label_row(row)
+
+
+def _resolve_label_product(
+    cur: Any,
+    *,
+    company_id: int,
+    price_list_id: int,
+    read_barcode: str,
+) -> tuple[dict[str, Any] | None, list[str], str | None]:
+    """Prueba variantes (padding) y devuelve producto, candidatos y barcode que coincidió."""
+    candidates = barcode_lookup_candidates(read_barcode)
+    for candidate in candidates:
+        product = _fetch_label_product(
+            cur,
+            company_id=company_id,
+            price_list_id=price_list_id,
+            barcode=candidate,
+        )
+        if product is not None:
+            return product, candidates, candidate
+    return None, candidates, None
 
 
 class LabelResolveItemIn(BaseModel):
@@ -213,29 +207,53 @@ async def resolve_label_products(request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail=exc.errors()) from exc
 
     conn = get_connection()
-    resolved: list[dict[str, Any]] = []
+    resolved_map: dict[int, dict[str, Any]] = {}
+    resolved_order: list[int] = []
     errors: list[dict[str, Any]] = []
     try:
         cur = conn.cursor()
         for idx, item in enumerate(body.items):
-            product = _fetch_label_product(
+            read_bc = item.barcode.strip()
+            product, tried, _matched_candidate = _resolve_label_product(
                 cur,
                 company_id=body.company_id,
                 price_list_id=body.price_list_id,
-                barcode=item.barcode,
+                read_barcode=read_bc,
             )
             if product is None:
                 errors.append(
                     {
                         "line": idx,
-                        "barcode": item.barcode.strip(),
+                        "barcode": read_bc,
+                        "read_barcode": read_bc,
+                        "tried_barcodes": tried,
                         "error": "Producto no encontrado",
                     }
                 )
                 continue
-            resolved.append({**product, "quantity": item.quantity})
+
+            canonical_bc = product["barcode"]
+            vid = int(product["variant_id"])
+            if vid in resolved_map:
+                resolved_map[vid]["quantity"] += item.quantity
+                extra_reads = resolved_map[vid].setdefault("extra_read_barcodes", [])
+                if read_bc not in extra_reads and read_bc != resolved_map[vid].get(
+                    "read_barcode"
+                ):
+                    extra_reads.append(read_bc)
+                continue
+
+            resolved_map[vid] = {
+                **product,
+                "quantity": item.quantity,
+                "read_barcode": read_bc,
+                "matched_barcode": canonical_bc if canonical_bc != read_bc else None,
+                "tried_barcodes": tried if canonical_bc != read_bc else None,
+            }
+            resolved_order.append(vid)
         cur.close()
     finally:
         conn.close()
 
+    resolved = [resolved_map[vid] for vid in resolved_order]
     return {"resolved": resolved, "errors": errors}

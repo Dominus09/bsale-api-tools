@@ -35,7 +35,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { cn } from "@/lib/utils"
+import { formatDeliveryDayLabel } from "@/lib/delivery-day-detect"
+import { normMunicipality } from "@/lib/distribuidora-logistics"
 
 const TRUCK_UNSET = "__unset__"
 
@@ -207,6 +208,10 @@ function PlanningTableRow({
   const priority = resolveRowPriority(r, thresholds)
   const dir = r.direccion?.trim() || "—"
   const seller = r.seller_name?.trim() || "—"
+  const obs = r.observaciones?.trim() || "—"
+  const deliveryDay =
+    r.dia_entrega_label?.trim() ||
+    formatDeliveryDayLabel(r.dia_entrega_detectado)
   const clusterShort =
     clusterLabel.length > 12 ? `${clusterLabel.slice(0, 11)}…` : clusterLabel
 
@@ -237,7 +242,13 @@ function PlanningTableRow({
         />
       </td>
       <td className={cn(TD, "max-w-0 text-muted-foreground")}>
-        <TruncateTooltip text={r.municipality?.trim() || "—"} />
+        <TruncateTooltip text={normMunicipality(r.municipality)} />
+      </td>
+      <td className={cn(TD, "max-w-0 text-muted-foreground")}>
+        <TruncateTooltip text={obs} />
+      </td>
+      <td className={cn(TD, "whitespace-nowrap text-[11px] font-medium")}>
+        {deliveryDay}
       </td>
       <td className={cn(TD, "max-w-0 text-muted-foreground")}>
         <TruncateTooltip text={dir} />
@@ -377,17 +388,18 @@ export function PreDespachoPlanningTable({
         <colgroup>
           <col className="w-[4%]" />
           <col className="w-[5%]" />
+          <col className="w-[10%]" />
+          <col className="w-[7%]" />
+          <col className="w-[11%]" />
+          <col className="w-[6%]" />
           <col className="w-[11%]" />
           <col className="w-[7%]" />
-          <col className="w-[13%]" />
-          <col className="w-[8%]" />
           <col className="w-[7%]" />
-          <col className="w-[8%]" />
           <col className="w-[4%]" />
-          <col className="w-[8%]" />
+          <col className="w-[7%]" />
           <col className="w-[4%]" />
-          <col className="w-[6%]" />
-          <col className="w-[15%]" />
+          <col className="w-[5%]" />
+          <col className="w-[12%]" />
         </colgroup>
         <thead className="sticky top-0 z-10 bg-card/98 shadow-[0_1px_0_0_hsl(var(--border))] backdrop-blur-sm">
           <tr className="border-b border-border/80 hover:bg-transparent">
@@ -395,6 +407,8 @@ export function PreDespachoPlanningTable({
             <th className={TH}>OC</th>
             <th className={TH}>Cliente</th>
             <th className={TH}>Comuna</th>
+            <th className={TH}>Observación</th>
+            <th className={TH}>Día entrega</th>
             <th className={TH}>Dirección</th>
             <th className={TH}>Vendedor</th>
             <th className={TH}>Estado</th>
@@ -410,7 +424,7 @@ export function PreDespachoPlanningTable({
           {loading ? (
             <tr>
               <td
-                colSpan={13}
+                colSpan={15}
                 className="px-2 py-12 text-center text-xs text-muted-foreground"
               >
                 Cargando órdenes…
@@ -421,7 +435,7 @@ export function PreDespachoPlanningTable({
               <Fragment key={block.key}>
                 {groupByMunicipality && block.key !== "_all" ? (
                   <tr className="bg-muted/50 hover:bg-muted/50">
-                    <td colSpan={13} className="px-2 py-1.5">
+                    <td colSpan={15} className="px-2 py-1.5">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <span className="text-xs font-semibold">
                           {block.key}

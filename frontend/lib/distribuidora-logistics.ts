@@ -20,7 +20,25 @@ export type LogisticsTruckRouteStub = {
 
 export function normMunicipality(m: string | null | undefined): string {
   const t = (m ?? "").trim()
-  return t.length ? t : "Sin comuna"
+  if (!t) return "Sin comuna"
+  const key = t
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+  const canonical: Record<string, string> = {
+    ancud: "Ancud",
+    quellon: "Quellón",
+    castro: "Castro",
+    chonchi: "Chonchi",
+    dalcahue: "Dalcahue",
+    achao: "Achao",
+    queilen: "Queilén",
+    quemchi: "Quemchi",
+    puqueldon: "Puqueldón",
+    melinka: "Melinka",
+  }
+  if (canonical[key]) return canonical[key]
+  return t.length > 1 ? t[0].toUpperCase() + t.slice(1) : t.toUpperCase()
 }
 
 function rowHasGeo(row: {

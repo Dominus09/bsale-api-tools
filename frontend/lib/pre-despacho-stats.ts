@@ -1,3 +1,4 @@
+import { normMunicipality } from "@/lib/distribuidora-logistics"
 import type {
   DistribuidoraDispatchPrepMunicipalityRow,
   DistribuidoraDispatchPrepPlanningRow,
@@ -61,8 +62,7 @@ export function filterPlanningRowsByStatus(
 }
 
 function municipalityLabel(row: DistribuidoraDispatchPrepPlanningRow): string {
-  const m = row.municipality?.trim()
-  return m || "(Sin comuna)"
+  return normMunicipality(row.municipality)
 }
 
 /** Resumen por comuna a partir de filas de planificación (respeta filtro de estado). */

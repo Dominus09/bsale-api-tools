@@ -121,8 +121,6 @@ export function prepareLabelResolveItems(
     let barcode = normalizeExcelBarcodeCell(it.barcode)
     let quantity = parseQuantityCell(it.quantity)
 
-    console.log("barcode parsed", it.barcode, "->", barcode)
-
     const qtyRaw = it.quantity
     const qtyLooksLikeBarcode =
       (typeof qtyRaw === "number" && qtyRaw >= 10_000_000) ||

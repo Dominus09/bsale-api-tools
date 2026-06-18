@@ -109,8 +109,14 @@ type ExcelImportReview = {
   fileName: string
   totalRead: number
   duplicates: { barcode: string; count: number }[]
-  notFound: { barcode: string; quantity: number }[]
+  notFound: {
+    readBarcode: string
+    quantity: number
+    triedBarcodes: string[]
+    error: string
+  }[]
   resolved: (LabelProductResolved & { quantity: number })[]
+  barcodeMappings: { read: string; matched: string }[]
 }
 
 export default function EtiquetasPage() {
@@ -385,15 +391,32 @@ export default function EtiquetasPage() {
         const merged = mergeEtiquetasExcelRows(parsed.rows)
         const { resolved, errors } = await resolveLabelProductsBatch(cid, plid, merged)
         const qtyByBarcode = new Map(merged.map((m) => [m.barcode, m.quantity]))
+        const barcodeMappings: { read: string; matched: string }[] = []
+        for (const item of resolved) {
+          const read = (item.read_barcode || item.barcode).trim()
+          const matched = (item.matched_barcode || item.barcode).trim()
+          if (read && matched && read !== matched) {
+            barcodeMappings.push({ read, matched })
+          }
+          for (const extra of item.extra_read_barcodes ?? []) {
+            const extraRead = extra.trim()
+            if (extraRead && extraRead !== matched) {
+              barcodeMappings.push({ read: extraRead, matched })
+            }
+          }
+        }
         setExcelReview({
           fileName: file.name,
           totalRead: parsed.rows.length,
           duplicates: parsed.duplicates,
           notFound: errors.map((e) => ({
-            barcode: e.barcode,
-            quantity: qtyByBarcode.get(e.barcode) ?? 1,
+            readBarcode: e.read_barcode ?? e.barcode,
+            quantity: qtyByBarcode.get(e.read_barcode ?? e.barcode) ?? 1,
+            triedBarcodes: e.tried_barcodes ?? [e.barcode],
+            error: e.error || "Producto no encontrado",
           })),
           resolved,
+          barcodeMappings,
         })
         setExcelReviewOpen(true)
         setScanError(false)
@@ -954,7 +977,7 @@ export default function EtiquetasPage() {
           if (!open) setExcelReview(null)
         }}
       >
-        <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
+        <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Resultado de importación Excel</DialogTitle>
             <DialogDescription>
@@ -975,6 +998,21 @@ export default function EtiquetasPage() {
                   </p>
                 </div>
               </div>
+
+              {excelReview.barcodeMappings.length > 0 ? (
+                <div className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2">
+                  <p className="font-medium text-sky-900">
+                    Códigos corregidos ({excelReview.barcodeMappings.length})
+                  </p>
+                  <ul className="mt-2 max-h-36 space-y-1.5 overflow-y-auto text-xs text-sky-950">
+                    {excelReview.barcodeMappings.map((m) => (
+                      <li key={`${m.read}-${m.matched}`} className="font-mono">
+                        Leído: {m.read} → encontrado como {m.matched}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
 
               {excelReview.duplicates.length > 0 ? (
                 <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
@@ -999,14 +1037,35 @@ export default function EtiquetasPage() {
                   <p className="font-medium text-destructive">
                     No encontrados ({excelReview.notFound.length})
                   </p>
-                  <ul className="mt-2 max-h-32 space-y-1 overflow-y-auto font-mono text-xs">
-                    {excelReview.notFound.map((nf) => (
-                      <li key={nf.barcode}>
-                        {nf.barcode}
-                        {nf.quantity > 1 ? ` · cant. ${nf.quantity}` : ""}
-                      </li>
-                    ))}
-                  </ul>
+                  <div className="mt-2 max-h-48 overflow-y-auto rounded border bg-background">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b bg-muted/40 text-left">
+                          <th className="px-2 py-1.5 font-medium">Código leído</th>
+                          <th className="px-2 py-1.5 font-medium">Variantes probadas</th>
+                          <th className="px-2 py-1.5 font-medium">Motivo</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {excelReview.notFound.map((nf) => (
+                          <tr key={nf.readBarcode} className="border-b align-top">
+                            <td className="px-2 py-1.5 font-mono">
+                              {nf.readBarcode}
+                              {nf.quantity > 1 ? (
+                                <span className="text-muted-foreground block font-sans">
+                                  cant. {nf.quantity}
+                                </span>
+                              ) : null}
+                            </td>
+                            <td className="px-2 py-1.5 font-mono text-[10px] leading-relaxed text-muted-foreground">
+                              {nf.triedBarcodes.join(" · ")}
+                            </td>
+                            <td className="px-2 py-1.5">{nf.error}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               ) : null}
 

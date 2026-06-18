@@ -23,6 +23,11 @@ from backend.utils.planning_rows_debug import (
     log_planning_rows,
     run_explain_analyze,
 )
+from backend.utils.delivery_day_detect import (
+    delivery_day_label,
+    resolve_delivery_day,
+    sql_resolve_delivery_day,
+)
 from backend.utils.planning_rows_stage import (
     PlanningRowsStageCollector,
     planning_rows_stage_enabled,
@@ -230,13 +235,33 @@ def _parse_day_filters(raw: str | None) -> list[str]:
     return seen
 
 
-def _day_obs_match_clause(obs_expr: str, day_filter: str | None) -> tuple[str, list[str]]:
-    """Fragmento SQL + parámetros LIKE para filtro multi-día."""
+def _day_resolved_filter_clause(
+    observaciones_expr: str,
+    comments_expr: str,
+    dia_atencion_expr: str,
+    day_filter: str | None,
+) -> tuple[str, list[str]]:
+    """Filtro exacto por día resuelto (observación > comentarios > ruta)."""
     tokens = _parse_day_filters(day_filter)
     if not tokens:
         return "TRUE", []
-    parts = [f"{obs_expr} LIKE %s" for _ in tokens]
-    return "(" + " OR ".join(parts) + ")", [f"%{t}%" for t in tokens]
+    resolved = sql_resolve_delivery_day(
+        observaciones_expr,
+        comments_expr,
+        dia_atencion_expr,
+    )
+    placeholders = ", ".join(["%s"] * len(tokens))
+    return f"({resolved} IN ({placeholders}))", list(tokens)
+
+
+def _enrich_row_delivery_day(row: dict[str, Any]) -> None:
+    obs = row.get("observaciones")
+    comments = row.get("comments")
+    dia_atencion = row.get("dia_atencion")
+    day, source = resolve_delivery_day(obs, comments, dia_atencion)
+    row["dia_entrega_detectado"] = day
+    row["dia_entrega_fuente"] = source
+    row["dia_entrega_label"] = delivery_day_label(day)
 
 
 def _row_to_dict(cur, row: tuple) -> dict[str, Any]:
@@ -512,7 +537,25 @@ def list_dispatch_prep_by_municipality(
     vía detalles de la misma OC (no se usa ``state``).
     """
     d0, d1 = _normalize_date_range(emission_date_from, emission_date_to)
-    day_clause, day_params = _day_obs_match_clause(_OBS_NORMALIZED_D, day_filter)
+    day_clause, day_params = _day_resolved_filter_clause(
+        """NULLIF(BTRIM((
+            SELECT da.attribute_value
+            FROM distribuidora.document_attributes da
+            WHERE da.document_id = d.document_id
+              AND UPPER(BTRIM(da.attribute_name)) = 'OBSERVACIONES'
+            ORDER BY da.id DESC NULLS LAST
+            LIMIT 1
+        )), '')""",
+        "NULLIF(BTRIM(d.raw_data->>'comments'), '')",
+        """NULLIF(BTRIM((
+            SELECT c_inner.dia_atencion
+            FROM bsale.clients c_inner
+            WHERE c_inner.company_id = d.company_id
+              AND c_inner.bsale_id = d.client_id
+            LIMIT 1
+        )), '')""",
+        day_filter,
+    )
     lim = max(1, min(int(limit), 300))
     conn = get_connection()
     try:
@@ -551,18 +594,21 @@ def list_dispatch_prep_by_municipality(
 
 def _planning_rows_ids_sql(*, day_tokens: list[str]) -> str:
     """Fase 1: IDs paginados sobre ``documents`` (filtro de fecha primero)."""
-    with_obs = bool(day_tokens)
-    obs_join = (
-        ""
-        if not with_obs
-        else """
-            INNER JOIN distribuidora.v_oc_attributes_flat obs_a
+    obs_join = ""
+    if day_tokens:
+        obs_join = """
+            LEFT JOIN distribuidora.v_oc_attributes_flat obs_a
                 ON obs_a.document_id = d.document_id
+            LEFT JOIN bsale.clients c_day
+                ON c_day.company_id = d.company_id
+               AND c_day.bsale_id = d.client_id
         """
-    )
-    if with_obs:
-        likes = " OR ".join(f"{_PLANNING_ROWS_OBS_TEXT} LIKE %s" for _ in day_tokens)
-        day_clause = f"({likes})"
+        day_clause, _ = _day_resolved_filter_clause(
+            "obs_a.observaciones",
+            "d.raw_data->>'comments'",
+            "c_day.dia_atencion",
+            ",".join(day_tokens),
+        )
     else:
         day_clause = "TRUE"
     return f"""
@@ -601,10 +647,15 @@ def _planning_rows_enrich_sql() -> str:
                 (c.lat IS NOT NULL AND c.lon IS NOT NULL) AS has_georef,
                 c.lat::double precision AS lat,
                 c.lon::double precision AS lng,
+                NULLIF(BTRIM(obs_a.observaciones), '') AS observaciones,
+                NULLIF(BTRIM(d.raw_data->>'comments'), '') AS comments,
+                NULLIF(BTRIM(c.dia_atencion), '') AS dia_atencion,
                 {_PLANNING_ROWS_STATUS_SELECT}
             FROM distribuidora.documents d
             INNER JOIN page_ids pi ON pi.document_id = d.document_id
             {_PLANNING_ROWS_ENRICH_STATUS_JOINS}
+            LEFT JOIN distribuidora.v_oc_attributes_flat obs_a
+                ON obs_a.document_id = d.document_id
             LEFT JOIN bsale.clients c
                 ON c.company_id = d.company_id
                AND c.bsale_id = d.client_id
@@ -636,9 +687,13 @@ def _planning_rows_base_orders_sql() -> str:
                 NULLIF(BTRIM(d.municipality), '') AS municipality,
                 NULLIF(BTRIM(d.address), '') AS direccion,
                 NULLIF(BTRIM(d.seller_name), '') AS seller_name,
-                d.total_amount
+                d.total_amount,
+                NULLIF(BTRIM(obs_a.observaciones), '') AS observaciones,
+                NULLIF(BTRIM(d.raw_data->>'comments'), '') AS comments
             FROM distribuidora.documents d
             INNER JOIN page_ids pi ON pi.document_id = d.document_id
+            LEFT JOIN distribuidora.v_oc_attributes_flat obs_a
+                ON obs_a.document_id = d.document_id
             ORDER BY d.number DESC NULLS LAST, d.document_id DESC
             """
 
@@ -714,6 +769,7 @@ def _planning_rows_georef_sql() -> str:
                 NULLIF(BTRIM(c.nombre_fantasia), '') AS nombre_fantasia,
                 NULLIF(BTRIM(c.municipality), '') AS municipality,
                 NULLIF(BTRIM(c.address), '') AS address,
+                NULLIF(BTRIM(c.dia_atencion), '') AS dia_atencion,
                 c.lat,
                 c.lon
             FROM bsale.clients c
@@ -807,6 +863,9 @@ def _merge_planning_rows_staged(
             "direccion": base.get("direccion") or (geo or {}).get("address"),
             "seller_name": base.get("seller_name"),
             "total_amount": base.get("total_amount"),
+            "observaciones": base.get("observaciones"),
+            "comments": base.get("comments"),
+            "dia_atencion": (geo or {}).get("dia_atencion"),
             "has_georef": bool(
                 geo and geo.get("lat") is not None and geo.get("lon") is not None
             ),
@@ -814,6 +873,7 @@ def _merge_planning_rows_staged(
             "lng": float(geo["lon"]) if geo and geo.get("lon") is not None else None,
         }
         _apply_status_fields_to_row(row, conf, prob)
+        _enrich_row_delivery_day(row)
         out.append(row)
     return out
 
@@ -900,18 +960,33 @@ def list_dispatch_prep_observation_texts(
     lim = effective_page_limit(limit, d0, d1)
     off = max(0, int(offset))
     fetch = lim + 1
-    day_clause, day_params = _day_obs_match_clause(_PLANNING_ROWS_OBS_TEXT, day_filter)
+    day_clause, day_params = _day_resolved_filter_clause(
+        "obs_a.observaciones",
+        "d.raw_data->>'comments'",
+        "c_day.dia_atencion",
+        day_filter,
+    )
     conn = get_connection()
     try:
         cur = conn.cursor()
         t_sql = time.perf_counter()
-        params: tuple[Any, ...] = (d0, d1, only_not_invoiced, *day_params, fetch, off)
+        params: tuple[Any, ...] = (
+            d0,
+            d1,
+            only_not_invoiced,
+            *day_params,
+            fetch,
+            off,
+        )
         cur.execute(
             f"""
             SELECT obs_a.observaciones
             FROM distribuidora.documents d
             INNER JOIN distribuidora.v_oc_attributes_flat obs_a
                 ON obs_a.document_id = d.document_id
+            LEFT JOIN bsale.clients c_day
+                ON c_day.company_id = d.company_id
+               AND c_day.bsale_id = d.client_id
             WHERE {_DISPATCH_PREP_DOC_FILTER}
               AND obs_a.observaciones IS NOT NULL
               AND BTRIM(obs_a.observaciones) <> ''
@@ -987,7 +1062,7 @@ def list_dispatch_prep_planning_rows(
         d0,
         d1,
         only_not_invoiced,
-        *[f"%{t}%" for t in day_tokens],
+        *day_tokens,
         fetch,
         off,
     )
@@ -1119,6 +1194,8 @@ def list_dispatch_prep_planning_rows(
             )
             t_build = time.perf_counter()
             merged = [_serialize_row(_row_to_dict(cur, r)) for r in raw]
+            for row in merged:
+                _enrich_row_delivery_day(row)
             stages.record(
                 "build_rows",
                 elapsed_ms=(time.perf_counter() - t_build) * 1000.0,
