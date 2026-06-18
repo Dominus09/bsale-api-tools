@@ -26,11 +26,18 @@ import {
   type PlanificacionStoredOrder,
 } from "@/lib/planificacion-despacho-storage"
 import { orderHasGeo, splitOrdersByGeo } from "@/lib/planificacion-geo"
+import {
+  computeOperationalCostClp,
+  computeRouteSales,
+  EMPTY_OPERATIONAL_COSTS,
+  type RouteOperationalCosts,
+} from "@/lib/planificacion-operational-costs"
 import type { PlanificacionMapRoute } from "@/components/distribuidora/planificacion-despacho-map-client"
 import { OrsClientPanel } from "@/components/distribuidora/planificacion/OrsClientPanel"
 import { OrsDispatchEmptyState } from "@/components/distribuidora/planificacion/OrsDispatchEmptyState"
 import { OrsFuelConfigBar } from "@/components/distribuidora/planificacion/OrsFuelConfigBar"
 import { OrsMapSkeleton } from "@/components/distribuidora/planificacion/OrsMapSkeleton"
+import { OrsOperationalCostsPanel } from "@/components/distribuidora/planificacion/OrsOperationalCostsPanel"
 import { OrsTopBar } from "@/components/distribuidora/planificacion/OrsTopBar"
 import { OrsTruckSidebar } from "@/components/distribuidora/planificacion/OrsTruckSidebar"
 import { OrsDispatchWorkflow } from "@/components/distribuidora/planificacion/OrsDispatchWorkflow"
@@ -114,6 +121,8 @@ export default function PlanificacionDespachoPage() {
     useState<DistribuidoraPlanificacionCrewDefaults | null>(null)
   const [selectedCamion, setSelectedCamion] = useState<string | null>(null)
   const [sessionPlans, setSessionPlans] = useState<DispatchPlanSummary[]>([])
+  const [operationalCosts, setOperationalCosts] =
+    useState<RouteOperationalCosts>(EMPTY_OPERATIONAL_COSTS)
 
   const orsAbortRef = useRef<AbortController | null>(null)
   const orsInFlightKeyRef = useRef<string | null>(null)
@@ -417,6 +426,18 @@ export default function PlanificacionDespachoPage() {
     return clients.size
   }, [ordersForTruck])
 
+  const routeSalesClp = useMemo(
+    () => computeRouteSales(ordersForTruck),
+    [ordersForTruck],
+  )
+
+  const operationalCostClp = useMemo(
+    () => computeOperationalCostClp(totals.fuelClp, operationalCosts),
+    [totals.fuelClp, operationalCosts],
+  )
+
+  const activeTruckId = ordersForTruck[0]?.truck_id ?? null
+
   const visits = useMemo(
     () => buildOrsVisitRows(routableForTruck, orsRoutes, truckColorMap),
     [routableForTruck, orsRoutes, truckColorMap],
@@ -507,6 +528,9 @@ export default function PlanificacionDespachoPage() {
         lng: null,
       })),
     ]
+    const extrasClp = operationalCosts.per_diem_clp + operationalCosts.other_clp
+    const fuelClp = activeRoute?.fuel_cost_clp ?? 0
+    const crewClp = activeRoute?.crew_cost_clp ?? 0
     await confirmDispatchPlan({
       plan_session_id: planSessionId,
       truck_id: truckId,
@@ -516,16 +540,20 @@ export default function PlanificacionDespachoPage() {
       assistant_count: crew.assistantCount,
       driver_cost_clp: activeRoute?.driver_cost_clp ?? 0,
       assistant_cost_clp: activeRoute?.assistant_cost_clp ?? 0,
-      diesel_price_per_liter: orsPayload?.diesel_price_per_liter ?? 1200,
+      diesel_price_per_liter: orsPayload?.diesel_price_per_liter ?? 1500,
       km_total: activeRoute?.distance_km ?? 0,
       duration_min: activeRoute?.duration_min ?? 0,
       liters_estimated: activeRoute?.liters_estimated ?? 0,
-      fuel_cost_clp: activeRoute?.fuel_cost_clp ?? 0,
-      ferry_cost_clp: bd?.ferry_clp ?? 0,
+      fuel_cost_clp: fuelClp,
+      ferry_cost_clp: operationalCosts.ferry_clp,
       toll_cost_clp: bd?.toll_clp ?? 0,
-      extras_cost_clp: 0,
-      crew_cost_clp: activeRoute?.crew_cost_clp ?? 0,
-      total_route_cost_clp: bd?.total_clp ?? activeRoute?.fuel_cost_clp ?? 0,
+      extras_cost_clp: extrasClp,
+      crew_cost_clp: crewClp,
+      total_route_cost_clp:
+        fuelClp +
+        crewClp +
+        operationalCosts.ferry_clp +
+        extrasClp,
       route_geometry: activeRoute?.geometry ?? null,
       orders: planOrders,
     })
@@ -539,6 +567,7 @@ export default function PlanificacionDespachoPage() {
     crewByCamion,
     orsPayload,
     loadSessionPlans,
+    operationalCosts,
   ])
 
   if (!loading && orders.length === 0) {
@@ -616,10 +645,13 @@ export default function PlanificacionDespachoPage() {
             durationMin={totals.min}
             litersEstimated={totals.liters}
             fuelCostClp={totals.fuelClp}
+            routeSalesClp={routeSalesClp}
+            operationalCostClp={operationalCostClp}
             crewCostClp={totals.crewClp}
-            totalRouteCostClp={totals.totalClp}
+            totalRouteCostClp={operationalCostClp + totals.crewClp}
             dieselPricePerLiter={totals.diesel}
             loading={loading}
+            routeSalesLoading={false}
           />
         </div>
       </header>
@@ -656,6 +688,13 @@ export default function PlanificacionDespachoPage() {
               </ul>
             </div>
           ) : null}
+          <OrsOperationalCostsPanel
+            planSessionId={planSessionId}
+            truckId={activeTruckId}
+            fuelCostClp={totals.fuelClp}
+            loading={loading}
+            onCostsChange={setOperationalCosts}
+          />
           <OrsClientPanel
             visits={visits}
             routeStats={routeStats}

@@ -15,6 +15,13 @@ export type PlanificacionStoredOrder = {
   nombre_fantasia?: string | null
   total_amount?: number | null
   stop_index: number
+  /** Comuna / municipio del cliente. */
+  municipality?: string | null
+  /** Observaciones de la OC (texto libre). */
+  observaciones?: string | null
+  /** Día de entrega detectado (ej. viernes). */
+  dia_entrega_label?: string | null
+  dia_entrega_detectado?: string | null
 }
 
 export type PlanificacionStoredPayload = {

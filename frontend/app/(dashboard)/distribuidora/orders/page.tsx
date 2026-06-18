@@ -802,6 +802,10 @@ export default function DistribuidoraOrdersPage() {
         nombre_fantasia: r.nombre_fantasia ?? null,
         total_amount: r.total_amount != null ? Number(r.total_amount) : null,
         stop_index: idx,
+        municipality: r.municipality ?? null,
+        observaciones: r.observaciones ?? null,
+        dia_entrega_label: r.dia_entrega_label ?? null,
+        dia_entrega_detectado: r.dia_entrega_detectado ?? null,
       })
     }
 

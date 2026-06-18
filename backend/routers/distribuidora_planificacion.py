@@ -25,6 +25,10 @@ from backend.services.distribuidora.planificacion_ors_service import (
     get_plan_route_crew,
     save_plan_route_crew,
 )
+from backend.services.distribuidora.route_operational_costs_service import (
+    get_route_operational_costs,
+    save_route_operational_costs,
+)
 from backend.services.distribuidora.system_config_service import (
     DEFAULT_DIESEL_CLP_PER_LITER,
     get_diesel_price_per_liter,
@@ -235,3 +239,50 @@ def put_route_crew(body: RouteCrewSaveBody):
         body.plan_session_id.strip(),
         [r.model_dump() for r in body.routes],
     )
+
+
+@router.get("/operational-costs")
+def get_operational_costs_endpoint(
+    plan_session_id: str = Query(..., min_length=8, max_length=64),
+    truck_id: int = Query(..., ge=1),
+):
+    try:
+        return get_route_operational_costs(plan_session_id.strip(), truck_id)
+    except Exception as exc:
+        log_error("GET /planificacion/operational-costs", exc)
+        return {
+            "plan_session_id": plan_session_id.strip(),
+            "truck_id": truck_id,
+            "ferry_clp": 0,
+            "per_diem_clp": 0,
+            "other_clp": 0,
+            "diesel_clp_per_liter": None,
+        }
+
+
+class OperationalCostsBody(BaseModel):
+    plan_session_id: str = Field(..., min_length=8, max_length=64)
+    truck_id: int = Field(..., ge=1)
+    ferry_clp: int = Field(0, ge=0)
+    per_diem_clp: int = Field(0, ge=0)
+    other_clp: int = Field(0, ge=0)
+    diesel_clp_per_liter: float | None = Field(None, gt=0)
+
+
+@router.put("/operational-costs")
+def put_operational_costs(body: OperationalCostsBody):
+    try:
+        return save_route_operational_costs(
+            plan_session_id=body.plan_session_id.strip(),
+            truck_id=body.truck_id,
+            ferry_clp=body.ferry_clp,
+            per_diem_clp=body.per_diem_clp,
+            other_clp=body.other_clp,
+            diesel_clp_per_liter=body.diesel_clp_per_liter,
+        )
+    except Exception as exc:
+        log_error("PUT /planificacion/operational-costs", exc)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al guardar costos operacionales: {exc}",
+        ) from exc

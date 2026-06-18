@@ -1694,6 +1694,57 @@ export async function putDistribuidoraPlanificacionRouteCrew(params: {
   }>
 }
 
+export type PlanificacionOperationalCostsRow = {
+  plan_session_id: string
+  truck_id: number
+  ferry_clp: number
+  per_diem_clp: number
+  other_clp: number
+  diesel_clp_per_liter?: number | null
+}
+
+export async function getDistribuidoraPlanificacionOperationalCosts(params: {
+  planSessionId: string
+  truckId: number
+  signal?: AbortSignal
+}): Promise<PlanificacionOperationalCostsRow> {
+  const qs = new URLSearchParams({
+    plan_session_id: params.planSessionId,
+    truck_id: String(params.truckId),
+  })
+  const res = await fetch(
+    `${API_URL}/distribuidora/planificacion/operational-costs?${qs}`,
+    { headers: getAuthHeaders(), signal: params.signal },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar costos operacionales")
+  }
+  return res.json() as Promise<PlanificacionOperationalCostsRow>
+}
+
+export async function putDistribuidoraPlanificacionOperationalCosts(body: {
+  plan_session_id: string
+  truck_id: number
+  ferry_clp: number
+  per_diem_clp: number
+  other_clp: number
+  diesel_clp_per_liter?: number | null
+  signal?: AbortSignal
+}): Promise<PlanificacionOperationalCostsRow> {
+  const res = await fetch(`${API_URL}/distribuidora/planificacion/operational-costs`, {
+    method: "PUT",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+    signal: body.signal,
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al guardar costos operacionales")
+  }
+  return res.json() as Promise<PlanificacionOperationalCostsRow>
+}
+
 export async function postDistribuidoraPlanificacionOrsRoutes(params: {
   planSessionId?: string | null
   routes: {

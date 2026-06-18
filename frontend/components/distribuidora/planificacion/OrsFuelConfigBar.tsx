@@ -29,7 +29,7 @@ export function OrsFuelConfigBar({ onSaved }: OrsFuelConfigBarProps) {
         const cfg = await getDistribuidoraPlanificacionFuelConfig({ signal: ac.signal })
         setDieselClp(String(Math.round(cfg.diesel_price_per_liter)))
       } catch {
-        setDieselClp("1200")
+        setDieselClp("1500")
       } finally {
         setLoading(false)
       }

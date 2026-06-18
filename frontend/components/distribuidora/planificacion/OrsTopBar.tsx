@@ -1,6 +1,6 @@
 "use client"
 
-import { Banknote, Clock, Droplets, Fuel, MapPinned, Users } from "lucide-react"
+import { Banknote, Clock, Droplets, Fuel, MapPinned, ShoppingCart, Users } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { formatClp } from "@/lib/ors-map-ui"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -11,10 +11,13 @@ type OrsTopBarProps = {
   durationMin: number
   litersEstimated: number
   fuelCostClp: number
+  routeSalesClp?: number
+  operationalCostClp?: number
   crewCostClp?: number
   totalRouteCostClp?: number
   dieselPricePerLiter?: number
   loading?: boolean
+  routeSalesLoading?: boolean
 }
 
 function MetricCard({
@@ -62,19 +65,23 @@ export function OrsTopBar({
   durationMin,
   litersEstimated,
   fuelCostClp,
+  routeSalesClp = 0,
+  operationalCostClp,
   crewCostClp = 0,
   totalRouteCostClp,
   dieselPricePerLiter,
   loading,
+  routeSalesLoading,
 }: OrsTopBarProps) {
-  const totalClp = totalRouteCostClp ?? fuelCostClp + crewCostClp
+  const operationalClp = operationalCostClp ?? fuelCostClp
+  const totalClp = totalRouteCostClp ?? operationalClp + crewCostClp
   const dieselSub =
     dieselPricePerLiter != null
       ? `Diesel ${Math.round(dieselPricePerLiter).toLocaleString("es-CL")} CLP/L`
       : "Bodega ida y vuelta"
 
   return (
-    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+    <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8">
       <MetricCard
         label="Km total"
         value={`${kmTotal.toFixed(1)} km`}
@@ -111,6 +118,20 @@ export function OrsTopBar({
         loading={loading}
       />
       <MetricCard
+        label="Venta ruta"
+        value={formatClp(routeSalesClp)}
+        sub="Suma OC del camión"
+        icon={ShoppingCart}
+        loading={routeSalesLoading ?? loading}
+      />
+      <MetricCard
+        label="Costo operacional"
+        value={formatClp(operationalClp)}
+        sub="Combustible + ferry + viáticos + otros"
+        icon={Banknote}
+        loading={loading}
+      />
+      <MetricCard
         label="Personal"
         value={formatClp(crewCostClp)}
         sub="Chofer + peoneta / vuelta"
@@ -120,7 +141,7 @@ export function OrsTopBar({
       <MetricCard
         label="Costo total ruta"
         value={formatClp(totalClp)}
-        sub="Combustible + personal"
+        sub="Operacional + personal"
         icon={Banknote}
         loading={loading}
       />

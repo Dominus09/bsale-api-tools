@@ -261,6 +261,8 @@ export default function PrePlanificacionDespachoPage() {
         nombre_fantasia: r.nombre_fantasia ?? null,
         total_amount: r.total_amount != null ? Number(r.total_amount) : null,
         stop_index: idx,
+        municipality: r.municipality?.trim() || r.comuna?.trim() || null,
+        observaciones: r.observations?.trim() || null,
       })
     }
 
