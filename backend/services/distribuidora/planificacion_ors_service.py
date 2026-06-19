@@ -161,6 +161,7 @@ def compute_planificacion_ors_routes(
     *,
     plan_session_id: str | None = None,
     persist_crew: bool = True,
+    diesel_price_per_liter: float | None = None,
 ) -> dict[str, Any]:
     """
     ``legs``: { camion, truck_id?, stops, driver_count?, assistant_count? }
@@ -198,6 +199,8 @@ def compute_planificacion_ors_routes(
             diesel_clp = DEFAULT_DIESEL_CLP_PER_LITER
             trucks_by_id, trucks_by_name = {}, {}
             logistics_settings = get_logistics_cost_settings()
+        if diesel_price_per_liter is not None and float(diesel_price_per_liter) > 0:
+            diesel_clp = float(diesel_price_per_liter)
         default_d, default_a = logistics_settings.crew_rates()
         saved: dict[str, dict[str, Any]] = {}
         if plan_session_id and str(plan_session_id).strip():

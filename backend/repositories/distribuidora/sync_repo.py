@@ -110,6 +110,7 @@ def ensure_distribuidora_schema(cur) -> None:
         "030_purchase_document_status_cache.sql",
         "031_dispatch_plan_snapshot_views.sql",
         "032_route_operational_costs.sql",
+        "033_diesel_price_default_1500.sql",
     ):
         _run_sql_file(cur, fn)
 

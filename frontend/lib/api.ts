@@ -1747,6 +1747,7 @@ export async function putDistribuidoraPlanificacionOperationalCosts(body: {
 
 export async function postDistribuidoraPlanificacionOrsRoutes(params: {
   planSessionId?: string | null
+  dieselPricePerLiter?: number | null
   routes: {
     camion: string
     truck_id?: number | null
@@ -1759,6 +1760,9 @@ export async function postDistribuidoraPlanificacionOrsRoutes(params: {
   const body: Record<string, unknown> = { routes: params.routes }
   if (params.planSessionId?.trim()) {
     body.plan_session_id = params.planSessionId.trim()
+  }
+  if (params.dieselPricePerLiter != null && params.dieselPricePerLiter > 0) {
+    body.diesel_price_per_liter = params.dieselPricePerLiter
   }
   const res = await fetchWithTimeout(
     `${API_URL}/distribuidora/planificacion/ors-routes`,

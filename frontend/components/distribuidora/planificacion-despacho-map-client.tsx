@@ -1,24 +1,31 @@
 "use client"
 
-import { useEffect, useMemo } from "react"
+import { useEffect, useMemo, useRef } from "react"
 import dynamic from "next/dynamic"
 import L from "leaflet"
-import { useMap } from "react-leaflet"
+import { Marker, Popup, Tooltip, useMap } from "react-leaflet"
 import "leaflet/dist/leaflet.css"
+import { OrsStopPopup } from "@/components/distribuidora/planificacion/OrsStopPopup"
+import { SEMAPHORE_RING_COLOR, type CommercialSemaphore } from "@/lib/ors-commercial-semaphore"
+import type { OrsStopPopupData } from "@/lib/ors-map-ui"
 
 const MapContainer = dynamic(() => import("react-leaflet").then((m) => m.MapContainer), {
   ssr: false,
 })
 const TileLayer = dynamic(() => import("react-leaflet").then((m) => m.TileLayer), { ssr: false })
 const Polyline = dynamic(() => import("react-leaflet").then((m) => m.Polyline), { ssr: false })
-const Marker = dynamic(() => import("react-leaflet").then((m) => m.Marker), { ssr: false })
-const Tooltip = dynamic(() => import("react-leaflet").then((m) => m.Tooltip), { ssr: false })
 
 export type PlanificacionMapStop = {
   lat: number
   lng: number
   num: number
+  stopKey: string
   label: string
+  comuna?: string | null
+  semaphore?: CommercialSemaphore
+  documentId?: number
+  clientId?: number | null
+  popup?: OrsStopPopupData
 }
 
 export type PlanificacionMapRoute = {
@@ -53,15 +60,98 @@ function FitBoundsInner({
   return null
 }
 
-function numberedIcon(n: number, color: string, highlighted?: boolean) {
-  const ring = highlighted ? "box-shadow:0 0 0 3px rgba(255,255,255,.95),0 0 0 5px " + color + "55,0 2px 8px rgba(0,0,0,.4)" : "box-shadow:0 2px 6px rgba(0,0,0,.35)"
+function MapFlyToController({
+  flyToTarget,
+}: {
+  flyToTarget?: { lat: number; lng: number; zoom?: number; seq?: number } | null
+}) {
+  const map = useMap()
+  useEffect(() => {
+    if (!flyToTarget) return
+    map.flyTo(
+      [flyToTarget.lat, flyToTarget.lng],
+      flyToTarget.zoom ?? 15,
+      { duration: 0.5, easeLinearity: 0.25 },
+    )
+  }, [map, flyToTarget?.lat, flyToTarget?.lng, flyToTarget?.zoom, flyToTarget?.seq])
+  return null
+}
+
+function numberedIcon(
+  n: number,
+  color: string,
+  highlighted?: boolean,
+  comuna?: string | null,
+  semaphore?: CommercialSemaphore,
+) {
+  const ringColor = semaphore ? SEMAPHORE_RING_COLOR[semaphore] : color
+  const ring = highlighted
+    ? `box-shadow:0 0 0 3px rgba(255,255,255,.95),0 0 0 5px ${ringColor}88,0 2px 8px rgba(0,0,0,.4)`
+    : `box-shadow:0 0 0 2px ${ringColor}99,0 2px 6px rgba(0,0,0,.35)`
   const scale = highlighted ? "transform:scale(1.12)" : ""
+  const comunaHtml = comuna?.trim()
+    ? `<span style="display:block;margin-top:2px;font:600 8px/1.1 system-ui,sans-serif;color:#334155;max-width:72px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${comuna}</span>`
+    : ""
   return L.divIcon({
     className: "planificacion-num-marker-wrap",
-    html: `<div style="width:26px;height:26px;border-radius:9999px;background:${color};color:#fff;font:700 12px/26px system-ui,sans-serif;text-align:center;border:2.5px solid #fff;${ring};${scale}">${n}</div>`,
-    iconSize: [26, 26],
-    iconAnchor: [13, 13],
+    html: `<div style="text-align:center"><div style="width:26px;height:26px;border-radius:9999px;background:${color};color:#fff;font:700 12px/26px system-ui,sans-serif;text-align:center;border:2.5px solid #fff;${ring};${scale}">${n}</div>${comunaHtml}</div>`,
+    iconSize: comunaHtml ? [72, 38] : [26, 26],
+    iconAnchor: comunaHtml ? [36, 13] : [13, 13],
+    popupAnchor: [0, comunaHtml ? -16 : -12],
   })
+}
+
+function RouteStopMarker({
+  stop,
+  routeColor,
+  camion,
+  highlighted,
+  openPopupStopKey,
+  onStopClick,
+  onPopupClose,
+}: {
+  stop: PlanificacionMapStop
+  routeColor: string
+  camion: string
+  highlighted?: boolean
+  openPopupStopKey?: string | null
+  onStopClick?: (stop: PlanificacionMapStop) => void
+  onPopupClose?: () => void
+}) {
+  const markerRef = useRef<L.Marker>(null)
+
+  useEffect(() => {
+    if (openPopupStopKey !== stop.stopKey) return
+    const timer = window.setTimeout(() => markerRef.current?.openPopup(), 400)
+    return () => window.clearTimeout(timer)
+  }, [openPopupStopKey, stop.stopKey])
+
+  const icon = numberedIcon(stop.num, routeColor, highlighted, stop.comuna, stop.semaphore)
+
+  return (
+    <Marker
+      ref={markerRef}
+      position={[stop.lat, stop.lng]}
+      icon={icon}
+      zIndexOffset={highlighted ? 1000 : stop.num}
+      eventHandlers={{
+        click: () => onStopClick?.(stop),
+        popupclose: () => {
+          if (openPopupStopKey === stop.stopKey) onPopupClose?.()
+        },
+      }}
+    >
+      {stop.popup ? (
+        <Popup closeButton minWidth={180} maxWidth={280}>
+          <OrsStopPopup {...stop.popup} />
+        </Popup>
+      ) : null}
+      <Tooltip direction="top" offset={[0, -10]} opacity={0.95}>
+        <span className="text-xs font-semibold">{stop.label}</span>
+        <span className="block text-[10px] opacity-80">{camion}</span>
+      </Tooltip>
+    </Marker>
+  )
 }
 
 const DEFAULT_CENTER: [number, number] = [-33.0, -71.5]
@@ -71,6 +161,10 @@ type PlanificacionDespachoMapClientProps = {
   depot?: { lat: number; lng: number } | null
   className?: string
   highlightedStopKey?: string | null
+  flyToTarget?: { lat: number; lng: number; zoom?: number; seq?: number } | null
+  openPopupStopKey?: string | null
+  onPopupClose?: () => void
+  onStopClick?: (stop: PlanificacionMapStop) => void
 }
 
 function depotIcon() {
@@ -87,6 +181,10 @@ export function PlanificacionDespachoMapClient({
   depot,
   className,
   highlightedStopKey,
+  flyToTarget,
+  openPopupStopKey,
+  onPopupClose,
+  onStopClick,
 }: PlanificacionDespachoMapClientProps) {
   const center = useMemo((): [number, number] => {
     if (depot) return [depot.lat, depot.lng]
@@ -117,6 +215,7 @@ export function PlanificacionDespachoMapClient({
           url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
         />
         <FitBoundsInner routes={routes} depot={depot} />
+        <MapFlyToController flyToTarget={flyToTarget} />
         {depot ? (
           <Marker position={[depot.lat, depot.lng]} icon={depotIcon()} zIndexOffset={2000}>
             <Tooltip direction="top" opacity={1}>
@@ -140,20 +239,18 @@ export function PlanificacionDespachoMapClient({
         ))}
         {routes.flatMap((r) =>
           r.stops.map((s) => {
-            const key = `${r.camion}-${s.num}`
-            const hi = highlightedStopKey === key
+            const hi = highlightedStopKey === s.stopKey
             return (
-              <Marker
-                key={`${r.camion}-${s.num}-${s.lat}-${s.lng}`}
-                position={[s.lat, s.lng]}
-                icon={numberedIcon(s.num, r.color, hi)}
-                zIndexOffset={hi ? 1000 : s.num}
-              >
-                <Tooltip direction="top" offset={[0, -10]} opacity={1}>
-                  <span className="text-xs font-semibold">{s.label}</span>
-                  <span className="block text-[10px] opacity-80">{r.camion}</span>
-                </Tooltip>
-              </Marker>
+              <RouteStopMarker
+                key={`${s.stopKey}-${s.lat}-${s.lng}`}
+                stop={s}
+                routeColor={r.color}
+                camion={r.camion}
+                highlighted={hi}
+                openPopupStopKey={openPopupStopKey}
+                onStopClick={onStopClick}
+                onPopupClose={onPopupClose}
+              />
             )
           }),
         )}

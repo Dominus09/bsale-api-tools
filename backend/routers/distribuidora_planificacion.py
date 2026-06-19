@@ -151,6 +151,11 @@ class OrsRoutesRequestBody(BaseModel):
         max_length=64,
         description="Id de sesión para persistir dotación por camión.",
     )
+    diesel_price_per_liter: float | None = Field(
+        None,
+        gt=0,
+        description="Override CLP/L para recalcular combustible en esta petición.",
+    )
 
 
 def _leg_to_service_dict(leg: OrsRouteInput) -> dict[str, Any]:
@@ -181,6 +186,7 @@ def post_planificacion_ors_routes(body: OrsRoutesRequestBody):
             legs,
             plan_session_id=body.plan_session_id,
             persist_crew=bool(body.plan_session_id),
+            diesel_price_per_liter=body.diesel_price_per_liter,
         )
     except Exception as exc:
         log_error("POST /planificacion/ors-routes", exc)

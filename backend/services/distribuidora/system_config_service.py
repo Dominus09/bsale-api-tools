@@ -11,7 +11,7 @@ from backend.db import get_connection
 logger = logging.getLogger(__name__)
 
 DIESEL_PRICE_KEY = "diesel_price_per_liter"
-DEFAULT_DIESEL_CLP_PER_LITER = 1200.0
+DEFAULT_DIESEL_CLP_PER_LITER = 1500.0
 
 
 def _parse_diesel_clp(value_json: Any) -> float:

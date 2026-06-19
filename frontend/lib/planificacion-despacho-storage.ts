@@ -17,6 +17,7 @@ export type PlanificacionStoredOrder = {
   stop_index: number
   /** Comuna / municipio del cliente. */
   municipality?: string | null
+  direccion?: string | null
   /** Observaciones de la OC (texto libre). */
   observaciones?: string | null
   /** Día de entrega detectado (ej. viernes). */

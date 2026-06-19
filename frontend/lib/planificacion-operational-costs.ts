@@ -4,12 +4,16 @@ export type RouteOperationalCosts = {
   ferry_clp: number
   per_diem_clp: number
   other_clp: number
+  diesel_clp_per_liter: number
 }
+
+export const DEFAULT_DIESEL_CLP_PER_LITER = 1500
 
 export const EMPTY_OPERATIONAL_COSTS: RouteOperationalCosts = {
   ferry_clp: 0,
   per_diem_clp: 0,
   other_clp: 0,
+  diesel_clp_per_liter: DEFAULT_DIESEL_CLP_PER_LITER,
 }
 
 export function computeRouteSales(orders: PlanificacionStoredOrder[]): number {

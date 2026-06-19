@@ -19,7 +19,7 @@ import {
   invalidateSessionPlansCache,
   logFrontendPlanDebug,
 } from "@/lib/planificacion-fetch"
-import { buildOrsVisitRows } from "@/lib/ors-map-ui"
+import { buildOrsVisitRows, buildRouteClientRows, buildStopPopupData } from "@/lib/ors-map-ui"
 import {
   readPlanificacionPayload,
   clearPlanificacionPayload,
@@ -32,10 +32,14 @@ import {
   EMPTY_OPERATIONAL_COSTS,
   type RouteOperationalCosts,
 } from "@/lib/planificacion-operational-costs"
-import type { PlanificacionMapRoute } from "@/components/distribuidora/planificacion-despacho-map-client"
+import type { PlanificacionMapRoute, PlanificacionMapStop } from "@/components/distribuidora/planificacion-despacho-map-client"
 import { OrsClientPanel } from "@/components/distribuidora/planificacion/OrsClientPanel"
+import { OrsClientRouteList } from "@/components/distribuidora/planificacion/OrsClientRouteList"
+import {
+  countCommercialSemaphores,
+  OrsCommercialKpiStrip,
+} from "@/components/distribuidora/planificacion/OrsCommercialKpiStrip"
 import { OrsDispatchEmptyState } from "@/components/distribuidora/planificacion/OrsDispatchEmptyState"
-import { OrsFuelConfigBar } from "@/components/distribuidora/planificacion/OrsFuelConfigBar"
 import { OrsMapSkeleton } from "@/components/distribuidora/planificacion/OrsMapSkeleton"
 import { OrsOperationalCostsPanel } from "@/components/distribuidora/planificacion/OrsOperationalCostsPanel"
 import { OrsTopBar } from "@/components/distribuidora/planificacion/OrsTopBar"
@@ -115,6 +119,7 @@ export default function PlanificacionDespachoPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedVisitId, setSelectedVisitId] = useState<number | null>(null)
+  const [selectedClientId, setSelectedClientId] = useState<number | null>(null)
   const [planSessionId, setPlanSessionId] = useState<string | null>(null)
   const [crewByCamion, setCrewByCamion] = useState<Map<string, CrewCounts>>(new Map())
   const [crewDefaults, setCrewDefaults] =
@@ -123,6 +128,13 @@ export default function PlanificacionDespachoPage() {
   const [sessionPlans, setSessionPlans] = useState<DispatchPlanSummary[]>([])
   const [operationalCosts, setOperationalCosts] =
     useState<RouteOperationalCosts>(EMPTY_OPERATIONAL_COSTS)
+  const [mapFlyTo, setMapFlyTo] = useState<{
+    lat: number
+    lng: number
+    zoom?: number
+    seq: number
+  } | null>(null)
+  const [openPopupStopKey, setOpenPopupStopKey] = useState<string | null>(null)
 
   const orsAbortRef = useRef<AbortController | null>(null)
   const orsInFlightKeyRef = useRef<string | null>(null)
@@ -132,9 +144,11 @@ export default function PlanificacionDespachoPage() {
   const ordersRef = useRef(orders)
   const planSessionIdRef = useRef(planSessionId)
   const crewByCamionRef = useRef(crewByCamion)
+  const operationalCostsRef = useRef(operationalCosts)
   ordersRef.current = orders
   planSessionIdRef.current = planSessionId
   crewByCamionRef.current = crewByCamion
+  operationalCostsRef.current = operationalCosts
 
   const loadSessionPlans = useCallback(async (sessionId: string | null, force = false) => {
     if (!sessionId) {
@@ -160,6 +174,7 @@ export default function PlanificacionDespachoPage() {
       camion: string | null,
       sessionId: string | null,
       crewMap: Map<string, CrewCounts>,
+      dieselPricePerLiter?: number | null,
     ) => {
       if (!camion || list.length === 0) {
         setOrsPayload(null)
@@ -180,7 +195,11 @@ export default function PlanificacionDespachoPage() {
         return
       }
 
-      const routeKey = `${camion}:${routableOrders.map((o) => o.document_id).join(",")}`
+      const diesel =
+        dieselPricePerLiter ??
+        operationalCostsRef.current.diesel_clp_per_liter ??
+        null
+      const routeKey = `${camion}:${diesel ?? "d"}:${routableOrders.map((o) => o.document_id).join(",")}`
       if (orsInFlightKeyRef.current === routeKey) {
         logFrontendPlanDebug("ors-routes", { camion, skipped: "inflight-same-key" })
         return
@@ -205,6 +224,7 @@ export default function PlanificacionDespachoPage() {
         const crew = crewMap.get(camion) ?? { driverCount: 1, assistantCount: 0 }
         const res = await postDistribuidoraPlanificacionOrsRoutes({
           planSessionId: sessionId,
+          dieselPricePerLiter: diesel,
           routes: [
             {
               camion,
@@ -341,6 +361,28 @@ export default function PlanificacionDespachoPage() {
     [ordersForTruck],
   )
 
+  const routeClientRows = useMemo(
+    () => buildRouteClientRows(ordersForTruck, orsRoutes),
+    [ordersForTruck, orsRoutes],
+  )
+
+  const commercialCounts = useMemo(
+    () => countCommercialSemaphores(routeClientRows),
+    [routeClientRows],
+  )
+
+  const clientByDocumentId = useMemo(() => {
+    const m = new Map<number, (typeof routeClientRows)[number]>()
+    for (const c of routeClientRows) {
+      for (const o of ordersForTruck) {
+        if (o.client_id === c.client_id) {
+          m.set(o.document_id, c)
+        }
+      }
+    }
+    return m
+  }, [routeClientRows, ordersForTruck])
+
   const mapRoutes: PlanificacionMapRoute[] = useMemo(() => {
     if (!selectedCamion || !activeRoute) return []
     const byT = groupOrdersByTruck(orders)
@@ -351,22 +393,40 @@ export default function PlanificacionDespachoPage() {
       stopsOrdered.length > 0
         ? stopsOrdered.map((s) => {
             const o = (byT.get(r.camion) ?? []).find((x) => x.document_id === s.document_id)
+            const clientRow = clientByDocumentId.get(s.document_id)
+            const stopKey = `${r.camion}-${s.stop_index}`
             return {
               lat: s.lat,
               lng: s.lng,
               num: s.stop_index,
+              stopKey,
+              documentId: s.document_id,
+              clientId: o?.client_id ?? clientRow?.client_id ?? null,
               label: `${o?.nombre_fantasia?.trim() || "Cliente"} · OC ${o?.oc ?? s.document_id}`,
+              comuna: o?.municipality?.trim() || clientRow?.comuna || null,
+              semaphore: clientRow?.semaphore,
+              popup: buildStopPopupData(o, clientRow),
             }
           })
         : (byT.get(r.camion) ?? [])
             .filter(orderHasGeo)
             .sort((a, b) => a.stop_index - b.stop_index)
-            .map((s) => ({
-              lat: Number(s.lat),
-              lng: Number(s.lng),
-              num: s.stop_index,
-              label: `${s.nombre_fantasia?.trim() || "Cliente"} · OC ${s.oc ?? s.document_id}`,
-            }))
+            .map((s) => {
+              const clientRow = clientByDocumentId.get(s.document_id)
+              const stopKey = `${r.camion}-${s.stop_index}`
+              return {
+                lat: Number(s.lat),
+                lng: Number(s.lng),
+                num: s.stop_index,
+                stopKey,
+                documentId: s.document_id,
+                clientId: s.client_id ?? clientRow?.client_id ?? null,
+                label: `${s.nombre_fantasia?.trim() || "Cliente"} · OC ${s.oc ?? s.document_id}`,
+                comuna: s.municipality?.trim() || clientRow?.comuna || null,
+                semaphore: clientRow?.semaphore,
+                popup: buildStopPopupData(s, clientRow),
+              }
+            })
     return [
       {
         camion: r.camion,
@@ -375,7 +435,49 @@ export default function PlanificacionDespachoPage() {
         stops: stopsFromOrder,
       },
     ]
-  }, [orders, activeRoute, selectedCamion, truckColorMap])
+  }, [orders, activeRoute, selectedCamion, truckColorMap, clientByDocumentId])
+
+  const handleDieselChange = useCallback(
+    (diesel: number) => {
+      if (!selectedCamion) return
+      void fetchRoutes(
+        ordersRef.current,
+        selectedCamion,
+        planSessionIdRef.current,
+        crewByCamionRef.current,
+        diesel,
+      )
+    },
+    [fetchRoutes, selectedCamion],
+  )
+
+  const handleSelectClient = useCallback(
+    (client: (typeof routeClientRows)[number]) => {
+      setSelectedClientId(client.client_id)
+      setSelectedVisitId(client.primary_document_id)
+      if (selectedCamion && client.lat != null && client.lng != null) {
+        setMapFlyTo({
+          lat: client.lat,
+          lng: client.lng,
+          zoom: 15,
+          seq: Date.now(),
+        })
+        setOpenPopupStopKey(`${selectedCamion}-${client.stop_index_min}`)
+      }
+    },
+    [selectedCamion],
+  )
+
+  const handleStopClick = useCallback((stop: PlanificacionMapStop) => {
+    setOpenPopupStopKey(stop.stopKey)
+    if (stop.documentId != null) setSelectedVisitId(stop.documentId)
+    if (stop.clientId != null) setSelectedClientId(Number(stop.clientId))
+    setMapFlyTo({ lat: stop.lat, lng: stop.lng, zoom: 15, seq: Date.now() })
+  }, [])
+
+  const handlePopupClose = useCallback(() => {
+    setOpenPopupStopKey(null)
+  }, [])
 
   const totals = useMemo(() => {
     if (orsPayload?.totals) {
@@ -487,6 +589,7 @@ export default function PlanificacionDespachoPage() {
           camion,
           planSessionIdRef.current,
           next,
+          operationalCostsRef.current.diesel_clp_per_liter,
         )
       }, 450)
     },
@@ -540,7 +643,10 @@ export default function PlanificacionDespachoPage() {
       assistant_count: crew.assistantCount,
       driver_cost_clp: activeRoute?.driver_cost_clp ?? 0,
       assistant_cost_clp: activeRoute?.assistant_cost_clp ?? 0,
-      diesel_price_per_liter: orsPayload?.diesel_price_per_liter ?? 1500,
+      diesel_price_per_liter:
+        operationalCosts.diesel_clp_per_liter ??
+        orsPayload?.diesel_price_per_liter ??
+        1500,
       km_total: activeRoute?.distance_km ?? 0,
       duration_min: activeRoute?.duration_min ?? 0,
       liters_estimated: activeRoute?.liters_estimated ?? 0,
@@ -587,13 +693,6 @@ export default function PlanificacionDespachoPage() {
             </h1>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <OrsFuelConfigBar
-              onSaved={() => {
-                if (selectedCamion && orders.length > 0) {
-                  void fetchRoutes(orders, selectedCamion, planSessionId, crewByCamion)
-                }
-              }}
-            />
             <Button
               type="button"
               variant="outline"
@@ -602,7 +701,13 @@ export default function PlanificacionDespachoPage() {
               disabled={loading}
               onClick={() => {
                 if (selectedCamion) {
-                  void fetchRoutes(orders, selectedCamion, planSessionId, crewByCamion)
+                  void fetchRoutes(
+                    orders,
+                    selectedCamion,
+                    planSessionId,
+                    crewByCamion,
+                    operationalCosts.diesel_clp_per_liter,
+                  )
                 }
               }}
             >
@@ -638,7 +743,7 @@ export default function PlanificacionDespachoPage() {
             </Button>
           </div>
         </div>
-        <div className="mt-3">
+        <div className="mt-3 space-y-2">
           <OrsTopBar
             kmTotal={totals.km}
             clientCount={clientCount}
@@ -653,6 +758,7 @@ export default function PlanificacionDespachoPage() {
             loading={loading}
             routeSalesLoading={false}
           />
+          <OrsCommercialKpiStrip counts={commercialCounts} loading={loading} />
         </div>
       </header>
 
@@ -669,7 +775,14 @@ export default function PlanificacionDespachoPage() {
           selectedCamion={selectedCamion}
           onSelect={(c) => {
             setSelectedCamion(c)
-            void fetchRoutes(orders, c, planSessionId, crewByCamion)
+            setSelectedClientId(null)
+            void fetchRoutes(
+              orders,
+              c,
+              planSessionId,
+              crewByCamion,
+              operationalCosts.diesel_clp_per_liter,
+            )
           }}
           loading={loading}
         />
@@ -694,6 +807,13 @@ export default function PlanificacionDespachoPage() {
             fuelCostClp={totals.fuelClp}
             loading={loading}
             onCostsChange={setOperationalCosts}
+            onDieselChange={handleDieselChange}
+          />
+          <OrsClientRouteList
+            clients={routeClientRows}
+            loading={loading}
+            selectedClientId={selectedClientId}
+            onSelectClient={handleSelectClient}
           />
           <OrsClientPanel
             visits={visits}
@@ -710,7 +830,28 @@ export default function PlanificacionDespachoPage() {
             truckOptions={truckOptions}
             loading={loading}
             selectedVisitId={selectedVisitId}
-            onSelectVisit={setSelectedVisitId}
+            onSelectVisit={(documentId) => {
+              setSelectedVisitId(documentId)
+              const order = ordersForTruck.find((o) => o.document_id === documentId)
+              setSelectedClientId(
+                order?.client_id != null ? Number(order.client_id) : null,
+              )
+              const visit = visits.find((v) => v.document_id === documentId)
+              if (
+                selectedCamion &&
+                visit &&
+                order?.lat != null &&
+                order?.lng != null
+              ) {
+                setMapFlyTo({
+                  lat: Number(order.lat),
+                  lng: Number(order.lng),
+                  zoom: 15,
+                  seq: Date.now(),
+                })
+                setOpenPopupStopKey(`${selectedCamion}-${visit.stop_index}`)
+              }
+            }}
             onCrewChange={handleCrewChange}
             activeCamion={selectedCamion}
           />
@@ -738,6 +879,10 @@ export default function PlanificacionDespachoPage() {
               routes={mapRoutes}
               depot={depot}
               highlightedStopKey={highlightedStopKey}
+              flyToTarget={mapFlyTo}
+              openPopupStopKey={openPopupStopKey}
+              onPopupClose={handlePopupClose}
+              onStopClick={handleStopClick}
               className="h-full min-h-0 w-full overflow-hidden rounded-lg border border-border/80 bg-slate-950/5 shadow-md dark:bg-slate-950/50"
             />
           )}
