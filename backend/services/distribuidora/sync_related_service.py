@@ -209,7 +209,7 @@ def _fetch_oc_document_ids_for_incremental(
 
     cur.execute(
         f"""
-        SELECT DISTINCT d.document_id
+        SELECT d.document_id
         FROM distribuidora.documents d
         WHERE d.document_type_id = %s
           AND d.company_id = %s
@@ -225,7 +225,7 @@ def _fetch_oc_document_ids_for_incremental(
 
     cur.execute(
         """
-        SELECT DISTINCT d.document_id
+        SELECT d.document_id
         FROM distribuidora.documents d
         WHERE d.document_type_id = %s
           AND d.company_id = %s
@@ -262,7 +262,7 @@ def _fetch_oc_document_ids_for_emission_day(cur, day: date) -> list[int]:
     day_start, day_end_excl = _utc_day_emission_bounds(day)
     cur.execute(
         """
-        SELECT DISTINCT d.document_id
+        SELECT d.document_id
         FROM distribuidora.documents d
         WHERE d.document_type_id = %s
           AND d.company_id = %s
