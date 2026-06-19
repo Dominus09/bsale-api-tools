@@ -8,11 +8,13 @@ import { Loader2, RefreshCw, Trash2 } from "lucide-react"
 import {
   confirmDispatchPlan,
   getDistribuidoraPlanificacionRouteCrew,
+  getDistribuidoraTrucks,
   postDistribuidoraPlanificacionOrsRoutes,
   type DispatchPlanSummary,
   type DistribuidoraPlanificacionCrewDefaults,
   type DistribuidoraPlanificacionOrsResponse,
   type DistribuidoraPlanificacionOrsRoute,
+  type DistribuidoraTruck,
 } from "@/lib/api"
 import {
   fetchDispatchPlansBySessionDeduped,
@@ -32,12 +34,18 @@ import {
   EMPTY_OPERATIONAL_COSTS,
   type RouteOperationalCosts,
 } from "@/lib/planificacion-operational-costs"
+import {
+  estimateAssignedKgFromStops,
+  isTruckOverloaded,
+  truckUtilizationPct,
+} from "@/lib/ors-truck-capacity"
 import type { PlanificacionMapRoute, PlanificacionMapStop } from "@/components/distribuidora/planificacion-despacho-map-client"
 import { OrsClientPanel } from "@/components/distribuidora/planificacion/OrsClientPanel"
 import { OrsClientRouteList } from "@/components/distribuidora/planificacion/OrsClientRouteList"
 import {
   countCommercialSemaphores,
   OrsCommercialKpiStrip,
+  type CommercialKpiCounts,
 } from "@/components/distribuidora/planificacion/OrsCommercialKpiStrip"
 import { OrsDispatchEmptyState } from "@/components/distribuidora/planificacion/OrsDispatchEmptyState"
 import { OrsMapSkeleton } from "@/components/distribuidora/planificacion/OrsMapSkeleton"
@@ -135,6 +143,7 @@ export default function PlanificacionDespachoPage() {
     seq: number
   } | null>(null)
   const [openPopupStopKey, setOpenPopupStopKey] = useState<string | null>(null)
+  const [trucksCatalog, setTrucksCatalog] = useState<DistribuidoraTruck[]>([])
 
   const orsAbortRef = useRef<AbortController | null>(null)
   const orsInFlightKeyRef = useRef<string | null>(null)
@@ -279,6 +288,13 @@ export default function PlanificacionDespachoPage() {
 
     let cancelled = false
     ;(async () => {
+      try {
+        const trucksRes = await getDistribuidoraTrucks()
+        if (!cancelled) setTrucksCatalog(trucksRes.items ?? [])
+      } catch {
+        /* catálogo opcional para capacidad */
+      }
+
       let crewMap = crewMapFromOrders(initial)
       if (sessionId) {
         try {
@@ -332,19 +348,36 @@ export default function PlanificacionDespachoPage() {
     return new Map(keys.map((k, i) => [k, TRUCK_COLORS[i % TRUCK_COLORS.length]!]))
   }, [orders])
 
+  const trucksById = useMemo(() => {
+    const m = new Map<number, DistribuidoraTruck>()
+    for (const t of trucksCatalog) m.set(t.id, t)
+    return m
+  }, [trucksCatalog])
+
   const truckSidebarRows = useMemo(() => {
     const byT = groupOrdersByTruck(orders)
     const planByTruck = new Map<number, DispatchPlanSummary>()
     for (const p of sessionPlans) {
       if (p.truck_id != null) planByTruck.set(Number(p.truck_id), p)
     }
-    return Array.from(byT.entries()).map(([camion, stops]) => ({
-      camion,
-      truckId: stops[0]?.truck_id ?? 0,
-      stopCount: stops.length,
-      plan: planByTruck.get(stops[0]?.truck_id ?? -1) ?? null,
-    }))
-  }, [orders, sessionPlans])
+    return Array.from(byT.entries()).map(([camion, stops]) => {
+      const truckId = stops[0]?.truck_id ?? 0
+      const meta = trucksById.get(truckId)
+      const maxWeightKg = meta?.max_weight_kg ?? null
+      const estimatedAssignedKg = estimateAssignedKgFromStops(stops.length)
+      const utilizationPct = truckUtilizationPct(estimatedAssignedKg, maxWeightKg)
+      return {
+        camion,
+        truckId,
+        stopCount: stops.length,
+        maxWeightKg,
+        estimatedAssignedKg,
+        utilizationPct,
+        overloaded: isTruckOverloaded(estimatedAssignedKg, maxWeightKg),
+        plan: planByTruck.get(truckId) ?? null,
+      }
+    })
+  }, [orders, sessionPlans, trucksById])
 
   const activePlan = useMemo(() => {
     const row = truckSidebarRows.find((t) => t.camion === selectedCamion)
@@ -366,10 +399,13 @@ export default function PlanificacionDespachoPage() {
     [ordersForTruck, orsRoutes],
   )
 
-  const commercialCounts = useMemo(
-    () => countCommercialSemaphores(routeClientRows),
-    [routeClientRows],
-  )
+  const commercialCounts = useMemo((): CommercialKpiCounts => {
+    const base = countCommercialSemaphores(routeClientRows)
+    return {
+      ...base,
+      isolated: routeClientRows.filter((c) => c.isolated).length,
+    }
+  }, [routeClientRows])
 
   const clientByDocumentId = useMemo(() => {
     const m = new Map<number, (typeof routeClientRows)[number]>()

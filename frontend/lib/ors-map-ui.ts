@@ -6,6 +6,7 @@ import {
   commercialSemaphore,
   type CommercialSemaphore,
 } from "@/lib/ors-commercial-semaphore"
+import { detectIsolatedClientDistances } from "@/lib/ors-isolated-client"
 import type { PlanificacionStoredOrder } from "@/lib/planificacion-despacho-storage"
 
 export type RouteClientRow = {
@@ -23,6 +24,8 @@ export type RouteClientRow = {
   lat: number | null
   lng: number | null
   primary_document_id: number
+  isolated?: boolean
+  isolated_distance_km?: number | null
 }
 
 export type OrsStopPopupData = {
@@ -34,6 +37,8 @@ export type OrsStopPopupData = {
   observaciones?: string[]
   diaEntregaLabel?: string | null
   semaphore?: CommercialSemaphore
+  isolated?: boolean
+  isolatedDistanceKm?: number | null
 }
 
 export function formatOrsEta(minutesFromStart: number): string {
@@ -198,7 +203,16 @@ export function buildRouteClientRows(
   }
 
   rows.sort((a, b) => a.stop_index_min - b.stop_index_min)
-  return rows.map((r, i) => ({ ...r, list_index: i + 1 }))
+  const indexed = rows.map((r, i) => ({ ...r, list_index: i + 1 }))
+  const isolatedMap = detectIsolatedClientDistances(indexed)
+  return indexed.map((r) => {
+    const dist = isolatedMap.get(r.client_id)
+    return {
+      ...r,
+      isolated: dist != null,
+      isolated_distance_km: dist ?? null,
+    }
+  })
 }
 
 export function buildStopPopupData(
@@ -215,6 +229,8 @@ export function buildStopPopupData(
       observaciones: clientRow.observaciones,
       diaEntregaLabel: clientRow.dia_entrega_label,
       semaphore: clientRow.semaphore,
+      isolated: clientRow.isolated,
+      isolatedDistanceKm: clientRow.isolated_distance_km,
     }
   }
   if (!order) return undefined

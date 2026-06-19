@@ -57,10 +57,15 @@ export function OrsClientRouteList({
                     {c.list_index}
                   </span>
                   <span className="shrink-0" aria-hidden>
-                    {SEMAPHORE_EMOJI[c.semaphore]}
+                    {c.isolated ? "⚫" : SEMAPHORE_EMOJI[c.semaphore]}
                   </span>
                   <span className="min-w-0 flex-1 truncate font-medium text-foreground">
                     {c.nombre}
+                    {c.isolated ? (
+                      <span className="ml-1 text-[10px] font-normal text-muted-foreground">
+                        aislado
+                      </span>
+                    ) : null}
                   </span>
                   <span className="shrink-0 font-semibold tabular-nums text-foreground">
                     {formatClp(c.venta_total)}

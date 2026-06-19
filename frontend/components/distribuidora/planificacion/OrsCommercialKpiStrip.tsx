@@ -8,8 +8,14 @@ import {
 import { cn } from "@/lib/utils"
 import { Skeleton } from "@/components/ui/skeleton"
 
+export type CommercialKpiCounts = CommercialSemaphoreCounts & {
+  isolated: number
+}
+
+const ISOLATED_EMOJI = "⚫"
+
 type OrsCommercialKpiStripProps = {
-  counts: CommercialSemaphoreCounts
+  counts: CommercialKpiCounts
   loading?: boolean
   className?: string
 }
@@ -57,6 +63,9 @@ export function OrsCommercialKpiStrip({
       <Chip emoji={SEMAPHORE_EMOJI.green} count={counts.green} label="Clientes verdes" />
       <Chip emoji={SEMAPHORE_EMOJI.yellow} count={counts.yellow} label="Clientes amarillos" />
       <Chip emoji={SEMAPHORE_EMOJI.red} count={counts.red} label="Clientes rojos" />
+      {counts.isolated > 0 ? (
+        <Chip emoji={ISOLATED_EMOJI} count={counts.isolated} label="Clientes aislados" />
+      ) : null}
     </div>
   )
 }

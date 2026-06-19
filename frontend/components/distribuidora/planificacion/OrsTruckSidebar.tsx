@@ -1,6 +1,6 @@
 "use client"
 
-import { Truck } from "lucide-react"
+import { AlertTriangle, Truck } from "lucide-react"
 
 import type { DispatchPlanSummary } from "@/lib/api"
 import { cn } from "@/lib/utils"
@@ -15,15 +15,19 @@ const STATUS_LABEL: Record<string, string> = {
   dispatched: "Despachado",
 }
 
-type TruckRow = {
+export type OrsTruckSidebarRow = {
   camion: string
   truckId: number
   stopCount: number
+  maxWeightKg?: number | null
+  estimatedAssignedKg?: number | null
+  utilizationPct?: number | null
+  overloaded?: boolean
   plan?: DispatchPlanSummary | null
 }
 
 type OrsTruckSidebarProps = {
-  trucks: TruckRow[]
+  trucks: OrsTruckSidebarRow[]
   selectedCamion: string | null
   onSelect: (camion: string) => void
   loading?: boolean
@@ -35,8 +39,10 @@ export function OrsTruckSidebar({
   onSelect,
   loading,
 }: OrsTruckSidebarProps) {
+  const activeRow = trucks.find((t) => t.camion === selectedCamion)
+
   return (
-    <div className="flex h-full min-h-0 w-44 shrink-0 flex-col border-r border-border/80 bg-muted/10 md:w-48">
+    <div className="flex h-full min-h-0 w-44 shrink-0 flex-col border-r border-border/80 bg-muted/10 md:w-52">
       <div className="border-b border-border/70 px-3 py-2.5">
         <p className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
           <Truck className="size-3.5 text-primary" aria-hidden />
@@ -61,12 +67,25 @@ export function OrsTruckSidebar({
                   active
                     ? "border-primary/50 bg-primary/10 shadow-sm"
                     : "border-border/60 bg-card/80 hover:bg-muted/50",
+                  t.overloaded && "border-amber-500/50",
                 )}
               >
                 <p className="truncate text-xs font-medium">{t.camion}</p>
                 <p className="mt-0.5 text-[10px] text-muted-foreground">
                   {t.stopCount} parada{t.stopCount === 1 ? "" : "s"}
+                  {t.maxWeightKg != null ? ` · cap. ${t.maxWeightKg.toLocaleString("es-CL")} kg` : ""}
                 </p>
+                {t.estimatedAssignedKg != null && t.utilizationPct != null ? (
+                  <p className="mt-0.5 text-[10px] tabular-nums text-muted-foreground">
+                    ~{t.estimatedAssignedKg.toLocaleString("es-CL")} kg est. · {t.utilizationPct}%
+                  </p>
+                ) : null}
+                {t.overloaded ? (
+                  <p className="mt-1 flex items-center gap-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                    <AlertTriangle className="size-3 shrink-0" aria-hidden />
+                    Sobrecarga est.
+                  </p>
+                ) : null}
                 {st ? (
                   <Badge variant="secondary" className="mt-1.5 h-5 px-1.5 text-[9px]">
                     {STATUS_LABEL[st] ?? st}
@@ -81,6 +100,44 @@ export function OrsTruckSidebar({
           )
         })}
       </ul>
+      {activeRow && activeRow.maxWeightKg != null ? (
+        <div className="shrink-0 border-t border-border/70 bg-card/60 px-3 py-2.5 text-[10px]">
+          <p className="font-semibold text-foreground">Capacidad activa</p>
+          <dl className="mt-1 space-y-0.5 text-muted-foreground">
+            <div className="flex justify-between gap-2">
+              <dt>Máx.</dt>
+              <dd className="font-medium tabular-nums text-foreground">
+                {activeRow.maxWeightKg.toLocaleString("es-CL")} kg
+              </dd>
+            </div>
+            <div className="flex justify-between gap-2">
+              <dt>Asignado est.</dt>
+              <dd className="font-medium tabular-nums text-foreground">
+                {activeRow.estimatedAssignedKg != null
+                  ? `~${activeRow.estimatedAssignedKg.toLocaleString("es-CL")} kg`
+                  : "—"}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-2">
+              <dt>Paradas</dt>
+              <dd className="font-medium tabular-nums text-foreground">{activeRow.stopCount}</dd>
+            </div>
+            {activeRow.utilizationPct != null ? (
+              <div className="flex justify-between gap-2">
+                <dt>Utilización</dt>
+                <dd
+                  className={cn(
+                    "font-semibold tabular-nums",
+                    activeRow.overloaded ? "text-amber-700 dark:text-amber-300" : "text-foreground",
+                  )}
+                >
+                  {activeRow.utilizationPct}%
+                </dd>
+              </div>
+            ) : null}
+          </dl>
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -19,6 +19,8 @@ export function OrsStopPopup({
   observaciones,
   diaEntregaLabel,
   semaphore,
+  isolated,
+  isolatedDistanceKm,
 }: OrsStopPopupProps) {
   const obsText = (observaciones ?? []).filter(Boolean).join(" · ")
 
@@ -27,11 +29,19 @@ export function OrsStopPopup({
       <div className="flex items-start gap-1.5">
         {semaphore ? (
           <span className="shrink-0 text-sm leading-none" aria-hidden>
-            {SEMAPHORE_EMOJI[semaphore]}
+            {isolated ? "⚫" : SEMAPHORE_EMOJI[semaphore]}
           </span>
         ) : null}
         <p className="font-semibold leading-snug">{nombre}</p>
       </div>
+      {isolated ? (
+        <p className="rounded border border-slate-500/30 bg-slate-500/10 px-1.5 py-0.5 text-[10px] font-medium text-slate-700 dark:text-slate-200">
+          Cliente aislado
+          {isolatedDistanceKm != null
+            ? ` · ~${isolatedDistanceKm.toFixed(1)} km del grupo`
+            : ""}
+        </p>
+      ) : null}
       {semaphore ? (
         <span
           className={cn(
