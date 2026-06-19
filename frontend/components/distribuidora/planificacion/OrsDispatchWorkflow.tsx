@@ -52,7 +52,7 @@ export function OrsDispatchWorkflow({
   }
 
   return (
-    <div className="shrink-0 space-y-2 border-t border-border/70 bg-card/90 p-3">
+    <div className="shrink-0 space-y-2 border-t border-border/70 bg-card/95 p-3 shadow-[0_-4px_12px_rgba(0,0,0,0.06)]">
       <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
         Flujo operativo
       </p>

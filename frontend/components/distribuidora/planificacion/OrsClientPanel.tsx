@@ -168,7 +168,7 @@ export function OrsClientPanel({
   const panelAssistantRate = activeLeg?.assistant_cost_clp ?? assistantRatePerTrip
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-muted/15">
+    <div className="flex flex-col bg-muted/15">
       <div className="shrink-0 space-y-3 border-b border-border/70 bg-card/80 p-3">
         <div className="flex items-center gap-2">
           <Route className="size-4 text-primary" aria-hidden />
@@ -322,7 +322,7 @@ export function OrsClientPanel({
         )}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+      <div className="max-h-56 overflow-y-auto p-3">
         <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
           Orden de visitas ({filtered.length})
         </p>

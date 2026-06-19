@@ -822,7 +822,7 @@ export default function PlanificacionDespachoPage() {
           }}
           loading={loading}
         />
-        <aside className="flex w-[min(100%,20rem)] shrink-0 flex-col border-r border-border/80 md:w-80 lg:w-[22rem]">
+        <aside className="flex min-h-0 w-[min(100%,20rem)] shrink-0 flex-col overflow-hidden border-r border-border/80 md:w-80 lg:w-[22rem]">
           {pendingGeorefForTruck.length > 0 ? (
             <div className="border-b border-amber-500/30 bg-amber-50/60 px-3 py-2 dark:bg-amber-950/30">
               <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-900 dark:text-amber-200">
@@ -837,6 +837,7 @@ export default function PlanificacionDespachoPage() {
               </ul>
             </div>
           ) : null}
+          <div className="min-h-0 flex-1 overflow-y-auto">
           <OrsOperationalCostsPanel
             planSessionId={planSessionId}
             truckId={activeTruckId}
@@ -891,6 +892,7 @@ export default function PlanificacionDespachoPage() {
             onCrewChange={handleCrewChange}
             activeCamion={selectedCamion}
           />
+          </div>
           <OrsDispatchWorkflow
             plan={activePlan}
             canConfirm={
