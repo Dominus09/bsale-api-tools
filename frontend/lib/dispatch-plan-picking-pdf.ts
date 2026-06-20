@@ -60,6 +60,12 @@ function planLabel(header: DispatchPlanPickingHeader): string {
   return pn.toUpperCase().startsWith("PLAN") ? pn : `PLAN-${pn}`
 }
 
+function pickingTitle(base: string, header: DispatchPlanPickingHeader): string {
+  const batch = (header as DispatchPlanPickingHeader & { load_batch?: { name?: string } })
+    .load_batch?.name
+  return batch ? `${base} — ${batch}` : base
+}
+
 function crewLabel(header: DispatchPlanPickingHeader): string {
   return header.driver_name || header.driver_label || "—"
 }
@@ -354,7 +360,7 @@ export async function exportDispatchPlanPickingClientePdf(params: {
     doc,
     MARGIN.top,
     params.header,
-    "Picking Cliente",
+    pickingTitle("Picking Cliente", params.header),
     kpiLine,
     logo,
     logoState,
@@ -512,7 +518,7 @@ export async function exportDispatchPlanPickingProductoPdf(params: {
     doc,
     MARGIN.top,
     params.header,
-    "Picking Producto",
+    pickingTitle("Picking Producto", params.header),
     kpiLine,
     logo,
     logoState,

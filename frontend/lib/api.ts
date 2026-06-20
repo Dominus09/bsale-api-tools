@@ -1787,8 +1787,10 @@ export type DispatchPlanStatus =
   | "invoicing"
   | "ready_for_picking"
   | "picking_generated"
+  | "closed"
   | "dispatched"
   | "delivered"
+  | "squared"
 
 export type DispatchPlanSummary = {
   id: number
@@ -2160,6 +2162,11 @@ export type DispatchPlanPickingHeader = {
     total_units: number
     estimated_boxes: number
   }
+  load_batch?: {
+    id: number
+    name: string
+    description?: string | null
+  }
 }
 
 export type DispatchPlanPickingClientRow = {
@@ -2255,14 +2262,18 @@ export type DispatchPlanPickingGenerateResponse = DispatchPlanPickingClientRespo
 
 export async function generateDispatchPlanPicking(
   planId: number,
-  opts?: { validate?: boolean; includeProbable?: boolean },
+  opts?: { validate?: boolean; includeProbable?: boolean; reason?: string },
 ): Promise<DispatchPlanPickingGenerateResponse> {
   const qs = new URLSearchParams()
   qs.set("validate", opts?.validate === false ? "false" : "true")
   if (opts?.includeProbable) qs.set("include_probable", "true")
   const res = await fetchWithTimeout(
     `${API_URL}/distribuidora/dispatch-plans/${planId}/picking/generate?${qs}`,
-    { method: "POST", headers: getAuthHeaders() },
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: JSON.stringify(opts?.reason ? { reason: opts.reason } : {}),
+    },
     DASHBOARD_FETCH_TIMEOUT_MS,
   )
   if (!res.ok) {
@@ -2346,6 +2357,7 @@ export async function getDispatchPlanPickingCliente(
     includeProbable?: boolean
     version?: number
     pickingId?: number
+    loadBatchId?: number
     signal?: AbortSignal
   },
 ): Promise<DispatchPlanPickingClientResponse> {
@@ -2354,6 +2366,7 @@ export async function getDispatchPlanPickingCliente(
   if (opts?.includeProbable) qs.set("include_probable", "true")
   if (opts?.version != null) qs.set("version", String(opts.version))
   if (opts?.pickingId != null) qs.set("picking_id", String(opts.pickingId))
+  if (opts?.loadBatchId != null) qs.set("load_batch_id", String(opts.loadBatchId))
   const res = await fetchWithTimeout(
     `${API_URL}/distribuidora/dispatch-plans/${planId}/picking-cliente?${qs}`,
     { headers: getAuthHeaders(), signal: opts?.signal },
@@ -2377,6 +2390,7 @@ export async function getDispatchPlanPickingProducto(
     includeProbable?: boolean
     version?: number
     pickingId?: number
+    loadBatchId?: number
     signal?: AbortSignal
   },
 ): Promise<DispatchPlanPickingProductResponse> {
@@ -2385,6 +2399,7 @@ export async function getDispatchPlanPickingProducto(
   if (opts?.includeProbable) qs.set("include_probable", "true")
   if (opts?.version != null) qs.set("version", String(opts.version))
   if (opts?.pickingId != null) qs.set("picking_id", String(opts.pickingId))
+  if (opts?.loadBatchId != null) qs.set("load_batch_id", String(opts.loadBatchId))
   const res = await fetchWithTimeout(
     `${API_URL}/distribuidora/dispatch-plans/${planId}/picking-producto?${qs}`,
     { headers: getAuthHeaders(), signal: opts?.signal },
@@ -2415,6 +2430,210 @@ export async function getDispatchPlanPickingByProduct(planId: number): Promise<{
   items: unknown[]
 }> {
   return getDispatchPlanPickingProducto(planId)
+}
+
+export type DispatchPlanLoadBatch = {
+  id: number
+  dispatch_plan_id: number
+  sort_order: number
+  name: string
+  description?: string | null
+  created_at?: string
+  updated_at?: string
+}
+
+export type DispatchPlanDocumentAssignment = {
+  id: number
+  dispatch_plan_id: number
+  load_batch_id: number | null
+  related_document_id: number
+  oc_document_id?: number | null
+  document_number?: number | null
+  client_name?: string | null
+  document_total?: number | null
+  assigned_at?: string
+  load_batch_name?: string | null
+  load_batch_sort_order?: number | null
+}
+
+export type DispatchPlanPickingAssignmentsResponse = {
+  dispatch_plan_id: number
+  batches: DispatchPlanLoadBatch[]
+  assignments: DispatchPlanDocumentAssignment[]
+  has_picking: boolean
+  picking_version?: number | null
+  picking_id?: number | null
+}
+
+export type DispatchPlanOrderSearchHit = {
+  oc_document_id: number
+  oc_number?: number | null
+  client_id?: number | null
+  client_name?: string | null
+  oc_total_amount?: number | null
+}
+
+export type DispatchPlanOrderEvent = {
+  id: number
+  dispatch_plan_id: number
+  action: string
+  user_name?: string | null
+  reason?: string | null
+  oc_document_id?: number | null
+  oc_number?: number | null
+  picking_id?: number | null
+  picking_version?: number | null
+  created_at?: string
+}
+
+export async function getDispatchPlanLoadBatches(
+  planId: number,
+): Promise<{ dispatch_plan_id: number; items: DispatchPlanLoadBatch[] }> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/load-batches`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) throw new Error(await res.text().catch(() => "Error al cargar pickings"))
+  return res.json()
+}
+
+export async function createDispatchPlanLoadBatch(
+  planId: number,
+  body: { name: string; description?: string },
+): Promise<DispatchPlanLoadBatch> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/load-batches`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: JSON.stringify(body),
+    },
+  )
+  if (!res.ok) throw new Error(await res.text().catch(() => "Error al crear picking"))
+  return res.json()
+}
+
+export async function updateDispatchPlanLoadBatch(
+  planId: number,
+  batchId: number,
+  body: { name: string; description?: string; sort_order?: number },
+): Promise<DispatchPlanLoadBatch> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/load-batches/${batchId}`,
+    {
+      method: "PUT",
+      headers: getAuthHeaders(),
+      body: JSON.stringify(body),
+    },
+  )
+  if (!res.ok) throw new Error(await res.text().catch(() => "Error al actualizar picking"))
+  return res.json()
+}
+
+export async function deleteDispatchPlanLoadBatch(
+  planId: number,
+  batchId: number,
+): Promise<void> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/load-batches/${batchId}`,
+    { method: "DELETE", headers: getAuthHeaders() },
+  )
+  if (!res.ok) throw new Error(await res.text().catch(() => "Error al eliminar picking"))
+}
+
+export async function getDispatchPlanPickingAssignments(
+  planId: number,
+): Promise<DispatchPlanPickingAssignmentsResponse> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/picking-assignments`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) throw new Error(await res.text().catch(() => "Error al cargar asignaciones"))
+  return res.json()
+}
+
+export async function saveDispatchPlanPickingAssignments(
+  planId: number,
+  assignments: {
+    related_document_id: number
+    load_batch_id: number | null
+    oc_document_id?: number | null
+    document_number?: number | null
+    client_name?: string | null
+    document_total?: number | null
+  }[],
+): Promise<DispatchPlanPickingAssignmentsResponse> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/picking-assignments`,
+    {
+      method: "PUT",
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ assignments }),
+    },
+  )
+  if (!res.ok) throw new Error(await res.text().catch(() => "Error al guardar asignaciones"))
+  return res.json()
+}
+
+export async function searchDispatchPlanOrders(
+  planId: number,
+  q: string,
+): Promise<{ dispatch_plan_id: number; q: string; items: DispatchPlanOrderSearchHit[] }> {
+  const qs = new URLSearchParams({ q })
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/orders/search?${qs}`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) throw new Error(await res.text().catch(() => "Error al buscar OC"))
+  return res.json()
+}
+
+export async function previewAddDispatchPlanOrder(planId: number): Promise<{
+  dispatch_plan_id: number
+  can_add: boolean
+  blocked_reason?: string | null
+  has_picking: boolean
+  warning?: string | null
+}> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/orders/add-preview`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) throw new Error(await res.text().catch(() => "Error al validar plan"))
+  return res.json()
+}
+
+export async function addDispatchPlanOrder(
+  planId: number,
+  body: { oc_document_id: number; regenerate_picking?: boolean; reason?: string },
+): Promise<{
+  added?: boolean
+  requires_regenerate?: boolean
+  warning?: string | null
+  picking?: unknown
+  plan?: { plan: DispatchPlanSummary }
+}> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/orders/add`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: JSON.stringify(body),
+    },
+  )
+  if (!res.ok) throw new Error(await res.text().catch(() => "Error al agregar OC"))
+  return res.json()
+}
+
+export async function getDispatchPlanPickingRegenerationLog(
+  planId: number,
+): Promise<{ dispatch_plan_id: number; items: DispatchPlanOrderEvent[] }> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/picking-regeneration-log`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) throw new Error(await res.text().catch(() => "Error al cargar historial"))
+  return res.json()
 }
 
 export async function markDispatchPlanPickingGenerated(planId: number): Promise<unknown> {

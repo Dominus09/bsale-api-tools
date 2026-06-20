@@ -124,8 +124,10 @@ VALID_STATUSES = frozenset(
         "invoicing",
         "ready_for_picking",
         "picking_generated",
+        "closed",
         "dispatched",
         "delivered",
+        "squared",
     }
 )
 
@@ -1576,6 +1578,117 @@ _PICKING_PRODUCT_SQL_LITE = f"""
                 """
 
 
+def compute_picking_products_for_related_documents(
+    plan_id: int,
+    related_document_ids: list[int],
+    *,
+    include_probable: bool = False,
+) -> list[dict[str, Any]]:
+    """Consolidado producto filtrado por documentos asignados a un picking operacional."""
+    if not related_document_ids:
+        return []
+    try:
+        inv_check = get_invoiced_documents(plan_id)
+    except Exception:
+        inv_check = {"invoicing_source": "lite"}
+    use_lite = inv_check.get("invoicing_source") == "lite" and not include_probable
+    doc_filter = (
+        "AND st.invoicing_document_id = ANY(%s)"
+        if use_lite
+        else "AND inv.related_document_id = ANY(%s)"
+    )
+    if use_lite:
+        product_sql = f"""
+                SELECT
+                    MAX(pm.id) AS product_id,
+                    MAX(dd.variant_id) AS variant_id,
+                    {PM_TIPO_PRODUCTO_EXPR} AS tipo_producto,
+                    {PRODUCTO_EXPR} AS producto,
+                    {VARIANTE_EXPR} AS variante,
+                    {BARCODE_EXPR} AS codigo_barras,
+                    SUM(dd.quantity) AS unidades,
+                    {CAJAS_AGG_EXPR} AS cajas,
+                    SUM(dd.total_amount) AS total_monto
+                FROM distribuidora.dispatch_plan_orders dpo
+                INNER JOIN distribuidora.v_orders_purchase_status st
+                    ON st.document_id = dpo.oc_document_id
+                   AND COALESCE(st.is_invoiced, FALSE) = TRUE
+                   {doc_filter}
+                INNER JOIN distribuidora.document_details dd
+                    ON dd.document_id = st.invoicing_document_id
+                {VARIANTS_JOIN}
+                {BSALE_PRODUCT_JOIN}
+                {PM_JOIN}
+                WHERE dpo.dispatch_plan_id = %s
+                GROUP BY
+                    {PM_TIPO_PRODUCTO_EXPR},
+                    {PRODUCTO_EXPR},
+                    {VARIANTE_EXPR},
+                    {BARCODE_EXPR}
+                ORDER BY tipo_producto, producto, codigo_barras NULLS LAST
+                """
+    else:
+        status_filter = inv_status_sql_filter(include_probable=include_probable)
+        doc_id = _picking_doc_id_expr()
+        product_sql = f"""
+                SELECT
+                    COALESCE(NULLIF(BTRIM(t.name), ''), 'Centro de despacho') AS sucursal_bodega,
+                    MAX(pm.id) AS product_id,
+                    MAX(dd.variant_id) AS variant_id,
+                    {PM_TIPO_PRODUCTO_EXPR} AS tipo_producto,
+                    {PRODUCTO_EXPR} AS producto,
+                    {VARIANTE_EXPR} AS variante,
+                    {BARCODE_EXPR} AS codigo_barras,
+                    SUM(dd.quantity) AS unidades,
+                    {CAJAS_AGG_EXPR} AS cajas,
+                    MAX(v.units_per_box) AS units_per_box,
+                    (
+                        MAX(v.units_per_box) IS NULL OR MAX(v.units_per_box) <= 0
+                    ) AS sin_unidad_caja,
+                    SUM(dd.total_amount) AS total_monto
+                FROM distribuidora.dispatch_plan_orders dpo
+                INNER JOIN distribuidora.dispatch_plan dp
+                    ON dp.id = dpo.dispatch_plan_id
+                LEFT JOIN distribuidora.trucks t ON t.id = dp.truck_id
+                INNER JOIN distribuidora.v_dispatch_plan_invoiced_documents inv
+                    ON inv.dispatch_plan_id = dpo.dispatch_plan_id
+                   AND inv.oc_document_id = dpo.oc_document_id
+                   {status_filter}
+                   AND {doc_id} IS NOT NULL
+                   {doc_filter}
+                INNER JOIN distribuidora.document_details dd
+                    ON dd.document_id = {doc_id}
+                {VARIANTS_JOIN}
+                {BSALE_PRODUCT_JOIN}
+                {PM_JOIN}
+                WHERE dpo.dispatch_plan_id = %s
+                GROUP BY
+                    COALESCE(NULLIF(BTRIM(t.name), ''), 'Centro de despacho'),
+                    {PM_TIPO_PRODUCTO_EXPR},
+                    {PRODUCTO_EXPR},
+                    {VARIANTE_EXPR},
+                    {BARCODE_EXPR}
+                ORDER BY tipo_producto, producto, codigo_barras NULLS LAST
+                """
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        timed_execute(
+            cur,
+            product_sql,
+            (related_document_ids, plan_id),
+            plan_id=plan_id,
+            endpoint="compute-picking-batch",
+        )
+        pcols = [c[0] for c in cur.description]
+        products = [dict(zip(pcols, r)) for r in cur.fetchall()]
+        enriched_products = enrich_picking_product_rows(cur, products)
+        cur.close()
+    finally:
+        conn.close()
+    return [normalize_product_row(_serialize(p)) for p in enriched_products]
+
+
 def _resolve_picking_row(
     plan_id: int,
     *,
@@ -1695,6 +1808,9 @@ def generate_plan_picking(
     *,
     validate: bool = True,
     include_probable: bool = False,
+    regenerated_by: str | None = None,
+    regeneration_reason: str | None = None,
+    regeneration_action: str = "generate",
 ) -> dict[str, Any]:
     """Calcula picking desde facturación y persiste nueva versión (cliente + producto)."""
     endpoint = "POST /dispatch-plans/{id}/picking/generate"
@@ -1762,12 +1878,27 @@ def generate_plan_picking(
             product_lines_count=len(items),
             document_total_clp=doc_total,
             product_total_monto_clp=prod_total,
+            regenerated_by=regenerated_by,
+            regeneration_reason=regeneration_reason,
         )
         picking_repo.insert_picking_clients(
             cur, picking_id=new_picking_id, plan_id=plan_id, clients=clients
         )
         picking_repo.insert_picking_products(
             cur, picking_id=new_picking_id, plan_id=plan_id, items=items
+        )
+        from backend.repositories.distribuidora import (
+            dispatch_plan_load_batch_repo as batch_repo,
+        )
+
+        batch_repo.insert_order_event(
+            cur,
+            plan_id=plan_id,
+            action=regeneration_action,
+            user_name=regenerated_by,
+            reason=regeneration_reason,
+            picking_id=new_picking_id,
+            picking_version=version,
         )
         conn.commit()
         cur.close()
@@ -1816,6 +1947,8 @@ def list_plan_pickings(plan_id: int, *, limit: int = 30) -> dict[str, Any]:
                     "superseded_at": v.get("superseded_at"),
                     "stops_count": v.get("stops_count"),
                     "product_lines_count": v.get("product_lines_count"),
+                    "regenerated_by": v.get("regenerated_by"),
+                    "regeneration_reason": v.get("regeneration_reason"),
                 }
                 for v in versions
             ],
@@ -1830,6 +1963,7 @@ def get_picking_by_client(
     include_probable: bool = False,
     version: int | None = None,
     picking_id: int | None = None,
+    load_batch_id: int | None = None,
 ) -> dict[str, Any]:
     endpoint = "GET /dispatch-plans/{id}/picking-by-client"
     row = _resolve_picking_row(plan_id, version=version, picking_id=picking_id)
@@ -1869,6 +2003,10 @@ def get_picking_by_client(
     log_plan_detail_debug(
         endpoint, planning_id=plan_id, rows=len(out["clients"])
     )
+    if load_batch_id is not None:
+        from backend.services.distribuidora import dispatch_plan_load_batch_service as batch_svc
+
+        return batch_svc.filter_picking_by_load_batch(out, plan_id, load_batch_id)
     return serialize_value(out)
 
 
@@ -1879,6 +2017,7 @@ def get_picking_by_product(
     include_probable: bool = False,
     version: int | None = None,
     picking_id: int | None = None,
+    load_batch_id: int | None = None,
 ) -> dict[str, Any]:
     endpoint = "GET /dispatch-plans/{id}/picking-by-product"
     row = _resolve_picking_row(plan_id, version=version, picking_id=picking_id)
@@ -1916,6 +2055,12 @@ def get_picking_by_product(
     }
     out["items"] = bundle["items"]
     log_plan_detail_debug(endpoint, planning_id=plan_id, rows=len(out["items"]))
+    if load_batch_id is not None:
+        from backend.services.distribuidora import dispatch_plan_load_batch_service as batch_svc
+
+        filtered = batch_svc.filter_picking_by_load_batch(out, plan_id, load_batch_id)
+        filtered.pop("clients", None)
+        return filtered
     return serialize_value(out)
 
 

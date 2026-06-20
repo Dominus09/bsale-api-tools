@@ -20,6 +20,7 @@ import {
   logFrontendPlanDebug,
   trackPlanPageRender,
 } from "@/lib/planificacion-fetch"
+import { dispatchPlanOperationalLabel } from "@/lib/dispatch-plan-operational-status"
 import { formatClp } from "@/lib/ors-map-ui"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -190,7 +191,7 @@ export default function PlanificacionDetallePage() {
                 {displayPlan.planning_date?.slice(0, 10) ?? displayPlan.created_at?.slice(0, 10)}
               </p>
               <Badge variant="secondary" className="mt-2">
-                {displayPlan.status}
+                {dispatchPlanOperationalLabel(displayPlan.status)}
               </Badge>
             </>
           ) : null}

@@ -17,6 +17,7 @@ import {
 } from "@/lib/api"
 import { DispatchPlanInvoicingDashboard } from "@/components/distribuidora/planificacion/DispatchPlanInvoicingDashboard"
 import { DispatchPlanCuadraturaPanel } from "@/components/distribuidora/planificacion/DispatchPlanCuadraturaPanel"
+import { DispatchPlanPickingAssignmentPanel } from "@/components/distribuidora/planificacion/DispatchPlanPickingAssignmentPanel"
 import { DispatchPlanInvoicedItemsTable } from "@/components/distribuidora/planificacion/DispatchPlanInvoicedItemsTable"
 import {
   DispatchPlanPickingClientePanel,
@@ -154,6 +155,7 @@ export function DispatchPlanDetailTabs({
         <TabsTrigger value="facturacion">Facturación</TabsTrigger>
         <TabsTrigger value="picking-cliente">Picking cliente</TabsTrigger>
         <TabsTrigger value="picking-producto">Picking producto</TabsTrigger>
+        <TabsTrigger value="asignacion-pickings">Asignación pickings</TabsTrigger>
         <TabsTrigger value="cuadratura">Cuadratura</TabsTrigger>
       </TabsList>
 
@@ -252,6 +254,16 @@ export function DispatchPlanDetailTabs({
           loading={pickingProductLoading}
           onRefresh={() => void loadPickingFromDb()}
           onMessage={onMessage}
+        />
+      </TabsContent>
+
+      <TabsContent value="asignacion-pickings" className="mt-4">
+        <DispatchPlanPickingAssignmentPanel
+          planId={planId}
+          planStatus={dashboard.plan.status}
+          planningCode={dashboard.plan.planning_code}
+          onMessage={onMessage}
+          onReloadDashboard={onReloadDashboard}
         />
       </TabsContent>
 

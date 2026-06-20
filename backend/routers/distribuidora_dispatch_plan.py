@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from backend.services.distribuidora import dispatch_plan_service as svc
 from backend.services.distribuidora import dispatch_plan_cuadratura_service as cuad_svc
+from backend.services.distribuidora import dispatch_plan_load_batch_service as batch_svc
 from backend.utils.auth_staff import BearerDep, decode_staff_token, require_staff_user
 from backend.utils.dashboard_debug import log_dashboard_debug
 from backend.utils.dashboard_stage import DashboardStageRun, log_picking_count_sql_reference
@@ -68,6 +69,40 @@ class ConfirmDispatchPlanBody(BaseModel):
 
 class StatusBody(BaseModel):
     status: str
+
+
+class PickingGenerateBody(BaseModel):
+    reason: str | None = Field(None, max_length=500)
+
+
+class LoadBatchBody(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    description: str | None = Field(None, max_length=500)
+
+
+class LoadBatchUpdateBody(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    description: str | None = Field(None, max_length=500)
+    sort_order: int | None = Field(None, ge=0, le=999)
+
+
+class PickingAssignmentItem(BaseModel):
+    related_document_id: int
+    load_batch_id: int | None = None
+    oc_document_id: int | None = None
+    document_number: int | None = None
+    client_name: str | None = None
+    document_total: float | None = None
+
+
+class PickingAssignmentsBody(BaseModel):
+    assignments: list[PickingAssignmentItem] = Field(default_factory=list)
+
+
+class AddOrderToPlanBody(BaseModel):
+    oc_document_id: int
+    regenerate_picking: bool = False
+    reason: str | None = Field(None, max_length=500)
 
 
 @router.get("")
@@ -278,6 +313,7 @@ def _picking_by_client_handler(
     include_probable: bool = False,
     version: int | None = None,
     picking_id: int | None = None,
+    load_batch_id: int | None = None,
 ) -> dict[str, Any]:
     ctx = log_plan_debug_context(plan_id, "GET /dispatch-plans/{id}/picking-cliente")
     t0 = time.perf_counter()
@@ -288,6 +324,7 @@ def _picking_by_client_handler(
             include_probable=include_probable,
             version=version,
             picking_id=picking_id,
+            load_batch_id=load_batch_id,
         )
     except Exception as exc:
         plan_debug_on_error("GET /dispatch-plans/{id}/picking-cliente", plan_id, exc, ctx)
@@ -321,6 +358,7 @@ def _picking_by_product_handler(
     include_probable: bool = False,
     version: int | None = None,
     picking_id: int | None = None,
+    load_batch_id: int | None = None,
 ) -> dict[str, Any]:
     ctx = log_plan_debug_context(plan_id, "GET /dispatch-plans/{id}/picking-producto")
     t0 = time.perf_counter()
@@ -331,6 +369,7 @@ def _picking_by_product_handler(
             include_probable=include_probable,
             version=version,
             picking_id=picking_id,
+            load_batch_id=load_batch_id,
         )
     except Exception as exc:
         plan_debug_on_error("GET /dispatch-plans/{id}/picking-producto", plan_id, exc, ctx)
@@ -362,13 +401,20 @@ def post_picking_generate(
     plan_id: int,
     validate: bool = Query(True),
     include_probable: bool = Query(False),
+    body: PickingGenerateBody | None = None,
+    user: dict = Depends(require_staff_user),
 ):
     """Calcula y persiste picking (nueva versión; reemplaza la versión actual)."""
     try:
+        reason = body.reason if body else None
+        action = "regenerate" if reason else "generate"
         return svc.generate_plan_picking(
             plan_id,
             validate=validate,
             include_probable=include_probable,
+            regenerated_by=str(user.get("email") or ""),
+            regeneration_reason=reason,
+            regeneration_action=action,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -389,6 +435,7 @@ def picking_cliente(
     include_probable: bool = Query(False, description="Ignorado en lectura persistida"),
     version: int | None = Query(None, ge=1),
     picking_id: int | None = Query(None, ge=1),
+    load_batch_id: int | None = Query(None, ge=1),
 ):
     return _picking_by_client_handler(
         plan_id,
@@ -396,6 +443,7 @@ def picking_cliente(
         include_probable=include_probable,
         version=version,
         picking_id=picking_id,
+        load_batch_id=load_batch_id,
     )
 
 
@@ -406,6 +454,7 @@ def picking_producto(
     include_probable: bool = Query(False),
     version: int | None = Query(None, ge=1),
     picking_id: int | None = Query(None, ge=1),
+    load_batch_id: int | None = Query(None, ge=1),
 ):
     return _picking_by_product_handler(
         plan_id,
@@ -413,6 +462,7 @@ def picking_producto(
         include_probable=include_probable,
         version=version,
         picking_id=picking_id,
+        load_batch_id=load_batch_id,
     )
 
 
@@ -465,6 +515,7 @@ def picking_by_client(
     include_probable: bool = Query(False),
     version: int | None = Query(None, ge=1),
     picking_id: int | None = Query(None, ge=1),
+    load_batch_id: int | None = Query(None, ge=1),
 ):
     """Retrocompatible: alias de /picking-cliente."""
     return _picking_by_client_handler(
@@ -473,6 +524,7 @@ def picking_by_client(
         include_probable=include_probable,
         version=version,
         picking_id=picking_id,
+        load_batch_id=load_batch_id,
     )
 
 
@@ -483,6 +535,7 @@ def picking_by_product(
     include_probable: bool = Query(False),
     version: int | None = Query(None, ge=1),
     picking_id: int | None = Query(None, ge=1),
+    load_batch_id: int | None = Query(None, ge=1),
 ):
     """Retrocompatible: alias de /picking-producto."""
     return _picking_by_product_handler(
@@ -491,7 +544,109 @@ def picking_by_product(
         include_probable=include_probable,
         version=version,
         picking_id=picking_id,
+        load_batch_id=load_batch_id,
     )
+
+
+@router.get("/{plan_id}/load-batches")
+def get_load_batches(plan_id: int):
+    try:
+        return batch_svc.list_load_batches(plan_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@router.post("/{plan_id}/load-batches")
+def post_load_batch(plan_id: int, body: LoadBatchBody):
+    try:
+        return batch_svc.create_load_batch(
+            plan_id, name=body.name, description=body.description
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.put("/{plan_id}/load-batches/{batch_id}")
+def put_load_batch(plan_id: int, batch_id: int, body: LoadBatchUpdateBody):
+    try:
+        return batch_svc.update_load_batch(
+            plan_id,
+            batch_id,
+            name=body.name,
+            description=body.description,
+            sort_order=body.sort_order,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.delete("/{plan_id}/load-batches/{batch_id}")
+def delete_load_batch(plan_id: int, batch_id: int):
+    try:
+        return batch_svc.delete_load_batch(plan_id, batch_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.get("/{plan_id}/picking-assignments")
+def get_picking_assignments(plan_id: int):
+    try:
+        return batch_svc.get_picking_assignments(plan_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@router.put("/{plan_id}/picking-assignments")
+def put_picking_assignments(plan_id: int, body: PickingAssignmentsBody):
+    try:
+        return batch_svc.save_picking_assignments(
+            plan_id, [a.model_dump() for a in body.assignments]
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.get("/{plan_id}/orders/search")
+def search_orders_for_plan(
+    plan_id: int,
+    q: str = Query(..., min_length=2, max_length=80),
+    limit: int = Query(20, ge=1, le=50),
+):
+    try:
+        return batch_svc.search_orders_for_plan(plan_id, q=q, limit=limit)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.get("/{plan_id}/orders/add-preview")
+def preview_add_order(plan_id: int):
+    try:
+        return batch_svc.preview_add_order(plan_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@router.post("/{plan_id}/orders/add")
+def add_order_to_plan(
+    plan_id: int,
+    body: AddOrderToPlanBody,
+    user: dict = Depends(require_staff_user),
+):
+    try:
+        return batch_svc.add_order_to_plan(
+            plan_id,
+            oc_document_id=body.oc_document_id,
+            regenerate_picking=body.regenerate_picking,
+            reason=body.reason,
+            user=user,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.get("/{plan_id}/picking-regeneration-log")
+def get_picking_regeneration_log(plan_id: int, limit: int = Query(50, ge=1, le=200)):
+    return batch_svc.list_picking_regeneration_log(plan_id, limit=limit)
 
 
 @router.post("/{plan_id}/repair-snapshot")

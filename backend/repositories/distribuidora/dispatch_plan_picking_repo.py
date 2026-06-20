@@ -53,15 +53,18 @@ def insert_picking(
     product_lines_count: int,
     document_total_clp: float,
     product_total_monto_clp: float,
+    regenerated_by: str | None = None,
+    regeneration_reason: str | None = None,
 ) -> int:
     cur.execute(
         """
         INSERT INTO distribuidora.dispatch_plan_pickings (
             dispatch_plan_id, version, is_current, include_probable,
             header, warnings, stops_count, product_lines_count,
-            document_total_clp, product_total_monto_clp
+            document_total_clp, product_total_monto_clp,
+            regenerated_by, regeneration_reason
         )
-        VALUES (%s, %s, TRUE, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, TRUE, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
         (
@@ -74,6 +77,8 @@ def insert_picking(
             product_lines_count,
             document_total_clp,
             product_total_monto_clp,
+            regenerated_by,
+            regeneration_reason,
         ),
     )
     return int(cur.fetchone()[0])
@@ -235,7 +240,8 @@ def list_picking_versions(cur, plan_id: int, *, limit: int = 30) -> list[dict[st
         SELECT
             id, dispatch_plan_id, version, is_current, include_probable,
             generated_at, superseded_at, stops_count, product_lines_count,
-            document_total_clp, product_total_monto_clp
+            document_total_clp, product_total_monto_clp,
+            regenerated_by, regeneration_reason
         FROM distribuidora.dispatch_plan_pickings
         WHERE dispatch_plan_id = %s
         ORDER BY version DESC

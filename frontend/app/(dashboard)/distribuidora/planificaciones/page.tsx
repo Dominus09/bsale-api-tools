@@ -22,13 +22,15 @@ import {
 } from "@/components/ui/table"
 
 const STATUS_LABEL: Record<string, string> = {
-  planned: "Planificado",
-  invoicing: "Facturando",
-  ready_for_picking: "Listo picking",
-  picking_generated: "Picking OK",
+  draft: "Abierto",
+  planned: "Abierto",
+  invoicing: "Abierto",
+  ready_for_picking: "Abierto",
+  picking_generated: "Pickings generados",
+  closed: "Cerrado",
   dispatched: "Despachado",
-  delivered: "Entregado",
-  draft: "Borrador",
+  delivered: "Despachado",
+  squared: "Cuadrado",
 }
 
 export default function PlanificacionesHistorialPage() {

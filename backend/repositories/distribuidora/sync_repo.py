@@ -114,6 +114,7 @@ def ensure_distribuidora_schema(cur) -> None:
         "034_dispatch_plan_crew_cuadratura.sql",
         "035_dispatch_plan_cuadratura_v2.sql",
         "036_dispatch_plan_cuadratura_cash_count.sql",
+        "037_dispatch_plan_load_batches.sql",
     ):
         _run_sql_file(cur, fn)
 
