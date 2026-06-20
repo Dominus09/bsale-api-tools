@@ -59,23 +59,31 @@ export type CuadraturaDocumentRow = {
 }
 
 export type CuadraturaCreditNoteV2Row = {
-  documento_venta: string
-  cliente: string
-  numero_nc: string
+  documento: string
+  nota_credito: string
   monto: number
-  motivo: string
-  aplicada: boolean
+  observacion: string
 }
 
 export type CuadraturaNotLoadedV2Row = {
-  cliente: string
   producto: string
+  producto_variante?: string
   cantidad: number
   motivo: string
   product_id?: number | null
   variant_id?: number | null
-  monto_clp?: number | null
+  codigo_barras?: string | null
 }
+
+export type CuadraturaCashCountRow = {
+  denominacion_clp: number
+  cantidad: number
+  subtotal_clp: number
+}
+
+export const CASH_DENOMINATIONS_CLP = [
+  20000, 10000, 5000, 2000, 1000, 500, 100, 50, 10,
+] as const
 
 export type CuadraturaResult = {
   resumen_pagos?: Record<string, number>
@@ -83,27 +91,48 @@ export type CuadraturaResult = {
   no_cargados_clp: number
   venta_ajustada_clp: number
   total_recaudado_clp: number
+  total_recaudado_documental_clp?: number
+  total_efectivo_documental_clp?: number
+  total_efectivo_contado_clp?: number
+  diferencia_efectivo_clp?: number
   diferencia_clp: number
+  diferencia_general_clp?: number
   diferencia_status: CuadraturaDiffStatus
+  cash_count?: CuadraturaCashCountRow[]
 }
 
 export type CuadraturaProductCatalogRow = {
   product_id?: number | null
   variant_id?: number | null
   producto: string
+  variante?: string
+  producto_variante: string
   codigo_barras?: string | null
-  unit_price_clp: number
 }
 
-function sumAppliedCreditNotes(rows: CuadraturaCreditNoteV2Row[]): number {
-  return rows.reduce((acc, row) => {
-    if (!row.aplicada) return acc
-    return acc + Math.round(Number(row.monto) || 0)
-  }, 0)
+export function defaultCashCount(): CuadraturaCashCountRow[] {
+  return CASH_DENOMINATIONS_CLP.map((denominacion_clp) => ({
+    denominacion_clp,
+    cantidad: 0,
+    subtotal_clp: 0,
+  }))
 }
 
-function sumNotLoaded(rows: CuadraturaNotLoadedV2Row[]): number {
-  return rows.reduce((acc, row) => acc + Math.round(Number(row.monto_clp) || 0), 0)
+export function normalizeCashCount(
+  rows: CuadraturaCashCountRow[] | null | undefined,
+): CuadraturaCashCountRow[] {
+  const byDenom = new Map<number, number>()
+  for (const row of rows || []) {
+    byDenom.set(row.denominacion_clp, Math.max(0, Math.round(row.cantidad || 0)))
+  }
+  return CASH_DENOMINATIONS_CLP.map((denominacion_clp) => {
+    const cantidad = byDenom.get(denominacion_clp) ?? 0
+    return {
+      denominacion_clp,
+      cantidad,
+      subtotal_clp: denominacion_clp * cantidad,
+    }
+  })
 }
 
 export function summarizeMedios(documents: CuadraturaDocumentRow[]): Record<string, number> {
@@ -119,26 +148,38 @@ export function computeCuadraturaV2Result(params: {
   venta_picking_clp: number
   documents: CuadraturaDocumentRow[]
   credit_notes_v2: CuadraturaCreditNoteV2Row[]
-  not_loaded_v2: CuadraturaNotLoadedV2Row[]
+  cash_count: CuadraturaCashCountRow[]
 }): CuadraturaResult {
   const resumen = summarizeMedios(params.documents)
-  const notas = sumAppliedCreditNotes(params.credit_notes_v2)
-  const noCargados = sumNotLoaded(params.not_loaded_v2)
-  const ventaAjustada = Math.round(params.venta_picking_clp) - notas - noCargados
-  const totalRecaudado = Object.values(resumen).reduce((a, b) => a + b, 0)
-  const diferencia = ventaAjustada - totalRecaudado
-  const ad = Math.abs(diferencia)
+  const notas = params.credit_notes_v2.reduce(
+    (acc, row) => acc + Math.round(Number(row.monto) || 0),
+    0,
+  )
+  const ventaAjustada = Math.round(params.venta_picking_clp) - notas
+  const totalRecaudadoDocumental = Object.values(resumen).reduce((a, b) => a + b, 0)
+  const totalEfectivoDocumental = resumen.efectivo || 0
+  const cashRows = normalizeCashCount(params.cash_count)
+  const totalEfectivoContado = cashRows.reduce((a, r) => a + r.subtotal_clp, 0)
+  const diferenciaEfectivo = totalEfectivoContado - totalEfectivoDocumental
+  const diferenciaGeneral = ventaAjustada - totalRecaudadoDocumental
+  const ad = Math.abs(diferenciaGeneral)
   let diferencia_status: CuadraturaDiffStatus = "red"
   if (ad === 0) diferencia_status = "green"
   else if (ad < CUADRATURA_DIFF_YELLOW_MAX_CLP) diferencia_status = "yellow"
   return {
     resumen_pagos: resumen,
     notas_credito_clp: notas,
-    no_cargados_clp: noCargados,
+    no_cargados_clp: 0,
     venta_ajustada_clp: ventaAjustada,
-    total_recaudado_clp: totalRecaudado,
-    diferencia_clp: diferencia,
+    total_recaudado_clp: totalRecaudadoDocumental,
+    total_recaudado_documental_clp: totalRecaudadoDocumental,
+    total_efectivo_documental_clp: totalEfectivoDocumental,
+    total_efectivo_contado_clp: totalEfectivoContado,
+    diferencia_efectivo_clp: diferenciaEfectivo,
+    diferencia_clp: diferenciaGeneral,
+    diferencia_general_clp: diferenciaGeneral,
     diferencia_status,
+    cash_count: cashRows,
   }
 }
 
@@ -181,8 +222,10 @@ export function computeCuadraturaResult(params: {
   }
 }
 
-export function observacionRequired(diferenciaClp: number): boolean {
-  return Math.round(diferenciaClp) !== 0
+export function observacionRequired(resultado: CuadraturaResult): boolean {
+  const gen = Math.round(resultado.diferencia_general_clp ?? resultado.diferencia_clp ?? 0)
+  const cash = Math.round(resultado.diferencia_efectivo_clp ?? 0)
+  return gen !== 0 || cash !== 0
 }
 
 export function diffStatusClass(status: CuadraturaDiffStatus): string {
@@ -213,7 +256,7 @@ export function operationalStatusBadge(status: CuadraturaOperationalStatus | str
       }
     case "difference":
       return {
-        label: "Diferencia",
+        label: "Con diferencia",
         emoji: "🔴",
         className: "bg-red-500/15 text-red-800 dark:text-red-300",
       }
@@ -233,49 +276,52 @@ export function operationalStatusBadge(status: CuadraturaOperationalStatus | str
 }
 
 export function emptyCreditNoteV2Row(): CuadraturaCreditNoteV2Row {
-  return {
-    documento_venta: "",
-    cliente: "",
-    numero_nc: "",
-    monto: 0,
-    motivo: "",
-    aplicada: true,
-  }
+  return { documento: "", nota_credito: "", monto: 0, observacion: "" }
 }
 
 export function emptyNotLoadedV2Row(): CuadraturaNotLoadedV2Row {
-  return { cliente: "", producto: "", cantidad: 0, motivo: "", monto_clp: 0 }
+  return { producto: "", cantidad: 0, motivo: "" }
 }
 
-export function estimateNotLoadedMonto(
+export function resolveProductFromCatalog(
+  query: string,
+  catalog: CuadraturaProductCatalogRow[],
+): CuadraturaProductCatalogRow | null {
+  const q = query.trim()
+  if (!q) return null
+  const qLower = q.toLowerCase()
+  const byBarcode = catalog.find((p) => (p.codigo_barras || "").trim() === q)
+  if (byBarcode) return byBarcode
+  const exact = catalog.find((p) => p.producto_variante.toLowerCase() === qLower)
+  if (exact) return exact
+  return (
+    catalog.find((p) => p.producto_variante.toLowerCase().includes(qLower)) ||
+    catalog.find((p) => p.producto.toLowerCase().includes(qLower)) ||
+    null
+  )
+}
+
+export function normalizeNotLoadedRow(
   row: CuadraturaNotLoadedV2Row,
   catalog: CuadraturaProductCatalogRow[],
-): number {
-  if (row.monto_clp && row.monto_clp > 0) return row.monto_clp
-  const qty = Math.max(0, Number(row.cantidad) || 0)
-  if (qty <= 0) return 0
-  const needle = (row.producto || "").trim().toLowerCase()
-  let match =
-    catalog.find(
-      (p) =>
-        row.product_id != null &&
-        p.product_id === row.product_id &&
-        (row.variant_id == null || p.variant_id === row.variant_id),
-    ) ||
-    catalog.find((p) => needle && p.producto.toLowerCase() === needle) ||
-    catalog.find((p) => needle && p.producto.toLowerCase().includes(needle))
-  if (!match) return 0
-  return Math.round((match.unit_price_clp || 0) * qty)
+): CuadraturaNotLoadedV2Row {
+  const match = resolveProductFromCatalog(row.producto, catalog)
+  if (!match) return row
+  return {
+    ...row,
+    producto: match.producto_variante,
+    producto_variante: match.producto_variante,
+    codigo_barras: match.codigo_barras,
+    product_id: match.product_id,
+    variant_id: match.variant_id,
+  }
 }
 
-export function enrichNotLoadedRows(
+export function normalizeNotLoadedRows(
   rows: CuadraturaNotLoadedV2Row[],
   catalog: CuadraturaProductCatalogRow[],
 ): CuadraturaNotLoadedV2Row[] {
-  return rows.map((row) => ({
-    ...row,
-    monto_clp: estimateNotLoadedMonto(row, catalog),
-  }))
+  return rows.map((row) => normalizeNotLoadedRow(row, catalog))
 }
 
 /** Legacy helpers */

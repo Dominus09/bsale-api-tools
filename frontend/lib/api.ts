@@ -2451,22 +2451,26 @@ export type DispatchPlanCuadraturaDocumentRow = {
 }
 
 export type DispatchPlanCuadraturaCreditNoteV2 = {
-  documento_venta: string
-  cliente: string
-  numero_nc: string
+  documento: string
+  nota_credito: string
   monto: number
-  motivo: string
-  aplicada: boolean
+  observacion: string
 }
 
 export type DispatchPlanCuadraturaNotLoadedV2 = {
-  cliente: string
   producto: string
+  producto_variante?: string
   cantidad: number
   motivo: string
   product_id?: number | null
   variant_id?: number | null
-  monto_clp?: number | null
+  codigo_barras?: string | null
+}
+
+export type DispatchPlanCuadraturaCashCountRow = {
+  denominacion_clp: number
+  cantidad: number
+  subtotal_clp: number
 }
 
 export type DispatchPlanCuadraturaResponse = {
@@ -2486,12 +2490,14 @@ export type DispatchPlanCuadraturaResponse = {
   medios_pago_options?: string[]
   credit_notes_v2?: DispatchPlanCuadraturaCreditNoteV2[]
   not_loaded_v2?: DispatchPlanCuadraturaNotLoadedV2[]
+  cash_count?: DispatchPlanCuadraturaCashCountRow[]
   product_catalog?: {
     product_id?: number | null
     variant_id?: number | null
     producto: string
+    variante?: string
+    producto_variante: string
     codigo_barras?: string | null
-    unit_price_clp: number
   }[]
   observacion?: string | null
   operational_status?: string
@@ -2571,6 +2577,7 @@ export async function putDispatchPlanCuadratura(
     documents?: DispatchPlanCuadraturaDocumentRow[]
     credit_notes_v2?: DispatchPlanCuadraturaCreditNoteV2[]
     not_loaded_v2?: DispatchPlanCuadraturaNotLoadedV2[]
+    cash_count?: DispatchPlanCuadraturaCashCountRow[]
     transferencia_clp?: number
     efectivo_clp?: number
     cheque_clp?: number

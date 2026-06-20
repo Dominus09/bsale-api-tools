@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react"
 import Link from "next/link"
-import { Loader2, Lock, Plus, Save, Trash2 } from "lucide-react"
+import { AlertTriangle, Loader2, Lock, Plus, Save, Trash2 } from "lucide-react"
 
 import {
   closeDispatchPlanCuadratura,
@@ -14,21 +14,25 @@ import {
   MEDIO_PAGO_LABELS,
   MEDIOS_PAGO,
   computeCuadraturaV2Result,
+  defaultCashCount,
   diffStatusClass,
   emptyCreditNoteV2Row,
   emptyNotLoadedV2Row,
-  enrichNotLoadedRows,
+  normalizeCashCount,
+  normalizeNotLoadedRow,
+  normalizeNotLoadedRows,
   observacionRequired,
   operationalStatusBadge,
+  type CuadraturaCashCountRow,
   type CuadraturaCreditNoteV2Row,
   type CuadraturaDocumentRow,
   type CuadraturaNotLoadedV2Row,
   type CuadraturaProductCatalogRow,
 } from "@/lib/dispatch-plan-cuadratura"
 import { formatClp } from "@/lib/ors-map-ui"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -60,6 +64,17 @@ function parseClpInput(raw: string): number {
   return Number.isFinite(n) && n >= 0 ? Math.round(n) : 0
 }
 
+function normalizeCreditNotesFromApi(
+  rows: Record<string, unknown>[] | undefined,
+): CuadraturaCreditNoteV2Row[] {
+  return (rows ?? []).map((row) => ({
+    documento: String(row.documento ?? row.documento_venta ?? ""),
+    nota_credito: String(row.nota_credito ?? row.numero_nc ?? ""),
+    monto: Math.round(Number(row.monto) || 0),
+    observacion: String(row.observacion ?? row.motivo ?? ""),
+  }))
+}
+
 function ReadOnlyAmount({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-md border border-border/60 bg-muted/20 p-3">
@@ -81,6 +96,7 @@ export function DispatchPlanCuadraturaPanel({
   const [documents, setDocuments] = useState<CuadraturaDocumentRow[]>([])
   const [creditNotes, setCreditNotes] = useState<CuadraturaCreditNoteV2Row[]>([])
   const [notLoaded, setNotLoaded] = useState<CuadraturaNotLoadedV2Row[]>([])
+  const [cashCount, setCashCount] = useState<CuadraturaCashCountRow[]>(defaultCashCount())
   const [catalog, setCatalog] = useState<CuadraturaProductCatalogRow[]>([])
   const [observacion, setObservacion] = useState("")
 
@@ -93,10 +109,11 @@ export function DispatchPlanCuadraturaPanel({
       const res = await getDispatchPlanCuadratura(planId)
       setData(res)
       setDocuments((res.documents ?? []) as CuadraturaDocumentRow[])
-      setCreditNotes((res.credit_notes_v2 ?? []) as CuadraturaCreditNoteV2Row[])
+      setCreditNotes(normalizeCreditNotesFromApi(res.credit_notes_v2 as Record<string, unknown>[]))
       const cat = (res.product_catalog ?? []) as CuadraturaProductCatalogRow[]
       setCatalog(cat)
-      setNotLoaded(enrichNotLoadedRows((res.not_loaded_v2 ?? []) as CuadraturaNotLoadedV2Row[], cat))
+      setNotLoaded(normalizeNotLoadedRows((res.not_loaded_v2 ?? []) as CuadraturaNotLoadedV2Row[], cat))
+      setCashCount(normalizeCashCount(res.cash_count ?? defaultCashCount()))
       setObservacion(res.observacion || "")
     } catch (e: unknown) {
       onMessage(e instanceof Error ? e.message : "Error al cargar cuadratura")
@@ -115,32 +132,32 @@ export function DispatchPlanCuadraturaPanel({
         venta_picking_clp: ventaPicking,
         documents,
         credit_notes_v2: creditNotes,
-        not_loaded_v2: notLoaded,
+        cash_count: cashCount,
       }),
-    [ventaPicking, documents, creditNotes, notLoaded],
+    [ventaPicking, documents, creditNotes, cashCount],
   )
 
-  const obsRequired = observacionRequired(resultado.diferencia_clp)
+  const obsRequired = observacionRequired(resultado)
   const statusBadge = operationalStatusBadge(data?.operational_status || "pending")
+  const cashDiff = resultado.diferencia_efectivo_clp ?? 0
 
-  const updateNotLoaded = (rows: CuadraturaNotLoadedV2Row[]) => {
-    setNotLoaded(enrichNotLoadedRows(rows, catalog))
-  }
+  const persistPayload = () => ({
+    schema_version: 2 as const,
+    observacion: observacion.trim() || null,
+    documents,
+    credit_notes_v2: creditNotes,
+    not_loaded_v2: notLoaded,
+    cash_count: normalizeCashCount(cashCount),
+  })
 
   const save = async () => {
     if (obsRequired && !observacion.trim()) {
-      onMessage("Debe ingresar una observación cuando la diferencia es distinta de cero.")
+      onMessage("Debe ingresar una observación cuando hay diferencia general o de efectivo.")
       return
     }
     setSaving(true)
     try {
-      await putDispatchPlanCuadratura(planId, {
-        schema_version: 2,
-        observacion: observacion.trim() || null,
-        documents,
-        credit_notes_v2: creditNotes,
-        not_loaded_v2: notLoaded,
-      })
+      await putDispatchPlanCuadratura(planId, persistPayload())
       onMessage("Cuadratura guardada.")
       await load()
     } catch (e: unknown) {
@@ -157,13 +174,7 @@ export function DispatchPlanCuadraturaPanel({
     }
     setClosing(true)
     try {
-      await putDispatchPlanCuadratura(planId, {
-        schema_version: 2,
-        observacion: observacion.trim() || null,
-        documents,
-        credit_notes_v2: creditNotes,
-        not_loaded_v2: notLoaded,
-      })
+      await putDispatchPlanCuadratura(planId, persistPayload())
       await closeDispatchPlanCuadratura(planId, { observacion: observacion.trim() || null })
       onMessage("Cuadratura cerrada.")
       await load()
@@ -186,8 +197,7 @@ export function DispatchPlanCuadraturaPanel({
   if (!data?.picking_ready) {
     return (
       <p className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-        Se requiere picking generado para cuadratura documental. Genere picking en la pestaña
-        correspondiente del plan.
+        Se requiere picking generado para cuadratura documental.
       </p>
     )
   }
@@ -234,9 +244,6 @@ export function DispatchPlanCuadraturaPanel({
 
       <section className="space-y-2">
         <h3 className="text-sm font-semibold">Documentos despachados</h3>
-        <p className="text-xs text-muted-foreground">
-          Medio de pago por documento — fuente: snapshot picking cliente.
-        </p>
         <div className="overflow-x-auto rounded-lg border">
           <Table>
             <TableHeader>
@@ -316,6 +323,7 @@ export function DispatchPlanCuadraturaPanel({
 
       <EditableSection
         title="Notas de crédito"
+        hint="Descuentan de la venta ajustada. Use NC cuando corresponda descontar valor por no entrega/devolución."
         disabled={isClosed}
         onAdd={() => setCreditNotes((r) => [...r, emptyCreditNoteV2Row()])}
       >
@@ -325,37 +333,25 @@ export function DispatchPlanCuadraturaPanel({
           creditNotes.map((row, idx) => (
             <div
               key={idx}
-              className="grid gap-2 rounded-md border border-border/60 p-2 sm:grid-cols-[1fr_1fr_100px_100px_1fr_80px_36px] sm:items-center"
+              className="grid gap-2 rounded-md border border-border/60 p-2 sm:grid-cols-[1fr_1fr_110px_1fr_36px] sm:items-center"
             >
               <Input
                 disabled={isClosed}
-                placeholder="Doc. venta"
-                value={row.documento_venta}
+                placeholder="N° documento"
+                value={row.documento}
                 onChange={(e) =>
                   setCreditNotes((rows) =>
-                    rows.map((r, i) =>
-                      i === idx ? { ...r, documento_venta: e.target.value } : r,
-                    ),
+                    rows.map((r, i) => (i === idx ? { ...r, documento: e.target.value } : r)),
                   )
                 }
               />
               <Input
                 disabled={isClosed}
-                placeholder="Cliente"
-                value={row.cliente}
+                placeholder="N° nota crédito"
+                value={row.nota_credito}
                 onChange={(e) =>
                   setCreditNotes((rows) =>
-                    rows.map((r, i) => (i === idx ? { ...r, cliente: e.target.value } : r)),
-                  )
-                }
-              />
-              <Input
-                disabled={isClosed}
-                placeholder="N° NC"
-                value={row.numero_nc}
-                onChange={(e) =>
-                  setCreditNotes((rows) =>
-                    rows.map((r, i) => (i === idx ? { ...r, numero_nc: e.target.value } : r)),
+                    rows.map((r, i) => (i === idx ? { ...r, nota_credito: e.target.value } : r)),
                   )
                 }
               />
@@ -374,26 +370,14 @@ export function DispatchPlanCuadraturaPanel({
               />
               <Input
                 disabled={isClosed}
-                placeholder="Motivo"
-                value={row.motivo}
+                placeholder="Observación"
+                value={row.observacion}
                 onChange={(e) =>
                   setCreditNotes((rows) =>
-                    rows.map((r, i) => (i === idx ? { ...r, motivo: e.target.value } : r)),
+                    rows.map((r, i) => (i === idx ? { ...r, observacion: e.target.value } : r)),
                   )
                 }
               />
-              <label className="flex items-center gap-1.5 text-xs">
-                <Checkbox
-                  disabled={isClosed}
-                  checked={row.aplicada}
-                  onCheckedChange={(v) =>
-                    setCreditNotes((rows) =>
-                      rows.map((r, i) => (i === idx ? { ...r, aplicada: v === true } : r)),
-                    )
-                  }
-                />
-                Aplicada
-              </label>
               {!isClosed ? (
                 <Button
                   type="button"
@@ -411,9 +395,10 @@ export function DispatchPlanCuadraturaPanel({
       </EditableSection>
 
       <EditableSection
-        title="No cargados (por producto)"
+        title="No cargados (control operacional)"
+        hint="Solo registro de productos faltantes. El descuento monetario va en Notas de crédito."
         disabled={isClosed}
-        onAdd={() => updateNotLoaded([...notLoaded, emptyNotLoadedV2Row()])}
+        onAdd={() => setNotLoaded((r) => [...r, emptyNotLoadedV2Row()])}
       >
         {notLoaded.length === 0 ? (
           <p className="text-xs text-muted-foreground">Sin productos no cargados.</p>
@@ -421,40 +406,42 @@ export function DispatchPlanCuadraturaPanel({
           notLoaded.map((row, idx) => (
             <div
               key={idx}
-              className="grid gap-2 rounded-md border border-border/60 p-2 sm:grid-cols-[1fr_1fr_80px_1fr_100px_36px] sm:items-center"
+              className="grid gap-2 rounded-md border border-border/60 p-2 sm:grid-cols-[2fr_80px_1fr_36px] sm:items-center"
             >
-              <Input
-                disabled={isClosed}
-                placeholder="Cliente"
-                value={row.cliente}
-                onChange={(e) =>
-                  updateNotLoaded(
-                    notLoaded.map((r, i) => (i === idx ? { ...r, cliente: e.target.value } : r)),
-                  )
-                }
-              />
-              <Input
-                disabled={isClosed}
-                placeholder="Producto"
-                list={`cuadratura-products-${planId}`}
-                value={row.producto}
-                onChange={(e) =>
-                  updateNotLoaded(
-                    notLoaded.map((r, i) => (i === idx ? { ...r, producto: e.target.value } : r)),
-                  )
-                }
-              />
+              <div className="space-y-1">
+                <Input
+                  disabled={isClosed}
+                  placeholder="Producto o código de barras"
+                  list={`cuadratura-products-${planId}`}
+                  value={row.producto}
+                  onChange={(e) =>
+                    setNotLoaded((rows) =>
+                      rows.map((r, i) =>
+                        i === idx ? normalizeNotLoadedRow({ ...r, producto: e.target.value }, catalog) : r,
+                      ),
+                    )
+                  }
+                  onBlur={(e) =>
+                    setNotLoaded((rows) =>
+                      rows.map((r, i) =>
+                        i === idx ? normalizeNotLoadedRow({ ...r, producto: e.target.value }, catalog) : r,
+                      ),
+                    )
+                  }
+                />
+                {row.producto_variante && row.producto_variante !== row.producto ? (
+                  <p className="text-[10px] text-muted-foreground">{row.producto_variante}</p>
+                ) : null}
+              </div>
               <Input
                 disabled={isClosed}
                 inputMode="decimal"
                 placeholder="Cant."
                 value={row.cantidad ? String(row.cantidad) : ""}
                 onChange={(e) =>
-                  updateNotLoaded(
-                    notLoaded.map((r, i) =>
-                      i === idx
-                        ? { ...r, cantidad: Number(e.target.value) || 0, monto_clp: undefined }
-                        : r,
+                  setNotLoaded((rows) =>
+                    rows.map((r, i) =>
+                      i === idx ? { ...r, cantidad: Number(e.target.value) || 0 } : r,
                     ),
                   )
                 }
@@ -464,19 +451,18 @@ export function DispatchPlanCuadraturaPanel({
                 placeholder="Motivo"
                 value={row.motivo}
                 onChange={(e) =>
-                  updateNotLoaded(
-                    notLoaded.map((r, i) => (i === idx ? { ...r, motivo: e.target.value } : r)),
+                  setNotLoaded((rows) =>
+                    rows.map((r, i) => (i === idx ? { ...r, motivo: e.target.value } : r)),
                   )
                 }
               />
-              <span className="font-mono text-xs">{formatClp(row.monto_clp ?? 0)}</span>
               {!isClosed ? (
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon"
                   className="size-8"
-                  onClick={() => updateNotLoaded(notLoaded.filter((_, i) => i !== idx))}
+                  onClick={() => setNotLoaded((rows) => rows.filter((_, i) => i !== idx))}
                 >
                   <Trash2 className="size-4" />
                 </Button>
@@ -485,26 +471,118 @@ export function DispatchPlanCuadraturaPanel({
           ))
         )}
         <datalist id={`cuadratura-products-${planId}`}>
-          {catalog.map((p) => (
-            <option key={`${p.product_id}-${p.variant_id}-${p.producto}`} value={p.producto} />
-          ))}
+          {catalog.flatMap((p) => [
+            <option
+              key={`${p.product_id}-${p.variant_id}-label`}
+              value={p.producto_variante}
+              label={p.codigo_barras ? `CB ${p.codigo_barras}` : undefined}
+            />,
+            ...(p.codigo_barras
+              ? [
+                  <option
+                    key={`${p.product_id}-${p.variant_id}-bc`}
+                    value={p.codigo_barras}
+                    label={p.producto_variante}
+                  />,
+                ]
+              : []),
+          ])}
         </datalist>
-        <p className="text-xs text-muted-foreground">
-          Monto descontado total: {formatClp(resultado.no_cargados_clp)}
-        </p>
       </EditableSection>
+
+      <section className="space-y-2">
+        <h3 className="text-sm font-semibold">Conteo de efectivo</h3>
+        <p className="text-xs text-muted-foreground">
+          Compare contra documentos marcados como Efectivo.
+        </p>
+        <div className="overflow-x-auto rounded-lg border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Denominación</TableHead>
+                <TableHead className="w-28">Cantidad</TableHead>
+                <TableHead className="text-right">Subtotal</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {normalizeCashCount(cashCount).map((row, idx) => (
+                <TableRow key={row.denominacion_clp}>
+                  <TableCell className="font-mono text-xs">
+                    {formatClp(row.denominacion_clp)}
+                  </TableCell>
+                  <TableCell>
+                    <Input
+                      disabled={isClosed}
+                      inputMode="numeric"
+                      value={row.cantidad ? String(row.cantidad) : ""}
+                      onChange={(e) => {
+                        const qty = Math.max(0, parseInt(e.target.value || "0", 10) || 0)
+                        setCashCount((rows) =>
+                          rows.map((r, i) =>
+                            i === idx
+                              ? {
+                                  ...r,
+                                  cantidad: qty,
+                                  subtotal_clp: r.denominacion_clp * qty,
+                                }
+                              : r,
+                          ),
+                        )
+                      }}
+                      className="h-8"
+                    />
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-xs">
+                    {formatClp(row.subtotal_clp)}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+        <ReadOnlyAmount
+          label="Total efectivo contado"
+          value={resultado.total_efectivo_contado_clp ?? 0}
+        />
+      </section>
+
+      {cashDiff !== 0 ? (
+        <Alert variant="destructive">
+          <AlertTriangle className="size-4" />
+          <AlertTitle>Diferencia de efectivo</AlertTitle>
+          <AlertDescription>
+            Documentos en efectivo: {formatClp(resultado.total_efectivo_documental_clp ?? 0)} ·
+            Contado: {formatClp(resultado.total_efectivo_contado_clp ?? 0)} · Diferencia:{" "}
+            {formatClp(cashDiff)}
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       <section className="space-y-2">
         <h3 className="text-sm font-semibold">Resultado</h3>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           <ReadOnlyAmount label="Venta picking" value={ventaPicking} />
           <ReadOnlyAmount label="(−) Notas crédito" value={-resultado.notas_credito_clp} />
-          <ReadOnlyAmount label="(−) No cargados" value={-resultado.no_cargados_clp} />
           <ReadOnlyAmount label="Venta ajustada" value={resultado.venta_ajustada_clp} />
-          <ReadOnlyAmount label="Total recaudado" value={resultado.total_recaudado_clp} />
-          <div className={cn("rounded-md border p-3", diffStatusClass(resultado.diferencia_status))}>
-            <p className="text-[11px] opacity-80">Diferencia</p>
-            <p className="font-mono text-sm font-semibold">{formatClp(resultado.diferencia_clp)}</p>
+          <ReadOnlyAmount
+            label="Total recaudado documental"
+            value={resultado.total_recaudado_documental_clp ?? resultado.total_recaudado_clp}
+          />
+          <ReadOnlyAmount
+            label="Total efectivo contado"
+            value={resultado.total_efectivo_contado_clp ?? 0}
+          />
+          <ReadOnlyAmount label="Diferencia efectivo" value={cashDiff} />
+          <div
+            className={cn(
+              "rounded-md border p-3 sm:col-span-2 lg:col-span-1",
+              diffStatusClass(resultado.diferencia_status),
+            )}
+          >
+            <p className="text-[11px] opacity-80">Diferencia general</p>
+            <p className="font-mono text-sm font-semibold">
+              {formatClp(resultado.diferencia_general_clp ?? resultado.diferencia_clp)}
+            </p>
           </div>
         </div>
       </section>
@@ -520,8 +598,8 @@ export function DispatchPlanCuadraturaPanel({
           onChange={(e) => setObservacion(e.target.value)}
           placeholder={
             obsRequired
-              ? "Obligatorio: explique la diferencia operacional"
-              : "Opcional hasta cerrar con diferencia"
+              ? "Obligatorio: explique diferencia general y/o de efectivo"
+              : "Opcional"
           }
           rows={3}
         />
@@ -541,9 +619,7 @@ export function DispatchPlanCuadraturaPanel({
                   {operationalStatusBadge(h.status).emoji}{" "}
                   {operationalStatusBadge(h.status).label}
                 </span>
-                <span className="font-mono">
-                  {formatClp(h.diferencia_clp ?? 0)}
-                </span>
+                <span className="font-mono">{formatClp(h.diferencia_clp ?? 0)}</span>
               </div>
             ))}
           </div>
@@ -556,7 +632,12 @@ export function DispatchPlanCuadraturaPanel({
             {saving ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Save className="mr-2 size-4" />}
             Guardar borrador
           </Button>
-          <Button type="button" variant="default" onClick={() => void closeCuadratura()} disabled={saving || closing}>
+          <Button
+            type="button"
+            variant="default"
+            onClick={() => void closeCuadratura()}
+            disabled={saving || closing}
+          >
             {closing ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Lock className="mr-2 size-4" />}
             Cerrar cuadratura
           </Button>
@@ -571,11 +652,13 @@ export function DispatchPlanCuadraturaPanel({
 
 function EditableSection({
   title,
+  hint,
   children,
   onAdd,
   disabled,
 }: {
   title: string
+  hint?: string
   children: ReactNode
   onAdd: () => void
   disabled?: boolean
@@ -583,7 +666,10 @@ function EditableSection({
   return (
     <section className="space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold">{title}</h3>
+        <div>
+          <h3 className="text-sm font-semibold">{title}</h3>
+          {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
+        </div>
         {!disabled ? (
           <Button type="button" variant="outline" size="sm" onClick={onAdd}>
             <Plus className="mr-1 size-3.5" />

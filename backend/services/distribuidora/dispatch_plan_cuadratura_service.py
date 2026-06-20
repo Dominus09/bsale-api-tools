@@ -20,14 +20,17 @@ from backend.utils.dispatch_plan_cuadratura import (
 from backend.utils.dispatch_plan_cuadratura_snapshot import (
     build_documents_from_picking_clients,
     build_product_catalog_from_picking,
-    enrich_not_loaded_rows,
+    normalize_credit_notes,
+    normalize_not_loaded_rows,
 )
 from backend.utils.dispatch_plan_cuadratura_v2 import (
     MEDIO_PAGO_LABELS,
     MEDIOS_PAGO,
     build_analytics_meta,
     compute_cuadratura_v2_result,
+    default_cash_count,
     derive_operational_status,
+    normalize_cash_count,
     observacion_required,
     operational_status_label,
 )
@@ -47,6 +50,7 @@ def _default_row() -> dict[str, Any]:
         "documents": [],
         "credit_notes_v2": [],
         "not_loaded_v2": [],
+        "cash_count": default_cash_count(),
     }
 
 
@@ -104,17 +108,18 @@ def _build_v2_payload(
         saved_documents=saved.get("documents") or [],
     )
     catalog = build_product_catalog_from_picking(picking["items"])
-    not_loaded_v2 = enrich_not_loaded_rows(
+    not_loaded_v2 = normalize_not_loaded_rows(
         saved.get("not_loaded_v2") or [],
         catalog,
     )
-    credit_notes_v2 = saved.get("credit_notes_v2") or []
+    credit_notes_v2 = normalize_credit_notes(saved.get("credit_notes_v2") or [])
+    cash_count = normalize_cash_count(saved.get("cash_count") or default_cash_count())
     venta_picking = picking["venta_picking_clp"]
     resultado = compute_cuadratura_v2_result(
         venta_picking_clp=venta_picking,
         documents=documents,
         credit_notes=credit_notes_v2,
-        not_loaded=not_loaded_v2,
+        cash_count=cash_count,
     )
     has_work = bool(saved.get("updated_at")) or bool(saved.get("documents"))
     op_status = saved.get("status") or derive_operational_status(
@@ -127,6 +132,7 @@ def _build_v2_payload(
         "documents": documents,
         "credit_notes_v2": credit_notes_v2,
         "not_loaded_v2": not_loaded_v2,
+        "cash_count": cash_count,
         "product_catalog": catalog,
         "resultado": resultado,
         "operational_status": op_status,
@@ -197,6 +203,7 @@ def get_dispatch_plan_cuadratura(plan_id: int) -> dict[str, Any]:
             "medios_pago_options": list(MEDIOS_PAGO),
             "credit_notes_v2": v2["credit_notes_v2"],
             "not_loaded_v2": v2["not_loaded_v2"],
+            "cash_count": v2["cash_count"],
             "product_catalog": v2["product_catalog"],
             "observacion": saved.get("observacion"),
             "operational_status": v2["operational_status"],
@@ -204,7 +211,7 @@ def get_dispatch_plan_cuadratura(plan_id: int) -> dict[str, Any]:
             "closed_at": saved.get("closed_at"),
             "closed_by": saved.get("closed_by"),
             "resultado": resultado,
-            "observacion_required": observacion_required(int(resultado["diferencia_clp"])),
+            "observacion_required": observacion_required(resultado),
             "history": history,
             "analytics_meta": v2["analytics_meta"],
             "legacy": _legacy_block(saved, venta_picking),
@@ -301,23 +308,29 @@ def save_dispatch_plan_cuadratura_v2(plan_id: int, body: dict[str, Any]) -> dict
             picking["clients"],
             saved_documents=preview.get("documents") or [],
         )
-    credit_notes_v2 = body.get("credit_notes_v2") or body.get("credit_notes") or []
-    not_loaded_v2 = enrich_not_loaded_rows(
+    credit_notes_v2 = normalize_credit_notes(
+        body.get("credit_notes_v2") or body.get("credit_notes") or []
+    )
+    not_loaded_v2 = normalize_not_loaded_rows(
         body.get("not_loaded_v2") or body.get("not_loaded") or [],
         catalog,
+    )
+    cash_count = normalize_cash_count(
+        body.get("cash_count")
+        if body.get("cash_count") is not None
+        else preview.get("cash_count") or default_cash_count()
     )
     venta_picking = int(preview["ventas"]["venta_picking_clp"])
     resultado = compute_cuadratura_v2_result(
         venta_picking_clp=venta_picking,
         documents=documents,
         credit_notes=credit_notes_v2,
-        not_loaded=not_loaded_v2,
+        cash_count=cash_count,
     )
-    diff = int(resultado["diferencia_clp"])
     obs = (body.get("observacion") or "").strip()
-    if observacion_required(diff) and not obs:
+    if observacion_required(resultado) and not obs:
         raise ValueError(
-            "Debe ingresar una observación cuando la diferencia es distinta de cero."
+            "Debe ingresar una observación cuando hay diferencia general o de efectivo."
         )
 
     op_status = derive_operational_status(
@@ -338,6 +351,7 @@ def save_dispatch_plan_cuadratura_v2(plan_id: int, body: dict[str, Any]) -> dict
             documents=documents,
             credit_notes_v2=credit_notes_v2,
             not_loaded_v2=not_loaded_v2,
+            cash_count=cash_count,
             picking_id=picking.get("picking_id"),
             picking_version=picking.get("picking_version"),
             status=str(op_status),
@@ -359,13 +373,22 @@ def close_dispatch_plan_cuadratura(
     data = get_dispatch_plan_cuadratura(plan_id)
     if int(data.get("schema_version") or 1) < 2:
         raise ValueError("Cuadratura v2 requerida para cierre.")
-    diff = int(data["resultado"]["diferencia_clp"])
+    resultado = data["resultado"]
     obs = (observacion or data.get("observacion") or "").strip()
-    if observacion_required(diff) and not obs:
+    if observacion_required(resultado) and not obs:
         raise ValueError(
             "No se puede cerrar la cuadratura sin observación cuando hay diferencia."
         )
-    op_status = "squared" if diff == 0 else "difference"
+    op_status = derive_operational_status(
+        resultado=resultado,
+        closed_at=datetime.now(timezone.utc),
+        has_work=True,
+    )
+    diff = int(
+        resultado.get("diferencia_general_clp")
+        or resultado.get("diferencia_clp")
+        or 0
+    )
     now = datetime.now(timezone.utc)
     snapshot = {
         "ventas": data.get("ventas"),
@@ -373,7 +396,8 @@ def close_dispatch_plan_cuadratura(
         "resumen_pagos": data.get("resumen_pagos"),
         "credit_notes_v2": data.get("credit_notes_v2"),
         "not_loaded_v2": data.get("not_loaded_v2"),
-        "resultado": data.get("resultado"),
+        "cash_count": data.get("cash_count"),
+        "resultado": resultado,
         "observacion": obs,
         "picking_id": data.get("picking_id"),
         "picking_version": data.get("picking_version"),
@@ -401,6 +425,7 @@ def close_dispatch_plan_cuadratura(
             documents=data.get("documents") or [],
             credit_notes_v2=data.get("credit_notes_v2") or [],
             not_loaded_v2=data.get("not_loaded_v2") or [],
+            cash_count=data.get("cash_count") or default_cash_count(),
             picking_id=data.get("picking_id"),
             picking_version=data.get("picking_version"),
             status=op_status,

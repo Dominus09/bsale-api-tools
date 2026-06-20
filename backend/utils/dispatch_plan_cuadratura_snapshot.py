@@ -12,7 +12,6 @@ def build_documents_from_picking_clients(
     *,
     saved_documents: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Una fila por documento facturado en picking cliente congelado."""
     saved_by_doc: dict[str, dict[str, Any]] = {}
     for row in saved_documents or []:
         key = _doc_key(row)
@@ -57,84 +56,103 @@ def build_product_catalog_from_picking(
 ) -> list[dict[str, Any]]:
     catalog: list[dict[str, Any]] = []
     for item in products or []:
-        try:
-            unidades = float(item.get("unidades") or 0)
-        except (TypeError, ValueError):
-            unidades = 0.0
-        try:
-            total = float(item.get("total_monto") or 0)
-        except (TypeError, ValueError):
-            total = 0.0
-        unit_price = round(total / unidades, 2) if unidades > 0 else 0.0
+        producto = (item.get("producto") or "").strip()
+        variante = (item.get("variante") or "").strip()
         label = (
             item.get("producto_variante")
             or item.get("display_name")
-            or item.get("producto")
-            or ""
+            or (producto if producto == variante else f"{producto} — {variante}".strip(" —"))
+            or producto
+            or variante
         ).strip()
         catalog.append(
             {
                 "product_id": item.get("product_id"),
                 "variant_id": item.get("variant_id"),
-                "producto": label,
+                "producto": producto or label,
+                "variante": variante,
+                "producto_variante": label,
                 "codigo_barras": item.get("codigo_barras"),
-                "unidades_snapshot": unidades,
-                "total_monto_snapshot": total,
-                "unit_price_clp": unit_price,
             }
         )
     return catalog
 
 
-def estimate_not_loaded_monto(
-    *,
-    producto: str,
-    cantidad: float,
+def normalize_credit_note_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "documento": str(row.get("documento") or row.get("documento_venta") or "").strip(),
+        "nota_credito": str(
+            row.get("nota_credito") or row.get("numero_nc") or row.get("nota_credito") or ""
+        ).strip(),
+        "monto": int(round(float(row.get("monto") or 0))),
+        "observacion": str(row.get("observacion") or row.get("motivo") or "").strip(),
+    }
+
+
+def normalize_credit_notes(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    return [normalize_credit_note_row(r) for r in rows or []]
+
+
+def resolve_product_from_catalog(
+    query: str,
     catalog: list[dict[str, Any]],
-    product_id: Any = None,
-    variant_id: Any = None,
-) -> int:
-    qty = max(0.0, float(cantidad or 0))
-    if qty <= 0:
-        return 0
-    needle = (producto or "").strip().lower()
-    match = None
+) -> dict[str, Any] | None:
+    q = (query or "").strip()
+    if not q:
+        return None
+    q_lower = q.lower()
     for row in catalog:
-        if product_id and row.get("product_id") == product_id:
-            if variant_id is None or row.get("variant_id") == variant_id:
-                match = row
-                break
-        if needle and needle == (row.get("producto") or "").strip().lower():
-            match = row
-            break
-    if not match and needle:
-        for row in catalog:
-            if needle in (row.get("producto") or "").lower():
-                match = row
-                break
-    if not match:
-        return 0
-    unit = float(match.get("unit_price_clp") or 0)
-    return int(round(unit * qty))
+        bc = str(row.get("codigo_barras") or "").strip()
+        if bc and bc == q:
+            return row
+    for row in catalog:
+        label = (row.get("producto_variante") or "").strip().lower()
+        if label and label == q_lower:
+            return row
+    for row in catalog:
+        label = (row.get("producto_variante") or "").lower()
+        if q_lower in label:
+            return row
+    for row in catalog:
+        prod = (row.get("producto") or "").lower()
+        var = (row.get("variante") or "").lower()
+        if q_lower in prod or q_lower in var:
+            return row
+    return None
 
 
-def enrich_not_loaded_rows(
-    rows: list[dict[str, Any]],
+def normalize_not_loaded_row(
+    row: dict[str, Any],
+    catalog: list[dict[str, Any]],
+) -> dict[str, Any]:
+    query = (row.get("producto") or row.get("producto_variante") or "").strip()
+    resolved = resolve_product_from_catalog(query, catalog)
+    if resolved:
+        return {
+            "producto": resolved.get("producto_variante") or query,
+            "producto_variante": resolved.get("producto_variante") or query,
+            "codigo_barras": resolved.get("codigo_barras"),
+            "product_id": resolved.get("product_id"),
+            "variant_id": resolved.get("variant_id"),
+            "cantidad": float(row.get("cantidad") or 0),
+            "motivo": (row.get("motivo") or "").strip(),
+        }
+    return {
+        "producto": query,
+        "producto_variante": query,
+        "codigo_barras": row.get("codigo_barras"),
+        "product_id": row.get("product_id"),
+        "variant_id": row.get("variant_id"),
+        "cantidad": float(row.get("cantidad") or 0),
+        "motivo": (row.get("motivo") or "").strip(),
+    }
+
+
+def normalize_not_loaded_rows(
+    rows: list[dict[str, Any]] | None,
     catalog: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    for row in rows or []:
-        item = dict(row)
-        if item.get("monto_clp") is None or int(item.get("monto_clp") or 0) == 0:
-            item["monto_clp"] = estimate_not_loaded_monto(
-                producto=item.get("producto") or "",
-                cantidad=item.get("cantidad") or 0,
-                catalog=catalog,
-                product_id=item.get("product_id"),
-                variant_id=item.get("variant_id"),
-            )
-        out.append(item)
-    return out
+    return [normalize_not_loaded_row(r, catalog) for r in rows or []]
 
 
 def _doc_key(row: dict[str, Any]) -> str:

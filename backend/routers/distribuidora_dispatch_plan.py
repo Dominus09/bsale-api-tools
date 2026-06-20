@@ -537,22 +537,26 @@ class CuadraturaDocumentRow(BaseModel):
 
 
 class CuadraturaCreditNoteV2Row(BaseModel):
-    documento_venta: str = ""
-    cliente: str = ""
-    numero_nc: str = ""
+    documento: str = ""
+    nota_credito: str = ""
     monto: int = Field(0, ge=0)
-    motivo: str = ""
-    aplicada: bool = True
+    observacion: str = ""
 
 
 class CuadraturaNotLoadedV2Row(BaseModel):
-    cliente: str = ""
     producto: str = ""
+    producto_variante: str | None = None
     cantidad: float = Field(0, ge=0)
     motivo: str = ""
     product_id: int | None = None
     variant_id: int | None = None
-    monto_clp: int | None = None
+    codigo_barras: str | None = None
+
+
+class CuadraturaCashCountRow(BaseModel):
+    denominacion_clp: int = Field(..., ge=1)
+    cantidad: int = Field(0, ge=0)
+    subtotal_clp: int = Field(0, ge=0)
 
 
 class CuadraturaSaveBody(BaseModel):
@@ -567,6 +571,7 @@ class CuadraturaSaveBody(BaseModel):
     documents: list[CuadraturaDocumentRow] | None = None
     credit_notes_v2: list[CuadraturaCreditNoteV2Row] = Field(default_factory=list)
     not_loaded_v2: list[CuadraturaNotLoadedV2Row] = Field(default_factory=list)
+    cash_count: list[CuadraturaCashCountRow] = Field(default_factory=list)
 
 
 class CuadraturaCloseBody(BaseModel):
@@ -592,10 +597,12 @@ def put_cuadratura(plan_id: int, body: CuadraturaSaveBody):
         if body.documents is not None:
             payload["documents"] = [r.model_dump() for r in body.documents]
             payload["schema_version"] = 2
-        if body.credit_notes_v2:
+        if body.credit_notes_v2 is not None:
             payload["credit_notes_v2"] = [r.model_dump() for r in body.credit_notes_v2]
-        if body.not_loaded_v2:
+        if body.not_loaded_v2 is not None:
             payload["not_loaded_v2"] = [r.model_dump() for r in body.not_loaded_v2]
+        if body.cash_count is not None:
+            payload["cash_count"] = [r.model_dump() for r in body.cash_count]
         if body.credit_notes:
             payload["credit_notes"] = [r.model_dump() for r in body.credit_notes]
         if body.not_loaded:

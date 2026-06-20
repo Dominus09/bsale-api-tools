@@ -63,14 +63,16 @@ def get_cuadratura_row(cur, plan_id: int) -> dict[str, Any] | None:
     if not _table_exists(cur):
         return None
     has_v2 = _column_exists(cur, "schema_version")
+    has_cash = _column_exists(cur, "cash_count")
     if has_v2:
+        cash_col = ", cash_count" if has_cash else ""
         cur.execute(
-            """
+            f"""
             SELECT transferencia_clp, efectivo_clp, cheque_clp, debito_clp,
                    observacion, credit_notes, not_loaded, updated_at,
                    schema_version, status, documents, credit_notes_v2,
                    not_loaded_v2, picking_id, picking_version,
-                   closed_at, closed_by, resultado_cache
+                   closed_at, closed_by, resultado_cache{cash_col}
             FROM distribuidora.dispatch_plan_cuadratura
             WHERE dispatch_plan_id = %s
             """,
@@ -91,7 +93,7 @@ def get_cuadratura_row(cur, plan_id: int) -> dict[str, Any] | None:
         return None
     cols = [d[0] for d in cur.description]
     out = dict(zip(cols, row))
-    for key in ("credit_notes", "not_loaded", "documents", "credit_notes_v2", "not_loaded_v2"):
+    for key in ("credit_notes", "not_loaded", "documents", "credit_notes_v2", "not_loaded_v2", "cash_count"):
         if key in out:
             out[key] = _parse_json(out.get(key), [])
     if "resultado_cache" in out:
@@ -152,6 +154,7 @@ def upsert_cuadratura_v2(
     documents: list[dict[str, Any]],
     credit_notes_v2: list[dict[str, Any]],
     not_loaded_v2: list[dict[str, Any]],
+    cash_count: list[dict[str, Any]],
     picking_id: int | None,
     picking_version: int | None,
     status: str,
@@ -161,12 +164,35 @@ def upsert_cuadratura_v2(
 ) -> None:
     if not _table_exists(cur) or not _column_exists(cur, "schema_version"):
         return
+    has_cash = _column_exists(cur, "cash_count")
+    cash_sql = ", cash_count" if has_cash else ""
+    cash_val = ", %s::jsonb" if has_cash else ""
+    cash_upd = ", cash_count = EXCLUDED.cash_count" if has_cash else ""
+    params: list[Any] = [
+        int(plan_id),
+        status,
+        json.dumps(documents or []),
+        json.dumps(credit_notes_v2 or []),
+        json.dumps(not_loaded_v2 or []),
+    ]
+    if has_cash:
+        params.append(json.dumps(cash_count or []))
+    params.extend(
+        [
+            picking_id,
+            picking_version,
+            (observacion or "").strip() or None,
+            json.dumps(resultado_cache or {}),
+            closed_at,
+            closed_by,
+        ]
+    )
     cur.execute(
-        """
+        f"""
         INSERT INTO distribuidora.dispatch_plan_cuadratura (
             dispatch_plan_id,
             schema_version, status,
-            documents, credit_notes_v2, not_loaded_v2,
+            documents, credit_notes_v2, not_loaded_v2{cash_sql},
             picking_id, picking_version,
             observacion, resultado_cache,
             closed_at, closed_by,
@@ -176,7 +202,7 @@ def upsert_cuadratura_v2(
         )
         VALUES (
             %s, 2, %s,
-            %s::jsonb, %s::jsonb, %s::jsonb,
+            %s::jsonb, %s::jsonb, %s::jsonb{cash_val},
             %s, %s,
             %s, %s::jsonb,
             %s, %s,
@@ -189,7 +215,7 @@ def upsert_cuadratura_v2(
             status = EXCLUDED.status,
             documents = EXCLUDED.documents,
             credit_notes_v2 = EXCLUDED.credit_notes_v2,
-            not_loaded_v2 = EXCLUDED.not_loaded_v2,
+            not_loaded_v2 = EXCLUDED.not_loaded_v2{cash_upd},
             picking_id = EXCLUDED.picking_id,
             picking_version = EXCLUDED.picking_version,
             observacion = EXCLUDED.observacion,
@@ -198,19 +224,7 @@ def upsert_cuadratura_v2(
             closed_by = EXCLUDED.closed_by,
             updated_at = NOW()
         """,
-        (
-            int(plan_id),
-            status,
-            json.dumps(documents or []),
-            json.dumps(credit_notes_v2 or []),
-            json.dumps(not_loaded_v2 or []),
-            picking_id,
-            picking_version,
-            (observacion or "").strip() or None,
-            json.dumps(resultado_cache or {}),
-            closed_at,
-            closed_by,
-        ),
+        tuple(params),
     )
 
 
