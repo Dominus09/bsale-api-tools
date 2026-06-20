@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import { useCallback, useState } from "react"
 import { Loader2 } from "lucide-react"
 
@@ -255,6 +256,13 @@ export function DispatchPlanDetailTabs({
       </TabsContent>
 
       <TabsContent value="cuadratura" className="mt-4">
+        <p className="mb-3 text-xs text-muted-foreground">
+          Cuadratura documental v2. También disponible en{" "}
+          <Link href={`/distribuidora/cuadraturas/${planId}`} className="text-primary hover:underline">
+            módulo Cuadraturas
+          </Link>
+          .
+        </p>
         <DispatchPlanCuadraturaPanel planId={planId} onMessage={onMessage} />
       </TabsContent>
     </Tabs>

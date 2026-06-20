@@ -2429,41 +2429,125 @@ export async function markDispatchPlanPickingGenerated(planId: number): Promise<
   return res.json()
 }
 
+export type DispatchPlanCuadraturaResult = {
+  resumen_pagos?: Record<string, number>
+  notas_credito_clp: number
+  no_cargados_clp: number
+  venta_ajustada_clp: number
+  total_recaudado_clp: number
+  diferencia_clp: number
+  diferencia_status: "green" | "yellow" | "red"
+}
+
+export type DispatchPlanCuadraturaDocumentRow = {
+  related_document_id?: number | null
+  document_number?: number | null
+  oc_document_id?: number | null
+  client_name?: string
+  monto_clp: number
+  medio_pago: string
+  observacion?: string
+  route_order?: number | null
+}
+
+export type DispatchPlanCuadraturaCreditNoteV2 = {
+  documento_venta: string
+  cliente: string
+  numero_nc: string
+  monto: number
+  motivo: string
+  aplicada: boolean
+}
+
+export type DispatchPlanCuadraturaNotLoadedV2 = {
+  cliente: string
+  producto: string
+  cantidad: number
+  motivo: string
+  product_id?: number | null
+  variant_id?: number | null
+  monto_clp?: number | null
+}
+
 export type DispatchPlanCuadraturaResponse = {
   dispatch_plan_id: number
+  schema_version?: number
+  picking_ready?: boolean
+  picking_id?: number | null
+  picking_version?: number | null
   ventas: {
     venta_oc_clp: number
     venta_facturada_clp: number
     venta_picking_clp: number
   }
-  pagos: {
+  documents?: DispatchPlanCuadraturaDocumentRow[]
+  resumen_pagos?: Record<string, number>
+  resumen_pagos_labels?: Record<string, string>
+  medios_pago_options?: string[]
+  credit_notes_v2?: DispatchPlanCuadraturaCreditNoteV2[]
+  not_loaded_v2?: DispatchPlanCuadraturaNotLoadedV2[]
+  product_catalog?: {
+    product_id?: number | null
+    variant_id?: number | null
+    producto: string
+    codigo_barras?: string | null
+    unit_price_clp: number
+  }[]
+  observacion?: string | null
+  operational_status?: string
+  operational_status_label?: string
+  closed_at?: string | null
+  closed_by?: string | null
+  resultado: DispatchPlanCuadraturaResult
+  observacion_required: boolean
+  history?: {
+    id: number
+    version: number
+    status: string
+    closed_at?: string
+    closed_by?: string | null
+    observacion?: string | null
+    diferencia_clp?: number
+    diferencia_status?: string
+  }[]
+  analytics_meta?: Record<string, unknown>
+  /** Legacy v1 */
+  pagos?: {
     transferencia_clp: number
     efectivo_clp: number
     cheque_clp: number
     debito_clp: number
   }
-  credit_notes: {
+  credit_notes?: {
     documento_venta: string
     nota_credito: string
     monto: number
     motivo: string
   }[]
-  not_loaded: {
+  not_loaded?: {
     cliente: string
     documento: string
     monto: number
     motivo: string
   }[]
-  observacion?: string | null
-  resultado: {
-    notas_credito_clp: number
-    no_cargados_clp: number
-    venta_ajustada_clp: number
-    total_recaudado_clp: number
-    diferencia_clp: number
-    diferencia_status: "green" | "yellow" | "red"
-  }
-  observacion_required: boolean
+  legacy?: Record<string, unknown>
+}
+
+export type CuadraturaListItem = {
+  dispatch_plan_id: number
+  planning_code?: string
+  planning_name?: string
+  planning_date?: string
+  truck_name?: string
+  route_name?: string
+  driver_name?: string
+  venta_picking_clp?: number
+  total_recaudado_clp?: number
+  diferencia_clp?: number
+  diferencia_status?: string
+  cuadratura_status?: string
+  operational_status_label?: string
+  closed_at?: string | null
 }
 
 export async function getDispatchPlanCuadratura(
@@ -2482,13 +2566,17 @@ export async function getDispatchPlanCuadratura(
 export async function putDispatchPlanCuadratura(
   planId: number,
   body: {
-    transferencia_clp: number
-    efectivo_clp: number
-    cheque_clp: number
-    debito_clp: number
+    schema_version?: number
     observacion?: string | null
-    credit_notes: DispatchPlanCuadraturaResponse["credit_notes"]
-    not_loaded: DispatchPlanCuadraturaResponse["not_loaded"]
+    documents?: DispatchPlanCuadraturaDocumentRow[]
+    credit_notes_v2?: DispatchPlanCuadraturaCreditNoteV2[]
+    not_loaded_v2?: DispatchPlanCuadraturaNotLoadedV2[]
+    transferencia_clp?: number
+    efectivo_clp?: number
+    cheque_clp?: number
+    debito_clp?: number
+    credit_notes?: DispatchPlanCuadraturaResponse["credit_notes"]
+    not_loaded?: DispatchPlanCuadraturaResponse["not_loaded"]
   },
 ): Promise<DispatchPlanCuadraturaResponse> {
   const res = await fetch(`${API_URL}/distribuidora/dispatch-plans/${planId}/cuadratura`, {
@@ -2501,6 +2589,43 @@ export async function putDispatchPlanCuadratura(
     throw new Error(msg || "Error al guardar cuadratura")
   }
   return res.json() as Promise<DispatchPlanCuadraturaResponse>
+}
+
+export async function closeDispatchPlanCuadratura(
+  planId: number,
+  body?: { observacion?: string | null; closed_by?: string | null },
+): Promise<DispatchPlanCuadraturaResponse> {
+  const res = await fetch(`${API_URL}/distribuidora/dispatch-plans/${planId}/cuadratura/close`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body ?? {}),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cerrar cuadratura")
+  }
+  return res.json() as Promise<DispatchPlanCuadraturaResponse>
+}
+
+export async function listDistribuidoraCuadraturas(params?: {
+  status?: "all" | "pending" | "squared" | "with_diff"
+  search?: string
+  limit?: number
+  offset?: number
+}): Promise<{ items: CuadraturaListItem[]; count: number }> {
+  const qs = new URLSearchParams()
+  if (params?.status) qs.set("status", params.status)
+  if (params?.search?.trim()) qs.set("search", params.search.trim())
+  if (params?.limit != null) qs.set("limit", String(params.limit))
+  if (params?.offset != null) qs.set("offset", String(params.offset))
+  const res = await fetch(`${API_URL}/distribuidora/cuadraturas?${qs}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al listar cuadraturas")
+  }
+  return res.json() as Promise<{ items: CuadraturaListItem[]; count: number }>
 }
 
 /** Fila de GET /distribuidora/orders/purchase/by-document-ids (preview planificación). */

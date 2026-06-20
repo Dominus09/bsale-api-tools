@@ -11,8 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from backend.services.distribuidora import dispatch_plan_cuadratura_service as cuad_svc
 from backend.services.distribuidora import dispatch_plan_service as svc
+from backend.services.distribuidora import dispatch_plan_cuadratura_service as cuad_svc
 from backend.utils.auth_staff import BearerDep, decode_staff_token, require_staff_user
 from backend.utils.dashboard_debug import log_dashboard_debug
 from backend.utils.dashboard_stage import DashboardStageRun, log_picking_count_sql_reference
@@ -525,7 +525,38 @@ class CuadraturaNotLoadedRow(BaseModel):
     motivo: str = ""
 
 
+class CuadraturaDocumentRow(BaseModel):
+    related_document_id: int | None = None
+    document_number: int | None = None
+    oc_document_id: int | None = None
+    client_name: str = ""
+    monto_clp: int = Field(0, ge=0)
+    medio_pago: str = "pendiente"
+    observacion: str = ""
+    route_order: int | None = None
+
+
+class CuadraturaCreditNoteV2Row(BaseModel):
+    documento_venta: str = ""
+    cliente: str = ""
+    numero_nc: str = ""
+    monto: int = Field(0, ge=0)
+    motivo: str = ""
+    aplicada: bool = True
+
+
+class CuadraturaNotLoadedV2Row(BaseModel):
+    cliente: str = ""
+    producto: str = ""
+    cantidad: float = Field(0, ge=0)
+    motivo: str = ""
+    product_id: int | None = None
+    variant_id: int | None = None
+    monto_clp: int | None = None
+
+
 class CuadraturaSaveBody(BaseModel):
+    schema_version: int | None = None
     transferencia_clp: int = Field(0, ge=0)
     efectivo_clp: int = Field(0, ge=0)
     cheque_clp: int = Field(0, ge=0)
@@ -533,6 +564,14 @@ class CuadraturaSaveBody(BaseModel):
     observacion: str | None = None
     credit_notes: list[CuadraturaCreditNoteRow] = Field(default_factory=list)
     not_loaded: list[CuadraturaNotLoadedRow] = Field(default_factory=list)
+    documents: list[CuadraturaDocumentRow] | None = None
+    credit_notes_v2: list[CuadraturaCreditNoteV2Row] = Field(default_factory=list)
+    not_loaded_v2: list[CuadraturaNotLoadedV2Row] = Field(default_factory=list)
+
+
+class CuadraturaCloseBody(BaseModel):
+    observacion: str | None = None
+    closed_by: str | None = None
 
 
 @router.get("/{plan_id}/cuadratura")
@@ -549,12 +588,37 @@ def get_cuadratura(plan_id: int):
 @router.put("/{plan_id}/cuadratura")
 def put_cuadratura(plan_id: int, body: CuadraturaSaveBody):
     try:
-        payload = body.model_dump()
-        payload["credit_notes"] = [r.model_dump() for r in body.credit_notes]
-        payload["not_loaded"] = [r.model_dump() for r in body.not_loaded]
+        payload = body.model_dump(exclude_none=True)
+        if body.documents is not None:
+            payload["documents"] = [r.model_dump() for r in body.documents]
+            payload["schema_version"] = 2
+        if body.credit_notes_v2:
+            payload["credit_notes_v2"] = [r.model_dump() for r in body.credit_notes_v2]
+        if body.not_loaded_v2:
+            payload["not_loaded_v2"] = [r.model_dump() for r in body.not_loaded_v2]
+        if body.credit_notes:
+            payload["credit_notes"] = [r.model_dump() for r in body.credit_notes]
+        if body.not_loaded:
+            payload["not_loaded"] = [r.model_dump() for r in body.not_loaded]
         return cuad_svc.save_dispatch_plan_cuadratura(plan_id, payload)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as exc:
         log_error("PUT /dispatch-plans/cuadratura", exc)
         raise HTTPException(status_code=500, detail="Error al guardar cuadratura") from exc
+
+
+@router.post("/{plan_id}/cuadratura/close")
+def close_cuadratura(plan_id: int, body: CuadraturaCloseBody | None = None):
+    try:
+        data = body.model_dump() if body else {}
+        return cuad_svc.close_dispatch_plan_cuadratura(
+            plan_id,
+            closed_by=data.get("closed_by"),
+            observacion=data.get("observacion"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as exc:
+        log_error("POST /dispatch-plans/cuadratura/close", exc)
+        raise HTTPException(status_code=500, detail="Error al cerrar cuadratura") from exc
