@@ -28,15 +28,30 @@ import { Label } from "@/components/ui/label"
 import { cn } from "@/lib/utils"
 
 function PickingHeaderBlock({ header }: { header: DispatchPlanPickingHeader }) {
+  const chofer = header.driver_name || header.driver_label || "—"
+  const peonetas =
+    header.assistant_names?.length ? header.assistant_names.join(", ") : header.assistant_label
   return (
     <div className="grid gap-2 rounded-lg border border-border/70 bg-muted/20 p-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
       <div>
-        <span className="text-muted-foreground">N° Planificación</span>
+        <span className="text-muted-foreground">Planificación</span>
         <p className="font-mono font-semibold">{header.planning_number}</p>
       </div>
       <div>
         <span className="text-muted-foreground">Fecha entrega</span>
         <p className="font-medium">{header.delivery_date}</p>
+      </div>
+      <div>
+        <span className="text-muted-foreground">Vehículo</span>
+        <p className="font-medium">{header.truck_name}</p>
+      </div>
+      <div>
+        <span className="text-muted-foreground">Chofer</span>
+        <p className="font-medium">{chofer}</p>
+      </div>
+      <div>
+        <span className="text-muted-foreground">Peoneta(s)</span>
+        <p className="font-medium">{peonetas || "—"}</p>
       </div>
       <div className="sm:col-span-2">
         <span className="text-muted-foreground">Ruta / comunas</span>
@@ -44,18 +59,6 @@ function PickingHeaderBlock({ header }: { header: DispatchPlanPickingHeader }) {
           {header.route_name}
           {header.communes ? ` · ${header.communes}` : ""}
         </p>
-      </div>
-      <div>
-        <span className="text-muted-foreground">Camión</span>
-        <p className="font-medium">{header.truck_name}</p>
-      </div>
-      <div>
-        <span className="text-muted-foreground">Chofer</span>
-        <p>{header.driver_label}</p>
-      </div>
-      <div>
-        <span className="text-muted-foreground">Peoneta</span>
-        <p>{header.assistant_label}</p>
       </div>
       <div className="sm:col-span-2">
         <span className="text-muted-foreground">Sello</span>

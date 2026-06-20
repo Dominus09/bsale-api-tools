@@ -25,6 +25,86 @@ def _slug_filename_part(s: str) -> str:
     return t[:48] or "plan"
 
 
+def _crew_from_frozen_plan(plan: dict[str, Any]) -> tuple[str, list[str], bool]:
+    """Dotación congelada en dispatch_plan al confirmar."""
+    driver = (plan.get("driver_name") or "").strip()
+    raw_asst = (plan.get("assistant_names") or "").strip()
+    assistants = [a.strip() for a in raw_asst.split(",") if a.strip()] if raw_asst else []
+    if driver or assistants:
+        return driver, assistants, True
+    return "", [], False
+
+
+def resolve_crew_from_route_summary(
+    cur,
+    *,
+    planning_date: date | Any,
+    truck_key: str,
+) -> tuple[str, list[str], str]:
+    """Chofer/peoneta/sello desde planificación confirmada (route_planning_summary)."""
+    sello = ""
+    driver_name = ""
+    assistant_names: list[str] = []
+    truck = (truck_key or "").strip()
+    if not truck or not planning_date:
+        return driver_name, assistant_names, sello
+    cur.execute(
+        """
+        SELECT general_observation, driver, assistant_1, assistant_2
+        FROM distribuidora.route_planning_summary
+        WHERE planning_date = %s
+          AND upper(btrim(truck)) = upper(btrim(%s))
+        LIMIT 1
+        """,
+        (planning_date, truck),
+    )
+    srow = cur.fetchone()
+    if srow:
+        sello = (srow[0] or "").strip()
+        driver_name = (srow[1] or "").strip()
+        for a in (srow[2], srow[3]):
+            name = (a or "").strip()
+            if name:
+                assistant_names.append(name)
+    return driver_name, assistant_names, sello
+
+
+def build_picking_header_dict(
+    plan: dict[str, Any],
+    *,
+    plan_id: int,
+    communes: str = "",
+    sello: str = "",
+    driver_name: str = "",
+    assistant_names: list[str] | None = None,
+) -> dict[str, Any]:
+    assistants = assistant_names or []
+    driver_n = int(plan.get("driver_count") or 1)
+    assistant_n = int(plan.get("assistant_count") or 0)
+    return {
+        "plan_id": plan_id,
+        "planning_number": plan.get("planning_code") or f"PLAN-{plan_id}",
+        "planning_name": plan.get("planning_name") or plan.get("route_name"),
+        "delivery_date": (
+            plan["planning_date"].isoformat()
+            if hasattr(plan.get("planning_date"), "isoformat")
+            else str(plan.get("planning_date") or "")
+        ),
+        "route_name": plan.get("route_name") or "",
+        "communes": communes,
+        "truck_name": plan.get("truck_name") or plan.get("route_name") or "",
+        "driver_name": driver_name,
+        "driver_label": driver_name or f"{driver_n} chofer{'es' if driver_n != 1 else ''}",
+        "assistant_label": (
+            ", ".join(assistants)
+            if assistants
+            else f"{assistant_n} peoneta{'s' if assistant_n != 1 else ''}"
+        ),
+        "assistant_names": assistants,
+        "sello": sello,
+    }
+
+
 def fetch_picking_header(plan_id: int) -> dict[str, Any]:
     conn = get_connection()
     try:
@@ -49,58 +129,34 @@ def fetch_picking_header(plan_id: int) -> dict[str, Any]:
         communes_row = cur.fetchone()
         communes = (communes_row[0] if communes_row else None) or ""
 
+        driver_name, assistant_names, frozen = _crew_from_frozen_plan(plan)
         sello = ""
-        driver_name = ""
-        assistant_names: list[str] = []
-        truck_key = (plan.get("truck_name") or plan.get("route_name") or "").strip()
-        pdate = plan.get("planning_date")
-        if truck_key and pdate:
-            cur.execute(
-                """
-                SELECT general_observation, driver, assistant_1, assistant_2
-                FROM distribuidora.route_planning_summary
-                WHERE planning_date = %s
-                  AND upper(btrim(truck)) = upper(btrim(%s))
-                LIMIT 1
-                """,
-                (pdate, truck_key),
+        if not frozen:
+            truck_key = (plan.get("truck_name") or plan.get("route_name") or "").strip()
+            driver_name, assistant_names, sello = resolve_crew_from_route_summary(
+                cur,
+                planning_date=plan.get("planning_date"),
+                truck_key=truck_key,
             )
-            srow = cur.fetchone()
-            if srow:
-                sello = (srow[0] or "").strip()
-                driver_name = (srow[1] or "").strip()
-                for a in (srow[2], srow[3]):
-                    name = (a or "").strip()
-                    if name:
-                        assistant_names.append(name)
+        else:
+            truck_key = (plan.get("truck_name") or plan.get("route_name") or "").strip()
+            _, _, sello = resolve_crew_from_route_summary(
+                cur,
+                planning_date=plan.get("planning_date"),
+                truck_key=truck_key,
+            )
         cur.close()
     finally:
         conn.close()
 
-    driver_n = int(plan.get("driver_count") or 1)
-    assistant_n = int(plan.get("assistant_count") or 0)
-    return {
-        "plan_id": plan_id,
-        "planning_number": plan.get("planning_code") or f"PLAN-{plan_id}",
-        "planning_name": plan.get("planning_name") or plan.get("route_name"),
-        "delivery_date": (
-            plan["planning_date"].isoformat()
-            if hasattr(plan.get("planning_date"), "isoformat")
-            else str(plan.get("planning_date") or "")
-        ),
-        "route_name": plan.get("route_name") or "",
-        "communes": communes,
-        "truck_name": plan.get("truck_name") or plan.get("route_name") or "",
-        "driver_name": driver_name,
-        "driver_label": driver_name or f"{driver_n} chofer{'es' if driver_n != 1 else ''}",
-        "assistant_label": (
-            ", ".join(assistant_names)
-            if assistant_names
-            else f"{assistant_n} peoneta{'s' if assistant_n != 1 else ''}"
-        ),
-        "assistant_names": assistant_names,
-        "sello": sello,
-    }
+    return build_picking_header_dict(
+        plan,
+        plan_id=plan_id,
+        communes=communes,
+        sello=sello,
+        driver_name=driver_name,
+        assistant_names=assistant_names,
+    )
 
 
 def normalize_client_stop(raw: dict[str, Any]) -> dict[str, Any]:

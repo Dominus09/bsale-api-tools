@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from backend.services.distribuidora import dispatch_plan_cuadratura_service as cuad_svc
 from backend.services.distribuidora import dispatch_plan_service as svc
 from backend.utils.auth_staff import BearerDep, decode_staff_token, require_staff_user
 from backend.utils.dashboard_debug import log_dashboard_debug
@@ -508,3 +509,52 @@ def post_picking_generated(plan_id: int):
         return svc.mark_picking_generated(plan_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+class CuadraturaCreditNoteRow(BaseModel):
+    documento_venta: str = ""
+    nota_credito: str = ""
+    monto: int = Field(0, ge=0)
+    motivo: str = ""
+
+
+class CuadraturaNotLoadedRow(BaseModel):
+    cliente: str = ""
+    documento: str = ""
+    monto: int = Field(0, ge=0)
+    motivo: str = ""
+
+
+class CuadraturaSaveBody(BaseModel):
+    transferencia_clp: int = Field(0, ge=0)
+    efectivo_clp: int = Field(0, ge=0)
+    cheque_clp: int = Field(0, ge=0)
+    debito_clp: int = Field(0, ge=0)
+    observacion: str | None = None
+    credit_notes: list[CuadraturaCreditNoteRow] = Field(default_factory=list)
+    not_loaded: list[CuadraturaNotLoadedRow] = Field(default_factory=list)
+
+
+@router.get("/{plan_id}/cuadratura")
+def get_cuadratura(plan_id: int):
+    try:
+        return cuad_svc.get_dispatch_plan_cuadratura(plan_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as exc:
+        log_error("GET /dispatch-plans/cuadratura", exc)
+        raise HTTPException(status_code=500, detail="Error al cargar cuadratura") from exc
+
+
+@router.put("/{plan_id}/cuadratura")
+def put_cuadratura(plan_id: int, body: CuadraturaSaveBody):
+    try:
+        payload = body.model_dump()
+        payload["credit_notes"] = [r.model_dump() for r in body.credit_notes]
+        payload["not_loaded"] = [r.model_dump() for r in body.not_loaded]
+        return cuad_svc.save_dispatch_plan_cuadratura(plan_id, payload)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as exc:
+        log_error("PUT /dispatch-plans/cuadratura", exc)
+        raise HTTPException(status_code=500, detail="Error al guardar cuadratura") from exc

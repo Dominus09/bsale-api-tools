@@ -173,12 +173,15 @@ def insert_dispatch_plan(cur, fields: dict[str, Any]) -> tuple[int, str]:
     """
     payload = dict(fields)
     payload.pop("planning_code", None)
+    payload.setdefault("driver_name", None)
+    payload.setdefault("assistant_names", None)
 
     cur.execute(
         """
         INSERT INTO distribuidora.dispatch_plan (
             plan_session_id, planning_date, truck_id, route_name, status,
             planning_code, planning_name, truck_name,
+            driver_name, assistant_names,
             driver_count, assistant_count, driver_cost_clp, assistant_cost_clp,
             diesel_price_per_liter, km_total, duration_min, liters_estimated,
             fuel_cost_clp, ferry_cost_clp, toll_cost_clp, extras_cost_clp,
@@ -187,6 +190,7 @@ def insert_dispatch_plan(cur, fields: dict[str, Any]) -> tuple[int, str]:
         VALUES (
             %(plan_session_id)s, %(planning_date)s, %(truck_id)s, %(route_name)s,
             %(status)s, NULL, %(planning_name)s, %(truck_name)s,
+            %(driver_name)s, %(assistant_names)s,
             %(driver_count)s, %(assistant_count)s,
             %(driver_cost_clp)s, %(assistant_cost_clp)s,
             %(diesel_price_per_liter)s, %(km_total)s, %(duration_min)s,

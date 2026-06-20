@@ -60,6 +60,76 @@ function planLabel(header: DispatchPlanPickingHeader): string {
   return pn.toUpperCase().startsWith("PLAN") ? pn : `PLAN-${pn}`
 }
 
+function crewLabel(header: DispatchPlanPickingHeader): string {
+  return header.driver_name || header.driver_label || "—"
+}
+
+function assistantLabel(header: DispatchPlanPickingHeader): string {
+  if (header.assistant_names?.length) return header.assistant_names.join(", ")
+  return header.assistant_label || "—"
+}
+
+function sellerLine(client: DispatchPlanPickingClientRow): string {
+  const name = (client.seller_name || "").trim() || "—"
+  const phone = (client.seller_phone || "").trim()
+  return phone ? `${name} · ${phone}` : name
+}
+
+function drawOperativePlanBlock(
+  doc: import("jspdf").jsPDF,
+  header: DispatchPlanPickingHeader,
+  y: number,
+): number {
+  const pageW = doc.internal.pageSize.getWidth()
+  const w = contentWidth(pageW)
+  const rows = [
+    ["Planificación", planLabel(header)],
+    ["Vehículo", header.truck_name || "—"],
+    ["Chofer", crewLabel(header)],
+    ["Peoneta(s)", assistantLabel(header)],
+  ]
+  const blockH = rows.length * 4.2 + 3
+  doc.setFillColor(248, 250, 252)
+  doc.rect(MARGIN.left, y, w, blockH, "F")
+  doc.setDrawColor(210, 214, 220)
+  doc.setLineWidth(0.15)
+  doc.rect(MARGIN.left, y, w, blockH, "S")
+  doc.setFontSize(6.8)
+  let ty = y + 3.5
+  for (const [label, value] of rows) {
+    doc.setFont("helvetica", "bold")
+    doc.text(`${label}:`, MARGIN.left + 2, ty)
+    doc.setFont("helvetica", "normal")
+    doc.text(value, MARGIN.left + 28, ty, { maxWidth: w - 30 })
+    ty += 4.2
+  }
+  return y + blockH + 2
+}
+
+function drawClientOperativeBand(
+  doc: import("jspdf").jsPDF,
+  header: DispatchPlanPickingHeader,
+  client: DispatchPlanPickingClientRow,
+  y: number,
+  pageW: number,
+): number {
+  const w = contentWidth(pageW)
+  const bandH = 8.5
+  doc.setFillColor(241, 245, 249)
+  doc.rect(MARGIN.left, y, w, bandH, "F")
+  doc.setDrawColor(203, 213, 225)
+  doc.setLineWidth(0.15)
+  doc.rect(MARGIN.left, y, w, bandH, "S")
+  doc.setFontSize(6.5)
+  const clientName = client.fantasy_name || client.client_name || "—"
+  const monto = formatClp(Number(client.document_total) || 0)
+  const line = `Cliente: ${clientName}  ·  Vendedor: ${sellerLine(client)}  ·  Chofer: ${crewLabel(header)}  ·  Peoneta: ${assistantLabel(header)}  ·  Monto: ${monto}`
+  doc.setFont("helvetica", "bold")
+  doc.text(line, MARGIN.left + 1.5, y + 5.2, { maxWidth: w - 3 })
+  doc.setFont("helvetica", "normal")
+  return y + bandH + 1.5
+}
+
 function contentWidth(pageW: number): number {
   return pageW - MARGIN.left - MARGIN.right
 }
@@ -203,7 +273,7 @@ function drawBrandedHeader(
     HEADER_TEXT_TOP + 9,
   )
   doc.text(
-    `Chofer: ${header.driver_name || header.driver_label} · Peonetas: ${header.assistant_label}`,
+    `Chofer: ${crewLabel(header)} · Peonetas: ${assistantLabel(header)}`,
     textX,
     HEADER_TEXT_TOP + 13,
   )
@@ -362,7 +432,8 @@ export async function exportDispatchPlanPickingClientePdf(params: {
       maxRowH = Math.max(maxRowH, lineH * lines.length + 2.5)
     }
 
-    if (y + maxRowH > bottomY) {
+    const bandH = 10
+    if (y + maxRowH + bandH > bottomY) {
       doc.addPage()
       y = drawBrandedHeader(
         doc,
@@ -375,6 +446,7 @@ export async function exportDispatchPlanPickingClientePdf(params: {
       )
       drawHead()
     }
+    y = drawClientOperativeBand(doc, params.header, c, y, pageW)
 
     drawRowGrid(doc, cols, x0, y, maxRowH, rowIdx % 2 === 1)
     doc.setFontSize(fontSize)
@@ -445,6 +517,7 @@ export async function exportDispatchPlanPickingProductoPdf(params: {
     logo,
     logoState,
   )
+  y = drawOperativePlanBlock(doc, params.header, y)
 
   const headH = mode === "compact" ? 4.5 : 5.5
   const drawHead = () => {

@@ -2174,6 +2174,7 @@ export type DispatchPlanPickingClientRow = {
   document_type?: string
   payment_method?: string
   seller_name?: string
+  seller_phone?: string
   observations?: string
   delivery_notes?: string
   document_total?: number | null
@@ -2426,6 +2427,80 @@ export async function markDispatchPlanPickingGenerated(planId: number): Promise<
     throw new Error(msg || "Error al actualizar estado del plan")
   }
   return res.json()
+}
+
+export type DispatchPlanCuadraturaResponse = {
+  dispatch_plan_id: number
+  ventas: {
+    venta_oc_clp: number
+    venta_facturada_clp: number
+    venta_picking_clp: number
+  }
+  pagos: {
+    transferencia_clp: number
+    efectivo_clp: number
+    cheque_clp: number
+    debito_clp: number
+  }
+  credit_notes: {
+    documento_venta: string
+    nota_credito: string
+    monto: number
+    motivo: string
+  }[]
+  not_loaded: {
+    cliente: string
+    documento: string
+    monto: number
+    motivo: string
+  }[]
+  observacion?: string | null
+  resultado: {
+    notas_credito_clp: number
+    no_cargados_clp: number
+    venta_ajustada_clp: number
+    total_recaudado_clp: number
+    diferencia_clp: number
+    diferencia_status: "green" | "yellow" | "red"
+  }
+  observacion_required: boolean
+}
+
+export async function getDispatchPlanCuadratura(
+  planId: number,
+): Promise<DispatchPlanCuadraturaResponse> {
+  const res = await fetch(`${API_URL}/distribuidora/dispatch-plans/${planId}/cuadratura`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar cuadratura")
+  }
+  return res.json() as Promise<DispatchPlanCuadraturaResponse>
+}
+
+export async function putDispatchPlanCuadratura(
+  planId: number,
+  body: {
+    transferencia_clp: number
+    efectivo_clp: number
+    cheque_clp: number
+    debito_clp: number
+    observacion?: string | null
+    credit_notes: DispatchPlanCuadraturaResponse["credit_notes"]
+    not_loaded: DispatchPlanCuadraturaResponse["not_loaded"]
+  },
+): Promise<DispatchPlanCuadraturaResponse> {
+  const res = await fetch(`${API_URL}/distribuidora/dispatch-plans/${planId}/cuadratura`, {
+    method: "PUT",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al guardar cuadratura")
+  }
+  return res.json() as Promise<DispatchPlanCuadraturaResponse>
 }
 
 /** Fila de GET /distribuidora/orders/purchase/by-document-ids (preview planificación). */

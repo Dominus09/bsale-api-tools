@@ -438,6 +438,13 @@ def confirm_dispatch_plan(
                 f"estado={existing['status']})."
             )
 
+        from backend.utils.dispatch_plan_picking import resolve_crew_from_route_summary
+
+        crew_driver, crew_assistants, _sello = resolve_crew_from_route_summary(
+            cur,
+            planning_date=pdate,
+            truck_key=frozen_truck_name or (route_name or "").strip(),
+        )
         fields = {
             "plan_session_id": plan_session_id.strip(),
             "planning_date": pdate,
@@ -445,6 +452,8 @@ def confirm_dispatch_plan(
             "route_name": (route_name or "").strip() or pname,
             "planning_name": pname,
             "truck_name": frozen_truck_name,
+            "driver_name": crew_driver or None,
+            "assistant_names": ", ".join(crew_assistants) if crew_assistants else None,
             "status": "planned",
             "driver_count": max(0, int(driver_count)),
             "assistant_count": max(0, int(assistant_count)),
