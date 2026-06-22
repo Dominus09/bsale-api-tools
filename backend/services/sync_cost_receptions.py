@@ -69,6 +69,17 @@ def _fmt_ts(ts: int | float | None) -> str | None:
     return _ts_to_dt(ts).isoformat()
 
 
+def _reception_id_bounds(receptions: list[dict[str, Any]]) -> tuple[int | None, int | None]:
+    ids: list[int] = []
+    for rec in receptions:
+        rec_id = parse_int(rec.get("id"), default=0)
+        if rec_id:
+            ids.append(rec_id)
+    if not ids:
+        return None, None
+    return ids[0], ids[-1]
+
+
 def _is_sql_error(exc: BaseException) -> bool:
     return isinstance(exc, psycopg2.Error)
 
@@ -148,6 +159,9 @@ def _sync_company_receptions(
     lines_n = 0
     max_ts_inserted: int | None = None
     stats = _new_company_stats()
+    first_reception_logged = False
+    first_detail_logged = False
+    first_insert_logged = False
 
     def _log_tax_context_unavailable() -> None:
         if tax_context_log_emitted is not None and tax_context_log_emitted[0]:
@@ -167,25 +181,34 @@ def _sync_company_receptions(
         _ts_to_dt(until_ts),
     )
 
+    logger.info(
+        "[SYNC_STEP_4] Llamada fetch_receptions company_id=%s since_ts=%s until_ts=%s",
+        company_id,
+        since_ts,
+        until_ts,
+    )
     receptions, fetch_meta = iter_receptions_for_sync(
         client, since_ts=since_ts, until_ts=until_ts, limit=LIMIT
     )
     stats.update(fetch_meta)
-
+    first_rec_id, last_rec_id = _reception_id_bounds(receptions)
     logger.info(
-        "COST_SYNC_FETCH company_id=%s strategy=%s pages_read=%s api_count=%s "
-        "order_hint=%s min_admission=%s max_admission=%s receptions_in_window=%s "
-        "receptions_year_2026=%s discarded_old=%s",
+        "[SYNC_STEP_5] Recepciones obtenidas company_id=%s len_receptions=%s "
+        "first_reception_id=%s last_reception_id=%s receptions_in_window=%s "
+        "strategy=%s pages_read=%s",
         company_id,
+        len(receptions),
+        first_rec_id,
+        last_rec_id,
+        fetch_meta.get("receptions_in_window"),
         fetch_meta.get("strategy"),
         fetch_meta.get("pages_read"),
-        fetch_meta.get("api_total_count"),
-        fetch_meta.get("page_order_hint"),
-        _fmt_ts(fetch_meta.get("min_admission_ts")),
-        _fmt_ts(fetch_meta.get("max_admission_ts")),
-        fetch_meta.get("receptions_in_window"),
-        fetch_meta.get("receptions_year_2026"),
-        fetch_meta.get("receptions_discarded_old"),
+    )
+
+    logger.info(
+        "[SYNC_STEP_6] Inicio procesamiento recepciones company_id=%s len_receptions=%s",
+        company_id,
+        len(receptions),
     )
 
     for rec in receptions:
@@ -197,6 +220,15 @@ def _sync_company_receptions(
         if not rec_id:
             continue
         stats["recepciones_leidas"] += 1
+        if not first_reception_logged:
+            logger.info(
+                "[SYNC_STEP_7] Primera recepción procesada company_id=%s "
+                "reception_id=%s admission_ts=%s",
+                company_id,
+                rec_id,
+                _fmt_ts(adm_ts),
+            )
+            first_reception_logged = True
         admission = _ts_to_dt(adm_ts)
         document = (rec.get("document") or "").strip() or None
 
@@ -252,6 +284,16 @@ def _sync_company_receptions(
 
                 cur.execute("SAVEPOINT cost_sync_detail")
                 try:
+                    if not first_detail_logged:
+                        logger.info(
+                            "[SYNC_STEP_8] Primer detalle procesado company_id=%s "
+                            "reception_id=%s reception_detail_id=%s variant_id=%s",
+                            company_id,
+                            rec_id,
+                            detail_id,
+                            variant_id,
+                        )
+                        first_detail_logged = True
                     ctx = repo.variant_tax_context(
                         cur,
                         company_id,
@@ -315,6 +357,16 @@ def _sync_company_receptions(
                             exc,
                         )
 
+                    if not first_insert_logged:
+                        logger.info(
+                            "[SYNC_STEP_9] Insert cost_reception_history company_id=%s "
+                            "reception_id=%s reception_detail_id=%s variant_id=%s",
+                            company_id,
+                            rec_id,
+                            detail_id,
+                            variant_id,
+                        )
+                        first_insert_logged = True
                     inserted = repo.insert_history_line(
                         cur,
                         unique_key=make_unique_key(company_id, detail_id),
@@ -445,28 +497,55 @@ def sync_cost_receptions(
 
         for co in companies:
             cid = co["company_id"]
-            state = repo.get_sync_state(cur, cid)
-            if state and state.get("last_admission_ts"):
-                since_ts = int(state["last_admission_ts"]) - 86400
-                since_mode = "incremental"
-            else:
-                days = lookback_days if lookback_days is not None else INITIAL_LOOKBACK_DAYS
-                since_ts = int(
-                    (datetime.now(timezone.utc) - timedelta(days=days)).timestamp()
-                )
-                since_mode = f"lookback_{days}d"
-
-            _diag(
-                "empresa=%s mode=%s lookback_days_param=%s since_ts=%s state=%s",
-                cid,
-                since_mode,
-                lookback_days,
-                since_ts,
-                state,
-            )
-
-            client = BsaleClient(co["token"])
+            state: dict[str, Any] | None = None
             try:
+                logger.info(
+                    "[SYNC_STEP_1] Inicio sync empresa company_id=%s name=%r",
+                    cid,
+                    co["name"],
+                )
+                state = repo.get_sync_state(cur, cid)
+                logger.info(
+                    "[SYNC_STEP_2] Lectura cost_sync_state company_id=%s state=%s",
+                    cid,
+                    state,
+                )
+                if state and state.get("last_admission_ts"):
+                    since_ts = int(state["last_admission_ts"]) - 86400
+                    since_mode = "incremental"
+                else:
+                    days = (
+                        lookback_days
+                        if lookback_days is not None
+                        else INITIAL_LOOKBACK_DAYS
+                    )
+                    since_ts = int(
+                        (
+                            datetime.now(timezone.utc) - timedelta(days=days)
+                        ).timestamp()
+                    )
+                    since_mode = f"lookback_{days}d"
+
+                logger.info(
+                    "[SYNC_STEP_3] Construcción ventana fechas company_id=%s "
+                    "since_mode=%s since_ts=%s (%s) lookback_days=%s",
+                    cid,
+                    since_mode,
+                    since_ts,
+                    _fmt_ts(since_ts),
+                    lookback_days,
+                )
+
+                _diag(
+                    "empresa=%s mode=%s lookback_days_param=%s since_ts=%s state=%s",
+                    cid,
+                    since_mode,
+                    lookback_days,
+                    since_ts,
+                    state,
+                )
+
+                client = BsaleClient(co["token"])
                 prev_watermark = (
                     int(state["last_admission_ts"])
                     if state and state.get("last_admission_ts")
@@ -523,22 +602,40 @@ def sync_cost_receptions(
                 )
                 summary["total_receptions"] += rec_n
                 summary["total_lines"] += line_n
-            except Exception as exc:
+                logger.info(
+                    "[SYNC_STEP_10] Fin empresa company_id=%s status=ok "
+                    "receptions_inserted=%s lines_inserted=%s "
+                    "recepciones_leidas=%s detalles_leidos=%s",
+                    cid,
+                    rec_n,
+                    line_n,
+                    sync_stats.get("recepciones_leidas", 0),
+                    sync_stats.get("details_read", 0),
+                )
+            except Exception:
                 conn.rollback()
-                logger.exception("Sync costos empresa %s", cid)
+                logger.exception(
+                    "[SYNC_FATAL] company_id=%s name=%r",
+                    cid,
+                    co["name"],
+                )
                 repo.upsert_sync_state(
                     cur,
                     company_id=cid,
                     last_admission_ts=state.get("last_admission_ts") if state else None,
                     status="error",
-                    message=str(exc)[:500],
+                    message="sync fatal — ver logs [SYNC_FATAL]",
                     receptions_inserted=0,
                     lines_inserted=0,
                 )
                 conn.commit()
                 summary["ok"] = False
                 summary["companies"].append(
-                    {"company_id": cid, "name": co["name"], "error": str(exc)}
+                    {
+                        "company_id": cid,
+                        "name": co["name"],
+                        "error": "sync fatal — ver logs [SYNC_FATAL]",
+                    }
                 )
         cur.close()
     finally:
