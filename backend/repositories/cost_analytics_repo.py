@@ -6,10 +6,13 @@ import json
 from datetime import datetime
 from typing import Any
 
+import psycopg2.errors
 from psycopg2.extras import Json
 
 HISTORY = "analytics.cost_reception_history"
 SYNC_STATE = "analytics.cost_sync_state"
+
+_product_column_cache: dict[str, bool] = {}
 
 
 def _cols(cur) -> list[str]:
@@ -211,28 +214,85 @@ def insert_history_line(
     return cur.fetchone() is not None
 
 
-def variant_tax_context(cur, company_id: int, variant_id: int) -> dict[str, Any]:
+def _product_column_exists(cur, column: str) -> bool:
+    key = f"bsale.products.{column}"
+    if key in _product_column_cache:
+        return _product_column_cache[key]
     cur.execute(
         """
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'bsale'
+              AND table_name = 'products'
+              AND column_name = %s
+        )
+        """,
+        (column,),
+    )
+    exists = bool(cur.fetchone()[0])
+    _product_column_cache[key] = exists
+    return exists
+
+
+def _default_tax_context(**extra: Any) -> dict[str, Any]:
+    return {
+        "product_id": extra.get("product_id"),
+        "product_name": extra.get("product_name"),
+        "variant_name": extra.get("variant_name"),
+        "barcode": extra.get("barcode"),
+        "tax_factor": 1.0,
+        "iva_rate": None,
+        "specific_taxes": None,
+        "iva_amount": 0,
+        "other_taxes": 0,
+        "tax_context_available": False,
+    }
+
+
+def variant_tax_context(cur, company_id: int, variant_id: int) -> dict[str, Any]:
+    has_taxes = _product_column_exists(cur, "taxes")
+    has_tax_factor = _product_column_exists(cur, "tax_factor")
+    tax_factor_expr = (
+        "COALESCE(NULLIF(p.tax_factor, 0), 1) AS tax_factor"
+        if has_tax_factor
+        else "1.0 AS tax_factor"
+    )
+    taxes_expr = "p.taxes" if has_taxes else "NULL::jsonb AS taxes"
+    sql = f"""
         SELECT
             v.bsale_id AS variant_id,
             v.product_id,
             v.description AS variant_name,
             v.bar_code AS barcode,
             p.name AS product_name,
-            COALESCE(NULLIF(p.tax_factor, 0), 1) AS tax_factor,
-            p.taxes
+            {tax_factor_expr},
+            {taxes_expr}
         FROM bsale.variants v
         LEFT JOIN bsale.products p
             ON p.company_id = v.company_id AND p.bsale_id = v.product_id
         WHERE v.company_id = %s AND v.bsale_id = %s
         LIMIT 1
-        """,
-        (company_id, variant_id),
-    )
+        """
+    try:
+        cur.execute(sql, (company_id, variant_id))
+    except psycopg2.errors.UndefinedColumn:
+        _product_column_cache.clear()
+        cur.connection.rollback()
+        return _default_tax_context()
     row = cur.fetchone()
     if not row:
-        return {"tax_factor": 1.0, "iva_rate": None, "specific_taxes": None}
+        return _default_tax_context()
+
+    if not has_taxes:
+        d = _row_dict(cur, row)
+        return _default_tax_context(
+            product_id=d.get("product_id"),
+            product_name=d.get("product_name"),
+            variant_name=d.get("variant_name"),
+            barcode=d.get("barcode"),
+        )
+
     d = _row_dict(cur, row)
     taxes = d.get("taxes")
     if isinstance(taxes, str):
@@ -254,6 +314,9 @@ def variant_tax_context(cur, company_id: int, variant_id: int) -> dict[str, Any]
         "tax_factor": float(d.get("tax_factor") or 1),
         "iva_rate": iva_rate,
         "specific_taxes": taxes,
+        "iva_amount": 0,
+        "other_taxes": 0,
+        "tax_context_available": True,
     }
 
 

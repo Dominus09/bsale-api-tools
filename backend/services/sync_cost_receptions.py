@@ -74,6 +74,7 @@ def _sync_company_receptions(
     company_name: str,
     client: BsaleClient,
     since_ts: int,
+    tax_context_log_emitted: list[bool] | None = None,
 ) -> tuple[int, int, int | None, dict[str, Any]]:
     """
     Returns (receptions_inserted, lines_inserted, max_admission_ts_inserted, stats).
@@ -89,6 +90,15 @@ def _sync_company_receptions(
         "details_discarded_no_variant": 0,
         "lines_inserted": 0,
     }
+
+    def _log_tax_context_unavailable() -> None:
+        if tax_context_log_emitted is not None and tax_context_log_emitted[0]:
+            return
+        logger.info(
+            "[COST_SYNC] tax_context_not_available using_net_cost_only=true"
+        )
+        if tax_context_log_emitted is not None:
+            tax_context_log_emitted[0] = True
 
     until_ts = int(datetime.now(timezone.utc).timestamp())
     _diag(
@@ -183,11 +193,22 @@ def _sync_company_receptions(
 
                 ctx = repo.variant_tax_context(cur, company_id, variant_id)
                 cost_net = parse_float(line.get("cost"), default=0.0)
-                tf = parse_float(ctx.get("tax_factor"), default=1.0)
-                iva_rate = ctx.get("iva_rate")
-                iva_amt, other_tax, bruto = split_erp_cost(
-                    cost_net, tax_factor=tf, iva_rate=iva_rate
-                )
+                if not ctx.get("tax_context_available", True):
+                    _log_tax_context_unavailable()
+                    tf = 1.0
+                    iva_rate = None
+                    iva_amt = 0.0
+                    other_tax = 0.0
+                    bruto = cost_net
+                else:
+                    tf = parse_float(ctx.get("tax_factor"), default=1.0)
+                    iva_rate = ctx.get("iva_rate")
+                    iva_amt, other_tax, bruto = split_erp_cost(
+                        cost_net, tax_factor=tf, iva_rate=iva_rate
+                    )
+                    iva_amt = float(iva_amt)
+                    other_tax = float(other_tax)
+                    bruto = float(bruto)
                 qty = parse_float(line.get("quantity"), default=0.0)
                 prev = repo.previous_cost_for_variant(
                     cur,
@@ -203,11 +224,14 @@ def _sync_company_receptions(
                     costs = client.get(f"/variants/{variant_id}/costs.json")
                     avg = costs.get("averageCost")
                     average_cost = parse_optional_float(avg)
-                    avg_gross = (
-                        float(cost_gross_from_net(average_cost, tf))
-                        if average_cost is not None
-                        else None
-                    )
+                    if ctx.get("tax_context_available", True):
+                        avg_gross = (
+                            float(cost_gross_from_net(average_cost, tf))
+                            if average_cost is not None
+                            else None
+                        )
+                    else:
+                        avg_gross = average_cost
                     repo.upsert_variant_cost_snapshot(
                         cur,
                         company_id=company_id,
@@ -244,9 +268,9 @@ def _sync_company_receptions(
                     admission_date=admission,
                     quantity=qty,
                     cost_net=cost_net,
-                    iva_amount=float(iva_amt),
-                    other_taxes=float(other_tax),
-                    cost_bruto_erp=float(bruto),
+                    iva_amount=iva_amt,
+                    other_taxes=other_tax,
+                    cost_bruto_erp=bruto,
                     average_cost=average_cost,
                     variation_pct=var_pct,
                 )
@@ -304,6 +328,8 @@ def sync_cost_receptions(
         if not companies:
             raise ValueError("No hay empresas activas con token Bsale configurado.")
 
+        tax_context_log_emitted = [False]
+
         for co in companies:
             cid = co["company_id"]
             state = repo.get_sync_state(cur, cid)
@@ -339,6 +365,7 @@ def sync_cost_receptions(
                     company_name=co["name"],
                     client=client,
                     since_ts=since_ts,
+                    tax_context_log_emitted=tax_context_log_emitted,
                 )
                 if line_n > 0 and max_ts_inserted is not None:
                     new_watermark = max_ts_inserted
