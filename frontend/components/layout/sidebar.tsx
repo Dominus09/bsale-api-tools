@@ -32,7 +32,6 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Percent,
-  Scale,
   UserCircle2,
   Stethoscope,
   PackageCheck,
