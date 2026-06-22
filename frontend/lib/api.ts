@@ -566,6 +566,94 @@ export async function getMarginAnalysisView(
   return Array.isArray(data) ? data : []
 }
 
+export type MarginRuleRow = {
+  id: number
+  company_id: number
+  company_name?: string | null
+  price_list_id: number
+  price_list_name?: string | null
+  product_type_id?: number | null
+  product_type_name?: string | null
+  min_margin: number
+  max_margin: number
+  active: boolean
+  notes?: string | null
+  rule_key: string
+}
+
+export async function getMarginRules(params?: {
+  company_id?: number
+  price_list_id?: number
+  product_type_id?: number
+  active?: "all" | "active" | "inactive"
+}): Promise<{ items: MarginRuleRow[]; count: number }> {
+  const qs = new URLSearchParams()
+  if (params?.company_id != null) qs.set("company_id", String(params.company_id))
+  if (params?.price_list_id != null) qs.set("price_list_id", String(params.price_list_id))
+  if (params?.product_type_id != null) qs.set("product_type_id", String(params.product_type_id))
+  if (params?.active === "active") qs.set("active", "true")
+  else if (params?.active === "inactive") qs.set("active", "false")
+  else if (params?.active === "all") qs.set("active", "all")
+  const res = await fetch(`${API_URL}/margin-rules?${qs}`, { headers: getAuthHeaders() })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar reglas de margen")
+  }
+  return res.json() as Promise<{ items: MarginRuleRow[]; count: number }>
+}
+
+export async function patchMarginRule(
+  ruleId: number,
+  body: {
+    min_margin: number
+    max_margin: number
+    active: boolean
+    notes?: string | null
+  },
+): Promise<{ item: MarginRuleRow; warnings?: string[] }> {
+  const res = await fetch(`${API_URL}/margin-rules/${ruleId}`, {
+    method: "PATCH",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al guardar regla")
+  }
+  return res.json() as Promise<{ item: MarginRuleRow; warnings?: string[] }>
+}
+
+export async function downloadMarginRulesExcel(params?: {
+  company_id?: number
+  price_list_id?: number
+  product_type_id?: number
+  active?: "all" | "active" | "inactive"
+}): Promise<void> {
+  const qs = new URLSearchParams()
+  if (params?.company_id != null) qs.set("company_id", String(params.company_id))
+  if (params?.price_list_id != null) qs.set("price_list_id", String(params.price_list_id))
+  if (params?.product_type_id != null) qs.set("product_type_id", String(params.product_type_id))
+  if (params?.active === "active") qs.set("active", "true")
+  else if (params?.active === "inactive") qs.set("active", "false")
+  const res = await fetch(`${API_URL}/margin-rules/export?${qs}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al exportar reglas")
+  }
+  const blob = await res.blob()
+  const cd = res.headers.get("Content-Disposition")
+  const m = cd?.match(/filename="([^"]+)"/)
+  const name = m?.[1] ?? "politica_margenes.xlsx"
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = name
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 export async function getProductsWithoutCost(): Promise<ProductWithoutCost[]> {
   try {
     const companyId = getCompanyId()

@@ -32,6 +32,7 @@ import {
   ChevronsLeft,
   ChevronsRight,
   Percent,
+  Scale,
   UserCircle2,
   Stethoscope,
   PackageCheck,
@@ -59,6 +60,7 @@ const navSections: { title: string; items: NavItem[] }[] = [
       { href: "/margins", label: "Márgenes", icon: TrendingUp },
       { href: "/alerts", label: "Alertas", icon: AlertTriangle },
       { href: "/promotions", label: "Promociones", icon: Percent },
+      { href: "/politica-margenes", label: "Política de Márgenes", icon: Scale },
     ],
   },
   {
