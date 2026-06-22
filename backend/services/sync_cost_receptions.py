@@ -8,6 +8,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import psycopg2
+
 from backend.db import get_connection
 from backend.repositories import cost_analytics_repo as repo
 from backend.services.cost_receptions_fetch import iter_receptions_for_sync
@@ -67,6 +69,67 @@ def _fmt_ts(ts: int | float | None) -> str | None:
     return _ts_to_dt(ts).isoformat()
 
 
+def _is_sql_error(exc: BaseException) -> bool:
+    return isinstance(exc, psycopg2.Error)
+
+
+def _is_tax_related_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return "tax" in msg or "p.taxes" in msg
+
+
+def _new_company_stats() -> dict[str, Any]:
+    return {
+        "details_read": 0,
+        "details_discarded_exists": 0,
+        "details_discarded_no_variant": 0,
+        "lines_inserted": 0,
+        "recepciones_leidas": 0,
+        "errores_tributarios": 0,
+        "errores_sql": 0,
+        "errores_generales": 0,
+        "tax_audit": {
+            "calls": 0,
+            "fallback": 0,
+            "p_taxes_attempted": 0,
+            "errors": 0,
+        },
+    }
+
+
+def _log_company_summary(
+    company_id: int,
+    company_name: str,
+    stats: dict[str, Any],
+    *,
+    receptions_inserted: int,
+) -> None:
+    tax_audit = stats.get("tax_audit") or {}
+    logger.info(
+        "COMPANY %s SUMMARY company_id=%s name=%r recepciones_leidas=%s "
+        "detalles_leidos=%s detalles_insertados=%s recepciones_insertadas=%s "
+        "errores_tributarios=%s errores_sql=%s errores_generales=%s "
+        "tax_calls=%s tax_fallback=%s tax_p_taxes_attempted=%s tax_errors=%s "
+        "details_discarded_exists=%s details_discarded_no_variant=%s",
+        company_id,
+        company_id,
+        company_name,
+        stats.get("recepciones_leidas", 0),
+        stats.get("details_read", 0),
+        stats.get("lines_inserted", 0),
+        receptions_inserted,
+        stats.get("errores_tributarios", 0),
+        stats.get("errores_sql", 0),
+        stats.get("errores_generales", 0),
+        tax_audit.get("calls", 0),
+        tax_audit.get("fallback", 0),
+        tax_audit.get("p_taxes_attempted", 0),
+        tax_audit.get("errors", 0),
+        stats.get("details_discarded_exists", 0),
+        stats.get("details_discarded_no_variant", 0),
+    )
+
+
 def _sync_company_receptions(
     cur,
     *,
@@ -84,12 +147,7 @@ def _sync_company_receptions(
     receptions_n = 0
     lines_n = 0
     max_ts_inserted: int | None = None
-    stats: dict[str, Any] = {
-        "details_read": 0,
-        "details_discarded_exists": 0,
-        "details_discarded_no_variant": 0,
-        "lines_inserted": 0,
-    }
+    stats = _new_company_stats()
 
     def _log_tax_context_unavailable() -> None:
         if tax_context_log_emitted is not None and tax_context_log_emitted[0]:
@@ -138,6 +196,7 @@ def _sync_company_receptions(
         rec_id = parse_int(rec.get("id"), default=0)
         if not rec_id:
             continue
+        stats["recepciones_leidas"] += 1
         admission = _ts_to_dt(adm_ts)
         document = (rec.get("document") or "").strip() or None
 
@@ -191,89 +250,121 @@ def _sync_company_receptions(
                     )
                     continue
 
-                ctx = repo.variant_tax_context(cur, company_id, variant_id)
-                cost_net = parse_float(line.get("cost"), default=0.0)
-                if not ctx.get("tax_context_available", True):
-                    _log_tax_context_unavailable()
-                    tf = 1.0
-                    iva_rate = None
-                    iva_amt = 0.0
-                    other_tax = 0.0
-                    bruto = cost_net
-                else:
-                    tf = parse_float(ctx.get("tax_factor"), default=1.0)
-                    iva_rate = ctx.get("iva_rate")
-                    iva_amt, other_tax, bruto = split_erp_cost(
-                        cost_net, tax_factor=tf, iva_rate=iva_rate
-                    )
-                    iva_amt = float(iva_amt)
-                    other_tax = float(other_tax)
-                    bruto = float(bruto)
-                qty = parse_float(line.get("quantity"), default=0.0)
-                prev = repo.previous_cost_for_variant(
-                    cur,
-                    company_id=company_id,
-                    variant_id=variant_id,
-                    office_id=office_id,
-                    before=admission,
-                )
-                var_pct = variation_pct(cost_net, prev)
-                average_cost: float | None = None
-
+                cur.execute("SAVEPOINT cost_sync_detail")
                 try:
-                    costs = client.get(f"/variants/{variant_id}/costs.json")
-                    avg = costs.get("averageCost")
-                    average_cost = parse_optional_float(avg)
-                    if ctx.get("tax_context_available", True):
-                        avg_gross = (
-                            float(cost_gross_from_net(average_cost, tf))
-                            if average_cost is not None
-                            else None
-                        )
+                    ctx = repo.variant_tax_context(
+                        cur,
+                        company_id,
+                        variant_id,
+                        tax_audit=stats["tax_audit"],
+                    )
+                    cost_net = parse_float(line.get("cost"), default=0.0)
+                    if not ctx.get("tax_context_available", True):
+                        _log_tax_context_unavailable()
+                        tf = 1.0
+                        iva_rate = None
+                        iva_amt = 0.0
+                        other_tax = 0.0
+                        bruto = cost_net
                     else:
-                        avg_gross = average_cost
-                    repo.upsert_variant_cost_snapshot(
+                        tf = parse_float(ctx.get("tax_factor"), default=1.0)
+                        iva_rate = ctx.get("iva_rate")
+                        iva_amt, other_tax, bruto = split_erp_cost(
+                            cost_net, tax_factor=tf, iva_rate=iva_rate
+                        )
+                        iva_amt = float(iva_amt)
+                        other_tax = float(other_tax)
+                        bruto = float(bruto)
+                    qty = parse_float(line.get("quantity"), default=0.0)
+                    prev = repo.previous_cost_for_variant(
                         cur,
                         company_id=company_id,
                         variant_id=variant_id,
-                        average_cost_net=average_cost,
-                        average_cost_gross=avg_gross,
-                        tax_factor=tf,
-                        iva_rate=iva_rate,
-                        specific_taxes=ctx.get("specific_taxes"),
+                        office_id=office_id,
+                        before=admission,
                     )
-                except Exception as exc:
-                    logger.warning(
-                        "No se pudo refrescar costs.json variant=%s: %s",
-                        variant_id,
-                        exc,
-                    )
+                    var_pct = variation_pct(cost_net, prev)
+                    average_cost: float | None = None
 
-                inserted = repo.insert_history_line(
-                    cur,
-                    unique_key=make_unique_key(company_id, detail_id),
-                    company_id=company_id,
-                    company_name=company_name,
-                    office_id=office_id,
-                    office_name=office_name,
-                    variant_id=variant_id,
-                    product_id=parse_optional_int(ctx.get("product_id")),
-                    barcode=ctx.get("barcode"),
-                    product_name=ctx.get("product_name"),
-                    variant_name=ctx.get("variant_name"),
-                    reception_id=rec_id,
-                    reception_detail_id=detail_id,
-                    document=document,
-                    document_number=doc_num,
-                    admission_date=admission,
-                    quantity=qty,
-                    cost_net=cost_net,
-                    iva_amount=iva_amt,
-                    other_taxes=other_tax,
-                    cost_bruto_erp=bruto,
-                    average_cost=average_cost,
-                    variation_pct=var_pct,
-                )
+                    try:
+                        costs = client.get(f"/variants/{variant_id}/costs.json")
+                        avg = costs.get("averageCost")
+                        average_cost = parse_optional_float(avg)
+                        if ctx.get("tax_context_available", True):
+                            avg_gross = (
+                                float(cost_gross_from_net(average_cost, tf))
+                                if average_cost is not None
+                                else None
+                            )
+                        else:
+                            avg_gross = average_cost
+                        repo.upsert_variant_cost_snapshot(
+                            cur,
+                            company_id=company_id,
+                            variant_id=variant_id,
+                            average_cost_net=average_cost,
+                            average_cost_gross=avg_gross,
+                            tax_factor=tf,
+                            iva_rate=iva_rate,
+                            specific_taxes=ctx.get("specific_taxes"),
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "No se pudo refrescar costs.json variant=%s: %s",
+                            variant_id,
+                            exc,
+                        )
+
+                    inserted = repo.insert_history_line(
+                        cur,
+                        unique_key=make_unique_key(company_id, detail_id),
+                        company_id=company_id,
+                        company_name=company_name,
+                        office_id=office_id,
+                        office_name=office_name,
+                        variant_id=variant_id,
+                        product_id=parse_optional_int(ctx.get("product_id")),
+                        barcode=ctx.get("barcode"),
+                        product_name=ctx.get("product_name"),
+                        variant_name=ctx.get("variant_name"),
+                        reception_id=rec_id,
+                        reception_detail_id=detail_id,
+                        document=document,
+                        document_number=doc_num,
+                        admission_date=admission,
+                        quantity=qty,
+                        cost_net=cost_net,
+                        iva_amount=iva_amt,
+                        other_taxes=other_tax,
+                        cost_bruto_erp=bruto,
+                        average_cost=average_cost,
+                        variation_pct=var_pct,
+                    )
+                    cur.execute("RELEASE SAVEPOINT cost_sync_detail")
+                except Exception as exc:
+                    try:
+                        cur.execute("ROLLBACK TO SAVEPOINT cost_sync_detail")
+                    except Exception:
+                        try:
+                            cur.connection.rollback()
+                        except Exception:
+                            pass
+                    stats["errores_generales"] += 1
+                    if _is_sql_error(exc):
+                        stats["errores_sql"] += 1
+                    if _is_tax_related_error(exc):
+                        stats["errores_tributarios"] += 1
+                    logger.exception(
+                        "[COST_SYNC_DETAIL_ERROR] company_id=%s reception_id=%s "
+                        "reception_detail_id=%s variant_id=%s error_type=%s",
+                        company_id,
+                        rec_id,
+                        detail_id,
+                        variant_id,
+                        type(exc).__name__,
+                    )
+                    continue
+
                 if inserted:
                     new_lines_in_rec += 1
                     lines_n += 1
@@ -292,10 +383,13 @@ def _sync_company_receptions(
 
         time.sleep(THROTTLE_SEC)
 
+    tax_audit = stats.get("tax_audit") or {}
     logger.info(
         "COST_SYNC company_id=%s receptions_processed=%s receptions_inserted=%s "
         "details_read=%s details_discarded_exists=%s details_discarded_no_variant=%s "
-        "lines_inserted=%s watermark_ts=%s",
+        "lines_inserted=%s watermark_ts=%s tax_calls=%s tax_fallback=%s "
+        "tax_p_taxes_attempted=%s tax_errors=%s errores_tributarios=%s "
+        "errores_sql=%s errores_generales=%s",
         company_id,
         len(receptions),
         receptions_n,
@@ -304,6 +398,19 @@ def _sync_company_receptions(
         stats["details_discarded_no_variant"],
         stats["lines_inserted"],
         _fmt_ts(max_ts_inserted),
+        tax_audit.get("calls", 0),
+        tax_audit.get("fallback", 0),
+        tax_audit.get("p_taxes_attempted", 0),
+        tax_audit.get("errors", 0),
+        stats.get("errores_tributarios", 0),
+        stats.get("errores_sql", 0),
+        stats.get("errores_generales", 0),
+    )
+    _log_company_summary(
+        company_id,
+        company_name,
+        stats,
+        receptions_inserted=receptions_n,
     )
     return receptions_n, lines_n, max_ts_inserted, stats
 
@@ -322,6 +429,12 @@ def sync_cost_receptions(
     }
     try:
         cur = conn.cursor()
+        repo.reset_product_column_cache()
+        repo.log_bsale_products_schema(cur)
+        logger.info(
+            "[COST_SYNC_AUDIT] p.taxes references in Python runtime: "
+            "cost_analytics_repo.variant_tax_context (conditional on has_taxes column)"
+        )
         companies = _load_companies(cur)
         if company_id is not None:
             companies = [c for c in companies if c["company_id"] == company_id]

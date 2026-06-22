@@ -3,16 +3,57 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from typing import Any
 
-import psycopg2.errors
+import psycopg2
 from psycopg2.extras import Json
+
+logger = logging.getLogger(__name__)
 
 HISTORY = "analytics.cost_reception_history"
 SYNC_STATE = "analytics.cost_sync_state"
 
 _product_column_cache: dict[str, bool] = {}
+
+
+def reset_product_column_cache() -> None:
+    _product_column_cache.clear()
+
+
+def log_bsale_products_schema(cur) -> list[str]:
+    """Introspección bsale.products — columnas reales en PG."""
+    cur.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'bsale'
+          AND table_name = 'products'
+        ORDER BY ordinal_position
+        """
+    )
+    columns = [row[0] for row in cur.fetchall()]
+    tax_cols = [
+        c
+        for c in columns
+        if "tax" in c.lower()
+    ]
+    logger.info(
+        "[COST_SYNC_SCHEMA] bsale.products column_count=%s columns=%s",
+        len(columns),
+        columns,
+    )
+    logger.info(
+        "[COST_SYNC_SCHEMA] tax_related_columns=%s "
+        "has_taxes=%s has_tax=%s has_tax_id=%s has_taxes_json=%s",
+        tax_cols,
+        "taxes" in columns,
+        "tax" in columns,
+        "tax_id" in columns,
+        "taxes_json" in columns,
+    )
+    return columns
 
 
 def _cols(cur) -> list[str]:
@@ -218,19 +259,31 @@ def _product_column_exists(cur, column: str) -> bool:
     key = f"bsale.products.{column}"
     if key in _product_column_cache:
         return _product_column_cache[key]
-    cur.execute(
-        """
-        SELECT EXISTS (
-            SELECT 1
-            FROM information_schema.columns
-            WHERE table_schema = 'bsale'
-              AND table_name = 'products'
-              AND column_name = %s
+    try:
+        cur.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'bsale'
+                  AND table_name = 'products'
+                  AND column_name = %s
+            )
+            """,
+            (column,),
         )
-        """,
-        (column,),
-    )
-    exists = bool(cur.fetchone()[0])
+        exists = bool(cur.fetchone()[0])
+    except Exception as exc:
+        logger.warning(
+            "[COST_SYNC_SCHEMA] column_exists check failed column=%s error=%s",
+            column,
+            exc,
+        )
+        try:
+            cur.connection.rollback()
+        except Exception:
+            pass
+        exists = False
     _product_column_cache[key] = exists
     return exists
 
@@ -250,74 +303,185 @@ def _default_tax_context(**extra: Any) -> dict[str, Any]:
     }
 
 
-def variant_tax_context(cur, company_id: int, variant_id: int) -> dict[str, Any]:
-    has_taxes = _product_column_exists(cur, "taxes")
-    has_tax_factor = _product_column_exists(cur, "tax_factor")
-    tax_factor_expr = (
-        "COALESCE(NULLIF(p.tax_factor, 0), 1) AS tax_factor"
-        if has_tax_factor
-        else "1.0 AS tax_factor"
+def _bump_tax_audit(tax_audit: dict[str, int] | None, key: str, n: int = 1) -> None:
+    if tax_audit is not None:
+        tax_audit[key] = int(tax_audit.get(key, 0)) + n
+
+
+def _log_tax_context_call(
+    *,
+    company_id: int,
+    variant_id: int,
+    tax_context_available: bool,
+    has_taxes: bool,
+    used_fallback: bool,
+    error: str | None = None,
+) -> None:
+    logger.info(
+        "[COST_SYNC_TAX] company_id=%s variant_id=%s tax_context_available=%s "
+        "has_taxes_column=%s used_fallback=%s error=%s",
+        company_id,
+        variant_id,
+        tax_context_available,
+        has_taxes,
+        used_fallback,
+        error,
+        extra={
+            "company_id": company_id,
+            "variant_id": variant_id,
+            "tax_context_available": tax_context_available,
+            "has_taxes_column": has_taxes,
+            "used_fallback": used_fallback,
+            "error": error,
+        },
     )
-    taxes_expr = "p.taxes" if has_taxes else "NULL::jsonb AS taxes"
-    sql = f"""
-        SELECT
-            v.bsale_id AS variant_id,
-            v.product_id,
-            v.description AS variant_name,
-            v.bar_code AS barcode,
-            p.name AS product_name,
-            {tax_factor_expr},
-            {taxes_expr}
-        FROM bsale.variants v
-        LEFT JOIN bsale.products p
-            ON p.company_id = v.company_id AND p.bsale_id = v.product_id
-        WHERE v.company_id = %s AND v.bsale_id = %s
-        LIMIT 1
-        """
+
+
+def variant_tax_context(
+    cur,
+    company_id: int,
+    variant_id: int,
+    *,
+    tax_audit: dict[str, int] | None = None,
+    tax_log_sample_limit: int = 5,
+) -> dict[str, Any]:
+    """
+    Contexto tributario por variant. Modo degradado absoluto: cualquier fallo SQL
+    retorna defaults sin propagar excepción.
+    """
+    _bump_tax_audit(tax_audit, "calls")
+    has_taxes = False
+    used_fallback = False
     try:
-        cur.execute(sql, (company_id, variant_id))
-    except psycopg2.errors.UndefinedColumn:
-        _product_column_cache.clear()
-        cur.connection.rollback()
-        return _default_tax_context()
-    row = cur.fetchone()
-    if not row:
-        return _default_tax_context()
-
-    if not has_taxes:
-        d = _row_dict(cur, row)
-        return _default_tax_context(
-            product_id=d.get("product_id"),
-            product_name=d.get("product_name"),
-            variant_name=d.get("variant_name"),
-            barcode=d.get("barcode"),
+        has_taxes = _product_column_exists(cur, "taxes")
+        has_tax_factor = _product_column_exists(cur, "tax_factor")
+        if has_taxes:
+            _bump_tax_audit(tax_audit, "p_taxes_attempted")
+        tax_factor_expr = (
+            "COALESCE(NULLIF(p.tax_factor, 0), 1) AS tax_factor"
+            if has_tax_factor
+            else "1.0 AS tax_factor"
         )
+        taxes_expr = "p.taxes" if has_taxes else "NULL::jsonb AS taxes"
+        sql = f"""
+            SELECT
+                v.bsale_id AS variant_id,
+                v.product_id,
+                v.description AS variant_name,
+                v.bar_code AS barcode,
+                p.name AS product_name,
+                {tax_factor_expr},
+                {taxes_expr}
+            FROM bsale.variants v
+            LEFT JOIN bsale.products p
+                ON p.company_id = v.company_id AND p.bsale_id = v.product_id
+            WHERE v.company_id = %s AND v.bsale_id = %s
+            LIMIT 1
+            """
+        cur.execute(sql, (company_id, variant_id))
+        row = cur.fetchone()
+        if not row:
+            used_fallback = True
+            _bump_tax_audit(tax_audit, "fallback")
+            result = _default_tax_context()
+            if int(tax_audit.get("_logged", 0) if tax_audit else 0) < tax_log_sample_limit:
+                _log_tax_context_call(
+                    company_id=company_id,
+                    variant_id=variant_id,
+                    tax_context_available=False,
+                    has_taxes=has_taxes,
+                    used_fallback=True,
+                    error="no_row",
+                )
+                if tax_audit is not None:
+                    tax_audit["_logged"] = int(tax_audit.get("_logged", 0)) + 1
+            return result
 
-    d = _row_dict(cur, row)
-    taxes = d.get("taxes")
-    if isinstance(taxes, str):
+        if not has_taxes:
+            d = _row_dict(cur, row)
+            used_fallback = True
+            _bump_tax_audit(tax_audit, "fallback")
+            result = _default_tax_context(
+                product_id=d.get("product_id"),
+                product_name=d.get("product_name"),
+                variant_name=d.get("variant_name"),
+                barcode=d.get("barcode"),
+            )
+            if int(tax_audit.get("_logged", 0) if tax_audit else 0) < tax_log_sample_limit:
+                _log_tax_context_call(
+                    company_id=company_id,
+                    variant_id=variant_id,
+                    tax_context_available=False,
+                    has_taxes=False,
+                    used_fallback=True,
+                )
+                if tax_audit is not None:
+                    tax_audit["_logged"] = int(tax_audit.get("_logged", 0)) + 1
+            return result
+
+        d = _row_dict(cur, row)
+        taxes = d.get("taxes")
+        if isinstance(taxes, str):
+            try:
+                taxes = json.loads(taxes)
+            except json.JSONDecodeError:
+                taxes = None
+        iva_rate = None
+        if isinstance(taxes, list) and taxes:
+            try:
+                iva_rate = float(
+                    taxes[0].get("percentage") or taxes[0].get("rate") or 0
+                )
+            except (TypeError, ValueError, AttributeError):
+                iva_rate = None
+        result = {
+            "product_id": d.get("product_id"),
+            "product_name": d.get("product_name"),
+            "variant_name": d.get("variant_name"),
+            "barcode": d.get("barcode"),
+            "tax_factor": float(d.get("tax_factor") or 1),
+            "iva_rate": iva_rate,
+            "specific_taxes": taxes,
+            "iva_amount": 0,
+            "other_taxes": 0,
+            "tax_context_available": True,
+        }
+        if int(tax_audit.get("_logged", 0) if tax_audit else 0) < tax_log_sample_limit:
+            _log_tax_context_call(
+                company_id=company_id,
+                variant_id=variant_id,
+                tax_context_available=True,
+                has_taxes=True,
+                used_fallback=False,
+            )
+            if tax_audit is not None:
+                tax_audit["_logged"] = int(tax_audit.get("_logged", 0)) + 1
+        return result
+    except Exception as exc:
+        _product_column_cache.clear()
+        used_fallback = True
+        _bump_tax_audit(tax_audit, "fallback")
+        _bump_tax_audit(tax_audit, "errors")
         try:
-            taxes = json.loads(taxes)
-        except json.JSONDecodeError:
-            taxes = None
-    iva_rate = None
-    if isinstance(taxes, list) and taxes:
-        try:
-            iva_rate = float(taxes[0].get("percentage") or taxes[0].get("rate") or 0)
-        except (TypeError, ValueError, AttributeError):
-            iva_rate = None
-    return {
-        "product_id": d.get("product_id"),
-        "product_name": d.get("product_name"),
-        "variant_name": d.get("variant_name"),
-        "barcode": d.get("barcode"),
-        "tax_factor": float(d.get("tax_factor") or 1),
-        "iva_rate": iva_rate,
-        "specific_taxes": taxes,
-        "iva_amount": 0,
-        "other_taxes": 0,
-        "tax_context_available": True,
-    }
+            cur.connection.rollback()
+        except Exception:
+            pass
+        err = f"{type(exc).__name__}: {exc}"
+        logger.warning(
+            "[COST_SYNC_TAX] degraded company_id=%s variant_id=%s error=%s",
+            company_id,
+            variant_id,
+            err,
+        )
+        _log_tax_context_call(
+            company_id=company_id,
+            variant_id=variant_id,
+            tax_context_available=False,
+            has_taxes=has_taxes,
+            used_fallback=True,
+            error=err,
+        )
+        return _default_tax_context()
 
 
 def upsert_variant_cost_snapshot(
