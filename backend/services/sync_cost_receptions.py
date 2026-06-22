@@ -12,6 +12,12 @@ from backend.db import get_connection
 from backend.repositories import cost_analytics_repo as repo
 from backend.services.cost_receptions_fetch import iter_receptions_for_sync
 from backend.services.distribuidora.bsale_client import BsaleClient
+from backend.utils.bsale_field_parse import (
+    parse_float,
+    parse_int,
+    parse_optional_float,
+    parse_optional_int,
+)
 from backend.utils.cost_analytics_calc import (
     cost_gross_from_net,
     make_unique_key,
@@ -115,18 +121,27 @@ def _sync_company_receptions(
     )
 
     for rec in receptions:
-        adm_ts = int(rec.get("admissionDate") or 0)
+        adm_ts = parse_int(rec.get("admissionDate"), default=0)
         if adm_ts < since_ts:
             continue
 
-        rec_id = int(rec["id"])
-        admission = _ts_to_dt(adm_ts)
-        if not isinstance(admission, datetime):
+        rec_id = parse_int(rec.get("id"), default=0)
+        if not rec_id:
             continue
+        admission = _ts_to_dt(adm_ts)
         document = (rec.get("document") or "").strip() or None
-        doc_num = int(rec["documentNumber"]) if rec.get("documentNumber") is not None else None
+
+        raw_doc_num = rec.get("documentNumber")
+        doc_num = parse_optional_int(raw_doc_num)
+        if doc_num is None:
+            logger.info(
+                "[COST_SYNC] recepcion_id=%s document_number_raw=%r",
+                rec_id,
+                raw_doc_num if raw_doc_num is not None else "",
+            )
+
         office = rec.get("office") or {}
-        office_id = int(office["id"]) if office.get("id") is not None else None
+        office_id = parse_optional_int(office.get("id"))
         office_name = office.get("name")
 
         detail_offset = 0
@@ -142,7 +157,9 @@ def _sync_company_receptions(
                 break
 
             for line in det_items:
-                detail_id = int(line["id"])
+                detail_id = parse_int(line.get("id"), default=0)
+                if not detail_id:
+                    continue
                 stats["details_read"] += 1
                 if repo.line_exists(cur, company_id, detail_id):
                     stats["details_discarded_exists"] += 1
@@ -154,7 +171,7 @@ def _sync_company_receptions(
                     continue
 
                 variant_node = line.get("variant") or {}
-                variant_id = int(variant_node.get("id") or 0)
+                variant_id = parse_int(variant_node.get("id"), default=0)
                 if not variant_id:
                     stats["details_discarded_no_variant"] += 1
                     _diag(
@@ -165,13 +182,13 @@ def _sync_company_receptions(
                     continue
 
                 ctx = repo.variant_tax_context(cur, company_id, variant_id)
-                cost_net = float(line.get("cost") or 0)
-                tf = float(ctx.get("tax_factor") or 1)
+                cost_net = parse_float(line.get("cost"), default=0.0)
+                tf = parse_float(ctx.get("tax_factor"), default=1.0)
                 iva_rate = ctx.get("iva_rate")
                 iva_amt, other_tax, bruto = split_erp_cost(
                     cost_net, tax_factor=tf, iva_rate=iva_rate
                 )
-                qty = float(line.get("quantity") or 0)
+                qty = parse_float(line.get("quantity"), default=0.0)
                 prev = repo.previous_cost_for_variant(
                     cur,
                     company_id=company_id,
@@ -185,7 +202,7 @@ def _sync_company_receptions(
                 try:
                     costs = client.get(f"/variants/{variant_id}/costs.json")
                     avg = costs.get("averageCost")
-                    average_cost = float(avg) if avg is not None else None
+                    average_cost = parse_optional_float(avg)
                     avg_gross = (
                         float(cost_gross_from_net(average_cost, tf))
                         if average_cost is not None
@@ -216,7 +233,7 @@ def _sync_company_receptions(
                     office_id=office_id,
                     office_name=office_name,
                     variant_id=variant_id,
-                    product_id=int(ctx["product_id"]) if ctx.get("product_id") else None,
+                    product_id=parse_optional_int(ctx.get("product_id")),
                     barcode=ctx.get("barcode"),
                     product_name=ctx.get("product_name"),
                     variant_name=ctx.get("variant_name"),
