@@ -17,8 +17,9 @@ from datetime import datetime, timedelta, timezone
 
 from backend.db import get_connection
 from backend.repositories import cost_analytics_repo as repo
+from backend.services.cost_receptions_fetch import iter_receptions_for_sync
 from backend.services.distribuidora.bsale_client import BsaleClient
-from backend.services.sync_cost_receptions import INITIAL_LOOKBACK_DAYS, LIMIT
+from backend.services.sync_cost_receptions import INITIAL_LOOKBACK_DAYS
 
 HISTORY = "analytics.cost_reception_history"
 SYNC_STATE = "analytics.cost_sync_state"
@@ -81,90 +82,37 @@ def _scan_bsale(
     since_ts: int,
     window_days: int,
 ) -> dict:
+    """Usa la misma estrategia de fetch que el sync (día + fallback)."""
+    now_ts = int(datetime.now(timezone.utc).timestamp())
     window_start = int(
         (datetime.now(timezone.utc) - timedelta(days=window_days)).timestamp()
     )
-    now_ts = int(datetime.now(timezone.utc).timestamp())
-
-    stats = {
-        "pages_fetched": 0,
-        "total_items_seen": 0,
-        "in_since_window": 0,
-        "in_last_n_days": 0,
-        "discarded_below_since": 0,
-        "stop_paging_triggered": False,
-        "first_page_admission_dates": [],
-        "sample_in_window": [],
-        "sample_discarded": [],
-        "order_hint": None,
+    effective_since = max(since_ts, window_start)
+    receptions, meta = iter_receptions_for_sync(
+        client, since_ts=effective_since, until_ts=now_ts, limit=50
+    )
+    sample = [
+        {
+            "id": r.get("id"),
+            "admissionDate": _ts_fmt(int(r.get("admissionDate") or 0)),
+            "document": r.get("document"),
+            "office": (r.get("office") or {}).get("name"),
+        }
+        for r in receptions[:5]
+    ]
+    return {
+        "strategy": meta.get("strategy"),
+        "pages_fetched": meta.get("pages_read"),
+        "api_total_count": meta.get("api_total_count"),
+        "order_hint": meta.get("page_order_hint"),
+        "min_admission": _ts_fmt(meta.get("min_admission_ts")),
+        "max_admission": _ts_fmt(meta.get("max_admission_ts")),
+        "in_since_window": meta.get("receptions_in_window"),
+        "receptions_year_2026": meta.get("receptions_year_2026"),
+        "discarded_below_since": meta.get("receptions_discarded_old"),
+        "receptions_fetched": len(receptions),
+        "sample_in_window": sample,
     }
-
-    offset = 0
-    stop_paging = False
-
-    while not stop_paging and stats["pages_fetched"] < 5:
-        data = client.get(
-            "/stocks/receptions.json",
-            {"limit": LIMIT, "offset": offset, "expand": "[office]"},
-        )
-        items = data.get("items") or []
-        stats["pages_fetched"] += 1
-        if not items:
-            break
-
-        page_ts = [int(r.get("admissionDate") or 0) for r in items]
-        if stats["pages_fetched"] == 1:
-            stats["first_page_admission_dates"] = [
-                {"id": r.get("id"), "admissionDate": _ts_fmt(int(r.get("admissionDate") or 0))}
-                for r in items[:5]
-            ]
-            if len(page_ts) >= 2:
-                if page_ts[0] > page_ts[-1]:
-                    stats["order_hint"] = "DESC (más reciente primero)"
-                elif page_ts[0] < page_ts[-1]:
-                    stats["order_hint"] = "ASC (más antigua primero) — RIESGO con stop_paging"
-                else:
-                    stats["order_hint"] = "indeterminado"
-
-        for rec in items:
-            adm_ts = int(rec.get("admissionDate") or 0)
-            stats["total_items_seen"] += 1
-
-            if window_start <= adm_ts <= now_ts:
-                stats["in_last_n_days"] += 1
-
-            if adm_ts < since_ts:
-                stats["discarded_below_since"] += 1
-                if len(stats["sample_discarded"]) < 3:
-                    stats["sample_discarded"].append(
-                        {
-                            "id": rec.get("id"),
-                            "admissionDate": _ts_fmt(adm_ts),
-                            "reason": f"admissionDate < since_ts ({_ts_fmt(since_ts)})",
-                        }
-                    )
-                stop_paging = True
-                stats["stop_paging_triggered"] = True
-                continue
-
-            stats["in_since_window"] += 1
-            if len(stats["sample_in_window"]) < 5:
-                stats["sample_in_window"].append(
-                    {
-                        "id": rec.get("id"),
-                        "admissionDate": _ts_fmt(adm_ts),
-                        "document": rec.get("document"),
-                        "office": (rec.get("office") or {}).get("name"),
-                    }
-                )
-
-        offset += LIMIT
-        if len(items) < LIMIT:
-            break
-        if stop_paging:
-            break
-
-    return stats
 
 
 def _history_counts(cur, company_id: int) -> dict:

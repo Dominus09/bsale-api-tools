@@ -10,6 +10,7 @@ from typing import Any
 
 from backend.db import get_connection
 from backend.repositories import cost_analytics_repo as repo
+from backend.services.cost_receptions_fetch import iter_receptions_for_sync
 from backend.services.distribuidora.bsale_client import BsaleClient
 from backend.utils.cost_analytics_calc import (
     cost_gross_from_net,
@@ -50,8 +51,14 @@ def _load_companies(cur) -> list[dict[str, Any]]:
     return out
 
 
-def _ts_to_dt(ts: int | float | None) -> datetime:
+def _ts_to_dt(ts: int | float) -> datetime:
     return datetime.fromtimestamp(int(ts), tz=timezone.utc)
+
+
+def _fmt_ts(ts: int | float | None) -> str | None:
+    if ts is None:
+        return None
+    return _ts_to_dt(ts).isoformat()
 
 
 def _sync_company_receptions(
@@ -61,7 +68,7 @@ def _sync_company_receptions(
     company_name: str,
     client: BsaleClient,
     since_ts: int,
-) -> tuple[int, int, int | None, dict[str, int]]:
+) -> tuple[int, int, int | None, dict[str, Any]]:
     """
     Returns (receptions_inserted, lines_inserted, max_admission_ts_inserted, stats).
 
@@ -70,219 +77,192 @@ def _sync_company_receptions(
     receptions_n = 0
     lines_n = 0
     max_ts_inserted: int | None = None
-    offset = 0
-    stop_paging = False
-    stats: dict[str, int] = {
-        "pages": 0,
-        "receptions_read": 0,
-        "receptions_in_window": 0,
-        "receptions_discarded_old": 0,
+    stats: dict[str, Any] = {
         "details_read": 0,
         "details_discarded_exists": 0,
         "details_discarded_no_variant": 0,
         "lines_inserted": 0,
     }
+
+    until_ts = int(datetime.now(timezone.utc).timestamp())
     _diag(
-        "company=%s since_ts=%s (%s)",
+        "company=%s since_ts=%s (%s) until=%s",
         company_id,
         since_ts,
-        _ts_to_dt(since_ts).isoformat(),
+        _ts_to_dt(since_ts),
+        _ts_to_dt(until_ts),
     )
 
-    while not stop_paging:
-        data = client.get(
-            "/stocks/receptions.json",
-            {"limit": LIMIT, "offset": offset, "expand": "[office]"},
-        )
-        items = data.get("items") or []
-        stats["pages"] += 1
-        if not items:
-            _diag("company=%s offset=%s página vacía", company_id, offset)
-            break
+    receptions, fetch_meta = iter_receptions_for_sync(
+        client, since_ts=since_ts, until_ts=until_ts, limit=LIMIT
+    )
+    stats.update(fetch_meta)
 
-        if stats["pages"] == 1 and items:
-            first_ts = int(items[0].get("admissionDate") or 0)
-            last_ts = int(items[-1].get("admissionDate") or 0)
-            order = "DESC" if first_ts > last_ts else ("ASC" if first_ts < last_ts else "FLAT")
-            _diag(
-                "company=%s página0 orden=%s first=%s last=%s",
-                company_id,
-                order,
-                _ts_to_dt(first_ts).isoformat(),
-                _ts_to_dt(last_ts).isoformat(),
+    logger.info(
+        "COST_SYNC_FETCH company_id=%s strategy=%s pages_read=%s api_count=%s "
+        "order_hint=%s min_admission=%s max_admission=%s receptions_in_window=%s "
+        "receptions_year_2026=%s discarded_old=%s",
+        company_id,
+        fetch_meta.get("strategy"),
+        fetch_meta.get("pages_read"),
+        fetch_meta.get("api_total_count"),
+        fetch_meta.get("page_order_hint"),
+        _fmt_ts(fetch_meta.get("min_admission_ts")),
+        _fmt_ts(fetch_meta.get("max_admission_ts")),
+        fetch_meta.get("receptions_in_window"),
+        fetch_meta.get("receptions_year_2026"),
+        fetch_meta.get("receptions_discarded_old"),
+    )
+
+    for rec in receptions:
+        adm_ts = int(rec.get("admissionDate") or 0)
+        if adm_ts < since_ts:
+            continue
+
+        rec_id = int(rec["id"])
+        admission = _ts_to_dt(adm_ts)
+        if not isinstance(admission, datetime):
+            continue
+        document = (rec.get("document") or "").strip() or None
+        doc_num = int(rec["documentNumber"]) if rec.get("documentNumber") is not None else None
+        office = rec.get("office") or {}
+        office_id = int(office["id"]) if office.get("id") is not None else None
+        office_name = office.get("name")
+
+        detail_offset = 0
+        new_lines_in_rec = 0
+
+        while True:
+            det_data = client.get(
+                f"/stocks/receptions/{rec_id}/details.json",
+                {"limit": LIMIT, "offset": detail_offset, "expand": "[variant]"},
             )
+            det_items = det_data.get("items") or []
+            if not det_items:
+                break
 
-        for rec in items:
-            adm_ts = int(rec.get("admissionDate") or 0)
-            stats["receptions_read"] += 1
-            if adm_ts < since_ts:
-                stats["receptions_discarded_old"] += 1
-                _diag(
-                    "recepción descartada id=%s adm=%s motivo=below_since_ts",
-                    rec.get("id"),
-                    _ts_to_dt(adm_ts).isoformat(),
-                )
-                stop_paging = True
-                continue
-            stats["receptions_in_window"] += 1
-
-            rec_id = int(rec["id"])
-            admission = _ts_to_dt(adm_ts)
-            document = (rec.get("document") or "").strip() or None
-            doc_num = int(rec["documentNumber"]) if rec.get("documentNumber") is not None else None
-            office = rec.get("office") or {}
-            office_id = int(office["id"]) if office.get("id") is not None else None
-            office_name = office.get("name")
-
-            detail_offset = 0
-            new_lines_in_rec = 0
-
-            while True:
-                det_data = client.get(
-                    f"/stocks/receptions/{rec_id}/details.json",
-                    {"limit": LIMIT, "offset": detail_offset, "expand": "[variant]"},
-                )
-                det_items = det_data.get("items") or []
-                if not det_items:
-                    break
-
-                for line in det_items:
-                    detail_id = int(line["id"])
-                    stats["details_read"] += 1
-                    if repo.line_exists(cur, company_id, detail_id):
-                        stats["details_discarded_exists"] += 1
-                        _diag(
-                            "detalle descartado id=%s rec=%s motivo=already_in_db",
-                            detail_id,
-                            rec_id,
-                        )
-                        continue
-
-                    variant_node = line.get("variant") or {}
-                    variant_id = int(variant_node.get("id") or 0)
-                    if not variant_id:
-                        stats["details_discarded_no_variant"] += 1
-                        _diag(
-                            "detalle descartado id=%s rec=%s motivo=no_variant_id",
-                            detail_id,
-                            rec_id,
-                        )
-                        continue
-
-                    ctx = repo.variant_tax_context(cur, company_id, variant_id)
-                    cost_net = float(line.get("cost") or 0)
-                    tf = float(ctx.get("tax_factor") or 1)
-                    iva_rate = ctx.get("iva_rate")
-                    iva_amt, other_tax, bruto = split_erp_cost(
-                        cost_net, tax_factor=tf, iva_rate=iva_rate
+            for line in det_items:
+                detail_id = int(line["id"])
+                stats["details_read"] += 1
+                if repo.line_exists(cur, company_id, detail_id):
+                    stats["details_discarded_exists"] += 1
+                    _diag(
+                        "detalle descartado id=%s rec=%s motivo=already_in_db",
+                        detail_id,
+                        rec_id,
                     )
-                    qty = float(line.get("quantity") or 0)
-                    prev = repo.previous_cost_for_variant(
+                    continue
+
+                variant_node = line.get("variant") or {}
+                variant_id = int(variant_node.get("id") or 0)
+                if not variant_id:
+                    stats["details_discarded_no_variant"] += 1
+                    _diag(
+                        "detalle descartado id=%s rec=%s motivo=no_variant_id",
+                        detail_id,
+                        rec_id,
+                    )
+                    continue
+
+                ctx = repo.variant_tax_context(cur, company_id, variant_id)
+                cost_net = float(line.get("cost") or 0)
+                tf = float(ctx.get("tax_factor") or 1)
+                iva_rate = ctx.get("iva_rate")
+                iva_amt, other_tax, bruto = split_erp_cost(
+                    cost_net, tax_factor=tf, iva_rate=iva_rate
+                )
+                qty = float(line.get("quantity") or 0)
+                prev = repo.previous_cost_for_variant(
+                    cur,
+                    company_id=company_id,
+                    variant_id=variant_id,
+                    office_id=office_id,
+                    before=admission,
+                )
+                var_pct = variation_pct(cost_net, prev)
+                average_cost: float | None = None
+
+                try:
+                    costs = client.get(f"/variants/{variant_id}/costs.json")
+                    avg = costs.get("averageCost")
+                    average_cost = float(avg) if avg is not None else None
+                    avg_gross = (
+                        float(cost_gross_from_net(average_cost, tf))
+                        if average_cost is not None
+                        else None
+                    )
+                    repo.upsert_variant_cost_snapshot(
                         cur,
                         company_id=company_id,
                         variant_id=variant_id,
-                        office_id=office_id,
-                        before=admission,
+                        average_cost_net=average_cost,
+                        average_cost_gross=avg_gross,
+                        tax_factor=tf,
+                        iva_rate=iva_rate,
+                        specific_taxes=ctx.get("specific_taxes"),
                     )
-                    var_pct = variation_pct(cost_net, prev)
-                    average_cost: float | None = None
-
-                    try:
-                        costs = client.get(f"/variants/{variant_id}/costs.json")
-                        avg = costs.get("averageCost")
-                        average_cost = float(avg) if avg is not None else None
-                        avg_gross = (
-                            float(cost_gross_from_net(average_cost, tf))
-                            if average_cost is not None
-                            else None
-                        )
-                        repo.upsert_variant_cost_snapshot(
-                            cur,
-                            company_id=company_id,
-                            variant_id=variant_id,
-                            average_cost_net=average_cost,
-                            average_cost_gross=avg_gross,
-                            tax_factor=tf,
-                            iva_rate=iva_rate,
-                            specific_taxes=ctx.get("specific_taxes"),
-                        )
-                    except Exception as exc:
-                        logger.warning(
-                            "No se pudo refrescar costs.json variant=%s: %s",
-                            variant_id,
-                            exc,
-                        )
-
-                    inserted = repo.insert_history_line(
-                        cur,
-                        unique_key=make_unique_key(company_id, detail_id),
-                        company_id=company_id,
-                        company_name=company_name,
-                        office_id=office_id,
-                        office_name=office_name,
-                        variant_id=variant_id,
-                        product_id=int(ctx["product_id"]) if ctx.get("product_id") else None,
-                        barcode=ctx.get("barcode"),
-                        product_name=ctx.get("product_name"),
-                        variant_name=ctx.get("variant_name"),
-                        reception_id=rec_id,
-                        reception_detail_id=detail_id,
-                        document=document,
-                        document_number=doc_num,
-                        admission_date=admission,
-                        quantity=qty,
-                        cost_net=cost_net,
-                        iva_amount=float(iva_amt),
-                        other_taxes=float(other_tax),
-                        cost_bruto_erp=float(bruto),
-                        average_cost=average_cost,
-                        variation_pct=var_pct,
+                except Exception as exc:
+                    logger.warning(
+                        "No se pudo refrescar costs.json variant=%s: %s",
+                        variant_id,
+                        exc,
                     )
-                    if inserted:
-                        new_lines_in_rec += 1
-                        lines_n += 1
-                        stats["lines_inserted"] += 1
-                        max_ts_inserted = (
-                            adm_ts
-                            if max_ts_inserted is None
-                            else max(max_ts_inserted, adm_ts)
-                        )
 
-                detail_offset += LIMIT
-                time.sleep(THROTTLE_SEC)
-                if len(det_items) < LIMIT:
-                    break
+                inserted = repo.insert_history_line(
+                    cur,
+                    unique_key=make_unique_key(company_id, detail_id),
+                    company_id=company_id,
+                    company_name=company_name,
+                    office_id=office_id,
+                    office_name=office_name,
+                    variant_id=variant_id,
+                    product_id=int(ctx["product_id"]) if ctx.get("product_id") else None,
+                    barcode=ctx.get("barcode"),
+                    product_name=ctx.get("product_name"),
+                    variant_name=ctx.get("variant_name"),
+                    reception_id=rec_id,
+                    reception_detail_id=detail_id,
+                    document=document,
+                    document_number=doc_num,
+                    admission_date=admission,
+                    quantity=qty,
+                    cost_net=cost_net,
+                    iva_amount=float(iva_amt),
+                    other_taxes=float(other_tax),
+                    cost_bruto_erp=float(bruto),
+                    average_cost=average_cost,
+                    variation_pct=var_pct,
+                )
+                if inserted:
+                    new_lines_in_rec += 1
+                    lines_n += 1
+                    stats["lines_inserted"] += 1
+                    max_ts_inserted = (
+                        adm_ts if max_ts_inserted is None else max(max_ts_inserted, adm_ts)
+                    )
 
-            if new_lines_in_rec > 0:
-                receptions_n += 1
-
+            detail_offset += LIMIT
             time.sleep(THROTTLE_SEC)
+            if len(det_items) < LIMIT:
+                break
 
-        offset += LIMIT
-        if len(items) < LIMIT:
-            break
+        if new_lines_in_rec > 0:
+            receptions_n += 1
+
         time.sleep(THROTTLE_SEC)
 
     logger.info(
-        "COST_SYNC company_id=%s receptions_read=%s receptions_in_window=%s "
-        "receptions_discarded_old=%s details_read=%s details_discarded_exists=%s "
-        "details_discarded_no_variant=%s lines_inserted=%s watermark_ts=%s",
+        "COST_SYNC company_id=%s receptions_processed=%s receptions_inserted=%s "
+        "details_read=%s details_discarded_exists=%s details_discarded_no_variant=%s "
+        "lines_inserted=%s watermark_ts=%s",
         company_id,
-        stats["receptions_read"],
-        stats["receptions_in_window"],
-        stats["receptions_discarded_old"],
+        len(receptions),
+        receptions_n,
         stats["details_read"],
         stats["details_discarded_exists"],
         stats["details_discarded_no_variant"],
         stats["lines_inserted"],
-        _ts_to_dt(max_ts_inserted).isoformat() if max_ts_inserted else None,
-    )
-    _diag(
-        "company=%s resumen pages=%s stats=%s watermark_inserted_only=%s",
-        company_id,
-        stats["pages"],
-        stats,
-        max_ts_inserted,
+        _fmt_ts(max_ts_inserted),
     )
     return receptions_n, lines_n, max_ts_inserted, stats
 
@@ -343,20 +323,20 @@ def sync_cost_receptions(
                     client=client,
                     since_ts=since_ts,
                 )
-                # Protección: no avanzar watermark sin al menos una línea insertada.
                 if line_n > 0 and max_ts_inserted is not None:
                     new_watermark = max_ts_inserted
                     watermark_advanced = True
                 else:
                     new_watermark = prev_watermark
                     watermark_advanced = False
-                    if line_n == 0 and sync_stats["receptions_in_window"] > 0:
+                    in_window = int(sync_stats.get("receptions_in_window") or 0)
+                    if line_n == 0 and in_window > 0:
                         logger.warning(
                             "COST_SYNC company_id=%s watermark NO avanzado: "
                             "0 líneas insertadas con %s recepciones en ventana "
                             "(details_read=%s exists=%s no_variant=%s)",
                             cid,
-                            sync_stats["receptions_in_window"],
+                            in_window,
                             sync_stats["details_read"],
                             sync_stats["details_discarded_exists"],
                             sync_stats["details_discarded_no_variant"],
