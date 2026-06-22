@@ -35,6 +35,7 @@ from backend.routers.app_distribuidora import router as app_distribuidora_router
 from backend.routers.operaciones import router as operaciones_router
 from backend.routers.operaciones_telemetry import router as operaciones_telemetry_router
 from backend.routers import labels
+from backend.routers import cost_analytics
 from backend.routers import margin_export
 from backend.routers import margin_problems
 from backend.routers import margin_rules
@@ -110,6 +111,7 @@ app.include_router(price_lists.router)
 app.include_router(labels.router)
 app.include_router(margins.router)
 app.include_router(margin_rules.router)
+app.include_router(cost_analytics.router)
 app.include_router(offers.router)
 app.include_router(promotions.router)
 app.include_router(alerts.router)

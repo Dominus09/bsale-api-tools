@@ -4391,3 +4391,357 @@ export async function resolveLabelProductsBatch(
 
   return { resolved, errors }
 }
+
+// --- Analítica → Costos ---
+
+export type CostAnalyticsSyncState = {
+  company_id: number
+  last_admission_ts?: number | null
+  last_run_at?: string | null
+  last_status?: string | null
+  last_message?: string | null
+  receptions_inserted?: number
+  lines_inserted?: number
+  total_lines_processed?: number
+}
+
+export type CostOfficeRef = {
+  office_id: number
+  office_name?: string | null
+}
+
+export type CostAnalyticsDashboard = {
+  company_id: number
+  kpis: {
+    variants_total: number
+    with_cost: number
+    without_cost: number
+    zero_cost: number
+    receptions_24h: number
+    variation_gt_10: number
+    variation_gt_20: number
+    receptions_processed: number
+    lines_processed: number
+  }
+  last_sync: CostAnalyticsSyncState | null
+  offices: CostOfficeRef[]
+}
+
+export type CostHistorySearchHit = {
+  variant_id: number
+  product_name?: string | null
+  variant_name?: string | null
+  barcode?: string | null
+  company_name?: string | null
+  average_cost?: number | null
+  average_cost_gross?: number | null
+}
+
+export type CostHistoryRow = {
+  company_id: number
+  company_name?: string | null
+  office_id?: number | null
+  office_name?: string | null
+  variant_id: number
+  barcode?: string | null
+  product_name?: string | null
+  variant_name?: string | null
+  reception_id: number
+  reception_detail_id: number
+  document?: string | null
+  document_number?: number | null
+  admission_date: string
+  quantity: number
+  cost_net: number
+  iva_amount?: number | null
+  other_taxes?: number | null
+  cost_bruto_erp?: number | null
+  average_cost?: number | null
+  variation_pct?: number | null
+}
+
+export type CostVariantHistory = {
+  company_id: number
+  variant_id: number
+  product_name?: string | null
+  variant_name?: string | null
+  barcode?: string | null
+  average_cost?: number | null
+  average_cost_gross?: number | null
+  items: CostHistoryRow[]
+}
+
+export type CostReceptionRow = {
+  reception_id: number
+  admission_date: string
+  company_name?: string | null
+  office_id?: number | null
+  office_name?: string | null
+  document?: string | null
+  document_number?: number | null
+  products_count: number
+  total_quantity: number
+  total_cost_net?: number | null
+  total_cost_bruto?: number | null
+}
+
+export type CostReceptionDetailLine = {
+  reception_detail_id: number
+  variant_id: number
+  product_name?: string | null
+  variant_name?: string | null
+  barcode?: string | null
+  quantity: number
+  cost_net: number
+  iva_amount?: number | null
+  other_taxes?: number | null
+  cost_bruto_erp?: number | null
+  average_cost?: number | null
+  variation_pct?: number | null
+}
+
+export type CostReceptionDetail = CostReceptionRow & {
+  items: CostReceptionDetailLine[]
+}
+
+export type CostAlertRow = {
+  variant_id: number
+  product_name?: string | null
+  variant_name?: string | null
+  barcode?: string | null
+  office_id?: number | null
+  office_name?: string | null
+  cost_net?: number | null
+  variation_pct?: number | null
+  admission_date?: string | null
+  reception_id?: number | null
+  average_cost?: number | null
+  missing_cost?: boolean
+  suspicious_reception?: boolean
+  cross_branch_spread?: number | null
+  alert_types: string[]
+  semaphore: "green" | "yellow" | "red"
+}
+
+export type CostOfficeComparison = {
+  variant_id: number
+  product_name?: string | null
+  variant_name?: string | null
+  barcode?: string | null
+  offices: {
+    office_id: number
+    office_name?: string | null
+    cost_net: number
+    cost_bruto_erp?: number | null
+    admission_date?: string | null
+    reception_id?: number | null
+  }[]
+  min_cost_net?: number | null
+  max_cost_net?: number | null
+  max_spread_pct?: number | null
+}
+
+function requireCompanyId(): number {
+  const id = getCompanyId()
+  if (id == null) throw new Error("Seleccione una empresa en el dashboard.")
+  return id
+}
+
+export async function getCostAnalyticsDashboard(
+  params?: {
+    company_id?: number
+    office_id?: number
+    date_from?: string
+    date_to?: string
+  },
+): Promise<CostAnalyticsDashboard> {
+  const cid = params?.company_id ?? requireCompanyId()
+  const qs = new URLSearchParams({ company_id: String(cid) })
+  if (params?.office_id != null) qs.set("office_id", String(params.office_id))
+  if (params?.date_from) qs.set("date_from", params.date_from)
+  if (params?.date_to) qs.set("date_to", params.date_to)
+  const res = await fetch(`${API_URL}/cost-analytics/dashboard?${qs}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar dashboard de costos")
+  }
+  return res.json() as Promise<CostAnalyticsDashboard>
+}
+
+export async function getCostOffices(companyId?: number): Promise<{ items: CostOfficeRef[] }> {
+  const cid = companyId ?? requireCompanyId()
+  const res = await fetch(`${API_URL}/cost-analytics/offices?company_id=${cid}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) throw new Error("Error al cargar sucursales")
+  return res.json() as Promise<{ items: CostOfficeRef[] }>
+}
+
+export async function searchCostHistory(
+  q: string,
+  companyId?: number,
+): Promise<{ items: CostHistorySearchHit[]; q: string }> {
+  const cid = companyId ?? requireCompanyId()
+  const qs = new URLSearchParams({ company_id: String(cid), q: q.trim() })
+  const res = await fetch(`${API_URL}/cost-analytics/history/search?${qs}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al buscar historial de costos")
+  }
+  return res.json() as Promise<{ items: CostHistorySearchHit[]; q: string }>
+}
+
+export async function listCostHistory(params?: {
+  company_id?: number
+  q?: string
+  variant_id?: number
+  office_id?: number
+  date_from?: string
+  date_to?: string
+  limit?: number
+  offset?: number
+}): Promise<{ items: CostHistoryRow[]; total: number }> {
+  const cid = params?.company_id ?? requireCompanyId()
+  const qs = new URLSearchParams({ company_id: String(cid) })
+  if (params?.q?.trim()) qs.set("q", params.q.trim())
+  if (params?.variant_id != null) qs.set("variant_id", String(params.variant_id))
+  if (params?.office_id != null) qs.set("office_id", String(params.office_id))
+  if (params?.date_from) qs.set("date_from", params.date_from)
+  if (params?.date_to) qs.set("date_to", params.date_to)
+  if (params?.limit != null) qs.set("limit", String(params.limit))
+  if (params?.offset != null) qs.set("offset", String(params.offset))
+  const res = await fetch(`${API_URL}/cost-analytics/history?${qs}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar historial")
+  }
+  return res.json() as Promise<{ items: CostHistoryRow[]; total: number }>
+}
+
+export async function getCostReceptions(params?: {
+  company_id?: number
+  date_from?: string
+  date_to?: string
+  office_id?: number
+  document_type?: string
+  limit?: number
+  offset?: number
+}): Promise<{ items: CostReceptionRow[]; total: number; limit: number; offset: number }> {
+  const cid = params?.company_id ?? requireCompanyId()
+  const qs = new URLSearchParams({ company_id: String(cid) })
+  if (params?.date_from) qs.set("date_from", params.date_from)
+  if (params?.date_to) qs.set("date_to", params.date_to)
+  if (params?.office_id != null) qs.set("office_id", String(params.office_id))
+  if (params?.document_type?.trim()) qs.set("document_type", params.document_type.trim())
+  if (params?.limit != null) qs.set("limit", String(params.limit))
+  if (params?.offset != null) qs.set("offset", String(params.offset))
+  const res = await fetch(`${API_URL}/cost-analytics/receptions?${qs}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar recepciones")
+  }
+  return res.json() as Promise<{
+    items: CostReceptionRow[]
+    total: number
+    limit: number
+    offset: number
+  }>
+}
+
+export async function getCostReceptionDetail(
+  receptionId: number,
+  companyId?: number,
+): Promise<CostReceptionDetail> {
+  const cid = companyId ?? requireCompanyId()
+  const res = await fetch(
+    `${API_URL}/cost-analytics/receptions/${receptionId}?company_id=${cid}`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Recepción no encontrada")
+  }
+  return res.json() as Promise<CostReceptionDetail>
+}
+
+export async function getCostVariantHistory(
+  variantId: number,
+  companyId?: number,
+): Promise<CostVariantHistory> {
+  const cid = companyId ?? requireCompanyId()
+  const res = await fetch(
+    `${API_URL}/cost-analytics/history/variants/${variantId}?company_id=${cid}`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar historial de variante")
+  }
+  return res.json() as Promise<CostVariantHistory>
+}
+
+export async function getCostAlerts(
+  params?: { company_id?: number; office_id?: number; limit?: number },
+): Promise<{ items: CostAlertRow[] }> {
+  const cid = params?.company_id ?? requireCompanyId()
+  const qs = new URLSearchParams({ company_id: String(cid) })
+  if (params?.office_id != null) qs.set("office_id", String(params.office_id))
+  if (params?.limit != null) qs.set("limit", String(params.limit))
+  const res = await fetch(`${API_URL}/cost-analytics/alerts?${qs}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar alertas de costo")
+  }
+  return res.json() as Promise<{ items: CostAlertRow[] }>
+}
+
+export async function compareCostOffices(params: {
+  company_id?: number
+  variant_id?: number
+  q?: string
+}): Promise<
+  | { comparison: CostOfficeComparison }
+  | { items: CostOfficeComparison[]; q?: string }
+> {
+  const cid = params.company_id ?? requireCompanyId()
+  const qs = new URLSearchParams({ company_id: String(cid) })
+  if (params.variant_id != null) qs.set("variant_id", String(params.variant_id))
+  if (params.q?.trim()) qs.set("q", params.q.trim())
+  const res = await fetch(`${API_URL}/cost-analytics/compare/offices?${qs}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al comparar sucursales")
+  }
+  return res.json()
+}
+
+export async function syncCostAnalytics(params?: {
+  company_id?: number
+  lookback_days?: number
+}): Promise<Record<string, unknown>> {
+  const qs = new URLSearchParams()
+  if (params?.company_id != null) qs.set("company_id", String(params.company_id))
+  if (params?.lookback_days != null) qs.set("lookback_days", String(params.lookback_days))
+  const suffix = qs.toString() ? `?${qs.toString()}` : ""
+  const res = await fetch(`${API_URL}/cost-analytics/sync${suffix}`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al sincronizar costos")
+  }
+  return res.json() as Promise<Record<string, unknown>>
+}

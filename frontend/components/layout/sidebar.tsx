@@ -29,6 +29,7 @@ import {
   CalendarDays,
   History,
   Scale,
+  CircleDollarSign,
   ChevronsLeft,
   ChevronsRight,
   Percent,
@@ -57,9 +58,9 @@ const navSections: { title: string; items: NavItem[] }[] = [
     title: "Analítica",
     items: [
       { href: "/margins", label: "Márgenes", icon: TrendingUp },
-      { href: "/alerts", label: "Alertas", icon: AlertTriangle },
-      { href: "/promotions", label: "Promociones", icon: Percent },
       { href: "/politica-margenes", label: "Política de Márgenes", icon: Scale },
+      { href: "/costos", label: "Costos", icon: CircleDollarSign },
+      { href: "/promotions", label: "Promociones", icon: Percent },
     ],
   },
   {
