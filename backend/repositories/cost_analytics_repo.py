@@ -1196,3 +1196,155 @@ def list_branch_comparison_ranked(
         params,
     )
     return [_row_dict(cur, r) for r in cur.fetchall()]
+
+
+WATCHLIST = "analytics.cost_watchlist"
+
+
+def resolve_staff_user_id(cur, user_email: str) -> int | None:
+    try:
+        cur.execute(
+            """
+            SELECT id FROM bsale.users
+            WHERE lower(trim(email)) = lower(trim(%s)) AND active = TRUE
+            LIMIT 1
+            """,
+            (user_email,),
+        )
+        row = cur.fetchone()
+        return int(row[0]) if row else None
+    except Exception:
+        return None
+
+
+def add_watchlist_item(
+    cur, *, user_email: str, company_id: int, variant_id: int
+) -> dict[str, Any]:
+    user_id = resolve_staff_user_id(cur, user_email)
+    cur.execute(
+        f"""
+        INSERT INTO {WATCHLIST} (user_email, user_id, company_id, variant_id, active)
+        VALUES (%s, %s, %s, %s, TRUE)
+        ON CONFLICT (user_email, company_id, variant_id) DO UPDATE
+        SET active = TRUE, user_id = COALESCE(EXCLUDED.user_id, {WATCHLIST}.user_id)
+        RETURNING id, user_email, user_id, company_id, variant_id, active, created_at
+        """,
+        (user_email.strip().lower(), user_id, company_id, variant_id),
+    )
+    return _row_dict(cur, cur.fetchone())
+
+
+def remove_watchlist_item(
+    cur, *, user_email: str, company_id: int, variant_id: int
+) -> bool:
+    cur.execute(
+        f"""
+        UPDATE {WATCHLIST}
+        SET active = FALSE
+        WHERE user_email = %s AND company_id = %s AND variant_id = %s
+        RETURNING id
+        """,
+        (user_email.strip().lower(), company_id, variant_id),
+    )
+    return cur.fetchone() is not None
+
+
+def is_on_watchlist(
+    cur, *, user_email: str, company_id: int, variant_id: int
+) -> bool:
+    cur.execute(
+        f"""
+        SELECT 1 FROM {WATCHLIST}
+        WHERE user_email = %s AND company_id = %s AND variant_id = %s AND active = TRUE
+        LIMIT 1
+        """,
+        (user_email.strip().lower(), company_id, variant_id),
+    )
+    return cur.fetchone() is not None
+
+
+def list_watchlist_enriched(
+    cur, *, user_email: str, company_id: int
+) -> list[dict[str, Any]]:
+    cur.execute(
+        f"""
+        WITH wl AS (
+            SELECT variant_id, created_at
+            FROM {WATCHLIST}
+            WHERE user_email = %s AND company_id = %s AND active = TRUE
+        ),
+        latest AS (
+            SELECT DISTINCT ON (h.variant_id)
+                h.variant_id, h.product_name, h.variant_name, h.barcode,
+                h.company_name, h.cost_net AS current_cost, h.admission_date AS last_reception_date
+            FROM {HISTORY} h
+            INNER JOIN wl ON wl.variant_id = h.variant_id
+            WHERE h.company_id = %s
+            ORDER BY h.variant_id, h.admission_date DESC, h.id DESC
+        ),
+        avg_90 AS (
+            SELECT variant_id, AVG(cost_net)::numeric AS avg_90d
+            FROM {HISTORY}
+            WHERE company_id = %s
+              AND admission_date >= NOW() - INTERVAL '90 days'
+              AND cost_net > 0
+            GROUP BY variant_id
+        )
+        SELECT
+            wl.variant_id,
+            l.product_name,
+            l.variant_name,
+            l.barcode,
+            l.company_name,
+            l.current_cost,
+            a.avg_90d,
+            l.last_reception_date,
+            wl.created_at AS watchlist_since,
+            CASE WHEN a.avg_90d > 0 THEN ROUND(
+                ((l.current_cost - a.avg_90d) / a.avg_90d) * 100.0, 2
+            ) ELSE NULL END AS variation_pct_90d
+        FROM wl
+        LEFT JOIN latest l ON l.variant_id = wl.variant_id
+        LEFT JOIN avg_90 a ON a.variant_id = wl.variant_id
+        ORDER BY l.product_name NULLS LAST, l.variant_name NULLS LAST
+        """,
+        (user_email.strip().lower(), company_id, company_id, company_id),
+    )
+    return [_row_dict(cur, r) for r in cur.fetchall()]
+
+
+def intelligence_summary_24h(cur, company_id: int) -> dict[str, int]:
+    cur.execute(
+        f"""
+        SELECT
+            (SELECT COUNT(DISTINCT variant_id)::int FROM {HISTORY}
+             WHERE company_id = %s AND admission_date >= NOW() - INTERVAL '24 hours'
+               AND variation_pct > 10) AS products_increased_10,
+            (SELECT COUNT(DISTINCT variant_id)::int FROM {HISTORY}
+             WHERE company_id = %s AND admission_date >= NOW() - INTERVAL '24 hours'
+               AND variation_pct < -10) AS products_decreased_10,
+            (SELECT COUNT(*)::int FROM (
+                SELECT variant_id FROM (
+                    SELECT DISTINCT ON (variant_id, office_id)
+                        variant_id, office_id, cost_net
+                    FROM {HISTORY}
+                    WHERE company_id = %s AND office_id IS NOT NULL
+                    ORDER BY variant_id, office_id, admission_date DESC, id DESC
+                ) x
+                GROUP BY variant_id
+                HAVING COUNT(DISTINCT office_id) > 1
+                   AND MIN(cost_net) > 0
+                   AND ((MAX(cost_net) - MIN(cost_net)) / MIN(cost_net)) * 100 > 10
+            ) b) AS products_branch_diff,
+            (SELECT COUNT(DISTINCT variant_id)::int FROM {HISTORY}
+             WHERE company_id = %s AND admission_date >= NOW() - INTERVAL '24 hours'
+               AND (ABS(COALESCE(variation_pct, 0)) >= 50 OR cost_net = 0)) AS products_anomalous
+        """,
+        (company_id, company_id, company_id, company_id),
+    )
+    return _row_dict(cur, cur.fetchone())
+
+
+def fetch_opportunity_base_rows(cur, company_id: int) -> list[dict[str, Any]]:
+    items, _, _ = list_purchase_opportunities(cur, company_id, limit=10000, offset=0)
+    return items

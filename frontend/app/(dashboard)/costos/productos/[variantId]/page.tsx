@@ -21,6 +21,7 @@ import {
   getStoredCompanyId,
   type CostHistoryRow,
 } from "@/lib/api"
+import { WatchlistButton } from "../components/watchlist-button"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -144,6 +145,7 @@ export default function CostoProductoPage() {
             {data?.barcode ? ` · ${data.barcode}` : ""}
           </p>
         </div>
+        <WatchlistButton companyId={companyId} variantId={variantId} />
       </div>
 
       {loading ? (

@@ -176,6 +176,62 @@ def margin_impact(
     return svc.get_margin_impact(company_id, variant_id)
 
 
+def _user_email(user: dict) -> str:
+    email = (user.get("email") or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=401, detail="Token sin email")
+    return email
+
+
+@router.get("/intelligence")
+def cost_intelligence(
+    company_id: int = Query(..., ge=1),
+    user: dict = Depends(require_staff_user),
+):
+    return svc.get_intelligence(company_id, user_email=_user_email(user))
+
+
+@router.get("/watchlist")
+def get_watchlist(
+    company_id: int = Query(..., ge=1),
+    user: dict = Depends(require_staff_user),
+):
+    return svc.list_watchlist(company_id, user_email=_user_email(user))
+
+
+@router.get("/watchlist/status")
+def watchlist_variant_status(
+    company_id: int = Query(..., ge=1),
+    variant_id: int = Query(..., ge=1),
+    user: dict = Depends(require_staff_user),
+):
+    return svc.watchlist_status_for_variant(
+        company_id, variant_id, user_email=_user_email(user)
+    )
+
+
+@router.post("/watchlist")
+def post_watchlist(
+    company_id: int = Query(..., ge=1),
+    variant_id: int = Query(..., ge=1),
+    user: dict = Depends(require_staff_user),
+):
+    return svc.add_to_watchlist(
+        company_id, variant_id, user_email=_user_email(user)
+    )
+
+
+@router.delete("/watchlist")
+def delete_watchlist(
+    company_id: int = Query(..., ge=1),
+    variant_id: int = Query(..., ge=1),
+    user: dict = Depends(require_staff_user),
+):
+    return svc.remove_from_watchlist(
+        company_id, variant_id, user_email=_user_email(user)
+    )
+
+
 @router.get("/compare/offices")
 def compare_offices(
     company_id: int = Query(..., ge=1),

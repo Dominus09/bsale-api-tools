@@ -224,3 +224,92 @@ OPPORTUNITY_LABELS: dict[str, str] = {
     "oportunidad_compra": "Oportunidad de compra",
     "riesgo_comercial": "Costo elevado",
 }
+
+
+ALERT_ACTIONS: dict[str, tuple[str, str]] = {
+    "variation_20": ("red", "Revisar precio de venta"),
+    "variation_10": ("yellow", "Vigilar margen y precio"),
+    "anomalous_cost": ("red", "Revisar costo anómalo"),
+    "zero_cost": ("red", "Revisar recepción con costo cero"),
+    "suspicious_reception": ("yellow", "Revisar recepción"),
+    "cross_branch_diff": ("red", "Revisar diferencia entre sucursales"),
+    "cost_decrease_10": ("green", "Oportunidad de compra"),
+    "missing_cost": ("yellow", "Completar costo del producto"),
+    "no_history": ("yellow", "Sin historial de costos"),
+    "oportunidad_compra": ("green", "Oportunidad de compra"),
+    "riesgo_comercial": ("red", "Revisar precio de venta"),
+}
+
+
+COMMERCIAL_SCORE_LABELS: dict[str, str] = {
+    "excelente": "Excelente",
+    "vigilar": "Vigilar",
+    "revisar": "Revisar",
+}
+
+
+WATCHLIST_STATUS_LABELS: dict[str, str] = {
+    "mejorando": "Mejorando",
+    "estable": "Estable",
+    "revisar": "Revisar",
+}
+
+
+def watchlist_status(variation_pct_90d: float | None) -> tuple[str, str]:
+    """Estado watchlist: mejorando | estable | revisar."""
+    if variation_pct_90d is None:
+        return "estable", "yellow"
+    v = float(variation_pct_90d)
+    if v <= -3:
+        return "mejorando", "green"
+    if v >= 3:
+        return "revisar", "red"
+    return "estable", "yellow"
+
+
+def commercial_score(
+    *,
+    variation_pct_90d: float | None = None,
+    branch_spread_pct: float | None = None,
+    reception_count_90d: int = 0,
+    movement_qty_90d: float = 0,
+    anomalous: bool = False,
+    zero_cost: bool = False,
+) -> tuple[str, str]:
+    """
+    Score comercial: excelente | vigilar | revisar.
+    Retorna (score_key, semaphore).
+    """
+    risk = 0
+    if zero_cost:
+        risk += 4
+    if anomalous:
+        risk += 3
+    if variation_pct_90d is not None:
+        v = abs(float(variation_pct_90d))
+        if v >= 20:
+            risk += 3
+        elif v >= 10:
+            risk += 2
+        elif v >= 5:
+            risk += 1
+    if branch_spread_pct is not None:
+        s = float(branch_spread_pct)
+        if s > 10:
+            risk += 3
+        elif s > 3:
+            risk += 1
+    if reception_count_90d < 2:
+        risk += 1
+    if movement_qty_90d <= 0:
+        risk += 1
+    if risk >= 5:
+        return "revisar", "red"
+    if risk >= 2:
+        return "vigilar", "yellow"
+    return "excelente", "green"
+
+
+def alert_to_action(alert_type: str) -> dict[str, str]:
+    sem, action = ALERT_ACTIONS.get(alert_type, ("yellow", "Revisar producto"))
+    return {"alert_type": alert_type, "semaphore": sem, "action": action}

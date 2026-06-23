@@ -4592,6 +4592,10 @@ export type CostOpportunityRow = {
   status?: "oportunidad_compra" | "riesgo_comercial" | null
   status_label?: string | null
   semaphore?: "green" | "yellow" | "red"
+  savings_vs_avg?: number | null
+  commercial_score?: string
+  commercial_score_label?: string
+  commercial_score_semaphore?: string
 }
 
 export type CostBranchComparisonRow = {
@@ -4611,6 +4615,44 @@ export type CostBranchComparisonRow = {
     admission_date?: string | null
     reception_id?: number | null
   }[]
+}
+
+export type CostWatchlistRow = {
+  variant_id: number
+  product_name?: string | null
+  variant_name?: string | null
+  barcode?: string | null
+  company_name?: string | null
+  current_cost?: number | null
+  avg_90d?: number | null
+  variation_pct_90d?: number | null
+  last_reception_date?: string | null
+  watchlist_status?: string
+  watchlist_status_label?: string
+  watchlist_semaphore?: string
+  commercial_score?: string
+  commercial_score_label?: string
+  commercial_score_semaphore?: string
+}
+
+export type CostActionableAlert = CostAlertRow & {
+  action?: string
+  action_semaphore?: string
+}
+
+export type CostIntelligencePayload = {
+  company_id: number
+  auto_summary?: {
+    period: string
+    bullets: string[]
+    metrics: Record<string, number>
+    featured_product?: CostOpportunityRow | null
+  }
+  top_opportunities?: CostOpportunityRow[]
+  top_risks?: CostOpportunityRow[]
+  actionable_alerts?: CostActionableAlert[]
+  watchlist?: CostWatchlistRow[]
+  opportunity_counts?: { oportunidad_compra: number; riesgo_comercial: number }
 }
 
 function requireCompanyId(): number {
@@ -4868,6 +4910,64 @@ export async function getCostMarginImpact(
     headers: getAuthHeaders(),
   })
   if (!res.ok) throw new Error("Error al consultar impacto en margen")
+  return res.json() as Promise<Record<string, unknown>>
+}
+
+export async function getCostIntelligence(
+  companyId?: number,
+): Promise<CostIntelligencePayload> {
+  const cid = companyId ?? requireCompanyId()
+  const res = await fetch(`${API_URL}/cost-analytics/intelligence?company_id=${cid}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) throw new Error("Error al cargar inteligencia de costos")
+  return res.json() as Promise<CostIntelligencePayload>
+}
+
+export async function getCostWatchlistStatus(
+  companyId: number,
+  variantId: number,
+): Promise<{ on_watchlist: boolean }> {
+  const qs = new URLSearchParams({
+    company_id: String(companyId),
+    variant_id: String(variantId),
+  })
+  const res = await fetch(`${API_URL}/cost-analytics/watchlist/status?${qs}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) throw new Error("Error al consultar watchlist")
+  return res.json() as Promise<{ on_watchlist: boolean }>
+}
+
+export async function addCostWatchlistItem(
+  companyId: number,
+  variantId: number,
+): Promise<Record<string, unknown>> {
+  const qs = new URLSearchParams({
+    company_id: String(companyId),
+    variant_id: String(variantId),
+  })
+  const res = await fetch(`${API_URL}/cost-analytics/watchlist?${qs}`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) throw new Error("Error al agregar a watchlist")
+  return res.json() as Promise<Record<string, unknown>>
+}
+
+export async function removeCostWatchlistItem(
+  companyId: number,
+  variantId: number,
+): Promise<Record<string, unknown>> {
+  const qs = new URLSearchParams({
+    company_id: String(companyId),
+    variant_id: String(variantId),
+  })
+  const res = await fetch(`${API_URL}/cost-analytics/watchlist?${qs}`, {
+    method: "DELETE",
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) throw new Error("Error al quitar de watchlist")
   return res.json() as Promise<Record<string, unknown>>
 }
 

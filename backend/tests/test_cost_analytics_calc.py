@@ -7,11 +7,13 @@ from backend.utils.cost_analytics_calc import (
     branch_spread_pct,
     classify_cost_alert,
     classify_reception_type,
+    commercial_score,
     cost_gross_from_net,
     make_unique_key,
     parse_tax_factor,
     split_erp_cost,
     variation_pct,
+    watchlist_status,
 )
 
 
@@ -20,6 +22,17 @@ def test_classify_reception_type():
     assert classify_reception_type("GUIA", "devolucion mercadería", None) == "recepcion_devolucion"
     assert classify_reception_type("FACTURA", "ajuste inventario", None) == "recepcion_ajuste"
     assert classify_reception_type("FACTURA", None, None) == "recepcion_normal"
+
+
+def test_commercial_score():
+    assert commercial_score(variation_pct_90d=25)[0] == "revisar"
+    assert commercial_score(variation_pct_90d=2)[0] == "excelente"
+
+
+def test_watchlist_status_fn():
+    assert watchlist_status(-10)[0] == "mejorando"
+    assert watchlist_status(5)[0] == "revisar"
+    assert watchlist_status(0)[0] == "estable"
 
 
 def test_parse_tax_factor_defaults():

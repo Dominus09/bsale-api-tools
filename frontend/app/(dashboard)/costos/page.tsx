@@ -59,6 +59,8 @@ import {
 } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
+import { CostIntelligencePanel } from "./components/cost-intelligence-panel"
+import { WatchlistButton } from "./components/watchlist-button"
 
 const ALL = "__all__"
 
@@ -249,7 +251,7 @@ export default function CostosPage() {
   const [officeFilter, setOfficeFilter] = useState(ALL)
   const [dateFrom, setDateFrom] = useState("")
   const [dateTo, setDateTo] = useState("")
-  const [tab, setTab] = useState("dashboard")
+  const [tab, setTab] = useState("panel")
 
   const filterParams = useMemo(
     () => ({
@@ -332,6 +334,7 @@ export default function CostosPage() {
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="flex h-auto flex-wrap">
+          <TabsTrigger value="panel">Panel ejecutivo</TabsTrigger>
           <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
           <TabsTrigger value="productos">Productos</TabsTrigger>
           <TabsTrigger value="recepciones">Recepciones</TabsTrigger>
@@ -341,7 +344,11 @@ export default function CostosPage() {
           <TabsTrigger value="historial">Historial</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="dashboard" className="mt-4">
+        <TabsContent value="panel" className="mt-4">
+          <CostIntelligencePanel companyId={companyId} />
+        </TabsContent>
+        <TabsContent value="dashboard" className="mt-4 space-y-6">
+          <CostIntelligencePanel companyId={companyId} compact />
           <DashboardTab companyId={companyId} offices={offices} filterParams={filterParams} />
         </TabsContent>
         <TabsContent value="productos" className="mt-4">
@@ -763,6 +770,7 @@ function AlertasTab({
               <TableHead className="text-right">Costo</TableHead>
               <TableHead className="text-right">Var. %</TableHead>
               <TableHead>Alertas</TableHead>
+              <TableHead />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -790,6 +798,9 @@ function AlertasTab({
                         </Badge>
                       ))}
                     </div>
+                  </TableCell>
+                  <TableCell>
+                    <WatchlistButton companyId={companyId} variantId={a.variant_id} size="sm" />
                   </TableCell>
                 </TableRow>
               ))
@@ -989,6 +1000,7 @@ function ProductosTab({ companyId }: { companyId: number }) {
                       Ficha
                     </Link>
                   </Button>
+                  <WatchlistButton companyId={companyId} variantId={r.variant_id} size="sm" />
                 </TableCell>
               </TableRow>
             ))}
@@ -1071,6 +1083,7 @@ function OportunidadesTab({ companyId }: { companyId: number }) {
               <TableHead className="text-right">Variación</TableHead>
               <TableHead className="text-right">Stock</TableHead>
               <TableHead>Estado</TableHead>
+              <TableHead />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -1101,6 +1114,9 @@ function OportunidadesTab({ companyId }: { companyId: number }) {
                       ) : (
                         "—"
                       )}
+                    </TableCell>
+                    <TableCell>
+                      <WatchlistButton companyId={companyId} variantId={r.variant_id} size="sm" />
                     </TableCell>
                   </TableRow>
                 )

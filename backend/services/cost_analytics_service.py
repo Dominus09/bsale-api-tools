@@ -8,11 +8,16 @@ from typing import Any
 from backend.db import get_connection
 from backend.repositories import cost_analytics_repo as repo
 from backend.utils.cost_analytics_calc import (
+    COMMERCIAL_SCORE_LABELS,
     OPPORTUNITY_LABELS,
+    WATCHLIST_STATUS_LABELS,
     alert_semaphore,
+    alert_to_action,
     branch_spread_pct,
     classify_cost_alert,
+    commercial_score,
     spread_semaphore,
+    watchlist_status,
 )
 from backend.utils.json_safe import serialize_value
 
@@ -400,5 +405,255 @@ def get_margin_impact(company_id: int, variant_id: int) -> dict[str, Any]:
             "current_margin_pct": None,
             "target_margin_pct": None,
             "suggested_price": None,
+        }
+    )
+
+
+def _enrich_opportunity_row(row: dict[str, Any]) -> dict[str, Any]:
+    r = dict(row)
+    cur_cost = float(r.get("current_cost") or 0)
+    avg90 = float(r.get("avg_90d") or 0)
+    r["savings_vs_avg"] = round(avg90 - cur_cost, 2) if avg90 > 0 else None
+    st = r.get("status")
+    score_key, score_sem = commercial_score(
+        variation_pct_90d=float(r["variation_pct_90d"])
+        if r.get("variation_pct_90d") is not None
+        else None,
+        anomalous=abs(float(r.get("variation_pct_90d") or 0)) >= 50,
+    )
+    r["commercial_score"] = score_key
+    r["commercial_score_label"] = COMMERCIAL_SCORE_LABELS.get(score_key, score_key)
+    r["commercial_score_semaphore"] = score_sem
+    r["status_label"] = OPPORTUNITY_LABELS.get(st, "") if st else None
+    r["semaphore"] = (
+        "green" if st == "oportunidad_compra"
+        else "red" if st == "riesgo_comercial"
+        else "yellow"
+    )
+    return r
+
+
+def get_intelligence(
+    company_id: int,
+    *,
+    user_email: str,
+) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        summary_24h = repo.intelligence_summary_24h(cur, company_id)
+        opp_rows = repo.fetch_opportunity_base_rows(cur, company_id)
+        opp_counts = {
+            "oportunidad_compra": sum(
+                1 for r in opp_rows if r.get("status") == "oportunidad_compra"
+            ),
+            "riesgo_comercial": sum(
+                1 for r in opp_rows if r.get("status") == "riesgo_comercial"
+            ),
+        }
+        summary_24h["opportunities_detected"] = opp_counts["oportunidad_compra"]
+
+        enriched = [_enrich_opportunity_row(r) for r in opp_rows]
+        buy_ops = [
+            r for r in enriched if r.get("status") == "oportunidad_compra"
+        ]
+        risks = [r for r in enriched if r.get("status") == "riesgo_comercial"]
+        buy_ops.sort(
+            key=lambda x: float(x.get("savings_vs_avg") or 0), reverse=True
+        )
+        risks.sort(
+            key=lambda x: float(x.get("variation_pct_90d") or 0), reverse=True
+        )
+
+        featured = buy_ops[0] if buy_ops else (enriched[0] if enriched else None)
+
+        raw_alerts = repo.list_cost_alerts(cur, company_id, limit=50)
+        actionable: list[dict[str, Any]] = []
+        for r in raw_alerts:
+            spread = r.get("cross_branch_spread")
+            kinds = classify_cost_alert(
+                has_history=True,
+                has_cost_row=not bool(r.get("missing_cost")),
+                average_cost=float(r["average_cost"])
+                if r.get("average_cost") is not None
+                else None,
+                cost_net=float(r["cost_net"]) if r.get("cost_net") is not None else None,
+                variation_pct=float(r["variation_pct"])
+                if r.get("variation_pct") is not None
+                else None,
+                cross_branch_spread=float(spread) if spread is not None else None,
+                suspicious_reception=bool(r.get("suspicious_reception")),
+            )
+            if not kinds:
+                continue
+            primary = kinds[0]
+            action = alert_to_action(primary)
+            actionable.append(
+                {
+                    **r,
+                    "alert_types": kinds,
+                    "semaphore": alert_semaphore(kinds),
+                    "action": action["action"],
+                    "action_semaphore": action["semaphore"],
+                }
+            )
+        actionable.sort(
+            key=lambda x: (
+                0 if x.get("action_semaphore") == "red" else 1,
+                -abs(float(x.get("variation_pct") or 0)),
+            )
+        )
+
+        watchlist_raw = repo.list_watchlist_enriched(
+            cur, user_email=user_email, company_id=company_id
+        )
+        watchlist_items: list[dict[str, Any]] = []
+        for w in watchlist_raw:
+            wl_status, wl_sem = watchlist_status(
+                float(w["variation_pct_90d"])
+                if w.get("variation_pct_90d") is not None
+                else None
+            )
+            watchlist_items.append(
+                {
+                    **w,
+                    "watchlist_status": wl_status,
+                    "watchlist_status_label": WATCHLIST_STATUS_LABELS.get(
+                        wl_status, wl_status
+                    ),
+                    "watchlist_semaphore": wl_sem,
+                }
+            )
+
+        cur.close()
+    finally:
+        conn.close()
+
+    bullets = [
+        f"{summary_24h.get('products_increased_10', 0)} productos aumentaron más de 10%.",
+        f"{summary_24h.get('products_decreased_10', 0)} productos bajaron de costo.",
+        f"{summary_24h.get('products_branch_diff', 0)} productos presentan diferencias entre sucursales.",
+        f"{summary_24h.get('products_anomalous', 0)} productos muestran costo anómalo.",
+        f"{summary_24h.get('opportunities_detected', 0)} oportunidades de compra detectadas.",
+    ]
+
+    return serialize_value(
+        {
+            "company_id": company_id,
+            "auto_summary": {
+                "period": "24h",
+                "bullets": bullets,
+                "metrics": summary_24h,
+                "featured_product": featured,
+            },
+            "top_opportunities": buy_ops[:10],
+            "top_risks": risks[:10],
+            "actionable_alerts": actionable[:15],
+            "watchlist": watchlist_items,
+            "opportunity_counts": opp_counts,
+        }
+    )
+
+
+def list_watchlist(company_id: int, *, user_email: str) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        items = repo.list_watchlist_enriched(
+            cur, user_email=user_email, company_id=company_id
+        )
+        out = []
+        for w in items:
+            wl_status, wl_sem = watchlist_status(
+                float(w["variation_pct_90d"])
+                if w.get("variation_pct_90d") is not None
+                else None
+            )
+            score_key, score_sem = commercial_score(
+                variation_pct_90d=float(w["variation_pct_90d"])
+                if w.get("variation_pct_90d") is not None
+                else None,
+            )
+            out.append(
+                {
+                    **w,
+                    "watchlist_status": wl_status,
+                    "watchlist_status_label": WATCHLIST_STATUS_LABELS.get(
+                        wl_status, wl_status
+                    ),
+                    "watchlist_semaphore": wl_sem,
+                    "commercial_score": score_key,
+                    "commercial_score_label": COMMERCIAL_SCORE_LABELS.get(
+                        score_key, score_key
+                    ),
+                    "commercial_score_semaphore": score_sem,
+                }
+            )
+        cur.close()
+    finally:
+        conn.close()
+    return serialize_value(
+        {"company_id": company_id, "items": out, "total": len(out)}
+    )
+
+
+def add_to_watchlist(
+    company_id: int, variant_id: int, *, user_email: str
+) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        row = repo.add_watchlist_item(
+            cur,
+            user_email=user_email,
+            company_id=company_id,
+            variant_id=variant_id,
+        )
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+    return serialize_value(row)
+
+
+def remove_from_watchlist(
+    company_id: int, variant_id: int, *, user_email: str
+) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        ok = repo.remove_watchlist_item(
+            cur,
+            user_email=user_email,
+            company_id=company_id,
+            variant_id=variant_id,
+        )
+        conn.commit()
+        cur.close()
+    finally:
+        conn.close()
+    return serialize_value({"removed": ok, "company_id": company_id, "variant_id": variant_id})
+
+
+def watchlist_status_for_variant(
+    company_id: int, variant_id: int, *, user_email: str
+) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        on_list = repo.is_on_watchlist(
+            cur,
+            user_email=user_email,
+            company_id=company_id,
+            variant_id=variant_id,
+        )
+        cur.close()
+    finally:
+        conn.close()
+    return serialize_value(
+        {
+            "company_id": company_id,
+            "variant_id": variant_id,
+            "on_watchlist": on_list,
         }
     )
