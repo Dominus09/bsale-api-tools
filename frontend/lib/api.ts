@@ -4422,6 +4422,14 @@ export type CostAnalyticsDashboard = {
     variation_gt_20: number
     receptions_processed: number
     lines_processed: number
+    products_monitored?: number
+    receptions_30d?: number
+    avg_cost_company?: number | null
+    products_cost_up?: number
+    products_cost_down?: number
+    opportunities_buy?: number
+    opportunities_risk?: number
+    opportunities_detected?: number
   }
   last_sync: CostAnalyticsSyncState | null
   offices: CostOfficeRef[]
@@ -4458,6 +4466,8 @@ export type CostHistoryRow = {
   cost_bruto_erp?: number | null
   average_cost?: number | null
   variation_pct?: number | null
+  reception_note?: string | null
+  reception_type?: string | null
 }
 
 export type CostVariantHistory = {
@@ -4469,6 +4479,13 @@ export type CostVariantHistory = {
   average_cost?: number | null
   average_cost_gross?: number | null
   items: CostHistoryRow[]
+  chart_series?: {
+    date?: string | null
+    cost_net?: number | null
+    cost_bruto_erp?: number | null
+    average_cost?: number | null
+    office_name?: string | null
+  }[]
 }
 
 export type CostReceptionRow = {
@@ -4483,6 +4500,8 @@ export type CostReceptionRow = {
   total_quantity: number
   total_cost_net?: number | null
   total_cost_bruto?: number | null
+  reception_note?: string | null
+  reception_type?: string | null
 }
 
 export type CostReceptionDetailLine = {
@@ -4539,6 +4558,59 @@ export type CostOfficeComparison = {
   min_cost_net?: number | null
   max_cost_net?: number | null
   max_spread_pct?: number | null
+}
+
+export type CostProductRow = {
+  variant_id: number
+  product_id?: number | null
+  product_name?: string | null
+  variant_name?: string | null
+  barcode?: string | null
+  company_name?: string | null
+  current_cost?: number | null
+  current_cost_gross?: number | null
+  average_cost?: number | null
+  average_cost_gross?: number | null
+  last_reception_date?: string | null
+  last_office_name?: string | null
+  variation_pct?: number | null
+  stock_quantity?: number | null
+}
+
+export type CostOpportunityRow = {
+  variant_id: number
+  product_name?: string | null
+  variant_name?: string | null
+  barcode?: string | null
+  company_name?: string | null
+  current_cost?: number | null
+  avg_30d?: number | null
+  avg_60d?: number | null
+  avg_90d?: number | null
+  variation_pct_90d?: number | null
+  stock_quantity?: number | null
+  status?: "oportunidad_compra" | "riesgo_comercial" | null
+  status_label?: string | null
+  semaphore?: "green" | "yellow" | "red"
+}
+
+export type CostBranchComparisonRow = {
+  variant_id: number
+  product_name?: string | null
+  variant_name?: string | null
+  barcode?: string | null
+  min_cost?: number | null
+  max_cost?: number | null
+  offices_count?: number
+  internal_variation_pct?: number | null
+  semaphore?: "green" | "yellow" | "red"
+  offices?: {
+    office_id: number
+    office_name?: string | null
+    cost_net?: number | null
+    admission_date?: string | null
+    reception_id?: number | null
+  }[]
 }
 
 function requireCompanyId(): number {
@@ -4725,6 +4797,78 @@ export async function compareCostOffices(params: {
     throw new Error(msg || "Error al comparar sucursales")
   }
   return res.json()
+}
+
+export async function listCostProducts(params?: {
+  company_id?: number
+  q?: string
+  limit?: number
+  offset?: number
+}): Promise<{ items: CostProductRow[]; total: number }> {
+  const cid = params?.company_id ?? requireCompanyId()
+  const qs = new URLSearchParams({ company_id: String(cid) })
+  if (params?.q?.trim()) qs.set("q", params.q.trim())
+  if (params?.limit != null) qs.set("limit", String(params.limit))
+  if (params?.offset != null) qs.set("offset", String(params.offset))
+  const res = await fetch(`${API_URL}/cost-analytics/products?${qs}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) throw new Error("Error al cargar productos")
+  return res.json() as Promise<{ items: CostProductRow[]; total: number }>
+}
+
+export async function listCostOpportunities(params?: {
+  company_id?: number
+  status?: "oportunidad_compra" | "riesgo_comercial"
+  limit?: number
+  offset?: number
+}): Promise<{
+  items: CostOpportunityRow[]
+  total: number
+  counts: { oportunidad_compra: number; riesgo_comercial: number }
+}> {
+  const cid = params?.company_id ?? requireCompanyId()
+  const qs = new URLSearchParams({ company_id: String(cid) })
+  if (params?.status) qs.set("status", params.status)
+  if (params?.limit != null) qs.set("limit", String(params.limit))
+  if (params?.offset != null) qs.set("offset", String(params.offset))
+  const res = await fetch(`${API_URL}/cost-analytics/opportunities?${qs}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) throw new Error("Error al cargar oportunidades")
+  return res.json()
+}
+
+export async function listCostBranchComparison(params?: {
+  company_id?: number
+  q?: string
+  limit?: number
+}): Promise<{ items: CostBranchComparisonRow[] }> {
+  const cid = params?.company_id ?? requireCompanyId()
+  const qs = new URLSearchParams({ company_id: String(cid) })
+  if (params?.q?.trim()) qs.set("q", params.q.trim())
+  if (params?.limit != null) qs.set("limit", String(params.limit))
+  const res = await fetch(`${API_URL}/cost-analytics/compare/branches?${qs}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) throw new Error("Error al comparar sucursales")
+  return res.json() as Promise<{ items: CostBranchComparisonRow[] }>
+}
+
+export async function getCostMarginImpact(
+  variantId: number,
+  companyId?: number,
+): Promise<Record<string, unknown>> {
+  const cid = companyId ?? requireCompanyId()
+  const qs = new URLSearchParams({
+    company_id: String(cid),
+    variant_id: String(variantId),
+  })
+  const res = await fetch(`${API_URL}/cost-analytics/margin-impact?${qs}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) throw new Error("Error al consultar impacto en margen")
+  return res.json() as Promise<Record<string, unknown>>
 }
 
 export async function syncCostAnalytics(params?: {

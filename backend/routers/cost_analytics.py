@@ -131,6 +131,51 @@ def cost_alerts(
     return svc.list_alerts(company_id, office_id=office_id, limit=limit)
 
 
+@router.get("/products")
+def list_products(
+    company_id: int = Query(..., ge=1),
+    q: str | None = Query(None, max_length=120),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    _user: dict = Depends(require_staff_user),
+):
+    return svc.list_products(company_id, q=q, limit=limit, offset=offset)
+
+
+@router.get("/opportunities")
+def list_opportunities(
+    company_id: int = Query(..., ge=1),
+    status: str | None = Query(
+        None, pattern="^(oportunidad_compra|riesgo_comercial)$"
+    ),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    _user: dict = Depends(require_staff_user),
+):
+    return svc.list_opportunities(
+        company_id, status=status, limit=limit, offset=offset
+    )
+
+
+@router.get("/compare/branches")
+def compare_branches(
+    company_id: int = Query(..., ge=1),
+    q: str | None = Query(None, max_length=120),
+    limit: int = Query(20, ge=1, le=100),
+    _user: dict = Depends(require_staff_user),
+):
+    return svc.list_branch_comparison(company_id, q=q, limit=limit)
+
+
+@router.get("/margin-impact")
+def margin_impact(
+    company_id: int = Query(..., ge=1),
+    variant_id: int = Query(..., ge=1),
+    _user: dict = Depends(require_staff_user),
+):
+    return svc.get_margin_impact(company_id, variant_id)
+
+
 @router.get("/compare/offices")
 def compare_offices(
     company_id: int = Query(..., ge=1),

@@ -6,12 +6,20 @@ from backend.utils.cost_analytics_calc import (
     alert_semaphore,
     branch_spread_pct,
     classify_cost_alert,
+    classify_reception_type,
     cost_gross_from_net,
     make_unique_key,
     parse_tax_factor,
     split_erp_cost,
     variation_pct,
 )
+
+
+def test_classify_reception_type():
+    assert classify_reception_type("FACTURA", "NOTA CREDITO proveedor", None) == "recepcion_nc"
+    assert classify_reception_type("GUIA", "devolucion mercadería", None) == "recepcion_devolucion"
+    assert classify_reception_type("FACTURA", "ajuste inventario", None) == "recepcion_ajuste"
+    assert classify_reception_type("FACTURA", None, None) == "recepcion_normal"
 
 
 def test_parse_tax_factor_defaults():

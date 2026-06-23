@@ -202,6 +202,8 @@ def insert_history_line(
     reception_detail_id: int,
     document: str | None,
     document_number: int | None,
+    reception_note: str | None = None,
+    reception_type: str | None = None,
     admission_date: datetime,
     quantity: float,
     cost_net: float,
@@ -217,12 +219,13 @@ def insert_history_line(
             unique_key, company_id, company_name, office_id, office_name,
             variant_id, product_id, barcode, product_name, variant_name,
             reception_id, reception_detail_id, document, document_number,
+            reception_note, reception_type,
             admission_date, quantity, cost_net, iva_amount, other_taxes,
             cost_bruto_erp, average_cost, variation_pct
         )
         VALUES (
             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
         )
         ON CONFLICT (unique_key) DO NOTHING
         RETURNING id
@@ -242,6 +245,8 @@ def insert_history_line(
             reception_detail_id,
             document,
             document_number,
+            reception_note,
+            reception_type,
             admission_date,
             quantity,
             cost_net,
@@ -581,7 +586,28 @@ def dashboard_kpis(
             (SELECT COUNT(*)::int FROM scoped
              WHERE variation_pct IS NOT NULL AND ABS(variation_pct) > 20) AS variation_gt_20,
             (SELECT COUNT(DISTINCT reception_id)::int FROM scoped) AS receptions_processed,
-            (SELECT COUNT(*)::int FROM scoped) AS lines_processed
+            (SELECT COUNT(*)::int FROM scoped) AS lines_processed,
+            (SELECT COUNT(DISTINCT variant_id)::int FROM scoped) AS products_monitored,
+            (SELECT COUNT(DISTINCT reception_id)::int FROM scoped
+             WHERE admission_date >= NOW() - INTERVAL '30 days') AS receptions_30d,
+            (SELECT ROUND(AVG(latest_cost)::numeric, 2) FROM (
+                SELECT DISTINCT ON (variant_id) cost_net AS latest_cost
+                FROM scoped
+                WHERE cost_net IS NOT NULL AND cost_net > 0
+                ORDER BY variant_id, admission_date DESC
+            ) lc) AS avg_cost_company,
+            (SELECT COUNT(*)::int FROM (
+                SELECT DISTINCT ON (variant_id) variation_pct
+                FROM scoped
+                WHERE variation_pct IS NOT NULL
+                ORDER BY variant_id, admission_date DESC
+            ) lv WHERE variation_pct > 10) AS products_cost_up,
+            (SELECT COUNT(*)::int FROM (
+                SELECT DISTINCT ON (variant_id) variation_pct
+                FROM scoped
+                WHERE variation_pct IS NOT NULL
+                ORDER BY variant_id, admission_date DESC
+            ) lv WHERE variation_pct < -10) AS products_cost_down
         """,
         [*filt_params, company_id, company_id, company_id, company_id],
     )
@@ -662,6 +688,7 @@ def list_history_rows(
             h.company_id, h.company_name, h.office_id, h.office_name,
             h.variant_id, h.barcode, h.product_name, h.variant_name,
             h.reception_id, h.reception_detail_id, h.document, h.document_number,
+            h.reception_note, h.reception_type,
             h.admission_date, h.quantity, h.cost_net, h.iva_amount, h.other_taxes,
             h.cost_bruto_erp, h.average_cost, h.variation_pct
         FROM {HISTORY} h
@@ -718,6 +745,8 @@ def list_receptions(
             MIN(h.office_name) AS office_name,
             MIN(h.document) AS document,
             MIN(h.document_number) AS document_number,
+            MIN(h.reception_note) AS reception_note,
+            MIN(h.reception_type) AS reception_type,
             COUNT(DISTINCT h.variant_id)::int AS products_count,
             COALESCE(SUM(h.quantity), 0) AS total_quantity,
             COALESCE(SUM(h.cost_net * h.quantity), 0) AS total_cost_net,
@@ -747,6 +776,8 @@ def get_reception_detail(
             MIN(admission_date) AS admission_date,
             MIN(document) AS document,
             MIN(document_number) AS document_number,
+            MIN(reception_note) AS reception_note,
+            MIN(reception_type) AS reception_type,
             COUNT(DISTINCT variant_id)::int AS products_count,
             COALESCE(SUM(quantity), 0) AS total_quantity,
             COALESCE(SUM(cost_net * quantity), 0) AS total_cost_net,
@@ -766,7 +797,7 @@ def get_reception_detail(
         SELECT
             reception_detail_id, variant_id, product_name, variant_name, barcode,
             quantity, cost_net, iva_amount, other_taxes, cost_bruto_erp,
-            average_cost, variation_pct
+            average_cost, variation_pct, reception_note, reception_type
         FROM {HISTORY}
         WHERE company_id = %s AND reception_id = %s
         ORDER BY id ASC
@@ -931,5 +962,237 @@ def list_cost_alerts(
         LIMIT %s
         """,
         [company_id, *office_params, company_id, company_id, company_id, limit],
+    )
+    return [_row_dict(cur, r) for r in cur.fetchall()]
+
+
+def _stocks_table_exists(cur) -> bool:
+    cur.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema = 'bsale' AND table_name = 'stocks'
+        )
+        """
+    )
+    return bool(cur.fetchone()[0])
+
+
+def list_products(
+    cur,
+    company_id: int,
+    *,
+    q: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[dict[str, Any]], int]:
+    """Catálogo consolidado por empresa: último costo por variante."""
+    where = "h.company_id = %s"
+    params: list[Any] = [company_id]
+    if q and q.strip():
+        term = f"%{q.strip()}%"
+        where += (
+            " AND (h.barcode ILIKE %s OR COALESCE(h.product_name,'') ILIKE %s"
+            " OR COALESCE(h.variant_name,'') ILIKE %s)"
+        )
+        params.extend([term, term, term])
+    cur.execute(
+        f"SELECT COUNT(DISTINCT variant_id) FROM {HISTORY} h WHERE {where}",
+        params,
+    )
+    total = int(cur.fetchone()[0])
+    has_stock = _stocks_table_exists(cur)
+    stock_join = ""
+    stock_sel = "NULL::numeric AS stock_quantity"
+    if has_stock:
+        stock_join = """
+        LEFT JOIN (
+            SELECT variant_id, SUM(quantity_available)::numeric AS stock_quantity
+            FROM bsale.stocks WHERE company_id = %s GROUP BY variant_id
+        ) st ON st.variant_id = l.variant_id
+        """
+        stock_sel = "st.stock_quantity"
+    list_params = list(params) + [company_id]
+    if has_stock:
+        list_params.append(company_id)
+    list_params.extend([limit, offset])
+    cur.execute(
+        f"""
+        WITH latest AS (
+            SELECT DISTINCT ON (h.variant_id)
+                h.variant_id, h.product_id, h.product_name, h.variant_name,
+                h.barcode, h.company_name, h.cost_net AS current_cost,
+                h.cost_bruto_erp AS current_cost_gross,
+                h.admission_date AS last_reception_date,
+                h.office_name AS last_office_name, h.variation_pct,
+                h.reception_id AS last_reception_id
+            FROM {HISTORY} h
+            WHERE {where}
+            ORDER BY h.variant_id, h.admission_date DESC, h.id DESC
+        )
+        SELECT l.*, vc.average_cost_net AS average_cost, vc.average_cost_gross,
+               {stock_sel}
+        FROM latest l
+        LEFT JOIN bsale.variant_cost vc
+            ON vc.company_id = %s AND vc.variant_id = l.variant_id
+        {stock_join}
+        ORDER BY l.product_name NULLS LAST, l.variant_name NULLS LAST
+        LIMIT %s OFFSET %s
+        """,
+        list_params,
+    )
+    return [_row_dict(cur, r) for r in cur.fetchall()], total
+
+
+def list_purchase_opportunities(
+    cur,
+    company_id: int,
+    *,
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> tuple[list[dict[str, Any]], int, dict[str, int]]:
+    """Comparación costo actual vs promedio histórico 30/60/90 días."""
+    has_stock = _stocks_table_exists(cur)
+    if has_stock:
+        stock_join = """
+        LEFT JOIN (
+            SELECT variant_id, SUM(quantity_available)::numeric AS stock_quantity
+            FROM bsale.stocks WHERE company_id = %s GROUP BY variant_id
+        ) st ON st.variant_id = l.variant_id
+        """
+    else:
+        stock_join = (
+            "LEFT JOIN (SELECT NULL::bigint AS variant_id, "
+            "NULL::numeric AS stock_quantity) st ON FALSE"
+        )
+    sql_params: list[Any] = [company_id, company_id, company_id, company_id]
+    if has_stock:
+        sql_params.append(company_id)
+    cur.execute(
+        f"""
+        WITH latest AS (
+            SELECT DISTINCT ON (variant_id)
+                variant_id, product_name, variant_name, barcode, company_name,
+                cost_net AS current_cost, admission_date AS last_reception_date
+            FROM {HISTORY}
+            WHERE company_id = %s AND cost_net > 0
+            ORDER BY variant_id, admission_date DESC, id DESC
+        ),
+        avg_30 AS (
+            SELECT variant_id, AVG(cost_net)::numeric AS avg_30d
+            FROM {HISTORY}
+            WHERE company_id = %s AND admission_date >= NOW() - INTERVAL '30 days' AND cost_net > 0
+            GROUP BY variant_id
+        ),
+        avg_60 AS (
+            SELECT variant_id, AVG(cost_net)::numeric AS avg_60d
+            FROM {HISTORY}
+            WHERE company_id = %s AND admission_date >= NOW() - INTERVAL '60 days' AND cost_net > 0
+            GROUP BY variant_id
+        ),
+        avg_90 AS (
+            SELECT variant_id, AVG(cost_net)::numeric AS avg_90d
+            FROM {HISTORY}
+            WHERE company_id = %s AND admission_date >= NOW() - INTERVAL '90 days' AND cost_net > 0
+            GROUP BY variant_id
+        )
+        SELECT
+            l.variant_id, l.product_name, l.variant_name, l.barcode, l.company_name,
+            l.current_cost, a30.avg_30d, a60.avg_60d, a90.avg_90d,
+            l.last_reception_date, st.stock_quantity,
+            CASE WHEN a90.avg_90d > 0 THEN ROUND(
+                ((l.current_cost - a90.avg_90d) / a90.avg_90d) * 100.0, 2
+            ) ELSE NULL END AS variation_pct_90d
+        FROM latest l
+        LEFT JOIN avg_30 a30 ON a30.variant_id = l.variant_id
+        LEFT JOIN avg_60 a60 ON a60.variant_id = l.variant_id
+        LEFT JOIN avg_90 a90 ON a90.variant_id = l.variant_id
+        {stock_join}
+        WHERE a90.avg_90d IS NOT NULL AND a90.avg_90d > 0
+        """,
+        sql_params,
+    )
+    rows = [_row_dict(cur, r) for r in cur.fetchall()]
+    counts = {"oportunidad_compra": 0, "riesgo_comercial": 0}
+    items: list[dict[str, Any]] = []
+    for r in rows:
+        var = r.get("variation_pct_90d")
+        if var is None:
+            continue
+        v = float(var)
+        if v <= -3:
+            opp_status = "oportunidad_compra"
+            counts["oportunidad_compra"] += 1
+        elif v >= 3:
+            opp_status = "riesgo_comercial"
+            counts["riesgo_comercial"] += 1
+        else:
+            opp_status = None
+        if status and opp_status != status:
+            continue
+        r["status"] = opp_status
+        items.append(r)
+    items.sort(key=lambda x: float(x.get("variation_pct_90d") or 0))
+    total = len(items)
+    return items[offset : offset + limit], total, counts
+
+
+def list_branch_comparison_ranked(
+    cur,
+    company_id: int,
+    *,
+    q: str | None = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    q_filter = ""
+    params: list[Any] = [company_id]
+    if q and q.strip():
+        term = f"%{q.strip()}%"
+        q_filter = """
+          AND (
+              h.barcode ILIKE %s OR COALESCE(h.product_name,'') ILIKE %s
+              OR COALESCE(h.variant_name,'') ILIKE %s
+          )
+        """
+        params.extend([term, term, term])
+    params.append(limit)
+    cur.execute(
+        f"""
+        WITH per_office AS (
+            SELECT DISTINCT ON (h.variant_id, h.office_id)
+                h.variant_id, h.product_name, h.variant_name, h.barcode,
+                h.office_id, h.office_name, h.cost_net, h.admission_date, h.reception_id
+            FROM {HISTORY} h
+            WHERE h.company_id = %s AND h.office_id IS NOT NULL{q_filter}
+            ORDER BY h.variant_id, h.office_id, h.admission_date DESC, h.id DESC
+        ),
+        spread AS (
+            SELECT variant_id,
+                MIN(product_name) AS product_name,
+                MIN(variant_name) AS variant_name,
+                MIN(barcode) AS barcode,
+                MIN(cost_net) AS min_cost,
+                MAX(cost_net) AS max_cost,
+                COUNT(DISTINCT office_id)::int AS offices_count,
+                CASE WHEN MIN(cost_net) > 0 THEN ROUND(
+                    ((MAX(cost_net) - MIN(cost_net)) / MIN(cost_net)) * 100.0, 2
+                ) ELSE NULL END AS internal_variation_pct
+            FROM per_office GROUP BY variant_id HAVING COUNT(DISTINCT office_id) > 1
+        )
+        SELECT s.*,
+            json_agg(json_build_object(
+                'office_id', p.office_id, 'office_name', p.office_name,
+                'cost_net', p.cost_net, 'admission_date', p.admission_date,
+                'reception_id', p.reception_id
+            ) ORDER BY p.office_name) AS offices
+        FROM spread s
+        JOIN per_office p ON p.variant_id = s.variant_id
+        GROUP BY s.variant_id, s.product_name, s.variant_name, s.barcode,
+                 s.min_cost, s.max_cost, s.offices_count, s.internal_variation_pct
+        ORDER BY s.internal_variation_pct DESC NULLS LAST
+        LIMIT %s
+        """,
+        params,
     )
     return [_row_dict(cur, r) for r in cur.fetchall()]

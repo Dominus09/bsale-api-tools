@@ -21,6 +21,7 @@ from backend.utils.bsale_field_parse import (
     parse_optional_int,
 )
 from backend.utils.cost_analytics_calc import (
+    classify_reception_type,
     cost_gross_from_net,
     make_unique_key,
     split_erp_cost,
@@ -231,9 +232,12 @@ def _sync_company_receptions(
             first_reception_logged = True
         admission = _ts_to_dt(adm_ts)
         document = (rec.get("document") or "").strip() or None
-
         raw_doc_num = rec.get("documentNumber")
         doc_num = parse_optional_int(raw_doc_num)
+        reception_note = (rec.get("note") or "").strip() or None
+        reception_type = classify_reception_type(
+            document, reception_note, doc_num if doc_num is not None else raw_doc_num
+        )
         if doc_num is None:
             logger.info(
                 "[COST_SYNC] recepcion_id=%s document_number_raw=%r",
@@ -383,6 +387,8 @@ def _sync_company_receptions(
                         reception_detail_id=detail_id,
                         document=document,
                         document_number=doc_num,
+                        reception_note=reception_note,
+                        reception_type=reception_type,
                         admission_date=admission,
                         quantity=qty,
                         cost_net=cost_net,

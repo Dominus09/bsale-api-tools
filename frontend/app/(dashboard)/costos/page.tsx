@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   AlertTriangle,
@@ -7,26 +8,31 @@ import {
   Loader2,
   RefreshCw,
   Search,
+  TrendingDown,
+  TrendingUp,
 } from "lucide-react"
 
 import {
-  compareCostOffices,
   getCompanies,
   getCostAlerts,
   getCostAnalyticsDashboard,
   getCostReceptionDetail,
   getCostReceptions,
-  getCostVariantHistory,
   getStoredCompanyId,
+  listCostBranchComparison,
   listCostHistory,
+  listCostOpportunities,
+  listCostProducts,
   searchCostHistory,
   syncCostAnalytics,
   type Company,
   type CostAlertRow,
+  type CostBranchComparisonRow,
   type CostHistoryRow,
   type CostHistorySearchHit,
-  type CostOfficeComparison,
   type CostOfficeRef,
+  type CostOpportunityRow,
+  type CostProductRow,
   type CostReceptionDetail,
   type CostReceptionRow,
 } from "@/lib/api"
@@ -96,6 +102,19 @@ const ALERT_LABELS: Record<string, string> = {
   anomalous_cost: "Costo anómalo",
   suspicious_reception: "Recepción sospechosa",
   cross_branch_diff: "Diferencia entre sucursales",
+  cost_decrease_10: "Baja de costo >10%",
+}
+
+const RECEPTION_TYPE_LABELS: Record<string, string> = {
+  recepcion_normal: "Normal",
+  recepcion_ajuste: "Ajuste",
+  recepcion_devolucion: "Devolución",
+  recepcion_nc: "NC",
+}
+
+const OPPORTUNITY_STATUS: Record<string, { label: string; className: string }> = {
+  oportunidad_compra: { label: "Comprar", className: "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300" },
+  riesgo_comercial: { label: "Costo elevado", className: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300" },
 }
 
 function SemaphoreDot({ level }: { level: "green" | "yellow" | "red" }) {
@@ -253,6 +272,16 @@ export default function CostosPage() {
       .catch(() => setCompanies([]))
   }, [])
 
+  const onCompanyChange = (id: number) => {
+    setCompanyId(id)
+    if (typeof window !== "undefined") {
+      localStorage.setItem("company_id", String(id))
+      const name = companies.find((c) => c.company_id === id)?.name
+      if (name) localStorage.setItem("company_name", name)
+    }
+    setOfficeFilter(ALL)
+  }
+
   useEffect(() => {
     if (companyId == null) return
     void getCostAnalyticsDashboard({ company_id: companyId })
@@ -284,39 +313,39 @@ export default function CostosPage() {
             Costos
           </h1>
           <p className="text-sm text-muted-foreground">
-            Trazabilidad por empresa → sucursal → recepción → variante — {companyLabel}
+            Centro de inteligencia de compras y costos — {companyLabel}
           </p>
         </div>
-        {companies.length > 1 ? (
-          <Select value={String(companyId)} onValueChange={(v) => setCompanyId(Number(v))}>
-            <SelectTrigger className="w-[220px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {companies.map((c) => (
-                <SelectItem key={c.company_id} value={String(c.company_id)}>
-                  {c.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : null}
+        <Select value={String(companyId)} onValueChange={(v) => onCompanyChange(Number(v))}>
+          <SelectTrigger className="w-[260px]">
+            <SelectValue placeholder="Empresa" />
+          </SelectTrigger>
+          <SelectContent>
+            {companies.map((c) => (
+              <SelectItem key={c.company_id} value={String(c.company_id)}>
+                {c.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList className="flex h-auto flex-wrap">
           <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
-          <TabsTrigger value="historial">Historial</TabsTrigger>
+          <TabsTrigger value="productos">Productos</TabsTrigger>
           <TabsTrigger value="recepciones">Recepciones</TabsTrigger>
           <TabsTrigger value="alertas">Alertas</TabsTrigger>
+          <TabsTrigger value="oportunidades">Oportunidades</TabsTrigger>
           <TabsTrigger value="comparacion">Comparación sucursales</TabsTrigger>
+          <TabsTrigger value="historial">Historial</TabsTrigger>
         </TabsList>
 
         <TabsContent value="dashboard" className="mt-4">
           <DashboardTab companyId={companyId} offices={offices} filterParams={filterParams} />
         </TabsContent>
-        <TabsContent value="historial" className="mt-4">
-          <HistorialTab companyId={companyId} offices={offices} filterParams={filterParams} />
+        <TabsContent value="productos" className="mt-4">
+          <ProductosTab companyId={companyId} />
         </TabsContent>
         <TabsContent value="recepciones" className="mt-4">
           <RecepcionesTab companyId={companyId} offices={offices} filterParams={filterParams} />
@@ -324,8 +353,14 @@ export default function CostosPage() {
         <TabsContent value="alertas" className="mt-4">
           <AlertasTab companyId={companyId} offices={offices} officeFilter={officeFilter} />
         </TabsContent>
+        <TabsContent value="oportunidades" className="mt-4">
+          <OportunidadesTab companyId={companyId} />
+        </TabsContent>
         <TabsContent value="comparacion" className="mt-4">
           <ComparacionTab companyId={companyId} />
+        </TabsContent>
+        <TabsContent value="historial" className="mt-4">
+          <HistorialTab companyId={companyId} offices={offices} filterParams={filterParams} />
         </TabsContent>
       </Tabs>
     </div>
@@ -349,7 +384,7 @@ function DashboardTab({
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [kpis, setKpis] = useState<Record<string, number> | null>(null)
+  const [kpis, setKpis] = useState<Record<string, number | null | undefined> | null>(null)
   const [lastSync, setLastSync] = useState<{
     last_run_at?: string | null
     last_status?: string | null
@@ -437,13 +472,16 @@ function DashboardTab({
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <KpiCard title="Productos con costo" value={kpis?.with_cost ?? 0} />
-          <KpiCard title="Productos sin costo" value={kpis?.without_cost ?? 0} />
-          <KpiCard title="Productos costo cero" value={kpis?.zero_cost ?? 0} />
-          <KpiCard title="Recepciones últimas 24h" value={kpis?.receptions_24h ?? 0} />
-          <KpiCard title="Variaciones >10%" value={kpis?.variation_gt_10 ?? 0} />
-          <KpiCard title="Variaciones >20%" value={kpis?.variation_gt_20 ?? 0} />
-          <KpiCard title="Recepciones procesadas" value={kpis?.receptions_processed ?? 0} />
+          <KpiCard
+            title="Costo promedio empresa"
+            value={formatMoney(kpis?.avg_cost_company ?? undefined)}
+          />
+          <KpiCard title="Productos monitoreados" value={kpis?.products_monitored ?? kpis?.with_cost ?? 0} />
+          <KpiCard title="Recepciones 30 días" value={kpis?.receptions_30d ?? 0} />
+          <KpiCard title="Alertas activas" value={(kpis?.variation_gt_10 ?? 0) + (kpis?.variation_gt_20 ?? 0)} />
+          <KpiCard title="Productos con alza" value={kpis?.products_cost_up ?? kpis?.variation_gt_10 ?? 0} hint=">10% vs anterior" />
+          <KpiCard title="Productos con baja" value={kpis?.products_cost_down ?? 0} hint=">10% vs anterior" />
+          <KpiCard title="Oportunidades detectadas" value={kpis?.opportunities_detected ?? 0} />
           <KpiCard title="Líneas en historial" value={kpis?.lines_processed ?? 0} />
         </div>
       )}
@@ -501,18 +539,6 @@ function HistorialTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companyId])
 
-  const openVariant = async (variantId: number) => {
-    setLoading(true)
-    try {
-      const data = await getCostVariantHistory(variantId, companyId)
-      setRows(data.items)
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Error al cargar variante")
-    } finally {
-      setLoading(false)
-    }
-  }
-
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-4">
@@ -539,8 +565,10 @@ function HistorialTab({
       {hits.length > 0 ? (
         <div className="flex flex-wrap gap-2">
           {hits.map((h) => (
-            <Button key={h.variant_id} size="sm" variant="outline" onClick={() => void openVariant(h.variant_id)}>
-              {h.product_name} — {h.variant_name}
+            <Button key={h.variant_id} size="sm" variant="outline" asChild>
+              <Link href={`/costos/productos/${h.variant_id}?company_id=${companyId}`}>
+                {h.product_name} — {h.variant_name}
+              </Link>
             </Button>
           ))}
         </div>
@@ -613,6 +641,7 @@ function RecepcionesTab({
               <TableHead>Empresa</TableHead>
               <TableHead>Sucursal</TableHead>
               <TableHead>Documento</TableHead>
+              <TableHead>Tipo</TableHead>
               <TableHead className="text-right">Productos</TableHead>
               <TableHead className="text-right">Unidades</TableHead>
               <TableHead className="text-right">Costo total</TableHead>
@@ -626,6 +655,15 @@ function RecepcionesTab({
                 <TableCell>{r.company_name ?? "—"}</TableCell>
                 <TableCell>{r.office_name ?? "—"}</TableCell>
                 <TableCell>{r.document ?? ""} {r.document_number ?? ""}</TableCell>
+                <TableCell>
+                  {r.reception_type ? (
+                    <Badge variant="outline">
+                      {RECEPTION_TYPE_LABELS[r.reception_type] ?? r.reception_type}
+                    </Badge>
+                  ) : (
+                    "—"
+                  )}
+                </TableCell>
                 <TableCell className="text-right">{r.products_count}</TableCell>
                 <TableCell className="text-right">{r.total_quantity}</TableCell>
                 <TableCell className="text-right">{formatMoney(r.total_cost_bruto ?? r.total_cost_net)}</TableCell>
@@ -765,73 +803,93 @@ function AlertasTab({
 
 function ComparacionTab({ companyId }: { companyId: number }) {
   const [q, setQ] = useState("")
-  const [items, setItems] = useState<CostOfficeComparison[]>([])
-  const [selected, setSelected] = useState<CostOfficeComparison | null>(null)
-  const [loading, setLoading] = useState(false)
+  const [items, setItems] = useState<CostBranchComparisonRow[]>([])
+  const [selected, setSelected] = useState<CostBranchComparisonRow | null>(null)
+  const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const run = async () => {
-    if (q.trim().length < 2) {
-      setError("Ingrese al menos 2 caracteres.")
-      return
-    }
+  const load = useCallback(async () => {
     setLoading(true)
     setError(null)
-    setSelected(null)
     try {
-      const data = await compareCostOffices({ company_id: companyId, q: q.trim() })
-      if ("items" in data) setItems(data.items)
-      else if ("comparison" in data) setSelected(data.comparison)
+      const data = await listCostBranchComparison({
+        company_id: companyId,
+        q: q.trim().length >= 2 ? q.trim() : undefined,
+        limit: 20,
+      })
+      setItems(data.items)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Error al comparar")
     } finally {
       setLoading(false)
     }
-  }
+  }, [companyId, q])
+
+  useEffect(() => {
+    void load()
+  }, [load])
 
   return (
     <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">
+        Variación interna entre sucursales por producto. Semáforo: 0–3% verde, 3–10% amarillo, &gt;10% rojo.
+      </p>
       <div className="flex gap-2">
         <Input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Producto o código de barras…"
+          placeholder="Filtrar producto o código…"
           className="max-w-md"
-          onKeyDown={(e) => e.key === "Enter" && void run()}
+          onKeyDown={(e) => e.key === "Enter" && void load()}
         />
-        <Button onClick={() => void run()} disabled={loading}>
+        <Button onClick={() => void load()} disabled={loading}>
           {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Search className="mr-2 h-4 w-4" />}
-          Comparar
+          Buscar
         </Button>
       </div>
       {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
 
-      {items.length > 0 ? (
+      {loading ? (
+        <Loader2 className="mx-auto h-6 w-6 animate-spin" />
+      ) : items.length === 0 ? (
+        <p className="text-sm text-muted-foreground">Sin productos con costos en múltiples sucursales.</p>
+      ) : (
         <div className="space-y-2">
           {items.map((cmp) => (
-            <Card key={cmp.variant_id} className="cursor-pointer hover:bg-muted/40" onClick={() => setSelected(cmp)}>
+            <Card
+              key={cmp.variant_id}
+              className="cursor-pointer hover:bg-muted/40"
+              onClick={() => setSelected(cmp)}
+            >
               <CardContent className="flex flex-wrap items-center justify-between gap-2 py-4">
-                <div>
-                  <p className="font-medium">{cmp.product_name} — {cmp.variant_name}</p>
-                  <p className="text-xs text-muted-foreground">{cmp.barcode}</p>
+                <div className="flex items-center gap-3">
+                  <SemaphoreDot level={cmp.semaphore ?? "green"} />
+                  <div>
+                    <p className="font-medium">{cmp.product_name} — {cmp.variant_name}</p>
+                    <p className="text-xs text-muted-foreground">{cmp.barcode}</p>
+                  </div>
                 </div>
-                <Badge variant={cmp.max_spread_pct && cmp.max_spread_pct >= 10 ? "destructive" : "secondary"}>
-                  Dif. máx. {formatPct(cmp.max_spread_pct)}
-                </Badge>
+                <div className="text-right text-sm">
+                  <p>Mín {formatMoney(cmp.min_cost)} · Máx {formatMoney(cmp.max_cost)}</p>
+                  <Badge variant={cmp.semaphore === "red" ? "destructive" : "secondary"}>
+                    Var. interna {formatPct(cmp.internal_variation_pct)}
+                  </Badge>
+                </div>
               </CardContent>
             </Card>
           ))}
         </div>
-      ) : null}
+      )}
 
       {selected ? (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">
+            <CardTitle className="text-base flex items-center gap-2">
+              <SemaphoreDot level={selected.semaphore ?? "green"} />
               {selected.product_name} — {selected.variant_name}
             </CardTitle>
             <p className="text-sm text-muted-foreground">
-              Diferencia máxima entre sucursales: {formatPct(selected.max_spread_pct)}
+              Variación interna: {formatPct(selected.internal_variation_pct)}
             </p>
           </CardHeader>
           <CardContent>
@@ -839,25 +897,218 @@ function ComparacionTab({ companyId }: { companyId: number }) {
               <TableHeader>
                 <TableRow>
                   <TableHead>Sucursal</TableHead>
-                  <TableHead className="text-right">Costo neto</TableHead>
-                  <TableHead className="text-right">Bruto ERP</TableHead>
+                  <TableHead className="text-right">Costo actual</TableHead>
                   <TableHead>Última recepción</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {selected.offices.map((o) => (
+                {(selected.offices ?? []).map((o) => (
                   <TableRow key={o.office_id}>
                     <TableCell>{o.office_name ?? `Sucursal ${o.office_id}`}</TableCell>
                     <TableCell className="text-right font-medium">{formatMoney(o.cost_net)}</TableCell>
-                    <TableCell className="text-right">{formatMoney(o.cost_bruto_erp)}</TableCell>
                     <TableCell>{formatDate(o.admission_date)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
+            <Button className="mt-4" variant="outline" size="sm" asChild>
+              <Link href={`/costos/productos/${selected.variant_id}?company_id=${companyId}`}>
+                Ver ficha producto
+              </Link>
+            </Button>
           </CardContent>
         </Card>
       ) : null}
+    </div>
+  )
+}
+
+function ProductosTab({ companyId }: { companyId: number }) {
+  const [q, setQ] = useState("")
+  const [rows, setRows] = useState<CostProductRow[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const data = await listCostProducts({
+        company_id: companyId,
+        q: q.trim() || undefined,
+        limit: 100,
+      })
+      setRows(data.items)
+    } finally {
+      setLoading(false)
+    }
+  }, [companyId, q])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-2">
+        <Input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Buscar producto…"
+          className="max-w-md"
+          onKeyDown={(e) => e.key === "Enter" && void load()}
+        />
+        <Button onClick={() => void load()} disabled={loading}>Buscar</Button>
+      </div>
+      {loading ? (
+        <Loader2 className="mx-auto h-6 w-6 animate-spin" />
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Producto</TableHead>
+              <TableHead className="text-right">Costo actual</TableHead>
+              <TableHead className="text-right">Promedio</TableHead>
+              <TableHead className="text-right">Stock</TableHead>
+              <TableHead>Última recepción</TableHead>
+              <TableHead />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((r) => (
+              <TableRow key={r.variant_id}>
+                <TableCell>
+                  <div className="font-medium">{r.product_name}</div>
+                  <div className="text-xs text-muted-foreground">{r.variant_name} · {r.barcode}</div>
+                </TableCell>
+                <TableCell className="text-right">{formatMoney(r.current_cost)}</TableCell>
+                <TableCell className="text-right">{formatMoney(r.average_cost)}</TableCell>
+                <TableCell className="text-right tabular-nums">{r.stock_quantity ?? "—"}</TableCell>
+                <TableCell>{formatDate(r.last_reception_date)}</TableCell>
+                <TableCell>
+                  <Button size="sm" variant="ghost" asChild>
+                    <Link href={`/costos/productos/${r.variant_id}?company_id=${companyId}`}>
+                      Ficha
+                    </Link>
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </div>
+  )
+}
+
+function OportunidadesTab({ companyId }: { companyId: number }) {
+  const [status, setStatus] = useState<string>(ALL)
+  const [rows, setRows] = useState<CostOpportunityRow[]>([])
+  const [counts, setCounts] = useState({ oportunidad_compra: 0, riesgo_comercial: 0 })
+  const [loading, setLoading] = useState(true)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const data = await listCostOpportunities({
+        company_id: companyId,
+        status:
+          status === ALL
+            ? undefined
+            : (status as "oportunidad_compra" | "riesgo_comercial"),
+        limit: 50,
+      })
+      setRows(data.items)
+      setCounts(data.counts)
+    } finally {
+      setLoading(false)
+    }
+  }, [companyId, status])
+
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Card className="border-green-200 dark:border-green-900">
+          <CardContent className="flex items-center gap-3 py-4">
+            <TrendingDown className="h-8 w-8 text-green-600" />
+            <div>
+              <p className="text-2xl font-semibold">{counts.oportunidad_compra}</p>
+              <p className="text-sm text-muted-foreground">Oportunidades de compra</p>
+            </div>
+          </CardContent>
+        </Card>
+        <Card className="border-red-200 dark:border-red-900">
+          <CardContent className="flex items-center gap-3 py-4">
+            <TrendingUp className="h-8 w-8 text-red-600" />
+            <div>
+              <p className="text-2xl font-semibold">{counts.riesgo_comercial}</p>
+              <p className="text-sm text-muted-foreground">Costos elevados</p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+      <Select value={status} onValueChange={setStatus}>
+        <SelectTrigger className="w-[220px]">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={ALL}>Todas</SelectItem>
+          <SelectItem value="oportunidad_compra">Oportunidad compra</SelectItem>
+          <SelectItem value="riesgo_comercial">Riesgo comercial</SelectItem>
+        </SelectContent>
+      </Select>
+      {loading ? (
+        <Loader2 className="mx-auto h-6 w-6 animate-spin" />
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Producto</TableHead>
+              <TableHead className="text-right">Costo actual</TableHead>
+              <TableHead className="text-right">Prom. 90d</TableHead>
+              <TableHead className="text-right">Variación</TableHead>
+              <TableHead className="text-right">Stock</TableHead>
+              <TableHead>Estado</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={6} className="text-center text-muted-foreground">
+                  Sin oportunidades con el filtro seleccionado.
+                </TableCell>
+              </TableRow>
+            ) : (
+              rows.map((r) => {
+                const st = r.status ? OPPORTUNITY_STATUS[r.status] : null
+                return (
+                  <TableRow key={r.variant_id}>
+                    <TableCell>
+                      <div className="font-medium">{r.product_name}</div>
+                      <div className="text-xs text-muted-foreground">{r.variant_name}</div>
+                    </TableCell>
+                    <TableCell className="text-right">{formatMoney(r.current_cost)}</TableCell>
+                    <TableCell className="text-right">{formatMoney(r.avg_90d)}</TableCell>
+                    <TableCell className={cn("text-right", variationClass(r.variation_pct_90d))}>
+                      {formatPct(r.variation_pct_90d)}
+                    </TableCell>
+                    <TableCell className="text-right">{r.stock_quantity ?? "—"}</TableCell>
+                    <TableCell>
+                      {st ? (
+                        <Badge className={st.className}>{st.label}</Badge>
+                      ) : (
+                        "—"
+                      )}
+                    </TableCell>
+                  </TableRow>
+                )
+              })
+            )}
+          </TableBody>
+        </Table>
+      )}
     </div>
   )
 }

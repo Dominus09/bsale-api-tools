@@ -8,9 +8,11 @@ from typing import Any
 from backend.db import get_connection
 from backend.repositories import cost_analytics_repo as repo
 from backend.utils.cost_analytics_calc import (
+    OPPORTUNITY_LABELS,
     alert_semaphore,
     branch_spread_pct,
     classify_cost_alert,
+    spread_semaphore,
 )
 from backend.utils.json_safe import serialize_value
 
@@ -34,6 +36,14 @@ def get_dashboard(
         )
         sync = repo.get_sync_state(cur, company_id)
         offices = repo.list_offices(cur, company_id)
+        opp_counts = repo.list_purchase_opportunities(
+            cur, company_id, limit=10000, offset=0
+        )[2]
+        kpis["opportunities_buy"] = opp_counts.get("oportunidad_compra", 0)
+        kpis["opportunities_risk"] = opp_counts.get("riesgo_comercial", 0)
+        kpis["opportunities_detected"] = (
+            kpis["opportunities_buy"] + kpis["opportunities_risk"]
+        )
         cur.close()
     finally:
         conn.close()
@@ -144,9 +154,20 @@ def get_variant_cost_history(
             "product_name": ctx.get("product_name"),
             "variant_name": ctx.get("variant_name"),
             "barcode": ctx.get("barcode"),
+            "product_id": ctx.get("product_id"),
             "average_cost": vc.get("average_cost_net") if vc else None,
             "average_cost_gross": vc.get("average_cost_gross") if vc else None,
             "items": rows,
+            "chart_series": [
+                {
+                    "date": r.get("admission_date"),
+                    "cost_net": r.get("cost_net"),
+                    "cost_bruto_erp": r.get("cost_bruto_erp"),
+                    "average_cost": r.get("average_cost"),
+                    "office_name": r.get("office_name"),
+                }
+                for r in rows
+            ],
         }
     )
 
@@ -274,4 +295,110 @@ def compare_offices(
         conn.close()
     return serialize_value(
         {"company_id": company_id, "q": q, "items": comparisons}
+    )
+
+
+def list_products(
+    company_id: int,
+    *,
+    q: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        rows, total = repo.list_products(
+            cur, company_id, q=q, limit=limit, offset=offset
+        )
+        cur.close()
+    finally:
+        conn.close()
+    return serialize_value(
+        {
+            "company_id": company_id,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "items": rows,
+        }
+    )
+
+
+def list_opportunities(
+    company_id: int,
+    *,
+    status: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        items, total, counts = repo.list_purchase_opportunities(
+            cur, company_id, status=status, limit=limit, offset=offset
+        )
+        enriched = []
+        for row in items:
+            r = dict(row)
+            st = r.get("status")
+            r["status_label"] = OPPORTUNITY_LABELS.get(st, "") if st else None
+            r["semaphore"] = (
+                "green" if st == "oportunidad_compra"
+                else "red" if st == "riesgo_comercial"
+                else "yellow"
+            )
+            enriched.append(r)
+        cur.close()
+    finally:
+        conn.close()
+    return serialize_value(
+        {
+            "company_id": company_id,
+            "total": total,
+            "counts": counts,
+            "limit": limit,
+            "offset": offset,
+            "items": enriched,
+        }
+    )
+
+
+def list_branch_comparison(
+    company_id: int,
+    *,
+    q: str | None = None,
+    limit: int = 20,
+) -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        rows = repo.list_branch_comparison_ranked(
+            cur, company_id, q=q, limit=limit
+        )
+        for r in rows:
+            r["semaphore"] = spread_semaphore(
+                float(r["internal_variation_pct"])
+                if r.get("internal_variation_pct") is not None
+                else None
+            )
+        cur.close()
+    finally:
+        conn.close()
+    return serialize_value({"company_id": company_id, "items": rows})
+
+
+def get_margin_impact(company_id: int, variant_id: int) -> dict[str, Any]:
+    """Stub preparado para Política de Márgenes — sin implementar cálculo."""
+    return serialize_value(
+        {
+            "company_id": company_id,
+            "variant_id": variant_id,
+            "status": "not_implemented",
+            "message": "Endpoint preparado para integración con Política de Márgenes.",
+            "current_price": None,
+            "current_margin_pct": None,
+            "target_margin_pct": None,
+            "suggested_price": None,
+        }
     )

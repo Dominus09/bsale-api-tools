@@ -89,6 +89,9 @@ def classify_cost_alert(
         alerts.append("zero_cost")
     if variation_pct is not None:
         av = abs(float(variation_pct))
+        v = float(variation_pct)
+        if v <= -10:
+            alerts.append("cost_decrease_10")
         if av >= 20:
             alerts.append("variation_20")
         elif av >= 10:
@@ -124,3 +127,100 @@ def alert_semaphore(alert_types: list[str]) -> str:
 
 def make_unique_key(company_id: int, reception_detail_id: int) -> str:
     return f"{company_id}_{reception_detail_id}"
+
+
+def _normalize_text_blob(*parts: Any) -> str:
+    import unicodedata
+
+    raw = " ".join(str(p or "") for p in parts)
+    lowered = raw.lower()
+    return "".join(
+        c
+        for c in unicodedata.normalize("NFD", lowered)
+        if unicodedata.category(c) != "Mn"
+    )
+
+
+def classify_reception_type(
+    document: str | None,
+    note: str | None,
+    document_number: int | str | None = None,
+) -> str:
+    """
+    Clasifica recepción según document / note / documentNumber.
+    Valores: recepcion_normal, recepcion_ajuste, recepcion_devolucion, recepcion_nc.
+    """
+    blob = _normalize_text_blob(document, note, document_number)
+    nc_markers = (
+        "nota credito",
+        "nota de credito",
+        " nc ",
+        "nc ",
+        " nc",
+        "abono",
+    )
+    devolucion_markers = ("devolucion", "devolución")
+    ajuste_markers = (
+        "ajuste",
+        "ajuste inventario",
+        "correccion",
+        "correccion recepcion",
+        "corrección",
+    )
+    if any(m.replace("ó", "o") in blob for m in nc_markers):
+        return "recepcion_nc"
+    if any(m.replace("ó", "o") in blob for m in devolucion_markers):
+        return "recepcion_devolucion"
+    if any(m.replace("ó", "o") in blob for m in ajuste_markers):
+        return "recepcion_ajuste"
+    return "recepcion_normal"
+
+
+RECEPTION_TYPE_LABELS: dict[str, str] = {
+    "recepcion_normal": "Recepción normal",
+    "recepcion_ajuste": "Recepción ajuste",
+    "recepcion_devolucion": "Recepción devolución",
+    "recepcion_nc": "Recepción NC",
+}
+
+
+def spread_semaphore(spread_pct: float | None) -> str:
+    """Semáforo variación interna entre sucursales: 0-3 verde, 3-10 amarillo, >10 rojo."""
+    if spread_pct is None:
+        return "green"
+    v = abs(float(spread_pct))
+    if v > 10:
+        return "red"
+    if v > 3:
+        return "yellow"
+    return "green"
+
+
+def classify_purchase_opportunity(
+    current_cost: float | None,
+    avg_historical: float | None,
+    *,
+    threshold_pct: float = 3.0,
+) -> tuple[str | None, float | None]:
+    """
+    Retorna (estado, variacion_pct).
+    estado: oportunidad_compra | riesgo_comercial | None
+    """
+    if current_cost is None or avg_historical is None:
+        return None, None
+    cur = float(current_cost)
+    avg = float(avg_historical)
+    if cur <= 0 or avg <= 0:
+        return None, None
+    var_pct = round(((cur - avg) / avg) * 100.0, 2)
+    if var_pct <= -threshold_pct:
+        return "oportunidad_compra", var_pct
+    if var_pct >= threshold_pct:
+        return "riesgo_comercial", var_pct
+    return None, var_pct
+
+
+OPPORTUNITY_LABELS: dict[str, str] = {
+    "oportunidad_compra": "Oportunidad de compra",
+    "riesgo_comercial": "Costo elevado",
+}
