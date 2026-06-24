@@ -264,6 +264,25 @@ def _enrich_row_delivery_day(row: dict[str, Any]) -> None:
     row["dia_entrega_label"] = delivery_day_label(day)
 
 
+_PLANNING_ROWS_WEIGHT_LATERAL = """
+LEFT JOIN LATERAL (
+    SELECT ROUND(COALESCE(SUM(dd.quantity * pl.weight_unit_kg), 0)::numeric, 3) AS weight_kg
+    FROM distribuidora.document_details dd
+    LEFT JOIN bsale.v_product_logistics pl ON pl.variant_id = dd.variant_id
+    WHERE dd.document_id = d.document_id
+) w ON TRUE
+"""
+
+
+def _apply_live_sync_flags(row: dict[str, Any]) -> None:
+    from backend.utils.order_live_metrics import bsale_ahead_of_erp_sync
+
+    row["bsale_updated_pending"] = bsale_ahead_of_erp_sync(
+        row.get("last_bs_update"),
+        row.get("last_erp_update"),
+    )
+
+
 def _row_to_dict(cur, row: tuple) -> dict[str, Any]:
     cols = [d[0] for d in cur.description]
     return dict(zip(cols, row))
@@ -650,6 +669,9 @@ def _planning_rows_enrich_sql() -> str:
                 NULLIF(BTRIM(obs_a.observaciones), '') AS observaciones,
                 NULLIF(BTRIM(d.raw_data->>'comments'), '') AS comments,
                 NULLIF(BTRIM(c.dia_atencion), '') AS dia_atencion,
+                d.generation_date AS last_bs_update,
+                d.updated_at AS last_erp_update,
+                COALESCE(w.weight_kg, 0) AS weight_kg,
                 {_PLANNING_ROWS_STATUS_SELECT}
             FROM distribuidora.documents d
             INNER JOIN page_ids pi ON pi.document_id = d.document_id
@@ -659,6 +681,7 @@ def _planning_rows_enrich_sql() -> str:
             LEFT JOIN bsale.clients c
                 ON c.company_id = d.company_id
                AND c.bsale_id = d.client_id
+            {_PLANNING_ROWS_WEIGHT_LATERAL}
             ORDER BY d.number DESC NULLS LAST, d.document_id DESC
             """
 
@@ -689,11 +712,15 @@ def _planning_rows_base_orders_sql() -> str:
                 NULLIF(BTRIM(d.seller_name), '') AS seller_name,
                 d.total_amount,
                 NULLIF(BTRIM(obs_a.observaciones), '') AS observaciones,
-                NULLIF(BTRIM(d.raw_data->>'comments'), '') AS comments
+                NULLIF(BTRIM(d.raw_data->>'comments'), '') AS comments,
+                d.generation_date AS last_bs_update,
+                d.updated_at AS last_erp_update,
+                COALESCE(w.weight_kg, 0) AS weight_kg
             FROM distribuidora.documents d
             INNER JOIN page_ids pi ON pi.document_id = d.document_id
             LEFT JOIN distribuidora.v_oc_attributes_flat obs_a
                 ON obs_a.document_id = d.document_id
+            {_PLANNING_ROWS_WEIGHT_LATERAL}
             ORDER BY d.number DESC NULLS LAST, d.document_id DESC
             """
 
@@ -865,6 +892,9 @@ def _merge_planning_rows_staged(
             "total_amount": base.get("total_amount"),
             "observaciones": base.get("observaciones"),
             "comments": base.get("comments"),
+            "weight_kg": base.get("weight_kg"),
+            "last_bs_update": base.get("last_bs_update"),
+            "last_erp_update": base.get("last_erp_update"),
             "dia_atencion": (geo or {}).get("dia_atencion"),
             "has_georef": bool(
                 geo and geo.get("lat") is not None and geo.get("lon") is not None
@@ -874,6 +904,7 @@ def _merge_planning_rows_staged(
         }
         _apply_status_fields_to_row(row, conf, prob)
         _enrich_row_delivery_day(row)
+        _apply_live_sync_flags(row)
         out.append(row)
     return out
 
@@ -1196,6 +1227,7 @@ def list_dispatch_prep_planning_rows(
             merged = [_serialize_row(_row_to_dict(cur, r)) for r in raw]
             for row in merged:
                 _enrich_row_delivery_day(row)
+                _apply_live_sync_flags(row)
             stages.record(
                 "build_rows",
                 elapsed_ms=(time.perf_counter() - t_build) * 1000.0,
@@ -1303,3 +1335,20 @@ def list_dispatch_prep_planning_rows(
         return payload
     finally:
         conn.close()
+
+
+def fetch_planning_live_by_document_ids(document_ids: list[int]) -> list[dict[str, Any]]:
+    """Métricas live por OC (peso, monto, día, timestamps) para refrescar planificación."""
+    from backend.utils.order_live_metrics import fetch_live_metrics_by_document_ids
+
+    ids = list(dict.fromkeys(int(x) for x in document_ids if x))
+    if not ids:
+        return []
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        by_id = fetch_live_metrics_by_document_ids(cur, ids)
+        cur.close()
+    finally:
+        conn.close()
+    return [_serialize_row(by_id[i]) for i in ids if i in by_id]

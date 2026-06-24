@@ -8,6 +8,7 @@ import { Loader2, RefreshCw, Trash2 } from "lucide-react"
 import {
   confirmDispatchPlan,
   getDistribuidoraPlanificacionRouteCrew,
+  getDistribuidoraPlanningLiveMetrics,
   getDistribuidoraTrucks,
   postDistribuidoraPlanificacionOrsRoutes,
   type DispatchPlanSummary,
@@ -25,8 +26,13 @@ import { buildOrsVisitRows, buildRouteClientRows, buildStopPopupData } from "@/l
 import {
   readPlanificacionPayload,
   clearPlanificacionPayload,
+  writePlanificacionPayload,
   type PlanificacionStoredOrder,
 } from "@/lib/planificacion-despacho-storage"
+import {
+  countBsaleUpdatedPending,
+  mergeLiveMetricsIntoPlanOrders,
+} from "@/lib/planificacion-live-refresh"
 import { orderHasGeo, splitOrdersByGeo } from "@/lib/planificacion-geo"
 import {
   computeOperationalCostClp,
@@ -35,6 +41,7 @@ import {
   type RouteOperationalCosts,
 } from "@/lib/planificacion-operational-costs"
 import {
+  estimateAssignedKgFromOrders,
   estimateAssignedKgFromStops,
   isTruckOverloaded,
   truckUtilizationPct,
@@ -144,6 +151,7 @@ export default function PlanificacionDespachoPage() {
   } | null>(null)
   const [openPopupStopKey, setOpenPopupStopKey] = useState<string | null>(null)
   const [trucksCatalog, setTrucksCatalog] = useState<DistribuidoraTruck[]>([])
+  const [liveRefreshNote, setLiveRefreshNote] = useState<string | null>(null)
 
   const orsAbortRef = useRef<AbortController | null>(null)
   const orsInFlightKeyRef = useRef<string | null>(null)
@@ -288,6 +296,32 @@ export default function PlanificacionDespachoPage() {
 
     let cancelled = false
     ;(async () => {
+      let workingOrders = initial
+      try {
+        const live = await getDistribuidoraPlanningLiveMetrics({
+          documentIds: initial.map((o) => o.document_id),
+        })
+        if (!cancelled && live.items.length > 0) {
+          workingOrders = mergeLiveMetricsIntoPlanOrders(initial, live.items)
+          const pending = countBsaleUpdatedPending(live.items)
+          if (pending > 0) {
+            setLiveRefreshNote(
+              `${pending} orden(es) con cambios en Bsale no reflejados en el snapshot. ` +
+                "Ejecute sync de órdenes y vuelva a cargar pre-despacho.",
+            )
+          }
+          const refreshedPayload = {
+            submittedAt: new Date().toISOString(),
+            planSessionId: sessionId ?? p?.planSessionId ?? "",
+            orders: workingOrders,
+          }
+          writePlanificacionPayload(refreshedPayload)
+          setOrders(workingOrders)
+        }
+      } catch {
+        /* refresco live opcional */
+      }
+
       try {
         const trucksRes = await getDistribuidoraTrucks()
         if (!cancelled) setTrucksCatalog(trucksRes.items ?? [])
@@ -295,7 +329,7 @@ export default function PlanificacionDespachoPage() {
         /* catálogo opcional para capacidad */
       }
 
-      let crewMap = crewMapFromOrders(initial)
+      let crewMap = crewMapFromOrders(workingOrders)
       if (sessionId) {
         try {
           const saved = await getDistribuidoraPlanificacionRouteCrew({
@@ -310,7 +344,7 @@ export default function PlanificacionDespachoPage() {
               assistantCount: row.assistant_count,
             })
           }
-          crewMap = crewMapFromOrders(initial, fromDb)
+          crewMap = crewMapFromOrders(workingOrders, fromDb)
         } catch {
           /* defaults locales */
         }
@@ -318,7 +352,7 @@ export default function PlanificacionDespachoPage() {
       if (cancelled) return
       setCrewByCamion(crewMap)
 
-      const camiones = Array.from(groupOrdersByTruck(initial).keys())
+      const camiones = Array.from(groupOrdersByTruck(workingOrders).keys())
       const first = camiones[0] ?? null
       setSelectedCamion(first)
 
@@ -327,7 +361,7 @@ export default function PlanificacionDespachoPage() {
         void loadSessionPlans(sessionId)
       }
 
-      if (first) void fetchRoutes(initial, first, sessionId, crewMap)
+      if (first) void fetchRoutes(workingOrders, first, sessionId, crewMap)
     })()
 
     return () => {
@@ -364,7 +398,7 @@ export default function PlanificacionDespachoPage() {
       const truckId = stops[0]?.truck_id ?? 0
       const meta = trucksById.get(truckId)
       const maxWeightKg = meta?.max_weight_kg ?? null
-      const estimatedAssignedKg = estimateAssignedKgFromStops(stops.length)
+      const estimatedAssignedKg = estimateAssignedKgFromOrders(stops)
       const utilizationPct = truckUtilizationPct(estimatedAssignedKg, maxWeightKg)
       return {
         camion,
@@ -802,6 +836,13 @@ export default function PlanificacionDespachoPage() {
         <Alert variant="destructive" className="mx-4 mt-2 shrink-0 md:mx-5">
           <AlertTitle>Error ORS</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      {liveRefreshNote ? (
+        <Alert className="mx-4 mt-2 shrink-0 border-red-500/40 bg-red-50/90 dark:bg-red-950/30 md:mx-5">
+          <AlertTitle>🔴 Actualizada en Bsale</AlertTitle>
+          <AlertDescription>{liveRefreshNote}</AlertDescription>
         </Alert>
       ) : null}
 

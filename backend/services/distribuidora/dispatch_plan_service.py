@@ -58,6 +58,10 @@ from backend.utils.dispatch_plan_picking import (
     picking_warnings_from_stops,
 )
 from backend.utils.load_summary import build_load_summary
+from backend.utils.order_live_metrics import (
+    fetch_live_metrics_by_document_ids,
+    overlay_snapshot_orders,
+)
 from backend.utils.picking_display import (
     compute_items_totals,
     count_snapshot_clients,
@@ -372,6 +376,12 @@ def get_dispatch_plan(plan_id: int) -> dict[str, Any] | None:
                 cur.close()
                 return None
             orders = repo.list_plan_orders(cur, plan_id)
+            if orders:
+                live_by_id = fetch_live_metrics_by_document_ids(
+                    cur,
+                    [int(o["oc_document_id"]) for o in orders],
+                )
+                orders = overlay_snapshot_orders(orders, live_by_id)
         except Exception as exc:
             log_error("GET /dispatch-plans/{id}", exc, planning_id=plan_id)
             return None
@@ -381,6 +391,28 @@ def get_dispatch_plan(plan_id: int) -> dict[str, Any] | None:
         return out
     finally:
         conn.close()
+
+
+def collect_stale_plan_order_warnings(cur, plan_id: int) -> list[str]:
+    orders = repo.list_plan_orders(cur, plan_id)
+    if not orders:
+        return []
+    live_by_id = fetch_live_metrics_by_document_ids(
+        cur,
+        [int(o["oc_document_id"]) for o in orders],
+    )
+    overlaid = overlay_snapshot_orders(orders, live_by_id)
+    stale = [o for o in overlaid if o.get("planning_stale")]
+    if not stale:
+        return []
+    ocs = ", ".join(
+        str(o.get("oc_number") or o.get("oc_document_id")) for o in stale[:8]
+    )
+    suffix = f" (+{len(stale) - 8} más)" if len(stale) > 8 else ""
+    return [
+        "La planificación contiene órdenes modificadas posteriormente en Bsale "
+        f"(OC: {ocs}{suffix}). Revise monto, peso, ciudad o día de entrega."
+    ]
 
 
 def confirm_dispatch_plan(
@@ -1855,6 +1887,13 @@ def generate_plan_picking(
         ),
     }
     warnings = picking_warnings_from_stops(clients)
+    conn_warn = get_connection()
+    try:
+        cur_warn = conn_warn.cursor()
+        warnings = collect_stale_plan_order_warnings(cur_warn, plan_id) + warnings
+        cur_warn.close()
+    finally:
+        conn_warn.close()
     if include_probable and int((inv_check.get("summary") or {}).get("probable") or 0) > 0:
         warnings.append(
             "El consolidado incluye documentos con coincidencia probable (60–74)."

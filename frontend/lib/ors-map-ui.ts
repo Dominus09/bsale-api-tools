@@ -15,6 +15,7 @@ export type RouteClientRow = {
   comuna: string | null
   direccion: string | null
   venta_total: number
+  peso_kg: number
   oc_count: number
   stop_index_min: number
   list_index: number
@@ -33,12 +34,29 @@ export type OrsStopPopupData = {
   direccion?: string | null
   comuna?: string | null
   ventaTotal: number
+  pesoKg?: number | null
   ocCount: number
   observaciones?: string[]
   diaEntregaLabel?: string | null
   semaphore?: CommercialSemaphore
   isolated?: boolean
   isolatedDistanceKm?: number | null
+}
+
+export type OrsVisitRow = {
+  document_id: number
+  stop_index: number
+  camion: string
+  nombre: string
+  ocLabel: string
+  cityLabel: string
+  etaMinutes: number
+  etaLabel: string
+  routeColor?: string
+  client_id: number | null
+  municipality: string | null
+  ventaClp: number
+  semaphore: CommercialSemaphore
 }
 
 export function formatOrsEta(minutesFromStart: number): string {
@@ -170,6 +188,10 @@ export function buildRouteClientRows(
       (s, o) => s + (Number(o.total_amount) || 0),
       0,
     )
+    const pesoKg = clientOrders.reduce((s, o) => {
+      const w = Number(o.weight_kg)
+      return s + (Number.isFinite(w) && w > 0 ? w : 0)
+    }, 0)
     const obs = [
       ...new Set(
         clientOrders
@@ -190,6 +212,7 @@ export function buildRouteClientRows(
       comuna: primary.municipality?.trim() || null,
       direccion: primary.direccion?.trim() || null,
       venta_total: ventaTotal,
+      peso_kg: pesoKg,
       oc_count: clientOrders.length,
       stop_index_min: stopMin,
       list_index: 0,
@@ -225,6 +248,7 @@ export function buildStopPopupData(
       direccion: clientRow.direccion,
       comuna: clientRow.comuna,
       ventaTotal: clientRow.venta_total,
+      pesoKg: clientRow.peso_kg > 0 ? clientRow.peso_kg : null,
       ocCount: clientRow.oc_count,
       observaciones: clientRow.observaciones,
       diaEntregaLabel: clientRow.dia_entrega_label,
@@ -235,11 +259,13 @@ export function buildStopPopupData(
   }
   if (!order) return undefined
   const venta = Number(order.total_amount) || 0
+  const peso = Number(order.weight_kg)
   return {
     nombre: order.nombre_fantasia?.trim() || "Cliente",
     direccion: order.direccion?.trim() || null,
     comuna: order.municipality?.trim() || null,
     ventaTotal: venta,
+    pesoKg: Number.isFinite(peso) && peso > 0 ? peso : null,
     ocCount: 1,
     observaciones: order.observaciones?.trim() ? [order.observaciones.trim()] : [],
     diaEntregaLabel: order.dia_entrega_label ?? null,

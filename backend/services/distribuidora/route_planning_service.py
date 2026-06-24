@@ -215,15 +215,47 @@ def get_route_planning(
 ) -> dict[str, Any]:
     truck_f = truck.strip() if truck and truck.strip() else None
     items, total_clients, total_amount = repo.list_route_planning(planning_date, truck_f)
+    doc_ids = [int(x["document_id"]) for x in items if x.get("document_id") is not None]
+    live_by_id: dict[int, dict[str, Any]] = {}
+    if doc_ids:
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+            from backend.utils.order_live_metrics import fetch_live_metrics_by_document_ids
+
+            live_by_id = fetch_live_metrics_by_document_ids(cur, doc_ids)
+            cur.close()
+        finally:
+            conn.close()
+
+    serialized_items: list[dict[str, Any]] = []
+    live_total = Decimal("0")
+    for row in items:
+        out = _serialize_row(row)
+        live = live_by_id.get(int(row["document_id"])) or {}
+        if live.get("total_amount") is not None:
+            out["total_amount"] = float(live["total_amount"])
+            out["snapshot_total_amount"] = float(row["total_amount"])
+        if live.get("weight_kg") is not None:
+            out["weight_kg"] = live["weight_kg"]
+        if live.get("municipality"):
+            out["municipality"] = live["municipality"]
+        out["last_bs_update"] = live.get("last_bs_update")
+        out["last_erp_update"] = live.get("last_erp_update")
+        out["bsale_updated_pending"] = live.get("bsale_updated_pending")
+        out["dia_entrega_label"] = live.get("dia_entrega_label")
+        live_total += Decimal(str(out.get("total_amount") or 0))
+        serialized_items.append(out)
+
     summaries = [_serialize_row(x) for x in repo.list_route_planning_summaries(planning_date)]
     if truck_f:
         summaries = [s for s in summaries if s.get("truck") == truck_f]
     return {
         "planning_date": planning_date.isoformat(),
         "truck": truck_f,
-        "items": [_serialize_row(x) for x in items],
+        "items": serialized_items,
         "total_clients": total_clients,
-        "total_amount": float(total_amount),
+        "total_amount": float(live_total if live_by_id else total_amount),
         "summaries": summaries,
     }
 

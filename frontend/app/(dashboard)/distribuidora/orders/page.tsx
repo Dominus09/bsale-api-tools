@@ -801,6 +801,7 @@ export default function DistribuidoraOrdersPage() {
         oc: r.oc ?? null,
         nombre_fantasia: r.nombre_fantasia ?? null,
         total_amount: r.total_amount != null ? Number(r.total_amount) : null,
+        weight_kg: r.weight_kg != null ? Number(r.weight_kg) : null,
         stop_index: idx,
         municipality: r.municipality ?? null,
         direccion: r.direccion ?? null,

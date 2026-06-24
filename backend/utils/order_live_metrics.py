@@ -1,0 +1,270 @@
+"""Métricas live de OC para planificación: peso, montos y detección de desactualización."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from decimal import Decimal
+from typing import Any
+
+from backend.utils.delivery_day_detect import delivery_day_label, resolve_delivery_day
+
+_WEIGHT_SQL = """
+SELECT
+    dd.document_id,
+    ROUND(COALESCE(SUM(dd.quantity * pl.weight_unit_kg), 0)::numeric, 3) AS weight_kg
+FROM distribuidora.document_details dd
+LEFT JOIN bsale.v_product_logistics pl ON pl.variant_id = dd.variant_id
+WHERE dd.document_id = ANY(%s::bigint[])
+GROUP BY dd.document_id
+"""
+
+_LIVE_FIELDS_SQL = """
+SELECT
+    d.document_id,
+    d.number AS oc,
+    d.client_id,
+    d.company_id,
+    d.total_amount,
+    d.generation_date AS last_bs_update,
+    d.updated_at AS last_erp_update,
+    COALESCE(
+        NULLIF(BTRIM(d.municipality), ''),
+        NULLIF(BTRIM(d.city), ''),
+        NULLIF(BTRIM(c.municipality), ''),
+        NULLIF(BTRIM(c.city), '')
+    ) AS municipality,
+    COALESCE(
+        NULLIF(BTRIM(d.city), ''),
+        NULLIF(BTRIM(d.municipality), ''),
+        NULLIF(BTRIM(c.city), ''),
+        NULLIF(BTRIM(c.municipality), '')
+    ) AS city,
+    COALESCE(
+        NULLIF(BTRIM(d.address), ''),
+        NULLIF(BTRIM(c.address), '')
+    ) AS address,
+    NULLIF(BTRIM(obs_a.observaciones), '') AS observaciones,
+    NULLIF(BTRIM(d.raw_data->>'comments'), '') AS comments,
+    NULLIF(BTRIM(c.dia_atencion), '') AS dia_atencion,
+    NULLIF(BTRIM(c.nombre_fantasia), '') AS nombre_fantasia,
+    (c.lat IS NOT NULL AND c.lon IS NOT NULL) AS has_georef,
+    c.lat::double precision AS lat,
+    c.lon::double precision AS lng
+FROM distribuidora.documents d
+LEFT JOIN distribuidora.v_oc_attributes_flat obs_a
+    ON obs_a.document_id = d.document_id
+LEFT JOIN bsale.clients c
+    ON c.company_id = d.company_id
+   AND c.bsale_id = d.client_id
+WHERE d.document_id = ANY(%s::bigint[])
+"""
+
+
+def _norm_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    s = str(value).strip()
+    return s if s else None
+
+
+def _norm_city(value: Any) -> str | None:
+    return _norm_text(value)
+
+
+def _to_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_ts(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    return None
+
+
+def amounts_differ(live: Any, snapshot: Any, *, tolerance_clp: float = 1.0) -> bool:
+    a = _to_float(live)
+    b = _to_float(snapshot)
+    if a is None or b is None:
+        return False
+    return abs(a - b) > tolerance_clp
+
+
+def cities_differ(live: Any, snapshot: Any) -> bool:
+    a = _norm_city(live)
+    b = _norm_city(snapshot)
+    if not a or not b:
+        return False
+    return a.casefold() != b.casefold()
+
+
+def delivery_days_differ(live_day: Any, snapshot_day: Any) -> bool:
+    a = _norm_text(live_day)
+    b = _norm_text(snapshot_day)
+    if not a or not b:
+        return False
+    return a.casefold() != b.casefold()
+
+
+def bsale_modified_after_snapshot(
+    last_bs_update: Any,
+    snapshot_at: Any,
+    *,
+    tolerance_seconds: float = 2.0,
+) -> bool:
+    bs = _to_ts(last_bs_update)
+    snap = _to_ts(snapshot_at)
+    if bs is None or snap is None:
+        return False
+    return (bs - snap).total_seconds() > tolerance_seconds
+
+
+def bsale_ahead_of_erp_sync(
+    last_bs_update: Any,
+    last_erp_update: Any,
+    *,
+    tolerance_seconds: float = 2.0,
+) -> bool:
+    """Bsale modificó la OC después del último sync ERP (sin snapshot de plan)."""
+    bs = _to_ts(last_bs_update)
+    erp = _to_ts(last_erp_update)
+    if bs is None or erp is None:
+        return False
+    return (bs - erp).total_seconds() > tolerance_seconds
+
+
+def enrich_delivery_day_fields(row: dict[str, Any]) -> None:
+    day, source = resolve_delivery_day(
+        row.get("observaciones"),
+        row.get("comments"),
+        row.get("dia_atencion"),
+    )
+    row["dia_entrega_detectado"] = day
+    row["dia_entrega_fuente"] = source
+    row["dia_entrega_label"] = delivery_day_label(day)
+
+
+def evaluate_planning_staleness(
+    *,
+    live: dict[str, Any],
+    snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compara métricas live vs snapshot congelado (plan confirmado)."""
+    reasons: list[str] = []
+    snapshot_at = (snapshot or {}).get("created_at") or (snapshot or {}).get(
+        "snapshot_at"
+    )
+    last_bs = live.get("last_bs_update")
+    last_erp = snapshot_at or live.get("last_erp_update")
+
+    if bsale_modified_after_snapshot(last_bs, snapshot_at):
+        reasons.append("bsale_modificada")
+
+    if amounts_differ(live.get("total_amount"), (snapshot or {}).get("oc_total_amount")):
+        reasons.append("monto")
+
+    live_city = live.get("city") or live.get("municipality")
+    snap_city = (snapshot or {}).get("city")
+    if cities_differ(live_city, snap_city):
+        reasons.append("ciudad")
+
+    live_day = live.get("dia_entrega_detectado")
+    snap_day = (snapshot or {}).get("dia_entrega_detectado")
+    if delivery_days_differ(live_day, snap_day):
+        reasons.append("dia_entrega")
+
+    snap_weight = (snapshot or {}).get("weight_kg")
+    live_weight = live.get("weight_kg")
+    if (
+        snap_weight is not None
+        and live_weight is not None
+        and abs(float(live_weight) - float(snap_weight)) > 0.05
+    ):
+        reasons.append("peso")
+
+    stale = bool(reasons)
+    bsale_pending = bsale_ahead_of_erp_sync(
+        last_bs,
+        live.get("last_erp_update") if snapshot is None else snapshot_at,
+    )
+
+    return {
+        "planning_stale": stale,
+        "planning_stale_reasons": reasons,
+        "bsale_updated_pending": bsale_pending or stale,
+        "last_bs_update": last_bs,
+        "last_erp_update": last_erp,
+    }
+
+
+def fetch_live_metrics_by_document_ids(
+    cur,
+    document_ids: list[int],
+) -> dict[int, dict[str, Any]]:
+    if not document_ids:
+        return {}
+
+    ids = list(dict.fromkeys(int(x) for x in document_ids))
+    cur.execute(_LIVE_FIELDS_SQL, (ids,))
+    cols = [c[0] for c in cur.description]
+    by_id: dict[int, dict[str, Any]] = {}
+    for row in cur.fetchall():
+        item = dict(zip(cols, row))
+        enrich_delivery_day_fields(item)
+        by_id[int(item["document_id"])] = item
+
+    cur.execute(_WEIGHT_SQL, (ids,))
+    for doc_id, weight_kg in cur.fetchall():
+        entry = by_id.setdefault(int(doc_id), {"document_id": int(doc_id)})
+        entry["weight_kg"] = float(weight_kg) if weight_kg is not None else 0.0
+
+    for entry in by_id.values():
+        if "weight_kg" not in entry:
+            entry["weight_kg"] = 0.0
+        staleness = evaluate_planning_staleness(live=entry, snapshot=None)
+        entry["bsale_updated_pending"] = staleness["bsale_updated_pending"]
+    return by_id
+
+
+def overlay_snapshot_orders(
+    orders: list[dict[str, Any]],
+    live_by_id: dict[int, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Superpone métricas live sobre filas con snapshot; conserva valores congelados en *_snapshot."""
+    out: list[dict[str, Any]] = []
+    for order in orders:
+        row = dict(order)
+        doc_id = int(row["oc_document_id"])
+        live = live_by_id.get(doc_id) or {}
+        staleness = evaluate_planning_staleness(live=live, snapshot=row)
+
+        row["snapshot_oc_total_amount"] = row.get("oc_total_amount")
+        row["snapshot_city"] = row.get("city")
+        row["snapshot_at"] = row.get("created_at")
+        row["weight_kg"] = live.get("weight_kg")
+        row["last_bs_update"] = live.get("last_bs_update")
+        row["last_erp_update"] = row.get("created_at")
+        row["planning_stale"] = staleness["planning_stale"]
+        row["planning_stale_reasons"] = staleness["planning_stale_reasons"]
+        row["bsale_updated_pending"] = staleness["bsale_updated_pending"]
+
+        if live.get("total_amount") is not None:
+            row["oc_total_amount"] = live["total_amount"]
+        live_city = live.get("city") or live.get("municipality")
+        if live_city:
+            row["city"] = live_city
+        if live.get("observaciones") is not None:
+            row["observaciones"] = live.get("observaciones")
+        row["dia_entrega_detectado"] = live.get("dia_entrega_detectado")
+        row["dia_entrega_label"] = live.get("dia_entrega_label")
+        row["dia_entrega_fuente"] = live.get("dia_entrega_fuente")
+        out.append(row)
+    return out

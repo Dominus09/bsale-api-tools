@@ -15,6 +15,7 @@ export function OrsStopPopup({
   direccion,
   comuna,
   ventaTotal,
+  pesoKg,
   ocCount,
   observaciones,
   diaEntregaLabel,
@@ -55,6 +56,14 @@ export function OrsStopPopup({
       <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-[11px]">
         <dt className="text-muted-foreground">Venta</dt>
         <dd className="font-medium tabular-nums">{formatClp(ventaTotal)}</dd>
+        {pesoKg != null && pesoKg > 0 ? (
+          <>
+            <dt className="text-muted-foreground">Peso</dt>
+            <dd className="font-medium tabular-nums">
+              {pesoKg.toLocaleString("es-CL", { maximumFractionDigits: 1 })} kg
+            </dd>
+          </>
+        ) : null}
         <dt className="text-muted-foreground">OC</dt>
         <dd className="font-medium tabular-nums">{ocCount}</dd>
         {comuna?.trim() ? (

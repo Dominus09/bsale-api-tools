@@ -1104,6 +1104,7 @@ export type DistribuidoraDispatchPrepPlanningRow = {
   direccion?: string | null
   seller_name?: string | null
   total_amount?: number | null
+  weight_kg?: number | null
   has_georef?: boolean | null
   lat?: number | null
   lng?: number | null
@@ -1117,6 +1118,9 @@ export type DistribuidoraDispatchPrepPlanningRow = {
   dia_entrega_detectado?: string | null
   dia_entrega_label?: string | null
   dia_entrega_fuente?: string | null
+  last_bs_update?: string | null
+  last_erp_update?: string | null
+  bsale_updated_pending?: boolean | null
 }
 
 export type DistribuidoraDispatchPrepPlanningRowsResponse =
@@ -1150,6 +1154,49 @@ export async function getDistribuidoraDispatchPrepPlanningRows(params: {
     throw new Error(msg || "Error al cargar pre-planificación")
   }
   return res.json() as Promise<DistribuidoraDispatchPrepPlanningRowsResponse>
+}
+
+export type DistribuidoraPlanningLiveMetrics = {
+  document_id: number
+  oc?: number | null
+  client_id?: number | null
+  nombre_fantasia?: string | null
+  municipality?: string | null
+  city?: string | null
+  address?: string | null
+  total_amount?: number | null
+  weight_kg?: number | null
+  observaciones?: string | null
+  dia_entrega_detectado?: string | null
+  dia_entrega_label?: string | null
+  last_bs_update?: string | null
+  last_erp_update?: string | null
+  bsale_updated_pending?: boolean | null
+  has_georef?: boolean | null
+  lat?: number | null
+  lng?: number | null
+}
+
+export async function getDistribuidoraPlanningLiveMetrics(params: {
+  documentIds: number[]
+  signal?: AbortSignal
+}): Promise<{ items: DistribuidoraPlanningLiveMetrics[] }> {
+  const ids = params.documentIds.filter((x) => Number.isFinite(x) && x > 0)
+  if (ids.length === 0) return { items: [] }
+  const qs = new URLSearchParams()
+  qs.set("ids", ids.join(","))
+  const res = await fetchWithTimeout(
+    `${API_URL}/distribuidora/orders/dispatch-prep/planning-rows/live?${qs}`,
+    {
+      headers: getAuthHeaders(),
+      signal: params.signal,
+    },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al refrescar métricas live")
+  }
+  return res.json() as Promise<{ items: DistribuidoraPlanningLiveMetrics[] }>
 }
 
 export type DistribuidoraTruck = {

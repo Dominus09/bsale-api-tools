@@ -14,6 +14,7 @@ export type PlanificacionStoredOrder = {
   oc?: number | null
   nombre_fantasia?: string | null
   total_amount?: number | null
+  weight_kg?: number | null
   stop_index: number
   /** Comuna / municipio del cliente. */
   municipality?: string | null

@@ -16,6 +16,7 @@ from backend.repositories.distribuidora.route_planning_repo import (
     fetch_enriched_orders_by_document_ids,
 )
 from backend.services.distribuidora.orders_service import (
+    fetch_planning_live_by_document_ids,
     get_purchase_order_detail,
     list_dispatch_prep_by_municipality,
     list_dispatch_prep_observation_texts,
@@ -364,6 +365,31 @@ def get_dispatch_prep_observaciones(
         offset=offset,
         day_filter=day_filter,
     )
+
+
+@router.get("/orders/dispatch-prep/planning-rows/live")
+def get_dispatch_prep_planning_rows_live(
+    ids: str = Query(
+        ...,
+        description="document_id separados por coma",
+        max_length=8000,
+    ),
+):
+    """Métricas live (monto, peso, día, timestamps) para refrescar planificación en curso."""
+    parts: list[int] = []
+    for x in ids.split(","):
+        x = x.strip()
+        if not x:
+            continue
+        try:
+            parts.append(int(x))
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Id inválido: {x}") from None
+    if not parts:
+        raise HTTPException(status_code=400, detail="Sin ids")
+    if len(parts) > 500:
+        raise HTTPException(status_code=400, detail="Máximo 500 document_id")
+    return {"items": fetch_planning_live_by_document_ids(parts)}
 
 
 @router.get("/orders/dispatch-prep/planning-rows")

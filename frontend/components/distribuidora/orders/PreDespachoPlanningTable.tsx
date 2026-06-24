@@ -62,6 +62,25 @@ function formatClp(n: number): string {
   return clp.format(Number.isFinite(n) ? n : 0)
 }
 
+function formatKg(n: number | null | undefined): string {
+  const v = Number(n)
+  if (!Number.isFinite(v) || v <= 0) return "—"
+  return `${v.toLocaleString("es-CL", { maximumFractionDigits: 1 })} kg`
+}
+
+function formatLastUpdate(row: DistribuidoraDispatchPrepPlanningRow): string {
+  const raw = row.last_erp_update ?? row.last_bs_update
+  if (!raw?.trim()) return "—"
+  const d = new Date(raw)
+  if (Number.isNaN(d.getTime())) return raw
+  return d.toLocaleString("es-CL", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  })
+}
+
 function rowHasGeo(r: DistribuidoraDispatchPrepPlanningRow): boolean {
   return Boolean(r.has_georef && r.lat != null && r.lng != null)
 }
@@ -196,16 +215,23 @@ function DeliveryDayCell({ row }: { row: DistribuidoraDispatchPrepPlanningRow })
   const label = formatPreDespachoDeliveryDay(row)
   const token = row.dia_entrega_detectado
   return (
-    <Badge
-      variant="outline"
-      className={cn(
-        "max-w-full truncate px-1.5 py-0 text-[10px] font-medium leading-5",
-        deliveryDayBadgeClass(token),
-      )}
-      title={row.observaciones?.trim() || undefined}
-    >
-      {label}
-    </Badge>
+    <div className="flex min-w-0 flex-col gap-0.5">
+      <Badge
+        variant="outline"
+        className={cn(
+          "max-w-full truncate px-1.5 py-0 text-[10px] font-medium leading-5",
+          deliveryDayBadgeClass(token),
+        )}
+        title={row.observaciones?.trim() || undefined}
+      >
+        {label}
+      </Badge>
+      {row.bsale_updated_pending ? (
+        <span className="text-[9px] font-medium text-red-600 dark:text-red-400">
+          🔴 Actualizada en Bsale
+        </span>
+      ) : null}
+    </div>
   )
 }
 
@@ -307,6 +333,12 @@ function PlanningTableRow({
       <td className={cn(TD, "whitespace-nowrap text-right text-[11px] font-semibold tabular-nums")}>
         {formatClp(Number(r.total_amount ?? 0))}
       </td>
+      <td className={cn(TD, "whitespace-nowrap text-right text-[11px] tabular-nums text-muted-foreground")}>
+        {formatKg(r.weight_kg)}
+      </td>
+      <td className={cn(TD, "whitespace-nowrap text-[10px] text-muted-foreground")}>
+        {formatLastUpdate(r)}
+      </td>
       <td className={cn(TD_STICKY_TRUCK, inPlan && "bg-primary/[0.06]")}>
         <TruckSelectCell
           r={r}
@@ -399,7 +431,7 @@ type PreDespachoPlanningTableProps = {
   onTruckChange: (row: DistribuidoraDispatchPrepPlanningRow, raw: string) => void
 }
 
-const COL_COUNT = 15
+const COL_COUNT = 17
 
 export function PreDespachoPlanningTable({
   blocks,
@@ -436,6 +468,8 @@ export function PreDespachoPlanningTable({
             <th className={TH}>Comuna</th>
             <th className={TH}>Día entrega</th>
             <th className={cn(TH, "text-right")}>Monto</th>
+            <th className={cn(TH, "text-right")}>Peso kg</th>
+            <th className={TH}>Últ. actualización</th>
             <th className={TH_STICKY_TRUCK}>Camión</th>
             <th className={TH}>Estado</th>
             <th className={cn(TH, "text-center")}>Geo</th>
