@@ -98,21 +98,24 @@ def detect_delivery_day_from_observation(text: str | None) -> str | None:
     if len(matches) == 1:
         return normalize_day_token(matches[0].group(1))
 
+    # Varias menciones: preferir la última con contexto de entrega; si ninguna, la última del texto.
     best: str | None = None
     best_score = -1.0
+    last_token: str | None = None
     for m in matches:
         token = normalize_day_token(m.group(1))
         if not token:
             continue
+        last_token = token
         start, end = m.span()
         window = norm[max(0, start - 48) : min(len(norm), end + 48)]
-        score = start / max(len(norm), 1)
+        score = float(start) / max(len(norm), 1)
         if _DELIVERY_CTX_RE.search(window):
             score += 10.0
         if score >= best_score:
             best_score = score
             best = token
-    return best
+    return best or last_token
 
 
 def resolve_delivery_day(
@@ -121,23 +124,27 @@ def resolve_delivery_day(
     dia_atencion: str | None = None,
 ) -> tuple[str | None, str]:
     """
-    Resuelve día de entrega.
-    1) Día explícito en observaciones
-    2) Si observaciones vacías, día en comentarios
-    3) Ruta / cliente (dia_atencion)
-  """
+    Resuelve día de entrega desde fuentes Bsale actuales.
+    1) Día en atributo OBSERVACIONES (más reciente)
+    2) Día en comentarios del documento
+    3) Texto combinado (obs + comentarios) — última mención con contexto
+    4) Ruta / cliente (dia_atencion)
+    """
     obs_text = (observaciones or "").strip()
+    comments_text = (comments or "").strip()
+
     obs_day = detect_delivery_day_from_observation(obs_text)
     if obs_day:
         return obs_day, "observacion"
 
-    if obs_text:
-        route = normalize_day_token(dia_atencion)
-        return route, "ruta" if route else "sin_dia"
-
-    comments_day = detect_delivery_day_from_observation(comments)
+    comments_day = detect_delivery_day_from_observation(comments_text)
     if comments_day:
         return comments_day, "comentario"
+
+    combined = "\n".join(x for x in (obs_text, comments_text) if x)
+    combined_day = detect_delivery_day_from_observation(combined)
+    if combined_day:
+        return combined_day, "observacion"
 
     route = normalize_day_token(dia_atencion)
     if route:

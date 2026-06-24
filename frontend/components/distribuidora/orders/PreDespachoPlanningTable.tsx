@@ -15,15 +15,16 @@ import {
 import { normMunicipality } from "@/lib/distribuidora-logistics"
 import {
   computeAmountThresholds,
-  priorityBadgeClass,
-  priorityShortLabel,
   resolveRowPriority,
   type PreDespachoAmountThresholds,
 } from "@/lib/pre-despacho-priority"
 import {
+  operationalStatusBadgeClass,
+  resolveOperationalStatus,
+} from "@/lib/pre-despacho-operational-status"
+import {
   PurchaseAssociatedDocumentCell,
   PurchaseInvoiceScoreCell,
-  PurchaseInvoiceStatusCell,
 } from "@/components/distribuidora/orders/PurchaseInvoiceTableCells"
 import { PreDespachoEmptyState } from "@/components/distribuidora/orders/PreDespachoEmptyState"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -64,7 +65,7 @@ function formatClp(n: number): string {
 
 function formatKg(n: number | null | undefined): string {
   const v = Number(n)
-  if (!Number.isFinite(v) || v <= 0) return "—"
+  if (!Number.isFinite(v)) return "—"
   return `${v.toLocaleString("es-CL", { maximumFractionDigits: 1 })} kg`
 }
 
@@ -180,17 +181,74 @@ function GroupTruckAssignMenu({
   )
 }
 
-function PriorityCell({
+function WeightCell({ row }: { row: DistribuidoraDispatchPrepPlanningRow }) {
+  const kg = row.peso_total_kg ?? row.weight_kg
+  const sinPeso = Number(row.productos_sin_peso ?? 0)
+  const coverage = Number(row.porcentaje_cobertura_peso ?? 0)
+  const incomplete = sinPeso > 0
+
+  return (
+    <div className="flex min-w-0 flex-col items-end gap-0.5">
+      <span className="text-[11px] tabular-nums text-foreground">{formatKg(kg)}</span>
+      {incomplete ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge
+              variant="outline"
+              className="max-w-full cursor-help truncate px-1 py-0 text-[8px] font-medium leading-4 border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100"
+            >
+              ⚠ Peso incompleto ({sinPeso})
+            </Badge>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-xs text-xs">
+            {sinPeso} línea(s) sin peso en maestro logístico.
+            Cobertura: {Number.isFinite(coverage) ? coverage.toFixed(0) : "0"}%.
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
+    </div>
+  )
+}
+
+function MunicipalityCell({
+  municipality,
+  clusterLabel,
+}: {
+  municipality?: string | null
+  clusterLabel: string
+}) {
+  const muni = normMunicipality(municipality)
+  const cluster = clusterLabel?.trim()
+  const showCluster = cluster && cluster !== "—"
+  return (
+    <div className="flex min-w-0 flex-col gap-0.5">
+      <TruncateTooltip text={muni} />
+      {showCluster ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="block max-w-full truncate text-[9px] text-muted-foreground/80">
+              {cluster}
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="text-xs">
+            Cluster: {cluster}
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
+    </div>
+  )
+}
+
+function OperationalStatusCell({
   row,
   thresholds,
+  hasGeo,
 }: {
   row: DistribuidoraDispatchPrepPlanningRow
   thresholds: PreDespachoAmountThresholds
+  hasGeo: boolean
 }) {
-  const { primary } = resolveRowPriority(row, thresholds)
-  if (!primary) {
-    return <span className="text-[10px] text-muted-foreground/40">—</span>
-  }
+  const status = resolveOperationalStatus(row, thresholds, hasGeo)
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -198,14 +256,17 @@ function PriorityCell({
           variant="outline"
           className={cn(
             "max-w-full truncate px-1 py-0 text-[9px] font-medium leading-4",
-            priorityBadgeClass(primary),
+            operationalStatusBadgeClass(status.kind),
           )}
         >
-          {priorityShortLabel(primary)}
+          <span className="mr-0.5" aria-hidden>
+            {status.emoji}
+          </span>
+          {status.label}
         </Badge>
       </TooltipTrigger>
-      <TooltipContent side="top" className="text-xs">
-        {priorityShortLabel(primary)}
+      <TooltipContent side="top" className="max-w-sm text-xs">
+        {status.detail}
       </TooltipContent>
     </Tooltip>
   )
@@ -214,24 +275,27 @@ function PriorityCell({
 function DeliveryDayCell({ row }: { row: DistribuidoraDispatchPrepPlanningRow }) {
   const label = formatPreDespachoDeliveryDay(row)
   const token = row.dia_entrega_detectado
+  const fuente = row.dia_entrega_fuente
   return (
-    <div className="flex min-w-0 flex-col gap-0.5">
-      <Badge
-        variant="outline"
-        className={cn(
-          "max-w-full truncate px-1.5 py-0 text-[10px] font-medium leading-5",
-          deliveryDayBadgeClass(token),
-        )}
-        title={row.observaciones?.trim() || undefined}
-      >
-        {label}
-      </Badge>
-      {row.bsale_updated_pending ? (
-        <span className="text-[9px] font-medium text-red-600 dark:text-red-400">
-          🔴 Actualizada en Bsale
-        </span>
-      ) : null}
-    </div>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Badge
+          variant="outline"
+          className={cn(
+            "max-w-full truncate px-1.5 py-0 text-[10px] font-medium leading-5",
+            deliveryDayBadgeClass(token),
+          )}
+        >
+          {label}
+        </Badge>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-sm text-xs">
+        <p>Fuente: {fuente ?? "—"}</p>
+        {row.observaciones?.trim() ? (
+          <p className="mt-1 text-muted-foreground">{row.observaciones.trim()}</p>
+        ) : null}
+      </TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -298,8 +362,6 @@ function PlanningTableRow({
   const dir = r.direccion?.trim() || "—"
   const seller = r.seller_name?.trim() || "—"
   const obs = r.observaciones?.trim() || "—"
-  const clusterShort =
-    clusterLabel.length > 12 ? `${clusterLabel.slice(0, 11)}…` : clusterLabel
 
   return (
     <tr
@@ -325,7 +387,7 @@ function PlanningTableRow({
         />
       </td>
       <td className={cn(TD, "max-w-[6rem] text-muted-foreground")}>
-        <TruncateTooltip text={normMunicipality(r.municipality)} />
+        <MunicipalityCell municipality={r.municipality} clusterLabel={clusterLabel} />
       </td>
       <td className={cn(TD, "max-w-[7rem]")}>
         <DeliveryDayCell row={r} />
@@ -333,8 +395,8 @@ function PlanningTableRow({
       <td className={cn(TD, "whitespace-nowrap text-right text-[11px] font-semibold tabular-nums")}>
         {formatClp(Number(r.total_amount ?? 0))}
       </td>
-      <td className={cn(TD, "whitespace-nowrap text-right text-[11px] tabular-nums text-muted-foreground")}>
-        {formatKg(r.weight_kg)}
+      <td className={cn(TD, "whitespace-nowrap text-right")}>
+        <WeightCell row={r} />
       </td>
       <td className={cn(TD, "whitespace-nowrap text-[10px] text-muted-foreground")}>
         {formatLastUpdate(r)}
@@ -348,34 +410,7 @@ function PlanningTableRow({
         />
       </td>
       <td className={cn(TD, "whitespace-nowrap")}>
-        <PurchaseInvoiceStatusCell row={r} compact />
-      </td>
-      <td className={cn(TD, "text-center")}>
-        {geo ? (
-          <Badge
-            variant="outline"
-            className="border-emerald-200 bg-emerald-50 px-1 py-0 text-[9px] text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200"
-          >
-            OK
-          </Badge>
-        ) : (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Badge
-                variant="outline"
-                className="cursor-help border-amber-400 bg-amber-50 px-1 py-0 text-[9px] text-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
-              >
-                Sin georef
-              </Badge>
-            </TooltipTrigger>
-            <TooltipContent side="top" className="text-xs">
-              Sin georreferencia — se puede planificar como pendiente
-            </TooltipContent>
-          </Tooltip>
-        )}
-      </td>
-      <td className={TD}>
-        <PriorityCell row={r} thresholds={thresholds} />
+        <OperationalStatusCell row={r} thresholds={thresholds} hasGeo={geo} />
       </td>
       <td className={cn(TD, "max-w-[8rem] text-muted-foreground")}>
         <TruncateTooltip text={obs} />
@@ -391,16 +426,6 @@ function PlanningTableRow({
       </td>
       <td className={cn(TD, "text-right")}>
         <PurchaseInvoiceScoreCell row={r} compact />
-      </td>
-      <td className={cn(TD, "max-w-[5rem] text-[10px] text-muted-foreground")}>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span className="block truncate">{clusterShort}</span>
-          </TooltipTrigger>
-          <TooltipContent side="top" className="text-xs">
-            {clusterLabel}
-          </TooltipContent>
-        </Tooltip>
       </td>
     </tr>
   )
@@ -431,7 +456,7 @@ type PreDespachoPlanningTableProps = {
   onTruckChange: (row: DistribuidoraDispatchPrepPlanningRow, raw: string) => void
 }
 
-const COL_COUNT = 17
+const COL_COUNT = 14
 
 export function PreDespachoPlanningTable({
   blocks,
@@ -471,15 +496,12 @@ export function PreDespachoPlanningTable({
             <th className={cn(TH, "text-right")}>Peso kg</th>
             <th className={TH}>Últ. actualización</th>
             <th className={TH_STICKY_TRUCK}>Camión</th>
-            <th className={TH}>Estado</th>
-            <th className={cn(TH, "text-center")}>Geo</th>
-            <th className={TH}>Prio</th>
+            <th className={TH}>Oper.</th>
             <th className={TH}>Observación</th>
             <th className={TH}>Dirección</th>
             <th className={TH}>Vendedor</th>
             <th className={TH}>Doc.</th>
             <th className={cn(TH, "text-right")}>Sc</th>
-            <th className={TH}>Clust.</th>
           </tr>
         </thead>
         <tbody>

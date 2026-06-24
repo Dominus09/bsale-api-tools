@@ -7,18 +7,13 @@ from decimal import Decimal
 from typing import Any
 
 from backend.utils.delivery_day_detect import delivery_day_label, resolve_delivery_day
+from backend.utils.planning_sql_fragments import (
+    LATEST_OBS_LATERAL_LIVE,
+    ORDER_WEIGHT_METRICS_SQL,
+    PLANNING_OBSERVACIONES_EXPR,
+)
 
-_WEIGHT_SQL = """
-SELECT
-    dd.document_id,
-    ROUND(COALESCE(SUM(dd.quantity * pl.weight_unit_kg), 0)::numeric, 3) AS weight_kg
-FROM distribuidora.document_details dd
-LEFT JOIN bsale.v_product_logistics pl ON pl.variant_id = dd.variant_id
-WHERE dd.document_id = ANY(%s::bigint[])
-GROUP BY dd.document_id
-"""
-
-_LIVE_FIELDS_SQL = """
+_LIVE_FIELDS_SQL = f"""
 SELECT
     d.document_id,
     d.number AS oc,
@@ -43,7 +38,7 @@ SELECT
         NULLIF(BTRIM(d.address), ''),
         NULLIF(BTRIM(c.address), '')
     ) AS address,
-    NULLIF(BTRIM(obs_a.observaciones), '') AS observaciones,
+    {PLANNING_OBSERVACIONES_EXPR} AS observaciones,
     NULLIF(BTRIM(d.raw_data->>'comments'), '') AS comments,
     NULLIF(BTRIM(c.dia_atencion), '') AS dia_atencion,
     NULLIF(BTRIM(c.nombre_fantasia), '') AS nombre_fantasia,
@@ -51,8 +46,7 @@ SELECT
     c.lat::double precision AS lat,
     c.lon::double precision AS lng
 FROM distribuidora.documents d
-LEFT JOIN distribuidora.v_oc_attributes_flat obs_a
-    ON obs_a.document_id = d.document_id
+{LATEST_OBS_LATERAL_LIVE}
 LEFT JOIN bsale.clients c
     ON c.company_id = d.company_id
    AND c.bsale_id = d.client_id
@@ -221,14 +215,24 @@ def fetch_live_metrics_by_document_ids(
         enrich_delivery_day_fields(item)
         by_id[int(item["document_id"])] = item
 
-    cur.execute(_WEIGHT_SQL, (ids,))
-    for doc_id, weight_kg in cur.fetchall():
-        entry = by_id.setdefault(int(doc_id), {"document_id": int(doc_id)})
-        entry["weight_kg"] = float(weight_kg) if weight_kg is not None else 0.0
+    cur.execute(ORDER_WEIGHT_METRICS_SQL, (ids,))
+    weight_cols = [c[0] for c in cur.description]
+    for row in cur.fetchall():
+        w = dict(zip(weight_cols, row))
+        doc_id = int(w["document_id"])
+        entry = by_id.setdefault(doc_id, {"document_id": doc_id})
+        peso = float(w["peso_total_kg"]) if w.get("peso_total_kg") is not None else 0.0
+        entry["peso_total_kg"] = peso
+        entry["weight_kg"] = peso
+        entry["productos_sin_peso"] = int(w.get("productos_sin_peso") or 0)
+        entry["porcentaje_cobertura_peso"] = float(w.get("porcentaje_cobertura_peso") or 0)
 
     for entry in by_id.values():
         if "weight_kg" not in entry:
             entry["weight_kg"] = 0.0
+            entry["peso_total_kg"] = 0.0
+            entry["productos_sin_peso"] = 0
+            entry["porcentaje_cobertura_peso"] = 0.0
         staleness = evaluate_planning_staleness(live=entry, snapshot=None)
         entry["bsale_updated_pending"] = staleness["bsale_updated_pending"]
     return by_id
@@ -250,6 +254,9 @@ def overlay_snapshot_orders(
         row["snapshot_city"] = row.get("city")
         row["snapshot_at"] = row.get("created_at")
         row["weight_kg"] = live.get("weight_kg")
+        row["peso_total_kg"] = live.get("peso_total_kg")
+        row["productos_sin_peso"] = live.get("productos_sin_peso")
+        row["porcentaje_cobertura_peso"] = live.get("porcentaje_cobertura_peso")
         row["last_bs_update"] = live.get("last_bs_update")
         row["last_erp_update"] = row.get("created_at")
         row["planning_stale"] = staleness["planning_stale"]

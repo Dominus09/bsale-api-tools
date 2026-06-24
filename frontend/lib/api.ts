@@ -1105,6 +1105,9 @@ export type DistribuidoraDispatchPrepPlanningRow = {
   seller_name?: string | null
   total_amount?: number | null
   weight_kg?: number | null
+  peso_total_kg?: number | null
+  productos_sin_peso?: number | null
+  porcentaje_cobertura_peso?: number | null
   has_georef?: boolean | null
   lat?: number | null
   lng?: number | null
@@ -1166,6 +1169,9 @@ export type DistribuidoraPlanningLiveMetrics = {
   address?: string | null
   total_amount?: number | null
   weight_kg?: number | null
+  peso_total_kg?: number | null
+  productos_sin_peso?: number | null
+  porcentaje_cobertura_peso?: number | null
   observaciones?: string | null
   dia_entrega_detectado?: string | null
   dia_entrega_label?: string | null

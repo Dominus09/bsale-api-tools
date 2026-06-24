@@ -16,6 +16,20 @@ export function mergeLiveMetricsIntoPlanOrders(
       total_amount:
         live.total_amount != null ? Number(live.total_amount) : o.total_amount,
       weight_kg: live.weight_kg != null ? Number(live.weight_kg) : o.weight_kg,
+      peso_total_kg:
+        live.peso_total_kg != null
+          ? Number(live.peso_total_kg)
+          : live.weight_kg != null
+            ? Number(live.weight_kg)
+            : o.peso_total_kg,
+      productos_sin_peso:
+        live.productos_sin_peso != null
+          ? Number(live.productos_sin_peso)
+          : o.productos_sin_peso,
+      porcentaje_cobertura_peso:
+        live.porcentaje_cobertura_peso != null
+          ? Number(live.porcentaje_cobertura_peso)
+          : o.porcentaje_cobertura_peso,
       municipality: live.municipality ?? live.city ?? o.municipality,
       direccion: live.address ?? o.direccion,
       observaciones: live.observaciones ?? o.observaciones,

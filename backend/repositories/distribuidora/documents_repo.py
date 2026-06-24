@@ -181,7 +181,7 @@ def document_dict_from_bsale(
         "user_id": int(user["id"]) if user.get("id") is not None else None,
         "emission_date": _ts(d.get("emissionDate")),
         "expiration_date": _ts(d.get("expirationDate")),
-        "generation_date": _ts(d.get("generationDate")),
+        "generation_date": _ts(d.get("generationDate")) or _ts(d.get("modificationDate")),
         "total_amount": _num(d.get("totalAmount")),
         "net_amount": _num(d.get("netAmount")),
         "tax_amount": _num(d.get("taxAmount")),

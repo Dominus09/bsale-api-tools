@@ -32,6 +32,12 @@ from backend.utils.planning_rows_stage import (
     PlanningRowsStageCollector,
     planning_rows_stage_enabled,
 )
+from backend.utils.planning_sql_fragments import (
+    PLANNING_LATEST_OBS_LATERAL,
+    PLANNING_OBSERVACIONES_EXPR,
+    PLANNING_WEIGHT_LATERAL,
+    PLANNING_WEIGHT_SELECT,
+)
 
 _DISPATCH_PREP_DOC_FILTER = """
     d.company_id = 3
@@ -264,17 +270,7 @@ def _enrich_row_delivery_day(row: dict[str, Any]) -> None:
     row["dia_entrega_label"] = delivery_day_label(day)
 
 
-_PLANNING_ROWS_WEIGHT_LATERAL = """
-LEFT JOIN LATERAL (
-    SELECT ROUND(COALESCE(SUM(dd.quantity * pl.weight_unit_kg), 0)::numeric, 3) AS weight_kg
-    FROM distribuidora.document_details dd
-    LEFT JOIN bsale.v_product_logistics pl ON pl.variant_id = dd.variant_id
-    WHERE dd.document_id = d.document_id
-) w ON TRUE
-"""
-
 _PLANNING_ROWS_UNRENDERED_MARKERS = (
-    "{_PLANNING_ROWS_WEIGHT_LATERAL}",
     "{_PLANNING_ROWS_STATUS_SELECT}",
     "{_PLANNING_ROWS_ENRICH_STATUS_JOINS}",
     "{_DISPATCH_PREP_NOT_INVOICED_FILTER}",
@@ -680,22 +676,21 @@ def _planning_rows_enrich_sql() -> str:
                 (c.lat IS NOT NULL AND c.lon IS NOT NULL) AS has_georef,
                 c.lat::double precision AS lat,
                 c.lon::double precision AS lng,
-                NULLIF(BTRIM(obs_a.observaciones), '') AS observaciones,
+                {PLANNING_OBSERVACIONES_EXPR} AS observaciones,
                 NULLIF(BTRIM(d.raw_data->>'comments'), '') AS comments,
                 NULLIF(BTRIM(c.dia_atencion), '') AS dia_atencion,
                 d.generation_date AS last_bs_update,
                 d.updated_at AS last_erp_update,
-                COALESCE(w.weight_kg, 0) AS weight_kg,
+                {PLANNING_WEIGHT_SELECT},
                 {_PLANNING_ROWS_STATUS_SELECT}
             FROM distribuidora.documents d
             INNER JOIN page_ids pi ON pi.document_id = d.document_id
             {_PLANNING_ROWS_ENRICH_STATUS_JOINS}
-            LEFT JOIN distribuidora.v_oc_attributes_flat obs_a
-                ON obs_a.document_id = d.document_id
+            {PLANNING_LATEST_OBS_LATERAL}
             LEFT JOIN bsale.clients c
                 ON c.company_id = d.company_id
                AND c.bsale_id = d.client_id
-            {_PLANNING_ROWS_WEIGHT_LATERAL}
+            {PLANNING_WEIGHT_LATERAL}
             ORDER BY d.number DESC NULLS LAST, d.document_id DESC
             """
 
@@ -725,16 +720,15 @@ def _planning_rows_base_orders_sql() -> str:
                 NULLIF(BTRIM(d.address), '') AS direccion,
                 NULLIF(BTRIM(d.seller_name), '') AS seller_name,
                 d.total_amount,
-                NULLIF(BTRIM(obs_a.observaciones), '') AS observaciones,
+                {PLANNING_OBSERVACIONES_EXPR} AS observaciones,
                 NULLIF(BTRIM(d.raw_data->>'comments'), '') AS comments,
                 d.generation_date AS last_bs_update,
                 d.updated_at AS last_erp_update,
-                COALESCE(w.weight_kg, 0) AS weight_kg
+                {PLANNING_WEIGHT_SELECT}
             FROM distribuidora.documents d
             INNER JOIN page_ids pi ON pi.document_id = d.document_id
-            LEFT JOIN distribuidora.v_oc_attributes_flat obs_a
-                ON obs_a.document_id = d.document_id
-            {_PLANNING_ROWS_WEIGHT_LATERAL}
+            {PLANNING_LATEST_OBS_LATERAL}
+            {PLANNING_WEIGHT_LATERAL}
             ORDER BY d.number DESC NULLS LAST, d.document_id DESC
             """
 
@@ -907,6 +901,9 @@ def _merge_planning_rows_staged(
             "observaciones": base.get("observaciones"),
             "comments": base.get("comments"),
             "weight_kg": base.get("weight_kg"),
+            "peso_total_kg": base.get("peso_total_kg"),
+            "productos_sin_peso": base.get("productos_sin_peso"),
+            "porcentaje_cobertura_peso": base.get("porcentaje_cobertura_peso"),
             "last_bs_update": base.get("last_bs_update"),
             "last_erp_update": base.get("last_erp_update"),
             "dia_atencion": (geo or {}).get("dia_atencion"),

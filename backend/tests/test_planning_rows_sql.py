@@ -15,7 +15,8 @@ def test_planning_rows_base_orders_sql_renders_weight_lateral():
     _assert_sql_template_rendered(sql, context="base_orders")
     assert "{_PLANNING_ROWS_WEIGHT_LATERAL}" not in sql
     assert "LEFT JOIN LATERAL" in sql
-    assert "weight_unit_kg" in sql
+    assert "COALESCE(pl.weight_unit_kg, 0)" in sql
+    assert "productos_sin_peso" in sql
 
 
 def test_planning_rows_enrich_sql_renders_weight_lateral():
