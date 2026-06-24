@@ -273,6 +273,20 @@ LEFT JOIN LATERAL (
 ) w ON TRUE
 """
 
+_PLANNING_ROWS_UNRENDERED_MARKERS = (
+    "{_PLANNING_ROWS_WEIGHT_LATERAL}",
+    "{_PLANNING_ROWS_STATUS_SELECT}",
+    "{_PLANNING_ROWS_ENRICH_STATUS_JOINS}",
+    "{_DISPATCH_PREP_NOT_INVOICED_FILTER}",
+    "{day_clause}",
+)
+
+
+def _assert_sql_template_rendered(sql: str, *, context: str = "planning_rows") -> None:
+    for marker in _PLANNING_ROWS_UNRENDERED_MARKERS:
+        if marker in sql:
+            raise RuntimeError(f"SQL template not rendered ({context}): {marker}")
+
 
 def _apply_live_sync_flags(row: dict[str, Any]) -> None:
     from backend.utils.order_live_metrics import bsale_ahead_of_erp_sync
@@ -698,7 +712,7 @@ def _planning_rows_use_monolith_enrich() -> bool:
 
 
 def _planning_rows_base_orders_sql() -> str:
-    return """
+    return f"""
             WITH page_ids AS (
                 SELECT unnest(%s::bigint[]) AS document_id
             )
@@ -918,7 +932,9 @@ def _fetch_planning_rows_staged(
     params = (doc_ids,)
 
     t0 = time.perf_counter()
-    cur.execute(_planning_rows_base_orders_sql(), params)
+    base_sql = _planning_rows_base_orders_sql()
+    _assert_sql_template_rendered(base_sql, context="_planning_rows_base_orders_sql")
+    cur.execute(base_sql, params)
     base_raw = cur.fetchall() or []
     base_rows = [_row_to_dict(cur, r) for r in base_raw]
     stages.record(
@@ -1089,6 +1105,7 @@ def list_dispatch_prep_planning_rows(
     fetch = lim + 1
     ids_sql = _planning_rows_ids_sql(day_tokens=day_tokens)
     enrich_sql = _planning_rows_enrich_sql()
+    _assert_sql_template_rendered(enrich_sql, context="_planning_rows_enrich_sql")
     ids_params: tuple[Any, ...] = (
         d0,
         d1,
@@ -1117,6 +1134,7 @@ def list_dispatch_prep_planning_rows(
                 conn.rollback()
 
         t_ids = time.perf_counter()
+        _assert_sql_template_rendered(ids_sql, context="_planning_rows_ids_sql")
         cur.execute(ids_sql, ids_params)
         id_rows = cur.fetchall() or []
         sql_ids_ms = round((time.perf_counter() - t_ids) * 1000.0, 2)
@@ -1188,6 +1206,7 @@ def list_dispatch_prep_planning_rows(
                     log_planning_rows("explain_enrich_failed", error=repr(exc))
                     conn.rollback()
             t_enrich = time.perf_counter()
+            _assert_sql_template_rendered(enrich_sql, context="_planning_rows_enrich_sql")
             cur.execute(enrich_sql, enrich_params)
             raw = cur.fetchall() or []
             sql_enrich_ms = round((time.perf_counter() - t_enrich) * 1000.0, 2)
