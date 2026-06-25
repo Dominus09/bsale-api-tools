@@ -34,6 +34,7 @@ from backend.utils.planning_rows_stage import (
 )
 from backend.utils.planning_sql_fragments import (
     PLANNING_LATEST_OBS_LATERAL,
+    PLANNING_LAST_BS_UPDATE_EXPR,
     PLANNING_OBSERVACIONES_EXPR,
     PLANNING_WEIGHT_LATERAL,
     PLANNING_WEIGHT_SELECT,
@@ -679,7 +680,7 @@ def _planning_rows_enrich_sql() -> str:
                 {PLANNING_OBSERVACIONES_EXPR} AS observaciones,
                 NULLIF(BTRIM(d.raw_data->>'comments'), '') AS comments,
                 NULLIF(BTRIM(c.dia_atencion), '') AS dia_atencion,
-                d.generation_date AS last_bs_update,
+                {PLANNING_LAST_BS_UPDATE_EXPR} AS last_bs_update,
                 d.updated_at AS last_erp_update,
                 {PLANNING_WEIGHT_SELECT},
                 {_PLANNING_ROWS_STATUS_SELECT}
@@ -722,7 +723,7 @@ def _planning_rows_base_orders_sql() -> str:
                 d.total_amount,
                 {PLANNING_OBSERVACIONES_EXPR} AS observaciones,
                 NULLIF(BTRIM(d.raw_data->>'comments'), '') AS comments,
-                d.generation_date AS last_bs_update,
+                {PLANNING_LAST_BS_UPDATE_EXPR} AS last_bs_update,
                 d.updated_at AS last_erp_update,
                 {PLANNING_WEIGHT_SELECT}
             FROM distribuidora.documents d

@@ -39,6 +39,7 @@ from backend.services.distribuidora.bsale_params import (
     log_office_filter_debug_response,
     merge_bsale_office_query,
 )
+from backend.utils.sync_order_audit import log_order_sync_audit
 from backend.utils.sync_state import (
     MODE_BACKFILL,
     update_sync_state_error,
@@ -69,6 +70,27 @@ def _sales_sliding_window_days() -> int:
         n = int(os.getenv("SALES_SYNC_WINDOW_DAYS", "10"))
     except ValueError:
         n = 10
+    return max(1, min(366, n))
+
+
+def _orders_emission_window_days() -> int:
+    """Ventana de emisión para sync OC (captura OCs recientes por fecha documento)."""
+    try:
+        n = int(os.getenv("ORDERS_EMISSION_WINDOW_DAYS", "45"))
+    except ValueError:
+        n = 45
+    return max(1, min(366, n))
+
+
+def _orders_generation_window_days() -> int:
+    """
+    Ventana ``generationdaterange`` Bsale: OCs modificadas recientemente aunque
+    su ``emission_date`` sea antigua.
+    """
+    try:
+        n = int(os.getenv("ORDERS_GENERATION_WINDOW_DAYS", "14"))
+    except ValueError:
+        n = 14
     return max(1, min(366, n))
 
 
@@ -400,6 +422,8 @@ def _append_items_from_bsale_response(
         if row is None:
             continue
         row["_bsale_document"] = d
+        if int(row.get("document_type_id") or 0) == 33:
+            log_order_sync_audit(d, phase="api_received")
         pending.append(row)
 
 
@@ -440,14 +464,28 @@ def _process_one_pending_document_row(
             _notify_progress(stats)
             return
         if not stats.get("_documents_only_skip_children"):
+            raw_doc = row.get("_bsale_document")
+            if isinstance(raw_doc, dict):
+                log_order_sync_audit(
+                    raw_doc,
+                    phase="before_children",
+                    persisted_document_id=int(row["document_id"]),
+                )
             _refresh_document_children(
                 client,
                 cur,
                 int(row["document_id"]),
                 row.get("document_type_id"),
                 stats,
-                raw_document=row.get("_bsale_document"),
+                raw_document=raw_doc,
             )
+            if isinstance(raw_doc, dict):
+                log_order_sync_audit(
+                    raw_doc,
+                    phase="after_children",
+                    persisted_document_id=int(row["document_id"]),
+                    attributes_count=int(stats.get("attributes_rows") or 0),
+                )
         conn.commit()
         stats["documents_processed"] += 1
         _notify_progress(stats)
@@ -653,18 +691,24 @@ def _fetch_documents_window(
     stats: dict[str, Any],
     log_id: int | None,
     raw_items_counter_key: str | None = None,
+    date_range_field: str = "emissiondaterange",
+    finalize_log: bool = True,
 ) -> None:
     """Paginación por ``offset``; mismo cliente robusto que resync (429/5xx/red)."""
+    if date_range_field not in ("emissiondaterange", "generationdaterange"):
+        raise ValueError(f"date_range_field inválido: {date_range_field}")
     offset = 0
     pending: list[dict[str, Any]] = []
+    pages = 0
     while True:
         params = {
             "limit": LIMIT_BSALE,
             "offset": offset,
-            "emissiondaterange": f"[{desde_ts},{hasta_ts}]",
+            date_range_field: f"[{desde_ts},{hasta_ts}]",
         }
         data = _documents_get_resync(client, params)
         items = data.get("items") or []
+        pages += 1
         if not items:
             break
 
@@ -678,6 +722,13 @@ def _fetch_documents_window(
         time.sleep(random.uniform(0.15, 0.45))
 
     _flush_pending_tail(client, cur, conn, pending, stats)
+
+    stats[f"api_pages_{date_range_field}"] = int(
+        stats.get(f"api_pages_{date_range_field}") or 0
+    ) + pages
+
+    if not finalize_log:
+        return
 
     upd = int(stats.get("updated_documents", 0) or 0)
     proc = int(stats.get("documents_processed", 0) or 0)
@@ -805,6 +856,48 @@ def sync_bsale_distribuidora_incremental(
                 desde_ts,
                 hasta_ts,
             )
+            orders_dual_sync = False
+        elif process_name == PROCESS_ORDERS:
+            emission_days = _orders_emission_window_days()
+            gen_days = _orders_generation_window_days()
+            today_utc = now.date()
+            from_emission = today_utc - timedelta(days=emission_days)
+            from_gen = today_utc - timedelta(days=gen_days)
+            desde = datetime(
+                from_emission.year,
+                from_emission.month,
+                from_emission.day,
+                0,
+                0,
+                0,
+                tzinfo=timezone.utc,
+            )
+            desde_gen = datetime(
+                from_gen.year,
+                from_gen.month,
+                from_gen.day,
+                0,
+                0,
+                0,
+                tzinfo=timezone.utc,
+            )
+            desde_ts = int(desde.timestamp())
+            desde_gen_ts = int(desde_gen.timestamp())
+            hasta_ts = int(now.timestamp())
+            if desde_ts >= hasta_ts:
+                desde_ts = hasta_ts - 3600
+            stats["orders_emission_window_days"] = emission_days
+            stats["orders_generation_window_days"] = gen_days
+            stats["orders_emission_from_date"] = from_emission.isoformat()
+            stats["orders_generation_from_date"] = from_gen.isoformat()
+            logger.info(
+                "sync-orders: emissiondaterange últimos %s d (%s) + generationdaterange últimos %s d (%s)",
+                emission_days,
+                from_emission.isoformat(),
+                gen_days,
+                from_gen.isoformat(),
+            )
+            orders_dual_sync = True
         else:
             if last_sync < _FIRST_SYNC_CUTOFF:
                 desde = now - timedelta(days=30)
@@ -819,31 +912,67 @@ def sync_bsale_distribuidora_incremental(
             hasta_ts = int(now.timestamp())
             if desde_ts >= hasta_ts:
                 desde_ts = hasta_ts - 3600
+            orders_dual_sync = False
 
         if allowed_document_type_ids is not None:
             stats["_allowed_document_type_ids"] = allowed_document_type_ids
 
         client = BsaleClient(token)
-        logger.info(
-            "distribuidora sync incremental (%s): company_id=%s office_id=%s officeid=%s | "
-            "epoch [%s, %s]",
-            process_name,
-            COMPANY_ID,
-            OFFICE_ID,
-            OFFICE_ID,
-            desde_ts,
-            hasta_ts,
-        )
-        _fetch_documents_window(
-            client,
-            cur,
-            conn,
-            desde_ts=desde_ts,
-            hasta_ts=hasta_ts,
-            stats=stats,
-            log_id=log_id,
-            raw_items_counter_key=raw_items_counter_key,
-        )
+        if orders_dual_sync:
+            logger.info(
+                "distribuidora sync incremental (%s): company_id=%s office_id=%s | "
+                "emission epoch [%s, %s] luego generation epoch [%s, %s]",
+                process_name,
+                COMPANY_ID,
+                OFFICE_ID,
+                desde_ts,
+                hasta_ts,
+                desde_gen_ts,
+                hasta_ts,
+            )
+            _fetch_documents_window(
+                client,
+                cur,
+                conn,
+                desde_ts=desde_ts,
+                hasta_ts=hasta_ts,
+                stats=stats,
+                log_id=None,
+                date_range_field="emissiondaterange",
+                finalize_log=False,
+            )
+            _fetch_documents_window(
+                client,
+                cur,
+                conn,
+                desde_ts=desde_gen_ts,
+                hasta_ts=hasta_ts,
+                stats=stats,
+                log_id=log_id,
+                date_range_field="generationdaterange",
+                finalize_log=True,
+            )
+        else:
+            logger.info(
+                "distribuidora sync incremental (%s): company_id=%s office_id=%s officeid=%s | "
+                "epoch [%s, %s]",
+                process_name,
+                COMPANY_ID,
+                OFFICE_ID,
+                OFFICE_ID,
+                desde_ts,
+                hasta_ts,
+            )
+            _fetch_documents_window(
+                client,
+                cur,
+                conn,
+                desde_ts=desde_ts,
+                hasta_ts=hasta_ts,
+                stats=stats,
+                log_id=log_id,
+                raw_items_counter_key=raw_items_counter_key,
+            )
 
         if process_name == PROCESS_SALES:
             logger.info(

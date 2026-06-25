@@ -10,6 +10,7 @@ from backend.utils.delivery_day_detect import delivery_day_label, resolve_delive
 from backend.utils.planning_sql_fragments import (
     LATEST_OBS_LATERAL_LIVE,
     ORDER_WEIGHT_METRICS_SQL,
+    PLANNING_LAST_BS_UPDATE_EXPR,
     PLANNING_OBSERVACIONES_EXPR,
 )
 
@@ -20,7 +21,7 @@ SELECT
     d.client_id,
     d.company_id,
     d.total_amount,
-    d.generation_date AS last_bs_update,
+    {PLANNING_LAST_BS_UPDATE_EXPR} AS last_bs_update,
     d.updated_at AS last_erp_update,
     COALESCE(
         NULLIF(BTRIM(d.municipality), ''),

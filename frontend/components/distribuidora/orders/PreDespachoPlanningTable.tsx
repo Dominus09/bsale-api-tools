@@ -70,7 +70,7 @@ function formatKg(n: number | null | undefined): string {
 }
 
 function formatLastUpdate(row: DistribuidoraDispatchPrepPlanningRow): string {
-  const raw = row.last_erp_update ?? row.last_bs_update
+  const raw = row.last_bs_update
   if (!raw?.trim()) return "—"
   const d = new Date(raw)
   if (Number.isNaN(d.getTime())) return raw
@@ -494,7 +494,7 @@ export function PreDespachoPlanningTable({
             <th className={TH}>Día entrega</th>
             <th className={cn(TH, "text-right")}>Monto</th>
             <th className={cn(TH, "text-right")}>Peso kg</th>
-            <th className={TH}>Últ. actualización</th>
+            <th className={TH}>Últ. Bsale</th>
             <th className={TH_STICKY_TRUCK}>Camión</th>
             <th className={TH}>Oper.</th>
             <th className={TH}>Observación</th>

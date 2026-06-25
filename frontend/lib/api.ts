@@ -5042,3 +5042,112 @@ export async function syncCostAnalytics(params?: {
   }
   return res.json() as Promise<Record<string, unknown>>
 }
+
+// --- Logística: auditoría de pesos ---
+
+export type WeightAuditMaster = {
+  productos_erp: number
+  productos_con_peso: number
+  productos_sin_peso: number
+  variantes_con_peso: number
+  variantes_sin_peso: number
+  variantes_total: number
+  porcentaje_cobertura: number
+}
+
+export type WeightAuditOrderRow = {
+  document_id: number
+  oc: number
+  cliente: string | null
+  productos_totales: number
+  productos_con_peso: number
+  productos_sin_peso: number
+  peso_total_kg: number
+  porcentaje_cobertura: number
+  porcentaje_cobertura_peso?: number
+  estado: "completo" | "parcial" | "sin_peso"
+}
+
+export type WeightAuditResponse = {
+  master: WeightAuditMaster
+  orders_summary: {
+    ordenes_total: number
+    ordenes_completo: number
+    ordenes_parcial: number
+    ordenes_sin_peso: number
+  }
+  orders: WeightAuditOrderRow[]
+}
+
+export type WeightAuditLineJoinDebug = {
+  variant_id: number | null
+  product_id: number | null
+  barcode: string | null
+  codigo_interno: string | null
+  weight_unit_kg: number | null
+  join_status: string
+  pm_id_variant: number | null
+  pm_id_barcode: number | null
+  peso_unitario_variant_join: number | null
+  peso_unitario_barcode_join: number | null
+}
+
+export type WeightAuditOrderLine = {
+  detail_id: number
+  line_number: number | null
+  codigo: string | null
+  producto: string | null
+  cantidad: number
+  peso_unitario_kg: number | null
+  peso_total_kg: number
+  estado: "tiene_peso" | "sin_peso"
+  join_debug: WeightAuditLineJoinDebug
+}
+
+export type WeightAuditOrderDetail = {
+  document_id: number
+  oc: number
+  cliente: string | null
+  productos_totales: number
+  productos_con_peso: number
+  productos_sin_peso: number
+  peso_total_kg: number
+  porcentaje_cobertura: number
+  estado: "completo" | "parcial" | "sin_peso"
+  lines: WeightAuditOrderLine[]
+}
+
+export async function getWeightAudit(params?: {
+  company_id?: number
+  office_id?: number
+}): Promise<WeightAuditResponse> {
+  const cid = params?.company_id ?? requireCompanyId()
+  const qs = new URLSearchParams({ company_id: String(cid) })
+  if (params?.office_id != null) qs.set("office_id", String(params.office_id))
+  const res = await fetch(`${API_URL}/logistics/weight-audit?${qs}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar auditoría de pesos")
+  }
+  return res.json() as Promise<WeightAuditResponse>
+}
+
+export async function getWeightAuditOrderDetail(
+  documentId: number,
+  params?: { company_id?: number; office_id?: number },
+): Promise<WeightAuditOrderDetail> {
+  const cid = params?.company_id ?? requireCompanyId()
+  const qs = new URLSearchParams({ company_id: String(cid) })
+  if (params?.office_id != null) qs.set("office_id", String(params.office_id))
+  const res = await fetch(
+    `${API_URL}/logistics/weight-audit/orders/${documentId}?${qs}`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar detalle de peso de la OC")
+  }
+  return res.json() as Promise<WeightAuditOrderDetail>
+}

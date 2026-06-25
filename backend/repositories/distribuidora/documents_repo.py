@@ -171,6 +171,9 @@ def document_dict_from_bsale(
         except (TypeError, ValueError, OSError):
             return None
 
+    gen_ts = _ts(d.get("generationDate"))
+    mod_ts = _ts(d.get("modificationDate"))
+
     return {
         "document_id": int(d["id"]),
         "number": _folio_number_from_bsale(d),
@@ -181,7 +184,8 @@ def document_dict_from_bsale(
         "user_id": int(user["id"]) if user.get("id") is not None else None,
         "emission_date": _ts(d.get("emissionDate")),
         "expiration_date": _ts(d.get("expirationDate")),
-        "generation_date": _ts(d.get("generationDate")) or _ts(d.get("modificationDate")),
+        "generation_date": gen_ts,
+        "bsale_modified_at": mod_ts or gen_ts,
         "total_amount": _num(d.get("totalAmount")),
         "net_amount": _num(d.get("netAmount")),
         "tax_amount": _num(d.get("taxAmount")),
@@ -307,6 +311,7 @@ def upsert_documents(
         "emission_date",
         "expiration_date",
         "generation_date",
+        "bsale_modified_at",
         "total_amount",
         "net_amount",
         "tax_amount",
@@ -378,6 +383,7 @@ def upsert_documents(
                 emission_date = EXCLUDED.emission_date,
                 expiration_date = EXCLUDED.expiration_date,
                 generation_date = EXCLUDED.generation_date,
+                bsale_modified_at = EXCLUDED.bsale_modified_at,
                 total_amount = EXCLUDED.total_amount,
                 net_amount = EXCLUDED.net_amount,
                 tax_amount = EXCLUDED.tax_amount,
@@ -452,6 +458,7 @@ def upsert_documents(
                 emission_date = EXCLUDED.emission_date,
                 expiration_date = EXCLUDED.expiration_date,
                 generation_date = EXCLUDED.generation_date,
+                bsale_modified_at = EXCLUDED.bsale_modified_at,
                 total_amount = EXCLUDED.total_amount,
                 net_amount = EXCLUDED.net_amount,
                 tax_amount = EXCLUDED.tax_amount,
