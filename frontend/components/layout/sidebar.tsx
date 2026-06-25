@@ -60,8 +60,18 @@ const navSections: { title: string; items: NavItem[] }[] = [
       { href: "/margins", label: "Márgenes", icon: TrendingUp },
       { href: "/politica-margenes", label: "Política de Márgenes", icon: Scale },
       { href: "/costos", label: "Costos", icon: CircleDollarSign },
-      { href: "/logistica/auditoria-pesos", label: "Auditoría de pesos", icon: PackageCheck },
       { href: "/promotions", label: "Promociones", icon: Percent },
+    ],
+  },
+  {
+    title: "Logística",
+    items: [
+      {
+        href: "/distribuidora/maestro-logistico",
+        label: "Productos Logísticos",
+        icon: Package,
+      },
+      { href: "/logistica/peso-ordenes", label: "Peso de Órdenes", icon: PackageCheck },
     ],
   },
   {
@@ -97,11 +107,6 @@ const navSections: { title: string; items: NavItem[] }[] = [
         href: "/distribuidora/resumen-vendedor",
         label: "Resumen vendedor",
         icon: CalendarDays,
-      },
-      {
-        href: "/distribuidora/maestro-logistico",
-        label: "Maestro logístico productos",
-        icon: Package,
       },
     ],
   },

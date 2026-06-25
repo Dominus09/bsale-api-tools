@@ -5151,3 +5151,218 @@ export async function getWeightAuditOrderDetail(
   }
   return res.json() as Promise<WeightAuditOrderDetail>
 }
+
+// --- Peso de Órdenes (módulo oficial) ---
+
+export type OrderWeightSearchRow = {
+  document_id: number
+  oc: number
+  emission_date?: string | null
+  total_amount?: number | null
+  empresa?: string | null
+  cliente?: string | null
+  codigo_cliente?: number | null
+  peso_total_kg?: number | null
+  porcentaje_cobertura?: number | null
+  ultimo_calculo?: string | null
+  estado: string
+}
+
+export type OrderWeightLineDiagnosis = {
+  existe_en_document_details?: boolean
+  existe_variant_id?: boolean
+  existe_en_v_product_logistics?: boolean
+  tiene_peso?: boolean
+  tiene_dimensiones?: boolean
+  tiene_cajas?: boolean
+  tiene_empresa_correcta?: boolean
+  join_correcto?: boolean
+  join_por_barcode?: boolean
+  products_master_id?: number | null
+  variant_id?: number | null
+  barcode?: string | null
+  codigo_interno?: string | null
+}
+
+export type OrderWeightLine = {
+  detail_id: number
+  line_number?: number | null
+  codigo?: string | null
+  producto?: string | null
+  variante?: string | null
+  cantidad_unitaria: number
+  cantidad_cajas?: number | null
+  units_per_box?: number | null
+  peso_unitario_kg?: number | null
+  peso_caja_kg?: number | null
+  peso_linea_kg: number
+  fuente_peso: string
+  estado_linea: string
+  products_master_id?: number | null
+  variant_id?: number | null
+  has_logistics_record?: boolean
+  join_debug?: OrderWeightLineDiagnosis
+}
+
+export type OrderWeightDetail = {
+  document_id: number
+  oc: number
+  company_id?: number
+  office_id?: number
+  empresa?: string | null
+  cliente?: string | null
+  codigo_cliente?: number | null
+  total_amount?: number | null
+  productos_totales: number
+  productos_con_peso: number
+  productos_sin_peso: number
+  productos_manuales: number
+  productos_estimados: number
+  peso_total_kg: number
+  porcentaje_cobertura: number
+  estado: string
+  semaforo: string
+  ultimo_calculo?: string | null
+  calculated_by?: string | null
+  lines: OrderWeightLine[]
+}
+
+export type OrderWeightHistoryRow = {
+  user_email?: string | null
+  peso_anterior_kg?: number | null
+  peso_nuevo_kg?: number | null
+  productos_modificados: number
+  created_at: string
+}
+
+export type ProductMasterLogisticsPatchBody = {
+  units_per_box?: number | null
+  weight_box_kg?: number | null
+  height_cm?: number | null
+  width_cm?: number | null
+  length_cm?: number | null
+  logistics_completed?: boolean | null
+}
+
+export async function searchOrderWeights(params?: {
+  company_id?: number
+  office_id?: number
+  oc?: number
+  cliente?: string
+  codigo_cliente?: string
+  date_from?: string
+  date_to?: string
+  estado?: string
+  only_open?: boolean
+  limit?: number
+}): Promise<OrderWeightSearchRow[]> {
+  const cid = params?.company_id ?? requireCompanyId()
+  const qs = new URLSearchParams({ company_id: String(cid) })
+  if (params?.office_id != null) qs.set("office_id", String(params.office_id))
+  if (params?.oc != null) qs.set("oc", String(params.oc))
+  if (params?.cliente) qs.set("cliente", params.cliente)
+  if (params?.codigo_cliente) qs.set("codigo_cliente", params.codigo_cliente)
+  if (params?.date_from) qs.set("date_from", params.date_from)
+  if (params?.date_to) qs.set("date_to", params.date_to)
+  if (params?.estado) qs.set("estado", params.estado)
+  if (params?.only_open != null) qs.set("only_open", String(params.only_open))
+  if (params?.limit != null) qs.set("limit", String(params.limit))
+  const res = await fetch(`${API_URL}/logistics/order-weights/search?${qs}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) throw new Error("Error al buscar órdenes")
+  return res.json() as Promise<OrderWeightSearchRow[]>
+}
+
+export async function getOrderWeight(
+  documentId: number,
+  params?: { company_id?: number; office_id?: number; line_filter?: string },
+): Promise<OrderWeightDetail> {
+  const cid = params?.company_id ?? requireCompanyId()
+  const qs = new URLSearchParams({ company_id: String(cid) })
+  if (params?.office_id != null) qs.set("office_id", String(params.office_id))
+  if (params?.line_filter) qs.set("line_filter", params.line_filter)
+  const res = await fetch(`${API_URL}/logistics/order-weights/${documentId}?${qs}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) throw new Error("Error al cargar peso de la orden")
+  return res.json() as Promise<OrderWeightDetail>
+}
+
+export async function recalculateOrderWeight(
+  documentId: number,
+  params?: { company_id?: number; office_id?: number },
+): Promise<OrderWeightDetail> {
+  const cid = params?.company_id ?? requireCompanyId()
+  const qs = new URLSearchParams({ company_id: String(cid) })
+  if (params?.office_id != null) qs.set("office_id", String(params.office_id))
+  const res = await fetch(
+    `${API_URL}/logistics/order-weights/${documentId}/recalculate?${qs}`,
+    { method: "POST", headers: getAuthHeaders() },
+  )
+  if (!res.ok) throw new Error("Error al recalcular orden")
+  return res.json() as Promise<OrderWeightDetail>
+}
+
+export async function patchOrderWeightProduct(
+  productsMasterId: number,
+  documentId: number,
+  body: ProductMasterLogisticsPatchBody,
+  params?: { company_id?: number; office_id?: number },
+): Promise<{ product: Record<string, unknown>; order: OrderWeightDetail }> {
+  const cid = params?.company_id ?? requireCompanyId()
+  const qs = new URLSearchParams({
+    company_id: String(cid),
+    document_id: String(documentId),
+  })
+  if (params?.office_id != null) qs.set("office_id", String(params.office_id))
+  const res = await fetch(
+    `${API_URL}/logistics/order-weights/products/${productsMasterId}?${qs}`,
+    {
+      method: "PATCH",
+      headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  )
+  if (!res.ok) throw new Error("Error al guardar logística del producto")
+  return res.json()
+}
+
+export async function createOrderWeightLogistics(
+  variantId: number,
+  documentId: number,
+  params?: { company_id?: number; office_id?: number },
+): Promise<{ product: Record<string, unknown>; order: OrderWeightDetail }> {
+  const cid = params?.company_id ?? requireCompanyId()
+  const qs = new URLSearchParams({
+    document_id: String(documentId),
+    office_id: String(params?.office_id ?? 1),
+  })
+  const res = await fetch(
+    `${API_URL}/logistics/order-weights/products/create-from-variant?${qs}`,
+    {
+      method: "POST",
+      headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({ variant_id: variantId, company_id: cid }),
+    },
+  )
+  if (!res.ok) throw new Error("Error al crear ficha logística")
+  return res.json()
+}
+
+export async function getOrderWeightHistory(
+  documentId: number,
+  limit = 20,
+): Promise<OrderWeightHistoryRow[]> {
+  const res = await fetch(
+    `${API_URL}/logistics/order-weights/${documentId}/history?limit=${limit}`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) throw new Error("Error al cargar historial")
+  return res.json() as Promise<OrderWeightHistoryRow[]>
+}
+
+export function orderWeightExportUrl(documentId: number, companyId?: number): string {
+  const cid = companyId ?? getCompanyId() ?? 3
+  return `${API_URL}/logistics/order-weights/${documentId}/export?company_id=${cid}`
+}

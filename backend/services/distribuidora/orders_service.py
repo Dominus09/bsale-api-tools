@@ -285,6 +285,33 @@ def _assert_sql_template_rendered(sql: str, *, context: str = "planning_rows") -
             raise RuntimeError(f"SQL template not rendered ({context}): {marker}")
 
 
+def _overlay_order_weights_to_rows(rows: list[dict[str, Any]]) -> None:
+    """Usa peso oficial del módulo Peso de Órdenes en filas de planificación."""
+    if not rows:
+        return
+    try:
+        from backend.services.order_weight_service import (
+            ensure_order_weights,
+            fetch_weights_by_document_ids,
+        )
+
+        ids = [int(r["document_id"]) for r in rows if r.get("document_id") is not None]
+        ensure_order_weights(ids)
+        by_w = fetch_weights_by_document_ids(ids)
+        for row in rows:
+            doc_id = int(row["document_id"])
+            w = by_w.get(doc_id)
+            if not w:
+                continue
+            row["weight_kg"] = w["weight_kg"]
+            row["peso_total_kg"] = w["peso_total_kg"]
+            row["productos_sin_peso"] = w["productos_sin_peso"]
+            row["porcentaje_cobertura_peso"] = w["porcentaje_cobertura_peso"]
+            row["peso_fuente"] = "order_weight_module"
+    except Exception:
+        pass
+
+
 def _apply_live_sync_flags(row: dict[str, Any]) -> None:
     from backend.utils.order_live_metrics import bsale_ahead_of_erp_sync
 
@@ -1245,6 +1272,7 @@ def list_dispatch_prep_planning_rows(
             for row in merged:
                 _enrich_row_delivery_day(row)
                 _apply_live_sync_flags(row)
+            _overlay_order_weights_to_rows(merged)
             stages.record(
                 "build_rows",
                 elapsed_ms=(time.perf_counter() - t_build) * 1000.0,
@@ -1262,6 +1290,7 @@ def list_dispatch_prep_planning_rows(
             merged_raw = _fetch_planning_rows_staged(cur, doc_ids, stages)
             t_build = time.perf_counter()
             merged = [_serialize_row(r) for r in merged_raw]
+            _overlay_order_weights_to_rows(merged)
             stages.record(
                 "build_rows",
                 elapsed_ms=(time.perf_counter() - t_build) * 1000.0,

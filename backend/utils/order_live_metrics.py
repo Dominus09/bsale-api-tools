@@ -228,6 +228,8 @@ def fetch_live_metrics_by_document_ids(
         entry["productos_sin_peso"] = int(w.get("productos_sin_peso") or 0)
         entry["porcentaje_cobertura_peso"] = float(w.get("porcentaje_cobertura_peso") or 0)
 
+    _overlay_official_order_weights(by_id, ids)
+
     for entry in by_id.values():
         if "weight_kg" not in entry:
             entry["weight_kg"] = 0.0
@@ -237,6 +239,30 @@ def fetch_live_metrics_by_document_ids(
         staleness = evaluate_planning_staleness(live=entry, snapshot=None)
         entry["bsale_updated_pending"] = staleness["bsale_updated_pending"]
     return by_id
+
+
+def _overlay_official_order_weights(
+    by_id: dict[int, dict[str, Any]],
+    document_ids: list[int],
+) -> None:
+    """Superpone peso oficial desde módulo Peso de Órdenes."""
+    try:
+        from backend.services.order_weight_service import (
+            ensure_order_weights,
+            fetch_weights_by_document_ids,
+        )
+
+        ensure_order_weights(document_ids)
+        weights = fetch_weights_by_document_ids(document_ids)
+        for doc_id, w in weights.items():
+            entry = by_id.setdefault(doc_id, {"document_id": doc_id})
+            entry["peso_total_kg"] = w["peso_total_kg"]
+            entry["weight_kg"] = w["weight_kg"]
+            entry["productos_sin_peso"] = w["productos_sin_peso"]
+            entry["porcentaje_cobertura_peso"] = w["porcentaje_cobertura_peso"]
+            entry["peso_fuente"] = "order_weight_module"
+    except Exception:
+        pass
 
 
 def overlay_snapshot_orders(
