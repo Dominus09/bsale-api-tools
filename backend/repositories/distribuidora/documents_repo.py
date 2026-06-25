@@ -11,6 +11,99 @@ from psycopg2.extras import Json, execute_values
 
 logger = logging.getLogger(__name__)
 
+_DOCS_BSALE_MODIFIED_COL: bool | None = None
+
+_DOCUMENT_UPSERT_COLS_BASE = [
+    "document_id",
+    "number",
+    "document_type_id",
+    "client_id",
+    "office_id",
+    "company_id",
+    "user_id",
+    "emission_date",
+    "expiration_date",
+    "generation_date",
+    "total_amount",
+    "net_amount",
+    "tax_amount",
+    "state",
+    "commercial_state",
+    "informed_sii",
+    "municipality",
+    "city",
+    "address",
+    "token",
+    "url_pdf",
+    "url_public_view",
+    "price_list_id",
+    "tracking_number",
+    "raw_data",
+]
+
+_DOCUMENT_UPSERT_UPDATE_SET_BASE = [
+    "number = EXCLUDED.number",
+    "document_type_id = EXCLUDED.document_type_id",
+    "client_id = EXCLUDED.client_id",
+    "office_id = EXCLUDED.office_id",
+    "company_id = EXCLUDED.company_id",
+    "user_id = EXCLUDED.user_id",
+    "emission_date = EXCLUDED.emission_date",
+    "expiration_date = EXCLUDED.expiration_date",
+    "generation_date = EXCLUDED.generation_date",
+    "total_amount = EXCLUDED.total_amount",
+    "net_amount = EXCLUDED.net_amount",
+    "tax_amount = EXCLUDED.tax_amount",
+    "state = EXCLUDED.state",
+    "commercial_state = EXCLUDED.commercial_state",
+    "informed_sii = EXCLUDED.informed_sii",
+    "municipality = EXCLUDED.municipality",
+    "city = EXCLUDED.city",
+    "address = EXCLUDED.address",
+    "token = EXCLUDED.token",
+    "url_pdf = EXCLUDED.url_pdf",
+    "url_public_view = EXCLUDED.url_public_view",
+    "price_list_id = EXCLUDED.price_list_id",
+    "tracking_number = EXCLUDED.tracking_number",
+    "raw_data = EXCLUDED.raw_data",
+    "updated_at = NOW()",
+]
+
+
+def _documents_has_bsale_modified_at(cur) -> bool:
+    global _DOCS_BSALE_MODIFIED_COL
+    if _DOCS_BSALE_MODIFIED_COL is not None:
+        return _DOCS_BSALE_MODIFIED_COL
+    cur.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'distribuidora'
+              AND table_name = 'documents'
+              AND column_name = 'bsale_modified_at'
+        )
+        """
+    )
+    _DOCS_BSALE_MODIFIED_COL = bool(cur.fetchone()[0])
+    return _DOCS_BSALE_MODIFIED_COL
+
+
+def _document_upsert_cols(cur) -> list[str]:
+    cols = list(_DOCUMENT_UPSERT_COLS_BASE)
+    if _documents_has_bsale_modified_at(cur):
+        idx = cols.index("generation_date") + 1
+        cols.insert(idx, "bsale_modified_at")
+    return cols
+
+
+def _document_upsert_update_set(cur) -> str:
+    parts = list(_DOCUMENT_UPSERT_UPDATE_SET_BASE)
+    if _documents_has_bsale_modified_at(cur):
+        idx = parts.index("generation_date = EXCLUDED.generation_date") + 1
+        parts.insert(idx, "bsale_modified_at = EXCLUDED.bsale_modified_at")
+    return ",\n                ".join(parts)
+
 
 def _emission_sort_key(r: dict[str, Any]) -> tuple[float, int]:
     """Mayor = más reciente: ``emission_date`` (timestamp), empate ``document_id``."""
@@ -300,34 +393,8 @@ def upsert_documents(
     if not rows:
         return 0, 0
     rows = _dedupe_logical_latest(rows)
-    cols = [
-        "document_id",
-        "number",
-        "document_type_id",
-        "client_id",
-        "office_id",
-        "company_id",
-        "user_id",
-        "emission_date",
-        "expiration_date",
-        "generation_date",
-        "bsale_modified_at",
-        "total_amount",
-        "net_amount",
-        "tax_amount",
-        "state",
-        "commercial_state",
-        "informed_sii",
-        "municipality",
-        "city",
-        "address",
-        "token",
-        "url_pdf",
-        "url_public_view",
-        "price_list_id",
-        "tracking_number",
-        "raw_data",
-    ]
+    cols = _document_upsert_cols(cur)
+    update_set = _document_upsert_update_set(cur)
     template = "(" + ",".join(["%s"] * len(cols)) + ",NOW(),NOW())"
 
     folio_rows = [
@@ -374,32 +441,7 @@ def upsert_documents(
             ON CONFLICT (company_id, office_id, document_type_id, number)
             WHERE document_type_id IS NOT NULL AND number IS NOT NULL
             DO UPDATE SET
-                number = EXCLUDED.number,
-                document_type_id = EXCLUDED.document_type_id,
-                client_id = EXCLUDED.client_id,
-                office_id = EXCLUDED.office_id,
-                company_id = EXCLUDED.company_id,
-                user_id = EXCLUDED.user_id,
-                emission_date = EXCLUDED.emission_date,
-                expiration_date = EXCLUDED.expiration_date,
-                generation_date = EXCLUDED.generation_date,
-                bsale_modified_at = EXCLUDED.bsale_modified_at,
-                total_amount = EXCLUDED.total_amount,
-                net_amount = EXCLUDED.net_amount,
-                tax_amount = EXCLUDED.tax_amount,
-                state = EXCLUDED.state,
-                commercial_state = EXCLUDED.commercial_state,
-                informed_sii = EXCLUDED.informed_sii,
-                municipality = EXCLUDED.municipality,
-                city = EXCLUDED.city,
-                address = EXCLUDED.address,
-                token = EXCLUDED.token,
-                url_pdf = EXCLUDED.url_pdf,
-                url_public_view = EXCLUDED.url_public_view,
-                price_list_id = EXCLUDED.price_list_id,
-                tracking_number = EXCLUDED.tracking_number,
-                raw_data = EXCLUDED.raw_data,
-                updated_at = NOW()
+                {update_set}
         """
         try:
             _execute_values_batch(cur, sql_folio_upsert, folio_rows, cols, template)
@@ -449,32 +491,7 @@ def upsert_documents(
             INSERT INTO distribuidora.documents ({", ".join(cols)}, created_at, updated_at)
             VALUES %s
             ON CONFLICT (document_id) DO UPDATE SET
-                number = EXCLUDED.number,
-                document_type_id = EXCLUDED.document_type_id,
-                client_id = EXCLUDED.client_id,
-                office_id = EXCLUDED.office_id,
-                company_id = EXCLUDED.company_id,
-                user_id = EXCLUDED.user_id,
-                emission_date = EXCLUDED.emission_date,
-                expiration_date = EXCLUDED.expiration_date,
-                generation_date = EXCLUDED.generation_date,
-                bsale_modified_at = EXCLUDED.bsale_modified_at,
-                total_amount = EXCLUDED.total_amount,
-                net_amount = EXCLUDED.net_amount,
-                tax_amount = EXCLUDED.tax_amount,
-                state = EXCLUDED.state,
-                commercial_state = EXCLUDED.commercial_state,
-                informed_sii = EXCLUDED.informed_sii,
-                municipality = EXCLUDED.municipality,
-                city = EXCLUDED.city,
-                address = EXCLUDED.address,
-                token = EXCLUDED.token,
-                url_pdf = EXCLUDED.url_pdf,
-                url_public_view = EXCLUDED.url_public_view,
-                price_list_id = EXCLUDED.price_list_id,
-                tracking_number = EXCLUDED.tracking_number,
-                raw_data = EXCLUDED.raw_data,
-                updated_at = NOW()
+                {update_set}
         """
         try:
             _execute_values_batch(cur, sql_pk, pk_rows, cols, template)

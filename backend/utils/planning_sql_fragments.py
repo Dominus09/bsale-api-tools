@@ -86,14 +86,14 @@ WHERE dd.document_id = ANY(%s::bigint[])
 GROUP BY dd.document_id
 """
 
+# No referencia d.bsale_modified_at: la migración 041 puede no estar aplicada aún.
 PLANNING_LAST_BS_UPDATE_EXPR = """COALESCE(
-    d.bsale_modified_at,
-    d.generation_date,
     CASE
         WHEN d.raw_data->>'modificationDate' ~ '^[0-9]+$'
         THEN to_timestamp((d.raw_data->>'modificationDate')::bigint)
         ELSE NULL
-    END
+    END,
+    d.generation_date
 )"""
 
 PLANNING_OBSERVACIONES_EXPR = """
