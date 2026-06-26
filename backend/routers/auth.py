@@ -20,14 +20,44 @@ logger = logging.getLogger(__name__)
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# Producción: definir JWT_SECRET_KEY o SECRET_KEY. Sin ellas se usa fallback solo desarrollo.
-SECRET = (os.getenv("JWT_SECRET_KEY") or os.getenv("SECRET_KEY") or "").strip()
-if not SECRET:
-    SECRET = "quillotana_secret_key"
-    logger.warning(
-        "JWT_SECRET_KEY / SECRET_KEY no definidas: se usa clave de desarrollo para firmar JWT. "
-        "Configure JWT_SECRET_KEY en producción."
-    )
+_DEV_JWT_FALLBACK = "quillotana_secret_key"
+_MIN_JWT_SECRET_BYTES = 32
+
+
+def _runtime_environment() -> str:
+    return (os.getenv("ENVIRONMENT") or os.getenv("ENV") or "development").strip().lower()
+
+
+def _load_jwt_secret() -> str:
+    """Carga JWT_SECRET_KEY / SECRET_KEY; en producción sin clave → error al arrancar."""
+    secret = (os.getenv("JWT_SECRET_KEY") or os.getenv("SECRET_KEY") or "").strip()
+    env = _runtime_environment()
+    is_prod = env in ("production", "staging", "prod")
+
+    if not secret:
+        if is_prod:
+            raise RuntimeError(
+                "JWT_SECRET_KEY (o SECRET_KEY) es obligatoria con ENVIRONMENT=production. "
+                "Genere una clave aleatoria de al menos 32 caracteres, p. ej.: "
+                "openssl rand -hex 32"
+            )
+        secret = _DEV_JWT_FALLBACK
+        logger.warning(
+            "JWT_SECRET_KEY / SECRET_KEY no definidas: se usa clave de desarrollo para firmar JWT. "
+            "Configure JWT_SECRET_KEY en producción."
+        )
+    elif len(secret.encode("utf-8")) < _MIN_JWT_SECRET_BYTES:
+        logger.warning(
+            "JWT_SECRET_KEY tiene %s bytes (< %s recomendados para HS256). "
+            "Use una clave más larga para evitar InsecureKeyLengthWarning de PyJWT.",
+            len(secret.encode("utf-8")),
+            _MIN_JWT_SECRET_BYTES,
+        )
+
+    return secret
+
+
+SECRET = _load_jwt_secret()
 
 _LOGIN_DEBUG = os.getenv("AUTH_LOGIN_DEBUG", "").strip().lower() in ("1", "true", "yes")
 
