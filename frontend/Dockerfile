@@ -17,21 +17,27 @@ RUN apk add --no-cache libc6-compat
 WORKDIR /app
 
 # Builders con poca RAM (Coolify/VPS): menos OOM en install + build de Next.
-# Ajustar si hace falta: 2048–8192. Deprecations en build: BUILD_DEBUG=1 o npm run build:debug
-ENV NODE_OPTIONS="--max-old-space-size=4096"
+# En servidores <4 GB RAM: en Coolify añada BUILD_NODE_MEMORY_MB=2048
+ARG BUILD_NODE_MEMORY_MB=4096
+ENV NODE_OPTIONS="--max-old-space-size=${BUILD_NODE_MEMORY_MB}"
 ENV npm_config_audit=false
 ENV npm_config_fund=false
 ENV npm_config_fetch_retries=5
 ENV npm_config_fetch_retry_mintimeout=20000
+ENV npm_config_maxsockets=3
 
 COPY package.json package-lock.json ./
-# Caché de npm acelera redeploys y reduce timeouts al registry.
-RUN --mount=type=cache,target=/root/.npm \
-    npm ci --no-audit --no-fund
+# Sin cache mount: más estable en Coolify (evita exit 255 en hosts sin BuildKit cache).
+# Redeploy más lento pero fiable en VPS pequeños.
+RUN npm ci --no-audit --no-fund \
+  || (echo "npm ci reintento 1..." && npm ci --no-audit --no-fund) \
+  || (echo "npm ci reintento 2..." && npm ci --no-audit --no-fund --prefer-offline)
 
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
+# Menos RAM en fase webpack (Coolify 2–4 GB).
+ENV GENERATE_SOURCEMAP=false
 # Deprecations de Node en log de build: ARG BUILD_DEBUG=1 en Coolify o usar npm run build:debug en local.
 RUN npm run build
 
