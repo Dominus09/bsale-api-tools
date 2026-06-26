@@ -5162,10 +5162,13 @@ export type OrderWeightSearchRow = {
   empresa?: string | null
   cliente?: string | null
   codigo_cliente?: number | null
+  comuna?: string | null
   peso_total_kg?: number | null
   porcentaje_cobertura?: number | null
+  productos_sin_peso?: number | null
   ultimo_calculo?: string | null
-  estado: string
+  estado: "completa" | "incompleta" | string
+  facturada?: boolean
 }
 
 export type OrderWeightLineDiagnosis = {
@@ -5196,6 +5199,7 @@ export type OrderWeightLine = {
   peso_unitario_kg?: number | null
   peso_caja_kg?: number | null
   peso_linea_kg: number
+  peso_pct_total?: number
   fuente_peso: string
   estado_linea: string
   products_master_id?: number | null
@@ -5215,6 +5219,7 @@ export type OrderWeightDetail = {
   total_amount?: number | null
   productos_totales: number
   productos_con_peso: number
+  productos_completos?: number
   productos_sin_peso: number
   productos_manuales: number
   productos_estimados: number
@@ -5253,7 +5258,7 @@ export async function searchOrderWeights(params?: {
   date_from?: string
   date_to?: string
   estado?: string
-  only_open?: boolean
+  billing_filter?: "pendientes" | "facturadas" | "todas"
   limit?: number
 }): Promise<OrderWeightSearchRow[]> {
   const cid = params?.company_id ?? requireCompanyId()
@@ -5265,7 +5270,7 @@ export async function searchOrderWeights(params?: {
   if (params?.date_from) qs.set("date_from", params.date_from)
   if (params?.date_to) qs.set("date_to", params.date_to)
   if (params?.estado) qs.set("estado", params.estado)
-  if (params?.only_open != null) qs.set("only_open", String(params.only_open))
+  if (params?.billing_filter) qs.set("billing_filter", params.billing_filter)
   if (params?.limit != null) qs.set("limit", String(params.limit))
   const res = await fetch(`${API_URL}/logistics/order-weights/search?${qs}`, {
     headers: getAuthHeaders(),

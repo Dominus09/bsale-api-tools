@@ -14,7 +14,22 @@ from backend.utils.order_weight_calc import (
     aggregate_order_summary,
     compute_line_from_row,
     coverage_semaphore,
+    enrich_lines_peso_pct,
 )
+
+OC_PURCHASE_INVOICED_BY_RELATED_SQL = """
+EXISTS (
+    SELECT 1
+    FROM distribuidora.document_related dr
+    INNER JOIN distribuidora.document_details dd ON dd.detail_id = dr.detail_id
+    INNER JOIN distribuidora.documents inv
+        ON inv.document_id = dr.related_document_id
+       AND inv.document_type_id IN (1, 6)
+       AND inv.company_id = d.company_id
+       AND inv.office_id = d.office_id
+    WHERE dd.document_id = d.document_id
+)
+""".strip()
 
 _ORDER_HEADER_SQL = """
 SELECT
@@ -34,7 +49,11 @@ SELECT
             NULLIF(BTRIM(c.last_name), '')
         )
     ) AS cliente,
-    c.bsale_id AS codigo_cliente
+    c.bsale_id AS codigo_cliente,
+    COALESCE(
+        NULLIF(BTRIM(d.municipality), ''),
+        NULLIF(BTRIM(c.municipality), '')
+    ) AS comuna
 FROM distribuidora.documents d
 LEFT JOIN bsale.companies co ON co.company_id = d.company_id
 LEFT JOIN bsale.clients c
@@ -60,6 +79,7 @@ SELECT
     COALESCE(pm_v.id, pm_b.id) AS products_master_id,
     COALESCE(pm_v.product_name, pm_b.product_name) AS product_name,
     COALESCE(pm_v.variant_name, pm_b.variant_name) AS variante,
+    p.name AS bsale_product_name,
     COALESCE(pm_v.logistics_completed, pm_b.logistics_completed) AS logistics_completed,
     COALESCE(pm_v.updated_at, pm_b.updated_at) AS pm_updated_at,
     COALESCE(pm_v.last_bsale_sync_at, pm_b.last_bsale_sync_at) AS last_bsale_sync_at,
@@ -76,6 +96,9 @@ FROM distribuidora.document_details dd
 LEFT JOIN bsale.variants v
     ON v.company_id = %s
    AND v.bsale_id = dd.variant_id
+LEFT JOIN bsale.products p
+    ON p.company_id = v.company_id
+   AND p.bsale_id = v.product_id
 LEFT JOIN bsale.v_product_logistics pl_v
     ON pl_v.variant_id = dd.variant_id
 LEFT JOIN bsale.products_master pm_v
@@ -108,10 +131,16 @@ SELECT
         )
     ) AS cliente,
     c.bsale_id AS codigo_cliente,
+    COALESCE(
+        NULLIF(BTRIM(d.municipality), ''),
+        NULLIF(BTRIM(c.municipality), '')
+    ) AS comuna,
     ows.peso_total_kg,
     ows.porcentaje_cobertura,
+    ows.productos_sin_peso,
     ows.calculated_at AS ultimo_calculo,
-    COALESCE(ows.estado_cached, 'pendiente') AS estado
+    COALESCE(ows.estado_cached, 'pendiente') AS estado,
+    (NOT ({OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL})) AS facturada
 FROM distribuidora.v_documents_latest d
 LEFT JOIN bsale.companies co ON co.company_id = d.company_id
 LEFT JOIN bsale.clients c
@@ -121,14 +150,13 @@ LEFT JOIN LATERAL (
     SELECT
         s.peso_total_kg,
         s.porcentaje_cobertura,
+        s.productos_sin_peso,
         s.calculated_at,
         s.productos_con_peso,
         s.productos_totales,
         CASE
-            WHEN s.porcentaje_cobertura >= 100 AND s.peso_total_kg > 0 THEN 'completo'
-            WHEN s.productos_con_peso > 0 THEN 'parcial'
-            WHEN s.productos_totales > 0 THEN 'sin_peso'
-            ELSE 'pendiente'
+            WHEN s.porcentaje_cobertura >= 100 AND s.peso_total_kg > 0 THEN 'completa'
+            ELSE 'incompleta'
         END AS estado_cached
     FROM distribuidora.order_weight_snapshots s
     WHERE s.document_id = d.document_id
@@ -137,7 +165,11 @@ LEFT JOIN LATERAL (
 WHERE d.company_id = %s
   AND d.office_id = %s
   AND d.document_type_id = 33
-  AND (%s = FALSE OR {OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL})
+  AND (
+        %s = 'todas'
+        OR (%s = 'pendientes' AND {OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL})
+        OR (%s = 'facturadas' AND {OC_PURCHASE_INVOICED_BY_RELATED_SQL})
+  )
   AND (%s IS NULL OR d.number = %s)
   AND (%s IS NULL OR (
         c.nombre_fantasia ILIKE %s
@@ -148,8 +180,11 @@ WHERE d.company_id = %s
   AND (%s IS NULL OR c.bsale_id::text ILIKE %s)
   AND (%s IS NULL OR d.emission_date >= %s::date)
   AND (%s IS NULL OR d.emission_date < (%s::date + interval '1 day'))
-  AND (%s IS NULL OR COALESCE(ows.estado_cached, 'pendiente') = %s)
-ORDER BY d.number DESC
+  AND (%s IS NULL OR COALESCE(ows.estado_cached, 'incompleta') = %s)
+ORDER BY
+    CASE COALESCE(ows.estado_cached, 'incompleta') WHEN 'incompleta' THEN 0 ELSE 1 END,
+    COALESCE(ows.productos_sin_peso, 999) DESC,
+    d.number DESC
 LIMIT %s
 """
 
@@ -349,6 +384,7 @@ def recalculate_order_weight(
 
         lines = compute_order_lines(cur, document_id=document_id, company_id=company_id)
         summary = aggregate_order_summary(lines)
+        enrich_lines_peso_pct(lines, summary["peso_total_kg"])
         semaforo = coverage_semaphore(summary["porcentaje_cobertura"])
 
         calculated_at = None
@@ -371,9 +407,7 @@ def recalculate_order_weight(
     finally:
         conn.close()
 
-    estado = "completo"
-    if summary["porcentaje_cobertura"] < 100 or summary["peso_total_kg"] <= 0:
-        estado = "parcial" if summary["productos_con_peso"] > 0 else "sin_peso"
+    estado = _order_estado_label(summary["porcentaje_cobertura"], summary["peso_total_kg"])
 
     return {
         **header,
@@ -414,6 +448,10 @@ def get_order_weight(
         if cached:
             result = dict(cached)
             all_lines = result.get("lines") or []
+            enrich_lines_peso_pct(
+                all_lines,
+                float(result.get("peso_total_kg") or 0),
+            )
             if line_filter and line_filter != "all":
                 result["lines"] = [ln for ln in all_lines if ln.get("estado_linea") == line_filter]
             else:
@@ -430,17 +468,21 @@ def get_order_weight(
 
         lines = result.get("lines") or []
         result["semaforo"] = coverage_semaphore(float(result.get("porcentaje_cobertura") or 0))
-        estado = "completo"
-        pct = float(result.get("porcentaje_cobertura") or 0)
-        peso = float(result.get("peso_total_kg") or 0)
-        if pct < 100 or peso <= 0:
-            estado = "parcial" if (result.get("productos_con_peso") or 0) > 0 else "sin_peso"
-        result["estado"] = estado
+        result["estado"] = _order_estado_label(
+            float(result.get("porcentaje_cobertura") or 0),
+            float(result.get("peso_total_kg") or 0),
+        )
         result["ultimo_calculo"] = result.get("calculated_at")
         cur.close()
         return result
     finally:
         conn.close()
+
+
+def _order_estado_label(porcentaje: float, peso_total: float) -> str:
+    if porcentaje >= 100 and peso_total > 0:
+        return "completa"
+    return "incompleta"
 
 
 def search_orders(
@@ -453,35 +495,51 @@ def search_orders(
     date_from: date | None = None,
     date_to: date | None = None,
     estado: str | None = None,
-    only_open: bool = True,
-    limit: int = 100,
+    billing_filter: str = "pendientes",
+    limit: int = 150,
 ) -> list[dict[str, Any]]:
     cliente_term = f"%{cliente.strip()}%" if cliente and cliente.strip() else None
     codigo_term = f"%{codigo_cliente.strip()}%" if codigo_cliente and codigo_cliente.strip() else None
+    billing = (billing_filter or "pendientes").strip().lower()
+    if billing not in ("pendientes", "facturadas", "todas"):
+        billing = "pendientes"
+    estado_norm = None
+    if estado and estado.strip().lower() in ("completa", "incompleta"):
+        estado_norm = estado.strip().lower()
 
     conn = get_connection()
     try:
         cur = conn.cursor()
         if not _table_exists(cur, "order_weight_snapshots"):
+            pendientes_only = billing == "pendientes"
+            facturadas_only = billing == "facturadas"
+            billing_sql = "TRUE"
+            if pendientes_only:
+                billing_sql = OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL
+            elif facturadas_only:
+                billing_sql = OC_PURCHASE_INVOICED_BY_RELATED_SQL
             cur.execute(
                 f"""
                 SELECT d.document_id, d.number AS oc, d.emission_date, d.total_amount,
                        co.name AS empresa,
                        COALESCE(NULLIF(BTRIM(c.nombre_fantasia), ''), NULLIF(BTRIM(c.company), '')) AS cliente,
                        c.bsale_id AS codigo_cliente,
+                       COALESCE(NULLIF(BTRIM(d.municipality), ''), NULLIF(BTRIM(c.municipality), '')) AS comuna,
                        NULL::numeric AS peso_total_kg,
                        NULL::numeric AS porcentaje_cobertura,
+                       NULL::int AS productos_sin_peso,
                        NULL::timestamptz AS ultimo_calculo,
-                       'pendiente' AS estado
+                       'incompleta' AS estado,
+                       (NOT ({OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL})) AS facturada
                 FROM distribuidora.v_documents_latest d
                 LEFT JOIN bsale.companies co ON co.company_id = d.company_id
                 LEFT JOIN bsale.clients c ON c.company_id = d.company_id AND c.bsale_id = d.client_id
                 WHERE d.company_id = %s AND d.office_id = %s AND d.document_type_id = 33
-                  AND (%s = FALSE OR {OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL})
+                  AND ({billing_sql})
                   AND (%s IS NULL OR d.number = %s)
                 ORDER BY d.number DESC LIMIT %s
                 """,
-                (company_id, office_id, only_open, oc, oc, limit),
+                (company_id, office_id, oc, oc, limit),
             )
         else:
             cur.execute(
@@ -489,7 +547,9 @@ def search_orders(
                 (
                     company_id,
                     office_id,
-                    only_open,
+                    billing,
+                    billing,
+                    billing,
                     oc,
                     oc,
                     cliente_term,
@@ -503,12 +563,18 @@ def search_orders(
                     date_from,
                     date_to,
                     date_to,
-                    estado,
-                    estado,
+                    estado_norm,
+                    estado_norm,
                     limit,
                 ),
             )
         rows = [_row_dict(cur, r) for r in cur.fetchall()]
+        for row in rows:
+            if not row.get("estado"):
+                row["estado"] = _order_estado_label(
+                    float(row.get("porcentaje_cobertura") or 0),
+                    float(row.get("peso_total_kg") or 0),
+                )
         cur.close()
         return rows
     finally:

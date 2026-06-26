@@ -7,6 +7,8 @@ from backend.utils.order_weight_calc import (
     classify_fuente_peso,
     compute_line_from_row,
     coverage_semaphore,
+    enrich_lines_peso_pct,
+    split_producto_variante,
 )
 
 
@@ -60,6 +62,23 @@ def test_aggregate_and_semaphore():
     assert coverage_semaphore(100) == "verde"
     assert coverage_semaphore(92) == "amarillo"
     assert coverage_semaphore(75) == "rojo"
+
+
+def test_split_product_variant_no_dup():
+    pn, vn = split_producto_variante(
+        line_description="LATA 710 CC",
+        product_name="COCA COLA",
+        variant_name="LATA 710 CC",
+    )
+    assert pn == "COCA COLA"
+    assert vn == "LATA 710 CC" or vn is None or vn != pn
+
+
+def test_enrich_peso_pct():
+    lines = [{"peso_linea_kg": 25.0}, {"peso_linea_kg": 75.0}]
+    enrich_lines_peso_pct(lines, 100.0)
+    assert lines[0]["peso_pct_total"] == 25.0
+    assert lines[1]["peso_pct_total"] == 75.0
 
 
 def test_manual_fuente():

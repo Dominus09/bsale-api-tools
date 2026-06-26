@@ -30,9 +30,12 @@ def search_order_weights(
     codigo_cliente: str | None = Query(None, max_length=40),
     date_from: date | None = Query(None),
     date_to: date | None = Query(None),
-    estado: str | None = Query(None, pattern=r"^(completo|parcial|sin_peso|pendiente)$"),
-    only_open: bool = Query(True),
-    limit: int = Query(100, ge=1, le=500),
+    estado: str | None = Query(None, pattern=r"^(completa|incompleta)$"),
+    billing_filter: str = Query(
+        "pendientes",
+        pattern=r"^(pendientes|facturadas|todas)$",
+    ),
+    limit: int = Query(150, ge=1, le=500),
     _user: dict = Depends(require_staff_user),
 ):
     try:
@@ -45,7 +48,7 @@ def search_order_weights(
             date_from=date_from,
             date_to=date_to,
             estado=estado,
-            only_open=only_open,
+            billing_filter=billing_filter,
             limit=limit,
         )
     except Exception as exc:

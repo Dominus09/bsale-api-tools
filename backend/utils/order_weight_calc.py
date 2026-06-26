@@ -134,12 +134,17 @@ def compute_line_from_row(row: dict[str, Any]) -> dict[str, Any]:
     cajas = cantidad_cajas(qty, upb_int)
 
     diagnosis = build_line_diagnosis(row)
+    producto, variante = split_producto_variante(
+        line_description=row.get("producto"),
+        product_name=row.get("product_name") or row.get("bsale_product_name"),
+        variant_name=row.get("variante") or row.get("variant_name"),
+    )
     return {
         "detail_id": int(row["detail_id"]),
         "line_number": row.get("line_number"),
         "codigo": row.get("codigo"),
-        "producto": row.get("producto") or row.get("product_name"),
-        "variante": row.get("variante") or row.get("variant_name"),
+        "producto": producto,
+        "variante": variante,
         "cantidad_unitaria": qty,
         "cantidad_cajas": cajas,
         "units_per_box": upb_int,
@@ -162,11 +167,13 @@ def aggregate_order_summary(lines: list[dict[str, Any]]) -> dict[str, Any]:
     sin_peso = total - con_peso
     manuales = sum(1 for ln in active if ln.get("fuente_peso") == "manual")
     estimados = sum(1 for ln in active if ln.get("fuente_peso") == "estimado")
+    completos = sum(1 for ln in active if ln.get("estado_linea") == "completo")
     peso_total = _round3(sum(ln.get("peso_linea_kg") or 0 for ln in active))
     cobertura = round(100.0 * con_peso / total, 1) if total > 0 else 0.0
     return {
         "productos_totales": total,
         "productos_con_peso": con_peso,
+        "productos_completos": completos,
         "productos_sin_peso": sin_peso,
         "productos_manuales": manuales,
         "productos_estimados": estimados,
@@ -185,3 +192,48 @@ def coverage_semaphore(pct: float) -> str:
     if pct >= 80:
         return "naranja"
     return "rojo"
+
+
+def _norm_label(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def split_producto_variante(
+    *,
+    line_description: Any = None,
+    product_name: Any = None,
+    variant_name: Any = None,
+) -> tuple[str | None, str | None]:
+    """Separa nombre de producto y variante sin repetir el mismo texto."""
+    pn = _norm_label(product_name)
+    vn = _norm_label(variant_name)
+    dd = _norm_label(line_description)
+
+    if not pn and dd:
+        pn = dd
+    if not vn and dd and dd.casefold() != pn.casefold():
+        vn = dd
+
+    if pn and vn:
+        if pn.casefold() == vn.casefold():
+            return pn, None
+        if vn.casefold().startswith(pn.casefold()):
+            rest = vn[len(pn) :].strip(" -–—:|")
+            vn = rest if rest else None
+        elif pn.casefold().startswith(vn.casefold()):
+            pn, vn = vn, None
+
+    return (pn or None), (vn or None)
+
+
+def enrich_lines_peso_pct(
+    lines: list[dict[str, Any]],
+    peso_total_kg: float,
+) -> list[dict[str, Any]]:
+    total = peso_total_kg or 0.0
+    for ln in lines:
+        pl = float(ln.get("peso_linea_kg") or 0)
+        ln["peso_pct_total"] = round(100.0 * pl / total, 1) if total > 0 else 0.0
+    return lines
