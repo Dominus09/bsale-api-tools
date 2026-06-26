@@ -21,6 +21,14 @@ class CreateLogisticsBody(BaseModel):
     company_id: int = Field(3, ge=1)
 
 
+class RecalculateBatchBody(BaseModel):
+    document_ids: list[int] = Field(..., min_length=1)
+    company_id: int = Field(3, ge=1)
+    office_id: int = Field(1, ge=1)
+    plan_session_id: str | None = None
+    motivo: str | None = Field(None, max_length=500)
+
+
 @router.get("/order-weights/search")
 def search_order_weights(
     company_id: int = Query(3, ge=1),
@@ -157,6 +165,24 @@ def order_weight_history(
     _user: dict = Depends(require_staff_user),
 ):
     return ow_svc.get_order_history(document_id, limit=limit)
+
+
+@router.post("/order-weights/recalculate-batch")
+def recalculate_order_weights_batch(
+    body: RecalculateBatchBody,
+    user: dict = Depends(require_staff_user),
+):
+    try:
+        return ow_svc.recalculate_orders_batch(
+            document_ids=body.document_ids,
+            company_id=body.company_id,
+            office_id=body.office_id,
+            user_email=user.get("email"),
+            plan_session_id=body.plan_session_id,
+            motivo=body.motivo,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/order-weights/{document_id}/export")

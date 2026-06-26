@@ -30,6 +30,12 @@ export function mergeLiveMetricsIntoPlanOrders(
         live.porcentaje_cobertura_peso != null
           ? Number(live.porcentaje_cobertura_peso)
           : o.porcentaje_cobertura_peso,
+      cantidad_cajas:
+        live.cantidad_cajas != null ? Number(live.cantidad_cajas) : o.cantidad_cajas,
+      cantidad_unidades:
+        live.cantidad_unidades != null
+          ? Number(live.cantidad_unidades)
+          : o.cantidad_unidades,
       municipality: live.municipality ?? live.city ?? o.municipality,
       direccion: live.address ?? o.direccion,
       observaciones: live.observaciones ?? o.observaciones,

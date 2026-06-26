@@ -210,9 +210,22 @@ ORDER BY line_number NULLS LAST, detail_id
 """
 
 _WEIGHTS_BY_DOCS_SQL = """
-SELECT document_id, peso_total_kg, productos_sin_peso, porcentaje_cobertura
-FROM distribuidora.order_weight_snapshots
-WHERE document_id = ANY(%s::bigint[])
+SELECT
+    ows.document_id,
+    ows.peso_total_kg,
+    ows.productos_sin_peso,
+    ows.porcentaje_cobertura,
+    COALESCE(line_agg.cantidad_unidades, 0) AS cantidad_unidades,
+    COALESCE(line_agg.cantidad_cajas, 0) AS cantidad_cajas
+FROM distribuidora.order_weight_snapshots ows
+LEFT JOIN LATERAL (
+    SELECT
+        SUM(l.cantidad_unitaria) AS cantidad_unidades,
+        SUM(COALESCE(l.cantidad_cajas, 0)) AS cantidad_cajas
+    FROM distribuidora.order_weight_snapshot_lines l
+    WHERE l.snapshot_id = ows.id
+) line_agg ON TRUE
+WHERE ows.document_id = ANY(%s::bigint[])
 """
 
 
@@ -639,6 +652,8 @@ def fetch_weights_by_document_ids(document_ids: list[int]) -> dict[int, dict[str
                 "productos_sin_peso": int(row[2] or 0),
                 "porcentaje_cobertura_peso": float(row[3] or 0),
                 "weight_kg": float(row[1] or 0),
+                "cantidad_unidades": float(row[4] or 0),
+                "cantidad_cajas": float(row[5] or 0),
             }
         cur.close()
         return out
@@ -760,3 +775,78 @@ def get_order_history(document_id: int, *, limit: int = 20) -> list[dict[str, An
         return rows
     finally:
         conn.close()
+
+
+def recalculate_orders_batch(
+    *,
+    document_ids: list[int],
+    company_id: int = 3,
+    office_id: int = 1,
+    user_email: str | None = None,
+    plan_session_id: str | None = None,
+    motivo: str | None = None,
+) -> dict[str, Any]:
+    ids = list(dict.fromkeys(int(x) for x in document_ids if x))
+    if not ids:
+        return {"recalculated": 0, "peso_anterior_kg": 0.0, "peso_nuevo_kg": 0.0, "items": []}
+
+    before = fetch_weights_by_document_ids(ids)
+    peso_antes = sum(float(w.get("peso_total_kg") or 0) for w in before.values())
+
+    items: list[dict[str, Any]] = []
+    for doc_id in ids:
+        result = recalculate_order_weight(
+            document_id=doc_id,
+            company_id=company_id,
+            office_id=office_id,
+            user_email=user_email,
+            persist=True,
+        )
+        if result:
+            items.append(
+                {
+                    "document_id": doc_id,
+                    "peso_total_kg": result.get("peso_total_kg"),
+                    "porcentaje_cobertura": result.get("porcentaje_cobertura"),
+                }
+            )
+
+    after = fetch_weights_by_document_ids(ids)
+    peso_nuevo = sum(float(w.get("peso_total_kg") or 0) for w in after.values())
+
+    if plan_session_id or motivo:
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_schema = 'distribuidora'
+                      AND table_name = 'dispatch_plan_weight_audit'
+                )
+                """
+            )
+            if cur.fetchone()[0]:
+                from backend.repositories.distribuidora import dispatch_plan_repo as dp_repo
+
+                dp_repo.insert_plan_weight_audit(
+                    cur,
+                    dispatch_plan_id=None,
+                    plan_session_id=plan_session_id,
+                    user_email=user_email,
+                    peso_anterior_kg=peso_antes,
+                    peso_nuevo_kg=peso_nuevo,
+                    motivo=motivo or "recalculate_batch",
+                )
+                conn.commit()
+            cur.close()
+        finally:
+            conn.close()
+
+    return {
+        "recalculated": len(items),
+        "peso_anterior_kg": round(peso_antes, 3),
+        "peso_nuevo_kg": round(peso_nuevo, 3),
+        "items": items,
+    }

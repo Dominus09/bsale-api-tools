@@ -240,7 +240,7 @@ export function DispatchPlanPickingClientePanel({
             {formatClp(data.totals?.document_total_clp ?? 0)} total documentos
           </p>
           <div className="overflow-x-auto rounded-md border">
-            <table className="w-full min-w-[900px] text-left text-xs">
+            <table className="w-full min-w-[960px] text-left text-xs">
               <thead className="bg-muted/50 text-[10px] uppercase text-muted-foreground">
                 <tr>
                   <th className="px-2 py-2">Ord</th>
@@ -254,6 +254,7 @@ export function DispatchPlanPickingClientePanel({
                   <th className="px-2 py-2">Pago</th>
                   <th className="px-2 py-2">Vendedor</th>
                   <th className="px-2 py-2">Obs. entrega</th>
+                  <th className="px-2 py-2 text-right">Peso pedido</th>
                   <th className="px-2 py-2 text-right">Total</th>
                 </tr>
               </thead>
@@ -262,7 +263,7 @@ export function DispatchPlanPickingClientePanel({
                   <Fragment key={group.cityKey}>
                     <tr className="bg-muted/40">
                       <td
-                        colSpan={12}
+                        colSpan={13}
                         className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
                       >
                         {group.cityLabel}
@@ -290,6 +291,11 @@ export function DispatchPlanPickingClientePanel({
                           {[row.delivery_notes, row.observations]
                             .filter((x) => (x || "").trim())
                             .join(" · ") || "—"}
+                        </td>
+                        <td className="px-2 py-1.5 text-right tabular-nums text-muted-foreground">
+                          {row.peso_total_kg != null && row.peso_total_kg > 0
+                            ? `${row.peso_total_kg.toLocaleString("es-CL", { maximumFractionDigits: 0 })} kg`
+                            : "—"}
                         </td>
                         <td className="px-2 py-1.5 text-right tabular-nums">
                           {formatClp(Number(row.document_total) || 0)}
@@ -446,6 +452,19 @@ export function DispatchPlanPickingProductoPanel({
       ) : null}
 
       {data?.header ? <PickingHeaderBlock header={data.header} /> : null}
+
+      {data?.header?.peso_total_picking_kg != null &&
+      data.header.peso_total_picking_kg > 0 ? (
+        <p className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-xs">
+          <span className="text-muted-foreground">Peso total del picking: </span>
+          <strong className="tabular-nums">
+            {data.header.peso_total_picking_kg.toLocaleString("es-CL", {
+              maximumFractionDigits: 1,
+            })}{" "}
+            kg
+          </strong>
+        </p>
+      ) : null}
 
       {data?.version != null ? (
         <p className="text-xs text-muted-foreground">

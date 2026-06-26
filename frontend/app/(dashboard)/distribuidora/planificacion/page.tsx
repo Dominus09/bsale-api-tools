@@ -11,6 +11,7 @@ import {
   getDistribuidoraPlanningLiveMetrics,
   getDistribuidoraTrucks,
   postDistribuidoraPlanificacionOrsRoutes,
+  recalculateOrderWeightsBatch,
   type DispatchPlanSummary,
   type DistribuidoraPlanificacionCrewDefaults,
   type DistribuidoraPlanificacionOrsResponse,
@@ -746,6 +747,28 @@ export default function PlanificacionDespachoPage() {
     operationalCosts,
   ])
 
+  const handleRecalculateWeights = useCallback(async () => {
+    if (!selectedCamion) return
+    const truckOrders = orders.filter((o) => o.camion === selectedCamion)
+    const ids = truckOrders.map((o) => o.document_id)
+    if (!ids.length) return
+    await recalculateOrderWeightsBatch({
+      document_ids: ids,
+      plan_session_id: planSessionId ?? undefined,
+      motivo: "recalcular_planificacion_ors",
+    })
+    const live = await getDistribuidoraPlanningLiveMetrics({ documentIds: ids })
+    const merged = mergeLiveMetricsIntoPlanOrders(truckOrders, live.items)
+    const byId = new Map(merged.map((o) => [o.document_id, o]))
+    const nextOrders = orders.map((o) => byId.get(o.document_id) ?? o)
+    setOrders(nextOrders)
+    writePlanificacionPayload({
+      submittedAt: new Date().toISOString(),
+      planSessionId: planSessionId ?? "",
+      orders: nextOrders,
+    })
+  }, [selectedCamion, orders, planSessionId])
+
   if (!loading && orders.length === 0) {
     return <OrsDispatchEmptyState />
   }
@@ -947,6 +970,9 @@ export default function PlanificacionDespachoPage() {
             onPlanUpdated={() => {
               if (planSessionId) void loadSessionPlans(planSessionId, true)
             }}
+            onRecalculateWeights={
+              !activePlan ? () => handleRecalculateWeights() : undefined
+            }
           />
         </aside>
 

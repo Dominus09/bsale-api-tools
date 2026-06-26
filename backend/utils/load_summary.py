@@ -39,6 +39,7 @@ def build_load_summary(
     picking_meta: dict[str, Any] | None,
     picking_kpis: dict[str, Any] | None,
     header: dict[str, Any] | None,
+    orders: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Bloque superior: cabecera, KPIs, facturación, costos y estado operacional."""
     inv_summary = inv.get("summary") if isinstance(inv.get("summary"), dict) else {}
@@ -149,6 +150,53 @@ def build_load_summary(
         has_picking=has_picking,
     )
     out["operational_status_label"] = _status_label(out["operational_status"])
+
+    frozen_weight = plan.get("weight_total_kg") is not None
+    cap = plan.get("truck_max_weight_kg")
+    if frozen_weight:
+        weight_total = float(plan.get("weight_total_kg") or 0)
+        util_pct = plan.get("weight_utilization_pct")
+        coverage = plan.get("weight_cobertura_pct")
+        productos = plan.get("weight_productos_totales")
+        unidades = plan.get("weight_unidades_totales")
+        orders_count = plan.get("weight_orders_count")
+    elif orders:
+        weight_total = sum(float(o.get("peso_total_kg") or o.get("weight_kg") or 0) for o in orders)
+        coverages = [
+            float(o.get("cobertura_logistica") or o.get("porcentaje_cobertura_peso") or 0)
+            for o in orders
+        ]
+        coverage = round(sum(coverages) / len(coverages), 1) if coverages else 0.0
+        productos = sum(int(o.get("cantidad_productos") or 0) for o in orders)
+        unidades = sum(float(o.get("cantidad_unidades") or 0) for o in orders)
+        orders_count = len(orders)
+        util_pct = None
+        if cap and int(cap) > 0:
+            util_pct = round((weight_total / int(cap)) * 100, 2)
+    else:
+        weight_total = 0.0
+        util_pct = None
+        coverage = 0.0
+        productos = 0
+        unidades = 0.0
+        orders_count = 0
+
+    out["weight"] = {
+        "frozen": frozen_weight,
+        "truck_max_weight_kg": int(cap) if cap is not None else None,
+        "weight_total_kg": round(weight_total, 3),
+        "utilization_pct": float(util_pct) if util_pct is not None else None,
+        "orders_count": int(orders_count or 0),
+        "productos_totales": int(productos or 0),
+        "unidades_totales": float(unidades or 0),
+        "cobertura_pct": float(coverage or 0),
+        "calculated_at": (
+            plan.get("weight_calculated_at").isoformat()
+            if hasattr(plan.get("weight_calculated_at"), "isoformat")
+            else plan.get("weight_calculated_at")
+        ),
+        "calc_version": plan.get("weight_calc_version"),
+    }
     return out
 
 

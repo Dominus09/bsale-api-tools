@@ -38,6 +38,12 @@ export function DispatchPlanLoadSummaryBlock({ dashboard, className }: Props) {
   const results = ls.results
   const statusClass =
     STATUS_STYLES[ls.operational_status] ?? "bg-muted text-foreground"
+  const w = ls.weight
+
+  const fmtKg = (n: number | null | undefined) =>
+    n != null && Number.isFinite(n)
+      ? `${n.toLocaleString("es-CL", { maximumFractionDigits: 1 })} kg`
+      : "—"
 
   return (
     <section
@@ -100,6 +106,46 @@ export function DispatchPlanLoadSummaryBlock({ dashboard, className }: Props) {
           value={k.estimated_boxes.toLocaleString("es-CL", { maximumFractionDigits: 0 })}
         />
       </div>
+
+      {w ? (
+        <div className="mt-4 rounded-lg border border-primary/20 bg-primary/5 px-3 py-3">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Carga logística
+            </p>
+            {w.frozen ? (
+              <Badge variant="secondary" className="text-[10px]">
+                Snapshot congelado
+              </Badge>
+            ) : null}
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            <KpiCell
+              label="Capacidad camión"
+              value={w.truck_max_weight_kg != null ? fmtKg(w.truck_max_weight_kg) : "—"}
+            />
+            <KpiCell label="Peso utilizado" value={fmtKg(w.weight_total_kg)} />
+            <KpiCell
+              label="Ocupación"
+              value={
+                w.utilization_pct != null
+                  ? `${w.utilization_pct.toLocaleString("es-CL", { maximumFractionDigits: 1 })} %`
+                  : "—"
+              }
+            />
+            <KpiCell label="Pedidos" value={String(w.orders_count)} />
+            <KpiCell label="Productos" value={String(w.productos_totales)} />
+            <KpiCell
+              label="Unidades"
+              value={w.unidades_totales.toLocaleString("es-CL", { maximumFractionDigits: 0 })}
+            />
+            <KpiCell
+              label="Cobertura logística"
+              value={`${w.cobertura_pct.toLocaleString("es-CL", { maximumFractionDigits: 0 })} %`}
+            />
+          </div>
+        </div>
+      ) : null}
 
       <div className="mt-4 grid gap-3 lg:grid-cols-3">
         <div className="rounded-lg border border-border/60 px-3 py-2 text-sm">

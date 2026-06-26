@@ -15,6 +15,11 @@ export type PlanificacionStoredOrder = {
   nombre_fantasia?: string | null
   total_amount?: number | null
   weight_kg?: number | null
+  cantidad_cajas?: number | null
+  cantidad_unidades?: number | null
+  porcentaje_cobertura_peso?: number | null
+  productos_sin_peso?: number | null
+  peso_total_kg?: number | null
   stop_index: number
   /** Comuna / municipio del cliente. */
   municipality?: string | null

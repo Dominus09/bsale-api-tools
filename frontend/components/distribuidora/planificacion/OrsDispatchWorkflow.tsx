@@ -8,6 +8,7 @@ import {
   FileSearch,
   Package,
   Loader2,
+  Scale,
 } from "lucide-react"
 
 import type { DispatchPlanSummary } from "@/lib/api"
@@ -25,6 +26,7 @@ type OrsDispatchWorkflowProps = {
   defaultPlanningName?: string
   onConfirm: (planningName: string) => Promise<void>
   onPlanUpdated: () => void
+  onRecalculateWeights?: () => Promise<void>
 }
 
 export function OrsDispatchWorkflow({
@@ -33,6 +35,7 @@ export function OrsDispatchWorkflow({
   defaultPlanningName = "",
   onConfirm,
   onPlanUpdated,
+  onRecalculateWeights,
 }: OrsDispatchWorkflowProps) {
   const [busy, setBusy] = useState<string | null>(null)
   const [invoiceMsg, setInvoiceMsg] = useState<string | null>(null)
@@ -96,6 +99,34 @@ export function OrsDispatchWorkflow({
           )}
           Confirmar planificación
         </Button>
+          {onRecalculateWeights ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 w-full gap-1.5 text-xs"
+              disabled={busy != null}
+              onClick={() =>
+                void run("recalc-weights", async () => {
+                  try {
+                    await onRecalculateWeights()
+                    setInvoiceMsg("Pesos recalculados desde módulo Peso de Órdenes.")
+                    setInvoiceAlert("default")
+                  } catch (e: unknown) {
+                    setInvoiceMsg(e instanceof Error ? e.message : "Error al recalcular pesos")
+                    setInvoiceAlert("destructive")
+                  }
+                })
+              }
+            >
+              {busy === "recalc-weights" ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden />
+              ) : (
+                <Scale className="size-3.5" aria-hidden />
+              )}
+              Recalcular pesos
+            </Button>
+          ) : null}
         </>
       ) : plan?.planning_code ? (
         <p className="text-[11px] text-muted-foreground">

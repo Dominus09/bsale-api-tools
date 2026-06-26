@@ -16,6 +16,8 @@ export type RouteClientRow = {
   direccion: string | null
   venta_total: number
   peso_kg: number
+  cajas: number
+  unidades: number
   oc_count: number
   stop_index_min: number
   list_index: number
@@ -35,6 +37,8 @@ export type OrsStopPopupData = {
   comuna?: string | null
   ventaTotal: number
   pesoKg?: number | null
+  cajas?: number | null
+  unidades?: number | null
   ocCount: number
   observaciones?: string[]
   diaEntregaLabel?: string | null
@@ -192,6 +196,14 @@ export function buildRouteClientRows(
       const w = Number(o.weight_kg)
       return s + (Number.isFinite(w) && w > 0 ? w : 0)
     }, 0)
+    const cajas = clientOrders.reduce((s, o) => {
+      const c = Number(o.cantidad_cajas)
+      return s + (Number.isFinite(c) && c > 0 ? c : 0)
+    }, 0)
+    const unidades = clientOrders.reduce((s, o) => {
+      const u = Number(o.cantidad_unidades)
+      return s + (Number.isFinite(u) && u > 0 ? u : 0)
+    }, 0)
     const obs = [
       ...new Set(
         clientOrders
@@ -213,6 +225,8 @@ export function buildRouteClientRows(
       direccion: primary.direccion?.trim() || null,
       venta_total: ventaTotal,
       peso_kg: pesoKg,
+      cajas,
+      unidades,
       oc_count: clientOrders.length,
       stop_index_min: stopMin,
       list_index: 0,
@@ -249,6 +263,8 @@ export function buildStopPopupData(
       comuna: clientRow.comuna,
       ventaTotal: clientRow.venta_total,
       pesoKg: clientRow.peso_kg > 0 ? clientRow.peso_kg : null,
+      cajas: clientRow.cajas > 0 ? clientRow.cajas : null,
+      unidades: clientRow.unidades > 0 ? clientRow.unidades : null,
       ocCount: clientRow.oc_count,
       observaciones: clientRow.observaciones,
       diaEntregaLabel: clientRow.dia_entrega_label,

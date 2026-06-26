@@ -593,10 +593,13 @@ def insert_plan_orders(cur, plan_id: int, orders: list[dict[str, Any]]) -> None:
                 dispatch_plan_id, oc_document_id, oc_number, route_order,
                 client_id, client_name, fantasy_name, address, city, seller_name,
                 payment_method, document_type_to_generate, oc_total_amount,
-                lat, lng
+                lat, lng,
+                peso_total_kg, cantidad_productos, cantidad_unidades, cantidad_cajas,
+                productos_sin_peso, cobertura_logistica, peso_calculated_at
             )
             VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s
             )
             ON CONFLICT (dispatch_plan_id, oc_document_id) DO UPDATE
             SET route_order = EXCLUDED.route_order,
@@ -609,7 +612,14 @@ def insert_plan_orders(cur, plan_id: int, orders: list[dict[str, Any]]) -> None:
                 document_type_to_generate = EXCLUDED.document_type_to_generate,
                 oc_total_amount = EXCLUDED.oc_total_amount,
                 lat = EXCLUDED.lat,
-                lng = EXCLUDED.lng
+                lng = EXCLUDED.lng,
+                peso_total_kg = EXCLUDED.peso_total_kg,
+                cantidad_productos = EXCLUDED.cantidad_productos,
+                cantidad_unidades = EXCLUDED.cantidad_unidades,
+                cantidad_cajas = EXCLUDED.cantidad_cajas,
+                productos_sin_peso = EXCLUDED.productos_sin_peso,
+                cobertura_logistica = EXCLUDED.cobertura_logistica,
+                peso_calculated_at = EXCLUDED.peso_calculated_at
             """,
             (
                 plan_id,
@@ -627,8 +637,120 @@ def insert_plan_orders(cur, plan_id: int, orders: list[dict[str, Any]]) -> None:
                 o.get("oc_total_amount"),
                 o.get("lat"),
                 o.get("lng"),
+                o.get("peso_total_kg"),
+                o.get("cantidad_productos"),
+                o.get("cantidad_unidades"),
+                o.get("cantidad_cajas"),
+                o.get("productos_sin_peso"),
+                o.get("cobertura_logistica"),
+                o.get("peso_calculated_at"),
             ),
         )
+
+
+def update_plan_weight_snapshot(cur, plan_id: int, fields: dict[str, Any]) -> None:
+    cur.execute(
+        """
+        UPDATE distribuidora.dispatch_plan
+        SET weight_total_kg = %s,
+            truck_max_weight_kg = %s,
+            weight_utilization_pct = %s,
+            weight_calculated_at = %s,
+            weight_calc_version = %s,
+            weight_orders_count = %s,
+            weight_productos_totales = %s,
+            weight_unidades_totales = %s,
+            weight_cobertura_pct = %s,
+            updated_at = NOW()
+        WHERE id = %s
+        """,
+        (
+            fields.get("weight_total_kg"),
+            fields.get("truck_max_weight_kg"),
+            fields.get("weight_utilization_pct"),
+            fields.get("weight_calculated_at"),
+            fields.get("weight_calc_version"),
+            fields.get("weight_orders_count"),
+            fields.get("weight_productos_totales"),
+            fields.get("weight_unidades_totales"),
+            fields.get("weight_cobertura_pct"),
+            plan_id,
+        ),
+    )
+
+
+def insert_plan_stop_snapshots(
+    cur, plan_id: int, stops: list[dict[str, Any]]
+) -> None:
+    for stop in stops:
+        cur.execute(
+            """
+            INSERT INTO distribuidora.dispatch_plan_stop_snapshots (
+                dispatch_plan_id, stop_order, client_id, client_name, address, city,
+                lat, lng, peso_total_kg, cantidad_cajas, cantidad_unidades,
+                cantidad_productos, monto_total, oc_document_ids
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                plan_id,
+                int(stop.get("stop_order") or 0),
+                stop.get("client_id"),
+                stop.get("client_name"),
+                stop.get("address"),
+                stop.get("city"),
+                stop.get("lat"),
+                stop.get("lng"),
+                stop.get("peso_total_kg"),
+                stop.get("cantidad_cajas"),
+                stop.get("cantidad_unidades"),
+                stop.get("cantidad_productos"),
+                stop.get("monto_total"),
+                stop.get("oc_document_ids") or [],
+            ),
+        )
+
+
+def list_plan_stop_snapshots(cur, plan_id: int) -> list[dict[str, Any]]:
+    cur.execute(
+        """
+        SELECT *
+        FROM distribuidora.dispatch_plan_stop_snapshots
+        WHERE dispatch_plan_id = %s
+        ORDER BY stop_order ASC
+        """,
+        (plan_id,),
+    )
+    return [dict(zip(_cols(cur), r)) for r in cur.fetchall()]
+
+
+def insert_plan_weight_audit(
+    cur,
+    *,
+    dispatch_plan_id: int | None,
+    plan_session_id: str | None,
+    user_email: str | None,
+    peso_anterior_kg: float | None,
+    peso_nuevo_kg: float | None,
+    motivo: str | None,
+) -> None:
+    cur.execute(
+        """
+        INSERT INTO distribuidora.dispatch_plan_weight_audit (
+            dispatch_plan_id, plan_session_id, user_email,
+            peso_anterior_kg, peso_nuevo_kg, motivo
+        )
+        VALUES (%s, %s, %s, %s, %s, %s)
+        """,
+        (
+            dispatch_plan_id,
+            plan_session_id,
+            user_email,
+            peso_anterior_kg,
+            peso_nuevo_kg,
+            motivo,
+        ),
+    )
 
 
 def list_plan_orders(cur, plan_id: int) -> list[dict[str, Any]]:

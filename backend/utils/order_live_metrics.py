@@ -260,6 +260,8 @@ def _overlay_official_order_weights(
             entry["weight_kg"] = w["weight_kg"]
             entry["productos_sin_peso"] = w["productos_sin_peso"]
             entry["porcentaje_cobertura_peso"] = w["porcentaje_cobertura_peso"]
+            entry["cantidad_unidades"] = w.get("cantidad_unidades")
+            entry["cantidad_cajas"] = w.get("cantidad_cajas")
             entry["peso_fuente"] = "order_weight_module"
     except Exception:
         pass
@@ -268,6 +270,8 @@ def _overlay_official_order_weights(
 def overlay_snapshot_orders(
     orders: list[dict[str, Any]],
     live_by_id: dict[int, dict[str, Any]],
+    *,
+    freeze_weight: bool = False,
 ) -> list[dict[str, Any]]:
     """Superpone métricas live sobre filas con snapshot; conserva valores congelados en *_snapshot."""
     out: list[dict[str, Any]] = []
@@ -280,15 +284,32 @@ def overlay_snapshot_orders(
         row["snapshot_oc_total_amount"] = row.get("oc_total_amount")
         row["snapshot_city"] = row.get("city")
         row["snapshot_at"] = row.get("created_at")
-        row["weight_kg"] = live.get("weight_kg")
-        row["peso_total_kg"] = live.get("peso_total_kg")
-        row["productos_sin_peso"] = live.get("productos_sin_peso")
-        row["porcentaje_cobertura_peso"] = live.get("porcentaje_cobertura_peso")
+        frozen_peso = row.get("peso_total_kg")
+        if freeze_weight and frozen_peso is not None:
+            row["weight_kg"] = float(frozen_peso)
+            row["peso_total_kg"] = float(frozen_peso)
+            row["productos_sin_peso"] = row.get("productos_sin_peso")
+            row["porcentaje_cobertura_peso"] = row.get("cobertura_logistica")
+            row["weight_frozen"] = True
+        else:
+            row["weight_kg"] = live.get("weight_kg")
+            row["peso_total_kg"] = live.get("peso_total_kg")
+            row["productos_sin_peso"] = live.get("productos_sin_peso")
+            row["porcentaje_cobertura_peso"] = live.get("porcentaje_cobertura_peso")
+            row["weight_frozen"] = False
         row["last_bs_update"] = live.get("last_bs_update")
         row["last_erp_update"] = row.get("created_at")
-        row["planning_stale"] = staleness["planning_stale"]
-        row["planning_stale_reasons"] = staleness["planning_stale_reasons"]
-        row["bsale_updated_pending"] = staleness["bsale_updated_pending"]
+        if freeze_weight and frozen_peso is not None:
+            reasons = [
+                r for r in staleness["planning_stale_reasons"] if r != "peso"
+            ]
+            row["planning_stale"] = bool(reasons)
+            row["planning_stale_reasons"] = reasons
+            row["bsale_updated_pending"] = staleness["bsale_updated_pending"]
+        else:
+            row["planning_stale"] = staleness["planning_stale"]
+            row["planning_stale_reasons"] = staleness["planning_stale_reasons"]
+            row["bsale_updated_pending"] = staleness["bsale_updated_pending"]
 
         if live.get("total_amount") is not None:
             row["oc_total_amount"] = live["total_amount"]

@@ -16,6 +16,8 @@ export function OrsStopPopup({
   comuna,
   ventaTotal,
   pesoKg,
+  cajas,
+  unidades,
   ocCount,
   observaciones,
   diaEntregaLabel,
@@ -61,6 +63,22 @@ export function OrsStopPopup({
             <dt className="text-muted-foreground">Peso</dt>
             <dd className="font-medium tabular-nums">
               {pesoKg.toLocaleString("es-CL", { maximumFractionDigits: 1 })} kg
+            </dd>
+          </>
+        ) : null}
+        {cajas != null && cajas > 0 ? (
+          <>
+            <dt className="text-muted-foreground">Cajas</dt>
+            <dd className="font-medium tabular-nums">
+              {cajas.toLocaleString("es-CL", { maximumFractionDigits: 0 })}
+            </dd>
+          </>
+        ) : null}
+        {unidades != null && unidades > 0 ? (
+          <>
+            <dt className="text-muted-foreground">Unidades</dt>
+            <dd className="font-medium tabular-nums">
+              {unidades.toLocaleString("es-CL", { maximumFractionDigits: 0 })}
             </dd>
           </>
         ) : null}

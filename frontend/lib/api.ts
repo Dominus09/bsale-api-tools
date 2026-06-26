@@ -1172,6 +1172,8 @@ export type DistribuidoraPlanningLiveMetrics = {
   peso_total_kg?: number | null
   productos_sin_peso?: number | null
   porcentaje_cobertura_peso?: number | null
+  cantidad_unidades?: number | null
+  cantidad_cajas?: number | null
   observaciones?: string | null
   dia_entrega_detectado?: string | null
   dia_entrega_label?: string | null
@@ -2056,6 +2058,18 @@ export type DispatchPlanLoadSummary = {
   }
   operational_status: string
   operational_status_label: string
+  weight?: {
+    frozen: boolean
+    truck_max_weight_kg?: number | null
+    weight_total_kg: number
+    utilization_pct?: number | null
+    orders_count: number
+    productos_totales: number
+    unidades_totales: number
+    cobertura_pct: number
+    calculated_at?: string | null
+    calc_version?: string | null
+  }
 }
 
 export type DispatchPlanDashboard = {
@@ -2097,6 +2111,20 @@ export type DispatchPlanDashboard = {
   invoicing_source?: string
   /** true si el backend degradó la respuesta por error interno */
   degraded?: boolean
+  plan_orders?: DispatchPlanOrderWeightRow[]
+}
+
+export type DispatchPlanOrderWeightRow = {
+  oc_document_id: number
+  oc_number?: number | null
+  client_name?: string | null
+  oc_total_amount?: number | null
+  peso_total_kg?: number | null
+  weight_kg?: number | null
+  cobertura_logistica?: number | null
+  porcentaje_cobertura_peso?: number | null
+  route_order?: number
+  weight_frozen?: boolean
 }
 
 /** Dashboard liviano (sin pickings; margen opcional). */
@@ -2303,6 +2331,7 @@ export type DispatchPlanPickingHeader = {
     total_units: number
     estimated_boxes: number
   }
+  peso_total_picking_kg?: number | null
   load_batch?: {
     id: number
     name: string
@@ -2331,6 +2360,10 @@ export type DispatchPlanPickingClientRow = {
   inclusion?: string
   is_probable_included?: boolean
   probable_score?: number | null
+  peso_total_kg?: number | null
+  weight_kg?: number | null
+  cantidad_unidades?: number | null
+  cantidad_cajas?: number | null
 }
 
 export type DispatchPlanPickingProductRow = {
@@ -5307,6 +5340,36 @@ export async function recalculateOrderWeight(
   )
   if (!res.ok) throw new Error("Error al recalcular orden")
   return res.json() as Promise<OrderWeightDetail>
+}
+
+export async function recalculateOrderWeightsBatch(body: {
+  document_ids: number[]
+  company_id?: number
+  office_id?: number
+  plan_session_id?: string
+  motivo?: string
+}): Promise<{
+  recalculated: number
+  peso_anterior_kg: number
+  peso_nuevo_kg: number
+  items: { document_id: number; peso_total_kg?: number; porcentaje_cobertura?: number }[]
+}> {
+  const res = await fetch(`${API_URL}/logistics/order-weights/recalculate-batch`, {
+    method: "POST",
+    headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({
+      company_id: body.company_id ?? requireCompanyId(),
+      office_id: body.office_id ?? 1,
+      document_ids: body.document_ids,
+      plan_session_id: body.plan_session_id,
+      motivo: body.motivo,
+    }),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al recalcular pesos")
+  }
+  return res.json()
 }
 
 export async function patchOrderWeightProduct(

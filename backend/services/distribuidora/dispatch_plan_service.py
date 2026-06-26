@@ -57,7 +57,12 @@ from backend.utils.dispatch_plan_picking import (
     normalize_product_row,
     picking_warnings_from_stops,
 )
-from backend.utils.load_summary import build_load_summary
+from backend.utils.dispatch_plan_weight_snapshot import (
+    aggregate_plan_weight,
+    build_stop_snapshots,
+    freeze_orders_weight,
+    plan_weight_is_frozen,
+)
 from backend.utils.order_live_metrics import (
     fetch_live_metrics_by_document_ids,
     overlay_snapshot_orders,
@@ -365,6 +370,28 @@ def get_plan_header(
     return _serialize(plan)
 
 
+def _hydrate_plan_orders(
+    cur,
+    orders: list[dict[str, Any]],
+    *,
+    plan_status: str | None,
+) -> list[dict[str, Any]]:
+    if not orders:
+        return []
+    freeze_weight = plan_weight_is_frozen(plan_status)
+    if freeze_weight:
+        live_by_id = fetch_live_metrics_by_document_ids(
+            cur,
+            [int(o["oc_document_id"]) for o in orders],
+        )
+        return overlay_snapshot_orders(orders, live_by_id, freeze_weight=True)
+    live_by_id = fetch_live_metrics_by_document_ids(
+        cur,
+        [int(o["oc_document_id"]) for o in orders],
+    )
+    return overlay_snapshot_orders(orders, live_by_id, freeze_weight=False)
+
+
 def get_dispatch_plan(plan_id: int) -> dict[str, Any] | None:
     log_debug("GET /dispatch-plans/{id}", planning_id=plan_id)
     conn = get_connection()
@@ -377,11 +404,11 @@ def get_dispatch_plan(plan_id: int) -> dict[str, Any] | None:
                 return None
             orders = repo.list_plan_orders(cur, plan_id)
             if orders:
-                live_by_id = fetch_live_metrics_by_document_ids(
+                orders = _hydrate_plan_orders(
                     cur,
-                    [int(o["oc_document_id"]) for o in orders],
+                    orders,
+                    plan_status=plan.get("status"),
                 )
-                orders = overlay_snapshot_orders(orders, live_by_id)
         except Exception as exc:
             log_error("GET /dispatch-plans/{id}", exc, planning_id=plan_id)
             return None
@@ -449,13 +476,14 @@ def confirm_dispatch_plan(
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT name FROM distribuidora.trucks WHERE id = %s",
+            "SELECT name, max_weight_kg FROM distribuidora.trucks WHERE id = %s",
             (truck_id,),
         )
         truck_row = cur.fetchone()
         frozen_truck_name = (
             str(truck_row[0]).strip() if truck_row and truck_row[0] else route_name
         )
+        truck_max_weight_kg = int(truck_row[1]) if truck_row and truck_row[1] else None
         existing = repo.get_latest_plan_for_truck_session(
             cur, plan_session_id=plan_session_id, truck_id=truck_id
         )
@@ -507,13 +535,22 @@ def confirm_dispatch_plan(
             "confirmed_at": now,
         }
         enriched = _enrich_orders_snapshot(cur, orders)
+        frozen_orders = freeze_orders_weight(cur, enriched, calculated_at=now)
+        stops = build_stop_snapshots(frozen_orders)
+        weight_fields = aggregate_plan_weight(
+            frozen_orders,
+            truck_max_weight_kg=truck_max_weight_kg,
+            calculated_at=now,
+        )
         plan_id, planning_code = repo.insert_dispatch_plan(cur, fields)
+        repo.update_plan_weight_snapshot(cur, plan_id, weight_fields)
         logger.info(
             "[PLANNING_CODE_DEBUG] confirm_dispatch_plan plan_id=%s planning_code=%s",
             plan_id,
             planning_code,
         )
-        repo.insert_plan_orders(cur, plan_id, enriched)
+        repo.insert_plan_orders(cur, plan_id, frozen_orders)
+        repo.insert_plan_stop_snapshots(cur, plan_id, stops)
         conn.commit()
         cur.close()
     finally:
@@ -623,7 +660,14 @@ def _load_plan_orders_safe(
             if stage_run:
                 with dashboard_connection(plan_id, stage_run) as (cur, _conn):
                     t0 = log_repo_start(plan_id, "repo.list_plan_orders")
+                    plan = repo.get_plan_by_id(cur, plan_id)
                     orders = repo.list_plan_orders(cur, plan_id)
+                    if plan and orders:
+                        orders = _hydrate_plan_orders(
+                            cur,
+                            orders,
+                            plan_status=plan.get("status"),
+                        )
                     log_repo_end(
                         plan_id,
                         "repo.list_plan_orders",
@@ -634,7 +678,14 @@ def _load_plan_orders_safe(
                 conn = get_connection()
                 try:
                     cur = conn.cursor()
+                    plan = repo.get_plan_by_id(cur, plan_id)
                     orders = repo.list_plan_orders(cur, plan_id)
+                    if plan and orders:
+                        orders = _hydrate_plan_orders(
+                            cur,
+                            orders,
+                            plan_status=plan.get("status"),
+                        )
                     cur.close()
                 finally:
                     conn.close()
@@ -782,6 +833,7 @@ def _load_summary_context(
     invoicing_block: dict[str, Any],
     margin_block: dict[str, Any] | None,
     *,
+    orders: list[dict[str, Any]] | None = None,
     stage_run: DashboardStageRun | None = None,
 ) -> dict[str, Any]:
     picking_meta: dict[str, Any] | None = None
@@ -826,6 +878,7 @@ def _load_summary_context(
         picking_meta=picking_meta,
         picking_kpis=picking_kpis,
         header=header,
+        orders=orders,
     )
 
 
@@ -994,6 +1047,7 @@ def _build_plan_dashboard(
         inv,
         invoicing_payload,
         margin_block,
+        orders=orders,
         stage_run=stage_run,
     )
 
@@ -1002,6 +1056,22 @@ def _build_plan_dashboard(
         "load_summary": load_summary,
         "invoicing": invoicing_payload,
         "invoiced_items": inv_items if include_items else [],
+        "plan_orders": [
+            {
+                "oc_document_id": o.get("oc_document_id"),
+                "oc_number": o.get("oc_number"),
+                "client_name": o.get("client_name") or o.get("fantasy_name"),
+                "oc_total_amount": o.get("oc_total_amount"),
+                "peso_total_kg": o.get("peso_total_kg"),
+                "weight_kg": o.get("weight_kg") or o.get("peso_total_kg"),
+                "cobertura_logistica": o.get("cobertura_logistica"),
+                "porcentaje_cobertura_peso": o.get("porcentaje_cobertura_peso")
+                or o.get("cobertura_logistica"),
+                "route_order": o.get("route_order"),
+                "weight_frozen": o.get("weight_frozen"),
+            }
+            for o in orders
+        ],
         "warnings": warnings,
         "probable_notes": probable_notes,
         "margin": margin_block,
@@ -1743,6 +1813,53 @@ def _resolve_picking_row(
         conn.close()
 
 
+def _weight_by_oc_from_plan_orders(
+    cur, plan_id: int
+) -> dict[int, dict[str, Any]]:
+    orders = repo.list_plan_orders(cur, plan_id)
+    out: dict[int, dict[str, Any]] = {}
+    for o in orders:
+        doc_id = int(o["oc_document_id"])
+        peso = o.get("peso_total_kg")
+        out[doc_id] = {
+            "peso_total_kg": float(peso) if peso is not None else None,
+            "cantidad_unidades": float(o.get("cantidad_unidades") or 0),
+            "cantidad_cajas": float(o.get("cantidad_cajas") or 0),
+            "cobertura_logistica": o.get("cobertura_logistica"),
+        }
+    return out
+
+
+def _enrich_picking_with_plan_weight(
+    cur,
+    plan_id: int,
+    clients: list[dict[str, Any]],
+    items: list[dict[str, Any]],
+    header: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    weights = _weight_by_oc_from_plan_orders(cur, plan_id)
+    total_peso = 0.0
+    enriched_clients: list[dict[str, Any]] = []
+    for client in clients:
+        row = dict(client)
+        oc_id = row.get("oc_document_id")
+        w = weights.get(int(oc_id)) if oc_id is not None else None
+        if w and w.get("peso_total_kg") is not None:
+            peso = float(w["peso_total_kg"])
+            row["peso_total_kg"] = peso
+            row["weight_kg"] = peso
+            row["cantidad_unidades"] = w.get("cantidad_unidades")
+            row["cantidad_cajas"] = w.get("cantidad_cajas")
+            total_peso += peso
+        enriched_clients.append(row)
+    hdr = dict(header)
+    hdr["peso_total_picking_kg"] = round(total_peso, 3) if total_peso > 0 else None
+    plan = repo.get_plan_by_id(cur, plan_id) or {}
+    if plan.get("weight_total_kg") is not None and not hdr.get("peso_total_picking_kg"):
+        hdr["peso_total_picking_kg"] = float(plan["weight_total_kg"])
+    return enriched_clients, items, hdr
+
+
 def _load_persisted_picking_bundle(
     plan_id: int,
     picking_row: dict[str, Any],
@@ -1754,16 +1871,18 @@ def _load_persisted_picking_bundle(
         client_rows = picking_repo.list_picking_clients(cur, pid)
         product_rows = picking_repo.list_picking_products(cur, pid)
         enriched_products = enrich_picking_product_rows(cur, product_rows)
+        meta = picking_repo.picking_meta_to_api(picking_row)
+        clients = [picking_repo.client_row_to_api(r) for r in client_rows]
+        items = [picking_repo.product_row_to_api(r) for r in enriched_products]
+        header = dict(meta.get("header") or {})
+        clients, items, header = _enrich_picking_with_plan_weight(
+            cur, plan_id, clients, items, header
+        )
         cur.close()
     finally:
         conn.close()
-
-    meta = picking_repo.picking_meta_to_api(picking_row)
-    clients = [picking_repo.client_row_to_api(r) for r in client_rows]
-    items = [picking_repo.product_row_to_api(r) for r in enriched_products]
     item_totals = compute_items_totals(items)
     clients_n = count_snapshot_clients(clients)
-    header = dict(meta.get("header") or {})
     header["load_kpis"] = {
         "clients": clients_n or len(clients),
         "documents": len(clients),
@@ -2163,6 +2282,55 @@ def repair_order_snapshots(plan_id: int) -> dict[str, Any]:
         if not orders:
             raise ValueError("Plan sin órdenes")
         enriched = _enrich_orders_snapshot(cur, orders)
+        needs_weight = any(o.get("peso_total_kg") is None for o in orders)
+        if needs_weight:
+            plan = repo.get_plan_by_id(cur, plan_id) or {}
+            now = datetime.now(timezone.utc)
+            frozen = freeze_orders_weight(cur, enriched, calculated_at=now)
+            stops = build_stop_snapshots(frozen)
+            cur.execute(
+                "SELECT max_weight_kg FROM distribuidora.trucks WHERE id = %s",
+                (plan.get("truck_id"),),
+            )
+            truck_row = cur.fetchone()
+            truck_max = int(truck_row[0]) if truck_row and truck_row[0] else None
+            weight_fields = aggregate_plan_weight(
+                frozen,
+                truck_max_weight_kg=truck_max,
+                calculated_at=now,
+            )
+            if plan.get("weight_total_kg") is None:
+                repo.update_plan_weight_snapshot(cur, plan_id, weight_fields)
+            cur.execute(
+                "DELETE FROM distribuidora.dispatch_plan_stop_snapshots WHERE dispatch_plan_id = %s",
+                (plan_id,),
+            )
+            repo.insert_plan_stop_snapshots(cur, plan_id, stops)
+            for o in frozen:
+                cur.execute(
+                    """
+                    UPDATE distribuidora.dispatch_plan_orders
+                    SET peso_total_kg = COALESCE(peso_total_kg, %s),
+                        cantidad_productos = COALESCE(cantidad_productos, %s),
+                        cantidad_unidades = COALESCE(cantidad_unidades, %s),
+                        cantidad_cajas = COALESCE(cantidad_cajas, %s),
+                        productos_sin_peso = COALESCE(productos_sin_peso, %s),
+                        cobertura_logistica = COALESCE(cobertura_logistica, %s),
+                        peso_calculated_at = COALESCE(peso_calculated_at, %s)
+                    WHERE dispatch_plan_id = %s AND oc_document_id = %s
+                    """,
+                    (
+                        o.get("peso_total_kg"),
+                        o.get("cantidad_productos"),
+                        o.get("cantidad_unidades"),
+                        o.get("cantidad_cajas"),
+                        o.get("productos_sin_peso"),
+                        o.get("cobertura_logistica"),
+                        o.get("peso_calculated_at"),
+                        plan_id,
+                        int(o["oc_document_id"]),
+                    ),
+                )
         for o in enriched:
             cur.execute(
                 """

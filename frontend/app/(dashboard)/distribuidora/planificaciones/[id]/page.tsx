@@ -13,6 +13,7 @@ import {
 } from "@/lib/api"
 import { DispatchPlanDetailTabs } from "@/components/distribuidora/planificacion/DispatchPlanDetailTabs"
 import { DispatchPlanLoadSummaryBlock } from "@/components/distribuidora/planificacion/DispatchPlanLoadSummary"
+import { DispatchPlanOrdersWeightTable } from "@/components/distribuidora/planificacion/DispatchPlanOrdersWeightTable"
 import {
   fetchDispatchPlanDashboardDeduped,
   fetchDispatchPlanHeaderDeduped,
@@ -301,6 +302,12 @@ export default function PlanificacionDetallePage() {
           ) : dashboard ? (
             <>
             <DispatchPlanLoadSummaryBlock dashboard={dashboard} />
+            {dashboard.plan_orders?.length ? (
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Órdenes del plan</p>
+                <DispatchPlanOrdersWeightTable orders={dashboard.plan_orders} />
+              </div>
+            ) : null}
             <DispatchPlanDetailTabs
               planId={planId}
               dashboard={dashboard}
