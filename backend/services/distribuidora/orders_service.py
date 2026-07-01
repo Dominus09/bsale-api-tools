@@ -307,6 +307,8 @@ def _overlay_order_weights_to_rows(rows: list[dict[str, Any]]) -> None:
             row["peso_total_kg"] = w["peso_total_kg"]
             row["productos_sin_peso"] = w["productos_sin_peso"]
             row["porcentaje_cobertura_peso"] = w["porcentaje_cobertura_peso"]
+            row["productos_manuales"] = w.get("productos_manuales")
+            row["productos_estimados"] = w.get("productos_estimados")
             row["cantidad_unidades"] = w.get("cantidad_unidades")
             row["cantidad_cajas"] = w.get("cantidad_cajas")
             row["peso_fuente"] = "order_weight_module"

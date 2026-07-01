@@ -27,6 +27,12 @@ import {
   PurchaseInvoiceScoreCell,
 } from "@/components/distribuidora/orders/PurchaseInvoiceTableCells"
 import { PreDespachoEmptyState } from "@/components/distribuidora/orders/PreDespachoEmptyState"
+import type { PreDespachoWeightSheetMode } from "@/components/distribuidora/orders/PreDespachoWeightSheet"
+import {
+  resolvePreDespachoWeightBadge,
+  weightBadgeClass,
+  weightBadgeEmoji,
+} from "@/lib/pre-despacho-weight"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -181,30 +187,63 @@ function GroupTruckAssignMenu({
   )
 }
 
-function WeightCell({ row }: { row: DistribuidoraDispatchPrepPlanningRow }) {
+function WeightCell({
+  row,
+  onOpenWeight,
+}: {
+  row: DistribuidoraDispatchPrepPlanningRow
+  onOpenWeight: (
+    row: DistribuidoraDispatchPrepPlanningRow,
+    mode: PreDespachoWeightSheetMode,
+  ) => void
+}) {
   const kg = row.peso_total_kg ?? row.weight_kg
-  const sinPeso = Number(row.productos_sin_peso ?? 0)
+  const badge = resolvePreDespachoWeightBadge(row)
   const coverage = Number(row.porcentaje_cobertura_peso ?? 0)
-  const incomplete = sinPeso > 0
 
   return (
     <div className="flex min-w-0 flex-col items-end gap-0.5">
-      <span className="text-[11px] tabular-nums text-foreground">{formatKg(kg)}</span>
-      {incomplete ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
+      <button
+        type="button"
+        onClick={() => onOpenWeight(row, "full")}
+        className="text-[11px] tabular-nums text-foreground underline-offset-2 hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
+        title="Ver detalle de peso"
+      >
+        {formatKg(kg)}
+      </button>
+      {badge ? (
+        badge.kind === "incomplete" ? (
+          <button
+            type="button"
+            onClick={() => onOpenWeight(row, "incomplete")}
+            className="max-w-full rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            title={`Corregir ${badge.count ?? 0} producto(s) sin peso`}
+          >
             <Badge
               variant="outline"
-              className="max-w-full cursor-help truncate px-1 py-0 text-[8px] font-medium leading-4 border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100"
+              className={cn(
+                "cursor-pointer truncate px-1 py-0 text-[8px] font-medium leading-4 transition-opacity hover:opacity-90",
+                weightBadgeClass(badge.kind),
+              )}
             >
-              ⚠ Peso incompleto ({sinPeso})
+              {weightBadgeEmoji(badge.kind)} {badge.label}
             </Badge>
-          </TooltipTrigger>
-          <TooltipContent side="top" className="max-w-xs text-xs">
-            {sinPeso} línea(s) sin peso en maestro logístico.
-            Cobertura: {Number.isFinite(coverage) ? coverage.toFixed(0) : "0"}%.
-          </TooltipContent>
-        </Tooltip>
+          </button>
+        ) : (
+          <Badge
+            variant="outline"
+            className={cn(
+              "max-w-full truncate px-1 py-0 text-[8px] font-medium leading-4",
+              weightBadgeClass(badge.kind),
+            )}
+          >
+            {weightBadgeEmoji(badge.kind)} {badge.label}
+          </Badge>
+        )
+      ) : coverage > 0 && coverage < 100 ? (
+        <span className="text-[8px] text-muted-foreground tabular-nums">
+          {coverage.toFixed(0)}% cobertura
+        </span>
       ) : null}
     </div>
   )
@@ -346,6 +385,7 @@ function PlanningTableRow({
   clusterLabel,
   thresholds,
   onTruckChange,
+  onOpenWeight,
 }: {
   r: DistribuidoraDispatchPrepPlanningRow
   trucks: DistribuidoraTruck[]
@@ -353,6 +393,10 @@ function PlanningTableRow({
   clusterLabel: string
   thresholds: PreDespachoAmountThresholds
   onTruckChange: (row: DistribuidoraDispatchPrepPlanningRow, raw: string) => void
+  onOpenWeight: (
+    row: DistribuidoraDispatchPrepPlanningRow,
+    mode: PreDespachoWeightSheetMode,
+  ) => void
 }) {
   const geo = rowHasGeo(r)
   const docId = r.document_id
@@ -396,7 +440,7 @@ function PlanningTableRow({
         {formatClp(Number(r.total_amount ?? 0))}
       </td>
       <td className={cn(TD, "whitespace-nowrap text-right")}>
-        <WeightCell row={r} />
+        <WeightCell row={r} onOpenWeight={onOpenWeight} />
       </td>
       <td className={cn(TD, "whitespace-nowrap text-[10px] text-muted-foreground")}>
         {formatLastUpdate(r)}
@@ -454,6 +498,10 @@ type PreDespachoPlanningTableProps = {
     groupRows: DistribuidoraDispatchPrepPlanningRow[],
   ) => void
   onTruckChange: (row: DistribuidoraDispatchPrepPlanningRow, raw: string) => void
+  onOpenWeight: (
+    row: DistribuidoraDispatchPrepPlanningRow,
+    mode: PreDespachoWeightSheetMode,
+  ) => void
 }
 
 const COL_COUNT = 14
@@ -471,6 +519,7 @@ export function PreDespachoPlanningTable({
   statusFilterActive,
   onGroupTruckPick,
   onTruckChange,
+  onOpenWeight,
 }: PreDespachoPlanningTableProps) {
   const thresholds = computeAmountThresholds(allRowsForThresholds)
   const rowCount = blocks.reduce((n, b) => n + b.rows.length, 0)
@@ -550,6 +599,7 @@ export function PreDespachoPlanningTable({
                     clusterLabel={clusterByDoc.get(r.document_id) ?? "—"}
                     thresholds={thresholds}
                     onTruckChange={onTruckChange}
+                    onOpenWeight={onOpenWeight}
                   />
                 ))}
               </Fragment>

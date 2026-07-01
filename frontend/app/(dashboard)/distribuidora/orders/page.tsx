@@ -27,6 +27,10 @@ import {
 import { PreDespachoKpiStrip } from "@/components/distribuidora/orders/PreDespachoKpiStrip"
 import { PreDespachoPlanningTable } from "@/components/distribuidora/orders/PreDespachoPlanningTable"
 import { PreDespachoStatusChips } from "@/components/distribuidora/orders/PreDespachoStatusChips"
+import {
+  PreDespachoWeightSheet,
+  type PreDespachoWeightSheetMode,
+} from "@/components/distribuidora/orders/PreDespachoWeightSheet"
 import { Button } from "@/components/ui/button"
 import {
   AlertDialog,
@@ -222,6 +226,12 @@ export default function DistribuidoraOrdersPage() {
   const [trucks, setTrucks] = useState<DistribuidoraTruck[]>([])
   const [trucksError, setTrucksError] = useState<string | null>(null)
   const [planificacionFeedback, setPlanificacionFeedback] = useState<string | null>(null)
+
+  const [weightSheetOpen, setWeightSheetOpen] = useState(false)
+  const [weightSheetRow, setWeightSheetRow] =
+    useState<DistribuidoraDispatchPrepPlanningRow | null>(null)
+  const [weightSheetMode, setWeightSheetMode] =
+    useState<PreDespachoWeightSheetMode>("incomplete")
 
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailRow, setDetailRow] =
@@ -927,6 +937,27 @@ export default function DistribuidoraOrdersPage() {
     [safePlanningRows, trucks, appliedDateFrom, appliedDateTo],
   )
 
+  const handleOpenWeightSheet = useCallback(
+    (row: DistribuidoraDispatchPrepPlanningRow, mode: PreDespachoWeightSheetMode) => {
+      setWeightSheetRow(row)
+      setWeightSheetMode(mode)
+      setWeightSheetOpen(true)
+    },
+    [],
+  )
+
+  const handleWeightRowUpdated = useCallback(
+    (documentId: number, patch: Partial<DistribuidoraDispatchPrepPlanningRow>) => {
+      setPlanningRows((prev) =>
+        prev.map((r) => (r.document_id === documentId ? { ...r, ...patch } : r)),
+      )
+      setWeightSheetRow((prev) =>
+        prev?.document_id === documentId ? { ...prev, ...patch } : prev,
+      )
+    },
+    [],
+  )
+
   const openDetail = useCallback((r: DistribuidoraDispatchPrepMunicipalityRow) => {
     setDetailRow(r)
     setDetailOpen(true)
@@ -1415,6 +1446,7 @@ export default function DistribuidoraOrdersPage() {
             statusFilterActive={appliedEstadoResumen !== "all"}
             onGroupTruckPick={assignTruckToGroupWithChoice}
             onTruckChange={onPlanningTruckChange}
+            onOpenWeight={handleOpenWeightSheet}
           />
           {planningHasMore ? (
             <div className="flex flex-col items-center gap-2 border-t border-border/60 pt-4">
@@ -1438,6 +1470,19 @@ export default function DistribuidoraOrdersPage() {
           ) : null}
         </section>
       </TooltipProvider>
+
+      <PreDespachoWeightSheet
+        open={weightSheetOpen}
+        onOpenChange={setWeightSheetOpen}
+        row={weightSheetRow}
+        mode={weightSheetMode}
+        onRowUpdated={handleWeightRowUpdated}
+        onSaved={() =>
+          toast({
+            title: "Peso actualizado y orden recalculada.",
+          })
+        }
+      />
 
       <AlertDialog open={wideRangeConfirmOpen} onOpenChange={setWideRangeConfirmOpen}>
         <AlertDialogContent>

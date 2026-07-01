@@ -215,6 +215,8 @@ SELECT
     ows.peso_total_kg,
     ows.productos_sin_peso,
     ows.porcentaje_cobertura,
+    ows.productos_manuales,
+    ows.productos_estimados,
     COALESCE(line_agg.cantidad_unidades, 0) AS cantidad_unidades,
     COALESCE(line_agg.cantidad_cajas, 0) AS cantidad_cajas
 FROM distribuidora.order_weight_snapshots ows
@@ -652,8 +654,10 @@ def fetch_weights_by_document_ids(document_ids: list[int]) -> dict[int, dict[str
                 "productos_sin_peso": int(row[2] or 0),
                 "porcentaje_cobertura_peso": float(row[3] or 0),
                 "weight_kg": float(row[1] or 0),
-                "cantidad_unidades": float(row[4] or 0),
-                "cantidad_cajas": float(row[5] or 0),
+                "productos_manuales": int(row[4] or 0),
+                "productos_estimados": int(row[5] or 0),
+                "cantidad_unidades": float(row[6] or 0),
+                "cantidad_cajas": float(row[7] or 0),
             }
         cur.close()
         return out

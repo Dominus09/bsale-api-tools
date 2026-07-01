@@ -1107,6 +1107,8 @@ export type DistribuidoraDispatchPrepPlanningRow = {
   weight_kg?: number | null
   peso_total_kg?: number | null
   productos_sin_peso?: number | null
+  productos_manuales?: number | null
+  productos_estimados?: number | null
   porcentaje_cobertura_peso?: number | null
   has_georef?: boolean | null
   lat?: number | null
