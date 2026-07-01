@@ -37,6 +37,7 @@ import {
   Stethoscope,
   PackageCheck,
   Crosshair,
+  UsersRound,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
@@ -61,6 +62,11 @@ const navSections: { title: string; items: NavItem[] }[] = [
       { href: "/politica-margenes", label: "Política de Márgenes", icon: Scale },
       { href: "/costos", label: "Costos", icon: CircleDollarSign },
       { href: "/promotions", label: "Promociones", icon: Percent },
+      {
+        href: "/analitica/comercial-vendedores",
+        label: "Comercial Vendedores",
+        icon: UsersRound,
+      },
     ],
   },
   {

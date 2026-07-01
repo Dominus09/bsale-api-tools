@@ -5436,3 +5436,249 @@ export function orderWeightExportUrl(documentId: number, companyId?: number): st
   const cid = companyId ?? getCompanyId() ?? 3
   return `${API_URL}/logistics/order-weights/${documentId}/export?company_id=${cid}`
 }
+
+// --- Analítica comercial vendedores ---
+
+export type CommercialKpiCompare = {
+  current: number
+  previous: number
+  delta_abs: number
+  delta_pct: number
+  trend: "up" | "down" | "flat"
+}
+
+export type CommercialDashboardResponse = {
+  period: { from: string; to: string }
+  compare_period: { from: string; to: string }
+  document_types: { boleta: number; factura: number; nota_credito_excluded: number }
+  kpis: Record<string, CommercialKpiCompare | null>
+  client_classification: {
+    activos: number
+    nuevos: number
+    recuperados: number
+    perdidos: number
+    en_riesgo: number
+  }
+  daily_sales: { day: string; venta_neta: number; clientes: number }[]
+  margen_parcial: boolean
+}
+
+export type CommercialSellerRow = {
+  seller_name: string
+  seller_id: number | null
+  venta_actual: number
+  venta_anterior: number
+  variacion_pct: number
+  clientes_unicos_actual: number
+  clientes_unicos_anterior: number
+  clientes_nuevos: number
+  clientes_perdidos: number
+  clientes_recuperados: number
+  ticket_promedio: number
+  productos_distintos: number
+  categorias_vendidas: number
+}
+
+export type CommercialFilterOptions = {
+  sellers: string[]
+  cities: string[]
+  document_types: { id: string; label: string; document_type_id?: number }[]
+}
+
+export type CommercialAnalyticsParams = {
+  company_id?: number
+  office_id?: number
+  date_from: string
+  date_to: string
+  compare_date_from?: string
+  compare_date_to?: string
+  seller?: string
+  city?: string
+  client_id?: number
+  document_type?: string
+  limit?: number
+  signal?: AbortSignal
+}
+
+function commercialAnalyticsQs(params: CommercialAnalyticsParams): URLSearchParams {
+  const qs = new URLSearchParams({
+    company_id: String(params.company_id ?? 3),
+    office_id: String(params.office_id ?? 1),
+    date_from: params.date_from,
+    date_to: params.date_to,
+  })
+  if (params.compare_date_from) qs.set("compare_date_from", params.compare_date_from)
+  if (params.compare_date_to) qs.set("compare_date_to", params.compare_date_to)
+  if (params.seller) qs.set("seller", params.seller)
+  if (params.city) qs.set("city", params.city)
+  if (params.client_id != null) qs.set("client_id", String(params.client_id))
+  if (params.document_type) qs.set("document_type", params.document_type)
+  if (params.limit != null) qs.set("limit", String(params.limit))
+  return qs
+}
+
+export async function getCommercialFilterOptions(signal?: AbortSignal): Promise<CommercialFilterOptions> {
+  const res = await fetch(`${API_URL}/analytics/commercial/filter-options`, {
+    headers: getAuthHeaders(),
+    signal,
+  })
+  if (!res.ok) throw new Error("Error al cargar filtros comerciales")
+  return res.json()
+}
+
+export async function getCommercialDashboard(
+  params: CommercialAnalyticsParams,
+): Promise<CommercialDashboardResponse> {
+  const res = await fetch(`${API_URL}/analytics/commercial/dashboard?${commercialAnalyticsQs(params)}`, {
+    headers: getAuthHeaders(),
+    signal: params.signal,
+  })
+  if (!res.ok) throw new Error("Error al cargar dashboard comercial")
+  return res.json()
+}
+
+export async function getCommercialSummary(params: CommercialAnalyticsParams): Promise<{
+  title: string
+  bullets: string[]
+  period: { from: string; to: string }
+  compare_period: { from: string; to: string }
+}> {
+  const res = await fetch(`${API_URL}/analytics/commercial/summary?${commercialAnalyticsQs(params)}`, {
+    headers: getAuthHeaders(),
+    signal: params.signal,
+  })
+  if (!res.ok) throw new Error("Error al cargar resumen comercial")
+  return res.json()
+}
+
+export async function getCommercialSellerPerformance(params: CommercialAnalyticsParams): Promise<{
+  items: CommercialSellerRow[]
+  rankings: Record<string, string[]>
+  client_classification_total: Record<string, number>
+  period: { from: string; to: string }
+  compare_period: { from: string; to: string }
+}> {
+  const res = await fetch(
+    `${API_URL}/analytics/commercial/seller-performance?${commercialAnalyticsQs(params)}`,
+    { headers: getAuthHeaders(), signal: params.signal },
+  )
+  if (!res.ok) throw new Error("Error al cargar rendimiento vendedores")
+  return res.json()
+}
+
+export async function getCommercialUniqueClients(params: CommercialAnalyticsParams): Promise<{
+  items: {
+    client_id: number
+    client_name: string
+    municipality: string
+    seller_name: string
+    venta_actual: number
+    status: string
+  }[]
+  summary: Record<string, number>
+}> {
+  const res = await fetch(
+    `${API_URL}/analytics/commercial/unique-clients?${commercialAnalyticsQs(params)}`,
+    { headers: getAuthHeaders(), signal: params.signal },
+  )
+  if (!res.ok) throw new Error("Error al cargar clientes únicos")
+  return res.json()
+}
+
+export async function getCommercialLostClients(params: CommercialAnalyticsParams): Promise<{
+  items: {
+    client_id: number
+    client_name: string
+    seller_name: string
+    municipality: string
+    ultima_compra: string | null
+    dias_sin_comprar: number
+    promedio_compra_mensual: number
+    ticket_promedio: number
+    productos_habituales: string[]
+    prioridad: string
+    accion_sugerida: string
+  }[]
+}> {
+  const res = await fetch(
+    `${API_URL}/analytics/commercial/lost-clients?${commercialAnalyticsQs(params)}`,
+    { headers: getAuthHeaders(), signal: params.signal },
+  )
+  if (!res.ok) throw new Error("Error al cargar clientes perdidos")
+  return res.json()
+}
+
+export async function getCommercialCrossSelling(params: CommercialAnalyticsParams): Promise<{
+  items: {
+    client_id: number
+    client_name: string
+    seller_name: string
+    producto_comprado: string
+    producto_recomendado: string
+    motivo: string
+    prioridad: string
+  }[]
+  total: number
+}> {
+  const res = await fetch(
+    `${API_URL}/analytics/commercial/cross-selling?${commercialAnalyticsQs(params)}`,
+    { headers: getAuthHeaders(), signal: params.signal },
+  )
+  if (!res.ok) throw new Error("Error al cargar cross-selling")
+  return res.json()
+}
+
+export async function getCommercialProductPerformance(
+  params: CommercialAnalyticsParams,
+): Promise<{
+  seller: string | null
+  top_products: { producto: string; unidades: number; clientes: number; venta: number }[]
+  oportunidades: {
+    producto: string
+    clientes_empresa: number
+    clientes_vendedor: number
+    brecha: number
+  }[]
+  caida_fuerte: { venta_actual: number; venta_anterior: number; variacion_pct: number }[]
+}> {
+  const res = await fetch(
+    `${API_URL}/analytics/commercial/product-performance?${commercialAnalyticsQs(params)}`,
+    { headers: getAuthHeaders(), signal: params.signal },
+  )
+  if (!res.ok) throw new Error("Error al cargar productos")
+  return res.json()
+}
+
+export async function getCommercialClientProfile(
+  clientId: number,
+  params: Pick<CommercialAnalyticsParams, "date_from" | "date_to" | "document_type" | "signal">,
+): Promise<{
+  client: {
+    client_id: number
+    client_name: string
+    municipality: string
+    seller_name: string
+    ultima_compra: string | null
+    frecuencia_dias: number | null
+    ticket_promedio: number
+    venta_total: number
+    total_compras: number
+  }
+  venta_mensual: { mes: string; venta: number }[]
+  productos_habituales: { producto: string; unidades: number; venta: number }[]
+  categorias: { categoria: string; venta: number }[]
+  oportunidades: { producto_recomendado: string; motivo: string }[]
+}> {
+  const qs = commercialAnalyticsQs({
+    date_from: params.date_from,
+    date_to: params.date_to,
+    document_type: params.document_type,
+  })
+  qs.set("client_id", String(clientId))
+  const res = await fetch(`${API_URL}/analytics/commercial/client-profile?${qs}`, {
+    headers: getAuthHeaders(),
+    signal: params.signal,
+  })
+  if (!res.ok) throw new Error("Error al cargar ficha cliente")
+  return res.json()
+}
