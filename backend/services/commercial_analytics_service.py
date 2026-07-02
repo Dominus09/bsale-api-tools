@@ -653,6 +653,12 @@ def get_commercial_map(filters: CommercialFilters, *, limit: int = 500) -> dict[
     return get_commercial_map_data(filters, limit=limit)
 
 
+def get_commercial_validation(filters: CommercialFilters) -> dict[str, Any]:
+    from backend.services.commercial_analytics_validation import build_commercial_validation
+
+    return build_commercial_validation(filters)
+
+
 def run_commercial_simulator(
     filters: CommercialFilters,
     *,

@@ -32,6 +32,7 @@ import {
 import {
   getCommercialBundle,
   getCommercialFilterOptions,
+  getCommercialValidation,
   getCommercialClientProfile,
   getCommercialSellerProfile,
   type CommercialAnalyticsParams,
@@ -45,10 +46,12 @@ import {
   type CommercialKpiCompare,
   type CommercialOpportunity,
   type CommercialSellerRow,
+  type CommercialValidationResponse,
 } from "@/lib/api"
 import { CommercialCrmHome, WATCHLIST_KEY, type Watchlist } from "@/components/comercial/commercial-crm-home"
 import { CommercialMapClient } from "@/components/comercial/commercial-map-client"
 import { CommercialSimulator } from "@/components/comercial/commercial-simulator"
+import { CommercialValidationPanel } from "@/components/comercial/commercial-validation-panel"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -99,6 +102,8 @@ function formatMinutesAgo(iso: string): string {
   if (mins === 1) return "hace 1 minuto"
   return `hace ${mins} minutos`
 }
+
+const ADMIN_VALIDATION_ROLES = new Set(["admin", "superadmin", "super_admin", "administrator"])
 
 function PrioridadBadge({ prioridad }: { prioridad: string }) {
   const map: Record<string, string> = {
@@ -347,6 +352,11 @@ export default function ComercialVendedoresPage() {
     Awaited<ReturnType<typeof getCommercialBundle>>["product_performance"] | null
   >(null)
 
+  const [isAdmin, setIsAdmin] = useState(false)
+  const [validation, setValidation] = useState<CommercialValidationResponse | null>(null)
+  const [validationLoading, setValidationLoading] = useState(false)
+  const [validationError, setValidationError] = useState<string | null>(null)
+
   const [profileClientId, setProfileClientId] = useState<number | null>(null)
   const [profile, setProfile] = useState<Awaited<ReturnType<typeof getCommercialClientProfile>> | null>(null)
   const [profileLoading, setProfileLoading] = useState(false)
@@ -447,6 +457,30 @@ export default function ComercialVendedoresPage() {
   useEffect(() => {
     void load()
   }, [load])
+
+  useEffect(() => {
+    const r = localStorage.getItem("role")?.trim().toLowerCase() ?? ""
+    setIsAdmin(ADMIN_VALIDATION_ROLES.has(r))
+  }, [])
+
+  const loadValidation = useCallback(async () => {
+    if (!isAdmin) return
+    setValidationLoading(true)
+    setValidationError(null)
+    try {
+      const v = await getCommercialValidation(params)
+      setValidation(v)
+    } catch (e: unknown) {
+      setValidationError(e instanceof Error ? e.message : "Error al cargar validación")
+      setValidation(null)
+    } finally {
+      setValidationLoading(false)
+    }
+  }, [isAdmin, params])
+
+  useEffect(() => {
+    if (tab === "validacion" && isAdmin) void loadValidation()
+  }, [tab, isAdmin, loadValidation])
 
   const openProfile = useCallback(
     async (clientId: number) => {
@@ -657,6 +691,7 @@ export default function ComercialVendedoresPage() {
             <TabsTrigger value="clientes">Clientes</TabsTrigger>
             <TabsTrigger value="perdidos">Perdidos</TabsTrigger>
             <TabsTrigger value="productos">Productos</TabsTrigger>
+            {isAdmin && <TabsTrigger value="validacion">Validación</TabsTrigger>}
           </TabsList>
 
           <TabsContent value="home" className="space-y-6">
@@ -954,6 +989,16 @@ export default function ComercialVendedoresPage() {
               </>
             )}
           </TabsContent>
+
+          {isAdmin && (
+            <TabsContent value="validacion" className="space-y-6">
+              <CommercialValidationPanel
+                data={validation}
+                loading={validationLoading}
+                error={validationError}
+              />
+            </TabsContent>
+          )}
 
           <TabsContent value="cross" className="hidden">
             <Card>

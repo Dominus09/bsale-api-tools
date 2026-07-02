@@ -5819,6 +5819,72 @@ export async function getCommercialBundle(
   return res.json()
 }
 
+export type CommercialValidationResponse = {
+  scope: {
+    company_id: number
+    company_name: string
+    office_id: number
+    office_name: string
+    active_sellers: { id: number; name: string }[]
+  }
+  period: { from: string; to: string }
+  temporal_coverage: {
+    first_document_date: string | null
+    last_document_date: string | null
+    days_covered: number
+  }
+  documents: {
+    total: number
+    facturas: number
+    boletas: number
+    notas_credito: number
+  }
+  clients: {
+    unique_clients: number
+    active_clients: number
+    inactive_clients: number
+  }
+  products: {
+    unique_products: number
+    total_lines: number
+  }
+  ventas_netas: {
+    facturas: number
+    boletas: number
+    notas_credito: number
+    ventas_netas: number
+    formula_check: number
+  }
+  seller_distribution: {
+    seller: string
+    seller_id: number
+    documents: number
+    clients: number
+    ventas_netas: number
+  }[]
+  validation: {
+    status: string
+    engine_version: string
+    sales_scope_version: string
+    generated_at: string
+    execution_ms: number
+  }
+}
+
+export async function getCommercialValidation(
+  params: CommercialAnalyticsParams,
+): Promise<CommercialValidationResponse> {
+  const res = await fetch(`${API_URL}/analytics/commercial/validation?${commercialAnalyticsQs(params)}`, {
+    headers: getAuthHeaders(),
+    signal: params.signal,
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar validación comercial")
+  }
+  return res.json()
+}
+
 export async function getCommercialDashboard(
   params: CommercialAnalyticsParams,
 ): Promise<CommercialDashboardResponse> {

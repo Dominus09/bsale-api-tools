@@ -28,6 +28,9 @@ ACTIVE_SELLER_NAMES: tuple[str, ...] = tuple(str(s["name"]) for s in ACTIVE_SELL
 SELLER_ID_BY_NAME: dict[str, int] = {str(s["name"]): int(s["id"]) for s in ACTIVE_SELLERS}
 SELLER_NAME_BY_ID: dict[int, str] = {int(s["id"]): str(s["name"]) for s in ACTIVE_SELLERS}
 
+ENGINE_VERSION = "commercial-engine-1.0.0"
+SALES_SCOPE_VERSION = "commercial-scope-1.0.0"
+
 
 def resolve_document_types(document_type: str | None) -> tuple[int, ...]:
     """Tipos incluidos en sales_base según filtro de documento."""
@@ -56,6 +59,18 @@ def analysis_scope_payload() -> dict[str, Any]:
         "document_types": list(ALLOWED_DOCUMENT_TYPES),
         "credit_notes_discount_sales": True,
         "active_sellers": list(ACTIVE_SELLER_NAMES),
+    }
+
+
+def validation_scope_payload() -> dict[str, Any]:
+    return {
+        "company_id": COMPANY_ID,
+        "company_name": COMPANY_NAME,
+        "office_id": OFFICE_ID,
+        "office_name": OFFICE_NAME,
+        "active_sellers": [
+            {"id": int(s["id"]), "name": str(s["name"])} for s in ACTIVE_SELLERS
+        ],
     }
 
 

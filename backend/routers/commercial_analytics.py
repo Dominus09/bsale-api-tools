@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from datetime import date
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
+from backend.diagnostics.security import require_diagnostics_admin
 from backend.services import commercial_analytics_service as svc
 
 router = APIRouter(prefix="/analytics/commercial", tags=["Analítica comercial"])
@@ -432,3 +433,27 @@ async def post_commercial_simulator(
         )
 
     return await run_in_threadpool(_run)
+
+
+@router.get("/validation")
+async def get_validation(
+    _admin: dict = Depends(require_diagnostics_admin),
+    company_id: int = Query(3, ge=1),
+    office_id: int = Query(1, ge=1),
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+    seller: str | None = Query(None),
+    city: str | None = Query(None),
+    document_type: str | None = Query(None),
+):
+    """Auditoría pre-deploy del motor comercial (solo administradores)."""
+    if company_id != 3 or office_id != 1:
+        raise HTTPException(status_code=400, detail="Solo soportado company_id=3 y office_id=1")
+    f = _filters(
+        date_from=date_from,
+        date_to=date_to,
+        seller=seller,
+        city=city,
+        document_type=document_type,
+    )
+    return await run_in_threadpool(svc.get_commercial_validation, f)
