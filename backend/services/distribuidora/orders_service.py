@@ -39,8 +39,7 @@ from backend.utils.planning_sql_fragments import (
     PLANNING_LATEST_OBS_LATERAL,
     PLANNING_LAST_BS_UPDATE_EXPR,
     PLANNING_OBSERVACIONES_EXPR,
-    PLANNING_WEIGHT_LATERAL,
-    PLANNING_WEIGHT_SELECT,
+    PLANNING_WEIGHT_PLACEHOLDER,
 )
 
 _DISPATCH_PREP_DOC_FILTER = """
@@ -71,19 +70,7 @@ _DISPATCH_PREP_NOT_INVOICED_FILTER = f"(%s = FALSE OR NOT {_OC_IS_INVOICED_SQL})
 _DAY_FILTER_ALLOW = frozenset({"lunes", "martes", "miercoles", "jueves", "viernes", "sabado"})
 
 # OC (tipo 33): facturada si hay ``document_related`` desde un detalle de la OC hacia boleta/factura (1 o 6).
-OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL = """
-NOT EXISTS (
-    SELECT 1
-    FROM distribuidora.document_related dr
-    INNER JOIN distribuidora.document_details dd ON dd.detail_id = dr.detail_id
-    INNER JOIN distribuidora.documents inv
-        ON inv.document_id = dr.related_document_id
-       AND inv.document_type_id IN (1, 6)
-       AND inv.company_id = d.company_id
-       AND inv.office_id = d.office_id
-    WHERE dd.document_id = d.document_id
-)
-""".strip()
+from backend.utils.distribuidora_oc_sql import OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL  # noqa: F401
 
 OC_PURCHASE_ESTADO_REAL_SQL = """
 CASE
@@ -289,30 +276,37 @@ def _assert_sql_template_rendered(sql: str, *, context: str = "planning_rows") -
 
 
 def _overlay_order_weights_to_rows(rows: list[dict[str, Any]]) -> None:
-    """Peso real recalculado (manual + ERP) — nunca snapshot sin recalcular."""
+    """Peso desde OrderWeightSummary — misma fuente que el popup."""
     if not rows:
         return
-    try:
-        from backend.services.order_weight_service import calculate_order_weights_batch
+    from backend.services.order_weight_service import (
+        apply_order_weight_summary_to_row,
+        get_order_weight_summaries_batch,
+        metrics_to_order_weight_summary,
+    )
 
-        ids = [int(r["document_id"]) for r in rows if r.get("document_id") is not None]
-        by_w = calculate_order_weights_batch(ids, persist_cache=True)
-        for row in rows:
-            doc_id = int(row["document_id"])
-            w = by_w.get(doc_id)
-            if not w:
-                continue
-            row["weight_kg"] = w["weight_kg"]
-            row["peso_total_kg"] = w["peso_total_kg"]
-            row["productos_sin_peso"] = w["productos_sin_peso"]
-            row["porcentaje_cobertura_peso"] = w["porcentaje_cobertura_peso"]
-            row["productos_manuales"] = w.get("productos_manuales")
-            row["productos_estimados"] = w.get("productos_estimados")
-            row["cantidad_unidades"] = w.get("cantidad_unidades")
-            row["cantidad_cajas"] = w.get("cantidad_cajas")
-            row["peso_fuente"] = "order_weight_calculated"
-    except Exception:
-        logger.exception("[ORDER_WEIGHT] overlay_planning_rows_failed")
+    ids = [int(r["document_id"]) for r in rows if r.get("document_id") is not None]
+    by_w = get_order_weight_summaries_batch(ids, persist_cache=True, log_planning=True)
+    for row in rows:
+        doc_id = int(row["document_id"])
+        w = by_w.get(doc_id)
+        if not w:
+            logger.warning(
+                "[PLANNING_WEIGHT] order_id=%s weight_source=overlay_missing total_weight=null",
+                doc_id,
+            )
+            continue
+        summary = metrics_to_order_weight_summary(w)
+        apply_order_weight_summary_to_row(
+            row,
+            summary,
+            weight_source="order_weight_summary",
+            extras={
+                "cantidad_unidades": w.get("cantidad_unidades"),
+                "cantidad_cajas": w.get("cantidad_cajas"),
+                "productos_totales": w.get("productos_totales"),
+            },
+        )
 
 
 def _apply_live_sync_flags(row: dict[str, Any]) -> None:
@@ -712,7 +706,7 @@ def _planning_rows_enrich_sql() -> str:
                 NULLIF(BTRIM(c.dia_atencion), '') AS dia_atencion,
                 {PLANNING_LAST_BS_UPDATE_EXPR} AS last_bs_update,
                 d.updated_at AS last_erp_update,
-                {PLANNING_WEIGHT_SELECT},
+                {PLANNING_WEIGHT_PLACEHOLDER},
                 {_PLANNING_ROWS_STATUS_SELECT}
             FROM distribuidora.documents d
             INNER JOIN page_ids pi ON pi.document_id = d.document_id
@@ -721,7 +715,6 @@ def _planning_rows_enrich_sql() -> str:
             LEFT JOIN bsale.clients c
                 ON c.company_id = d.company_id
                AND c.bsale_id = d.client_id
-            {PLANNING_WEIGHT_LATERAL}
             ORDER BY d.number DESC NULLS LAST, d.document_id DESC
             """
 
@@ -759,7 +752,6 @@ def _planning_rows_base_orders_sql() -> str:
             FROM distribuidora.documents d
             INNER JOIN page_ids pi ON pi.document_id = d.document_id
             {PLANNING_LATEST_OBS_LATERAL}
-            {PLANNING_WEIGHT_LATERAL}
             ORDER BY d.number DESC NULLS LAST, d.document_id DESC
             """
 

@@ -225,6 +225,9 @@ export function PreDespachoWeightSheet({
       setAllComplete(false)
       try {
         const data = await getOrderWeight(docId)
+        console.info(
+          `[POPUP_WEIGHT] order_id=${data.document_id} total_weight=${data.peso_total_kg} coverage=${data.porcentaje_cobertura} missing=${data.productos_sin_peso}`,
+        )
         setOrder(data)
         const pending = sinPesoLines(data.lines)
         if (sheetMode === "incomplete") {

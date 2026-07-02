@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Any
 
 from backend.db import get_connection
-from backend.services.distribuidora.orders_service import OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL
+from backend.utils.distribuidora_oc_sql import OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL
 from backend.utils.planning_sql_fragments import PLANNING_WEIGHT_LATERAL, PLANNING_WEIGHT_SELECT
 
 _MASTER_AUDIT_SQL = """

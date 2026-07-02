@@ -13,45 +13,18 @@ LEFT JOIN LATERAL (
 ) latest_obs ON TRUE
 """
 
-PLANNING_WEIGHT_LATERAL = """
-LEFT JOIN LATERAL (
-    SELECT
-        ROUND(
-            COALESCE(SUM(dd.quantity * COALESCE(pl.weight_unit_kg, 0)), 0)::numeric,
-            3
-        ) AS peso_total_kg,
-        COUNT(*) FILTER (WHERE COALESCE(dd.quantity, 0) > 0)::int AS productos_con_cantidad,
-        COUNT(*) FILTER (
-            WHERE COALESCE(dd.quantity, 0) > 0
-              AND (pl.weight_unit_kg IS NULL OR pl.weight_unit_kg <= 0)
-        )::int AS productos_sin_peso,
-        CASE
-            WHEN COUNT(*) FILTER (WHERE COALESCE(dd.quantity, 0) > 0) > 0
-            THEN ROUND(
-                100.0 * (
-                    COUNT(*) FILTER (
-                        WHERE COALESCE(dd.quantity, 0) > 0
-                          AND pl.weight_unit_kg IS NOT NULL
-                          AND pl.weight_unit_kg > 0
-                    )::numeric
-                    / COUNT(*) FILTER (WHERE COALESCE(dd.quantity, 0) > 0)::numeric
-                ),
-                1
-            )
-            ELSE 0::numeric
-        END AS porcentaje_cobertura_peso
-    FROM distribuidora.document_details dd
-    LEFT JOIN bsale.v_product_logistics pl ON pl.variant_id = dd.variant_id
-    WHERE dd.document_id = d.document_id
-) w ON TRUE
+PLANNING_WEIGHT_PLACEHOLDER = """
+NULL::numeric AS peso_total_kg,
+NULL::numeric AS weight_kg,
+NULL::int AS productos_sin_peso,
+NULL::numeric AS porcentaje_cobertura_peso
 """
 
-PLANNING_WEIGHT_SELECT = """
-COALESCE(w.peso_total_kg, 0) AS peso_total_kg,
-COALESCE(w.peso_total_kg, 0) AS weight_kg,
-COALESCE(w.productos_sin_peso, 0) AS productos_sin_peso,
-COALESCE(w.porcentaje_cobertura_peso, 0) AS porcentaje_cobertura_peso
-"""
+# Alias legacy (auditoría logística); planificación usa OrderWeightSummary.
+PLANNING_WEIGHT_SELECT = PLANNING_WEIGHT_PLACEHOLDER
+
+# Deprecated: planificación no usa join lateral de peso.
+PLANNING_WEIGHT_LATERAL = ""
 
 ORDER_WEIGHT_METRICS_SQL = """
 SELECT

@@ -10,20 +10,22 @@ from backend.services.distribuidora.orders_service import (
 )
 
 
-def test_planning_rows_base_orders_sql_renders_weight_lateral():
+def test_planning_rows_base_orders_sql_uses_weight_placeholder_not_lateral():
     sql = _planning_rows_base_orders_sql()
     _assert_sql_template_rendered(sql, context="base_orders")
     assert "{_PLANNING_ROWS_WEIGHT_LATERAL}" not in sql
-    assert "LEFT JOIN LATERAL" in sql
-    assert "COALESCE(pl.weight_unit_kg, 0)" in sql
+    assert "NULL::numeric AS peso_total_kg" in sql
+    assert "NULL::numeric AS weight_kg" in sql
     assert "productos_sin_peso" in sql
+    assert "COALESCE(pl.weight_unit_kg, 0)" not in sql
 
 
-def test_planning_rows_enrich_sql_renders_weight_lateral():
+def test_planning_rows_enrich_sql_uses_weight_placeholder_not_lateral():
     sql = _planning_rows_enrich_sql()
     _assert_sql_template_rendered(sql, context="enrich")
     assert "{_PLANNING_ROWS_WEIGHT_LATERAL}" not in sql
-    assert "LEFT JOIN LATERAL" in sql
+    assert "NULL::numeric AS peso_total_kg" in sql
+    assert "COALESCE(pl.weight_unit_kg, 0)" not in sql
 
 
 def test_planning_rows_ids_sql_renders_day_clause():

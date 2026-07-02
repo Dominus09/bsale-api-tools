@@ -245,20 +245,27 @@ def _overlay_official_order_weights(
     by_id: dict[int, dict[str, Any]],
     document_ids: list[int],
 ) -> None:
-    """Superpone peso real recalculado (módulo Peso de Órdenes)."""
+    """Superpone OrderWeightSummary (misma fuente que popup/planificación)."""
     try:
-        from backend.services.order_weight_service import calculate_order_weights_batch
+        from backend.services.order_weight_service import (
+            apply_order_weight_summary_to_row,
+            get_order_weight_summaries_batch,
+            metrics_to_order_weight_summary,
+        )
 
-        weights = calculate_order_weights_batch(document_ids, persist_cache=True)
+        weights = get_order_weight_summaries_batch(document_ids, persist_cache=True, log_planning=True)
         for doc_id, w in weights.items():
             entry = by_id.setdefault(doc_id, {"document_id": doc_id})
-            entry["peso_total_kg"] = w["peso_total_kg"]
-            entry["weight_kg"] = w["weight_kg"]
-            entry["productos_sin_peso"] = w["productos_sin_peso"]
-            entry["porcentaje_cobertura_peso"] = w["porcentaje_cobertura_peso"]
-            entry["cantidad_unidades"] = w.get("cantidad_unidades")
-            entry["cantidad_cajas"] = w.get("cantidad_cajas")
-            entry["peso_fuente"] = "order_weight_calculated"
+            summary = metrics_to_order_weight_summary(w)
+            apply_order_weight_summary_to_row(
+                entry,
+                summary,
+                weight_source="order_weight_summary",
+                extras={
+                    "cantidad_unidades": w.get("cantidad_unidades"),
+                    "cantidad_cajas": w.get("cantidad_cajas"),
+                },
+            )
     except Exception:
         import logging
 

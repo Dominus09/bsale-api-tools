@@ -336,6 +336,11 @@ export default function DistribuidoraOrdersPage() {
         signal: opts.signal,
       })
       const newItems = Array.isArray(plan.items) ? plan.items : []
+      for (const r of newItems) {
+        console.info(
+          `[PLANNING_WEIGHT] order_id=${r.document_id} weight_source=${r.peso_fuente ?? "order_weight_summary"} total_weight=${r.peso_total_kg ?? r.weight_kg} coverage=${r.porcentaje_cobertura_peso} missing=${r.productos_sin_peso}`,
+        )
+      }
       setPlanningRows((prev) => (append ? [...prev, ...newItems] : newItems))
       const docIds = newItems.map((r) => r.document_id)
       setTruckIdByDoc((prev) => {

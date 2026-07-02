@@ -8,10 +8,10 @@ import logging
 import time
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, TypedDict
 
 from backend.db import get_connection
-from backend.services.distribuidora.orders_service import OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL
+from backend.utils.distribuidora_oc_sql import OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL
 from backend.utils.order_weight_calc import (
     aggregate_order_summary,
     compute_line_from_row,
@@ -20,6 +20,141 @@ from backend.utils.order_weight_calc import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class OrderWeightSummary(TypedDict):
+    """Fuente única de verdad para métricas de peso de una OC."""
+
+    total_weight: float
+    coverage_percent: float
+    missing_products: int
+    manual_products: int
+    automatic_products: int
+    estimated_products: int
+
+
+def metrics_to_order_weight_summary(metrics: dict[str, Any]) -> OrderWeightSummary:
+    return {
+        "total_weight": float(metrics["total_weight"]),
+        "coverage_percent": float(metrics["coverage_percent"]),
+        "missing_products": int(metrics["missing_products"]),
+        "manual_products": int(metrics["manual_products"]),
+        "automatic_products": int(metrics["automatic_products"]),
+        "estimated_products": int(metrics["estimated_products"]),
+    }
+
+
+def _log_planning_weight(
+    *,
+    order_id: int,
+    weight_source: str,
+    summary: OrderWeightSummary,
+) -> None:
+    logger.info(
+        "[PLANNING_WEIGHT] order_id=%s weight_source=%s total_weight=%s coverage=%s missing=%s",
+        order_id,
+        weight_source,
+        summary["total_weight"],
+        summary["coverage_percent"],
+        summary["missing_products"],
+    )
+
+
+def _log_popup_weight(*, order_id: int, summary: OrderWeightSummary) -> None:
+    logger.info(
+        "[POPUP_WEIGHT] order_id=%s total_weight=%s coverage=%s missing=%s",
+        order_id,
+        summary["total_weight"],
+        summary["coverage_percent"],
+        summary["missing_products"],
+    )
+
+
+def apply_order_weight_summary_to_row(
+    row: dict[str, Any],
+    summary: OrderWeightSummary,
+    *,
+    weight_source: str = "order_weight_summary",
+    extras: dict[str, Any] | None = None,
+) -> None:
+    row["weight_kg"] = summary["total_weight"]
+    row["peso_total_kg"] = summary["total_weight"]
+    row["productos_sin_peso"] = summary["missing_products"]
+    row["porcentaje_cobertura_peso"] = summary["coverage_percent"]
+    row["porcentaje_cobertura"] = summary["coverage_percent"]
+    row["productos_manuales"] = summary["manual_products"]
+    row["productos_estimados"] = summary["estimated_products"]
+    row["peso_fuente"] = weight_source
+    if extras:
+        row.update(extras)
+
+
+def get_order_weight_summary(
+    document_id: int,
+    *,
+    company_id: int = 3,
+    office_id: int = 1,
+    user_email: str | None = None,
+    persist_cache: bool = False,
+) -> OrderWeightSummary | None:
+    """Métricas de peso — siempre desde calculate_order_weight (sin snapshot/SQL lateral)."""
+    result = calculate_order_weight(
+        document_id,
+        company_id=company_id,
+        office_id=office_id,
+        user_email=user_email,
+        persist_cache=persist_cache,
+    )
+    if not result:
+        return None
+    return metrics_to_order_weight_summary(_build_weight_metrics(result))
+
+
+def get_order_weight_summaries_batch(
+    document_ids: list[int],
+    *,
+    company_id: int = 3,
+    office_id: int = 1,
+    user_email: str | None = None,
+    persist_cache: bool = True,
+    log_planning: bool = True,
+) -> dict[int, dict[str, Any]]:
+    """
+    Batch para planificación: summary + campos auxiliares por OC.
+    Errores por orden no abortan el lote completo.
+    """
+    if not document_ids:
+        return {}
+    ids = list(dict.fromkeys(int(x) for x in document_ids))
+    out: dict[int, dict[str, Any]] = {}
+    for doc_id in ids:
+        try:
+            result = calculate_order_weight(
+                doc_id,
+                company_id=company_id,
+                office_id=office_id,
+                user_email=user_email,
+                persist_cache=persist_cache,
+            )
+            if not result:
+                logger.warning("[PLANNING_WEIGHT] order_id=%s weight_source=missing_header", doc_id)
+                continue
+            metrics = _build_weight_metrics(result)
+            summary = metrics_to_order_weight_summary(metrics)
+            if log_planning:
+                _log_planning_weight(
+                    order_id=doc_id,
+                    weight_source="order_weight_summary",
+                    summary=summary,
+                )
+            out[doc_id] = weight_dict_for_planning(
+                metrics,
+                result,
+                result.get("lines") or [],
+            )
+        except Exception:
+            logger.exception("[PLANNING_WEIGHT] order_id=%s weight_source=error", doc_id)
+    return out
 
 OC_PURCHASE_INVOICED_BY_RELATED_SQL = """
 EXISTS (
@@ -507,22 +642,14 @@ def calculate_order_weights_batch(
     persist_cache: bool = True,
 ) -> dict[int, dict[str, Any]]:
     """Recalcula peso real para varias OCs (planificación / live refresh)."""
-    if not document_ids:
-        return {}
-    ids = list(dict.fromkeys(int(x) for x in document_ids))
-    out: dict[int, dict[str, Any]] = {}
-    for doc_id in ids:
-        result = calculate_order_weight(
-            doc_id,
-            company_id=company_id,
-            office_id=office_id,
-            user_email=user_email,
-            persist_cache=persist_cache,
-        )
-        if result:
-            metrics = _build_weight_metrics(result)
-            out[doc_id] = weight_dict_for_planning(metrics, result, result.get("lines") or [])
-    return out
+    return get_order_weight_summaries_batch(
+        document_ids,
+        company_id=company_id,
+        office_id=office_id,
+        user_email=user_email,
+        persist_cache=persist_cache,
+        log_planning=True,
+    )
 
 
 def _persist_snapshot(
@@ -660,55 +787,41 @@ def get_order_weight(
     line_filter: str | None = None,
     use_cache: bool = True,
 ) -> dict[str, Any]:
+    """Detalle de peso para popup — misma fuente que planificación (calculate_order_weight)."""
     conn = get_connection()
     try:
         cur = conn.cursor()
         has_snapshots = _table_exists(cur, "order_weight_snapshots")
-        cached = None
-        if use_cache and has_snapshots:
-            cur.execute(_SNAPSHOT_BY_DOC_SQL, (document_id,))
-            snap_row = cur.fetchone()
-            if snap_row:
-                snap = _row_dict(cur, snap_row)
-                cur.execute(_SNAPSHOT_LINES_SQL, (snap["id"],))
-                lines = [_row_dict(cur, r) for r in cur.fetchall()]
-                cur.execute(_ORDER_HEADER_SQL, (document_id, company_id))
-                hdr = cur.fetchone()
-                header = _row_dict(cur, hdr) if hdr else {}
-                cached = {**header, **snap, "lines": lines}
-
-        if cached:
-            result = dict(cached)
-            all_lines = result.get("lines") or []
-            enrich_lines_peso_pct(
-                all_lines,
-                float(result.get("peso_total_kg") or 0),
-            )
-            if line_filter and line_filter != "all":
-                result["lines"] = [ln for ln in all_lines if ln.get("estado_linea") == line_filter]
-            else:
-                result["lines"] = all_lines
-        else:
-            cur.close()
-            conn.close()
-            return recalculate_order_weight(
-                document_id=document_id,
-                company_id=company_id,
-                office_id=office_id,
-                persist=has_snapshots,
-            )
-
-        lines = result.get("lines") or []
-        result["semaforo"] = coverage_semaphore(float(result.get("porcentaje_cobertura") or 0))
-        result["estado"] = _order_estado_label(
-            float(result.get("porcentaje_cobertura") or 0),
-            float(result.get("peso_total_kg") or 0),
-        )
-        result["ultimo_calculo"] = result.get("calculated_at")
         cur.close()
-        return result
     finally:
         conn.close()
+
+    result = calculate_order_weight(
+        document_id,
+        company_id=company_id,
+        office_id=office_id,
+        persist_cache=use_cache and has_snapshots,
+    )
+    if not result:
+        return {}
+
+    summary = metrics_to_order_weight_summary(_build_weight_metrics(result))
+    _log_popup_weight(order_id=int(document_id), summary=summary)
+
+    all_lines = result.get("lines") or []
+    if line_filter and line_filter != "all":
+        result = dict(result)
+        result["lines"] = [ln for ln in all_lines if ln.get("estado_linea") == line_filter]
+    else:
+        result["lines"] = all_lines
+
+    result["semaforo"] = coverage_semaphore(float(result.get("porcentaje_cobertura") or 0))
+    result["estado"] = _order_estado_label(
+        float(result.get("porcentaje_cobertura") or 0),
+        float(result.get("peso_total_kg") or 0),
+    )
+    result["ultimo_calculo"] = result.get("calculated_at") or result.get("ultimo_calculo")
+    return result
 
 
 def _order_estado_label(porcentaje: float, peso_total: float) -> str:
