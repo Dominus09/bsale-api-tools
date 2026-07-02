@@ -81,6 +81,10 @@ import {
 } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
+import {
+  canAccessCommercialValidation,
+  staffUserFromLocalStorage,
+} from "@/lib/permissions"
 
 function formatCLP(n: number): string {
   return n.toLocaleString("es-CL", {
@@ -102,8 +106,6 @@ function formatMinutesAgo(iso: string): string {
   if (mins === 1) return "hace 1 minuto"
   return `hace ${mins} minutos`
 }
-
-const ADMIN_VALIDATION_ROLES = new Set(["admin", "superadmin", "super_admin", "administrator"])
 
 function PrioridadBadge({ prioridad }: { prioridad: string }) {
   const map: Record<string, string> = {
@@ -352,7 +354,7 @@ export default function ComercialVendedoresPage() {
     Awaited<ReturnType<typeof getCommercialBundle>>["product_performance"] | null
   >(null)
 
-  const [isAdmin, setIsAdmin] = useState(false)
+  const [canAccessValidation, setCanAccessValidation] = useState(false)
   const [validation, setValidation] = useState<CommercialValidationResponse | null>(null)
   const [validationLoading, setValidationLoading] = useState(false)
   const [validationError, setValidationError] = useState<string | null>(null)
@@ -459,12 +461,11 @@ export default function ComercialVendedoresPage() {
   }, [load])
 
   useEffect(() => {
-    const r = localStorage.getItem("role")?.trim().toLowerCase() ?? ""
-    setIsAdmin(ADMIN_VALIDATION_ROLES.has(r))
+    setCanAccessValidation(canAccessCommercialValidation(staffUserFromLocalStorage()))
   }, [])
 
   const loadValidation = useCallback(async () => {
-    if (!isAdmin) return
+    if (!canAccessValidation) return
     setValidationLoading(true)
     setValidationError(null)
     try {
@@ -476,11 +477,11 @@ export default function ComercialVendedoresPage() {
     } finally {
       setValidationLoading(false)
     }
-  }, [isAdmin, params])
+  }, [canAccessValidation, params])
 
   useEffect(() => {
-    if (tab === "validacion" && isAdmin) void loadValidation()
-  }, [tab, isAdmin, loadValidation])
+    if (tab === "validacion" && canAccessValidation) void loadValidation()
+  }, [tab, canAccessValidation, loadValidation])
 
   const openProfile = useCallback(
     async (clientId: number) => {
@@ -696,7 +697,7 @@ export default function ComercialVendedoresPage() {
             <TabsTrigger value="clientes">Clientes</TabsTrigger>
             <TabsTrigger value="perdidos">Perdidos</TabsTrigger>
             <TabsTrigger value="productos">Productos</TabsTrigger>
-            {isAdmin && <TabsTrigger value="validacion">Validación</TabsTrigger>}
+            {canAccessValidation && <TabsTrigger value="validacion">Validación</TabsTrigger>}
           </TabsList>
 
           <TabsContent value="home" className="space-y-6">
@@ -995,7 +996,7 @@ export default function ComercialVendedoresPage() {
             )}
           </TabsContent>
 
-          {isAdmin && (
+          {canAccessValidation && (
             <TabsContent value="validacion" className="space-y-6">
               <CommercialValidationPanel
                 data={validation}

@@ -37,17 +37,11 @@ import {
 } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Loader2, RefreshCw, Download, FilterX } from "lucide-react"
-
-const ADMIN_ROLES = new Set(["admin", "superadmin", "super_admin", "administrator"])
+import { canAccessDiagnostics, staffUserFromLocalStorage } from "@/lib/permissions"
 
 function readStaffRole(): string | null {
   if (typeof window === "undefined") return null
   return localStorage.getItem("role")
-}
-
-function isStaffAdmin(role: string | null): boolean {
-  if (!role) return false
-  return ADMIN_ROLES.has(role.toLowerCase().trim())
 }
 
 const FE_VERSION = process.env.NEXT_PUBLIC_APP_VERSION ?? "0.1.0"
@@ -79,7 +73,7 @@ export default function DiagnosticoErpPage() {
     setHydrated(true)
   }, [])
 
-  const canAccess = isStaffAdmin(role)
+  const canAccess = canAccessDiagnostics({ ...staffUserFromLocalStorage(), role })
 
   const loadAll = useCallback(async () => {
     if (!canAccess) return
@@ -202,9 +196,9 @@ export default function DiagnosticoErpPage() {
         <Alert variant="destructive">
           <AlertTitle>Acceso restringido</AlertTitle>
           <AlertDescription>
-            Esta ruta está reservada para usuarios con rol de administración en el login staff
-            (por ejemplo <code className="text-xs">admin</code>). Tu sesión no tiene ese rol o no
-            hay token. No uses esta página en producción sin autenticación y roles definidos; ver{" "}
+            Esta ruta está reservada para usuarios con permisos de gerencia (por ejemplo{" "}
+            <code className="text-xs">gerencia</code> o <code className="text-xs">admin</code>).
+            Tu sesión no tiene ese rol o no hay token. Ver{" "}
             <code className="text-xs">docs/diagnostics/PANEL_DIAGNOSTICO_ERP.md</code>.
           </AlertDescription>
         </Alert>

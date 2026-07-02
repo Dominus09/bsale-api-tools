@@ -140,20 +140,7 @@ VALID_STATUSES = frozenset(
     }
 )
 
-MARGIN_VIEW_ROLES = frozenset(
-    {
-        "admin",
-        "superadmin",
-        "super_admin",
-        "administrator",
-        "finanzas",
-        "finance",
-        "gerencia",
-    }
-)
-
-
-def _pick(*values: Any) -> Any:
+from backend.auth.permissions import has_margin_view_access
     for v in values:
         if v is None:
             continue
@@ -964,8 +951,7 @@ def _build_plan_dashboard(
         and inv_summary["confirmed"] > 0
     )
     margin_block: dict[str, Any] | None = None
-    role = (user_role or "").strip().lower()
-    show_margin = role in MARGIN_VIEW_ROLES
+    show_margin = has_margin_view_access({"role": user_role})
     if can_calc_margin:
         if stage_run:
             stage_run.log_stage("margin", "load_margin")

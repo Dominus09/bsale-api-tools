@@ -40,6 +40,7 @@ import {
   UsersRound,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { canAccessDiagnostics, staffUserFromLocalStorage } from "@/lib/permissions"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
 type NavItem = {
@@ -142,12 +143,10 @@ const navSections: { title: string; items: NavItem[] }[] = [
   },
 ]
 
-const ADMIN_DIAGNOSTIC_ROLES = new Set(["admin", "superadmin", "super_admin", "administrator"])
-
 function buildNavSectionsForRole(role: string | null) {
-  const r = role?.trim().toLowerCase() ?? ""
-  const isAdmin = ADMIN_DIAGNOSTIC_ROLES.has(r)
-  if (!isAdmin) return navSections
+  const user = staffUserFromLocalStorage()
+  if (role) user.role = role
+  if (!canAccessDiagnostics(user)) return navSections
   return navSections.map((section) => {
     if (section.title !== "Administración") return section
     return {

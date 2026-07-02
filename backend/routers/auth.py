@@ -5,7 +5,7 @@ import logging
 import os
 
 import jwt
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from passlib.context import CryptContext
 from pydantic import BaseModel
@@ -13,8 +13,11 @@ from pydantic import BaseModel
 from backend.client_rut import require_valid_rut, city_is_melinka
 from backend.db import get_connection
 from backend.utils.catalog_admin_rut import is_catalog_admin_rut
+from backend.utils.auth_staff import require_staff_user
+from backend.auth.permissions import build_auth_me_response
 
 router = APIRouter()
+auth_router = APIRouter(prefix="/auth")
 
 logger = logging.getLogger(__name__)
 
@@ -184,3 +187,9 @@ def login(data: LoginRequest):
         "email": data.email,
         "role": role
     }
+
+
+@auth_router.get("/me")
+def auth_me(user: dict = Depends(require_staff_user)):
+    """Perfil staff + permisos efectivos (depuración de accesos)."""
+    return build_auth_me_response(user)

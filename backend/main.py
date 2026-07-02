@@ -98,6 +98,7 @@ app.add_middleware(DiagnosticsRequestLogMiddleware)
 
 # --- Auth (login staff + login-client) ---
 app.include_router(auth.router)
+app.include_router(auth.auth_router)
 
 # --- Pedidos (app.orders) ---
 app.include_router(orders.router)

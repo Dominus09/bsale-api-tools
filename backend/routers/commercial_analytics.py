@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from backend.diagnostics.security import require_diagnostics_admin
+from backend.auth.permissions import require_management_access
 from backend.services import commercial_analytics_service as svc
 
 router = APIRouter(prefix="/analytics/commercial", tags=["Analítica comercial"])
@@ -437,7 +437,7 @@ async def post_commercial_simulator(
 
 @router.get("/validation")
 async def get_validation(
-    _admin: dict = Depends(require_diagnostics_admin),
+    _admin: dict = Depends(require_management_access),
     company_id: int = Query(3, ge=1),
     office_id: int = Query(1, ge=1),
     date_from: date = Query(...),

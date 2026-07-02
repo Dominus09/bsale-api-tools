@@ -91,6 +91,20 @@ export interface LoginResponse {
   role: string
 }
 
+export interface AuthMeResponse {
+  id: number | null
+  email: string
+  role: string | null
+  management_access: boolean
+  admin_access: boolean
+  permissions: {
+    commercial_validation: boolean
+    diagnostics: boolean
+    costs: boolean
+    margins: boolean
+  }
+}
+
 export interface Company {
   company_id: number
   name: string
@@ -441,6 +455,16 @@ export async function login(email: string, password: string): Promise<LoginRespo
     }
     throw error
   }
+}
+
+export async function getAuthMe(): Promise<AuthMeResponse> {
+  const res = await fetch(`${API_URL}/auth/me`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    throw new Error("No se pudo cargar el perfil de permisos")
+  }
+  return res.json()
 }
 
 export async function getCompanies(): Promise<Company[]> {
