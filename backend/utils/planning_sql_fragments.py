@@ -13,15 +13,17 @@ LEFT JOIN LATERAL (
 ) latest_obs ON TRUE
 """
 
-PLANNING_WEIGHT_PLACEHOLDER = """
+# Planificación: columnas NULL en SQL — el peso real se superpone vía OrderWeightSummary
+# (misma fuente que el popup: calculate_order_weight / get_order_weight_summary).
+PLANNING_WEIGHT_SELECT = """
 NULL::numeric AS peso_total_kg,
 NULL::numeric AS weight_kg,
 NULL::int AS productos_sin_peso,
 NULL::numeric AS porcentaje_cobertura_peso
-"""
+""".strip()
 
-# Alias legacy (auditoría logística); planificación usa OrderWeightSummary.
-PLANNING_WEIGHT_SELECT = PLANNING_WEIGHT_PLACEHOLDER
+# Alias legacy — usar PLANNING_WEIGHT_SELECT.
+PLANNING_WEIGHT_PLACEHOLDER = PLANNING_WEIGHT_SELECT
 
 # Deprecated: planificación no usa join lateral de peso.
 PLANNING_WEIGHT_LATERAL = ""

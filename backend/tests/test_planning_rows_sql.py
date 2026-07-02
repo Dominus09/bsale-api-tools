@@ -34,6 +34,19 @@ def test_planning_rows_ids_sql_renders_day_clause():
     assert "{day_clause}" not in sql
 
 
+def test_planning_rows_sql_templates_all_render_without_placeholders():
+    """Evita NameError / placeholders sin reemplazar en producción."""
+    for name, builder in (
+        ("base_orders", _planning_rows_base_orders_sql),
+        ("enrich", _planning_rows_enrich_sql),
+        ("ids", lambda: _planning_rows_ids_sql(day_tokens=())),
+    ):
+        sql = builder()
+        _assert_sql_template_rendered(sql, context=name)
+        assert "{PLANNING_WEIGHT_SELECT}" not in sql, name
+        assert "PLANNING_WEIGHT_SELECT" not in sql, name
+
+
 def test_assert_sql_template_rendered_raises_on_literal_placeholder():
     with pytest.raises(RuntimeError, match="_PLANNING_ROWS_WEIGHT_LATERAL"):
         _assert_sql_template_rendered(

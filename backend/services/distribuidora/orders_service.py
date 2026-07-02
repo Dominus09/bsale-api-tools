@@ -39,7 +39,7 @@ from backend.utils.planning_sql_fragments import (
     PLANNING_LATEST_OBS_LATERAL,
     PLANNING_LAST_BS_UPDATE_EXPR,
     PLANNING_OBSERVACIONES_EXPR,
-    PLANNING_WEIGHT_PLACEHOLDER,
+    PLANNING_WEIGHT_SELECT,
 )
 
 _DISPATCH_PREP_DOC_FILTER = """
@@ -266,6 +266,9 @@ _PLANNING_ROWS_UNRENDERED_MARKERS = (
     "{_PLANNING_ROWS_ENRICH_STATUS_JOINS}",
     "{_DISPATCH_PREP_NOT_INVOICED_FILTER}",
     "{day_clause}",
+    "{PLANNING_WEIGHT_SELECT}",
+    "{PLANNING_WEIGHT_PLACEHOLDER}",
+    "{PLANNING_WEIGHT_LATERAL}",
 )
 
 
@@ -706,7 +709,7 @@ def _planning_rows_enrich_sql() -> str:
                 NULLIF(BTRIM(c.dia_atencion), '') AS dia_atencion,
                 {PLANNING_LAST_BS_UPDATE_EXPR} AS last_bs_update,
                 d.updated_at AS last_erp_update,
-                {PLANNING_WEIGHT_PLACEHOLDER},
+                {PLANNING_WEIGHT_SELECT},
                 {_PLANNING_ROWS_STATUS_SELECT}
             FROM distribuidora.documents d
             INNER JOIN page_ids pi ON pi.document_id = d.document_id
