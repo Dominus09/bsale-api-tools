@@ -13,6 +13,7 @@ from typing import Any
 
 import pandas as pd
 
+from backend.auth.permissions import has_margin_view_access
 from backend.db import get_connection
 from backend.repositories.distribuidora import dispatch_plan_picking_repo as picking_repo
 from backend.repositories.distribuidora import dispatch_plan_repo as repo
@@ -140,7 +141,8 @@ VALID_STATUSES = frozenset(
     }
 )
 
-from backend.auth.permissions import has_margin_view_access
+
+def _pick(*values: Any) -> Any:
     for v in values:
         if v is None:
             continue
