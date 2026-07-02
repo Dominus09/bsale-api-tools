@@ -30,21 +30,24 @@ import {
 } from "lucide-react"
 
 import {
-  getCommercialCrossSelling,
-  getCommercialDashboard,
+  getCommercialBundle,
   getCommercialFilterOptions,
-  getCommercialLostClients,
-  getCommercialProductPerformance,
-  getCommercialSellerPerformance,
-  getCommercialSummary,
-  getCommercialUniqueClients,
   getCommercialClientProfile,
+  getCommercialSellerProfile,
   type CommercialAnalyticsParams,
+  type CommercialAttackItem,
+  type CommercialBundleMeta,
+  type CommercialCrmLayer,
   type CommercialDashboardResponse,
   type CommercialFilterOptions,
+  type CommercialInsight,
   type CommercialKpiCompare,
+  type CommercialOpportunity,
   type CommercialSellerRow,
 } from "@/lib/api"
+import { CommercialCrmHome, WATCHLIST_KEY, type Watchlist } from "@/components/comercial/commercial-crm-home"
+import { CommercialMapClient } from "@/components/comercial/commercial-map-client"
+import { CommercialSimulator } from "@/components/comercial/commercial-simulator"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -86,6 +89,94 @@ function formatCLP(n: number): string {
 function formatPct(n: number): string {
   const sign = n > 0 ? "+" : ""
   return `${sign}${n.toFixed(1)}%`
+}
+
+function formatMinutesAgo(iso: string): string {
+  const then = new Date(iso).getTime()
+  const mins = Math.max(0, Math.round((Date.now() - then) / 60000))
+  if (mins < 1) return "hace un momento"
+  if (mins === 1) return "hace 1 minuto"
+  return `hace ${mins} minutos`
+}
+
+function PrioridadBadge({ prioridad }: { prioridad: string }) {
+  const map: Record<string, string> = {
+    alta: "destructive",
+    media: "default",
+    baja: "secondary",
+  }
+  return (
+    <Badge variant={(map[prioridad] as "destructive" | "default" | "secondary") ?? "outline"}>
+      {prioridad}
+    </Badge>
+  )
+}
+
+function InsightTypeBadge({ tipo }: { tipo: string }) {
+  const labels: Record<string, string> = {
+    vendedor: "Vendedor",
+    riesgo: "Riesgo",
+    oportunidad: "Oportunidad",
+    recuperacion: "Recuperación",
+    producto: "Producto",
+  }
+  return <Badge variant="outline">{labels[tipo] ?? tipo}</Badge>
+}
+
+function AttackList({
+  title,
+  items,
+  onClientClick,
+}: {
+  title: string
+  items: CommercialAttackItem[]
+  onClientClick?: (id: number) => void
+}) {
+  if (!items.length) return null
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-medium">{title}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {items.slice(0, 5).map((item, i) => (
+          <div
+            key={i}
+            className={cn(
+              "rounded-lg border p-3 text-sm",
+              item.client_id && onClientClick && "cursor-pointer hover:bg-muted/50",
+            )}
+            onClick={() => item.client_id && onClientClick?.(item.client_id)}
+          >
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <span className="font-medium">
+                {item.client_name ?? item.seller_name ?? item.producto ?? "Acción"}
+              </span>
+              <PrioridadBadge prioridad={item.prioridad} />
+            </div>
+            <p className="text-muted-foreground">{item.motivo}</p>
+            <p className="mt-1 font-medium text-primary">{item.accion}</p>
+            {item.monto_estimado != null && item.monto_estimado > 0 && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Monto estimado: {formatCLP(item.monto_estimado)}
+              </p>
+            )}
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  )
+}
+
+function SellerScoreBadge({ score, label }: { score?: number; label?: string }) {
+  if (score == null) return null
+  const color =
+    score >= 80 ? "text-emerald-600 bg-emerald-50" : score >= 60 ? "text-amber-600 bg-amber-50" : "text-red-600 bg-red-50"
+  return (
+    <span className={cn("rounded-full px-2 py-0.5 text-xs font-semibold", color)}>
+      Score {score} — {label}
+    </span>
+  )
 }
 
 function isoDate(d: Date): string {
@@ -225,28 +316,43 @@ export default function ComercialVendedoresPage() {
   const [city, setCity] = useState<string>("")
   const [documentType, setDocumentType] = useState<string>("all")
   const [filterOptions, setFilterOptions] = useState<CommercialFilterOptions | null>(null)
-  const [tab, setTab] = useState("dashboard")
+  const [tab, setTab] = useState("home")
 
+  const [crm, setCrm] = useState<CommercialCrmLayer | null>(null)
   const [dashboard, setDashboard] = useState<CommercialDashboardResponse | null>(null)
-  const [summary, setSummary] = useState<{ title: string; bullets: string[] } | null>(null)
+  const [meta, setMeta] = useState<CommercialBundleMeta | null>(null)
+  const [summary, setSummary] = useState<{
+    title: string
+    bullets: string[]
+    insights: CommercialInsight[]
+  } | null>(null)
+  const [attackPlan, setAttackPlan] = useState<
+    Awaited<ReturnType<typeof getCommercialBundle>>["attack_plan"] | null
+  >(null)
+  const [opportunities, setOpportunities] = useState<CommercialOpportunity[]>([])
   const [sellers, setSellers] = useState<CommercialSellerRow[]>([])
   const [rankings, setRankings] = useState<Record<string, string[]>>({})
   const [uniqueClients, setUniqueClients] = useState<
-    { client_id: number; client_name: string; seller_name: string; status: string; venta_actual: number }[]
+    Awaited<ReturnType<typeof getCommercialBundle>>["unique_clients"]["items"]
   >([])
   const [lostClients, setLostClients] = useState<
-    Awaited<ReturnType<typeof getCommercialLostClients>>["items"]
+    Awaited<ReturnType<typeof getCommercialBundle>>["lost_clients"]["items"]
   >([])
   const [crossSelling, setCrossSelling] = useState<
-    Awaited<ReturnType<typeof getCommercialCrossSelling>>["items"]
+    Awaited<ReturnType<typeof getCommercialBundle>>["cross_selling"]["items"]
   >([])
   const [products, setProducts] = useState<
-    Awaited<ReturnType<typeof getCommercialProductPerformance>> | null
+    Awaited<ReturnType<typeof getCommercialBundle>>["product_performance"] | null
   >(null)
 
   const [profileClientId, setProfileClientId] = useState<number | null>(null)
   const [profile, setProfile] = useState<Awaited<ReturnType<typeof getCommercialClientProfile>> | null>(null)
   const [profileLoading, setProfileLoading] = useState(false)
+
+  const [profileSellerName, setProfileSellerName] = useState<string | null>(null)
+  const [sellerProfile, setSellerProfile] = useState<Awaited<ReturnType<typeof getCommercialSellerProfile>> | null>(null)
+  const [sellerProfileLoading, setSellerProfileLoading] = useState(false)
+  const [watchlist, setWatchlist] = useState<Watchlist>({ clients: {}, sellers: {} })
 
   const params: CommercialAnalyticsParams = useMemo(
     () => ({
@@ -265,6 +371,32 @@ export default function ComercialVendedoresPage() {
       .catch(() => setFilterOptions(null))
   }, [])
 
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(WATCHLIST_KEY)
+      if (raw) setWatchlist(JSON.parse(raw) as Watchlist)
+    } catch {
+      /* ignore */
+    }
+  }, [])
+
+  const toggleWatchlistClient = useCallback(
+    (clientId: number, tag: Watchlist["clients"][number]) => {
+      setWatchlist((prev) => {
+        const next = { ...prev, clients: { ...prev.clients } }
+        if (next.clients[clientId] === tag) delete next.clients[clientId]
+        else next.clients[clientId] = tag
+        try {
+          localStorage.setItem(WATCHLIST_KEY, JSON.stringify(next))
+        } catch {
+          /* ignore */
+        }
+        return next
+      })
+    },
+    [],
+  )
+
   const applyPreset = useCallback((preset: "current" | "previous" | "custom") => {
     setPeriodPreset(preset)
     if (preset === "current") {
@@ -282,23 +414,26 @@ export default function ComercialVendedoresPage() {
     setLoading(true)
     setError(null)
     try {
-      const [dash, sum, sellerPerf, unique, lost, cross, prod] = await Promise.all([
-        getCommercialDashboard(params),
-        getCommercialSummary(params),
-        getCommercialSellerPerformance({ ...params, limit: 50 }),
-        getCommercialUniqueClients({ ...params, limit: 300 }),
-        getCommercialLostClients({ ...params, limit: 100 }),
-        getCommercialCrossSelling({ ...params, limit: 100 }),
-        getCommercialProductPerformance({ ...params, limit: 50 }),
-      ])
-      setDashboard(dash)
-      setSummary(sum)
-      setSellers(sellerPerf.items)
-      setRankings(sellerPerf.rankings)
-      setUniqueClients(unique.items)
-      setLostClients(lost.items)
-      setCrossSelling(cross.items)
-      setProducts(prod)
+      const bundle = await getCommercialBundle({
+        ...params,
+        seller_limit: 50,
+        unique_limit: 300,
+        lost_limit: 100,
+        cross_limit: 100,
+        product_limit: 50,
+      })
+      setDashboard(bundle.dashboard)
+      setCrm(bundle.crm ?? null)
+      setMeta(bundle.meta)
+      setSummary(bundle.summary)
+      setAttackPlan(bundle.attack_plan)
+      setOpportunities(bundle.opportunities)
+      setSellers(bundle.seller_performance.items)
+      setRankings(bundle.seller_performance.rankings)
+      setUniqueClients(bundle.unique_clients.items)
+      setLostClients(bundle.lost_clients.items)
+      setCrossSelling(bundle.cross_selling.items)
+      setProducts(bundle.product_performance)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Error al cargar analítica comercial")
     } finally {
@@ -331,6 +466,51 @@ export default function ComercialVendedoresPage() {
     [dateFrom, dateTo, documentType],
   )
 
+  const openSellerProfile = useCallback(
+    async (sellerName: string) => {
+      setProfileSellerName(sellerName)
+      setSellerProfileLoading(true)
+      setSellerProfile(null)
+      try {
+        const p = await getCommercialSellerProfile(sellerName, {
+          date_from: dateFrom,
+          date_to: dateTo,
+          document_type: documentType === "all" ? undefined : documentType,
+        })
+        setSellerProfile(p)
+      } catch {
+        setSellerProfile(null)
+      } finally {
+        setSellerProfileLoading(false)
+      }
+    },
+    [dateFrom, dateTo, documentType],
+  )
+
+  const dailySpark = useMemo(
+    () => dashboard?.daily_sales.slice(-14).map((d) => ({ v: d.venta_neta })) ?? [],
+    [dashboard],
+  )
+
+  const handleRadarClick = useCallback(
+    (blockId: string) => {
+      const map: Record<string, string> = {
+        clientes_perdidos: "perdidos",
+        clientes_riesgo: "clientes",
+        cross_selling: "oportunidades",
+        productos: "productos",
+        productos_nuevos: "productos",
+        nuevos: "clientes",
+        vip: "clientes",
+        oportunidades: "oportunidades",
+        perdidos: "perdidos",
+        recuperados: "clientes",
+      }
+      setTab(map[blockId] ?? "oportunidades")
+    },
+    [],
+  )
+
   const classificationPie = useMemo(() => {
     if (!dashboard) return []
     const c = dashboard.client_classification
@@ -347,34 +527,25 @@ export default function ComercialVendedoresPage() {
     <div className="flex flex-col gap-6 p-6">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Comercial Vendedores</h1>
+          <h1 className="text-2xl font-bold tracking-tight">CRM Comercial</h1>
           <p className="text-sm text-muted-foreground">
-            Inteligencia comercial — Facturas y boletas (Company 3 / Office 1)
+            Director Comercial Digital — Facturas y boletas (Company 3 / Office 1)
           </p>
+          {meta && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Análisis generado {formatMinutesAgo(meta.generated_at)}
+              {" · "}
+              {meta.documents_analyzed.toLocaleString("es-CL")} documentos
+              {" · "}
+              {meta.execution_ms.toFixed(0)} ms
+            </p>
+          )}
         </div>
         <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
           {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
           Actualizar
         </Button>
       </div>
-
-      {summary && (
-        <Card className="border-primary/20 bg-primary/5">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">{summary.title}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ul className="space-y-1 text-sm">
-              {summary.bullets.map((b, i) => (
-                <li key={i} className="flex items-start gap-2">
-                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-primary" />
-                  {b}
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
-      )}
 
       <Card>
         <CardContent className="flex flex-wrap items-end gap-4 pt-6">
@@ -475,13 +646,42 @@ export default function ComercialVendedoresPage() {
       ) : (
         <Tabs value={tab} onValueChange={setTab}>
           <TabsList className="flex h-auto flex-wrap gap-1">
-            <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
+            <TabsTrigger value="home">Home CRM</TabsTrigger>
+            <TabsTrigger value="mapa">Mapa</TabsTrigger>
+            <TabsTrigger value="dashboard">Detalle KPIs</TabsTrigger>
             <TabsTrigger value="vendedores">Vendedores</TabsTrigger>
-            <TabsTrigger value="clientes">Clientes únicos</TabsTrigger>
+            <TabsTrigger value="oportunidades">Oportunidades</TabsTrigger>
+            <TabsTrigger value="clientes">Clientes</TabsTrigger>
             <TabsTrigger value="perdidos">Perdidos</TabsTrigger>
             <TabsTrigger value="productos">Productos</TabsTrigger>
-            <TabsTrigger value="cross">Cross-selling</TabsTrigger>
           </TabsList>
+
+          <TabsContent value="home" className="space-y-6">
+            {crm ? (
+              <>
+                <CommercialCrmHome
+                  crm={crm}
+                  dailySpark={dailySpark}
+                  selectedSeller={seller || undefined}
+                  onClientClick={(id) => void openProfile(id)}
+                  onSellerClick={(name) => void openSellerProfile(name)}
+                  onRadarClick={handleRadarClick}
+                />
+                <CommercialSimulator
+                  dateFrom={dateFrom}
+                  dateTo={dateTo}
+                  documentType={documentType === "all" ? undefined : documentType}
+                  seller={seller || undefined}
+                />
+              </>
+            ) : (
+              <p className="py-12 text-center text-muted-foreground">Cargando inteligencia comercial…</p>
+            )}
+          </TabsContent>
+
+          <TabsContent value="mapa" className="space-y-6">
+            <CommercialMapClient params={params} onClientClick={(id) => void openProfile(id)} />
+          </TabsContent>
 
           <TabsContent value="dashboard" className="space-y-6">
             {dashboard && (
@@ -496,9 +696,6 @@ export default function ComercialVendedoresPage() {
                   <KpiCard title="Documentos emitidos" icon={<Package className="h-4 w-4 text-muted-foreground" />} kpi={dashboard.kpis.documentos_emitidos} />
                   <KpiCard title="Unidades vendidas" icon={<Package className="h-4 w-4 text-muted-foreground" />} kpi={dashboard.kpis.unidades_vendidas} />
                   <KpiCard title="Productos distintos" icon={<Package className="h-4 w-4 text-muted-foreground" />} kpi={dashboard.kpis.productos_distintos} />
-                  {dashboard.kpis.margen_estimado && (
-                    <KpiCard title="Margen estimado" icon={<Target className="h-4 w-4 text-muted-foreground" />} kpi={dashboard.kpis.margen_estimado} format="currency" />
-                  )}
                 </div>
 
                 <div className="grid gap-6 lg:grid-cols-2">
@@ -542,76 +739,74 @@ export default function ComercialVendedoresPage() {
                     </CardContent>
                   </Card>
                 </div>
+                <div className="grid gap-6 lg:grid-cols-2">
+                  <Card>
+                    <CardHeader><CardTitle className="text-base">Top riesgos</CardTitle></CardHeader>
+                    <CardContent className="space-y-2">
+                      {opportunities.filter((o) => o.tipo.includes("riesgo") || o.tipo === "cliente_perdido").slice(0, 5).map((o, i) => (
+                        <div key={i} className="cursor-pointer rounded-md border p-2 text-sm hover:bg-muted/50" onClick={() => o.client_id && void openProfile(o.client_id)}>
+                          <div className="flex justify-between"><span className="font-medium">{o.titulo}</span><PrioridadBadge prioridad={o.prioridad} /></div>
+                          <p className="text-xs text-muted-foreground">{o.explicacion}</p>
+                        </div>
+                      ))}
+                    </CardContent>
+                  </Card>
+                  <Card>
+                    <CardHeader><CardTitle className="text-base">Top oportunidades</CardTitle></CardHeader>
+                    <CardContent className="space-y-2">
+                      {opportunities.filter((o) => o.tipo === "cross_selling" || o.tipo.includes("producto")).slice(0, 5).map((o, i) => (
+                        <div key={i} className="rounded-md border p-2 text-sm">
+                          <div className="flex justify-between"><span className="font-medium">{o.titulo}</span><PrioridadBadge prioridad={o.prioridad} /></div>
+                          <p className="text-xs text-muted-foreground">{o.accion_sugerida}</p>
+                        </div>
+                      ))}
+                    </CardContent>
+                  </Card>
+                </div>
               </>
             )}
           </TabsContent>
 
           <TabsContent value="vendedores" className="space-y-6">
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
-              {[
-                { key: "mayor_venta", label: "Mayor venta" },
-                { key: "mayor_crecimiento", label: "Mayor crecimiento" },
-                { key: "mayor_recuperacion", label: "Mayor recuperación" },
-                { key: "mayor_perdida", label: "Mayor pérdida" },
-                { key: "mejor_cobertura", label: "Mejor cobertura" },
-              ].map(({ key, label }) => (
-                <Card key={key}>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {sellers.map((s) => (
+                <Card
+                  key={s.seller_name}
+                  className="cursor-pointer transition-shadow hover:shadow-md"
+                  onClick={() => void openSellerProfile(s.seller_name)}
+                >
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-xs font-medium text-muted-foreground">{label}</CardTitle>
+                    <div className="flex items-start justify-between gap-2">
+                      <CardTitle className="text-base">{s.seller_name}</CardTitle>
+                      <SellerScoreBadge score={s.commercial_score} label={s.score_status_label} />
+                    </div>
                   </CardHeader>
-                  <CardContent>
-                    <ol className="space-y-1 text-sm">
-                      {(rankings[key] ?? []).slice(0, 3).map((name, i) => (
-                        <li key={name} className="flex items-center gap-2">
-                          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-muted text-xs font-bold">
-                            {i + 1}
-                          </span>
-                          <span className="truncate">{name}</span>
-                        </li>
-                      ))}
-                    </ol>
+                  <CardContent className="space-y-2 text-sm">
+                    <div className="flex justify-between"><span className="text-muted-foreground">Venta</span><span className="font-semibold">{formatCLP(s.venta_actual)}</span></div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Clientes únicos</span>
+                      <span>{s.clientes_unicos_actual}{s.clientes_unicos_variacion_pct != null && <span className={cn("ml-1", s.clientes_unicos_variacion_pct < 0 ? "text-red-600" : "text-emerald-600")}> ({formatPct(s.clientes_unicos_variacion_pct)})</span>}</span>
+                    </div>
+                    <div className="flex justify-between"><span className="text-muted-foreground">Perdidos / Rec.</span><span><span className="text-red-600">{s.clientes_perdidos}</span> / <span className="text-emerald-600">{s.clientes_recuperados}</span></span></div>
+                    {s.accion_sugerida && <div className="mt-2 rounded-md bg-muted/60 p-2 text-xs"><span className="font-medium">Acción: </span>{s.accion_sugerida}</div>}
                   </CardContent>
                 </Card>
               ))}
             </div>
+          </TabsContent>
 
+          <TabsContent value="oportunidades">
             <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Rendimiento por vendedor</CardTitle>
-              </CardHeader>
-              <CardContent className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Vendedor</TableHead>
-                      <TableHead className="text-right">Venta actual</TableHead>
-                      <TableHead className="text-right">Var %</TableHead>
-                      <TableHead className="text-right">Clientes</TableHead>
-                      <TableHead className="text-right">Nuevos</TableHead>
-                      <TableHead className="text-right">Perdidos</TableHead>
-                      <TableHead className="text-right">Recuperados</TableHead>
-                      <TableHead className="text-right">Ticket</TableHead>
-                      <TableHead className="text-right">Productos</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {sellers.map((s) => (
-                      <TableRow key={s.seller_name}>
-                        <TableCell className="font-medium">{s.seller_name}</TableCell>
-                        <TableCell className="text-right">{formatCLP(s.venta_actual)}</TableCell>
-                        <TableCell className={cn("text-right font-medium", s.variacion_pct >= 0 ? "text-emerald-600" : "text-red-600")}>
-                          {formatPct(s.variacion_pct)}
-                        </TableCell>
-                        <TableCell className="text-right">{s.clientes_unicos_actual}</TableCell>
-                        <TableCell className="text-right">{s.clientes_nuevos}</TableCell>
-                        <TableCell className="text-right text-red-600">{s.clientes_perdidos}</TableCell>
-                        <TableCell className="text-right text-emerald-600">{s.clientes_recuperados}</TableCell>
-                        <TableCell className="text-right">{formatCLP(s.ticket_promedio)}</TableCell>
-                        <TableCell className="text-right">{s.productos_distintos}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+              <CardHeader><CardTitle className="text-base">Oportunidades ({opportunities.length})</CardTitle></CardHeader>
+              <CardContent className="grid gap-3 md:grid-cols-2">
+                {opportunities.map((o, i) => (
+                  <div key={i} className={cn("rounded-lg border p-4 text-sm", o.client_id && "cursor-pointer hover:bg-muted/50")} onClick={() => o.client_id && void openProfile(o.client_id)}>
+                    <div className="mb-2 flex gap-2"><Badge variant="outline">{o.tipo}</Badge><PrioridadBadge prioridad={o.prioridad} /></div>
+                    <p className="font-semibold">{o.titulo}</p>
+                    <p className="text-sm text-muted-foreground">{o.explicacion}</p>
+                    <p className="mt-2 text-primary">{o.accion_sugerida}</p>
+                  </div>
+                ))}
               </CardContent>
             </Card>
           </TabsContent>
@@ -628,6 +823,7 @@ export default function ComercialVendedoresPage() {
                       <TableHead>Cliente</TableHead>
                       <TableHead>Vendedor</TableHead>
                       <TableHead>Estado</TableHead>
+                      <TableHead className="text-right">Score</TableHead>
                       <TableHead className="text-right">Venta período</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -642,7 +838,11 @@ export default function ComercialVendedoresPage() {
                         <TableCell>{c.seller_name}</TableCell>
                         <TableCell>
                           <StatusBadge status={c.status} />
+                          {"client_health_label" in c && c.client_health_label && (
+                            <span className="ml-1 text-xs text-muted-foreground">{String(c.client_health_label)}</span>
+                          )}
                         </TableCell>
+                        <TableCell className="text-right font-medium">{c.client_score ?? "—"}</TableCell>
                         <TableCell className="text-right">{formatCLP(c.venta_actual)}</TableCell>
                       </TableRow>
                     ))}
@@ -751,7 +951,7 @@ export default function ComercialVendedoresPage() {
             )}
           </TabsContent>
 
-          <TabsContent value="cross">
+          <TabsContent value="cross" className="hidden">
             <Card>
               <CardHeader>
                 <CardTitle className="text-base">Oportunidades cross-selling</CardTitle>
@@ -805,14 +1005,58 @@ export default function ComercialVendedoresPage() {
           ) : profile ? (
             <div className="mt-6 space-y-6">
               <div>
-                <h3 className="text-lg font-semibold">{profile.client.client_name}</h3>
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <h3 className="text-lg font-semibold">{profile.client.client_name}</h3>
+                  {"client_health_label" in profile.client && profile.client.client_health_label && (
+                    <Badge variant="outline">{String(profile.client.client_health_label)}</Badge>
+                  )}
+                  {"client_score" in profile.client && profile.client.client_score != null && (
+                    <Badge>Score {String(profile.client.client_score)}</Badge>
+                  )}
+                </div>
                 <p className="text-sm text-muted-foreground">{profile.client.municipality}</p>
-                <p className="text-sm">Vendedor: {profile.client.seller_name}</p>
+                <p className="text-sm">
+                  Vendedor:{" "}
+                  <button
+                    type="button"
+                    className="text-primary underline-offset-2 hover:underline"
+                    onClick={() => void openSellerProfile(profile.client.seller_name)}
+                  >
+                    {profile.client.seller_name}
+                  </button>
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {(["favorito", "critico", "vip", "observacion"] as const).map((tag) => (
+                    <Button
+                      key={tag}
+                      size="sm"
+                      variant={watchlist.clients[profile.client.client_id] === tag ? "default" : "outline"}
+                      onClick={() => toggleWatchlistClient(profile.client.client_id, tag)}
+                    >
+                      {tag}
+                    </Button>
+                  ))}
+                </div>
                 <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
                   <div>Última compra: {profile.client.ultima_compra ?? "—"}</div>
                   <div>Ticket prom.: {formatCLP(profile.client.ticket_promedio)}</div>
                   <div>Total compras: {profile.client.total_compras}</div>
                   <div>Venta total: {formatCLP(profile.client.venta_total)}</div>
+                  {"dias_sin_comprar" in profile.client && (
+                    <div>Días sin comprar: {profile.client.dias_sin_comprar ?? "—"}</div>
+                  )}
+                  {"frecuencia_dias" in profile.client && profile.client.frecuencia_dias && (
+                    <div>Frecuencia: ~{profile.client.frecuencia_dias} días</div>
+                  )}
+                  {profile.client.potencial_mensual != null && (
+                    <div>Potencial mensual: {formatCLP(profile.client.potencial_mensual)}</div>
+                  )}
+                  {profile.client.probabilidad_abandono != null && (
+                    <div>Prob. abandono: {profile.client.probabilidad_abandono}%</div>
+                  )}
+                  {profile.client.probabilidad_recuperacion != null && (
+                    <div>Prob. recuperación: {profile.client.probabilidad_recuperacion}%</div>
+                  )}
                 </div>
               </div>
 
@@ -841,6 +1085,17 @@ export default function ComercialVendedoresPage() {
                 </ul>
               </div>
 
+              {"productos_abandonados" in profile && (profile.productos_abandonados as { producto: string }[]).length > 0 && (
+                <div>
+                  <p className="mb-2 text-sm font-medium">Productos abandonados</p>
+                  <ul className="space-y-1 text-sm text-muted-foreground">
+                    {(profile.productos_abandonados as { producto: string; ultima_compra?: string }[]).map((p, i) => (
+                      <li key={i}>{p.producto}{p.ultima_compra ? ` — ${p.ultima_compra}` : ""}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {profile.oportunidades.length > 0 && (
                 <div>
                   <p className="mb-2 text-sm font-medium">Oportunidades sugeridas</p>
@@ -852,6 +1107,143 @@ export default function ComercialVendedoresPage() {
                       </li>
                     ))}
                   </ul>
+                </div>
+              )}
+            </div>
+          ) : (
+            <p className="py-8 text-center text-sm text-muted-foreground">No se pudo cargar la ficha</p>
+          )}
+        </SheetContent>
+      </Sheet>
+
+      <Sheet open={profileSellerName !== null} onOpenChange={(o) => !o && setProfileSellerName(null)}>
+        <SheetContent className="w-full overflow-y-auto sm:max-w-xl">
+          <SheetHeader>
+            <SheetTitle>Ficha vendedor</SheetTitle>
+          </SheetHeader>
+          {sellerProfileLoading ? (
+            <div className="flex justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin" />
+            </div>
+          ) : sellerProfile ? (
+            <div className="mt-6 space-y-6">
+              <div className="flex gap-4">
+                <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-full bg-primary/10 text-2xl font-bold text-primary">
+                  {sellerProfile.seller.seller_name.slice(0, 1)}
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold">{sellerProfile.seller.seller_name}</h3>
+                  <div className="mt-1 flex flex-wrap gap-2">
+                    <Badge>Score {sellerProfile.seller.commercial_score ?? "—"}</Badge>
+                    <Badge variant="outline">{sellerProfile.seller.score_status_label}</Badge>
+                    {sellerProfile.seller.ranking_posicion != null && (
+                      <Badge variant="secondary">
+                        #{sellerProfile.seller.ranking_posicion} de {sellerProfile.seller.ranking_total}
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="rounded-lg border p-3">
+                  <p className="text-muted-foreground">Venta período</p>
+                  <p className="text-lg font-bold">{formatCLP(sellerProfile.seller.venta_actual)}</p>
+                  <p className={cn("text-xs", sellerProfile.seller.variacion_pct >= 0 ? "text-emerald-600" : "text-red-600")}>
+                    {formatPct(sellerProfile.seller.variacion_pct)}
+                  </p>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <p className="text-muted-foreground">Clientes únicos</p>
+                  <p className="text-lg font-bold">{sellerProfile.seller.clientes_unicos}</p>
+                  <p className="text-xs text-muted-foreground">
+                    +{sellerProfile.seller.clientes_nuevos} nuevos · {sellerProfile.seller.clientes_perdidos} perdidos
+                  </p>
+                </div>
+              </div>
+
+              {sellerProfile.seller.score_explanation && (
+                <div className="text-sm">
+                  <p className="mb-2 font-medium">Por qué este score</p>
+                  <div className="flex flex-wrap gap-2">
+                    {sellerProfile.seller.score_explanation.positives.map((p) => (
+                      <span key={p} className="text-emerald-600">
+                        ✔ {p}
+                      </span>
+                    ))}
+                    {sellerProfile.seller.score_explanation.negatives.map((n) => (
+                      <span key={n} className="text-red-600">
+                        ✖ {n}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {sellerProfile.forecast_personal && (
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-sm">
+                  <p className="font-medium">Forecast personal</p>
+                  <p>
+                    Aporte necesario:{" "}
+                    <strong>{formatCLP(sellerProfile.forecast_personal.aporte_necesario)}</strong>
+                  </p>
+                </div>
+              )}
+
+              {sellerProfile.acciones_sugeridas.length > 0 && (
+                <div>
+                  <p className="mb-2 text-sm font-medium">Acciones sugeridas</p>
+                  <ul className="list-inside list-disc space-y-1 text-sm text-muted-foreground">
+                    {sellerProfile.acciones_sugeridas.map((a, i) => (
+                      <li key={i}>{a}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {sellerProfile.comunas.length > 0 && (
+                <div>
+                  <p className="mb-2 text-sm font-medium">Comunas</p>
+                  <ul className="space-y-1 text-sm">
+                    {sellerProfile.comunas.slice(0, 8).map((c) => (
+                      <li key={c.comuna} className="flex justify-between">
+                        <span>{c.comuna}</span>
+                        <span className="text-muted-foreground">
+                          {c.clientes} cli. · {formatCLP(c.venta)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {sellerProfile.evolucion_mensual.length > 0 && (
+                <div className="h-48">
+                  <p className="mb-2 text-sm font-medium">Evolución mensual</p>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={sellerProfile.evolucion_mensual}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="mes" tick={{ fontSize: 10 }} />
+                      <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => `${(v / 1e6).toFixed(0)}M`} />
+                      <Tooltip formatter={(v: number) => formatCLP(v)} />
+                      <Bar dataKey="venta" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+
+              {sellerProfile.ia_narrativas.length > 0 && (
+                <div>
+                  <p className="mb-2 text-sm font-medium">IA Comercial</p>
+                  {sellerProfile.ia_narrativas.map((n, i) => (
+                    <div key={i} className="mb-2 rounded-md border p-3 text-sm">
+                      {n.parrafos.map((p, j) => (
+                        <p key={j} className="text-muted-foreground">
+                          {p}
+                        </p>
+                      ))}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>

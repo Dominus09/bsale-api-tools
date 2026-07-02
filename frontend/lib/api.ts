@@ -5460,7 +5460,159 @@ export type CommercialDashboardResponse = {
     en_riesgo: number
   }
   daily_sales: { day: string; venta_neta: number; clientes: number }[]
-  margen_parcial: boolean
+}
+
+export type CommercialEstadoCard = {
+  key: string
+  label: string
+  value: number
+  previous: number | null
+  delta_pct: number
+  format: "currency" | "number" | "percent"
+  trend: "up" | "down" | "flat"
+}
+
+export type CommercialDailyMission = {
+  mission_type: string
+  titulo: string
+  subtitulo?: string | null
+  monto_estimado?: number | null
+  probabilidad?: number
+  probabilidad_label?: string
+  accion?: string | null
+  prioridad: string
+  client_id?: number | null
+  seller_name?: string | null
+  impacto_economico?: number
+  detalle?: string
+  producto_comprado?: string | null
+  producto_recomendado?: string | null
+}
+
+export type CommercialExecutiveCard = {
+  emoji: string
+  titulo: string
+  descripcion: string
+  monto_estimado: number | null
+  prioridad: string
+  action_label: string
+  seller: string | null
+  client_id: number | null
+  tipo: string
+}
+
+export type CommercialRadarBlock = {
+  id: string
+  titulo: string
+  cantidad: number
+  monto: number
+  prioridad: string
+  color: string
+}
+
+export type CommercialRadarStructured = {
+  clientes_perdidos: { cantidad: number; monto: number; prioridad: string }
+  clientes_riesgo: { cantidad: number; monto: number; prioridad: string }
+  cross_selling: { cantidad: number; monto: number; prioridad: string }
+  productos: { cantidad: number; monto: number; prioridad: string }
+  nuevos: { cantidad: number; monto: number; prioridad: string }
+  vip: { cantidad: number; monto: number; prioridad: string }
+  oportunidades: { cantidad: number; monto: number; prioridad: string }
+}
+
+export type CommercialAgendaTask = {
+  tipo: string
+  vendedor: string | null
+  cliente: string | null
+  client_id: number | null
+  comuna: string | null
+  motivo: string
+  prioridad: string
+  score: number
+  potencial_economico: number
+  dias_sin_compra: number | null
+  ultima_compra: string | null
+  accion_sugerida: string
+  categorias_sugeridas: string[]
+  productos_sugeridos: string[]
+  purchase_probability?: number
+  probabilidad_recuperacion?: number
+  segmento?: string
+  potential_monthly?: number
+}
+
+export type CommercialAlert = {
+  tipo: string
+  prioridad: string
+  mensaje: string
+  cliente: string | null
+  client_id: number | null
+  vendedor: string | null
+  accion: string
+}
+
+export type CommercialRouteTarget = {
+  seller_name: string
+  meta: number
+  venta_actual: number
+  proyeccion: number
+  clientes_pendientes: number
+  potencial: number
+  cumplimiento_pct: number
+  aporte_necesario: number
+}
+
+export type CommercialRankingRow = CommercialSellerRow & {
+  score_explanation: {
+    positives: string[]
+    negatives: string[]
+    stars: number
+    status_label: string
+  }
+  stars: number
+}
+
+export type CommercialCrmLayer = {
+  estado_hoy: {
+    cards: CommercialEstadoCard[]
+    venta_proyectada: number
+    meta_mes: number
+    monto_recuperacion_potencial: number
+    clientes_recuperados: number
+    clientes_perdidos: number
+  }
+  executive_cards: CommercialExecutiveCard[]
+  daily_missions: CommercialDailyMission[]
+  forecast: {
+    meta: number
+    proyeccion: number
+    cumplimiento_pct: number
+    faltan: number
+    seller_aportes: { seller_name: string; aporte_necesario: number; venta_actual: number; variacion_pct: number }[]
+  }
+  radar: CommercialRadarStructured
+  radar_blocks?: CommercialRadarBlock[]
+  ranking: CommercialRankingRow[]
+  ia_comercial: { seller_name: string | null; parrafos: string[]; monto_estimado: number | null }[]
+  timeline: { meses: { mes: string; venta: number; clientes: number; ticket_promedio: number; documentos: number }[] }
+  objetivos_diarios: {
+    titulo: string
+    visitar_clientes: number
+    recuperar_clientes: number
+    cross_selling: number
+    monto_potencial: number
+    misiones_prioritarias: CommercialDailyMission[]
+  }
+  gamificacion: { badges: { label: string; seller_name: string; metric: string }[] }
+  actividad_reciente: { hora: string; texto: string; tipo: string; client_id?: number | null }[]
+  opportunities: CommercialOpportunity[]
+  agenda?: {
+    tareas: CommercialAgendaTask[]
+    vendedores: { seller_name: string; tareas: CommercialAgendaTask[]; total_tareas: number; potencial_total: number }[]
+    total_tareas: number
+  }
+  alerts?: CommercialAlert[]
+  route_targets?: CommercialRouteTarget[]
 }
 
 export type CommercialSellerRow = {
@@ -5471,12 +5623,68 @@ export type CommercialSellerRow = {
   variacion_pct: number
   clientes_unicos_actual: number
   clientes_unicos_anterior: number
+  clientes_unicos_variacion_pct?: number
   clientes_nuevos: number
   clientes_perdidos: number
   clientes_recuperados: number
   ticket_promedio: number
   productos_distintos: number
   categorias_vendidas: number
+  commercial_score?: number
+  score_status?: string
+  score_status_label?: string
+  accion_sugerida?: string
+}
+
+export type CommercialInsight = {
+  tipo: string
+  prioridad: string
+  titulo: string
+  descripcion: string
+  monto_estimado: number | null
+  seller: string | null
+  client_id: number | null
+  action_label: string
+}
+
+export type CommercialAttackItem = {
+  prioridad: string
+  motivo: string
+  accion: string
+  monto_estimado: number | null
+  client_id?: number | null
+  client_name?: string | null
+  seller_name?: string | null
+  producto?: string | null
+}
+
+export type CommercialOpportunity = {
+  tipo: string
+  titulo: string
+  cliente: string | null
+  vendedor: string | null
+  producto: string | null
+  categoria: string | null
+  monto_estimado: number | null
+  prioridad: string
+  explicacion: string
+  accion_sugerida: string
+  client_id?: number | null
+}
+
+export type CommercialBundleMeta = {
+  generated_at: string
+  company_id: number
+  office_id: number
+  date_from: string
+  date_to: string
+  previous_date_from: string
+  previous_date_to: string
+  rows_analyzed: number
+  documents_analyzed: number
+  clients_analyzed: number
+  products_analyzed: number
+  execution_ms: number
 }
 
 export type CommercialFilterOptions = {
@@ -5523,6 +5731,81 @@ export async function getCommercialFilterOptions(signal?: AbortSignal): Promise<
     signal,
   })
   if (!res.ok) throw new Error("Error al cargar filtros comerciales")
+  return res.json()
+}
+
+export type CommercialBundleResponse = {
+  meta: CommercialBundleMeta
+  crm?: CommercialCrmLayer
+  alerts?: CommercialAlert[]
+  dashboard: CommercialDashboardResponse
+  summary: {
+    title: string
+    bullets: string[]
+    insights: CommercialInsight[]
+    period: { from: string; to: string }
+    compare_period: { from: string; to: string }
+  }
+  attack_plan: {
+    top_clients_to_recover: CommercialAttackItem[]
+    top_clients_at_risk: CommercialAttackItem[]
+    top_cross_selling: CommercialAttackItem[]
+    top_products_to_push: CommercialAttackItem[]
+    top_sellers_to_review: CommercialAttackItem[]
+  }
+  opportunities: CommercialOpportunity[]
+  seller_performance: {
+    items: CommercialSellerRow[]
+    rankings: Record<string, string[]>
+    client_classification_total: Record<string, number>
+    period: { from: string; to: string }
+    compare_period: { from: string; to: string }
+  }
+  unique_clients: {
+    items: {
+      client_id: number
+      client_name: string
+      seller_name: string
+      status: string
+      venta_actual: number
+      venta_anterior?: number
+      client_score?: number
+      client_health?: string
+      client_health_label?: string
+      dias_sin_comprar?: number | null
+      ticket_promedio?: number
+    }[]
+    summary: Record<string, number>
+  }
+  lost_clients: Awaited<ReturnType<typeof getCommercialLostClients>>
+  recovered_clients: { items: { client_id: number; client_name: string; status: string }[]; total: number }
+  cross_selling: Awaited<ReturnType<typeof getCommercialCrossSelling>>
+  product_performance: Awaited<ReturnType<typeof getCommercialProductPerformance>>
+}
+
+export async function getCommercialBundle(
+  params: CommercialAnalyticsParams & {
+    seller_limit?: number
+    unique_limit?: number
+    lost_limit?: number
+    cross_limit?: number
+    product_limit?: number
+  },
+): Promise<CommercialBundleResponse> {
+  const qs = commercialAnalyticsQs(params)
+  if (params.seller_limit != null) qs.set("seller_limit", String(params.seller_limit))
+  if (params.unique_limit != null) qs.set("unique_limit", String(params.unique_limit))
+  if (params.lost_limit != null) qs.set("lost_limit", String(params.lost_limit))
+  if (params.cross_limit != null) qs.set("cross_limit", String(params.cross_limit))
+  if (params.product_limit != null) qs.set("product_limit", String(params.product_limit))
+  const res = await fetch(`${API_URL}/analytics/commercial/bundle?${qs}`, {
+    headers: getAuthHeaders(),
+    signal: params.signal,
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar analítica comercial")
+  }
   return res.json()
 }
 
@@ -5663,11 +5946,23 @@ export async function getCommercialClientProfile(
     ticket_promedio: number
     venta_total: number
     total_compras: number
+    client_score?: number
+    client_health?: string
+    client_health_label?: string
+    status?: string
+    dias_sin_comprar?: number
+    venta_periodo_actual?: number
+    venta_periodo_anterior?: number
+    probabilidad_abandono?: number
+    probabilidad_recuperacion?: number
+    potencial_mensual?: number
   }
   venta_mensual: { mes: string; venta: number }[]
-  productos_habituales: { producto: string; unidades: number; venta: number }[]
+  productos_habituales: { producto: string; unidades: number; venta: number; ultima_compra?: string | null }[]
+  productos_abandonados?: { producto: string; ultima_compra?: string }[]
   categorias: { categoria: string; venta: number }[]
-  oportunidades: { producto_recomendado: string; motivo: string }[]
+  oportunidades: { producto_recomendado: string; motivo: string; prioridad?: string }[]
+  productos_sugeridos?: { producto: string; motivo: string; prioridad: string }[]
 }> {
   const qs = commercialAnalyticsQs({
     date_from: params.date_from,
@@ -5680,5 +5975,119 @@ export async function getCommercialClientProfile(
     signal: params.signal,
   })
   if (!res.ok) throw new Error("Error al cargar ficha cliente")
+  return res.json()
+}
+
+export async function getCommercialSellerProfile(
+  sellerName: string,
+  params: Pick<
+    CommercialAnalyticsParams,
+    "date_from" | "date_to" | "compare_date_from" | "compare_date_to" | "document_type" | "signal"
+  >,
+): Promise<{
+  seller: {
+    seller_name: string
+    seller_id: number | null
+    commercial_score?: number
+    score_status?: string
+    score_status_label?: string
+    score_explanation: { positives: string[]; negatives: string[]; stars: number; status_label: string }
+    venta_actual: number
+    venta_anterior: number
+    variacion_pct: number
+    clientes_unicos: number
+    clientes_perdidos: number
+    clientes_recuperados: number
+    clientes_nuevos: number
+    ticket_promedio: number
+    ranking_posicion: number | null
+    ranking_total: number
+  }
+  forecast_personal: { seller_name: string; aporte_necesario: number } | null
+  forecast_equipo: { meta: number; proyeccion: number; cumplimiento_pct: number; faltan: number }
+  comunas: { comuna: string; clientes: number; venta: number }[]
+  productos_fuertes: { producto: string; venta: number; unidades?: number }[]
+  productos_debiles: { producto: string; brecha?: number; clientes_empresa?: number }[]
+  clientes_recuperados: { client_id: number; client_name: string; seller_name?: string; status?: string }[]
+  clientes_perdidos: { client_id: number; client_name: string; dias_sin_comprar?: number }[]
+  evolucion_mensual: { mes: string; venta: number; clientes: number; ticket_promedio: number }[]
+  acciones_sugeridas: string[]
+  ia_narrativas: { seller_name: string | null; parrafos: string[]; monto_estimado: number | null }[]
+}> {
+  const qs = commercialAnalyticsQs({
+    date_from: params.date_from,
+    date_to: params.date_to,
+    compare_date_from: params.compare_date_from,
+    compare_date_to: params.compare_date_to,
+    document_type: params.document_type,
+  })
+  qs.set("seller_name", sellerName)
+  const res = await fetch(`${API_URL}/analytics/commercial/seller-profile?${qs}`, {
+    headers: getAuthHeaders(),
+    signal: params.signal,
+  })
+  if (!res.ok) throw new Error("Error al cargar ficha vendedor")
+  return res.json()
+}
+
+export type CommercialMapPoint = {
+  client_id: number
+  lat: number
+  lng: number
+  vendedor: string | null
+  nombre: string | null
+  score: number
+  estado: string
+  prioridad: string
+  potencial: number
+  ticket_promedio: number
+  frecuencia: number
+  ultima_compra: string | null
+  cliente_vip: boolean
+  purchase_probability: number
+  segmento: string | null
+  comuna: string | null
+}
+
+export async function getCommercialMap(
+  params: CommercialAnalyticsParams & { limit?: number },
+): Promise<{ items: CommercialMapPoint[]; total: number; with_georef: number; period: { from: string; to: string } }> {
+  const qs = commercialAnalyticsQs(params)
+  if (params.limit != null) qs.set("limit", String(params.limit))
+  const res = await fetch(`${API_URL}/analytics/commercial/commercial-map?${qs}`, {
+    headers: getAuthHeaders(),
+    signal: params.signal,
+  })
+  if (!res.ok) throw new Error("Error al cargar mapa comercial")
+  return res.json()
+}
+
+export async function postCommercialSimulator(body: {
+  scenario: string
+  seller?: string
+  pct_recuperacion?: number
+  ticket_uplift_pct?: number
+  cross_clients?: number
+  date_from: string
+  date_to: string
+  compare_date_from?: string
+  compare_date_to?: string
+  document_type?: string
+}): Promise<{
+  scenario: string
+  venta_periodo_actual: number
+  proyeccion_base: number
+  incremento_esperado: number
+  venta_proyectada: number
+  impacto_por_vendedor: { seller_name: string; incremento: number }[]
+  nota: string
+}> {
+  const qs = new URLSearchParams({ company_id: "3", office_id: "1" })
+  const res = await fetch(`${API_URL}/analytics/commercial/simulator?${qs}`, {
+    method: "POST",
+    headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error("Error en simulador comercial")
   return res.json()
 }
