@@ -6,17 +6,17 @@ import logging
 import time
 from datetime import datetime, timezone
 
-import jwt
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from backend.auth.jwt import staff_email_from_authorization
 from backend.diagnostics import store
 from backend.diagnostics.sanitize import sanitize_free_text, sanitize_query_string
 from backend.diagnostics.security import diagnostics_feature_enabled
-from backend.routers.auth import SECRET
 
 logger = logging.getLogger("diagnostics.http")
+
 
 def _client_ip(request: Request) -> str | None:
     forwarded = request.headers.get("x-forwarded-for")
@@ -28,20 +28,7 @@ def _client_ip(request: Request) -> str | None:
 
 
 def _user_from_auth_header(request: Request) -> str | None:
-    auth = request.headers.get("authorization")
-    if not auth or not auth.lower().startswith("bearer "):
-        return None
-    token = auth[7:].strip()
-    if not token:
-        return None
-    try:
-        payload = jwt.decode(token, SECRET, algorithms=["HS256"])
-    except jwt.PyJWTError:
-        return None
-    email = payload.get("email")
-    if isinstance(email, str) and email.strip():
-        return email.strip()
-    return None
+    return staff_email_from_authorization(request.headers.get("authorization"))
 
 
 def _safe_path(request: Request) -> str:

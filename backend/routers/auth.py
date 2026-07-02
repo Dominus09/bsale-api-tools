@@ -4,17 +4,17 @@ import hmac
 import logging
 import os
 
-import jwt
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from passlib.context import CryptContext
 from pydantic import BaseModel
 
+from backend.auth.jwt import create_staff_token
+from backend.auth.permissions import build_auth_me_response
 from backend.client_rut import require_valid_rut, city_is_melinka
 from backend.db import get_connection
-from backend.utils.catalog_admin_rut import is_catalog_admin_rut
 from backend.utils.auth_staff import require_staff_user
-from backend.auth.permissions import build_auth_me_response
+from backend.utils.catalog_admin_rut import is_catalog_admin_rut
 
 router = APIRouter()
 auth_router = APIRouter(prefix="/auth")
@@ -22,45 +22,6 @@ auth_router = APIRouter(prefix="/auth")
 logger = logging.getLogger(__name__)
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-_DEV_JWT_FALLBACK = "quillotana_secret_key"
-_MIN_JWT_SECRET_BYTES = 32
-
-
-def _runtime_environment() -> str:
-    return (os.getenv("ENVIRONMENT") or os.getenv("ENV") or "development").strip().lower()
-
-
-def _load_jwt_secret() -> str:
-    """Carga JWT_SECRET_KEY / SECRET_KEY; en producción sin clave → error al arrancar."""
-    secret = (os.getenv("JWT_SECRET_KEY") or os.getenv("SECRET_KEY") or "").strip()
-    env = _runtime_environment()
-    is_prod = env in ("production", "staging", "prod")
-
-    if not secret:
-        if is_prod:
-            raise RuntimeError(
-                "JWT_SECRET_KEY (o SECRET_KEY) es obligatoria con ENVIRONMENT=production. "
-                "Genere una clave aleatoria de al menos 32 caracteres, p. ej.: "
-                "openssl rand -hex 32"
-            )
-        secret = _DEV_JWT_FALLBACK
-        logger.warning(
-            "JWT_SECRET_KEY / SECRET_KEY no definidas: se usa clave de desarrollo para firmar JWT. "
-            "Configure JWT_SECRET_KEY en producción."
-        )
-    elif len(secret.encode("utf-8")) < _MIN_JWT_SECRET_BYTES:
-        logger.warning(
-            "JWT_SECRET_KEY tiene %s bytes (< %s recomendados para HS256). "
-            "Use una clave más larga para evitar InsecureKeyLengthWarning de PyJWT.",
-            len(secret.encode("utf-8")),
-            _MIN_JWT_SECRET_BYTES,
-        )
-
-    return secret
-
-
-SECRET = _load_jwt_secret()
 
 _LOGIN_DEBUG = os.getenv("AUTH_LOGIN_DEBUG", "").strip().lower() in ("1", "true", "yes")
 
@@ -176,11 +137,7 @@ def login(data: LoginRequest):
     if not ok:
         raise HTTPException(status_code=401, detail="Password incorrecta")
 
-    token = jwt.encode(
-        {"email": data.email, "role": role},
-        SECRET,
-        algorithm="HS256"
-    )
+    token = create_staff_token(email=data.email, role=role)
 
     return {
         "token": token,
