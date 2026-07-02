@@ -575,6 +575,11 @@ export default function ComercialVendedoresPage() {
               {meta.documents_analyzed.toLocaleString("es-CL")} documentos
               {" · "}
               {meta.execution_ms.toFixed(0)} ms
+              {dashboard?.compare_period && (
+                <>
+                  {" · "}vs {dashboard.compare_period.from} → {dashboard.compare_period.to}
+                </>
+              )}
             </p>
           )}
         </div>

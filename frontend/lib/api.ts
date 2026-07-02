@@ -5819,6 +5819,13 @@ export async function getCommercialBundle(
   return res.json()
 }
 
+export type CommercialValidationDelta = {
+  current: number
+  previous: number
+  delta_abs: number
+  delta_pct: number
+}
+
 export type CommercialValidationResponse = {
   scope: {
     company_id: number
@@ -5828,6 +5835,24 @@ export type CommercialValidationResponse = {
     active_sellers: { id: number; name: string }[]
   }
   period: { from: string; to: string }
+  compare_period: {
+    current: { from: string; to: string; days: number }
+    previous: { from: string; to: string; days: number }
+    method: string
+    same_length: boolean
+  }
+  comparison: {
+    period_meta: CommercialValidationResponse["compare_period"]
+    current: Record<string, string | number | null>
+    previous: Record<string, string | number | null>
+    deltas: {
+      venta_neta: CommercialValidationDelta
+      clientes_unicos: CommercialValidationDelta
+      documentos_total: CommercialValidationDelta
+      unidades_netas: CommercialValidationDelta
+      ticket_promedio: CommercialValidationDelta
+    }
+  }
   temporal_coverage: {
     first_document_date: string | null
     last_document_date: string | null
@@ -5847,12 +5872,14 @@ export type CommercialValidationResponse = {
   products: {
     unique_products: number
     total_lines: number
+    unidades_netas: number
   }
   ventas_netas: {
     facturas: number
     boletas: number
     notas_credito: number
     ventas_netas: number
+    ticket_promedio: number
     formula_check: number
   }
   seller_distribution: {
@@ -5860,7 +5887,20 @@ export type CommercialValidationResponse = {
     seller_id: number
     documents: number
     clients: number
-    ventas_netas: number
+    notas_credito: number
+    ticket_promedio: number
+    ventas_netas: CommercialValidationDelta
+    out_of_scope?: boolean
+  }[]
+  audit_checks: {
+    severity: "ok" | "info" | "warning" | "error"
+    metric: string
+    message: string
+    delta_abs: number | null
+    delta_pct: number | null
+    possible_cause: string | null
+    seller: string | null
+    document_type: string | null
   }[]
   validation: {
     status: string

@@ -36,11 +36,14 @@ class CommercialFilters:
     document_type: str | None = None  # factura | boleta | all | None
 
     def compare_period(self) -> tuple[date, date]:
-        if self.compare_date_from and self.compare_date_to:
-            return self.compare_date_from, self.compare_date_to
-        days = (self.date_to - self.date_from).days + 1
-        prev_to = self.date_from - timedelta(days=1)
-        prev_from = prev_to - timedelta(days=days - 1)
+        from backend.utils.commercial_period import resolve_compare_period
+
+        prev_from, prev_to, _method = resolve_compare_period(
+            self.date_from,
+            self.date_to,
+            compare_date_from=self.compare_date_from,
+            compare_date_to=self.compare_date_to,
+        )
         return prev_from, prev_to
 
 
