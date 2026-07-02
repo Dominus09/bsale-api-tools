@@ -194,6 +194,22 @@ class CommercialReadSession:
 
     def query_all(self, label: str, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
         assert self._conn is not None
+        placeholder_count = sql.count("%s")
+        param_count = len(params)
+        logger.info(
+            "[COMMERCIAL_SQL_DEBUG] query=%s placeholders=%s params=%s",
+            label,
+            placeholder_count,
+            param_count,
+        )
+        logger.info("[COMMERCIAL_SQL_DEBUG] params_list=%s", list(params))
+        if placeholder_count != param_count:
+            logger.error(
+                "[COMMERCIAL_SQL_DEBUG] MISMATCH query=%s placeholders=%s params=%s",
+                label,
+                placeholder_count,
+                param_count,
+            )
         t0 = time.perf_counter()
         cur = self._conn.cursor()
         try:
@@ -225,18 +241,31 @@ def _client_classification_merged(session: CommercialReadSession, scope: SalesSc
 
     base_cte, base_params = scope.sales_base_cte()
     f = scope.filters
-    params: list[Any] = list(base_params)
-    params.extend(
-        [
-            f.date_from,
-            f.date_to,
-            scope.prev_from,
-            scope.prev_to,
-            f.date_from,
-            f.date_from,
-            f.date_from,
-            f.date_to,
-        ]
+
+    # Parámetros del CTE per_client (9 placeholders, en orden de aparición en SQL)
+    per_client_params: list[Any] = [
+        f.date_from,
+        f.date_to,
+        scope.prev_from,
+        scope.prev_to,
+        f.date_from,
+        f.date_to,
+        f.date_to,
+        f.date_to,
+        f.date_to,
+    ]
+
+    # Parámetros del bloque tagged (2 placeholders)
+    tagged_params: list[Any] = [
+        f.date_from,
+        f.date_from,
+    ]
+
+    # Parámetro del bloque risk (1 placeholder)
+    risk_params: list[Any] = [f.date_to]
+
+    params: list[Any] = (
+        list(base_params) + per_client_params + tagged_params + risk_params
     )
 
     sql = f"""
@@ -298,7 +327,13 @@ def _client_classification_merged(session: CommercialReadSession, scope: SalesSc
         UNION ALL
         SELECT 'en_riesgo', n FROM risk
     """
-    params.extend([f.date_from, f.date_from, f.date_to])
+    placeholder_count = sql.count("%s")
+    logger.info(
+        "[COMMERCIAL_SQL_DEBUG] client_classification_merged placeholders=%s params=%s",
+        placeholder_count,
+        len(params),
+    )
+    logger.info("[COMMERCIAL_SQL_DEBUG] client_classification_merged params_list=%s", params)
     rows = session.query_all("client_classification_merged", sql, tuple(params))
     result = {
         "activos": 0,
