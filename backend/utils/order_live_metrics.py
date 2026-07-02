@@ -245,15 +245,11 @@ def _overlay_official_order_weights(
     by_id: dict[int, dict[str, Any]],
     document_ids: list[int],
 ) -> None:
-    """Superpone peso oficial desde módulo Peso de Órdenes."""
+    """Superpone peso real recalculado (módulo Peso de Órdenes)."""
     try:
-        from backend.services.order_weight_service import (
-            ensure_order_weights,
-            fetch_weights_by_document_ids,
-        )
+        from backend.services.order_weight_service import calculate_order_weights_batch
 
-        ensure_order_weights(document_ids)
-        weights = fetch_weights_by_document_ids(document_ids)
+        weights = calculate_order_weights_batch(document_ids, persist_cache=True)
         for doc_id, w in weights.items():
             entry = by_id.setdefault(doc_id, {"document_id": doc_id})
             entry["peso_total_kg"] = w["peso_total_kg"]
@@ -262,9 +258,11 @@ def _overlay_official_order_weights(
             entry["porcentaje_cobertura_peso"] = w["porcentaje_cobertura_peso"]
             entry["cantidad_unidades"] = w.get("cantidad_unidades")
             entry["cantidad_cajas"] = w.get("cantidad_cajas")
-            entry["peso_fuente"] = "order_weight_module"
+            entry["peso_fuente"] = "order_weight_calculated"
     except Exception:
-        pass
+        import logging
+
+        logging.getLogger(__name__).exception("[ORDER_WEIGHT] overlay_live_metrics_failed")
 
 
 def overlay_snapshot_orders(

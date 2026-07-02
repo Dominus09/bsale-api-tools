@@ -76,4 +76,11 @@ def replace_document_details(cur, document_id: int, items: list[dict[str, Any]])
     template = "(" + ",".join(["%s"] * len(cols)) + ",NOW(),NOW())"
     values = [tuple(r[c] for c in cols) for r in rows]
     execute_values(cur, sql, values, template=template, page_size=len(values))
-    return len(rows)
+    written = len(rows)
+    try:
+        from backend.services.order_weight_service import invalidate_order_weight_cache
+
+        invalidate_order_weight_cache(int(document_id))
+    except Exception:
+        pass
+    return written

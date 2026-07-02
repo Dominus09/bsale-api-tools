@@ -32,6 +32,17 @@ _LOGISTICS_PATCH_FIELDS = frozenset(
     }
 )
 
+_WEIGHT_CACHE_INVALIDATION_FIELDS = frozenset(
+    {
+        "units_per_box",
+        "weight_box_kg",
+        "height_cm",
+        "width_cm",
+        "length_cm",
+        "logistics_completed",
+    }
+)
+
 _PM_SELECT = """
     id,
     barcode,
@@ -189,7 +200,17 @@ def _apply_patch(
             raise HTTPException(status_code=404, detail="Producto no encontrado")
         conn.commit()
         columns = [desc[0] for desc in cur.description]
-        return _serialize_pm_row(dict(zip(columns, row)))
+        result = _serialize_pm_row(dict(zip(columns, row)))
+        if row_id is not None and any(k in payload for k in _WEIGHT_CACHE_INVALIDATION_FIELDS):
+            try:
+                from backend.services.order_weight_service import (
+                    invalidate_order_weight_cache_for_products_master,
+                )
+
+                invalidate_order_weight_cache_for_products_master(int(row_id))
+            except Exception:
+                pass
+        return result
     except HTTPException:
         conn.rollback()
         raise

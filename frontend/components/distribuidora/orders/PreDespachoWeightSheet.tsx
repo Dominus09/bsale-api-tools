@@ -15,6 +15,7 @@ import {
   logisticsPatchFromUnitKg,
   orderWeightToPlanningPatch,
 } from "@/lib/pre-despacho-weight"
+import { emitOrderWeightUpdated } from "@/lib/order-weight-events"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -296,7 +297,9 @@ export function PreDespachoWeightSheet({
     (detail: OrderWeightDetail) => {
       setOrder(detail)
       if (row) {
-        onRowUpdated(row.document_id, orderWeightToPlanningPatch(detail))
+        const patch = orderWeightToPlanningPatch(detail)
+        onRowUpdated(row.document_id, patch)
+        emitOrderWeightUpdated(row.document_id, patch)
       }
     },
     [onRowUpdated, row],

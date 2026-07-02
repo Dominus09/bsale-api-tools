@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import csv
 import io
+import logging
+import time
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
@@ -16,6 +18,8 @@ from backend.utils.order_weight_calc import (
     coverage_semaphore,
     enrich_lines_peso_pct,
 )
+
+logger = logging.getLogger(__name__)
 
 OC_PURCHASE_INVOICED_BY_RELATED_SQL = """
 EXISTS (
@@ -264,6 +268,263 @@ def compute_order_lines(cur, *, document_id: int, company_id: int) -> list[dict[
     return [compute_line_from_row(_row_dict(cur, r)) for r in cur.fetchall()]
 
 
+def _build_weight_metrics(summary: dict[str, Any]) -> dict[str, Any]:
+    automatic = max(
+        0,
+        int(summary.get("productos_con_peso") or 0)
+        - int(summary.get("productos_manuales") or 0)
+        - int(summary.get("productos_estimados") or 0),
+    )
+    return {
+        "total_weight": float(summary.get("peso_total_kg") or 0),
+        "missing_products": int(summary.get("productos_sin_peso") or 0),
+        "coverage_percent": float(summary.get("porcentaje_cobertura") or 0),
+        "manual_products": int(summary.get("productos_manuales") or 0),
+        "automatic_products": automatic,
+        "estimated_products": int(summary.get("productos_estimados") or 0),
+    }
+
+
+def weight_dict_for_planning(
+    metrics: dict[str, Any],
+    summary: dict[str, Any],
+    lines: list[dict[str, Any]],
+) -> dict[str, Any]:
+    unidades = sum(float(ln.get("cantidad_unitaria") or 0) for ln in lines)
+    cajas = sum(float(ln.get("cantidad_cajas") or 0) for ln in lines)
+    return {
+        **metrics,
+        "peso_total_kg": metrics["total_weight"],
+        "weight_kg": metrics["total_weight"],
+        "productos_sin_peso": metrics["missing_products"],
+        "porcentaje_cobertura_peso": metrics["coverage_percent"],
+        "porcentaje_cobertura": metrics["coverage_percent"],
+        "productos_manuales": metrics["manual_products"],
+        "productos_estimados": metrics["estimated_products"],
+        "productos_totales": int(summary.get("productos_totales") or 0),
+        "cantidad_unidades": unidades,
+        "cantidad_cajas": cajas,
+    }
+
+
+def _log_order_weight(
+    *,
+    order_id: int,
+    old_weight: float | None,
+    new_weight: float,
+    coverage: float,
+    missing_products: int,
+    calculation_ms: float,
+) -> None:
+    logger.info(
+        "[ORDER_WEIGHT] order_id=%s old_weight=%s new_weight=%s coverage=%s "
+        "missing_products=%s calculation_ms=%.1f",
+        order_id,
+        old_weight,
+        new_weight,
+        coverage,
+        missing_products,
+        calculation_ms,
+    )
+
+
+def _snapshot_weight_only(cur, document_id: int) -> float | None:
+    if not _table_exists(cur, "order_weight_snapshots"):
+        return None
+    cur.execute(
+        "SELECT peso_total_kg FROM distribuidora.order_weight_snapshots WHERE document_id = %s",
+        (int(document_id),),
+    )
+    row = cur.fetchone()
+    if not row or row[0] is None:
+        return None
+    return float(row[0])
+
+
+def invalidate_order_weight_cache(document_id: int) -> None:
+    """Invalida snapshot cacheado (p. ej. tras sync o cambio logístico)."""
+    invalidate_order_weight_cache_batch([int(document_id)])
+
+
+def invalidate_order_weight_cache_batch(document_ids: list[int]) -> int:
+    """Elimina snapshots cacheados para las OCs indicadas."""
+    ids = list(dict.fromkeys(int(x) for x in document_ids if x))
+    if not ids:
+        return 0
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        if not _table_exists(cur, "order_weight_snapshots"):
+            cur.close()
+            return 0
+        cur.execute(
+            "DELETE FROM distribuidora.order_weight_snapshots WHERE document_id = ANY(%s::bigint[])",
+            (ids,),
+        )
+        deleted = int(cur.rowcount or 0)
+        conn.commit()
+        cur.close()
+        if deleted:
+            logger.info("[ORDER_WEIGHT] cache_invalidated count=%s document_ids=%s", deleted, ids)
+        return deleted
+    finally:
+        conn.close()
+
+
+def invalidate_order_weight_cache_for_products_master(products_master_id: int) -> int:
+    """Invalida snapshots de OCs que incluyen el producto logístico."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        if not _table_exists(cur, "order_weight_snapshots"):
+            cur.close()
+            return 0
+        cur.execute(
+            """
+            DELETE FROM distribuidora.order_weight_snapshots ows
+            WHERE ows.document_id IN (
+                SELECT DISTINCT dd.document_id
+                FROM distribuidora.document_details dd
+                INNER JOIN distribuidora.documents d
+                    ON d.document_id = dd.document_id
+                   AND d.document_type_id = 33
+                LEFT JOIN bsale.variants v
+                    ON v.bsale_id = dd.variant_id
+                   AND v.company_id = d.company_id
+                INNER JOIN bsale.products_master pm ON pm.id = %s
+                WHERE (
+                    pm.variant_id IS NOT NULL
+                    AND pm.variant_id = dd.variant_id
+                ) OR (
+                    pm.barcode IS NOT NULL
+                    AND NULLIF(BTRIM(v.bar_code), '') IS NOT NULL
+                    AND pm.barcode = BTRIM(v.bar_code)
+                )
+            )
+            """,
+            (int(products_master_id),),
+        )
+        deleted = int(cur.rowcount or 0)
+        conn.commit()
+        cur.close()
+        if deleted:
+            logger.info(
+                "[ORDER_WEIGHT] cache_invalidated products_master_id=%s count=%s",
+                products_master_id,
+                deleted,
+            )
+        return deleted
+    finally:
+        conn.close()
+
+
+def calculate_order_weight(
+    document_id: int,
+    *,
+    company_id: int = 3,
+    office_id: int = 1,
+    user_email: str | None = None,
+    persist_cache: bool = False,
+) -> dict[str, Any]:
+    """
+    Calcula peso real desde document_details + logística (manual > automático).
+    Nunca lee snapshot cacheado — siempre recalcula desde fuente.
+    """
+    t0 = time.perf_counter()
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        can_persist = persist_cache and _table_exists(cur, "order_weight_snapshots")
+        old_weight = _snapshot_weight_only(cur, int(document_id)) if can_persist else None
+
+        cur.execute(_ORDER_HEADER_SQL, (document_id, company_id))
+        header_row = cur.fetchone()
+        if not header_row:
+            cur.close()
+            return {}
+        header = _row_dict(cur, header_row)
+        if header.get("office_id") is None:
+            header["office_id"] = office_id
+
+        lines = compute_order_lines(cur, document_id=document_id, company_id=company_id)
+        summary = aggregate_order_summary(lines)
+        enrich_lines_peso_pct(lines, summary["peso_total_kg"])
+        metrics = _build_weight_metrics(summary)
+        semaforo = coverage_semaphore(summary["porcentaje_cobertura"])
+
+        calculated_at = None
+        calculated_by = user_email
+        if can_persist:
+            _persist_snapshot(
+                cur,
+                header=header,
+                lines=lines,
+                summary=summary,
+                user_email=user_email,
+            )
+            conn.commit()
+            cur.execute(_SNAPSHOT_BY_DOC_SQL, (document_id,))
+            snap = cur.fetchone()
+            if snap:
+                calculated_at = _serialize(snap[9])
+                calculated_by = snap[10]
+        cur.close()
+    finally:
+        conn.close()
+
+    calculation_ms = (time.perf_counter() - t0) * 1000
+    new_weight = float(metrics["total_weight"])
+    _log_order_weight(
+        order_id=int(document_id),
+        old_weight=old_weight,
+        new_weight=new_weight,
+        coverage=float(metrics["coverage_percent"]),
+        missing_products=int(metrics["missing_products"]),
+        calculation_ms=calculation_ms,
+    )
+
+    estado = _order_estado_label(summary["porcentaje_cobertura"], summary["peso_total_kg"])
+    return {
+        **header,
+        **summary,
+        **metrics,
+        "peso_total_kg": new_weight,
+        "estado": estado,
+        "semaforo": semaforo,
+        "ultimo_calculo": calculated_at or datetime.utcnow().isoformat(),
+        "calculated_by": calculated_by,
+        "calculation_ms": round(calculation_ms, 1),
+        "lines": lines,
+    }
+
+
+def calculate_order_weights_batch(
+    document_ids: list[int],
+    *,
+    company_id: int = 3,
+    office_id: int = 1,
+    user_email: str | None = None,
+    persist_cache: bool = True,
+) -> dict[int, dict[str, Any]]:
+    """Recalcula peso real para varias OCs (planificación / live refresh)."""
+    if not document_ids:
+        return {}
+    ids = list(dict.fromkeys(int(x) for x in document_ids))
+    out: dict[int, dict[str, Any]] = {}
+    for doc_id in ids:
+        result = calculate_order_weight(
+            doc_id,
+            company_id=company_id,
+            office_id=office_id,
+            user_email=user_email,
+            persist_cache=persist_cache,
+        )
+        if result:
+            metrics = _build_weight_metrics(result)
+            out[doc_id] = weight_dict_for_planning(metrics, result, result.get("lines") or [])
+    return out
+
+
 def _persist_snapshot(
     cur,
     *,
@@ -382,57 +643,13 @@ def recalculate_order_weight(
     user_email: str | None = None,
     persist: bool = True,
 ) -> dict[str, Any]:
-    conn = get_connection()
-    try:
-        cur = conn.cursor()
-        if persist and not _table_exists(cur, "order_weight_snapshots"):
-            persist = False
-
-        cur.execute(_ORDER_HEADER_SQL, (document_id, company_id))
-        header_row = cur.fetchone()
-        if not header_row:
-            cur.close()
-            return {}
-        header = _row_dict(cur, header_row)
-        if header.get("office_id") is None:
-            header["office_id"] = office_id
-
-        lines = compute_order_lines(cur, document_id=document_id, company_id=company_id)
-        summary = aggregate_order_summary(lines)
-        enrich_lines_peso_pct(lines, summary["peso_total_kg"])
-        semaforo = coverage_semaphore(summary["porcentaje_cobertura"])
-
-        calculated_at = None
-        calculated_by = user_email
-        if persist:
-            _persist_snapshot(
-                cur,
-                header=header,
-                lines=lines,
-                summary=summary,
-                user_email=user_email,
-            )
-            conn.commit()
-            cur.execute(_SNAPSHOT_BY_DOC_SQL, (document_id,))
-            snap = cur.fetchone()
-            if snap:
-                calculated_at = _serialize(snap[9])
-                calculated_by = snap[10]
-        cur.close()
-    finally:
-        conn.close()
-
-    estado = _order_estado_label(summary["porcentaje_cobertura"], summary["peso_total_kg"])
-
-    return {
-        **header,
-        **summary,
-        "estado": estado,
-        "semaforo": semaforo,
-        "ultimo_calculo": calculated_at or datetime.utcnow().isoformat(),
-        "calculated_by": calculated_by,
-        "lines": lines,
-    }
+    return calculate_order_weight(
+        document_id,
+        company_id=company_id,
+        office_id=office_id,
+        user_email=user_email,
+        persist_cache=persist,
+    )
 
 
 def get_order_weight(
@@ -603,38 +820,14 @@ def ensure_order_weights(
     office_id: int = 1,
     user_email: str | None = None,
 ) -> dict[int, dict[str, Any]]:
-    """Calcula y persiste peso para OCs sin snapshot (planificación)."""
-    if not document_ids:
-        return {}
-    ids = list(dict.fromkeys(int(x) for x in document_ids))
-    conn = get_connection()
-    try:
-        cur = conn.cursor()
-        if not _table_exists(cur, "order_weight_snapshots"):
-            cur.close()
-            return {}
-        cur.execute(
-            """
-            SELECT document_id FROM distribuidora.order_weight_snapshots
-            WHERE document_id = ANY(%s::bigint[])
-            """,
-            (ids,),
-        )
-        existing = {int(r[0]) for r in cur.fetchall()}
-        cur.close()
-    finally:
-        conn.close()
-
-    for doc_id in ids:
-        if doc_id not in existing:
-            recalculate_order_weight(
-                document_id=doc_id,
-                company_id=company_id,
-                office_id=office_id,
-                user_email=user_email,
-                persist=True,
-            )
-    return fetch_weights_by_document_ids(ids)
+    """Recalcula peso real para planificación (nunca usa snapshot sin recalcular)."""
+    return calculate_order_weights_batch(
+        document_ids,
+        company_id=company_id,
+        office_id=office_id,
+        user_email=user_email,
+        persist_cache=True,
+    )
 
 
 def fetch_weights_by_document_ids(document_ids: list[int]) -> dict[int, dict[str, Any]]:
@@ -797,26 +990,22 @@ def recalculate_orders_batch(
     before = fetch_weights_by_document_ids(ids)
     peso_antes = sum(float(w.get("peso_total_kg") or 0) for w in before.values())
 
-    items: list[dict[str, Any]] = []
-    for doc_id in ids:
-        result = recalculate_order_weight(
-            document_id=doc_id,
-            company_id=company_id,
-            office_id=office_id,
-            user_email=user_email,
-            persist=True,
-        )
-        if result:
-            items.append(
-                {
-                    "document_id": doc_id,
-                    "peso_total_kg": result.get("peso_total_kg"),
-                    "porcentaje_cobertura": result.get("porcentaje_cobertura"),
-                }
-            )
-
-    after = fetch_weights_by_document_ids(ids)
-    peso_nuevo = sum(float(w.get("peso_total_kg") or 0) for w in after.values())
+    after_map = calculate_order_weights_batch(
+        ids,
+        company_id=company_id,
+        office_id=office_id,
+        user_email=user_email,
+        persist_cache=True,
+    )
+    items = [
+        {
+            "document_id": doc_id,
+            "peso_total_kg": w.get("peso_total_kg"),
+            "porcentaje_cobertura": w.get("porcentaje_cobertura_peso"),
+        }
+        for doc_id, w in after_map.items()
+    ]
+    peso_nuevo = sum(float(w.get("peso_total_kg") or 0) for w in after_map.values())
 
     if plan_session_id or motivo:
         conn = get_connection()

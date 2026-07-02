@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 import unicodedata
 from datetime import date
@@ -9,6 +10,8 @@ from decimal import Decimal
 from typing import Any
 
 from backend.db import get_connection
+
+logger = logging.getLogger(__name__)
 from backend.utils.dispatch_prep_common import (
     DEFAULT_DISPATCH_PREP_LIMIT,
     effective_page_limit,
@@ -286,18 +289,14 @@ def _assert_sql_template_rendered(sql: str, *, context: str = "planning_rows") -
 
 
 def _overlay_order_weights_to_rows(rows: list[dict[str, Any]]) -> None:
-    """Usa peso oficial del módulo Peso de Órdenes en filas de planificación."""
+    """Peso real recalculado (manual + ERP) — nunca snapshot sin recalcular."""
     if not rows:
         return
     try:
-        from backend.services.order_weight_service import (
-            ensure_order_weights,
-            fetch_weights_by_document_ids,
-        )
+        from backend.services.order_weight_service import calculate_order_weights_batch
 
         ids = [int(r["document_id"]) for r in rows if r.get("document_id") is not None]
-        ensure_order_weights(ids)
-        by_w = fetch_weights_by_document_ids(ids)
+        by_w = calculate_order_weights_batch(ids, persist_cache=True)
         for row in rows:
             doc_id = int(row["document_id"])
             w = by_w.get(doc_id)
@@ -311,9 +310,9 @@ def _overlay_order_weights_to_rows(rows: list[dict[str, Any]]) -> None:
             row["productos_estimados"] = w.get("productos_estimados")
             row["cantidad_unidades"] = w.get("cantidad_unidades")
             row["cantidad_cajas"] = w.get("cantidad_cajas")
-            row["peso_fuente"] = "order_weight_module"
+            row["peso_fuente"] = "order_weight_calculated"
     except Exception:
-        pass
+        logger.exception("[ORDER_WEIGHT] overlay_planning_rows_failed")
 
 
 def _apply_live_sync_flags(row: dict[str, Any]) -> None:

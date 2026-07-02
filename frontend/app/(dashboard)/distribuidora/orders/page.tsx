@@ -15,6 +15,7 @@ import {
   type DistribuidoraDispatchPrepPlanningRow,
   type DistribuidoraTruck,
 } from "@/lib/api"
+import { subscribeOrderWeightUpdated } from "@/lib/order-weight-events"
 import {
   aggregateObservationTags,
   weekdayTokenFromTagLabel,
@@ -957,6 +958,12 @@ export default function DistribuidoraOrdersPage() {
     },
     [],
   )
+
+  useEffect(() => {
+    return subscribeOrderWeightUpdated(({ documentId, patch }) => {
+      handleWeightRowUpdated(documentId, patch)
+    })
+  }, [handleWeightRowUpdated])
 
   const openDetail = useCallback((r: DistribuidoraDispatchPrepMunicipalityRow) => {
     setDetailRow(r)

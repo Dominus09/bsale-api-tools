@@ -86,13 +86,13 @@ def _fetch_weights_extended(cur, document_ids: list[int]) -> dict[int, dict[str,
     return out
 
 
-def _ensure_order_weights(document_ids: list[int]) -> None:
+def _ensure_order_weights(document_ids: list[int]) -> dict[int, dict[str, Any]]:
     try:
-        from backend.services.order_weight_service import ensure_order_weights
+        from backend.services.order_weight_service import calculate_order_weights_batch
 
-        ensure_order_weights(document_ids)
+        return calculate_order_weights_batch(document_ids, persist_cache=True)
     except Exception:
-        pass
+        return {}
 
 
 def freeze_orders_weight(
@@ -105,8 +105,7 @@ def freeze_orders_weight(
     ids = [int(o["oc_document_id"]) for o in orders if o.get("oc_document_id")]
     if not ids:
         return [dict(o) for o in orders]
-    _ensure_order_weights(ids)
-    weights = _fetch_weights_extended(cur, ids)
+    weights = _ensure_order_weights(ids) or _fetch_weights_extended(cur, ids)
     now = calculated_at or datetime.now(timezone.utc)
     out: list[dict[str, Any]] = []
     for order in orders:
