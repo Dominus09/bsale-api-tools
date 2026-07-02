@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 from backend.db import get_connection
 from backend.services.distribuidora.orders_service import _row_to_dict, _serialize_row
 
 logger = logging.getLogger(__name__)
+
+COMMERCIAL_DEBUG_SQL = os.getenv("COMMERCIAL_DEBUG_SQL", "").lower() in ("true", "1", "yes")
+
+T = TypeVar("T")
 
 COMPANY_ID = 3
 DOC_BOLETA = 1
@@ -167,6 +172,33 @@ class CommercialReadSession:
         self._conn: Any = None
         self._cache: dict[str, Any] = {}
         self.rows_analyzed = 0
+        self.sql_metrics: list[dict[str, Any]] = []
+        self.queries_ok = 0
+        self.queries_failed = 0
+        self._failed_query_names: list[str] = []
+
+    def record_bundle_failure(self, query_name: str, exc: Exception) -> None:
+        self.queries_failed += 1
+        self._failed_query_names.append(query_name)
+        logger.error(
+            "[COMMERCIAL_BUNDLE] secondary_query_failed query=%s error=%s",
+            query_name,
+            exc,
+        )
+
+    def health_payload(self, *, bundle_complete: bool) -> dict[str, Any]:
+        status = "ok"
+        if self.queries_failed > 0:
+            status = "degraded"
+        if not bundle_complete and self.queries_failed == 0:
+            status = "ok"
+        return {
+            "status": status,
+            "queries_ok": self.queries_ok,
+            "queries_failed": self.queries_failed,
+            "bundle_complete": bundle_complete,
+            "failed_queries": list(self._failed_query_names),
+        }
 
     def __enter__(self) -> CommercialReadSession:
         self._conn = get_connection()
@@ -192,42 +224,91 @@ class CommercialReadSession:
             self._conn.close()
             self._conn = None
 
-    def query_all(self, label: str, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
+    def query_all(self, label: str, sql: str, params: tuple[Any, ...] | None = None) -> list[dict[str, Any]]:
         assert self._conn is not None
+        bound_params = tuple(params or ())
         placeholder_count = sql.count("%s")
-        param_count = len(params)
-        logger.info(
-            "[COMMERCIAL_SQL_DEBUG] query=%s placeholders=%s params=%s",
-            label,
-            placeholder_count,
-            param_count,
-        )
-        logger.info("[COMMERCIAL_SQL_DEBUG] params_list=%s", list(params))
+        param_count = len(bound_params)
+
         if placeholder_count != param_count:
             logger.error(
-                "[COMMERCIAL_SQL_DEBUG] MISMATCH query=%s placeholders=%s params=%s",
+                "[COMMERCIAL_SQL_DEBUG]\nPARAMETER_MISMATCH\nquery=%s\nplaceholders=%s\nparams=%s",
                 label,
                 placeholder_count,
                 param_count,
             )
+            raise RuntimeError(
+                f"SQL parameter mismatch: placeholders={placeholder_count}, params={param_count}"
+            )
+
+        if COMMERCIAL_DEBUG_SQL:
+            logger.info(
+                "[COMMERCIAL_SQL_DEBUG] query=%s placeholders=%s params=%s",
+                label,
+                placeholder_count,
+                param_count,
+            )
+            logger.info("[COMMERCIAL_SQL_DEBUG] params_list=%s", list(bound_params))
+
         t0 = time.perf_counter()
         cur = self._conn.cursor()
         try:
-            cur.execute(sql, params)
+            cur.execute(sql, bound_params)
             rows = cur.fetchall()
             out = [_serialize_row(_row_to_dict(cur, r)) for r in rows]
         finally:
             cur.close()
         ms = (time.perf_counter() - t0) * 1000
         self.rows_analyzed += len(out)
+        self.queries_ok += 1
+        self.sql_metrics.append({
+            "name": label,
+            "execution_ms": round(ms, 1),
+            "rows": len(out),
+            "placeholders": placeholder_count,
+            "params": param_count,
+        })
+
         logger.info(
-            "[COMMERCIAL_SQL] endpoint=%s query=%s duration_ms=%.1f rows=%s",
-            self.endpoint,
+            "[COMMERCIAL_SQL] query_name=%s execution_ms=%.1f rows=%s placeholders=%s params=%s",
             label,
             ms,
             len(out),
+            placeholder_count,
+            param_count,
         )
+        if ms > 1000:
+            logger.warning(
+                "[COMMERCIAL_PERFORMANCE_WARNING] query_name=%s execution_ms=%.1f rows=%s",
+                label,
+                ms,
+                len(out),
+            )
+
+        if COMMERCIAL_DEBUG_SQL:
+            logger.info(
+                "[COMMERCIAL_SQL_DEBUG] query=%s execution_ms=%.1f rows=%s placeholders=%s params=%s",
+                label,
+                ms,
+                len(out),
+                placeholder_count,
+                param_count,
+            )
+            self._log_explain(label, sql, bound_params)
+
         return out
+
+    def _log_explain(self, label: str, sql: str, params: tuple[Any, ...]) -> None:
+        assert self._conn is not None
+        explain_cur = self._conn.cursor()
+        try:
+            explain_cur.execute(f"EXPLAIN {sql}", params)
+            plan = "\n".join(str(row[0]) for row in explain_cur.fetchall())
+            logger.info("[COMMERCIAL_SQL_DEBUG] EXPLAIN query=%s\n%s", label, plan)
+        except Exception as exc:
+            logger.warning("[COMMERCIAL_SQL_DEBUG] EXPLAIN failed query=%s error=%s", label, exc)
+        finally:
+            explain_cur.close()
 
     def query_one(self, label: str, sql: str, params: tuple[Any, ...]) -> dict[str, Any] | None:
         rows = self.query_all(label, sql, params)
@@ -327,13 +408,6 @@ def _client_classification_merged(session: CommercialReadSession, scope: SalesSc
         UNION ALL
         SELECT 'en_riesgo', n FROM risk
     """
-    placeholder_count = sql.count("%s")
-    logger.info(
-        "[COMMERCIAL_SQL_DEBUG] client_classification_merged placeholders=%s params=%s",
-        placeholder_count,
-        len(params),
-    )
-    logger.info("[COMMERCIAL_SQL_DEBUG] client_classification_merged params_list=%s", params)
     rows = session.query_all("client_classification_merged", sql, tuple(params))
     result = {
         "activos": 0,
@@ -1145,6 +1219,45 @@ def _build_dashboard(
     }
 
 
+def _mark_section_available(result: dict[str, Any]) -> dict[str, Any]:
+    return {**result, "available": True}
+
+
+def _section_error_payload(fallback: dict[str, Any], exc: Exception) -> dict[str, Any]:
+    return {**fallback, "available": False, "error": str(exc)}
+
+
+def _run_secondary_bundle_section(
+    session: CommercialReadSession,
+    query_name: str,
+    fn: Callable[[], dict[str, Any]],
+    *,
+    fallback: dict[str, Any],
+) -> dict[str, Any]:
+    """Ejecuta consulta secundaria; degradación graceful si falla (no HTTP 500)."""
+    try:
+        return _mark_section_available(fn())
+    except Exception as exc:
+        session.record_bundle_failure(query_name, exc)
+        logger.exception("[COMMERCIAL_BUNDLE] secondary_query_failed query=%s", query_name)
+        return _section_error_payload(fallback, exc)
+
+
+def _run_secondary_bundle_value(
+    session: CommercialReadSession,
+    query_name: str,
+    fn: Callable[[], T],
+    *,
+    fallback: T,
+) -> T:
+    try:
+        return fn()
+    except Exception as exc:
+        session.record_bundle_failure(query_name, exc)
+        logger.exception("[COMMERCIAL_BUNDLE] secondary_query_failed query=%s", query_name)
+        return fallback
+
+
 def build_commercial_bundle(
     filters: CommercialFilters,
     limits: BundleLimits | None = None,
@@ -1161,16 +1274,44 @@ def build_commercial_bundle(
     lim = limits or BundleLimits()
     scope = SalesScope.from_filters(filters)
     t0 = time.perf_counter()
+    bundle_complete = True
+
+    seller_fallback: dict[str, Any] = {
+        "items": [],
+        "rankings": {
+            "mayor_venta": [],
+            "mayor_crecimiento": [],
+            "mayor_recuperacion": [],
+            "mayor_perdida": [],
+            "mejor_cobertura": [],
+        },
+    }
+    unique_fallback: dict[str, Any] = {"items": [], "summary": {}}
+    lost_fallback: dict[str, Any] = {"items": []}
+    cross_fallback: dict[str, Any] = {"items": [], "total": 0}
+    products_fallback: dict[str, Any] = {"top_products": [], "oportunidades": []}
 
     with CommercialReadSession("bundle") as session:
-        classification = _client_classification_merged(session, scope)
-        curr_kpi = _period_kpis_merged(session, scope, filters.date_from, filters.date_to, "curr")
-        prev_kpi = _period_kpis_merged(session, scope, scope.prev_from, scope.prev_to, "prev")
-        daily = _daily_sales(session, scope)
+        # Consultas críticas (sales_base): fallo → excepción → HTTP 500
+        try:
+            classification = _client_classification_merged(session, scope)
+            curr_kpi = _period_kpis_merged(session, scope, filters.date_from, filters.date_to, "curr")
+            prev_kpi = _period_kpis_merged(session, scope, scope.prev_from, scope.prev_to, "prev")
+            daily = _daily_sales(session, scope)
+        except Exception as exc:
+            session.record_bundle_failure("sales_base", exc)
+            logger.exception("[COMMERCIAL_BUNDLE] critical_query_failed query=sales_base")
+            raise
+
         dashboard = _build_dashboard(scope, classification, curr_kpi, prev_kpi, daily)
 
-        seller_data = _seller_performance(session, scope, lim.seller)
-        scored_sellers = compute_seller_scores(seller_data["items"])
+        seller_data = _run_secondary_bundle_section(
+            session,
+            "seller_performance",
+            lambda: _seller_performance(session, scope, lim.seller),
+            fallback=seller_fallback,
+        )
+        scored_sellers = compute_seller_scores(seller_data.get("items") or [])
         seller_payload = {
             **seller_data,
             "items": scored_sellers,
@@ -1179,19 +1320,46 @@ def build_commercial_bundle(
             "compare_period": dashboard["compare_period"],
         }
 
-        unique = _unique_clients(session, scope, lim.unique_clients)
-        lost = _lost_clients(session, scope, lim.lost_clients)
-        cross = _cross_selling(session, scope, lim.cross_selling)
-        products = _product_performance(session, scope, lim.products)
+        unique = _run_secondary_bundle_section(
+            session,
+            "unique_clients",
+            lambda: _unique_clients(session, scope, lim.unique_clients),
+            fallback=unique_fallback,
+        )
+        lost = _run_secondary_bundle_section(
+            session,
+            "lost_clients",
+            lambda: _lost_clients(session, scope, lim.lost_clients),
+            fallback=lost_fallback,
+        )
+        cross = _run_secondary_bundle_section(
+            session,
+            "cross_selling",
+            lambda: _cross_selling(session, scope, lim.cross_selling),
+            fallback=cross_fallback,
+        )
+        products = _run_secondary_bundle_section(
+            session,
+            "product_performance",
+            lambda: _product_performance(session, scope, lim.products),
+            fallback=products_fallback,
+        )
+
+        if session.queries_failed > 0:
+            bundle_complete = False
 
         month_label = filters.date_to.strftime("%B %Y")
+        lost_items = lost.get("items") or []
+        unique_items = unique.get("items") or []
+        cross_items = cross.get("items") or []
+
         summary = build_actionable_summary(
             f"Resumen Comercial — {month_label}",
             scored_sellers,
-            lost.get("items", []),
-            unique.get("items", []),
+            lost_items,
+            unique_items,
             products,
-            cross.get("items", []),
+            cross_items,
             classification,
             dashboard["kpis"],
         )
@@ -1200,23 +1368,38 @@ def build_commercial_bundle(
 
         attack_plan = build_attack_plan(
             scored_sellers,
-            lost.get("items", []),
-            unique.get("items", []),
-            cross.get("items", []),
+            lost_items,
+            unique_items,
+            cross_items,
             products,
         )
         opportunities = build_opportunities(
-            lost.get("items", []),
-            unique.get("items", []),
-            cross.get("items", []),
+            lost_items,
+            unique_items,
+            cross_items,
             products,
             scored_sellers,
         )
 
-        today_row = _today_sales(session, scope)
-        monthly_timeline = _monthly_timeline(session, scope)
-        recovered_items = [x for x in unique["items"] if x.get("status") == "recuperado"][: lim.lost_clients]
+        today_row = _run_secondary_bundle_value(
+            session,
+            "today_sales",
+            lambda: _today_sales(session, scope),
+            fallback=None,
+        )
+        monthly_timeline = _run_secondary_bundle_value(
+            session,
+            "monthly_timeline",
+            lambda: _monthly_timeline(session, scope),
+            fallback=[],
+        )
+        recovered_items = [x for x in unique_items if x.get("status") == "recuperado"][: lim.lost_clients]
         rows_analyzed = session.rows_analyzed
+        sql_metrics_public = [
+            {"name": m["name"], "execution_ms": m["execution_ms"]}
+            for m in session.sql_metrics
+        ]
+        health = session.health_payload(bundle_complete=bundle_complete)
 
     execution_ms = (time.perf_counter() - t0) * 1000
     meta = build_meta(
@@ -1225,9 +1408,11 @@ def build_commercial_bundle(
         execution_ms=execution_ms,
         rows_analyzed=rows_analyzed,
         documents_analyzed=_int(curr_kpi.get("documentos_emitidos")),
-        clients_analyzed=len(unique.get("items", [])),
+        clients_analyzed=len(unique_items),
         products_analyzed=_int(curr_kpi.get("productos_distintos")),
     )
+    meta["sql_metrics"] = sql_metrics_public
+    meta["health"] = health
 
     from backend.services.commercial_crm_intelligence import build_crm_layer
 
@@ -1243,9 +1428,9 @@ def build_commercial_bundle(
         attack_plan=attack_plan,
         opportunities=opportunities,
         sellers=scored_sellers,
-        unique=unique.get("items", []),
-        lost=lost.get("items", []),
-        cross=cross.get("items", []),
+        unique=unique_items,
+        lost=lost_items,
+        cross=cross_items,
         products=products,
         today_row=today_row,
         monthly_timeline=monthly_timeline,
