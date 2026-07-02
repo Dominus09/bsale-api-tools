@@ -5850,7 +5850,117 @@ export type CommercialValidationDelta = {
   delta_pct: number
 }
 
+export type CommercialValidationReconcileRow = {
+  concept?: string
+  erp: number
+  bsale: number
+  delta: number
+  status: "ok" | "error"
+}
+
+export type CommercialValidationCoverageRow = {
+  metric: string
+  erp: string | number | null
+  bsale: string | number | null
+  match: boolean
+}
+
+export type CommercialValidationSellerReconcile = {
+  seller_id: number
+  seller: string
+  facturas: number
+  boletas: number
+  notas_credito: number
+  venta_erp: number
+  venta_bsale: number
+  delta: number
+  clientes: number
+  ticket: number
+  status: "ok" | "error"
+}
+
+export type CommercialValidationDailyRow = {
+  date: string
+  erp: number
+  bsale: number
+  delta: number
+  status: "ok" | "error"
+}
+
+export type CommercialValidationDocumentRow = {
+  document_id: number
+  number: number | string | null
+  document_type: string
+  document_type_id: number
+  client: string
+  seller: string
+  erp: number
+  bsale: number
+  delta: number
+  status: "ok" | "error"
+  url?: string | null
+}
+
+export type CommercialValidationClientRow = {
+  client_id: number
+  client: string
+  erp: number
+  bsale: number
+  delta: number
+  documentos: number
+  ticket: number
+  ultima_compra: string | null
+  status: "ok" | "error"
+}
+
+export type CommercialValidationProductRow = {
+  variant_id: number
+  product: string
+  qty_erp: number
+  qty_bsale: number
+  amount_erp: number
+  amount_bsale: number
+  delta: number
+  status: "ok" | "error"
+}
+
+export type CommercialValidationAutoRule = {
+  rule_id: string
+  label: string
+  severity: "ok" | "warning" | "error"
+  count: number
+  message: string
+}
+
+export type CommercialValidationDifferenceItem = {
+  priority: "high" | "medium" | "low"
+  type: string
+  description: string
+  impact: number
+  anchor: string
+}
+
+export type CommercialValidationAuditStatus = {
+  state: "VALIDATED" | "MINOR_DIFFERENCES" | "MAJOR_DIFFERENCES"
+  label: string
+  emoji: string
+  precision_percent: number
+  progress_percent: number
+  progress_label: string
+  validated: boolean
+}
+
 export type CommercialValidationResponse = {
+  audit_status: CommercialValidationAuditStatus
+  data_coverage: CommercialValidationCoverageRow[]
+  commercial_reconciliation: (CommercialValidationReconcileRow & { concept: string })[]
+  seller_reconciliation: CommercialValidationSellerReconcile[]
+  daily_reconciliation: CommercialValidationDailyRow[]
+  documents_by_day: Record<string, CommercialValidationDocumentRow[]>
+  client_reconciliation: CommercialValidationClientRow[]
+  product_reconciliation: CommercialValidationProductRow[]
+  auto_audit_rules: CommercialValidationAutoRule[]
+  difference_items: CommercialValidationDifferenceItem[]
   scope: {
     company_id: number
     company_name: string
@@ -5929,7 +6039,9 @@ export type CommercialValidationResponse = {
   validation: {
     status: string
     engine_version: string
+    audit_engine_version?: string
     sales_scope_version: string
+    comparison_method?: string
     generated_at: string
     execution_ms: number
   }

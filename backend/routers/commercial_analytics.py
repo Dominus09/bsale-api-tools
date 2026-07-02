@@ -442,16 +442,20 @@ async def get_validation(
     office_id: int = Query(1, ge=1),
     date_from: date = Query(...),
     date_to: date = Query(...),
+    compare_date_from: date | None = Query(None),
+    compare_date_to: date | None = Query(None),
     seller: str | None = Query(None),
     city: str | None = Query(None),
     document_type: str | None = Query(None),
 ):
-    """Auditoría pre-deploy del motor comercial (solo administradores)."""
+    """Auditoría pre-deploy del motor comercial (solo gerencia)."""
     if company_id != 3 or office_id != 1:
         raise HTTPException(status_code=400, detail="Solo soportado company_id=3 y office_id=1")
     f = _filters(
         date_from=date_from,
         date_to=date_to,
+        compare_date_from=compare_date_from,
+        compare_date_to=compare_date_to,
         seller=seller,
         city=city,
         document_type=document_type,
