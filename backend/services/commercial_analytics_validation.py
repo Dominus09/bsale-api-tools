@@ -49,6 +49,38 @@ def _int(v: Any) -> int:
     return int(v)
 
 
+def normalize_date(value: Any) -> date | None:
+    """Normaliza fechas desde SQL (date, datetime, str ISO) a datetime.date."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return None
+        try:
+            return date.fromisoformat(s[:10])
+        except ValueError:
+            pass
+        try:
+            return datetime.fromisoformat(s.replace("Z", "+00:00")).date()
+        except ValueError:
+            return None
+    return None
+
+
+def _days_inclusive(first: Any, last: Any) -> int:
+    """Días entre dos fechas SQL (inclusive)."""
+    d0 = normalize_date(first)
+    d1 = normalize_date(last)
+    if d0 is None or d1 is None:
+        return 0
+    return (d1 - d0).days + 1
+
+
 def _delta(current: float, previous: float) -> dict[str, Any]:
     diff = current - previous
     if previous == 0:
@@ -69,9 +101,11 @@ def _reconcile_status(delta: float, *, is_money: bool = True) -> str:
 
 
 def _metric_block(row: dict[str, Any], prefix: str) -> dict[str, Any]:
+    first = normalize_date(row.get(f"{prefix}_first_date"))
+    last = normalize_date(row.get(f"{prefix}_last_date"))
     return {
-        "first_document_date": str(row.get(f"{prefix}_first_date")) if row.get(f"{prefix}_first_date") else None,
-        "last_document_date": str(row.get(f"{prefix}_last_date")) if row.get(f"{prefix}_last_date") else None,
+        "first_document_date": first.isoformat() if first else None,
+        "last_document_date": last.isoformat() if last else None,
         "documents_total": _int(row.get(f"{prefix}_doc_total")),
         "documents_facturas": _int(row.get(f"{prefix}_doc_facturas")),
         "documents_boletas": _int(row.get(f"{prefix}_doc_boletas")),
@@ -200,16 +234,8 @@ def _build_data_coverage(erp: dict[str, Any], bsale: dict[str, Any]) -> list[dic
             "match": match,
         }
 
-    days_erp = 0
-    if erp.get("first_document_date") and erp.get("last_document_date"):
-        d0 = date.fromisoformat(str(erp["first_document_date"]))
-        d1 = date.fromisoformat(str(erp["last_document_date"]))
-        days_erp = (d1 - d0).days + 1
-    days_bsale = 0
-    if bsale.get("first_document_date") and bsale.get("last_document_date"):
-        d0 = date.fromisoformat(str(bsale["first_document_date"]))
-        d1 = date.fromisoformat(str(bsale["last_document_date"]))
-        days_bsale = (d1 - d0).days + 1
+    days_erp = _days_inclusive(erp.get("first_document_date"), erp.get("last_document_date"))
+    days_bsale = _days_inclusive(bsale.get("first_document_date"), bsale.get("last_document_date"))
 
     return [
         row("Primer documento", erp.get("first_document_date"), bsale.get("first_document_date")),
@@ -1024,6 +1050,7 @@ def build_commercial_validation(filters: CommercialFilters) -> dict[str, Any]:
             }
         elif section == "client":
             delta = round(_float(r.get("delta")), 2)
+            ultima = normalize_date(r.get("n5"))
             client_reconciliation.append({
                 "client_id": _int(r.get("k1")),
                 "client": str(r.get("k3") or ""),
@@ -1035,7 +1062,7 @@ def build_commercial_validation(filters: CommercialFilters) -> dict[str, Any]:
                     _float(r.get("bsale")) / max(_int(r.get("n1")), 1),
                     2,
                 ),
-                "ultima_compra": str(r.get("n5") or "") if r.get("n5") else None,
+                "ultima_compra": ultima.isoformat() if ultima else None,
                 "status": _reconcile_status(delta),
             })
 
@@ -1199,10 +1226,9 @@ def build_commercial_validation(filters: CommercialFilters) -> dict[str, Any]:
         "temporal_coverage": {
             "first_document_date": curr["first_document_date"],
             "last_document_date": curr["last_document_date"],
-            "days_covered": (
-                (totals_row.get("c_last_date") - totals_row.get("c_first_date")).days + 1
-                if totals_row.get("c_first_date") and totals_row.get("c_last_date")
-                else 0
+            "days_covered": _days_inclusive(
+                totals_row.get("c_first_date"),
+                totals_row.get("c_last_date"),
             ),
         },
         "documents": {
