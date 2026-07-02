@@ -28,6 +28,7 @@ import {
 } from "lucide-react"
 
 import type {
+  CommercialAnalysisScope,
   CommercialCrmLayer,
   CommercialDailyMission,
   CommercialEstadoCard,
@@ -239,6 +240,7 @@ function ExecutiveCardItem({
 
 export function CommercialCrmHome({
   crm,
+  analysisScope,
   dailySpark,
   selectedSeller,
   onClientClick,
@@ -246,6 +248,7 @@ export function CommercialCrmHome({
   onRadarClick,
 }: {
   crm: CommercialCrmLayer
+  analysisScope?: CommercialAnalysisScope
   dailySpark?: { v: number }[]
   selectedSeller?: string
   onClientClick?: (clientId: number) => void
@@ -293,6 +296,38 @@ export function CommercialCrmHome({
 
   return (
     <div className="space-y-8">
+      {analysisScope && (
+        <Card className="border-dashed bg-muted/20">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base font-semibold">Alcance analítico</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <div className="flex flex-wrap gap-x-6 gap-y-1 text-muted-foreground">
+              <span>
+                <span className="font-medium text-foreground">Empresa:</span> {analysisScope.company}
+              </span>
+              <span>
+                <span className="font-medium text-foreground">Bodega:</span> {analysisScope.office}
+              </span>
+              <span>
+                <span className="font-medium text-foreground">Vendedores:</span> {analysisScope.seller_count}
+              </span>
+            </div>
+            <p className="text-muted-foreground">
+              Ventas netas = Facturas + Boletas − Notas de crédito
+              {analysisScope.credit_notes_discount_sales ? " (NC descontadas automáticamente)" : ""}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {analysisScope.active_sellers.map((name) => (
+                <Badge key={name} variant="secondary" className="font-normal">
+                  {name}
+                </Badge>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Objetivos del día */}
       <Card className="border-primary/30 bg-gradient-to-r from-primary/10 via-primary/5 to-background">
         <CardContent className="flex flex-wrap items-center justify-between gap-4 p-6">

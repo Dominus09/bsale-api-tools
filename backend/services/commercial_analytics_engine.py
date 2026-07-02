@@ -9,6 +9,17 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any, Callable, TypeVar
 
+from backend.config.commercial_scope import (
+    COMPANY_ID,
+    DD_SIGNED_AMOUNT,
+    DD_SIGNED_QTY,
+    DOC_BOLETA,
+    DOC_FACTURA,
+    DOC_NC,
+    analysis_scope_payload,
+    resolve_document_types,
+    resolve_seller_ids,
+)
 from backend.db import get_connection
 from backend.services.distribuidora.orders_service import _row_to_dict, _serialize_row
 
@@ -17,11 +28,6 @@ logger = logging.getLogger(__name__)
 COMMERCIAL_DEBUG_SQL = os.getenv("COMMERCIAL_DEBUG_SQL", "").lower() in ("true", "1", "yes")
 
 T = TypeVar("T")
-
-COMPANY_ID = 3
-DOC_BOLETA = 1
-DOC_FACTURA = 6
-SALE_DOC_TYPES = (DOC_BOLETA, DOC_FACTURA)
 
 CROSS_SELL_RULES: list[tuple[str, str, str, str]] = [
     ("cerveza", "hielo", "Compra cerveza pero no hielo", "alta"),
@@ -89,8 +95,8 @@ class SalesScope:
     prev_to: date
     hist_from: date
     date_to: date
-    doc_filter: str
-    doc_params: list[Any]
+    doc_types: tuple[int, ...]
+    seller_ids: tuple[int, ...]
     extra_sql: str
     extra_params: list[Any]
 
@@ -98,22 +104,11 @@ class SalesScope:
     def from_filters(cls, filters: CommercialFilters) -> SalesScope:
         prev_from, prev_to = filters.compare_period()
         hist_from = min(prev_from, filters.date_from - timedelta(days=180))
-        doc = (filters.document_type or "all").lower().strip()
-        if doc == "factura":
-            doc_filter = "sb.document_type_id = %s"
-            doc_params: list[Any] = [DOC_FACTURA]
-        elif doc == "boleta":
-            doc_filter = "sb.document_type_id = %s"
-            doc_params = [DOC_BOLETA]
-        else:
-            doc_filter = "sb.document_type_id IN %s"
-            doc_params = [SALE_DOC_TYPES]
+        doc_types = resolve_document_types(filters.document_type)
+        seller_ids = resolve_seller_ids(filters.seller)
 
         extra: list[str] = []
         extra_params: list[Any] = []
-        if filters.seller and str(filters.seller).strip():
-            extra.append("sb.seller_name = %s")
-            extra_params.append(filters.seller.strip())
         if filters.city and str(filters.city).strip():
             extra.append("sb.municipality = %s")
             extra_params.append(filters.city.strip())
@@ -128,16 +123,15 @@ class SalesScope:
             prev_to=prev_to,
             hist_from=hist_from,
             date_to=filters.date_to,
-            doc_filter=doc_filter,
-            doc_params=doc_params,
+            doc_types=doc_types,
+            seller_ids=seller_ids,
             extra_sql=extra_sql,
             extra_params=extra_params,
         )
 
     def sales_base_cte(self) -> tuple[str, list[Any]]:
-        """CTE sales_base: única lectura acotada de v_sales para el bundle."""
-        params: list[Any] = list(self.doc_params)
-        params.extend([self.hist_from, self.date_to])
+        """CTE sales_base: ventas netas (F+B+NC) del equipo comercial operativo."""
+        params: list[Any] = [self.doc_types, self.seller_ids, self.hist_from, self.date_to]
         params.extend(self.extra_params)
         sql = f"""
         sales_base AS (
@@ -155,8 +149,8 @@ class SalesScope:
                 sb.total_amount_sales,
                 sb.is_sale
             FROM distribuidora.v_sales sb
-            WHERE sb.is_sale = 1
-              AND {self.doc_filter}
+            WHERE sb.document_type_id IN %s
+              AND sb.seller_id IN %s
               AND (sb.emission_date AT TIME ZONE 'UTC')::date >= %s
               AND (sb.emission_date AT TIME ZONE 'UTC')::date <= %s
               {self.extra_sql}
@@ -354,20 +348,24 @@ def _client_classification_merged(session: CommercialReadSession, scope: SalesSc
         per_client AS (
             SELECT
                 sb.client_id,
-                BOOL_OR(sb.sale_day BETWEEN %s AND %s) AS in_curr,
-                BOOL_OR(sb.sale_day BETWEEN %s AND %s) AS in_prev,
-                MAX(sb.sale_day) FILTER (WHERE sb.sale_day < %s) AS last_before,
+                BOOL_OR(sb.is_sale = 1 AND sb.sale_day BETWEEN %s AND %s) AS in_curr,
+                BOOL_OR(sb.is_sale = 1 AND sb.sale_day BETWEEN %s AND %s) AS in_prev,
+                MAX(sb.sale_day) FILTER (WHERE sb.is_sale = 1 AND sb.sale_day < %s) AS last_before,
                 COUNT(DISTINCT sb.sale_day) FILTER (
-                    WHERE sb.sale_day >= (%s::date - INTERVAL '180 days')::date
+                    WHERE sb.is_sale = 1
+                      AND sb.sale_day >= (%s::date - INTERVAL '180 days')::date
                 ) AS visit_days_180,
                 MAX(sb.sale_day) FILTER (
-                    WHERE sb.sale_day >= (%s::date - INTERVAL '180 days')::date
+                    WHERE sb.is_sale = 1
+                      AND sb.sale_day >= (%s::date - INTERVAL '180 days')::date
                 ) AS last_d_180,
                 MIN(sb.sale_day) FILTER (
-                    WHERE sb.sale_day >= (%s::date - INTERVAL '180 days')::date
+                    WHERE sb.is_sale = 1
+                      AND sb.sale_day >= (%s::date - INTERVAL '180 days')::date
                 ) AS first_d_180,
                 COUNT(*) FILTER (
-                    WHERE sb.sale_day >= (%s::date - INTERVAL '180 days')::date
+                    WHERE sb.is_sale = 1
+                      AND sb.sale_day >= (%s::date - INTERVAL '180 days')::date
                 ) AS cnt_180
             FROM sales_base sb
             GROUP BY sb.client_id
@@ -449,14 +447,18 @@ def _period_kpis_merged(
                 WHERE sb.sale_day BETWEEN %s AND %s
             ), 0) AS venta_neta,
             COUNT(DISTINCT sb.client_id) FILTER (
-                WHERE sb.sale_day BETWEEN %s AND %s
+                WHERE sb.is_sale = 1 AND sb.sale_day BETWEEN %s AND %s
             )::bigint AS clientes_unicos,
             COALESCE(SUM(sb.is_sale) FILTER (
-                WHERE sb.sale_day BETWEEN %s AND %s
+                WHERE sb.is_sale = 1 AND sb.sale_day BETWEEN %s AND %s
             ), 0)::bigint AS documentos_emitidos,
             COALESCE(
-                SUM(sb.total_amount_sales) FILTER (WHERE sb.sale_day BETWEEN %s AND %s)
-                / NULLIF(SUM(sb.is_sale) FILTER (WHERE sb.sale_day BETWEEN %s AND %s)::numeric, 0),
+                SUM(sb.total_amount_sales) FILTER (
+                    WHERE sb.is_sale = 1 AND sb.sale_day BETWEEN %s AND %s
+                )
+                / NULLIF(SUM(sb.is_sale) FILTER (
+                    WHERE sb.is_sale = 1 AND sb.sale_day BETWEEN %s AND %s
+                )::numeric, 0),
                 0
             ) AS ticket_promedio
         FROM sales_base sb
@@ -465,17 +467,15 @@ def _period_kpis_merged(
     row = session.query_one(f"{label}_sales", sql_sales, tuple(params)) or {}
 
     sql_lines = f"""
-        WITH {base_cte},
-        sale_docs AS (
-            SELECT DISTINCT sb.document_id
-            FROM sales_base sb
-            WHERE sb.sale_day BETWEEN %s AND %s
-        )
+        WITH {base_cte}
         SELECT
-            COALESCE(SUM(dd.quantity), 0) AS unidades_vendidas,
-            COUNT(DISTINCT dd.variant_id)::bigint AS productos_distintos
-        FROM distribuidora.document_details dd
-        INNER JOIN sale_docs sd ON sd.document_id = dd.document_id
+            COALESCE(SUM({DD_SIGNED_QTY}), 0) AS unidades_vendidas,
+            COUNT(DISTINCT dd.variant_id) FILTER (
+                WHERE sb.is_sale = 1
+            )::bigint AS productos_distintos
+        FROM sales_base sb
+        INNER JOIN distribuidora.document_details dd ON dd.document_id = sb.document_id
+        WHERE sb.sale_day BETWEEN %s AND %s
     """
     line_params = list(base_params) + [d_from, d_to]
     lines = session.query_one(f"{label}_lines", sql_lines, tuple(line_params)) or {}
@@ -502,7 +502,7 @@ def _today_sales(session: CommercialReadSession, scope: SalesScope) -> dict[str,
         WITH {base_cte}
         SELECT
             COALESCE(SUM(sb.total_amount_net), 0) AS venta_neta,
-            COUNT(DISTINCT sb.client_id)::bigint AS clientes
+            COUNT(DISTINCT sb.client_id) FILTER (WHERE sb.is_sale = 1)::bigint AS clientes
         FROM sales_base sb
         WHERE sb.sale_day BETWEEN %s AND %s
     """
@@ -521,10 +521,11 @@ def _monthly_timeline(session: CommercialReadSession, scope: SalesScope) -> list
         SELECT
             TO_CHAR(sb.sale_day, 'YYYY-MM') AS mes,
             COALESCE(SUM(sb.total_amount_net), 0) AS venta,
-            COUNT(DISTINCT sb.client_id)::bigint AS clientes,
+            COUNT(DISTINCT sb.client_id) FILTER (WHERE sb.is_sale = 1)::bigint AS clientes,
             COALESCE(SUM(sb.is_sale), 0)::bigint AS documentos,
             COALESCE(
-                SUM(sb.total_amount_sales) / NULLIF(SUM(sb.is_sale)::numeric, 0),
+                SUM(sb.total_amount_sales) FILTER (WHERE sb.is_sale = 1)
+                / NULLIF(SUM(sb.is_sale)::numeric, 0),
                 0
             ) AS ticket_promedio
         FROM sales_base sb
@@ -544,7 +545,7 @@ def _daily_sales(session: CommercialReadSession, scope: SalesScope) -> list[dict
         SELECT
             sb.sale_day AS day,
             COALESCE(SUM(sb.total_amount_net), 0) AS venta_neta,
-            COUNT(DISTINCT sb.client_id)::bigint AS clientes
+            COUNT(DISTINCT sb.client_id) FILTER (WHERE sb.is_sale = 1)::bigint AS clientes
         FROM sales_base sb
         WHERE sb.sale_day BETWEEN %s AND %s
         GROUP BY sb.sale_day
@@ -565,8 +566,13 @@ def _seller_performance(session: CommercialReadSession, scope: SalesScope, limit
         scope.prev_from, scope.prev_to,
         f.date_from, f.date_to,
         scope.prev_from, scope.prev_to,
+        f.date_from, f.date_to,
+        f.date_from, f.date_to,
+        f.date_from, f.date_to,
+        scope.prev_from, scope.prev_to,
         f.date_from,
-        f.date_from, f.date_from,
+        f.date_from,
+        f.date_from,
         f.date_from, f.date_to,
         limit,
     ]
@@ -584,14 +590,18 @@ def _seller_performance(session: CommercialReadSession, scope: SalesScope, limit
                     WHERE sb.sale_day BETWEEN %s AND %s
                 ), 0) AS venta_anterior,
                 COUNT(DISTINCT sb.client_id) FILTER (
-                    WHERE sb.sale_day BETWEEN %s AND %s
+                    WHERE sb.is_sale = 1 AND sb.sale_day BETWEEN %s AND %s
                 )::bigint AS clientes_curr,
                 COUNT(DISTINCT sb.client_id) FILTER (
-                    WHERE sb.sale_day BETWEEN %s AND %s
+                    WHERE sb.is_sale = 1 AND sb.sale_day BETWEEN %s AND %s
                 )::bigint AS clientes_prev,
                 COALESCE(
-                    SUM(sb.total_amount_sales) FILTER (WHERE sb.sale_day BETWEEN %s AND %s)
-                    / NULLIF(SUM(sb.is_sale) FILTER (WHERE sb.sale_day BETWEEN %s AND %s)::numeric, 0),
+                    SUM(sb.total_amount_sales) FILTER (
+                        WHERE sb.is_sale = 1 AND sb.sale_day BETWEEN %s AND %s
+                    )
+                    / NULLIF(SUM(sb.is_sale) FILTER (
+                        WHERE sb.is_sale = 1 AND sb.sale_day BETWEEN %s AND %s
+                    )::numeric, 0),
                     0
                 ) AS ticket_promedio
             FROM sales_base sb
@@ -601,10 +611,11 @@ def _seller_performance(session: CommercialReadSession, scope: SalesScope, limit
             SELECT
                 sb.seller_name,
                 sb.client_id,
-                BOOL_OR(sb.sale_day BETWEEN %s AND %s) AS in_curr,
-                BOOL_OR(sb.sale_day BETWEEN %s AND %s) AS in_prev,
-                MAX(sb.sale_day) FILTER (WHERE sb.sale_day < %s) AS last_before
+                BOOL_OR(sb.is_sale = 1 AND sb.sale_day BETWEEN %s AND %s) AS in_curr,
+                BOOL_OR(sb.is_sale = 1 AND sb.sale_day BETWEEN %s AND %s) AS in_prev,
+                MAX(sb.sale_day) FILTER (WHERE sb.is_sale = 1 AND sb.sale_day < %s) AS last_before
             FROM sales_base sb
+            WHERE sb.is_sale = 1
             GROUP BY sb.seller_name, sb.client_id
         ),
         seller_client_stats AS (
@@ -623,7 +634,7 @@ def _seller_performance(session: CommercialReadSession, scope: SalesScope, limit
         sale_docs AS (
             SELECT DISTINCT sb.document_id, sb.seller_name
             FROM sales_base sb
-            WHERE sb.sale_day BETWEEN %s AND %s
+            WHERE sb.is_sale = 1 AND sb.sale_day BETWEEN %s AND %s
         ),
         prod AS (
             SELECT sd.seller_name, COUNT(DISTINCT dd.variant_id)::bigint AS productos
@@ -706,7 +717,11 @@ def _unique_clients(session: CommercialReadSession, scope: SalesScope, limit: in
         f.date_from, f.date_to,
         scope.prev_from, scope.prev_to,
         f.date_from,
-        f.date_from, f.date_from,
+        f.date_to,
+        f.date_from, f.date_to,
+        f.date_from, f.date_to,
+        f.date_from,
+        f.date_from,
         limit,
     ]
     sql = f"""
@@ -718,7 +733,7 @@ def _unique_clients(session: CommercialReadSession, scope: SalesScope, limit: in
                 MAX(sb.municipality) AS municipality,
                 (
                     ARRAY_AGG(sb.seller_name ORDER BY sb.emission_date DESC)
-                    FILTER (WHERE sb.sale_day BETWEEN %s AND %s)
+                    FILTER (WHERE sb.is_sale = 1 AND sb.sale_day BETWEEN %s AND %s)
                 )[1] AS seller_name,
                 COALESCE(SUM(sb.total_amount_net) FILTER (
                     WHERE sb.sale_day BETWEEN %s AND %s
@@ -726,17 +741,22 @@ def _unique_clients(session: CommercialReadSession, scope: SalesScope, limit: in
                 COALESCE(SUM(sb.total_amount_net) FILTER (
                     WHERE sb.sale_day BETWEEN %s AND %s
                 ), 0) AS venta_anterior,
-                BOOL_OR(sb.sale_day BETWEEN %s AND %s) AS in_curr,
-                BOOL_OR(sb.sale_day BETWEEN %s AND %s) AS in_prev,
-                MAX(sb.sale_day) FILTER (WHERE sb.sale_day < %s) AS last_before,
-                MAX(sb.sale_day) AS ultima_compra,
-                (CURRENT_DATE - MAX(sb.sale_day))::int AS dias_sin_comprar,
+                BOOL_OR(sb.is_sale = 1 AND sb.sale_day BETWEEN %s AND %s) AS in_curr,
+                BOOL_OR(sb.is_sale = 1 AND sb.sale_day BETWEEN %s AND %s) AS in_prev,
+                MAX(sb.sale_day) FILTER (WHERE sb.is_sale = 1 AND sb.sale_day < %s) AS last_before,
+                MAX(sb.sale_day) FILTER (WHERE sb.is_sale = 1) AS ultima_compra,
+                (CURRENT_DATE - MAX(sb.sale_day) FILTER (WHERE sb.is_sale = 1))::int AS dias_sin_comprar,
                 COUNT(*) FILTER (
-                    WHERE sb.sale_day >= (%s::date - INTERVAL '90 days')::date
+                    WHERE sb.is_sale = 1
+                      AND sb.sale_day >= (%s::date - INTERVAL '90 days')::date
                 )::bigint AS compras_90d,
                 COALESCE(
-                    SUM(sb.total_amount_sales) FILTER (WHERE sb.sale_day BETWEEN %s AND %s)
-                    / NULLIF(SUM(sb.is_sale) FILTER (WHERE sb.sale_day BETWEEN %s AND %s)::numeric, 0),
+                    SUM(sb.total_amount_sales) FILTER (
+                        WHERE sb.is_sale = 1 AND sb.sale_day BETWEEN %s AND %s
+                    )
+                    / NULLIF(SUM(sb.is_sale) FILTER (
+                        WHERE sb.is_sale = 1 AND sb.sale_day BETWEEN %s AND %s
+                    )::numeric, 0),
                     0
                 ) AS ticket_promedio
             FROM sales_base sb
@@ -812,7 +832,7 @@ def get_commercial_map_data(
             active_clients AS (
                 SELECT DISTINCT sb.client_id
                 FROM sales_base sb
-                WHERE sb.sale_day BETWEEN %s AND %s
+                WHERE sb.is_sale = 1 AND sb.sale_day BETWEEN %s AND %s
             )
             SELECT
                 ac.client_id,
@@ -882,12 +902,12 @@ def _lost_clients(session: CommercialReadSession, scope: SalesScope, limit: int)
         prev_clients AS (
             SELECT DISTINCT sb.client_id
             FROM sales_base sb
-            WHERE sb.sale_day BETWEEN %s AND %s
+            WHERE sb.is_sale = 1 AND sb.sale_day BETWEEN %s AND %s
         ),
         curr_clients AS (
             SELECT DISTINCT sb.client_id
             FROM sales_base sb
-            WHERE sb.sale_day BETWEEN %s AND %s
+            WHERE sb.is_sale = 1 AND sb.sale_day BETWEEN %s AND %s
         ),
         lost AS (
             SELECT p.client_id FROM prev_clients p
@@ -899,9 +919,11 @@ def _lost_clients(session: CommercialReadSession, scope: SalesScope, limit: int)
                 sb.client_id,
                 MAX(sb.client_name) AS client_name,
                 MAX(sb.municipality) AS municipality,
-                (ARRAY_AGG(sb.seller_name ORDER BY sb.emission_date DESC))[1] AS seller_name,
-                MAX(sb.sale_day) AS ultima_compra,
-                (CURRENT_DATE - MAX(sb.sale_day))::int AS dias_sin_comprar,
+                (ARRAY_AGG(sb.seller_name ORDER BY sb.emission_date DESC)
+                    FILTER (WHERE sb.is_sale = 1)
+                )[1] AS seller_name,
+                MAX(sb.sale_day) FILTER (WHERE sb.is_sale = 1) AS ultima_compra,
+                (CURRENT_DATE - MAX(sb.sale_day) FILTER (WHERE sb.is_sale = 1))::int AS dias_sin_comprar,
                 COALESCE(SUM(sb.total_amount_net), 0) AS valor_historico,
                 COALESCE(SUM(sb.is_sale), 0)::bigint AS total_compras,
                 COALESCE(
@@ -920,6 +942,7 @@ def _lost_clients(session: CommercialReadSession, scope: SalesScope, limit: int)
             FROM sales_base sb
             INNER JOIN lost l ON l.client_id = sb.client_id
             INNER JOIN distribuidora.document_details dd ON dd.document_id = sb.document_id
+            WHERE sb.is_sale = 1
             GROUP BY sb.client_id
         )
         SELECT
@@ -983,7 +1006,7 @@ def _cross_selling(session: CommercialReadSession, scope: SalesScope, limit: int
             LEFT JOIN bsale.products p ON p.company_id = v2.company_id AND p.bsale_id = v2.product_id
             LEFT JOIN bsale.product_types pt ON pt.company_id = p.company_id AND pt.bsale_id = p.product_type_id
             LEFT JOIN bsale.products_master pm ON pm.company_id = {COMPANY_ID} AND pm.variant_id = dd.variant_id
-            WHERE sb.sale_day BETWEEN %s AND %s
+            WHERE sb.is_sale = 1 AND sb.sale_day BETWEEN %s AND %s
             GROUP BY sb.client_id, LOWER(COALESCE(pt.name, pm.product_type, ''))
         ),
         client_cat_set AS (
@@ -1021,61 +1044,46 @@ def _cross_selling(session: CommercialReadSession, scope: SalesScope, limit: int
 def _product_performance(session: CommercialReadSession, scope: SalesScope, limit: int) -> dict[str, Any]:
     base_cte, base_params = scope.sales_base_cte()
     f = scope.filters
-    seller_extra = ""
-    seller_params: list[Any] = []
-    if f.seller and str(f.seller).strip():
-        seller_extra = "AND sb.seller_name = %s"
-        seller_params.append(f.seller.strip())
 
-    top_params = list(base_params) + [f.date_from, f.date_to] + seller_params + [limit]
+    top_params = list(base_params) + [f.date_from, f.date_to, limit]
     sql_top = f"""
-        WITH {base_cte},
-        sale_docs AS (
-            SELECT sb.document_id, sb.client_id
-            FROM sales_base sb
-            WHERE sb.sale_day BETWEEN %s AND %s
-              {seller_extra}
-        )
+        WITH {base_cte}
         SELECT
             COALESCE(dd.variant_description, dd.variant_code, 'Sin nombre') AS producto,
             dd.variant_id,
-            COALESCE(SUM(dd.quantity), 0) AS unidades,
-            COUNT(DISTINCT sd.client_id)::bigint AS clientes,
-            COALESCE(SUM(dd.total_amount), 0) AS venta
-        FROM sale_docs sd
-        INNER JOIN distribuidora.document_details dd ON dd.document_id = sd.document_id
+            COALESCE(SUM({DD_SIGNED_QTY}), 0) AS unidades,
+            COUNT(DISTINCT sb.client_id) FILTER (WHERE sb.is_sale = 1)::bigint AS clientes,
+            COALESCE(SUM({DD_SIGNED_AMOUNT}), 0) AS venta
+        FROM sales_base sb
+        INNER JOIN distribuidora.document_details dd ON dd.document_id = sb.document_id
+        WHERE sb.sale_day BETWEEN %s AND %s
         GROUP BY dd.variant_id, dd.variant_description, dd.variant_code
         ORDER BY venta DESC NULLS LAST
         LIMIT %s
     """
     top = session.query_all("product_top", sql_top, tuple(top_params))
 
-    gap_params = (
-        list(base_params) + [f.date_from, f.date_to]
-        + list(base_params) + [f.date_from, f.date_to]
-        + seller_params + [min(50, limit)]
-    )
+    gap_params = list(base_params) + [f.date_from, f.date_to, f.date_from, f.date_to, min(50, limit)]
     gap_sql = f"""
         WITH {base_cte},
         company_prod AS (
             SELECT
                 dd.variant_id,
                 COALESCE(dd.variant_description, dd.variant_code, 'Sin nombre') AS producto,
-                COUNT(DISTINCT sb.client_id)::bigint AS clientes_empresa
+                COUNT(DISTINCT sb.client_id) FILTER (WHERE sb.is_sale = 1)::bigint AS clientes_empresa
             FROM sales_base sb
             INNER JOIN distribuidora.document_details dd ON dd.document_id = sb.document_id
-            WHERE sb.sale_day BETWEEN %s AND %s
+            WHERE sb.is_sale = 1 AND sb.sale_day BETWEEN %s AND %s
             GROUP BY dd.variant_id, dd.variant_description, dd.variant_code
-            HAVING COUNT(DISTINCT sb.client_id) >= 10
+            HAVING COUNT(DISTINCT sb.client_id) FILTER (WHERE sb.is_sale = 1) >= 10
         ),
         seller_prod AS (
             SELECT
                 dd.variant_id,
-                COUNT(DISTINCT sb.client_id)::bigint AS clientes_vendedor
+                COUNT(DISTINCT sb.client_id) FILTER (WHERE sb.is_sale = 1)::bigint AS clientes_vendedor
             FROM sales_base sb
             INNER JOIN distribuidora.document_details dd ON dd.document_id = sb.document_id
-            WHERE sb.sale_day BETWEEN %s AND %s
-              {seller_extra}
+            WHERE sb.is_sale = 1 AND sb.sale_day BETWEEN %s AND %s
             GROUP BY dd.variant_id
         )
         SELECT
@@ -1093,8 +1101,8 @@ def _product_performance(session: CommercialReadSession, scope: SalesScope, limi
     gaps = session.query_all("product_gaps", gap_sql, tuple(gap_params))
 
     cmp_params = (
-        list(base_params) + [f.date_from, f.date_to] + seller_params
-        + list(base_params) + [scope.prev_from, scope.prev_to] + seller_params
+        list(base_params) + [f.date_from, f.date_to]
+        + list(base_params) + [scope.prev_from, scope.prev_to]
         + [30]
     )
     cmp_sql = f"""
@@ -1103,22 +1111,20 @@ def _product_performance(session: CommercialReadSession, scope: SalesScope, limi
             SELECT
                 dd.variant_id,
                 MAX(COALESCE(dd.variant_description, dd.variant_code, 'Producto')) AS producto,
-                COALESCE(SUM(dd.total_amount), 0) AS venta
+                COALESCE(SUM({DD_SIGNED_AMOUNT}), 0) AS venta
             FROM sales_base sb
             INNER JOIN distribuidora.document_details dd ON dd.document_id = sb.document_id
             WHERE sb.sale_day BETWEEN %s AND %s
-              {seller_extra}
             GROUP BY dd.variant_id
         ),
         prev AS (
             SELECT
                 dd.variant_id,
                 MAX(COALESCE(dd.variant_description, dd.variant_code, 'Producto')) AS producto,
-                COALESCE(SUM(dd.total_amount), 0) AS venta
+                COALESCE(SUM({DD_SIGNED_AMOUNT}), 0) AS venta
             FROM sales_base sb
             INNER JOIN distribuidora.document_details dd ON dd.document_id = sb.document_id
             WHERE sb.sale_day BETWEEN %s AND %s
-              {seller_extra}
             GROUP BY dd.variant_id
         )
         SELECT
@@ -1212,7 +1218,12 @@ def _build_dashboard(
     return {
         "period": {"from": f.date_from.isoformat(), "to": f.date_to.isoformat()},
         "compare_period": {"from": scope.prev_from.isoformat(), "to": scope.prev_to.isoformat()},
-        "document_types": {"boleta": DOC_BOLETA, "factura": DOC_FACTURA, "nota_credito_excluded": 9},
+        "document_types": {
+            "boleta": DOC_BOLETA,
+            "factura": DOC_FACTURA,
+            "nota_credito": DOC_NC,
+            "net_formula": "factura + boleta - nota_credito",
+        },
         "kpis": kpis,
         "client_classification": classification,
         "daily_sales": daily,
@@ -1440,6 +1451,7 @@ def build_commercial_bundle(
 
     return {
         "meta": meta,
+        "analysis_scope": analysis_scope_payload(),
         "crm": crm,
         "alerts": alerts,
         "dashboard": dashboard,

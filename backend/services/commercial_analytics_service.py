@@ -1,4 +1,4 @@
-"""Analítica comercial vendedores — Company 3 / Office 1, solo facturas (6) y boletas (1)."""
+"""Analítica comercial vendedores — equipo operativo La Quillotana (Company 3 / Office 1)."""
 
 from __future__ import annotations
 
@@ -9,17 +9,17 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
+from backend.config.commercial_scope import (
+    COMPANY_ID,
+    DD_SIGNED_AMOUNT,
+    DD_SIGNED_QTY,
+    filter_options_payload,
+    profile_sales_where,
+)
 from backend.db import get_connection
 from backend.services.distribuidora.orders_service import _row_to_dict, _serialize_row
 
 logger = logging.getLogger(__name__)
-
-COMPANY_ID = 3
-OFFICE_ID = 1
-DOC_BOLETA = 1
-DOC_FACTURA = 6
-DOC_NC = 9
-SALE_DOC_TYPES = (DOC_BOLETA, DOC_FACTURA)
 
 MAX_ROWS = 5000
 
@@ -221,17 +221,10 @@ def get_summary(filters: CommercialFilters) -> dict[str, Any]:
 
 
 def get_client_profile(filters: CommercialFilters, client_id: int) -> dict[str, Any]:
-    doc = (filters.document_type or "all").lower().strip()
-    if doc == "factura":
-        doc_filter = "v.document_type_id = %s"
-        doc_params: list[Any] = [DOC_FACTURA]
-    elif doc == "boleta":
-        doc_filter = "v.document_type_id = %s"
-        doc_params = [DOC_BOLETA]
-    else:
-        doc_filter = "v.document_type_id IN %s"
-        doc_params = [SALE_DOC_TYPES]
-
+    where_clause, where_params = profile_sales_where(
+        client_id=client_id,
+        document_type=filters.document_type,
+    )
     six_months_ago = filters.date_to - timedelta(days=180)
 
     sql_client = f"""
@@ -241,21 +234,23 @@ def get_client_profile(filters: CommercialFilters, client_id: int) -> dict[str, 
             MAX(v.municipality) AS municipality,
             (
                 ARRAY_AGG(v.seller_name ORDER BY v.emission_date DESC)
+                FILTER (WHERE v.is_sale = 1)
             )[1] AS seller_name,
             MAX((v.emission_date AT TIME ZONE 'UTC')::date) FILTER (WHERE v.is_sale = 1) AS ultima_compra,
             COALESCE(SUM(v.is_sale), 0)::bigint AS total_compras,
             COALESCE(SUM(v.total_amount_net), 0) AS venta_total,
             COALESCE(
-                SUM(v.total_amount_sales) / NULLIF(SUM(v.is_sale)::numeric, 0),
+                SUM(v.total_amount_sales) FILTER (WHERE v.is_sale = 1)
+                / NULLIF(SUM(v.is_sale)::numeric, 0),
                 0
             ) AS ticket_promedio
         FROM distribuidora.v_sales v
-        WHERE v.client_id = %s AND v.is_sale = 1 AND {doc_filter}
+        WHERE {where_clause}
         GROUP BY v.client_id
     """
     client_row = _conn_query_one(
         sql_client,
-        tuple([client_id] + doc_params),
+        tuple(where_params),
         endpoint="client-profile",
         label="client",
     ) or {}
@@ -265,34 +260,37 @@ def get_client_profile(filters: CommercialFilters, client_id: int) -> dict[str, 
             TO_CHAR((v.emission_date AT TIME ZONE 'UTC')::date, 'YYYY-MM') AS mes,
             COALESCE(SUM(v.total_amount_net), 0) AS venta
         FROM distribuidora.v_sales v
-        WHERE v.client_id = %s AND v.is_sale = 1 AND {doc_filter}
+        WHERE {where_clause}
           AND (v.emission_date AT TIME ZONE 'UTC')::date >= %s
         GROUP BY 1
         ORDER BY 1
     """
     monthly = _conn_query_all(
         sql_monthly,
-        tuple([client_id] + doc_params + [six_months_ago]),
+        tuple(where_params + [six_months_ago]),
         endpoint="client-profile",
         label="monthly",
     )
 
+    signed_qty = DD_SIGNED_QTY.replace("sb.", "v.")
+    signed_amount = DD_SIGNED_AMOUNT.replace("sb.", "v.")
+
     sql_products = f"""
         SELECT
             COALESCE(dd.variant_description, dd.variant_code, 'Producto') AS producto,
-            COALESCE(SUM(dd.quantity), 0) AS unidades,
-            COALESCE(SUM(dd.total_amount), 0) AS venta,
-            MAX((v.emission_date AT TIME ZONE 'UTC')::date) AS ultima_compra
+            COALESCE(SUM({signed_qty}), 0) AS unidades,
+            COALESCE(SUM({signed_amount}), 0) AS venta,
+            MAX((v.emission_date AT TIME ZONE 'UTC')::date) FILTER (WHERE v.is_sale = 1) AS ultima_compra
         FROM distribuidora.v_sales v
         INNER JOIN distribuidora.document_details dd ON dd.document_id = v.document_id
-        WHERE v.client_id = %s AND v.is_sale = 1 AND {doc_filter}
+        WHERE {where_clause}
         GROUP BY dd.variant_description, dd.variant_code
         ORDER BY venta DESC NULLS LAST
         LIMIT 20
     """
     products = _conn_query_all(
         sql_products,
-        tuple([client_id] + doc_params),
+        tuple(where_params),
         endpoint="client-profile",
         label="products",
     )
@@ -300,20 +298,20 @@ def get_client_profile(filters: CommercialFilters, client_id: int) -> dict[str, 
     sql_cats = f"""
         SELECT
             COALESCE(pt.name, pm.product_type, 'Sin categoría') AS categoria,
-            COALESCE(SUM(dd.total_amount), 0) AS venta
+            COALESCE(SUM({signed_amount}), 0) AS venta
         FROM distribuidora.v_sales v
         INNER JOIN distribuidora.document_details dd ON dd.document_id = v.document_id
         LEFT JOIN bsale.variants v2 ON v2.company_id = {COMPANY_ID} AND v2.bsale_id = dd.variant_id
         LEFT JOIN bsale.products p ON p.company_id = v2.company_id AND p.bsale_id = v2.product_id
         LEFT JOIN bsale.product_types pt ON pt.company_id = p.company_id AND pt.bsale_id = p.product_type_id
         LEFT JOIN bsale.products_master pm ON pm.company_id = {COMPANY_ID} AND pm.variant_id = dd.variant_id
-        WHERE v.client_id = %s AND v.is_sale = 1 AND {doc_filter}
+        WHERE {where_clause}
         GROUP BY 1
         ORDER BY venta DESC NULLS LAST
     """
     categories = _conn_query_all(
         sql_cats,
-        tuple([client_id] + doc_params),
+        tuple(where_params),
         endpoint="client-profile",
         label="categories",
     )
@@ -327,21 +325,27 @@ def get_client_profile(filters: CommercialFilters, client_id: int) -> dict[str, 
             COALESCE(SUM(v.total_amount_net) FILTER (
                 WHERE (v.emission_date AT TIME ZONE 'UTC')::date BETWEEN %s AND %s
             ), 0) AS venta_anterior,
-            BOOL_OR((v.emission_date AT TIME ZONE 'UTC')::date BETWEEN %s AND %s) AS in_curr,
-            BOOL_OR((v.emission_date AT TIME ZONE 'UTC')::date BETWEEN %s AND %s) AS in_prev,
-            (CURRENT_DATE - MAX((v.emission_date AT TIME ZONE 'UTC')::date))::int AS dias_sin_comprar,
+            BOOL_OR(v.is_sale = 1 AND (v.emission_date AT TIME ZONE 'UTC')::date BETWEEN %s AND %s) AS in_curr,
+            BOOL_OR(v.is_sale = 1 AND (v.emission_date AT TIME ZONE 'UTC')::date BETWEEN %s AND %s) AS in_prev,
+            (CURRENT_DATE - MAX((v.emission_date AT TIME ZONE 'UTC')::date) FILTER (WHERE v.is_sale = 1))::int AS dias_sin_comprar,
             COUNT(*) FILTER (
-                WHERE (v.emission_date AT TIME ZONE 'UTC')::date >= (%s::date - INTERVAL '90 days')::date
+                WHERE v.is_sale = 1
+                  AND (v.emission_date AT TIME ZONE 'UTC')::date >= (%s::date - INTERVAL '90 days')::date
             )::bigint AS compras_90d
         FROM distribuidora.v_sales v
-        WHERE v.client_id = %s AND v.is_sale = 1 AND {doc_filter}
+        WHERE {where_clause}
     """
     period_row = _conn_query_one(
         sql_period,
         tuple(
-            [filters.date_from, filters.date_to, prev_from, prev_to,
-             filters.date_from, filters.date_to, prev_from, prev_to,
-             filters.date_to, client_id] + doc_params
+            where_params
+            + [
+                filters.date_from, filters.date_to,
+                prev_from, prev_to,
+                filters.date_from, filters.date_to,
+                prev_from, prev_to,
+                filters.date_to,
+            ]
         ),
         endpoint="client-profile",
         label="period",
@@ -354,7 +358,8 @@ def get_client_profile(filters: CommercialFilters, client_id: int) -> dict[str, 
                 MAX((v.emission_date AT TIME ZONE 'UTC')::date) AS ultima
             FROM distribuidora.v_sales v
             INNER JOIN distribuidora.document_details dd ON dd.document_id = v.document_id
-            WHERE v.client_id = %s AND v.is_sale = 1 AND {doc_filter}
+            WHERE {where_clause}
+              AND v.is_sale = 1
               AND (v.emission_date AT TIME ZONE 'UTC')::date >= %s
             GROUP BY 1
         )
@@ -366,7 +371,7 @@ def get_client_profile(filters: CommercialFilters, client_id: int) -> dict[str, 
     """
     abandoned = _conn_query_all(
         sql_abandoned,
-        tuple([client_id] + doc_params + [six_months_ago, filters.date_to]),
+        tuple(where_params + [six_months_ago, filters.date_to]),
         endpoint="client-profile",
         label="abandoned",
     )
@@ -526,24 +531,17 @@ def get_seller_profile(filters: CommercialFilters, seller_name: str) -> dict[str
     recovered = [c for c in unique if c.get("status") == "recuperado"]
     lost_mine = [c for c in lost if c.get("seller_name") == name][:20]
 
-    doc = (filters.document_type or "all").lower().strip()
-    if doc == "factura":
-        doc_filter = "v.document_type_id = %s"
-        doc_params: list[Any] = [DOC_FACTURA]
-    elif doc == "boleta":
-        doc_filter = "v.document_type_id = %s"
-        doc_params = [DOC_BOLETA]
-    else:
-        doc_filter = "v.document_type_id IN %s"
-        doc_params = [SALE_DOC_TYPES]
-
+    where_clause, where_params = profile_sales_where(
+        seller_name=name,
+        document_type=filters.document_type,
+    )
     sql_comunas = f"""
         SELECT
             COALESCE(v.municipality, 'Sin comuna') AS comuna,
-            COUNT(DISTINCT v.client_id)::bigint AS clientes,
+            COUNT(DISTINCT v.client_id) FILTER (WHERE v.is_sale = 1)::bigint AS clientes,
             COALESCE(SUM(v.total_amount_net), 0) AS venta
         FROM distribuidora.v_sales v
-        WHERE v.is_sale = 1 AND v.seller_name = %s AND {doc_filter}
+        WHERE {where_clause}
           AND (v.emission_date AT TIME ZONE 'UTC')::date BETWEEN %s AND %s
         GROUP BY 1
         ORDER BY venta DESC NULLS LAST
@@ -551,7 +549,7 @@ def get_seller_profile(filters: CommercialFilters, seller_name: str) -> dict[str
     """
     comunas = _conn_query_all(
         sql_comunas,
-        tuple([name] + doc_params + [filters.date_from, filters.date_to]),
+        tuple(where_params + [filters.date_from, filters.date_to]),
         endpoint="seller-profile",
         label="comunas",
     )
@@ -615,37 +613,24 @@ def get_seller_profile(filters: CommercialFilters, seller_name: str) -> dict[str
 
 
 def list_filter_options() -> dict[str, Any]:
-    sellers = _conn_query_all(
-        """
-        SELECT DISTINCT seller_name
-        FROM distribuidora.v_sales
-        WHERE is_sale = 1 AND seller_name IS NOT NULL
-        ORDER BY seller_name
-        """,
-        (),
-        endpoint="filter-options",
-        label="sellers",
-    )
+    from backend.config.commercial_scope import ACTIVE_SELLER_IDS
+
+    payload = filter_options_payload()
     cities = _conn_query_all(
         """
         SELECT DISTINCT municipality
         FROM distribuidora.v_sales
-        WHERE is_sale = 1 AND municipality IS NOT NULL AND TRIM(municipality) <> ''
+        WHERE seller_id IN %s
+          AND is_sale = 1
+          AND municipality IS NOT NULL AND TRIM(municipality) <> ''
         ORDER BY municipality
         """,
-        (),
+        (ACTIVE_SELLER_IDS,),
         endpoint="filter-options",
         label="cities",
     )
-    return {
-        "sellers": [r["seller_name"] for r in sellers],
-        "cities": [r["municipality"] for r in cities],
-        "document_types": [
-            {"id": "all", "label": "Todos"},
-            {"id": "factura", "label": "Factura", "document_type_id": DOC_FACTURA},
-            {"id": "boleta", "label": "Boleta", "document_type_id": DOC_BOLETA},
-        ],
-    }
+    payload["cities"] = [r["municipality"] for r in cities]
+    return payload
 
 
 def current_month_range() -> tuple[date, date]:

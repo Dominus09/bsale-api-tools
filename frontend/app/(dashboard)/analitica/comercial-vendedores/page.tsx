@@ -35,6 +35,7 @@ import {
   getCommercialClientProfile,
   getCommercialSellerProfile,
   type CommercialAnalyticsParams,
+  type CommercialAnalysisScope,
   type CommercialAttackItem,
   type CommercialBundleMeta,
   type CommercialCrmLayer,
@@ -319,6 +320,7 @@ export default function ComercialVendedoresPage() {
   const [tab, setTab] = useState("home")
 
   const [crm, setCrm] = useState<CommercialCrmLayer | null>(null)
+  const [analysisScope, setAnalysisScope] = useState<CommercialAnalysisScope | null>(null)
   const [dashboard, setDashboard] = useState<CommercialDashboardResponse | null>(null)
   const [meta, setMeta] = useState<CommercialBundleMeta | null>(null)
   const [summary, setSummary] = useState<{
@@ -424,6 +426,7 @@ export default function ComercialVendedoresPage() {
       })
       setDashboard(bundle.dashboard)
       setCrm(bundle.crm ?? null)
+      setAnalysisScope(bundle.analysis_scope ?? null)
       setMeta(bundle.meta)
       setSummary(bundle.summary)
       setAttackPlan(bundle.attack_plan)
@@ -661,6 +664,7 @@ export default function ComercialVendedoresPage() {
               <>
                 <CommercialCrmHome
                   crm={crm}
+                  analysisScope={analysisScope ?? undefined}
                   dailySpark={dailySpark}
                   selectedSeller={seller || undefined}
                   onClientClick={(id) => void openProfile(id)}

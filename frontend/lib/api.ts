@@ -5734,8 +5734,18 @@ export async function getCommercialFilterOptions(signal?: AbortSignal): Promise<
   return res.json()
 }
 
+export type CommercialAnalysisScope = {
+  company: string
+  office: string
+  seller_count: number
+  document_types: number[]
+  credit_notes_discount_sales: boolean
+  active_sellers: string[]
+}
+
 export type CommercialBundleResponse = {
   meta: CommercialBundleMeta
+  analysis_scope?: CommercialAnalysisScope
   crm?: CommercialCrmLayer
   alerts?: CommercialAlert[]
   dashboard: CommercialDashboardResponse

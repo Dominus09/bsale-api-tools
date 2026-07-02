@@ -5,8 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-COMPANY_ID = 3
-OFFICE_ID = 1
+from backend.config.commercial_scope import COMPANY_ID, OFFICE_ID
 
 PRIORITY_ORDER = {"alta": 0, "media": 1, "baja": 2}
 
