@@ -447,6 +447,10 @@ async def get_validation(
     seller: str | None = Query(None),
     city: str | None = Query(None),
     document_type: str | None = Query(None),
+    bsale_dashboard_total: float | None = Query(
+        None,
+        description="Total del dashboard oficial Bsale para interpretar regla de negocio",
+    ),
 ):
     """Auditoría pre-deploy del motor comercial (solo gerencia)."""
     if company_id != 3 or office_id != 1:
@@ -460,4 +464,11 @@ async def get_validation(
         city=city,
         document_type=document_type,
     )
-    return await run_in_threadpool(svc.get_commercial_validation, f)
+
+    def _run() -> dict:
+        return svc.get_commercial_validation(
+            f,
+            bsale_dashboard_total=bsale_dashboard_total,
+        )
+
+    return await run_in_threadpool(_run)

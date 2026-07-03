@@ -5728,6 +5728,7 @@ export type CommercialAnalyticsParams = {
   city?: string
   client_id?: number
   document_type?: string
+  bsale_dashboard_total?: number
   limit?: number
   signal?: AbortSignal
 }
@@ -5745,6 +5746,9 @@ function commercialAnalyticsQs(params: CommercialAnalyticsParams): URLSearchPara
   if (params.city) qs.set("city", params.city)
   if (params.client_id != null) qs.set("client_id", String(params.client_id))
   if (params.document_type) qs.set("document_type", params.document_type)
+  if (params.bsale_dashboard_total != null && !Number.isNaN(params.bsale_dashboard_total)) {
+    qs.set("bsale_dashboard_total", String(params.bsale_dashboard_total))
+  }
   if (params.limit != null) qs.set("limit", String(params.limit))
   return qs
 }
@@ -5950,6 +5954,63 @@ export type CommercialValidationAuditStatus = {
   validated: boolean
 }
 
+export type CommercialValidationBsaleInterpretation = {
+  crm_metrics: {
+    ventas_facturas: number
+    ventas_boletas: number
+    notas_credito: number
+    ventas_brutas: number
+    ventas_netas: number
+    notas_credito_count: number
+  }
+  dashboard_reference: {
+    bsale_dashboard_total: number | null
+    provided: boolean
+  }
+  likely_dashboard_metric: {
+    metric: "gross" | "net" | null
+    label: string | null
+    match_percent_gross: number | null
+    match_percent_net: number | null
+    options: {
+      key: "gross" | "net"
+      label: string
+      match_percent: number | null
+      selected: boolean
+    }[]
+  }
+  comparison_scenarios: {
+    id: string
+    label: string
+    formula: string
+    value: number
+  }[]
+  diagnosis: {
+    status: "ok" | "warning" | "info"
+    message: string
+    crm_ventas_netas: number
+    crm_ventas_brutas: number
+    nc_period_total: number
+    delta_dashboard_vs_crm_net: number | null
+    delta_explained_by_nc: boolean
+    unexplained_delta: number | null
+  }
+  credit_notes: {
+    document_id: number
+    number: number | string | null
+    date: string | null
+    client: string
+    seller: string
+    amount: number
+    origin_document: string | null
+    origin_document_id: number | null
+    origin_in_period: boolean
+    discounted_by_crm: boolean
+    likely_subtracted_in_bsale_dashboard: boolean
+    likely_visible_in_bsale_dashboard: boolean
+  }[]
+}
+
 export type CommercialValidationResponse = {
   audit_status: CommercialValidationAuditStatus
   data_coverage: CommercialValidationCoverageRow[]
@@ -5961,6 +6022,7 @@ export type CommercialValidationResponse = {
   product_reconciliation: CommercialValidationProductRow[]
   auto_audit_rules: CommercialValidationAutoRule[]
   difference_items: CommercialValidationDifferenceItem[]
+  bsale_interpretation?: CommercialValidationBsaleInterpretation
   scope: {
     company_id: number
     company_name: string

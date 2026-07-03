@@ -251,6 +251,314 @@ def _build_data_coverage(erp: dict[str, Any], bsale: dict[str, Any]) -> list[dic
     ]
 
 
+def _match_percent(reference: float, candidate: float) -> float:
+    if reference == 0:
+        return 100.0 if candidate == 0 else 0.0
+    return round(max(0.0, 100.0 * (1.0 - abs(reference - candidate) / abs(reference))), 2)
+
+
+def _origin_doc_label(type_id: int | None, number: Any) -> str | None:
+    if type_id is None and number is None:
+        return None
+    label = DOC_TYPE_LABEL.get(int(type_id or 0), f"Tipo {type_id}")
+    num = number if number is not None else "?"
+    return f"{label} {num}"
+
+
+def _fetch_credit_notes_interpretation(
+    session: CommercialReadSession,
+    *,
+    base_cte: str,
+    date_from: date,
+    date_to: date,
+    period_only_bound: tuple[Any, ...],
+) -> tuple[list[dict[str, Any]], float]:
+    """NC del período + monto escenario F (NC ligadas a ventas emitidas en el período)."""
+    nc_sql = f"""
+        WITH {base_cte},
+        period_b AS (
+            SELECT sb.* FROM sales_base sb WHERE sb.sale_day BETWEEN %s AND %s
+        ),
+        nc_emitidas AS (
+            SELECT sb.*
+            FROM period_b sb
+            WHERE sb.document_type_id = {DOC_NC}
+        ),
+        nc_origen AS (
+            SELECT DISTINCT ON (nc.document_id)
+                nc.document_id,
+                nc.number,
+                nc.sale_day,
+                nc.client_name,
+                nc.seller_name,
+                ABS(nc.total_amount_net) AS monto,
+                orig.document_id AS origin_document_id,
+                orig.number AS origin_number,
+                orig.document_type_id AS origin_document_type_id,
+                (orig.emission_date AT TIME ZONE 'UTC')::date AS origin_sale_day
+            FROM nc_emitidas nc
+            LEFT JOIN LATERAL (
+                SELECT dr.related_document_id
+                FROM distribuidora.document_details dd
+                INNER JOIN distribuidora.document_related dr ON dr.detail_id = dd.detail_id
+                WHERE dd.document_id = nc.document_id
+                ORDER BY dr.related_document_id
+                LIMIT 1
+            ) rel ON TRUE
+            LEFT JOIN distribuidora.v_documents_latest orig
+                ON orig.document_id = rel.related_document_id
+            ORDER BY nc.document_id, orig.emission_date DESC NULLS LAST
+        )
+        SELECT
+            document_id,
+            number,
+            sale_day,
+            client_name,
+            seller_name,
+            monto,
+            origin_document_id,
+            origin_number,
+            origin_document_type_id,
+            origin_sale_day
+        FROM nc_origen
+        ORDER BY sale_day, number NULLS LAST, document_id
+    """
+    scenario_f_sql = f"""
+        WITH {base_cte},
+        period_sales AS (
+            SELECT sb.document_id
+            FROM sales_base sb
+            WHERE sb.sale_day BETWEEN %s AND %s
+              AND sb.document_type_id IN ({DOC_FACTURA}, {DOC_BOLETA})
+        ),
+        nc_scoped AS (
+            SELECT sb.*
+            FROM sales_base sb
+            WHERE sb.document_type_id = {DOC_NC}
+        )
+        SELECT COALESCE(SUM(ABS(nc.total_amount_net)), 0) AS scenario_f_total
+        FROM nc_scoped nc
+        WHERE EXISTS (
+            SELECT 1
+            FROM distribuidora.document_details dd
+            INNER JOIN distribuidora.document_related dr ON dr.detail_id = dd.detail_id
+            INNER JOIN period_sales ps ON ps.document_id = dr.related_document_id
+            WHERE dd.document_id = nc.document_id
+        )
+    """
+    nc_rows = session.query_all("validation_nc_interpretation", nc_sql, period_only_bound)
+    f_row = session.query_one("validation_nc_scenario_f", scenario_f_sql, period_only_bound) or {}
+    scenario_f_total = round(_float(f_row.get("scenario_f_total")), 2)
+
+    credit_notes: list[dict[str, Any]] = []
+    for r in nc_rows:
+        sale_day = normalize_date(r.get("sale_day"))
+        origin_day = normalize_date(r.get("origin_sale_day"))
+        origin_in_period = (
+            origin_day is not None
+            and date_from <= origin_day <= date_to
+        )
+        credit_notes.append({
+            "document_id": _int(r.get("document_id")),
+            "number": r.get("number"),
+            "date": sale_day.isoformat() if sale_day else None,
+            "client": str(r.get("client_name") or ""),
+            "seller": str(r.get("seller_name") or ""),
+            "amount": round(_float(r.get("monto")), 2),
+            "origin_document": _origin_doc_label(
+                _int(r.get("origin_document_type_id"))
+                if r.get("origin_document_type_id") is not None
+                else None,
+                r.get("origin_number"),
+            ),
+            "origin_document_id": _int(r.get("origin_document_id")) or None,
+            "origin_in_period": origin_in_period,
+            "discounted_by_crm": True,
+        })
+
+    return credit_notes, scenario_f_total
+
+
+def _build_bsale_interpretation(
+    crm: dict[str, Any],
+    credit_notes: list[dict[str, Any]],
+    *,
+    scenario_f_total: float,
+    bsale_dashboard_total: float | None,
+) -> dict[str, Any]:
+    """Interpreta qué métrica del dashboard oficial Bsale explica la diferencia con el CRM."""
+    ventas_facturas = round(_float(crm.get("venta_facturas")), 2)
+    ventas_boletas = round(_float(crm.get("venta_boletas")), 2)
+    notas_credito = round(_float(crm.get("notas_credito_monto")), 2)
+    ventas_brutas = round(ventas_facturas + ventas_boletas, 2)
+    ventas_netas = round(_float(crm.get("venta_neta")), 2)
+
+    nc_emitidas_periodo = round(sum(_float(n.get("amount")) for n in credit_notes), 2)
+
+    scenarios = [
+        {
+            "id": "A",
+            "label": "Facturas + Boletas",
+            "formula": "F + B",
+            "value": ventas_brutas,
+        },
+        {
+            "id": "B",
+            "label": "Facturas + Boletas − NC",
+            "formula": "F + B − NC",
+            "value": ventas_netas,
+        },
+        {
+            "id": "C",
+            "label": "Solo Facturas",
+            "formula": "F",
+            "value": ventas_facturas,
+        },
+        {
+            "id": "D",
+            "label": "Solo Boletas",
+            "formula": "B",
+            "value": ventas_boletas,
+        },
+        {
+            "id": "E",
+            "label": "NC emitidas dentro del período",
+            "formula": "Σ NC emitidas en período",
+            "value": nc_emitidas_periodo,
+        },
+        {
+            "id": "F",
+            "label": "NC asociadas a documentos del período",
+            "formula": "Σ NC → venta (F/B) emitida en período",
+            "value": scenario_f_total,
+        },
+    ]
+
+    match_gross = (
+        _match_percent(bsale_dashboard_total, ventas_brutas)
+        if bsale_dashboard_total is not None
+        else None
+    )
+    match_net = (
+        _match_percent(bsale_dashboard_total, ventas_netas)
+        if bsale_dashboard_total is not None
+        else None
+    )
+
+    likely_metric: str | None = None
+    likely_label: str | None = None
+    if match_gross is not None and match_net is not None:
+        if match_gross >= match_net:
+            likely_metric = "gross"
+            likely_label = "Ventas Brutas"
+        else:
+            likely_metric = "net"
+            likely_label = "Ventas Netas"
+
+    likely_subtracts_nc = likely_metric == "net"
+    for note in credit_notes:
+        note["likely_subtracted_in_bsale_dashboard"] = likely_subtracts_nc
+        note["likely_visible_in_bsale_dashboard"] = not likely_subtracts_nc
+
+    diagnosis_status = "info"
+    diagnosis_message = (
+        "Ingresa el total del dashboard oficial de Bsale para comparar escenarios "
+        "y detectar si la diferencia se explica por el tratamiento de las NC."
+    )
+    delta_dashboard: float | None = None
+    delta_explained_by_nc = False
+    unexplained_delta: float | None = None
+
+    if bsale_dashboard_total is not None:
+        ref = round(bsale_dashboard_total, 2)
+        delta_dashboard = round(ref - ventas_netas, 2)
+        delta_gross_gap = round(ref - ventas_brutas, 2)
+        delta_explained_by_nc = (
+            abs(delta_dashboard - notas_credito) <= MONEY_TOLERANCE
+            or abs(delta_gross_gap) <= MONEY_TOLERANCE
+            or abs(delta_dashboard + notas_credito) <= MONEY_TOLERANCE
+        )
+        unexplained_delta = (
+            None
+            if delta_explained_by_nc
+            else round(
+                delta_dashboard - notas_credito
+                if abs(delta_dashboard) >= abs(delta_gross_gap)
+                else delta_gross_gap,
+                2,
+            )
+        )
+        if delta_explained_by_nc:
+            diagnosis_status = "ok"
+            if abs(delta_gross_gap) <= MONEY_TOLERANCE:
+                diagnosis_message = (
+                    f"El dashboard Bsale ({ref:,.0f} CLP) coincide con ventas brutas del CRM "
+                    f"(F + B). Las NC del período ({notas_credito:,.0f} CLP) no se restan en ese "
+                    "total — el CRM sí las descuenta en ventas netas."
+                ).replace(",", ".")
+            else:
+                diagnosis_message = (
+                    f"La diferencia con el dashboard Bsale ({abs(delta_dashboard):,.0f} CLP) "
+                    f"corresponde exactamente al monto de las NC del período "
+                    f"({notas_credito:,.0f} CLP). El CRM aplica F + B − NC; el dashboard "
+                    "probablemente muestra ventas brutas o no descuenta NC emitidas."
+                ).replace(",", ".")
+        else:
+            diagnosis_status = "warning"
+            diagnosis_message = (
+                f"Existen diferencias que NO se explican solo con las NC del período. "
+                f"Dashboard Bsale: {ref:,.0f} · CRM netas: {ventas_netas:,.0f} · "
+                f"Δ {delta_dashboard:,.0f} · NC período: {notas_credito:,.0f}."
+            ).replace(",", ".")
+
+    return {
+        "crm_metrics": {
+            "ventas_facturas": ventas_facturas,
+            "ventas_boletas": ventas_boletas,
+            "notas_credito": notas_credito,
+            "ventas_brutas": ventas_brutas,
+            "ventas_netas": ventas_netas,
+            "notas_credito_count": len(credit_notes),
+        },
+        "dashboard_reference": {
+            "bsale_dashboard_total": bsale_dashboard_total,
+            "provided": bsale_dashboard_total is not None,
+        },
+        "likely_dashboard_metric": {
+            "metric": likely_metric,
+            "label": likely_label,
+            "match_percent_gross": match_gross,
+            "match_percent_net": match_net,
+            "options": [
+                {
+                    "key": "gross",
+                    "label": "Ventas Brutas",
+                    "match_percent": match_gross,
+                    "selected": likely_metric == "gross",
+                },
+                {
+                    "key": "net",
+                    "label": "Ventas Netas",
+                    "match_percent": match_net,
+                    "selected": likely_metric == "net",
+                },
+            ],
+        },
+        "comparison_scenarios": scenarios,
+        "diagnosis": {
+            "status": diagnosis_status,
+            "message": diagnosis_message,
+            "crm_ventas_netas": ventas_netas,
+            "crm_ventas_brutas": ventas_brutas,
+            "nc_period_total": notas_credito,
+            "delta_dashboard_vs_crm_net": delta_dashboard,
+            "delta_explained_by_nc": delta_explained_by_nc,
+            "unexplained_delta": unexplained_delta,
+        },
+        "credit_notes": credit_notes,
+    }
+
+
 def _build_commercial_reconciliation(erp: dict[str, Any], bsale: dict[str, Any]) -> list[dict[str, Any]]:
     def concept_row(concept: str, erp_val: float, bsale_val: float, *, is_money: bool = True) -> dict[str, Any]:
         delta = round(erp_val - bsale_val, 2 if is_money else 0)
@@ -716,7 +1024,11 @@ def _build_audit_checks(
     return checks
 
 
-def build_commercial_validation(filters: CommercialFilters) -> dict[str, Any]:
+def build_commercial_validation(
+    filters: CommercialFilters,
+    *,
+    bsale_dashboard_total: float | None = None,
+) -> dict[str, Any]:
     """Auditoría Etapa 1 usando el mismo sales_base que el bundle."""
     scope = SalesScope.from_filters(filters)
     f = scope.filters
@@ -1012,6 +1324,13 @@ def build_commercial_validation(filters: CommercialFilters) -> dict[str, Any]:
             date_to=f.date_to,
             bound=tuple(dual_base),
         )
+        credit_notes, scenario_f_total = _fetch_credit_notes_interpretation(
+            session,
+            base_cte=base_cte,
+            date_from=f.date_from,
+            date_to=f.date_to,
+            period_only_bound=period_only_bound,
+        )
 
     curr = _metric_block(totals_row, "c")
     prev = _metric_block(totals_row, "p")
@@ -1130,6 +1449,12 @@ def build_commercial_validation(filters: CommercialFilters) -> dict[str, Any]:
 
     data_coverage = _build_data_coverage(erp_curr, curr)
     commercial_reconciliation = _build_commercial_reconciliation(erp_curr, curr)
+    bsale_interpretation = _build_bsale_interpretation(
+        curr,
+        credit_notes,
+        scenario_f_total=scenario_f_total,
+        bsale_dashboard_total=bsale_dashboard_total,
+    )
     precision = _compute_precision(erp_curr["venta_neta"], curr["venta_neta"], abs_doc_delta)
     ok_rules = sum(1 for r in auto_rules if r["severity"] == "ok")
     progress = (ok_rules / len(auto_rules)) * 100.0 if auto_rules else 0.0
@@ -1223,6 +1548,7 @@ def build_commercial_validation(filters: CommercialFilters) -> dict[str, Any]:
         "product_reconciliation": product_reconciliation,
         "auto_audit_rules": auto_rules,
         "difference_items": difference_items,
+        "bsale_interpretation": bsale_interpretation,
         "temporal_coverage": {
             "first_document_date": curr["first_document_date"],
             "last_document_date": curr["last_document_date"],

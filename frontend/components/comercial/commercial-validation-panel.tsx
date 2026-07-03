@@ -27,6 +27,8 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
   Drawer,
   DrawerClose,
@@ -103,14 +105,21 @@ export function CommercialValidationPanel({
   data,
   loading,
   error,
+  bsaleDashboardTotal,
+  onBsaleDashboardApply,
 }: {
   data: CommercialValidationResponse | null
   loading: boolean
   error: string | null
+  bsaleDashboardTotal?: number | null
+  onBsaleDashboardApply?: (total: number | null) => void
 }) {
   const [drawerDay, setDrawerDay] = useState<string | null>(null)
   const [drawerDocs, setDrawerDocs] = useState<CommercialValidationDocumentRow[]>([])
   const [sellerDetail, setSellerDetail] = useState<CommercialValidationSellerReconcile | null>(null)
+  const [bsaleInput, setBsaleInput] = useState(
+    bsaleDashboardTotal != null ? String(Math.round(bsaleDashboardTotal)) : "",
+  )
   const [productSort, setProductSort] = useState<{ key: SortKey; asc: boolean }>({
     key: "delta",
     asc: false,
@@ -173,6 +182,13 @@ export function CommercialValidationPanel({
   const differenceItems = data.difference_items ?? []
   const documentsByDay = data.documents_by_day ?? {}
   const engineLabel = data.validation.audit_engine_version ?? "2.1"
+  const bsaleInterp = data.bsale_interpretation
+
+  const applyBsaleDashboard = () => {
+    const raw = bsaleInput.replace(/\./g, "").replace(/,/g, "").trim()
+    const parsed = raw ? Number(raw) : null
+    onBsaleDashboardApply?.(parsed != null && !Number.isNaN(parsed) ? parsed : null)
+  }
 
   const openDayDrawer = (day: string) => {
     setDrawerDay(day)
@@ -265,7 +281,183 @@ export function CommercialValidationPanel({
         </CardContent>
       </Card>
 
-      {/* 10. Panel de diferencias */}
+      {bsaleInterp && (
+        <>
+          <Card id="interpretacion-bsale" className="border-blue-500/30 bg-blue-500/5">
+            <CardHeader>
+              <CardTitle className="text-base">Interpretación de Bsale</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                El CRM no se asume incorrecto. Compara con el total del dashboard oficial de Bsale
+                para inferir su regla de negocio (brutas vs netas, tratamiento de NC).
+              </p>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="min-w-[220px] flex-1">
+                  <Label htmlFor="bsale-dashboard-total" className="text-xs">
+                    Total dashboard Bsale (CLP)
+                  </Label>
+                  <Input
+                    id="bsale-dashboard-total"
+                    inputMode="numeric"
+                    placeholder="Ej. total ventas del panel Bsale"
+                    value={bsaleInput}
+                    onChange={(e) => setBsaleInput(e.target.value)}
+                  />
+                </div>
+                <Button type="button" variant="secondary" onClick={applyBsaleDashboard} disabled={loading}>
+                  Comparar regla Bsale
+                </Button>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                {(
+                  [
+                    ["Facturas", bsaleInterp.crm_metrics.ventas_facturas],
+                    ["Boletas", bsaleInterp.crm_metrics.ventas_boletas],
+                    ["Notas de crédito", bsaleInterp.crm_metrics.notas_credito],
+                    ["Ventas brutas (F+B)", bsaleInterp.crm_metrics.ventas_brutas],
+                    ["Ventas netas (F+B−NC)", bsaleInterp.crm_metrics.ventas_netas],
+                  ] as const
+                ).map(([label, value]) => (
+                  <div key={label} className="rounded-lg border bg-background/80 p-3">
+                    <p className="text-xs text-muted-foreground">{label}</p>
+                    <p className="text-lg font-semibold tabular-nums">{formatCLP(value)}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="rounded-lg border bg-background/80 p-4">
+                <p className="mb-3 text-sm font-medium">Dashboard Bsale probablemente corresponde a:</p>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {bsaleInterp.likely_dashboard_metric.options.map((opt) => (
+                    <div
+                      key={opt.key}
+                      className={cn(
+                        "flex items-center gap-3 rounded-md border p-3",
+                        opt.selected && "border-primary bg-primary/5",
+                      )}
+                    >
+                      <span className="text-lg">{opt.selected ? "●" : "○"}</span>
+                      <div>
+                        <p className="font-medium">{opt.label}</p>
+                        <p className="text-xs text-muted-foreground">
+                          Coincidencia:{" "}
+                          {opt.match_percent != null ? `${formatPct(opt.match_percent)} %` : "—"}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                {!bsaleInterp.dashboard_reference.provided && (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Ingresa el total del dashboard Bsale para calcular el porcentaje de coincidencia.
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <p className="mb-2 text-sm font-medium">Escenarios de comparación</p>
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {bsaleInterp.comparison_scenarios.map((s) => (
+                    <div key={s.id} className="rounded-md border bg-background/60 p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <Badge variant="outline">Escenario {s.id}</Badge>
+                        <span className="text-sm font-semibold tabular-nums">{formatCLP(s.value)}</span>
+                      </div>
+                      <p className="mt-1 text-sm">{s.label}</p>
+                      <p className="text-xs text-muted-foreground">{s.formula}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card
+            id="diagnostico-bsale"
+            className={cn(
+              bsaleInterp.diagnosis.status === "ok" && "border-emerald-500/40 bg-emerald-500/5",
+              bsaleInterp.diagnosis.status === "warning" && "border-amber-500/40 bg-amber-500/5",
+              bsaleInterp.diagnosis.status === "info" && "border-muted",
+            )}
+          >
+            <CardHeader>
+              <CardTitle className="text-base">Diagnóstico</CardTitle>
+            </CardHeader>
+            <CardContent className="flex gap-3">
+              {bsaleInterp.diagnosis.status === "ok" ? (
+                <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
+              ) : bsaleInterp.diagnosis.status === "warning" ? (
+                <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+              ) : (
+                <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
+              )}
+              <p className="text-sm leading-relaxed">{bsaleInterp.diagnosis.message}</p>
+            </CardContent>
+          </Card>
+
+          {bsaleInterp.credit_notes.length > 0 && (
+            <Card id="notas-credito-periodo">
+              <CardHeader>
+                <CardTitle className="text-base">Notas de crédito del período</CardTitle>
+                <p className="text-sm text-muted-foreground">
+                  {bsaleInterp.crm_metrics.notas_credito_count} documento(s) ·{" "}
+                  {formatCLP(bsaleInterp.crm_metrics.notas_credito)} total
+                </p>
+              </CardHeader>
+              <CardContent className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Número</TableHead>
+                      <TableHead>Fecha</TableHead>
+                      <TableHead>Cliente</TableHead>
+                      <TableHead>Vendedor</TableHead>
+                      <TableHead className="text-right">Monto</TableHead>
+                      <TableHead>Documento origen</TableHead>
+                      <TableHead>¿Descontada CRM?</TableHead>
+                      <TableHead>¿Visible dashboard Bsale?</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {bsaleInterp.credit_notes.map((nc) => (
+                      <TableRow key={nc.document_id}>
+                        <TableCell className="tabular-nums">{nc.number ?? nc.document_id}</TableCell>
+                        <TableCell>{nc.date ? formatDateCL(nc.date) : "—"}</TableCell>
+                        <TableCell className="max-w-[160px] truncate" title={nc.client}>
+                          {nc.client}
+                        </TableCell>
+                        <TableCell className="max-w-[140px] truncate">{nc.seller}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCLP(nc.amount)}</TableCell>
+                        <TableCell>{nc.origin_document ?? "—"}</TableCell>
+                        <TableCell className="text-center">
+                          {nc.discounted_by_crm ? (
+                            <span className="text-emerald-600">✔</span>
+                          ) : (
+                            <span className="text-red-600">❌</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-center text-xs">
+                          {nc.likely_visible_in_bsale_dashboard ? (
+                            <span title="Probablemente no resta del total bruto">✔ línea / bruto</span>
+                          ) : nc.likely_subtracted_in_bsale_dashboard ? (
+                            <span title="Probablemente ya restada en netas">✔ netas</span>
+                          ) : (
+                            "—"
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
+        </>
+      )}
+
+      {/* Panel diferencias */}
       {differenceItems.length > 0 && (
         <Card id="panel-diferencias" className="border-amber-500/30">
           <CardHeader>

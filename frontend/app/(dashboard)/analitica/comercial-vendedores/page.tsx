@@ -358,6 +358,7 @@ export default function ComercialVendedoresPage() {
   const [validation, setValidation] = useState<CommercialValidationResponse | null>(null)
   const [validationLoading, setValidationLoading] = useState(false)
   const [validationError, setValidationError] = useState<string | null>(null)
+  const [bsaleDashboardTotal, setBsaleDashboardTotal] = useState<number | null>(null)
 
   const [profileClientId, setProfileClientId] = useState<number | null>(null)
   const [profile, setProfile] = useState<Awaited<ReturnType<typeof getCommercialClientProfile>> | null>(null)
@@ -469,7 +470,10 @@ export default function ComercialVendedoresPage() {
     setValidationLoading(true)
     setValidationError(null)
     try {
-      const v = await getCommercialValidation(params)
+      const v = await getCommercialValidation({
+        ...params,
+        bsale_dashboard_total: bsaleDashboardTotal ?? undefined,
+      })
       setValidation(v)
     } catch (e: unknown) {
       setValidationError(e instanceof Error ? e.message : "Error al cargar validación")
@@ -477,7 +481,7 @@ export default function ComercialVendedoresPage() {
     } finally {
       setValidationLoading(false)
     }
-  }, [canAccessValidation, params])
+  }, [canAccessValidation, params, bsaleDashboardTotal])
 
   useEffect(() => {
     if (tab === "validacion" && canAccessValidation) void loadValidation()
@@ -1002,6 +1006,10 @@ export default function ComercialVendedoresPage() {
                 data={validation}
                 loading={validationLoading}
                 error={validationError}
+                bsaleDashboardTotal={bsaleDashboardTotal}
+                onBsaleDashboardApply={(total) => {
+                  setBsaleDashboardTotal(total)
+                }}
               />
             </TabsContent>
           )}
