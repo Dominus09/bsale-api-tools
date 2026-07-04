@@ -282,6 +282,8 @@ export default function NotasCreditoPage() {
               Bootstrap {bootstrap?.date_from} → {bootstrap?.date_to}:{" "}
               {bootstrap?.completed ? (
                 <span className="text-emerald-300">completado</span>
+              ) : bootstrap?.last_history_status === "no_data" ? (
+                <span className="text-amber-300">sin datos (reejecutable)</span>
               ) : bootstrap?.resumable ? (
                 <span className="text-amber-300">
                   incompleto ({bootstrap.pages_processed} páginas)

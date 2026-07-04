@@ -24,12 +24,18 @@ def main() -> None:
         action="store_true",
         help="Reanudar carga histórica incompleta desde la última página guardada",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Repetir bootstrap aunque exista uno completed con datos",
+    )
     args = parser.parse_args()
     logger.info(
-        "[RETURNS_SYNC_DEBUG] Iniciando sync_bsale_returns_history resume=%s",
+        "[RETURNS_SYNC_DEBUG] Iniciando sync_bsale_returns_history resume=%s force=%s",
         args.resume,
+        args.force,
     )
-    result = sync_bsale_returns_history(resume=args.resume)
+    result = sync_bsale_returns_history(resume=args.resume, force=args.force)
     logger.info("SYNC_BSALE_RETURNS_HISTORY %s", result)
     if not result.get("ok"):
         raise SystemExit(1)

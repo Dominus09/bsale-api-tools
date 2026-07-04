@@ -103,6 +103,7 @@ def get_sync_status() -> dict[str, Any]:
             date_to=HISTORY_DATE_TO,
         )
         runs = repo.list_sync_runs(cur, company_id=COMPANY_ID, office_id=OFFICE_ID, limit=8)
+        last_history = next((r for r in runs if r.get("sync_type") == "history"), None)
     finally:
         cur.close()
         conn.close()
@@ -126,6 +127,8 @@ def get_sync_status() -> dict[str, Any]:
             "resumable": resumable is not None,
             "resumable_sync_id": resumable.get("id") if resumable else None,
             "pages_processed": _int(resumable.get("pages_processed")) if resumable else 0,
+            "last_history_status": last_history.get("status") if last_history else None,
+            "last_history_sync_id": last_history.get("id") if last_history else None,
         },
         "cursor": {
             "last_sync_at": _iso(state.get("last_sync_at")) if state else None,

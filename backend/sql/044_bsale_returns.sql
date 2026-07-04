@@ -96,11 +96,19 @@ CREATE TABLE IF NOT EXISTS bsale.returns_sync (
     finished_at         TIMESTAMPTZ,
     duration_ms         BIGINT,
     status              TEXT NOT NULL DEFAULT 'running'
-        CHECK (status IN ('running', 'completed', 'failed')),
+        CHECK (status IN ('running', 'completed', 'failed', 'no_data')),
     error_message       TEXT
 );
 -- +go
 
 CREATE INDEX IF NOT EXISTS idx_bsale_returns_sync_lookup
     ON bsale.returns_sync (company_id, office_id, sync_type, status, started_at DESC);
+-- +go
+
+-- Permitir status no_data en tablas ya creadas (bootstrap sin registros).
+ALTER TABLE bsale.returns_sync DROP CONSTRAINT IF EXISTS returns_sync_status_check;
+-- +go
+
+ALTER TABLE bsale.returns_sync ADD CONSTRAINT returns_sync_status_check
+    CHECK (status IN ('running', 'completed', 'failed', 'no_data'));
 -- +go

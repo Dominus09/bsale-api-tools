@@ -98,9 +98,10 @@ async def insights(
 async def trigger_history_sync(
     _user: dict = Depends(require_admin_access),
     resume: bool = Query(False),
+    force: bool = Query(False),
 ):
     def _run():
-        result = sync_bsale_returns_history(resume=resume)
+        result = sync_bsale_returns_history(resume=resume, force=force)
         if not result.get("ok"):
             raise ValueError(result.get("error") or "Bootstrap histórico no ejecutado")
         return result

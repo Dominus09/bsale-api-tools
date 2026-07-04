@@ -31,6 +31,8 @@ export type ReturnsSyncStatus = {
     resumable: boolean
     resumable_sync_id: number | null
     pages_processed: number
+    last_history_status: string | null
+    last_history_sync_id: number | null
   }
   cursor: {
     last_sync_at: string | null
@@ -220,9 +222,12 @@ export function getReturnsInsights(params: ReturnsAnalyticsParams = {}) {
   )
 }
 
-export function syncReturnsHistory(resume = false) {
-  const q = resume ? "?resume=true" : ""
-  return fetchJson<Record<string, unknown>>(`/returns-analytics/sync/history${q}`, {
+export function syncReturnsHistory(resume = false, force = false) {
+  const sp = new URLSearchParams()
+  if (resume) sp.set("resume", "true")
+  if (force) sp.set("force", "true")
+  const q = sp.toString()
+  return fetchJson<Record<string, unknown>>(`/returns-analytics/sync/history${q ? `?${q}` : ""}`, {
     method: "POST",
   })
 }

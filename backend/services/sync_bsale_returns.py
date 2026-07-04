@@ -283,10 +283,11 @@ def sync_bsale_returns_history(
     company_id: int = COMPANY_ID,
     office_id: int = OFFICE_ID,
     resume: bool = False,
+    force: bool = False,
 ) -> dict[str, Any]:
     """
     Bootstrap histórico UNA VEZ: 2026-01-01 → 2026-06-30, Company 3 / Office 1.
-    Reanudable por página si falla.
+    Reanudable por página si falla. Bootstrap vacío (0 páginas/registros) no bloquea reintentos.
     """
     date_from = HISTORY_DATE_FROM
     date_to = HISTORY_DATE_TO
@@ -304,7 +305,7 @@ def sync_bsale_returns_history(
         repo.ensure_returns_schema(cur)
         conn.commit()
 
-        if repo.get_completed_history_sync(
+        if not force and repo.get_completed_history_sync(
             cur,
             company_id=company_id,
             office_id=office_id,
@@ -412,6 +413,47 @@ def sync_bsale_returns_history(
             conn.commit()
 
         duration_ms = int((time.monotonic() - t0) * 1000)
+        is_empty_bootstrap = (
+            total_returns == 0
+            and total_details == 0
+            and pages_this_run == 0
+        )
+
+        if is_empty_bootstrap:
+            repo.finish_sync_run(
+                cur,
+                sync_id,
+                status="no_data",
+                duration_ms=duration_ms,
+                error_message="No se encontraron devoluciones para los parámetros enviados",
+            )
+            conn.commit()
+            logger.warning(
+                "[RETURNS_HISTORY] bootstrap vacío — status=no_data (no bloquea reintentos) "
+                "company=%s office=%s window=%s..%s",
+                company_id,
+                office_id,
+                date_from.isoformat(),
+                date_to.isoformat(),
+            )
+            return {
+                "ok": True,
+                "bootstrap_status": "no_data",
+                "sync_type": "history",
+                "sync_id": sync_id,
+                "company_id": company_id,
+                "office_id": office_id,
+                "company_name": company_name,
+                "returns_upserted": 0,
+                "details_upserted": 0,
+                "pages_processed": pages_done,
+                "date_from": date_from.isoformat(),
+                "date_to": date_to.isoformat(),
+                "resumed": resume and bool(existing),
+                "duration_ms": duration_ms,
+                "message": "Bootstrap sin datos — puede reejecutarse",
+            }
+
         repo.finish_sync_run(cur, sync_id, status="completed", duration_ms=duration_ms)
         repo.upsert_sync_state(
             cur,
@@ -434,6 +476,7 @@ def sync_bsale_returns_history(
         )
         return {
             "ok": True,
+            "bootstrap_status": "completed",
             "sync_type": "history",
             "sync_id": sync_id,
             "company_id": company_id,

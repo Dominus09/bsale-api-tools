@@ -144,6 +144,7 @@ def get_completed_history_sync(
     date_from,
     date_to,
 ) -> dict[str, Any] | None:
+    """Bootstrap histórico exitoso: completed con al menos un registro procesado."""
     cur.execute(
         f"""
         SELECT *
@@ -151,6 +152,7 @@ def get_completed_history_sync(
         WHERE company_id = %s AND office_id = %s
           AND sync_type = 'history'
           AND status = 'completed'
+          AND records_processed > 0
           AND date_from = %s AND date_to = %s
         ORDER BY finished_at DESC NULLS LAST
         LIMIT 1
