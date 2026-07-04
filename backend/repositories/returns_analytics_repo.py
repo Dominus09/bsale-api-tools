@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from psycopg2.extras import Json
@@ -17,17 +15,292 @@ RETURN_DETAILS = "bsale.return_details"
 SYNC_STATE = "bsale.returns_sync_state"
 SYNC_RUNS = "bsale.returns_sync"
 
+_SCHEMA = "bsale"
+
+
+def _schema_log(message: str) -> None:
+    logger.info("[RETURNS_SCHEMA] %s", message)
+
+
+def _table_exists(cur, qualified_name: str) -> bool:
+    cur.execute("SELECT to_regclass(%s)", (qualified_name,))
+    return cur.fetchone()[0] is not None
+
+
+def _column_exists(cur, *, schema: str, table: str, column: str) -> bool:
+    cur.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = %s
+          AND table_name = %s
+          AND column_name = %s
+        """,
+        (schema, table, column),
+    )
+    return cur.fetchone() is not None
+
+
+def _index_exists(cur, *, schema: str, index_name: str) -> bool:
+    cur.execute(
+        """
+        SELECT 1
+        FROM pg_indexes
+        WHERE schemaname = %s
+          AND indexname = %s
+        """,
+        (schema, index_name),
+    )
+    return cur.fetchone() is not None
+
+
+def _constraint_exists(cur, *, schema: str, table: str, conname: str) -> bool:
+    cur.execute(
+        """
+        SELECT 1
+        FROM pg_constraint c
+        JOIN pg_class t ON c.conrelid = t.oid
+        JOIN pg_namespace n ON t.relnamespace = n.oid
+        WHERE n.nspname = %s
+          AND t.relname = %s
+          AND c.conname = %s
+        """,
+        (schema, table, conname),
+    )
+    return cur.fetchone() is not None
+
+
+def _ensure_schema(cur) -> None:
+    cur.execute(
+        """
+        SELECT 1 FROM information_schema.schemata WHERE schema_name = %s
+        """,
+        (_SCHEMA,),
+    )
+    if cur.fetchone():
+        _schema_log(f"Esquema existente: {_SCHEMA}")
+        return
+    cur.execute(f"CREATE SCHEMA {_SCHEMA}")
+    _schema_log(f"Esquema creado: {_SCHEMA}")
+
+
+def _ensure_table(cur, qualified: str, create_sql: str) -> None:
+    if _table_exists(cur, qualified):
+        _schema_log(f"Tabla existente: {qualified}")
+        return
+    cur.execute(create_sql)
+    _schema_log(f"Tabla creada: {qualified}")
+
+
+def _ensure_column(
+    cur,
+    *,
+    schema: str,
+    table: str,
+    column: str,
+    add_sql: str,
+) -> None:
+    if _column_exists(cur, schema=schema, table=table, column=column):
+        _schema_log(f"Columna existente: {schema}.{table}.{column}")
+        return
+    cur.execute(add_sql)
+    _schema_log(f"Columna creada: {schema}.{table}.{column}")
+
+
+def _ensure_index(cur, *, schema: str, index_name: str, create_sql: str) -> None:
+    if _index_exists(cur, schema=schema, index_name=index_name):
+        _schema_log(f"Índice existente: {schema}.{index_name}")
+        return
+    cur.execute(create_sql)
+    _schema_log(f"Índice creado: {schema}.{index_name}")
+
+
+def _ensure_constraint(
+    cur,
+    *,
+    schema: str,
+    table: str,
+    conname: str,
+    add_sql: str,
+) -> None:
+    if _constraint_exists(cur, schema=schema, table=table, conname=conname):
+        _schema_log(f"Constraint existente: {schema}.{table}.{conname}")
+        return
+    cur.execute(add_sql)
+    _schema_log(f"Constraint creado: {schema}.{table}.{conname}")
+
 
 def ensure_returns_schema(cur) -> None:
-    sql_path = Path(__file__).resolve().parents[1] / "sql" / "044_bsale_returns.sql"
-    if not sql_path.is_file():
-        logger.warning("returns schema file missing: %s", sql_path)
-        return
-    raw = sql_path.read_text(encoding="utf-8")
-    for chunk in raw.split("-- +go"):
-        stmt = chunk.strip()
-        if stmt and not stmt.startswith("--"):
-            cur.execute(stmt)
+    """DDL idempotente para tablas de devoluciones Bsale — seguro ejecutar N veces."""
+    _ensure_schema(cur)
+
+    _ensure_table(
+        cur,
+        f"{_SCHEMA}.returns_sync_state",
+        f"""
+        CREATE TABLE {_SCHEMA}.returns_sync_state (
+            company_id     INTEGER NOT NULL,
+            office_id      INTEGER NOT NULL DEFAULT 1,
+            last_return_ts BIGINT,
+            last_sync_at   TIMESTAMPTZ,
+            records_total  BIGINT NOT NULL DEFAULT 0,
+            PRIMARY KEY (company_id, office_id)
+        )
+        """,
+    )
+
+    _ensure_table(
+        cur,
+        f"{_SCHEMA}.returns",
+        f"""
+        CREATE TABLE {_SCHEMA}.returns (
+            company_id              INTEGER NOT NULL,
+            office_id               INTEGER NOT NULL DEFAULT 1,
+            bsale_id                BIGINT NOT NULL,
+            code                    TEXT,
+            return_date             TIMESTAMPTZ,
+            motive                  TEXT,
+            return_type             INTEGER,
+            amount                  NUMERIC(18, 4) NOT NULL DEFAULT 0,
+            price_adjustment        NUMERIC(18, 4) NOT NULL DEFAULT 0,
+            edit_texts              INTEGER NOT NULL DEFAULT 0,
+            reference_document_id   BIGINT,
+            reference_document_number BIGINT,
+            reference_document_type_id INTEGER,
+            credit_note_id          BIGINT,
+            credit_note_number      BIGINT,
+            client_id               BIGINT,
+            client_name             TEXT,
+            seller_id               INTEGER,
+            seller_name             TEXT,
+            municipality            TEXT,
+            credit_note_emission    TIMESTAMPTZ,
+            reference_emission      TIMESTAMPTZ,
+            raw_data                JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+            synced_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """,
+    )
+    _ensure_constraint(
+        cur,
+        schema=_SCHEMA,
+        table="returns",
+        conname="returns_company_bsale_unique",
+        add_sql=f"""
+            ALTER TABLE {_SCHEMA}.returns
+            ADD CONSTRAINT returns_company_bsale_unique UNIQUE (company_id, bsale_id)
+        """,
+    )
+
+    for index_name, index_sql in (
+        (
+            "idx_bsale_returns_company_office_date",
+            f"""
+            CREATE INDEX idx_bsale_returns_company_office_date
+                ON {_SCHEMA}.returns (company_id, office_id, return_date DESC)
+            """,
+        ),
+        (
+            "idx_bsale_returns_motive",
+            f"CREATE INDEX idx_bsale_returns_motive ON {_SCHEMA}.returns (company_id, motive)",
+        ),
+        (
+            "idx_bsale_returns_seller",
+            f"CREATE INDEX idx_bsale_returns_seller ON {_SCHEMA}.returns (company_id, seller_id)",
+        ),
+        (
+            "idx_bsale_returns_client",
+            f"CREATE INDEX idx_bsale_returns_client ON {_SCHEMA}.returns (company_id, client_id)",
+        ),
+    ):
+        _ensure_index(cur, schema=_SCHEMA, index_name=index_name, create_sql=index_sql)
+
+    _ensure_table(
+        cur,
+        f"{_SCHEMA}.return_details",
+        f"""
+        CREATE TABLE {_SCHEMA}.return_details (
+            company_id           INTEGER NOT NULL,
+            return_id            BIGINT NOT NULL,
+            bsale_detail_id      BIGINT NOT NULL,
+            document_detail_id   BIGINT,
+            variant_id           BIGINT,
+            product_name         TEXT,
+            variant_description  TEXT,
+            quantity             NUMERIC(18, 4) NOT NULL DEFAULT 0,
+            unit_value           NUMERIC(18, 4) NOT NULL DEFAULT 0,
+            total_amount         NUMERIC(18, 4) NOT NULL DEFAULT 0,
+            raw_data             JSONB NOT NULL DEFAULT '{{}}'::jsonb,
+            synced_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (company_id, return_id, bsale_detail_id)
+        )
+        """,
+    )
+    _ensure_index(
+        cur,
+        schema=_SCHEMA,
+        index_name="idx_bsale_return_details_variant",
+        create_sql=f"""
+            CREATE INDEX idx_bsale_return_details_variant
+                ON {_SCHEMA}.return_details (company_id, variant_id)
+        """,
+    )
+
+    _ensure_table(
+        cur,
+        f"{_SCHEMA}.returns_sync",
+        f"""
+        CREATE TABLE {_SCHEMA}.returns_sync (
+            id                  SERIAL PRIMARY KEY,
+            company_id          INTEGER NOT NULL,
+            office_id           INTEGER NOT NULL DEFAULT 1,
+            sync_type           TEXT NOT NULL,
+            date_from           DATE,
+            date_to             DATE,
+            last_return_date    TIMESTAMPTZ,
+            last_return_id      BIGINT,
+            pages_processed     INTEGER NOT NULL DEFAULT 0,
+            records_processed   INTEGER NOT NULL DEFAULT 0,
+            started_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            finished_at         TIMESTAMPTZ,
+            duration_ms         BIGINT,
+            status              TEXT NOT NULL DEFAULT 'running',
+            error_message       TEXT
+        )
+        """,
+    )
+    _ensure_constraint(
+        cur,
+        schema=_SCHEMA,
+        table="returns_sync",
+        conname="returns_sync_sync_type_check",
+        add_sql=f"""
+            ALTER TABLE {_SCHEMA}.returns_sync
+            ADD CONSTRAINT returns_sync_sync_type_check
+            CHECK (sync_type IN ('history', 'incremental'))
+        """,
+    )
+    _ensure_constraint(
+        cur,
+        schema=_SCHEMA,
+        table="returns_sync",
+        conname="returns_sync_status_check",
+        add_sql=f"""
+            ALTER TABLE {_SCHEMA}.returns_sync
+            ADD CONSTRAINT returns_sync_status_check
+            CHECK (status IN ('running', 'completed', 'failed', 'no_data'))
+        """,
+    )
+    _ensure_index(
+        cur,
+        schema=_SCHEMA,
+        index_name="idx_bsale_returns_sync_lookup",
+        create_sql=f"""
+            CREATE INDEX idx_bsale_returns_sync_lookup
+                ON {_SCHEMA}.returns_sync (company_id, office_id, sync_type, status, started_at DESC)
+        """,
+    )
 
 
 def get_sync_state(cur, *, company_id: int, office_id: int) -> dict[str, Any] | None:
