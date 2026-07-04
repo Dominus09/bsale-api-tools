@@ -17,6 +17,7 @@ from backend.config.returns_scope import (
 from backend.db import get_connection
 from backend.repositories import returns_analytics_repo as repo
 from backend.services.distribuidora.bsale_client import BsaleClient
+from backend.services.returns_sync_debug import fetch_returns_page_json, log_bootstrap_date_conversion
 from backend.utils.bsale_field_parse import parse_float, parse_int, parse_optional_int
 
 logger = logging.getLogger(__name__)
@@ -193,6 +194,7 @@ def _in_window(return_ts: int | None, date_from_ts: int, date_to_ts: int) -> boo
 def iter_returns_pages(
     client: BsaleClient,
     *,
+    company_id: int = COMPANY_ID,
     office_id: int,
     date_from_ts: int,
     date_to_ts: int,
@@ -207,7 +209,15 @@ def iter_returns_pages(
             "returndate": f"[{date_from_ts},{date_to_ts}]",
             "expand": EXPAND,
         }
-        payload = client.get("/returns.json", params)
+        payload = fetch_returns_page_json(
+            client,
+            "/returns.json",
+            params,
+            company_id=company_id,
+            office_id=office_id,
+            date_from_ts=date_from_ts,
+            date_to_ts=date_to_ts,
+        )
         items = payload.get("items") or []
         if not items:
             break
@@ -281,6 +291,8 @@ def sync_bsale_returns_history(
     date_from = HISTORY_DATE_FROM
     date_to = HISTORY_DATE_TO
     date_from_ts, date_to_ts = _date_bounds_ts(date_from, date_to)
+
+    log_bootstrap_date_conversion(date_from, date_to, company_id=company_id, office_id=office_id)
 
     conn = get_connection()
     conn.autocommit = False
@@ -363,6 +375,7 @@ def sync_bsale_returns_history(
 
         for page in iter_returns_pages(
             client,
+            company_id=company_id,
             office_id=office_id,
             date_from_ts=date_from_ts,
             date_to_ts=date_to_ts,
@@ -525,6 +538,7 @@ def sync_bsale_returns_incremental(
 
         for page in iter_returns_pages(
             client,
+            company_id=company_id,
             office_id=office_id,
             date_from_ts=date_from_ts,
             date_to_ts=date_to_ts,
