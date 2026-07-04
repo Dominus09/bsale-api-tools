@@ -23,8 +23,9 @@ export type ReturnsSyncStatus = {
   company_id: number
   office_id: number
   bootstrap: {
-    date_from: string
-    date_to: string
+    scope: string
+    company_id: number
+    office_id: number
     completed: boolean
     completed_at: string | null
     records_processed: number

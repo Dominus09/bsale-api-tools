@@ -279,7 +279,7 @@ export default function NotasCreditoPage() {
         {syncInfo ? (
           <div className="relative z-10 mt-4 space-y-1 text-xs text-red-200/60">
             <p>
-              Bootstrap {bootstrap?.date_from} → {bootstrap?.date_to}:{" "}
+              Bootstrap catálogo completo (Company {bootstrap?.company_id} / Office {bootstrap?.office_id}):{" "}
               {bootstrap?.completed ? (
                 <span className="text-emerald-300">completado</span>
               ) : bootstrap?.last_history_status === "no_data" ? (

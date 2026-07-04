@@ -323,6 +323,7 @@ def _probe_returns_get(
         "last_id": last_id,
         "params": params,
         "response_url": getattr(r.request, "url", None),
+        "items": items,
     }
 
     logger.info("[RETURNS_API_DIAG] Prueba %s HTTP_status=%s", label, r.status_code)
@@ -418,3 +419,71 @@ def run_returns_api_diagnostic(
                 )
 
     return results
+
+
+def run_bootstrap_diagnostic_sample(
+    client: BsaleClient,
+    *,
+    office_id: int,
+    pages: int = 3,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """
+    Prueba F — bootstrap real: officeid sin fecha, N páginas.
+    Muestra ids, fechas, motivos, credit_note.id, reference_document.id.
+    """
+    expand = "[reference_document,credit_note,details]"
+    logger.info(
+        "[RETURNS_API_DIAG] ── Prueba F (bootstrap real, %s páginas) ── officeid=%s sin fecha",
+        pages,
+        office_id,
+    )
+
+    all_samples: list[dict[str, Any]] = []
+    page_summaries: list[dict[str, Any]] = []
+
+    for page_idx in range(pages):
+        offset = page_idx * limit
+        params: dict[str, Any] = {
+            "limit": limit,
+            "offset": offset,
+            "officeid": office_id,
+            "expand": expand,
+        }
+        probe = _probe_returns_get(client, label=f"F-{page_idx + 1}", params=params)
+        page_summaries.append({k: v for k, v in probe.items() if k != "items"})
+        items = probe.get("items") or []
+
+        for item in items[:10]:
+            credit = item.get("credit_note")
+            ref = item.get("reference_document")
+            sample = {
+                "id": parse_optional_int(item.get("id")),
+                "returnDate": item.get("returnDate"),
+                "motive": item.get("motive"),
+                "credit_note_id": (
+                    parse_optional_int(credit.get("id"))
+                    if isinstance(credit, dict)
+                    else parse_optional_int(credit)
+                ),
+                "reference_document_id": (
+                    parse_optional_int(ref.get("id"))
+                    if isinstance(ref, dict)
+                    else parse_optional_int(ref)
+                ),
+            }
+            all_samples.append(sample)
+            logger.info("[RETURNS_API_DIAG] Prueba F muestra: %s", sample)
+
+        time.sleep(0.15)
+
+    logger.info(
+        "[RETURNS_API_DIAG] Prueba F completada — %s muestras de %s páginas",
+        len(all_samples),
+        pages,
+    )
+    return {
+        "label": "F",
+        "pages": page_summaries,
+        "samples": all_samples,
+    }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import time
 from datetime import date, datetime, time as dt_time, timedelta, timezone
@@ -19,7 +20,7 @@ from backend.repositories import returns_analytics_repo as repo
 from backend.services.distribuidora.bsale_client import BsaleClient
 from backend.services.returns_sync_debug import (
     fetch_returns_page_json,
-    log_bootstrap_date_conversion,
+    run_bootstrap_diagnostic_sample,
     run_returns_api_diagnostic,
 )
 from backend.utils.bsale_field_parse import parse_float, parse_int, parse_optional_int
@@ -189,13 +190,44 @@ def _parse_return_row(
     return row, details
 
 
-def _in_window(return_ts: int | None, date_from_ts: int, date_to_ts: int) -> bool:
-    if return_ts is None:
-        return False
-    return date_from_ts <= int(return_ts) <= date_to_ts
+def _details_expanded(raw: dict[str, Any]) -> bool:
+    node = raw.get("details")
+    if isinstance(node, list) and node:
+        return True
+    if isinstance(node, dict):
+        items = node.get("items")
+        if isinstance(items, list) and items:
+            return True
+        if any(k in node for k in ("quantity", "variant", "unitValue", "unit_value")):
+            return True
+    return False
 
 
-def iter_returns_pages(
+def _fetch_return_details(client: BsaleClient, return_id: int) -> list[dict[str, Any]]:
+    payload = client.get(f"/returns/{return_id}/details.json")
+    return _parse_detail_items(payload)
+
+
+def _get_returns_list_page(
+    client: BsaleClient,
+    *,
+    office_id: int,
+    offset: int,
+    limit: int = LIMIT,
+) -> dict[str, Any]:
+    """GET /returns.json — bootstrap: solo officeid + paginación, sin filtros de fecha."""
+    return client.get(
+        "/returns.json",
+        {
+            "limit": limit,
+            "offset": offset,
+            "officeid": office_id,
+            "expand": EXPAND,
+        },
+    )
+
+
+def iter_returns_pages_dated(
     client: BsaleClient,
     *,
     company_id: int = COMPANY_ID,
@@ -232,17 +264,74 @@ def iter_returns_pages(
         time.sleep(THROTTLE_SEC)
 
 
+def _process_bootstrap_page(
+    cur,
+    client: BsaleClient,
+    page: list[dict[str, Any]],
+    *,
+    company_id: int,
+    office_id: int,
+) -> tuple[int, int, int, int, datetime | None, int | None]:
+    """
+    Procesa una página del bootstrap completo.
+    Retorna: insertados, actualizados, detalles, errores, last_date, last_id.
+    """
+    inserted = 0
+    updated = 0
+    details_count = 0
+    errors = 0
+    last_return_date: datetime | None = None
+    last_return_id: int | None = None
+
+    for raw in page:
+        try:
+            row, details = _parse_return_row(raw, company_id=company_id, office_id=office_id)
+            if not row["bsale_id"]:
+                continue
+
+            if not details and not _details_expanded(raw):
+                details = _fetch_return_details(client, int(row["bsale_id"]))
+
+            action = repo.upsert_return(cur, row)
+            if action == "insert":
+                inserted += 1
+            else:
+                updated += 1
+
+            if details:
+                for d in details:
+                    d["company_id"] = company_id
+                    d["return_id"] = row["bsale_id"]
+                repo.replace_return_details(
+                    cur,
+                    company_id=company_id,
+                    return_id=row["bsale_id"],
+                    details=details,
+                )
+                details_count += len(details)
+
+            if row.get("return_date"):
+                last_return_date = row["return_date"]
+                last_return_id = row["bsale_id"]
+        except Exception as exc:
+            errors += 1
+            logger.warning(
+                "[RETURNS] Error procesando devolución id=%s: %s",
+                raw.get("id"),
+                exc,
+            )
+
+    return inserted, updated, details_count, errors, last_return_date, last_return_id
+
+
 def _process_page(
     cur,
     page: list[dict[str, Any]],
     *,
     company_id: int,
     office_id: int,
-    date_from_ts: int | None = None,
-    date_to_ts: int | None = None,
-    enforce_window: bool = False,
 ) -> tuple[int, int, int, datetime | None, int | None]:
-    """Procesa una página. Retorna returns, details, max_ts, last_date, last_id."""
+    """Procesa página incremental (con filtro returndate en la API)."""
     returns_upserted = 0
     details_upserted = 0
     max_return_ts = 0
@@ -250,11 +339,6 @@ def _process_page(
     last_return_id: int | None = None
 
     for raw in page:
-        return_ts = parse_optional_int(raw.get("returnDate") or raw.get("return_date"))
-        if enforce_window and date_from_ts is not None and date_to_ts is not None:
-            if not _in_window(return_ts, date_from_ts, date_to_ts):
-                continue
-
         row, details = _parse_return_row(raw, company_id=company_id, office_id=office_id)
         if not row["bsale_id"]:
             continue
@@ -273,6 +357,7 @@ def _process_page(
             )
             details_upserted += len(details)
 
+        return_ts = parse_optional_int(raw.get("returnDate") or raw.get("return_date"))
         if return_ts and return_ts > max_return_ts:
             max_return_ts = return_ts
         if row.get("return_date"):
@@ -287,7 +372,7 @@ def diagnose_bsale_returns_api(
     company_id: int = COMPANY_ID,
     office_id: int = OFFICE_ID,
 ) -> dict[str, Any]:
-    """Modo diagnóstico: pruebas A–E contra Bsale sin sincronizar."""
+    """Modo diagnóstico: pruebas A–E + F contra Bsale sin sincronizar."""
     date_from = HISTORY_DATE_FROM
     date_to = HISTORY_DATE_TO
     date_from_ts, date_to_ts = _date_bounds_ts(date_from, date_to)
@@ -307,8 +392,6 @@ def diagnose_bsale_returns_api(
     company_name, token = loaded
     client = BsaleClient(token)
 
-    log_bootstrap_date_conversion(date_from, date_to, company_id=company_id, office_id=office_id)
-
     results = run_returns_api_diagnostic(
         client,
         office_id=office_id,
@@ -317,6 +400,7 @@ def diagnose_bsale_returns_api(
         date_from_iso=date_from.isoformat(),
         date_to_iso=date_to.isoformat(),
     )
+    sample_f = run_bootstrap_diagnostic_sample(client, office_id=office_id, pages=3)
 
     return {
         "ok": True,
@@ -324,9 +408,8 @@ def diagnose_bsale_returns_api(
         "company_id": company_id,
         "office_id": office_id,
         "company_name": company_name,
-        "date_from": date_from.isoformat(),
-        "date_to": date_to.isoformat(),
         "tests": results,
+        "test_f": sample_f,
     }
 
 
@@ -338,15 +421,10 @@ def sync_bsale_returns_history(
     force: bool = False,
 ) -> dict[str, Any]:
     """
-    Bootstrap histórico UNA VEZ: 2026-01-01 → 2026-06-30, Company 3 / Office 1.
-    Reanudable por página si falla. Bootstrap vacío (0 páginas/registros) no bloquea reintentos.
+    Bootstrap histórico completo — Company 3 / Office 1.
+    Descarga TODAS las devoluciones vía officeid + paginación (sin returndate).
+    Filtrado temporal solo en PostgreSQL (analytics).
     """
-    date_from = HISTORY_DATE_FROM
-    date_to = HISTORY_DATE_TO
-    date_from_ts, date_to_ts = _date_bounds_ts(date_from, date_to)
-
-    log_bootstrap_date_conversion(date_from, date_to, company_id=company_id, office_id=office_id)
-
     conn = get_connection()
     conn.autocommit = False
     cur = conn.cursor()
@@ -361,12 +439,10 @@ def sync_bsale_returns_history(
             cur,
             company_id=company_id,
             office_id=office_id,
-            date_from=date_from,
-            date_to=date_to,
         ):
             return {
                 "ok": False,
-                "error": "Bootstrap histórico ya completado para 2026-01-01..2026-06-30",
+                "error": "Bootstrap histórico ya completado para esta empresa/sucursal",
                 "sync_type": "history",
             }
 
@@ -380,19 +456,18 @@ def sync_bsale_returns_history(
             cur,
             company_id=company_id,
             office_id=office_id,
-            date_from=date_from,
-            date_to=date_to,
         )
 
         if existing and resume:
             sync_id = int(existing["id"])
             pages_done = int(existing.get("pages_processed") or 0)
             records_done = int(existing.get("records_processed") or 0)
-            start_offset = pages_done * LIMIT
+            start_offset = int(existing.get("last_offset") or 0) or pages_done * LIMIT
             cur.execute(
                 f"""
                 UPDATE {repo.SYNC_RUNS}
-                SET status = 'running', error_message = NULL, finished_at = NULL, duration_ms = NULL
+                SET status = 'running', error_message = NULL, finished_at = NULL,
+                    duration_ms = NULL, finished = FALSE
                 WHERE id = %s
                 """,
                 (sync_id,),
@@ -403,6 +478,7 @@ def sync_bsale_returns_history(
                 "error": "Hay una carga histórica incompleta. Use resume=true para reanudar.",
                 "sync_id": existing["id"],
                 "pages_processed": existing.get("pages_processed"),
+                "last_offset": existing.get("last_offset"),
             }
         else:
             sync_id = repo.create_sync_run(
@@ -410,8 +486,8 @@ def sync_bsale_returns_history(
                 company_id=company_id,
                 office_id=office_id,
                 sync_type="history",
-                date_from=date_from,
-                date_to=date_to,
+                date_from=None,
+                date_to=None,
             )
             pages_done = 0
             records_done = 0
@@ -419,75 +495,36 @@ def sync_bsale_returns_history(
 
         conn.commit()
 
-        total_returns = 0
-        total_details = 0
-        max_return_ts = 0
-        last_return_date: datetime | None = None
-        last_return_id: int | None = None
-        pages_this_run = 0
-
-        for page in iter_returns_pages(
-            client,
-            company_id=company_id,
-            office_id=office_id,
-            date_from_ts=date_from_ts,
-            date_to_ts=date_to_ts,
-            start_offset=start_offset,
-        ):
-            r_up, d_up, page_max_ts, page_last_date, page_last_id = _process_page(
-                cur,
-                page,
-                company_id=company_id,
-                office_id=office_id,
-                date_from_ts=date_from_ts,
-                date_to_ts=date_to_ts,
-                enforce_window=True,
-            )
-            total_returns += r_up
-            total_details += d_up
-            if page_max_ts > max_return_ts:
-                max_return_ts = page_max_ts
-            if page_last_date:
-                last_return_date = page_last_date
-                last_return_id = page_last_id
-
-            pages_done += 1
-            pages_this_run += 1
-            records_done += r_up
-            repo.update_sync_run_progress(
-                cur,
-                sync_id,
-                pages_processed=pages_done,
-                records_processed=records_done,
-                last_return_date=last_return_date,
-                last_return_id=last_return_id,
-            )
-            conn.commit()
-
-        duration_ms = int((time.monotonic() - t0) * 1000)
-        is_empty_bootstrap = (
-            total_returns == 0
-            and total_details == 0
-            and pages_this_run == 0
+        logger.info(
+            "[RETURNS] Inicio bootstrap | company=%s office=%s | resume=%s offset=%s",
+            company_id,
+            office_id,
+            resume,
+            start_offset,
         )
 
-        if is_empty_bootstrap:
+        first_payload = _get_returns_list_page(client, office_id=office_id, offset=start_offset)
+        total_count = int(first_payload.get("count") or 0)
+        total_pages = math.ceil(total_count / LIMIT) if total_count > 0 else 0
+
+        logger.info(
+            "[RETURNS] API count=%s total_pages=%s limit=%s",
+            total_count,
+            total_pages,
+            LIMIT,
+        )
+
+        if total_count == 0 and start_offset == 0:
+            duration_ms = int((time.monotonic() - t0) * 1000)
             repo.finish_sync_run(
                 cur,
                 sync_id,
                 status="no_data",
                 duration_ms=duration_ms,
-                error_message="No se encontraron devoluciones para los parámetros enviados",
+                error_message="API devolvió count=0 para officeid sin filtro de fecha",
+                finished=False,
             )
             conn.commit()
-            logger.warning(
-                "[RETURNS_HISTORY] bootstrap vacío — status=no_data (no bloquea reintentos) "
-                "company=%s office=%s window=%s..%s",
-                company_id,
-                office_id,
-                date_from.isoformat(),
-                date_to.isoformat(),
-            )
             return {
                 "ok": True,
                 "bootstrap_status": "no_data",
@@ -496,36 +533,116 @@ def sync_bsale_returns_history(
                 "company_id": company_id,
                 "office_id": office_id,
                 "company_name": company_name,
-                "returns_upserted": 0,
-                "details_upserted": 0,
-                "pages_processed": pages_done,
-                "date_from": date_from.isoformat(),
-                "date_to": date_to.isoformat(),
-                "resumed": resume and bool(existing),
-                "duration_ms": duration_ms,
+                "total_count": 0,
                 "message": "Bootstrap sin datos — puede reejecutarse",
+                "duration_ms": duration_ms,
             }
 
-        repo.finish_sync_run(cur, sync_id, status="completed", duration_ms=duration_ms)
+        total_inserted = 0
+        total_updated = 0
+        total_details = 0
+        total_errors = 0
+        max_return_ts = 0
+        last_return_date: datetime | None = None
+        last_return_id: int | None = None
+        pages_this_run = 0
+        offset = start_offset
+        payload = first_payload
+
+        while offset < total_count:
+            items = payload.get("items") or []
+            page_num = offset // LIMIT + 1
+            items_count = len(items)
+
+            ins, upd, det, err, page_last_date, page_last_id = _process_bootstrap_page(
+                cur,
+                client,
+                items,
+                company_id=company_id,
+                office_id=office_id,
+            )
+            total_inserted += ins
+            total_updated += upd
+            total_details += det
+            total_errors += err
+            records_done += ins + upd
+            pages_done += 1
+            pages_this_run += 1
+
+            if page_last_id:
+                last_return_id = page_last_id
+                last_return_date = page_last_date
+
+            for raw in items:
+                rts = parse_optional_int(raw.get("returnDate") or raw.get("return_date"))
+                if rts and rts > max_return_ts:
+                    max_return_ts = rts
+
+            next_offset = offset + LIMIT
+            repo.update_sync_run_progress(
+                cur,
+                sync_id,
+                pages_processed=pages_done,
+                records_processed=records_done,
+                last_return_date=last_return_date,
+                last_return_id=last_return_id,
+                last_page=page_num,
+                last_offset=next_offset,
+                total_count=total_count,
+            )
+            conn.commit()
+
+            logger.info(
+                "[RETURNS] Página %s/%s offset=%s items=%s insertados=%s actualizados=%s total=%s/%s",
+                page_num,
+                total_pages,
+                offset,
+                items_count,
+                ins,
+                upd,
+                min(records_done, total_count),
+                total_count,
+            )
+
+            if not items or items_count < LIMIT:
+                break
+
+            offset = next_offset
+            if offset >= total_count:
+                break
+
+            time.sleep(THROTTLE_SEC)
+            payload = _get_returns_list_page(client, office_id=office_id, offset=offset)
+
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        repo.finish_sync_run(
+            cur,
+            sync_id,
+            status="completed",
+            duration_ms=duration_ms,
+            finished=True,
+        )
         repo.upsert_sync_state(
             cur,
             company_id=company_id,
             office_id=office_id,
-            last_return_ts=max_return_ts or date_to_ts,
-            records_delta=total_returns,
+            last_return_ts=max_return_ts or None,
+            records_delta=total_inserted + total_updated,
         )
         conn.commit()
 
         logger.info(
-            "[RETURNS_HISTORY] company=%s office=%s returns=%s details=%s pages=%s window=%s..%s",
-            company_id,
-            office_id,
-            total_returns,
+            "[RETURNS] Bootstrap completado | duración_ms=%s | total_api=%s | "
+            "insertados=%s | actualizados=%s | detalles=%s | errores=%s | páginas=%s",
+            duration_ms,
+            total_count,
+            total_inserted,
+            total_updated,
             total_details,
+            total_errors,
             pages_this_run,
-            date_from.isoformat(),
-            date_to.isoformat(),
         )
+
         return {
             "ok": True,
             "bootstrap_status": "completed",
@@ -534,11 +651,12 @@ def sync_bsale_returns_history(
             "company_id": company_id,
             "office_id": office_id,
             "company_name": company_name,
-            "returns_upserted": total_returns,
+            "total_count": total_count,
+            "returns_inserted": total_inserted,
+            "returns_updated": total_updated,
             "details_upserted": total_details,
+            "errors": total_errors,
             "pages_processed": pages_done,
-            "date_from": date_from.isoformat(),
-            "date_to": date_to.isoformat(),
             "resumed": resume and bool(existing),
             "duration_ms": duration_ms,
         }
@@ -553,6 +671,7 @@ def sync_bsale_returns_history(
                     status="failed",
                     duration_ms=duration_ms,
                     error_message=str(exc)[:2000],
+                    finished=False,
                 )
                 conn.commit()
             except Exception:
@@ -583,8 +702,6 @@ def sync_bsale_returns_incremental(
             cur,
             company_id=company_id,
             office_id=office_id,
-            date_from=HISTORY_DATE_FROM,
-            date_to=HISTORY_DATE_TO,
         )
         if not history_done:
             return {
@@ -631,7 +748,7 @@ def sync_bsale_returns_incremental(
         last_return_id: int | None = None
         pages_done = 0
 
-        for page in iter_returns_pages(
+        for page in iter_returns_pages_dated(
             client,
             company_id=company_id,
             office_id=office_id,
@@ -643,7 +760,6 @@ def sync_bsale_returns_incremental(
                 page,
                 company_id=company_id,
                 office_id=office_id,
-                enforce_window=False,
             )
             total_returns += r_up
             total_details += d_up

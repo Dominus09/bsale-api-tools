@@ -357,6 +357,13 @@ def ensure_returns_schema(cur) -> None:
         """,
     )
     _ensure_returns_sync_status_check(cur)
+    for col, ddl in (
+        ("last_page", f"ALTER TABLE {_SCHEMA}.returns_sync ADD COLUMN last_page INTEGER"),
+        ("last_offset", f"ALTER TABLE {_SCHEMA}.returns_sync ADD COLUMN last_offset INTEGER"),
+        ("finished", f"ALTER TABLE {_SCHEMA}.returns_sync ADD COLUMN finished BOOLEAN NOT NULL DEFAULT FALSE"),
+        ("total_count", f"ALTER TABLE {_SCHEMA}.returns_sync ADD COLUMN total_count BIGINT"),
+    ):
+        _ensure_column(cur, schema=_SCHEMA, table="returns_sync", column=col, add_sql=ddl)
     _ensure_index(
         cur,
         schema=_SCHEMA,
@@ -439,6 +446,9 @@ def update_sync_run_progress(
     records_processed: int,
     last_return_date: datetime | None,
     last_return_id: int | None,
+    last_page: int | None = None,
+    last_offset: int | None = None,
+    total_count: int | None = None,
 ) -> None:
     cur.execute(
         f"""
@@ -446,10 +456,22 @@ def update_sync_run_progress(
         SET pages_processed = %s,
             records_processed = %s,
             last_return_date = %s,
-            last_return_id = %s
+            last_return_id = %s,
+            last_page = COALESCE(%s, last_page),
+            last_offset = COALESCE(%s, last_offset),
+            total_count = COALESCE(%s, total_count)
         WHERE id = %s
         """,
-        (pages_processed, records_processed, last_return_date, last_return_id, sync_id),
+        (
+            pages_processed,
+            records_processed,
+            last_return_date,
+            last_return_id,
+            last_page,
+            last_offset,
+            total_count,
+            sync_id,
+        ),
     )
 
 
@@ -460,6 +482,7 @@ def finish_sync_run(
     status: str,
     duration_ms: int,
     error_message: str | None = None,
+    finished: bool = True,
 ) -> None:
     cur.execute(
         f"""
@@ -467,10 +490,11 @@ def finish_sync_run(
         SET status = %s,
             finished_at = NOW(),
             duration_ms = %s,
-            error_message = %s
+            error_message = %s,
+            finished = %s
         WHERE id = %s
         """,
-        (status, duration_ms, error_message, sync_id),
+        (status, duration_ms, error_message, finished, sync_id),
     )
 
 
@@ -479,10 +503,8 @@ def get_completed_history_sync(
     *,
     company_id: int,
     office_id: int,
-    date_from,
-    date_to,
 ) -> dict[str, Any] | None:
-    """Bootstrap histórico exitoso: completed con al menos un registro procesado."""
+    """Bootstrap histórico completo exitoso (sin filtro de fechas en API)."""
     cur.execute(
         f"""
         SELECT *
@@ -491,11 +513,11 @@ def get_completed_history_sync(
           AND sync_type = 'history'
           AND status = 'completed'
           AND records_processed > 0
-          AND date_from = %s AND date_to = %s
+          AND COALESCE(finished, FALSE) = TRUE
         ORDER BY finished_at DESC NULLS LAST
         LIMIT 1
         """,
-        (company_id, office_id, date_from, date_to),
+        (company_id, office_id),
     )
     row = cur.fetchone()
     return _row_dict(cur, row) if row else None
@@ -506,8 +528,6 @@ def get_resumable_history_sync(
     *,
     company_id: int,
     office_id: int,
-    date_from,
-    date_to,
 ) -> dict[str, Any] | None:
     cur.execute(
         f"""
@@ -516,11 +536,11 @@ def get_resumable_history_sync(
         WHERE company_id = %s AND office_id = %s
           AND sync_type = 'history'
           AND status IN ('running', 'failed')
-          AND date_from = %s AND date_to = %s
+          AND COALESCE(finished, FALSE) = FALSE
         ORDER BY started_at DESC
         LIMIT 1
         """,
-        (company_id, office_id, date_from, date_to),
+        (company_id, office_id),
     )
     row = cur.fetchone()
     return _row_dict(cur, row) if row else None
@@ -546,7 +566,8 @@ def list_sync_runs(
     return [_row_dict(cur, r) for r in cur.fetchall()]
 
 
-def upsert_return(cur, row: dict[str, Any]) -> None:
+def upsert_return(cur, row: dict[str, Any]) -> str:
+    """UPSERT por (company_id, bsale_id). Retorna 'insert' o 'update'."""
     cur.execute(
         f"""
         INSERT INTO {RETURNS} (
@@ -587,9 +608,12 @@ def upsert_return(cur, row: dict[str, Any]) -> None:
             raw_data = EXCLUDED.raw_data,
             synced_at = NOW(),
             updated_at = NOW()
+        RETURNING (xmax = 0) AS was_insert
         """,
         {**row, "raw_data": Json(row.get("raw_data") or {})},
     )
+    was_insert = cur.fetchone()[0]
+    return "insert" if was_insert else "update"
 
 
 def replace_return_details(

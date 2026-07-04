@@ -92,15 +92,11 @@ def get_sync_status() -> dict[str, Any]:
             cur,
             company_id=COMPANY_ID,
             office_id=OFFICE_ID,
-            date_from=HISTORY_DATE_FROM,
-            date_to=HISTORY_DATE_TO,
         )
         resumable = repo.get_resumable_history_sync(
             cur,
             company_id=COMPANY_ID,
             office_id=OFFICE_ID,
-            date_from=HISTORY_DATE_FROM,
-            date_to=HISTORY_DATE_TO,
         )
         runs = repo.list_sync_runs(cur, company_id=COMPANY_ID, office_id=OFFICE_ID, limit=8)
         last_history = next((r for r in runs if r.get("sync_type") == "history"), None)
@@ -119,8 +115,9 @@ def get_sync_status() -> dict[str, Any]:
         "company_id": COMPANY_ID,
         "office_id": OFFICE_ID,
         "bootstrap": {
-            "date_from": HISTORY_DATE_FROM.isoformat(),
-            "date_to": HISTORY_DATE_TO.isoformat(),
+            "scope": "full_catalog",
+            "company_id": COMPANY_ID,
+            "office_id": OFFICE_ID,
             "completed": history is not None,
             "completed_at": _iso(history.get("finished_at")) if history else None,
             "records_processed": _int(history.get("records_processed")) if history else 0,
