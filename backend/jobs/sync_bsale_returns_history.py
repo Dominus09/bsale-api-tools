@@ -5,7 +5,10 @@ from __future__ import annotations
 import argparse
 import logging
 
-from backend.services.sync_bsale_returns import sync_bsale_returns_history
+from backend.services.sync_bsale_returns import (
+    diagnose_bsale_returns_api,
+    sync_bsale_returns_history,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,7 +32,21 @@ def main() -> None:
         action="store_true",
         help="Repetir bootstrap aunque exista uno completed con datos",
     )
+    parser.add_argument(
+        "--diagnose",
+        action="store_true",
+        help="Ejecutar pruebas A–E contra la API Bsale (sin sincronizar)",
+    )
     args = parser.parse_args()
+
+    if args.diagnose:
+        logger.info("[RETURNS_API_DIAG] Modo diagnóstico — sin sincronización")
+        result = diagnose_bsale_returns_api()
+        logger.info("RETURNS_API_DIAGNOSTIC %s", result)
+        if not result.get("ok"):
+            raise SystemExit(1)
+        return
+
     logger.info(
         "[RETURNS_SYNC_DEBUG] Iniciando sync_bsale_returns_history resume=%s force=%s",
         args.resume,

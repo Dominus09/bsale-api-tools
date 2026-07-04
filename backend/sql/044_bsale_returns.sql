@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS bsale.returns_sync (
     finished_at         TIMESTAMPTZ,
     duration_ms         BIGINT,
     status              TEXT NOT NULL DEFAULT 'running'
-        CHECK (status IN ('running', 'completed', 'failed', 'no_data')),
+        CHECK (status IN ('running', 'completed', 'failed', 'empty', 'no_data')),
     error_message       TEXT
 );
 -- +go

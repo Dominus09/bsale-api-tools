@@ -17,6 +17,15 @@ SYNC_RUNS = "bsale.returns_sync"
 
 _SCHEMA = "bsale"
 
+RETURNS_SYNC_VALID_STATUSES = (
+    "running",
+    "completed",
+    "failed",
+    "empty",
+    "no_data",
+)
+RETURNS_SYNC_STATUS_CHECK = "returns_sync_status_check"
+
 
 def _schema_log(message: str) -> None:
     logger.info("[RETURNS_SCHEMA] %s", message)
@@ -68,6 +77,72 @@ def _constraint_exists(cur, *, schema: str, table: str, conname: str) -> bool:
         (schema, table, conname),
     )
     return cur.fetchone() is not None
+
+
+def _constraint_definition(
+    cur,
+    *,
+    schema: str,
+    table: str,
+    conname: str,
+) -> str | None:
+    cur.execute(
+        """
+        SELECT pg_get_constraintdef(c.oid)
+        FROM pg_constraint c
+        JOIN pg_class t ON c.conrelid = t.oid
+        JOIN pg_namespace n ON t.relnamespace = n.oid
+        WHERE n.nspname = %s
+          AND t.relname = %s
+          AND c.conname = %s
+        """,
+        (schema, table, conname),
+    )
+    row = cur.fetchone()
+    return str(row[0]) if row and row[0] else None
+
+
+def _status_check_includes_all_statuses(defn: str | None) -> bool:
+    if not defn:
+        return False
+    normalized = defn.lower().replace(" ", "")
+    return all(f"'{status}'" in normalized for status in RETURNS_SYNC_VALID_STATUSES)
+
+
+def _ensure_returns_sync_status_check(cur) -> None:
+    """
+    Asegura returns_sync_status_check con todos los estados válidos.
+
+    PostgreSQL no permite ALTER del predicado CHECK in-place: se migra con
+    ALTER TABLE ... DROP CONSTRAINT + ADD CONSTRAINT (mismo nombre).
+    """
+    if not _table_exists(cur, f"{_SCHEMA}.returns_sync"):
+        return
+
+    conname = RETURNS_SYNC_STATUS_CHECK
+    defn = _constraint_definition(cur, schema=_SCHEMA, table="returns_sync", conname=conname)
+    statuses_sql = ", ".join(f"'{s}'" for s in RETURNS_SYNC_VALID_STATUSES)
+
+    if _status_check_includes_all_statuses(defn):
+        _schema_log(f"Constraint existente: {_SCHEMA}.returns_sync.{conname}")
+        return
+
+    if defn:
+        cur.execute(
+            f"ALTER TABLE {_SCHEMA}.returns_sync DROP CONSTRAINT {conname}"
+        )
+        _schema_log(
+            f"Constraint eliminada para migración ALTER TABLE: {_SCHEMA}.returns_sync.{conname}"
+        )
+
+    cur.execute(
+        f"""
+        ALTER TABLE {_SCHEMA}.returns_sync
+        ADD CONSTRAINT {conname}
+        CHECK (status IN ({statuses_sql}))
+        """
+    )
+    _schema_log(f"Constraint modificada: {_SCHEMA}.returns_sync.{conname}")
 
 
 def _ensure_schema(cur) -> None:
@@ -281,17 +356,7 @@ def ensure_returns_schema(cur) -> None:
             CHECK (sync_type IN ('history', 'incremental'))
         """,
     )
-    _ensure_constraint(
-        cur,
-        schema=_SCHEMA,
-        table="returns_sync",
-        conname="returns_sync_status_check",
-        add_sql=f"""
-            ALTER TABLE {_SCHEMA}.returns_sync
-            ADD CONSTRAINT returns_sync_status_check
-            CHECK (status IN ('running', 'completed', 'failed', 'no_data'))
-        """,
-    )
+    _ensure_returns_sync_status_check(cur)
     _ensure_index(
         cur,
         schema=_SCHEMA,

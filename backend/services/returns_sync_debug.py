@@ -277,3 +277,144 @@ def fetch_returns_page_json(
             raise RuntimeError(f"Bsale HTTP {r.status_code}: {(r.text or '')[:500]}")
 
         return payload
+
+
+def _probe_returns_get(
+    client: BsaleClient,
+    *,
+    label: str,
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    """GET /returns.json de diagnóstico — sin sincronizar, una sola petición."""
+    url = f"{BASE_BSALE}/returns.json"
+    full_url = _build_full_url("/returns.json", params)
+
+    logger.info("[RETURNS_API_DIAG] ── Prueba %s ──", label)
+    logger.info("[RETURNS_API_DIAG] query_params=%s", params)
+    logger.info("[RETURNS_API_DIAG] url=%s", full_url)
+
+    r = client.session.get(
+        url,
+        headers={"access_token": client.access_token},
+        params=params,
+        timeout=45,
+    )
+
+    payload: dict[str, Any] = {}
+    items: list[dict[str, Any]] = []
+    if r.content:
+        try:
+            payload = r.json()
+            raw_items = payload.get("items")
+            items = raw_items if isinstance(raw_items, list) else []
+        except Exception:
+            payload = {"_parse_error": True, "_raw": (r.text or "")[:500]}
+
+    first_id, last_id = _item_ids(items)
+    count = payload.get("count")
+    result = {
+        "label": label,
+        "http_status": r.status_code,
+        "count": count,
+        "limit": payload.get("limit"),
+        "offset": payload.get("offset"),
+        "items_received": len(items),
+        "first_id": first_id,
+        "last_id": last_id,
+        "params": params,
+        "response_url": getattr(r.request, "url", None),
+    }
+
+    logger.info("[RETURNS_API_DIAG] Prueba %s HTTP_status=%s", label, r.status_code)
+    logger.info(
+        "[RETURNS_API_DIAG] Prueba %s count=%s limit=%s offset=%s items_received=%s",
+        label,
+        count,
+        result["limit"],
+        result["offset"],
+        result["items_received"],
+    )
+    logger.info(
+        "[RETURNS_API_DIAG] Prueba %s first_id=%s last_id=%s",
+        label,
+        first_id if first_id is not None else "—",
+        last_id if last_id is not None else "—",
+    )
+    if count == 0:
+        logger.warning(
+            "[RETURNS_API_DIAG] Prueba %s count=0 — sin devoluciones con estos parámetros",
+            label,
+        )
+
+    return result
+
+
+def run_returns_api_diagnostic(
+    client: BsaleClient,
+    *,
+    office_id: int,
+    date_from_ts: int,
+    date_to_ts: int,
+    date_from_iso: str,
+    date_to_iso: str,
+) -> list[dict[str, Any]]:
+    """
+    Ejecuta pruebas A–E contra GET /returns.json para aislar parámetros que anulan resultados.
+
+    No sincroniza datos. Prueba D/E usan returndate como rango [unix,unix] (hipótesis sync actual).
+    """
+    returndate_range = f"[{date_from_ts},{date_to_ts}]"
+    returndate_single = str(date_from_ts)
+
+    logger.info(
+        "[RETURNS_API_DIAG] Inicio diagnóstico API returns | office=%s | "
+        "bootstrap %s → %s | returndate_rango=%s | returndate_single=%s",
+        office_id,
+        date_from_iso,
+        date_to_iso,
+        returndate_range,
+        returndate_single,
+    )
+
+    tests: list[tuple[str, dict[str, Any]]] = [
+        ("A", {"limit": 5}),
+        ("B", {"limit": 5, "officeid": office_id}),
+        ("C", {"limit": 5, "expand": "[reference_document,credit_note]"}),
+        ("D", {"limit": 5, "returndate": returndate_range}),
+        ("E", {"limit": 5, "officeid": office_id, "returndate": returndate_range}),
+    ]
+
+    results: list[dict[str, Any]] = []
+    for label, params in tests:
+        results.append(_probe_returns_get(client, label=label, params=params))
+        time.sleep(0.15)
+
+    logger.info("[RETURNS_API_DIAG] ── Resumen comparativo ──")
+    for row in results:
+        logger.info(
+            "[RETURNS_API_DIAG] %s | HTTP %s | count=%s | items=%s | first=%s | last=%s | params=%s",
+            row["label"],
+            row["http_status"],
+            row["count"],
+            row["items_received"],
+            row["first_id"] if row["first_id"] is not None else "—",
+            row["last_id"] if row["last_id"] is not None else "—",
+            row["params"],
+        )
+
+    baseline = next((r for r in results if r["label"] == "A"), None)
+    if baseline and (baseline.get("count") or 0) > 0:
+        for row in results:
+            if row["label"] == "A":
+                continue
+            if (row.get("count") or 0) == 0 and baseline.get("count", 0) > 0:
+                added = set(row["params"]) - set(baseline["params"])
+                logger.warning(
+                    "[RETURNS_API_DIAG] Prueba %s count=0 vs A count=%s — "
+                    "parámetros adicionales respecto a A: %s",
+                    row["label"],
+                    baseline.get("count"),
+                    {k: row["params"][k] for k in added},
+                )
+
+    return results

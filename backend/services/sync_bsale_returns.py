@@ -17,7 +17,11 @@ from backend.config.returns_scope import (
 from backend.db import get_connection
 from backend.repositories import returns_analytics_repo as repo
 from backend.services.distribuidora.bsale_client import BsaleClient
-from backend.services.returns_sync_debug import fetch_returns_page_json, log_bootstrap_date_conversion
+from backend.services.returns_sync_debug import (
+    fetch_returns_page_json,
+    log_bootstrap_date_conversion,
+    run_returns_api_diagnostic,
+)
 from backend.utils.bsale_field_parse import parse_float, parse_int, parse_optional_int
 
 logger = logging.getLogger(__name__)
@@ -276,6 +280,54 @@ def _process_page(
             last_return_id = row["bsale_id"]
 
     return returns_upserted, details_upserted, max_return_ts, last_return_date, last_return_id
+
+
+def diagnose_bsale_returns_api(
+    *,
+    company_id: int = COMPANY_ID,
+    office_id: int = OFFICE_ID,
+) -> dict[str, Any]:
+    """Modo diagnóstico: pruebas A–E contra Bsale sin sincronizar."""
+    date_from = HISTORY_DATE_FROM
+    date_to = HISTORY_DATE_TO
+    date_from_ts, date_to_ts = _date_bounds_ts(date_from, date_to)
+
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        repo.ensure_returns_schema(cur)
+        conn.commit()
+        loaded = _load_company_token(cur, company_id)
+    finally:
+        cur.close()
+        conn.close()
+
+    if not loaded:
+        return {"ok": False, "error": f"Sin token para company_id={company_id}"}
+    company_name, token = loaded
+    client = BsaleClient(token)
+
+    log_bootstrap_date_conversion(date_from, date_to, company_id=company_id, office_id=office_id)
+
+    results = run_returns_api_diagnostic(
+        client,
+        office_id=office_id,
+        date_from_ts=date_from_ts,
+        date_to_ts=date_to_ts,
+        date_from_iso=date_from.isoformat(),
+        date_to_iso=date_to.isoformat(),
+    )
+
+    return {
+        "ok": True,
+        "mode": "diagnostic",
+        "company_id": company_id,
+        "office_id": office_id,
+        "company_name": company_name,
+        "date_from": date_from.isoformat(),
+        "date_to": date_to.isoformat(),
+        "tests": results,
+    }
 
 
 def sync_bsale_returns_history(
