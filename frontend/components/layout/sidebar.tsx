@@ -38,6 +38,7 @@ import {
   PackageCheck,
   Crosshair,
   UsersRound,
+  FileWarning,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { canAccessDiagnostics, staffUserFromLocalStorage } from "@/lib/permissions"
@@ -67,6 +68,11 @@ const navSections: { title: string; items: NavItem[] }[] = [
         href: "/analitica/comercial-vendedores",
         label: "Comercial Vendedores",
         icon: UsersRound,
+      },
+      {
+        href: "/analitica/notas-credito",
+        label: "Notas de Crédito",
+        icon: FileWarning,
       },
     ],
   },

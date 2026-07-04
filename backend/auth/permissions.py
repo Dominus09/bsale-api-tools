@@ -169,3 +169,25 @@ def require_management_access(
             detail="Acceso restringido a usuarios con permisos de gerencia",
         )
     return user
+
+
+def require_admin_access(
+    authorization: BearerDep,
+    request: Request,
+    *,
+    required_permission: str = "admin_access",
+) -> dict[str, Any]:
+    """Dependencia FastAPI: exige rol de administración técnica."""
+    user = decode_staff_token(authorization)
+    if not has_admin_access(user):
+        _log_auth_denial(
+            user=user,
+            endpoint=request.url.path,
+            required_permission=required_permission,
+            reason="Rol sin acceso de administración",
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Acceso restringido a administradores",
+        )
+    return user

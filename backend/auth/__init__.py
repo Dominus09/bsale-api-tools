@@ -17,6 +17,7 @@ from backend.auth.permissions import (
     has_operational_access,
     has_sales_access,
     require_management_access,
+    require_admin_access,
 )
 
 __all__ = [
@@ -34,4 +35,5 @@ __all__ = [
     "has_operational_access",
     "has_sales_access",
     "require_management_access",
+    "require_admin_access",
 ]
