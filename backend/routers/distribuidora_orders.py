@@ -41,9 +41,11 @@ from backend.services.distribuidora.sync_service import (
     sync_bsale_distribuidora_orders_incremental,
     sync_bsale_distribuidora_sales_incremental,
 )
+from backend.utils.request_audit import get_request_id, rss_mb
 
 router = APIRouter(prefix="/distribuidora", tags=["Distribuidora órdenes"])
 logger = logging.getLogger(__name__)
+audit_logger = logging.getLogger("request_audit")
 
 # Ventana corta (días calendario UTC) para traer documentos recientes desde Bsale.
 _RESYNC_OC_CALENDAR_DAYS = 2
@@ -414,6 +416,14 @@ def get_dispatch_prep_planning_rows(
         description="Desplazamiento para paginación.",
     ),
 ):
+    # Auditoría ECONNRESET: checkpoint de entrada al router (request_id lo asigna
+    # RequestAuditMiddleware; el service registra el resto de etapas).
+    audit_logger.info(
+        "[REQUEST_AUDIT] STEP request_id=%s endpoint=planning-rows step=router_enter "
+        "rss_mb=%s",
+        get_request_id(),
+        rss_mb(),
+    )
     return list_dispatch_prep_planning_rows(
         emission_date_from=emission_date_from,
         emission_date_to=emission_date_to,

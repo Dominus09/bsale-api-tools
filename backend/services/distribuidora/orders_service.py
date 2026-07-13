@@ -35,6 +35,12 @@ from backend.utils.planning_rows_stage import (
     PlanningRowsStageCollector,
     planning_rows_stage_enabled,
 )
+from backend.utils.request_audit import (
+    RequestAudit,
+    log_pg_connection_stats,
+    slow_serialize_threshold_ms,
+    timed_query,
+)
 from backend.utils.planning_sql_fragments import (
     PLANNING_LATEST_OBS_LATERAL,
     PLANNING_LAST_BS_UPDATE_EXPR,
@@ -950,49 +956,64 @@ def _fetch_planning_rows_staged(
     cur,
     doc_ids: list[int],
     stages: PlanningRowsStageCollector,
+    audit: RequestAudit | None = None,
 ) -> list[dict[str, Any]]:
     """Carga por etapas instrumentadas (misma semántica que enrich monolítico)."""
     params = (doc_ids,)
 
-    t0 = time.perf_counter()
     base_sql = _planning_rows_base_orders_sql()
     _assert_sql_template_rendered(base_sql, context="_planning_rows_base_orders_sql")
-    cur.execute(base_sql, params)
+    ms = timed_query(cur, "planning_rows_base_orders", base_sql, params, audit=audit)
     base_raw = cur.fetchall() or []
     base_rows = [_row_to_dict(cur, r) for r in base_raw]
     stages.record(
         "load_base_orders",
-        elapsed_ms=(time.perf_counter() - t0) * 1000.0,
+        elapsed_ms=ms,
         rows_count=len(base_rows),
         step="document_fields",
     )
 
-    t0 = time.perf_counter()
-    cur.execute(_planning_rows_purchase_status_sql(), params)
+    ms = timed_query(
+        cur,
+        "planning_rows_purchase_status",
+        _planning_rows_purchase_status_sql(),
+        params,
+        audit=audit,
+    )
     conf_rows = [_row_to_dict(cur, r) for r in cur.fetchall() or []]
     conf_by_doc = {int(r["oc_document_id"]): r for r in conf_rows}
     stages.record(
         "load_purchase_status",
-        elapsed_ms=(time.perf_counter() - t0) * 1000.0,
+        elapsed_ms=ms,
         rows_count=len(conf_rows),
     )
 
-    t0 = time.perf_counter()
-    cur.execute(_planning_rows_probable_matches_sql(), params)
+    ms = timed_query(
+        cur,
+        "planning_rows_probable_matches",
+        _planning_rows_probable_matches_sql(),
+        params,
+        audit=audit,
+    )
     prob_rows = [_row_to_dict(cur, r) for r in cur.fetchall() or []]
     prob_by_doc = {int(r["oc_document_id"]): r for r in prob_rows}
     stages.record(
         "load_probable_matches",
-        elapsed_ms=(time.perf_counter() - t0) * 1000.0,
+        elapsed_ms=ms,
         rows_count=len(prob_rows),
     )
 
-    t0 = time.perf_counter()
-    cur.execute(_planning_rows_observaciones_sql(), params)
+    ms = timed_query(
+        cur,
+        "planning_rows_observaciones",
+        _planning_rows_observaciones_sql(),
+        params,
+        audit=audit,
+    )
     obs_rows = cur.fetchall() or []
     stages.record(
         "load_observaciones",
-        elapsed_ms=(time.perf_counter() - t0) * 1000.0,
+        elapsed_ms=ms,
         rows_count=len(obs_rows),
     )
 
@@ -1000,15 +1021,21 @@ def _fetch_planning_rows_staged(
         {int(r["client_id"]) for r in base_rows if r.get("client_id") is not None}
     )
     geo_by_client: dict[tuple[int, int], dict[str, Any]] = {}
-    t0 = time.perf_counter()
+    ms = 0.0
     if client_ids:
-        cur.execute(_planning_rows_georef_sql(), (3, client_ids))
+        ms = timed_query(
+            cur,
+            "planning_rows_georef",
+            _planning_rows_georef_sql(),
+            (3, client_ids),
+            audit=audit,
+        )
         for r in cur.fetchall() or []:
             d = _row_to_dict(cur, r)
             geo_by_client[(int(d["company_id"]), int(d["client_id"]))] = d
     stages.record(
         "load_georef",
-        elapsed_ms=(time.perf_counter() - t0) * 1000.0,
+        elapsed_ms=ms,
         rows_count=len(geo_by_client),
     )
 
@@ -1115,7 +1142,41 @@ def list_dispatch_prep_planning_rows(
     """
     Filas OC (33) para tabla de pre‑planificación.
 
-    Instrumentación ``[PLANNING_ROWS_STAGE]`` por etapa (ver ``planning_rows_stage.py``).
+    Envoltura de auditoría (diagnóstico ECONNRESET): captura CUALQUIER excepción
+    fatal con stack completo, última query ejecutada y último paso alcanzado,
+    y luego re-lanza sin alterar el comportamiento.
+    """
+    audit = RequestAudit("planning-rows")
+    try:
+        return _list_dispatch_prep_planning_rows_impl(
+            audit,
+            emission_date_from=emission_date_from,
+            emission_date_to=emission_date_to,
+            only_not_invoiced=only_not_invoiced,
+            day_filter=day_filter,
+            limit=limit,
+            offset=offset,
+        )
+    except BaseException as exc:  # nunca perder un traceback (incluye CancelledError)
+        audit.log_fatal(exc)
+        raise
+
+
+def _list_dispatch_prep_planning_rows_impl(
+    audit: RequestAudit,
+    *,
+    emission_date_from: date,
+    emission_date_to: date,
+    only_not_invoiced: bool = True,
+    day_filter: str | None = None,
+    limit: int = DEFAULT_DISPATCH_PREP_LIMIT,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """
+    Cuerpo original de planning-rows (lógica comercial intacta).
+
+    Instrumentación ``[PLANNING_ROWS_STAGE]`` por etapa (ver ``planning_rows_stage.py``)
+    + ``[REQUEST_AUDIT]`` (request_id, memoria, connection_id, SLOW QUERY).
     Por defecto carga desglosada por etapa; ``PLANNING_ROWS_MONOLITH_ENRICH=1`` usa un
     solo SQL enrich (comparable con latencia histórica ~35s).
     """
@@ -1138,6 +1199,7 @@ def list_dispatch_prep_planning_rows(
         off,
     )
     use_monolith = _planning_rows_use_monolith_enrich()
+    audit.step("parse_params", limit=lim, offset=off, date_from=d0, date_to=d1)
 
     conn = get_connection()
     sql_ids_ms = 0.0
@@ -1145,6 +1207,8 @@ def list_dispatch_prep_planning_rows(
     explains: list[dict[str, Any]] = []
     try:
         cur = conn.cursor()
+        audit.step("db_connect")
+        log_pg_connection_stats(cur, label="before")
         if explain_analyze_enabled():
             try:
                 explains.append(
@@ -1156,19 +1220,20 @@ def list_dispatch_prep_planning_rows(
                 log_planning_rows("explain_ids_failed", error=repr(exc))
                 conn.rollback()
 
-        t_ids = time.perf_counter()
         _assert_sql_template_rendered(ids_sql, context="_planning_rows_ids_sql")
-        cur.execute(ids_sql, ids_params)
+        sql_ids_ms = timed_query(cur, "sql_ids", ids_sql, ids_params, audit=audit)
         id_rows = cur.fetchall() or []
-        sql_ids_ms = round((time.perf_counter() - t_ids) * 1000.0, 2)
         timer.mark("sql_ids")
+        audit.step("sql_ids", rows=len(id_rows), execution_ms=sql_ids_ms)
 
         has_more = len(id_rows) > lim
         doc_ids = [int(r[0]) for r in id_rows[:lim]]
         meta = wide_range_meta(d0, d1)
 
         if not doc_ids:
+            log_pg_connection_stats(cur, label="after")
             cur.close()
+            audit.step("empty_result")
             t_sum = time.perf_counter()
             payload: dict[str, Any] = {
                 "items": [],
@@ -1214,6 +1279,8 @@ def list_dispatch_prep_planning_rows(
                 limit=lim,
                 offset=off,
             )
+            audit.memory_report(payload_bytes=pbytes)
+            audit.step("request_end", rows=0, payload_bytes=pbytes)
             return payload
 
         if use_monolith:
@@ -1228,12 +1295,13 @@ def list_dispatch_prep_planning_rows(
                 except Exception as exc:
                     log_planning_rows("explain_enrich_failed", error=repr(exc))
                     conn.rollback()
-            t_enrich = time.perf_counter()
             _assert_sql_template_rendered(enrich_sql, context="_planning_rows_enrich_sql")
-            cur.execute(enrich_sql, enrich_params)
+            sql_enrich_ms = timed_query(
+                cur, "sql_enrich_monolith", enrich_sql, enrich_params, audit=audit
+            )
             raw = cur.fetchall() or []
-            sql_enrich_ms = round((time.perf_counter() - t_enrich) * 1000.0, 2)
             timer.mark("sql_enrich")
+            audit.step("sql_enrich", rows=len(raw), execution_ms=sql_enrich_ms)
             enrich_ms = sql_enrich_ms
             stages.record(
                 "load_base_orders",
@@ -1285,7 +1353,7 @@ def list_dispatch_prep_planning_rows(
                     rows_count=len(doc_ids),
                     step="pagination",
                 )
-            merged_raw = _fetch_planning_rows_staged(cur, doc_ids, stages)
+            merged_raw = _fetch_planning_rows_staged(cur, doc_ids, stages, audit=audit)
             t_build = time.perf_counter()
             merged = [_serialize_row(r) for r in merged_raw]
             _overlay_order_weights_to_rows(merged)
@@ -1301,6 +1369,8 @@ def list_dispatch_prep_planning_rows(
                 "load_georef",
             )
 
+        audit.step("build_rows", rows=len(merged))
+        log_pg_connection_stats(cur, label="after")
         cur.close()
 
         t_sum = time.perf_counter()
@@ -1326,6 +1396,22 @@ def list_dispatch_prep_planning_rows(
             rows_count=len(merged),
             payload_size=pbytes,
         )
+        audit.step(
+            "serialize_json",
+            json_dumps_ms=json_ms,
+            payload_kb=round(pbytes / 1024.0, 1),
+            rows=len(merged),
+        )
+        if json_ms > slow_serialize_threshold_ms():
+            logger.warning(
+                "[REQUEST_AUDIT] SLOW_SERIALIZE request_id=%s json_dumps_ms=%s "
+                "payload_kb=%s rows=%s threshold_ms=%s",
+                audit.request_id,
+                json_ms,
+                round(pbytes / 1024.0, 1),
+                len(merged),
+                slow_serialize_threshold_ms(),
+            )
         stage_report = stages.finish(rows_count=len(merged))
 
         if explain_analyze_enabled():
@@ -1376,9 +1462,17 @@ def list_dispatch_prep_planning_rows(
                     issues=ex.get("issues"),
                     top_node=(ex.get("top_nodes") or [None])[0],
                 )
+        audit.memory_report(payload_bytes=pbytes)
+        audit.step(
+            "request_end",
+            rows=len(merged),
+            payload_bytes=pbytes,
+            total_ms=total_ms,
+        )
         return payload
     finally:
         conn.close()
+        audit.step("db_connection_closed")
 
 
 def fetch_planning_live_by_document_ids(document_ids: list[int]) -> list[dict[str, Any]]:

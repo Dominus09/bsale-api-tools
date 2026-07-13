@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 from backend.cors_middleware import QuillotanaCorsMiddleware
 from backend.middleware.distribuidora_request_log import DistribuidoraRequestLogMiddleware
 from backend.diagnostics.middleware import DiagnosticsRequestLogMiddleware
+from backend.utils.request_audit import RequestAuditMiddleware
 from backend.routers import auth
 from backend.routers import orders
 from backend.routers.catalog import router as catalog_router
@@ -96,6 +97,11 @@ app.add_middleware(
 app.add_middleware(DistribuidoraRequestLogMiddleware)
 # Diagnóstico: capa más externa para registrar status final y tiempos (sin payloads sensibles).
 app.add_middleware(DiagnosticsRequestLogMiddleware)
+# TEMPORAL (auditoría ECONNRESET planning-rows): middleware ASGI global con request_id,
+# REQUEST_START/END, bytes, memoria y detección de SEND_FAILED (socket cerrado durante
+# el envío). Capa MÁS externa para observar también fallos de las otras capas.
+# Desactivable con REQUEST_AUDIT=0. Retirar al cerrar el diagnóstico.
+app.add_middleware(RequestAuditMiddleware)
 
 # --- Auth (login staff + login-client) ---
 app.include_router(auth.router)
