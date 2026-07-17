@@ -108,7 +108,7 @@ export default function DispatchAnalysisPage() {
   const [selectedSellers, setSelectedSellers] = useState<Set<string>>(() => new Set())
 
   const [items, setItems] = useState<DistribuidoraPurchaseOrder[]>([])
-  const [total, setTotal] = useState(0)
+  const [hasMore, setHasMore] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -120,15 +120,15 @@ export default function DispatchAnalysisPage() {
         emission_date_from: dateFrom,
         emission_date_to: dateTo,
         only_not_invoiced: onlyNotInvoiced,
-        limit: 5000,
+        limit: 500,
         offset: 0,
       })
       setItems(res.items)
-      setTotal(res.total)
+      setHasMore(res.has_more)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Error al cargar datos")
       setItems([])
-      setTotal(0)
+      setHasMore(false)
     } finally {
       setLoading(false)
     }
@@ -267,7 +267,7 @@ export default function DispatchAnalysisPage() {
     router.push(`/distribuidora/orders?${qs.toString()}`)
   }
 
-  const truncated = total > items.length
+  const truncated = hasMore
 
   const loadBadgeClass = (tier: LoadTier) =>
     cn(
@@ -341,8 +341,8 @@ export default function DispatchAnalysisPage() {
         <Alert>
           <AlertTitle>Aviso</AlertTitle>
           <AlertDescription>
-            Hay {total} órdenes en el rango y se cargaron {items.length} (límite 5000).
-            Los totales pueden quedar incompletos.
+            Se cargaron las primeras {items.length} órdenes del rango (límite 500) y
+            hay más resultados. Los totales pueden quedar incompletos.
           </AlertDescription>
         </Alert>
       ) : null}

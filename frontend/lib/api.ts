@@ -3,7 +3,9 @@ import { prepareLabelResolveItems } from "@/lib/etiquetas-excel"
 import {
   DEFAULT_FETCH_TIMEOUT_MS,
   DISPATCH_PREP_FETCH_TIMEOUT_MS,
+  fetchDistinguishingTimeout,
   fetchWithTimeout,
+  ORDERS_PURCHASE_FETCH_TIMEOUT_MS,
   ORS_FETCH_TIMEOUT_MS,
 } from "@/lib/fetch-timeout"
 
@@ -997,10 +999,11 @@ export type DistribuidoraPurchaseOrder = {
 }
 
 export type DistribuidoraOrdersPurchaseResponse = {
-  total: number
+  items: DistribuidoraPurchaseOrder[]
   limit: number
   offset: number
-  items: DistribuidoraPurchaseOrder[]
+  has_more: boolean
+  next_offset: number | null
 }
 
 export async function getDistribuidoraOrdersPurchase(params: {
@@ -1027,12 +1030,16 @@ export async function getDistribuidoraOrdersPurchase(params: {
     qs.set("delivery_search", params.delivery_search.trim())
   if (params.municipality?.trim())
     qs.set("municipality", params.municipality.trim())
-  qs.set("limit", String(params.limit ?? 5000))
+  qs.set("limit", String(params.limit ?? 100))
   qs.set("offset", String(params.offset ?? 0))
-  const res = await fetch(`${API_URL}/distribuidora/orders/purchase?${qs}`, {
-    headers: getAuthHeaders(),
-    signal: params.signal,
-  })
+  const res = await fetchDistinguishingTimeout(
+    `${API_URL}/distribuidora/orders/purchase?${qs}`,
+    {
+      headers: getAuthHeaders(),
+      signal: params.signal,
+    },
+    ORDERS_PURCHASE_FETCH_TIMEOUT_MS,
+  )
   if (!res.ok) {
     const msg = await res.text().catch(() => "")
     throw new Error(msg || "Error al cargar órdenes de compra")

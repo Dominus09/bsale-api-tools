@@ -373,9 +373,14 @@ def list_purchase_orders(
     municipality: str | None = None,
     client_id: int | None = None,
     user_id: int | None = None,
-    limit: int = 500,
+    limit: int = 100,
     offset: int = 0,
-) -> tuple[list[dict[str, Any]], int]:
+) -> tuple[list[dict[str, Any]], bool]:
+    """Lista OC enriquecidas paginadas.
+
+    Devuelve ``(rows, has_more)``. Se pide ``limit + 1`` filas en vez de un
+    ``COUNT(*)`` sobre la vista completa (costo prohibitivo por los LATERAL).
+    """
     where = ["1=1"]
     params: list[Any] = []
     if only_not_invoiced:
@@ -420,16 +425,8 @@ def list_purchase_orders(
     conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute(
-            f"""
-            SELECT COUNT(*) FROM distribuidora.v_orders_purchase_enriched e
-            WHERE {where_sql}
-            """,
-            tuple(params),
-        )
-        total = int(cur.fetchone()[0])
         params2 = list(params)
-        params2.extend([limit, offset])
+        params2.extend([limit + 1, offset])
         cur.execute(
             f"""
             SELECT
@@ -462,7 +459,8 @@ def list_purchase_orders(
         )
         rows = [_serialize_row(_row_to_dict(cur, r)) for r in cur.fetchall()]
         cur.close()
-        return rows, total
+        has_more = len(rows) > limit
+        return rows[:limit], has_more
     finally:
         conn.close()
 

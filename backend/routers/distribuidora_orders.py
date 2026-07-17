@@ -279,10 +279,10 @@ def get_orders_purchase(
     ),
     client_id: int | None = Query(None),
     user_id: int | None = Query(None),
-    limit: int = Query(500, ge=1, le=5000),
+    limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ):
-    rows, total = list_purchase_orders(
+    rows, has_more = list_purchase_orders(
         only_not_invoiced=only_not_invoiced,
         invoice_status=invoice_status,
         emission_date_from=emission_date_from,
@@ -294,7 +294,13 @@ def get_orders_purchase(
         limit=limit,
         offset=offset,
     )
-    return {"total": total, "limit": limit, "offset": offset, "items": rows}
+    return {
+        "items": rows,
+        "limit": limit,
+        "offset": offset,
+        "has_more": has_more,
+        "next_offset": offset + len(rows) if has_more else None,
+    }
 
 
 @router.get("/orders/purchase/{document_id}")
