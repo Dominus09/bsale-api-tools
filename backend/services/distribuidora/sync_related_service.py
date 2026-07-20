@@ -36,7 +36,6 @@ from psycopg2.extensions import connection as PgConnection
 from backend.db import get_connection
 from backend.repositories.distribuidora.details_repo import replace_document_details
 from backend.repositories.distribuidora.sync_repo import (
-    ensure_distribuidora_schema,
     insert_sync_status_row,
 )
 from backend.services.distribuidora.bsale_client import BsaleClient
@@ -1344,7 +1343,6 @@ def sync_distribuidora_related_documents(
             stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
             return stats
 
-        ensure_distribuidora_schema(cur)
         conn.commit()
 
         logger.info(
@@ -1363,6 +1361,7 @@ def sync_distribuidora_related_documents(
         stats["documents_recent_refresh"] = pick_meta["recent_refresh_candidates"]
         stats["documents_merged_unique"] = pick_meta["merged_unique"]
         stats["documents_considered"] = len(document_ids)
+        conn.commit()
         logger.info(
             "sync related selección OC: lookback=%sd pending_sin_factura=%s "
             "refresh_recientes=%s total_unicos=%s (pending_limit=%s refresh_limit=%s)",
@@ -1508,7 +1507,6 @@ def sync_related_documents_range(
             stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
             return stats
 
-        ensure_distribuidora_schema(cur)
         conn.commit()
 
         logger.info(
@@ -1619,8 +1617,6 @@ def backfill_distribuidora_related_may_2026_only(*, strict_token: bool = True) -
     conn0 = get_connection()
     try:
         c0 = conn0.cursor()
-        ensure_distribuidora_schema(c0)
-        conn0.commit()
         log_id = start_sync_log(c0, BACKFILL_RELATED_MAY_LOG_PROCESS)
         conn0.commit()
         c0.close()
@@ -1808,8 +1804,14 @@ def debug_sync_related_for_document(document_number: int) -> dict[str, Any]:
     cur = conn.cursor()
     got_lock = False
     try:
-        ensure_distribuidora_schema(cur)
+        cur.execute("SELECT pg_try_advisory_lock(%s)", (ADVISORY_LOCK_RELATED,))
+        got_lock = bool(cur.fetchone()[0])
         conn.commit()
+        if not got_lock:
+            return {
+                "ok": False,
+                "error": "Lock document_related en uso; detenga otro sync related e intente de nuevo.",
+            }
         cur.execute(
             """
             SELECT document_id FROM distribuidora.documents
@@ -1819,19 +1821,13 @@ def debug_sync_related_for_document(document_number: int) -> dict[str, Any]:
             (COMPANY_ID, OFFICE_ID, DOC_TYPE_OC, document_number),
         )
         row = cur.fetchone()
+        conn.commit()
         if not row:
             return {
                 "ok": False,
                 "error": f"OC número {document_number} no encontrada en distribuidora.documents",
             }
         document_id = int(row[0])
-        cur.execute("SELECT pg_try_advisory_lock(%s)", (ADVISORY_LOCK_RELATED,))
-        got_lock = bool(cur.fetchone()[0])
-        if not got_lock:
-            return {
-                "ok": False,
-                "error": "Lock document_related en uso; detenga otro sync related e intente de nuevo.",
-            }
         client = BsaleClient(token)
         stats: dict[str, Any] = {}
         items_m, inserted, calls = _fetch_and_persist_related_for_document(

@@ -19,7 +19,6 @@ from backend.repositories.distribuidora.probable_matches_repo import (
     delete_probable_matches_below_score,
     upsert_probable_matches,
 )
-from backend.repositories.distribuidora.sync_repo import ensure_distribuidora_schema
 
 logger = logging.getLogger(__name__)
 
@@ -474,7 +473,6 @@ def build_probable_invoice_matches_may_2026(
     try:
         conn.autocommit = False
         cur = conn.cursor()
-        ensure_distribuidora_schema(cur)
         oc_ids = _fetch_oc_without_confirmed_invoice(
             cur, emission_from=d0, emission_to=d1
         )

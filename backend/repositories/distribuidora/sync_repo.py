@@ -76,47 +76,84 @@ def _run_sql_file(cur, name: str) -> None:
     logger.info("SQL aplicado: %s", name)
 
 
-def ensure_distribuidora_schema(cur) -> None:
-    for fn in (
-        "001_schema.sql",
-        "002_indexes.sql",
-        "003_views.sql",
-        "004_route_planning_summary.sql",
-        "005_route_picking.sql",
-        "006_route_planning_seller.sql",
-        "007_document_related_sync_status_views.sql",
-        "008_documents_fk_on_update_cascade.sql",
-        "009_v_sales_with_credit_notes.sql",
-        "010_document_sellers.sql",
-        "011_v_sales_document_sellers.sql",
-        "012_trucks.sql",
-        "013_operational_sync_state.sql",
-        "014_document_probable_matches.sql",
-        "015_v_purchase_document_status_full.sql",
-        "016_system_config.sql",
-        "017_trucks_fuel.sql",
-        "018_trucks_real_consumption.sql",
-        "019_logistics_cost_settings.sql",
-        "020_ors_route_crew_costs.sql",
-        "021_dispatch_plan.sql",
-        "022_dispatch_plan_invoiced_view.sql",
-        "023_dispatch_plan_identity.sql",
-        "024_dispatch_plan_picking_snapshots.sql",
-        "025_dispatch_plan_margin_and_snapshot.sql",
-        "026_dispatch_plan_invoiced_view_perf.sql",
-        "027_dispatch_plan_pickings.sql",
-        "028_planning_rows_indexes.sql",
-        "029_planning_rows_sort_index.sql",
-        "030_purchase_document_status_cache.sql",
-        "031_dispatch_plan_snapshot_views.sql",
-        "032_route_operational_costs.sql",
-        "033_diesel_price_default_1500.sql",
-        "034_dispatch_plan_crew_cuadratura.sql",
-        "035_dispatch_plan_cuadratura_v2.sql",
-        "036_dispatch_plan_cuadratura_cash_count.sql",
-        "037_dispatch_plan_load_batches.sql",
-    ):
+# Orden versionado de DDL (única fuente aplicada por el runner de migraciones).
+DISTRIBUIDORA_SCHEMA_FILES: tuple[str, ...] = (
+    "001_schema.sql",
+    "002_indexes.sql",
+    "003_views.sql",
+    "004_route_planning_summary.sql",
+    "005_route_picking.sql",
+    "006_route_planning_seller.sql",
+    "007_document_related_sync_status_views.sql",
+    "008_documents_fk_on_update_cascade.sql",
+    "009_v_sales_with_credit_notes.sql",
+    "010_document_sellers.sql",
+    "011_v_sales_document_sellers.sql",
+    "012_trucks.sql",
+    "013_operational_sync_state.sql",
+    "014_document_probable_matches.sql",
+    "015_v_purchase_document_status_full.sql",
+    "016_system_config.sql",
+    "017_trucks_fuel.sql",
+    "018_trucks_real_consumption.sql",
+    "019_logistics_cost_settings.sql",
+    "020_ors_route_crew_costs.sql",
+    "021_dispatch_plan.sql",
+    "022_dispatch_plan_invoiced_view.sql",
+    "023_dispatch_plan_identity.sql",
+    "024_dispatch_plan_picking_snapshots.sql",
+    "025_dispatch_plan_margin_and_snapshot.sql",
+    "026_dispatch_plan_invoiced_view_perf.sql",
+    "027_dispatch_plan_pickings.sql",
+    "028_planning_rows_indexes.sql",
+    "029_planning_rows_sort_index.sql",
+    "030_purchase_document_status_cache.sql",
+    "031_dispatch_plan_snapshot_views.sql",
+    "032_route_operational_costs.sql",
+    "033_diesel_price_default_1500.sql",
+    "034_dispatch_plan_crew_cuadratura.sql",
+    "035_dispatch_plan_cuadratura_v2.sql",
+    "036_dispatch_plan_cuadratura_cash_count.sql",
+    "037_dispatch_plan_load_batches.sql",
+)
+
+_ENSURE_SCHEMA_NOOP_WARNED = False
+
+
+def apply_distribuidora_migrations(cur) -> list[str]:
+    """Aplica el DDL versionado de ``backend/sql/distribuidora/``.
+
+    SOLO debe invocarse desde el runner explícito
+    ``python -m backend.jobs.apply_distribuidora_schema`` (deploy/migración).
+    No llamar desde syncs, endpoints HTTP ni jobs recurrentes: los
+    ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS`` piden AccessExclusiveLock y
+    encolan los SELECT de planning-rows.
+    """
+    applied: list[str] = []
+    for fn in DISTRIBUIDORA_SCHEMA_FILES:
         _run_sql_file(cur, fn)
+        applied.append(fn)
+    logger.info(
+        "apply_distribuidora_migrations: %s archivos SQL aplicados",
+        len(applied),
+    )
+    return applied
+
+
+def ensure_distribuidora_schema(cur) -> None:
+    """NO-OP deliberado (anti-bloqueo planning-rows).
+
+    Históricamente reaplicaba todo el DDL en cada sync. Eso provocaba
+    ``ALTER TABLE distribuidora.documents`` concurrente con lecturas.
+    El DDL vive solo en ``apply_distribuidora_migrations``.
+    """
+    global _ENSURE_SCHEMA_NOOP_WARNED
+    if not _ENSURE_SCHEMA_NOOP_WARNED:
+        _ENSURE_SCHEMA_NOOP_WARNED = True
+        logger.warning(
+            "ensure_distribuidora_schema es NO-OP: el DDL no se ejecuta en sync/HTTP. "
+            "Usar: python -m backend.jobs.apply_distribuidora_schema"
+        )
 
 
 def get_last_sync(cur, process_name: str) -> Any:

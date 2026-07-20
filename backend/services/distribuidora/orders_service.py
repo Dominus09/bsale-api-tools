@@ -1204,8 +1204,11 @@ def _list_dispatch_prep_planning_rows_impl(
     sql_enrich_ms = 0.0
     explains: list[dict[str, Any]] = []
     try:
+        # Lecturas: autocommit evita idle in transaction / locks retenidos entre queries
+        # (si el proxy Next corta a ~30s, no dejamos AccessShareLock colgado).
+        conn.autocommit = True
         cur = conn.cursor()
-        audit.step("db_connect")
+        audit.step("db_connect", pg_pid=cur.connection.get_backend_pid(), autocommit=True)
         log_pg_connection_stats(cur, label="before")
         if explain_analyze_enabled():
             try:
@@ -1216,7 +1219,11 @@ def _list_dispatch_prep_planning_rows_impl(
                 )
             except Exception as exc:
                 log_planning_rows("explain_ids_failed", error=repr(exc))
-                conn.rollback()
+                try:
+                    if not conn.autocommit:
+                        conn.rollback()
+                except Exception:
+                    pass
 
         _assert_sql_template_rendered(ids_sql, context="_planning_rows_ids_sql")
         sql_ids_ms = timed_query(cur, "sql_ids", ids_sql, ids_params, audit=audit)
@@ -1292,7 +1299,11 @@ def _list_dispatch_prep_planning_rows_impl(
                     )
                 except Exception as exc:
                     log_planning_rows("explain_enrich_failed", error=repr(exc))
-                    conn.rollback()
+                    try:
+                        if not conn.autocommit:
+                            conn.rollback()
+                    except Exception:
+                        pass
             _assert_sql_template_rendered(enrich_sql, context="_planning_rows_enrich_sql")
             sql_enrich_ms = timed_query(
                 cur, "sql_enrich_monolith", enrich_sql, enrich_params, audit=audit

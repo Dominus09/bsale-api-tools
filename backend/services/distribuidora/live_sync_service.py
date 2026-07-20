@@ -13,7 +13,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from backend.db import get_connection
-from backend.repositories.distribuidora.sync_repo import ensure_distribuidora_schema
 from backend.services.distribuidora.bsale_client import BsaleClient
 from backend.services.distribuidora.probable_invoice_service import (
     build_probable_invoice_matches_may_2026,
@@ -31,6 +30,7 @@ from backend.services.distribuidora.sync_service import (
     _refresh_document_children,
     bsale_token_distribuidora_configured,
 )
+from backend.utils.db_tx import log_tx, pg_backend_pid, release_transaction, safe_rollback
 from backend.utils.sync_state import (
     MODE_INCREMENTAL,
     get_sync_state,
@@ -238,8 +238,15 @@ def live_sync_documents(*, strict_token: bool = True) -> dict[str, Any]:
                 "duration_seconds": round(time.perf_counter() - t0, 3),
             }
 
-        ensure_distribuidora_schema(cur)
+        # Sin DDL aquí. Commit tras advisory lock (sesión) para no dejar TX abierta.
         conn.commit()
+        log_tx(
+            "COMMIT",
+            job="live_sync_documents",
+            conn=conn,
+            step="after_advisory_lock",
+            pg_pid=pg_backend_pid(conn),
+        )
 
         state = get_sync_state(
             cur, sync_type=SYNC_TYPE_DOCUMENTS_LIVE, mode=MODE_INCREMENTAL, office_id=OFFICE_ID
@@ -365,7 +372,14 @@ def live_sync_details(*, strict_token: bool = True) -> dict[str, Any]:
                 "duration_seconds": round(time.perf_counter() - t0, 3),
             }
 
-        ensure_distribuidora_schema(cur)
+        conn.commit()
+        log_tx(
+            "COMMIT",
+            job="live_sync_details",
+            conn=conn,
+            step="after_advisory_lock",
+            pg_pid=pg_backend_pid(conn),
+        )
         state = get_sync_state(
             cur, sync_type=SYNC_TYPE_DETAILS_LIVE, mode=MODE_INCREMENTAL, office_id=OFFICE_ID
         )
@@ -408,6 +422,16 @@ def live_sync_details(*, strict_token: bool = True) -> dict[str, Any]:
         )
         rows = cur.fetchall()
         stats["documents_reviewed"] = len(rows)
+        # Liberar AccessShareLock del SELECT de listado antes del loop HTTP.
+        conn.commit()
+        log_tx(
+            "COMMIT",
+            job="live_sync_details",
+            conn=conn,
+            step="after_list_documents",
+            pg_pid=pg_backend_pid(conn),
+            rows=len(rows),
+        )
 
         client = BsaleClient(token)
         for document_id, document_type_id in rows:
@@ -415,12 +439,14 @@ def live_sync_details(*, strict_token: bool = True) -> dict[str, Any]:
             doc_type = int(document_type_id) if document_type_id is not None else None
             child_stats = _child_sync_stats_template()
             try:
+                release_transaction(conn, job=f"live_sync_details:{doc_id}")
                 cur.execute(
                     "SELECT COUNT(*)::int FROM distribuidora.document_details WHERE document_id = %s",
                     (doc_id,),
                 )
                 br = cur.fetchone()
                 rows_before = int(br[0] or 0) if br else 0
+                conn.commit()
 
                 det_payload: Any = None
                 parser_key = "not_fetched"
@@ -440,12 +466,12 @@ def live_sync_details(*, strict_token: bool = True) -> dict[str, Any]:
                 _refresh_document_children(
                     client,
                     cur,
+                    conn,
                     doc_id,
                     doc_type,
                     child_stats,
                     raw_document=None,
                 )
-                conn.commit()
 
                 cur.execute(
                     "SELECT COUNT(*)::int FROM distribuidora.document_details WHERE document_id = %s",
@@ -453,6 +479,7 @@ def live_sync_details(*, strict_token: bool = True) -> dict[str, Any]:
                 )
                 ar = cur.fetchone()
                 rows_after = int(ar[0] or 0) if ar else 0
+                conn.commit()
                 rows_written = int(child_stats.get("details_rows") or 0)
 
                 stats["details_replace_calls"] = int(stats.get("details_replace_calls") or 0) + 1
@@ -480,7 +507,7 @@ def live_sync_details(*, strict_token: bool = True) -> dict[str, Any]:
                         doc_type,
                     )
             except Exception as e:
-                conn.rollback()
+                safe_rollback(conn, job=f"live_sync_details:{doc_id}")
                 stats["document_errors"] = int(stats.get("document_errors") or 0) + 1
                 logger.warning(
                     "live_sync_details document_id=%s: %s",

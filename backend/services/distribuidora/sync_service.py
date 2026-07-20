@@ -26,7 +26,6 @@ from backend.repositories.distribuidora.documents_repo import (
 )
 from backend.repositories.distribuidora.references_repo import replace_document_references
 from backend.repositories.distribuidora.sync_repo import (
-    ensure_distribuidora_schema,
     ensure_sync_state_row,
     finish_sync_log,
     get_last_sync,
@@ -39,6 +38,7 @@ from backend.services.distribuidora.bsale_params import (
     log_office_filter_debug_response,
     merge_bsale_office_query,
 )
+from backend.utils.db_tx import log_tx, pg_backend_pid, release_transaction, safe_rollback
 from backend.utils.sync_order_audit import log_order_sync_audit
 from backend.utils.sync_state import (
     MODE_BACKFILL,
@@ -442,9 +442,13 @@ def _process_one_pending_document_row(
     stats: dict[str, Any],
 ) -> None:
     doc_log_id = _document_log_id_from_row(row)
+    job = f"sync_doc:{doc_log_id}"
     try:
         try:
             upsert_documents(cur, [row], stats)
+            # Liberar locks de documents ANTES de HTTP a Bsale (hijos/sellers).
+            conn.commit()
+            log_tx("COMMIT", job=job, conn=conn, step="after_upsert")
         except Exception as e:
             stats["document_upsert_failures"] = int(stats.get("document_upsert_failures") or 0) + 1
             stats["document_errors"] = int(stats.get("document_errors") or 0) + 1
@@ -454,13 +458,7 @@ def _process_one_pending_document_row(
                 str(e),
                 exc_info=True,
             )
-            try:
-                conn.rollback()
-            except Exception:
-                logger.exception(
-                    "distribuidora: rollback tras error upsert documento %s",
-                    doc_log_id,
-                )
+            safe_rollback(conn, job=job)
             _notify_progress(stats)
             return
         if not stats.get("_documents_only_skip_children"):
@@ -474,6 +472,7 @@ def _process_one_pending_document_row(
             _refresh_document_children(
                 client,
                 cur,
+                conn,
                 int(row["document_id"]),
                 row.get("document_type_id"),
                 stats,
@@ -486,7 +485,7 @@ def _process_one_pending_document_row(
                     persisted_document_id=int(row["document_id"]),
                     attributes_count=int(stats.get("attributes_rows") or 0),
                 )
-        conn.commit()
+        release_transaction(conn, job=job)
         stats["documents_processed"] += 1
         _notify_progress(stats)
     except Exception as e:
@@ -497,13 +496,7 @@ def _process_one_pending_document_row(
             str(e),
             exc_info=True,
         )
-        try:
-            conn.rollback()
-        except Exception:
-            logger.exception(
-                "distribuidora: rollback tras error documento %s",
-                doc_log_id,
-            )
+        safe_rollback(conn, job=job)
         _notify_progress(stats)
 
 
@@ -645,16 +638,25 @@ def _sync_document_sellers(
 def _refresh_document_children(
     client: BsaleClient,
     cur,
+    conn,
     document_id: int,
     document_type_id: int | None,
     stats: dict[str, Any],
     raw_document: dict[str, Any] | None = None,
 ) -> None:
+    """HTTP a Bsale fuera de transacción; persistencia en TX corta.
+
+    Firma: ``conn`` es obligatorio para liberar locks antes del HTTP.
+    """
+    job = f"sync_children:{document_id}"
+    # Garantizar que no hay TX abierta sosteniendo locks durante el HTTP.
+    release_transaction(conn, job=job)
+
+    det: dict[str, Any] | None = None
+    ad: dict[str, Any] | None = None
+    rd: dict[str, Any] | None = None
     try:
         det = client.get(f"/documents/{document_id}/details.json")
-        items = det.get("items") or []
-        n = replace_document_details(cur, document_id, items)
-        stats["details_rows"] = int(stats.get("details_rows") or 0) + n
     except Exception as e:
         logger.warning("details document_id=%s: %s", document_id, e)
 
@@ -663,8 +665,6 @@ def _refresh_document_children(
             ad = client.get(f"/documents/{document_id}/attributes.json")
             if not isinstance(ad, dict):
                 ad = {"_raw": ad}
-            n = replace_document_attributes(cur, document_id, ad)
-            stats["attributes_rows"] = int(stats.get("attributes_rows") or 0) + n
         except Exception as e:
             logger.warning("attributes document_id=%s: %s", document_id, e)
 
@@ -673,12 +673,52 @@ def _refresh_document_children(
             rd = client.get(f"/documents/{document_id}/references.json")
             if not isinstance(rd, dict):
                 rd = {"_raw": rd}
-            n = replace_document_references(cur, document_id, rd)
-            stats["references_rows"] = int(stats.get("references_rows") or 0) + n
         except Exception as e:
             logger.warning("references document_id=%s: %s", document_id, e)
 
-    _sync_document_sellers(client, cur, document_id, raw_document, stats)
+    # Sellers: resolver HTTP antes de abrir TX de escritura.
+    seller_tuples: list[tuple[int | None, str | None]] = []
+    if isinstance(raw_document, dict):
+        seller_tuples = _seller_tuples_from_bsale_document_json(client, raw_document)
+    if not seller_tuples:
+        try:
+            data = client.get(f"/documents/{document_id}/sellers.json")
+            seller_tuples = seller_tuples_from_sellers_api_response(data)
+        except Exception as e:
+            logger.warning("sellers.json document_id=%s: %s", document_id, e)
+
+    log_tx("TX_BEGIN", job=job, conn=conn, step="persist_children")
+    try:
+        if det is not None:
+            items = det.get("items") or []
+            n = replace_document_details(cur, document_id, items)
+            stats["details_rows"] = int(stats.get("details_rows") or 0) + n
+        if ad is not None:
+            n = replace_document_attributes(cur, document_id, ad)
+            stats["attributes_rows"] = int(stats.get("attributes_rows") or 0) + n
+        if rd is not None:
+            n = replace_document_references(cur, document_id, rd)
+            stats["references_rows"] = int(stats.get("references_rows") or 0) + n
+        try:
+            n = replace_document_sellers(cur, document_id, seller_tuples)
+            stats["document_sellers_rows"] = int(stats.get("document_sellers_rows") or 0) + n
+            if seller_tuples:
+                sid0, name0 = seller_tuples[0]
+                set_document_primary_seller(cur, document_id, sid0, name0)
+                stats["sellers_filled"] = int(stats.get("sellers_filled") or 0) + 1
+        except Exception as e:
+            stats["seller_sync_failures"] = int(stats.get("seller_sync_failures") or 0) + 1
+            logger.error(
+                "seller_sync_failed document_id=%s: %s",
+                document_id,
+                e,
+                exc_info=True,
+            )
+        conn.commit()
+        log_tx("COMMIT", job=job, conn=conn, step="persist_children")
+    except Exception:
+        safe_rollback(conn, job=job)
+        raise
 
 
 def _fetch_documents_window(
@@ -706,6 +746,8 @@ def _fetch_documents_window(
             "offset": offset,
             date_range_field: f"[{desde_ts},{hasta_ts}]",
         }
+        # Paginación HTTP: nunca sostener TX abierta mientras se espera a Bsale.
+        release_transaction(conn, job="fetch_documents_window")
         data = _documents_get_resync(client, params)
         items = data.get("items") or []
         pages += 1
@@ -815,7 +857,16 @@ def sync_bsale_distribuidora_incremental(
             stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
             return stats
 
-        ensure_distribuidora_schema(cur)
+        # Advisory lock es de sesión: commit inmediato para no dejar
+        # idle in transaction sosteniendo locks de catálogo/relación.
+        conn.commit()
+        log_tx(
+            "COMMIT",
+            job=f"sync_incremental:{process_name}",
+            conn=conn,
+            step="after_advisory_lock",
+            pg_pid=pg_backend_pid(conn),
+        )
         if allowed_document_type_ids is not None:
             ensure_sync_state_row(cur, process_name)
         conn.commit()
@@ -1197,8 +1248,14 @@ def resync_bsale_distribuidora_range(
             stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
             return stats
 
-        ensure_distribuidora_schema(cur)
         conn.commit()
+        log_tx(
+            "COMMIT",
+            job="resync_range",
+            conn=conn,
+            step="after_advisory_lock",
+            pg_pid=pg_backend_pid(conn),
+        )
 
         log_id = start_sync_log(cur, PROCESS_RESYNC)
         conn.commit()
@@ -1516,8 +1573,14 @@ def backfill_distribuidora_documents_may_2026_documents_only(
             stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
             return stats
 
-        ensure_distribuidora_schema(cur)
         conn.commit()
+        log_tx(
+            "COMMIT",
+            job="backfill_documents_may_2026",
+            conn=conn,
+            step="after_advisory_lock",
+            pg_pid=pg_backend_pid(conn),
+        )
 
         log_id = start_sync_log(cur, BACKFILL_MAY_LOG_PROCESS)
         conn.commit()
@@ -1809,8 +1872,14 @@ def backfill_distribuidora_document_details_may_2026_only(
             stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
             return stats
 
-        ensure_distribuidora_schema(cur)
         conn.commit()
+        log_tx(
+            "COMMIT",
+            job="backfill_details_may_2026",
+            conn=conn,
+            step="after_advisory_lock",
+            pg_pid=pg_backend_pid(conn),
+        )
 
         log_id = start_sync_log(cur, BACKFILL_MAY_DETAILS_LOG_PROCESS)
         conn.commit()
@@ -1844,6 +1913,8 @@ def backfill_distribuidora_document_details_may_2026_only(
                 (COMPANY_ID, OFFICE_ID, emission_from, emission_to_excl, last_id, batch),
             )
             id_rows = cur.fetchall() or []
+            # Liberar AccessShareLock del SELECT antes de HTTP por documento.
+            conn.commit()
             if not id_rows:
                 break
             stats["document_batches"] = int(stats.get("document_batches") or 0) + 1
@@ -1852,7 +1923,9 @@ def backfill_distribuidora_document_details_may_2026_only(
                 if max_docs and processed_cap >= max_docs:
                     break
                 doc_id = int(document_id)
+                release_transaction(conn, job=f"backfill_details:{doc_id}")
                 before_n = _count_document_details_rows(cur, doc_id)
+                conn.commit()
                 last_err: Exception | None = None
                 written = 0
                 for attempt in range(max_retries):
