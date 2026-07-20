@@ -106,3 +106,87 @@ def test_manual_fuente():
         )
         == "manual"
     )
+
+
+def _manual_15kg_row(*, quantity: float) -> dict:
+    """Línea OC con peso manual 15 kg/caja; cantidad viene del detalle actual."""
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    return {
+        "detail_id": 8971875,
+        "line_number": 0,
+        "variant_id": 27383,
+        "codigo": "68237149926080",
+        "producto": "ROJO 12 KG APROX (SEC 1)",
+        "cantidad_unitaria": quantity,
+        "units_per_box": 1,
+        "peso_unitario_kg": 15.0,
+        "peso_caja_kg": 15.0,
+        "products_master_id": 998,
+        "variante": "ROJO 15 KG APROX (SEC 1)",
+        "logistics_completed": False,
+        "join_variant_ok": False,
+        "join_barcode_ok": True,
+        "exists_in_pm": True,
+        "pm_updated_at": now,
+        "last_bsale_sync_at": datetime(2026, 6, 4, tzinfo=timezone.utc),
+        "height_cm": None,
+        "width_cm": None,
+        "length_cm": None,
+        "barcode": "68237149926080",
+        "codigo_interno": "68237149926080",
+    }
+
+
+def test_oc_qty1_manual_15kg_total_15():
+    """OC cantidad 1, peso manual 15 kg → total 15 kg; cobertura 100%."""
+    line = compute_line_from_row(_manual_15kg_row(quantity=1))
+    assert line["cantidad_unitaria"] == 1.0
+    assert line["cantidad_cajas"] == 1.0
+    assert line["peso_unitario_kg"] == 15.0
+    assert line["peso_linea_kg"] == 15.0
+    assert line["fuente_peso"] == "manual"
+    assert line["estado_linea"] == "manual"
+    summary = aggregate_order_summary([line])
+    assert summary["peso_total_kg"] == 15.0
+    assert summary["porcentaje_cobertura"] == 100.0
+    assert summary["productos_manuales"] == 1
+
+
+def test_oc_qty_changes_1_to_20_recalculates_300kg_keeps_manual_unit():
+    """
+    Misma OC cambia a cantidad 20 → total 300 kg.
+    El peso manual unitario sigue en 15 kg; no se congela la cantidad antigua.
+    """
+    before = compute_line_from_row(_manual_15kg_row(quantity=1))
+    after = compute_line_from_row(_manual_15kg_row(quantity=20))
+
+    assert before["peso_unitario_kg"] == 15.0
+    assert after["peso_unitario_kg"] == 15.0
+    assert after["fuente_peso"] == "manual"
+    assert after["cantidad_unitaria"] == 20.0
+    assert after["cantidad_cajas"] == 20.0
+    assert after["peso_linea_kg"] == 300.0
+
+    summary = aggregate_order_summary([after])
+    assert summary["peso_total_kg"] == 300.0
+    assert summary["porcentaje_cobertura"] == 100.0
+    assert summary["productos_manuales"] == 1
+    # No queda rastro de cantidad 1 en el resumen derivado de la línea actual
+    assert summary["peso_total_kg"] != before["peso_linea_kg"]
+
+
+def test_weight_uses_current_detail_qty_not_saved_snapshot_qty():
+    """Regla: total = current_detail.quantity × manual_unit_weight (no saved_qty × weight)."""
+    frozen_old_qty = 1.0
+    current_qty = 20.0
+    unit = 15.0
+    # Incorrecto (congelar cantidad):
+    wrong = frozen_old_qty * unit
+    # Correcto:
+    right = current_qty * unit
+    line = compute_line_from_row(_manual_15kg_row(quantity=current_qty))
+    assert line["peso_linea_kg"] == right
+    assert line["peso_linea_kg"] != wrong
+    assert line["cantidad_unitaria"] == current_qty

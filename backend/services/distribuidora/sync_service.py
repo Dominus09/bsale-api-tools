@@ -463,26 +463,33 @@ def _process_one_pending_document_row(
             return
         if not stats.get("_documents_only_skip_children"):
             raw_doc = row.get("_bsale_document")
+            local_document_id = int(row["document_id"])
+            folio = row.get("number")
+            try:
+                folio_int = int(folio) if folio is not None else None
+            except (TypeError, ValueError):
+                folio_int = None
             if isinstance(raw_doc, dict):
                 log_order_sync_audit(
                     raw_doc,
                     phase="before_children",
-                    persisted_document_id=int(row["document_id"]),
+                    persisted_document_id=local_document_id,
                 )
             _refresh_document_children(
                 client,
                 cur,
                 conn,
-                int(row["document_id"]),
+                local_document_id,
                 row.get("document_type_id"),
                 stats,
-                raw_document=raw_doc,
+                raw_document=raw_doc if isinstance(raw_doc, dict) else None,
+                folio=folio_int,
             )
             if isinstance(raw_doc, dict):
                 log_order_sync_audit(
                     raw_doc,
                     phase="after_children",
-                    persisted_document_id=int(row["document_id"]),
+                    persisted_document_id=local_document_id,
                     attributes_count=int(stats.get("attributes_rows") or 0),
                 )
         release_transaction(conn, job=job)
@@ -599,37 +606,56 @@ def _seller_tuples_from_bsale_document_json(
 def _sync_document_sellers(
     client: BsaleClient,
     cur,
-    document_id: int,
+    local_document_id: int,
     raw_document: dict[str, Any] | None,
     stats: dict[str, Any],
+    *,
+    bsale_source_document_id: int | None = None,
 ) -> None:
     """
     Persiste ``distribuidora.document_sellers`` desde ``document.sellers`` o GET sellers.json.
 
+    HTTP usa ``bsale_source_document_id``; persistencia bajo ``local_document_id``.
     Si ``sellers`` viene vacío, solo se eliminan filas previas (ningún INSERT).
     """
+    from backend.utils.bsale_document_ids import resolve_bsale_source_document_id
+
+    source_id = (
+        int(bsale_source_document_id)
+        if bsale_source_document_id is not None
+        else resolve_bsale_source_document_id(
+            local_document_id=local_document_id,
+            raw_document=raw_document,
+        )
+    )
     tuples: list[tuple[int | None, str | None]] = []
     if isinstance(raw_document, dict):
         tuples = _seller_tuples_from_bsale_document_json(client, raw_document)
     if not tuples:
         try:
-            data = client.get(f"/documents/{document_id}/sellers.json")
+            data = client.get(f"/documents/{source_id}/sellers.json")
             tuples = seller_tuples_from_sellers_api_response(data)
         except Exception as e:
-            logger.warning("sellers.json document_id=%s: %s", document_id, e)
+            logger.warning(
+                "sellers.json local_document_id=%s bsale_source_document_id=%s: %s",
+                local_document_id,
+                source_id,
+                e,
+            )
 
     try:
-        n = replace_document_sellers(cur, document_id, tuples)
+        n = replace_document_sellers(cur, local_document_id, tuples)
         stats["document_sellers_rows"] = int(stats.get("document_sellers_rows") or 0) + n
         if tuples:
             sid0, name0 = tuples[0]
-            set_document_primary_seller(cur, document_id, sid0, name0)
+            set_document_primary_seller(cur, local_document_id, sid0, name0)
             stats["sellers_filled"] = int(stats.get("sellers_filled") or 0) + 1
     except Exception as e:
         stats["seller_sync_failures"] = int(stats.get("seller_sync_failures") or 0) + 1
         logger.error(
-            "seller_sync_failed document_id=%s: %s",
-            document_id,
+            "seller_sync_failed local_document_id=%s bsale_source_document_id=%s: %s",
+            local_document_id,
+            source_id,
             e,
             exc_info=True,
         )
@@ -639,16 +665,56 @@ def _refresh_document_children(
     client: BsaleClient,
     cur,
     conn,
-    document_id: int,
+    local_document_id: int,
     document_type_id: int | None,
     stats: dict[str, Any],
     raw_document: dict[str, Any] | None = None,
+    *,
+    folio: int | None = None,
+    bsale_source_document_id: int | None = None,
+    raw_data_id: Any = None,
 ) -> None:
     """HTTP a Bsale fuera de transacción; persistencia en TX corta.
 
+    * ``local_document_id``: PK estable en PostgreSQL (destino de INSERT/replace).
+    * ``bsale_source_document_id`` / ``raw_document["id"]``: id vigente en Bsale
+      para construir URLs de hijos. Nunca usar la PK local cuando el documento
+      se resolvió por folio y el id Bsale difiere.
+
     Firma: ``conn`` es obligatorio para liberar locks antes del HTTP.
     """
-    job = f"sync_children:{document_id}"
+    from backend.utils.bsale_document_ids import (
+        ids_differ,
+        resolve_bsale_source_document_id,
+    )
+
+    source_id = (
+        int(bsale_source_document_id)
+        if bsale_source_document_id is not None
+        else resolve_bsale_source_document_id(
+            local_document_id=local_document_id,
+            raw_document=raw_document,
+            raw_data_id=raw_data_id,
+        )
+    )
+    folio_val = folio
+    if folio_val is None and isinstance(raw_document, dict):
+        try:
+            folio_val = int(raw_document["number"]) if raw_document.get("number") is not None else None
+        except (TypeError, ValueError):
+            folio_val = None
+
+    differ = ids_differ(local_document_id, source_id)
+    job = f"sync_children:local={local_document_id}:bsale={source_id}"
+    logger.info(
+        "refresh_children folio=%s local_document_id=%s bsale_source_document_id=%s "
+        "ids_differ=%s document_type_id=%s",
+        folio_val,
+        local_document_id,
+        source_id,
+        differ,
+        document_type_id,
+    )
     # Garantizar que no hay TX abierta sosteniendo locks durante el HTTP.
     release_transaction(conn, job=job)
 
@@ -656,25 +722,40 @@ def _refresh_document_children(
     ad: dict[str, Any] | None = None
     rd: dict[str, Any] | None = None
     try:
-        det = client.get(f"/documents/{document_id}/details.json")
+        det = client.get(f"/documents/{source_id}/details.json")
     except Exception as e:
-        logger.warning("details document_id=%s: %s", document_id, e)
+        logger.warning(
+            "details local_document_id=%s bsale_source_document_id=%s: %s",
+            local_document_id,
+            source_id,
+            e,
+        )
 
     if document_type_id == 33:
         try:
-            ad = client.get(f"/documents/{document_id}/attributes.json")
+            ad = client.get(f"/documents/{source_id}/attributes.json")
             if not isinstance(ad, dict):
                 ad = {"_raw": ad}
         except Exception as e:
-            logger.warning("attributes document_id=%s: %s", document_id, e)
+            logger.warning(
+                "attributes local_document_id=%s bsale_source_document_id=%s: %s",
+                local_document_id,
+                source_id,
+                e,
+            )
 
     if document_type_id in (1, 6, 9, 33):
         try:
-            rd = client.get(f"/documents/{document_id}/references.json")
+            rd = client.get(f"/documents/{source_id}/references.json")
             if not isinstance(rd, dict):
                 rd = {"_raw": rd}
         except Exception as e:
-            logger.warning("references document_id=%s: %s", document_id, e)
+            logger.warning(
+                "references local_document_id=%s bsale_source_document_id=%s: %s",
+                local_document_id,
+                source_id,
+                e,
+            )
 
     # Sellers: resolver HTTP antes de abrir TX de escritura.
     seller_tuples: list[tuple[int | None, str | None]] = []
@@ -682,35 +763,44 @@ def _refresh_document_children(
         seller_tuples = _seller_tuples_from_bsale_document_json(client, raw_document)
     if not seller_tuples:
         try:
-            data = client.get(f"/documents/{document_id}/sellers.json")
+            data = client.get(f"/documents/{source_id}/sellers.json")
             seller_tuples = seller_tuples_from_sellers_api_response(data)
         except Exception as e:
-            logger.warning("sellers.json document_id=%s: %s", document_id, e)
+            logger.warning(
+                "sellers.json local_document_id=%s bsale_source_document_id=%s: %s",
+                local_document_id,
+                source_id,
+                e,
+            )
 
+    details_replaced = 0
     log_tx("TX_BEGIN", job=job, conn=conn, step="persist_children")
     try:
         if det is not None:
             items = det.get("items") or []
-            n = replace_document_details(cur, document_id, items)
-            stats["details_rows"] = int(stats.get("details_rows") or 0) + n
+            if not isinstance(items, list):
+                items = []
+            details_replaced = replace_document_details(cur, local_document_id, items)
+            stats["details_rows"] = int(stats.get("details_rows") or 0) + details_replaced
         if ad is not None:
-            n = replace_document_attributes(cur, document_id, ad)
+            n = replace_document_attributes(cur, local_document_id, ad)
             stats["attributes_rows"] = int(stats.get("attributes_rows") or 0) + n
         if rd is not None:
-            n = replace_document_references(cur, document_id, rd)
+            n = replace_document_references(cur, local_document_id, rd)
             stats["references_rows"] = int(stats.get("references_rows") or 0) + n
         try:
-            n = replace_document_sellers(cur, document_id, seller_tuples)
+            n = replace_document_sellers(cur, local_document_id, seller_tuples)
             stats["document_sellers_rows"] = int(stats.get("document_sellers_rows") or 0) + n
             if seller_tuples:
                 sid0, name0 = seller_tuples[0]
-                set_document_primary_seller(cur, document_id, sid0, name0)
+                set_document_primary_seller(cur, local_document_id, sid0, name0)
                 stats["sellers_filled"] = int(stats.get("sellers_filled") or 0) + 1
         except Exception as e:
             stats["seller_sync_failures"] = int(stats.get("seller_sync_failures") or 0) + 1
             logger.error(
-                "seller_sync_failed document_id=%s: %s",
-                document_id,
+                "seller_sync_failed local_document_id=%s bsale_source_document_id=%s: %s",
+                local_document_id,
+                source_id,
                 e,
                 exc_info=True,
             )
@@ -719,6 +809,20 @@ def _refresh_document_children(
     except Exception:
         safe_rollback(conn, job=job)
         raise
+
+    logger.info(
+        "refresh_children_done folio=%s local_document_id=%s bsale_source_document_id=%s "
+        "ids_differ=%s details_replaced=%s",
+        folio_val,
+        local_document_id,
+        source_id,
+        differ,
+        details_replaced,
+    )
+    stats["last_children_local_document_id"] = local_document_id
+    stats["last_children_bsale_source_document_id"] = source_id
+    stats["last_children_ids_differ"] = differ
+    stats["last_children_details_replaced"] = details_replaced
 
 
 def _fetch_documents_window(
@@ -1900,7 +2004,7 @@ def backfill_distribuidora_document_details_may_2026_only(
         while True:
             cur.execute(
                 """
-                SELECT d.document_id
+                SELECT d.document_id, d.number, d.raw_data->>'id'
                 FROM distribuidora.documents d
                 WHERE d.company_id = %s
                   AND d.office_id = %s
@@ -1919,10 +2023,23 @@ def backfill_distribuidora_document_details_may_2026_only(
                 break
             stats["document_batches"] = int(stats.get("document_batches") or 0) + 1
 
-            for (document_id,) in id_rows:
+            from backend.utils.bsale_document_ids import (
+                ids_differ,
+                resolve_bsale_source_document_id,
+            )
+
+            for document_id, number, raw_bsale_id in id_rows:
                 if max_docs and processed_cap >= max_docs:
                     break
                 doc_id = int(document_id)
+                source_id = resolve_bsale_source_document_id(
+                    local_document_id=doc_id,
+                    raw_data_id=raw_bsale_id,
+                )
+                try:
+                    folio_int = int(number) if number is not None else None
+                except (TypeError, ValueError):
+                    folio_int = None
                 release_transaction(conn, job=f"backfill_details:{doc_id}")
                 before_n = _count_document_details_rows(cur, doc_id)
                 conn.commit()
@@ -1930,19 +2047,36 @@ def backfill_distribuidora_document_details_may_2026_only(
                 written = 0
                 for attempt in range(max_retries):
                     try:
-                        det = client.get(f"/documents/{doc_id}/details.json", timeout=90)
+                        logger.info(
+                            "backfill_details folio=%s local_document_id=%s "
+                            "bsale_source_document_id=%s ids_differ=%s",
+                            folio_int,
+                            doc_id,
+                            source_id,
+                            ids_differ(doc_id, source_id),
+                        )
+                        det = client.get(f"/documents/{source_id}/details.json", timeout=90)
                         items = det.get("items") if isinstance(det, dict) else []
                         if not isinstance(items, list):
                             items = []
                         written = replace_document_details(cur, doc_id, items)
                         conn.commit()
+                        logger.info(
+                            "backfill_details_done folio=%s local_document_id=%s "
+                            "bsale_source_document_id=%s details_replaced=%s",
+                            folio_int,
+                            doc_id,
+                            source_id,
+                            written,
+                        )
                         last_err = None
                         break
                     except Exception as e:
                         last_err = e
                         logger.warning(
-                            "backfill_details doc_id=%s intento %s/%s: %s",
+                            "backfill_details local=%s bsale_source=%s intento %s/%s: %s",
                             doc_id,
+                            source_id,
                             attempt + 1,
                             max_retries,
                             e,

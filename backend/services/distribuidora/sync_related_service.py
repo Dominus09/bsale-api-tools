@@ -40,6 +40,10 @@ from backend.repositories.distribuidora.sync_repo import (
 )
 from backend.services.distribuidora.bsale_client import BsaleClient
 from backend.services.distribuidora.bsale_params import merge_bsale_office_query
+from backend.utils.bsale_document_ids import (
+    ids_differ,
+    resolve_bsale_source_document_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -318,28 +322,68 @@ def _detail_ids_missing_for_document(
     return [int(r[0]) for r in cur.fetchall()]
 
 
+def _bsale_source_id_from_pg(cur, local_document_id: int) -> tuple[int, int | None]:
+    """
+    Resuelve id Bsale vigente desde ``raw_data->>'id'`` (si existe).
+
+    Retorna ``(bsale_source_document_id, folio)``.
+    """
+    cur.execute(
+        """
+        SELECT number, raw_data->>'id'
+        FROM distribuidora.documents
+        WHERE document_id = %s
+        LIMIT 1
+        """,
+        (int(local_document_id),),
+    )
+    row = cur.fetchone()
+    folio = None
+    raw_id = None
+    if row:
+        folio = row[0]
+        raw_id = row[1]
+    source = resolve_bsale_source_document_id(
+        local_document_id=int(local_document_id),
+        raw_data_id=raw_id,
+    )
+    try:
+        folio_int = int(folio) if folio is not None else None
+    except (TypeError, ValueError):
+        folio_int = None
+    return source, folio_int
+
+
 def _fetch_all_detail_items_from_bsale(
     client: BsaleClient,
     document_id: int,
     *,
     throttle: float,
     log_ctx: str,
+    bsale_source_document_id: int | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Paginación completa de ``details.json`` (items crudos para ``replace_document_details``)."""
+    source_id = (
+        int(bsale_source_document_id)
+        if bsale_source_document_id is not None
+        else int(document_id)
+    )
     items_out: list[dict[str, Any]] = []
     api_calls = 0
     offset = 0
     while True:
         try:
             data = client.get(
-                f"/documents/{document_id}/details.json",
+                f"/documents/{source_id}/details.json",
                 {"limit": DETAILS_PAGE_LIMIT, "offset": offset},
             )
         except Exception as e:
             logger.warning(
-                "%s details.json (self-heal) document_id=%s offset=%s: %s",
+                "%s details.json (self-heal) local_document_id=%s "
+                "bsale_source_document_id=%s offset=%s: %s",
                 log_ctx,
                 document_id,
+                source_id,
                 offset,
                 e,
             )
@@ -399,15 +443,36 @@ def _self_heal_document_details_if_needed(
 
     still_missing = list(missing)
     for attempt in range(1, max_attempts + 1):
+        source_id, folio = _bsale_source_id_from_pg(cur, document_id)
+        logger.info(
+            "%s self-heal fetch folio=%s local_document_id=%s "
+            "bsale_source_document_id=%s ids_differ=%s intento=%s",
+            log_ctx,
+            folio,
+            document_id,
+            source_id,
+            ids_differ(document_id, source_id),
+            attempt,
+        )
         items, c_fetch = _fetch_all_detail_items_from_bsale(
             client,
             document_id,
             throttle=throttle,
             log_ctx=log_ctx,
+            bsale_source_document_id=source_id,
         )
         extra_calls += c_fetch
         try:
             n_written = replace_document_details(cur, document_id, items)
+            logger.info(
+                "%s self-heal replace folio=%s local_document_id=%s "
+                "bsale_source_document_id=%s details_replaced=%s",
+                log_ctx,
+                folio,
+                document_id,
+                source_id,
+                n_written,
+            )
         except Exception as e:
             logger.error(
                 "%s self-heal replace_document_details falló document_id=%s intento=%s: %s",
@@ -1010,23 +1075,40 @@ def _fetch_detail_ids_from_bsale_details(
     *,
     throttle: float,
     log_ctx: str = "",
+    bsale_source_document_id: int | None = None,
 ) -> tuple[list[int], int]:
     """
-    ``GET /documents/{document_id}/details.json`` paginado.
+    ``GET /documents/{bsale_source}/details.json`` paginado.
+
+    ``document_id`` es la clave local (log); la URL usa ``bsale_source_document_id``
+    cuando se indica (p. ej. tras reemisión por folio).
 
     Retorna ``(detail_ids, llamadas_http)``.
     """
+    source_id = (
+        int(bsale_source_document_id)
+        if bsale_source_document_id is not None
+        else int(document_id)
+    )
     ids: list[int] = []
     api_calls = 0
     offset = 0
     while True:
         try:
             data = client.get(
-                f"/documents/{document_id}/details.json",
+                f"/documents/{source_id}/details.json",
                 {"limit": DETAILS_PAGE_LIMIT, "offset": offset},
             )
         except Exception as e:
-            logger.warning("%s details.json document_id=%s offset=%s: %s", log_ctx, document_id, offset, e)
+            logger.warning(
+                "%s details.json local_document_id=%s bsale_source_document_id=%s "
+                "offset=%s: %s",
+                log_ctx,
+                document_id,
+                source_id,
+                offset,
+                e,
+            )
             break
         api_calls += 1
         items = data.get("items") or []
@@ -1044,7 +1126,14 @@ def _fetch_detail_ids_from_bsale_details(
             time.sleep(throttle)
     # Orden estable y sin duplicados (paginación / API)
     ids = list(dict.fromkeys(ids))
-    logger.info("%s details.json detail_ids usados=%s (n=%s)", log_ctx, ids, len(ids))
+    logger.info(
+        "%s details.json local=%s bsale_source=%s detail_ids usados=%s (n=%s)",
+        log_ctx,
+        document_id,
+        source_id,
+        ids,
+        len(ids),
+    )
     return ids, api_calls
 
 
@@ -1133,11 +1222,21 @@ def _sync_related_by_detail_for_oc_document(
 
     Retorna ``(detail_ids_procesados, items_related_total, filas_insertadas, llamadas_http)``.
     """
+    source_id, folio = _bsale_source_id_from_pg(cur, document_id)
+    logger.info(
+        "%s related OC folio=%s local_document_id=%s bsale_source_document_id=%s ids_differ=%s",
+        log_ctx,
+        folio,
+        document_id,
+        source_id,
+        ids_differ(document_id, source_id),
+    )
     detail_ids, calls_details = _fetch_detail_ids_from_bsale_details(
         client,
         document_id,
         throttle=throttle,
         log_ctx=log_ctx,
+        bsale_source_document_id=source_id,
     )
     logger.info("%s details encontrados=%s detail_ids=%s", log_ctx, len(detail_ids), detail_ids)
     if not detail_ids:

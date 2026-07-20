@@ -411,7 +411,7 @@ def live_sync_details(*, strict_token: bool = True) -> dict[str, Any]:
 
         cur.execute(
             """
-            SELECT document_id, document_type_id
+            SELECT document_id, document_type_id, number, raw_data->>'id'
             FROM distribuidora.v_documents_latest
             WHERE company_id = %s AND office_id = %s
               AND emission_date >= %s
@@ -434,9 +434,13 @@ def live_sync_details(*, strict_token: bool = True) -> dict[str, Any]:
         )
 
         client = BsaleClient(token)
-        for document_id, document_type_id in rows:
+        for document_id, document_type_id, number, raw_bsale_id in rows:
             doc_id = int(document_id)
             doc_type = int(document_type_id) if document_type_id is not None else None
+            try:
+                folio_int = int(number) if number is not None else None
+            except (TypeError, ValueError):
+                folio_int = None
             child_stats = _child_sync_stats_template()
             try:
                 release_transaction(conn, job=f"live_sync_details:{doc_id}")
@@ -452,12 +456,20 @@ def live_sync_details(*, strict_token: bool = True) -> dict[str, Any]:
                 parser_key = "not_fetched"
                 details_api_count = 0
                 if _live_details_debug_enabled():
-                    det_payload = client.get(f"/documents/{doc_id}/details.json")
+                    from backend.utils.bsale_document_ids import resolve_bsale_source_document_id
+
+                    source_dbg = resolve_bsale_source_document_id(
+                        local_document_id=doc_id,
+                        raw_data_id=raw_bsale_id,
+                    )
+                    det_payload = client.get(f"/documents/{source_dbg}/details.json")
                     items_dbg, parser_key = _extract_bsale_detail_items(det_payload)
                     details_api_count = len(items_dbg)
                     logger.info(
-                        "[LIVE_DETAILS_DEBUG] doc=%s type=%s pre_fetch api_count=%s parser=%s",
+                        "[LIVE_DETAILS_DEBUG] local=%s bsale_source=%s type=%s "
+                        "pre_fetch api_count=%s parser=%s",
                         doc_id,
+                        source_dbg,
                         doc_type,
                         details_api_count,
                         parser_key,
@@ -471,6 +483,8 @@ def live_sync_details(*, strict_token: bool = True) -> dict[str, Any]:
                     doc_type,
                     child_stats,
                     raw_document=None,
+                    folio=folio_int,
+                    raw_data_id=raw_bsale_id,
                 )
 
                 cur.execute(
