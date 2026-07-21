@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator
@@ -42,7 +43,13 @@ ADVISORY_LOCK_OC_WRITERS = (
 )
 
 SOURCE_METADATA_COLUMNS = frozenset(
-    {"source_document_id", "source_hash", "source_updated_at", "last_synced_at"}
+    {
+        "source_document_id",
+        "source_hash",
+        "source_updated_at",
+        "last_synced_at",
+        "last_reconciliation_at",
+    }
 )
 
 
@@ -204,7 +211,9 @@ def _load_local_oc(
                        NULLIF(to_jsonb(d)->>'source_updated_at', '')::timestamptz
                            AS source_updated_at,
                        NULLIF(to_jsonb(d)->>'last_synced_at', '')::timestamptz
-                           AS last_synced_at
+                           AS last_synced_at,
+                       NULLIF(to_jsonb(d)->>'last_reconciliation_at', '')::timestamptz
+                           AS last_reconciliation_at
                 FROM distribuidora.documents d
                 WHERE document_id = %s
                 LIMIT 1
@@ -223,7 +232,9 @@ def _load_local_oc(
                        NULLIF(to_jsonb(d)->>'source_updated_at', '')::timestamptz
                            AS source_updated_at,
                        NULLIF(to_jsonb(d)->>'last_synced_at', '')::timestamptz
-                           AS last_synced_at
+                           AS last_synced_at,
+                       NULLIF(to_jsonb(d)->>'last_reconciliation_at', '')::timestamptz
+                           AS last_reconciliation_at
                 FROM distribuidora.documents d
                 WHERE company_id = %s AND office_id = %s
                   AND document_type_id = %s AND number = %s
@@ -331,6 +342,92 @@ def _assert_source_schema(cur) -> None:
         raise RuntimeError(
             "Migración 044 pendiente; faltan columnas: " + ", ".join(sorted(missing))
         )
+
+
+def _assert_plan_invalidation_schema(cur) -> None:
+    cur.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'distribuidora'
+          AND table_name = 'dispatch_plan'
+          AND column_name = ANY(%s::text[])
+        """,
+        (["needs_recalculation", "invalidated_at", "invalidation_reason"],),
+    )
+    found = {row[0] for row in cur.fetchall()}
+    missing = {
+        "needs_recalculation",
+        "invalidated_at",
+        "invalidation_reason",
+    } - found
+    if missing:
+        raise RuntimeError(
+            "Migración 045 pendiente; faltan columnas: "
+            + ", ".join(sorted(missing))
+        )
+
+
+def _mark_reconciliation_attempt(
+    local_document_id: int,
+    *,
+    successful: bool,
+) -> None:
+    """Mueve el cursor rotativo; una revisión exitosa también refresca sync."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        if successful:
+            cur.execute(
+                """
+                UPDATE distribuidora.documents
+                SET last_reconciliation_at = NOW(),
+                    last_synced_at = NOW()
+                WHERE document_id = %s
+                """,
+                (int(local_document_id),),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE distribuidora.documents
+                SET last_reconciliation_at = NOW()
+                WHERE document_id = %s
+                """,
+                (int(local_document_id),),
+            )
+        conn.commit()
+        cur.close()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def _invalidate_affected_dispatch_plans(cur, local_document_id: int) -> int:
+    """Marca planes no despachados sin destruir su snapshot histórico."""
+    cur.execute(
+        """
+        UPDATE distribuidora.dispatch_plan p
+        SET needs_recalculation = TRUE,
+            invalidated_at = NOW(),
+            invalidation_reason = %s,
+            updated_at = NOW()
+        WHERE p.status <> 'dispatched'
+          AND EXISTS (
+              SELECT 1
+              FROM distribuidora.dispatch_plan_orders dpo
+              WHERE dpo.dispatch_plan_id = p.id
+                AND dpo.oc_document_id = %s
+          )
+        """,
+        (
+            f"OC {int(local_document_id)} cambió durante reconciliación Bsale",
+            int(local_document_id),
+        ),
+    )
+    return int(cur.rowcount or 0)
 
 
 @contextmanager
@@ -517,7 +614,10 @@ def _reconcile_one_oc(
         report["status"] = "dry_run_in_sync" if diff["matches"] else "dry_run_needs_sync"
         return report
     if hash_matches and diff["matches"]:
+        if local_id is not None:
+            _mark_reconciliation_attempt(local_id, successful=True)
         report["status"] = "already_in_sync"
+        report["metadata_updated"] = local_id is not None
         return report
 
     conn = get_connection()
@@ -525,6 +625,7 @@ def _reconcile_one_oc(
         cur = conn.cursor()
         try:
             _assert_source_schema(cur)
+            _assert_plan_invalidation_schema(cur)
             row = document_dict_from_bsale(
                 selected,
                 company_id=COMPANY_ID,
@@ -552,6 +653,7 @@ def _reconcile_one_oc(
                     source_hash = %s,
                     source_updated_at = %s,
                     last_synced_at = NOW(),
+                    last_reconciliation_at = NOW(),
                     updated_at = NOW()
                 WHERE document_id = %s
                 """,
@@ -565,6 +667,7 @@ def _reconcile_one_oc(
                 user_email=user_email,
                 persist=True,
             )
+            invalidated_plans = _invalidate_affected_dispatch_plans(cur, local_id)
             conn.commit()
         except Exception:
             conn.rollback()
@@ -582,6 +685,7 @@ def _reconcile_one_oc(
             "details_replaced": details_written,
             "peso_despues_kg": weight_result.get("peso_total_kg"),
             "cobertura_despues": weight_result.get("porcentaje_cobertura"),
+            "dispatch_plans_invalidated": invalidated_plans,
         }
     )
     logger.info(
@@ -619,6 +723,98 @@ def reconcile_one_oc(
         return _reconcile_one_oc(client, **kwargs)
 
 
+_FULL_COVERAGE_CANDIDATES_SQL = """
+    WITH eligible AS (
+        SELECT
+            d.document_id,
+            d.number,
+            d.emission_date,
+            d.last_reconciliation_at,
+            EXTRACT(
+                EPOCH FROM (
+                    NOW() - COALESCE(
+                        d.last_reconciliation_at,
+                        d.emission_date,
+                        d.created_at
+                    )
+                )
+            ) AS seconds_since_review
+        FROM distribuidora.documents d
+        WHERE d.company_id = %s
+          AND d.office_id = %s
+          AND d.document_type_id = %s
+          AND d.state = 0
+          AND COALESCE(d.commercial_state, 0) = 0
+          AND NOT EXISTS (
+              SELECT 1
+              FROM distribuidora.document_details dd
+              INNER JOIN distribuidora.document_related dr
+                  ON dr.detail_id = dd.detail_id
+              INNER JOIN distribuidora.documents invoice
+                  ON invoice.document_id = dr.related_document_id
+                 AND invoice.company_id = d.company_id
+                 AND invoice.office_id = d.office_id
+                 AND invoice.document_type_id IN (1, 6)
+                 AND invoice.state = 0
+              WHERE dd.document_id = d.document_id
+          )
+          AND (
+              EXISTS (
+                  SELECT 1
+                  FROM distribuidora.document_details current_detail
+                  WHERE current_detail.document_id = d.document_id
+              )
+              OR EXISTS (
+                  SELECT 1
+                  FROM distribuidora.dispatch_plan_orders dpo
+                  INNER JOIN distribuidora.dispatch_plan dp
+                      ON dp.id = dpo.dispatch_plan_id
+                     AND dp.status <> 'dispatched'
+                  WHERE dpo.oc_document_id = d.document_id
+              )
+          )
+    )
+    SELECT
+        document_id,
+        number,
+        emission_date,
+        last_reconciliation_at,
+        seconds_since_review,
+        MAX(seconds_since_review) OVER () AS max_seconds_since_review
+    FROM eligible
+    ORDER BY last_reconciliation_at NULLS FIRST, document_id
+    LIMIT %s
+"""
+
+
+def _load_full_coverage_batch(
+    *,
+    limit: int,
+    exclude_document_ids: set[int] | None = None,
+) -> tuple[list[dict[str, Any]], float | None]:
+    """OCs abiertas/sin factura ordenadas por cursor persistente."""
+    excluded = exclude_document_ids or set()
+    requested_limit = max(1, int(limit))
+    query_limit = requested_limit + len(excluded)
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            _FULL_COVERAGE_CANDIDATES_SQL,
+            (COMPANY_ID, OFFICE_ID, OC_DOCUMENT_TYPE_ID, query_limit),
+        )
+        columns = [description[0] for description in cur.description]
+        rows = [dict(zip(columns, row)) for row in cur.fetchall()]
+        cur.close()
+    finally:
+        conn.close()
+    selected = [
+        row for row in rows if int(row["document_id"]) not in excluded
+    ][:requested_limit]
+    max_age = _num(rows[0].get("max_seconds_since_review")) if rows else None
+    return selected, max_age
+
+
 def _fetch_recent_oc_documents(
     client: BsaleClient,
     *,
@@ -654,9 +850,11 @@ def reconcile_recent_ocs(
     client: BsaleClient,
     *,
     window_days: int = 30,
+    full_coverage_limit: int = 100,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    """Ventana móvil de emisión, agrupada por folio y con hash para skip writes."""
+    """Carril rápido reciente + lote rotativo de OCs abiertas sin factura."""
+    started = time.perf_counter()
     lock_conn = get_connection()
     got_lock = False
     try:
@@ -671,7 +869,9 @@ def reconcile_recent_ocs(
         if not got_lock:
             return {
                 "window_days": max(30, int(window_days)),
+                "full_coverage_limit": max(1, int(full_coverage_limit)),
                 "omitido_concurrencia": True,
+                "duration_seconds": round(time.perf_counter() - started, 3),
                 "results": [],
             }
 
@@ -684,6 +884,7 @@ def reconcile_recent_ocs(
             by_folio.setdefault(int(number), []).append(item)
 
         results: list[dict[str, Any]] = []
+        reviewed_local_ids: set[int] = set()
         for folio, candidates in sorted(by_folio.items()):
             active, _ = select_active_oc_source(candidates, folio=folio)
             if active is None:
@@ -703,19 +904,95 @@ def reconcile_recent_ocs(
                         "status": "error",
                         "error": str(exc),
                         "wrote": False,
+                        "lane": "fast_recent",
                     }
                 )
             else:
+                result["lane"] = "fast_recent"
                 results.append(result)
+                if result.get("local_document_id") is not None:
+                    reviewed_local_ids.add(int(result["local_document_id"]))
+
+        full_candidates, max_unreviewed_age = _load_full_coverage_batch(
+            limit=max(1, int(full_coverage_limit)),
+            exclude_document_ids=reviewed_local_ids,
+        )
+        full_results: list[dict[str, Any]] = []
+        for candidate in full_candidates:
+            local_id = int(candidate["document_id"])
+            folio = int(candidate["number"])
+            try:
+                result = reconcile_one_oc(
+                    client,
+                    folio=folio,
+                    local_document_id=local_id,
+                    dry_run=dry_run,
+                )
+                if result.get("status") == "source_not_found" and not dry_run:
+                    _mark_reconciliation_attempt(local_id, successful=False)
+            except Exception as exc:
+                logger.exception(
+                    "Reconcile cobertura completa OC folio=%s document_id=%s falló",
+                    folio,
+                    local_id,
+                )
+                if not dry_run:
+                    try:
+                        _mark_reconciliation_attempt(local_id, successful=False)
+                    except Exception:
+                        logger.exception(
+                            "No se pudo avanzar cursor fallido document_id=%s",
+                            local_id,
+                        )
+                result = {
+                    "folio": folio,
+                    "local_document_id": local_id,
+                    "status": "error",
+                    "error": str(exc),
+                    "wrote": False,
+                }
+            result["lane"] = "full_open_uninvoiced"
+            result["seconds_since_previous_review"] = _num(
+                candidate.get("seconds_since_review")
+            )
+            results.append(result)
+            full_results.append(result)
+
+        errors = sum(
+            1
+            for item in results
+            if item.get("status") in {"error", "source_not_found"}
+        )
+        modified = sum(1 for item in results if item.get("wrote"))
+        new_versions = sum(1 for item in results if item.get("source_changed"))
+        unchanged = sum(
+            1 for item in results if item.get("status") == "already_in_sync"
+        )
         return {
             "window_days": max(30, int(window_days)),
+            "full_coverage_limit": max(1, int(full_coverage_limit)),
             "api_documents": len(items),
             "folios": len(by_folio),
-            "synced": sum(1 for item in results if item.get("wrote")),
-            "unchanged": sum(
-                1 for item in results if item.get("status") == "already_in_sync"
-            ),
-            "errors": sum(1 for item in results if item.get("status") == "error"),
+            "ocs_reviewed": len(results),
+            "new_versions_detected": new_versions,
+            "ocs_modified": modified,
+            "bsale_errors": errors,
+            "duration_seconds": round(time.perf_counter() - started, 3),
+            "max_unreviewed_age_seconds": max_unreviewed_age,
+            "fast_lane": {
+                "candidates": len(by_folio),
+                "reviewed": sum(
+                    1 for item in results if item.get("lane") == "fast_recent"
+                ),
+            },
+            "full_coverage_lane": {
+                "candidates": len(full_candidates),
+                "reviewed": len(full_results),
+            },
+            # Compatibilidad con consumidores/alertas actuales.
+            "synced": modified,
+            "unchanged": unchanged,
+            "errors": errors,
             "omitido_concurrencia": False,
             "results": results,
         }

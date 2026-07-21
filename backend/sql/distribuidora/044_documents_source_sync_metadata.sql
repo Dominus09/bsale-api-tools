@@ -7,7 +7,8 @@ ALTER TABLE distribuidora.documents
     ADD COLUMN IF NOT EXISTS source_document_id BIGINT,
     ADD COLUMN IF NOT EXISTS source_hash TEXT,
     ADD COLUMN IF NOT EXISTS source_updated_at TIMESTAMPTZ,
-    ADD COLUMN IF NOT EXISTS last_synced_at TIMESTAMPTZ;
+    ADD COLUMN IF NOT EXISTS last_synced_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS last_reconciliation_at TIMESTAMPTZ;
 -- +go
 
 COMMENT ON COLUMN distribuidora.documents.source_document_id IS
@@ -17,12 +18,25 @@ COMMENT ON COLUMN distribuidora.documents.source_hash IS
 COMMENT ON COLUMN distribuidora.documents.source_updated_at IS
     'modificationDate o generationDate del source vigente en Bsale.';
 COMMENT ON COLUMN distribuidora.documents.last_synced_at IS
-    'Momento de la última persistencia efectiva desde Bsale.';
+    'Última revisión Bsale exitosa, haya o no cambios de contenido.';
+COMMENT ON COLUMN distribuidora.documents.last_reconciliation_at IS
+    'Cursor rotativo: último intento de reconciliación de la OC.';
 -- +go
 
 CREATE INDEX IF NOT EXISTS idx_documents_source_document_id
     ON distribuidora.documents (source_document_id)
     WHERE source_document_id IS NOT NULL;
+-- +go
+
+CREATE INDEX IF NOT EXISTS idx_documents_oc_reconciliation_cursor
+    ON distribuidora.documents (
+        last_reconciliation_at NULLS FIRST,
+        document_id
+    )
+    WHERE company_id = 3
+      AND office_id = 1
+      AND document_type_id = 33
+      AND state = 0;
 -- +go
 
 UPDATE distribuidora.documents d

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
-from unittest.mock import patch
+from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -17,6 +18,7 @@ from backend.services.distribuidora.oc_source_resolver import (
     compute_oc_source_hash,
     discover_oc_sources,
     fetch_all_document_details,
+    select_active_oc_source,
 )
 
 LOCAL_ID = 3832233
@@ -234,6 +236,17 @@ def test_writer_lock_conflict_aborts_and_releases_acquired_locks():
     conn.close.assert_called_once()
 
 
+def test_changed_oc_invalidates_only_non_dispatched_plans():
+    cur = MagicMock()
+    cur.rowcount = 2
+    count = reconciliation._invalidate_affected_dispatch_plans(cur, LOCAL_ID)
+    sql, params = cur.execute.call_args.args
+    assert count == 2
+    assert "p.status <> 'dispatched'" in sql
+    assert "needs_recalculation = TRUE" in sql
+    assert params[1] == LOCAL_ID
+
+
 def test_next_sync_with_same_hash_and_data_is_idempotent():
     digest = compute_oc_source_hash(ACTIVE, ACTIVE_DETAILS)
     pg_document = {
@@ -271,6 +284,9 @@ def test_next_sync_with_same_hash_and_data_is_idempotent():
             "backend.services.distribuidora.oc_reconciliation_service._oc_writer_locks",
             return_value=nullcontext(),
         ),
+        patch(
+            "backend.services.distribuidora.oc_reconciliation_service._mark_reconciliation_attempt"
+        ) as mark_attempt,
     ):
         report = reconcile_one_oc(
             FakeBsaleClient(),
@@ -283,6 +299,8 @@ def test_next_sync_with_same_hash_and_data_is_idempotent():
     assert report["source_hash_matches"] is True
     assert report["diff"]["matches"] is True
     assert report["wrote"] is False
+    assert report["metadata_updated"] is True
+    mark_attempt.assert_called_once_with(LOCAL_ID, successful=True)
     get_connection.assert_not_called()
 
 
@@ -340,6 +358,10 @@ def test_automatic_reconciliation_keeps_latest_source_on_next_run():
                     "wrote": False,
                 },
             ) as reconcile,
+            patch(
+                "backend.services.distribuidora.oc_reconciliation_service._load_full_coverage_batch",
+                return_value=([], None),
+            ),
         ):
             stats = reconcile_recent_ocs(FakeBsaleClient(), window_days=30)
 
@@ -347,3 +369,121 @@ def test_automatic_reconciliation_keeps_latest_source_on_next_run():
     assert stats["unchanged"] == 1
     selected = reconcile.call_args.kwargs["active_document"]
     assert selected["id"] == CURRENT_SOURCE_ID
+
+
+def test_full_coverage_returns_open_oc_older_than_60_days():
+    reviewed = datetime.now(timezone.utc) - timedelta(days=61)
+    columns = (
+        "document_id",
+        "number",
+        "emission_date",
+        "last_reconciliation_at",
+        "seconds_since_review",
+        "max_seconds_since_review",
+    )
+    with patch.object(reconciliation, "get_connection") as get_connection:
+        cur = get_connection.return_value.cursor.return_value
+        cur.description = [(column,) for column in columns]
+        cur.fetchall.return_value = [
+            (
+                LOCAL_ID,
+                FOLIO,
+                datetime.now(timezone.utc) - timedelta(days=90),
+                reviewed,
+                61 * 86400,
+                61 * 86400,
+            )
+        ]
+        rows, max_age = reconciliation._load_full_coverage_batch(limit=10)
+
+    assert rows[0]["document_id"] == LOCAL_ID
+    assert max_age == 61 * 86400
+    sql = cur.execute.call_args.args[0]
+    assert "ORDER BY last_reconciliation_at NULLS FIRST" in sql
+    assert "invoice.document_type_id IN (1, 6)" in sql
+    assert "AND invoice.state = 0" in sql
+    assert "AND d.state = 0" in sql
+
+
+def test_sixth_reissue_selected_after_five_previous_versions():
+    versions = [
+        _document(
+            3833000 + index,
+            number=FOLIO,
+            state=1,
+            generation=1784650000 + index,
+            total=219800 + index,
+        )
+        for index in range(5)
+    ]
+    sixth = _document(
+        3833005,
+        number=FOLIO,
+        state=0,
+        generation=1784660000,
+        total=237200,
+    )
+    active, evaluated = select_active_oc_source(
+        [*versions, sixth],
+        folio=FOLIO,
+    )
+    assert active["id"] == 3833005
+    assert sum(1 for item in evaluated if item["eligible"]) == 1
+
+
+def test_full_lane_detects_sixth_version_then_stops_after_invoice():
+    candidate = {
+        "document_id": LOCAL_ID,
+        "number": FOLIO,
+        "seconds_since_review": 60 * 86400,
+    }
+    with patch.object(reconciliation, "get_connection") as get_connection:
+        connection = get_connection.return_value
+        connection.cursor.return_value.fetchone.return_value = (True,)
+        with (
+            patch.object(reconciliation, "_fetch_recent_oc_documents", return_value=[]),
+            patch.object(
+                reconciliation,
+                "_load_full_coverage_batch",
+                return_value=([candidate], 60 * 86400),
+            ),
+            patch.object(
+                reconciliation,
+                "reconcile_one_oc",
+                return_value={
+                    "folio": FOLIO,
+                    "local_document_id": LOCAL_ID,
+                    "current_bsale_source_document_id": 3833005,
+                    "source_changed": True,
+                    "status": "synced",
+                    "wrote": True,
+                },
+            ),
+        ):
+            changed = reconcile_recent_ocs(
+                FakeBsaleClient(),
+                full_coverage_limit=10,
+            )
+
+    assert changed["full_coverage_lane"]["reviewed"] == 1
+    assert changed["new_versions_detected"] == 1
+    assert changed["ocs_modified"] == 1
+
+    # La consulta de elegibilidad devuelve vacío una vez existe factura definitiva.
+    with patch.object(reconciliation, "get_connection") as get_connection:
+        connection = get_connection.return_value
+        connection.cursor.return_value.fetchone.return_value = (True,)
+        with (
+            patch.object(reconciliation, "_fetch_recent_oc_documents", return_value=[]),
+            patch.object(
+                reconciliation,
+                "_load_full_coverage_batch",
+                return_value=([], None),
+            ),
+        ):
+            invoiced = reconcile_recent_ocs(
+                FakeBsaleClient(),
+                full_coverage_limit=10,
+            )
+    assert invoiced["full_coverage_lane"]["candidates"] == 0
+    assert invoiced["ocs_reviewed"] == 0

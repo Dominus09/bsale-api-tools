@@ -51,11 +51,19 @@ python -m backend.jobs.reconcile_bsale_ocs
 
 Raíz del repo, con `BSALE_TOKEN` / `PG_*` en entorno.
 
-`reconcile_bsale_ocs` es la reconciliación móvil de OCs: usa una ventana de
-emisión de 30 días como mínimo, pagina completamente, selecciona por folio el
-source activo más reciente (`generationDate`, luego mayor id) y evita escrituras
-si `source_hash` y los campos operacionales no cambiaron. Ejecutar cada 15–30
-minutos después de aplicar `044_documents_source_sync_metadata.sql`.
+`reconcile_bsale_ocs` tiene dos carriles:
+
+- rápido: OCs emitidas durante los últimos 30 días como mínimo;
+- cobertura completa: lote rotativo de OCs activas, no cerradas y sin factura
+  definitiva, ordenado por `last_reconciliation_at NULLS FIRST`, sin límite por
+  fecha de emisión.
+
+El tamaño del segundo carril se configura con
+`OC_RECONCILIATION_FULL_BATCH_SIZE` (default `100`). Una revisión sin cambios
+solo mueve `last_synced_at`/`last_reconciliation_at`; una nueva versión reemplaza
+encabezado/detalles, recalcula peso y marca planes no despachados para
+recalcular. Ejecutar cada 15–30 minutos después de aplicar las migraciones 044 y
+045.
 
 ## Endpoint manual
 

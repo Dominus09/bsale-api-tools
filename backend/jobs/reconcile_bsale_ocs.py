@@ -1,4 +1,4 @@
-"""Reconciliación móvil de OCs Bsale (30 días mínimo)."""
+"""Reconciliación Bsale: carril reciente + cobertura rotativa de OCs abiertas."""
 
 from __future__ import annotations
 
@@ -22,9 +22,16 @@ def main() -> int:
         configured = int(os.getenv("OC_RECONCILIATION_WINDOW_DAYS", "30"))
     except ValueError:
         configured = 30
+    try:
+        full_batch_size = int(
+            os.getenv("OC_RECONCILIATION_FULL_BATCH_SIZE", "100")
+        )
+    except ValueError:
+        full_batch_size = 100
     stats = reconcile_recent_ocs(
         BsaleClient(token),
         window_days=max(30, configured),
+        full_coverage_limit=max(1, full_batch_size),
         dry_run=False,
     )
     print(json.dumps(stats, ensure_ascii=False, default=str))

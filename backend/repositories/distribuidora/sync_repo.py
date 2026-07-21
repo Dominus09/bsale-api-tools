@@ -116,6 +116,7 @@ DISTRIBUIDORA_SCHEMA_FILES: tuple[str, ...] = (
     "036_dispatch_plan_cuadratura_cash_count.sql",
     "037_dispatch_plan_load_batches.sql",
     "044_documents_source_sync_metadata.sql",
+    "045_dispatch_plan_source_invalidation.sql",
 )
 
 _ENSURE_SCHEMA_NOOP_WARNED = False
