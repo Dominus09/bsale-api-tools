@@ -8,7 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Body, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
@@ -23,6 +23,8 @@ from backend.services.distribuidora.orders_service import (
     list_dispatch_prep_planning_rows,
     list_purchase_orders,
 )
+from backend.services.distribuidora.bsale_client import BsaleClient
+from backend.services.distribuidora.oc_reconciliation_service import reconcile_one_oc
 from backend.services.distribuidora.resync_oc_jobs import (
     create_job,
     get_job,
@@ -42,6 +44,8 @@ from backend.services.distribuidora.sync_service import (
     sync_bsale_distribuidora_sales_incremental,
 )
 from backend.utils.request_audit import get_request_id, rss_mb
+from backend.utils.bsale_token_env import read_bsale_token_from_env
+from backend.utils.auth_staff import require_staff_user
 
 router = APIRouter(prefix="/distribuidora", tags=["Distribuidora órdenes"])
 logger = logging.getLogger(__name__)
@@ -83,6 +87,13 @@ class ResyncOcStartBody(BaseModel):
     model_config = ConfigDict(extra="ignore")
     emission_date_from: date | None = None
     emission_date_to: date | None = None
+
+
+class ResyncOcOneBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    folio: int | None = None
+    document_id: int | None = None
+    dry_run: bool = True
 
 
 def _resync_oc_emission_bounds(
@@ -474,6 +485,34 @@ def post_resync_oc(
         "emission_date_from": df,
         "emission_date_to": dt,
     }
+
+
+@router.post("/resync-oc/one")
+def post_resync_oc_one(
+    body: ResyncOcOneBody,
+    user: dict = Depends(require_staff_user),
+):
+    """Descubre por folio el source OC activo y reconcilia una sola orden."""
+    if (body.folio is None) == (body.document_id is None):
+        raise HTTPException(
+            status_code=400,
+            detail="Indique exactamente uno: folio o document_id local",
+        )
+    token = read_bsale_token_from_env()
+    if not token:
+        raise HTTPException(status_code=503, detail="Token Bsale no configurado")
+    try:
+        return reconcile_one_oc(
+            BsaleClient(token),
+            folio=body.folio,
+            local_document_id=body.document_id,
+            dry_run=body.dry_run,
+            user_email=str(user.get("email") or "") or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/resync-oc/status/{job_id}")

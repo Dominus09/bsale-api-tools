@@ -46,9 +46,16 @@ python -m backend.jobs.live_sync_documents
 python -m backend.jobs.live_sync_details
 python -m backend.jobs.live_sync_related
 python -m backend.jobs.live_sync_probable_matches
+python -m backend.jobs.reconcile_bsale_ocs
 ```
 
 Raíz del repo, con `BSALE_TOKEN` / `PG_*` en entorno.
+
+`reconcile_bsale_ocs` es la reconciliación móvil de OCs: usa una ventana de
+emisión de 30 días como mínimo, pagina completamente, selecciona por folio el
+source activo más reciente (`generationDate`, luego mayor id) y evita escrituras
+si `source_hash` y los campos operacionales no cambiaron. Ejecutar cada 15–30
+minutos después de aplicar `044_documents_source_sync_metadata.sql`.
 
 ## Endpoint manual
 

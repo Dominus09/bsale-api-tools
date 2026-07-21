@@ -52,7 +52,13 @@ def detail_dict_from_item(document_id: int, item: dict[str, Any]) -> dict[str, A
     }
 
 
-def replace_document_details(cur, document_id: int, items: list[dict[str, Any]]) -> int:
+def replace_document_details(
+    cur,
+    document_id: int,
+    items: list[dict[str, Any]],
+    *,
+    invalidate_cache: bool = True,
+) -> int:
     cur.execute(
         "DELETE FROM distribuidora.document_details WHERE document_id = %s",
         (document_id,),
@@ -77,10 +83,11 @@ def replace_document_details(cur, document_id: int, items: list[dict[str, Any]])
     values = [tuple(r[c] for c in cols) for r in rows]
     execute_values(cur, sql, values, template=template, page_size=len(values))
     written = len(rows)
-    try:
-        from backend.services.order_weight_service import invalidate_order_weight_cache
+    if invalidate_cache:
+        try:
+            from backend.services.order_weight_service import invalidate_order_weight_cache
 
-        invalidate_order_weight_cache(int(document_id))
-    except Exception:
-        pass
+            invalidate_order_weight_cache(int(document_id))
+        except Exception:
+            pass
     return written

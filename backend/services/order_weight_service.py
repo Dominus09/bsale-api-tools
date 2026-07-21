@@ -633,6 +633,60 @@ def calculate_order_weight(
     }
 
 
+def recalculate_order_weight_in_transaction(
+    cur,
+    *,
+    document_id: int,
+    company_id: int = 3,
+    office_id: int = 1,
+    user_email: str | None = None,
+    persist: bool = True,
+) -> dict[str, Any]:
+    """Recalcula y persiste el snapshot usando la transacción/cursor del caller.
+
+    Se usa cuando el mismo TX acaba de reemplazar ``document_details``: el cálculo
+    ve esas líneas aún no confirmadas y evita abrir conexiones laterales.
+    No hace ``commit`` ni ``rollback``.
+    """
+    cur.execute(_ORDER_HEADER_SQL, (int(document_id), int(company_id)))
+    header_row = cur.fetchone()
+    if not header_row:
+        return {}
+    header = _row_dict(cur, header_row)
+    if header.get("office_id") is None:
+        header["office_id"] = int(office_id)
+
+    lines = compute_order_lines(
+        cur,
+        document_id=int(document_id),
+        company_id=int(company_id),
+    )
+    summary = aggregate_order_summary(lines)
+    enrich_lines_peso_pct(lines, summary["peso_total_kg"])
+    metrics = _build_weight_metrics(summary)
+    if persist and _table_exists(cur, "order_weight_snapshots"):
+        _persist_snapshot(
+            cur,
+            header=header,
+            lines=lines,
+            summary=summary,
+            user_email=user_email,
+        )
+
+    return {
+        **header,
+        **summary,
+        **metrics,
+        "peso_total_kg": float(metrics["total_weight"]),
+        "estado": _order_estado_label(
+            float(summary["porcentaje_cobertura"]),
+            float(summary["peso_total_kg"]),
+        ),
+        "semaforo": coverage_semaphore(float(summary["porcentaje_cobertura"])),
+        "lines": lines,
+    }
+
+
 def calculate_order_weights_batch(
     document_ids: list[int],
     *,
