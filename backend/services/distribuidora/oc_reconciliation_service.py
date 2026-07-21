@@ -195,6 +195,8 @@ def _load_local_oc(
     *,
     folio: int | None,
     local_document_id: int | None,
+    company_id: int = COMPANY_ID,
+    office_id: int = OFFICE_ID,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     conn = get_connection()
     try:
@@ -240,7 +242,7 @@ def _load_local_oc(
                   AND document_type_id = %s AND number = %s
                 LIMIT 1
                 """,
-                (COMPANY_ID, OFFICE_ID, OC_DOCUMENT_TYPE_ID, int(folio)),
+                (int(company_id), int(office_id), OC_DOCUMENT_TYPE_ID, int(folio)),
             )
         row = cur.fetchone()
         if not row:
@@ -290,14 +292,16 @@ def _projected_weight(
     local_document_id: int | None,
     pg_details: list[dict[str, Any]],
     bsale_details: list[dict[str, Any]],
+    company_id: int = COMPANY_ID,
+    office_id: int = OFFICE_ID,
 ) -> dict[str, Any]:
     before: dict[str, Any] = {}
     if local_document_id is not None:
         try:
             before = calculate_order_weight(
                 int(local_document_id),
-                company_id=COMPANY_ID,
-                office_id=OFFICE_ID,
+                company_id=int(company_id),
+                office_id=int(office_id),
                 persist_cache=False,
             )
         except Exception:
@@ -466,6 +470,8 @@ def _reconcile_one_oc(
     dry_run: bool = True,
     active_document: dict[str, Any] | None = None,
     user_email: str | None = None,
+    company_id: int = COMPANY_ID,
+    office_id: int = OFFICE_ID,
 ) -> dict[str, Any]:
     """Descubre source vigente, compara y opcionalmente persiste una OC."""
     if folio is None and local_document_id is None:
@@ -473,6 +479,8 @@ def _reconcile_one_oc(
     pg_document, pg_details = _load_local_oc(
         folio=folio,
         local_document_id=local_document_id,
+        company_id=company_id,
+        office_id=office_id,
     )
     if local_document_id is not None:
         if pg_document is None:
@@ -492,8 +500,8 @@ def _reconcile_one_oc(
             client,
             folio=resolved_folio,
             known_source_ids=_known_source_ids(pg_document),
-            company_id=COMPANY_ID,
-            office_id=OFFICE_ID,
+            company_id=company_id,
+            office_id=office_id,
             document_type_id=OC_DOCUMENT_TYPE_ID,
         )
         selected = discovery.get("active_document")
@@ -502,8 +510,8 @@ def _reconcile_one_oc(
         _, evaluated = select_active_oc_source(
             [active_document],
             folio=resolved_folio,
-            company_id=COMPANY_ID,
-            office_id=OFFICE_ID,
+            company_id=company_id,
+            office_id=office_id,
             document_type_id=OC_DOCUMENT_TYPE_ID,
         )
         discovery = {
@@ -511,7 +519,10 @@ def _reconcile_one_oc(
             "source": "reconciliation_window",
             "documents": evaluated,
             "active_document": active_document,
-            "active_source_document_id": summarize_bsale_document(active_document).get("id"),
+            "active_source_document_id": summarize_bsale_document(
+                active_document,
+                expected_company_id=company_id,
+            ).get("id"),
         }
     if not isinstance(selected, dict):
         return {
@@ -522,14 +533,17 @@ def _reconcile_one_oc(
             "wrote": False,
         }
 
-    selected_summary = summarize_bsale_document(selected)
+    selected_summary = summarize_bsale_document(
+        selected,
+        expected_company_id=company_id,
+    )
     source_id = int(selected_summary["id"])
     # Defensa final, aun si el caller entregó ``active_document``.
     reselected, evaluated = select_active_oc_source(
         [selected],
         folio=resolved_folio,
-        company_id=COMPANY_ID,
-        office_id=OFFICE_ID,
+        company_id=company_id,
+        office_id=office_id,
         document_type_id=OC_DOCUMENT_TYPE_ID,
     )
     if reselected is None:
@@ -560,6 +574,8 @@ def _reconcile_one_oc(
         local_document_id=local_id,
         pg_details=pg_details,
         bsale_details=details,
+        company_id=company_id,
+        office_id=office_id,
     )
     raw_pg = (pg_document or {}).get("raw_data")
     raw_pg_id = raw_pg.get("id") if isinstance(raw_pg, dict) else None
@@ -628,8 +644,8 @@ def _reconcile_one_oc(
             _assert_plan_invalidation_schema(cur)
             row = document_dict_from_bsale(
                 selected,
-                company_id=COMPANY_ID,
-                default_office_id=OFFICE_ID,
+                company_id=company_id,
+                default_office_id=office_id,
             )
             if row is None:
                 raise RuntimeError("El source activo no pudo mapearse a documents")
@@ -662,8 +678,8 @@ def _reconcile_one_oc(
             weight_result = recalculate_order_weight_in_transaction(
                 cur,
                 document_id=local_id,
-                company_id=COMPANY_ID,
-                office_id=OFFICE_ID,
+                company_id=company_id,
+                office_id=office_id,
                 user_email=user_email,
                 persist=True,
             )
@@ -708,6 +724,8 @@ def reconcile_one_oc(
     dry_run: bool = True,
     active_document: dict[str, Any] | None = None,
     user_email: str | None = None,
+    company_id: int = COMPANY_ID,
+    office_id: int = OFFICE_ID,
 ) -> dict[str, Any]:
     """Ejecuta read-only sin lock; toda escritura compite con syncs existentes."""
     kwargs = {
@@ -716,6 +734,8 @@ def reconcile_one_oc(
         "dry_run": dry_run,
         "active_document": active_document,
         "user_email": user_email,
+        "company_id": int(company_id),
+        "office_id": int(office_id),
     }
     if dry_run:
         return _reconcile_one_oc(client, **kwargs)
@@ -782,7 +802,11 @@ _FULL_COVERAGE_CANDIDATES_SQL = """
         seconds_since_review,
         MAX(seconds_since_review) OVER () AS max_seconds_since_review
     FROM eligible
-    ORDER BY last_reconciliation_at NULLS FIRST, document_id
+    ORDER BY
+        last_reconciliation_at NULLS FIRST,
+        (emission_date >= NOW() - make_interval(days => %s)) DESC,
+        last_reconciliation_at,
+        document_id
     LIMIT %s
 """
 
@@ -790,6 +814,9 @@ _FULL_COVERAGE_CANDIDATES_SQL = """
 def _load_full_coverage_batch(
     *,
     limit: int,
+    recent_days: int = 30,
+    company_id: int = COMPANY_ID,
+    office_id: int = OFFICE_ID,
     exclude_document_ids: set[int] | None = None,
 ) -> tuple[list[dict[str, Any]], float | None]:
     """OCs abiertas/sin factura ordenadas por cursor persistente."""
@@ -801,7 +828,13 @@ def _load_full_coverage_batch(
         cur = conn.cursor()
         cur.execute(
             _FULL_COVERAGE_CANDIDATES_SQL,
-            (COMPANY_ID, OFFICE_ID, OC_DOCUMENT_TYPE_ID, query_limit),
+            (
+                int(company_id),
+                int(office_id),
+                OC_DOCUMENT_TYPE_ID,
+                max(1, int(recent_days)),
+                query_limit,
+            ),
         )
         columns = [description[0] for description in cur.description]
         rows = [dict(zip(columns, row)) for row in cur.fetchall()]
@@ -819,6 +852,7 @@ def _fetch_recent_oc_documents(
     client: BsaleClient,
     *,
     window_days: int,
+    office_id: int = OFFICE_ID,
 ) -> list[dict[str, Any]]:
     now = datetime.now(timezone.utc)
     start = now - timedelta(days=max(30, int(window_days)))
@@ -832,7 +866,7 @@ def _fetch_recent_oc_documents(
                 "limit": PAGE_LIMIT,
                 "offset": offset,
             },
-            OFFICE_ID,
+            int(office_id),
             context="reconcile_recent_ocs",
         )
         payload = client.get("/documents.json", params)
@@ -846,12 +880,200 @@ def _fetch_recent_oc_documents(
     return output
 
 
+def reconcile_open_purchase_orders_batch(
+    client: BsaleClient,
+    *,
+    execute: bool,
+    limit: int = 100,
+    recent_days: int = 30,
+    company_id: int = COMPANY_ID,
+    office_id: int = OFFICE_ID,
+) -> dict[str, Any]:
+    """Lote acotado para Scheduled Task; continúa ante errores por OC."""
+    started = time.perf_counter()
+    batch_limit = max(1, int(limit))
+    recent_days = max(1, int(recent_days))
+    logger.info(
+        "reconciliation_cycle_started execute=%s limit=%s recent_days=%s "
+        "company_id=%s office_id=%s",
+        execute,
+        batch_limit,
+        recent_days,
+        company_id,
+        office_id,
+    )
+    results: list[dict[str, Any]] = []
+    max_unreviewed_age: float | None = None
+    lock_conn = get_connection()
+    got_lock = False
+    try:
+        lock_cur = lock_conn.cursor()
+        lock_cur.execute(
+            "SELECT pg_try_advisory_lock(%s)",
+            (ADVISORY_LOCK_OC_RECONCILIATION,),
+        )
+        got_lock = bool(lock_cur.fetchone()[0])
+        lock_conn.commit()
+        lock_cur.close()
+        if not got_lock:
+            return {
+                "status": "already_running",
+                "execute": execute,
+                "limit": batch_limit,
+                "ocs_checked": 0,
+                "results": [],
+            }
+
+        candidates, max_unreviewed_age = _load_full_coverage_batch(
+            limit=batch_limit,
+            recent_days=recent_days,
+            company_id=company_id,
+            office_id=office_id,
+        )
+        for candidate in candidates:
+            local_id = int(candidate["document_id"])
+            folio = int(candidate["number"])
+            logger.info(
+                "oc_checked folio=%s local_document_id=%s "
+                "last_reconciliation_at=%s",
+                folio,
+                local_id,
+                candidate.get("last_reconciliation_at"),
+            )
+            try:
+                result = reconcile_one_oc(
+                    client,
+                    folio=folio,
+                    local_document_id=local_id,
+                    dry_run=not execute,
+                    company_id=company_id,
+                    office_id=office_id,
+                )
+                if result.get("source_changed"):
+                    logger.info(
+                        "oc_source_changed folio=%s local_document_id=%s "
+                        "previous_source_document_id=%s "
+                        "current_bsale_source_document_id=%s",
+                        folio,
+                        local_id,
+                        result.get("previous_source_document_id"),
+                        result.get("current_bsale_source_document_id"),
+                    )
+                if result.get("wrote"):
+                    logger.info(
+                        "oc_updated folio=%s local_document_id=%s "
+                        "source_document_id=%s details_replaced=%s",
+                        folio,
+                        local_id,
+                        result.get("current_bsale_source_document_id"),
+                        result.get("details_replaced"),
+                    )
+                elif result.get("status") in {
+                    "already_in_sync",
+                    "dry_run_in_sync",
+                }:
+                    logger.info(
+                        "oc_unchanged folio=%s local_document_id=%s "
+                        "source_document_id=%s",
+                        folio,
+                        local_id,
+                        result.get("current_bsale_source_document_id"),
+                    )
+                elif result.get("status") == "source_not_found":
+                    if execute:
+                        _mark_reconciliation_attempt(local_id, successful=False)
+                    logger.error(
+                        "oc_failed folio=%s local_document_id=%s "
+                        "error=source_not_found",
+                        folio,
+                        local_id,
+                    )
+            except Exception as exc:
+                if execute:
+                    try:
+                        _mark_reconciliation_attempt(local_id, successful=False)
+                    except Exception:
+                        logger.exception(
+                            "No se pudo avanzar cursor fallido document_id=%s",
+                            local_id,
+                        )
+                logger.exception(
+                    "oc_failed folio=%s local_document_id=%s error=%s",
+                    folio,
+                    local_id,
+                    exc,
+                )
+                result = {
+                    "folio": folio,
+                    "local_document_id": local_id,
+                    "status": "error",
+                    "error": str(exc),
+                    "wrote": False,
+                }
+            results.append(result)
+
+        errors = sum(
+            1
+            for item in results
+            if item.get("status") in {"error", "source_not_found"}
+        )
+        return {
+            "status": "completed",
+            "execute": execute,
+            "limit": batch_limit,
+            "recent_days": recent_days,
+            "company_id": int(company_id),
+            "office_id": int(office_id),
+            "ocs_checked": len(results),
+            "new_versions_detected": sum(
+                1 for item in results if item.get("source_changed")
+            ),
+            "ocs_updated": sum(1 for item in results if item.get("wrote")),
+            "ocs_unchanged": sum(
+                1
+                for item in results
+                if item.get("status") in {"already_in_sync", "dry_run_in_sync"}
+            ),
+            "errors": errors,
+            "max_unreviewed_age_seconds": max_unreviewed_age,
+            "duration_seconds": round(time.perf_counter() - started, 3),
+            "results": results,
+        }
+    finally:
+        if got_lock:
+            try:
+                unlock_cur = lock_conn.cursor()
+                unlock_cur.execute(
+                    "SELECT pg_advisory_unlock(%s)",
+                    (ADVISORY_LOCK_OC_RECONCILIATION,),
+                )
+                unlock_cur.close()
+            except Exception:
+                logger.exception("No se pudo liberar lock de reconciliación OC")
+        lock_conn.close()
+        logger.info(
+            "reconciliation_cycle_finished execute=%s checked=%s updated=%s "
+            "errors=%s duration_seconds=%.3f",
+            execute,
+            len(results),
+            sum(1 for item in results if item.get("wrote")),
+            sum(
+                1
+                for item in results
+                if item.get("status") in {"error", "source_not_found"}
+            ),
+            time.perf_counter() - started,
+        )
+
+
 def reconcile_recent_ocs(
     client: BsaleClient,
     *,
     window_days: int = 30,
     full_coverage_limit: int = 100,
     dry_run: bool = False,
+    company_id: int = COMPANY_ID,
+    office_id: int = OFFICE_ID,
 ) -> dict[str, Any]:
     """Carril rápido reciente + lote rotativo de OCs abiertas sin factura."""
     started = time.perf_counter()
@@ -875,10 +1097,17 @@ def reconcile_recent_ocs(
                 "results": [],
             }
 
-        items = _fetch_recent_oc_documents(client, window_days=max(30, window_days))
+        items = _fetch_recent_oc_documents(
+            client,
+            window_days=max(30, window_days),
+            office_id=office_id,
+        )
         by_folio: dict[int, list[dict[str, Any]]] = {}
         for item in items:
-            number = summarize_bsale_document(item).get("number")
+            number = summarize_bsale_document(
+                item,
+                expected_company_id=company_id,
+            ).get("number")
             if number is None or int(number) <= 0:
                 continue
             by_folio.setdefault(int(number), []).append(item)
@@ -886,7 +1115,12 @@ def reconcile_recent_ocs(
         results: list[dict[str, Any]] = []
         reviewed_local_ids: set[int] = set()
         for folio, candidates in sorted(by_folio.items()):
-            active, _ = select_active_oc_source(candidates, folio=folio)
+            active, _ = select_active_oc_source(
+                candidates,
+                folio=folio,
+                company_id=company_id,
+                office_id=office_id,
+            )
             if active is None:
                 continue
             try:
@@ -895,6 +1129,8 @@ def reconcile_recent_ocs(
                     folio=folio,
                     dry_run=dry_run,
                     active_document=active,
+                    company_id=company_id,
+                    office_id=office_id,
                 )
             except Exception as exc:
                 logger.exception("Reconcile OC folio=%s falló", folio)
@@ -915,6 +1151,9 @@ def reconcile_recent_ocs(
 
         full_candidates, max_unreviewed_age = _load_full_coverage_batch(
             limit=max(1, int(full_coverage_limit)),
+            recent_days=max(30, int(window_days)),
+            company_id=company_id,
+            office_id=office_id,
             exclude_document_ids=reviewed_local_ids,
         )
         full_results: list[dict[str, Any]] = []
@@ -927,6 +1166,8 @@ def reconcile_recent_ocs(
                     folio=folio,
                     local_document_id=local_id,
                     dry_run=dry_run,
+                    company_id=company_id,
+                    office_id=office_id,
                 )
                 if result.get("status") == "source_not_found" and not dry_run:
                     _mark_reconciliation_attempt(local_id, successful=False)

@@ -399,7 +399,7 @@ def test_full_coverage_returns_open_oc_older_than_60_days():
     assert rows[0]["document_id"] == LOCAL_ID
     assert max_age == 61 * 86400
     sql = cur.execute.call_args.args[0]
-    assert "ORDER BY last_reconciliation_at NULLS FIRST" in sql
+    assert "last_reconciliation_at NULLS FIRST" in sql
     assert "invoice.document_type_id IN (1, 6)" in sql
     assert "AND invoice.state = 0" in sql
     assert "AND d.state = 0" in sql
@@ -487,3 +487,155 @@ def test_full_lane_detects_sixth_version_then_stops_after_invoice():
             )
     assert invoiced["full_coverage_lane"]["candidates"] == 0
     assert invoiced["ocs_reviewed"] == 0
+
+
+def test_oc_68199_new_source_changes_discounts_and_amounts_not_quantity():
+    previous_source_id = 3832987
+    current_source_id = 3833128
+    current_document = {
+        **ACTIVE,
+        "id": current_source_id,
+        "totalAmount": 213480,
+        "netAmount": 179395,
+        "taxAmount": 34085,
+        "generationDate": ACTIVE["generationDate"] + 600,
+    }
+    current_details = [
+        {
+            **ACTIVE_DETAILS[0],
+            "id": 9000128,
+            "quantity": 20.0,
+            "netDiscount": 19933,
+            "totalDiscount": 23720,
+            "discountPercentage": 10.0,
+            "netAmount": 179395,
+            "taxAmount": 34085,
+            "totalAmount": 213480,
+        }
+    ]
+
+    class ReissuedClient:
+        def get(self, path, params=None, **kwargs):
+            if path == "/documents.json":
+                return {"items": [current_document]}
+            if path in {
+                f"/documents/{LOCAL_ID}.json",
+                f"/documents/{previous_source_id}.json",
+            }:
+                return {
+                    **PREVIOUS_SOURCE,
+                    "id": int(path.split("/")[-1].split(".")[0]),
+                    "number": 0,
+                    "state": 1,
+                }
+            if path == f"/documents/{current_source_id}/details.json":
+                return {"items": current_details}
+            raise AssertionError(path)
+
+    pg_document = {
+        **_old_pg_document(),
+        "source_document_id": previous_source_id,
+        "raw_data": {"id": previous_source_id, "number": FOLIO},
+        "total_amount": 237200,
+        "net_amount": 199328,
+        "tax_amount": 37872,
+    }
+    pg_details = [
+        {
+            "detail_id": 9000001,
+            "variant_id": 27383,
+            "quantity": 20.0,
+            "total_amount": 237200.0,
+        }
+    ]
+    with (
+        patch.object(
+            reconciliation,
+            "_load_local_oc",
+            return_value=(pg_document, pg_details),
+        ),
+        patch.object(
+            reconciliation,
+            "calculate_order_weight",
+            return_value={
+                "peso_total_kg": 300.0,
+                "lines": [{"variant_id": 27383, "peso_unitario_kg": 15.0}],
+            },
+        ),
+    ):
+        report = reconcile_one_oc(
+            ReissuedClient(),
+            folio=FOLIO,
+            local_document_id=LOCAL_ID,
+            dry_run=True,
+        )
+
+    assert report["status"] == "dry_run_needs_sync"
+    assert report["previous_source_document_id"] == previous_source_id
+    assert report["current_bsale_source_document_id"] == current_source_id
+    assert report["source_changed"] is True
+    assert report["diff"]["postgresql_quantity"] == 20
+    assert report["diff"]["bsale_quantity"] == 20
+    assert report["diff"]["postgresql_line_total"] == 237200
+    assert report["diff"]["bsale_line_total"] == 213480
+
+
+def test_batch_continues_after_failure_and_emits_mandatory_logs(caplog):
+    candidates = [
+        {"document_id": 1, "number": 100, "last_reconciliation_at": None},
+        {"document_id": 2, "number": 101, "last_reconciliation_at": None},
+        {"document_id": 3, "number": 102, "last_reconciliation_at": None},
+    ]
+    outcomes = [
+        {
+            "status": "synced",
+            "wrote": True,
+            "source_changed": True,
+            "previous_source_document_id": 10,
+            "current_bsale_source_document_id": 11,
+            "details_replaced": 1,
+        },
+        {
+            "status": "dry_run_in_sync",
+            "wrote": False,
+            "source_changed": False,
+            "current_bsale_source_document_id": 20,
+        },
+        RuntimeError("Bsale unavailable"),
+    ]
+    caplog.set_level("INFO")
+    with patch.object(reconciliation, "get_connection") as get_connection:
+        get_connection.return_value.cursor.return_value.fetchone.return_value = (True,)
+        with (
+            patch.object(
+                reconciliation,
+                "_load_full_coverage_batch",
+                return_value=(candidates, 999),
+            ),
+            patch.object(
+                reconciliation,
+                "reconcile_one_oc",
+                side_effect=outcomes,
+            ),
+        ):
+            stats = reconciliation.reconcile_open_purchase_orders_batch(
+                FakeBsaleClient(),
+                execute=False,
+                limit=3,
+            )
+
+    text = caplog.text
+    for event in (
+        "reconciliation_cycle_started",
+        "oc_checked",
+        "oc_source_changed",
+        "oc_updated",
+        "oc_unchanged",
+        "oc_failed",
+        "reconciliation_cycle_finished",
+    ):
+        assert event in text
+    assert stats["ocs_checked"] == 3
+    assert stats["ocs_updated"] == 1
+    assert stats["ocs_unchanged"] == 1
+    assert stats["errors"] == 1

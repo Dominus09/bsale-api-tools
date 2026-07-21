@@ -65,6 +65,30 @@ encabezado/detalles, recalcula peso y marca planes no despachados para
 recalcular. Ejecutar cada 15–30 minutos después de aplicar las migraciones 044 y
 045.
 
+### Scheduled Task canónico: OCs abiertas
+
+Canary read-only (10 OCs):
+
+```bash
+python -m backend.jobs.reconcile_open_purchase_orders --dry-run --limit 10 --recent-days 30 --company-id 3 --office-id 1
+```
+
+Canary con persistencia:
+
+```bash
+python -m backend.jobs.reconcile_open_purchase_orders --execute --limit 10 --recent-days 30 --company-id 3 --office-id 1
+```
+
+Producción cada 15 minutos:
+
+```bash
+python -m backend.jobs.reconcile_open_purchase_orders --execute --limit 100 --recent-days 30 --company-id 3 --office-id 1
+```
+
+Cron Coolify: `*/15 * * * *`. El proceso hereda `BSALE_TOKEN` (o
+`BSALE_TOKEN_SPA`) y `PG_HOST`, `PG_DB`, `PG_USER`, `PG_PASSWORD`, `PG_PORT`
+desde el runtime del contenedor.
+
 ## Endpoint manual
 
 `POST /distribuidora/sync/live-now`
