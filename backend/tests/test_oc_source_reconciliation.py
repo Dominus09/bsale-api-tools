@@ -639,6 +639,113 @@ def test_batch_continues_after_failure_and_emits_mandatory_logs(caplog):
     assert stats["ocs_updated"] == 1
     assert stats["ocs_unchanged"] == 1
     assert stats["errors"] == 1
+    assert stats["checked"] == 3
+    assert stats["updated"] == 1
+    assert stats["unchanged"] == 1
+    assert stats["skipped"] == 0
+    assert stats["invalid_folios"] == 0
+    assert "duration_seconds" in stats
+    assert text.count("reconciliation_cycle_finished") == 1
+
+
+def test_batch_skips_invalid_folios_and_processes_valid_candidate(caplog):
+    candidates = [
+        {"document_id": 11, "number": None, "last_reconciliation_at": None},
+        {"document_id": 12, "number": 0, "last_reconciliation_at": None},
+        {"document_id": 13, "number": "", "last_reconciliation_at": None},
+        {"document_id": 14, "number": 68260, "last_reconciliation_at": None},
+    ]
+    valid_result = {
+        "status": "dry_run_in_sync",
+        "wrote": False,
+        "source_changed": False,
+        "current_bsale_source_document_id": 99,
+        "local_document_id": 14,
+        "folio": 68260,
+    }
+    caplog.set_level("INFO")
+    with patch.object(reconciliation, "get_connection") as get_connection:
+        get_connection.return_value.cursor.return_value.fetchone.return_value = (True,)
+        with (
+            patch.object(
+                reconciliation,
+                "_load_full_coverage_batch",
+                return_value=(candidates, 10),
+            ),
+            patch.object(
+                reconciliation,
+                "reconcile_one_oc",
+                return_value=valid_result,
+            ) as reconcile_one,
+        ):
+            stats = reconciliation.reconcile_open_purchase_orders_batch(
+                FakeBsaleClient(),
+                execute=False,
+                limit=10,
+            )
+
+    assert reconcile_one.call_count == 1
+    assert reconcile_one.call_args.kwargs["folio"] == 68260
+    assert reconcile_one.call_args.kwargs["local_document_id"] == 14
+    assert stats["status"] == "completed"
+    assert stats["checked"] == 4
+    assert stats["skipped"] == 3
+    assert stats["invalid_folios"] == 3
+    assert stats["unchanged"] == 1
+    assert stats["updated"] == 0
+    assert stats["errors"] == 0
+    assert "duration_seconds" in stats
+
+    skipped = [item for item in stats["results"] if item["status"] == "oc_skipped"]
+    assert len(skipped) == 3
+    assert {item["local_document_id"] for item in skipped} == {11, 12, 13}
+    assert all(item["reason"] == "invalid_or_missing_folio" for item in skipped)
+
+    text = caplog.text
+    assert text.count("oc_skipped") == 3
+    assert "reason=invalid_or_missing_folio" in text
+    assert text.count("reconciliation_cycle_finished") == 1
+    assert "reconciliation_cycle_failed" not in text
+
+
+def test_candidate_sql_excludes_null_and_non_positive_folios():
+    sql = " ".join(reconciliation._FULL_COVERAGE_CANDIDATES_SQL.split())
+    assert "d.number IS NOT NULL" in sql
+    assert "d.number > 0" in sql
+
+
+def test_unexpected_batch_abort_does_not_emit_finished(caplog):
+    candidates = [
+        {"document_id": 1, "number": 100, "last_reconciliation_at": None},
+    ]
+    caplog.set_level("INFO")
+    with patch.object(reconciliation, "get_connection") as get_connection:
+        get_connection.return_value.cursor.return_value.fetchone.return_value = (True,)
+        with (
+            patch.object(
+                reconciliation,
+                "_load_full_coverage_batch",
+                return_value=(candidates, 1),
+            ),
+            patch.object(
+                reconciliation,
+                "reconcile_one_oc",
+                side_effect=MemoryError("boom"),
+            ),
+            patch.object(
+                reconciliation,
+                "_is_global_reconciliation_error",
+                return_value=True,
+            ),
+        ):
+            with pytest.raises(MemoryError):
+                reconciliation.reconcile_open_purchase_orders_batch(
+                    FakeBsaleClient(),
+                    execute=False,
+                    limit=1,
+                )
+
+    assert "reconciliation_cycle_finished" not in caplog.text
 
 
 def test_batch_skips_whole_cycle_on_active_writer_lock():

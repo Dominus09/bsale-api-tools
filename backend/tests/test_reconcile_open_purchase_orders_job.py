@@ -103,3 +103,39 @@ def test_global_failure_exits_one():
         ),
     ):
         assert job.main(["--execute"]) == 1
+
+
+def test_invalid_folios_only_exit_zero(capsys):
+    result = {
+        "status": "completed",
+        "checked": 3,
+        "updated": 0,
+        "unchanged": 0,
+        "skipped": 3,
+        "errors": 0,
+        "invalid_folios": 3,
+        "duration_seconds": 0.1,
+        "results": [
+            {
+                "status": "oc_skipped",
+                "reason": "invalid_or_missing_folio",
+                "local_document_id": 1,
+            }
+        ],
+    }
+    with (
+        patch.object(job, "load_dotenv_if_available"),
+        patch.object(job, "require_bsale_token", return_value="token"),
+        patch.object(job, "BsaleClient", return_value=MagicMock()),
+        patch.object(
+            job,
+            "reconcile_open_purchase_orders_batch",
+            return_value=result,
+        ),
+    ):
+        assert job.main(["--execute"]) == 0
+        assert job.main(["--execute", "--fail-on-item-error"]) == 0
+
+    out = capsys.readouterr().out
+    assert '"invalid_folios": 3' in out
+    assert '"skipped": 3' in out

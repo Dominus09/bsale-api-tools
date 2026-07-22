@@ -768,6 +768,21 @@ def reconcile_one_oc(
         return _reconcile_one_oc(client, **kwargs)
 
 
+def _parse_candidate_folio(raw_number: Any) -> int | None:
+    """Devuelve folio entero positivo o None si es inválido/ausente."""
+    if raw_number is None:
+        return None
+    if isinstance(raw_number, str) and not raw_number.strip():
+        return None
+    try:
+        folio = int(raw_number)
+    except (TypeError, ValueError):
+        return None
+    if folio <= 0:
+        return None
+    return folio
+
+
 _FULL_COVERAGE_CANDIDATES_SQL = """
     WITH eligible AS (
         SELECT
@@ -790,6 +805,8 @@ _FULL_COVERAGE_CANDIDATES_SQL = """
           AND d.document_type_id = %s
           AND d.state = 0
           AND COALESCE(d.commercial_state, 0) = 0
+          AND d.number IS NOT NULL
+          AND d.number > 0
           AND NOT EXISTS (
               SELECT 1
               FROM distribuidora.document_details dd
@@ -905,6 +922,37 @@ def _fetch_recent_oc_documents(
     return output
 
 
+def _batch_summary_counts(results: list[dict[str, Any]]) -> dict[str, int]:
+    skipped = sum(
+        1
+        for item in results
+        if item.get("status") == "oc_skipped"
+        and item.get("reason") == "invalid_or_missing_folio"
+    )
+    errors = sum(
+        1
+        for item in results
+        if item.get("status") in {"error", "source_not_found"}
+    )
+    updated = sum(1 for item in results if item.get("wrote"))
+    unchanged = sum(
+        1
+        for item in results
+        if item.get("status") in {"already_in_sync", "dry_run_in_sync"}
+    )
+    return {
+        "checked": len(results),
+        "updated": updated,
+        "unchanged": unchanged,
+        "skipped": skipped,
+        "errors": errors,
+        "invalid_folios": skipped,
+        "ocs_checked": len(results),
+        "ocs_updated": updated,
+        "ocs_unchanged": unchanged,
+    }
+
+
 def reconcile_open_purchase_orders_batch(
     client: BsaleClient,
     *,
@@ -929,6 +977,8 @@ def reconcile_open_purchase_orders_batch(
     )
     results: list[dict[str, Any]] = []
     max_unreviewed_age: float | None = None
+    cycle_finished = False
+    finished_summary: dict[str, Any] | None = None
     lock_conn = get_connection()
     got_lock = False
     try:
@@ -941,14 +991,19 @@ def reconcile_open_purchase_orders_batch(
         lock_conn.commit()
         lock_cur.close()
         if not got_lock:
-            return {
+            counts = _batch_summary_counts([])
+            result = {
                 "status": "skipped_due_to_active_sync",
                 "execute": execute,
                 "limit": batch_limit,
-                "ocs_checked": 0,
                 "errors": 0,
                 "results": [],
+                "duration_seconds": round(time.perf_counter() - started, 3),
+                **counts,
             }
+            cycle_finished = True
+            finished_summary = result
+            return result
 
         candidates, max_unreviewed_age = _load_full_coverage_batch(
             limit=batch_limit,
@@ -958,7 +1013,27 @@ def reconcile_open_purchase_orders_batch(
         )
         for candidate in candidates:
             local_id = int(candidate["document_id"])
-            folio = int(candidate["number"])
+            raw_number = candidate.get("number")
+            folio = _parse_candidate_folio(raw_number)
+            if folio is None:
+                logger.info(
+                    "oc_skipped local_document_id=%s reason=invalid_or_missing_folio "
+                    "raw_number=%r",
+                    local_id,
+                    raw_number,
+                )
+                results.append(
+                    {
+                        "folio": None,
+                        "local_document_id": local_id,
+                        "status": "oc_skipped",
+                        "reason": "invalid_or_missing_folio",
+                        "raw_number": raw_number,
+                        "wrote": False,
+                    }
+                )
+                continue
+
             logger.info(
                 "oc_checked folio=%s local_document_id=%s "
                 "last_reconciliation_at=%s",
@@ -1022,21 +1097,21 @@ def reconcile_open_purchase_orders_batch(
                     local_id,
                     exc,
                 )
-                return {
+                counts = _batch_summary_counts(results)
+                result = {
                     "status": "skipped_due_to_active_sync",
                     "execute": execute,
                     "limit": batch_limit,
                     "recent_days": recent_days,
                     "company_id": int(company_id),
                     "office_id": int(office_id),
-                    "ocs_checked": len(results),
-                    "ocs_updated": sum(
-                        1 for item in results if item.get("wrote")
-                    ),
-                    "errors": 0,
                     "duration_seconds": round(time.perf_counter() - started, 3),
                     "results": results,
+                    **counts,
                 }
+                cycle_finished = True
+                finished_summary = result
+                return result
             except Exception as exc:
                 if _is_global_reconciliation_error(exc):
                     raise
@@ -1063,33 +1138,25 @@ def reconcile_open_purchase_orders_batch(
                 }
             results.append(result)
 
-        errors = sum(
-            1
-            for item in results
-            if item.get("status") in {"error", "source_not_found"}
-        )
-        return {
+        counts = _batch_summary_counts(results)
+        result = {
             "status": "completed",
             "execute": execute,
             "limit": batch_limit,
             "recent_days": recent_days,
             "company_id": int(company_id),
             "office_id": int(office_id),
-            "ocs_checked": len(results),
             "new_versions_detected": sum(
                 1 for item in results if item.get("source_changed")
             ),
-            "ocs_updated": sum(1 for item in results if item.get("wrote")),
-            "ocs_unchanged": sum(
-                1
-                for item in results
-                if item.get("status") in {"already_in_sync", "dry_run_in_sync"}
-            ),
-            "errors": errors,
             "max_unreviewed_age_seconds": max_unreviewed_age,
             "duration_seconds": round(time.perf_counter() - started, 3),
             "results": results,
+            **counts,
         }
+        cycle_finished = True
+        finished_summary = result
+        return result
     finally:
         if got_lock:
             try:
@@ -1102,19 +1169,25 @@ def reconcile_open_purchase_orders_batch(
             except Exception:
                 logger.exception("No se pudo liberar lock de reconciliación OC")
         lock_conn.close()
-        logger.info(
-            "reconciliation_cycle_finished execute=%s checked=%s updated=%s "
-            "errors=%s duration_seconds=%.3f",
-            execute,
-            len(results),
-            sum(1 for item in results if item.get("wrote")),
-            sum(
-                1
-                for item in results
-                if item.get("status") in {"error", "source_not_found"}
-            ),
-            time.perf_counter() - started,
-        )
+        # Solo al final real del ciclo (incluye saltos). No emitir si una
+        # excepción no controlada aborta antes de terminar los candidatos.
+        if cycle_finished and finished_summary is not None:
+            logger.info(
+                "reconciliation_cycle_finished execute=%s checked=%s updated=%s "
+                "unchanged=%s skipped=%s errors=%s invalid_folios=%s "
+                "duration_seconds=%.3f",
+                execute,
+                finished_summary.get("checked", 0),
+                finished_summary.get("updated", 0),
+                finished_summary.get("unchanged", 0),
+                finished_summary.get("skipped", 0),
+                finished_summary.get("errors", 0),
+                finished_summary.get("invalid_folios", 0),
+                finished_summary.get(
+                    "duration_seconds",
+                    time.perf_counter() - started,
+                ),
+            )
 
 
 def reconcile_recent_ocs(
@@ -1210,7 +1283,27 @@ def reconcile_recent_ocs(
         full_results: list[dict[str, Any]] = []
         for candidate in full_candidates:
             local_id = int(candidate["document_id"])
-            folio = int(candidate["number"])
+            raw_number = candidate.get("number")
+            folio = _parse_candidate_folio(raw_number)
+            if folio is None:
+                logger.info(
+                    "oc_skipped local_document_id=%s reason=invalid_or_missing_folio "
+                    "raw_number=%r",
+                    local_id,
+                    raw_number,
+                )
+                full_results.append(
+                    {
+                        "folio": None,
+                        "local_document_id": local_id,
+                        "status": "oc_skipped",
+                        "reason": "invalid_or_missing_folio",
+                        "raw_number": raw_number,
+                        "wrote": False,
+                        "lane": "full_open_uninvoiced",
+                    }
+                )
+                continue
             try:
                 result = reconcile_one_oc(
                     client,
