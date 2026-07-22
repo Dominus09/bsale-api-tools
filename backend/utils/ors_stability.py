@@ -42,6 +42,16 @@ def log_error(
     logger.exception("[ORS_STABILITY_DEBUG] %s", " ".join(parts))
 
 
+def global_invoicing_warning(message: str) -> dict[str, Any]:
+    """Aviso de carga global (no asociado a una OC real)."""
+    return {
+        "oc_document_id": None,
+        "oc_number": None,
+        "scope": "global",
+        "message": message,
+    }
+
+
 def empty_invoicing_payload(
     plan_id: int,
     orders: list[dict[str, Any]],
@@ -72,22 +82,16 @@ def empty_invoicing_payload(
     warnings: list[dict[str, Any]] = []
     if full_view_error:
         warnings.append(
-            {
-                "oc_document_id": 0,
-                "oc_number": None,
-                "message": (
-                    "Error en v_dispatch_plan_invoiced_documents (vista full): "
-                    f"{full_view_error}"
-                ),
-            }
+            global_invoicing_warning(
+                "Error en v_dispatch_plan_invoiced_documents (vista full): "
+                f"{full_view_error}"
+            )
         )
     if lite_error:
         warnings.append(
-            {
-                "oc_document_id": 0,
-                "oc_number": None,
-                "message": f"Fallback document_related también falló: {lite_error}",
-            }
+            global_invoicing_warning(
+                f"Fallback document_related también falló: {lite_error}"
+            )
         )
     warnings.extend(
         {
@@ -96,6 +100,7 @@ def empty_invoicing_payload(
             "message": msg,
         }
         for x in items
+        if x.get("oc_document_id")
     )
     return {
         "dispatch_plan_id": plan_id,
@@ -128,12 +133,7 @@ def empty_plan_dashboard(
     """Dashboard seguro cuando falla facturación, margen o vistas SQL."""
     warnings: list[dict[str, Any]] = []
     if degraded_message:
-        warnings.append(
-            {
-                "oc_document_id": 0,
-                "message": degraded_message,
-            }
-        )
+        warnings.append(global_invoicing_warning(degraded_message))
     base_plan = plan if plan else {"id": plan_id}
     from backend.utils.load_summary import build_load_summary
 

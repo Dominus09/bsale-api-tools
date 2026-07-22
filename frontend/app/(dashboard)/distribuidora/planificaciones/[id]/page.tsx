@@ -40,7 +40,9 @@ function emptyDashboardFromPlan(plan: DispatchPlanSummary): DispatchPlanDashboar
     invoiced_items: [],
     warnings: [
       {
-        oc_document_id: 0,
+        oc_document_id: null,
+        oc_number: null,
+        scope: "global",
         message: "No se pudo cargar el dashboard de facturación.",
       },
     ],

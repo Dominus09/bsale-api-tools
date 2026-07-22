@@ -2120,8 +2120,17 @@ export type DispatchPlanDashboard = {
     pending: { count: number; amount_clp: number }
   }
   invoiced_items: DispatchPlanInvoicedRow[]
-  warnings: { oc_document_id: number; message: string }[]
-  probable_notes: { oc_document_id: number; message: string }[]
+  warnings: {
+    oc_document_id: number | null
+    oc_number?: number | null
+    scope?: "global" | string
+    message: string
+  }[]
+  probable_notes: {
+    oc_document_id: number | null
+    oc_number?: number | null
+    message: string
+  }[]
   margin: {
     visible: boolean
     restricted?: boolean

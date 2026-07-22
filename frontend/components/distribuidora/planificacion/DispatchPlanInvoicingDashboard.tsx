@@ -129,18 +129,40 @@ export function DispatchPlanInvoicingDashboard({
         </p>
       ) : null}
 
-      {data.warnings.length > 0 ? (
-        <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-800 dark:text-red-300">
-          <p className="font-medium">OCs sin documento facturado asociado</p>
-          <ul className="mt-1 list-inside list-disc">
-            {data.warnings.slice(0, 8).map((w) => (
-              <li key={w.oc_document_id}>
-                OC {w.oc_number ?? w.oc_document_id}: {w.message}
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
+      {(() => {
+        const globalWarnings = data.warnings.filter(
+          (w) => w.scope === "global" || w.oc_document_id == null || w.oc_document_id === 0,
+        )
+        const ocWarnings = data.warnings.filter(
+          (w) => w.scope !== "global" && w.oc_document_id != null && w.oc_document_id !== 0,
+        )
+        return (
+          <>
+            {globalWarnings.length > 0 ? (
+              <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
+                <p className="font-medium">Avisos de carga</p>
+                <ul className="mt-1 list-inside list-disc">
+                  {globalWarnings.slice(0, 8).map((w, i) => (
+                    <li key={`global-${i}`}>{w.message}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {ocWarnings.length > 0 ? (
+              <div className="rounded-md border border-red-500/30 bg-red-500/5 px-3 py-2 text-xs text-red-800 dark:text-red-300">
+                <p className="font-medium">OCs sin documento facturado asociado</p>
+                <ul className="mt-1 list-inside list-disc">
+                  {ocWarnings.slice(0, 8).map((w) => (
+                    <li key={w.oc_document_id}>
+                      OC {w.oc_number ?? w.oc_document_id}: {w.message}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </>
+        )
+      })()}
 
       {data.probable_notes.length > 0 ? (
         <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">

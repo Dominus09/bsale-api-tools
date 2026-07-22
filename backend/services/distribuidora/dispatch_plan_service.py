@@ -22,6 +22,7 @@ from backend.services.distribuidora.dispatch_commercial_margin_service import (
     compute_plan_commercial_margin,
 )
 from backend.utils.json_safe import serialize_row, serialize_rows, serialize_value
+from backend.utils.load_summary import build_load_summary
 from backend.utils.plan_debug import (
     PLAN_DEBUG_RERAISE,
     log_plan_debug_context,
@@ -33,6 +34,7 @@ from backend.utils.ors_stability import (
     empty_picking_by_client_response,
     empty_picking_by_product_response,
     empty_plan_dashboard,
+    global_invoicing_warning,
     log_debug,
     log_error,
 )
@@ -1261,24 +1263,16 @@ def get_invoiced_documents(
         if source == "lite":
             if full_err:
                 extra.append(
-                    {
-                        "oc_document_id": 0,
-                        "oc_number": None,
-                        "message": (
-                            "Error en v_dispatch_plan_invoiced_documents (vista full): "
-                            f"{full_err}"
-                        ),
-                    }
+                    global_invoicing_warning(
+                        "Error en v_dispatch_plan_invoiced_documents (vista full): "
+                        f"{full_err}"
+                    )
                 )
             extra.append(
-                {
-                    "oc_document_id": 0,
-                    "oc_number": None,
-                    "message": (
-                        "Facturación en modo rápido (document_related). "
-                        "Coincidencias probables no evaluadas."
-                    ),
-                }
+                global_invoicing_warning(
+                    "Facturación en modo rápido (document_related). "
+                    "Coincidencias probables no evaluadas."
+                )
             )
         return _invoicing_payload_from_rows(
             plan_id,
