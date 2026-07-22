@@ -500,11 +500,141 @@ def test_candidate_sql_separates_recent_and_historical_lanes():
     assert "generation_date DESC NULLS LAST" in recent_sql
     assert "last_reconciliation_at ASC NULLS FIRST" in recent_sql
     assert "document_id DESC" in recent_sql
+    # Rotación primero: nunca revisadas / más antiguas en cursor, luego generación.
+    order_idx = recent_sql.index("ORDER BY")
+    order_clause = recent_sql[order_idx:]
+    assert order_clause.index("last_reconciliation_at ASC NULLS FIRST") < order_clause.index(
+        "generation_date DESC NULLS LAST"
+    )
+    assert order_clause.index("generation_date DESC NULLS LAST") < order_clause.index(
+        "document_id DESC"
+    )
     assert "lane_date < NOW() - make_interval(days => %s)" in historical_sql
     assert "last_reconciliation_at ASC NULLS FIRST" in historical_sql
     assert "invoice.document_type_id IN (1, 6)" in recent_sql
     assert "AND invoice.state = 0" in recent_sql
     assert "AND d.state = 0" in recent_sql
+
+
+def _sort_recent_lane_candidates(rows: list[dict]) -> list[dict]:
+    """Espejo Python del ORDER BY del carril reciente."""
+
+    def sort_key(row: dict):
+        reviewed = row.get("last_reconciliation_at")
+        generation = row.get("generation_date")
+        document_id = int(row["document_id"])
+        # NULLS FIRST para last_reconciliation_at
+        reviewed_key = (0, datetime.min.replace(tzinfo=timezone.utc)) if reviewed is None else (1, reviewed)
+        # NULLS LAST para generation_date DESC → usar sentinel bajo y negar
+        if generation is None:
+            generation_key = (1, datetime.min.replace(tzinfo=timezone.utc))
+        else:
+            generation_key = (0, generation)
+        return (
+            reviewed_key[0],
+            reviewed_key[1],
+            generation_key[0],
+            # DESC: invertir timestamp
+            -generation_key[1].timestamp() if generation is not None else 0,
+            -document_id,
+        )
+
+    return sorted(rows, key=sort_key)
+
+
+def test_recent_lane_does_not_starve_older_folio_68143():
+    """200 OCs más nuevas no deben bloquear permanentemente a 68143."""
+    now = datetime.now(timezone.utc)
+    folio_68143 = {
+        "document_id": 3_700_143,
+        "number": 68143,
+        "emission_date": now - timedelta(days=5),
+        "generation_date": now - timedelta(days=5),
+        # Nunca revisada (o más antigua en cursor) frente a las nuevas ya rotadas.
+        "last_reconciliation_at": None,
+        "seconds_since_review": 5 * 86400,
+    }
+    newer_ocs = [
+        {
+            "document_id": 3_800_000 + index,
+            "number": 69000 + index,
+            "emission_date": now - timedelta(hours=index),
+            "generation_date": now - timedelta(minutes=index),
+            # Ya revisadas recientemente: con el ORDER BY viejo seguirían primero.
+            "last_reconciliation_at": now - timedelta(hours=1),
+            "seconds_since_review": 3600,
+        }
+        for index in range(200)
+    ]
+    pool = [*newer_ocs, folio_68143]
+    by_id = {int(row["document_id"]): row for row in pool}
+    recent_slots = 80
+    historical_slots = 20
+    total_limit = 100
+
+    selected_numbers: set[int] = set()
+    cycles_until_hit: int | None = None
+    max_cycles = 3  # ceil(201/80) con rotación correcta; con starvation vieja nunca entra
+
+    for cycle in range(1, max_cycles + 1):
+        ordered = _sort_recent_lane_candidates(pool)
+        selected = reconciliation._merge_lane_candidates(
+            recent_rows=ordered,
+            historical_rows=[],
+            recent_slots=recent_slots,
+            historical_slots=historical_slots,
+            total_limit=total_limit,
+        )
+        cycle_numbers = {int(row["number"]) for row in selected}
+        selected_numbers |= cycle_numbers
+        # Simula avance del cursor rotativo tras cada revisión (en el pool original).
+        for row in selected:
+            by_id[int(row["document_id"])]["last_reconciliation_at"] = now + timedelta(
+                seconds=cycle
+            )
+            by_id[int(row["document_id"])]["seconds_since_review"] = 0
+        if 68143 in cycle_numbers:
+            cycles_until_hit = cycle
+            break
+
+    assert cycles_until_hit is not None, "68143 nunca fue seleccionada (starvation)"
+    assert cycles_until_hit <= max_cycles
+    assert 68143 in selected_numbers
+
+
+def test_recent_lane_rotates_all_within_three_cycles_for_240_ocs():
+    """Con 240 recientes y cupo 80, todas deben salir en ≤3 ciclos."""
+    now = datetime.now(timezone.utc)
+    pool = [
+        {
+            "document_id": 4_000_000 + index,
+            "number": 70000 + index,
+            "emission_date": now - timedelta(days=index % 20),
+            "generation_date": now - timedelta(hours=index),
+            "last_reconciliation_at": None,
+            "seconds_since_review": (index + 1) * 3600,
+        }
+        for index in range(240)
+    ]
+    by_id = {int(row["document_id"]): row for row in pool}
+    seen: set[int] = set()
+    for cycle in range(1, 4):
+        ordered = _sort_recent_lane_candidates(pool)
+        selected = reconciliation._merge_lane_candidates(
+            recent_rows=ordered,
+            historical_rows=[],
+            recent_slots=80,
+            historical_slots=20,
+            total_limit=100,
+        )
+        assert sum(1 for row in selected if row["candidate_lane"] == "recent") == 80
+        for row in selected:
+            doc_id = int(row["document_id"])
+            seen.add(doc_id)
+            by_id[doc_id]["last_reconciliation_at"] = now + timedelta(seconds=cycle)
+            by_id[doc_id]["seconds_since_review"] = 0
+
+    assert len(seen) == 240
 
 
 def test_sixth_reissue_selected_after_five_previous_versions():

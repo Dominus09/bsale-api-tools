@@ -1111,8 +1111,8 @@ _RECENT_CANDIDATES_SQL = (
     FROM eligible
     WHERE lane_date >= NOW() - make_interval(days => %s)
     ORDER BY
-        generation_date DESC NULLS LAST,
         last_reconciliation_at ASC NULLS FIRST,
+        generation_date DESC NULLS LAST,
         document_id DESC
     LIMIT %s
 """
