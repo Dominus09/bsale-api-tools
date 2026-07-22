@@ -89,6 +89,11 @@ Cron Coolify: `*/15 * * * *`. El proceso hereda `BSALE_TOKEN` (o
 `BSALE_TOKEN_SPA`) y `PG_HOST`, `PG_DB`, `PG_USER`, `PG_PASSWORD`, `PG_PORT`
 desde el runtime del contenedor.
 
+El Scheduled Task retorna `0` si termina con errores recuperables por OC o si
+otro sync mantiene el lock (`skipped_due_to_active_sync`). Para una ejecución
+manual estricta, agregar `--fail-on-item-error`; las fallas globales de token,
+PostgreSQL, migraciones o una excepción fatal retornan `1`.
+
 ## Endpoint manual
 
 `POST /distribuidora/sync/live-now`

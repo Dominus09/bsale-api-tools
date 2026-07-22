@@ -33,6 +33,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--recent-days", type=int, default=30)
     parser.add_argument("--company-id", type=int, default=3)
     parser.add_argument("--office-id", type=int, default=1)
+    parser.add_argument(
+        "--fail-on-item-error",
+        action="store_true",
+        help="Exit 1 si alguna OC falla; pensado para ejecución manual estricta",
+    )
     return parser
 
 
@@ -66,10 +71,12 @@ def main(argv: list[str] | None = None) -> int:
             "reconciliation_cycle_failed error=%s",
             exc,
         )
-        return 2
+        return 1
 
     print(json.dumps(result, ensure_ascii=False, default=str))
-    return 1 if int(result.get("errors") or 0) > 0 else 0
+    if args.fail_on_item_error and int(result.get("errors") or 0) > 0:
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

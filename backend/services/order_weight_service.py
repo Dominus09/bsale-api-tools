@@ -33,6 +33,32 @@ class OrderWeightSummary(TypedDict):
     estimated_products: int
 
 
+class SnapshotLineConflictError(RuntimeError):
+    """Un mismo detail_id llegó con dos representaciones de peso distintas."""
+
+
+class LogisticsMatchConflictError(RuntimeError):
+    """Una línea de OC tiene más de una coincidencia logística aplicable."""
+
+    def __init__(
+        self,
+        *,
+        variant_id: int | None,
+        detail_id: int,
+        match_type: str,
+        products_master_ids: list[int],
+    ) -> None:
+        self.variant_id = variant_id
+        self.detail_id = detail_id
+        self.match_type = match_type
+        self.products_master_ids = products_master_ids
+        super().__init__(
+            "Coincidencia logística ambigua para "
+            f"variant_id={variant_id} detail_id={detail_id} "
+            f"match_type={match_type} products_master_ids={products_master_ids}"
+        )
+
+
 def metrics_to_order_weight_summary(metrics: dict[str, Any]) -> OrderWeightSummary:
     return {
         "total_weight": float(metrics["total_weight"]),
@@ -212,25 +238,87 @@ SELECT
     NULLIF(BTRIM(dd.variant_code), '') AS codigo,
     NULLIF(BTRIM(dd.variant_description), '') AS producto,
     dd.quantity::numeric AS cantidad_unitaria,
-    COALESCE(pm_v.units_per_box, pm_b.units_per_box, v.units_per_box) AS units_per_box,
-    COALESCE(pl_v.weight_unit_kg, pl_b.weight_unit_kg) AS peso_unitario_kg,
-    COALESCE(pm_v.weight_box_kg, pm_b.weight_box_kg) AS peso_caja_kg,
-    COALESCE(pm_v.id, pm_b.id) AS products_master_id,
-    COALESCE(pm_v.product_name, pm_b.product_name) AS product_name,
-    COALESCE(pm_v.variant_name, pm_b.variant_name) AS variante,
+    CASE
+        WHEN pl_v.match_count = 1 THEN pl_v.units_per_box
+        WHEN pl_v.match_count = 0 AND pl_b.match_count = 1 THEN pl_b.units_per_box
+        ELSE v.units_per_box
+    END AS units_per_box,
+    CASE
+        WHEN pl_v.match_count = 1 THEN pl_v.weight_unit_kg
+        WHEN pl_v.match_count = 0 AND pl_b.match_count = 1 THEN pl_b.weight_unit_kg
+    END AS peso_unitario_kg,
+    CASE
+        WHEN pl_v.match_count = 1 THEN pl_v.weight_box_kg
+        WHEN pl_v.match_count = 0 AND pl_b.match_count = 1 THEN pl_b.weight_box_kg
+    END AS peso_caja_kg,
+    CASE
+        WHEN pl_v.match_count = 1 THEN pl_v.products_master_id
+        WHEN pl_v.match_count = 0 AND pl_b.match_count = 1 THEN pl_b.products_master_id
+    END AS products_master_id,
+    CASE
+        WHEN pl_v.match_count = 1 THEN pl_v.product_name
+        WHEN pl_v.match_count = 0 AND pl_b.match_count = 1 THEN pl_b.product_name
+    END AS product_name,
+    CASE
+        WHEN pl_v.match_count = 1 THEN pl_v.variant_name
+        WHEN pl_v.match_count = 0 AND pl_b.match_count = 1 THEN pl_b.variant_name
+    END AS variante,
     p.name AS bsale_product_name,
-    COALESCE(pm_v.logistics_completed, pm_b.logistics_completed) AS logistics_completed,
-    COALESCE(pm_v.updated_at, pm_b.updated_at) AS pm_updated_at,
-    COALESCE(pm_v.last_bsale_sync_at, pm_b.last_bsale_sync_at) AS last_bsale_sync_at,
-    COALESCE(pm_v.height_cm, pm_b.height_cm) AS height_cm,
-    COALESCE(pm_v.width_cm, pm_b.width_cm) AS width_cm,
-    COALESCE(pm_v.length_cm, pm_b.length_cm) AS length_cm,
+    CASE
+        WHEN pl_v.match_count = 1 THEN pl_v.logistics_completed
+        WHEN pl_v.match_count = 0 AND pl_b.match_count = 1 THEN pl_b.logistics_completed
+    END AS logistics_completed,
+    CASE
+        WHEN pl_v.match_count = 1 THEN pl_v.updated_at
+        WHEN pl_v.match_count = 0 AND pl_b.match_count = 1 THEN pl_b.updated_at
+    END AS pm_updated_at,
+    CASE
+        WHEN pl_v.match_count = 1 THEN pl_v.last_bsale_sync_at
+        WHEN pl_v.match_count = 0 AND pl_b.match_count = 1 THEN pl_b.last_bsale_sync_at
+    END AS last_bsale_sync_at,
+    CASE
+        WHEN pl_v.match_count = 1 THEN pl_v.height_cm
+        WHEN pl_v.match_count = 0 AND pl_b.match_count = 1 THEN pl_b.height_cm
+    END AS height_cm,
+    CASE
+        WHEN pl_v.match_count = 1 THEN pl_v.width_cm
+        WHEN pl_v.match_count = 0 AND pl_b.match_count = 1 THEN pl_b.width_cm
+    END AS width_cm,
+    CASE
+        WHEN pl_v.match_count = 1 THEN pl_v.length_cm
+        WHEN pl_v.match_count = 0 AND pl_b.match_count = 1 THEN pl_b.length_cm
+    END AS length_cm,
     v.product_id,
     NULLIF(BTRIM(v.bar_code), '') AS barcode,
     NULLIF(BTRIM(v.code), '') AS codigo_interno,
-    (pl_v.weight_unit_kg IS NOT NULL AND pl_v.weight_unit_kg > 0) AS join_variant_ok,
-    (pl_b.weight_unit_kg IS NOT NULL AND pl_b.weight_unit_kg > 0) AS join_barcode_ok,
-    (pm_v.id IS NOT NULL OR pm_b.id IS NOT NULL) AS exists_in_pm
+    (
+        pl_v.match_count = 1
+        AND pl_v.weight_unit_kg IS NOT NULL
+        AND pl_v.weight_unit_kg > 0
+    ) AS join_variant_ok,
+    (
+        pl_v.match_count = 0
+        AND pl_b.match_count = 1
+        AND pl_b.weight_unit_kg IS NOT NULL
+        AND pl_b.weight_unit_kg > 0
+    ) AS join_barcode_ok,
+    (
+        pl_v.match_count = 1
+        OR (pl_v.match_count = 0 AND pl_b.match_count = 1)
+    ) AS exists_in_pm,
+    CASE
+        WHEN pl_v.match_count > 1 THEN 'conflict_variant'
+        WHEN pl_v.match_count = 1 THEN 'matched_variant'
+        WHEN pl_b.match_count > 1 THEN 'conflict_barcode'
+        WHEN pl_b.match_count = 1 THEN 'matched_barcode'
+        ELSE 'pending'
+    END AS logistics_match_status,
+    CASE
+        WHEN pl_v.match_count > 1 THEN pl_v.products_master_ids
+        WHEN pl_v.match_count = 0 AND pl_b.match_count > 1
+            THEN pl_b.products_master_ids
+        ELSE ARRAY[]::bigint[]
+    END AS conflicting_products_master_ids
 FROM distribuidora.document_details dd
 LEFT JOIN bsale.variants v
     ON v.company_id = %s
@@ -238,17 +326,50 @@ LEFT JOIN bsale.variants v
 LEFT JOIN bsale.products p
     ON p.company_id = v.company_id
    AND p.bsale_id = v.product_id
-LEFT JOIN bsale.v_product_logistics pl_v
-    ON pl_v.variant_id = dd.variant_id
-LEFT JOIN bsale.products_master pm_v
-    ON pm_v.variant_id = dd.variant_id
-   AND pm_v.is_active = TRUE
-LEFT JOIN bsale.products_master pm_b
-    ON pm_b.is_active = TRUE
-   AND NULLIF(BTRIM(v.bar_code), '') IS NOT NULL
-   AND pm_b.barcode = BTRIM(v.bar_code)
-LEFT JOIN bsale.v_product_logistics pl_b
-    ON pl_b.products_master_id = pm_b.id
+LEFT JOIN LATERAL (
+    SELECT
+        COUNT(*)::integer AS match_count,
+        ARRAY_AGG(pl.products_master_id ORDER BY pl.products_master_id)
+            AS products_master_ids,
+        MIN(pl.products_master_id) AS products_master_id,
+        MIN(pl.units_per_box) AS units_per_box,
+        MIN(pl.weight_unit_kg) AS weight_unit_kg,
+        MIN(pl.weight_box_kg) AS weight_box_kg,
+        MIN(pl.product_name) AS product_name,
+        MIN(pl.variant_name) AS variant_name,
+        BOOL_AND(pl.logistics_completed) AS logistics_completed,
+        MAX(pl.updated_at) AS updated_at,
+        MAX(pl.last_bsale_sync_at) AS last_bsale_sync_at,
+        MIN(pl.height_cm) AS height_cm,
+        MIN(pl.width_cm) AS width_cm,
+        MIN(pl.length_cm) AS length_cm
+    FROM bsale.v_product_logistics pl
+    WHERE pl.is_active = TRUE
+      AND pl.variant_id = dd.variant_id
+) pl_v ON TRUE
+LEFT JOIN LATERAL (
+    SELECT
+        COUNT(*)::integer AS match_count,
+        ARRAY_AGG(pl.products_master_id ORDER BY pl.products_master_id)
+            AS products_master_ids,
+        MIN(pl.products_master_id) AS products_master_id,
+        MIN(pl.units_per_box) AS units_per_box,
+        MIN(pl.weight_unit_kg) AS weight_unit_kg,
+        MIN(pl.weight_box_kg) AS weight_box_kg,
+        MIN(pl.product_name) AS product_name,
+        MIN(pl.variant_name) AS variant_name,
+        BOOL_AND(pl.logistics_completed) AS logistics_completed,
+        MAX(pl.updated_at) AS updated_at,
+        MAX(pl.last_bsale_sync_at) AS last_bsale_sync_at,
+        MIN(pl.height_cm) AS height_cm,
+        MIN(pl.width_cm) AS width_cm,
+        MIN(pl.length_cm) AS length_cm
+    FROM bsale.v_product_logistics pl
+    WHERE pl.is_active = TRUE
+      AND pl_v.match_count = 0
+      AND NULLIF(BTRIM(v.bar_code), '') IS NOT NULL
+      AND BTRIM(pl.barcode) = BTRIM(v.bar_code)
+) pl_b ON TRUE
 WHERE dd.document_id = %s
 ORDER BY dd.line_number NULLS LAST, dd.detail_id
 """
@@ -400,7 +521,44 @@ def _table_exists(cur, table: str) -> bool:
 
 def compute_order_lines(cur, *, document_id: int, company_id: int) -> list[dict[str, Any]]:
     cur.execute(_ORDER_LINES_SQL, (company_id, document_id))
-    return [compute_line_from_row(_row_dict(cur, r)) for r in cur.fetchall()]
+    rows = [_row_dict(cur, row) for row in cur.fetchall()]
+    lines: list[dict[str, Any]] = []
+    for row in rows:
+        match_status = row.get("logistics_match_status")
+        if match_status in {"conflict_variant", "conflict_barcode"}:
+            products_master_ids = [
+                int(value)
+                for value in (row.get("conflicting_products_master_ids") or [])
+            ]
+            match_type = "variant_id" if match_status == "conflict_variant" else "barcode"
+            logger.error(
+                "order_weight_logistics_match_conflict "
+                "variant_id=%s detail_id=%s match_type=%s products_master_ids=%s",
+                row.get("variant_id"),
+                row.get("detail_id"),
+                match_type,
+                products_master_ids,
+            )
+            raise LogisticsMatchConflictError(
+                variant_id=(
+                    int(row["variant_id"]) if row.get("variant_id") is not None else None
+                ),
+                detail_id=int(row["detail_id"]),
+                match_type=match_type,
+                products_master_ids=products_master_ids,
+            )
+        lines.append(compute_line_from_row(row))
+    deduplicated, duplicate_counts = _deduplicate_snapshot_lines(
+        lines,
+        snapshot_id=None,
+    )
+    for detail_id, count in sorted(duplicate_counts.items()):
+        logger.warning(
+            "order_weight_line_deduplicated detail_id=%s occurrences=%s",
+            detail_id,
+            count,
+        )
+    return deduplicated
 
 
 def _build_weight_metrics(summary: dict[str, Any]) -> dict[str, Any]:
@@ -584,8 +742,6 @@ def calculate_order_weight(
         lines = compute_order_lines(cur, document_id=document_id, company_id=company_id)
         summary = aggregate_order_summary(lines)
         enrich_lines_peso_pct(lines, summary["peso_total_kg"])
-        metrics = _build_weight_metrics(summary)
-        semaforo = coverage_semaphore(summary["porcentaje_cobertura"])
 
         calculated_at = None
         calculated_by = user_email
@@ -603,6 +759,8 @@ def calculate_order_weight(
             if snap:
                 calculated_at = _serialize(snap[9])
                 calculated_by = snap[10]
+        metrics = _build_weight_metrics(summary)
+        semaforo = coverage_semaphore(summary["porcentaje_cobertura"])
         cur.close()
     finally:
         conn.close()
@@ -663,7 +821,6 @@ def recalculate_order_weight_in_transaction(
     )
     summary = aggregate_order_summary(lines)
     enrich_lines_peso_pct(lines, summary["peso_total_kg"])
-    metrics = _build_weight_metrics(summary)
     if persist and _table_exists(cur, "order_weight_snapshots"):
         _persist_snapshot(
             cur,
@@ -672,6 +829,7 @@ def recalculate_order_weight_in_transaction(
             summary=summary,
             user_email=user_email,
         )
+    metrics = _build_weight_metrics(summary)
 
     return {
         **header,
@@ -706,6 +864,82 @@ def calculate_order_weights_batch(
     )
 
 
+_SNAPSHOT_LINE_FIELDS = (
+    "line_number",
+    "codigo",
+    "producto",
+    "variante",
+    "cantidad_unitaria",
+    "cantidad_cajas",
+    "units_per_box",
+    "peso_unitario_kg",
+    "peso_caja_kg",
+    "peso_linea_kg",
+    "fuente_peso",
+    "estado_linea",
+    "products_master_id",
+    "variant_id",
+    "join_debug",
+)
+
+
+def _snapshot_comparable(value: Any) -> Any:
+    if isinstance(value, Decimal):
+        return ("number", value.normalize())
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return ("number", Decimal(str(value)).normalize())
+    if isinstance(value, dict):
+        return tuple(
+            sorted((str(key), _snapshot_comparable(item)) for key, item in value.items())
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_snapshot_comparable(item) for item in value)
+    return value
+
+
+def _deduplicate_snapshot_lines(
+    lines: list[dict[str, Any]],
+    *,
+    snapshot_id: int | None,
+) -> tuple[list[dict[str, Any]], dict[int, int]]:
+    """Deduplica iguales y aborta si un detail_id tiene valores divergentes."""
+    by_detail: dict[int, list[tuple[tuple[Any, ...], dict[str, Any]]]] = {}
+    output: list[dict[str, Any]] = []
+    for line in lines:
+        raw_detail_id = line.get("detail_id")
+        if raw_detail_id is None:
+            output.append(line)
+            continue
+        detail_id = int(raw_detail_id)
+        signature = tuple(
+            _snapshot_comparable(line.get(field)) for field in _SNAPSHOT_LINE_FIELDS
+        )
+        group = by_detail.setdefault(detail_id, [])
+        if not group:
+            output.append(line)
+        group.append((signature, line))
+
+    duplicates: dict[int, int] = {}
+    for detail_id, group in by_detail.items():
+        if len(group) <= 1:
+            continue
+        duplicates[detail_id] = len(group)
+        first_signature = group[0][0]
+        if any(signature != first_signature for signature, _line in group[1:]):
+            logger.error(
+                "snapshot_line_conflict snapshot_id=%s detail_id=%s occurrences=%s",
+                snapshot_id,
+                detail_id,
+                len(group),
+            )
+            raise SnapshotLineConflictError(
+                "Líneas de peso conflictivas para "
+                f"snapshot_id={snapshot_id} detail_id={detail_id} "
+                f"occurrences={len(group)}"
+            )
+    return output, duplicates
+
+
 def _persist_snapshot(
     cur,
     *,
@@ -717,8 +951,20 @@ def _persist_snapshot(
     old_weight = None
     cur.execute(_SNAPSHOT_BY_DOC_SQL, (int(header["document_id"]),))
     prev = cur.fetchone()
+    previous_snapshot_id = int(prev[0]) if prev else None
     if prev:
         old_weight = float(prev[2]) if prev[2] is not None else None
+
+    deduplicated, duplicate_counts = _deduplicate_snapshot_lines(
+        lines,
+        snapshot_id=previous_snapshot_id,
+    )
+    if len(deduplicated) != len(lines):
+        lines[:] = deduplicated
+        corrected_summary = aggregate_order_summary(lines)
+        enrich_lines_peso_pct(lines, corrected_summary["peso_total_kg"])
+        summary.clear()
+        summary.update(corrected_summary)
 
     cur.execute(
         """
@@ -760,6 +1006,13 @@ def _persist_snapshot(
         ),
     )
     snapshot_id = int(cur.fetchone()[0])
+    for detail_id, count in sorted(duplicate_counts.items()):
+        logger.warning(
+            "snapshot_line_deduplicated snapshot_id=%s detail_id=%s occurrences=%s",
+            snapshot_id,
+            detail_id,
+            count,
+        )
     cur.execute(
         "DELETE FROM distribuidora.order_weight_snapshot_lines WHERE snapshot_id = %s",
         (snapshot_id,),

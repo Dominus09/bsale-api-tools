@@ -95,6 +95,7 @@ def build_line_diagnosis(row: dict[str, Any]) -> dict[str, Any]:
         "variant_id": row.get("variant_id"),
         "barcode": row.get("barcode"),
         "codigo_interno": row.get("codigo_interno"),
+        "logistics_match_status": row.get("logistics_match_status"),
     }
 
 

@@ -639,3 +639,35 @@ def test_batch_continues_after_failure_and_emits_mandatory_logs(caplog):
     assert stats["ocs_updated"] == 1
     assert stats["ocs_unchanged"] == 1
     assert stats["errors"] == 1
+
+
+def test_batch_skips_whole_cycle_on_active_writer_lock():
+    candidate = {
+        "document_id": LOCAL_ID,
+        "number": FOLIO,
+        "last_reconciliation_at": None,
+    }
+    with patch.object(reconciliation, "get_connection") as get_connection:
+        get_connection.return_value.cursor.return_value.fetchone.return_value = (True,)
+        with (
+            patch.object(
+                reconciliation,
+                "_load_full_coverage_batch",
+                return_value=([candidate], 100),
+            ),
+            patch.object(
+                reconciliation,
+                "reconcile_one_oc",
+                side_effect=reconciliation.ActiveSyncConflict("active sync"),
+            ),
+            patch.object(reconciliation, "_mark_reconciliation_attempt") as mark,
+        ):
+            result = reconciliation.reconcile_open_purchase_orders_batch(
+                FakeBsaleClient(),
+                execute=True,
+                limit=10,
+            )
+
+    assert result["status"] == "skipped_due_to_active_sync"
+    assert result["errors"] == 0
+    mark.assert_not_called()

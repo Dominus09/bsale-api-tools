@@ -8,6 +8,8 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator
 
+import psycopg2
+
 from backend.db import get_connection
 from backend.repositories.distribuidora.details_repo import replace_document_details
 from backend.repositories.distribuidora.documents_repo import (
@@ -51,6 +53,29 @@ SOURCE_METADATA_COLUMNS = frozenset(
         "last_reconciliation_at",
     }
 )
+
+
+class ActiveSyncConflict(RuntimeError):
+    """Conflicto temporal: otro writer de documentos/detalles está activo."""
+
+
+def _is_global_reconciliation_error(exc: Exception) -> bool:
+    if isinstance(
+        exc,
+        (
+            psycopg2.OperationalError,
+            psycopg2.InterfaceError,
+            psycopg2.errors.UndefinedColumn,
+            psycopg2.errors.UndefinedTable,
+        ),
+    ):
+        return True
+    message = str(exc)
+    return (
+        "Bsale 401 Unauthorized" in message
+        or "Migración 044 pendiente" in message
+        or "Migración 045 pendiente" in message
+    )
 
 
 def _num(value: Any) -> float | None:
@@ -444,7 +469,7 @@ def _oc_writer_locks() -> Iterator[None]:
         for lock_key in ADVISORY_LOCK_OC_WRITERS:
             cur.execute("SELECT pg_try_advisory_lock(%s)", (lock_key,))
             if not bool(cur.fetchone()[0]):
-                raise RuntimeError(
+                raise ActiveSyncConflict(
                     "Otro sync de documentos/detalles está ejecutándose; reintente"
                 )
             acquired.append(lock_key)
@@ -917,10 +942,11 @@ def reconcile_open_purchase_orders_batch(
         lock_cur.close()
         if not got_lock:
             return {
-                "status": "already_running",
+                "status": "skipped_due_to_active_sync",
                 "execute": execute,
                 "limit": batch_limit,
                 "ocs_checked": 0,
+                "errors": 0,
                 "results": [],
             }
 
@@ -988,7 +1014,32 @@ def reconcile_open_purchase_orders_batch(
                         folio,
                         local_id,
                     )
+            except ActiveSyncConflict as exc:
+                logger.warning(
+                    "reconciliation_cycle_skipped_due_to_active_sync "
+                    "folio=%s local_document_id=%s error=%s",
+                    folio,
+                    local_id,
+                    exc,
+                )
+                return {
+                    "status": "skipped_due_to_active_sync",
+                    "execute": execute,
+                    "limit": batch_limit,
+                    "recent_days": recent_days,
+                    "company_id": int(company_id),
+                    "office_id": int(office_id),
+                    "ocs_checked": len(results),
+                    "ocs_updated": sum(
+                        1 for item in results if item.get("wrote")
+                    ),
+                    "errors": 0,
+                    "duration_seconds": round(time.perf_counter() - started, 3),
+                    "results": results,
+                }
             except Exception as exc:
+                if _is_global_reconciliation_error(exc):
+                    raise
                 if execute:
                     try:
                         _mark_reconciliation_attempt(local_id, successful=False)
