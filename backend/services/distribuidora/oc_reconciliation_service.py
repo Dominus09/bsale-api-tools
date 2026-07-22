@@ -783,17 +783,76 @@ def _parse_candidate_folio(raw_number: Any) -> int | None:
     return folio
 
 
-_FULL_COVERAGE_CANDIDATES_SQL = """
+def _allocate_lane_slots(limit: int) -> tuple[int, int]:
+    """Divide el cupo total: ~80% reciente, ~20% histórico."""
+    total = max(1, int(limit))
+    if total == 1:
+        return 1, 0
+    recent_slots = (total * 4) // 5
+    if recent_slots < 1:
+        recent_slots = 1
+    historical_slots = total - recent_slots
+    return recent_slots, historical_slots
+
+
+def _merge_lane_candidates(
+    *,
+    recent_rows: list[dict[str, Any]],
+    historical_rows: list[dict[str, Any]],
+    recent_slots: int,
+    historical_slots: int,
+    total_limit: int,
+    exclude_document_ids: set[int] | None = None,
+) -> list[dict[str, Any]]:
+    """Une carriles, deduplica por document_id y reasigna cupos sobrantes."""
+    excluded = exclude_document_ids or set()
+    selected: list[dict[str, Any]] = []
+    seen: set[int] = set()
+
+    recent_selected = 0
+    for row in recent_rows:
+        document_id = int(row["document_id"])
+        if document_id in excluded or document_id in seen:
+            continue
+        item = dict(row)
+        item["candidate_lane"] = "recent"
+        selected.append(item)
+        seen.add(document_id)
+        recent_selected += 1
+        if recent_selected >= recent_slots:
+            break
+
+    historical_limit = historical_slots + max(0, recent_slots - recent_selected)
+    historical_selected = 0
+    for row in historical_rows:
+        document_id = int(row["document_id"])
+        if document_id in excluded or document_id in seen:
+            continue
+        item = dict(row)
+        item["candidate_lane"] = "historical"
+        selected.append(item)
+        seen.add(document_id)
+        historical_selected += 1
+        if historical_selected >= historical_limit:
+            break
+
+    return selected[: max(1, int(total_limit))]
+
+
+_ELIGIBLE_OC_CTE = """
     WITH eligible AS (
         SELECT
             d.document_id,
             d.number,
             d.emission_date,
+            d.generation_date,
             d.last_reconciliation_at,
+            COALESCE(d.generation_date, d.emission_date) AS lane_date,
             EXTRACT(
                 EPOCH FROM (
                     NOW() - COALESCE(
                         d.last_reconciliation_at,
+                        d.generation_date,
                         d.emission_date,
                         d.created_at
                     )
@@ -836,21 +895,58 @@ _FULL_COVERAGE_CANDIDATES_SQL = """
               )
           )
     )
+"""
+
+_RECENT_CANDIDATES_SQL = (
+    _ELIGIBLE_OC_CTE
+    + """
     SELECT
         document_id,
         number,
         emission_date,
+        generation_date,
         last_reconciliation_at,
         seconds_since_review,
         MAX(seconds_since_review) OVER () AS max_seconds_since_review
     FROM eligible
+    WHERE lane_date >= NOW() - make_interval(days => %s)
     ORDER BY
-        last_reconciliation_at NULLS FIRST,
-        (emission_date >= NOW() - make_interval(days => %s)) DESC,
-        last_reconciliation_at,
-        document_id
+        generation_date DESC NULLS LAST,
+        last_reconciliation_at ASC NULLS FIRST,
+        document_id DESC
     LIMIT %s
 """
+)
+
+_HISTORICAL_CANDIDATES_SQL = (
+    _ELIGIBLE_OC_CTE
+    + """
+    SELECT
+        document_id,
+        number,
+        emission_date,
+        generation_date,
+        last_reconciliation_at,
+        seconds_since_review,
+        MAX(seconds_since_review) OVER () AS max_seconds_since_review
+    FROM eligible
+    WHERE lane_date IS NULL
+       OR lane_date < NOW() - make_interval(days => %s)
+    ORDER BY
+        last_reconciliation_at ASC NULLS FIRST,
+        document_id ASC
+    LIMIT %s
+"""
+)
+
+# Compatibilidad para tests/diagnóstico que referencian el SQL antiguo.
+_FULL_COVERAGE_CANDIDATES_SQL = _RECENT_CANDIDATES_SQL
+
+
+def _fetch_candidate_rows(cur, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
+    cur.execute(sql, params)
+    columns = [description[0] for description in cur.description]
+    return [dict(zip(columns, row)) for row in cur.fetchall()]
 
 
 def _load_full_coverage_batch(
@@ -860,34 +956,79 @@ def _load_full_coverage_batch(
     company_id: int = COMPANY_ID,
     office_id: int = OFFICE_ID,
     exclude_document_ids: set[int] | None = None,
-) -> tuple[list[dict[str, Any]], float | None]:
-    """OCs abiertas/sin factura ordenadas por cursor persistente."""
+) -> tuple[list[dict[str, Any]], float | None, dict[str, Any]]:
+    """OCs abiertas/sin factura en carriles reciente + histórico."""
     excluded = exclude_document_ids or set()
     requested_limit = max(1, int(limit))
-    query_limit = requested_limit + len(excluded)
+    recent_days = max(1, int(recent_days))
+    recent_slots, historical_slots = _allocate_lane_slots(requested_limit)
+    # Over-fetch para compensar exclusiones y relleno histórico.
+    recent_fetch_limit = recent_slots + len(excluded)
+    historical_fetch_limit = (
+        historical_slots + recent_slots + len(excluded)
+    )
+
     conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute(
-            _FULL_COVERAGE_CANDIDATES_SQL,
-            (
-                int(company_id),
-                int(office_id),
-                OC_DOCUMENT_TYPE_ID,
-                max(1, int(recent_days)),
-                query_limit,
-            ),
+        base_params = (
+            int(company_id),
+            int(office_id),
+            OC_DOCUMENT_TYPE_ID,
+            recent_days,
         )
-        columns = [description[0] for description in cur.description]
-        rows = [dict(zip(columns, row)) for row in cur.fetchall()]
+        recent_rows = _fetch_candidate_rows(
+            cur,
+            _RECENT_CANDIDATES_SQL,
+            (*base_params, recent_fetch_limit),
+        )
+        historical_rows = _fetch_candidate_rows(
+            cur,
+            _HISTORICAL_CANDIDATES_SQL,
+            (*base_params, historical_fetch_limit),
+        )
         cur.close()
     finally:
         conn.close()
-    selected = [
-        row for row in rows if int(row["document_id"]) not in excluded
-    ][:requested_limit]
-    max_age = _num(rows[0].get("max_seconds_since_review")) if rows else None
-    return selected, max_age
+
+    selected = _merge_lane_candidates(
+        recent_rows=recent_rows,
+        historical_rows=historical_rows,
+        recent_slots=recent_slots,
+        historical_slots=historical_slots,
+        total_limit=requested_limit,
+        exclude_document_ids=excluded,
+    )
+    ages = [
+        _num(row.get("seconds_since_review"))
+        for row in selected
+        if _num(row.get("seconds_since_review")) is not None
+    ]
+    max_age = max(ages) if ages else None
+    meta = {
+        "recent_slots": recent_slots,
+        "historical_slots": historical_slots,
+        "recent_candidates_loaded": len(recent_rows),
+        "historical_candidates_loaded": len(historical_rows),
+        "recent_selected": sum(
+            1 for row in selected if row.get("candidate_lane") == "recent"
+        ),
+        "historical_selected": sum(
+            1 for row in selected if row.get("candidate_lane") == "historical"
+        ),
+    }
+    logger.info(
+        "recent_candidates_loaded=%s historical_candidates_loaded=%s "
+        "recent_slots=%s historical_slots=%s recent_selected=%s "
+        "historical_selected=%s",
+        meta["recent_candidates_loaded"],
+        meta["historical_candidates_loaded"],
+        meta["recent_slots"],
+        meta["historical_slots"],
+        meta["recent_selected"],
+        meta["historical_selected"],
+    )
+    return selected, max_age, meta
 
 
 def _fetch_recent_oc_documents(
@@ -1005,22 +1146,26 @@ def reconcile_open_purchase_orders_batch(
             finished_summary = result
             return result
 
-        candidates, max_unreviewed_age = _load_full_coverage_batch(
+        candidates, max_unreviewed_age, lane_meta = _load_full_coverage_batch(
             limit=batch_limit,
             recent_days=recent_days,
             company_id=company_id,
             office_id=office_id,
         )
+        recent_checked = 0
+        historical_checked = 0
         for candidate in candidates:
             local_id = int(candidate["document_id"])
             raw_number = candidate.get("number")
             folio = _parse_candidate_folio(raw_number)
+            candidate_lane = candidate.get("candidate_lane") or "unknown"
             if folio is None:
                 logger.info(
                     "oc_skipped local_document_id=%s reason=invalid_or_missing_folio "
-                    "raw_number=%r",
+                    "raw_number=%r candidate_lane=%s",
                     local_id,
                     raw_number,
+                    candidate_lane,
                 )
                 results.append(
                     {
@@ -1029,16 +1174,23 @@ def reconcile_open_purchase_orders_batch(
                         "status": "oc_skipped",
                         "reason": "invalid_or_missing_folio",
                         "raw_number": raw_number,
+                        "candidate_lane": candidate_lane,
                         "wrote": False,
                     }
                 )
                 continue
 
+            if candidate_lane == "recent":
+                recent_checked += 1
+            elif candidate_lane == "historical":
+                historical_checked += 1
+
             logger.info(
-                "oc_checked folio=%s local_document_id=%s "
+                "oc_checked folio=%s local_document_id=%s candidate_lane=%s "
                 "last_reconciliation_at=%s",
                 folio,
                 local_id,
+                candidate_lane,
                 candidate.get("last_reconciliation_at"),
             )
             try:
@@ -1050,22 +1202,25 @@ def reconcile_open_purchase_orders_batch(
                     company_id=company_id,
                     office_id=office_id,
                 )
+                result["candidate_lane"] = candidate_lane
                 if result.get("source_changed"):
                     logger.info(
                         "oc_source_changed folio=%s local_document_id=%s "
-                        "previous_source_document_id=%s "
+                        "candidate_lane=%s previous_source_document_id=%s "
                         "current_bsale_source_document_id=%s",
                         folio,
                         local_id,
+                        candidate_lane,
                         result.get("previous_source_document_id"),
                         result.get("current_bsale_source_document_id"),
                     )
                 if result.get("wrote"):
                     logger.info(
                         "oc_updated folio=%s local_document_id=%s "
-                        "source_document_id=%s details_replaced=%s",
+                        "candidate_lane=%s source_document_id=%s details_replaced=%s",
                         folio,
                         local_id,
+                        candidate_lane,
                         result.get("current_bsale_source_document_id"),
                         result.get("details_replaced"),
                     )
@@ -1075,9 +1230,10 @@ def reconcile_open_purchase_orders_batch(
                 }:
                     logger.info(
                         "oc_unchanged folio=%s local_document_id=%s "
-                        "source_document_id=%s",
+                        "candidate_lane=%s source_document_id=%s",
                         folio,
                         local_id,
+                        candidate_lane,
                         result.get("current_bsale_source_document_id"),
                     )
                 elif result.get("status") == "source_not_found":
@@ -1085,16 +1241,18 @@ def reconcile_open_purchase_orders_batch(
                         _mark_reconciliation_attempt(local_id, successful=False)
                     logger.error(
                         "oc_failed folio=%s local_document_id=%s "
-                        "error=source_not_found",
+                        "candidate_lane=%s error=source_not_found",
                         folio,
                         local_id,
+                        candidate_lane,
                     )
             except ActiveSyncConflict as exc:
                 logger.warning(
                     "reconciliation_cycle_skipped_due_to_active_sync "
-                    "folio=%s local_document_id=%s error=%s",
+                    "folio=%s local_document_id=%s candidate_lane=%s error=%s",
                     folio,
                     local_id,
+                    candidate_lane,
                     exc,
                 )
                 counts = _batch_summary_counts(results)
@@ -1107,6 +1265,16 @@ def reconcile_open_purchase_orders_batch(
                     "office_id": int(office_id),
                     "duration_seconds": round(time.perf_counter() - started, 3),
                     "results": results,
+                    "recent_slots": lane_meta.get("recent_slots"),
+                    "historical_slots": lane_meta.get("historical_slots"),
+                    "recent_candidates_loaded": lane_meta.get(
+                        "recent_candidates_loaded"
+                    ),
+                    "historical_candidates_loaded": lane_meta.get(
+                        "historical_candidates_loaded"
+                    ),
+                    "recent_checked": recent_checked,
+                    "historical_checked": historical_checked,
                     **counts,
                 }
                 cycle_finished = True
@@ -1124,9 +1292,11 @@ def reconcile_open_purchase_orders_batch(
                             local_id,
                         )
                 logger.exception(
-                    "oc_failed folio=%s local_document_id=%s error=%s",
+                    "oc_failed folio=%s local_document_id=%s candidate_lane=%s "
+                    "error=%s",
                     folio,
                     local_id,
+                    candidate_lane,
                     exc,
                 )
                 result = {
@@ -1134,6 +1304,7 @@ def reconcile_open_purchase_orders_batch(
                     "local_document_id": local_id,
                     "status": "error",
                     "error": str(exc),
+                    "candidate_lane": candidate_lane,
                     "wrote": False,
                 }
             results.append(result)
@@ -1152,6 +1323,14 @@ def reconcile_open_purchase_orders_batch(
             "max_unreviewed_age_seconds": max_unreviewed_age,
             "duration_seconds": round(time.perf_counter() - started, 3),
             "results": results,
+            "recent_slots": lane_meta.get("recent_slots"),
+            "historical_slots": lane_meta.get("historical_slots"),
+            "recent_candidates_loaded": lane_meta.get("recent_candidates_loaded"),
+            "historical_candidates_loaded": lane_meta.get(
+                "historical_candidates_loaded"
+            ),
+            "recent_checked": recent_checked,
+            "historical_checked": historical_checked,
             **counts,
         }
         cycle_finished = True
@@ -1175,7 +1354,8 @@ def reconcile_open_purchase_orders_batch(
             logger.info(
                 "reconciliation_cycle_finished execute=%s checked=%s updated=%s "
                 "unchanged=%s skipped=%s errors=%s invalid_folios=%s "
-                "duration_seconds=%.3f",
+                "recent_checked=%s historical_checked=%s "
+                "recent_slots=%s historical_slots=%s duration_seconds=%.3f",
                 execute,
                 finished_summary.get("checked", 0),
                 finished_summary.get("updated", 0),
@@ -1183,6 +1363,10 @@ def reconcile_open_purchase_orders_batch(
                 finished_summary.get("skipped", 0),
                 finished_summary.get("errors", 0),
                 finished_summary.get("invalid_folios", 0),
+                finished_summary.get("recent_checked", 0),
+                finished_summary.get("historical_checked", 0),
+                finished_summary.get("recent_slots", 0),
+                finished_summary.get("historical_slots", 0),
                 finished_summary.get(
                     "duration_seconds",
                     time.perf_counter() - started,
@@ -1273,7 +1457,7 @@ def reconcile_recent_ocs(
                 if result.get("local_document_id") is not None:
                     reviewed_local_ids.add(int(result["local_document_id"]))
 
-        full_candidates, max_unreviewed_age = _load_full_coverage_batch(
+        full_candidates, max_unreviewed_age, _lane_meta = _load_full_coverage_batch(
             limit=max(1, int(full_coverage_limit)),
             recent_days=max(30, int(window_days)),
             company_id=company_id,

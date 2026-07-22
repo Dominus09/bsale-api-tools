@@ -360,7 +360,7 @@ def test_automatic_reconciliation_keeps_latest_source_on_next_run():
             ) as reconcile,
             patch(
                 "backend.services.distribuidora.oc_reconciliation_service._load_full_coverage_batch",
-                return_value=([], None),
+                return_value=([], None, {}),
             ),
         ):
             stats = reconcile_recent_ocs(FakeBsaleClient(), window_days=30)
@@ -373,36 +373,136 @@ def test_automatic_reconciliation_keeps_latest_source_on_next_run():
 
 def test_full_coverage_returns_open_oc_older_than_60_days():
     reviewed = datetime.now(timezone.utc) - timedelta(days=61)
-    columns = (
-        "document_id",
-        "number",
-        "emission_date",
-        "last_reconciliation_at",
-        "seconds_since_review",
-        "max_seconds_since_review",
-    )
-    with patch.object(reconciliation, "get_connection") as get_connection:
-        cur = get_connection.return_value.cursor.return_value
-        cur.description = [(column,) for column in columns]
-        cur.fetchall.return_value = [
-            (
-                LOCAL_ID,
-                FOLIO,
-                datetime.now(timezone.utc) - timedelta(days=90),
-                reviewed,
-                61 * 86400,
-                61 * 86400,
-            )
-        ]
-        rows, max_age = reconciliation._load_full_coverage_batch(limit=10)
+    historical_row = {
+        "document_id": LOCAL_ID,
+        "number": FOLIO,
+        "emission_date": datetime.now(timezone.utc) - timedelta(days=90),
+        "generation_date": datetime.now(timezone.utc) - timedelta(days=90),
+        "last_reconciliation_at": reviewed,
+        "seconds_since_review": 61 * 86400,
+        "max_seconds_since_review": 61 * 86400,
+    }
+    with (
+        patch.object(reconciliation, "get_connection"),
+        patch.object(
+            reconciliation,
+            "_fetch_candidate_rows",
+            side_effect=[[], [historical_row]],
+        ),
+    ):
+        rows, max_age, meta = reconciliation._load_full_coverage_batch(limit=10)
 
     assert rows[0]["document_id"] == LOCAL_ID
+    assert rows[0]["candidate_lane"] == "historical"
     assert max_age == 61 * 86400
-    sql = cur.execute.call_args.args[0]
-    assert "last_reconciliation_at NULLS FIRST" in sql
-    assert "invoice.document_type_id IN (1, 6)" in sql
-    assert "AND invoice.state = 0" in sql
-    assert "AND d.state = 0" in sql
+    assert meta["historical_selected"] == 1
+    assert meta["recent_selected"] == 0
+
+
+def test_lane_slots_are_eighty_twenty_for_limit_100():
+    assert reconciliation._allocate_lane_slots(100) == (80, 20)
+    assert reconciliation._allocate_lane_slots(10) == (8, 2)
+    assert reconciliation._allocate_lane_slots(1) == (1, 0)
+
+
+def test_recent_oc_is_selected_despite_hundreds_of_historical_nulls():
+    now = datetime.now(timezone.utc)
+    historical_rows = [
+        {
+            "document_id": 600000 + index,
+            "number": 65000 + index,
+            "emission_date": now - timedelta(days=120),
+            "generation_date": now - timedelta(days=120),
+            "last_reconciliation_at": None,
+            "seconds_since_review": 120 * 86400,
+        }
+        for index in range(250)
+    ]
+    recent_68199 = {
+        "document_id": LOCAL_ID,
+        "number": FOLIO,
+        "emission_date": now - timedelta(days=2),
+        "generation_date": now - timedelta(days=1),
+        "last_reconciliation_at": now - timedelta(hours=3),
+        "seconds_since_review": 3 * 3600,
+    }
+    selected = reconciliation._merge_lane_candidates(
+        recent_rows=[recent_68199],
+        historical_rows=historical_rows,
+        recent_slots=80,
+        historical_slots=20,
+        total_limit=100,
+    )
+    assert len(selected) == 100
+    assert selected[0]["document_id"] == LOCAL_ID
+    assert selected[0]["number"] == FOLIO
+    assert selected[0]["candidate_lane"] == "recent"
+    assert sum(1 for row in selected if row["candidate_lane"] == "recent") == 1
+    assert sum(1 for row in selected if row["candidate_lane"] == "historical") == 99
+    assert all(row["candidate_lane"] == "historical" for row in selected[1:])
+    assert len({row["document_id"] for row in selected}) == 100
+
+
+def test_lane_quota_fill_and_no_duplicates():
+    recent_rows = [
+        {"document_id": 1000 + index, "number": 70000 + index}
+        for index in range(80)
+    ]
+    historical_rows = [
+        {"document_id": 2000 + index, "number": 65000 + index}
+        for index in range(150)
+    ]
+    full = reconciliation._merge_lane_candidates(
+        recent_rows=recent_rows,
+        historical_rows=historical_rows,
+        recent_slots=80,
+        historical_slots=20,
+        total_limit=100,
+    )
+    assert len(full) == 100
+    assert sum(1 for row in full if row["candidate_lane"] == "recent") == 80
+    assert sum(1 for row in full if row["candidate_lane"] == "historical") == 20
+    assert len({row["document_id"] for row in full}) == 100
+
+    sparse_recent = recent_rows[:30]
+    topped = reconciliation._merge_lane_candidates(
+        recent_rows=sparse_recent,
+        historical_rows=historical_rows,
+        recent_slots=80,
+        historical_slots=20,
+        total_limit=100,
+    )
+    assert len(topped) == 100  # 30 recent + 70 historical por overflow
+    assert sum(1 for row in topped if row["candidate_lane"] == "recent") == 30
+    assert sum(1 for row in topped if row["candidate_lane"] == "historical") == 70
+    assert len({row["document_id"] for row in topped}) == 100
+
+    # Sin recientes, el histórico puede consumir el cupo total vía overflow.
+    only_hist = reconciliation._merge_lane_candidates(
+        recent_rows=[],
+        historical_rows=historical_rows,
+        recent_slots=80,
+        historical_slots=20,
+        total_limit=100,
+    )
+    assert len(only_hist) == 100
+    assert all(row["candidate_lane"] == "historical" for row in only_hist)
+
+
+def test_candidate_sql_separates_recent_and_historical_lanes():
+    recent_sql = " ".join(reconciliation._RECENT_CANDIDATES_SQL.split())
+    historical_sql = " ".join(reconciliation._HISTORICAL_CANDIDATES_SQL.split())
+    assert "d.number IS NOT NULL" in recent_sql
+    assert "d.number > 0" in recent_sql
+    assert "lane_date >= NOW() - make_interval(days => %s)" in recent_sql
+    assert "generation_date DESC NULLS LAST" in recent_sql
+    assert "last_reconciliation_at ASC NULLS FIRST" in recent_sql
+    assert "document_id DESC" in recent_sql
+    assert "lane_date < NOW() - make_interval(days => %s)" in historical_sql
+    assert "last_reconciliation_at ASC NULLS FIRST" in historical_sql
+    assert "invoice.document_type_id IN (1, 6)" in recent_sql
+    assert "AND invoice.state = 0" in recent_sql
+    assert "AND d.state = 0" in recent_sql
 
 
 def test_sixth_reissue_selected_after_five_previous_versions():
@@ -445,7 +545,7 @@ def test_full_lane_detects_sixth_version_then_stops_after_invoice():
             patch.object(
                 reconciliation,
                 "_load_full_coverage_batch",
-                return_value=([candidate], 60 * 86400),
+                return_value=([candidate], 60 * 86400, {}),
             ),
             patch.object(
                 reconciliation,
@@ -478,7 +578,7 @@ def test_full_lane_detects_sixth_version_then_stops_after_invoice():
             patch.object(
                 reconciliation,
                 "_load_full_coverage_batch",
-                return_value=([], None),
+                return_value=([], None, {}),
             ),
         ):
             invoiced = reconcile_recent_ocs(
@@ -610,7 +710,16 @@ def test_batch_continues_after_failure_and_emits_mandatory_logs(caplog):
             patch.object(
                 reconciliation,
                 "_load_full_coverage_batch",
-                return_value=(candidates, 999),
+                return_value=(
+                    candidates,
+                    999,
+                    {
+                        "recent_slots": 2,
+                        "historical_slots": 1,
+                        "recent_candidates_loaded": 3,
+                        "historical_candidates_loaded": 0,
+                    },
+                ),
             ),
             patch.object(
                 reconciliation,
@@ -670,7 +779,16 @@ def test_batch_skips_invalid_folios_and_processes_valid_candidate(caplog):
             patch.object(
                 reconciliation,
                 "_load_full_coverage_batch",
-                return_value=(candidates, 10),
+                return_value=(
+                    candidates,
+                    10,
+                    {
+                        "recent_slots": 8,
+                        "historical_slots": 2,
+                        "recent_candidates_loaded": 4,
+                        "historical_candidates_loaded": 0,
+                    },
+                ),
             ),
             patch.object(
                 reconciliation,
@@ -725,7 +843,7 @@ def test_unexpected_batch_abort_does_not_emit_finished(caplog):
             patch.object(
                 reconciliation,
                 "_load_full_coverage_batch",
-                return_value=(candidates, 1),
+                return_value=(candidates, 1, {}),
             ),
             patch.object(
                 reconciliation,
@@ -760,7 +878,7 @@ def test_batch_skips_whole_cycle_on_active_writer_lock():
             patch.object(
                 reconciliation,
                 "_load_full_coverage_batch",
-                return_value=([candidate], 100),
+                return_value=([candidate], 100, {}),
             ),
             patch.object(
                 reconciliation,
