@@ -16,6 +16,8 @@ COMPANY_ID = 3
 OFFICE_ID = 1
 OC_DOCUMENT_TYPE_ID = 33
 PAGE_LIMIT = 50
+# Convención Bsale observada en reemisiones/anulaciones de OC.
+BSALE_CANCELLED_STATE = 8888
 
 
 def _int(value: Any) -> int | None:
@@ -99,6 +101,62 @@ def is_active_oc_candidate(
     if row["document_type_id"] != int(document_type_id):
         reasons.append("document_type_mismatch")
     return not reasons, reasons
+
+
+def is_cancelled_bsale_document(document: dict[str, Any]) -> bool:
+    """True si Bsale representa el documento como anulado/inactivo."""
+    row = summarize_bsale_document(document)
+    state = row.get("state")
+    number = row.get("number")
+    if state is not None and int(state) != 0:
+        return True
+    if number == 0:
+        return True
+    return False
+
+
+def find_cancelled_source_evidence(
+    discovery: dict[str, Any],
+    *,
+    known_source_ids: Iterable[int] = (),
+) -> dict[str, Any] | None:
+    """
+    Sin versión activa del folio, elige evidencia de anulación entre sources conocidos.
+
+    Requiere que el source conocido exista en el discovery (GET directo o búsqueda)
+    y esté descartado por estado inactivo y/o number=0.
+    """
+    if discovery.get("active_document") is not None:
+        return None
+    known: set[int] = set()
+    for raw_id in known_source_ids:
+        source_id = _int(raw_id)
+        if source_id is not None and source_id > 0:
+            known.add(source_id)
+    if not known:
+        return None
+
+    candidates: list[dict[str, Any]] = []
+    for item in discovery.get("documents") or []:
+        if not isinstance(item, dict) or item.get("eligible"):
+            continue
+        source_id = _int(item.get("id"))
+        if source_id is None or source_id not in known:
+            continue
+        reasons = set(item.get("discard_reasons") or [])
+        if not reasons.intersection({"state_not_active", "folio_mismatch_or_zero"}):
+            continue
+        state = _int(item.get("state"))
+        number = _int(item.get("number"))
+        if (state is not None and state != 0) or number == 0:
+            candidates.append(item)
+    if not candidates:
+        return None
+
+    def sort_key(row: dict[str, Any]) -> tuple[int, int]:
+        return (_int(row.get("generationDate")) or -1, _int(row.get("id")) or -1)
+
+    return max(candidates, key=sort_key)
 
 
 def select_active_oc_source(

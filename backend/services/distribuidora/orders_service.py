@@ -52,6 +52,7 @@ _DISPATCH_PREP_DOC_FILTER = """
     d.company_id = 3
     AND d.office_id = 1
     AND d.document_type_id = 33
+    AND COALESCE(d.state, 0) = 0
     AND d.emission_date >= %s::date
     AND d.emission_date < (%s::date + interval '1 day')
 """.strip()
@@ -80,6 +81,7 @@ from backend.utils.distribuidora_oc_sql import OC_PURCHASE_NOT_INVOICED_BY_RELAT
 
 OC_PURCHASE_ESTADO_REAL_SQL = """
 CASE
+    WHEN COALESCE(d.state, 0) <> 0 THEN 'Anulada'
     WHEN EXISTS (
         SELECT 1
         FROM distribuidora.document_related dr
@@ -171,6 +173,7 @@ LEFT JOIN (
 
 _PLANNING_ROWS_STATUS_SELECT = """
                 CASE
+                    WHEN COALESCE(d.state, 0) <> 0 THEN 'ANULADA'
                     WHEN COALESCE(conf.is_invoiced, FALSE) THEN 'FACTURADA_CONFIRMADA'
                     WHEN prob.score >= 90 THEN 'PROBABLE_FACTURADA_HIGH'
                     WHEN prob.score >= 75 THEN 'PROBABLE_FACTURADA_MEDIUM'
@@ -178,18 +181,21 @@ _PLANNING_ROWS_STATUS_SELECT = """
                     ELSE 'PENDIENTE'
                 END AS purchase_status,
                 CASE
+                    WHEN COALESCE(d.state, 0) <> 0 THEN 'Anulada'
                     WHEN COALESCE(conf.is_invoiced, FALSE) THEN 'Facturada'
                     WHEN prob.score >= 60 THEN 'Probable facturada'
                     ELSE 'Pendiente'
                 END AS estado_real,
                 prob.score AS probable_score,
                 CASE
+                    WHEN COALESCE(d.state, 0) <> 0 THEN NULL
                     WHEN prob.score >= 90 THEN 'PROBABLE_FACTURADA_HIGH'
                     WHEN prob.score >= 75 THEN 'PROBABLE_FACTURADA_MEDIUM'
                     WHEN prob.score >= 60 THEN 'PROBABLE_FACTURADA_LOW'
                     ELSE NULL
                 END AS probable_tier,
                 CASE
+                    WHEN COALESCE(d.state, 0) <> 0 THEN NULL
                     WHEN COALESCE(conf.is_invoiced, FALSE) THEN
                         CASE conf.invoicing_document_type_id
                             WHEN 1 THEN 'Boleta'
@@ -205,6 +211,7 @@ _PLANNING_ROWS_STATUS_SELECT = """
                     ELSE NULL
                 END AS associated_document_label,
                 CASE
+                    WHEN COALESCE(d.state, 0) <> 0 THEN NULL
                     WHEN COALESCE(conf.is_invoiced, FALSE) THEN 100::numeric
                     WHEN prob.score >= 60 THEN prob.score
                     ELSE NULL
@@ -636,6 +643,7 @@ def list_dispatch_prep_by_municipality(
             WHERE d.company_id = 3
               AND d.office_id = 1
               AND d.document_type_id = 33
+              AND COALESCE(d.state, 0) = 0
               AND d.emission_date >= %s::date
               AND d.emission_date < (%s::date + interval '1 day')
               AND (%s = FALSE OR {OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL})
@@ -694,6 +702,7 @@ def _planning_rows_enrich_sql() -> str:
                 d.document_id,
                 d.number AS oc,
                 d.client_id,
+                d.state,
                 NULLIF(BTRIM(c.nombre_fantasia), '') AS nombre_fantasia,
                 COALESCE(
                     NULLIF(BTRIM(d.municipality), ''),
@@ -855,6 +864,10 @@ def _apply_status_fields_to_row(
     if is_inv:
         purchase_status = "FACTURADA_CONFIRMADA"
         estado_real = "Facturada"
+        probable_tier = None
+    elif int(row.get("state") or 0) != 0:
+        purchase_status = "ANULADA"
+        estado_real = "Anulada"
         probable_tier = None
     elif score_f is not None and score_f >= 90:
         purchase_status = "PROBABLE_FACTURADA_HIGH"

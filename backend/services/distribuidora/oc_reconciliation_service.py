@@ -19,6 +19,7 @@ from backend.repositories.distribuidora.documents_repo import (
 from backend.services.distribuidora.bsale_client import BsaleClient
 from backend.services.distribuidora.bsale_params import merge_bsale_office_query
 from backend.services.distribuidora.oc_source_resolver import (
+    BSALE_CANCELLED_STATE,
     COMPANY_ID,
     OC_DOCUMENT_TYPE_ID,
     OFFICE_ID,
@@ -26,6 +27,7 @@ from backend.services.distribuidora.oc_source_resolver import (
     compute_oc_source_hash,
     discover_oc_sources,
     fetch_all_document_details,
+    find_cancelled_source_evidence,
     select_active_oc_source,
     source_updated_at,
     summarize_bsale_document,
@@ -459,6 +461,167 @@ def _invalidate_affected_dispatch_plans(cur, local_document_id: int) -> int:
     return int(cur.rowcount or 0)
 
 
+def _apply_local_oc_cancellation(
+    cur,
+    *,
+    local_document_id: int,
+    folio: int,
+    cancelled_evidence: dict[str, Any],
+    previous_state: Any,
+) -> int:
+    """Marca la PK local como anulada sin borrar detalles ni snapshots."""
+    cancelled_source_id = cancelled_evidence.get("id")
+    cancelled_source_updated = None
+    raw_generation = cancelled_evidence.get("generationDate")
+    raw_modification = cancelled_evidence.get("modificationDate")
+    for raw in (raw_modification, raw_generation):
+        try:
+            if raw is not None:
+                cancelled_source_updated = datetime.fromtimestamp(int(raw), tz=timezone.utc)
+                break
+        except (TypeError, ValueError, OSError, OverflowError):
+            continue
+
+    cur.execute(
+        """
+        UPDATE distribuidora.documents
+        SET state = %s,
+            last_reconciliation_at = NOW(),
+            last_synced_at = NOW(),
+            source_updated_at = COALESCE(%s, source_updated_at),
+            source_document_id = COALESCE(source_document_id, %s),
+            updated_at = NOW()
+        WHERE document_id = %s
+        """,
+        (
+            BSALE_CANCELLED_STATE,
+            cancelled_source_updated,
+            int(cancelled_source_id) if cancelled_source_id is not None else None,
+            int(local_document_id),
+        ),
+    )
+    if cur.rowcount != 1:
+        raise RuntimeError(
+            f"No se pudo marcar anulación de document_id={local_document_id}"
+        )
+    invalidated = _invalidate_affected_dispatch_plans(cur, int(local_document_id))
+    logger.info(
+        "oc_cancelled_detected folio=%s local_document_id=%s previous_state=%s "
+        "new_state=%s dispatch_plans_invalidated=%s cancelled_source_id=%s",
+        folio,
+        local_document_id,
+        previous_state,
+        BSALE_CANCELLED_STATE,
+        invalidated,
+        cancelled_source_id,
+    )
+    return invalidated
+
+
+def _report_cancelled_oc(
+    *,
+    dry_run: bool,
+    folio: int,
+    pg_document: dict[str, Any],
+    discovery: dict[str, Any],
+    cancelled_evidence: dict[str, Any],
+    wrote: bool,
+    dispatch_plans_invalidated: int = 0,
+    status: str,
+) -> dict[str, Any]:
+    local_id = int(pg_document["document_id"])
+    previous_state = pg_document.get("state")
+    discovery_report = {
+        key: value for key, value in discovery.items() if key != "active_document"
+    }
+    return {
+        "status": status,
+        "dry_run": dry_run,
+        "wrote": wrote,
+        "folio": folio,
+        "local_document_id": local_id,
+        "previous_state": previous_state,
+        "new_state": BSALE_CANCELLED_STATE,
+        "cancelled_source_document_id": cancelled_evidence.get("id"),
+        "current_bsale_source_document_id": None,
+        "source_changed": False,
+        "dispatch_plans_invalidated": dispatch_plans_invalidated,
+        "details_preserved": True,
+        "source_discovery": discovery_report,
+        "cancelled_evidence": cancelled_evidence,
+    }
+
+
+def _handle_cancelled_oc(
+    *,
+    dry_run: bool,
+    folio: int,
+    pg_document: dict[str, Any],
+    discovery: dict[str, Any],
+    cancelled_evidence: dict[str, Any],
+) -> dict[str, Any]:
+    local_id = int(pg_document["document_id"])
+    previous_state = pg_document.get("state")
+    already_cancelled = int(previous_state or 0) != 0
+
+    if already_cancelled:
+        if not dry_run:
+            _mark_reconciliation_attempt(local_id, successful=True)
+        return _report_cancelled_oc(
+            dry_run=dry_run,
+            folio=folio,
+            pg_document=pg_document,
+            discovery=discovery,
+            cancelled_evidence=cancelled_evidence,
+            wrote=False,
+            status="already_cancelled",
+        )
+
+    if dry_run:
+        return _report_cancelled_oc(
+            dry_run=True,
+            folio=folio,
+            pg_document=pg_document,
+            discovery=discovery,
+            cancelled_evidence=cancelled_evidence,
+            wrote=False,
+            status="dry_run_cancelled",
+        )
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        try:
+            _assert_source_schema(cur)
+            _assert_plan_invalidation_schema(cur)
+            invalidated = _apply_local_oc_cancellation(
+                cur,
+                local_document_id=local_id,
+                folio=folio,
+                cancelled_evidence=cancelled_evidence,
+                previous_state=previous_state,
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cur.close()
+    finally:
+        conn.close()
+
+    return _report_cancelled_oc(
+        dry_run=False,
+        folio=folio,
+        pg_document=pg_document,
+        discovery=discovery,
+        cancelled_evidence=cancelled_evidence,
+        wrote=True,
+        dispatch_plans_invalidated=invalidated,
+        status="cancelled",
+    )
+
+
 @contextmanager
 def _oc_writer_locks() -> Iterator[None]:
     """Adquiere en una sesión los locks de todos los writers de OCs."""
@@ -550,12 +713,49 @@ def _reconcile_one_oc(
             ).get("id"),
         }
     if not isinstance(selected, dict):
+        cancelled_evidence = find_cancelled_source_evidence(
+            discovery,
+            known_source_ids=_known_source_ids(pg_document),
+        )
+        if cancelled_evidence is not None and pg_document is not None:
+            return _handle_cancelled_oc(
+                dry_run=dry_run,
+                folio=resolved_folio,
+                pg_document=pg_document,
+                discovery=discovery,
+                cancelled_evidence=cancelled_evidence,
+            )
         return {
             "status": "source_not_found",
             "dry_run": dry_run,
             "folio": resolved_folio,
+            "local_document_id": (pg_document or {}).get("document_id"),
             "source_discovery": discovery,
             "wrote": False,
+        }
+
+    # No revivir una OC ya anulada/inactiva en PostgreSQL.
+    if pg_document is not None and int(pg_document.get("state") or 0) != 0:
+        local_id = int(pg_document["document_id"])
+        if not dry_run:
+            _mark_reconciliation_attempt(local_id, successful=True)
+        discovery_report = {
+            key: value for key, value in discovery.items() if key != "active_document"
+        }
+        return {
+            "status": "already_cancelled",
+            "dry_run": dry_run,
+            "wrote": False,
+            "folio": resolved_folio,
+            "local_document_id": local_id,
+            "previous_state": pg_document.get("state"),
+            "new_state": pg_document.get("state"),
+            "revival_skipped": True,
+            "current_bsale_source_document_id": summarize_bsale_document(
+                selected,
+                expected_company_id=company_id,
+            ).get("id"),
+            "source_discovery": discovery_report,
         }
 
     selected_summary = summarize_bsale_document(
@@ -1070,6 +1270,11 @@ def _batch_summary_counts(results: list[dict[str, Any]]) -> dict[str, int]:
         if item.get("status") == "oc_skipped"
         and item.get("reason") == "invalid_or_missing_folio"
     )
+    cancelled = sum(
+        1
+        for item in results
+        if item.get("status") in {"cancelled", "already_cancelled", "dry_run_cancelled"}
+    )
     errors = sum(
         1
         for item in results
@@ -1079,13 +1284,15 @@ def _batch_summary_counts(results: list[dict[str, Any]]) -> dict[str, int]:
     unchanged = sum(
         1
         for item in results
-        if item.get("status") in {"already_in_sync", "dry_run_in_sync"}
+        if item.get("status")
+        in {"already_in_sync", "dry_run_in_sync", "already_cancelled"}
     )
     return {
         "checked": len(results),
         "updated": updated,
         "unchanged": unchanged,
         "skipped": skipped,
+        "cancelled": cancelled,
         "errors": errors,
         "invalid_folios": skipped,
         "ocs_checked": len(results),
@@ -1223,6 +1430,22 @@ def reconcile_open_purchase_orders_batch(
                         candidate_lane,
                         result.get("current_bsale_source_document_id"),
                         result.get("details_replaced"),
+                    )
+                elif result.get("status") in {
+                    "cancelled",
+                    "already_cancelled",
+                    "dry_run_cancelled",
+                }:
+                    logger.info(
+                        "oc_cancelled_detected folio=%s local_document_id=%s "
+                        "candidate_lane=%s previous_state=%s new_state=%s "
+                        "dispatch_plans_invalidated=%s",
+                        folio,
+                        local_id,
+                        candidate_lane,
+                        result.get("previous_state"),
+                        result.get("new_state"),
+                        result.get("dispatch_plans_invalidated") or 0,
                     )
                 elif result.get("status") in {
                     "already_in_sync",

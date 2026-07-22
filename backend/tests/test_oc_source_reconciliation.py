@@ -14,6 +14,8 @@ from backend.services.distribuidora.oc_reconciliation_service import (
     reconcile_recent_ocs,
 )
 from backend.services.distribuidora import oc_reconciliation_service as reconciliation
+from backend.services.distribuidora import orders_service
+from backend.services import order_weight_service as service_order_weight
 from backend.services.distribuidora.oc_source_resolver import (
     compute_oc_source_hash,
     discover_oc_sources,
@@ -896,3 +898,237 @@ def test_batch_skips_whole_cycle_on_active_writer_lock():
     assert result["status"] == "skipped_due_to_active_sync"
     assert result["errors"] == 0
     mark.assert_not_called()
+
+
+def _cancelled_source(source_id: int = 3833335) -> dict:
+    return {
+        "id": source_id,
+        "number": 0,
+        "state": 8888,
+        "commercialState": 0,
+        "emissionDate": 1784505600,
+        "generationDate": 1784653800,
+        "totalAmount": 65115,
+        "office": {"id": 1},
+        "document_type": {"id": 33},
+    }
+
+
+class CancelledBsaleClient:
+    """Folio sin versión activa; el último source conocido responde anulado."""
+
+    def get(self, path: str, params=None, **kwargs):
+        if path == "/documents.json":
+            return {"items": [], "count": 0}
+        if path == f"/documents/{LOCAL_ID}.json":
+            return _cancelled_source(LOCAL_ID)
+        if path == f"/documents/{PREVIOUS_SOURCE_ID}.json":
+            return _cancelled_source(PREVIOUS_SOURCE_ID)
+        if path == "/documents/3833335.json":
+            return _cancelled_source(3833335)
+        raise AssertionError(f"GET inesperado: {path} params={params}")
+
+
+class MissingSourceClient:
+    """Ningún source conocido existe: verdadero source_not_found."""
+
+    def get(self, path: str, params=None, **kwargs):
+        if path == "/documents.json":
+            return {"items": [], "count": 0}
+        if path.startswith("/documents/") and path.endswith(".json"):
+            raise RuntimeError("404 not found")
+        raise AssertionError(f"GET inesperado: {path}")
+
+
+def test_cancelled_source_marks_local_oc_without_deleting_details(caplog):
+    pg_document = {
+        **_old_pg_document(source_hash="abc"),
+        "source_document_id": 3833335,
+        "state": 0,
+        "total_amount": 213480,
+    }
+    pg_details = list(OLD_DETAILS)
+    caplog.set_level("INFO")
+
+    class CancelCursor:
+        def __init__(self):
+            self.sql = []
+            self.rowcount = 1
+
+        def execute(self, sql, params=None):
+            self.sql.append(" ".join(sql.split()))
+            if "information_schema.columns" in sql:
+                self._fetch = [
+                    ("source_document_id",),
+                    ("source_hash",),
+                    ("source_updated_at",),
+                    ("last_synced_at",),
+                    ("last_reconciliation_at",),
+                ]
+                if "needs_recalculation" in str(params):
+                    self._fetch = [
+                        ("needs_recalculation",),
+                        ("invalidated_at",),
+                        ("invalidation_reason",),
+                    ]
+            else:
+                self._fetch = []
+
+        def fetchall(self):
+            return list(self._fetch)
+
+        def fetchone(self):
+            return None
+
+        def close(self):
+            return None
+
+    class CancelConn:
+        def __init__(self):
+            self.cur = CancelCursor()
+            self.commits = 0
+            self.rollbacks = 0
+
+        def cursor(self):
+            return self.cur
+
+        def commit(self):
+            self.commits += 1
+
+        def rollback(self):
+            self.rollbacks += 1
+
+        def close(self):
+            return None
+
+    conn = CancelConn()
+    with (
+        patch.object(
+            reconciliation,
+            "_load_local_oc",
+            return_value=(pg_document, pg_details),
+        ),
+        patch.object(reconciliation, "_oc_writer_locks", nullcontext),
+        patch.object(reconciliation, "get_connection", return_value=conn),
+        patch.object(
+            reconciliation,
+            "_invalidate_affected_dispatch_plans",
+            return_value=2,
+        ) as invalidate,
+    ):
+        report = reconcile_one_oc(
+            CancelledBsaleClient(),
+            folio=FOLIO,
+            local_document_id=LOCAL_ID,
+            dry_run=False,
+        )
+
+    assert report["status"] == "cancelled"
+    assert report["wrote"] is True
+    assert report["new_state"] == 8888
+    assert report["details_preserved"] is True
+    assert report["dispatch_plans_invalidated"] == 2
+    assert report["cancelled_source_document_id"] == 3833335
+    invalidate.assert_called_once()
+    update_sql = [sql for sql in conn.cur.sql if sql.startswith("UPDATE distribuidora.documents")]
+    assert update_sql
+    assert "state = %s" in update_sql[0]
+    assert not any("DELETE FROM distribuidora.document_details" in sql for sql in conn.cur.sql)
+    assert "oc_cancelled_detected" in caplog.text
+    assert f"local_document_id={LOCAL_ID}" in caplog.text
+    assert conn.commits == 1
+
+
+def test_cancelled_detection_dry_run_and_second_cycle_idempotent():
+    pg_document = {
+        **_old_pg_document(source_hash="abc"),
+        "source_document_id": 3833335,
+        "state": 0,
+    }
+    with (
+        patch.object(
+            reconciliation,
+            "_load_local_oc",
+            return_value=(pg_document, OLD_DETAILS),
+        ),
+        patch.object(reconciliation, "get_connection") as get_connection,
+    ):
+        dry = reconcile_one_oc(
+            CancelledBsaleClient(),
+            folio=FOLIO,
+            local_document_id=LOCAL_ID,
+            dry_run=True,
+        )
+    assert dry["status"] == "dry_run_cancelled"
+    assert dry["wrote"] is False
+    get_connection.assert_not_called()
+
+    already = {
+        **pg_document,
+        "state": 8888,
+    }
+    with (
+        patch.object(
+            reconciliation,
+            "_load_local_oc",
+            return_value=(already, OLD_DETAILS),
+        ),
+        patch.object(
+            reconciliation,
+            "_mark_reconciliation_attempt",
+        ) as mark,
+        patch.object(reconciliation, "_oc_writer_locks", nullcontext),
+        patch.object(
+            reconciliation,
+            "_apply_local_oc_cancellation",
+        ) as apply_cancel,
+    ):
+        second = reconcile_one_oc(
+            CancelledBsaleClient(),
+            folio=FOLIO,
+            local_document_id=LOCAL_ID,
+            dry_run=False,
+        )
+    assert second["status"] == "already_cancelled"
+    assert second["wrote"] is False
+    mark.assert_called_once_with(LOCAL_ID, successful=True)
+    apply_cancel.assert_not_called()
+
+
+def test_true_source_not_found_is_not_treated_as_cancellation():
+    pg_document = {
+        **_old_pg_document(source_hash="abc"),
+        "source_document_id": 3833335,
+        "state": 0,
+    }
+    with patch.object(
+        reconciliation,
+        "_load_local_oc",
+        return_value=(pg_document, OLD_DETAILS),
+    ):
+        report = reconcile_one_oc(
+            MissingSourceClient(),
+            folio=FOLIO,
+            local_document_id=LOCAL_ID,
+            dry_run=True,
+        )
+    assert report["status"] == "source_not_found"
+    assert report["wrote"] is False
+
+
+def test_open_orders_and_planning_filters_exclude_cancelled_state():
+    assert "COALESCE(d.state, 0) = 0" in orders_service._DISPATCH_PREP_DOC_FILTER
+    assert "WHEN COALESCE(d.state, 0) <> 0 THEN 'Anulada'" in orders_service.OC_PURCHASE_ESTADO_REAL_SQL
+    assert "WHEN COALESCE(d.state, 0) <> 0 THEN 'Anulada'" in orders_service._PLANNING_ROWS_STATUS_SELECT
+    planning_sql = open(
+        "backend/services/distribuidora/dispatch_planning_list_service.py",
+        encoding="utf-8",
+    ).read()
+    assert planning_sql.count("COALESCE(d.state, 0) = 0") >= 2
+    weight_sql = " ".join(service_order_weight._SEARCH_ORDERS_SQL.split())
+    assert "COALESCE(d.state, 0) = 0" in weight_sql
+
+
+def test_cancelled_local_is_excluded_from_candidate_sql():
+    recent_sql = " ".join(reconciliation._RECENT_CANDIDATES_SQL.split())
+    assert "AND d.state = 0" in recent_sql

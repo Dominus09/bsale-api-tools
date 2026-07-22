@@ -425,6 +425,7 @@ LEFT JOIN LATERAL (
 WHERE d.company_id = %s
   AND d.office_id = %s
   AND d.document_type_id = 33
+  AND COALESCE(d.state, 0) = 0
   AND (
         %s = 'todas'
         OR (%s = 'pendientes' AND {OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL})
