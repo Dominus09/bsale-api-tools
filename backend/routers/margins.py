@@ -1,15 +1,37 @@
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter
+
 from backend.db import get_connection
+from backend.services.price_list_control_service import (
+    list_price_list_control_rows,
+    summarize_price_list_control,
+)
 
 router = APIRouter()
+
+
+def _dict_executor(conn):
+    cur = conn.cursor()
+
+    def execute(sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+        columns = [desc[0] for desc in cur.description]
+        return [dict(zip(columns, row)) for row in rows]
+
+    execute._cursor = cur  # type: ignore[attr-defined]
+    return execute
 
 
 def _fetch_margin_analysis_view_rows(
     company_id: int,
     price_list_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
+    """Legacy: lee bsale.margin_analysis_view (costo actual × tax_factor).
+
+    Preferir GET /price-list-control para semántica canónica de /margins.
+    """
     conn = get_connection()
     cur = conn.cursor()
 
@@ -56,6 +78,32 @@ def _fetch_margin_analysis_view_rows(
     return result
 
 
+@router.get("/price-list-control")
+def price_list_control(
+    company_id: int,
+    price_list_id: Optional[int] = None,
+):
+    """Control actual de precios por lista (variante × lista).
+
+    Costo de referencia = máximo bruto válido de recepción (fallback variant_cost).
+    Métrica de cumplimiento = recargo % sobre costo (actual_markup_pct).
+    Sin ventas ni unidades vendidas.
+    """
+    conn = get_connection()
+    execute = _dict_executor(conn)
+    try:
+        rows = list_price_list_control_rows(
+            execute,
+            company_id=company_id,
+            price_list_id=price_list_id,
+        )
+        summary = summarize_price_list_control(rows)
+        return {"items": rows, "summary": summary}
+    finally:
+        execute._cursor.close()  # type: ignore[attr-defined]
+        conn.close()
+
+
 @router.get("/margin-analysis-view")
 def margin_analysis_view(
     company_id: int,
@@ -64,6 +112,9 @@ def margin_analysis_view(
     """
     Vista bsale.margin_analysis_view (definición en backend/sql/margin_analysis_view.sql).
     Sin price_list_id devuelve todas las listas de la empresa.
+
+    Nota: la vista legacy usa costo actual × tax_factor. Para /margins usar
+    GET /price-list-control.
     """
     return _fetch_margin_analysis_view_rows(company_id, price_list_id)
 

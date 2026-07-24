@@ -592,6 +592,36 @@ export async function getMarginAnalysisView(
   return Array.isArray(data) ? data : []
 }
 
+/** Fila canónica de control de precios por lista (GET /price-list-control). */
+export type PriceListControlRowApi = Record<string, unknown>
+
+export type PriceListControlResponse = {
+  items: PriceListControlRowApi[]
+  summary: Record<string, unknown>
+}
+
+/** Control actual variante × lista (sin ventas). Preferido por /margins. */
+export async function getPriceListControl(
+  companyId: number,
+  priceListId?: number | null,
+): Promise<PriceListControlResponse> {
+  const qs = new URLSearchParams({ company_id: String(companyId) })
+  if (priceListId != null && !Number.isNaN(priceListId)) {
+    qs.set("price_list_id", String(priceListId))
+  }
+  const res = await fetch(`${API_URL}/price-list-control?${qs.toString()}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    throw new Error("Error al cargar control de precios por lista")
+  }
+  const data = await res.json()
+  return {
+    items: Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : [],
+    summary: (data?.summary as Record<string, unknown>) ?? {},
+  }
+}
+
 export type MarginRuleRow = {
   id: number
   company_id: number

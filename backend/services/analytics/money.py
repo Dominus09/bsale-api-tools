@@ -7,6 +7,7 @@ from typing import Any
 
 MONEY_QUANT = Decimal("0.0001")
 PCT_QUANT = Decimal("0.0001")
+PCT_COMMERCIAL_QUANT = Decimal("0.01")  # márgenes/markups comerciales UI
 ZERO = Decimal("0")
 
 
@@ -28,6 +29,11 @@ def quantize_money(value: Decimal) -> Decimal:
 
 def quantize_pct(value: Decimal) -> Decimal:
     return value.quantize(PCT_QUANT, rounding=ROUND_HALF_UP)
+
+
+def quantize_commercial_pct(value: Decimal) -> Decimal:
+    """Porcentajes comerciales predeterminados (2 decimales, HALF_UP)."""
+    return value.quantize(PCT_COMMERCIAL_QUANT, rounding=ROUND_HALF_UP)
 
 
 def optional_decimal(value: Any) -> Decimal | None:

@@ -238,12 +238,14 @@ export default function PoliticaMargenesPage() {
           </div>
           <h1 className="text-2xl font-bold text-foreground">Política de Márgenes</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Reglas en{" "}
-            <code className="rounded bg-muted px-1 text-xs">bsale.margin_rules</code>. Alimentan{" "}
+            Reglas de <strong>recargo sobre costo</strong> (markup) en{" "}
+            <code className="rounded bg-muted px-1 text-xs">bsale.margin_rules</code>.
+            Alimentan el control de precios por lista en{" "}
             <Link href="/margins" className="text-primary hover:underline">
-              Analítica → Márgenes
-            </Link>{" "}
-            y las alertas de productos bajo margen.
+              Márgenes
+            </Link>
+            . No definen margen realizado de ventas. Columnas actuales: «Recargo mín./máx. %»;
+            renombre futuro sugerido: «Recargo mínimo/máximo objetivo».
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -273,8 +275,10 @@ export default function PoliticaMargenesPage() {
       <Alert>
         <AlertTitle>Uso operativo</AlertTitle>
         <AlertDescription className="text-sm">
-          Los cambios aquí no recalculan precios automáticamente. Afectan cómo se clasifican y
-          alertan los márgenes en el módulo de análisis. Revise{" "}
+          Los valores son <strong>recargo mínimo/máximo objetivo</strong> (% sobre
+          costo bruto). Equivalencia informativa: un recargo del 25% sobre costo ≈
+          20% de margen sobre precio. Los cambios no recalculan precios en Bsale.
+          Revise{" "}
           <Link href="/alerts" className="text-primary hover:underline">
             Alertas
           </Link>{" "}
@@ -380,8 +384,8 @@ export default function PoliticaMargenesPage() {
                 <TableHead>Empresa</TableHead>
                 <TableHead>Lista de precios</TableHead>
                 <TableHead>Tipo producto</TableHead>
-                <TableHead className="w-24">Mín. %</TableHead>
-                <TableHead className="w-24">Máx. %</TableHead>
+                <TableHead className="w-28">Recargo mín. %</TableHead>
+                <TableHead className="w-28">Recargo máx. %</TableHead>
                 <TableHead className="w-16">Activo</TableHead>
                 <TableHead className="min-w-[180px]">Notas</TableHead>
                 <TableHead className="w-20" />

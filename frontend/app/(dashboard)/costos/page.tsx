@@ -1,43 +1,23 @@
 "use client"
 
-import Link from "next/link"
 import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   AlertTriangle,
-  CircleDollarSign,
-  Loader2,
+  Download,
   RefreshCw,
-  Search,
-  TrendingDown,
-  TrendingUp,
 } from "lucide-react"
 
+import { AnalyticsFilterBar, type FilterChip } from "@/components/analytics/analytics-filter-bar"
+import { AnalyticsKpiCard } from "@/components/analytics/analytics-kpi-card"
+import { AnalyticsPageHeader } from "@/components/analytics/analytics-page-header"
+import { CostDetailDrawer } from "@/components/costos/cost-detail-drawer"
 import {
-  getCompanies,
-  getCostAlerts,
-  getCostAnalyticsDashboard,
-  getCostReceptionDetail,
-  getCostReceptions,
-  getStoredCompanyId,
-  listCostBranchComparison,
-  listCostHistory,
-  listCostOpportunities,
-  listCostProducts,
-  searchCostHistory,
-  syncCostAnalytics,
-  type Company,
-  type CostAlertRow,
-  type CostBranchComparisonRow,
-  type CostHistoryRow,
-  type CostHistorySearchHit,
-  type CostOfficeRef,
-  type CostOpportunityRow,
-  type CostProductRow,
-  type CostReceptionDetail,
-  type CostReceptionRow,
-} from "@/lib/api"
+  CostAgeDistributionChart,
+  CostHistoryChart,
+  CostTopIncreasesList,
+} from "@/components/costos/cost-history-chart"
+import { CostMainTable } from "@/components/costos/cost-main-table"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -49,1082 +29,799 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { cn } from "@/lib/utils"
-import { CostIntelligencePanel } from "./components/cost-intelligence-panel"
-import { WatchlistButton } from "./components/watchlist-button"
+  getCompanies,
+  getCostAlerts,
+  getCostAnalyticsDashboard,
+  getCostOffices,
+  getStoredCompanyId,
+  listCostHistory,
+  listCostOpportunities,
+  syncCostAnalytics,
+  type Company,
+  type CostAnalyticsDashboard,
+  type CostHistoryRow,
+  type CostOfficeRef,
+  type CostOpportunityRow,
+} from "@/lib/api"
+import {
+  adaptDashboardKpis,
+  aggregateGrossEvolution,
+  buildAgeDistribution,
+  buildTopIncreases,
+  buildVariantAuditRows,
+  type CostTableRow,
+} from "@/lib/costos/adapt-cost-analytics"
+import { formatDateTime, formatPct } from "@/lib/costos/format"
+import {
+  AGE_BUCKET_LABEL,
+  GROSS_COST_QUALITY_LABEL,
+  type AgeBucketKind,
+  type GrossCostQualityKind,
+} from "@/lib/costos/quality-labels"
+import { useIsMobile } from "@/components/ui/use-mobile"
 
 const ALL = "__all__"
+const PAGE_SIZE = 40
 
-function formatMoney(value: number | null | undefined) {
-  if (value == null || !Number.isFinite(Number(value))) return "—"
-  return new Intl.NumberFormat("es-CL", {
-    style: "currency",
-    currency: "CLP",
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(Number(value))
+function defaultDateRange() {
+  const to = new Date()
+  const from = new Date()
+  from.setDate(from.getDate() - 90)
+  const iso = (d: Date) => d.toISOString().slice(0, 10)
+  return { from: iso(from), to: iso(to) }
 }
 
-function formatPct(value: number | null | undefined) {
-  if (value == null || !Number.isFinite(Number(value))) return "—"
-  const n = Number(value)
-  return `${n > 0 ? "+" : ""}${n.toFixed(2)}%`
-}
-
-function formatDate(value: string | null | undefined) {
-  if (!value) return "—"
-  const d = new Date(value)
-  if (Number.isNaN(d.getTime())) return value
-  return d.toLocaleString("es-CL", { dateStyle: "short", timeStyle: "short" })
-}
-
-function variationClass(pct: number | null | undefined) {
-  if (pct == null) return ""
-  const av = Math.abs(Number(pct))
-  if (av >= 20) return "text-red-600 dark:text-red-400 font-medium"
-  if (av >= 10) return "text-amber-600 dark:text-amber-500"
-  return ""
-}
-
-const ALERT_LABELS: Record<string, string> = {
-  no_history: "Sin historial",
-  missing_cost: "Costo faltante",
-  zero_cost: "Costo cero",
-  variation_10: "Variación >10%",
-  variation_20: "Variación >20%",
-  anomalous_cost: "Costo anómalo",
-  suspicious_reception: "Recepción sospechosa",
-  cross_branch_diff: "Diferencia entre sucursales",
-  cost_decrease_10: "Baja de costo >10%",
-}
-
-const RECEPTION_TYPE_LABELS: Record<string, string> = {
-  recepcion_normal: "Normal",
-  recepcion_ajuste: "Ajuste",
-  recepcion_devolucion: "Devolución",
-  recepcion_nc: "NC",
-}
-
-const OPPORTUNITY_STATUS: Record<string, { label: string; className: string }> = {
-  oportunidad_compra: { label: "Comprar", className: "bg-green-100 text-green-800 dark:bg-green-950 dark:text-green-300" },
-  riesgo_comercial: { label: "Costo elevado", className: "bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300" },
-}
-
-function SemaphoreDot({ level }: { level: "green" | "yellow" | "red" }) {
-  const cls =
-    level === "red"
-      ? "bg-red-500"
-      : level === "yellow"
-        ? "bg-amber-400"
-        : "bg-green-500"
-  return <span className={cn("inline-block h-3 w-3 rounded-full", cls)} title={level} />
-}
-
-function KpiCard({ title, value, hint }: { title: string; value: number | string; hint?: string }) {
-  return (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-medium text-muted-foreground">{title}</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <p className="text-2xl font-semibold tabular-nums">{value}</p>
-        {hint ? <p className="mt-1 text-xs text-muted-foreground">{hint}</p> : null}
-      </CardContent>
-    </Card>
-  )
-}
-
-function OfficeFilter({
-  offices,
-  value,
-  onChange,
-}: {
-  offices: CostOfficeRef[]
-  value: string
-  onChange: (v: string) => void
-}) {
-  return (
-    <div>
-      <Label>Sucursal</Label>
-      <Select value={value} onValueChange={onChange}>
-        <SelectTrigger>
-          <SelectValue placeholder="Todas" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={ALL}>Todas las sucursales</SelectItem>
-          {offices.map((o) => (
-            <SelectItem key={o.office_id} value={String(o.office_id)}>
-              {o.office_name ?? `Sucursal ${o.office_id}`}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  )
-}
-
-function DateFilters({
-  dateFrom,
-  dateTo,
-  onFrom,
-  onTo,
-}: {
-  dateFrom: string
-  dateTo: string
-  onFrom: (v: string) => void
-  onTo: (v: string) => void
-}) {
-  return (
-    <>
-      <div>
-        <Label>Desde</Label>
-        <Input type="date" value={dateFrom} onChange={(e) => onFrom(e.target.value)} />
-      </div>
-      <div>
-        <Label>Hasta</Label>
-        <Input type="date" value={dateTo} onChange={(e) => onTo(e.target.value)} />
-      </div>
-    </>
-  )
-}
-
-function HistoryTable({ rows }: { rows: CostHistoryRow[] }) {
-  return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Fecha</TableHead>
-          <TableHead>Empresa</TableHead>
-          <TableHead>Sucursal</TableHead>
-          <TableHead>Producto / Variante</TableHead>
-          <TableHead>Documento</TableHead>
-          <TableHead className="text-right">Cant.</TableHead>
-          <TableHead className="text-right">Neto</TableHead>
-          <TableHead className="text-right">IVA</TableHead>
-          <TableHead className="text-right">Bruto ERP</TableHead>
-          <TableHead className="text-right">Promedio</TableHead>
-          <TableHead className="text-right">Var. %</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {rows.map((r) => (
-          <TableRow key={r.reception_detail_id}>
-            <TableCell>{formatDate(r.admission_date)}</TableCell>
-            <TableCell>{r.company_name ?? "—"}</TableCell>
-            <TableCell>{r.office_name ?? "—"}</TableCell>
-            <TableCell>
-              <div>{r.product_name ?? "—"}</div>
-              <div className="text-xs text-muted-foreground">{r.variant_name ?? ""}</div>
-            </TableCell>
-            <TableCell>
-              {r.document ?? ""} {r.document_number ?? ""}
-              <div className="text-xs text-muted-foreground">Rec. #{r.reception_id}</div>
-            </TableCell>
-            <TableCell className="text-right tabular-nums">{r.quantity}</TableCell>
-            <TableCell className="text-right">{formatMoney(r.cost_net)}</TableCell>
-            <TableCell className="text-right">{formatMoney(r.iva_amount)}</TableCell>
-            <TableCell className="text-right">{formatMoney(r.cost_bruto_erp)}</TableCell>
-            <TableCell className="text-right">{formatMoney(r.average_cost)}</TableCell>
-            <TableCell className={cn("text-right", variationClass(r.variation_pct))}>
-              {formatPct(r.variation_pct)}
-            </TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
-  )
+function downloadCsv(rows: CostTableRow[], filename: string) {
+  const headers = [
+    "producto",
+    "variante",
+    "codigo",
+    "fecha",
+    "costo_neto",
+    "iva",
+    "otros_impuestos",
+    "costo_bruto",
+    "variacion_pct",
+    "calidad",
+    "antiguedad",
+  ]
+  const lines = [headers.join(",")]
+  for (const r of rows) {
+    lines.push(
+      [
+        JSON.stringify(r.productName ?? ""),
+        JSON.stringify(r.variantName ?? ""),
+        JSON.stringify(r.barcode ?? ""),
+        r.lastReceptionDate ?? "",
+        r.costNet ?? "",
+        r.ivaAmount ?? "",
+        r.otherTaxes ?? "",
+        r.costGross ?? "",
+        r.variationPct ?? "",
+        GROSS_COST_QUALITY_LABEL[r.grossCostQuality],
+        AGE_BUCKET_LABEL[r.ageBucket],
+      ].join(","),
+    )
+  }
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 export default function CostosPage() {
-  const [companies, setCompanies] = useState<Company[]>([])
-  const [companyId, setCompanyId] = useState<number | null>(null)
-  const [offices, setOffices] = useState<CostOfficeRef[]>([])
-  const [officeFilter, setOfficeFilter] = useState(ALL)
-  const [dateFrom, setDateFrom] = useState("")
-  const [dateTo, setDateTo] = useState("")
-  const [tab, setTab] = useState("panel")
+  const isMobile = useIsMobile()
+  const range0 = useMemo(() => defaultDateRange(), [])
 
-  const filterParams = useMemo(
-    () => ({
-      company_id: companyId ?? undefined,
-      office_id: officeFilter !== ALL ? Number(officeFilter) : undefined,
-      date_from: dateFrom || undefined,
-      date_to: dateTo || undefined,
-    }),
-    [companyId, officeFilter, dateFrom, dateTo],
-  )
+  const [companies, setCompanies] = useState<Company[]>([])
+  const [offices, setOffices] = useState<CostOfficeRef[]>([])
+  const [companyId, setCompanyId] = useState("")
+  const [officeId, setOfficeId] = useState(ALL)
+  const [dateFrom, setDateFrom] = useState(range0.from)
+  const [dateTo, setDateTo] = useState(range0.to)
+  const [search, setSearch] = useState("")
+  const [costState, setCostState] = useState<string>(ALL)
+  const [originFilter, setOriginFilter] = useState<string>(ALL)
+  const [ageFilter, setAgeFilter] = useState<string>(ALL)
+
+  const [applied, setApplied] = useState({
+    companyId: "",
+    officeId: ALL as string,
+    dateFrom: range0.from,
+    dateTo: range0.to,
+    search: "",
+    costState: ALL,
+    origin: ALL,
+    age: ALL,
+  })
+
+  const [dash, setDash] = useState<CostAnalyticsDashboard | null>(null)
+  const [rawHistory, setRawHistory] = useState<CostHistoryRow[]>([])
+  const [historyTotal, setHistoryTotal] = useState(0)
+  const [page, setPage] = useState(1)
+  const [loading, setLoading] = useState(true)
+  const [syncing, setSyncing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [alertCount, setAlertCount] = useState(0)
+  const [opportunities, setOpportunities] = useState<CostOpportunityRow[]>([])
+  const [showAlerts, setShowAlerts] = useState(false)
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [selected, setSelected] = useState<CostTableRow | null>(null)
+  const [drawerOpen, setDrawerOpen] = useState(false)
 
   useEffect(() => {
-    void getCompanies()
-      .then((list) => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const list = await getCompanies()
+        if (cancelled) return
         setCompanies(list)
         const stored = getStoredCompanyId()
-        if (stored && list.some((c) => c.company_id === stored)) setCompanyId(stored)
-        else if (list.length > 0) setCompanyId(list[0].company_id)
-      })
-      .catch(() => setCompanies([]))
+        const def =
+          list.find((c) => c.company_id === stored)?.company_id ??
+          list[0]?.company_id
+        if (def != null) {
+          setCompanyId(String(def))
+          setApplied((a) => ({ ...a, companyId: String(def) }))
+        }
+      } catch {
+        if (!cancelled) setError("No se pudieron cargar las empresas.")
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
   }, [])
 
-  const onCompanyChange = (id: number) => {
-    setCompanyId(id)
-    if (typeof window !== "undefined") {
-      localStorage.setItem("company_id", String(id))
-      const name = companies.find((c) => c.company_id === id)?.name
-      if (name) localStorage.setItem("company_name", name)
-    }
-    setOfficeFilter(ALL)
-  }
-
   useEffect(() => {
-    if (companyId == null) return
-    void getCostAnalyticsDashboard({ company_id: companyId })
-      .then((d) => setOffices(d.offices ?? []))
-      .catch(() => setOffices([]))
+    if (!companyId) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await getCostOffices(Number(companyId))
+        if (!cancelled) setOffices(res.items || [])
+      } catch {
+        if (!cancelled) setOffices([])
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
   }, [companyId])
 
-  const companyLabel = useMemo(() => {
-    if (companyId == null) return ""
-    return companies.find((c) => c.company_id === companyId)?.name ?? `Empresa ${companyId}`
-  }, [companies, companyId])
+  const loadData = useCallback(async () => {
+    if (!applied.companyId) return
+    setLoading(true)
+    setError(null)
+    const cid = Number(applied.companyId)
+    const office =
+      applied.officeId !== ALL ? Number(applied.officeId) : undefined
+    try {
+      const [dashboard, history, alerts, opps] = await Promise.all([
+        getCostAnalyticsDashboard({
+          company_id: cid,
+          office_id: office,
+          date_from: applied.dateFrom,
+          date_to: applied.dateTo,
+        }),
+        listCostHistory({
+          company_id: cid,
+          office_id: office,
+          date_from: applied.dateFrom,
+          date_to: applied.dateTo,
+          q: applied.search || undefined,
+          limit: 500,
+          offset: 0,
+        }),
+        getCostAlerts({ company_id: cid, limit: 50 }).catch(() => ({
+          items: [] as never[],
+        })),
+        listCostOpportunities({ company_id: cid, limit: 20 }).catch(() => ({
+          items: [] as CostOpportunityRow[],
+        })),
+      ])
+      setDash(dashboard)
+      setRawHistory(history.items || [])
+      setHistoryTotal(history.total ?? history.items?.length ?? 0)
+      setAlertCount(Array.isArray(alerts.items) ? alerts.items.length : 0)
+      setOpportunities(opps.items || [])
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Error al cargar costos. Intente de nuevo.",
+      )
+      setRawHistory([])
+    } finally {
+      setLoading(false)
+    }
+  }, [applied])
 
-  if (companyId == null) {
-    return (
-      <div className="p-6">
-        <Alert>
-          <AlertDescription>Seleccione una empresa para ver costos.</AlertDescription>
-        </Alert>
-      </div>
-    )
+  useEffect(() => {
+    void loadData()
+  }, [loadData])
+
+  const tableAll = useMemo(() => buildVariantAuditRows(rawHistory), [rawHistory])
+
+  const tableFiltered = useMemo(() => {
+    return tableAll.filter((r) => {
+      if (applied.costState !== ALL) {
+        if (r.grossCostQuality !== (applied.costState as GrossCostQualityKind)) {
+          return false
+        }
+      }
+      if (applied.origin !== ALL && r.origin !== applied.origin) return false
+      if (applied.age !== ALL && r.ageBucket !== (applied.age as AgeBucketKind)) {
+        return false
+      }
+      return true
+    })
+  }, [tableAll, applied])
+
+  const pageRows = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE
+    return tableFiltered.slice(start, start + PAGE_SIZE)
+  }, [tableFiltered, page])
+
+  const kpis = useMemo(
+    () => adaptDashboardKpis(dash, tableFiltered),
+    [dash, tableFiltered],
+  )
+  const ageDist = useMemo(
+    () => buildAgeDistribution(tableFiltered),
+    [tableFiltered],
+  )
+  const topUp = useMemo(() => buildTopIncreases(tableFiltered), [tableFiltered])
+  const evolution = useMemo(
+    () => aggregateGrossEvolution(rawHistory),
+    [rawHistory],
+  )
+
+  const chips: FilterChip[] = useMemo(() => {
+    const list: FilterChip[] = []
+    if (applied.dateFrom || applied.dateTo) {
+      list.push({
+        id: "dates",
+        label: `${applied.dateFrom} → ${applied.dateTo}`,
+        onRemove: () => {
+          const r = defaultDateRange()
+          setDateFrom(r.from)
+          setDateTo(r.to)
+          setApplied((a) => ({ ...a, dateFrom: r.from, dateTo: r.to }))
+          setPage(1)
+        },
+      })
+    }
+    if (applied.officeId !== ALL) {
+      const name =
+        offices.find((o) => String(o.office_id) === applied.officeId)
+          ?.office_name || applied.officeId
+      list.push({
+        id: "office",
+        label: `Oficina: ${name}`,
+        onRemove: () => {
+          setOfficeId(ALL)
+          setApplied((a) => ({ ...a, officeId: ALL }))
+          setPage(1)
+        },
+      })
+    }
+    if (applied.search) {
+      list.push({
+        id: "q",
+        label: `Buscar: ${applied.search}`,
+        onRemove: () => {
+          setSearch("")
+          setApplied((a) => ({ ...a, search: "" }))
+          setPage(1)
+        },
+      })
+    }
+    if (applied.costState !== ALL) {
+      list.push({
+        id: "state",
+        label: GROSS_COST_QUALITY_LABEL[applied.costState as GrossCostQualityKind],
+        onRemove: () => {
+          setCostState(ALL)
+          setApplied((a) => ({ ...a, costState: ALL }))
+          setPage(1)
+        },
+      })
+    }
+    if (applied.age !== ALL) {
+      list.push({
+        id: "age",
+        label: AGE_BUCKET_LABEL[applied.age as AgeBucketKind],
+        onRemove: () => {
+          setAgeFilter(ALL)
+          setApplied((a) => ({ ...a, age: ALL }))
+          setPage(1)
+        },
+      })
+    }
+    return list
+  }, [applied, offices])
+
+  function applyFilters() {
+    setApplied({
+      companyId,
+      officeId,
+      dateFrom,
+      dateTo,
+      search: search.trim(),
+      costState,
+      origin: originFilter,
+      age: ageFilter,
+    })
+    setPage(1)
+    setFiltersOpen(false)
   }
 
-  return (
-    <div className="space-y-6 p-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-            <CircleDollarSign className="h-7 w-7" />
-            Costos
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Centro de inteligencia de compras y costos — {companyLabel}
-          </p>
-        </div>
-        <Select value={String(companyId)} onValueChange={(v) => onCompanyChange(Number(v))}>
-          <SelectTrigger className="w-[260px]">
+  function clearFilters() {
+    const r = defaultDateRange()
+    setOfficeId(ALL)
+    setDateFrom(r.from)
+    setDateTo(r.to)
+    setSearch("")
+    setCostState(ALL)
+    setOriginFilter(ALL)
+    setAgeFilter(ALL)
+    setApplied((a) => ({
+      ...a,
+      officeId: ALL,
+      dateFrom: r.from,
+      dateTo: r.to,
+      search: "",
+      costState: ALL,
+      origin: ALL,
+      age: ALL,
+    }))
+    setPage(1)
+  }
+
+  async function handleSync() {
+    if (!companyId) return
+    setSyncing(true)
+    setError(null)
+    try {
+      await syncCostAnalytics({ company_id: Number(companyId) })
+      await loadData()
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "No se pudo sincronizar costos.",
+      )
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  const syncLabel = kpis.lastSyncAt
+    ? `${formatDateTime(kpis.lastSyncAt)}${
+        kpis.lastSyncStatus ? ` · ${kpis.lastSyncStatus}` : ""
+      }`
+    : "Sin sincronización registrada"
+
+  const filterFields = (
+    <>
+      <div className="space-y-1.5">
+        <Label htmlFor="costos-company">Empresa</Label>
+        <Select
+          value={companyId}
+          onValueChange={(v) => {
+            setCompanyId(v)
+            setOfficeId(ALL)
+          }}
+        >
+          <SelectTrigger id="costos-company" className="w-[200px]">
             <SelectValue placeholder="Empresa" />
           </SelectTrigger>
           <SelectContent>
             {companies.map((c) => (
               <SelectItem key={c.company_id} value={String(c.company_id)}>
-                {c.name}
+                {c.name || `Empresa ${c.company_id}`}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
       </div>
-
-      <Tabs value={tab} onValueChange={setTab}>
-        <TabsList className="flex h-auto flex-wrap">
-          <TabsTrigger value="panel">Panel ejecutivo</TabsTrigger>
-          <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
-          <TabsTrigger value="productos">Productos</TabsTrigger>
-          <TabsTrigger value="recepciones">Recepciones</TabsTrigger>
-          <TabsTrigger value="alertas">Alertas</TabsTrigger>
-          <TabsTrigger value="oportunidades">Oportunidades</TabsTrigger>
-          <TabsTrigger value="comparacion">Comparación sucursales</TabsTrigger>
-          <TabsTrigger value="historial">Historial</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="panel" className="mt-4">
-          <CostIntelligencePanel companyId={companyId} />
-        </TabsContent>
-        <TabsContent value="dashboard" className="mt-4 space-y-6">
-          <CostIntelligencePanel companyId={companyId} compact />
-          <DashboardTab companyId={companyId} offices={offices} filterParams={filterParams} />
-        </TabsContent>
-        <TabsContent value="productos" className="mt-4">
-          <ProductosTab companyId={companyId} />
-        </TabsContent>
-        <TabsContent value="recepciones" className="mt-4">
-          <RecepcionesTab companyId={companyId} offices={offices} filterParams={filterParams} />
-        </TabsContent>
-        <TabsContent value="alertas" className="mt-4">
-          <AlertasTab companyId={companyId} offices={offices} officeFilter={officeFilter} />
-        </TabsContent>
-        <TabsContent value="oportunidades" className="mt-4">
-          <OportunidadesTab companyId={companyId} />
-        </TabsContent>
-        <TabsContent value="comparacion" className="mt-4">
-          <ComparacionTab companyId={companyId} />
-        </TabsContent>
-        <TabsContent value="historial" className="mt-4">
-          <HistorialTab companyId={companyId} offices={offices} filterParams={filterParams} />
-        </TabsContent>
-      </Tabs>
-    </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="costos-from">Desde</Label>
+        <Input
+          id="costos-from"
+          type="date"
+          value={dateFrom}
+          onChange={(e) => setDateFrom(e.target.value)}
+          className="w-[150px]"
+        />
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="costos-to">Hasta</Label>
+        <Input
+          id="costos-to"
+          type="date"
+          value={dateTo}
+          onChange={(e) => setDateTo(e.target.value)}
+          className="w-[150px]"
+        />
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="costos-office">Oficina</Label>
+        <Select value={officeId} onValueChange={setOfficeId}>
+          <SelectTrigger id="costos-office" className="w-[180px]">
+            <SelectValue placeholder="Todas" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>Todas</SelectItem>
+            {offices.map((o) => (
+              <SelectItem key={o.office_id} value={String(o.office_id)}>
+                {o.office_name || `Oficina ${o.office_id}`}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="min-w-[180px] flex-1 space-y-1.5">
+        <Label htmlFor="costos-q">Buscar</Label>
+        <Input
+          id="costos-q"
+          placeholder="Nombre, código o barras"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") applyFilters()
+          }}
+        />
+      </div>
+    </>
   )
-}
 
-function DashboardTab({
-  companyId,
-  offices,
-  filterParams,
-}: {
-  companyId: number
-  offices: CostOfficeRef[]
-  filterParams: {
-    company_id?: number
-    office_id?: number
-    date_from?: string
-    date_to?: string
-  }
-}) {
-  const [loading, setLoading] = useState(true)
-  const [syncing, setSyncing] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [kpis, setKpis] = useState<Record<string, number | null | undefined> | null>(null)
-  const [lastSync, setLastSync] = useState<{
-    last_run_at?: string | null
-    last_status?: string | null
-    last_message?: string | null
-    total_lines_processed?: number
-  } | null>(null)
-  const [officeFilter, setOfficeFilter] = useState(ALL)
-  const [dateFrom, setDateFrom] = useState("")
-  const [dateTo, setDateTo] = useState("")
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const data = await getCostAnalyticsDashboard({
-        company_id: companyId,
-        office_id: officeFilter !== ALL ? Number(officeFilter) : undefined,
-        date_from: dateFrom || undefined,
-        date_to: dateTo || undefined,
-      })
-      setKpis(data.kpis)
-      setLastSync(data.last_sync)
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Error al cargar dashboard")
-    } finally {
-      setLoading(false)
-    }
-  }, [companyId, officeFilter, dateFrom, dateTo])
-
-  useEffect(() => {
-    void load()
-  }, [load])
+  const advancedFields = (
+    <>
+      <div className="space-y-1.5">
+        <Label>Estado del costo</Label>
+        <Select value={costState} onValueChange={setCostState}>
+          <SelectTrigger className="w-[220px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>Todos</SelectItem>
+            {(
+              Object.keys(GROSS_COST_QUALITY_LABEL) as GrossCostQualityKind[]
+            ).map((k) => (
+              <SelectItem key={k} value={k}>
+                {GROSS_COST_QUALITY_LABEL[k]}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-1.5">
+        <Label>Origen</Label>
+        <Select value={originFilter} onValueChange={setOriginFilter}>
+          <SelectTrigger className="w-[200px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>Todos</SelectItem>
+            <SelectItem value="reception_history">Recepción / compra</SelectItem>
+            <SelectItem value="variant_cost">Costo actual Bsale</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-1.5">
+        <Label>Antigüedad</Label>
+        <Select value={ageFilter} onValueChange={setAgeFilter}>
+          <SelectTrigger className="w-[180px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>Todas</SelectItem>
+            {(Object.keys(AGE_BUCKET_LABEL) as AgeBucketKind[])
+              .filter((k) => k !== "unknown")
+              .map((k) => (
+                <SelectItem key={k} value={k}>
+                  {AGE_BUCKET_LABEL[k]}
+                </SelectItem>
+              ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="space-y-1.5 opacity-70">
+        <Label>Categoría / tipo</Label>
+        <Input disabled placeholder="Sin información en API" className="w-[200px]" />
+      </div>
+      <div className="space-y-1.5 opacity-70">
+        <Label>Proveedor</Label>
+        <Input disabled placeholder="Sin información en API" className="w-[200px]" />
+      </div>
+    </>
+  )
 
   return (
-    <div className="space-y-4">
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <OfficeFilter offices={offices} value={officeFilter} onChange={setOfficeFilter} />
-        <DateFilters dateFrom={dateFrom} dateTo={dateTo} onFrom={setDateFrom} onTo={setDateTo} />
-        <div className="flex items-end gap-2">
-          <Button variant="outline" onClick={() => void load()}>
-            Aplicar filtros
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => {
-              setSyncing(true)
-              void syncCostAnalytics({ company_id: companyId })
-                .then(() => load())
-                .catch((e: unknown) =>
-                  setError(e instanceof Error ? e.message : "Error al sincronizar"),
-                )
-                .finally(() => setSyncing(false))
-            }}
-            disabled={syncing}
-          >
-            {syncing ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-          </Button>
-        </div>
-      </div>
-
-      <div className="text-sm text-muted-foreground">
-        Último sync: <strong>{formatDate(lastSync?.last_run_at)}</strong>
-        {lastSync?.last_status ? (
-          <Badge variant="outline" className="ml-2">
-            {lastSync.last_status}
-          </Badge>
-        ) : null}
-        {lastSync?.last_message ? <span className="ml-2">— {lastSync.last_message}</span> : null}
-        {lastSync?.total_lines_processed != null ? (
-          <span className="ml-2">· Líneas acumuladas: {lastSync.total_lines_processed}</span>
-        ) : null}
-      </div>
+    <div className="mx-auto flex w-full max-w-[1400px] flex-col gap-5 p-4 sm:p-6">
+      <AnalyticsPageHeader
+        title="Costos"
+        subtitle="Auditoría e historial de costos de compra (neto, IVA, ILA/otros, bruto ERP). No es un módulo de ventas ni utilidad."
+        meta={
+          <span>
+            Fuente: historial de recepciones · Fallback: costo actual Bsale · Última sync:{" "}
+            <span className="font-medium text-foreground">{syncLabel}</span>
+          </span>
+        }
+        actions={[
+          {
+            label: "Actualizar",
+            onClick: () => void handleSync(),
+            loading: syncing,
+            variant: "default",
+            icon: <RefreshCw className="mr-1.5 h-3.5 w-3.5" />,
+          },
+          {
+            label: "Exportar",
+            onClick: () =>
+              downloadCsv(
+                tableFiltered,
+                `costos_${applied.dateFrom}_${applied.dateTo}.csv`,
+              ),
+            icon: <Download className="mr-1.5 h-3.5 w-3.5" />,
+            disabled: tableFiltered.length === 0,
+          },
+          {
+            label: alertCount ? `Alertas (${alertCount})` : "Ver alertas",
+            onClick: () => setShowAlerts(true),
+            icon: <AlertTriangle className="mr-1.5 h-3.5 w-3.5" />,
+          },
+        ]}
+      />
 
       {error ? (
         <Alert variant="destructive">
-          <AlertTriangle className="h-4 w-4" />
-          <AlertTitle>Error</AlertTitle>
+          <AlertTitle>No se pudo cargar el módulo</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       ) : null}
 
-      {loading ? (
-        <div className="flex justify-center py-12">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        </div>
-      ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <KpiCard
-            title="Costo promedio empresa"
-            value={formatMoney(kpis?.avg_cost_company ?? undefined)}
-          />
-          <KpiCard title="Productos monitoreados" value={kpis?.products_monitored ?? kpis?.with_cost ?? 0} />
-          <KpiCard title="Recepciones 30 días" value={kpis?.receptions_30d ?? 0} />
-          <KpiCard title="Alertas activas" value={(kpis?.variation_gt_10 ?? 0) + (kpis?.variation_gt_20 ?? 0)} />
-          <KpiCard title="Productos con alza" value={kpis?.products_cost_up ?? kpis?.variation_gt_10 ?? 0} hint=">10% vs anterior" />
-          <KpiCard title="Productos con baja" value={kpis?.products_cost_down ?? 0} hint=">10% vs anterior" />
-          <KpiCard title="Oportunidades detectadas" value={kpis?.opportunities_detected ?? 0} />
-          <KpiCard title="Líneas en historial" value={kpis?.lines_processed ?? 0} />
-        </div>
-      )}
-    </div>
-  )
-}
-
-function HistorialTab({
-  companyId,
-  offices,
-}: {
-  companyId: number
-  offices: CostOfficeRef[]
-  filterParams: object
-}) {
-  const [q, setQ] = useState("")
-  const [rows, setRows] = useState<CostHistoryRow[]>([])
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [officeFilter, setOfficeFilter] = useState(ALL)
-  const [hits, setHits] = useState<CostHistorySearchHit[]>([])
-
-  const search = async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      if (q.trim().length >= 2) {
-        const found = await searchCostHistory(q, companyId)
-        setHits(found.items)
-        const hist = await listCostHistory({
-          company_id: companyId,
-          q: q.trim(),
-          office_id: officeFilter !== ALL ? Number(officeFilter) : undefined,
-          limit: 200,
-        })
-        setRows(hist.items)
-      } else {
-        const hist = await listCostHistory({
-          company_id: companyId,
-          office_id: officeFilter !== ALL ? Number(officeFilter) : undefined,
-          limit: 100,
-        })
-        setRows(hist.items)
-        setHits([])
-      }
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Error en historial")
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    void search()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [companyId])
-
-  return (
-    <div className="space-y-4">
-      <div className="grid gap-3 sm:grid-cols-4">
-        <div className="sm:col-span-2">
-          <Label>Búsqueda (código, producto, variante)</Label>
-          <Input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Mínimo 2 caracteres…"
-            onKeyDown={(e) => e.key === "Enter" && void search()}
-          />
-        </div>
-        <OfficeFilter offices={offices} value={officeFilter} onChange={setOfficeFilter} />
-        <div className="flex items-end">
-          <Button onClick={() => void search()} disabled={loading}>
-            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Search className="mr-2 h-4 w-4" />}
-            Buscar
+      {isMobile ? (
+        <>
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full"
+            onClick={() => setFiltersOpen(true)}
+          >
+            Filtros
+            {chips.length ? ` (${chips.length})` : ""}
           </Button>
-        </div>
-      </div>
-
-      {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
-
-      {hits.length > 0 ? (
-        <div className="flex flex-wrap gap-2">
-          {hits.map((h) => (
-            <Button key={h.variant_id} size="sm" variant="outline" asChild>
-              <Link href={`/costos/productos/${h.variant_id}?company_id=${companyId}`}>
-                {h.product_name} — {h.variant_name}
-              </Link>
-            </Button>
-          ))}
-        </div>
-      ) : null}
-
-      {rows.length > 0 ? <HistoryTable rows={rows} /> : (
-        !loading && <p className="text-sm text-muted-foreground">Sin registros. Ejecute sincronización en Dashboard.</p>
-      )}
-    </div>
-  )
-}
-
-function RecepcionesTab({
-  companyId,
-  offices,
-}: {
-  companyId: number
-  offices: CostOfficeRef[]
-  filterParams: object
-}) {
-  const [rows, setRows] = useState<CostReceptionRow[]>([])
-  const [loading, setLoading] = useState(true)
-  const [detail, setDetail] = useState<CostReceptionDetail | null>(null)
-  const [officeFilter, setOfficeFilter] = useState(ALL)
-  const [dateFrom, setDateFrom] = useState("")
-  const [dateTo, setDateTo] = useState("")
-  const [docFilter, setDocFilter] = useState("")
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const data = await getCostReceptions({
-        company_id: companyId,
-        office_id: officeFilter !== ALL ? Number(officeFilter) : undefined,
-        date_from: dateFrom || undefined,
-        date_to: dateTo || undefined,
-        document_type: docFilter || undefined,
-      })
-      setRows(data.items)
-    } finally {
-      setLoading(false)
-    }
-  }, [companyId, officeFilter, dateFrom, dateTo, docFilter])
-
-  useEffect(() => {
-    void load()
-  }, [load])
-
-  return (
-    <div className="space-y-4">
-      <div className="grid gap-3 sm:grid-cols-5">
-        <OfficeFilter offices={offices} value={officeFilter} onChange={setOfficeFilter} />
-        <DateFilters dateFrom={dateFrom} dateTo={dateTo} onFrom={setDateFrom} onTo={setDateTo} />
-        <div>
-          <Label>Documento</Label>
-          <Input value={docFilter} onChange={(e) => setDocFilter(e.target.value)} placeholder="FACTURA…" />
-        </div>
-        <div className="flex items-end">
-          <Button variant="outline" onClick={() => void load()}>Filtrar</Button>
-        </div>
-      </div>
-
-      {loading ? (
-        <Loader2 className="mx-auto h-6 w-6 animate-spin" />
+          <Sheet open={filtersOpen} onOpenChange={setFiltersOpen}>
+            <SheetContent side="bottom" className="max-h-[85vh] overflow-y-auto">
+              <SheetHeader>
+                <SheetTitle>Filtros de costos</SheetTitle>
+              </SheetHeader>
+              <div className="space-y-4 py-4">
+                <AnalyticsFilterBar
+                  chips={chips}
+                  onApply={applyFilters}
+                  onClear={clearFilters}
+                  advanced={advancedFields}
+                >
+                  {filterFields}
+                </AnalyticsFilterBar>
+              </div>
+            </SheetContent>
+          </Sheet>
+        </>
       ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Fecha</TableHead>
-              <TableHead>Empresa</TableHead>
-              <TableHead>Sucursal</TableHead>
-              <TableHead>Documento</TableHead>
-              <TableHead>Tipo</TableHead>
-              <TableHead className="text-right">Productos</TableHead>
-              <TableHead className="text-right">Unidades</TableHead>
-              <TableHead className="text-right">Costo total</TableHead>
-              <TableHead />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((r) => (
-              <TableRow key={r.reception_id}>
-                <TableCell>{formatDate(r.admission_date)}</TableCell>
-                <TableCell>{r.company_name ?? "—"}</TableCell>
-                <TableCell>{r.office_name ?? "—"}</TableCell>
-                <TableCell>{r.document ?? ""} {r.document_number ?? ""}</TableCell>
-                <TableCell>
-                  {r.reception_type ? (
-                    <Badge variant="outline">
-                      {RECEPTION_TYPE_LABELS[r.reception_type] ?? r.reception_type}
-                    </Badge>
-                  ) : (
-                    "—"
-                  )}
-                </TableCell>
-                <TableCell className="text-right">{r.products_count}</TableCell>
-                <TableCell className="text-right">{r.total_quantity}</TableCell>
-                <TableCell className="text-right">{formatMoney(r.total_cost_bruto ?? r.total_cost_net)}</TableCell>
-                <TableCell>
-                  <Button size="sm" variant="ghost" onClick={() => void getCostReceptionDetail(r.reception_id, companyId).then(setDetail)}>
-                    Detalle
-                  </Button>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+        <AnalyticsFilterBar
+          chips={chips}
+          onApply={applyFilters}
+          onClear={clearFilters}
+          advanced={advancedFields}
+        >
+          {filterFields}
+        </AnalyticsFilterBar>
       )}
 
-      {detail ? (
-        <Card>
-          <CardHeader className="flex flex-row justify-between">
-            <CardTitle className="text-base">Recepción #{detail.reception_id}</CardTitle>
-            <Button size="sm" variant="ghost" onClick={() => setDetail(null)}>Cerrar</Button>
-          </CardHeader>
-          <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Producto</TableHead>
-                  <TableHead className="text-right">Cant.</TableHead>
-                  <TableHead className="text-right">Neto</TableHead>
-                  <TableHead className="text-right">IVA</TableHead>
-                  <TableHead className="text-right">Bruto</TableHead>
-                  <TableHead className="text-right">Var. %</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {detail.items.map((line) => (
-                  <TableRow key={line.reception_detail_id}>
-                    <TableCell>{line.product_name} — {line.variant_name}</TableCell>
-                    <TableCell className="text-right">{line.quantity}</TableCell>
-                    <TableCell className="text-right">{formatMoney(line.cost_net)}</TableCell>
-                    <TableCell className="text-right">{formatMoney(line.iva_amount)}</TableCell>
-                    <TableCell className="text-right">{formatMoney(line.cost_bruto_erp)}</TableCell>
-                    <TableCell className={cn("text-right", variationClass(line.variation_pct))}>
-                      {formatPct(line.variation_pct)}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
-      ) : null}
-    </div>
-  )
-}
-
-function AlertasTab({
-  companyId,
-  offices,
-  officeFilter: _,
-}: {
-  companyId: number
-  offices: CostOfficeRef[]
-  officeFilter: string
-}) {
-  const [items, setItems] = useState<CostAlertRow[]>([])
-  const [loading, setLoading] = useState(true)
-  const [officeFilter, setOfficeFilter] = useState(ALL)
-
-  useEffect(() => {
-    void (async () => {
-      setLoading(true)
-      try {
-        const data = await getCostAlerts({
-          company_id: companyId,
-          office_id: officeFilter !== ALL ? Number(officeFilter) : undefined,
-        })
-        setItems(data.items)
-      } finally {
-        setLoading(false)
-      }
-    })()
-  }, [companyId, officeFilter])
-
-  return (
-    <div className="space-y-4">
-      <div className="max-w-xs">
-        <OfficeFilter offices={offices} value={officeFilter} onChange={setOfficeFilter} />
-      </div>
-      {loading ? (
-        <Loader2 className="mx-auto h-6 w-6 animate-spin" />
-      ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead />
-              <TableHead>Producto</TableHead>
-              <TableHead>Sucursal</TableHead>
-              <TableHead className="text-right">Costo</TableHead>
-              <TableHead className="text-right">Var. %</TableHead>
-              <TableHead>Alertas</TableHead>
-              <TableHead />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {items.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={6} className="text-center text-muted-foreground">
-                  Sin alertas activas.
-                </TableCell>
-              </TableRow>
-            ) : (
-              items.map((a) => (
-                <TableRow key={`${a.variant_id}-${a.office_id ?? 0}`}>
-                  <TableCell><SemaphoreDot level={a.semaphore} /></TableCell>
-                  <TableCell>{a.product_name} — {a.variant_name}</TableCell>
-                  <TableCell>{a.office_name ?? "—"}</TableCell>
-                  <TableCell className="text-right">{formatMoney(a.cost_net)}</TableCell>
-                  <TableCell className={cn("text-right", variationClass(a.variation_pct))}>
-                    {formatPct(a.variation_pct)}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex flex-wrap gap-1">
-                      {a.alert_types.map((t) => (
-                        <Badge key={t} variant="outline" className="text-xs">
-                          {ALERT_LABELS[t] ?? t}
-                        </Badge>
-                      ))}
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <WatchlistButton companyId={companyId} variantId={a.variant_id} size="sm" />
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-      )}
-    </div>
-  )
-}
-
-function ComparacionTab({ companyId }: { companyId: number }) {
-  const [q, setQ] = useState("")
-  const [items, setItems] = useState<CostBranchComparisonRow[]>([])
-  const [selected, setSelected] = useState<CostBranchComparisonRow | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      const data = await listCostBranchComparison({
-        company_id: companyId,
-        q: q.trim().length >= 2 ? q.trim() : undefined,
-        limit: 20,
-      })
-      setItems(data.items)
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Error al comparar")
-    } finally {
-      setLoading(false)
-    }
-  }, [companyId, q])
-
-  useEffect(() => {
-    void load()
-  }, [load])
-
-  return (
-    <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">
-        Variación interna entre sucursales por producto. Semáforo: 0–3% verde, 3–10% amarillo, &gt;10% rojo.
-      </p>
-      <div className="flex gap-2">
-        <Input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Filtrar producto o código…"
-          className="max-w-md"
-          onKeyDown={(e) => e.key === "Enter" && void load()}
+      <section
+        className="grid grid-cols-2 gap-3 sm:grid-cols-2 lg:grid-cols-4"
+        aria-label="Indicadores"
+      >
+        <AnalyticsKpiCard
+          title="Variantes analizadas"
+          value={kpis.variantsAnalyzed ?? "—"}
+          tooltip="Variantes con actividad de costo en el período o catálogo monitoreado."
+          loading={loading}
+          delta={
+            kpis.deltas.variantsAnalyzed != null
+              ? `Δ ${kpis.deltas.variantsAnalyzed}`
+              : "Δ período previo: sin información"
+          }
         />
-        <Button onClick={() => void load()} disabled={loading}>
-          {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Search className="mr-2 h-4 w-4" />}
-          Buscar
-        </Button>
-      </div>
-      {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
+        <AnalyticsKpiCard
+          title="Cobertura costo bruto"
+          value={
+            kpis.grossCoveragePct != null
+              ? `${kpis.grossCoveragePct.toFixed(1)}%`
+              : "—"
+          }
+          tooltip="Porcentaje de variantes con costo bruto conocido (preferente cost_bruto_erp)."
+          loading={loading}
+        />
+        <AnalyticsKpiCard
+          title="Sin costo"
+          value={kpis.withoutCost ?? "—"}
+          tooltip="Variantes del catálogo sin average_cost en variant_cost."
+          loading={loading}
+        />
+        <AnalyticsKpiCard
+          title="Actualizados 30 días"
+          value={kpis.updatedLast30d ?? "—"}
+          subtitle="Recepciones distintas"
+          tooltip="Recepciones de compra en los últimos 30 días (dashboard)."
+          loading={loading}
+        />
+        <AnalyticsKpiCard
+          title="Antiguos +90 días"
+          value={kpis.olderThan90d ?? "—"}
+          tooltip="Última recepción con más de 90 días en el conjunto filtrado."
+          loading={loading}
+        />
+        <AnalyticsKpiCard
+          title="Variación promedio"
+          value={formatPct(kpis.avgVariationPct)}
+          tooltip="Promedio de variation_pct de la última recepción por variante."
+          loading={loading}
+        />
+        <AnalyticsKpiCard
+          title="Alzas importantes"
+          value={kpis.productsWithMajorIncrease ?? "—"}
+          tooltip="Productos con alza de costo >10% (KPI backend)."
+          loading={loading}
+        />
+        <AnalyticsKpiCard
+          title="Última sincronización"
+          value={kpis.lastSyncStatus || "—"}
+          subtitle={formatDateTime(kpis.lastSyncAt)}
+          tooltip="Estado del job sync_cost_receptions para la empresa."
+          loading={loading}
+        />
+      </section>
 
-      {loading ? (
-        <Loader2 className="mx-auto h-6 w-6 animate-spin" />
-      ) : items.length === 0 ? (
-        <p className="text-sm text-muted-foreground">Sin productos con costos en múltiples sucursales.</p>
-      ) : (
-        <div className="space-y-2">
-          {items.map((cmp) => (
-            <Card
-              key={cmp.variant_id}
-              className="cursor-pointer hover:bg-muted/40"
-              onClick={() => setSelected(cmp)}
-            >
-              <CardContent className="flex flex-wrap items-center justify-between gap-2 py-4">
-                <div className="flex items-center gap-3">
-                  <SemaphoreDot level={cmp.semaphore ?? "green"} />
-                  <div>
-                    <p className="font-medium">{cmp.product_name} — {cmp.variant_name}</p>
-                    <p className="text-xs text-muted-foreground">{cmp.barcode}</p>
-                  </div>
-                </div>
-                <div className="text-right text-sm">
-                  <p>Mín {formatMoney(cmp.min_cost)} · Máx {formatMoney(cmp.max_cost)}</p>
-                  <Badge variant={cmp.semaphore === "red" ? "destructive" : "secondary"}>
-                    Var. interna {formatPct(cmp.internal_variation_pct)}
-                  </Badge>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
-
-      {selected ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
-              <SemaphoreDot level={selected.semaphore ?? "green"} />
-              {selected.product_name} — {selected.variant_name}
+      <section className="grid gap-4 lg:grid-cols-2">
+        <Card className="shadow-none">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">
+              Evolución del costo bruto
             </CardTitle>
-            <p className="text-sm text-muted-foreground">
-              Variación interna: {formatPct(selected.internal_variation_pct)}
-            </p>
           </CardHeader>
           <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Sucursal</TableHead>
-                  <TableHead className="text-right">Costo actual</TableHead>
-                  <TableHead>Última recepción</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(selected.offices ?? []).map((o) => (
-                  <TableRow key={o.office_id}>
-                    <TableCell>{o.office_name ?? `Sucursal ${o.office_id}`}</TableCell>
-                    <TableCell className="text-right font-medium">{formatMoney(o.cost_net)}</TableCell>
-                    <TableCell>{formatDate(o.admission_date)}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-            <Button className="mt-4" variant="outline" size="sm" asChild>
-              <Link href={`/costos/productos/${selected.variant_id}?company_id=${companyId}`}>
-                Ver ficha producto
-              </Link>
-            </Button>
+            <CostHistoryChart data={evolution} />
           </CardContent>
         </Card>
-      ) : null}
-    </div>
-  )
-}
-
-function ProductosTab({ companyId }: { companyId: number }) {
-  const [q, setQ] = useState("")
-  const [rows, setRows] = useState<CostProductRow[]>([])
-  const [loading, setLoading] = useState(true)
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const data = await listCostProducts({
-        company_id: companyId,
-        q: q.trim() || undefined,
-        limit: 100,
-      })
-      setRows(data.items)
-    } finally {
-      setLoading(false)
-    }
-  }, [companyId, q])
-
-  useEffect(() => {
-    void load()
-  }, [load])
-
-  return (
-    <div className="space-y-4">
-      <div className="flex gap-2">
-        <Input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Buscar producto…"
-          className="max-w-md"
-          onKeyDown={(e) => e.key === "Enter" && void load()}
-        />
-        <Button onClick={() => void load()} disabled={loading}>Buscar</Button>
-      </div>
-      {loading ? (
-        <Loader2 className="mx-auto h-6 w-6 animate-spin" />
-      ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Producto</TableHead>
-              <TableHead className="text-right">Costo actual</TableHead>
-              <TableHead className="text-right">Promedio</TableHead>
-              <TableHead className="text-right">Stock</TableHead>
-              <TableHead>Última recepción</TableHead>
-              <TableHead />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((r) => (
-              <TableRow key={r.variant_id}>
-                <TableCell>
-                  <div className="font-medium">{r.product_name}</div>
-                  <div className="text-xs text-muted-foreground">{r.variant_name} · {r.barcode}</div>
-                </TableCell>
-                <TableCell className="text-right">{formatMoney(r.current_cost)}</TableCell>
-                <TableCell className="text-right">{formatMoney(r.average_cost)}</TableCell>
-                <TableCell className="text-right tabular-nums">{r.stock_quantity ?? "—"}</TableCell>
-                <TableCell>{formatDate(r.last_reception_date)}</TableCell>
-                <TableCell>
-                  <Button size="sm" variant="ghost" asChild>
-                    <Link href={`/costos/productos/${r.variant_id}?company_id=${companyId}`}>
-                      Ficha
-                    </Link>
-                  </Button>
-                  <WatchlistButton companyId={companyId} variantId={r.variant_id} size="sm" />
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      )}
-    </div>
-  )
-}
-
-function OportunidadesTab({ companyId }: { companyId: number }) {
-  const [status, setStatus] = useState<string>(ALL)
-  const [rows, setRows] = useState<CostOpportunityRow[]>([])
-  const [counts, setCounts] = useState({ oportunidad_compra: 0, riesgo_comercial: 0 })
-  const [loading, setLoading] = useState(true)
-
-  const load = useCallback(async () => {
-    setLoading(true)
-    try {
-      const data = await listCostOpportunities({
-        company_id: companyId,
-        status:
-          status === ALL
-            ? undefined
-            : (status as "oportunidad_compra" | "riesgo_comercial"),
-        limit: 50,
-      })
-      setRows(data.items)
-      setCounts(data.counts)
-    } finally {
-      setLoading(false)
-    }
-  }, [companyId, status])
-
-  useEffect(() => {
-    void load()
-  }, [load])
-
-  return (
-    <div className="space-y-4">
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Card className="border-green-200 dark:border-green-900">
-          <CardContent className="flex items-center gap-3 py-4">
-            <TrendingDown className="h-8 w-8 text-green-600" />
-            <div>
-              <p className="text-2xl font-semibold">{counts.oportunidad_compra}</p>
-              <p className="text-sm text-muted-foreground">Oportunidades de compra</p>
-            </div>
+        <Card className="shadow-none">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">
+              Distribución por antigüedad
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <CostAgeDistributionChart data={ageDist} />
           </CardContent>
         </Card>
-        <Card className="border-red-200 dark:border-red-900">
-          <CardContent className="flex items-center gap-3 py-4">
-            <TrendingUp className="h-8 w-8 text-red-600" />
-            <div>
-              <p className="text-2xl font-semibold">{counts.riesgo_comercial}</p>
-              <p className="text-sm text-muted-foreground">Costos elevados</p>
-            </div>
+        <Card className="shadow-none">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">
+              Top productos con mayor alza
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <CostTopIncreasesList items={topUp} />
           </CardContent>
         </Card>
-      </div>
-      <Select value={status} onValueChange={setStatus}>
-        <SelectTrigger className="w-[220px]">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={ALL}>Todas</SelectItem>
-          <SelectItem value="oportunidad_compra">Oportunidad compra</SelectItem>
-          <SelectItem value="riesgo_comercial">Riesgo comercial</SelectItem>
-        </SelectContent>
-      </Select>
-      {loading ? (
-        <Loader2 className="mx-auto h-6 w-6 animate-spin" />
-      ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Producto</TableHead>
-              <TableHead className="text-right">Costo actual</TableHead>
-              <TableHead className="text-right">Prom. 90d</TableHead>
-              <TableHead className="text-right">Variación</TableHead>
-              <TableHead className="text-right">Stock</TableHead>
-              <TableHead>Estado</TableHead>
-              <TableHead />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={6} className="text-center text-muted-foreground">
-                  Sin oportunidades con el filtro seleccionado.
-                </TableCell>
-              </TableRow>
+        <Card className="shadow-none">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">
+              Oportunidades y riesgos de compra
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="mb-2 text-xs text-muted-foreground">
+              Derivado de /cost-analytics (costos recientes vs promedios). No usa
+              ventas.
+            </p>
+            {opportunities.length === 0 ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">
+                Sin oportunidades detectadas en el período.
+              </p>
             ) : (
-              rows.map((r) => {
-                const st = r.status ? OPPORTUNITY_STATUS[r.status] : null
-                return (
-                  <TableRow key={r.variant_id}>
-                    <TableCell>
-                      <div className="font-medium">{r.product_name}</div>
-                      <div className="text-xs text-muted-foreground">{r.variant_name}</div>
-                    </TableCell>
-                    <TableCell className="text-right">{formatMoney(r.current_cost)}</TableCell>
-                    <TableCell className="text-right">{formatMoney(r.avg_90d)}</TableCell>
-                    <TableCell className={cn("text-right", variationClass(r.variation_pct_90d))}>
-                      {formatPct(r.variation_pct_90d)}
-                    </TableCell>
-                    <TableCell className="text-right">{r.stock_quantity ?? "—"}</TableCell>
-                    <TableCell>
-                      {st ? (
-                        <Badge className={st.className}>{st.label}</Badge>
-                      ) : (
-                        "—"
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <WatchlistButton companyId={companyId} variantId={r.variant_id} size="sm" />
-                    </TableCell>
-                  </TableRow>
-                )
-              })
+              <ul className="divide-y divide-border/60">
+                {opportunities.slice(0, 8).map((o) => (
+                  <li
+                    key={o.variant_id}
+                    className="flex items-center justify-between gap-2 py-2 text-sm"
+                  >
+                    <button
+                      type="button"
+                      className="min-w-0 truncate text-left font-medium outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                      onClick={() => {
+                        const row = tableFiltered.find(
+                          (r) => r.variantId === o.variant_id,
+                        )
+                        if (row) {
+                          setSelected(row)
+                          setDrawerOpen(true)
+                        }
+                      }}
+                    >
+                      {o.product_name || `Variante ${o.variant_id}`}
+                    </button>
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {o.status_label || o.status || "—"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             )}
-          </TableBody>
-        </Table>
-      )}
+          </CardContent>
+        </Card>
+      </section>
+
+      <section aria-label="Tabla de costos" className="space-y-2">
+        <h2 className="text-sm font-medium text-foreground">
+          Último costo bruto por variante
+        </h2>
+        <CostMainTable
+          rows={pageRows}
+          loading={loading}
+          error={null}
+          page={page}
+          pageSize={PAGE_SIZE}
+          total={tableFiltered.length}
+          onPageChange={setPage}
+          onSelect={(row) => {
+            setSelected(row)
+            setDrawerOpen(true)
+          }}
+        />
+        {historyTotal > rawHistory.length ? (
+          <p className="text-xs text-muted-foreground">
+            Mostrando hasta {rawHistory.length} líneas de historial de{" "}
+            {historyTotal} en el servidor. Refine fechas si necesita más
+            cobertura.
+          </p>
+        ) : null}
+      </section>
+
+      <CostDetailDrawer
+        open={drawerOpen}
+        onOpenChange={setDrawerOpen}
+        row={selected}
+        companyId={Number(applied.companyId) || 0}
+      />
+
+      <Sheet open={showAlerts} onOpenChange={setShowAlerts}>
+        <SheetContent className="sm:max-w-md">
+          <SheetHeader>
+            <SheetTitle>Alertas de costo</SheetTitle>
+          </SheetHeader>
+          <p className="mt-4 text-sm text-muted-foreground">
+            Hay {alertCount} alertas recientes para la empresa. Use la ficha de
+            producto o el historial para revisar variaciones y costos faltantes.
+          </p>
+          <Button
+            type="button"
+            className="mt-4"
+            variant="outline"
+            onClick={() => setShowAlerts(false)}
+          >
+            Cerrar
+          </Button>
+        </SheetContent>
+      </Sheet>
     </div>
   )
 }

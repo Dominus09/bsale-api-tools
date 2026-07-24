@@ -1,16 +1,16 @@
-"""Contratos canónicos del motor analítico (Etapa 1).
+"""Contratos canónicos del motor analítico.
+
+Vista predeterminada Quillotana = COMERCIAL BRUTA (IVA + ILA incluidos).
+Vista secundaria = NETA.
 
 Definiciones financieras (referencia):
 
-- line_net_sales: monto neto de línea (sin IVA), o prorrateo reconciliable
-  del net_amount del documento (etapa posterior).
-- net_sales agregado: Σ ventas activas netas − Σ NC activas netas.
-- historical_cost: historical_unit_cost × net_quantity.
-- gross_profit: net_sales − historical_cost (None si falta costo).
-- gross_margin_pct: gross_profit / net_sales × 100 (None si net_sales=0
-  o falta costo).
-- markup_pct: gross_profit / historical_cost × 100 (None si costo≤0
-  o falta costo).
+- gross_sales: line.total_amount (preferido) o document.total_amount.
+- net_sales: monto neto de línea / prorrateo reconciliable.
+- historical_net_cost: historical_net_unit_cost × quantity (Bsale costo base).
+- historical_gross_cost: net + cost_iva + cost_ila (aditivo; no compuesto).
+- gross_commercial_profit: gross_sales − historical_gross_cost (UI default).
+- net metrics (gross_profit / gross_margin_pct / markup_pct): vista secundaria.
 
 Política de Márgenes = target/control; no altera margen real.
 """
@@ -158,7 +158,7 @@ class ResolvedCost:
 
 @dataclass(frozen=True, slots=True)
 class LineEconomics:
-    """Economía de una línea tras aplicar fórmulas canónicas."""
+    """Economía NETA de una línea (vista secundaria; compat Etapa 1)."""
 
     net_sales: Decimal
     historical_cost: Decimal | None
@@ -166,6 +166,37 @@ class LineEconomics:
     gross_margin_pct: Decimal | None
     markup_pct: Decimal | None
     cost_quality: CostQualityStatus
+
+
+@dataclass(frozen=True, slots=True)
+class CommercialLineEconomics:
+    """Economía comercial completa (bruta predeterminada + neta secundaria)."""
+
+    net_sales: Decimal
+    iva_sales: Decimal | None
+    ila_sales: Decimal | None
+    gross_sales: Decimal
+    historical_net_unit_cost: Decimal | None
+    historical_net_cost: Decimal | None
+    cost_iva: Decimal | None
+    cost_ila: Decimal | None
+    historical_gross_unit_cost: Decimal | None
+    historical_gross_cost: Decimal | None
+    net_gross_profit: Decimal | None
+    gross_commercial_profit: Decimal | None
+    net_margin_pct: Decimal | None
+    gross_commercial_margin_pct: Decimal | None
+    net_markup_pct: Decimal | None
+    gross_commercial_markup_pct: Decimal | None
+    cost_quality: CostQualityStatus
+    tax_resolution_method: str
+    tax_quality_status: str
+    tax_category: str | None = None
+    tax_source: str | None = None
+    gross_cost_quality: str | None = None
+    tax_breakdown_quality: str | None = None
+    total_tax_amount: Decimal | None = None
+    unclassified_tax_amount: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,6 +209,7 @@ class AnalyticsLine:
     product_id: int | None
     variant_id: int | None
     net_quantity: Decimal
+    # --- neto (secundario; nombres Etapa 1 conservados) ---
     net_sales: Decimal
     historical_cost: Decimal | None
     gross_profit: Decimal | None
@@ -186,6 +218,30 @@ class AnalyticsLine:
     related_credit_note_id: int | None
     cost_quality: CostQualityStatus
     data_quality: DataQualityStatus
+    # --- bruto comercial (predeterminado UI) ---
+    iva_sales: Decimal | None = None
+    ila_sales: Decimal | None = None
+    gross_sales: Decimal | None = None
+    historical_net_unit_cost: Decimal | None = None
+    historical_net_cost: Decimal | None = None
+    cost_iva: Decimal | None = None
+    cost_ila: Decimal | None = None
+    historical_gross_unit_cost: Decimal | None = None
+    historical_gross_cost: Decimal | None = None
+    net_gross_profit: Decimal | None = None
+    gross_commercial_profit: Decimal | None = None
+    net_margin_pct: Decimal | None = None
+    gross_commercial_margin_pct: Decimal | None = None
+    net_markup_pct: Decimal | None = None
+    gross_commercial_markup_pct: Decimal | None = None
+    tax_resolution_method: str | None = None
+    tax_quality_status: str | None = None
+    tax_category: str | None = None
+    tax_source: str | None = None
+    gross_cost_quality: str | None = None
+    tax_breakdown_quality: str | None = None
+    total_tax_amount: Decimal | None = None
+    unclassified_tax_amount: Decimal | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,3 +259,12 @@ class AnalyticsSummary:
     net_units: Decimal
     data_quality: DataQuality
     extra: dict[str, Any] = field(default_factory=dict)
+    # Agregados brutos comerciales (cuando el pipeline los rellene)
+    historical_gross_cost: Decimal | None = None
+    gross_commercial_profit: Decimal | None = None
+    gross_commercial_margin_pct: Decimal | None = None
+    gross_commercial_markup_pct: Decimal | None = None
+    cost_iva: Decimal | None = None
+    cost_ila: Decimal | None = None
+    iva_sales: Decimal | None = None
+    ila_sales: Decimal | None = None
