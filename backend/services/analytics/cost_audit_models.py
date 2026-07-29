@@ -1,0 +1,282 @@
+"""Modelos y tolerancias del auditor de calidad de costos (read-only).
+
+No modifica sync ni datos. Las fórmulas aquí son de auditoría independiente:
+no reutilizan split_erp_cost del sync (objeto auditado).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import date, datetime
+from decimal import Decimal
+from enum import Enum
+from typing import Any
+
+from backend.services.analytics.money import ZERO, optional_decimal
+from backend.services.analytics.validate_distribuidora_source import (
+    AnalyticsValidationError,
+)
+
+MAX_DAYS = 365
+MAX_LIMIT = 5000
+MAX_SAMPLE_LIMIT = 100
+MAX_TIMEOUT_SECONDS = 30
+DEFAULT_DAYS = 90
+DEFAULT_LIMIT = 500
+DEFAULT_SAMPLE_LIMIT = 20
+DEFAULT_TIMEOUT_SECONDS = 20
+DEFAULT_LOCK_TIMEOUT = "3s"
+
+
+class CostAuditFlag(str, Enum):
+    EXACT_MATCH = "exact_match"
+    ROUNDING_DIFFERENCE = "rounding_difference"
+    GROSS_MISMATCH = "gross_mismatch"
+    TAX_MISMATCH = "tax_mismatch"
+    PROBABLE_MISSING_TAXES = "probable_missing_taxes"
+    PROBABLE_IVA_DUPLICATED = "probable_iva_duplicated"
+    PROBABLE_SPECIFIC_TAX_DUPLICATED = "probable_specific_tax_duplicated"
+    PROBABLE_TAX_FACTOR_DUPLICATED = "probable_tax_factor_duplicated"
+    QUANTITY_MISMATCH = "quantity_mismatch"
+    UNIT_TOTAL_MISMATCH = "unit_total_mismatch"
+    DUPLICATE_RECEPTION = "duplicate_reception"
+    DUPLICATE_VARIANT_LINK = "duplicate_variant_link"
+    VARIANT_BARCODE_MISMATCH = "variant_barcode_mismatch"
+    MISSING_TAX_CONTEXT = "missing_tax_context"
+    TAX_IDS_NOT_CONSUMED = "tax_ids_not_consumed"
+    MISSING_NET_COST = "missing_net_cost"
+    MISSING_GROSS_COST = "missing_gross_cost"
+    ZERO_COST = "zero_cost"
+    NEGATIVE_COST = "negative_cost"
+    SUSPICIOUS_OUTLIER = "suspicious_outlier"
+    STALE_SNAPSHOT = "stale_snapshot"
+    SOURCE_CONFLICT = "source_conflict"
+
+
+QUALITY_COUNTER_KEYS: tuple[str, ...] = (
+    CostAuditFlag.EXACT_MATCH.value,
+    CostAuditFlag.ROUNDING_DIFFERENCE.value,
+    CostAuditFlag.GROSS_MISMATCH.value,
+    CostAuditFlag.TAX_MISMATCH.value,
+    CostAuditFlag.PROBABLE_MISSING_TAXES.value,
+    CostAuditFlag.PROBABLE_IVA_DUPLICATED.value,
+    CostAuditFlag.PROBABLE_SPECIFIC_TAX_DUPLICATED.value,
+    CostAuditFlag.UNIT_TOTAL_MISMATCH.value,
+    CostAuditFlag.DUPLICATE_RECEPTION.value,
+    CostAuditFlag.VARIANT_BARCODE_MISMATCH.value,
+    CostAuditFlag.MISSING_TAX_CONTEXT.value,
+    CostAuditFlag.TAX_IDS_NOT_CONSUMED.value,
+    CostAuditFlag.ZERO_COST.value,
+    CostAuditFlag.NEGATIVE_COST.value,
+    CostAuditFlag.SUSPICIOUS_OUTLIER.value,
+    CostAuditFlag.STALE_SNAPSHOT.value,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class CostAuditTolerances:
+    """Criterios centralizados y configurables."""
+
+    money_rounding: Decimal = Decimal("0.01")
+    money_exact: Decimal = Decimal("0.0001")
+    pct_soft: Decimal = Decimal("0.5")  # % sobre |cost_net|
+    stale_snapshot_days: int = 90
+    outlier_factor: Decimal = Decimal("3")
+    min_candidates_for_outlier: int = 3
+    duplicate_iva_tolerance: Decimal = Decimal("0.02")  # fracción relativa
+    unit_total_rel_tolerance: Decimal = Decimal("0.02")
+
+
+DEFAULT_TOLERANCES = CostAuditTolerances()
+
+
+@dataclass(frozen=True, slots=True)
+class CostAuditArgs:
+    company_id: int
+    office_id: int | None = None
+    days: int = DEFAULT_DAYS
+    limit: int = DEFAULT_LIMIT
+    sample_limit: int = DEFAULT_SAMPLE_LIMIT
+    statement_timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS
+    variant_id: int | None = None
+    barcode: str | None = None
+    source_document_id: int | None = None
+    lock_timeout: str = DEFAULT_LOCK_TIMEOUT
+    tolerances: CostAuditTolerances = DEFAULT_TOLERANCES
+
+
+def clamp_cost_audit_args(
+    *,
+    company_id: int,
+    office_id: int | None = None,
+    days: int = DEFAULT_DAYS,
+    limit: int = DEFAULT_LIMIT,
+    sample_limit: int = DEFAULT_SAMPLE_LIMIT,
+    statement_timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    variant_id: int | None = None,
+    barcode: str | None = None,
+    source_document_id: int | None = None,
+    tolerances: CostAuditTolerances | None = None,
+) -> CostAuditArgs:
+    if int(company_id) <= 0:
+        raise AnalyticsValidationError(
+            "company_id is required and must be > 0",
+            error_type="invalid_args",
+        )
+    office: int | None
+    if office_id is None:
+        office = None
+    else:
+        office = int(office_id)
+        if office <= 0:
+            raise AnalyticsValidationError(
+                "office_id must be > 0 when provided",
+                error_type="invalid_args",
+            )
+    return CostAuditArgs(
+        company_id=int(company_id),
+        office_id=office,
+        days=max(1, min(int(days), MAX_DAYS)),
+        limit=max(1, min(int(limit), MAX_LIMIT)),
+        sample_limit=max(1, min(int(sample_limit), MAX_SAMPLE_LIMIT)),
+        statement_timeout_seconds=max(
+            1, min(int(statement_timeout_seconds), MAX_TIMEOUT_SECONDS)
+        ),
+        variant_id=int(variant_id) if variant_id is not None else None,
+        barcode=(barcode.strip() if barcode and str(barcode).strip() else None),
+        source_document_id=(
+            int(source_document_id) if source_document_id is not None else None
+        ),
+        tolerances=tolerances or DEFAULT_TOLERANCES,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class TaxCatalogEntry:
+    tax_id: int
+    name: str | None
+    percentage: Decimal | None
+
+
+@dataclass(frozen=True, slots=True)
+class CostAuditRawRow:
+    """Fila cruda cargada en batch (history + joins)."""
+
+    history_id: int
+    unique_key: str | None
+    reception_id: int | None
+    reception_detail_id: int | None
+    source_document_id: int | None  # document_number o reception_id (no hay col canónica)
+    variant_id: int
+    product_id: int | None
+    product_name: str | None
+    variant_name: str | None
+    barcode: str | None
+    variant_code: str | None
+    catalog_barcode: str | None
+    admission_date: date | datetime | None
+    quantity: Decimal | None
+    cost_net: Decimal | None  # None preservado (no forzar 0)
+    iva_amount: Decimal | None
+    other_taxes: Decimal | None
+    cost_bruto_erp: Decimal | None
+    average_cost: Decimal | None
+    reception_type: str | None
+    office_id: int | None
+    # variant_cost snapshot
+    variant_cost_net: Decimal | None
+    variant_cost_gross: Decimal | None
+    vc_iva_rate: Decimal | None
+    vc_tax_factor: Decimal | None
+    specific_taxes: Any
+    cost_source: str | None
+    last_update: date | datetime | None
+    # product tax context
+    product_tax_factor: Decimal | None
+    tax_ids_json: Any
+    products_taxes: Any
+    has_products_taxes_column: bool
+    has_tax_ids_json: bool
+    has_product_tax_factor: bool
+
+
+@dataclass(slots=True)
+class CostAuditRowResult:
+    raw: CostAuditRawRow
+    expected_gross_from_amounts: Decimal | None
+    expected_gross_from_rates: Decimal | None
+    expected_iva_from_rate: Decimal | None
+    expected_specific_tax_from_rate: Decimal | None
+    gross_difference_amounts: Decimal | None
+    gross_difference_rates: Decimal | None
+    tax_factor_used: Decimal | None
+    iva_rate_used: Decimal | None
+    specific_tax_rate_used: Decimal | None
+    flags: list[str] = field(default_factory=list)
+    probable_cause: str | None = None
+
+    def to_sample_dict(self) -> dict[str, Any]:
+        r = self.raw
+
+        def _s(v: Decimal | None) -> str | None:
+            return None if v is None else str(v)
+
+        adm = r.admission_date
+        if isinstance(adm, datetime):
+            adm_s = adm.date().isoformat()
+        elif isinstance(adm, date):
+            adm_s = adm.isoformat()
+        else:
+            adm_s = None
+        return {
+            "history_id": r.history_id,
+            "source_document_id": r.source_document_id,
+            "variant_id": r.variant_id,
+            "product_name": r.product_name,
+            "variant_name": r.variant_name,
+            "barcode": r.barcode or r.catalog_barcode,
+            "variant_code": r.variant_code,
+            "admission_date": adm_s,
+            "quantity": _s(r.quantity),
+            "cost_net": _s(r.cost_net),
+            "iva_amount": _s(r.iva_amount),
+            "other_taxes": _s(r.other_taxes),
+            "cost_bruto_erp": _s(r.cost_bruto_erp),
+            "expected_gross_from_amounts": _s(self.expected_gross_from_amounts),
+            "expected_gross_from_rates": _s(self.expected_gross_from_rates),
+            "difference": _s(self.gross_difference_amounts),
+            "average_cost": _s(r.average_cost),
+            "variant_cost_net": _s(r.variant_cost_net),
+            "variant_cost_gross": _s(r.variant_cost_gross),
+            "tax_factor": _s(self.tax_factor_used),
+            "iva_rate": _s(self.iva_rate_used),
+            "specific_taxes": r.specific_taxes,
+            "tax_ids_json": r.tax_ids_json,
+            "products_taxes": r.products_taxes,
+            "flags": list(self.flags),
+            "probable_cause": self.probable_cause,
+        }
+
+
+def coerce_optional_decimal(value: Any) -> Decimal | None:
+    """Preserva None; no convierte silenciosamente a cero."""
+    if value is None:
+        return None
+    return optional_decimal(value)
+
+
+def rate_to_fraction(rate: Decimal | None) -> Decimal | None:
+    """Convierte tasa almacenada a fracción.
+
+    Convención confirmada en sync: iva_rate en puntos (19 = 19%).
+    Si rate <= 1 se interpreta como fracción ya normalizada.
+    """
+    if rate is None:
+        return None
+    if rate > Decimal("1"):
+        return rate / Decimal("100")
+    return rate
+
+
+def abs_decimal(value: Decimal) -> Decimal:
+    return value if value >= ZERO else -value

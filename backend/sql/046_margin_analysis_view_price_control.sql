@@ -9,9 +9,13 @@
 --   datos canónicos vía GET /price-list-control (Python + Decimal), usando
 --   el costo bruto máximo válido de analytics.cost_reception_history.
 --
--- Esta migración es opcional: alinea la vista SQL con estados canónicos y
--- max_margin, pero NO replica el resolvedor de costo máximo válido (queda
--- en el servicio). Útil para reportes/ad-hoc que lean la vista.
+-- PostgreSQL: CREATE OR REPLACE VIEW NO puede renombrar ni reordenar columnas.
+--   Solo se pueden AGREGAR columnas al FINAL. Por eso gross_margin_pct y
+--   max_margin_percent van después de status.
+--
+-- Si hiciera falta reordenar, usar:
+--   DROP VIEW IF EXISTS bsale.margin_analysis_view;
+--   CREATE VIEW ...
 -- =============================================================================
 
 CREATE OR REPLACE VIEW bsale.margin_analysis_view AS
@@ -109,6 +113,7 @@ calc AS (
     FROM joined
 )
 SELECT
+    -- Columnas originales (mismo orden/nombres que la vista existente)
     company_id,
     product_type_id,
     product_type_name,
@@ -124,9 +129,7 @@ SELECT
     cost,
     margin_value,
     margin_percent,
-    gross_margin_pct,
     min_margin_percent,
-    max_margin_percent,
     CASE
         WHEN margin_percent IS NOT NULL AND min_margin_percent IS NOT NULL THEN
             ROUND((margin_percent - min_margin_percent)::numeric, 4)
@@ -140,7 +143,10 @@ SELECT
              AND max_margin_percent > 0
              AND margin_percent > max_margin_percent THEN 'above_maximum'
         ELSE 'within_policy'
-    END AS status
+    END AS status,
+    -- Columnas nuevas solo al final (permitido por CREATE OR REPLACE VIEW)
+    gross_margin_pct,
+    max_margin_percent
 FROM calc;
 
 COMMENT ON VIEW bsale.margin_analysis_view IS
