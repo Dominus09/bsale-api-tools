@@ -240,6 +240,158 @@ LIMIT 500
             match_details=tuple(details),
         )
 
+    def _history_scope_sql(
+        self,
+        args: CostAuditArgs,
+        *,
+        date_from: date,
+        date_to: date,
+        variant_ids: list[int] | None,
+        select_clause: str,
+        order_limit: str = "",
+    ) -> tuple[str, list[Any]]:
+        """WHERE común para population / detail (sin N+1)."""
+        has_tax_ids = self.column_exists("bsale", "products", "tax_ids_json")
+        date_to_exclusive = date_to + timedelta(days=1)
+        needs_product = "p." in select_clause or "tax_ids" in select_clause.lower()
+        join_product = ""
+        if needs_product or has_tax_ids:
+            join_product = """
+LEFT JOIN bsale.variants v
+    ON v.company_id = h.company_id
+   AND v.bsale_id = h.variant_id
+LEFT JOIN bsale.products p
+    ON p.company_id = h.company_id
+   AND p.bsale_id = COALESCE(h.product_id, v.product_id)
+"""
+        sql = f"""
+SELECT
+    {select_clause}
+FROM analytics.cost_reception_history h
+{join_product}
+WHERE h.company_id = %s
+  AND h.admission_date >= %s
+  AND h.admission_date < %s
+""".strip()
+        params: list[Any] = [args.company_id, date_from, date_to_exclusive]
+        if args.office_id is not None:
+            sql += " AND h.office_id = %s"
+            params.append(args.office_id)
+        if args.variant_id is not None:
+            sql += " AND h.variant_id = %s"
+            params.append(args.variant_id)
+        if variant_ids is not None:
+            if not variant_ids:
+                # caller should short-circuit
+                sql += " AND FALSE"
+            else:
+                sql += " AND h.variant_id = ANY(%s)"
+                params.append(list(variant_ids))
+        if args.source_document_id is not None:
+            sql += " AND (h.document_number = %s OR h.reception_id = %s)"
+            params.extend([args.source_document_id, args.source_document_id])
+        if order_limit:
+            sql += " " + order_limit
+        return sql, params
+
+    def fetch_population_summary(
+        self,
+        args: CostAuditArgs,
+        *,
+        date_from: date,
+        date_to: date,
+        variant_ids: list[int] | None = None,
+    ) -> dict[str, Any]:
+        """Agregados sobre TODO el rango (sin LIMIT de samples/detalle)."""
+        if variant_ids is not None and not variant_ids:
+            return {
+                "rows_in_scope": 0,
+                "unique_variants": 0,
+                "unique_documents": 0,
+                "min_admission_date": None,
+                "max_admission_date": None,
+            }
+        select_clause = """
+    COUNT(*)::bigint AS rows_in_scope,
+    COUNT(DISTINCT h.variant_id)::bigint AS unique_variants,
+    COUNT(DISTINCT COALESCE(h.document_number, h.reception_id))::bigint AS unique_documents,
+    MIN(h.admission_date::date) AS min_admission_date,
+    MAX(h.admission_date::date) AS max_admission_date
+"""
+        sql, params = self._history_scope_sql(
+            args,
+            date_from=date_from,
+            date_to=date_to,
+            variant_ids=variant_ids,
+            select_clause=select_clause.strip(),
+        )
+        rows = self._execute(sql, tuple(params))
+        if not rows:
+            return {
+                "rows_in_scope": 0,
+                "unique_variants": 0,
+                "unique_documents": 0,
+                "min_admission_date": None,
+                "max_admission_date": None,
+            }
+        row = rows[0]
+        min_d = _as_date(row.get("min_admission_date"))
+        max_d = _as_date(row.get("max_admission_date"))
+        return {
+            "rows_in_scope": int(row.get("rows_in_scope") or 0),
+            "unique_variants": int(row.get("unique_variants") or 0),
+            "unique_documents": int(row.get("unique_documents") or 0),
+            "min_admission_date": min_d.isoformat() if min_d else None,
+            "max_admission_date": max_d.isoformat() if max_d else None,
+        }
+
+    def fetch_tax_combination_counts(
+        self,
+        args: CostAuditArgs,
+        *,
+        date_from: date,
+        date_to: date,
+        variant_ids: list[int] | None = None,
+    ) -> dict[str, int]:
+        """Conteo por fingerprint ordenado de tax_ids (población, no samples)."""
+        if variant_ids is not None and not variant_ids:
+            return {}
+        has_tax_ids = self.column_exists("bsale", "products", "tax_ids_json")
+        if not has_tax_ids:
+            return {"(no_tax_ids_column)": 0}
+        # Fingerprint en SQL: ordenar ids vía jsonb (aproximación estable)
+        select_clause = """
+    COALESCE(
+        (
+            SELECT string_agg(x::text, ',' ORDER BY x::int)
+            FROM jsonb_array_elements_text(
+                CASE
+                    WHEN jsonb_typeof(p.tax_ids_json) = 'array' THEN p.tax_ids_json
+                    ELSE '[]'::jsonb
+                END
+            ) AS t(x)
+        ),
+        ''
+    ) AS tax_fp,
+    COUNT(*)::bigint AS cnt
+"""
+        sql, params = self._history_scope_sql(
+            args,
+            date_from=date_from,
+            date_to=date_to,
+            variant_ids=variant_ids,
+            select_clause=select_clause.strip(),
+        )
+        sql += " GROUP BY 1 ORDER BY cnt DESC LIMIT 200"
+        rows = self._execute(sql, tuple(params))
+        out: dict[str, int] = {}
+        for row in rows:
+            fp = row.get("tax_fp") or "(none)"
+            if fp == "":
+                fp = "(none)"
+            out[str(fp)] = int(row.get("cnt") or 0)
+        return out
+
     def fetch_history_rows(
         self,
         args: CostAuditArgs,
@@ -247,7 +399,65 @@ LIMIT 500
         date_from: date,
         date_to: date,
         variant_ids: list[int] | None = None,
+        offset: int = 0,
+        limit: int | None = None,
     ) -> list[CostAuditRawRow]:
+        return self._fetch_history_rows_impl(
+            args,
+            date_from=date_from,
+            date_to=date_to,
+            variant_ids=variant_ids,
+            offset=offset,
+            limit=limit if limit is not None else args.limit,
+        )
+
+    def fetch_history_rows_paged(
+        self,
+        args: CostAuditArgs,
+        *,
+        date_from: date,
+        date_to: date,
+        variant_ids: list[int] | None = None,
+    ) -> list[CostAuditRawRow]:
+        """Carga detalle paginado hasta page_size*max_pages / limit (no sample-limit)."""
+        if variant_ids is not None and not variant_ids:
+            return []
+        page_size = max(1, int(args.page_size))
+        max_pages = max(1, int(args.max_pages))
+        hard_cap = max(1, int(args.limit))
+        out: list[CostAuditRawRow] = []
+        for page in range(max_pages):
+            if len(out) >= hard_cap:
+                break
+            remaining = hard_cap - len(out)
+            batch_limit = min(page_size, remaining)
+            batch = self._fetch_history_rows_impl(
+                args,
+                date_from=date_from,
+                date_to=date_to,
+                variant_ids=variant_ids,
+                offset=page * page_size,
+                limit=batch_limit,
+            )
+            if not batch:
+                break
+            out.extend(batch)
+            if len(batch) < batch_limit:
+                break
+        return out
+
+    def _fetch_history_rows_impl(
+        self,
+        args: CostAuditArgs,
+        *,
+        date_from: date,
+        date_to: date,
+        variant_ids: list[int] | None = None,
+        offset: int = 0,
+        limit: int = 500,
+    ) -> list[CostAuditRawRow]:
+        if variant_ids is not None and not variant_ids:
+            return []
         has_taxes = self.column_exists("bsale", "products", "taxes")
         has_tax_ids = self.column_exists("bsale", "products", "tax_ids_json")
         has_tax_factor = self.column_exists("bsale", "products", "tax_factor")
@@ -286,7 +496,6 @@ LIMIT 500
             "vc.cost_source AS cost_source" if has_vc_source else "NULL::text AS cost_source"
         )
 
-        # date_to inclusivo: admission_date < date_to + 1 day
         date_to_exclusive = date_to + timedelta(days=1)
 
         sql = f"""
@@ -343,18 +552,14 @@ WHERE h.company_id = %s
         if args.variant_id is not None:
             sql += " AND h.variant_id = %s"
             params.append(args.variant_id)
-        # Filtro barcode: SOLO por variant_id(s) ya resueltos (misma fuente /costos).
-        # Nunca filtrar por variants.code como barcode.
         if variant_ids is not None:
-            if not variant_ids:
-                return []
             sql += " AND h.variant_id = ANY(%s)"
             params.append(list(variant_ids))
         if args.source_document_id is not None:
             sql += " AND (h.document_number = %s OR h.reception_id = %s)"
             params.extend([args.source_document_id, args.source_document_id])
-        sql += " ORDER BY h.admission_date DESC, h.id DESC LIMIT %s"
-        params.append(args.limit)
+        sql += " ORDER BY h.admission_date DESC, h.id DESC LIMIT %s OFFSET %s"
+        params.extend([int(limit), max(0, int(offset))])
 
         rows = self._execute(sql, tuple(params))
         out: list[CostAuditRawRow] = []

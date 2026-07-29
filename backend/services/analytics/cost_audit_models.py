@@ -18,14 +18,18 @@ from backend.services.analytics.validate_distribuidora_source import (
 )
 
 MAX_DAYS = 365
-MAX_LIMIT = 5000
+MAX_LIMIT = 50000  # tope de filas clasificadas en detalle
 MAX_SAMPLE_LIMIT = 100
 MAX_TIMEOUT_SECONDS = 30
+MAX_PAGE_SIZE = 2000
+MAX_PAGES = 100
 DEFAULT_DAYS = 90
-DEFAULT_LIMIT = 500
+DEFAULT_LIMIT = 5000  # scan de detalle por defecto (no confunde con sample-limit)
 DEFAULT_SAMPLE_LIMIT = 20
 DEFAULT_TIMEOUT_SECONDS = 20
 DEFAULT_LOCK_TIMEOUT = "3s"
+DEFAULT_PAGE_SIZE = 500
+DEFAULT_MAX_PAGES = 20
 
 
 class CostAuditFlag(str, Enum):
@@ -182,6 +186,9 @@ class CostAuditArgs:
     source_document_id: int | None = None
     lock_timeout: str = DEFAULT_LOCK_TIMEOUT
     tolerances: CostAuditTolerances = DEFAULT_TOLERANCES
+    page_size: int = DEFAULT_PAGE_SIZE
+    max_pages: int = DEFAULT_MAX_PAGES
+    summary_only: bool = False
 
 
 def clamp_cost_audit_args(
@@ -196,6 +203,9 @@ def clamp_cost_audit_args(
     barcode: str | None = None,
     source_document_id: int | None = None,
     tolerances: CostAuditTolerances | None = None,
+    page_size: int = DEFAULT_PAGE_SIZE,
+    max_pages: int = DEFAULT_MAX_PAGES,
+    summary_only: bool = False,
 ) -> CostAuditArgs:
     if int(company_id) <= 0:
         raise AnalyticsValidationError(
@@ -212,11 +222,16 @@ def clamp_cost_audit_args(
                 "office_id must be > 0 when provided",
                 error_type="invalid_args",
             )
+    page_size_i = max(1, min(int(page_size), MAX_PAGE_SIZE))
+    max_pages_i = max(1, min(int(max_pages), MAX_PAGES))
+    # limit = tope de filas a clasificar; no limita population SQL
+    scan_cap = max(1, min(int(limit), MAX_LIMIT))
+    scan_cap = min(scan_cap, page_size_i * max_pages_i)
     return CostAuditArgs(
         company_id=int(company_id),
         office_id=office,
         days=max(1, min(int(days), MAX_DAYS)),
-        limit=max(1, min(int(limit), MAX_LIMIT)),
+        limit=scan_cap,
         sample_limit=max(1, min(int(sample_limit), MAX_SAMPLE_LIMIT)),
         statement_timeout_seconds=max(
             1, min(int(statement_timeout_seconds), MAX_TIMEOUT_SECONDS)
@@ -227,6 +242,9 @@ def clamp_cost_audit_args(
             int(source_document_id) if source_document_id is not None else None
         ),
         tolerances=tolerances or DEFAULT_TOLERANCES,
+        page_size=page_size_i,
+        max_pages=max_pages_i,
+        summary_only=bool(summary_only),
     )
 
 
@@ -296,8 +314,11 @@ class CostAuditRowResult:
     corrected_gross_cost: Decimal | None = None
     stored_gross_cost: Decimal | None = None
     gross_understatement_amount: Decimal | None = None
-    gross_understatement_pct: Decimal | None = None
+    # % explícitos (no usar nombre ambiguo gross_understatement_pct)
+    tax_rate_on_net_pct: Decimal | None = None
+    gross_understatement_vs_corrected_pct: Decimal | None = None
     effective_quality_status: str | None = None
+    tax_resolution: dict[str, Any] | None = None
     flags: list[str] = field(default_factory=list)
     probable_cause: str | None = None
 
@@ -335,12 +356,16 @@ class CostAuditRowResult:
             "expected_specific_tax_amount": _s(self.expected_specific_tax_from_rate),
             "corrected_gross_cost": _s(self.corrected_gross_cost),
             "gross_understatement_amount": _s(self.gross_understatement_amount),
-            "gross_understatement_pct": _s(self.gross_understatement_pct),
+            "tax_rate_on_net_pct": _s(self.tax_rate_on_net_pct),
+            "gross_understatement_vs_corrected_pct": _s(
+                self.gross_understatement_vs_corrected_pct
+            ),
             "difference_stored_components": _s(self.gross_difference_amounts),
             "difference_expected_tax": _s(self.gross_difference_rates),
             "stored_components_status": self.stored_components_status,
             "expected_tax_status": self.expected_tax_status,
             "effective_quality_status": self.effective_quality_status,
+            "tax_resolution": self.tax_resolution,
             "average_cost": _s(r.average_cost),
             "variant_cost_net": _s(r.variant_cost_net),
             "variant_cost_gross": _s(r.variant_cost_gross),

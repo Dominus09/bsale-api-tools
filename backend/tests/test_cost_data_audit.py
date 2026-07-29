@@ -151,6 +151,39 @@ class RecordingExecutor:
             # resolución catálogo por bar_code
             return list(self.catalog_variants)
         if "COST_RECEPTION_HISTORY" in upper:
+            # población agregada
+            if "COUNT(*)" in upper and "GROUP BY" not in upper:
+                rows = list(self.history)
+                for p in params:
+                    if isinstance(p, list) and p and all(isinstance(x, int) for x in p):
+                        rows = [r for r in rows if int(r["variant_id"]) in set(p)]
+                dates = [r.get("admission_date") for r in rows if r.get("admission_date")]
+                docs = {
+                    r.get("document_number") or r.get("reception_id") for r in rows
+                }
+                variants = {int(r["variant_id"]) for r in rows}
+                return [
+                    {
+                        "rows_in_scope": len(rows),
+                        "unique_variants": len(variants),
+                        "unique_documents": len(docs),
+                        "min_admission_date": min(dates) if dates else None,
+                        "max_admission_date": max(dates) if dates else None,
+                    }
+                ]
+            if "GROUP BY" in upper and "TAX_FP" in upper:
+                rows = list(self.history)
+                from collections import Counter
+
+                c: Counter[str] = Counter()
+                for r in rows:
+                    ids = r.get("tax_ids_json") or []
+                    if isinstance(ids, list) and ids:
+                        fp = ",".join(str(i) for i in sorted({int(x) for x in ids}))
+                    else:
+                        fp = "(none)"
+                    c[fp] += 1
+                return [{"tax_fp": k, "cnt": v} for k, v in c.most_common()]
             # resolución barcode (SELECT DISTINCT variant_id...) vs fetch completo
             if "SELECT DISTINCT" in upper and "VARIANT_ID" in upper and "HISTORY_ID" not in upper:
                 return list(self.resolve_history)
@@ -727,12 +760,16 @@ def test_semantics_mankeke_669_missing_iva():
     assert res.expected_iva_from_rate == D("127.11")
     assert res.corrected_gross_cost == D("796.11")
     assert res.gross_understatement_amount == D("127.11")
+    assert res.tax_rate_on_net_pct == D("19.00")
+    assert res.gross_understatement_vs_corrected_pct == D("15.97")
     assert res.stored_gross_cost == D("669")
     sample = res.to_sample_dict()
     assert sample["effective_quality_status"] == "missing_taxes_in_gross"
     assert sample["expected_iva_amount"] == "127.11"
     assert sample["corrected_gross_cost"] == "796.11"
-
+    assert "gross_understatement_pct" not in sample
+    assert sample["tax_rate_on_net_pct"] == "19.00"
+    assert sample["gross_understatement_vs_corrected_pct"] == "15.97"
 
 def test_semantics_mankeke_632():
     res = classify_cost_audit_row(
@@ -803,8 +840,8 @@ def test_semantics_tax_profile_unavailable():
     )
     assert CostAuditFlag.EXPECTED_TAX_UNAVAILABLE.value in res.flags
     assert CostAuditFlag.STORED_COMPONENTS_MATCH.value in res.flags
-    assert res.effective_quality_status == "valid_gross"
-
+    assert res.effective_quality_status == "incomplete_tax_context"
+    assert res.effective_quality_status != "valid_gross"
 
 def test_semantics_stored_component_inconsistent():
     res = classify_cost_audit_row(
@@ -983,7 +1020,9 @@ def test_23_batch_no_n_plus_one():
     )
     history_queries = [s for s in exe.sqls if "cost_reception_history" in s.lower()]
     tax_queries = [s for s in exe.sqls if "bsale.taxes" in s.lower()]
-    assert len(history_queries) == 1
+    # population COUNT + tax combos + detail (no N+1 por fila)
+    assert len(history_queries) >= 2
+    assert len(history_queries) <= 5
     assert len(tax_queries) <= 1
     # schema probes are few (not per row)
     schema_probes = [s for s in exe.sqls if "information_schema.columns" in s.lower()]
@@ -997,9 +1036,12 @@ def test_clamp_limits():
         limit=99999,
         sample_limit=999,
         statement_timeout_seconds=99,
+        page_size=500,
+        max_pages=20,
     )
     assert args.days == 365
-    assert args.limit == 5000
+    # limit capped by page_size * max_pages
+    assert args.limit == 10000
     assert args.sample_limit == 100
     assert args.statement_timeout_seconds == 30
     with pytest.raises(AnalyticsValidationError):
@@ -1018,3 +1060,210 @@ def test_executor_sets_timeouts():
     joined = " ".join(fake.executed)
     assert "statement_timeout" in joined
     assert "lock_timeout" in joined
+
+
+# ---------------------------------------------------------------------------
+# TaxResolution por identidad + población / percentages
+# ---------------------------------------------------------------------------
+
+
+def test_tax_ids_order_1_8_same_as_8_1():
+    from backend.services.analytics.cost_tax_resolution import resolve_taxes_from_ids
+
+    a = resolve_taxes_from_ids([1, 8])
+    b = resolve_taxes_from_ids([8, 1])
+    assert a.iva_tax_id == 1
+    assert b.iva_tax_id == 1
+    assert a.iva_rate == D("19")
+    assert b.iva_rate == D("19")
+    assert a.specific_tax_total_rate == D("31.50")
+    assert b.specific_tax_total_rate == D("31.50")
+    assert a.total_tax_rate == D("50.50")
+    assert b.total_tax_rate == D("50.50")
+    assert a.to_dict()["iva_rate"] == b.to_dict()["iva_rate"]
+    assert a.total_tax_rate == b.total_tax_rate
+
+
+def test_tax_ids_vino_2_1():
+    from backend.services.analytics.cost_tax_resolution import resolve_taxes_from_ids
+
+    r = resolve_taxes_from_ids([2, 1])
+    assert r.iva_tax_id == 1
+    assert r.iva_rate == D("19")
+    assert r.specific_tax_total_rate == D("20.50")
+    assert r.total_tax_rate == D("39.50")
+
+
+def test_tax_ids_cerveza_order_independent():
+    from backend.services.analytics.cost_tax_resolution import resolve_taxes_from_ids
+
+    a = resolve_taxes_from_ids([1, 3])
+    b = resolve_taxes_from_ids([3, 1])
+    assert a.iva_rate == b.iva_rate == D("19")
+    assert a.specific_tax_total_rate == b.specific_tax_total_rate == D("20.50")
+    assert a.total_tax_rate == b.total_tax_rate == D("39.50")
+
+
+def test_classify_destilado_order_independent_gross():
+    catalog = {
+        1: TaxCatalogEntry(1, "IVA", D("19")),
+        8: TaxCatalogEntry(8, "ILA destilados", D("31.5")),
+    }
+    common = dict(
+        cost_net=D("1000"),
+        iva_amount=D("0"),
+        other_taxes=D("0"),
+        cost_bruto_erp=D("1000"),
+        vc_iva_rate=None,
+        vc_tax_factor=D("1"),
+        product_tax_factor=D("1"),
+        products_taxes=None,
+        has_products_taxes_column=False,
+        specific_taxes=None,
+    )
+    r1 = classify_cost_audit_row(
+        _row(tax_ids_json=[1, 8], **common), tax_catalog=catalog
+    )
+    r2 = classify_cost_audit_row(
+        _row(tax_ids_json=[8, 1], **common), tax_catalog=catalog
+    )
+    assert r1.corrected_gross_cost == r2.corrected_gross_cost == D("1505.00")
+    assert r1.iva_rate_used == r2.iva_rate_used == D("19")
+    assert r1.specific_tax_rate_used == r2.specific_tax_rate_used == D("31.50")
+    assert r1.tax_resolution["iva_tax_id"] == 1
+    assert r2.tax_resolution["iva_tax_id"] == 1
+    assert r1.effective_quality_status == "missing_taxes_in_gross"
+
+
+def test_classify_vino_iva_plus_specific():
+    catalog = {
+        1: TaxCatalogEntry(1, "IVA", D("19")),
+        2: TaxCatalogEntry(2, "ILA vino", D("20.5")),
+    }
+    res = classify_cost_audit_row(
+        _row(
+            cost_net=D("1000"),
+            iva_amount=D("0"),
+            other_taxes=D("0"),
+            cost_bruto_erp=D("1000"),
+            vc_iva_rate=None,
+            vc_tax_factor=D("1"),
+            tax_ids_json=[2, 1],
+            products_taxes=None,
+            has_products_taxes_column=False,
+        ),
+        tax_catalog=catalog,
+    )
+    assert res.iva_rate_used == D("19")
+    assert res.specific_tax_rate_used == D("20.50")
+    assert res.corrected_gross_cost == D("1395.00")
+
+
+def test_classify_iva_only():
+    res = classify_cost_audit_row(
+        _row(tax_ids_json=[1]),
+        tax_catalog={1: TaxCatalogEntry(1, "IVA", D("19"))},
+    )
+    assert res.iva_rate_used == D("19")
+    assert (res.specific_tax_rate_used or D("0")) == D("0")
+    assert res.tax_resolution["iva_tax_id"] == 1
+    assert res.effective_quality_status == "valid_gross"
+
+
+def test_unknown_profile_incomplete():
+    res = classify_cost_audit_row(
+        _row(
+            tax_ids_json=[999],
+            vc_iva_rate=None,
+            vc_tax_factor=D("1"),
+            product_tax_factor=D("1"),
+            products_taxes=None,
+            has_products_taxes_column=False,
+            specific_taxes=None,
+            cost_bruto_erp=D("10000"),
+            iva_amount=D("0"),
+            other_taxes=D("0"),
+        ),
+        tax_catalog={},
+    )
+    assert CostAuditFlag.EXPECTED_TAX_UNAVAILABLE.value in res.flags
+    assert res.effective_quality_status == "incomplete_tax_context"
+    assert res.effective_quality_status != "valid_gross"
+
+
+def test_expected_unavailable_never_valid_gross():
+    res = classify_cost_audit_row(
+        _row(
+            vc_iva_rate=None,
+            vc_tax_factor=None,
+            product_tax_factor=None,
+            tax_ids_json=None,
+            products_taxes=None,
+            specific_taxes=None,
+            has_tax_ids_json=False,
+            has_product_tax_factor=False,
+        )
+    )
+    assert CostAuditFlag.EXPECTED_TAX_UNAVAILABLE.value in res.flags
+    assert res.effective_quality_status != "valid_gross"
+
+
+def test_population_not_capped_by_sample_limit():
+    hist = [_hist_row(i, barcode=f"BC{i}", history_id=i) for i in range(1, 31)]
+    for i, row in enumerate(hist):
+        row["admission_date"] = date(2026, 7, 1)
+        row["cost_net"] = D("100")
+        row["iva_amount"] = D("0")
+        row["other_taxes"] = D("0")
+        row["cost_bruto_erp"] = D("100")
+        row["vc_iva_rate"] = D("19")
+        row["vc_tax_factor"] = D("1")
+        row["tax_ids_json"] = [1]
+        row["products_taxes"] = None
+    exe = RecordingExecutor(history=hist)
+    args = clamp_cost_audit_args(
+        company_id=3,
+        days=30,
+        limit=5000,
+        sample_limit=3,
+        page_size=500,
+        max_pages=20,
+    )
+    report = run_cost_data_audit(
+        args=args, repository=CostDataAuditRepository(exe), today=date(2026, 7, 20)
+    )
+    assert report["population"]["rows_in_scope"] == 30
+    assert report["population"]["rows_scanned_for_detail"] == 30
+    assert report["population"]["is_full_detail_scan"] is True
+    assert len(report["samples"]) <= 3
+    assert report["effective_quality"]["missing_taxes_in_gross"] == 30
+
+
+def test_summary_only_no_samples_has_population_freshness():
+    hist = [
+        _hist_row(
+            1,
+            admission_date=date(2026, 6, 22),
+            cost_net=D("100"),
+            iva_amount=D("0"),
+            other_taxes=D("0"),
+            cost_bruto_erp=D("100"),
+            vc_iva_rate=D("19"),
+            vc_tax_factor=D("1"),
+            tax_ids_json=[1],
+        )
+    ]
+    exe = RecordingExecutor(history=hist)
+    args = clamp_cost_audit_args(
+        company_id=3, days=90, summary_only=True, sample_limit=50
+    )
+    report = run_cost_data_audit(
+        args=args, repository=CostDataAuditRepository(exe), today=date(2026, 7, 20)
+    )
+    assert report["summary_only"] is True
+    assert report["samples"] == []
+    assert "population" in report
+    assert report["population"]["rows_in_scope"] == 1
+    assert report["freshness"]["latest_admission_date"] == "2026-06-22"
+    assert report["freshness"]["days_since_latest_admission"] == 28
+    assert "admission_date_meaning" in report["freshness"]

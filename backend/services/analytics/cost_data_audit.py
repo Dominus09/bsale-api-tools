@@ -29,6 +29,12 @@ from backend.services.analytics.cost_audit_models import (
     clamp_cost_audit_args,
     rate_to_fraction,
 )
+from backend.services.analytics.cost_tax_resolution import (
+    ResolvedSpecificTax,
+    TaxResolution,
+    resolve_taxes_from_ids,
+    tax_ids_fingerprint,
+)
 from backend.services.analytics.money import ZERO
 from backend.services.analytics.validate_distribuidora_source import (
     AnalyticsValidationError,
@@ -95,90 +101,188 @@ def _rel_near(a: Decimal, b: Decimal, rel: Decimal) -> bool:
     return abs_decimal(a - b) / abs_decimal(b) <= rel
 
 
-def _extract_rates_from_products_taxes(
-    products_taxes: Any,
-) -> tuple[Decimal | None, Decimal | None]:
+def _products_taxes_to_ids(products_taxes: Any) -> list[int] | None:
+    """Extrae tax_ids de products.taxes si traen id; None si no hay ids."""
     if not isinstance(products_taxes, list) or not products_taxes:
-        return None, None
-    rates: list[Decimal] = []
+        return None
+    ids: list[int] = []
+    saw_id = False
     for item in products_taxes:
         if not isinstance(item, dict):
             continue
-        raw = item.get("percentage")
-        if raw is None:
-            raw = item.get("rate")
-        if raw is None:
+        raw_id = item.get("id")
+        if raw_id is None:
+            raw_id = item.get("tax_id")
+        if raw_id is None:
             continue
+        saw_id = True
         try:
-            rates.append(Decimal(str(raw)))
-        except Exception:
+            ids.append(int(raw_id))
+        except (TypeError, ValueError):
             continue
-    if not rates:
-        return None, None
-    iva = rates[0]
-    specific = sum(rates[1:], ZERO) if len(rates) > 1 else ZERO
-    return iva, (specific if specific > ZERO else None)
+    return ids if saw_id else None
 
 
-def _rates_from_tax_ids(
-    tax_ids_json: Any,
-    tax_catalog: dict[int, TaxCatalogEntry],
-) -> tuple[Decimal | None, Decimal | None]:
-    ids = _tax_id_list(tax_ids_json)
-    if not ids:
-        return None, None
-    rates: list[Decimal] = []
-    for tid in ids:
-        entry = tax_catalog.get(tid)
-        if entry is None or entry.percentage is None:
-            continue
-        rates.append(entry.percentage)
-    if not rates:
-        return None, None
-    iva = rates[0]
-    specific = sum(rates[1:], ZERO) if len(rates) > 1 else ZERO
-    return iva, (specific if specific > ZERO else None)
+def _enrich_resolution_with_tax_factor(
+    resolution: TaxResolution,
+    tax_factor: Decimal | None,
+) -> TaxResolution:
+    """Si tax_factor implica tasa específica adicional no cubierta por tax_ids, sumarla."""
+    if tax_factor is None or tax_factor <= Decimal("1"):
+        return resolution
+    if resolution.total_tax_rate is None and resolution.iva_rate is None:
+        return resolution
+    known = (resolution.iva_rate or ZERO) + (resolution.specific_tax_total_rate or ZERO)
+    implied = (tax_factor - Decimal("1")) * Decimal("100")
+    residual = implied - known
+    if residual <= Decimal("0.05"):
+        return resolution
+    from backend.services.analytics.cost_tax_resolution import ResolvedSpecificTax
+
+    extras = list(resolution.specific_taxes)
+    extras.append(
+        ResolvedSpecificTax(
+            tax_id=-1,
+            name="tax_factor_residual",
+            rate=residual,
+            category="specific_other",
+        )
+    )
+    spec_total = (resolution.specific_tax_total_rate or ZERO) + residual
+    total = (resolution.iva_rate or ZERO) + spec_total
+    quality = resolution.tax_resolution_quality
+    if quality == "unavailable":
+        quality = "partial"
+    return TaxResolution(
+        iva_tax_id=resolution.iva_tax_id,
+        iva_rate=resolution.iva_rate,
+        specific_taxes=tuple(extras),
+        specific_tax_total_rate=spec_total,
+        total_tax_rate=total,
+        tax_resolution_source=(
+            f"{resolution.tax_resolution_source}+tax_factor"
+            if resolution.tax_resolution_source
+            else "tax_factor"
+        ),
+        tax_resolution_quality=quality,
+        unresolved_tax_ids=resolution.unresolved_tax_ids,
+    )
 
 
-def _resolve_tax_inputs(
+def _resolve_tax_profile(
     raw: CostAuditRawRow,
     tax_catalog: dict[int, TaxCatalogEntry],
-) -> tuple[Decimal | None, Decimal | None, Decimal | None, bool, bool]:
-    """(tax_factor, iva_rate puntos, specific_rate puntos, rates_reliable, missing_context)."""
+) -> tuple[TaxResolution, Decimal | None]:
+    """Resuelve perfil por identidad (tax_id). Nunca asume taxes[0]=IVA.
+
+    Retorna (TaxResolution, tax_factor_almacenado).
+    Prioridad: tax_ids_json → products.taxes con ids → vc_iva_rate / tax_factor.
+    """
     tax_factor = raw.vc_tax_factor if raw.vc_tax_factor is not None else raw.product_tax_factor
+    cost_net = raw.cost_net
+
+    tax_ids = _tax_id_list(raw.tax_ids_json)
+    if tax_ids:
+        res = resolve_taxes_from_ids(
+            tax_ids, tax_catalog=tax_catalog, cost_net=cost_net
+        )
+        return _enrich_resolution_with_tax_factor(res, tax_factor), tax_factor
+
+    pt_ids = _products_taxes_to_ids(raw.products_taxes)
+    if pt_ids:
+        res = resolve_taxes_from_ids(
+            pt_ids, tax_catalog=tax_catalog, cost_net=cost_net
+        )
+        return _enrich_resolution_with_tax_factor(res, tax_factor), tax_factor
+
+    # Sin tax_ids: usar tasas snapshot (vc) — no inventar orden desde percentages
     iva_rate = raw.vc_iva_rate
     specific_rate: Decimal | None = None
+    if isinstance(raw.specific_taxes, list) and raw.specific_taxes:
+        total_spec = ZERO
+        for item in raw.specific_taxes:
+            if not isinstance(item, dict):
+                continue
+            raw_pct = item.get("percentage")
+            if raw_pct is None:
+                raw_pct = item.get("rate")
+            if raw_pct is None:
+                continue
+            try:
+                pct = Decimal(str(raw_pct))
+            except Exception:
+                continue
+            name = str(item.get("name") or "").lower()
+            if name.startswith("iva") or (iva_rate is not None and pct == iva_rate):
+                continue
+            total_spec += pct
+        if total_spec > ZERO:
+            specific_rate = total_spec
 
-    pt_iva, pt_spec = _extract_rates_from_products_taxes(raw.products_taxes)
-    if iva_rate is None:
-        iva_rate = pt_iva
-    if specific_rate is None:
-        specific_rate = pt_spec
+    if iva_rate is not None or (tax_factor is not None and tax_factor > Decimal("1")):
+        if iva_rate is None and tax_factor is not None and tax_factor > Decimal("1"):
+            total = (tax_factor - Decimal("1")) * Decimal("100")
+            return (
+                TaxResolution(
+                    iva_tax_id=None,
+                    iva_rate=None,
+                    specific_taxes=(),
+                    specific_tax_total_rate=None,
+                    total_tax_rate=total,
+                    tax_resolution_source="tax_factor_only",
+                    tax_resolution_quality="partial",
+                ),
+                tax_factor,
+            )
+        spec = specific_rate or ZERO
+        if (
+            specific_rate is None
+            and tax_factor is not None
+            and tax_factor > Decimal("1")
+            and iva_rate is not None
+        ):
+            iva_frac = rate_to_fraction(iva_rate) or ZERO
+            residual = tax_factor - Decimal("1") - iva_frac
+            if residual > ZERO:
+                spec = residual * Decimal("100")
+        total = (iva_rate or ZERO) + (spec if spec else ZERO)
+        return (
+            TaxResolution(
+                iva_tax_id=1 if iva_rate is not None else None,
+                iva_rate=iva_rate,
+                specific_taxes=(),
+                specific_tax_total_rate=spec if spec else ZERO,
+                total_tax_rate=total,
+                tax_resolution_source="variant_cost_rates",
+                tax_resolution_quality="resolved" if iva_rate is not None else "partial",
+            ),
+            tax_factor,
+        )
 
-    id_iva, id_spec = _rates_from_tax_ids(raw.tax_ids_json, tax_catalog)
-    if iva_rate is None:
-        iva_rate = id_iva
-    if specific_rate is None:
-        specific_rate = id_spec
-
-    has_any_tax_signal = bool(
-        (tax_factor is not None and tax_factor > Decimal("1"))
-        or (iva_rate is not None and iva_rate > ZERO)
-        or (specific_rate is not None and specific_rate > ZERO)
-        or (isinstance(raw.products_taxes, list) and len(raw.products_taxes) > 0)
-        or bool(_tax_id_list(raw.tax_ids_json))
+    return (
+        TaxResolution(
+            iva_tax_id=None,
+            iva_rate=None,
+            specific_taxes=(),
+            specific_tax_total_rate=None,
+            total_tax_rate=None,
+            tax_resolution_source=None,
+            tax_resolution_quality="unavailable",
+        ),
+        tax_factor,
     )
-    rates_reliable = iva_rate is not None or (
-        tax_factor is not None and tax_factor > Decimal("1")
-    )
-    missing_context = not has_any_tax_signal
-    return tax_factor, iva_rate, specific_rate, rates_reliable, missing_context
 
 
-def _has_associated_taxes(raw: CostAuditRawRow, tax_factor: Decimal | None, iva_rate: Decimal | None) -> bool:
+def _has_associated_taxes(
+    raw: CostAuditRawRow,
+    tax_factor: Decimal | None,
+    resolution: TaxResolution,
+) -> bool:
     if tax_factor is not None and tax_factor > Decimal("1"):
         return True
-    if iva_rate is not None and iva_rate > ZERO:
+    if resolution.iva_rate is not None and resolution.iva_rate > ZERO:
+        return True
+    if resolution.specific_tax_total_rate and resolution.specific_tax_total_rate > ZERO:
         return True
     if isinstance(raw.products_taxes, list) and len(raw.products_taxes) > 0:
         return True
@@ -228,8 +332,16 @@ def _probable_causes(flags: list[str], effective: str | None) -> str | None:
     return flags[0] if flags else None
 
 
-def resolve_effective_quality_status(flags: list[str]) -> str:
-    """Un solo estado efectivo; no valida solo por suma de componentes almacenados."""
+def resolve_effective_quality_status(
+    flags: list[str],
+    *,
+    tax_resolution_quality: str | None = None,
+) -> str:
+    """Un solo estado efectivo.
+
+    ``expected_tax_unavailable`` / ``missing_tax_context`` → incomplete_tax_context.
+    Nunca ``valid_gross`` sin perfil tributario resuelto y bruto esperado alineado.
+    """
     candidates: list[str] = []
     if (
         CostAuditFlag.MISSING_NET_COST.value in flags
@@ -250,40 +362,34 @@ def resolve_effective_quality_status(flags: list[str]) -> str:
         CostAuditFlag.PROBABLE_MISSING_TAXES.value in flags
         or CostAuditFlag.EXPECTED_TAX_MISMATCH.value in flags
     ):
-        # mismatch esperado con impuestos omitidos (bruto≈neto) o perfil no reflejado
-        candidates.append(EffectiveQualityStatus.MISSING_TAXES_IN_GROSS.value)
-    if (
-        CostAuditFlag.MISSING_TAX_CONTEXT.value in flags
-        or CostAuditFlag.TAX_IDS_NOT_CONSUMED.value in flags
-        or CostAuditFlag.EXPECTED_TAX_UNAVAILABLE.value in flags
-    ):
-        # incomplete: tax_ids sin consumir, o contexto ausente CON señales conflictivas.
-        # Producto sin impuestos (expected unavailable + stored match) → no incomplete.
-        if EffectiveQualityStatus.MISSING_TAXES_IN_GROSS.value not in candidates:
-            if CostAuditFlag.TAX_IDS_NOT_CONSUMED.value in flags:
-                candidates.append(EffectiveQualityStatus.INCOMPLETE_TAX_CONTEXT.value)
-            elif (
-                CostAuditFlag.MISSING_TAX_CONTEXT.value in flags
-                and CostAuditFlag.STORED_COMPONENTS_MATCH.value not in flags
-                and CostAuditFlag.STORED_COMPONENTS_ROUNDING.value not in flags
-            ):
-                candidates.append(EffectiveQualityStatus.INCOMPLETE_TAX_CONTEXT.value)
+        # Sin perfil esperado no afirmar "missing taxes in gross"
+        if CostAuditFlag.EXPECTED_TAX_UNAVAILABLE.value not in flags:
+            candidates.append(EffectiveQualityStatus.MISSING_TAXES_IN_GROSS.value)
+
+    unavailable = CostAuditFlag.EXPECTED_TAX_UNAVAILABLE.value in flags
+    missing_ctx = CostAuditFlag.MISSING_TAX_CONTEXT.value in flags
+    if unavailable or missing_ctx or tax_resolution_quality in (None, "unavailable"):
+        candidates.append(EffectiveQualityStatus.INCOMPLETE_TAX_CONTEXT.value)
+
     if CostAuditFlag.SUSPICIOUS_OUTLIER.value in flags:
         candidates.append(EffectiveQualityStatus.SUSPICIOUS_OUTLIER.value)
 
     if not candidates:
-        # valid_gross solo si componentes OK y (tax esperado OK o unavailable sin señales)
-        if CostAuditFlag.STORED_COMPONENTS_MISMATCH.value in flags:
-            return EffectiveQualityStatus.GROSS_COMPONENT_MISMATCH.value
-        if CostAuditFlag.EXPECTED_TAX_MISMATCH.value in flags:
-            return EffectiveQualityStatus.MISSING_TAXES_IN_GROSS.value
-        if (
+        profile_ok = tax_resolution_quality == "resolved"
+        stored_ok = (
             CostAuditFlag.STORED_COMPONENTS_MATCH.value in flags
             or CostAuditFlag.STORED_COMPONENTS_ROUNDING.value in flags
-        ) and (
+        )
+        expected_ok = (
             CostAuditFlag.EXPECTED_TAX_MATCH.value in flags
             or CostAuditFlag.EXPECTED_TAX_ROUNDING.value in flags
-            or CostAuditFlag.EXPECTED_TAX_UNAVAILABLE.value in flags
+        )
+        if (
+            profile_ok
+            and stored_ok
+            and expected_ok
+            and CostAuditFlag.MISSING_NET_COST.value not in flags
+            and CostAuditFlag.MISSING_GROSS_COST.value not in flags
         ):
             return EffectiveQualityStatus.VALID_GROSS.value
         return EffectiveQualityStatus.INCOMPLETE_TAX_CONTEXT.value
@@ -310,8 +416,29 @@ def classify_cost_audit_row(
     catalog = tax_catalog or {}
     flags: list[str] = []
 
-    tax_factor, iva_rate, specific_rate, rates_reliable, missing_context = _resolve_tax_inputs(
-        raw, catalog
+    resolution, tax_factor = _resolve_tax_profile(raw, catalog)
+    # Completar amounts en specifics
+    if raw.cost_net is not None and resolution.specific_taxes:
+        resolution = TaxResolution(
+            iva_tax_id=resolution.iva_tax_id,
+            iva_rate=resolution.iva_rate,
+            specific_taxes=resolution.specifics_with_amounts(raw.cost_net),
+            specific_tax_total_rate=resolution.specific_tax_total_rate,
+            total_tax_rate=resolution.total_tax_rate,
+            tax_resolution_source=resolution.tax_resolution_source,
+            tax_resolution_quality=resolution.tax_resolution_quality,
+            unresolved_tax_ids=resolution.unresolved_tax_ids,
+        )
+
+    iva_rate = resolution.iva_rate
+    specific_rate = resolution.specific_tax_total_rate
+    rates_reliable = resolution.tax_resolution_quality in ("resolved", "partial") and (
+        resolution.total_tax_rate is not None
+    )
+    missing_context = resolution.tax_resolution_quality == "unavailable" and not (
+        (tax_factor is not None and tax_factor > Decimal("1"))
+        or bool(_tax_id_list(raw.tax_ids_json))
+        or (isinstance(raw.products_taxes, list) and len(raw.products_taxes) > 0)
     )
 
     cost_net = raw.cost_net
@@ -349,7 +476,7 @@ def classify_cost_audit_row(
                 )
             flags.append(stored_status)
 
-    # --- B) expected tax profile ---
+    # --- B) expected tax profile (por identidad) ---
     expected_iva: Decimal | None = None
     expected_specific: Decimal | None = None
     expected_from_rates: Decimal | None = None
@@ -357,22 +484,12 @@ def classify_cost_audit_row(
     expected_tax_status: str | None = None
 
     iva_frac = rate_to_fraction(iva_rate)
-    spec_frac = rate_to_fraction(specific_rate)
+    spec_frac = rate_to_fraction(specific_rate) if specific_rate else None
 
-    if cost_net is not None and rates_reliable and iva_frac is not None:
-        expected_iva = _commercial(cost_net * iva_frac)
-        if spec_frac is not None:
-            expected_specific = _commercial(cost_net * spec_frac)
-        elif tax_factor is not None and tax_factor > Decimal("1"):
-            residual = tax_factor - Decimal("1") - iva_frac
-            if residual > ZERO:
-                expected_specific = _commercial(cost_net * residual)
-                specific_rate = residual * Decimal("100")
-        expected_from_rates = _commercial(
-            cost_net + (expected_iva or ZERO) + (expected_specific or ZERO)
-        )
-    elif cost_net is not None and rates_reliable and tax_factor is not None and tax_factor > Decimal("1"):
-        expected_from_rates = _commercial(cost_net * tax_factor)
+    if cost_net is not None and rates_reliable and resolution.total_tax_rate is not None:
+        expected_iva = resolution.expected_iva_amount(cost_net)
+        expected_specific = resolution.expected_specific_amount(cost_net)
+        expected_from_rates = resolution.expected_gross(cost_net)
 
     if expected_from_rates is None:
         expected_tax_status = CostAuditFlag.EXPECTED_TAX_UNAVAILABLE.value
@@ -390,13 +507,20 @@ def classify_cost_audit_row(
 
     corrected_gross = expected_from_rates
     understatement: Decimal | None = None
-    understatement_pct: Decimal | None = None
+    understatement_vs_corrected: Decimal | None = None
+    tax_rate_on_net: Decimal | None = None
+    if cost_net is not None and corrected_gross is not None:
+        total_tax = _commercial(corrected_gross - cost_net)
+        if cost_net != ZERO:
+            tax_rate_on_net = _commercial(total_tax / cost_net * Decimal("100"))
     if corrected_gross is not None and stored_gross is not None:
         gap = _commercial(corrected_gross - stored_gross)
         if gap > ZERO:
             understatement = gap
             if corrected_gross > ZERO:
-                understatement_pct = _commercial(gap / corrected_gross * Decimal("100"))
+                understatement_vs_corrected = _commercial(
+                    gap / corrected_gross * Decimal("100")
+                )
 
     # --- flags estructurales ---
     if cost_net is None:
@@ -426,16 +550,14 @@ def classify_cost_audit_row(
     if tax_ids and (not raw.has_products_taxes_column or products_taxes_empty):
         flags.append(CostAuditFlag.TAX_IDS_NOT_CONSUMED.value)
 
-    # Bruto == neto con impuestos asociados → missing taxes in gross
     if (
         cost_net is not None
         and bruto is not None
         and _near(bruto, cost_net, tol.money_rounding)
-        and _has_associated_taxes(raw, tax_factor, iva_rate)
+        and _has_associated_taxes(raw, tax_factor, resolution)
     ):
         flags.append(CostAuditFlag.PROBABLE_MISSING_TAXES.value)
 
-    # Duplicaciones probables
     if cost_net is not None and bruto is not None and cost_net > ZERO:
         if iva_frac is not None and iva_frac > ZERO:
             double_iva = cost_net * (Decimal("1") + iva_frac) * (Decimal("1") + iva_frac)
@@ -463,7 +585,6 @@ def classify_cost_audit_row(
             ):
                 flags.append(CostAuditFlag.PROBABLE_TAX_FACTOR_DUPLICATED.value)
 
-    # Unitario vs total
     if (
         cost_net is not None
         and raw.quantity is not None
@@ -535,7 +656,9 @@ def classify_cost_audit_row(
         if med > ZERO and bruto > med * tol.outlier_factor:
             flags.append(CostAuditFlag.SUSPICIOUS_OUTLIER.value)
 
-    effective = resolve_effective_quality_status(flags)
+    effective = resolve_effective_quality_status(
+        flags, tax_resolution_quality=resolution.tax_resolution_quality
+    )
 
     return CostAuditRowResult(
         raw=raw,
@@ -553,8 +676,10 @@ def classify_cost_audit_row(
         corrected_gross_cost=corrected_gross,
         stored_gross_cost=stored_gross,
         gross_understatement_amount=understatement,
-        gross_understatement_pct=understatement_pct,
+        tax_rate_on_net_pct=tax_rate_on_net,
+        gross_understatement_vs_corrected_pct=understatement_vs_corrected,
         effective_quality_status=effective,
+        tax_resolution=resolution.to_dict(),
         flags=flags,
         probable_cause=_probable_causes(flags, effective),
     )
@@ -588,6 +713,10 @@ def build_cost_audit_report(
     tax_context_stats: dict[str, int],
     duration_ms: float,
     barcode_resolution: Any | None = None,
+    population: dict[str, Any] | None = None,
+    freshness: dict[str, Any] | None = None,
+    tax_combination_counts: dict[str, int] | None = None,
+    understatement_stats: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     quality = {k: 0 for k in QUALITY_COUNTER_KEYS}
     effective_quality = {k: 0 for k in EFFECTIVE_COUNTER_KEYS}
@@ -597,6 +726,8 @@ def build_cost_audit_report(
     tax_abs: list[Decimal] = []
     tax_pct: list[Decimal] = []
     dates: list[date] = []
+    combo_counts: Counter[str] = Counter()
+    under_amounts: list[Decimal] = []
 
     for res in results:
         variants.add(res.raw.variant_id)
@@ -614,6 +745,8 @@ def build_cost_audit_report(
                 counted.add(f)
         if res.effective_quality_status and res.effective_quality_status in effective_quality:
             effective_quality[res.effective_quality_status] += 1
+        fp = tax_ids_fingerprint(res.raw.tax_ids_json)
+        combo_counts[fp or "(none)"] += 1
         if res.gross_difference_amounts is not None:
             stored_abs.append(abs_decimal(res.gross_difference_amounts))
         if res.gross_difference_rates is not None:
@@ -623,15 +756,38 @@ def build_cost_audit_report(
                 tax_pct.append(ad / abs_decimal(res.raw.cost_net) * Decimal("100"))
         elif res.gross_understatement_amount is not None:
             tax_abs.append(abs_decimal(res.gross_understatement_amount))
+        if res.gross_understatement_amount is not None:
+            under_amounts.append(res.gross_understatement_amount)
 
-    samples = sorted(
-        [r for r in results if _is_problematic(r)],
-        key=_sample_rank,
-    )[: args.sample_limit]
+    samples: list[dict[str, Any]] = []
+    if not args.summary_only:
+        samples = [
+            s.to_sample_dict()
+            for s in sorted(
+                [r for r in results if _is_problematic(r)],
+                key=_sample_rank,
+            )[: args.sample_limit]
+        ]
+
+    pop = population or {}
+    rows_in_scope = int(pop.get("rows_in_scope") or len(results))
+    rows_scanned = len(results)
+    is_full = rows_scanned >= rows_in_scope and rows_in_scope >= 0
+
+    under_stats = understatement_stats or {
+        "sum": str(sum(under_amounts)) if under_amounts else None,
+        "average": (
+            str(sum(under_amounts) / Decimal(len(under_amounts))) if under_amounts else None
+        ),
+        "maximum": str(max(under_amounts)) if under_amounts else None,
+        "rows_with_understatement": len(under_amounts),
+        "scope": "detail_scan",
+    }
 
     return {
         "ok": True,
         "read_only": True,
+        "summary_only": args.summary_only,
         "scope": {
             "company_id": args.company_id,
             "office_id": args.office_id,
@@ -641,16 +797,51 @@ def build_cost_audit_report(
             "barcode": args.barcode,
             "source_document_id": args.source_document_id,
             "limit": args.limit,
+            "page_size": args.page_size,
+            "max_pages": args.max_pages,
+            "sample_limit": args.sample_limit,
         },
-        "rows_analyzed": len(results),
-        "unique_variants": len(variants),
-        "unique_documents": len(documents),
+        "population": {
+            "rows_in_scope": rows_in_scope,
+            "rows_scanned_for_detail": rows_scanned,
+            "is_full_detail_scan": is_full,
+            "unique_variants": int(pop.get("unique_variants") or len(variants)),
+            "unique_documents": int(pop.get("unique_documents") or len(documents)),
+            "min_admission_date": pop.get("min_admission_date")
+            or (min(dates).isoformat() if dates else None),
+            "max_admission_date": pop.get("max_admission_date")
+            or (max(dates).isoformat() if dates else None),
+            "note": (
+                "rows_in_scope viene de COUNT SQL sin LIMIT de samples; "
+                "effective_quality / understatement sobre rows_scanned_for_detail"
+            ),
+        },
+        "freshness": freshness
+        or {
+            "latest_admission_date": None,
+            "days_since_latest_admission": None,
+            "is_stale": None,
+            "admission_date_meaning": (
+                "Fecha de admisión/recepción en cost_reception_history "
+                "(no es la fecha de ejecución del sync)"
+            ),
+            "variant_cost_last_update_meaning": (
+                "bsale.variant_cost.last_update = última actualización del snapshot de costo"
+            ),
+        },
+        "rows_analyzed": rows_scanned,
+        "unique_variants": int(pop.get("unique_variants") or len(variants)),
+        "unique_documents": int(pop.get("unique_documents") or len(documents)),
         "date_range_found": {
-            "min": min(dates).isoformat() if dates else None,
-            "max": max(dates).isoformat() if dates else None,
+            "min": pop.get("min_admission_date")
+            or (min(dates).isoformat() if dates else None),
+            "max": pop.get("max_admission_date")
+            or (max(dates).isoformat() if dates else None),
         },
         "quality": quality,
         "effective_quality": effective_quality,
+        "tax_combinations": tax_combination_counts or dict(combo_counts),
+        "gross_understatement": under_stats,
         "tax_context": tax_context_stats,
         "differences": {
             "stored_components": {
@@ -669,7 +860,7 @@ def build_cost_audit_report(
                 ),
             },
         },
-        "samples": [s.to_sample_dict() for s in samples],
+        "samples": samples,
         "duration_ms": round(duration_ms, 2),
         "barcode_resolution": (
             barcode_resolution.to_dict()
@@ -682,6 +873,7 @@ def build_cost_audit_report(
             "pct_soft": str(args.tolerances.pct_soft),
             "stale_snapshot_days": args.tolerances.stale_snapshot_days,
             "outlier_factor": str(args.tolerances.outlier_factor),
+            "freshness_stale_days": 7,
         },
         "limitations": [
             "source_document_id no es columna canónica; se usa document_number o reception_id",
@@ -689,6 +881,9 @@ def build_cost_audit_report(
             "iva_rate interpretado en puntos porcentuales si > 1",
             "stored_components_match no implica bruto fiscalmente correcto",
             "outlier es alerta estadística, no corrección",
+            "IVA se identifica por tax_id/tipo, nunca por posición en tax_ids_json",
+            "sample-limit no limita population.rows_in_scope ni agregados SQL",
+            "admission_date ≠ fecha de corrida del sync; ver freshness.*_meaning",
         ],
     }
 
@@ -710,11 +905,23 @@ def run_cost_data_audit(
             barcode=args.barcode,
         )
         variant_ids_filter = list(barcode_resolution.resolved_variant_ids)
-        # Si además hay --variant-id, intersecar
         if args.variant_id is not None:
             variant_ids_filter = [v for v in variant_ids_filter if v == args.variant_id]
 
-    raw_rows = repository.fetch_history_rows(
+    population_row = repository.fetch_population_summary(
+        args,
+        date_from=date_from,
+        date_to=date_to,
+        variant_ids=variant_ids_filter,
+    )
+    tax_combos = repository.fetch_tax_combination_counts(
+        args,
+        date_from=date_from,
+        date_to=date_to,
+        variant_ids=variant_ids_filter,
+    )
+
+    raw_rows = repository.fetch_history_rows_paged(
         args,
         date_from=date_from,
         date_to=date_to,
@@ -729,7 +936,6 @@ def run_cost_data_audit(
             and not barcode_resolution.barcode_not_found
         ):
             if "no_reception_history" not in warnings:
-                # Puede ser filtro office/fecha; distinguir
                 if barcode_resolution.no_reception_history:
                     pass
                 else:
@@ -754,12 +960,17 @@ def run_cost_data_audit(
         )
 
     tax_ids = CostDataAuditRepository.collect_tax_ids(raw_rows)
+    # Incluir ids de combinaciones de población para catálogo completo
+    for combo in tax_combos:
+        for part in str(combo).split(","):
+            part = part.strip()
+            if part.isdigit():
+                tax_ids.append(int(part))
     tax_catalog = repository.fetch_taxes_for_ids(
         company_id=args.company_id,
         tax_ids=tax_ids,
     )
 
-    # Duplicados dentro del batch
     uk_counts: Counter[str] = Counter()
     detail_counts: Counter[tuple[int, int]] = Counter()
     for r in raw_rows:
@@ -817,6 +1028,27 @@ def run_cost_data_audit(
             )
         )
 
+    latest_adm_pop = population_row.get("max_admission_date")
+    latest_d: date | None = None
+    if isinstance(latest_adm_pop, str):
+        latest_d = date.fromisoformat(latest_adm_pop)
+    elif isinstance(latest_adm_pop, date):
+        latest_d = latest_adm_pop
+    days_since = (as_of - latest_d).days if latest_d is not None else None
+    freshness = {
+        "latest_admission_date": latest_d.isoformat() if latest_d else None,
+        "days_since_latest_admission": days_since,
+        "is_stale": bool(days_since is not None and days_since > 7),
+        "admission_date_meaning": (
+            "Máxima admission_date en analytics.cost_reception_history "
+            "dentro del scope (recepción/admisión, no timestamp de job sync)"
+        ),
+        "variant_cost_last_update_meaning": (
+            "bsale.variant_cost.last_update = frescura del snapshot por variante"
+        ),
+        "as_of": as_of.isoformat(),
+    }
+
     duration_ms = (time.perf_counter() - t0) * 1000.0
     return build_cost_audit_report(
         args=args,
@@ -826,4 +1058,7 @@ def run_cost_data_audit(
         tax_context_stats=tax_stats,
         duration_ms=duration_ms,
         barcode_resolution=barcode_resolution,
+        population=population_row,
+        freshness=freshness,
+        tax_combination_counts=tax_combos,
     )

@@ -3,10 +3,17 @@
 Uso (Coolify / contenedor backend)::
 
     python -m backend.jobs.audit_cost_data_quality \\
-      --company-id 3 --office-id 1 --days 90 --limit 500 --sample-limit 20
+      --company-id 3 --office-id 3 --days 365 --limit 5000 --sample-limit 50
+
+Resumen población sin samples::
+
+    python -m backend.jobs.audit_cost_data_quality \\
+      --company-id 3 --office-id 3 --days 365 --summary-only \\
+      --page-size 1000 --max-pages 50
 
 No ejecuta DDL/DML. Siempre hace rollback al terminar.
 No ejecutar desde Cursor contra producción.
+No modifica sync_cost_receptions ni datos productivos.
 """
 
 from __future__ import annotations
@@ -38,12 +45,39 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--company-id", type=int, required=True)
     parser.add_argument("--office-id", type=int, default=None)
     parser.add_argument("--days", type=int, default=90)
-    parser.add_argument("--limit", type=int, default=500)
-    parser.add_argument("--sample-limit", type=int, default=20)
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=5000,
+        help="Tope de filas clasificadas en detalle (no limita population SQL)",
+    )
+    parser.add_argument(
+        "--sample-limit",
+        type=int,
+        default=20,
+        help="Máximo de samples en la salida (no limita conteos de población)",
+    )
     parser.add_argument("--statement-timeout-seconds", type=int, default=20)
     parser.add_argument("--variant-id", type=int, default=None)
     parser.add_argument("--barcode", type=str, default=None)
     parser.add_argument("--source-document-id", type=int, default=None)
+    parser.add_argument(
+        "--page-size",
+        type=int,
+        default=500,
+        help="Tamaño de página al escanear detalle",
+    )
+    parser.add_argument(
+        "--max-pages",
+        type=int,
+        default=20,
+        help="Máximo de páginas de detalle a clasificar",
+    )
+    parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="Calcula totales/población sin devolver samples",
+    )
     return parser
 
 
@@ -60,6 +94,9 @@ def run_job(argv: list[str] | None = None) -> tuple[int, dict[str, Any]]:
             variant_id=args_ns.variant_id,
             barcode=args_ns.barcode,
             source_document_id=args_ns.source_document_id,
+            page_size=args_ns.page_size,
+            max_pages=args_ns.max_pages,
+            summary_only=args_ns.summary_only,
         )
     except AnalyticsValidationError as exc:
         return 1, {
