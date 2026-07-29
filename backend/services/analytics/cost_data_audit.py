@@ -8,12 +8,14 @@ from __future__ import annotations
 import time
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from statistics import median
 from typing import Any
 
 from backend.repositories.cost_data_audit_repo import CostDataAuditRepository, _tax_id_list
 from backend.services.analytics.cost_audit_models import (
+    EFFECTIVE_COUNTER_KEYS,
+    EFFECTIVE_STATUS_PRIORITY,
     QUALITY_COUNTER_KEYS,
     BarcodeResolution,
     CostAuditArgs,
@@ -21,6 +23,7 @@ from backend.services.analytics.cost_audit_models import (
     CostAuditRawRow,
     CostAuditRowResult,
     CostAuditTolerances,
+    EffectiveQualityStatus,
     TaxCatalogEntry,
     abs_decimal,
     clamp_cost_audit_args,
@@ -47,11 +50,13 @@ __all__ = [
 
 
 SAMPLE_PRIORITY: tuple[str, ...] = (
-    CostAuditFlag.PROBABLE_MISSING_TAXES.value,
+    EffectiveQualityStatus.MISSING_TAXES_IN_GROSS.value,
+    EffectiveQualityStatus.DUPLICATED_TAXES_IN_GROSS.value,
+    EffectiveQualityStatus.GROSS_COMPONENT_MISMATCH.value,
     CostAuditFlag.PROBABLE_IVA_DUPLICATED.value,
-    CostAuditFlag.PROBABLE_SPECIFIC_TAX_DUPLICATED.value,
-    CostAuditFlag.PROBABLE_TAX_FACTOR_DUPLICATED.value,
-    CostAuditFlag.GROSS_MISMATCH.value,
+    CostAuditFlag.PROBABLE_MISSING_TAXES.value,
+    CostAuditFlag.EXPECTED_TAX_MISMATCH.value,
+    CostAuditFlag.STORED_COMPONENTS_MISMATCH.value,
     CostAuditFlag.UNIT_TOTAL_MISMATCH.value,
     CostAuditFlag.VARIANT_BARCODE_MISMATCH.value,
     CostAuditFlag.DUPLICATE_RECEPTION.value,
@@ -59,6 +64,12 @@ SAMPLE_PRIORITY: tuple[str, ...] = (
     CostAuditFlag.NEGATIVE_COST.value,
     CostAuditFlag.SUSPICIOUS_OUTLIER.value,
 )
+
+COMMERCIAL_QUANT = Decimal("0.01")
+
+
+def _commercial(value: Decimal) -> Decimal:
+    return value.quantize(COMMERCIAL_QUANT, rounding=ROUND_HALF_UP)
 
 
 def audit_date_window(days: int, *, today: date | None = None) -> tuple[date, date]:
@@ -176,55 +187,111 @@ def _has_associated_taxes(raw: CostAuditRawRow, tax_factor: Decimal | None, iva_
     return False
 
 
-def _probable_causes(flags: list[str]) -> str | None:
-    if not flags:
-        return None
+def _probable_causes(flags: list[str], effective: str | None) -> str | None:
+    if effective == EffectiveQualityStatus.MISSING_TAXES_IN_GROSS.value:
+        return (
+            "componentes almacenados coherentes entre sí, pero el bruto omite impuestos "
+            "esperados según iva_rate/tax_ids (p.ej. IVA 19% no aplicado)"
+        )
+    if effective == EffectiveQualityStatus.DUPLICATED_TAXES_IN_GROSS.value:
+        return "bruto compatible con impuestos aplicados más de una vez"
+    if effective == EffectiveQualityStatus.GROSS_COMPONENT_MISMATCH.value:
+        return "cost_bruto_erp no cuadra con cost_net + iva_amount + other_taxes almacenados"
+    if effective == EffectiveQualityStatus.INCOMPLETE_TAX_CONTEXT.value:
+        return "hay señales tributarias incompletas (tax_ids sin rates/products.taxes)"
+    if effective == EffectiveQualityStatus.MISSING_COST.value:
+        return "falta costo neto o bruto, o es cero/negativo"
+    if effective == EffectiveQualityStatus.SUSPICIOUS_OUTLIER.value:
+        return "costo bruto atípico vs mediana de la variante (alerta)"
+    if effective == EffectiveQualityStatus.VALID_GROSS.value:
+        return "bruto alineado con componentes y perfil tributario esperado"
     mapping = {
         CostAuditFlag.PROBABLE_MISSING_TAXES.value: (
-            "cost_bruto_erp ≈ cost_net pese a señales tributarias (posible fallback sin taxes)"
-        ),
-        CostAuditFlag.PROBABLE_IVA_DUPLICATED.value: (
-            "bruto compatible con IVA aplicado dos veces sobre el neto"
-        ),
-        CostAuditFlag.PROBABLE_SPECIFIC_TAX_DUPLICATED.value: (
-            "bruto compatible con impuesto específico duplicado"
-        ),
-        CostAuditFlag.PROBABLE_TAX_FACTOR_DUPLICATED.value: (
-            "bruto compatible con tax_factor aplicado dos veces"
-        ),
-        CostAuditFlag.UNIT_TOTAL_MISMATCH.value: (
-            "cost_net parece total de línea (≈ unitario × quantity) o mezcla unitario/total"
+            "cost_bruto_erp ≈ cost_net pese a señales tributarias"
         ),
         CostAuditFlag.TAX_IDS_NOT_CONSUMED.value: (
             "tax_ids_json tiene impuestos pero products.taxes ausente/vacío"
-        ),
-        CostAuditFlag.GROSS_MISMATCH.value: (
-            "cost_bruto_erp no cuadra con cost_net + iva_amount + other_taxes"
         ),
         CostAuditFlag.VARIANT_BARCODE_MISMATCH.value: (
             "barcode del historial no coincide con catálogo de la variante"
         ),
         CostAuditFlag.DUPLICATE_RECEPTION.value: "posible recepción/detalle duplicado",
-        CostAuditFlag.STALE_SNAPSHOT.value: (
-            "variant_cost.last_update desactualizado vs última recepción"
-        ),
-        CostAuditFlag.SOURCE_CONFLICT.value: (
-            "average_cost de history difiere del snapshot variant_cost"
-        ),
-        CostAuditFlag.SUSPICIOUS_OUTLIER.value: (
-            "costo bruto atípico vs mediana de la variante (solo alerta)"
-        ),
-        CostAuditFlag.MISSING_TAX_CONTEXT.value: "sin tax_factor/iva/taxes/tax_ids",
-        CostAuditFlag.ZERO_COST.value: "costo neto o bruto en cero",
-        CostAuditFlag.NEGATIVE_COST.value: "costo neto o bruto negativo",
+        CostAuditFlag.STALE_SNAPSHOT.value: "variant_cost desactualizado vs recepción",
+        CostAuditFlag.SOURCE_CONFLICT.value: "average_cost history vs variant_cost conflictivo",
     }
     for flag in SAMPLE_PRIORITY:
-        if flag in flags:
-            return mapping.get(flag)
+        if flag in flags and flag in mapping:
+            return mapping[flag]
     for flag in flags:
         if flag in mapping:
             return mapping[flag]
-    return flags[0]
+    return flags[0] if flags else None
+
+
+def resolve_effective_quality_status(flags: list[str]) -> str:
+    """Un solo estado efectivo; no valida solo por suma de componentes almacenados."""
+    candidates: list[str] = []
+    if (
+        CostAuditFlag.MISSING_NET_COST.value in flags
+        or CostAuditFlag.MISSING_GROSS_COST.value in flags
+        or CostAuditFlag.ZERO_COST.value in flags
+        or CostAuditFlag.NEGATIVE_COST.value in flags
+    ):
+        candidates.append(EffectiveQualityStatus.MISSING_COST.value)
+    if CostAuditFlag.STORED_COMPONENTS_MISMATCH.value in flags:
+        candidates.append(EffectiveQualityStatus.GROSS_COMPONENT_MISMATCH.value)
+    if (
+        CostAuditFlag.PROBABLE_IVA_DUPLICATED.value in flags
+        or CostAuditFlag.PROBABLE_SPECIFIC_TAX_DUPLICATED.value in flags
+        or CostAuditFlag.PROBABLE_TAX_FACTOR_DUPLICATED.value in flags
+    ):
+        candidates.append(EffectiveQualityStatus.DUPLICATED_TAXES_IN_GROSS.value)
+    if (
+        CostAuditFlag.PROBABLE_MISSING_TAXES.value in flags
+        or CostAuditFlag.EXPECTED_TAX_MISMATCH.value in flags
+    ):
+        # mismatch esperado con impuestos omitidos (bruto≈neto) o perfil no reflejado
+        candidates.append(EffectiveQualityStatus.MISSING_TAXES_IN_GROSS.value)
+    if (
+        CostAuditFlag.MISSING_TAX_CONTEXT.value in flags
+        or CostAuditFlag.TAX_IDS_NOT_CONSUMED.value in flags
+        or CostAuditFlag.EXPECTED_TAX_UNAVAILABLE.value in flags
+    ):
+        # incomplete: tax_ids sin consumir, o contexto ausente CON señales conflictivas.
+        # Producto sin impuestos (expected unavailable + stored match) → no incomplete.
+        if EffectiveQualityStatus.MISSING_TAXES_IN_GROSS.value not in candidates:
+            if CostAuditFlag.TAX_IDS_NOT_CONSUMED.value in flags:
+                candidates.append(EffectiveQualityStatus.INCOMPLETE_TAX_CONTEXT.value)
+            elif (
+                CostAuditFlag.MISSING_TAX_CONTEXT.value in flags
+                and CostAuditFlag.STORED_COMPONENTS_MATCH.value not in flags
+                and CostAuditFlag.STORED_COMPONENTS_ROUNDING.value not in flags
+            ):
+                candidates.append(EffectiveQualityStatus.INCOMPLETE_TAX_CONTEXT.value)
+    if CostAuditFlag.SUSPICIOUS_OUTLIER.value in flags:
+        candidates.append(EffectiveQualityStatus.SUSPICIOUS_OUTLIER.value)
+
+    if not candidates:
+        # valid_gross solo si componentes OK y (tax esperado OK o unavailable sin señales)
+        if CostAuditFlag.STORED_COMPONENTS_MISMATCH.value in flags:
+            return EffectiveQualityStatus.GROSS_COMPONENT_MISMATCH.value
+        if CostAuditFlag.EXPECTED_TAX_MISMATCH.value in flags:
+            return EffectiveQualityStatus.MISSING_TAXES_IN_GROSS.value
+        if (
+            CostAuditFlag.STORED_COMPONENTS_MATCH.value in flags
+            or CostAuditFlag.STORED_COMPONENTS_ROUNDING.value in flags
+        ) and (
+            CostAuditFlag.EXPECTED_TAX_MATCH.value in flags
+            or CostAuditFlag.EXPECTED_TAX_ROUNDING.value in flags
+            or CostAuditFlag.EXPECTED_TAX_UNAVAILABLE.value in flags
+        ):
+            return EffectiveQualityStatus.VALID_GROSS.value
+        return EffectiveQualityStatus.INCOMPLETE_TAX_CONTEXT.value
+
+    for status in EFFECTIVE_STATUS_PRIORITY:
+        if status in candidates:
+            return status
+    return candidates[0]
 
 
 def classify_cost_audit_row(
@@ -238,7 +305,7 @@ def classify_cost_audit_row(
     as_of: date | None = None,
     latest_admission_by_variant: dict[int, date] | None = None,
 ) -> CostAuditRowResult:
-    """Clasifica una fila. No muta `raw`. Permite múltiples flags."""
+    """Clasifica una fila. No muta `raw`. Permite múltiples flags técnicos."""
     tol = tolerances or CostAuditTolerances()
     catalog = tax_catalog or {}
     flags: list[str] = []
@@ -251,47 +318,85 @@ def classify_cost_audit_row(
     iva_amount = raw.iva_amount
     other_taxes = raw.other_taxes
     bruto = raw.cost_bruto_erp
+    stored_gross = bruto
 
+    # --- A) stored components ---
     expected_from_amounts: Decimal | None = None
     diff_amounts: Decimal | None = None
+    stored_status: str | None = None
     if cost_net is not None:
-        expected_from_amounts = (
+        expected_from_amounts = _commercial(
             cost_net
             + (iva_amount if iva_amount is not None else ZERO)
             + (other_taxes if other_taxes is not None else ZERO)
         )
         if bruto is not None:
-            diff_amounts = bruto - expected_from_amounts
+            diff_amounts = _commercial(bruto - expected_from_amounts)
+            ad = abs_decimal(diff_amounts)
+            if ad <= tol.money_exact:
+                stored_status = CostAuditFlag.STORED_COMPONENTS_MATCH.value
+            elif ad <= tol.money_rounding:
+                stored_status = CostAuditFlag.STORED_COMPONENTS_ROUNDING.value
+            else:
+                soft = (
+                    cost_net != ZERO
+                    and (ad / abs_decimal(cost_net) * Decimal("100")) <= tol.pct_soft
+                )
+                stored_status = (
+                    CostAuditFlag.STORED_COMPONENTS_ROUNDING.value
+                    if soft
+                    else CostAuditFlag.STORED_COMPONENTS_MISMATCH.value
+                )
+            flags.append(stored_status)
 
+    # --- B) expected tax profile ---
     expected_iva: Decimal | None = None
     expected_specific: Decimal | None = None
     expected_from_rates: Decimal | None = None
     diff_rates: Decimal | None = None
+    expected_tax_status: str | None = None
 
     iva_frac = rate_to_fraction(iva_rate)
     spec_frac = rate_to_fraction(specific_rate)
 
-    if cost_net is not None and rates_reliable:
-        if iva_frac is not None:
-            expected_iva = cost_net * iva_frac
+    if cost_net is not None and rates_reliable and iva_frac is not None:
+        expected_iva = _commercial(cost_net * iva_frac)
         if spec_frac is not None:
-            expected_specific = cost_net * spec_frac
-        elif tax_factor is not None and iva_frac is not None and tax_factor > Decimal("1"):
-            # residual teórico del factor menos IVA (solo diagnóstico)
+            expected_specific = _commercial(cost_net * spec_frac)
+        elif tax_factor is not None and tax_factor > Decimal("1"):
             residual = tax_factor - Decimal("1") - iva_frac
             if residual > ZERO:
-                expected_specific = cost_net * residual
+                expected_specific = _commercial(cost_net * residual)
                 specific_rate = residual * Decimal("100")
-        if expected_iva is not None or expected_specific is not None:
-            expected_from_rates = (
-                cost_net
-                + (expected_iva or ZERO)
-                + (expected_specific or ZERO)
-            )
-        elif tax_factor is not None:
-            expected_from_rates = cost_net * tax_factor
-        if expected_from_rates is not None and bruto is not None:
-            diff_rates = bruto - expected_from_rates
+        expected_from_rates = _commercial(
+            cost_net + (expected_iva or ZERO) + (expected_specific or ZERO)
+        )
+    elif cost_net is not None and rates_reliable and tax_factor is not None and tax_factor > Decimal("1"):
+        expected_from_rates = _commercial(cost_net * tax_factor)
+
+    if expected_from_rates is None:
+        expected_tax_status = CostAuditFlag.EXPECTED_TAX_UNAVAILABLE.value
+        flags.append(expected_tax_status)
+    elif bruto is not None:
+        diff_rates = _commercial(bruto - expected_from_rates)
+        ad_r = abs_decimal(diff_rates)
+        if ad_r <= tol.money_exact:
+            expected_tax_status = CostAuditFlag.EXPECTED_TAX_MATCH.value
+        elif ad_r <= tol.money_rounding:
+            expected_tax_status = CostAuditFlag.EXPECTED_TAX_ROUNDING.value
+        else:
+            expected_tax_status = CostAuditFlag.EXPECTED_TAX_MISMATCH.value
+        flags.append(expected_tax_status)
+
+    corrected_gross = expected_from_rates
+    understatement: Decimal | None = None
+    understatement_pct: Decimal | None = None
+    if corrected_gross is not None and stored_gross is not None:
+        gap = _commercial(corrected_gross - stored_gross)
+        if gap > ZERO:
+            understatement = gap
+            if corrected_gross > ZERO:
+                understatement_pct = _commercial(gap / corrected_gross * Decimal("100"))
 
     # --- flags estructurales ---
     if cost_net is None:
@@ -321,23 +426,7 @@ def classify_cost_audit_row(
     if tax_ids and (not raw.has_products_taxes_column or products_taxes_empty):
         flags.append(CostAuditFlag.TAX_IDS_NOT_CONSUMED.value)
 
-    # Identidad montos
-    if cost_net is not None and bruto is not None and expected_from_amounts is not None and diff_amounts is not None:
-        ad = abs_decimal(diff_amounts)
-        if ad <= tol.money_exact:
-            flags.append(CostAuditFlag.EXACT_MATCH.value)
-        elif ad <= tol.money_rounding:
-            flags.append(CostAuditFlag.ROUNDING_DIFFERENCE.value)
-        else:
-            soft = False
-            if cost_net != ZERO and (ad / abs_decimal(cost_net) * Decimal("100")) <= tol.pct_soft:
-                soft = True
-            if soft:
-                flags.append(CostAuditFlag.ROUNDING_DIFFERENCE.value)
-            else:
-                flags.append(CostAuditFlag.GROSS_MISMATCH.value)
-
-    # Bruto == neto con impuestos asociados
+    # Bruto == neto con impuestos asociados → missing taxes in gross
     if (
         cost_net is not None
         and bruto is not None
@@ -345,16 +434,6 @@ def classify_cost_audit_row(
         and _has_associated_taxes(raw, tax_factor, iva_rate)
     ):
         flags.append(CostAuditFlag.PROBABLE_MISSING_TAXES.value)
-
-    # Tax mismatch vs tasas
-    if (
-        expected_from_rates is not None
-        and bruto is not None
-        and diff_rates is not None
-        and abs_decimal(diff_rates) > tol.money_rounding
-    ):
-        if CostAuditFlag.TAX_MISMATCH.value not in flags:
-            flags.append(CostAuditFlag.TAX_MISMATCH.value)
 
     # Duplicaciones probables
     if cost_net is not None and bruto is not None and cost_net > ZERO:
@@ -364,7 +443,6 @@ def classify_cost_audit_row(
             if _rel_near(bruto, double_iva, tol.duplicate_iva_tolerance) or _rel_near(
                 bruto, additive_double, tol.duplicate_iva_tolerance
             ):
-                # Evitar falso positivo cuando tax_factor legitimo ≈ (1+iva)^2
                 single = cost_net * (Decimal("1") + iva_frac)
                 if not _rel_near(bruto, single, tol.duplicate_iva_tolerance):
                     flags.append(CostAuditFlag.PROBABLE_IVA_DUPLICATED.value)
@@ -408,13 +486,11 @@ def classify_cost_audit_row(
             if CostAuditFlag.UNIT_TOTAL_MISMATCH.value not in flags:
                 flags.append(CostAuditFlag.UNIT_TOTAL_MISMATCH.value)
 
-    # Barcode mismatch
     hist_bc = (raw.barcode or "").strip()
     cat_bc = (raw.catalog_barcode or "").strip()
     if hist_bc and cat_bc and hist_bc != cat_bc:
         flags.append(CostAuditFlag.VARIANT_BARCODE_MISMATCH.value)
 
-    # Duplicados
     if raw.unique_key and duplicate_unique_keys and raw.unique_key in duplicate_unique_keys:
         flags.append(CostAuditFlag.DUPLICATE_RECEPTION.value)
     if (
@@ -426,7 +502,6 @@ def classify_cost_audit_row(
             flags.append(CostAuditFlag.DUPLICATE_RECEPTION.value)
         flags.append(CostAuditFlag.DUPLICATE_VARIANT_LINK.value)
 
-    # Stale snapshot
     as_of_d = as_of or date.today()
     last_adm = None
     if latest_admission_by_variant and raw.variant_id in latest_admission_by_variant:
@@ -441,7 +516,6 @@ def classify_cost_audit_row(
             if CostAuditFlag.STALE_SNAPSHOT.value not in flags:
                 flags.append(CostAuditFlag.STALE_SNAPSHOT.value)
 
-    # Source conflict history average vs snapshot
     if (
         raw.average_cost is not None
         and raw.variant_cost_net is not None
@@ -451,7 +525,6 @@ def classify_cost_audit_row(
     ):
         flags.append(CostAuditFlag.SOURCE_CONFLICT.value)
 
-    # Outlier (alerta; no auto-error solo por ser alto)
     if (
         bruto is not None
         and bruto > ZERO
@@ -462,24 +535,7 @@ def classify_cost_audit_row(
         if med > ZERO and bruto > med * tol.outlier_factor:
             flags.append(CostAuditFlag.SUSPICIOUS_OUTLIER.value)
 
-    # Si no hay problemas y no marcamos exact/rounding, y no hay missing → exact si cuadra
-    problem_flags = {
-        CostAuditFlag.GROSS_MISMATCH.value,
-        CostAuditFlag.TAX_MISMATCH.value,
-        CostAuditFlag.PROBABLE_MISSING_TAXES.value,
-        CostAuditFlag.PROBABLE_IVA_DUPLICATED.value,
-        CostAuditFlag.PROBABLE_SPECIFIC_TAX_DUPLICATED.value,
-        CostAuditFlag.PROBABLE_TAX_FACTOR_DUPLICATED.value,
-        CostAuditFlag.UNIT_TOTAL_MISMATCH.value,
-        CostAuditFlag.MISSING_NET_COST.value,
-        CostAuditFlag.MISSING_GROSS_COST.value,
-        CostAuditFlag.ZERO_COST.value,
-        CostAuditFlag.NEGATIVE_COST.value,
-    }
-    if not any(f in problem_flags for f in flags):
-        if CostAuditFlag.EXACT_MATCH.value not in flags and CostAuditFlag.ROUNDING_DIFFERENCE.value not in flags:
-            if cost_net is not None and bruto is not None:
-                flags.append(CostAuditFlag.EXACT_MATCH.value)
+    effective = resolve_effective_quality_status(flags)
 
     return CostAuditRowResult(
         raw=raw,
@@ -492,26 +548,35 @@ def classify_cost_audit_row(
         tax_factor_used=tax_factor,
         iva_rate_used=iva_rate,
         specific_tax_rate_used=specific_rate,
+        stored_components_status=stored_status,
+        expected_tax_status=expected_tax_status,
+        corrected_gross_cost=corrected_gross,
+        stored_gross_cost=stored_gross,
+        gross_understatement_amount=understatement,
+        gross_understatement_pct=understatement_pct,
+        effective_quality_status=effective,
         flags=flags,
-        probable_cause=_probable_causes(flags),
+        probable_cause=_probable_causes(flags, effective),
     )
 
 
 def _sample_rank(result: CostAuditRowResult) -> tuple[int, Decimal, int]:
+    eff = result.effective_quality_status or ""
     for i, key in enumerate(SAMPLE_PRIORITY):
-        if key in result.flags:
-            diff = abs_decimal(result.gross_difference_amounts or ZERO)
+        if key == eff or key in result.flags:
+            diff = abs_decimal(
+                result.gross_understatement_amount
+                or result.gross_difference_rates
+                or result.gross_difference_amounts
+                or ZERO
+            )
             return (i, -diff, result.raw.history_id)
-    diff = abs_decimal(result.gross_difference_amounts or ZERO)
+    diff = abs_decimal(result.gross_understatement_amount or ZERO)
     return (len(SAMPLE_PRIORITY), -diff, result.raw.history_id)
 
 
 def _is_problematic(result: CostAuditRowResult) -> bool:
-    benign = {
-        CostAuditFlag.EXACT_MATCH.value,
-        CostAuditFlag.ROUNDING_DIFFERENCE.value,
-    }
-    return any(f not in benign for f in result.flags)
+    return result.effective_quality_status != EffectiveQualityStatus.VALID_GROSS.value
 
 
 def build_cost_audit_report(
@@ -525,10 +590,12 @@ def build_cost_audit_report(
     barcode_resolution: Any | None = None,
 ) -> dict[str, Any]:
     quality = {k: 0 for k in QUALITY_COUNTER_KEYS}
+    effective_quality = {k: 0 for k in EFFECTIVE_COUNTER_KEYS}
     variants: set[int] = set()
     documents: set[int] = set()
-    abs_diffs: list[Decimal] = []
-    pct_diffs: list[Decimal] = []
+    stored_abs: list[Decimal] = []
+    tax_abs: list[Decimal] = []
+    tax_pct: list[Decimal] = []
     dates: list[date] = []
 
     for res in results:
@@ -545,24 +612,22 @@ def build_cost_audit_report(
             if f in quality and f not in counted:
                 quality[f] += 1
                 counted.add(f)
+        if res.effective_quality_status and res.effective_quality_status in effective_quality:
+            effective_quality[res.effective_quality_status] += 1
         if res.gross_difference_amounts is not None:
-            ad = abs_decimal(res.gross_difference_amounts)
-            abs_diffs.append(ad)
+            stored_abs.append(abs_decimal(res.gross_difference_amounts))
+        if res.gross_difference_rates is not None:
+            ad = abs_decimal(res.gross_difference_rates)
+            tax_abs.append(ad)
             if res.raw.cost_net and res.raw.cost_net != ZERO:
-                pct_diffs.append(ad / abs_decimal(res.raw.cost_net) * Decimal("100"))
+                tax_pct.append(ad / abs_decimal(res.raw.cost_net) * Decimal("100"))
+        elif res.gross_understatement_amount is not None:
+            tax_abs.append(abs_decimal(res.gross_understatement_amount))
 
     samples = sorted(
         [r for r in results if _is_problematic(r)],
         key=_sample_rank,
     )[: args.sample_limit]
-
-    avg_abs = (
-        str(sum(abs_diffs) / Decimal(len(abs_diffs))) if abs_diffs else None
-    )
-    max_abs = str(max(abs_diffs)) if abs_diffs else None
-    avg_pct = (
-        str(sum(pct_diffs) / Decimal(len(pct_diffs))) if pct_diffs else None
-    )
 
     return {
         "ok": True,
@@ -585,11 +650,24 @@ def build_cost_audit_report(
             "max": max(dates).isoformat() if dates else None,
         },
         "quality": quality,
+        "effective_quality": effective_quality,
         "tax_context": tax_context_stats,
         "differences": {
-            "average_absolute": avg_abs,
-            "maximum_absolute": max_abs,
-            "average_percentage": avg_pct,
+            "stored_components": {
+                "average_absolute": (
+                    str(sum(stored_abs) / Decimal(len(stored_abs))) if stored_abs else None
+                ),
+                "maximum_absolute": str(max(stored_abs)) if stored_abs else None,
+            },
+            "expected_tax_profile": {
+                "average_absolute": (
+                    str(sum(tax_abs) / Decimal(len(tax_abs))) if tax_abs else None
+                ),
+                "maximum_absolute": str(max(tax_abs)) if tax_abs else None,
+                "average_percentage": (
+                    str(sum(tax_pct) / Decimal(len(tax_pct))) if tax_pct else None
+                ),
+            },
         },
         "samples": [s.to_sample_dict() for s in samples],
         "duration_ms": round(duration_ms, 2),
@@ -609,7 +687,7 @@ def build_cost_audit_report(
             "source_document_id no es columna canónica; se usa document_number o reception_id",
             "cost_bruto_erp del sync es sintético (net×tax_factor), no bruto de documento Bsale",
             "iva_rate interpretado en puntos porcentuales si > 1",
-            "net_unit_value/total_unit_value no existen en cost_reception_history",
+            "stored_components_match no implica bruto fiscalmente correcto",
             "outlier es alerta estadística, no corrección",
         ],
     }

@@ -29,10 +29,16 @@ DEFAULT_LOCK_TIMEOUT = "3s"
 
 
 class CostAuditFlag(str, Enum):
-    EXACT_MATCH = "exact_match"
-    ROUNDING_DIFFERENCE = "rounding_difference"
-    GROSS_MISMATCH = "gross_mismatch"
-    TAX_MISMATCH = "tax_mismatch"
+    # A) Consistencia de componentes almacenados
+    STORED_COMPONENTS_MATCH = "stored_components_match"
+    STORED_COMPONENTS_ROUNDING = "stored_components_rounding"
+    STORED_COMPONENTS_MISMATCH = "stored_components_mismatch"
+    # B) Consistencia vs perfil tributario esperado
+    EXPECTED_TAX_MATCH = "expected_tax_match"
+    EXPECTED_TAX_ROUNDING = "expected_tax_rounding"
+    EXPECTED_TAX_MISMATCH = "expected_tax_mismatch"
+    EXPECTED_TAX_UNAVAILABLE = "expected_tax_unavailable"
+    # Señales técnicas adicionales
     PROBABLE_MISSING_TAXES = "probable_missing_taxes"
     PROBABLE_IVA_DUPLICATED = "probable_iva_duplicated"
     PROBABLE_SPECIFIC_TAX_DUPLICATED = "probable_specific_tax_duplicated"
@@ -53,11 +59,38 @@ class CostAuditFlag(str, Enum):
     SOURCE_CONFLICT = "source_conflict"
 
 
+class EffectiveQualityStatus(str, Enum):
+    """Estado único prioritario para análisis / UI futura."""
+
+    VALID_GROSS = "valid_gross"
+    MISSING_TAXES_IN_GROSS = "missing_taxes_in_gross"
+    DUPLICATED_TAXES_IN_GROSS = "duplicated_taxes_in_gross"
+    INCOMPLETE_TAX_CONTEXT = "incomplete_tax_context"
+    GROSS_COMPONENT_MISMATCH = "gross_component_mismatch"
+    SUSPICIOUS_OUTLIER = "suspicious_outlier"
+    MISSING_COST = "missing_cost"
+
+
+# Prioridad: menor índice = más grave / gana
+EFFECTIVE_STATUS_PRIORITY: tuple[str, ...] = (
+    EffectiveQualityStatus.MISSING_COST.value,
+    EffectiveQualityStatus.GROSS_COMPONENT_MISMATCH.value,
+    EffectiveQualityStatus.DUPLICATED_TAXES_IN_GROSS.value,
+    EffectiveQualityStatus.MISSING_TAXES_IN_GROSS.value,
+    EffectiveQualityStatus.INCOMPLETE_TAX_CONTEXT.value,
+    EffectiveQualityStatus.SUSPICIOUS_OUTLIER.value,
+    EffectiveQualityStatus.VALID_GROSS.value,
+)
+
+
 QUALITY_COUNTER_KEYS: tuple[str, ...] = (
-    CostAuditFlag.EXACT_MATCH.value,
-    CostAuditFlag.ROUNDING_DIFFERENCE.value,
-    CostAuditFlag.GROSS_MISMATCH.value,
-    CostAuditFlag.TAX_MISMATCH.value,
+    CostAuditFlag.STORED_COMPONENTS_MATCH.value,
+    CostAuditFlag.STORED_COMPONENTS_ROUNDING.value,
+    CostAuditFlag.STORED_COMPONENTS_MISMATCH.value,
+    CostAuditFlag.EXPECTED_TAX_MATCH.value,
+    CostAuditFlag.EXPECTED_TAX_ROUNDING.value,
+    CostAuditFlag.EXPECTED_TAX_MISMATCH.value,
+    CostAuditFlag.EXPECTED_TAX_UNAVAILABLE.value,
     CostAuditFlag.PROBABLE_MISSING_TAXES.value,
     CostAuditFlag.PROBABLE_IVA_DUPLICATED.value,
     CostAuditFlag.PROBABLE_SPECIFIC_TAX_DUPLICATED.value,
@@ -71,6 +104,12 @@ QUALITY_COUNTER_KEYS: tuple[str, ...] = (
     CostAuditFlag.SUSPICIOUS_OUTLIER.value,
     CostAuditFlag.STALE_SNAPSHOT.value,
 )
+
+EFFECTIVE_COUNTER_KEYS: tuple[str, ...] = EFFECTIVE_STATUS_PRIORITY
+
+# Alias de compatibilidad: tests antiguos no deben usar exact_match
+EXACT_MATCH_REMOVED = True
+
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,6 +291,13 @@ class CostAuditRowResult:
     tax_factor_used: Decimal | None
     iva_rate_used: Decimal | None
     specific_tax_rate_used: Decimal | None
+    stored_components_status: str | None = None
+    expected_tax_status: str | None = None
+    corrected_gross_cost: Decimal | None = None
+    stored_gross_cost: Decimal | None = None
+    gross_understatement_amount: Decimal | None = None
+    gross_understatement_pct: Decimal | None = None
+    effective_quality_status: str | None = None
     flags: list[str] = field(default_factory=list)
     probable_cause: str | None = None
 
@@ -282,9 +328,19 @@ class CostAuditRowResult:
             "iva_amount": _s(r.iva_amount),
             "other_taxes": _s(r.other_taxes),
             "cost_bruto_erp": _s(r.cost_bruto_erp),
+            "stored_gross_cost": _s(self.stored_gross_cost),
             "expected_gross_from_amounts": _s(self.expected_gross_from_amounts),
             "expected_gross_from_rates": _s(self.expected_gross_from_rates),
-            "difference": _s(self.gross_difference_amounts),
+            "expected_iva_amount": _s(self.expected_iva_from_rate),
+            "expected_specific_tax_amount": _s(self.expected_specific_tax_from_rate),
+            "corrected_gross_cost": _s(self.corrected_gross_cost),
+            "gross_understatement_amount": _s(self.gross_understatement_amount),
+            "gross_understatement_pct": _s(self.gross_understatement_pct),
+            "difference_stored_components": _s(self.gross_difference_amounts),
+            "difference_expected_tax": _s(self.gross_difference_rates),
+            "stored_components_status": self.stored_components_status,
+            "expected_tax_status": self.expected_tax_status,
+            "effective_quality_status": self.effective_quality_status,
             "average_cost": _s(r.average_cost),
             "variant_cost_net": _s(r.variant_cost_net),
             "variant_cost_gross": _s(r.variant_cost_gross),

@@ -14,6 +14,7 @@ from backend.services.analytics.cost_audit_models import (
     CostAuditFlag,
     CostAuditRawRow,
     CostAuditTolerances,
+    EffectiveQualityStatus,
     TaxCatalogEntry,
     clamp_cost_audit_args,
     coerce_optional_decimal,
@@ -164,17 +165,19 @@ class RecordingExecutor:
 
 def test_1_exact_gross_match():
     res = classify_cost_audit_row(_row())
-    assert CostAuditFlag.EXACT_MATCH.value in res.flags
-    assert res.expected_gross_from_amounts == D("11900")
-    assert res.gross_difference_amounts == D("0")
+    assert CostAuditFlag.STORED_COMPONENTS_MATCH.value in res.flags
+    assert CostAuditFlag.EXPECTED_TAX_MATCH.value in res.flags
+    assert res.effective_quality_status == "valid_gross"
+    assert res.expected_gross_from_amounts == D("11900.00")
+    assert res.gross_difference_amounts == D("0.00")
 
 
 def test_2_rounding_difference():
     res = classify_cost_audit_row(
         _row(cost_bruto_erp=D("11900.005"), iva_amount=D("1900"), other_taxes=D("0"))
     )
-    assert CostAuditFlag.ROUNDING_DIFFERENCE.value in res.flags
-    assert CostAuditFlag.GROSS_MISMATCH.value not in res.flags
+    assert CostAuditFlag.STORED_COMPONENTS_ROUNDING.value in res.flags
+    assert CostAuditFlag.STORED_COMPONENTS_MISMATCH.value not in res.flags
 
 
 def test_3_bruto_equals_neto_with_taxes():
@@ -698,7 +701,174 @@ def test_barcode_10_final_filter_by_variant_id():
     assert report["rows_analyzed"] == 1
     fetch = next(s for s in exe.sqls if "history_id" in s.lower())
     assert "variant_id = any" in fetch.lower()
-    assert report["samples"] == [] or True
+
+
+def test_semantics_mankeke_669_missing_iva():
+    """net 669, IVA almacenado 0, bruto 669, iva_rate 19 → understatement 127.11."""
+    res = classify_cost_audit_row(
+        _row(
+            cost_net=D("669"),
+            iva_amount=D("0"),
+            other_taxes=D("0"),
+            cost_bruto_erp=D("669"),
+            vc_iva_rate=D("19"),
+            vc_tax_factor=D("1"),
+            product_tax_factor=D("1"),
+            tax_ids_json=[1],
+            products_taxes=None,
+            has_products_taxes_column=False,
+            specific_taxes=None,
+        )
+    )
+    assert CostAuditFlag.STORED_COMPONENTS_MATCH.value in res.flags
+    assert CostAuditFlag.EXPECTED_TAX_MISMATCH.value in res.flags
+    assert CostAuditFlag.PROBABLE_MISSING_TAXES.value in res.flags
+    assert res.effective_quality_status == EffectiveQualityStatus.MISSING_TAXES_IN_GROSS.value
+    assert res.expected_iva_from_rate == D("127.11")
+    assert res.corrected_gross_cost == D("796.11")
+    assert res.gross_understatement_amount == D("127.11")
+    assert res.stored_gross_cost == D("669")
+    sample = res.to_sample_dict()
+    assert sample["effective_quality_status"] == "missing_taxes_in_gross"
+    assert sample["expected_iva_amount"] == "127.11"
+    assert sample["corrected_gross_cost"] == "796.11"
+
+
+def test_semantics_mankeke_632():
+    res = classify_cost_audit_row(
+        _row(
+            cost_net=D("632"),
+            iva_amount=D("0"),
+            other_taxes=D("0"),
+            cost_bruto_erp=D("632"),
+            vc_iva_rate=D("19"),
+            vc_tax_factor=D("1"),
+            tax_ids_json=[1],
+            products_taxes=None,
+            has_products_taxes_column=False,
+        )
+    )
+    assert res.corrected_gross_cost == D("752.08")
+    assert res.gross_understatement_amount == D("120.08")
+    assert res.effective_quality_status == "missing_taxes_in_gross"
+
+
+def test_semantics_correct_gross_with_iva():
+    res = classify_cost_audit_row(
+        _row(
+            cost_net=D("669"),
+            iva_amount=D("127.11"),
+            other_taxes=D("0"),
+            cost_bruto_erp=D("796.11"),
+            vc_iva_rate=D("19"),
+            vc_tax_factor=D("1.19"),
+        )
+    )
+    assert CostAuditFlag.STORED_COMPONENTS_MATCH.value in res.flags
+    assert CostAuditFlag.EXPECTED_TAX_MATCH.value in res.flags
+    assert res.effective_quality_status == "valid_gross"
+    assert res.gross_understatement_amount is None
+
+
+def test_semantics_iva_duplicated_effective():
+    res = classify_cost_audit_row(
+        _row(
+            cost_net=D("10000"),
+            iva_amount=D("1900"),
+            other_taxes=D("2261"),
+            cost_bruto_erp=D("14161"),
+            vc_iva_rate=D("19"),
+            vc_tax_factor=D("1.19"),
+        )
+    )
+    assert CostAuditFlag.PROBABLE_IVA_DUPLICATED.value in res.flags
+    assert res.effective_quality_status == "duplicated_taxes_in_gross"
+
+
+def test_semantics_tax_profile_unavailable():
+    res = classify_cost_audit_row(
+        _row(
+            cost_net=D("1000"),
+            iva_amount=D("0"),
+            other_taxes=D("0"),
+            cost_bruto_erp=D("1000"),
+            vc_iva_rate=None,
+            vc_tax_factor=D("1"),
+            product_tax_factor=D("1"),
+            tax_ids_json=None,
+            products_taxes=None,
+            specific_taxes=None,
+            has_tax_ids_json=False,
+        )
+    )
+    assert CostAuditFlag.EXPECTED_TAX_UNAVAILABLE.value in res.flags
+    assert CostAuditFlag.STORED_COMPONENTS_MATCH.value in res.flags
+    assert res.effective_quality_status == "valid_gross"
+
+
+def test_semantics_stored_component_inconsistent():
+    res = classify_cost_audit_row(
+        _row(
+            cost_net=D("1000"),
+            iva_amount=D("100"),
+            other_taxes=D("0"),
+            cost_bruto_erp=D("1500"),
+            vc_iva_rate=D("19"),
+            vc_tax_factor=D("1.19"),
+        )
+    )
+    assert CostAuditFlag.STORED_COMPONENTS_MISMATCH.value in res.flags
+    assert res.effective_quality_status == "gross_component_mismatch"
+
+
+def test_report_differences_separated():
+    exe = RecordingExecutor(
+        history=[
+            _hist_row(
+                28922,
+                barcode="7803473005960",
+                cost_net=D("669"),
+                iva_amount=D("0"),
+                other_taxes=D("0"),
+                cost_bruto_erp=D("669"),
+                vc_iva_rate=D("19"),
+                vc_tax_factor=D("1"),
+                tax_ids_json=[1],
+                products_taxes=None,
+            )
+        ],
+        resolve_history=[
+            {
+                "variant_id": 28922,
+                "barcode": "7803473005960",
+                "product_name": "MANKEKE",
+                "variant_name": "3 UN",
+            }
+        ],
+    )
+    # patch history row fields used by executor filter
+    exe.history[0]["vc_iva_rate"] = D("19")
+    exe.history[0]["vc_tax_factor"] = D("1")
+    exe.history[0]["tax_ids_json"] = [1]
+    args = clamp_cost_audit_args(company_id=3, barcode="7803473005960", days=365)
+    report = run_cost_data_audit(
+        args=args, repository=CostDataAuditRepository(exe), today=date(2026, 7, 20)
+    )
+    assert report["quality"]["stored_components_match"] == 1
+    assert report["quality"]["expected_tax_mismatch"] == 1
+    assert "exact_match" not in report["quality"]
+    assert report["effective_quality"]["missing_taxes_in_gross"] == 1
+    assert report["differences"]["stored_components"]["average_absolute"] in (
+        "0",
+        "0.00",
+        "0.0",
+    )
+    tax_avg = report["differences"]["expected_tax_profile"]["average_absolute"]
+    assert tax_avg is not None
+    assert Decimal(tax_avg) == D("127.11")
+    sample = report["samples"][0]
+    assert sample["corrected_gross_cost"] == "796.11"
+    assert sample["gross_understatement_amount"] == "127.11"
 
 
 def test_19_open_readonly_connection():
