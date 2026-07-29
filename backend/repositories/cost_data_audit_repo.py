@@ -11,10 +11,12 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from backend.services.analytics.cost_audit_models import (
+    BarcodeResolution,
     CostAuditArgs,
     CostAuditRawRow,
     TaxCatalogEntry,
     coerce_optional_decimal,
+    normalize_barcode,
 )
 from backend.services.analytics.money import optional_decimal
 from backend.services.analytics.validate_distribuidora_source import assert_sql_is_read_only
@@ -86,12 +88,165 @@ LIMIT 1
         self._schema_cache[key] = exists
         return exists
 
+    def resolve_barcode_to_variant_ids(
+        self,
+        *,
+        company_id: int,
+        barcode: str,
+    ) -> BarcodeResolution:
+        """Resuelve barcode → variant_id(s) como /costos.
+
+        Fuente canónica de búsqueda en /costos:
+          analytics.cost_reception_history.barcode ILIKE %term%
+        (list_history_rows / search_variants en cost_analytics_repo).
+
+        No usa variants.code (SKU) como si fuera barcode.
+        Catálogo adicional: bsale.variants.bar_code (solo diagnóstico / fallback).
+        No filtra por office ni por estado activo.
+        """
+        requested = barcode
+        normalized = normalize_barcode(barcode)
+        if not normalized:
+            return BarcodeResolution(
+                requested_barcode=requested,
+                normalized_barcode=None,
+                catalog_matches=0,
+                resolved_variant_ids=(),
+                resolution_source=None,
+                duplicate_mapping=False,
+                history_rows_found=0,
+                barcode_not_found=True,
+                warnings=("empty_barcode",),
+            )
+
+        # Misma semántica que /costos: ILIKE %term% sobre h.barcode + TRIM exacto
+        like = f"%{normalized}%"
+        history_rows = self._execute(
+            """
+SELECT DISTINCT
+    h.variant_id,
+    h.barcode,
+    h.product_name,
+    h.variant_name
+FROM analytics.cost_reception_history h
+WHERE h.company_id = %s
+  AND (
+        TRIM(COALESCE(h.barcode, '')) = %s
+     OR h.barcode ILIKE %s
+  )
+ORDER BY h.variant_id
+LIMIT 500
+""".strip(),
+            (int(company_id), normalized, like),
+        )
+
+        history_ids: list[int] = []
+        details: list[dict[str, Any]] = []
+        for row in history_rows:
+            vid = int(row["variant_id"])
+            if vid not in history_ids:
+                history_ids.append(vid)
+            details.append(
+                {
+                    "variant_id": vid,
+                    "barcode": row.get("barcode"),
+                    "product_name": row.get("product_name"),
+                    "variant_name": row.get("variant_name"),
+                    "source": "cost_reception_history.barcode",
+                }
+            )
+
+        catalog_rows = self._execute(
+            """
+SELECT
+    v.bsale_id AS variant_id,
+    v.bar_code AS barcode,
+    v.description AS variant_name,
+    v.product_id,
+    p.name AS product_name
+FROM bsale.variants v
+LEFT JOIN bsale.products p
+    ON p.company_id = v.company_id
+   AND p.bsale_id = v.product_id
+WHERE v.company_id = %s
+  AND (
+        TRIM(COALESCE(v.bar_code, '')) = %s
+     OR v.bar_code ILIKE %s
+  )
+ORDER BY v.bsale_id
+LIMIT 500
+""".strip(),
+            (int(company_id), normalized, like),
+        )
+
+        catalog_ids: list[int] = []
+        for row in catalog_rows:
+            vid = int(row["variant_id"])
+            if vid not in catalog_ids:
+                catalog_ids.append(vid)
+            details.append(
+                {
+                    "variant_id": vid,
+                    "barcode": row.get("barcode"),
+                    "product_name": row.get("product_name"),
+                    "variant_name": row.get("variant_name"),
+                    "source": "bsale.variants.bar_code",
+                }
+            )
+
+        resolved: list[int] = []
+        for vid in history_ids + catalog_ids:
+            if vid not in resolved:
+                resolved.append(vid)
+
+        warnings: list[str] = []
+        if len(resolved) > 1:
+            warnings.append("duplicate_barcode_mapping")
+
+        if not resolved:
+            return BarcodeResolution(
+                requested_barcode=requested,
+                normalized_barcode=normalized,
+                catalog_matches=len(catalog_ids),
+                resolved_variant_ids=(),
+                resolution_source=None,
+                duplicate_mapping=False,
+                history_rows_found=0,
+                barcode_not_found=True,
+                no_reception_history=False,
+                warnings=tuple(warnings),
+                match_details=(),
+            )
+
+        if history_ids and catalog_ids:
+            source = "both"
+        elif history_ids:
+            source = "cost_reception_history.barcode"
+        else:
+            source = "bsale.variants.bar_code"
+            warnings.append("no_reception_history")
+
+        return BarcodeResolution(
+            requested_barcode=requested,
+            normalized_barcode=normalized,
+            catalog_matches=len(catalog_ids),
+            resolved_variant_ids=tuple(resolved),
+            resolution_source=source,
+            duplicate_mapping=len(resolved) > 1,
+            history_rows_found=0,  # se completa tras fetch
+            barcode_not_found=False,
+            no_reception_history=not bool(history_ids),
+            warnings=tuple(warnings),
+            match_details=tuple(details),
+        )
+
     def fetch_history_rows(
         self,
         args: CostAuditArgs,
         *,
         date_from: date,
         date_to: date,
+        variant_ids: list[int] | None = None,
     ) -> list[CostAuditRawRow]:
         has_taxes = self.column_exists("bsale", "products", "taxes")
         has_tax_ids = self.column_exists("bsale", "products", "tax_ids_json")
@@ -188,9 +343,13 @@ WHERE h.company_id = %s
         if args.variant_id is not None:
             sql += " AND h.variant_id = %s"
             params.append(args.variant_id)
-        if args.barcode:
-            sql += " AND (h.barcode = %s OR v.bar_code = %s OR v.code = %s)"
-            params.extend([args.barcode, args.barcode, args.barcode])
+        # Filtro barcode: SOLO por variant_id(s) ya resueltos (misma fuente /costos).
+        # Nunca filtrar por variants.code como barcode.
+        if variant_ids is not None:
+            if not variant_ids:
+                return []
+            sql += " AND h.variant_id = ANY(%s)"
+            params.append(list(variant_ids))
         if args.source_document_id is not None:
             sql += " AND (h.document_number = %s OR h.reception_id = %s)"
             params.extend([args.source_document_id, args.source_document_id])

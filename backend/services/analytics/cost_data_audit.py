@@ -15,6 +15,7 @@ from typing import Any
 from backend.repositories.cost_data_audit_repo import CostDataAuditRepository, _tax_id_list
 from backend.services.analytics.cost_audit_models import (
     QUALITY_COUNTER_KEYS,
+    BarcodeResolution,
     CostAuditArgs,
     CostAuditFlag,
     CostAuditRawRow,
@@ -521,6 +522,7 @@ def build_cost_audit_report(
     results: list[CostAuditRowResult],
     tax_context_stats: dict[str, int],
     duration_ms: float,
+    barcode_resolution: Any | None = None,
 ) -> dict[str, Any]:
     quality = {k: 0 for k in QUALITY_COUNTER_KEYS}
     variants: set[int] = set()
@@ -591,6 +593,11 @@ def build_cost_audit_report(
         },
         "samples": [s.to_sample_dict() for s in samples],
         "duration_ms": round(duration_ms, 2),
+        "barcode_resolution": (
+            barcode_resolution.to_dict()
+            if barcode_resolution is not None and hasattr(barcode_resolution, "to_dict")
+            else barcode_resolution
+        ),
         "tolerances": {
             "money_rounding": str(args.tolerances.money_rounding),
             "money_exact": str(args.tolerances.money_exact),
@@ -616,7 +623,57 @@ def run_cost_data_audit(
 ) -> dict[str, Any]:
     t0 = time.perf_counter()
     date_from, date_to = audit_date_window(args.days, today=today)
-    raw_rows = repository.fetch_history_rows(args, date_from=date_from, date_to=date_to)
+
+    barcode_resolution = None
+    variant_ids_filter: list[int] | None = None
+    if args.barcode:
+        barcode_resolution = repository.resolve_barcode_to_variant_ids(
+            company_id=args.company_id,
+            barcode=args.barcode,
+        )
+        variant_ids_filter = list(barcode_resolution.resolved_variant_ids)
+        # Si además hay --variant-id, intersecar
+        if args.variant_id is not None:
+            variant_ids_filter = [v for v in variant_ids_filter if v == args.variant_id]
+
+    raw_rows = repository.fetch_history_rows(
+        args,
+        date_from=date_from,
+        date_to=date_to,
+        variant_ids=variant_ids_filter,
+    )
+
+    if barcode_resolution is not None:
+        warnings = list(barcode_resolution.warnings)
+        if (
+            barcode_resolution.resolved_variant_ids
+            and not raw_rows
+            and not barcode_resolution.barcode_not_found
+        ):
+            if "no_reception_history" not in warnings:
+                # Puede ser filtro office/fecha; distinguir
+                if barcode_resolution.no_reception_history:
+                    pass
+                else:
+                    warnings.append("no_history_in_scope")
+        barcode_resolution = BarcodeResolution(
+            requested_barcode=barcode_resolution.requested_barcode,
+            normalized_barcode=barcode_resolution.normalized_barcode,
+            catalog_matches=barcode_resolution.catalog_matches,
+            resolved_variant_ids=barcode_resolution.resolved_variant_ids,
+            resolution_source=barcode_resolution.resolution_source,
+            duplicate_mapping=barcode_resolution.duplicate_mapping,
+            history_rows_found=len(raw_rows),
+            barcode_not_found=barcode_resolution.barcode_not_found,
+            no_reception_history=barcode_resolution.no_reception_history
+            or (
+                bool(barcode_resolution.resolved_variant_ids)
+                and barcode_resolution.resolution_source
+                == "bsale.variants.bar_code"
+            ),
+            warnings=tuple(dict.fromkeys(warnings)),
+            match_details=barcode_resolution.match_details,
+        )
 
     tax_ids = CostDataAuditRepository.collect_tax_ids(raw_rows)
     tax_catalog = repository.fetch_taxes_for_ids(
@@ -690,4 +747,5 @@ def run_cost_data_audit(
         results=results,
         tax_context_stats=tax_stats,
         duration_ms=duration_ms,
+        barcode_resolution=barcode_resolution,
     )

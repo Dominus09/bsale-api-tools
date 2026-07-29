@@ -90,6 +90,46 @@ class CostAuditTolerances:
 DEFAULT_TOLERANCES = CostAuditTolerances()
 
 
+def normalize_barcode(raw: str | None) -> str | None:
+    """Normaliza barcode de filtro: trim; no interpreta variant_code."""
+    if raw is None:
+        return None
+    cleaned = str(raw).strip()
+    return cleaned or None
+
+
+@dataclass(frozen=True, slots=True)
+class BarcodeResolution:
+    """Resultado de barcode → variant_id(s), alineado con /costos."""
+
+    requested_barcode: str | None
+    normalized_barcode: str | None
+    catalog_matches: int
+    resolved_variant_ids: tuple[int, ...]
+    resolution_source: str | None
+    duplicate_mapping: bool
+    history_rows_found: int
+    barcode_not_found: bool = False
+    no_reception_history: bool = False
+    warnings: tuple[str, ...] = ()
+    match_details: tuple[dict[str, Any], ...] = ()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "requested_barcode": self.requested_barcode,
+            "normalized_barcode": self.normalized_barcode,
+            "catalog_matches": self.catalog_matches,
+            "resolved_variant_ids": list(self.resolved_variant_ids),
+            "resolution_source": self.resolution_source,
+            "duplicate_mapping": self.duplicate_mapping,
+            "history_rows_found": self.history_rows_found,
+            "barcode_not_found": self.barcode_not_found,
+            "no_reception_history": self.no_reception_history,
+            "warnings": list(self.warnings),
+            "match_details": list(self.match_details),
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class CostAuditArgs:
     company_id: int
@@ -143,7 +183,7 @@ def clamp_cost_audit_args(
             1, min(int(statement_timeout_seconds), MAX_TIMEOUT_SECONDS)
         ),
         variant_id=int(variant_id) if variant_id is not None else None,
-        barcode=(barcode.strip() if barcode and str(barcode).strip() else None),
+        barcode=normalize_barcode(barcode),
         source_document_id=(
             int(source_document_id) if source_document_id is not None else None
         ),

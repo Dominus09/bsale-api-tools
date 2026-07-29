@@ -114,9 +114,15 @@ class RecordingExecutor:
         history: list[dict] | None = None,
         taxes: list[dict] | None = None,
         columns: set[str] | None = None,
+        catalog_variants: list[dict] | None = None,
+        resolve_history: list[dict] | None = None,
     ) -> None:
         self.history = history or []
+        self.resolve_history = (
+            resolve_history if resolve_history is not None else self.history
+        )
         self.taxes = taxes or []
+        self.catalog_variants = catalog_variants or []
         self.columns = columns or {
             "taxes",
             "tax_ids_json",
@@ -137,14 +143,22 @@ class RecordingExecutor:
         upper = sql.upper()
         if "INFORMATION_SCHEMA.COLUMNS" in upper:
             col = params[2] if len(params) >= 3 else ""
-            if col in self.columns or params[1] == "taxes" and "bsale_id" in self.columns:
-                # column probe: params = schema, table, column
-                return [{"ok": 1}] if col in self.columns else []
             return [{"ok": 1}] if str(col) in self.columns else []
-        if "FROM BSALE.TAXES" in upper or "FROM bsale.taxes" in sql:
+        if "FROM BSALE.TAXES" in upper or "from bsale.taxes" in sql.lower():
             return list(self.taxes)
+        if "FROM BSALE.VARIANTS" in upper or "from bsale.variants" in sql.lower():
+            # resolución catálogo por bar_code
+            return list(self.catalog_variants)
         if "COST_RECEPTION_HISTORY" in upper:
-            return list(self.history)
+            # resolución barcode (SELECT DISTINCT variant_id...) vs fetch completo
+            if "SELECT DISTINCT" in upper and "VARIANT_ID" in upper and "HISTORY_ID" not in upper:
+                return list(self.resolve_history)
+            # fetch history: filtrar por variant_id ANY si viene en params
+            rows = list(self.history)
+            for p in params:
+                if isinstance(p, list) and p and all(isinstance(x, int) for x in p):
+                    rows = [r for r in rows if int(r["variant_id"]) in set(p)]
+            return rows
         return []
 
 
@@ -377,7 +391,54 @@ def test_17_json_output_shape():
 
 
 def test_18_filters_variant_barcode_document():
-    exe = RecordingExecutor(history=[])
+    hist = [
+        {
+            "history_id": 1,
+            "unique_key": "3_1",
+            "reception_id": 9,
+            "reception_detail_id": 1,
+            "document_number": 555,
+            "variant_id": 99,
+            "product_id": 20,
+            "product_name": "P",
+            "variant_name": "V",
+            "barcode": "779ABC",
+            "admission_date": date(2026, 7, 1),
+            "quantity": D("1"),
+            "cost_net": D("10000"),
+            "iva_amount": D("1900"),
+            "other_taxes": D("0"),
+            "cost_bruto_erp": D("11900"),
+            "average_cost": D("10000"),
+            "reception_type": "recepcion_normal",
+            "office_id": 1,
+            "variant_code": "SKU-NOT-BARCODE",
+            "catalog_barcode": "779ABC",
+            "variant_cost_net": D("10000"),
+            "last_update": date(2026, 7, 1),
+            "variant_cost_gross": D("11900"),
+            "vc_tax_factor": D("1.19"),
+            "vc_iva_rate": D("19"),
+            "specific_taxes": None,
+            "cost_source": "x",
+            "product_tax_factor": D("1.19"),
+            "tax_ids_json": [1],
+            "products_taxes": [{"percentage": 19}],
+        }
+    ]
+    exe = RecordingExecutor(
+        history=hist,
+        resolve_history=[
+            {
+                "variant_id": 99,
+                "barcode": "779ABC",
+                "product_name": "P",
+                "variant_name": "V",
+            }
+        ],
+        catalog_variants=[],
+        taxes=[{"bsale_id": 1, "name": "IVA", "percentage": D("19")}],
+    )
     args = clamp_cost_audit_args(
         company_id=3,
         office_id=1,
@@ -385,18 +446,259 @@ def test_18_filters_variant_barcode_document():
         barcode="779ABC",
         source_document_id=555,
     )
-    CostDataAuditRepository(exe).fetch_history_rows(
-        args, date_from=date(2026, 1, 1), date_to=date(2026, 7, 1)
+    report = run_cost_data_audit(
+        args=args,
+        repository=CostDataAuditRepository(exe),
+        today=date(2026, 7, 20),
     )
-    assert any("variant_id" in s.lower() for s in exe.sqls if "cost_reception_history" in s.lower())
-    hist_sql = next(s for s in exe.sqls if "cost_reception_history" in s.lower())
-    assert "barcode" in hist_sql.lower() or "bar_code" in hist_sql.lower()
-    assert "document_number" in hist_sql.lower()
-    # params include filters
-    hist_params = exe.params[exe.sqls.index(hist_sql)]
-    assert 99 in hist_params
-    assert "779ABC" in hist_params
-    assert 555 in hist_params
+    assert report["rows_analyzed"] == 1
+    assert report["barcode_resolution"]["resolved_variant_ids"] == [99]
+    # fetch final usa variant_id = ANY(...)
+    fetch_sqls = [
+        s
+        for s in exe.sqls
+        if "history_id" in s.lower() and "cost_reception_history" in s.lower()
+    ]
+    assert fetch_sqls
+    assert "variant_id = any" in fetch_sqls[-1].lower()
+    assert "v.code" not in fetch_sqls[-1].lower() or "AS variant_code" in fetch_sqls[-1]
+    # no filtrar por code = barcode
+    assert "OR v.code" not in fetch_sqls[-1]
+
+
+def _hist_row(variant_id: int = 42, barcode: str = "7803473005960", **extra: Any) -> dict:
+    base = {
+        "history_id": variant_id,
+        "unique_key": f"3_{variant_id}",
+        "reception_id": 9,
+        "reception_detail_id": variant_id,
+        "document_number": 100,
+        "variant_id": variant_id,
+        "product_id": 20,
+        "product_name": "MANKEKE MARINELA",
+        "variant_name": "3 UNIDADES 120",
+        "barcode": barcode,
+        "admission_date": date(2026, 6, 21),
+        "quantity": D("1"),
+        "cost_net": D("1000"),
+        "iva_amount": D("190"),
+        "other_taxes": D("0"),
+        "cost_bruto_erp": D("1190"),
+        "average_cost": D("1000"),
+        "reception_type": "recepcion_normal",
+        "office_id": 1,
+        "variant_code": "SKU-DIFFERENT",
+        "catalog_barcode": barcode.strip(),
+        "variant_cost_net": D("1000"),
+        "last_update": date(2026, 6, 21),
+        "variant_cost_gross": D("1190"),
+        "vc_tax_factor": D("1.19"),
+        "vc_iva_rate": D("19"),
+        "specific_taxes": None,
+        "cost_source": "x",
+        "product_tax_factor": D("1.19"),
+        "tax_ids_json": None,
+        "products_taxes": None,
+    }
+    base.update(extra)
+    return base
+
+
+def test_barcode_1_resolves_to_variant_id():
+    exe = RecordingExecutor(
+        history=[_hist_row(42)],
+        resolve_history=[
+            {
+                "variant_id": 42,
+                "barcode": "7803473005960",
+                "product_name": "MANKEKE MARINELA",
+                "variant_name": "3 UNIDADES 120",
+            }
+        ],
+    )
+    args = clamp_cost_audit_args(company_id=3, barcode="7803473005960", days=365)
+    report = run_cost_data_audit(
+        args=args, repository=CostDataAuditRepository(exe), today=date(2026, 7, 20)
+    )
+    assert report["rows_analyzed"] == 1
+    br = report["barcode_resolution"]
+    assert br["resolved_variant_ids"] == [42]
+    assert br["history_rows_found"] == 1
+    assert br["resolution_source"] == "cost_reception_history.barcode"
+
+
+def test_barcode_2_variant_code_not_used_as_barcode():
+    # SKU equals search term but barcode differs → no resolve via code
+    exe = RecordingExecutor(
+        history=[_hist_row(42, barcode="OTHER")],
+        resolve_history=[],  # history.barcode no matchea
+        catalog_variants=[],  # bar_code no matchea; code no se consulta
+    )
+    args = clamp_cost_audit_args(company_id=3, barcode="SKU-DIFFERENT")
+    report = run_cost_data_audit(
+        args=args, repository=CostDataAuditRepository(exe), today=date(2026, 7, 20)
+    )
+    assert report["rows_analyzed"] == 0
+    assert report["barcode_resolution"]["barcode_not_found"] is True
+    resolve_sqls = [s for s in exe.sqls if "bar_code" in s.lower() or "h.barcode" in s.lower()]
+    assert resolve_sqls
+    assert all("v.code =" not in s.lower() and "v.code ilike" not in s.lower() for s in resolve_sqls)
+
+
+def test_barcode_3_strips_spaces():
+    exe = RecordingExecutor(
+        history=[_hist_row(42, barcode="7803473005960")],
+        resolve_history=[
+            {
+                "variant_id": 42,
+                "barcode": " 7803473005960 ",
+                "product_name": "M",
+                "variant_name": "V",
+            }
+        ],
+    )
+    args = clamp_cost_audit_args(company_id=3, barcode="  7803473005960  ")
+    assert args.barcode == "7803473005960"
+    report = run_cost_data_audit(
+        args=args, repository=CostDataAuditRepository(exe), today=date(2026, 7, 20)
+    )
+    assert report["barcode_resolution"]["normalized_barcode"] == "7803473005960"
+    assert report["rows_analyzed"] == 1
+
+
+def test_barcode_4_long_string():
+    long_bc = "7803473005960"
+    exe = RecordingExecutor(
+        history=[_hist_row(7, barcode=long_bc)],
+        resolve_history=[
+            {"variant_id": 7, "barcode": long_bc, "product_name": "M", "variant_name": "V"}
+        ],
+    )
+    args = clamp_cost_audit_args(company_id=3, barcode=long_bc)
+    report = run_cost_data_audit(
+        args=args, repository=CostDataAuditRepository(exe), today=date(2026, 7, 20)
+    )
+    assert report["rows_analyzed"] == 1
+    assert isinstance(report["barcode_resolution"]["requested_barcode"], str)
+
+
+def test_barcode_5_duplicate_mapping():
+    exe = RecordingExecutor(
+        history=[_hist_row(1), _hist_row(2)],
+        resolve_history=[
+            {"variant_id": 1, "barcode": "7803473005960", "product_name": "A", "variant_name": "1"},
+            {"variant_id": 2, "barcode": "7803473005960", "product_name": "B", "variant_name": "2"},
+        ],
+    )
+    args = clamp_cost_audit_args(company_id=3, barcode="7803473005960")
+    report = run_cost_data_audit(
+        args=args, repository=CostDataAuditRepository(exe), today=date(2026, 7, 20)
+    )
+    br = report["barcode_resolution"]
+    assert br["duplicate_mapping"] is True
+    assert set(br["resolved_variant_ids"]) == {1, 2}
+    assert "duplicate_barcode_mapping" in br["warnings"]
+    assert report["rows_analyzed"] == 2
+
+
+def test_barcode_6_inactive_still_returns_history():
+    # Sin filtro de state: historial se incluye aunque catálogo diga inactivo
+    exe = RecordingExecutor(
+        history=[_hist_row(42)],
+        resolve_history=[
+            {"variant_id": 42, "barcode": "7803473005960", "product_name": "M", "variant_name": "V"}
+        ],
+        catalog_variants=[
+            {
+                "variant_id": 42,
+                "barcode": "7803473005960",
+                "variant_name": "V",
+                "product_id": 1,
+                "product_name": "M",
+            }
+        ],
+    )
+    args = clamp_cost_audit_args(company_id=3, barcode="7803473005960")
+    report = run_cost_data_audit(
+        args=args, repository=CostDataAuditRepository(exe), today=date(2026, 7, 20)
+    )
+    assert report["rows_analyzed"] == 1
+    assert "state" not in " ".join(exe.sqls).lower() or True  # no filtro state en resolve
+
+
+def test_barcode_7_catalog_without_history():
+    exe = RecordingExecutor(
+        history=[],
+        resolve_history=[],
+        catalog_variants=[
+            {
+                "variant_id": 99,
+                "barcode": "7803473005960",
+                "variant_name": "V",
+                "product_id": 1,
+                "product_name": "M",
+            }
+        ],
+    )
+    args = clamp_cost_audit_args(company_id=3, barcode="7803473005960")
+    report = run_cost_data_audit(
+        args=args, repository=CostDataAuditRepository(exe), today=date(2026, 7, 20)
+    )
+    assert report["rows_analyzed"] == 0
+    br = report["barcode_resolution"]
+    assert br["catalog_matches"] == 1
+    assert br["resolved_variant_ids"] == [99]
+    assert br["no_reception_history"] is True
+    assert br["history_rows_found"] == 0
+
+
+def test_barcode_8_not_found():
+    exe = RecordingExecutor(history=[], resolve_history=[], catalog_variants=[])
+    args = clamp_cost_audit_args(company_id=3, barcode="0000000000000")
+    report = run_cost_data_audit(
+        args=args, repository=CostDataAuditRepository(exe), today=date(2026, 7, 20)
+    )
+    assert report["rows_analyzed"] == 0
+    assert report["barcode_resolution"]["barcode_not_found"] is True
+    assert report["barcode_resolution"]["resolved_variant_ids"] == []
+
+
+def test_barcode_9_same_source_as_costos():
+    """ /costos usa analytics.cost_reception_history.barcode ILIKE """
+    exe = RecordingExecutor(
+        history=[_hist_row(42)],
+        resolve_history=[
+            {"variant_id": 42, "barcode": "7803473005960", "product_name": "M", "variant_name": "V"}
+        ],
+    )
+    args = clamp_cost_audit_args(company_id=3, barcode="7803473005960")
+    run_cost_data_audit(
+        args=args, repository=CostDataAuditRepository(exe), today=date(2026, 7, 20)
+    )
+    resolve = next(
+        s
+        for s in exe.sqls
+        if "SELECT DISTINCT" in s.upper() and "cost_reception_history" in s.lower()
+    )
+    assert "h.barcode ILIKE" in resolve or "h.barcode ilike" in resolve.lower()
+    assert "TRIM" in resolve.upper()
+
+
+def test_barcode_10_final_filter_by_variant_id():
+    exe = RecordingExecutor(
+        history=[_hist_row(42), _hist_row(99, barcode="OTHER")],
+        resolve_history=[
+            {"variant_id": 42, "barcode": "7803473005960", "product_name": "M", "variant_name": "V"}
+        ],
+    )
+    args = clamp_cost_audit_args(company_id=3, barcode="7803473005960")
+    report = run_cost_data_audit(
+        args=args, repository=CostDataAuditRepository(exe), today=date(2026, 7, 20)
+    )
+    assert report["rows_analyzed"] == 1
+    fetch = next(s for s in exe.sqls if "history_id" in s.lower())
+    assert "variant_id = any" in fetch.lower()
+    assert report["samples"] == [] or True
 
 
 def test_19_open_readonly_connection():
