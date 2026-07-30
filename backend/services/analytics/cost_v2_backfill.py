@@ -1,0 +1,428 @@
+"""Orquestación dry-run del backfill Costos V2 (solo lectura)."""
+
+from __future__ import annotations
+
+import time
+from collections import Counter
+from dataclasses import dataclass
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Any
+
+from backend.repositories.cost_v2_backfill_repo import CostV2BackfillRepository
+from backend.services.analytics.cost_v2_calculator import (
+    CALCULATION_VERSION,
+    build_tax_context_from_ids,
+    calculate_cost_reception,
+)
+from backend.services.analytics.cost_v2_models import (
+    CostReceptionCalculation,
+    CostReceptionInput,
+)
+from backend.services.analytics.money import ZERO
+from backend.services.analytics.validate_distribuidora_source import (
+    AnalyticsValidationError,
+)
+
+QUALITY_KEYS = (
+    "missing_cost",
+    "gross_component_mismatch",
+    "duplicated_taxes_in_gross",
+    "missing_taxes_in_gross",
+    "incomplete_tax_context",
+    "valid_gross",
+)
+
+SAMPLE_PRIORITY = (
+    "missing_cost",
+    "gross_component_mismatch",
+    "duplicated_taxes_in_gross",
+    "incomplete_tax_context",
+    "missing_taxes_in_gross",
+    "valid_gross",
+)
+
+MAX_BATCH_SIZE = 2000
+DEFAULT_BATCH_SIZE = 500
+MAX_SAMPLE_LIMIT = 100
+DEFAULT_SAMPLE_LIMIT = 20
+MAX_TIMEOUT = 30
+
+
+@dataclass(frozen=True, slots=True)
+class CostV2BackfillArgs:
+    company_id: int
+    office_id: int | None
+    date_from: date
+    date_to: date
+    dry_run: bool
+    batch_size: int
+    sample_limit: int
+    statement_timeout_seconds: int
+    calculation_version: str
+    history_id: int | None = None
+    variant_id: int | None = None
+    barcode: str | None = None
+    document_number: int | None = None
+    apply: bool = False
+
+
+def clamp_backfill_args(
+    *,
+    company_id: int,
+    office_id: int | None = None,
+    date_from: date,
+    date_to: date,
+    dry_run: bool = True,
+    batch_size: int = DEFAULT_BATCH_SIZE,
+    sample_limit: int = DEFAULT_SAMPLE_LIMIT,
+    statement_timeout_seconds: int = 20,
+    calculation_version: str = CALCULATION_VERSION,
+    history_id: int | None = None,
+    variant_id: int | None = None,
+    barcode: str | None = None,
+    document_number: int | None = None,
+    apply: bool = False,
+) -> CostV2BackfillArgs:
+    if int(company_id) <= 0:
+        raise AnalyticsValidationError(
+            "company_id is required and must be > 0", error_type="invalid_args"
+        )
+    if date_to < date_from:
+        raise AnalyticsValidationError(
+            "date_to must be >= date_from", error_type="invalid_args"
+        )
+    if apply:
+        raise AnalyticsValidationError(
+            "Apply no habilitado en Etapa D",
+            error_type="apply_not_enabled",
+        )
+    if not dry_run:
+        raise AnalyticsValidationError(
+            "Solo dry-run está habilitado en Etapa D (use --dry-run)",
+            error_type="dry_run_required",
+        )
+    return CostV2BackfillArgs(
+        company_id=int(company_id),
+        office_id=int(office_id) if office_id is not None else None,
+        date_from=date_from,
+        date_to=date_to,
+        dry_run=True,
+        batch_size=max(1, min(int(batch_size), MAX_BATCH_SIZE)),
+        sample_limit=max(1, min(int(sample_limit), MAX_SAMPLE_LIMIT)),
+        statement_timeout_seconds=max(1, min(int(statement_timeout_seconds), MAX_TIMEOUT)),
+        calculation_version=str(calculation_version or CALCULATION_VERSION),
+        history_id=int(history_id) if history_id is not None else None,
+        variant_id=int(variant_id) if variant_id is not None else None,
+        barcode=(barcode.strip() if barcode else None) or None,
+        document_number=int(document_number) if document_number is not None else None,
+        apply=False,
+    )
+
+
+def _abs(value: Decimal) -> Decimal:
+    return value if value >= ZERO else -value
+
+
+def _sample_rank(
+    calc: CostReceptionCalculation, meta: dict[str, Any]
+) -> tuple[int, Decimal, int]:
+    status = calc.effective_quality_status
+    for i, key in enumerate(SAMPLE_PRIORITY):
+        if status == key:
+            diff = _abs(calc.gross_difference_amount or ZERO)
+            return (i, -diff, calc.history_id)
+    return (len(SAMPLE_PRIORITY), ZERO, calc.history_id)
+
+
+def _sample_dict(calc: CostReceptionCalculation, meta: dict[str, Any]) -> dict[str, Any]:
+    def _s(v: Decimal | None) -> str | None:
+        return None if v is None else str(v)
+
+    adm = calc.admission_date
+    return {
+        "history_id": calc.history_id,
+        "product_name": meta.get("product_name"),
+        "variant_name": meta.get("variant_name"),
+        "barcode": meta.get("barcode"),
+        "variant_id": calc.variant_id,
+        "admission_date": adm.isoformat() if adm else None,
+        "document_number": meta.get("document_number"),
+        "stored_cost_net": _s(calc.stored_cost_net),
+        "stored_iva_amount": _s(calc.stored_iva_amount),
+        "stored_other_taxes": _s(calc.stored_other_taxes),
+        "stored_gross_cost": _s(calc.stored_gross_cost),
+        "catalog_tax_ids": list(calc.catalog_tax_ids),
+        "resolved_tax_ids": list(calc.resolved_tax_ids),
+        "calculated_iva_amount": _s(calc.calculated_iva_amount),
+        "additional_tax_amount_total": _s(calc.additional_tax_amount_total),
+        "total_tax_rate": _s(calc.total_tax_rate),
+        "corrected_gross_cost": _s(calc.corrected_gross_cost),
+        "gross_difference_amount": _s(calc.gross_difference_amount),
+        "tax_rate_on_net_pct": _s(calc.tax_rate_on_net_pct),
+        "gross_understatement_vs_corrected_pct": _s(
+            calc.gross_understatement_vs_corrected_pct
+        ),
+        "tax_context_source": calc.tax_context_source,
+        "tax_resolution_quality": calc.tax_resolution_quality,
+        "effective_quality_status": calc.effective_quality_status,
+        "warnings": list(calc.warnings),
+        "source_history_fingerprint": calc.source_history_fingerprint,
+        "tax_context_fingerprint": calc.tax_context_fingerprint,
+    }
+
+
+def run_cost_v2_backfill_dry_run(
+    *,
+    args: CostV2BackfillArgs,
+    repository: CostV2BackfillRepository,
+) -> dict[str, Any]:
+    t0 = time.perf_counter()
+
+    variant_ids: list[int] | None = None
+    if args.barcode:
+        variant_ids = repository.resolve_barcode_variant_ids(
+            company_id=args.company_id, barcode=args.barcode
+        )
+        if args.variant_id is not None:
+            variant_ids = [v for v in variant_ids if v == args.variant_id]
+    elif args.variant_id is not None:
+        variant_ids = [args.variant_id]
+
+    population = repository.count_population(
+        company_id=args.company_id,
+        office_id=args.office_id,
+        date_from=args.date_from,
+        date_to=args.date_to,
+        variant_ids=variant_ids,
+        history_id=args.history_id,
+        document_number=args.document_number,
+    )
+
+    results_count = {k: 0 for k in QUALITY_KEYS}
+    tax_res_count = {"current_catalog": 0, "canonical_fallback": 0, "unresolved": 0}
+    warning_count = {
+        "suspicious_outlier": 0,
+        "tax_ids_not_consumed": 0,
+        "variant_barcode_mismatch": 0,
+        "source_conflict": 0,
+    }
+    unknown_tax_ids: set[int] = set()
+    diffs: list[Decimal] = []
+    candidates: list[tuple[tuple[int, Decimal, int], dict[str, Any]]] = []
+
+    after_id = 0
+    batches = 0
+    processed = 0
+    all_tax_ids: set[int] = set()
+
+    # Prefetch: first pass collect tax ids from batches, or resolve per batch
+    # To avoid N+1 we load taxes once after scanning all catalog ids from processed
+    # batches — but we need catalog during processing. Strategy: per batch collect
+    # ids, fetch taxes for missing ids only (cached).
+    tax_catalog: dict[int, Any] = {}
+
+    while True:
+        batch = repository.fetch_history_batch(
+            company_id=args.company_id,
+            office_id=args.office_id,
+            date_from=args.date_from,
+            date_to=args.date_to,
+            after_id=after_id,
+            batch_size=args.batch_size,
+            variant_ids=variant_ids,
+            history_id=args.history_id,
+            document_number=args.document_number,
+        )
+        if not batch:
+            break
+        batches += 1
+
+        batch_ids: list[int] = []
+        for row in batch:
+            batch_ids.extend(row.get("catalog_tax_ids") or [])
+        missing = [i for i in set(batch_ids) if i not in tax_catalog]
+        if missing:
+            fetched = repository.fetch_taxes_for_ids(
+                company_id=args.company_id, tax_ids=missing
+            )
+            tax_catalog.update(fetched)
+
+        for row in batch:
+            catalog_ids = tuple(row.get("catalog_tax_ids") or [])
+            all_tax_ids.update(catalog_ids)
+
+            adm = row.get("admission_date")
+            if isinstance(adm, datetime):
+                adm_d = adm.date()
+            else:
+                adm_d = adm
+
+            inp = CostReceptionInput(
+                history_id=int(row["history_id"]),
+                company_id=int(row["company_id"]),
+                office_id=row.get("office_id"),
+                variant_id=int(row["variant_id"]),
+                admission_date=adm_d,
+                stored_cost_net=row.get("cost_net"),
+                stored_quantity=row.get("quantity"),
+                stored_iva_amount=row.get("iva_amount"),
+                stored_other_taxes=row.get("other_taxes"),
+                stored_gross_cost=row.get("cost_bruto_erp"),
+                reception_tax_ids=(),  # sin evidencia directa del payload
+                catalog_tax_ids=catalog_ids,
+                source_history_created_at=row.get("created_at"),
+            )
+
+            ctx = build_tax_context_from_ids(
+                list(catalog_ids),
+                tax_catalog=tax_catalog,
+                context_source="current_product_tax",
+                context_is_historical=False,
+                cost_net=inp.stored_cost_net,
+            )
+            # Etapa D: no afirmar histórico
+            if ctx.resolution_quality == "canonical_fallback":
+                pass
+            elif ctx.resolution_quality != "unresolved" and ctx.taxes:
+                # forzar etiqueta current_catalog cuando hay tasas de bsale.taxes o mix
+                from backend.services.analytics.cost_v2_models import TaxContextInput
+
+                quality = ctx.resolution_quality
+                source = ctx.context_source
+                if quality not in ("canonical_fallback", "unresolved"):
+                    quality = "current_catalog"
+                    source = (
+                        "bsale_taxes"
+                        if any(t.source == "bsale.taxes" for t in ctx.taxes)
+                        else "current_product_tax"
+                    )
+                ctx = TaxContextInput(
+                    tax_ids=ctx.tax_ids,
+                    taxes=ctx.taxes,
+                    context_source=source,  # type: ignore[arg-type]
+                    context_as_of=ctx.context_as_of,
+                    context_is_historical=False,
+                    resolution_quality=quality,  # type: ignore[arg-type]
+                )
+
+            for tid in catalog_ids:
+                if tid not in tax_catalog and tid not in (1, 2, 3, 8):
+                    # puede resolverse por fallback solo 1,2,3,8
+                    from backend.services.analytics.cost_tax_resolution import (
+                        TAX_ID_FALLBACK,
+                    )
+
+                    if tid not in TAX_ID_FALLBACK:
+                        unknown_tax_ids.add(tid)
+
+            calc = calculate_cost_reception(
+                inp,
+                ctx,
+                calculation_version=args.calculation_version,
+            )
+            processed += 1
+            status = calc.effective_quality_status
+            if status in results_count:
+                results_count[status] += 1
+            else:
+                results_count["incomplete_tax_context"] += 1
+
+            rq = calc.tax_resolution_quality
+            if rq in tax_res_count:
+                tax_res_count[rq] += 1
+            else:
+                tax_res_count["unresolved"] += 1
+
+            for w in calc.warnings:
+                if w in warning_count:
+                    warning_count[w] += 1
+
+            if calc.gross_difference_amount is not None and calc.gross_difference_amount != ZERO:
+                diffs.append(calc.gross_difference_amount)
+
+            sample = _sample_dict(calc, row)
+            candidates.append((_sample_rank(calc, row), sample))
+
+        after_id = int(batch[-1]["history_id"])
+        if len(batch) < args.batch_size:
+            break
+
+    candidates.sort(key=lambda x: x[0])
+    samples = [c[1] for c in candidates[: args.sample_limit]]
+
+    unit_sum = sum(diffs, ZERO) if diffs else ZERO
+    duration_ms = (time.perf_counter() - t0) * 1000.0
+
+    status_sum = sum(results_count.values())
+    if status_sum != processed:
+        raise AnalyticsValidationError(
+            f"suma de estados ({status_sum}) != rows_processed ({processed})",
+            error_type="invariant_violation",
+        )
+
+    return {
+        "ok": True,
+        "mode": "dry-run",
+        "read_only": True,
+        "calculation_version": args.calculation_version,
+        "scope": {
+            "company_id": args.company_id,
+            "office_id": args.office_id,
+            "date_from": args.date_from.isoformat(),
+            "date_to": args.date_to.isoformat(),
+            "history_id": args.history_id,
+            "variant_id": args.variant_id,
+            "barcode": args.barcode,
+            "document_number": args.document_number,
+            "batch_size": args.batch_size,
+            "sample_limit": args.sample_limit,
+        },
+        "population": {
+            "rows_found": population["rows_found"],
+            "rows_processed": processed,
+            "batches": batches,
+            "unique_variants": population["unique_variants"],
+            "unique_documents": population["unique_documents"],
+            "min_admission_date": population["min_admission_date"],
+            "max_admission_date": population["max_admission_date"],
+        },
+        "results": {
+            "would_insert": processed,
+            "would_update_same_version": 0,
+            "note": (
+                "would_update_same_version=0 porque cost_reception_calculated "
+                "aún no existe (migración 047 no ejecutada). "
+                "Tras migrar, se comparará por (history_id, calculation_version)."
+            ),
+            **results_count,
+        },
+        "tax_resolution": {
+            **tax_res_count,
+            "unknown_tax_ids": sorted(unknown_tax_ids),
+            "note": (
+                "context_is_historical=false; current_catalog no implica "
+                "impuesto vigente en admission_date"
+            ),
+        },
+        "differences": {
+            "unit_difference_sum": str(unit_sum) if diffs else "0.00",
+            "average_per_row": (
+                str(unit_sum / Decimal(len(diffs))) if diffs else "0.00"
+            ),
+            "maximum_per_row": str(max(diffs)) if diffs else "0.00",
+            "rows_with_difference": len(diffs),
+            "warning": "No representa impacto total de compras",
+        },
+        "warnings": warning_count,
+        "samples": samples,
+        "duration_ms": round(duration_ms, 2),
+        "limitations": [
+            "Etapa D: dry-run only; Apply no habilitado",
+            "No se escribe cost_reception_calculated",
+            "No se usa quantity para totales ponderados",
+            "No se consulta bsale.variant_cost",
+            "reception_tax_ids vacío (sin evidencia de payload de línea)",
+            "No se usa products.taxes[0] ni split_erp_cost",
+        ],
+    }
