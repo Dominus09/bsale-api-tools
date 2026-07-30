@@ -704,6 +704,192 @@ def _is_problematic(result: CostAuditRowResult) -> bool:
     return result.effective_quality_status != EffectiveQualityStatus.VALID_GROSS.value
 
 
+def _with_denominator(counts: dict[str, int], denominator: int) -> dict[str, Any]:
+    out: dict[str, Any] = {"denominator": int(denominator)}
+    out.update(counts)
+    return out
+
+
+def _build_coverage(
+    *,
+    date_from: date,
+    date_to: date,
+    requested_days: int,
+    population: dict[str, Any],
+    history_meta: dict[str, Any] | None,
+) -> dict[str, Any]:
+    actual_min_s = population.get("min_admission_date")
+    actual_max_s = population.get("max_admission_date")
+    actual_min = date.fromisoformat(actual_min_s) if actual_min_s else None
+    actual_max = date.fromisoformat(actual_max_s) if actual_max_s else None
+    covered_days = (
+        (actual_max - actual_min).days + 1 if actual_min and actual_max else 0
+    )
+    missing_before = (
+        (actual_min - date_from).days if actual_min and actual_min > date_from else 0
+    )
+    missing_after = (
+        (date_to - actual_max).days if actual_max and actual_max < date_to else 0
+    )
+    hm = history_meta or {}
+    return {
+        "requested_date_from": date_from.isoformat(),
+        "requested_date_to": date_to.isoformat(),
+        "actual_min_admission_date": actual_min_s,
+        "actual_max_admission_date": actual_max_s,
+        "requested_days": int(requested_days),
+        "covered_days": covered_days,
+        "missing_days_before": max(0, missing_before),
+        "missing_days_after": max(0, missing_after),
+        "coverage_is_complete": bool(
+            actual_min
+            and actual_max
+            and missing_before <= 0
+            and missing_after <= 0
+            and int(population.get("rows_in_scope") or 0) > 0
+        ),
+        "history_earliest_admission_date_global": hm.get("earliest_admission_date"),
+        "history_latest_admission_date_global": hm.get("latest_admission_date"),
+        "history_earliest_created_at": hm.get("earliest_created_at"),
+        "history_latest_created_at": hm.get("latest_created_at"),
+        "history_total_rows_company": hm.get("total_rows"),
+        "initial_sync_lookback_days_default": 90,
+        "initial_sync_lookback_env": "COST_SYNC_INITIAL_DAYS",
+        "checkpoint_table": "analytics.cost_sync_state",
+        "checkpoint_field": "last_admission_ts",
+        "backfill_full_history": False,
+        "backfill_note": (
+            "El primer sync usa lookback INITIAL_LOOKBACK_DAYS (default 90), "
+            "no un backfill histórico completo a 365+ días. "
+            "admission_date ≠ created_at ni last_run_at."
+        ),
+    }
+
+
+def _build_sync_freshness(
+    *,
+    sync_meta: dict[str, Any] | None,
+    history_meta: dict[str, Any] | None,
+    latest_admission_date: str | None,
+    as_of: date,
+) -> dict[str, Any]:
+    sm = sync_meta or {}
+    hm = history_meta or {}
+    last_run = sm.get("last_run_at")
+    last_status = sm.get("last_status")
+    last_run_s = None
+    if last_run is not None:
+        last_run_s = last_run.isoformat() if hasattr(last_run, "isoformat") else str(last_run)
+
+    status = "unknown"
+    if last_status == "error":
+        status = "failed"
+    elif last_status == "ok" and last_run_s:
+        # Frescura del JOB, no de admission_date
+        try:
+            if isinstance(last_run, datetime):
+                run_d = last_run.date()
+            else:
+                run_d = date.fromisoformat(str(last_run)[:10])
+            age = (as_of - run_d).days
+            status = "stale" if age > 7 else "current"
+        except Exception:
+            status = "unknown"
+    elif not sm.get("row_found") and not sm.get("last_run_at"):
+        status = "unknown"
+
+    return {
+        "last_successful_sync_at": last_run_s if last_status == "ok" else None,
+        "last_source_query_at": last_run_s,  # no hay campo separado; last_run_at es el proxy
+        "last_insert_or_update_at": hm.get("latest_created_at"),
+        "latest_admission_date": latest_admission_date,
+        "sync_status": status,
+        "last_status_raw": last_status,
+        "checkpoint_last_admission_ts": sm.get("last_admission_ts"),
+        "notes": [
+            "last_run_at = timestamp de ejecución del job sync (analytics.cost_sync_state)",
+            "last_admission_ts = watermark de admission del origen (unix); no es created_at",
+            "created_at en history = momento de INSERT local",
+            "admission_date antigua NO implica sync fallido por sí sola",
+        ],
+    }
+
+
+def _build_tax_dictionary(
+    *,
+    tax_catalog: dict[int, TaxCatalogEntry],
+    occurrence_counts: dict[int, int],
+    observed_ids: set[int],
+) -> tuple[list[dict[str, Any]], list[int]]:
+    from backend.services.analytics.cost_tax_resolution import (
+        DOCUMENTED_TAX_IDS,
+        TAX_ID_FALLBACK,
+        TAX_ID_NOTES,
+        _category_for,
+        _is_iva_entry,
+    )
+
+    ids = set(DOCUMENTED_TAX_IDS) | set(observed_ids) | set(occurrence_counts.keys())
+    unknown: list[int] = []
+    dictionary: list[dict[str, Any]] = []
+    for tax_id in sorted(ids):
+        entry = tax_catalog.get(tax_id)
+        rate: Decimal | None = None
+        name: str | None = None
+        source = "unresolved"
+        if entry is not None and entry.percentage is not None:
+            rate = entry.percentage
+            name = entry.name
+            source = "bsale.taxes"
+        elif tax_id in TAX_ID_FALLBACK:
+            name, rate, _cat = TAX_ID_FALLBACK[tax_id]
+            source = "fallback"
+        else:
+            unknown.append(tax_id)
+        is_iva = _is_iva_entry(tax_id, name=name, rate=rate) if rate is not None else (
+            tax_id == 1
+        )
+        category = (
+            _category_for(tax_id, rate, is_iva=is_iva) if rate is not None else "unknown"
+        )
+        dictionary.append(
+            {
+                "tax_id": tax_id,
+                "name": name,
+                "rate": None if rate is None else str(rate),
+                "category": category,
+                "source": source,
+                "rows_in_scope": int(occurrence_counts.get(tax_id, 0)),
+                "note": TAX_ID_NOTES.get(
+                    tax_id,
+                    "ID observado sin nota canónica en repo; sin tasa segura no se corrige.",
+                ),
+            }
+        )
+    return dictionary, sorted(set(unknown))
+
+
+def _quantity_semantics() -> dict[str, Any]:
+    return {
+        "status": "unknown",
+        "safe_for_weighted_totals": False,
+        "description": (
+            "quantity se copia desde reception detail Bsale (line.quantity) y cost_net "
+            "desde line.cost en sync_cost_receptions. El repo de analítica multiplica "
+            "cost_net*quantity en algunos totales de UI, pero el sync no valida unidad "
+            "(unidad/caja/kg), SEC, units_per_box ni productos pesables. "
+            "Por eso el auditor no pondera understatement por quantity."
+        ),
+        "source_fields": {
+            "quantity": "Bsale reception detail → analytics.cost_reception_history.quantity",
+            "cost_net": "Bsale reception detail cost → cost_reception_history.cost_net",
+        },
+        "sec_interaction": "no validado en sync_cost_receptions",
+        "weighable_products": "no discriminados en el sync de costos",
+        "boxes_vs_units": "no confirmado a nivel de fila de recepción",
+    }
+
+
 def build_cost_audit_report(
     *,
     args: CostAuditArgs,
@@ -716,7 +902,11 @@ def build_cost_audit_report(
     population: dict[str, Any] | None = None,
     freshness: dict[str, Any] | None = None,
     tax_combination_counts: dict[str, int] | None = None,
-    understatement_stats: dict[str, Any] | None = None,
+    coverage: dict[str, Any] | None = None,
+    sync_freshness: dict[str, Any] | None = None,
+    tax_dictionary: list[dict[str, Any]] | None = None,
+    unknown_tax_ids: list[int] | None = None,
+    unresolved_tax_rows: int = 0,
 ) -> dict[str, Any]:
     quality = {k: 0 for k in QUALITY_COUNTER_KEYS}
     effective_quality = {k: 0 for k in EFFECTIVE_COUNTER_KEYS}
@@ -772,16 +962,63 @@ def build_cost_audit_report(
     pop = population or {}
     rows_in_scope = int(pop.get("rows_in_scope") or len(results))
     rows_scanned = len(results)
-    is_full = rows_scanned >= rows_in_scope and rows_in_scope >= 0
+    is_full = rows_scanned >= rows_in_scope
 
-    under_stats = understatement_stats or {
-        "sum": str(sum(under_amounts)) if under_amounts else None,
-        "average": (
-            str(sum(under_amounts) / Decimal(len(under_amounts))) if under_amounts else None
+    denom = rows_scanned  # stats below are always over classified rows
+    stats_scope = (
+        "full_population"
+        if args.summary_only and is_full
+        else ("full_population" if is_full else "detail_scan")
+    )
+
+    unit_understatement = {
+        "sum_across_reception_rows": (
+            str(sum(under_amounts)) if under_amounts else None
         ),
-        "maximum": str(max(under_amounts)) if under_amounts else None,
-        "rows_with_understatement": len(under_amounts),
-        "scope": "detail_scan",
+        "average_per_row": (
+            str(sum(under_amounts) / Decimal(len(under_amounts)))
+            if under_amounts
+            else None
+        ),
+        "maximum_per_row": str(max(under_amounts)) if under_amounts else None,
+        "rows": len(under_amounts),
+        "denominator": denom,
+        "scope": stats_scope,
+        "warning": "No representa impacto total de compras",
+    }
+    quantity_weighted = {
+        "sum": None,
+        "rows_included": 0,
+        "rows_excluded": denom,
+        "quality": "unavailable",
+        "denominator": denom,
+        "reason": "quantity_semantics.safe_for_weighted_totals=false",
+    }
+
+    tax_ctx = dict(tax_context_stats)
+    tax_ctx["denominator"] = denom
+    tax_ctx["scope"] = stats_scope
+
+    differences = {
+        "denominator": denom,
+        "scope": stats_scope,
+        "stored_components": {
+            "average_absolute": (
+                str(sum(stored_abs) / Decimal(len(stored_abs))) if stored_abs else None
+            ),
+            "maximum_absolute": str(max(stored_abs)) if stored_abs else None,
+            "rows": len(stored_abs),
+        },
+        "expected_tax_profile": {
+            "average_absolute": (
+                str(sum(tax_abs) / Decimal(len(tax_abs))) if tax_abs else None
+            ),
+            "maximum_absolute": str(max(tax_abs)) if tax_abs else None,
+            "average_percentage": (
+                str(sum(tax_pct) / Decimal(len(tax_pct))) if tax_pct else None
+            ),
+            "rows": len(tax_abs),
+        },
     }
 
     return {
@@ -797,9 +1034,11 @@ def build_cost_audit_report(
             "barcode": args.barcode,
             "source_document_id": args.source_document_id,
             "limit": args.limit,
+            "limit_applies_to": "detail_scan_only",
             "page_size": args.page_size,
             "max_pages": args.max_pages,
             "sample_limit": args.sample_limit,
+            "summary_only_ignores_limit": True,
         },
         "population": {
             "rows_in_scope": rows_in_scope,
@@ -812,23 +1051,23 @@ def build_cost_audit_report(
             "max_admission_date": pop.get("max_admission_date")
             or (max(dates).isoformat() if dates else None),
             "note": (
-                "rows_in_scope viene de COUNT SQL sin LIMIT de samples; "
-                "effective_quality / understatement sobre rows_scanned_for_detail"
+                "rows_in_scope = COUNT SQL sin LIMIT. "
+                "Con --summary-only se clasifica toda la población (limit ignorado). "
+                "En modo detalle, limit/page-size/max-pages acotan el scan."
             ),
         },
+        "coverage": coverage or {},
         "freshness": freshness
         or {
             "latest_admission_date": None,
             "days_since_latest_admission": None,
             "is_stale": None,
             "admission_date_meaning": (
-                "Fecha de admisión/recepción en cost_reception_history "
-                "(no es la fecha de ejecución del sync)"
-            ),
-            "variant_cost_last_update_meaning": (
-                "bsale.variant_cost.last_update = última actualización del snapshot de costo"
+                "Fecha de admisión/recepción (no es ejecución del sync)"
             ),
         },
+        "sync_freshness": sync_freshness or {},
+        "quantity_semantics": _quantity_semantics(),
         "rows_analyzed": rows_scanned,
         "unique_variants": int(pop.get("unique_variants") or len(variants)),
         "unique_documents": int(pop.get("unique_documents") or len(documents)),
@@ -838,28 +1077,20 @@ def build_cost_audit_report(
             "max": pop.get("max_admission_date")
             or (max(dates).isoformat() if dates else None),
         },
-        "quality": quality,
-        "effective_quality": effective_quality,
-        "tax_combinations": tax_combination_counts or dict(combo_counts),
-        "gross_understatement": under_stats,
-        "tax_context": tax_context_stats,
-        "differences": {
-            "stored_components": {
-                "average_absolute": (
-                    str(sum(stored_abs) / Decimal(len(stored_abs))) if stored_abs else None
-                ),
-                "maximum_absolute": str(max(stored_abs)) if stored_abs else None,
-            },
-            "expected_tax_profile": {
-                "average_absolute": (
-                    str(sum(tax_abs) / Decimal(len(tax_abs))) if tax_abs else None
-                ),
-                "maximum_absolute": str(max(tax_abs)) if tax_abs else None,
-                "average_percentage": (
-                    str(sum(tax_pct) / Decimal(len(tax_pct))) if tax_pct else None
-                ),
-            },
+        "quality": _with_denominator(quality, denom),
+        "effective_quality": _with_denominator(effective_quality, denom),
+        "tax_combinations": {
+            "denominator": rows_in_scope,
+            "scope": "population_sql",
+            "counts": tax_combination_counts or dict(combo_counts),
         },
+        "tax_dictionary": tax_dictionary or [],
+        "unknown_tax_ids": unknown_tax_ids or [],
+        "unresolved_tax_rows": unresolved_tax_rows,
+        "unit_understatement": unit_understatement,
+        "quantity_weighted_understatement": quantity_weighted,
+        "tax_context": tax_ctx,
+        "differences": differences,
         "samples": samples,
         "duration_ms": round(duration_ms, 2),
         "barcode_resolution": (
@@ -873,7 +1104,7 @@ def build_cost_audit_report(
             "pct_soft": str(args.tolerances.pct_soft),
             "stale_snapshot_days": args.tolerances.stale_snapshot_days,
             "outlier_factor": str(args.tolerances.outlier_factor),
-            "freshness_stale_days": 7,
+            "sync_job_stale_days": 7,
         },
         "limitations": [
             "source_document_id no es columna canónica; se usa document_number o reception_id",
@@ -882,8 +1113,12 @@ def build_cost_audit_report(
             "stored_components_match no implica bruto fiscalmente correcto",
             "outlier es alerta estadística, no corrección",
             "IVA se identifica por tax_id/tipo, nunca por posición en tax_ids_json",
-            "sample-limit no limita population.rows_in_scope ni agregados SQL",
-            "admission_date ≠ fecha de corrida del sync; ver freshness.*_meaning",
+            "sample-limit no limita population.rows_in_scope",
+            "limit solo aplica al detail scan; summary-only lo ignora",
+            "admission_date ≠ last_run_at del sync; ver sync_freshness",
+            "unit_understatement no es impacto total de compras",
+            "quantity no se usa para totales ponderados sin semántica confirmada",
+            "tax_id 4–7 sin fallback seguro: sin bsale.taxes.percentage → unresolved",
         ],
     }
 
@@ -920,6 +1155,14 @@ def run_cost_data_audit(
         date_to=date_to,
         variant_ids=variant_ids_filter,
     )
+    tax_id_counts = repository.fetch_tax_id_occurrence_counts(
+        args,
+        date_from=date_from,
+        date_to=date_to,
+        variant_ids=variant_ids_filter,
+    )
+    sync_meta = repository.fetch_sync_meta(company_id=args.company_id)
+    history_meta = repository.fetch_history_coverage_meta(company_id=args.company_id)
 
     raw_rows = repository.fetch_history_rows_paged(
         args,
@@ -960,12 +1203,13 @@ def run_cost_data_audit(
         )
 
     tax_ids = CostDataAuditRepository.collect_tax_ids(raw_rows)
-    # Incluir ids de combinaciones de población para catálogo completo
     for combo in tax_combos:
         for part in str(combo).split(","):
             part = part.strip()
             if part.isdigit():
                 tax_ids.append(int(part))
+    tax_ids.extend(tax_id_counts.keys())
+    tax_ids.extend(range(1, 9))
     tax_catalog = repository.fetch_taxes_for_ids(
         company_id=args.company_id,
         tax_ids=tax_ids,
@@ -1001,6 +1245,7 @@ def run_cost_data_audit(
         "with_tax_factor": 0,
         "tax_ids_without_products_taxes": 0,
     }
+    unresolved_tax_rows = 0
     for r in raw_rows:
         if _tax_id_list(r.tax_ids_json):
             tax_stats["with_tax_ids_json"] += 1
@@ -1015,18 +1260,27 @@ def run_cost_data_audit(
         if tf is not None and tf > Decimal("1"):
             tax_stats["with_tax_factor"] += 1
 
-        results.append(
-            classify_cost_audit_row(
-                r,
-                tax_catalog=tax_catalog,
-                tolerances=args.tolerances,
-                duplicate_unique_keys=dup_uks,
-                duplicate_detail_keys=dup_details,
-                variant_gross_values=gross_by_variant.get(r.variant_id),
-                as_of=as_of,
-                latest_admission_by_variant=latest_adm,
-            )
+        classified = classify_cost_audit_row(
+            r,
+            tax_catalog=tax_catalog,
+            tolerances=args.tolerances,
+            duplicate_unique_keys=dup_uks,
+            duplicate_detail_keys=dup_details,
+            variant_gross_values=gross_by_variant.get(r.variant_id),
+            as_of=as_of,
+            latest_admission_by_variant=latest_adm,
         )
+        tr = classified.tax_resolution or {}
+        if tr.get("unresolved_tax_ids") or tr.get("tax_resolution_quality") in (
+            "unavailable",
+            "partial",
+        ):
+            # partial con IVA+específicos conocidos no cuenta como unresolved row
+            if tr.get("unresolved_tax_ids"):
+                unresolved_tax_rows += 1
+            elif tr.get("tax_resolution_quality") == "unavailable":
+                unresolved_tax_rows += 1
+        results.append(classified)
 
     latest_adm_pop = population_row.get("max_admission_date")
     latest_d: date | None = None
@@ -1038,16 +1292,46 @@ def run_cost_data_audit(
     freshness = {
         "latest_admission_date": latest_d.isoformat() if latest_d else None,
         "days_since_latest_admission": days_since,
-        "is_stale": bool(days_since is not None and days_since > 7),
+        # Solo informa edad de admission; NO decide sync fallido
+        "admission_data_gap_days": days_since,
+        "is_stale": None,
+        "note": (
+            "No usar admission_date sola para afirmar sync stale/failed; "
+            "ver sync_freshness.sync_status"
+        ),
         "admission_date_meaning": (
-            "Máxima admission_date en analytics.cost_reception_history "
-            "dentro del scope (recepción/admisión, no timestamp de job sync)"
+            "Máxima admission_date en cost_reception_history (recepción/admisión)"
         ),
         "variant_cost_last_update_meaning": (
             "bsale.variant_cost.last_update = frescura del snapshot por variante"
         ),
         "as_of": as_of.isoformat(),
     }
+
+    observed_ids: set[int] = set(tax_id_counts.keys())
+    for combo in tax_combos:
+        for part in str(combo).split(","):
+            if part.strip().isdigit():
+                observed_ids.add(int(part.strip()))
+    tax_dictionary, unknown_ids = _build_tax_dictionary(
+        tax_catalog=tax_catalog,
+        occurrence_counts=tax_id_counts,
+        observed_ids=observed_ids,
+    )
+
+    coverage = _build_coverage(
+        date_from=date_from,
+        date_to=date_to,
+        requested_days=args.days,
+        population=population_row,
+        history_meta=history_meta,
+    )
+    sync_freshness = _build_sync_freshness(
+        sync_meta=sync_meta,
+        history_meta=history_meta,
+        latest_admission_date=latest_d.isoformat() if latest_d else None,
+        as_of=as_of,
+    )
 
     duration_ms = (time.perf_counter() - t0) * 1000.0
     return build_cost_audit_report(
@@ -1061,4 +1345,9 @@ def run_cost_data_audit(
         population=population_row,
         freshness=freshness,
         tax_combination_counts=tax_combos,
+        coverage=coverage,
+        sync_freshness=sync_freshness,
+        tax_dictionary=tax_dictionary,
+        unknown_tax_ids=unknown_ids,
+        unresolved_tax_rows=unresolved_tax_rows,
     )

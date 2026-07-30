@@ -144,13 +144,56 @@ class RecordingExecutor:
         upper = sql.upper()
         if "INFORMATION_SCHEMA.COLUMNS" in upper:
             col = params[2] if len(params) >= 3 else ""
+            # cost_sync_state.company_id probe
+            if str(params[0]) == "analytics" and str(params[1]) == "cost_sync_state":
+                return [{"ok": 1}] if "company_id" in self.columns or True else []
             return [{"ok": 1}] if str(col) in self.columns else []
         if "FROM BSALE.TAXES" in upper or "from bsale.taxes" in sql.lower():
             return list(self.taxes)
+        if "COST_SYNC_STATE" in upper:
+            return list(getattr(self, "sync_state_rows", []) or [])
         if "FROM BSALE.VARIANTS" in upper or "from bsale.variants" in sql.lower():
-            # resolución catálogo por bar_code
             return list(self.catalog_variants)
         if "COST_RECEPTION_HISTORY" in upper:
+            # cobertura global (solo company_id, con created_at)
+            if "EARLIEST_CREATED_AT" in upper or (
+                "CREATED_AT" in upper and "COUNT(*)" in upper and "OFFICE_ID" not in upper
+                and len(params) == 1
+            ):
+                rows = list(self.history)
+                dates = [r.get("admission_date") for r in rows if r.get("admission_date")]
+                created = [
+                    r.get("created_at") or r.get("admission_date")
+                    for r in rows
+                    if r.get("created_at") or r.get("admission_date")
+                ]
+                return [
+                    {
+                        "total_rows": len(rows),
+                        "earliest_admission_date": min(dates) if dates else None,
+                        "latest_admission_date": max(dates) if dates else None,
+                        "earliest_created_at": min(created) if created else None,
+                        "latest_created_at": max(created) if created else None,
+                    }
+                ]
+            # tax_id occurrence (LATERAL / elem.tid)
+            if "ELEM.TID" in upper or "elem.tid" in sql.lower():
+                rows = list(self.history)
+                for p in params:
+                    if isinstance(p, list) and p and all(isinstance(x, int) for x in p):
+                        rows = [r for r in rows if int(r["variant_id"]) in set(p)]
+                from collections import Counter
+
+                c: Counter[int] = Counter()
+                for r in rows:
+                    ids = r.get("tax_ids_json") or []
+                    if isinstance(ids, list):
+                        for x in ids:
+                            try:
+                                c[int(x)] += 1
+                            except (TypeError, ValueError):
+                                pass
+                return [{"tax_id": k, "cnt": v} for k, v in sorted(c.items())]
             # población agregada
             if "COUNT(*)" in upper and "GROUP BY" not in upper:
                 rows = list(self.history)
@@ -175,23 +218,27 @@ class RecordingExecutor:
                 rows = list(self.history)
                 from collections import Counter
 
-                c: Counter[str] = Counter()
+                c2: Counter[str] = Counter()
                 for r in rows:
                     ids = r.get("tax_ids_json") or []
                     if isinstance(ids, list) and ids:
                         fp = ",".join(str(i) for i in sorted({int(x) for x in ids}))
                     else:
                         fp = "(none)"
-                    c[fp] += 1
-                return [{"tax_fp": k, "cnt": v} for k, v in c.most_common()]
-            # resolución barcode (SELECT DISTINCT variant_id...) vs fetch completo
+                    c2[fp] += 1
+                return [{"tax_fp": k, "cnt": v} for k, v in c2.most_common()]
             if "SELECT DISTINCT" in upper and "VARIANT_ID" in upper and "HISTORY_ID" not in upper:
                 return list(self.resolve_history)
-            # fetch history: filtrar por variant_id ANY si viene en params
             rows = list(self.history)
             for p in params:
                 if isinstance(p, list) and p and all(isinstance(x, int) for x in p):
                     rows = [r for r in rows if int(r["variant_id"]) in set(p)]
+            # OFFSET/LIMIT: params end with limit, offset
+            if len(params) >= 2 and isinstance(params[-1], int) and isinstance(params[-2], int):
+                lim, off = params[-2], params[-1]
+                # ORDER ... LIMIT %s OFFSET %s → last two are limit, offset
+                if "OFFSET" in upper:
+                    rows = rows[off : off + lim]
             return rows
         return []
 
@@ -1040,10 +1087,20 @@ def test_clamp_limits():
         max_pages=20,
     )
     assert args.days == 365
-    # limit capped by page_size * max_pages
+    # detail: limit capped by page_size * max_pages
     assert args.limit == 10000
     assert args.sample_limit == 100
     assert args.statement_timeout_seconds == 30
+    summary_args = clamp_cost_audit_args(
+        company_id=3,
+        limit=5000,
+        page_size=500,
+        max_pages=10,
+        summary_only=True,
+    )
+    # summary-only: limit se guarda pero no se reduce por max_pages (detalle informativo)
+    assert summary_args.limit == 5000
+    assert summary_args.summary_only is True
     with pytest.raises(AnalyticsValidationError):
         clamp_cost_audit_args(company_id=0)
 
@@ -1255,7 +1312,7 @@ def test_summary_only_no_samples_has_population_freshness():
     ]
     exe = RecordingExecutor(history=hist)
     args = clamp_cost_audit_args(
-        company_id=3, days=90, summary_only=True, sample_limit=50
+        company_id=3, days=90, summary_only=True, sample_limit=50, limit=5000
     )
     report = run_cost_data_audit(
         args=args, repository=CostDataAuditRepository(exe), today=date(2026, 7, 20)
@@ -1264,6 +1321,162 @@ def test_summary_only_no_samples_has_population_freshness():
     assert report["samples"] == []
     assert "population" in report
     assert report["population"]["rows_in_scope"] == 1
+    assert report["population"]["is_full_detail_scan"] is True
     assert report["freshness"]["latest_admission_date"] == "2026-06-22"
     assert report["freshness"]["days_since_latest_admission"] == 28
+    assert report["freshness"]["is_stale"] is None  # no afirmar stale por admission
     assert "admission_date_meaning" in report["freshness"]
+    assert report["sync_freshness"]["sync_status"] == "unknown"
+    assert report["unit_understatement"]["warning"] == "No representa impacto total de compras"
+    assert report["quantity_weighted_understatement"]["quality"] == "unavailable"
+    assert report["quantity_semantics"]["safe_for_weighted_totals"] is False
+    assert report["effective_quality"]["denominator"] == 1
+
+
+def test_summary_only_ignores_limit_classifies_full_population():
+    """Población 80 con limit 10: summary clasifica 80; detail clasifica 10."""
+    hist = []
+    for i in range(1, 81):
+        hist.append(
+            _hist_row(
+                i,
+                barcode=f"BC{i}",
+                history_id=i,
+                admission_date=date(2026, 6, 1),
+                cost_net=D("100"),
+                iva_amount=D("0"),
+                other_taxes=D("0"),
+                cost_bruto_erp=D("100"),
+                vc_iva_rate=D("19"),
+                vc_tax_factor=D("1"),
+                tax_ids_json=[1],
+                products_taxes=None,
+            )
+        )
+    exe = RecordingExecutor(history=hist)
+
+    summary_args = clamp_cost_audit_args(
+        company_id=3,
+        days=365,
+        limit=10,
+        page_size=25,
+        max_pages=1,
+        sample_limit=5,
+        summary_only=True,
+    )
+    summary = run_cost_data_audit(
+        args=summary_args,
+        repository=CostDataAuditRepository(exe),
+        today=date(2026, 7, 20),
+    )
+    assert summary["population"]["rows_in_scope"] == 80
+    assert summary["population"]["rows_scanned_for_detail"] == 80
+    assert summary["population"]["is_full_detail_scan"] is True
+    assert summary["effective_quality"]["denominator"] == 80
+    assert sum(
+        v
+        for k, v in summary["effective_quality"].items()
+        if k != "denominator"
+    ) == 80
+    assert summary["samples"] == []
+    assert summary["differences"]["denominator"] == 80
+    assert summary["unit_understatement"]["denominator"] == 80
+
+    detail_args = clamp_cost_audit_args(
+        company_id=3,
+        days=365,
+        limit=10,
+        page_size=25,
+        max_pages=1,
+        sample_limit=5,
+        summary_only=False,
+    )
+    # limit capped by page_size*max_pages → min(10, 25)=10
+    assert detail_args.limit == 10
+    detail = run_cost_data_audit(
+        args=detail_args,
+        repository=CostDataAuditRepository(RecordingExecutor(history=hist)),
+        today=date(2026, 7, 20),
+    )
+    assert detail["population"]["rows_in_scope"] == 80
+    assert detail["population"]["rows_scanned_for_detail"] == 10
+    assert detail["population"]["is_full_detail_scan"] is False
+    assert detail["effective_quality"]["denominator"] == 10
+    assert len(detail["samples"]) <= 5
+
+
+def test_tax_dictionary_includes_documented_ids_and_unknown():
+    hist = [
+        _hist_row(
+            1,
+            tax_ids_json=[1, 4, 8],
+            cost_net=D("100"),
+            iva_amount=D("0"),
+            other_taxes=D("0"),
+            cost_bruto_erp=D("100"),
+            vc_iva_rate=None,
+            vc_tax_factor=D("1"),
+            products_taxes=None,
+            has_products_taxes_column=False,
+        )
+    ]
+    exe = RecordingExecutor(
+        history=hist,
+        taxes=[
+            {"bsale_id": 1, "name": "IVA", "percentage": D("19")},
+            {"bsale_id": 8, "name": "Destilados", "percentage": D("31.5")},
+        ],
+    )
+    args = clamp_cost_audit_args(company_id=3, days=90, summary_only=True)
+    report = run_cost_data_audit(
+        args=args, repository=CostDataAuditRepository(exe), today=date(2026, 7, 20)
+    )
+    ids = {d["tax_id"] for d in report["tax_dictionary"]}
+    assert {1, 2, 3, 4, 5, 6, 7, 8}.issubset(ids)
+    by_id = {d["tax_id"]: d for d in report["tax_dictionary"]}
+    assert by_id[1]["source"] in ("bsale.taxes", "fallback")
+    assert by_id[4]["source"] == "unresolved"
+    assert 4 in report["unknown_tax_ids"]
+    assert report["unresolved_tax_rows"] >= 1
+
+
+def test_coverage_incomplete_when_actual_range_narrower():
+    hist = [
+        _hist_row(1, admission_date=date(2026, 6, 9)),
+        _hist_row(2, admission_date=date(2026, 6, 22)),
+    ]
+    exe = RecordingExecutor(history=hist)
+    args = clamp_cost_audit_args(company_id=3, days=365, summary_only=True)
+    report = run_cost_data_audit(
+        args=args, repository=CostDataAuditRepository(exe), today=date(2026, 7, 22)
+    )
+    cov = report["coverage"]
+    assert cov["requested_days"] == 365
+    assert cov["coverage_is_complete"] is False
+    assert cov["missing_days_before"] > 0 or cov["missing_days_after"] > 0
+    assert cov["backfill_full_history"] is False
+    assert cov["checkpoint_table"] == "analytics.cost_sync_state"
+
+
+def test_admission_date_old_does_not_force_sync_failed():
+    hist = [_hist_row(1, admission_date=date(2026, 3, 25))]
+    exe = RecordingExecutor(history=hist)
+    exe.sync_state_rows = [
+        {
+            "company_id": 3,
+            "last_admission_ts": int(datetime(2026, 6, 22).timestamp()),
+            "last_run_at": datetime(2026, 7, 20, 12, 0, 0),
+            "last_status": "ok",
+            "last_message": "ok",
+            "receptions_inserted": 1,
+            "lines_inserted": 1,
+            "total_lines_processed": 1,
+        }
+    ]
+    args = clamp_cost_audit_args(company_id=3, days=365, summary_only=True)
+    report = run_cost_data_audit(
+        args=args, repository=CostDataAuditRepository(exe), today=date(2026, 7, 20)
+    )
+    assert report["freshness"]["latest_admission_date"] == "2026-03-25"
+    assert report["sync_freshness"]["sync_status"] == "current"
+    assert report["sync_freshness"]["sync_status"] != "failed"

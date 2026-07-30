@@ -5,11 +5,11 @@ Uso (Coolify / contenedor backend)::
     python -m backend.jobs.audit_cost_data_quality \\
       --company-id 3 --office-id 3 --days 365 --limit 5000 --sample-limit 50
 
-Resumen población sin samples::
+Resumen poblacional completo (ignora --limit para clasificación)::
 
     python -m backend.jobs.audit_cost_data_quality \\
       --company-id 3 --office-id 3 --days 365 --summary-only \\
-      --page-size 1000 --max-pages 50
+      --page-size 1000 --statement-timeout-seconds 30
 
 No ejecuta DDL/DML. Siempre hace rollback al terminar.
 No ejecutar desde Cursor contra producción.

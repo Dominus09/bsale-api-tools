@@ -419,12 +419,23 @@ WHERE h.company_id = %s
         date_to: date,
         variant_ids: list[int] | None = None,
     ) -> list[CostAuditRawRow]:
-        """Carga detalle paginado hasta page_size*max_pages / limit (no sample-limit)."""
+        """Carga detalle paginado.
+
+        - Modo detalle: hasta page_size*max_pages / limit.
+        - Modo summary-only: escanea toda la población (ignora limit/max_pages);
+          page_size solo define el tamaño de lote.
+        """
+        from backend.services.analytics.cost_audit_models import MAX_POPULATION_SCAN
+
         if variant_ids is not None and not variant_ids:
             return []
         page_size = max(1, int(args.page_size))
-        max_pages = max(1, int(args.max_pages))
-        hard_cap = max(1, int(args.limit))
+        if args.summary_only:
+            hard_cap = MAX_POPULATION_SCAN
+            max_pages = (hard_cap + page_size - 1) // page_size
+        else:
+            hard_cap = max(1, int(args.limit))
+            max_pages = max(1, int(args.max_pages))
         out: list[CostAuditRawRow] = []
         for page in range(max_pages):
             if len(out) >= hard_cap:
@@ -620,6 +631,164 @@ WHERE h.company_id = %s
                     and row.get("product_tax_factor") is not None,
                 )
             )
+        return out
+
+    def fetch_sync_meta(self, *, company_id: int) -> dict[str, Any]:
+        """Timestamps reales de analytics.cost_sync_state (read-only)."""
+        if not self.column_exists("analytics", "cost_sync_state", "company_id"):
+            return {
+                "exists": False,
+                "last_admission_ts": None,
+                "last_run_at": None,
+                "last_status": None,
+                "last_message": None,
+            }
+        rows = self._execute(
+            """
+SELECT
+    company_id,
+    last_admission_ts,
+    last_run_at,
+    last_status,
+    last_message,
+    receptions_inserted,
+    lines_inserted,
+    total_lines_processed
+FROM analytics.cost_sync_state
+WHERE company_id = %s
+LIMIT 1
+""".strip(),
+            (int(company_id),),
+        )
+        if not rows:
+            return {
+                "exists": True,
+                "row_found": False,
+                "last_admission_ts": None,
+                "last_run_at": None,
+                "last_status": None,
+                "last_message": None,
+            }
+        row = rows[0]
+        return {
+            "exists": True,
+            "row_found": True,
+            "last_admission_ts": row.get("last_admission_ts"),
+            "last_run_at": row.get("last_run_at"),
+            "last_status": row.get("last_status"),
+            "last_message": row.get("last_message"),
+            "receptions_inserted": row.get("receptions_inserted"),
+            "lines_inserted": row.get("lines_inserted"),
+            "total_lines_processed": row.get("total_lines_processed"),
+        }
+
+    def fetch_history_coverage_meta(self, *, company_id: int) -> dict[str, Any]:
+        """Cobertura global del historial (sin filtro de días del auditor)."""
+        rows = self._execute(
+            """
+SELECT
+    COUNT(*)::bigint AS total_rows,
+    MIN(admission_date::date) AS earliest_admission_date,
+    MAX(admission_date::date) AS latest_admission_date,
+    MIN(created_at) AS earliest_created_at,
+    MAX(created_at) AS latest_created_at
+FROM analytics.cost_reception_history
+WHERE company_id = %s
+""".strip(),
+            (int(company_id),),
+        )
+        if not rows:
+            return {
+                "total_rows": 0,
+                "earliest_admission_date": None,
+                "latest_admission_date": None,
+                "earliest_created_at": None,
+                "latest_created_at": None,
+            }
+        row = rows[0]
+        earliest = _as_date(row.get("earliest_admission_date"))
+        latest = _as_date(row.get("latest_admission_date"))
+        return {
+            "total_rows": int(row.get("total_rows") or 0),
+            "earliest_admission_date": earliest.isoformat() if earliest else None,
+            "latest_admission_date": latest.isoformat() if latest else None,
+            "earliest_created_at": (
+                row.get("earliest_created_at").isoformat()
+                if row.get("earliest_created_at") is not None
+                else None
+            ),
+            "latest_created_at": (
+                row.get("latest_created_at").isoformat()
+                if row.get("latest_created_at") is not None
+                else None
+            ),
+        }
+
+    def fetch_tax_id_occurrence_counts(
+        self,
+        args: CostAuditArgs,
+        *,
+        date_from: date,
+        date_to: date,
+        variant_ids: list[int] | None = None,
+    ) -> dict[int, int]:
+        """Filas en scope que contienen cada tax_id (población)."""
+        if variant_ids is not None and not variant_ids:
+            return {}
+        if not self.column_exists("bsale", "products", "tax_ids_json"):
+            return {}
+        select_clause = """
+    (elem.tid)::int AS tax_id,
+    COUNT(*)::bigint AS cnt
+"""
+        # Rebuild with lateral join — use custom SQL for clarity
+        date_to_exclusive = date_to + timedelta(days=1)
+        sql = """
+SELECT
+    (elem.tid)::int AS tax_id,
+    COUNT(*)::bigint AS cnt
+FROM analytics.cost_reception_history h
+LEFT JOIN bsale.variants v
+    ON v.company_id = h.company_id
+   AND v.bsale_id = h.variant_id
+LEFT JOIN bsale.products p
+    ON p.company_id = h.company_id
+   AND p.bsale_id = COALESCE(h.product_id, v.product_id)
+CROSS JOIN LATERAL jsonb_array_elements_text(
+    CASE
+        WHEN p.tax_ids_json IS NOT NULL
+         AND jsonb_typeof(p.tax_ids_json) = 'array'
+        THEN p.tax_ids_json
+        ELSE '[]'::jsonb
+    END
+) AS elem(tid)
+WHERE h.company_id = %s
+  AND h.admission_date >= %s
+  AND h.admission_date < %s
+""".strip()
+        params: list[Any] = [args.company_id, date_from, date_to_exclusive]
+        if args.office_id is not None:
+            sql += " AND h.office_id = %s"
+            params.append(args.office_id)
+        if args.variant_id is not None:
+            sql += " AND h.variant_id = %s"
+            params.append(args.variant_id)
+        if variant_ids is not None:
+            sql += " AND h.variant_id = ANY(%s)"
+            params.append(list(variant_ids))
+        if args.source_document_id is not None:
+            sql += " AND (h.document_number = %s OR h.reception_id = %s)"
+            params.extend([args.source_document_id, args.source_document_id])
+        sql += " GROUP BY 1 ORDER BY 1"
+        # silence unused
+        _ = select_clause
+        rows = self._execute(sql, tuple(params))
+        out: dict[int, int] = {}
+        for row in rows:
+            try:
+                out[int(row["tax_id"])] = int(row.get("cnt") or 0)
+            except (TypeError, ValueError, KeyError):
+                continue
         return out
 
     def fetch_taxes_for_ids(

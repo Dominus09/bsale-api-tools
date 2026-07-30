@@ -18,13 +18,14 @@ from backend.services.analytics.validate_distribuidora_source import (
 )
 
 MAX_DAYS = 365
-MAX_LIMIT = 50000  # tope de filas clasificadas en detalle
+MAX_LIMIT = 50000  # tope de filas clasificadas en modo detalle
+MAX_POPULATION_SCAN = 200000  # tope de seguridad para --summary-only
 MAX_SAMPLE_LIMIT = 100
 MAX_TIMEOUT_SECONDS = 30
 MAX_PAGE_SIZE = 2000
 MAX_PAGES = 100
 DEFAULT_DAYS = 90
-DEFAULT_LIMIT = 5000  # scan de detalle por defecto (no confunde con sample-limit)
+DEFAULT_LIMIT = 5000  # solo detalle; summary-only lo ignora para agregados
 DEFAULT_SAMPLE_LIMIT = 20
 DEFAULT_TIMEOUT_SECONDS = 20
 DEFAULT_LOCK_TIMEOUT = "3s"
@@ -224,14 +225,16 @@ def clamp_cost_audit_args(
             )
     page_size_i = max(1, min(int(page_size), MAX_PAGE_SIZE))
     max_pages_i = max(1, min(int(max_pages), MAX_PAGES))
-    # limit = tope de filas a clasificar; no limita population SQL
-    scan_cap = max(1, min(int(limit), MAX_LIMIT))
-    scan_cap = min(scan_cap, page_size_i * max_pages_i)
+    summary = bool(summary_only)
+    # limit = tope de detalle únicamente; summary-only no lo usa para agregados
+    detail_cap = max(1, min(int(limit), MAX_LIMIT))
+    if not summary:
+        detail_cap = min(detail_cap, page_size_i * max_pages_i)
     return CostAuditArgs(
         company_id=int(company_id),
         office_id=office,
         days=max(1, min(int(days), MAX_DAYS)),
-        limit=scan_cap,
+        limit=detail_cap,
         sample_limit=max(1, min(int(sample_limit), MAX_SAMPLE_LIMIT)),
         statement_timeout_seconds=max(
             1, min(int(statement_timeout_seconds), MAX_TIMEOUT_SECONDS)
@@ -244,7 +247,7 @@ def clamp_cost_audit_args(
         tolerances=tolerances or DEFAULT_TOLERANCES,
         page_size=page_size_i,
         max_pages=max_pages_i,
-        summary_only=bool(summary_only),
+        summary_only=summary,
     )
 
 

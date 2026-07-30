@@ -3,12 +3,20 @@
 Mapeo canónico Quillotana / Bsale Chile documentado en el repo
 (tests gross commercial + tasas conocidas):
 
-| tax_id | Rol                         | Tasa fallback |
-|--------|-----------------------------|---------------|
-| 1      | IVA                         | 19%           |
-| 2      | ILA vino / cerveza-vino     | 20.5%         |
-| 3      | ILA cerveza                 | 20.5%         |
-| 8      | ILA destilados              | 31.5%         |
+| tax_id | Rol                                      | Tasa fallback | Estado en repo      |
+|--------|------------------------------------------|---------------|---------------------|
+| 1      | IVA                                      | 19%           | confirmado          |
+| 2      | ILA vino                                 | 20.5%         | confirmado          |
+| 3      | ILA cerveza                              | 20.5%         | confirmado          |
+| 4      | (sin rol canónico en código)             | —             | sin fallback seguro |
+| 5      | (sin rol canónico en código)             | —             | sin fallback seguro |
+| 6      | (sin rol canónico en código)             | —             | sin fallback seguro |
+| 7      | (sin rol canónico en código)             | —             | sin fallback seguro |
+| 8      | ILA destilados                           | 31.5%         | confirmado          |
+
+tax_id 4–7: no hay tasa ni categoría fija en el repositorio. Solo se resuelven
+si ``bsale.taxes.percentage`` está presente. Sin tasa segura → unresolved;
+el auditor NO corrige costos en ese caso.
 
 Las tasas de ``bsale.taxes`` (catálogo) tienen prioridad sobre el fallback.
 Nunca se asume que taxes[0] es IVA.
@@ -16,7 +24,7 @@ Nunca se asume que taxes[0] es IVA.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
@@ -29,12 +37,39 @@ COMMERCIAL_QUANT = Decimal("0.01")
 # IDs conocidos de IVA (Bsale company Quillotana / catálogo habitual)
 IVA_TAX_IDS: frozenset[int] = frozenset({1})
 
+# IDs observados habitualmente en Quillotana (incl. sin fallback)
+DOCUMENTED_TAX_IDS: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 8)
+
 # Fallback cuando bsale.taxes no trae percentage (solo auditoría; no escribe sync)
+# 4–7 deliberadamente ausentes: sin tasa segura en código.
 TAX_ID_FALLBACK: dict[int, tuple[str, Decimal, str]] = {
     1: ("IVA", Decimal("19"), "iva"),
     2: ("ILA vino", Decimal("20.5"), "ila_beer_wine"),
     3: ("ILA cerveza", Decimal("20.5"), "ila_beer_wine"),
     8: ("ILA destilados", Decimal("31.5"), "ila_spirits"),
+}
+
+TAX_ID_NOTES: dict[int, str] = {
+    1: "IVA 19% — identidad por tax_id=1",
+    2: "ILA vino 20.5% — fallback canónico del repo",
+    3: "ILA cerveza 20.5% — fallback canónico del repo",
+    4: (
+        "Sin tasa/categoría canónica en el repo. Resolver solo vía bsale.taxes; "
+        "si percentage ausente → unresolved; no corregir costos."
+    ),
+    5: (
+        "Sin tasa/categoría canónica en el repo. Resolver solo vía bsale.taxes; "
+        "si percentage ausente → unresolved; no corregir costos."
+    ),
+    6: (
+        "Sin tasa/categoría canónica en el repo. Resolver solo vía bsale.taxes; "
+        "si percentage ausente → unresolved; no corregir costos."
+    ),
+    7: (
+        "Sin tasa/categoría canónica en el repo. Resolver solo vía bsale.taxes; "
+        "si percentage ausente → unresolved; no corregir costos."
+    ),
+    8: "ILA destilados 31.5% — fallback canónico del repo",
 }
 
 
