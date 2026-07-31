@@ -218,6 +218,8 @@ def test_18_rate_change_changes_tax_fingerprint():
         context_as_of=None,
         context_is_historical=False,
         resolution_quality="current_catalog",
+        tax_ids_source="current_product_tax",
+        tax_rates_source="bsale_taxes",
     )
     t2 = TaxContextInput(
         tax_ids=(1,),
@@ -226,6 +228,8 @@ def test_18_rate_change_changes_tax_fingerprint():
         context_as_of=None,
         context_is_historical=False,
         resolution_quality="current_catalog",
+        tax_ids_source="current_product_tax",
+        tax_rates_source="bsale_taxes",
     )
     assert tax_context_fingerprint(t1) != tax_context_fingerprint(t2)
 
@@ -248,3 +252,64 @@ def test_20_no_float_in_output_amounts():
     ):
         assert v is None or isinstance(v, Decimal)
         assert not isinstance(v, float)
+
+
+def test_21_tax_ids_source_current_product_tax():
+    catalog = {1: TaxCatalogEntry(1, "IVA", D("19"))}
+    ctx = build_tax_context_from_ids(
+        [1], tax_catalog=catalog, tax_ids_source="current_product_tax"
+    )
+    assert ctx.tax_ids_source == "current_product_tax"
+    res = calculate_cost_reception(_row(reception_tax_ids=()), ctx)
+    assert res.tax_ids_source == "current_product_tax"
+
+
+def test_22_tax_rates_source_bsale_taxes():
+    catalog = {1: TaxCatalogEntry(1, "IVA", D("19"))}
+    ctx = build_tax_context_from_ids(
+        [1], tax_catalog=catalog, tax_ids_source="current_product_tax"
+    )
+    assert ctx.tax_rates_source == "bsale_taxes"
+    assert ctx.resolution_quality == "current_catalog"
+    assert ctx.context_is_historical is False
+    res = calculate_cost_reception(_row(reception_tax_ids=()), ctx)
+    assert res.tax_rates_source == "bsale_taxes"
+    assert res.tax_context_source == "bsale_taxes"
+
+
+def test_23_canonical_fallback_separate_from_ids_source():
+    ctx = build_tax_context_from_ids(
+        [1], tax_catalog={}, tax_ids_source="current_product_tax"
+    )
+    assert ctx.tax_ids_source == "current_product_tax"
+    assert ctx.tax_rates_source == "canonical_fallback"
+    assert ctx.resolution_quality == "canonical_fallback"
+    res = calculate_cost_reception(
+        _row(stored_cost_net=D("669"), stored_gross_cost=D("669"), reception_tax_ids=()),
+        ctx,
+    )
+    assert res.tax_ids_source == "current_product_tax"
+    assert res.tax_rates_source == "canonical_fallback"
+    assert res.corrected_gross_cost == D("796.11")
+
+
+def test_24_fingerprint_includes_tax_sources():
+    catalog = {1: TaxCatalogEntry(1, "IVA", D("19"))}
+    a = build_tax_context_from_ids(
+        [1], tax_catalog=catalog, tax_ids_source="current_product_tax"
+    )
+    b = build_tax_context_from_ids(
+        [1], tax_catalog=catalog, tax_ids_source="historical_product_tax"
+    )
+    assert tax_context_fingerprint(a) != tax_context_fingerprint(b)
+    c = TaxContextInput(
+        tax_ids=a.tax_ids,
+        taxes=a.taxes,
+        context_source=a.context_source,
+        context_as_of=a.context_as_of,
+        context_is_historical=a.context_is_historical,
+        resolution_quality=a.resolution_quality,
+        tax_ids_source=a.tax_ids_source,
+        tax_rates_source="canonical_fallback",
+    )
+    assert tax_context_fingerprint(a) != tax_context_fingerprint(c)

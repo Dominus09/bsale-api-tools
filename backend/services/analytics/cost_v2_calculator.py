@@ -16,6 +16,8 @@ from backend.services.analytics.cost_tax_resolution import (
 from backend.services.analytics.cost_v2_models import (
     ALLOWED_CONTEXT_SOURCES,
     ALLOWED_RESOLUTION_QUALITIES,
+    ALLOWED_TAX_IDS_SOURCES,
+    ALLOWED_TAX_RATES_SOURCES,
     CALCULATION_VERSION,
     AdditionalTaxAmount,
     CostReceptionCalculation,
@@ -118,6 +120,8 @@ def tax_context_fingerprint(ctx: TaxContextInput) -> str:
             "tax_ids": sorted(set(ctx.tax_ids)),
             "taxes": taxes_payload,
             "context_source": ctx.context_source,
+            "tax_ids_source": ctx.tax_ids_source,
+            "tax_rates_source": ctx.tax_rates_source,
             "context_as_of": as_of.isoformat() if as_of else None,
             "context_is_historical": ctx.context_is_historical,
             "resolution_quality": ctx.resolution_quality,
@@ -130,13 +134,21 @@ def build_tax_context_from_ids(
     *,
     tax_catalog: dict[int, TaxCatalogEntry] | None = None,
     context_source: str = "bsale_taxes",
+    tax_ids_source: str = "unresolved",
     context_as_of: datetime | None = None,
     context_is_historical: bool = False,
     cost_net: Decimal | None = None,
 ) -> TaxContextInput:
-    """Helper: resuelve por identidad vía cost_tax_resolution."""
+    """Helper: resuelve por identidad vía cost_tax_resolution.
+
+    tax_ids_source y tax_rates_source son ortogonales: los IDs pueden venir del
+    producto actual mientras las tasas salen de bsale.taxes o fallback canónico.
+    context_source queda como campo legacy (preferir tax_rates_source).
+    """
     if context_source not in ALLOWED_CONTEXT_SOURCES:
         raise ValueError(f"invalid context_source: {context_source}")
+    if tax_ids_source not in ALLOWED_TAX_IDS_SOURCES:
+        raise ValueError(f"invalid tax_ids_source: {tax_ids_source}")
     ids = tuple(sorted({int(x) for x in tax_ids}))
     resolution = resolve_taxes_from_ids(
         list(ids), tax_catalog=tax_catalog, cost_net=cost_net
@@ -167,35 +179,61 @@ def build_tax_context_from_ids(
         resolution.unresolved_tax_ids and not taxes
     ):
         quality = "unresolved"
-        source: str = "unresolved"
+        rates_source = "unresolved"
     elif resolution.unresolved_tax_ids:
         quality = "unresolved"
-        source = context_source if taxes else "unresolved"
+        rates_source = (
+            "canonical_fallback"
+            if resolution.tax_resolution_source == "canonical_fallback"
+            else ("bsale_taxes" if taxes else "unresolved")
+        )
     elif resolution.tax_resolution_source == "canonical_fallback":
         quality = "canonical_fallback"
-        source = "canonical_fallback"
+        rates_source = "canonical_fallback"
     elif context_is_historical:
         quality = "historical_catalog"
-        source = context_source
+        rates_source = (
+            "reception_payload"
+            if context_source == "reception_payload"
+            else "bsale_taxes"
+        )
     elif context_source == "reception_payload":
         quality = "direct_reception"
-        source = context_source
+        rates_source = "reception_payload"
     else:
         quality = "current_catalog"
-        source = context_source
+        rates_source = "bsale_taxes"
+
+    # Legacy: tax_context_source ≈ fuente de tasas (deprecado).
+    if rates_source == "bsale_taxes":
+        legacy_source = "bsale_taxes"
+    elif rates_source == "canonical_fallback":
+        legacy_source = "canonical_fallback"
+    elif rates_source == "reception_payload":
+        legacy_source = "reception_payload"
+    else:
+        legacy_source = "unresolved"
 
     if quality not in ALLOWED_RESOLUTION_QUALITIES:
         quality = "unresolved"
-    if source not in ALLOWED_CONTEXT_SOURCES:
-        source = "unresolved"
+    if rates_source not in ALLOWED_TAX_RATES_SOURCES:
+        rates_source = "unresolved"
+    if legacy_source not in ALLOWED_CONTEXT_SOURCES:
+        legacy_source = "unresolved"
+
+    ids_source = tax_ids_source if ids else "unresolved"
+    if ids_source not in ALLOWED_TAX_IDS_SOURCES:
+        ids_source = "unresolved"
 
     return TaxContextInput(
         tax_ids=ids,
         taxes=tuple(taxes),
-        context_source=source,  # type: ignore[arg-type]
+        context_source=legacy_source,  # type: ignore[arg-type]
         context_as_of=context_as_of,
         context_is_historical=context_is_historical,
         resolution_quality=quality,  # type: ignore[arg-type]
+        tax_ids_source=ids_source,  # type: ignore[arg-type]
+        tax_rates_source=rates_source,  # type: ignore[arg-type]
     )
 
 
@@ -247,6 +285,10 @@ def calculate_cost_reception(
         raise ValueError(f"invalid context_source: {tax_context.context_source}")
     if tax_context.resolution_quality not in ALLOWED_RESOLUTION_QUALITIES:
         raise ValueError(f"invalid resolution_quality: {tax_context.resolution_quality}")
+    if tax_context.tax_ids_source not in ALLOWED_TAX_IDS_SOURCES:
+        raise ValueError(f"invalid tax_ids_source: {tax_context.tax_ids_source}")
+    if tax_context.tax_rates_source not in ALLOWED_TAX_RATES_SOURCES:
+        raise ValueError(f"invalid tax_rates_source: {tax_context.tax_rates_source}")
 
     hist_fp = source_history_fingerprint(row)
     tax_fp = tax_context_fingerprint(tax_context)
@@ -255,7 +297,7 @@ def calculate_cost_reception(
     net = row.stored_cost_net
     bruto = row.stored_gross_cost
 
-    if row.reception_tax_ids and tax_context.context_source != "reception_payload":
+    if row.reception_tax_ids and tax_context.tax_ids_source != "reception_payload":
         if "tax_ids_not_consumed" not in warnings:
             warnings.append("tax_ids_not_consumed")
     if not tax_context.tax_ids and not tax_context.taxes:
@@ -290,6 +332,8 @@ def calculate_cost_reception(
             tax_rate_on_net_pct=None,
             gross_understatement_vs_corrected_pct=None,
             tax_context_source=tax_context.context_source,
+            tax_ids_source=tax_context.tax_ids_source,
+            tax_rates_source=tax_context.tax_rates_source,
             tax_context_as_of=tax_context.context_as_of,
             tax_context_is_historical=tax_context.context_is_historical,
             tax_resolution_quality=tax_context.resolution_quality,
@@ -456,6 +500,8 @@ def calculate_cost_reception(
         tax_rate_on_net_pct=tax_rate_on_net,
         gross_understatement_vs_corrected_pct=under_vs_corr,
         tax_context_source=tax_context.context_source,
+        tax_ids_source=tax_context.tax_ids_source,
+        tax_rates_source=tax_context.tax_rates_source,
         tax_context_as_of=tax_context.context_as_of,
         tax_context_is_historical=tax_context.context_is_historical,
         tax_resolution_quality=(

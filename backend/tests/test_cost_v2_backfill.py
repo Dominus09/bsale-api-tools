@@ -31,7 +31,7 @@ def _hist(
     bruto: Decimal = D("669"),
     tax_ids: list[int] | None = None,
     barcode: str = "7803473005960",
-    document_number: int = 100,
+    document_number: int | None = 100,
     admission_date: date = date(2026, 6, 1),
     iva: Decimal | None = D("0"),
     other: Decimal | None = D("0"),
@@ -104,12 +104,16 @@ class RecordingExecutor:
         columns: set[str] | None = None,
     ) -> None:
         self.history = history or []
-        self.taxes = taxes or [
-            {"bsale_id": 1, "name": "IVA", "percentage": D("19")},
-            {"bsale_id": 2, "name": "ILA vino", "percentage": D("20.5")},
-            {"bsale_id": 3, "name": "ILA cerveza", "percentage": D("20.5")},
-            {"bsale_id": 8, "name": "Destilados", "percentage": D("31.5")},
-        ]
+        self.taxes = (
+            taxes
+            if taxes is not None
+            else [
+                {"bsale_id": 1, "name": "IVA", "percentage": D("19")},
+                {"bsale_id": 2, "name": "ILA vino", "percentage": D("20.5")},
+                {"bsale_id": 3, "name": "ILA cerveza", "percentage": D("20.5")},
+                {"bsale_id": 8, "name": "Destilados", "percentage": D("31.5")},
+            ]
+        )
         self.columns = columns or {"tax_ids_json", "bsale_id"}
         self.sqls: list[str] = []
         self.params: list[tuple] = []
@@ -157,6 +161,25 @@ class RecordingExecutor:
                 bc = (r.get("barcode") or "").strip()
                 if term and (bc == term or term in bc):
                     out.append({"variant_id": r["variant_id"]})
+            return out
+        # Prefetch nets for outlier medians (no history_id column)
+        if (
+            "h.cost_net" in sql.lower()
+            and "history_id" not in sql.lower()
+            and "COUNT(*)" not in upper
+        ):
+            out = []
+            for r in self.history:
+                net = r.get("cost_net")
+                if net is None:
+                    continue
+                if isinstance(net, Decimal) and net <= 0:
+                    continue
+                out.append({"variant_id": r["variant_id"], "cost_net": net})
+            # optional variant filter
+            for p in params:
+                if isinstance(p, list) and p and all(isinstance(x, int) for x in p):
+                    out = [x for x in out if int(x["variant_id"]) in set(p)]
             return out
         # keyset fetch
         if "HISTORY_ID" in upper or "h.id AS history_id" in sql.lower():
@@ -500,6 +523,10 @@ def test_25_fingerprints_present():
     s = report["samples"][0]
     assert len(s["source_history_fingerprint"]) == 64
     assert len(s["tax_context_fingerprint"]) == 64
+    assert s["tax_ids_source"] == "current_product_tax"
+    assert s["tax_rates_source"] == "bsale_taxes"
+    assert s["tax_resolution_quality"] == "current_catalog"
+    assert s["tax_context_is_historical"] is False
 
 
 def test_26_deterministic_order():
@@ -515,6 +542,124 @@ def test_26_deterministic_order():
     assert fetch_params
     # first batch after_id=0
     assert fetch_params[0][3] == 0
+
+
+def test_27_tax_ids_source_current_product_tax():
+    exe = RecordingExecutor(history=[_hist(1)])
+    report = run_cost_v2_backfill_dry_run(
+        args=_args(), repository=CostV2BackfillRepository(exe)
+    )
+    assert report["samples"][0]["tax_ids_source"] == "current_product_tax"
+
+
+def test_28_tax_rates_source_bsale_taxes():
+    exe = RecordingExecutor(history=[_hist(1)])
+    report = run_cost_v2_backfill_dry_run(
+        args=_args(), repository=CostV2BackfillRepository(exe)
+    )
+    assert report["samples"][0]["tax_rates_source"] == "bsale_taxes"
+    assert report["samples"][0]["tax_context_source"] == "bsale_taxes"
+
+
+def test_29_canonical_fallback_keeps_ids_source():
+    # Sin tasas en catálogo → fallback canónico; IDs siguen de producto.
+    exe = RecordingExecutor(
+        history=[_hist(1, tax_ids=[1])],
+        taxes=[],
+    )
+    report = run_cost_v2_backfill_dry_run(
+        args=_args(), repository=CostV2BackfillRepository(exe)
+    )
+    s = report["samples"][0]
+    assert s["tax_ids_source"] == "current_product_tax"
+    assert s["tax_rates_source"] == "canonical_fallback"
+    assert s["tax_resolution_quality"] == "canonical_fallback"
+    assert s["corrected_gross_cost"] == "796.11"
+
+
+def test_30_outlier_warning_on_2533():
+    hist = [
+        _hist(1, cost_net=D("669"), bruto=D("669")),
+        _hist(2, cost_net=D("632"), bruto=D("632")),
+        _hist(3, cost_net=D("650"), bruto=D("650")),
+        _hist(23190, cost_net=D("2533"), bruto=D("2533"), document_number=None),
+    ]
+    exe = RecordingExecutor(history=hist)
+    report = run_cost_v2_backfill_dry_run(
+        args=_args(batch_size=10, sample_limit=10),
+        repository=CostV2BackfillRepository(exe),
+    )
+    outlier = next(s for s in report["samples"] if s["history_id"] == 23190)
+    assert outlier["effective_quality_status"] == "missing_taxes_in_gross"
+    assert "suspicious_outlier" in outlier["warnings"]
+    assert outlier["corrected_gross_cost"] == "3014.27"
+    assert report["warnings"]["suspicious_outlier"] >= 1
+
+
+def test_31_outlier_does_not_change_primary_status():
+    hist = [
+        _hist(1, cost_net=D("669"), bruto=D("669")),
+        _hist(2, cost_net=D("632"), bruto=D("632")),
+        _hist(3, cost_net=D("650"), bruto=D("650")),
+        _hist(4, cost_net=D("2533"), bruto=D("2533")),
+    ]
+    exe = RecordingExecutor(history=hist)
+    report = run_cost_v2_backfill_dry_run(
+        args=_args(batch_size=10, sample_limit=10),
+        repository=CostV2BackfillRepository(exe),
+    )
+    out = next(s for s in report["samples"] if s["history_id"] == 4)
+    assert out["effective_quality_status"] == "missing_taxes_in_gross"
+    assert out["effective_quality_status"] != "suspicious_outlier"
+
+
+def test_32_normal_costs_not_outlier():
+    hist = [
+        _hist(1, cost_net=D("669"), bruto=D("669")),
+        _hist(2, cost_net=D("632"), bruto=D("632")),
+        _hist(3, cost_net=D("650"), bruto=D("650")),
+        _hist(4, cost_net=D("640"), bruto=D("640")),
+    ]
+    exe = RecordingExecutor(history=hist)
+    report = run_cost_v2_backfill_dry_run(
+        args=_args(batch_size=10, sample_limit=10),
+        repository=CostV2BackfillRepository(exe),
+    )
+    for s in report["samples"]:
+        assert "suspicious_outlier" not in s["warnings"]
+    assert report["warnings"]["suspicious_outlier"] == 0
+
+
+def test_33_outlier_batch_no_n_plus_1():
+    hist = [
+        _hist(i, cost_net=D("100") + Decimal(i), bruto=D("100") + Decimal(i))
+        for i in range(1, 8)
+    ]
+    hist.append(_hist(99, cost_net=D("5000"), bruto=D("5000")))
+    exe = RecordingExecutor(history=hist)
+    run_cost_v2_backfill_dry_run(
+        args=_args(batch_size=3, sample_limit=20),
+        repository=CostV2BackfillRepository(exe),
+    )
+    net_prefetch = [
+        s
+        for s in exe.sqls
+        if "h.cost_net" in s.lower() and "history_id" not in s.lower() and "COUNT(*)" not in s.upper()
+    ]
+    assert len(net_prefetch) == 1
+    # taxes fetched in batches, not per-row: at most a few tax queries
+    tax_sqls = [s for s in exe.sqls if "bsale.taxes" in s.lower()]
+    assert len(tax_sqls) <= 3
+
+
+def test_34_document_number_null_preserved():
+    exe = RecordingExecutor(history=[_hist(23190, document_number=None)])
+    report = run_cost_v2_backfill_dry_run(
+        args=_args(), repository=CostV2BackfillRepository(exe)
+    )
+    s = report["samples"][0]
+    assert s["document_number"] is None
+    assert "missing_document_number" not in s["warnings"]
 
 
 def test_executor_timeouts_set():

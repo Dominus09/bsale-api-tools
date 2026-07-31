@@ -60,7 +60,10 @@ CREATE TABLE IF NOT EXISTS analytics.cost_reception_calculated (
     gross_understatement_vs_corrected_pct NUMERIC(9, 4),
 
     -- Resolución (NOT NULL: sin contexto seguro → 'unresolved')
+    -- tax_context_source: LEGACY/DEPRECATED — preferir tax_ids_source + tax_rates_source.
     tax_context_source              TEXT NOT NULL DEFAULT 'unresolved',
+    tax_ids_source                  TEXT NOT NULL DEFAULT 'unresolved',
+    tax_rates_source                TEXT NOT NULL DEFAULT 'unresolved',
     tax_context_as_of               TIMESTAMPTZ,
     tax_context_is_historical       BOOLEAN,
     tax_context_fingerprint         TEXT,
@@ -108,6 +111,22 @@ CREATE TABLE IF NOT EXISTS analytics.cost_reception_calculated (
             'reception_payload',
             'historical_product_tax',
             'current_product_tax',
+            'bsale_taxes',
+            'canonical_fallback',
+            'unresolved'
+        )),
+
+    CONSTRAINT ck_cost_reception_calculated_tax_ids_source
+        CHECK (tax_ids_source IN (
+            'reception_payload',
+            'historical_product_tax',
+            'current_product_tax',
+            'unresolved'
+        )),
+
+    CONSTRAINT ck_cost_reception_calculated_tax_rates_source
+        CHECK (tax_rates_source IN (
+            'reception_payload',
             'bsale_taxes',
             'canonical_fallback',
             'unresolved'
@@ -167,6 +186,8 @@ SELECT
     c.tax_rate_on_net_pct,
     c.gross_understatement_vs_corrected_pct,
     c.tax_context_source,
+    c.tax_ids_source,
+    c.tax_rates_source,
     c.tax_context_as_of,
     c.tax_context_is_historical,
     c.tax_context_fingerprint,
@@ -233,10 +254,20 @@ COMMENT ON COLUMN analytics.cost_reception_calculated.corrected_gross_cost IS
     'NULL = cálculo no seguro (perfil unresolved / incomplete).';
 
 COMMENT ON COLUMN analytics.cost_reception_calculated.tax_context_source IS
+    'LEGACY/DEPRECATED. Preferir tax_ids_source + tax_rates_source. Conservado por compatibilidad. '
     'NOT NULL DEFAULT unresolved. current_product_tax NO implica vigencia histórica en admission_date.';
 
+COMMENT ON COLUMN analytics.cost_reception_calculated.tax_ids_source IS
+    'Origen de los tax_ids: reception_payload | historical_product_tax | current_product_tax | unresolved. '
+    'Ortogonal a tax_rates_source (Etapa D: products.tax_ids_json → current_product_tax).';
+
+COMMENT ON COLUMN analytics.cost_reception_calculated.tax_rates_source IS
+    'Origen de las tasas: reception_payload | bsale_taxes | canonical_fallback | unresolved. '
+    'Ortogonal a tax_ids_source (Etapa D: bsale.taxes → bsale_taxes).';
+
 COMMENT ON COLUMN analytics.cost_reception_calculated.tax_context_fingerprint IS
-    'SHA-256 del contexto tributario (ids ordenados + tasas + fuentes). Independiente del orden de tax_ids.';
+    'SHA-256 del contexto tributario (ids ordenados + tasas + tax_ids_source + tax_rates_source + fuentes). '
+    'Independiente del orden de tax_ids.';
 
 COMMENT ON COLUMN analytics.cost_reception_calculated.tax_resolution_quality IS
     'NOT NULL DEFAULT unresolved.';

@@ -56,6 +56,38 @@ ALLOWED_RESOLUTION_QUALITIES: frozenset[str] = frozenset(
     }
 )
 
+TaxIdsSource = Literal[
+    "reception_payload",
+    "historical_product_tax",
+    "current_product_tax",
+    "unresolved",
+]
+
+TaxRatesSource = Literal[
+    "reception_payload",
+    "bsale_taxes",
+    "canonical_fallback",
+    "unresolved",
+]
+
+ALLOWED_TAX_IDS_SOURCES: frozenset[str] = frozenset(
+    {
+        "reception_payload",
+        "historical_product_tax",
+        "current_product_tax",
+        "unresolved",
+    }
+)
+
+ALLOWED_TAX_RATES_SOURCES: frozenset[str] = frozenset(
+    {
+        "reception_payload",
+        "bsale_taxes",
+        "canonical_fallback",
+        "unresolved",
+    }
+)
+
 
 @dataclass(frozen=True, slots=True)
 class CostReceptionInput:
@@ -89,10 +121,13 @@ class TaxRateEntry:
 class TaxContextInput:
     tax_ids: tuple[int, ...]
     taxes: tuple[TaxRateEntry, ...]
+    # DEPRECATED: prefer tax_ids_source + tax_rates_source (compat temporal).
     context_source: TaxContextSource
     context_as_of: datetime | None
     context_is_historical: bool
     resolution_quality: TaxResolutionQuality
+    tax_ids_source: TaxIdsSource = "unresolved"
+    tax_rates_source: TaxRatesSource = "unresolved"
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,7 +179,10 @@ class CostReceptionCalculation:
     gross_difference_amount: Decimal | None
     tax_rate_on_net_pct: Decimal | None
     gross_understatement_vs_corrected_pct: Decimal | None
+    # DEPRECATED: prefer tax_ids_source + tax_rates_source (compat temporal).
     tax_context_source: str
+    tax_ids_source: str
+    tax_rates_source: str
     tax_context_as_of: datetime | None
     tax_context_is_historical: bool | None
     tax_resolution_quality: str

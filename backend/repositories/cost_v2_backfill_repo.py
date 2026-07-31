@@ -258,6 +258,55 @@ WHERE h.company_id = %s
             )
         return out
 
+    def fetch_variant_cost_nets(
+        self,
+        *,
+        company_id: int,
+        office_id: int | None,
+        date_from: date,
+        date_to: date,
+        variant_ids: list[int] | None = None,
+        history_id: int | None = None,
+        document_number: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Un solo SELECT: (variant_id, cost_net) del scope para mediana batch (sin N+1)."""
+        date_to_exclusive = date_to + timedelta(days=1)
+        sql = """
+SELECT
+    h.variant_id,
+    h.cost_net
+FROM analytics.cost_reception_history h
+WHERE h.company_id = %s
+  AND h.admission_date >= %s
+  AND h.admission_date < %s
+  AND h.cost_net IS NOT NULL
+  AND h.cost_net > 0
+""".strip()
+        params: list[Any] = [company_id, date_from, date_to_exclusive]
+        if office_id is not None:
+            sql += " AND h.office_id = %s"
+            params.append(office_id)
+        if history_id is not None:
+            sql += " AND h.id = %s"
+            params.append(history_id)
+        if document_number is not None:
+            sql += " AND (h.document_number = %s OR h.reception_id = %s)"
+            params.extend([document_number, document_number])
+        if variant_ids is not None:
+            if not variant_ids:
+                return []
+            sql += " AND h.variant_id = ANY(%s)"
+            params.append(list(variant_ids))
+
+        rows = self._execute(sql, tuple(params))
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            net = coerce_optional_decimal(row.get("cost_net"))
+            if net is None or net <= Decimal("0"):
+                continue
+            out.append({"variant_id": int(row["variant_id"]), "cost_net": net})
+        return out
+
     def fetch_taxes_for_ids(
         self,
         *,

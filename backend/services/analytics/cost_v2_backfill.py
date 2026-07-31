@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import time
-from collections import Counter
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from statistics import median
 from typing import Any
 
 from backend.repositories.cost_v2_backfill_repo import CostV2BackfillRepository
+from backend.services.analytics.cost_tax_resolution import TAX_ID_FALLBACK
 from backend.services.analytics.cost_v2_calculator import (
     CALCULATION_VERSION,
     build_tax_context_from_ids,
@@ -47,6 +49,24 @@ DEFAULT_BATCH_SIZE = 500
 MAX_SAMPLE_LIMIT = 100
 DEFAULT_SAMPLE_LIMIT = 20
 MAX_TIMEOUT = 30
+
+# Outlier (orquestador): mediana robusta por variant_id dentro del scope.
+OUTLIER_FACTOR = Decimal("3")
+MIN_OUTLIER_CANDIDATES = 3
+
+# Vocabulario de warnings del dry-run V2 (no inventar alerts nuevas aquí).
+# missing_document_number: NO está en este vocabulario todavía; document_number NULL
+# se preserva sin warning hasta que se defina formalmente.
+KNOWN_WARNINGS = frozenset(
+    {
+        "suspicious_outlier",
+        "tax_ids_not_consumed",
+        "variant_barcode_mismatch",
+        "source_conflict",
+        "reception_tax_context_unavailable",
+        "stored_components_rounding",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +144,44 @@ def _abs(value: Decimal) -> Decimal:
     return value if value >= ZERO else -value
 
 
+def build_variant_net_outlier_stats(
+    net_rows: list[dict[str, Any]],
+) -> dict[int, tuple[Decimal, int]]:
+    """Mediana y conteo de cost_net > 0 por variant_id (batch, sin N+1)."""
+    by_variant: dict[int, list[Decimal]] = defaultdict(list)
+    for row in net_rows:
+        vid = int(row["variant_id"])
+        net = row.get("cost_net")
+        if net is None:
+            continue
+        net_d = net if isinstance(net, Decimal) else Decimal(str(net))
+        if net_d > ZERO:
+            by_variant[vid].append(net_d)
+    out: dict[int, tuple[Decimal, int]] = {}
+    for vid, values in by_variant.items():
+        med = Decimal(str(median([float(v) for v in values])))
+        out[vid] = (med, len(values))
+    return out
+
+
+def is_suspicious_net_outlier(
+    cost_net: Decimal | None,
+    *,
+    variant_median: Decimal | None,
+    variant_count: int,
+    factor: Decimal = OUTLIER_FACTOR,
+    min_candidates: int = MIN_OUTLIER_CANDIDATES,
+) -> bool:
+    """Alerta externa: no corrige ni excluye; no cambia effective_quality_status."""
+    if cost_net is None or cost_net <= ZERO:
+        return False
+    if variant_median is None or variant_median <= ZERO:
+        return False
+    if variant_count < min_candidates:
+        return False
+    return cost_net > variant_median * factor
+
+
 def _sample_rank(
     calc: CostReceptionCalculation, meta: dict[str, Any]
 ) -> tuple[int, Decimal, int]:
@@ -164,6 +222,9 @@ def _sample_dict(calc: CostReceptionCalculation, meta: dict[str, Any]) -> dict[s
             calc.gross_understatement_vs_corrected_pct
         ),
         "tax_context_source": calc.tax_context_source,
+        "tax_ids_source": calc.tax_ids_source,
+        "tax_rates_source": calc.tax_rates_source,
+        "tax_context_is_historical": calc.tax_context_is_historical,
         "tax_resolution_quality": calc.tax_resolution_quality,
         "effective_quality_status": calc.effective_quality_status,
         "warnings": list(calc.warnings),
@@ -199,6 +260,18 @@ def run_cost_v2_backfill_dry_run(
         document_number=args.document_number,
     )
 
+    # Prefetch medians once (sin N+1 por fila).
+    net_rows = repository.fetch_variant_cost_nets(
+        company_id=args.company_id,
+        office_id=args.office_id,
+        date_from=args.date_from,
+        date_to=args.date_to,
+        variant_ids=variant_ids,
+        history_id=args.history_id,
+        document_number=args.document_number,
+    )
+    outlier_stats = build_variant_net_outlier_stats(net_rows)
+
     results_count = {k: 0 for k in QUALITY_KEYS}
     tax_res_count = {"current_catalog": 0, "canonical_fallback": 0, "unresolved": 0}
     warning_count = {
@@ -215,11 +288,6 @@ def run_cost_v2_backfill_dry_run(
     batches = 0
     processed = 0
     all_tax_ids: set[int] = set()
-
-    # Prefetch: first pass collect tax ids from batches, or resolve per batch
-    # To avoid N+1 we load taxes once after scanning all catalog ids from processed
-    # batches — but we need catalog during processing. Strategy: per batch collect
-    # ids, fetch taxes for missing ids only (cached).
     tax_catalog: dict[int, Any] = {}
 
     while True:
@@ -274,51 +342,34 @@ def run_cost_v2_backfill_dry_run(
                 source_history_created_at=row.get("created_at"),
             )
 
+            tax_ids_source = "current_product_tax" if catalog_ids else "unresolved"
             ctx = build_tax_context_from_ids(
                 list(catalog_ids),
                 tax_catalog=tax_catalog,
-                context_source="current_product_tax",
+                tax_ids_source=tax_ids_source,
                 context_is_historical=False,
                 cost_net=inp.stored_cost_net,
             )
-            # Etapa D: no afirmar histórico
-            if ctx.resolution_quality == "canonical_fallback":
-                pass
-            elif ctx.resolution_quality != "unresolved" and ctx.taxes:
-                # forzar etiqueta current_catalog cuando hay tasas de bsale.taxes o mix
-                from backend.services.analytics.cost_v2_models import TaxContextInput
-
-                quality = ctx.resolution_quality
-                source = ctx.context_source
-                if quality not in ("canonical_fallback", "unresolved"):
-                    quality = "current_catalog"
-                    source = (
-                        "bsale_taxes"
-                        if any(t.source == "bsale.taxes" for t in ctx.taxes)
-                        else "current_product_tax"
-                    )
-                ctx = TaxContextInput(
-                    tax_ids=ctx.tax_ids,
-                    taxes=ctx.taxes,
-                    context_source=source,  # type: ignore[arg-type]
-                    context_as_of=ctx.context_as_of,
-                    context_is_historical=False,
-                    resolution_quality=quality,  # type: ignore[arg-type]
-                )
 
             for tid in catalog_ids:
-                if tid not in tax_catalog and tid not in (1, 2, 3, 8):
-                    # puede resolverse por fallback solo 1,2,3,8
-                    from backend.services.analytics.cost_tax_resolution import (
-                        TAX_ID_FALLBACK,
-                    )
+                if tid not in tax_catalog and tid not in TAX_ID_FALLBACK:
+                    unknown_tax_ids.add(tid)
 
-                    if tid not in TAX_ID_FALLBACK:
-                        unknown_tax_ids.add(tid)
+            external_warnings: list[str] = []
+            stats = outlier_stats.get(int(row["variant_id"]))
+            if stats is not None:
+                med, count = stats
+                if is_suspicious_net_outlier(
+                    inp.stored_cost_net,
+                    variant_median=med,
+                    variant_count=count,
+                ):
+                    external_warnings.append("suspicious_outlier")
 
             calc = calculate_cost_reception(
                 inp,
                 ctx,
+                external_warnings=external_warnings,
                 calculation_version=args.calculation_version,
             )
             processed += 1
@@ -401,6 +452,9 @@ def run_cost_v2_backfill_dry_run(
             **tax_res_count,
             "unknown_tax_ids": sorted(unknown_tax_ids),
             "note": (
+                "tax_ids_source (p.ej. current_product_tax) es ortogonal a "
+                "tax_rates_source (bsale_taxes | canonical_fallback). "
+                "tax_context_source es legacy/deprecado. "
                 "context_is_historical=false; current_catalog no implica "
                 "impuesto vigente en admission_date"
             ),
@@ -424,5 +478,15 @@ def run_cost_v2_backfill_dry_run(
             "No se consulta bsale.variant_cost",
             "reception_tax_ids vacío (sin evidencia de payload de línea)",
             "No se usa products.taxes[0] ni split_erp_cost",
+            "tax_context_source es legacy; preferir tax_ids_source + tax_rates_source",
+            (
+                "document_number NULL se preserva; missing_document_number "
+                "aún no forma parte del vocabulario de warnings V2"
+            ),
+            (
+                f"outlier: mediana de cost_net por variant_id en el scope; "
+                f"factor={OUTLIER_FACTOR}, min_n={MIN_OUTLIER_CANDIDATES}; "
+                "solo warning suspicious_outlier"
+            ),
         ],
     }
