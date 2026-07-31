@@ -290,6 +290,111 @@ WHERE h.company_id = %s
             "max_admission_date": max_d.isoformat() if max_d else None,
         }
 
+    def fetch_population_scope_stats(
+        self,
+        *,
+        company_id: int,
+        office_id: int,
+        date_from: date,
+        date_to: date,
+    ) -> dict[str, Any]:
+        """Conteo + bounds + unicidad de history_id (sin OFFSET / sin cargar filas)."""
+        date_to_exclusive = date_to + timedelta(days=1)
+        rows = self._execute(
+            """
+SELECT
+    COUNT(*)::bigint AS rows_found,
+    COUNT(DISTINCT h.id)::bigint AS unique_history_ids,
+    COUNT(DISTINCT h.variant_id)::bigint AS unique_variants,
+    MIN(h.id)::bigint AS min_history_id,
+    MAX(h.id)::bigint AS max_history_id
+FROM analytics.cost_reception_history h
+WHERE h.company_id = %s
+  AND h.office_id = %s
+  AND h.admission_date >= %s
+  AND h.admission_date < %s
+""".strip(),
+            (int(company_id), int(office_id), date_from, date_to_exclusive),
+        )
+        row = rows[0] if rows else {}
+        return {
+            "rows_found": int(row.get("rows_found") or 0),
+            "unique_history_ids": int(row.get("unique_history_ids") or 0),
+            "unique_variants": int(row.get("unique_variants") or 0),
+            "min_history_id": (
+                int(row["min_history_id"])
+                if row.get("min_history_id") is not None
+                else None
+            ),
+            "max_history_id": (
+                int(row["max_history_id"])
+                if row.get("max_history_id") is not None
+                else None
+            ),
+        }
+
+    def count_calculated_for_scope(
+        self,
+        *,
+        company_id: int,
+        office_id: int,
+        date_from: date,
+        date_to: date,
+        calculation_version: str,
+    ) -> int:
+        date_to_exclusive = date_to + timedelta(days=1)
+        rows = self._execute(
+            """
+SELECT COUNT(*)::bigint AS n
+FROM analytics.cost_reception_calculated c
+JOIN analytics.cost_reception_history h ON h.id = c.history_id
+WHERE c.calculation_version = %s
+  AND h.company_id = %s
+  AND h.office_id = %s
+  AND h.admission_date >= %s
+  AND h.admission_date < %s
+""".strip(),
+            (
+                str(calculation_version),
+                int(company_id),
+                int(office_id),
+                date_from,
+                date_to_exclusive,
+            ),
+        )
+        return int(rows[0]["n"]) if rows else 0
+
+    def count_latest_for_scope(
+        self,
+        *,
+        company_id: int,
+        office_id: int,
+        date_from: date,
+        date_to: date,
+        calculation_version: str,
+    ) -> int:
+        date_to_exclusive = date_to + timedelta(days=1)
+        rows = self._execute(
+            """
+SELECT COUNT(*)::bigint AS n
+FROM analytics.v_cost_reception_calculated_latest l
+JOIN analytics.cost_reception_history h ON h.id = l.history_id
+WHERE l.calculation_version = %s
+  AND h.company_id = %s
+  AND h.office_id = %s
+  AND h.admission_date >= %s
+  AND h.admission_date < %s
+""".strip(),
+            (
+                str(calculation_version),
+                int(company_id),
+                int(office_id),
+                date_from,
+                date_to_exclusive,
+            ),
+        )
+        return int(rows[0]["n"]) if rows else 0
+
     def fetch_history_batch(
         self,
         *,

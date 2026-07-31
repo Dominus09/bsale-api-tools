@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from unittest.mock import patch
@@ -135,14 +135,38 @@ class PersistFake:
         if "FROM BSALE.TAXES" in upper or "from bsale.taxes" in sql.lower():
             return list(self.taxes)
         if "COUNT(*)" in upper and "COST_RECEPTION_CALCULATED" in upper:
+            if "JOIN analytics.cost_reception_history" in sql.lower() or (
+                "JOIN ANALYTICS.COST_RECEPTION_HISTORY" in upper
+            ):
+                # count_calculated_for_scope / similar
+                n = len(self.calculated)
+                return [{"n": n}]
             hid = int(params[0]) if params else None
             n = sum(1 for k in self.calculated if k[0] == hid)
             return [{"n": n}]
+        if "V_COST_RECEPTION_CALCULATED_LATEST" in upper and "COUNT(*)" in upper:
+            # latest por scope: una fila por history_id
+            hids = {k[0] for k in self.calculated}
+            return [{"n": len(hids)}]
         if "COUNT(*)" in upper and "COST_RECEPTION_HISTORY" in upper:
             rows = list(self.history)
             for p in params:
                 if isinstance(p, list) and p and all(isinstance(x, int) for x in p):
                     rows = [r for r in rows if int(r["variant_id"]) in set(p)]
+            if "UNIQUE_HISTORY_IDS" in upper or "min_history_id" in sql.lower():
+                return [
+                    {
+                        "rows_found": len(rows),
+                        "unique_history_ids": len({int(r["history_id"]) for r in rows}),
+                        "unique_variants": len({r["variant_id"] for r in rows}),
+                        "min_history_id": min(int(r["history_id"]) for r in rows)
+                        if rows
+                        else None,
+                        "max_history_id": max(int(r["history_id"]) for r in rows)
+                        if rows
+                        else None,
+                    }
+                ]
             if "h.id =" in sql.lower() or " AND h.id = %s" in sql:
                 for p in params:
                     if isinstance(p, int) and any(
@@ -223,7 +247,7 @@ class PersistFake:
             key = (history_id, version)
             was_inserted = key not in self.calculated
             self._clock += 1
-            now = datetime(2026, 7, 31, 12, 0, self._clock)
+            now = datetime(2026, 7, 31, 12, 0, 0) + timedelta(seconds=self._clock)
 
             row = {
                 "history_id": history_id,

@@ -1,4 +1,4 @@
-"""Job Costos V2: dry-run, apply canario 1 fila, o apply-scope lote acotado.
+"""Job Costos V2: dry-run, canarios y backfill reanudable por lotes.
 
 Dry-run::
 
@@ -22,7 +22,15 @@ Apply scope (lote confirmado, máx. 100)::
       --barcode 7803473005960 \\
       --apply --apply-scope --confirm-row-count 14 --max-apply-rows 100
 
-No backfill masivo. No ejecutar apply desde Cursor contra producción.
+Apply backfill (piloto 1 lote)::
+
+    python -m backend.jobs.backfill_cost_reception_calculated \\
+      --company-id 3 --office-id 3 \\
+      --date-from 2026-03-25 --date-to 2026-06-22 \\
+      --apply --apply-backfill --confirm-total-rows 7188 \\
+      --commit-batch-size 250 --max-batches 1
+
+No ejecutar apply desde Cursor contra producción.
 """
 
 from __future__ import annotations
@@ -38,6 +46,7 @@ from backend.db import get_connection
 from backend.repositories.cost_v2_backfill_repo import CostV2BackfillRepository
 from backend.services.analytics.cost_v2_backfill import (
     clamp_backfill_args,
+    run_cost_v2_backfill_apply,
     run_cost_v2_backfill_dry_run,
     run_cost_v2_canary_apply,
     run_cost_v2_scope_apply,
@@ -61,7 +70,7 @@ def _parse_date(value: str) -> date:
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Backfill Costos V2: dry-run / apply canario / apply-scope"
+        description="Backfill Costos V2: dry-run / canario / scope / backfill por lotes"
     )
     p.add_argument("--company-id", type=int, required=True)
     p.add_argument("--office-id", type=int, default=None)
@@ -70,8 +79,13 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", default=False)
     p.add_argument("--apply", action="store_true", default=False)
     p.add_argument("--apply-scope", action="store_true", default=False)
+    p.add_argument("--apply-backfill", action="store_true", default=False)
     p.add_argument("--confirm-row-count", type=int, default=None)
+    p.add_argument("--confirm-total-rows", type=int, default=None)
     p.add_argument("--max-apply-rows", type=int, default=100)
+    p.add_argument("--commit-batch-size", type=int, default=250)
+    p.add_argument("--start-after-history-id", type=int, default=0)
+    p.add_argument("--max-batches", type=int, default=None)
     p.add_argument("--batch-size", type=int, default=500)
     p.add_argument("--sample-limit", type=int, default=20)
     p.add_argument("--statement-timeout-seconds", type=int, default=20)
@@ -82,6 +96,16 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--barcode", type=str, default=None)
     p.add_argument("--document-number", type=int, default=None)
     return p
+
+
+def _mode_from_ns(ns: argparse.Namespace) -> str:
+    if ns.apply and ns.apply_backfill:
+        return "apply-backfill"
+    if ns.apply and ns.apply_scope:
+        return "apply-scope-canary"
+    if ns.apply:
+        return "apply-canary"
+    return "dry-run"
 
 
 def run_job(argv: list[str] | None = None) -> tuple[int, dict[str, Any]]:
@@ -120,17 +144,17 @@ def run_job(argv: list[str] | None = None) -> tuple[int, dict[str, Any]]:
             apply_scope=bool(ns.apply_scope),
             confirm_row_count=ns.confirm_row_count,
             max_apply_rows=ns.max_apply_rows,
+            apply_backfill=bool(ns.apply_backfill),
+            confirm_total_rows=ns.confirm_total_rows,
+            commit_batch_size=ns.commit_batch_size,
+            start_after_history_id=ns.start_after_history_id,
+            max_batches=ns.max_batches,
         )
     except AnalyticsValidationError as exc:
-        mode = "rejected"
-        if ns.apply and ns.apply_scope:
-            mode = "apply-scope-canary"
-        elif ns.apply:
-            mode = "apply-canary"
         return 1, {
             "ok": False,
             "committed": False,
-            "mode": mode,
+            "mode": _mode_from_ns(ns),
             "error_type": exc.error_type,
             "error": str(exc),
             "details": getattr(exc, "details", {}) or {},
@@ -148,6 +172,20 @@ def run_job(argv: list[str] | None = None) -> tuple[int, dict[str, Any]]:
                 sql_log=[],
             )
             repo = CostV2BackfillRepository(executor=rw, write_executor=rw)
+
+            def _emit(event: dict[str, Any]) -> None:
+                print(json.dumps(event, ensure_ascii=False, default=str), flush=True)
+
+            if args.apply_backfill:
+                report = run_cost_v2_backfill_apply(
+                    args=args,
+                    repository=repo,
+                    commit_fn=conn.commit,
+                    rollback_fn=conn.rollback,
+                    emit_fn=_emit,
+                )
+                code = 0 if report.get("ok") else 1
+                return code, report
             if args.apply_scope:
                 report = run_cost_v2_scope_apply(
                     args=args,
@@ -155,13 +193,13 @@ def run_job(argv: list[str] | None = None) -> tuple[int, dict[str, Any]]:
                     commit_fn=conn.commit,
                     rollback_fn=conn.rollback,
                 )
-            else:
-                report = run_cost_v2_canary_apply(
-                    args=args,
-                    repository=repo,
-                    commit_fn=conn.commit,
-                    rollback_fn=conn.rollback,
-                )
+                return 0, report
+            report = run_cost_v2_canary_apply(
+                args=args,
+                repository=repo,
+                commit_fn=conn.commit,
+                rollback_fn=conn.rollback,
+            )
             return 0, report
 
         conn = open_readonly_connection(get_connection)
@@ -181,9 +219,13 @@ def run_job(argv: list[str] | None = None) -> tuple[int, dict[str, Any]]:
             except Exception:
                 logger.exception("rollback_failed")
         mode = (
-            "apply-scope-canary"
-            if args.apply_scope
-            else ("apply-canary" if args.apply else "dry-run")
+            "apply-backfill"
+            if args.apply_backfill
+            else (
+                "apply-scope-canary"
+                if args.apply_scope
+                else ("apply-canary" if args.apply else "dry-run")
+            )
         )
         return 1, {
             "ok": False,
@@ -209,9 +251,13 @@ def run_job(argv: list[str] | None = None) -> tuple[int, dict[str, Any]]:
         elif "does not exist" in msg or "undefinedcolumn" in msg.replace(" ", ""):
             error_type = "schema_mismatch"
         mode = (
-            "apply-scope-canary"
-            if args.apply_scope
-            else ("apply-canary" if args.apply else "dry-run")
+            "apply-backfill"
+            if args.apply_backfill
+            else (
+                "apply-scope-canary"
+                if args.apply_scope
+                else ("apply-canary" if args.apply else "dry-run")
+            )
         )
         return 1, {
             "ok": False,

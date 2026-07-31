@@ -57,6 +57,8 @@ DEFAULT_SAMPLE_LIMIT = 20
 MAX_TIMEOUT = 30
 MAX_APPLY_ROWS_CAP = 100
 DEFAULT_MAX_APPLY_ROWS = 100
+DEFAULT_COMMIT_BATCH_SIZE = 250
+MAX_COMMIT_BATCH_SIZE = 500
 
 # Outlier (orquestador): mediana robusta por variant_id dentro del scope.
 OUTLIER_FACTOR = Decimal("3")
@@ -97,6 +99,11 @@ class CostV2BackfillArgs:
     apply_scope: bool = False
     confirm_row_count: int | None = None
     max_apply_rows: int = DEFAULT_MAX_APPLY_ROWS
+    apply_backfill: bool = False
+    confirm_total_rows: int | None = None
+    commit_batch_size: int = DEFAULT_COMMIT_BATCH_SIZE
+    start_after_history_id: int = 0
+    max_batches: int | None = None
 
 
 def clamp_backfill_args(
@@ -119,6 +126,11 @@ def clamp_backfill_args(
     apply_scope: bool = False,
     confirm_row_count: int | None = None,
     max_apply_rows: int = DEFAULT_MAX_APPLY_ROWS,
+    apply_backfill: bool = False,
+    confirm_total_rows: int | None = None,
+    commit_batch_size: int = DEFAULT_COMMIT_BATCH_SIZE,
+    start_after_history_id: int = 0,
+    max_batches: int | None = None,
 ) -> CostV2BackfillArgs:
     if int(company_id) <= 0:
         raise AnalyticsValidationError(
@@ -141,10 +153,101 @@ def clamp_backfill_args(
             error_type="apply_dry_run_conflict",
         )
 
+    if apply_backfill and not apply:
+        raise AnalyticsValidationError(
+            "--apply-backfill requiere --apply",
+            error_type="apply_backfill_requires_apply",
+        )
+
     if apply_scope and not apply:
         raise AnalyticsValidationError(
             "--apply-scope requiere --apply",
             error_type="apply_scope_requires_apply",
+        )
+
+    if apply_backfill and apply_scope:
+        raise AnalyticsValidationError(
+            "Apply backfill no puede combinarse con --apply-scope",
+            error_type="apply_backfill_scope_conflict",
+        )
+
+    if apply and apply_backfill:
+        if office_id is None:
+            raise AnalyticsValidationError(
+                "Apply backfill requiere --office-id",
+                error_type="apply_backfill_office_required",
+            )
+        if (
+            history_id is not None
+            or confirm_history_id is not None
+            or (barcode and str(barcode).strip())
+            or variant_id is not None
+            or document_number is not None
+        ):
+            raise AnalyticsValidationError(
+                "Apply backfill no permite --history-id, --barcode, --variant-id ni --document-number",
+                error_type="apply_backfill_filters_forbidden",
+            )
+        if confirm_total_rows is None:
+            raise AnalyticsValidationError(
+                "Apply backfill requiere --confirm-total-rows",
+                error_type="apply_backfill_confirm_required",
+            )
+        if int(confirm_total_rows) <= 0:
+            raise AnalyticsValidationError(
+                "confirm-total-rows debe ser > 0",
+                error_type="apply_backfill_confirm_invalid",
+            )
+        cbs = int(commit_batch_size)
+        if cbs <= 0:
+            raise AnalyticsValidationError(
+                "commit-batch-size debe ser > 0",
+                error_type="apply_backfill_batch_size",
+            )
+        if cbs > MAX_COMMIT_BATCH_SIZE:
+            raise AnalyticsValidationError(
+                "commit-batch-size no puede superar 500",
+                error_type="apply_backfill_batch_size",
+                details={"commit_batch_size": cbs, "cap": MAX_COMMIT_BATCH_SIZE},
+            )
+        start_after = int(start_after_history_id or 0)
+        if start_after < 0:
+            raise AnalyticsValidationError(
+                "start-after-history-id debe ser >= 0",
+                error_type="apply_backfill_start_after",
+            )
+        mb = None if max_batches is None else int(max_batches)
+        if mb is not None and mb <= 0:
+            raise AnalyticsValidationError(
+                "max-batches debe ser > 0 cuando se informa",
+                error_type="apply_backfill_max_batches",
+            )
+        return CostV2BackfillArgs(
+            company_id=int(company_id),
+            office_id=int(office_id),
+            date_from=date_from,
+            date_to=date_to,
+            dry_run=False,
+            batch_size=max(1, min(int(batch_size), MAX_BATCH_SIZE)),
+            sample_limit=max(1, min(int(sample_limit), MAX_SAMPLE_LIMIT)),
+            statement_timeout_seconds=max(
+                1, min(int(statement_timeout_seconds), MAX_TIMEOUT)
+            ),
+            calculation_version=version,
+            history_id=None,
+            variant_id=None,
+            barcode=None,
+            document_number=None,
+            apply=True,
+            confirm_history_id=None,
+            apply_scope=False,
+            confirm_row_count=None,
+            max_apply_rows=DEFAULT_MAX_APPLY_ROWS,
+            apply_backfill=True,
+            confirm_total_rows=int(confirm_total_rows),
+            commit_batch_size=cbs,
+            start_after_history_id=start_after,
+            max_batches=mb,
         )
 
     if apply and apply_scope:
@@ -1389,3 +1492,461 @@ def run_cost_v2_scope_apply(
         except Exception:
             pass
         raise
+
+
+def _empty_quality_counts() -> dict[str, int]:
+    return {k: 0 for k in QUALITY_KEYS}
+
+
+def _accumulate_calc_results(
+    calc: CostReceptionCalculation,
+    *,
+    results_count: dict[str, int],
+    warning_count: dict[str, int],
+) -> None:
+    if calc.effective_quality_status in results_count:
+        results_count[calc.effective_quality_status] += 1
+    for w in calc.warnings:
+        warning_count[w] += 1
+
+
+def _stream_expected_status_counts(
+    *,
+    repository: CostV2BackfillRepository,
+    args: CostV2BackfillArgs,
+) -> dict[str, Any]:
+    """Calcula estados esperados por keyset sin retener todo el scope en memoria."""
+    results_count = _empty_quality_counts()
+    warning_count: dict[str, int] = defaultdict(int)
+    after_id = 0
+    page = max(1, min(int(args.commit_batch_size), MAX_COMMIT_BATCH_SIZE))
+    while True:
+        batch = repository.fetch_history_batch(
+            company_id=args.company_id,
+            office_id=args.office_id,
+            date_from=args.date_from,
+            date_to=args.date_to,
+            after_id=after_id,
+            batch_size=page,
+        )
+        if not batch:
+            break
+        variant_ids = sorted({int(r["variant_id"]) for r in batch})
+        outlier_stats = build_variant_net_outlier_stats(
+            repository.fetch_outlier_baseline_cost_nets(
+                company_id=args.company_id,
+                office_id=args.office_id,
+                variant_ids=variant_ids,
+            )
+        )
+        all_tax_ids: list[int] = []
+        for r in batch:
+            all_tax_ids.extend(r.get("catalog_tax_ids") or [])
+        tax_catalog = repository.fetch_taxes_for_ids(
+            company_id=args.company_id, tax_ids=all_tax_ids
+        )
+        for r in batch:
+            calc = _calculate_single_row(
+                row=r,
+                tax_catalog=tax_catalog,
+                outlier_stats=outlier_stats,
+                calculation_version=args.calculation_version,
+            )
+            _accumulate_calc_results(
+                calc, results_count=results_count, warning_count=warning_count
+            )
+        after_id = int(batch[-1]["history_id"])
+        if len(batch) < page:
+            break
+    return {**results_count, "warnings": dict(warning_count)}
+
+
+def _process_backfill_batch(
+    *,
+    repository: CostV2BackfillRepository,
+    args: CostV2BackfillArgs,
+    rows: list[dict[str, Any]],
+    transaction_batch_id: str,
+) -> tuple[dict[str, int], list[CostReceptionCalculation]]:
+    """Calcula, valida, persiste y verifica un lote. Sin commit."""
+    variant_ids = sorted({int(r["variant_id"]) for r in rows})
+    outlier_stats = build_variant_net_outlier_stats(
+        repository.fetch_outlier_baseline_cost_nets(
+            company_id=args.company_id,
+            office_id=args.office_id,
+            variant_ids=variant_ids,
+        )
+    )
+    all_tax_ids: list[int] = []
+    for r in rows:
+        all_tax_ids.extend(r.get("catalog_tax_ids") or [])
+    tax_catalog = repository.fetch_taxes_for_ids(
+        company_id=args.company_id, tax_ids=all_tax_ids
+    )
+
+    calcs: list[CostReceptionCalculation] = []
+    for r in rows:
+        calc = _calculate_single_row(
+            row=r,
+            tax_catalog=tax_catalog,
+            outlier_stats=outlier_stats,
+            calculation_version=args.calculation_version,
+        )
+        validate_calculation_before_persist(calc)
+        calcs.append(calc)
+
+    persistence = {"inserted": 0, "updated": 0, "unchanged": 0}
+    prior_meta: dict[int, dict[str, Any]] = {}
+    expect_batch_by_hid: dict[int, str] = {}
+
+    for calc in calcs:
+        existing = repository.get_existing_calculation(
+            history_id=calc.history_id,
+            calculation_version=calc.calculation_version,
+        )
+        if existing is not None and _fingerprints_unchanged(existing, calc):
+            persistence["unchanged"] += 1
+            prior_meta[calc.history_id] = {
+                "calculation_batch_id": str(existing.get("calculation_batch_id")),
+                "calculated_at": existing.get("calculated_at"),
+            }
+            expect_batch_by_hid[calc.history_id] = str(
+                existing.get("calculation_batch_id")
+            )
+        elif existing is None:
+            repository.persist_calculation(
+                calc=calc, calculation_batch_id=transaction_batch_id
+            )
+            persistence["inserted"] += 1
+            expect_batch_by_hid[calc.history_id] = transaction_batch_id
+        else:
+            repository.persist_calculation(
+                calc=calc, calculation_batch_id=transaction_batch_id
+            )
+            persistence["updated"] += 1
+            expect_batch_by_hid[calc.history_id] = transaction_batch_id
+
+    for calc in calcs:
+        readback = repository.read_calculation(
+            history_id=calc.history_id,
+            calculation_version=calc.calculation_version,
+        )
+        if readback is None:
+            raise AnalyticsValidationError(
+                "readback tabla vacío tras persistencia",
+                error_type="readback_mismatch",
+            )
+        if calc.history_id in prior_meta:
+            meta = prior_meta[calc.history_id]
+            if str(readback.get("calculation_batch_id")) != meta["calculation_batch_id"]:
+                raise AnalyticsValidationError(
+                    "unchanged alteró calculation_batch_id",
+                    error_type="readback_mismatch",
+                )
+            if readback.get("calculated_at") != meta["calculated_at"]:
+                raise AnalyticsValidationError(
+                    "unchanged alteró calculated_at",
+                    error_type="readback_mismatch",
+                )
+        _assert_readback_matches(
+            calc,
+            readback,
+            expect_batch_id=expect_batch_by_hid[calc.history_id],
+        )
+        latest_rows = repository.read_latest_view(history_id=calc.history_id)
+        if len(latest_rows) != 1:
+            raise AnalyticsValidationError(
+                "latest view no devolvió exactamente 1 fila",
+                error_type="latest_view_mismatch",
+            )
+        _assert_readback_matches(
+            calc,
+            latest_rows[0],
+            expect_batch_id=expect_batch_by_hid[calc.history_id],
+        )
+        _verify_source_fp(repository, calc)
+
+    if sum(persistence.values()) != len(calcs):
+        raise AnalyticsValidationError(
+            "persistence counters != rows_processed",
+            error_type="invariant_violation",
+        )
+    return persistence, calcs
+
+
+def run_cost_v2_backfill_apply(
+    *,
+    args: CostV2BackfillArgs,
+    repository: CostV2BackfillRepository,
+    commit_fn: Any,
+    rollback_fn: Any,
+    emit_fn: Any | None = None,
+) -> dict[str, Any]:
+    """Backfill V2 reanudable por lotes controlados (commit por lote)."""
+    if not args.apply or not args.apply_backfill or args.dry_run:
+        raise AnalyticsValidationError(
+            "run_cost_v2_backfill_apply requiere apply-backfill",
+            error_type="invalid_args",
+        )
+
+    run_batch_id = str(uuid.uuid4())
+    last_committed_history_id = int(args.start_after_history_id)
+    batches_committed = 0
+    rows_processed = 0
+    persistence_total = {"inserted": 0, "updated": 0, "unchanged": 0}
+    results_count = _empty_quality_counts()
+    warning_count: dict[str, int] = defaultdict(int)
+    batch_events: list[dict[str, Any]] = []
+    all_batches_verified = True
+
+    def _emit(event: dict[str, Any]) -> None:
+        batch_events.append(event)
+        if emit_fn is not None:
+            emit_fn(event)
+
+    if not repository.calculated_table_exists():
+        raise AnalyticsValidationError(
+            "Tabla analytics.cost_reception_calculated no existe",
+            error_type="destination_table_missing",
+        )
+    if not repository.calculated_latest_view_exists():
+        raise AnalyticsValidationError(
+            "Vista analytics.v_cost_reception_calculated_latest no existe",
+            error_type="destination_view_missing",
+        )
+
+    scope_stats = repository.fetch_population_scope_stats(
+        company_id=args.company_id,
+        office_id=int(args.office_id),  # type: ignore[arg-type]
+        date_from=args.date_from,
+        date_to=args.date_to,
+    )
+    rows_found = int(scope_stats["rows_found"])
+    if rows_found != int(args.confirm_total_rows or -1):
+        raise AnalyticsValidationError(
+            "Cantidad real no coincide con --confirm-total-rows",
+            error_type="apply_backfill_row_count",
+            details={
+                "rows_found": rows_found,
+                "confirm_total_rows": args.confirm_total_rows,
+            },
+        )
+    if int(scope_stats["unique_history_ids"]) != rows_found:
+        raise AnalyticsValidationError(
+            "history_id duplicados en el scope",
+            error_type="apply_backfill_duplicate_history",
+            details=scope_stats,
+        )
+
+    expected_results = _stream_expected_status_counts(
+        repository=repository, args=args
+    )
+
+    cursor = int(args.start_after_history_id)
+    commit_size = int(args.commit_batch_size)
+
+    while True:
+        if args.max_batches is not None and batches_committed >= int(args.max_batches):
+            break
+
+        batch_number = batches_committed + 1
+        transaction_batch_id = str(uuid.uuid4())
+        t0 = time.perf_counter()
+
+        try:
+            rows = repository.fetch_history_batch(
+                company_id=args.company_id,
+                office_id=args.office_id,
+                date_from=args.date_from,
+                date_to=args.date_to,
+                after_id=cursor,
+                batch_size=commit_size,
+            )
+            if not rows:
+                break
+
+            persistence, calcs = _process_backfill_batch(
+                repository=repository,
+                args=args,
+                rows=rows,
+                transaction_batch_id=transaction_batch_id,
+            )
+            for calc in calcs:
+                _accumulate_calc_results(
+                    calc,
+                    results_count=results_count,
+                    warning_count=warning_count,
+                )
+
+            commit_fn()
+            first_hid = int(rows[0]["history_id"])
+            last_hid = int(rows[-1]["history_id"])
+            cursor = last_hid
+            last_committed_history_id = last_hid
+            batches_committed += 1
+            rows_processed += len(rows)
+            for k in persistence_total:
+                persistence_total[k] += persistence[k]
+
+            duration_ms = int((time.perf_counter() - t0) * 1000)
+            _emit(
+                {
+                    "event": "batch_committed",
+                    "batch_number": batch_number,
+                    "transaction_batch_id": transaction_batch_id,
+                    "run_batch_id": run_batch_id,
+                    "first_history_id": first_hid,
+                    "last_history_id": last_hid,
+                    "rows_processed": len(rows),
+                    "inserted": persistence["inserted"],
+                    "updated": persistence["updated"],
+                    "unchanged": persistence["unchanged"],
+                    "duration_ms": duration_ms,
+                }
+            )
+
+            if len(rows) < commit_size:
+                break
+        except Exception as exc:
+            try:
+                rollback_fn()
+            except Exception:
+                pass
+            all_batches_verified = False
+            return {
+                "ok": False,
+                "mode": "apply-backfill",
+                "committed": False,
+                "partial": batches_committed > 0,
+                "failed_batch": batch_number,
+                "last_committed_history_id": last_committed_history_id,
+                "resume_after_history_id": last_committed_history_id,
+                "run_batch_id": run_batch_id,
+                "error": str(exc),
+                "error_type": getattr(exc, "error_type", type(exc).__name__),
+                "checkpoint": {
+                    "last_committed_history_id": last_committed_history_id,
+                    "batches_committed": batches_committed,
+                },
+                "persistence": dict(persistence_total),
+                "scope": {
+                    "company_id": args.company_id,
+                    "office_id": args.office_id,
+                    "rows_found": rows_found,
+                    "rows_processed": rows_processed,
+                },
+                "batches": batch_events,
+            }
+
+    remaining = repository.fetch_history_batch(
+        company_id=args.company_id,
+        office_id=args.office_id,
+        date_from=args.date_from,
+        date_to=args.date_to,
+        after_id=cursor,
+        batch_size=1,
+    )
+    partial = bool(remaining)
+    verification = {
+        "all_batches_verified": all_batches_verified and batches_committed > 0,
+        "population_matches": True,
+        "status_sum_matches": sum(results_count.values()) == rows_processed,
+        "table_count_ok": True,
+        "latest_count_ok": True,
+        "no_duplicates": True,
+    }
+
+    # Verificación final solo cuando no quedan filas del scope por keyset
+    if not remaining:
+        table_n = repository.count_calculated_for_scope(
+            company_id=args.company_id,
+            office_id=int(args.office_id),  # type: ignore[arg-type]
+            date_from=args.date_from,
+            date_to=args.date_to,
+            calculation_version=args.calculation_version,
+        )
+        latest_n = repository.count_latest_for_scope(
+            company_id=args.company_id,
+            office_id=int(args.office_id),  # type: ignore[arg-type]
+            date_from=args.date_from,
+            date_to=args.date_to,
+            calculation_version=args.calculation_version,
+        )
+        # Scope completo persistido (esta corrida o corridas previas + esta)
+        scope_complete = table_n == rows_found and latest_n == rows_found
+        verification["table_count_ok"] = table_n == rows_found
+        verification["latest_count_ok"] = latest_n == rows_found
+        verification["population_matches"] = scope_complete
+        if int(args.start_after_history_id) == 0:
+            verification["status_sum_matches"] = (
+                sum(results_count.values()) == rows_found
+            )
+        if scope_complete and int(args.start_after_history_id) == 0:
+            if (
+                not verification["population_matches"]
+                or not verification["status_sum_matches"]
+            ):
+                return {
+                    "ok": False,
+                    "mode": "apply-backfill",
+                    "committed": True,
+                    "partial": False,
+                    "run_batch_id": run_batch_id,
+                    "scope": {
+                        "company_id": args.company_id,
+                        "office_id": args.office_id,
+                        "date_from": args.date_from.isoformat(),
+                        "date_to": args.date_to.isoformat(),
+                        "rows_found": rows_found,
+                        "rows_processed": rows_processed,
+                        "min_history_id": scope_stats["min_history_id"],
+                        "max_history_id": scope_stats["max_history_id"],
+                        "unique_variants": scope_stats["unique_variants"],
+                    },
+                    "persistence": dict(persistence_total),
+                    "results": {**results_count, "warnings": dict(warning_count)},
+                    "expected_results": expected_results,
+                    "checkpoint": {
+                        "last_committed_history_id": last_committed_history_id,
+                        "batches_committed": batches_committed,
+                    },
+                    "verification": verification,
+                    "batches": batch_events,
+                    "error": "Verificación final del scope no coincide",
+                }
+        partial = not scope_complete
+
+    return {
+        "ok": True,
+        "mode": "apply-backfill",
+        "committed": True,
+        "partial": partial,
+        "run_batch_id": run_batch_id,
+        "calculation_version": args.calculation_version,
+        "scope": {
+            "company_id": args.company_id,
+            "office_id": args.office_id,
+            "date_from": args.date_from.isoformat(),
+            "date_to": args.date_to.isoformat(),
+            "rows_found": rows_found,
+            "rows_processed": rows_processed,
+            "min_history_id": scope_stats["min_history_id"],
+            "max_history_id": scope_stats["max_history_id"],
+            "unique_variants": scope_stats["unique_variants"],
+        },
+        "persistence": dict(persistence_total),
+        "results": {**results_count, "warnings": dict(warning_count)},
+        "expected_results": expected_results,
+        "checkpoint": {
+            "last_committed_history_id": last_committed_history_id,
+            "batches_committed": batches_committed,
+            "resume_after_history_id": (
+                last_committed_history_id if partial else None
+            ),
+        },
+        "resume_after_history_id": (
+            last_committed_history_id if partial else None
+        ),
+        "verification": verification,
+        "batches": batch_events,
+    }
