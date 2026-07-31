@@ -788,6 +788,229 @@ WHERE history_id = %s
         )
         return int(rows[0]["n"]) if rows else 0
 
+    def fetch_history_sync_audit(
+        self,
+        *,
+        company_id: int,
+        office_id: int,
+        after_admission_date: date,
+        calculation_version: str,
+    ) -> dict[str, Any]:
+        """Auditoría read-only: bounds y cobertura V2 (sin escribir)."""
+        after_excl = after_admission_date + timedelta(days=1)
+        rows = self._execute(
+            """
+SELECT
+    COUNT(*)::bigint AS total_rows,
+    COUNT(*) FILTER (WHERE h.admission_date >= %s)::bigint AS rows_after_cutoff,
+    MIN(h.admission_date) AS min_admission_date,
+    MAX(h.admission_date) AS max_admission_date,
+    MIN(h.id)::bigint AS min_history_id,
+    MAX(h.id)::bigint AS max_history_id,
+    COUNT(*) FILTER (
+        WHERE c.history_id IS NULL
+    )::bigint AS missing_calculation,
+    COUNT(*) FILTER (
+        WHERE c.history_id IS NOT NULL
+    )::bigint AS with_calculation
+FROM analytics.cost_reception_history h
+LEFT JOIN analytics.cost_reception_calculated c
+    ON c.history_id = h.id
+   AND c.calculation_version = %s
+WHERE h.company_id = %s
+  AND h.office_id = %s
+""".strip(),
+            (after_excl, str(calculation_version), int(company_id), int(office_id)),
+        )
+        row = rows[0] if rows else {}
+        min_d = row.get("min_admission_date")
+        max_d = row.get("max_admission_date")
+        if isinstance(min_d, datetime):
+            min_d = min_d.date()
+        if isinstance(max_d, datetime):
+            max_d = max_d.date()
+        return {
+            "total_rows": int(row.get("total_rows") or 0),
+            "rows_after_cutoff": int(row.get("rows_after_cutoff") or 0),
+            "min_admission_date": min_d.isoformat() if min_d else None,
+            "max_admission_date": max_d.isoformat() if max_d else None,
+            "min_history_id": (
+                int(row["min_history_id"]) if row.get("min_history_id") is not None else None
+            ),
+            "max_history_id": (
+                int(row["max_history_id"]) if row.get("max_history_id") is not None else None
+            ),
+            "missing_calculation": int(row.get("missing_calculation") or 0),
+            "with_calculation": int(row.get("with_calculation") or 0),
+            "has_updated_at": False,
+            "has_synced_at": False,
+            "history_append_only_note": (
+                "sync usa ON CONFLICT (unique_key) DO NOTHING; "
+                "no hay updated_at/synced_at. Cambios de contexto tributario "
+                "vienen del JOIN a products.tax_ids_json al recalcular."
+            ),
+        }
+
+    def _map_history_rows(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            tax_ids = _tax_id_list(row.get("catalog_tax_ids_json"))
+            out.append(
+                {
+                    "history_id": int(row["history_id"]),
+                    "company_id": int(row["company_id"]),
+                    "office_id": (
+                        int(row["office_id"]) if row.get("office_id") is not None else None
+                    ),
+                    "variant_id": int(row["variant_id"]),
+                    "admission_date": row.get("admission_date"),
+                    "quantity": coerce_optional_decimal(row.get("quantity")),
+                    "cost_net": coerce_optional_decimal(row.get("cost_net")),
+                    "iva_amount": coerce_optional_decimal(row.get("iva_amount")),
+                    "other_taxes": coerce_optional_decimal(row.get("other_taxes")),
+                    "cost_bruto_erp": coerce_optional_decimal(row.get("cost_bruto_erp")),
+                    "created_at": row.get("created_at"),
+                    "barcode": row.get("barcode"),
+                    "product_name": row.get("product_name"),
+                    "variant_name": row.get("variant_name"),
+                    "document_number": row.get("document_number"),
+                    "reception_id": row.get("reception_id"),
+                    "catalog_tax_ids": tax_ids,
+                }
+            )
+        return out
+
+    def _history_select_from(self) -> str:
+        has_tax_ids = self.column_exists("bsale", "products", "tax_ids_json")
+        tax_ids_expr = (
+            "p.tax_ids_json AS catalog_tax_ids_json"
+            if has_tax_ids
+            else "NULL::jsonb AS catalog_tax_ids_json"
+        )
+        return f"""
+SELECT
+    h.id AS history_id,
+    h.company_id,
+    h.office_id,
+    h.variant_id,
+    h.admission_date,
+    h.quantity,
+    h.cost_net,
+    h.iva_amount,
+    h.other_taxes,
+    h.cost_bruto_erp,
+    h.created_at,
+    h.barcode,
+    h.product_name,
+    h.variant_name,
+    h.document_number,
+    h.reception_id,
+    h.product_id,
+    {tax_ids_expr}
+FROM analytics.cost_reception_history h
+LEFT JOIN bsale.variants v
+    ON v.company_id = h.company_id
+   AND v.bsale_id = h.variant_id
+LEFT JOIN bsale.products p
+    ON p.company_id = h.company_id
+   AND p.bsale_id = COALESCE(h.product_id, v.product_id)
+""".strip()
+
+    def fetch_missing_calculated_batch(
+        self,
+        *,
+        company_id: int,
+        office_id: int,
+        calculation_version: str,
+        after_id: int,
+        batch_size: int,
+        date_from: date | None = None,
+        date_to: date | None = None,
+    ) -> list[dict[str, Any]]:
+        """Recepciones sin fila cost-v2 (keyset por history_id). Sin OFFSET."""
+        sql = self._history_select_from()
+        sql += """
+LEFT JOIN analytics.cost_reception_calculated c
+    ON c.history_id = h.id
+   AND c.calculation_version = %s
+WHERE h.company_id = %s
+  AND h.office_id = %s
+  AND c.history_id IS NULL
+  AND h.id > %s
+""".rstrip()
+        params: list[Any] = [
+            str(calculation_version),
+            int(company_id),
+            int(office_id),
+            int(after_id),
+        ]
+        if date_from is not None:
+            sql += "\n  AND h.admission_date >= %s"
+            params.append(date_from)
+        if date_to is not None:
+            sql += "\n  AND h.admission_date < %s"
+            params.append(date_to + timedelta(days=1))
+        sql += "\nORDER BY h.id ASC LIMIT %s"
+        params.append(int(batch_size))
+        return self._map_history_rows(self._execute(sql.strip(), tuple(params)))
+
+    def fetch_calculated_window_batch(
+        self,
+        *,
+        company_id: int,
+        office_id: int,
+        calculation_version: str,
+        date_from: date,
+        date_to: date,
+        after_id: int,
+        batch_size: int,
+    ) -> list[dict[str, Any]]:
+        """History CON cálculo existente en ventana (para rechequeo de fingerprints)."""
+        sql = self._history_select_from()
+        sql += """
+INNER JOIN analytics.cost_reception_calculated c
+    ON c.history_id = h.id
+   AND c.calculation_version = %s
+WHERE h.company_id = %s
+  AND h.office_id = %s
+  AND h.admission_date >= %s
+  AND h.admission_date < %s
+  AND h.id > %s
+ORDER BY h.id ASC
+LIMIT %s
+""".rstrip()
+        params: list[Any] = [
+            str(calculation_version),
+            int(company_id),
+            int(office_id),
+            date_from,
+            date_to + timedelta(days=1),
+            int(after_id),
+            int(batch_size),
+        ]
+        return self._map_history_rows(self._execute(sql.strip(), tuple(params)))
+
+    def fetch_history_rows_by_ids(
+        self,
+        *,
+        company_id: int,
+        office_id: int,
+        history_ids: list[int],
+    ) -> list[dict[str, Any]]:
+        ids = sorted({int(i) for i in history_ids})
+        if not ids:
+            return []
+        sql = self._history_select_from()
+        sql += """
+WHERE h.company_id = %s
+  AND h.office_id = %s
+  AND h.id = ANY(%s)
+ORDER BY h.id ASC
+""".rstrip()
+        return self._map_history_rows(
+            self._execute(sql.strip(), (int(company_id), int(office_id), ids))
+        )
+
     @staticmethod
     def _normalize_calc_row(row: dict[str, Any]) -> dict[str, Any]:
         out = dict(row)
