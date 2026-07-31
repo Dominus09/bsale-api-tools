@@ -55,6 +55,8 @@ DEFAULT_BATCH_SIZE = 500
 MAX_SAMPLE_LIMIT = 100
 DEFAULT_SAMPLE_LIMIT = 20
 MAX_TIMEOUT = 30
+MAX_APPLY_ROWS_CAP = 100
+DEFAULT_MAX_APPLY_ROWS = 100
 
 # Outlier (orquestador): mediana robusta por variant_id dentro del scope.
 OUTLIER_FACTOR = Decimal("3")
@@ -92,6 +94,9 @@ class CostV2BackfillArgs:
     document_number: int | None = None
     apply: bool = False
     confirm_history_id: int | None = None
+    apply_scope: bool = False
+    confirm_row_count: int | None = None
+    max_apply_rows: int = DEFAULT_MAX_APPLY_ROWS
 
 
 def clamp_backfill_args(
@@ -111,6 +116,9 @@ def clamp_backfill_args(
     document_number: int | None = None,
     apply: bool = False,
     confirm_history_id: int | None = None,
+    apply_scope: bool = False,
+    confirm_row_count: int | None = None,
+    max_apply_rows: int = DEFAULT_MAX_APPLY_ROWS,
 ) -> CostV2BackfillArgs:
     if int(company_id) <= 0:
         raise AnalyticsValidationError(
@@ -131,6 +139,80 @@ def clamp_backfill_args(
         raise AnalyticsValidationError(
             "--dry-run y --apply no pueden usarse juntos",
             error_type="apply_dry_run_conflict",
+        )
+
+    if apply_scope and not apply:
+        raise AnalyticsValidationError(
+            "--apply-scope requiere --apply",
+            error_type="apply_scope_requires_apply",
+        )
+
+    if apply and apply_scope:
+        if history_id is not None or confirm_history_id is not None:
+            raise AnalyticsValidationError(
+                "Apply scope no puede combinarse con --history-id",
+                error_type="apply_scope_history_forbidden",
+            )
+        if office_id is None:
+            raise AnalyticsValidationError(
+                "Apply scope requiere --office-id",
+                error_type="apply_scope_office_required",
+            )
+        if document_number is not None:
+            raise AnalyticsValidationError(
+                "Apply scope no permite --document-number",
+                error_type="apply_scope_forbidden",
+            )
+        has_barcode = bool(barcode and str(barcode).strip())
+        has_variant = variant_id is not None
+        if has_barcode == has_variant:
+            raise AnalyticsValidationError(
+                "Apply scope requiere --barcode o --variant-id, pero no ambos",
+                error_type="apply_scope_selector_required",
+            )
+        if confirm_row_count is None:
+            raise AnalyticsValidationError(
+                "Apply scope requiere --confirm-row-count",
+                error_type="apply_scope_confirm_required",
+            )
+        if int(confirm_row_count) <= 0:
+            raise AnalyticsValidationError(
+                "confirm-row-count debe ser > 0",
+                error_type="apply_scope_confirm_invalid",
+            )
+        max_rows = int(max_apply_rows)
+        if max_rows > MAX_APPLY_ROWS_CAP:
+            raise AnalyticsValidationError(
+                "Apply scope excede --max-apply-rows",
+                error_type="apply_scope_max_rows",
+                details={"max_apply_rows": max_rows, "cap": MAX_APPLY_ROWS_CAP},
+            )
+        if max_rows <= 0:
+            raise AnalyticsValidationError(
+                "max-apply-rows debe ser > 0",
+                error_type="apply_scope_max_rows",
+            )
+        return CostV2BackfillArgs(
+            company_id=int(company_id),
+            office_id=int(office_id),
+            date_from=date_from,
+            date_to=date_to,
+            dry_run=False,
+            batch_size=max(1, min(int(batch_size), MAX_BATCH_SIZE)),
+            sample_limit=max(1, min(int(sample_limit), MAX_SAMPLE_LIMIT)),
+            statement_timeout_seconds=max(
+                1, min(int(statement_timeout_seconds), MAX_TIMEOUT)
+            ),
+            calculation_version=version,
+            history_id=None,
+            variant_id=int(variant_id) if has_variant else None,
+            barcode=(barcode.strip() if has_barcode else None),
+            document_number=None,
+            apply=True,
+            confirm_history_id=None,
+            apply_scope=True,
+            confirm_row_count=int(confirm_row_count),
+            max_apply_rows=max_rows,
         )
 
     if apply:
@@ -176,6 +258,9 @@ def clamp_backfill_args(
             document_number=None,
             apply=True,
             confirm_history_id=int(confirm_history_id),
+            apply_scope=False,
+            confirm_row_count=None,
+            max_apply_rows=DEFAULT_MAX_APPLY_ROWS,
         )
 
     if not dry_run:
@@ -199,6 +284,9 @@ def clamp_backfill_args(
         document_number=int(document_number) if document_number is not None else None,
         apply=False,
         confirm_history_id=None,
+        apply_scope=False,
+        confirm_row_count=None,
+        max_apply_rows=DEFAULT_MAX_APPLY_ROWS,
     )
 
 
@@ -969,6 +1057,7 @@ def run_cost_v2_canary_apply(
             "mode": "apply-canary",
             "committed": True,
             "calculation_version": calc.calculation_version,
+            "run_batch_id": batch_id,
             "calculation_batch_id": expect_batch if persistence["unchanged"] else batch_id,
             "scope": {
                 "history_id": calc.history_id,
@@ -998,6 +1087,300 @@ def run_cost_v2_canary_apply(
                 ),
                 "effective_quality_status": calc.effective_quality_status,
                 "warnings": list(calc.warnings),
+            },
+        }
+    except Exception:
+        try:
+            rollback_fn()
+        except Exception:
+            pass
+        raise
+
+
+def _fingerprints_unchanged(existing: dict[str, Any], calc: CostReceptionCalculation) -> bool:
+    return (
+        existing.get("calculation_result_fingerprint")
+        == calc.calculation_result_fingerprint
+        and existing.get("source_history_fingerprint")
+        == calc.source_history_fingerprint
+        and existing.get("tax_context_fingerprint") == calc.tax_context_fingerprint
+    )
+
+
+def _fetch_all_scope_rows(
+    *,
+    repository: CostV2BackfillRepository,
+    args: CostV2BackfillArgs,
+    variant_ids: list[int],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    after_id = 0
+    while True:
+        batch = repository.fetch_history_batch(
+            company_id=args.company_id,
+            office_id=args.office_id,
+            date_from=args.date_from,
+            date_to=args.date_to,
+            after_id=after_id,
+            batch_size=args.batch_size,
+            variant_ids=variant_ids,
+        )
+        if not batch:
+            break
+        rows.extend(batch)
+        after_id = int(batch[-1]["history_id"])
+        if len(batch) < args.batch_size:
+            break
+    rows.sort(key=lambda r: int(r["history_id"]))
+    return rows
+
+
+def _verify_source_fp(
+    repository: CostV2BackfillRepository, calc: CostReceptionCalculation
+) -> None:
+    src = repository.verify_source_fingerprint_inputs(history_id=calc.history_id)
+    if src is None:
+        raise AnalyticsValidationError(
+            "history fuente no encontrada en verificación",
+            error_type="source_fingerprint_changed",
+        )
+    adm = src.get("admission_date")
+    if isinstance(adm, datetime):
+        adm_d = adm.date()
+    else:
+        adm_d = adm
+    src_inp = CostReceptionInput(
+        history_id=int(src["history_id"]),
+        company_id=int(src["company_id"]),
+        office_id=src.get("office_id"),
+        variant_id=int(src["variant_id"]),
+        admission_date=adm_d,
+        stored_cost_net=src.get("cost_net"),
+        stored_quantity=src.get("quantity"),
+        stored_iva_amount=src.get("iva_amount"),
+        stored_other_taxes=src.get("other_taxes"),
+        stored_gross_cost=src.get("cost_bruto_erp"),
+        reception_tax_ids=(),
+        catalog_tax_ids=tuple(src.get("catalog_tax_ids") or []),
+        source_history_created_at=src.get("created_at"),
+    )
+    if source_history_fingerprint(src_inp) != calc.source_history_fingerprint:
+        raise AnalyticsValidationError(
+            "source_history_fingerprint cambió antes del commit",
+            error_type="source_fingerprint_changed",
+        )
+
+
+def run_cost_v2_scope_apply(
+    *,
+    args: CostV2BackfillArgs,
+    repository: CostV2BackfillRepository,
+    commit_fn: Any,
+    rollback_fn: Any,
+) -> dict[str, Any]:
+    """Persistencia atómica de un lote acotado (barcode/variant + confirm-row-count)."""
+    if not args.apply or not args.apply_scope or args.dry_run:
+        raise AnalyticsValidationError(
+            "run_cost_v2_scope_apply requiere apply-scope",
+            error_type="invalid_args",
+        )
+    run_batch_id = str(uuid.uuid4())
+    try:
+        if not repository.calculated_table_exists():
+            raise AnalyticsValidationError(
+                "Tabla analytics.cost_reception_calculated no existe",
+                error_type="destination_table_missing",
+            )
+        if not repository.calculated_latest_view_exists():
+            raise AnalyticsValidationError(
+                "Vista analytics.v_cost_reception_calculated_latest no existe",
+                error_type="destination_view_missing",
+            )
+
+        variant_ids: list[int]
+        if args.barcode:
+            variant_ids = repository.resolve_barcode_variant_ids(
+                company_id=args.company_id, barcode=args.barcode
+            )
+            if len(variant_ids) != 1:
+                raise AnalyticsValidationError(
+                    "Apply scope: barcode debe resolver exactamente una variante",
+                    error_type="apply_scope_barcode_ambiguous",
+                    details={"variants": variant_ids},
+                )
+        else:
+            variant_ids = [int(args.variant_id)]  # type: ignore[arg-type]
+
+        rows = _fetch_all_scope_rows(
+            repository=repository, args=args, variant_ids=variant_ids
+        )
+        n = len(rows)
+        if n == 0:
+            raise AnalyticsValidationError(
+                "Cantidad real no coincide con --confirm-row-count",
+                error_type="apply_scope_row_count",
+                details={"rows_found": 0, "confirm_row_count": args.confirm_row_count},
+            )
+        if n != int(args.confirm_row_count or -1):
+            raise AnalyticsValidationError(
+                "Cantidad real no coincide con --confirm-row-count",
+                error_type="apply_scope_row_count",
+                details={"rows_found": n, "confirm_row_count": args.confirm_row_count},
+            )
+        if n > int(args.max_apply_rows):
+            raise AnalyticsValidationError(
+                "Apply scope excede --max-apply-rows",
+                error_type="apply_scope_max_rows",
+                details={"rows_found": n, "max_apply_rows": args.max_apply_rows},
+            )
+
+        history_ids = [int(r["history_id"]) for r in rows]
+        if len(set(history_ids)) != len(history_ids):
+            raise AnalyticsValidationError(
+                "history_id duplicados en el scope",
+                error_type="apply_scope_duplicate_history",
+            )
+        # Ya ordenado ASC por _fetch_all_scope_rows
+        assert history_ids == sorted(history_ids)
+
+        outlier_stats = build_variant_net_outlier_stats(
+            repository.fetch_outlier_baseline_cost_nets(
+                company_id=args.company_id,
+                office_id=args.office_id,
+                variant_ids=variant_ids,
+            )
+        )
+
+        all_tax_ids: list[int] = []
+        for r in rows:
+            all_tax_ids.extend(r.get("catalog_tax_ids") or [])
+        tax_catalog = repository.fetch_taxes_for_ids(
+            company_id=args.company_id, tax_ids=all_tax_ids
+        )
+
+        calcs: list[CostReceptionCalculation] = []
+        for r in rows:
+            calc = _calculate_single_row(
+                row=r,
+                tax_catalog=tax_catalog,
+                outlier_stats=outlier_stats,
+                calculation_version=args.calculation_version,
+            )
+            validate_calculation_before_persist(calc)
+            calcs.append(calc)
+
+        persistence = {"inserted": 0, "updated": 0, "unchanged": 0}
+        prior_meta: dict[int, dict[str, Any]] = {}
+        expect_batch_by_hid: dict[int, str] = {}
+
+        for calc in calcs:
+            existing = repository.get_existing_calculation(
+                history_id=calc.history_id,
+                calculation_version=calc.calculation_version,
+            )
+            if existing is not None and _fingerprints_unchanged(existing, calc):
+                persistence["unchanged"] += 1
+                prior_meta[calc.history_id] = {
+                    "calculation_batch_id": str(existing.get("calculation_batch_id")),
+                    "calculated_at": existing.get("calculated_at"),
+                }
+                expect_batch_by_hid[calc.history_id] = str(
+                    existing.get("calculation_batch_id")
+                )
+            else:
+                upsert = repository.persist_calculation(
+                    calc=calc, calculation_batch_id=run_batch_id
+                )
+                if bool(upsert.get("was_inserted")):
+                    persistence["inserted"] += 1
+                else:
+                    persistence["updated"] += 1
+                expect_batch_by_hid[calc.history_id] = run_batch_id
+
+        # Verificación post-escritura
+        for calc in calcs:
+            readback = repository.read_calculation(
+                history_id=calc.history_id,
+                calculation_version=calc.calculation_version,
+            )
+            if readback is None:
+                raise AnalyticsValidationError(
+                    "readback tabla vacío tras persistencia",
+                    error_type="readback_mismatch",
+                )
+            if calc.history_id in prior_meta:
+                meta = prior_meta[calc.history_id]
+                if str(readback.get("calculation_batch_id")) != meta["calculation_batch_id"]:
+                    raise AnalyticsValidationError(
+                        "unchanged alteró calculation_batch_id",
+                        error_type="readback_mismatch",
+                    )
+                if readback.get("calculated_at") != meta["calculated_at"]:
+                    raise AnalyticsValidationError(
+                        "unchanged alteró calculated_at",
+                        error_type="readback_mismatch",
+                    )
+            _assert_readback_matches(
+                calc,
+                readback,
+                expect_batch_id=expect_batch_by_hid[calc.history_id],
+            )
+
+            latest_rows = repository.read_latest_view(history_id=calc.history_id)
+            if len(latest_rows) != 1:
+                raise AnalyticsValidationError(
+                    "latest view no devolvió exactamente 1 fila",
+                    error_type="latest_view_mismatch",
+                )
+            _assert_readback_matches(
+                calc,
+                latest_rows[0],
+                expect_batch_id=expect_batch_by_hid[calc.history_id],
+            )
+            _verify_source_fp(repository, calc)
+
+        if sum(persistence.values()) != len(calcs):
+            raise AnalyticsValidationError(
+                "persistence counters != rows_processed",
+                error_type="invariant_violation",
+            )
+
+        results_count = {k: 0 for k in QUALITY_KEYS}
+        warning_count: dict[str, int] = defaultdict(int)
+        for calc in calcs:
+            if calc.effective_quality_status in results_count:
+                results_count[calc.effective_quality_status] += 1
+            for w in calc.warnings:
+                warning_count[w] += 1
+
+        commit_fn()
+        return {
+            "ok": True,
+            "mode": "apply-scope-canary",
+            "committed": True,
+            "calculation_version": args.calculation_version,
+            "run_batch_id": run_batch_id,
+            "scope": {
+                "company_id": args.company_id,
+                "office_id": args.office_id,
+                "barcode": args.barcode,
+                "variant_id": args.variant_id,
+                "rows_found": n,
+                "rows_processed": n,
+                "unique_variants": len(set(variant_ids)),
+            },
+            "persistence": dict(persistence),
+            "verification": {
+                "table_readback_ok": True,
+                "latest_view_ok": True,
+                "source_fingerprints_unchanged": True,
+                "result_fingerprints_match": True,
+                "scope_count_ok": True,
+                "unchanged_metadata_preserved": True,
+            },
+            "results": {
+                **results_count,
+                "warnings": dict(warning_count),
             },
         }
     except Exception:

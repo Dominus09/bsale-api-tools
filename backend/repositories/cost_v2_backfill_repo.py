@@ -199,6 +199,15 @@ SELECT to_regclass('analytics.cost_reception_calculated') IS NOT NULL AS ok
         )
         return bool(rows and rows[0].get("ok"))
 
+    def calculated_latest_view_exists(self) -> bool:
+        rows = self._execute(
+            """
+SELECT to_regclass('analytics.v_cost_reception_calculated_latest') IS NOT NULL AS ok
+""".strip(),
+            (),
+        )
+        return bool(rows and rows[0].get("ok"))
+
     def resolve_barcode_variant_ids(self, *, company_id: int, barcode: str) -> list[int]:
         normalized = (barcode or "").strip()
         if not normalized:

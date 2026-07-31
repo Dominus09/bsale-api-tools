@@ -1,22 +1,28 @@
-"""Job Costos V2: dry-run masivo o apply canario (1 history_id confirmado).
+"""Job Costos V2: dry-run, apply canario 1 fila, o apply-scope lote acotado.
 
 Dry-run::
 
     python -m backend.jobs.backfill_cost_reception_calculated \\
       --company-id 3 --office-id 3 \\
       --date-from 2026-03-25 --date-to 2026-06-22 \\
-      --dry-run --batch-size 500 --sample-limit 30
+      --dry-run
 
-Apply canario (exactamente 1 fila)::
+Apply canario (1 history_id)::
 
     python -m backend.jobs.backfill_cost_reception_calculated \\
       --company-id 3 --office-id 3 \\
       --date-from 2026-03-25 --date-to 2026-06-22 \\
-      --history-id 23190 --confirm-history-id 23190 --apply \\
-      --statement-timeout-seconds 30
+      --history-id 23190 --confirm-history-id 23190 --apply
 
-No ejecuta migración. No backfill masivo con --apply.
-No ejecutar apply desde Cursor contra producción.
+Apply scope (lote confirmado, máx. 100)::
+
+    python -m backend.jobs.backfill_cost_reception_calculated \\
+      --company-id 3 --office-id 3 \\
+      --date-from 2026-03-25 --date-to 2026-06-22 \\
+      --barcode 7803473005960 \\
+      --apply --apply-scope --confirm-row-count 14 --max-apply-rows 100
+
+No backfill masivo. No ejecutar apply desde Cursor contra producción.
 """
 
 from __future__ import annotations
@@ -34,6 +40,7 @@ from backend.services.analytics.cost_v2_backfill import (
     clamp_backfill_args,
     run_cost_v2_backfill_dry_run,
     run_cost_v2_canary_apply,
+    run_cost_v2_scope_apply,
 )
 from backend.services.analytics.cost_v2_calculator import CALCULATION_VERSION
 from backend.services.analytics.validate_distribuidora_source import (
@@ -54,7 +61,7 @@ def _parse_date(value: str) -> date:
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Backfill Costos V2: dry-run o apply canario (1 history_id)"
+        description="Backfill Costos V2: dry-run / apply canario / apply-scope"
     )
     p.add_argument("--company-id", type=int, required=True)
     p.add_argument("--office-id", type=int, default=None)
@@ -62,6 +69,9 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--date-to", type=_parse_date, required=True)
     p.add_argument("--dry-run", action="store_true", default=False)
     p.add_argument("--apply", action="store_true", default=False)
+    p.add_argument("--apply-scope", action="store_true", default=False)
+    p.add_argument("--confirm-row-count", type=int, default=None)
+    p.add_argument("--max-apply-rows", type=int, default=100)
     p.add_argument("--batch-size", type=int, default=500)
     p.add_argument("--sample-limit", type=int, default=20)
     p.add_argument("--statement-timeout-seconds", type=int, default=20)
@@ -107,15 +117,23 @@ def run_job(argv: list[str] | None = None) -> tuple[int, dict[str, Any]]:
             document_number=ns.document_number,
             apply=apply,
             confirm_history_id=ns.confirm_history_id,
+            apply_scope=bool(ns.apply_scope),
+            confirm_row_count=ns.confirm_row_count,
+            max_apply_rows=ns.max_apply_rows,
         )
     except AnalyticsValidationError as exc:
+        mode = "rejected"
+        if ns.apply and ns.apply_scope:
+            mode = "apply-scope-canary"
+        elif ns.apply:
+            mode = "apply-canary"
         return 1, {
             "ok": False,
             "committed": False,
-            "mode": "apply-canary" if ns.apply else "rejected",
+            "mode": mode,
             "error_type": exc.error_type,
             "error": str(exc),
-            "details": exc.details,
+            "details": getattr(exc, "details", {}) or {},
         }
 
     conn = None
@@ -129,14 +147,21 @@ def run_job(argv: list[str] | None = None) -> tuple[int, dict[str, Any]]:
                 lock_timeout="10s",
                 sql_log=[],
             )
-            # Lecturas también pueden usar el mismo executor RW (sin assert read-only).
             repo = CostV2BackfillRepository(executor=rw, write_executor=rw)
-            report = run_cost_v2_canary_apply(
-                args=args,
-                repository=repo,
-                commit_fn=conn.commit,
-                rollback_fn=conn.rollback,
-            )
+            if args.apply_scope:
+                report = run_cost_v2_scope_apply(
+                    args=args,
+                    repository=repo,
+                    commit_fn=conn.commit,
+                    rollback_fn=conn.rollback,
+                )
+            else:
+                report = run_cost_v2_canary_apply(
+                    args=args,
+                    repository=repo,
+                    commit_fn=conn.commit,
+                    rollback_fn=conn.rollback,
+                )
             return 0, report
 
         conn = open_readonly_connection(get_connection)
@@ -155,13 +180,18 @@ def run_job(argv: list[str] | None = None) -> tuple[int, dict[str, Any]]:
                 conn.rollback()
             except Exception:
                 logger.exception("rollback_failed")
+        mode = (
+            "apply-scope-canary"
+            if args.apply_scope
+            else ("apply-canary" if args.apply else "dry-run")
+        )
         return 1, {
             "ok": False,
             "committed": False,
-            "mode": "apply-canary" if args.apply else "dry-run",
+            "mode": mode,
             "error_type": exc.error_type,
             "error": str(exc),
-            "details": exc.details,
+            "details": getattr(exc, "details", {}) or {},
             "company_id": ns.company_id,
             "office_id": ns.office_id,
         }
@@ -178,10 +208,15 @@ def run_job(argv: list[str] | None = None) -> tuple[int, dict[str, Any]]:
             error_type = "statement_timeout"
         elif "does not exist" in msg or "undefinedcolumn" in msg.replace(" ", ""):
             error_type = "schema_mismatch"
+        mode = (
+            "apply-scope-canary"
+            if args.apply_scope
+            else ("apply-canary" if args.apply else "dry-run")
+        )
         return 1, {
             "ok": False,
             "committed": False,
-            "mode": "apply-canary" if args.apply else "dry-run",
+            "mode": mode,
             "error_type": error_type,
             "error": str(exc),
             "company_id": ns.company_id,
