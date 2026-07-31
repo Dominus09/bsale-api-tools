@@ -552,3 +552,137 @@ def test_40_fingerprints_stable_iva_advance():
     assert tax_context_fingerprint(ctx) == tax_context_fingerprint(ctx)
     row = _row(stored_cost_net=D("664"), stored_gross_cost=D("664"), reception_tax_ids=())
     assert source_history_fingerprint(row) == source_history_fingerprint(row)
+
+
+def test_41_result_fingerprint_stable():
+    from backend.services.analytics.cost_v2_calculator import calculation_result_fingerprint
+
+    res = calculate_cost_reception(
+        _row(stored_cost_net=D("669"), stored_gross_cost=D("669"), reception_tax_ids=()),
+        build_tax_context_from_ids([1], tax_catalog=_catalog_iva_advance()),
+    )
+    assert len(res.calculation_result_fingerprint) == 64
+    assert calculation_result_fingerprint(res) == res.calculation_result_fingerprint
+
+
+def test_42_result_fingerprint_changes_with_corrected_gross():
+    from dataclasses import replace
+
+    from backend.services.analytics.cost_v2_calculator import calculation_result_fingerprint
+
+    res = calculate_cost_reception(
+        _row(stored_cost_net=D("669"), stored_gross_cost=D("669"), reception_tax_ids=()),
+        build_tax_context_from_ids([1], tax_catalog=_catalog_iva_advance()),
+    )
+    other = replace(res, corrected_gross_cost=D("999.00"), calculation_result_fingerprint="")
+    assert calculation_result_fingerprint(other) != res.calculation_result_fingerprint
+
+
+def test_43_result_fingerprint_changes_with_status():
+    from dataclasses import replace
+
+    from backend.services.analytics.cost_v2_calculator import calculation_result_fingerprint
+
+    res = calculate_cost_reception(
+        _row(stored_cost_net=D("669"), stored_gross_cost=D("669"), reception_tax_ids=()),
+        build_tax_context_from_ids([1], tax_catalog=_catalog_iva_advance()),
+    )
+    other = replace(
+        res, effective_quality_status="valid_gross", calculation_result_fingerprint=""
+    )
+    assert calculation_result_fingerprint(other) != res.calculation_result_fingerprint
+
+
+def test_44_result_fingerprint_changes_with_outlier_warning():
+    row = _row(stored_cost_net=D("669"), stored_gross_cost=D("669"), reception_tax_ids=())
+    ctx = build_tax_context_from_ids([1], tax_catalog=_catalog_iva_advance())
+    a = calculate_cost_reception(row, ctx)
+    b = calculate_cost_reception(row, ctx, external_warnings=("suspicious_outlier",))
+    assert a.calculation_result_fingerprint != b.calculation_result_fingerprint
+
+
+def test_45_result_fingerprint_changes_with_version():
+    row = _row(stored_cost_net=D("669"), stored_gross_cost=D("669"), reception_tax_ids=())
+    ctx = build_tax_context_from_ids([1], tax_catalog=_catalog_iva_advance())
+    a = calculate_cost_reception(row, ctx, calculation_version="cost-v2.0.0")
+    b = calculate_cost_reception(row, ctx, calculation_version="cost-v2.0.1")
+    assert a.calculation_result_fingerprint != b.calculation_result_fingerprint
+
+
+def test_46_result_fingerprint_warning_order_independent():
+    from dataclasses import replace
+
+    from backend.services.analytics.cost_v2_calculator import calculation_result_fingerprint
+
+    res = calculate_cost_reception(
+        _row(stored_cost_net=D("669"), stored_gross_cost=D("669"), reception_tax_ids=()),
+        build_tax_context_from_ids([1], tax_catalog=_catalog_iva_advance()),
+        external_warnings=("suspicious_outlier", "tax_ids_not_consumed"),
+    )
+    flipped = replace(
+        res,
+        warnings=("tax_ids_not_consumed", "suspicious_outlier"),
+        calculation_result_fingerprint="",
+    )
+    assert calculation_result_fingerprint(flipped) == res.calculation_result_fingerprint
+
+
+def test_47_result_fingerprint_additional_taxes_order_independent():
+    from dataclasses import replace
+
+    from backend.services.analytics.cost_v2_calculator import calculation_result_fingerprint
+    from backend.services.analytics.cost_v2_models import AdditionalTaxAmount
+
+    res = calculate_cost_reception(
+        _row(stored_cost_net=D("664"), stored_gross_cost=D("664"), reception_tax_ids=()),
+        build_tax_context_from_ids([1, 6], tax_catalog=_catalog_iva_advance()),
+    )
+    assert len(res.additional_taxes) >= 1
+    flipped_taxes = tuple(reversed(res.additional_taxes))
+    if len(flipped_taxes) < 2:
+        # force two entries for order test
+        t0 = res.additional_taxes[0]
+        extra = AdditionalTaxAmount(
+            tax_id=7,
+            name="x",
+            rate=D("5"),
+            category="iva_advance",
+            amount=D("1.00"),
+            source="bsale.taxes",
+        )
+        base = replace(
+            res,
+            additional_taxes=(t0, extra),
+            calculation_result_fingerprint="",
+        )
+        flipped = replace(
+            base,
+            additional_taxes=(extra, t0),
+            calculation_result_fingerprint="",
+        )
+        assert calculation_result_fingerprint(base) == calculation_result_fingerprint(flipped)
+    else:
+        flipped = replace(
+            res, additional_taxes=flipped_taxes, calculation_result_fingerprint=""
+        )
+        assert calculation_result_fingerprint(flipped) == res.calculation_result_fingerprint
+
+
+def test_48_result_fingerprint_null_vs_zero():
+    from dataclasses import replace
+
+    from backend.services.analytics.cost_v2_calculator import calculation_result_fingerprint
+
+    res = calculate_cost_reception(
+        _row(stored_cost_net=D("669"), stored_gross_cost=D("669"), reception_tax_ids=()),
+        build_tax_context_from_ids([1], tax_catalog=_catalog_iva_advance()),
+    )
+    with_null = replace(
+        res, calculated_iva_amount=None, calculation_result_fingerprint=""
+    )
+    with_zero = replace(
+        res, calculated_iva_amount=D("0"), calculation_result_fingerprint=""
+    )
+    assert calculation_result_fingerprint(with_null) != calculation_result_fingerprint(
+        with_zero
+    )

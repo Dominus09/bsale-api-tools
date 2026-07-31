@@ -191,6 +191,7 @@ class CostReceptionCalculation:
     source_history_created_at: datetime | None
     source_history_fingerprint: str
     tax_context_fingerprint: str
+    calculation_result_fingerprint: str
 
     def additional_taxes_json(self) -> list[dict[str, Any]]:
         return [t.to_dict() for t in self.additional_taxes]

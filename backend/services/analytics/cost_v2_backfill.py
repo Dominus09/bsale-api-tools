@@ -230,6 +230,7 @@ def _sample_dict(calc: CostReceptionCalculation, meta: dict[str, Any]) -> dict[s
         "warnings": list(calc.warnings),
         "source_history_fingerprint": calc.source_history_fingerprint,
         "tax_context_fingerprint": calc.tax_context_fingerprint,
+        "calculation_result_fingerprint": calc.calculation_result_fingerprint,
     }
 
 
@@ -260,8 +261,8 @@ def run_cost_v2_backfill_dry_run(
         document_number=args.document_number,
     )
 
-    # Prefetch medians once (sin N+1 por fila).
-    net_rows = repository.fetch_variant_cost_nets(
+    # Variants del scope de salida → baseline independiente de filtros de salida.
+    scope_variant_ids = repository.fetch_scope_variant_ids(
         company_id=args.company_id,
         office_id=args.office_id,
         date_from=args.date_from,
@@ -269,6 +270,12 @@ def run_cost_v2_backfill_dry_run(
         variant_ids=variant_ids,
         history_id=args.history_id,
         document_number=args.document_number,
+    )
+    # Caché por corrida: una sola consulta batch (sin N+1, sin date/history/doc).
+    net_rows = repository.fetch_outlier_baseline_cost_nets(
+        company_id=args.company_id,
+        office_id=args.office_id,
+        variant_ids=scope_variant_ids,
     )
     outlier_stats = build_variant_net_outlier_stats(net_rows)
 
@@ -484,9 +491,10 @@ def run_cost_v2_backfill_dry_run(
                 "aún no forma parte del vocabulario de warnings V2"
             ),
             (
-                f"outlier: mediana de cost_net por variant_id en el scope; "
-                f"factor={OUTLIER_FACTOR}, min_n={MIN_OUTLIER_CANDIDATES}; "
-                "solo warning suspicious_outlier"
+                f"outlier: mediana de cost_net por variant_id sobre historial disponible "
+                f"(company_id+office_id+variants del scope); ignora date/history/barcode/"
+                f"document del resultado; factor={OUTLIER_FACTOR}, min_n={MIN_OUTLIER_CANDIDATES}; "
+                "warning analítico (no clasificación as-of admission_date)"
             ),
         ],
     }

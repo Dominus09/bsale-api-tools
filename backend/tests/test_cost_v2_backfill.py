@@ -102,8 +102,13 @@ class RecordingExecutor:
         history: list[dict] | None = None,
         taxes: list[dict] | None = None,
         columns: set[str] | None = None,
+        baseline_history: list[dict] | None = None,
     ) -> None:
         self.history = history or []
+        # Historial global para mediana de outliers (puede exceder el scope de salida).
+        self.baseline_history = (
+            baseline_history if baseline_history is not None else list(self.history)
+        )
         self.taxes = (
             taxes
             if taxes is not None
@@ -154,31 +159,47 @@ class RecordingExecutor:
                 }
             ]
         if "SELECT DISTINCT" in upper and "VARIANT_ID" in upper:
-            term = None
-            for p in params:
-                if isinstance(p, str) and not p.startswith("%"):
-                    term = p
-            out = []
-            for r in self.history:
-                bc = (r.get("barcode") or "").strip()
-                if term and (bc == term or term in bc):
-                    out.append({"variant_id": r["variant_id"]})
-            return out
-        # Prefetch nets for outlier medians (no history_id column)
+            # barcode resolve vs scope variants
+            if "ILIKE" in upper or "barcode" in sql.lower():
+                term = None
+                for p in params:
+                    if isinstance(p, str) and not p.startswith("%"):
+                        term = p
+                out = []
+                for r in self.history:
+                    bc = (r.get("barcode") or "").strip()
+                    if term and (bc == term or term in bc):
+                        out.append({"variant_id": r["variant_id"]})
+                return out
+            # scope variant ids (admite filtros; fake: desde history de salida)
+            rows = list(self.history)
+            if len(params) >= 1:
+                # history_id filter if present as int matching a history row
+                for p in params:
+                    if isinstance(p, int) and any(
+                        int(r["history_id"]) == p for r in self.history
+                    ):
+                        rows = [r for r in rows if int(r["history_id"]) == p]
+                        break
+            return [
+                {"variant_id": v}
+                for v in sorted({int(r["variant_id"]) for r in rows})
+            ]
+        # Outlier baseline: sin admission_date
         if (
             "h.cost_net" in sql.lower()
+            and "admission_date" not in sql.lower()
             and "history_id" not in sql.lower()
             and "COUNT(*)" not in upper
         ):
             out = []
-            for r in self.history:
+            for r in self.baseline_history:
                 net = r.get("cost_net")
                 if net is None:
                     continue
                 if isinstance(net, Decimal) and net <= 0:
                     continue
                 out.append({"variant_id": r["variant_id"], "cost_net": net})
-            # optional variant filter
             for p in params:
                 if isinstance(p, list) and p and all(isinstance(x, int) for x in p):
                     out = [x for x in out if int(x["variant_id"]) in set(p)]
@@ -187,18 +208,12 @@ class RecordingExecutor:
         if "HISTORY_ID" in upper or "h.id AS history_id" in sql.lower():
             after_id = 0
             limit = 500
-            # params: company, date_from, date_to_excl, after_id, ... limit
-            for i, p in enumerate(params):
-                if isinstance(p, int) and i >= 3:
-                    # heuristic: after_id then later limit
-                    pass
             if len(params) >= 4 and isinstance(params[3], int):
                 after_id = int(params[3])
             if isinstance(params[-1], int):
                 limit = int(params[-1])
             rows = [r for r in self.history if int(r["history_id"]) > after_id]
             rows = sorted(rows, key=lambda r: int(r["history_id"]))[:limit]
-            # filter variant ANY
             for p in params:
                 if isinstance(p, list) and p and all(isinstance(x, int) for x in p):
                     rows = [r for r in rows if int(r["variant_id"]) in set(p)]
@@ -525,6 +540,7 @@ def test_25_fingerprints_present():
     s = report["samples"][0]
     assert len(s["source_history_fingerprint"]) == 64
     assert len(s["tax_context_fingerprint"]) == 64
+    assert len(s["calculation_result_fingerprint"]) == 64
     assert s["tax_ids_source"] == "current_product_tax"
     assert s["tax_rates_source"] == "bsale_taxes"
     assert s["tax_resolution_quality"] == "current_catalog"
@@ -643,13 +659,14 @@ def test_33_outlier_batch_no_n_plus_1():
         args=_args(batch_size=3, sample_limit=20),
         repository=CostV2BackfillRepository(exe),
     )
-    net_prefetch = [
+    baseline_sqls = [
         s
         for s in exe.sqls
-        if "h.cost_net" in s.lower() and "history_id" not in s.lower() and "COUNT(*)" not in s.upper()
+        if "h.cost_net" in s.lower()
+        and "admission_date" not in s.lower()
+        and "COUNT(*)" not in s.upper()
     ]
-    assert len(net_prefetch) == 1
-    # taxes fetched in batches, not per-row: at most a few tax queries
+    assert len(baseline_sqls) == 1
     tax_sqls = [s for s in exe.sqls if "bsale.taxes" in s.lower()]
     assert len(tax_sqls) <= 3
 
@@ -747,6 +764,139 @@ def test_39_missing_cost_preserves_resolved_ids_in_sample():
     assert s["resolved_tax_ids"] == [1, 8]
     assert s["tax_resolution_quality"] == "current_catalog"
     assert s["corrected_gross_cost"] is None
+
+
+def _mankeke_outlier_hist():
+    return [
+        _hist(1, cost_net=D("669"), bruto=D("669"), barcode="7803473005960"),
+        _hist(2, cost_net=D("632"), bruto=D("632"), barcode="7803473005960"),
+        _hist(3, cost_net=D("650"), bruto=D("650"), barcode="7803473005960"),
+        _hist(
+            23190,
+            cost_net=D("2533"),
+            bruto=D("2533"),
+            barcode="7803473005960",
+            document_number=None,
+        ),
+    ]
+
+
+def test_40_outlier_same_warning_barcode_vs_full_scope():
+    hist = _mankeke_outlier_hist()
+    full = run_cost_v2_backfill_dry_run(
+        args=_args(batch_size=10, sample_limit=10),
+        repository=CostV2BackfillRepository(RecordingExecutor(history=hist)),
+    )
+    by_bc = run_cost_v2_backfill_dry_run(
+        args=_args(batch_size=10, sample_limit=10, barcode="7803473005960"),
+        repository=CostV2BackfillRepository(RecordingExecutor(history=hist)),
+    )
+    a = next(s for s in full["samples"] if s["history_id"] == 23190)
+    b = next(s for s in by_bc["samples"] if s["history_id"] == 23190)
+    assert "suspicious_outlier" in a["warnings"]
+    assert a["warnings"] == b["warnings"]
+    assert a["effective_quality_status"] == b["effective_quality_status"]
+
+
+def test_41_outlier_history_id_only_uses_global_baseline():
+    baseline = _mankeke_outlier_hist()
+    only = [_hist(23190, cost_net=D("2533"), bruto=D("2533"), document_number=None)]
+    exe = RecordingExecutor(history=only, baseline_history=baseline)
+    report = run_cost_v2_backfill_dry_run(
+        args=_args(history_id=23190, batch_size=10, sample_limit=5),
+        repository=CostV2BackfillRepository(exe),
+    )
+    s = report["samples"][0]
+    assert s["history_id"] == 23190
+    assert s["effective_quality_status"] == "missing_taxes_in_gross"
+    assert "suspicious_outlier" in s["warnings"]
+    assert s["corrected_gross_cost"] == "3014.27"
+
+
+def test_42_normal_cost_not_outlier_with_narrow_scope():
+    baseline = _mankeke_outlier_hist()
+    only = [_hist(1, cost_net=D("669"), bruto=D("669"))]
+    exe = RecordingExecutor(history=only, baseline_history=baseline)
+    report = run_cost_v2_backfill_dry_run(
+        args=_args(history_id=1, batch_size=10, sample_limit=5),
+        repository=CostV2BackfillRepository(exe),
+    )
+    s = report["samples"][0]
+    assert "suspicious_outlier" not in s["warnings"]
+    assert s["effective_quality_status"] == "missing_taxes_in_gross"
+
+
+def test_43_baseline_sql_ignores_date_filters():
+    exe = RecordingExecutor(history=_mankeke_outlier_hist())
+    run_cost_v2_backfill_dry_run(
+        args=_args(date_from=date(2026, 6, 1), date_to=date(2026, 6, 2)),
+        repository=CostV2BackfillRepository(exe),
+    )
+    baseline = [
+        (s, p)
+        for s, p in zip(exe.sqls, exe.params)
+        if "h.cost_net" in s.lower() and "admission_date" not in s.lower()
+    ]
+    assert len(baseline) == 1
+    sql, params = baseline[0]
+    assert "admission_date" not in sql.lower()
+    # params: company_id, variant_ids list, office_id — no dates
+    assert params[0] == 3
+    assert isinstance(params[1], list)
+    assert 3 in params  # office_id
+
+
+def test_44_baseline_keeps_company_and_office():
+    exe = RecordingExecutor(history=[_hist(1)])
+    run_cost_v2_backfill_dry_run(
+        args=_args(company_id=3, office_id=3),
+        repository=CostV2BackfillRepository(exe),
+    )
+    baseline = [
+        (s, p)
+        for s, p in zip(exe.sqls, exe.params)
+        if "h.cost_net" in s.lower() and "admission_date" not in s.lower()
+    ]
+    assert baseline
+    sql, params = baseline[0]
+    assert "company_id" in sql.lower()
+    assert "office_id" in sql.lower()
+    assert params[0] == 3
+    assert params[-1] == 3
+
+
+def test_45_mankeke_2533_status_and_amount():
+    exe = RecordingExecutor(history=_mankeke_outlier_hist())
+    report = run_cost_v2_backfill_dry_run(
+        args=_args(batch_size=10, sample_limit=10),
+        repository=CostV2BackfillRepository(exe),
+    )
+    s = next(x for x in report["samples"] if x["history_id"] == 23190)
+    assert s["effective_quality_status"] == "missing_taxes_in_gross"
+    assert "suspicious_outlier" in s["warnings"]
+    assert s["corrected_gross_cost"] == "3014.27"
+    assert len(s["calculation_result_fingerprint"]) == 64
+
+
+def test_46_status_sum_equals_population_outlier_set():
+    exe = RecordingExecutor(history=_mankeke_outlier_hist())
+    report = run_cost_v2_backfill_dry_run(
+        args=_args(batch_size=10, sample_limit=10),
+        repository=CostV2BackfillRepository(exe),
+    )
+    r = report["results"]
+    total = sum(
+        r[k]
+        for k in (
+            "missing_cost",
+            "gross_component_mismatch",
+            "duplicated_taxes_in_gross",
+            "missing_taxes_in_gross",
+            "incomplete_tax_context",
+            "valid_gross",
+        )
+    )
+    assert total == report["population"]["rows_processed"]
 
 
 def test_executor_timeouts_set():

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Iterable, Sequence
@@ -36,6 +37,7 @@ __all__ = [
     "CALCULATION_VERSION",
     "build_tax_context_from_ids",
     "calculate_cost_reception",
+    "calculation_result_fingerprint",
     "fingerprint_sha256",
     "source_history_fingerprint",
     "tax_context_fingerprint",
@@ -128,6 +130,57 @@ def tax_context_fingerprint(ctx: TaxContextInput) -> str:
             "resolution_quality": ctx.resolution_quality,
         }
     )
+
+
+def calculation_result_fingerprint(calc: CostReceptionCalculation) -> str:
+    """SHA-256 del resultado V2. Orden de warnings/taxes/ids no altera el hash.
+
+    NULL se serializa como null JSON (distinto de cero).
+    """
+    adds = [
+        {
+            "tax_id": t.tax_id,
+            "name": t.name,
+            "rate": _dec_str(t.rate),
+            "category": t.category,
+            "amount": _dec_str(t.amount),
+            "source": t.source,
+        }
+        for t in sorted(
+            calc.additional_taxes,
+            key=lambda x: (x.tax_id, x.category or "", x.source or "", x.name or ""),
+        )
+    ]
+    return fingerprint_sha256(
+        {
+            "calculation_version": calc.calculation_version,
+            "resolved_tax_ids": sorted(set(calc.resolved_tax_ids)),
+            "iva_tax_id": calc.iva_tax_id,
+            "iva_rate": _dec_str(calc.iva_rate),
+            "calculated_iva_amount": _dec_str(calc.calculated_iva_amount),
+            "additional_taxes": adds,
+            "additional_tax_rate_total": _dec_str(calc.additional_tax_rate_total),
+            "additional_tax_amount_total": _dec_str(calc.additional_tax_amount_total),
+            "total_tax_rate": _dec_str(calc.total_tax_rate),
+            "corrected_gross_cost": _dec_str(calc.corrected_gross_cost),
+            "gross_difference_amount": _dec_str(calc.gross_difference_amount),
+            "tax_rate_on_net_pct": _dec_str(calc.tax_rate_on_net_pct),
+            "gross_understatement_vs_corrected_pct": _dec_str(
+                calc.gross_understatement_vs_corrected_pct
+            ),
+            "effective_quality_status": calc.effective_quality_status,
+            "warnings": sorted(set(calc.warnings)),
+            "tax_ids_source": calc.tax_ids_source,
+            "tax_rates_source": calc.tax_rates_source,
+            "tax_resolution_quality": calc.tax_resolution_quality,
+            "source_history_fingerprint": calc.source_history_fingerprint,
+            "tax_context_fingerprint": calc.tax_context_fingerprint,
+        }
+    )
+
+
+def _with_result_fingerprint(calc: CostReceptionCalculation) -> CostReceptionCalculation:
+    return replace(calc, calculation_result_fingerprint=calculation_result_fingerprint(calc))
 
 
 def build_tax_context_from_ids(
@@ -326,43 +379,46 @@ def calculate_cost_reception(
     resolved_ids, ctx_iva_tax_id, ctx_iva_rate = _context_identity_fields(tax_context)
 
     if net is None or net <= ZERO:
-        return CostReceptionCalculation(
-            history_id=row.history_id,
-            company_id=row.company_id,
-            office_id=row.office_id,
-            variant_id=row.variant_id,
-            admission_date=adm,
-            calculation_version=calculation_version,
-            stored_cost_net=net,
-            stored_quantity=row.stored_quantity,
-            stored_iva_amount=row.stored_iva_amount,
-            stored_other_taxes=row.stored_other_taxes,
-            stored_gross_cost=bruto,
-            reception_tax_ids=tuple(row.reception_tax_ids),
-            catalog_tax_ids=tuple(row.catalog_tax_ids),
-            resolved_tax_ids=resolved_ids,
-            iva_tax_id=ctx_iva_tax_id,
-            iva_rate=ctx_iva_rate,
-            calculated_iva_amount=None,
-            additional_taxes=(),
-            additional_tax_rate_total=None,
-            additional_tax_amount_total=None,
-            total_tax_rate=None,
-            corrected_gross_cost=None,
-            gross_difference_amount=None,
-            tax_rate_on_net_pct=None,
-            gross_understatement_vs_corrected_pct=None,
-            tax_context_source=tax_context.context_source,
-            tax_ids_source=tax_context.tax_ids_source,
-            tax_rates_source=tax_context.tax_rates_source,
-            tax_context_as_of=tax_context.context_as_of,
-            tax_context_is_historical=tax_context.context_is_historical,
-            tax_resolution_quality=tax_context.resolution_quality,
-            effective_quality_status="missing_cost",
-            warnings=tuple(warnings),
-            source_history_created_at=row.source_history_created_at,
-            source_history_fingerprint=hist_fp,
-            tax_context_fingerprint=tax_fp,
+        return _with_result_fingerprint(
+            CostReceptionCalculation(
+                history_id=row.history_id,
+                company_id=row.company_id,
+                office_id=row.office_id,
+                variant_id=row.variant_id,
+                admission_date=adm,
+                calculation_version=calculation_version,
+                stored_cost_net=net,
+                stored_quantity=row.stored_quantity,
+                stored_iva_amount=row.stored_iva_amount,
+                stored_other_taxes=row.stored_other_taxes,
+                stored_gross_cost=bruto,
+                reception_tax_ids=tuple(row.reception_tax_ids),
+                catalog_tax_ids=tuple(row.catalog_tax_ids),
+                resolved_tax_ids=resolved_ids,
+                iva_tax_id=ctx_iva_tax_id,
+                iva_rate=ctx_iva_rate,
+                calculated_iva_amount=None,
+                additional_taxes=(),
+                additional_tax_rate_total=None,
+                additional_tax_amount_total=None,
+                total_tax_rate=None,
+                corrected_gross_cost=None,
+                gross_difference_amount=None,
+                tax_rate_on_net_pct=None,
+                gross_understatement_vs_corrected_pct=None,
+                tax_context_source=tax_context.context_source,
+                tax_ids_source=tax_context.tax_ids_source,
+                tax_rates_source=tax_context.tax_rates_source,
+                tax_context_as_of=tax_context.context_as_of,
+                tax_context_is_historical=tax_context.context_is_historical,
+                tax_resolution_quality=tax_context.resolution_quality,
+                effective_quality_status="missing_cost",
+                warnings=tuple(warnings),
+                source_history_created_at=row.source_history_created_at,
+                source_history_fingerprint=hist_fp,
+                tax_context_fingerprint=tax_fp,
+                calculation_result_fingerprint="",
+            )
         )
 
     resolved = _profile_resolved(tax_context)
@@ -489,49 +545,52 @@ def calculate_cost_reception(
         tax_rate_on_net = None
         under_vs_corr = None
 
-    return CostReceptionCalculation(
-        history_id=row.history_id,
-        company_id=row.company_id,
-        office_id=row.office_id,
-        variant_id=row.variant_id,
-        admission_date=adm,
-        calculation_version=calculation_version,
-        stored_cost_net=_storage(net),
-        stored_quantity=(
-            _storage(row.stored_quantity) if row.stored_quantity is not None else None
-        ),
-        stored_iva_amount=(
-            _storage(row.stored_iva_amount) if row.stored_iva_amount is not None else None
-        ),
-        stored_other_taxes=(
-            _storage(row.stored_other_taxes) if row.stored_other_taxes is not None else None
-        ),
-        stored_gross_cost=_storage(bruto) if bruto is not None else None,
-        reception_tax_ids=tuple(row.reception_tax_ids),
-        catalog_tax_ids=tuple(row.catalog_tax_ids),
-        resolved_tax_ids=resolved_ids,
-        iva_tax_id=iva_tax_id if resolved else None,
-        iva_rate=iva_rate if resolved else None,
-        calculated_iva_amount=iva_amount if resolved else None,
-        additional_taxes=tuple(add_amounts) if resolved else (),
-        additional_tax_rate_total=add_rate_total if resolved else None,
-        additional_tax_amount_total=add_amount_total if resolved else None,
-        total_tax_rate=total_rate if resolved else None,
-        corrected_gross_cost=corrected,
-        gross_difference_amount=gross_diff,
-        tax_rate_on_net_pct=tax_rate_on_net,
-        gross_understatement_vs_corrected_pct=under_vs_corr,
-        tax_context_source=tax_context.context_source,
-        tax_ids_source=tax_context.tax_ids_source,
-        tax_rates_source=tax_context.tax_rates_source,
-        tax_context_as_of=tax_context.context_as_of,
-        tax_context_is_historical=tax_context.context_is_historical,
-        tax_resolution_quality=(
-            tax_context.resolution_quality if resolved else "unresolved"
-        ),
-        effective_quality_status=status,
-        warnings=tuple(warnings),
-        source_history_created_at=row.source_history_created_at,
-        source_history_fingerprint=hist_fp,
-        tax_context_fingerprint=tax_fp,
+    return _with_result_fingerprint(
+        CostReceptionCalculation(
+            history_id=row.history_id,
+            company_id=row.company_id,
+            office_id=row.office_id,
+            variant_id=row.variant_id,
+            admission_date=adm,
+            calculation_version=calculation_version,
+            stored_cost_net=_storage(net),
+            stored_quantity=(
+                _storage(row.stored_quantity) if row.stored_quantity is not None else None
+            ),
+            stored_iva_amount=(
+                _storage(row.stored_iva_amount) if row.stored_iva_amount is not None else None
+            ),
+            stored_other_taxes=(
+                _storage(row.stored_other_taxes) if row.stored_other_taxes is not None else None
+            ),
+            stored_gross_cost=_storage(bruto) if bruto is not None else None,
+            reception_tax_ids=tuple(row.reception_tax_ids),
+            catalog_tax_ids=tuple(row.catalog_tax_ids),
+            resolved_tax_ids=resolved_ids,
+            iva_tax_id=iva_tax_id if resolved else None,
+            iva_rate=iva_rate if resolved else None,
+            calculated_iva_amount=iva_amount if resolved else None,
+            additional_taxes=tuple(add_amounts) if resolved else (),
+            additional_tax_rate_total=add_rate_total if resolved else None,
+            additional_tax_amount_total=add_amount_total if resolved else None,
+            total_tax_rate=total_rate if resolved else None,
+            corrected_gross_cost=corrected,
+            gross_difference_amount=gross_diff,
+            tax_rate_on_net_pct=tax_rate_on_net,
+            gross_understatement_vs_corrected_pct=under_vs_corr,
+            tax_context_source=tax_context.context_source,
+            tax_ids_source=tax_context.tax_ids_source,
+            tax_rates_source=tax_context.tax_rates_source,
+            tax_context_as_of=tax_context.context_as_of,
+            tax_context_is_historical=tax_context.context_is_historical,
+            tax_resolution_quality=(
+                tax_context.resolution_quality if resolved else "unresolved"
+            ),
+            effective_quality_status=status,
+            warnings=tuple(warnings),
+            source_history_created_at=row.source_history_created_at,
+            source_history_fingerprint=hist_fp,
+            tax_context_fingerprint=tax_fp,
+            calculation_result_fingerprint="",
+        )
     )

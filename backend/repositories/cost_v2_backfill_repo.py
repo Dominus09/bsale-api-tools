@@ -258,7 +258,7 @@ WHERE h.company_id = %s
             )
         return out
 
-    def fetch_variant_cost_nets(
+    def fetch_scope_variant_ids(
         self,
         *,
         company_id: int,
@@ -268,19 +268,17 @@ WHERE h.company_id = %s
         variant_ids: list[int] | None = None,
         history_id: int | None = None,
         document_number: int | None = None,
-    ) -> list[dict[str, Any]]:
-        """Un solo SELECT: (variant_id, cost_net) del scope para mediana batch (sin N+1)."""
+    ) -> list[int]:
+        """Variant IDs presentes en el scope de salida (con filtros del CLI)."""
+        if variant_ids is not None:
+            return sorted({int(v) for v in variant_ids})
         date_to_exclusive = date_to + timedelta(days=1)
         sql = """
-SELECT
-    h.variant_id,
-    h.cost_net
+SELECT DISTINCT h.variant_id AS variant_id
 FROM analytics.cost_reception_history h
 WHERE h.company_id = %s
   AND h.admission_date >= %s
   AND h.admission_date < %s
-  AND h.cost_net IS NOT NULL
-  AND h.cost_net > 0
 """.strip()
         params: list[Any] = [company_id, date_from, date_to_exclusive]
         if office_id is not None:
@@ -292,11 +290,40 @@ WHERE h.company_id = %s
         if document_number is not None:
             sql += " AND (h.document_number = %s OR h.reception_id = %s)"
             params.extend([document_number, document_number])
-        if variant_ids is not None:
-            if not variant_ids:
-                return []
-            sql += " AND h.variant_id = ANY(%s)"
-            params.append(list(variant_ids))
+        sql += " ORDER BY h.variant_id"
+        rows = self._execute(sql, tuple(params))
+        return [int(r["variant_id"]) for r in rows if r.get("variant_id") is not None]
+
+    def fetch_outlier_baseline_cost_nets(
+        self,
+        *,
+        company_id: int,
+        office_id: int | None,
+        variant_ids: list[int],
+    ) -> list[dict[str, Any]]:
+        """Baseline de outliers: historial completo de la variante (sin filtros de salida).
+
+        Ignora date_from/date_to, history_id, barcode y document_number.
+        Solo company_id + office_id + variant_ids + cost_net > 0.
+        Una sola consulta batch (sin N+1).
+        """
+        ids = sorted({int(v) for v in variant_ids})
+        if not ids:
+            return []
+        sql = """
+SELECT
+    h.variant_id,
+    h.cost_net
+FROM analytics.cost_reception_history h
+WHERE h.company_id = %s
+  AND h.cost_net IS NOT NULL
+  AND h.cost_net > 0
+  AND h.variant_id = ANY(%s)
+""".strip()
+        params: list[Any] = [company_id, ids]
+        if office_id is not None:
+            sql += " AND h.office_id = %s"
+            params.append(office_id)
 
         rows = self._execute(sql, tuple(params))
         out: list[dict[str, Any]] = []

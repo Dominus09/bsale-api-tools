@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS analytics.cost_reception_calculated (
     -- Trazabilidad
     source_history_created_at       TIMESTAMPTZ,
     source_history_fingerprint      TEXT,
+    calculation_result_fingerprint  TEXT NOT NULL,
     calculated_at                   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
     CONSTRAINT uq_cost_reception_calculated_history_version
@@ -196,6 +197,7 @@ SELECT
     c.warnings_json,
     c.source_history_created_at,
     c.source_history_fingerprint,
+    c.calculation_result_fingerprint,
     c.calculated_at,
     h.unique_key AS history_unique_key,
     h.reception_id,
@@ -268,6 +270,11 @@ COMMENT ON COLUMN analytics.cost_reception_calculated.tax_rates_source IS
 COMMENT ON COLUMN analytics.cost_reception_calculated.tax_context_fingerprint IS
     'SHA-256 del contexto tributario (ids ordenados + tasas + tax_ids_source + tax_rates_source + fuentes). '
     'Independiente del orden de tax_ids.';
+
+COMMENT ON COLUMN analytics.cost_reception_calculated.calculation_result_fingerprint IS
+    'SHA-256 del resultado calculado (montos, estado, warnings, fuentes, fingerprints de origen). '
+    'Permite distinguir un rerun sin cambios de uno cuyo estado, warning o monto cambió. '
+    'NULL ≠ cero; orden de warnings/taxes/ids no altera el hash.';
 
 COMMENT ON COLUMN analytics.cost_reception_calculated.tax_resolution_quality IS
     'NOT NULL DEFAULT unresolved.';
