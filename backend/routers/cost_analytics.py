@@ -2,15 +2,125 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from backend.schemas.cost_v2_read import (
+    DEFAULT_LIMIT,
+    MAX_LIMIT,
+    CostV2ReadValidationError,
+)
 from backend.services import cost_analytics_service as svc
+from backend.services import cost_v2_read_service as v2svc
 from backend.services.sync_cost_receptions import sync_cost_receptions
 from backend.utils.auth_staff import require_staff_user
 
 router = APIRouter(prefix="/cost-analytics", tags=["cost-analytics"])
+
+
+def _v2_http_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, CostV2ReadValidationError):
+        return HTTPException(status_code=422, detail=str(exc))
+    if isinstance(exc, LookupError):
+        return HTTPException(status_code=404, detail=str(exc))
+    return HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/v2/receptions")
+def list_v2_receptions(
+    company_id: int = Query(..., ge=1),
+    office_id: int = Query(..., ge=1),
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+    status: list[str] | None = Query(None),
+    warning: list[str] | None = Query(None),
+    barcode: str | None = Query(None, max_length=64),
+    variant_id: int | None = Query(None, ge=1),
+    document_number: int | None = Query(None),
+    history_id: int | None = Query(None, ge=1),
+    search: str | None = Query(None, max_length=120),
+    limit: int = Query(DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
+    cursor: str | None = Query(None, max_length=512),
+    _user: dict = Depends(require_staff_user),
+):
+    """Listado read-only Costos V2 (paralelo; no reemplaza /receptions legacy)."""
+    try:
+        return v2svc.list_v2_receptions(
+            company_id=company_id,
+            office_id=office_id,
+            date_from=date_from,
+            date_to=date_to,
+            limit=limit,
+            cursor=cursor,
+            status=status,
+            warning=warning,
+            barcode=barcode,
+            variant_id=variant_id,
+            document_number=document_number,
+            history_id=history_id,
+            search=search,
+        )
+    except (CostV2ReadValidationError, LookupError) as exc:
+        raise _v2_http_error(exc) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/v2/receptions/{history_id}")
+def get_v2_reception(
+    history_id: int,
+    company_id: int = Query(..., ge=1),
+    office_id: int = Query(..., ge=1),
+    _user: dict = Depends(require_staff_user),
+):
+    """Detalle read-only Costos V2 por history_id."""
+    try:
+        return v2svc.get_v2_reception(
+            company_id=company_id,
+            office_id=office_id,
+            history_id=history_id,
+        )
+    except (CostV2ReadValidationError, LookupError) as exc:
+        raise _v2_http_error(exc) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/v2/summary")
+def v2_summary(
+    company_id: int = Query(..., ge=1),
+    office_id: int = Query(..., ge=1),
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+    status: list[str] | None = Query(None),
+    warning: list[str] | None = Query(None),
+    barcode: str | None = Query(None, max_length=64),
+    variant_id: int | None = Query(None, ge=1),
+    document_number: int | None = Query(None),
+    history_id: int | None = Query(None, ge=1),
+    search: str | None = Query(None, max_length=120),
+    _user: dict = Depends(require_staff_user),
+):
+    """Resumen agregable sin sumar costos unitarios ni impacto monetario."""
+    try:
+        return v2svc.summarize_v2(
+            company_id=company_id,
+            office_id=office_id,
+            date_from=date_from,
+            date_to=date_to,
+            status=status,
+            warning=warning,
+            barcode=barcode,
+            variant_id=variant_id,
+            document_number=document_number,
+            history_id=history_id,
+            search=search,
+        )
+    except (CostV2ReadValidationError, LookupError) as exc:
+        raise _v2_http_error(exc) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.get("/dashboard")
