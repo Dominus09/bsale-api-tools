@@ -5,18 +5,21 @@ Mapeo canónico Quillotana / Bsale Chile documentado en el repo
 
 | tax_id | Rol                                      | Tasa fallback | Estado en repo      |
 |--------|------------------------------------------|---------------|---------------------|
-| 1      | IVA                                      | 19%           | confirmado          |
+| 1      | IVA principal                            | 19%           | confirmado          |
 | 2      | ILA vino                                 | 20.5%         | confirmado          |
 | 3      | ILA cerveza                              | 20.5%         | confirmado          |
 | 4      | (sin rol canónico en código)             | —             | sin fallback seguro |
 | 5      | (sin rol canónico en código)             | —             | sin fallback seguro |
-| 6      | (sin rol canónico en código)             | —             | sin fallback seguro |
-| 7      | (sin rol canónico en código)             | —             | sin fallback seguro |
+| 6      | IVA anticipado harina (iva_advance)      | —             | solo vía bsale.taxes|
+| 7      | IVA anticipado carne (iva_advance)       | —             | solo vía bsale.taxes|
 | 8      | ILA destilados                           | 31.5%         | confirmado          |
 
-tax_id 4–7: no hay tasa ni categoría fija en el repositorio. Solo se resuelven
-si ``bsale.taxes.percentage`` está presente. Sin tasa segura → unresolved;
-el auditor NO corrige costos en ese caso.
+tax_id 4–5: no hay tasa ni categoría fija en el repositorio. Solo se resuelven
+si ``bsale.taxes.percentage`` está presente. Sin tasa segura → unresolved.
+
+tax_id 6–7: IVA anticipado (category=iva_advance, semantic_type=tax_advance).
+NO son IVA principal. Rate exclusivamente desde ``bsale.taxes`` (sin fallback
+canónico). Sin percentage → unresolved; no corregir costos.
 
 Las tasas de ``bsale.taxes`` (catálogo) tienen prioridad sobre el fallback.
 Nunca se asume que taxes[0] es IVA.
@@ -34,14 +37,17 @@ from backend.services.analytics.tax_models import TaxCategory, classify_tax_cate
 
 COMMERCIAL_QUANT = Decimal("0.01")
 
-# IDs conocidos de IVA (Bsale company Quillotana / catálogo habitual)
+# IDs conocidos de IVA principal (Bsale company Quillotana / catálogo habitual)
 IVA_TAX_IDS: frozenset[int] = frozenset({1})
+
+# IVA anticipado: no son IVA principal; rate solo desde bsale.taxes
+IVA_ADVANCE_TAX_IDS: frozenset[int] = frozenset({6, 7})
 
 # IDs observados habitualmente en Quillotana (incl. sin fallback)
 DOCUMENTED_TAX_IDS: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 8)
 
 # Fallback cuando bsale.taxes no trae percentage (solo auditoría; no escribe sync)
-# 4–7 deliberadamente ausentes: sin tasa segura en código.
+# 4–7 deliberadamente ausentes: sin tasa segura en código (6–7 = anticipo sin fallback).
 TAX_ID_FALLBACK: dict[int, tuple[str, Decimal, str]] = {
     1: ("IVA", Decimal("19"), "iva"),
     2: ("ILA vino", Decimal("20.5"), "ila_beer_wine"),
@@ -50,7 +56,7 @@ TAX_ID_FALLBACK: dict[int, tuple[str, Decimal, str]] = {
 }
 
 TAX_ID_NOTES: dict[int, str] = {
-    1: "IVA 19% — identidad por tax_id=1",
+    1: "IVA principal 19% — identidad por tax_id=1",
     2: "ILA vino 20.5% — fallback canónico del repo",
     3: "ILA cerveza 20.5% — fallback canónico del repo",
     4: (
@@ -62,14 +68,20 @@ TAX_ID_NOTES: dict[int, str] = {
         "si percentage ausente → unresolved; no corregir costos."
     ),
     6: (
-        "Sin tasa/categoría canónica en el repo. Resolver solo vía bsale.taxes; "
-        "si percentage ausente → unresolved; no corregir costos."
+        "IVA anticipado harina (category=iva_advance, semantic_type=tax_advance). "
+        "NO es IVA principal. Rate solo vía bsale.taxes; sin percentage → unresolved."
     ),
     7: (
-        "Sin tasa/categoría canónica en el repo. Resolver solo vía bsale.taxes; "
-        "si percentage ausente → unresolved; no corregir costos."
+        "IVA anticipado carne (category=iva_advance, semantic_type=tax_advance). "
+        "NO es IVA principal. Rate solo vía bsale.taxes; sin percentage → unresolved."
     ),
     8: "ILA destilados 31.5% — fallback canónico del repo",
+}
+
+TAX_ID_SEMANTIC_TYPE: dict[int, str] = {
+    1: "iva_principal",
+    6: "tax_advance",
+    7: "tax_advance",
 }
 
 
@@ -105,16 +117,32 @@ def _is_iva_entry(
     name: str | None,
     rate: Decimal | None,
 ) -> bool:
+    """True solo para IVA principal. Anticipos (6/7) nunca califican."""
+    if tax_id in IVA_ADVANCE_TAX_IDS:
+        return False
     if tax_id in IVA_TAX_IDS:
         return True
     n = (name or "").strip().lower()
-    if n in {"iva", "i.v.a", "i.v.a."} or n.startswith("iva "):
+    # Nombres tipo "IVA HARI" / "IVA CARN." son anticipos si el id es 6/7 (ya excluido).
+    # Para otros ids, solo match exacto de IVA genérico — no startswith (evita anticipos).
+    if n in {"iva", "i.v.a", "i.v.a."}:
         return True
-    # No clasificar como IVA solo por rate==19 (ILA podría coincidir en otros países)
     return False
 
 
+def semantic_type_for_tax_id(tax_id: int, *, category: str | None = None) -> str | None:
+    if tax_id in TAX_ID_SEMANTIC_TYPE:
+        return TAX_ID_SEMANTIC_TYPE[tax_id]
+    if category == "iva_advance":
+        return "tax_advance"
+    if category == "iva" or tax_id in IVA_TAX_IDS:
+        return "iva_principal"
+    return None
+
+
 def _category_for(tax_id: int, rate: Decimal | None, *, is_iva: bool) -> str:
+    if tax_id in IVA_ADVANCE_TAX_IDS:
+        return "iva_advance"
     if is_iva:
         return "iva"
     if tax_id in TAX_ID_FALLBACK:

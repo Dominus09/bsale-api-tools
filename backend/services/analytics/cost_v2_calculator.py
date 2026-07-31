@@ -10,6 +10,7 @@ from typing import Any, Iterable, Sequence
 
 from backend.services.analytics.cost_audit_models import TaxCatalogEntry
 from backend.services.analytics.cost_tax_resolution import (
+    IVA_ADVANCE_TAX_IDS,
     IVA_TAX_IDS,
     resolve_taxes_from_ids,
 )
@@ -240,11 +241,17 @@ def build_tax_context_from_ids(
 def _split_iva_and_additional(
     taxes: Sequence[TaxRateEntry],
 ) -> tuple[TaxRateEntry | None, list[TaxRateEntry]]:
+    """Separa IVA principal de adicionales (incl. iva_advance 6/7)."""
     iva: TaxRateEntry | None = None
     additional: list[TaxRateEntry] = []
     for t in sorted(taxes, key=lambda x: x.tax_id):
-        is_iva = t.tax_id in IVA_TAX_IDS or t.category == "iva"
-        if is_iva:
+        is_advance = (
+            t.tax_id in IVA_ADVANCE_TAX_IDS or t.category == "iva_advance"
+        )
+        is_principal_iva = (not is_advance) and (
+            t.tax_id in IVA_TAX_IDS or t.category == "iva"
+        )
+        if is_principal_iva:
             if iva is None or t.rate > iva.rate:
                 iva = t
         else:
@@ -264,6 +271,17 @@ def _profile_resolved(ctx: TaxContextInput) -> bool:
         if tid not in known:
             return False
     return True
+
+
+def _context_identity_fields(
+    tax_context: TaxContextInput,
+) -> tuple[tuple[int, ...], int | None, Decimal | None]:
+    """IDs/tasas de identidad del contexto (sin montos calculados)."""
+    resolved_ids = tuple(sorted({t.tax_id for t in tax_context.taxes}))
+    iva_entry, _additional = _split_iva_and_additional(tax_context.taxes)
+    iva_tax_id = iva_entry.tax_id if iva_entry is not None else None
+    iva_rate = iva_entry.rate if iva_entry is not None else None
+    return resolved_ids, iva_tax_id, iva_rate
 
 
 def calculate_cost_reception(
@@ -304,6 +322,9 @@ def calculate_cost_reception(
         if "reception_tax_context_unavailable" not in warnings:
             warnings.append("reception_tax_context_unavailable")
 
+    # Conservar identidad tributaria aunque el neto no permita montos.
+    resolved_ids, ctx_iva_tax_id, ctx_iva_rate = _context_identity_fields(tax_context)
+
     if net is None or net <= ZERO:
         return CostReceptionCalculation(
             history_id=row.history_id,
@@ -319,9 +340,9 @@ def calculate_cost_reception(
             stored_gross_cost=bruto,
             reception_tax_ids=tuple(row.reception_tax_ids),
             catalog_tax_ids=tuple(row.catalog_tax_ids),
-            resolved_tax_ids=(),
-            iva_tax_id=None,
-            iva_rate=None,
+            resolved_tax_ids=resolved_ids,
+            iva_tax_id=ctx_iva_tax_id,
+            iva_rate=ctx_iva_rate,
             calculated_iva_amount=None,
             additional_taxes=(),
             additional_tax_rate_total=None,
@@ -355,7 +376,7 @@ def calculate_cost_reception(
     add_amount_total: Decimal | None = None
     total_rate: Decimal | None = None
     corrected: Decimal | None = None
-    resolved_ids = tuple(sorted({t.tax_id for t in tax_context.taxes}))
+    # resolved_ids ya calculado arriba desde el contexto
 
     if resolved:
         if iva_entry is not None:
@@ -436,6 +457,7 @@ def calculate_cost_reception(
         status = "duplicated_taxes_in_gross"
     elif not resolved:
         status = "incomplete_tax_context"
+        status = "incomplete_tax_context"
         corrected = None
         gross_diff = None
         tax_rate_on_net = None
@@ -447,7 +469,7 @@ def calculate_cost_reception(
         add_rate_total = None
         total_rate = None
         add_amounts = []
-        resolved_ids = ()
+        # resolved_ids se conserva desde el contexto (trazabilidad).
     elif bruto is not None and corrected is not None and _near(bruto, net, tol.money_rounding):
         if corrected > bruto + tol.money_rounding:
             status = "missing_taxes_in_gross"

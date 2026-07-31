@@ -111,6 +111,8 @@ class RecordingExecutor:
                 {"bsale_id": 1, "name": "IVA", "percentage": D("19")},
                 {"bsale_id": 2, "name": "ILA vino", "percentage": D("20.5")},
                 {"bsale_id": 3, "name": "ILA cerveza", "percentage": D("20.5")},
+                {"bsale_id": 6, "name": "IVA HARI", "percentage": D("12")},
+                {"bsale_id": 7, "name": "IVA CARN.", "percentage": D("5")},
                 {"bsale_id": 8, "name": "Destilados", "percentage": D("31.5")},
             ]
         )
@@ -660,6 +662,91 @@ def test_34_document_number_null_preserved():
     s = report["samples"][0]
     assert s["document_number"] is None
     assert "missing_document_number" not in s["warnings"]
+
+
+def test_35_harina_backfill():
+    exe = RecordingExecutor(
+        history=[_hist(1, tax_ids=[1, 6], cost_net=D("664"), bruto=D("664"))]
+    )
+    report = run_cost_v2_backfill_dry_run(
+        args=_args(), repository=CostV2BackfillRepository(exe)
+    )
+    s = report["samples"][0]
+    assert s["corrected_gross_cost"] == "869.84"
+    assert s["total_tax_rate"] == "31.00"
+    assert s["effective_quality_status"] == "missing_taxes_in_gross"
+
+
+def test_36_carne_backfill():
+    exe = RecordingExecutor(
+        history=[_hist(1, tax_ids=[1, 7], cost_net=D("7770"), bruto=D("7770"))]
+    )
+    report = run_cost_v2_backfill_dry_run(
+        args=_args(), repository=CostV2BackfillRepository(exe)
+    )
+    s = report["samples"][0]
+    assert s["corrected_gross_cost"] == "9634.80"
+    assert s["total_tax_rate"] == "24.00"
+
+
+def test_37_status_sum_equals_population_mixed():
+    hist = [
+        _hist(1, tax_ids=[1, 6], cost_net=D("664"), bruto=D("664")),
+        _hist(2, tax_ids=[1, 7], cost_net=D("7770"), bruto=D("7770")),
+        _hist(3, tax_ids=[], cost_net=D("100"), bruto=D("100")),  # cigarrillo
+        _hist(4, cost_net=None, bruto=None, iva=None, other=None, tax_ids=[8, 1]),
+    ]
+    exe = RecordingExecutor(history=hist)
+    report = run_cost_v2_backfill_dry_run(
+        args=_args(batch_size=10, sample_limit=10),
+        repository=CostV2BackfillRepository(exe),
+    )
+    r = report["results"]
+    total = sum(
+        r[k]
+        for k in (
+            "missing_cost",
+            "gross_component_mismatch",
+            "duplicated_taxes_in_gross",
+            "missing_taxes_in_gross",
+            "incomplete_tax_context",
+            "valid_gross",
+        )
+    )
+    assert total == report["population"]["rows_processed"] == 4
+    assert r["missing_cost"] == 1
+    assert r["incomplete_tax_context"] == 1
+    assert r["missing_taxes_in_gross"] == 2
+
+
+def test_38_cigarrillo_sin_tax_ids_unresolved():
+    exe = RecordingExecutor(
+        history=[_hist(1, tax_ids=[], cost_net=D("500"), bruto=D("500"))]
+    )
+    report = run_cost_v2_backfill_dry_run(
+        args=_args(), repository=CostV2BackfillRepository(exe)
+    )
+    assert report["results"]["incomplete_tax_context"] == 1
+    s = report["samples"][0]
+    assert s["corrected_gross_cost"] is None
+    assert s["tax_resolution_quality"] == "unresolved"
+    assert s["catalog_tax_ids"] == []
+
+
+def test_39_missing_cost_preserves_resolved_ids_in_sample():
+    exe = RecordingExecutor(
+        history=[
+            _hist(1, tax_ids=[8, 1], cost_net=None, bruto=None, iva=None, other=None)
+        ]
+    )
+    report = run_cost_v2_backfill_dry_run(
+        args=_args(), repository=CostV2BackfillRepository(exe)
+    )
+    s = report["samples"][0]
+    assert s["effective_quality_status"] == "missing_cost"
+    assert s["resolved_tax_ids"] == [1, 8]
+    assert s["tax_resolution_quality"] == "current_catalog"
+    assert s["corrected_gross_cost"] is None
 
 
 def test_executor_timeouts_set():

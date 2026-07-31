@@ -313,3 +313,242 @@ def test_24_fingerprint_includes_tax_sources():
         tax_rates_source="canonical_fallback",
     )
     assert tax_context_fingerprint(a) != tax_context_fingerprint(c)
+
+
+def _catalog_iva_advance() -> dict[int, TaxCatalogEntry]:
+    return {
+        1: TaxCatalogEntry(1, "IVA", D("19")),
+        6: TaxCatalogEntry(6, "IVA HARI", D("12")),
+        7: TaxCatalogEntry(7, "IVA CARN.", D("5")),
+        8: TaxCatalogEntry(8, "Destilados", D("31.5")),
+    }
+
+
+def test_25_harina_1_6_rates():
+    ctx = build_tax_context_from_ids(
+        [1, 6],
+        tax_catalog=_catalog_iva_advance(),
+        tax_ids_source="current_product_tax",
+    )
+    res = calculate_cost_reception(
+        _row(
+            stored_cost_net=D("664"),
+            stored_gross_cost=D("664"),
+            reception_tax_ids=(),
+            catalog_tax_ids=(1, 6),
+        ),
+        ctx,
+    )
+    assert res.iva_tax_id == 1
+    assert res.iva_rate == D("19")
+    assert res.calculated_iva_amount == D("126.16")
+    assert res.additional_tax_rate_total == D("12.00")
+    assert res.additional_tax_amount_total == D("79.68")
+    assert res.total_tax_rate == D("31.00")
+    assert {t.tax_id for t in res.additional_taxes} == {6}
+    assert all(t.category == "iva_advance" for t in res.additional_taxes)
+
+
+def test_26_harina_664():
+    ctx = build_tax_context_from_ids([1, 6], tax_catalog=_catalog_iva_advance())
+    res = calculate_cost_reception(
+        _row(stored_cost_net=D("664"), stored_gross_cost=D("664"), reception_tax_ids=()),
+        ctx,
+    )
+    assert res.corrected_gross_cost == D("869.84")
+    assert res.effective_quality_status == "missing_taxes_in_gross"
+
+
+def test_27_harina_13560():
+    ctx = build_tax_context_from_ids([1, 6], tax_catalog=_catalog_iva_advance())
+    res = calculate_cost_reception(
+        _row(stored_cost_net=D("13560"), stored_gross_cost=D("13560"), reception_tax_ids=()),
+        ctx,
+    )
+    assert res.corrected_gross_cost == D("17763.60")
+
+
+def test_28_carne_1_7_rates():
+    ctx = build_tax_context_from_ids(
+        [1, 7],
+        tax_catalog=_catalog_iva_advance(),
+        tax_ids_source="current_product_tax",
+    )
+    res = calculate_cost_reception(
+        _row(
+            stored_cost_net=D("7770"),
+            stored_gross_cost=D("7770"),
+            reception_tax_ids=(),
+            catalog_tax_ids=(1, 7),
+        ),
+        ctx,
+    )
+    assert res.iva_tax_id == 1
+    assert res.iva_rate == D("19")
+    assert res.calculated_iva_amount == D("1476.30")
+    assert res.additional_tax_rate_total == D("5.00")
+    assert res.additional_tax_amount_total == D("388.50")
+    assert res.total_tax_rate == D("24.00")
+    assert {t.tax_id for t in res.additional_taxes} == {7}
+
+
+def test_29_carne_7770():
+    ctx = build_tax_context_from_ids([1, 7], tax_catalog=_catalog_iva_advance())
+    res = calculate_cost_reception(
+        _row(stored_cost_net=D("7770"), stored_gross_cost=D("7770"), reception_tax_ids=()),
+        ctx,
+    )
+    assert res.corrected_gross_cost == D("9634.80")
+
+
+def test_30_tax_6_not_principal_iva():
+    ctx = build_tax_context_from_ids([1, 6], tax_catalog=_catalog_iva_advance())
+    res = calculate_cost_reception(
+        _row(stored_cost_net=D("664"), stored_gross_cost=D("664"), reception_tax_ids=()),
+        ctx,
+    )
+    assert res.iva_tax_id == 1
+    assert any(t.tax_id == 6 and t.category == "iva_advance" for t in res.additional_taxes)
+    assert all(t.tax_id != 6 or t.category == "iva_advance" for t in res.additional_taxes)
+
+
+def test_31_tax_7_not_principal_iva():
+    ctx = build_tax_context_from_ids([1, 7], tax_catalog=_catalog_iva_advance())
+    res = calculate_cost_reception(
+        _row(stored_cost_net=D("7770"), stored_gross_cost=D("7770"), reception_tax_ids=()),
+        ctx,
+    )
+    assert res.iva_tax_id == 1
+    assert any(t.tax_id == 7 and t.category == "iva_advance" for t in res.additional_taxes)
+
+
+def test_32_tax_6_without_bsale_rate_unresolved():
+    catalog = {1: TaxCatalogEntry(1, "IVA", D("19"))}  # sin 6
+    ctx = build_tax_context_from_ids([1, 6], tax_catalog=catalog)
+    res = calculate_cost_reception(
+        _row(stored_cost_net=D("664"), stored_gross_cost=D("664"), reception_tax_ids=()),
+        ctx,
+    )
+    assert res.effective_quality_status == "incomplete_tax_context"
+    assert res.corrected_gross_cost is None
+    assert ctx.resolution_quality == "unresolved"
+    assert 6 not in {t.tax_id for t in ctx.taxes}
+
+
+def test_33_tax_7_without_bsale_rate_unresolved():
+    catalog = {1: TaxCatalogEntry(1, "IVA", D("19"))}
+    ctx = build_tax_context_from_ids([1, 7], tax_catalog=catalog)
+    res = calculate_cost_reception(
+        _row(stored_cost_net=D("7770"), stored_gross_cost=D("7770"), reception_tax_ids=()),
+        ctx,
+    )
+    assert res.effective_quality_status == "incomplete_tax_context"
+    assert res.corrected_gross_cost is None
+    assert ctx.resolution_quality == "unresolved"
+
+
+def test_34_no_canonical_fallback_for_6_or_7():
+    from backend.services.analytics.cost_tax_resolution import TAX_ID_FALLBACK
+
+    assert 6 not in TAX_ID_FALLBACK
+    assert 7 not in TAX_ID_FALLBACK
+    ctx6 = build_tax_context_from_ids([6], tax_catalog={})
+    ctx7 = build_tax_context_from_ids([7], tax_catalog={})
+    assert ctx6.resolution_quality == "unresolved"
+    assert ctx7.resolution_quality == "unresolved"
+    assert ctx6.taxes == ()
+    assert ctx7.taxes == ()
+
+
+def test_35_missing_cost_preserves_resolved_tax_ids():
+    ctx = build_tax_context_from_ids(
+        [8, 1],
+        tax_catalog=_catalog_iva_advance(),
+        tax_ids_source="current_product_tax",
+    )
+    res = calculate_cost_reception(
+        _row(
+            stored_cost_net=None,
+            stored_gross_cost=None,
+            catalog_tax_ids=(8, 1),
+            reception_tax_ids=(),
+        ),
+        ctx,
+    )
+    assert res.effective_quality_status == "missing_cost"
+    assert res.resolved_tax_ids == (1, 8)
+    assert res.tax_resolution_quality == "current_catalog"
+    assert res.corrected_gross_cost is None
+
+
+def test_36_missing_cost_preserves_tax_context_fingerprint():
+    ctx = build_tax_context_from_ids(
+        [8, 1],
+        tax_catalog=_catalog_iva_advance(),
+        tax_ids_source="current_product_tax",
+    )
+    fp = tax_context_fingerprint(ctx)
+    res = calculate_cost_reception(
+        _row(stored_cost_net=D("0"), stored_gross_cost=D("0"), reception_tax_ids=()),
+        ctx,
+    )
+    assert res.effective_quality_status == "missing_cost"
+    assert res.tax_context_fingerprint == fp
+    assert res.tax_ids_source == "current_product_tax"
+    assert res.tax_rates_source == "bsale_taxes"
+
+
+def test_37_missing_cost_no_amounts():
+    ctx = build_tax_context_from_ids([1, 6], tax_catalog=_catalog_iva_advance())
+    for net in (None, D("0"), D("-10")):
+        res = calculate_cost_reception(
+            _row(stored_cost_net=net, stored_gross_cost=net, reception_tax_ids=()),
+            ctx,
+        )
+        assert res.effective_quality_status == "missing_cost"
+        assert res.calculated_iva_amount is None
+        assert res.additional_tax_amount_total is None
+        assert res.corrected_gross_cost is None
+        assert res.resolved_tax_ids == (1, 6)
+
+
+def test_38_order_6_1_equals_1_6():
+    cat = _catalog_iva_advance()
+    a = calculate_cost_reception(
+        _row(stored_cost_net=D("664"), stored_gross_cost=D("664"), reception_tax_ids=()),
+        build_tax_context_from_ids([6, 1], tax_catalog=cat),
+    )
+    b = calculate_cost_reception(
+        _row(stored_cost_net=D("664"), stored_gross_cost=D("664"), reception_tax_ids=()),
+        build_tax_context_from_ids([1, 6], tax_catalog=cat),
+    )
+    assert a.corrected_gross_cost == b.corrected_gross_cost == D("869.84")
+    assert a.total_tax_rate == b.total_tax_rate
+    assert a.iva_tax_id == b.iva_tax_id == 1
+    assert tax_context_fingerprint(
+        build_tax_context_from_ids([6, 1], tax_catalog=cat)
+    ) == tax_context_fingerprint(build_tax_context_from_ids([1, 6], tax_catalog=cat))
+
+
+def test_39_order_7_1_equals_1_7():
+    cat = _catalog_iva_advance()
+    a = calculate_cost_reception(
+        _row(stored_cost_net=D("7770"), stored_gross_cost=D("7770"), reception_tax_ids=()),
+        build_tax_context_from_ids([7, 1], tax_catalog=cat),
+    )
+    b = calculate_cost_reception(
+        _row(stored_cost_net=D("7770"), stored_gross_cost=D("7770"), reception_tax_ids=()),
+        build_tax_context_from_ids([1, 7], tax_catalog=cat),
+    )
+    assert a.corrected_gross_cost == b.corrected_gross_cost == D("9634.80")
+    assert tax_context_fingerprint(
+        build_tax_context_from_ids([7, 1], tax_catalog=cat)
+    ) == tax_context_fingerprint(build_tax_context_from_ids([1, 7], tax_catalog=cat))
+
+
+def test_40_fingerprints_stable_iva_advance():
+    cat = _catalog_iva_advance()
+    ctx = build_tax_context_from_ids([1, 6], tax_catalog=cat)
+    assert tax_context_fingerprint(ctx) == tax_context_fingerprint(ctx)
+    row = _row(stored_cost_net=D("664"), stored_gross_cost=D("664"), reception_tax_ids=())
+    assert source_history_fingerprint(row) == source_history_fingerprint(row)
