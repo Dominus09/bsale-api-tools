@@ -1,16 +1,22 @@
-"""Job dry-run Costos V2: calcula sin escribir.
+"""Job Costos V2: dry-run masivo o apply canario (1 history_id confirmado).
 
-Uso (Coolify / contenedor backend)::
+Dry-run::
 
     python -m backend.jobs.backfill_cost_reception_calculated \\
       --company-id 3 --office-id 3 \\
       --date-from 2026-03-25 --date-to 2026-06-22 \\
-      --dry-run --batch-size 500 --sample-limit 30 \\
+      --dry-run --batch-size 500 --sample-limit 30
+
+Apply canario (exactamente 1 fila)::
+
+    python -m backend.jobs.backfill_cost_reception_calculated \\
+      --company-id 3 --office-id 3 \\
+      --date-from 2026-03-25 --date-to 2026-06-22 \\
+      --history-id 23190 --confirm-history-id 23190 --apply \\
       --statement-timeout-seconds 30
 
-Etapa D: solo dry-run. --apply se rechaza.
-No ejecuta migración 047. No escribe datos.
-No ejecutar desde Cursor contra producción.
+No ejecuta migración. No backfill masivo con --apply.
+No ejecutar apply desde Cursor contra producción.
 """
 
 from __future__ import annotations
@@ -27,12 +33,15 @@ from backend.repositories.cost_v2_backfill_repo import CostV2BackfillRepository
 from backend.services.analytics.cost_v2_backfill import (
     clamp_backfill_args,
     run_cost_v2_backfill_dry_run,
+    run_cost_v2_canary_apply,
 )
 from backend.services.analytics.cost_v2_calculator import CALCULATION_VERSION
 from backend.services.analytics.validate_distribuidora_source import (
     AnalyticsValidationError,
     make_psycopg_executor,
+    make_psycopg_rw_executor,
     open_readonly_connection,
+    open_readwrite_connection,
 )
 from backend.utils.bsale_token_env import load_dotenv_if_available
 
@@ -45,7 +54,7 @@ def _parse_date(value: str) -> date:
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Backfill dry-run Costos V2 (read-only; sin escrituras)"
+        description="Backfill Costos V2: dry-run o apply canario (1 history_id)"
     )
     p.add_argument("--company-id", type=int, required=True)
     p.add_argument("--office-id", type=int, default=None)
@@ -58,6 +67,7 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--statement-timeout-seconds", type=int, default=20)
     p.add_argument("--calculation-version", type=str, default=CALCULATION_VERSION)
     p.add_argument("--history-id", type=int, default=None)
+    p.add_argument("--confirm-history-id", type=int, default=None)
     p.add_argument("--variant-id", type=int, default=None)
     p.add_argument("--barcode", type=str, default=None)
     p.add_argument("--document-number", type=int, default=None)
@@ -67,31 +77,42 @@ def _parser() -> argparse.ArgumentParser:
 def run_job(argv: list[str] | None = None) -> tuple[int, dict[str, Any]]:
     ns = _parser().parse_args(argv)
     try:
-        # dry-run por defecto obligatorio: si no viene flag, forzar True
-        dry_run = True if not ns.apply else bool(ns.dry_run)
-        if not ns.dry_run and not ns.apply:
+        if ns.apply and ns.dry_run:
+            raise AnalyticsValidationError(
+                "--dry-run y --apply no pueden usarse juntos",
+                error_type="apply_dry_run_conflict",
+            )
+        if ns.apply:
+            dry_run = False
+            apply = True
+            timeout = min(int(ns.statement_timeout_seconds or 30), 30)
+        else:
             dry_run = True
+            apply = False
+            timeout = ns.statement_timeout_seconds
+
         args = clamp_backfill_args(
             company_id=ns.company_id,
             office_id=ns.office_id,
             date_from=ns.date_from,
             date_to=ns.date_to,
-            dry_run=dry_run or True,
+            dry_run=dry_run,
             batch_size=ns.batch_size,
             sample_limit=ns.sample_limit,
-            statement_timeout_seconds=ns.statement_timeout_seconds,
+            statement_timeout_seconds=timeout,
             calculation_version=ns.calculation_version,
             history_id=ns.history_id,
             variant_id=ns.variant_id,
             barcode=ns.barcode,
             document_number=ns.document_number,
-            apply=bool(ns.apply),
+            apply=apply,
+            confirm_history_id=ns.confirm_history_id,
         )
     except AnalyticsValidationError as exc:
         return 1, {
             "ok": False,
-            "read_only": True,
-            "mode": "rejected",
+            "committed": False,
+            "mode": "apply-canary" if ns.apply else "rejected",
             "error_type": exc.error_type,
             "error": str(exc),
             "details": exc.details,
@@ -99,6 +120,25 @@ def run_job(argv: list[str] | None = None) -> tuple[int, dict[str, Any]]:
 
     conn = None
     try:
+        if args.apply:
+            conn = open_readwrite_connection(get_connection)
+            timeout_s = min(int(args.statement_timeout_seconds), 30)
+            rw = make_psycopg_rw_executor(
+                conn,
+                statement_timeout_seconds=timeout_s,
+                lock_timeout="10s",
+                sql_log=[],
+            )
+            # Lecturas también pueden usar el mismo executor RW (sin assert read-only).
+            repo = CostV2BackfillRepository(executor=rw, write_executor=rw)
+            report = run_cost_v2_canary_apply(
+                args=args,
+                repository=repo,
+                commit_fn=conn.commit,
+                rollback_fn=conn.rollback,
+            )
+            return 0, report
+
         conn = open_readonly_connection(get_connection)
         executor = make_psycopg_executor(
             conn,
@@ -110,10 +150,15 @@ def run_job(argv: list[str] | None = None) -> tuple[int, dict[str, Any]]:
         report = run_cost_v2_backfill_dry_run(args=args, repository=repo)
         return 0, report
     except AnalyticsValidationError as exc:
+        if conn is not None and args.apply:
+            try:
+                conn.rollback()
+            except Exception:
+                logger.exception("rollback_failed")
         return 1, {
             "ok": False,
-            "read_only": True,
-            "mode": "dry-run",
+            "committed": False,
+            "mode": "apply-canary" if args.apply else "dry-run",
             "error_type": exc.error_type,
             "error": str(exc),
             "details": exc.details,
@@ -121,7 +166,12 @@ def run_job(argv: list[str] | None = None) -> tuple[int, dict[str, Any]]:
             "office_id": ns.office_id,
         }
     except Exception as exc:
-        logger.exception("backfill_cost_reception_calculated dry-run failed")
+        logger.exception("backfill_cost_reception_calculated failed")
+        if conn is not None and args.apply:
+            try:
+                conn.rollback()
+            except Exception:
+                logger.exception("rollback_failed")
         msg = str(exc).lower()
         error_type = type(exc).__name__
         if "statement timeout" in msg or "canceling statement" in msg:
@@ -130,8 +180,8 @@ def run_job(argv: list[str] | None = None) -> tuple[int, dict[str, Any]]:
             error_type = "schema_mismatch"
         return 1, {
             "ok": False,
-            "read_only": True,
-            "mode": "dry-run",
+            "committed": False,
+            "mode": "apply-canary" if args.apply else "dry-run",
             "error_type": error_type,
             "error": str(exc),
             "company_id": ns.company_id,
@@ -139,10 +189,11 @@ def run_job(argv: list[str] | None = None) -> tuple[int, dict[str, Any]]:
         }
     finally:
         if conn is not None:
-            try:
-                conn.rollback()
-            except Exception:
-                logger.exception("rollback_failed")
+            if not args.apply:
+                try:
+                    conn.rollback()
+                except Exception:
+                    logger.exception("rollback_failed")
             try:
                 conn.close()
             except Exception:

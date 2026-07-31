@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -16,8 +17,13 @@ from backend.services.analytics.cost_v2_calculator import (
     CALCULATION_VERSION,
     build_tax_context_from_ids,
     calculate_cost_reception,
+    source_history_fingerprint,
 )
 from backend.services.analytics.cost_v2_models import (
+    ALLOWED_CONTEXT_SOURCES,
+    ALLOWED_RESOLUTION_QUALITIES,
+    ALLOWED_TAX_IDS_SOURCES,
+    ALLOWED_TAX_RATES_SOURCES,
     CostReceptionCalculation,
     CostReceptionInput,
 )
@@ -85,6 +91,7 @@ class CostV2BackfillArgs:
     barcode: str | None = None
     document_number: int | None = None
     apply: bool = False
+    confirm_history_id: int | None = None
 
 
 def clamp_backfill_args(
@@ -103,6 +110,7 @@ def clamp_backfill_args(
     barcode: str | None = None,
     document_number: int | None = None,
     apply: bool = False,
+    confirm_history_id: int | None = None,
 ) -> CostV2BackfillArgs:
     if int(company_id) <= 0:
         raise AnalyticsValidationError(
@@ -112,14 +120,67 @@ def clamp_backfill_args(
         raise AnalyticsValidationError(
             "date_to must be >= date_from", error_type="invalid_args"
         )
-    if apply:
+    version = str(calculation_version or "").strip()
+    if not version:
         raise AnalyticsValidationError(
-            "Apply no habilitado en Etapa D",
-            error_type="apply_not_enabled",
+            "calculation_version no puede estar vacía",
+            error_type="invalid_args",
         )
+
+    if apply and dry_run:
+        raise AnalyticsValidationError(
+            "--dry-run y --apply no pueden usarse juntos",
+            error_type="apply_dry_run_conflict",
+        )
+
+    if apply:
+        if (
+            history_id is None
+            or confirm_history_id is None
+            or int(history_id) != int(confirm_history_id)
+        ):
+            raise AnalyticsValidationError(
+                "Apply canario requiere --history-id y --confirm-history-id iguales",
+                error_type="apply_canary_confirmation_required",
+            )
+        if barcode:
+            raise AnalyticsValidationError(
+                "Apply canario no permite --barcode",
+                error_type="apply_canary_scope_forbidden",
+            )
+        if variant_id is not None:
+            raise AnalyticsValidationError(
+                "Apply canario no permite --variant-id",
+                error_type="apply_canary_scope_forbidden",
+            )
+        if document_number is not None:
+            raise AnalyticsValidationError(
+                "Apply canario no permite --document-number",
+                error_type="apply_canary_scope_forbidden",
+            )
+        return CostV2BackfillArgs(
+            company_id=int(company_id),
+            office_id=int(office_id) if office_id is not None else None,
+            date_from=date_from,
+            date_to=date_to,
+            dry_run=False,
+            batch_size=max(1, min(int(batch_size), MAX_BATCH_SIZE)),
+            sample_limit=max(1, min(int(sample_limit), MAX_SAMPLE_LIMIT)),
+            statement_timeout_seconds=max(
+                1, min(int(statement_timeout_seconds), MAX_TIMEOUT)
+            ),
+            calculation_version=version,
+            history_id=int(history_id),
+            variant_id=None,
+            barcode=None,
+            document_number=None,
+            apply=True,
+            confirm_history_id=int(confirm_history_id),
+        )
+
     if not dry_run:
         raise AnalyticsValidationError(
-            "Solo dry-run está habilitado en Etapa D (use --dry-run)",
+            "Solo dry-run está habilitado sin --apply (use --dry-run)",
             error_type="dry_run_required",
         )
     return CostV2BackfillArgs(
@@ -131,12 +192,13 @@ def clamp_backfill_args(
         batch_size=max(1, min(int(batch_size), MAX_BATCH_SIZE)),
         sample_limit=max(1, min(int(sample_limit), MAX_SAMPLE_LIMIT)),
         statement_timeout_seconds=max(1, min(int(statement_timeout_seconds), MAX_TIMEOUT)),
-        calculation_version=str(calculation_version or CALCULATION_VERSION),
+        calculation_version=version,
         history_id=int(history_id) if history_id is not None else None,
         variant_id=int(variant_id) if variant_id is not None else None,
         barcode=(barcode.strip() if barcode else None) or None,
         document_number=int(document_number) if document_number is not None else None,
         apply=False,
+        confirm_history_id=None,
     )
 
 
@@ -479,8 +541,8 @@ def run_cost_v2_backfill_dry_run(
         "samples": samples,
         "duration_ms": round(duration_ms, 2),
         "limitations": [
-            "Etapa D: dry-run only; Apply no habilitado",
-            "No se escribe cost_reception_calculated",
+            "Dry-run: no escribe cost_reception_calculated",
+            "Apply canario: solo con --history-id + --confirm-history-id iguales (1 fila)",
             "No se usa quantity para totales ponderados",
             "No se consulta bsale.variant_cost",
             "reception_tax_ids vacío (sin evidencia de payload de línea)",
@@ -498,3 +560,449 @@ def run_cost_v2_backfill_dry_run(
             ),
         ],
     }
+
+
+def _dec_equal(a: Decimal | None, b: Decimal | None) -> bool:
+    if a is None and b is None:
+        return True
+    if a is None or b is None:
+        return False
+    if not isinstance(a, Decimal) or not isinstance(b, Decimal):
+        raise TypeError("comparación monetaria requiere Decimal")
+    return a == b
+
+
+def _json_list_equal(a: Any, b: Any) -> bool:
+    la = list(a or [])
+    lb = list(b or [])
+    return la == lb
+
+
+def validate_calculation_before_persist(calc: CostReceptionCalculation) -> None:
+    if not calc.history_id:
+        raise AnalyticsValidationError(
+            "history_id ausente", error_type="persist_validation"
+        )
+    if not calc.calculation_version:
+        raise AnalyticsValidationError(
+            "calculation_version ausente", error_type="persist_validation"
+        )
+    if not calc.source_history_fingerprint:
+        raise AnalyticsValidationError(
+            "source_history_fingerprint vacío", error_type="persist_validation"
+        )
+    if not calc.tax_context_fingerprint:
+        raise AnalyticsValidationError(
+            "tax_context_fingerprint vacío", error_type="persist_validation"
+        )
+    if not calc.calculation_result_fingerprint:
+        raise AnalyticsValidationError(
+            "calculation_result_fingerprint vacío", error_type="persist_validation"
+        )
+    if calc.effective_quality_status not in QUALITY_KEYS:
+        raise AnalyticsValidationError(
+            f"effective_quality_status inválido: {calc.effective_quality_status}",
+            error_type="persist_validation",
+        )
+    if calc.tax_ids_source not in ALLOWED_TAX_IDS_SOURCES:
+        raise AnalyticsValidationError(
+            f"tax_ids_source inválido: {calc.tax_ids_source}",
+            error_type="persist_validation",
+        )
+    if calc.tax_rates_source not in ALLOWED_TAX_RATES_SOURCES:
+        raise AnalyticsValidationError(
+            f"tax_rates_source inválido: {calc.tax_rates_source}",
+            error_type="persist_validation",
+        )
+    if calc.tax_resolution_quality not in ALLOWED_RESOLUTION_QUALITIES:
+        raise AnalyticsValidationError(
+            f"tax_resolution_quality inválido: {calc.tax_resolution_quality}",
+            error_type="persist_validation",
+        )
+    if calc.tax_context_source not in ALLOWED_CONTEXT_SOURCES:
+        raise AnalyticsValidationError(
+            f"tax_context_source inválido: {calc.tax_context_source}",
+            error_type="persist_validation",
+        )
+    # warnings serializables
+    for w in calc.warnings:
+        if not isinstance(w, str):
+            raise AnalyticsValidationError(
+                "warnings deben ser str", error_type="persist_validation"
+            )
+    for v in (
+        calc.stored_cost_net,
+        calc.calculated_iva_amount,
+        calc.corrected_gross_cost,
+        calc.iva_rate,
+        calc.total_tax_rate,
+    ):
+        if v is not None and not isinstance(v, Decimal):
+            raise AnalyticsValidationError(
+                "montos deben permanecer Decimal hasta SQL",
+                error_type="persist_validation",
+            )
+
+
+def _assert_readback_matches(
+    calc: CostReceptionCalculation,
+    row: dict[str, Any],
+    *,
+    expect_batch_id: str | None,
+) -> None:
+    checks = [
+        (int(row["history_id"]), calc.history_id, "history_id"),
+        (str(row["calculation_version"]), calc.calculation_version, "calculation_version"),
+        (row.get("tax_ids_source"), calc.tax_ids_source, "tax_ids_source"),
+        (row.get("tax_rates_source"), calc.tax_rates_source, "tax_rates_source"),
+        (
+            row.get("tax_resolution_quality"),
+            calc.tax_resolution_quality,
+            "tax_resolution_quality",
+        ),
+        (
+            row.get("effective_quality_status"),
+            calc.effective_quality_status,
+            "effective_quality_status",
+        ),
+        (
+            row.get("source_history_fingerprint"),
+            calc.source_history_fingerprint,
+            "source_history_fingerprint",
+        ),
+        (
+            row.get("tax_context_fingerprint"),
+            calc.tax_context_fingerprint,
+            "tax_context_fingerprint",
+        ),
+        (
+            row.get("calculation_result_fingerprint"),
+            calc.calculation_result_fingerprint,
+            "calculation_result_fingerprint",
+        ),
+    ]
+    for got, expected, name in checks:
+        if got != expected:
+            raise AnalyticsValidationError(
+                f"readback mismatch {name}: {got!r} != {expected!r}",
+                error_type="readback_mismatch",
+            )
+    if expect_batch_id is not None:
+        if str(row.get("calculation_batch_id")) != str(expect_batch_id):
+            raise AnalyticsValidationError(
+                "readback mismatch calculation_batch_id",
+                error_type="readback_mismatch",
+            )
+    money_pairs = [
+        ("stored_cost_net", calc.stored_cost_net),
+        ("calculated_iva_amount", calc.calculated_iva_amount),
+        ("additional_tax_amount_total", calc.additional_tax_amount_total),
+        ("total_tax_rate", calc.total_tax_rate),
+        ("corrected_gross_cost", calc.corrected_gross_cost),
+        ("gross_difference_amount", calc.gross_difference_amount),
+        ("tax_rate_on_net_pct", calc.tax_rate_on_net_pct),
+        (
+            "gross_understatement_vs_corrected_pct",
+            calc.gross_understatement_vs_corrected_pct,
+        ),
+    ]
+    for key, expected in money_pairs:
+        got = row.get(key)
+        if got is not None and not isinstance(got, Decimal):
+            raise AnalyticsValidationError(
+                f"readback {key} no es Decimal",
+                error_type="readback_mismatch",
+            )
+        if not _dec_equal(got, expected):
+            raise AnalyticsValidationError(
+                f"readback mismatch {key}: {got!r} != {expected!r}",
+                error_type="readback_mismatch",
+            )
+    resolved = row.get("resolved_tax_ids_json") or []
+    if sorted(int(x) for x in resolved) != sorted(calc.resolved_tax_ids):
+        raise AnalyticsValidationError(
+            "readback mismatch resolved_tax_ids_json",
+            error_type="readback_mismatch",
+        )
+    warnings = row.get("warnings_json") or []
+    if sorted(str(x) for x in warnings) != sorted(calc.warnings):
+        raise AnalyticsValidationError(
+            "readback mismatch warnings_json",
+            error_type="readback_mismatch",
+        )
+
+
+def _calculate_single_row(
+    *,
+    row: dict[str, Any],
+    tax_catalog: dict[int, Any],
+    outlier_stats: dict[int, tuple[Decimal, int]],
+    calculation_version: str,
+) -> CostReceptionCalculation:
+    catalog_ids = tuple(row.get("catalog_tax_ids") or [])
+    adm = row.get("admission_date")
+    if isinstance(adm, datetime):
+        adm_d = adm.date()
+    else:
+        adm_d = adm
+    inp = CostReceptionInput(
+        history_id=int(row["history_id"]),
+        company_id=int(row["company_id"]),
+        office_id=row.get("office_id"),
+        variant_id=int(row["variant_id"]),
+        admission_date=adm_d,
+        stored_cost_net=row.get("cost_net"),
+        stored_quantity=row.get("quantity"),
+        stored_iva_amount=row.get("iva_amount"),
+        stored_other_taxes=row.get("other_taxes"),
+        stored_gross_cost=row.get("cost_bruto_erp"),
+        reception_tax_ids=(),
+        catalog_tax_ids=catalog_ids,
+        source_history_created_at=row.get("created_at"),
+    )
+    tax_ids_source = "current_product_tax" if catalog_ids else "unresolved"
+    ctx = build_tax_context_from_ids(
+        list(catalog_ids),
+        tax_catalog=tax_catalog,
+        tax_ids_source=tax_ids_source,
+        context_is_historical=False,
+        cost_net=inp.stored_cost_net,
+    )
+    external_warnings: list[str] = []
+    stats = outlier_stats.get(int(row["variant_id"]))
+    if stats is not None:
+        med, count = stats
+        if is_suspicious_net_outlier(
+            inp.stored_cost_net,
+            variant_median=med,
+            variant_count=count,
+        ):
+            external_warnings.append("suspicious_outlier")
+    return calculate_cost_reception(
+        inp,
+        ctx,
+        external_warnings=external_warnings,
+        calculation_version=calculation_version,
+    )
+
+
+def run_cost_v2_canary_apply(
+    *,
+    args: CostV2BackfillArgs,
+    repository: CostV2BackfillRepository,
+    commit_fn: Any,
+    rollback_fn: Any,
+) -> dict[str, Any]:
+    """Persistencia canaria de exactamente una fila. Commit solo tras verificaciones."""
+    if not args.apply or args.dry_run:
+        raise AnalyticsValidationError(
+            "run_cost_v2_canary_apply requiere apply=True",
+            error_type="invalid_args",
+        )
+    batch_id = str(uuid.uuid4())
+    try:
+        if not repository.calculated_table_exists():
+            raise AnalyticsValidationError(
+                "Tabla analytics.cost_reception_calculated no existe",
+                error_type="destination_table_missing",
+            )
+
+        population = repository.count_population(
+            company_id=args.company_id,
+            office_id=args.office_id,
+            date_from=args.date_from,
+            date_to=args.date_to,
+            history_id=args.history_id,
+        )
+        if int(population["rows_found"]) != 1:
+            raise AnalyticsValidationError(
+                "Apply canario requiere exactamente una fila",
+                error_type="apply_canary_row_count",
+                details={"rows_found": population["rows_found"]},
+            )
+
+        batch = repository.fetch_history_batch(
+            company_id=args.company_id,
+            office_id=args.office_id,
+            date_from=args.date_from,
+            date_to=args.date_to,
+            after_id=0,
+            batch_size=2,
+            history_id=args.history_id,
+        )
+        if len(batch) != 1:
+            raise AnalyticsValidationError(
+                "Apply canario requiere exactamente una fila",
+                error_type="apply_canary_row_count",
+                details={"rows_fetched": len(batch)},
+            )
+        row = batch[0]
+
+        scope_variant_ids = [int(row["variant_id"])]
+        net_rows = repository.fetch_outlier_baseline_cost_nets(
+            company_id=args.company_id,
+            office_id=args.office_id,
+            variant_ids=scope_variant_ids,
+        )
+        outlier_stats = build_variant_net_outlier_stats(net_rows)
+
+        catalog_ids = list(row.get("catalog_tax_ids") or [])
+        tax_catalog = repository.fetch_taxes_for_ids(
+            company_id=args.company_id, tax_ids=catalog_ids
+        )
+        calc = _calculate_single_row(
+            row=row,
+            tax_catalog=tax_catalog,
+            outlier_stats=outlier_stats,
+            calculation_version=args.calculation_version,
+        )
+        validate_calculation_before_persist(calc)
+
+        existing = repository.get_existing_calculation(
+            history_id=calc.history_id,
+            calculation_version=calc.calculation_version,
+        )
+        persistence = {"inserted": 0, "updated": 0, "unchanged": 0}
+        expect_batch: str | None = batch_id
+
+        if existing is not None and (
+            existing.get("calculation_result_fingerprint")
+            == calc.calculation_result_fingerprint
+            and existing.get("source_history_fingerprint")
+            == calc.source_history_fingerprint
+            and existing.get("tax_context_fingerprint") == calc.tax_context_fingerprint
+        ):
+            persistence["unchanged"] = 1
+            expect_batch = str(existing.get("calculation_batch_id"))
+            stored = existing
+        else:
+            upsert = repository.persist_calculation(
+                calc=calc, calculation_batch_id=batch_id
+            )
+            if bool(upsert.get("was_inserted")):
+                persistence["inserted"] = 1
+            else:
+                persistence["updated"] = 1
+            stored = None
+
+        readback = repository.read_calculation(
+            history_id=calc.history_id,
+            calculation_version=calc.calculation_version,
+        )
+        if readback is None:
+            raise AnalyticsValidationError(
+                "readback tabla vacío tras persistencia",
+                error_type="readback_mismatch",
+            )
+        if persistence["unchanged"]:
+            # no debió cambiar batch ni calculated_at
+            if str(readback.get("calculation_batch_id")) != str(
+                existing.get("calculation_batch_id")
+            ):
+                raise AnalyticsValidationError(
+                    "unchanged alteró calculation_batch_id",
+                    error_type="readback_mismatch",
+                )
+            if readback.get("calculated_at") != existing.get("calculated_at"):
+                raise AnalyticsValidationError(
+                    "unchanged alteró calculated_at",
+                    error_type="readback_mismatch",
+                )
+        _assert_readback_matches(calc, readback, expect_batch_id=expect_batch)
+
+        latest_rows = repository.read_latest_view(history_id=calc.history_id)
+        if len(latest_rows) != 1:
+            raise AnalyticsValidationError(
+                "latest view no devolvió exactamente 1 fila",
+                error_type="latest_view_mismatch",
+            )
+        _assert_readback_matches(
+            calc, latest_rows[0], expect_batch_id=expect_batch
+        )
+        if latest_rows[0].get("calculation_version") != calc.calculation_version:
+            raise AnalyticsValidationError(
+                "latest view no coincide con calculation_version",
+                error_type="latest_view_mismatch",
+            )
+
+        src = repository.verify_source_fingerprint_inputs(history_id=calc.history_id)
+        if src is None:
+            raise AnalyticsValidationError(
+                "history fuente no encontrada en verificación",
+                error_type="source_fingerprint_changed",
+            )
+        adm = src.get("admission_date")
+        if isinstance(adm, datetime):
+            adm_d = adm.date()
+        else:
+            adm_d = adm
+        src_inp = CostReceptionInput(
+            history_id=int(src["history_id"]),
+            company_id=int(src["company_id"]),
+            office_id=src.get("office_id"),
+            variant_id=int(src["variant_id"]),
+            admission_date=adm_d,
+            stored_cost_net=src.get("cost_net"),
+            stored_quantity=src.get("quantity"),
+            stored_iva_amount=src.get("iva_amount"),
+            stored_other_taxes=src.get("other_taxes"),
+            stored_gross_cost=src.get("cost_bruto_erp"),
+            reception_tax_ids=(),
+            catalog_tax_ids=tuple(src.get("catalog_tax_ids") or []),
+            source_history_created_at=src.get("created_at"),
+        )
+        if source_history_fingerprint(src_inp) != calc.source_history_fingerprint:
+            raise AnalyticsValidationError(
+                "source_history_fingerprint cambió antes del commit",
+                error_type="source_fingerprint_changed",
+            )
+
+        if sum(persistence.values()) != 1:
+            raise AnalyticsValidationError(
+                "persistence counters inválidos",
+                error_type="invariant_violation",
+            )
+
+        commit_fn()
+        return {
+            "ok": True,
+            "mode": "apply-canary",
+            "committed": True,
+            "calculation_version": calc.calculation_version,
+            "calculation_batch_id": expect_batch if persistence["unchanged"] else batch_id,
+            "scope": {
+                "history_id": calc.history_id,
+                "rows_found": 1,
+                "rows_processed": 1,
+            },
+            "persistence": persistence,
+            "verification": {
+                "table_readback_ok": True,
+                "latest_view_ok": True,
+                "source_fingerprint_unchanged": True,
+                "result_fingerprint_match": True,
+            },
+            "result": {
+                "stored_cost_net": (
+                    None if calc.stored_cost_net is None else str(calc.stored_cost_net)
+                ),
+                "corrected_gross_cost": (
+                    None
+                    if calc.corrected_gross_cost is None
+                    else str(calc.corrected_gross_cost)
+                ),
+                "calculated_iva_amount": (
+                    None
+                    if calc.calculated_iva_amount is None
+                    else str(calc.calculated_iva_amount)
+                ),
+                "effective_quality_status": calc.effective_quality_status,
+                "warnings": list(calc.warnings),
+            },
+        }
+    except Exception:
+        try:
+            rollback_fn()
+        except Exception:
+            pass
+        raise

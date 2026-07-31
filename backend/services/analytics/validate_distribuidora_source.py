@@ -379,6 +379,48 @@ def make_psycopg_executor(
     return _execute
 
 
+def make_psycopg_rw_executor(
+    conn: Any,
+    *,
+    statement_timeout_seconds: int,
+    lock_timeout: str = "10s",
+    sql_log: list[str] | None = None,
+) -> Callable[[str, tuple[Any, ...]], list[dict[str, Any]]]:
+    """Executor READ WRITE (permite DML). No hace commit; el caller controla la TX."""
+
+    def _execute(sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
+        upper = sql.upper()
+        if "FOR UPDATE" in upper:
+            raise RuntimeError("SELECT FOR UPDATE no permitido en Costos V2 canario")
+        if sql_log is not None:
+            sql_log.append(sql)
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                f"SET LOCAL statement_timeout = '{int(statement_timeout_seconds) * 1000}'"
+            )
+            cur.execute(f"SET LOCAL lock_timeout = '{lock_timeout}'")
+            cur.execute(sql, params)
+            if cur.description is None:
+                return []
+            columns = [desc[0] for desc in cur.description]
+            rows = cur.fetchall()
+            return [dict(zip(columns, row)) for row in rows]
+        except Exception as exc:
+            msg = str(exc).lower()
+            if "statement timeout" in msg or "canceling statement" in msg:
+                raise AnalyticsValidationError(
+                    "statement_timeout",
+                    error_type="statement_timeout",
+                    details={"message": str(exc)},
+                ) from exc
+            raise
+        finally:
+            cur.close()
+
+    return _execute
+
+
 def open_readonly_connection(get_connection: Callable[[], Any]) -> Any:
     """Abre conexión y fuerza sesión read-only (sin autocommit)."""
     conn = get_connection()
@@ -390,6 +432,28 @@ def open_readonly_connection(get_connection: Callable[[], Any]) -> Any:
             cur = conn.cursor()
             try:
                 cur.execute("SET default_transaction_read_only = on")
+            finally:
+                cur.close()
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        raise
+    return conn
+
+
+def open_readwrite_connection(get_connection: Callable[[], Any]) -> Any:
+    """Abre conexión READ WRITE (sin autocommit) para apply canario."""
+    conn = get_connection()
+    try:
+        if hasattr(conn, "set_session"):
+            conn.set_session(readonly=False, autocommit=False)
+        else:
+            conn.autocommit = False
+            cur = conn.cursor()
+            try:
+                cur.execute("SET default_transaction_read_only = off")
             finally:
                 cur.close()
     except Exception:

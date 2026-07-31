@@ -268,16 +268,16 @@ def test_3_job_rollback():
     assert fake.rolled_back is True
 
 
-def test_4_apply_rejected():
+def test_4_apply_without_canary_confirm_rejected():
     with pytest.raises(AnalyticsValidationError) as ei:
         clamp_backfill_args(
             company_id=3,
             date_from=date(2026, 3, 25),
             date_to=date(2026, 6, 22),
-            dry_run=True,
+            dry_run=False,
             apply=True,
         )
-    assert "Apply no habilitado" in str(ei.value)
+    assert "Apply canario requiere" in str(ei.value)
     code, payload = job.run_job(
         [
             "--company-id",
@@ -290,7 +290,8 @@ def test_4_apply_rejected():
         ]
     )
     assert code == 1
-    assert payload["error_type"] == "apply_not_enabled"
+    assert payload["error_type"] == "apply_canary_confirmation_required"
+    assert payload.get("committed") is False
 
 
 def test_5_keyset_pagination_sql():
