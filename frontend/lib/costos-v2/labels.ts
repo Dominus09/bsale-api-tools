@@ -1,34 +1,185 @@
 import type { CostV2QualityStatus, CostV2WarningCode } from "./types"
 
+/** Mapeo único centralizado — valores técnicos internos → español operativo. */
 export const COST_V2_STATUS_LABEL: Record<string, string> = {
   missing_taxes_in_gross: "Impuestos no incluidos",
   incomplete_tax_context: "Contexto tributario incompleto",
   missing_cost: "Costo faltante",
-  valid_gross: "Costo válido",
-  gross_component_mismatch: "Componentes no coinciden",
+  valid_gross: "Costo correcto",
   duplicated_taxes_in_gross: "Posible impuesto duplicado",
+  gross_component_mismatch: "Descuadre en el costo",
 }
 
 export const COST_V2_WARNING_LABEL: Record<string, string> = {
   suspicious_outlier: "Costo atípico",
-  reception_tax_context_unavailable: "Sin contexto tributario",
+  reception_tax_context_unavailable: "Sin información tributaria suficiente",
   stored_components_rounding: "Diferencia de redondeo",
-  tax_ids_not_consumed: "Tax IDs no consumidos",
-  variant_barcode_mismatch: "Barcode no coincide",
-  source_conflict: "Conflicto de fuentes",
 }
+
+/** Explicaciones breves (tooltip / panel). */
+export const COST_V2_STATUS_SHORT_HELP: Record<string, string> = {
+  missing_taxes_in_gross:
+    "El bruto original no incluía todos los impuestos. V2 calculó el valor corregido.",
+  incomplete_tax_context:
+    "No fue posible determinar todos los impuestos aplicables.",
+  missing_cost: "La recepción no tiene costo suficiente para realizar el cálculo.",
+  valid_gross: "El bruto almacenado coincide con el neto más los impuestos esperados.",
+  duplicated_taxes_in_gross:
+    "El bruto parece incluir uno o más impuestos aplicados más de una vez.",
+  gross_component_mismatch:
+    "El bruto no coincide con la suma esperada de neto, IVA e impuestos adicionales.",
+}
+
+export const COST_V2_WARNING_SHORT_HELP: Record<string, string> = {
+  suspicious_outlier:
+    "El costo se encuentra fuera del comportamiento habitual del mismo producto.",
+  reception_tax_context_unavailable:
+    "No fue posible obtener todo el contexto tributario necesario para la recepción.",
+  stored_components_rounding:
+    "Existe una diferencia menor que puede deberse al redondeo de los componentes.",
+}
+
+export type SymbologyStatusEntry = {
+  code: string
+  label: string
+  description: string
+  action: string
+}
+
+export type SymbologyAlertEntry = {
+  code: string
+  label: string
+  description: string
+}
+
+export const SYMBOLOGY_INTRO =
+  "Estas categorías indican la calidad del costo registrado y del cálculo tributario realizado por Costos V2."
+
+export const SYMBOLOGY_SCOPE_NOTE =
+  "Actualmente Costos V2 contiene información de La Quillotana SpA, Supermercado La Quillotana."
+
+export const SYMBOLOGY_STATUSES: SymbologyStatusEntry[] = [
+  {
+    code: "missing_taxes_in_gross",
+    label: COST_V2_STATUS_LABEL.missing_taxes_in_gross,
+    description:
+      "El costo bruto almacenado no incluía todos los impuestos correspondientes. Costos V2 calculó un bruto corregido agregando IVA e impuestos adicionales.",
+    action: "Usar el costo corregido V2 como referencia.",
+  },
+  {
+    code: "incomplete_tax_context",
+    label: COST_V2_STATUS_LABEL.incomplete_tax_context,
+    description:
+      "No existe información tributaria suficiente para calcular un costo bruto confiable.",
+    action: "Revisar la configuración tributaria del producto.",
+  },
+  {
+    code: "missing_cost",
+    label: COST_V2_STATUS_LABEL.missing_cost,
+    description:
+      "La recepción no tiene un costo neto válido o el costo registrado es cero.",
+    action: "Revisar el documento o la recepción original.",
+  },
+  {
+    code: "valid_gross",
+    label: COST_V2_STATUS_LABEL.valid_gross,
+    description:
+      "El costo bruto almacenado coincide con el neto más los impuestos esperados.",
+    action: "No requiere revisión.",
+  },
+  {
+    code: "duplicated_taxes_in_gross",
+    label: COST_V2_STATUS_LABEL.duplicated_taxes_in_gross,
+    description:
+      "El costo bruto parece contener uno o más impuestos aplicados más de una vez.",
+    action: "Revisar el detalle tributario de la recepción.",
+  },
+  {
+    code: "gross_component_mismatch",
+    label: COST_V2_STATUS_LABEL.gross_component_mismatch,
+    description:
+      "El costo bruto no coincide con la suma esperada de neto, IVA e impuestos adicionales.",
+    action: "Revisar el cálculo y los componentes almacenados.",
+  },
+]
+
+export const SYMBOLOGY_ALERTS: SymbologyAlertEntry[] = [
+  {
+    code: "suspicious_outlier",
+    label: COST_V2_WARNING_LABEL.suspicious_outlier,
+    description:
+      "El costo se encuentra fuera del comportamiento habitual del mismo producto.",
+  },
+  {
+    code: "reception_tax_context_unavailable",
+    label: COST_V2_WARNING_LABEL.reception_tax_context_unavailable,
+    description:
+      "No fue posible obtener todo el contexto tributario necesario para la recepción.",
+  },
+  {
+    code: "stored_components_rounding",
+    label: COST_V2_WARNING_LABEL.stored_components_rounding,
+    description:
+      "Existe una diferencia menor que puede deberse al redondeo de los componentes.",
+  },
+]
+
+/** Opciones de filtro Estado (value técnico, label español). */
+export const FILTER_STATUS_OPTIONS = [
+  { value: "missing_taxes_in_gross", label: COST_V2_STATUS_LABEL.missing_taxes_in_gross },
+  { value: "incomplete_tax_context", label: COST_V2_STATUS_LABEL.incomplete_tax_context },
+  { value: "missing_cost", label: COST_V2_STATUS_LABEL.missing_cost },
+  { value: "valid_gross", label: COST_V2_STATUS_LABEL.valid_gross },
+  { value: "duplicated_taxes_in_gross", label: COST_V2_STATUS_LABEL.duplicated_taxes_in_gross },
+  { value: "gross_component_mismatch", label: COST_V2_STATUS_LABEL.gross_component_mismatch },
+] as const
+
+/** Opciones de filtro Alerta. */
+export const FILTER_WARNING_OPTIONS = [
+  { value: "suspicious_outlier", label: COST_V2_WARNING_LABEL.suspicious_outlier },
+  {
+    value: "reception_tax_context_unavailable",
+    label: COST_V2_WARNING_LABEL.reception_tax_context_unavailable,
+  },
+  {
+    value: "stored_components_rounding",
+    label: COST_V2_WARNING_LABEL.stored_components_rounding,
+  },
+] as const
+
+/** Códigos técnicos que no deben aparecer en UI principal. */
+export const TECHNICAL_STATUS_CODES = Object.keys(COST_V2_STATUS_LABEL)
+export const TECHNICAL_WARNING_CODES = Object.keys(COST_V2_WARNING_LABEL)
 
 export function statusLabel(status: CostV2QualityStatus | null | undefined): string {
   if (!status) return "Sin estado"
-  return COST_V2_STATUS_LABEL[status] ?? status
+  return COST_V2_STATUS_LABEL[status] ?? "Estado desconocido"
 }
 
 export function warningLabel(code: CostV2WarningCode | null | undefined): string {
   if (!code) return ""
-  return COST_V2_WARNING_LABEL[code] ?? code
+  return COST_V2_WARNING_LABEL[code] ?? "Alerta"
 }
 
-/** Orden preferido para gráfico de distribución. */
+export function statusShortHelp(status: CostV2QualityStatus | null | undefined): string {
+  if (!status) return "Sin información de estado."
+  return COST_V2_STATUS_SHORT_HELP[status] ?? "Consulte la pestaña Simbología."
+}
+
+export function warningShortHelp(code: CostV2WarningCode | null | undefined): string {
+  if (!code) return ""
+  return COST_V2_WARNING_SHORT_HELP[code] ?? "Consulte la pestaña Simbología."
+}
+
+/** True si el texto contiene un código técnico expuesto (para tests / guardas). */
+export function containsTechnicalCode(text: string): boolean {
+  const lower = text.toLowerCase()
+  for (const code of [...TECHNICAL_STATUS_CODES, ...TECHNICAL_WARNING_CODES]) {
+    if (lower.includes(code.toLowerCase())) return true
+  }
+  return false
+}
+
 export const STATUS_CHART_ORDER = [
   "missing_taxes_in_gross",
   "incomplete_tax_context",
@@ -55,7 +206,6 @@ export function buildStatusChartData(
   return out
 }
 
-/** Textos prohibidos en UI V2 (no hay semántica de impacto agregado). */
 export const FORBIDDEN_AGGREGATE_PHRASES = [
   "impacto total",
   "pérdida total",

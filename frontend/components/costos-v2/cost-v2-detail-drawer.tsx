@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react"
 
+import { CostV2InfoHint } from "@/components/costos-v2/cost-v2-info-hint"
 import { CostV2StatusBadge } from "@/components/costos-v2/cost-v2-status-badge"
 import {
   Accordion,
@@ -31,7 +32,11 @@ import {
   formatDecimalMoneyCLP,
   formatTaxRate,
 } from "@/lib/costos-v2/format"
-import { warningLabel } from "@/lib/costos-v2/labels"
+import {
+  statusLabel,
+  statusShortHelp,
+  warningLabel,
+} from "@/lib/costos-v2/labels"
 import type { CostV2ReceptionDetail } from "@/lib/costos-v2/types"
 
 function Field({ label, value }: { label: string; value: ReactNode }) {
@@ -49,12 +54,14 @@ export function CostV2DetailDrawer({
   historyId,
   companyId,
   officeId,
+  onOpenSymbology,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   historyId: number | null
   companyId: number
   officeId: number
+  onOpenSymbology?: () => void
 }) {
   const [item, setItem] = useState<CostV2ReceptionDetail | null>(null)
   const [loading, setLoading] = useState(false)
@@ -242,20 +249,40 @@ export function CostV2DetailDrawer({
             <Separator />
 
             <section className="space-y-3">
-              <h3 className="text-sm font-semibold">Calidad</h3>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="inline-flex items-center gap-1.5 text-sm font-semibold">
+                  Estado del costo
+                  <CostV2InfoHint
+                    title={statusLabel(status)}
+                    text={statusShortHelp(status)}
+                  />
+                </h3>
+                {onOpenSymbology ? (
+                  <Button
+                    type="button"
+                    variant="link"
+                    size="sm"
+                    className="h-auto px-0 text-xs"
+                    onClick={onOpenSymbology}
+                  >
+                    Ver simbología
+                  </Button>
+                ) : null}
+              </div>
               <div className="flex flex-wrap items-center gap-2">
-                <CostV2StatusBadge status={status} />
+                <CostV2StatusBadge status={status} showHelp={false} />
                 {(item.warnings ?? []).map((w) => (
                   <Badge key={w} variant="outline" className="font-normal">
                     {warningLabel(w)}
                   </Badge>
                 ))}
               </div>
+              <p className="text-sm text-muted-foreground">{statusShortHelp(status)}</p>
               {item.suspicious_outlier ? (
                 <Alert>
                   <AlertTitle>Costo atípico</AlertTitle>
                   <AlertDescription>
-                    Advertencia de outlier; no invalida automáticamente el cálculo V2.
+                    Advertencia adicional; no invalida automáticamente el cálculo V2.
                   </AlertDescription>
                 </Alert>
               ) : null}
@@ -282,10 +309,22 @@ export function CostV2DetailDrawer({
             <Accordion type="single" collapsible className="w-full">
               <AccordionItem value="trace">
                 <AccordionTrigger className="text-sm">
-                  Trazabilidad técnica
+                  Detalle técnico
                 </AccordionTrigger>
                 <AccordionContent>
                   <dl className="grid grid-cols-1 gap-3">
+                    <Field
+                      label="effective_quality_status"
+                      value={<span className="font-mono text-xs">{status ?? "—"}</span>}
+                    />
+                    <Field
+                      label="warnings"
+                      value={
+                        <span className="font-mono text-xs">
+                          {(item.warnings ?? []).join(", ") || "—"}
+                        </span>
+                      }
+                    />
                     <Field label="calculation_version" value={item.calculation_version} />
                     <Field
                       label="calculation_batch_id"

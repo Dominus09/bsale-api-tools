@@ -42,7 +42,7 @@ export function CostV2ControlKpis({
       key: "outlier" as const,
       title: "Costos atípicos",
       value: outliers,
-      hint: "Warning suspicious_outlier",
+      hint: "Costo fuera del patrón habitual",
     },
   ]
 

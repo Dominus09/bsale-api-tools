@@ -1,5 +1,6 @@
 "use client"
 
+import { CostV2InfoHint } from "@/components/costos-v2/cost-v2-info-hint"
 import { Badge } from "@/components/ui/badge"
 import {
   Tooltip,
@@ -7,7 +8,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { statusLabel } from "@/lib/costos-v2/labels"
+import { statusLabel, statusShortHelp } from "@/lib/costos-v2/labels"
 import { cn } from "@/lib/utils"
 
 const statusClass: Record<string, string> = {
@@ -27,30 +28,46 @@ const statusClass: Record<string, string> = {
 export function CostV2StatusBadge({
   status,
   className,
+  showHelp = true,
 }: {
   status: string | null | undefined
   className?: string
+  /** Tooltip con explicación en español (nunca el código técnico). */
+  showHelp?: boolean
 }) {
+  const label = statusLabel(status)
+  const help = statusShortHelp(status)
   const code = status || "unknown"
+
+  const badge = (
+    <Badge
+      variant="secondary"
+      className={cn(
+        "font-normal",
+        statusClass[code] ?? "bg-muted text-muted-foreground",
+        className,
+      )}
+    >
+      {label}
+    </Badge>
+  )
+
+  if (!showHelp) return badge
+
   return (
-    <TooltipProvider delayDuration={200}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Badge
-            variant="secondary"
-            className={cn(
-              "font-normal",
-              statusClass[code] ?? "bg-muted text-muted-foreground",
-              className,
-            )}
-          >
-            {statusLabel(status)}
-          </Badge>
-        </TooltipTrigger>
-        <TooltipContent>
-          <p className="font-mono text-xs">{code}</p>
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <span className="inline-flex items-center gap-1">
+      <TooltipProvider delayDuration={150}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex cursor-default">{badge}</span>
+          </TooltipTrigger>
+          <TooltipContent className="max-w-xs text-xs leading-relaxed">
+            <p className="font-medium">{label}</p>
+            <p className="mt-0.5">{help}</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+      <CostV2InfoHint title={label} text={help} />
+    </span>
   )
 }

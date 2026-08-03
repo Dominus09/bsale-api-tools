@@ -18,7 +18,10 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import type { CostOfficeRef } from "@/lib/api"
-import { COST_V2_STATUS_LABEL, COST_V2_WARNING_LABEL } from "@/lib/costos-v2/labels"
+import {
+  FILTER_STATUS_OPTIONS,
+  FILTER_WARNING_OPTIONS,
+} from "@/lib/costos-v2/labels"
 
 const ALL = "__all__"
 
@@ -156,28 +159,28 @@ export function CostV2Filters({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={ALL}>Todos</SelectItem>
-                {Object.entries(COST_V2_STATUS_LABEL).map(([k, label]) => (
-                  <SelectItem key={k} value={k}>
-                    {label}
+                {FILTER_STATUS_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
           </div>
           <div className="space-y-1 min-w-0">
-            <Label>Warning</Label>
+            <Label>Alerta</Label>
             <Select
               value={draft.warning || ALL}
               onValueChange={(v) => onChange({ warning: v === ALL ? "" : v })}
             >
               <SelectTrigger className="w-full">
-                <SelectValue placeholder="Todos" />
+                <SelectValue placeholder="Todas" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={ALL}>Todos</SelectItem>
-                {Object.entries(COST_V2_WARNING_LABEL).map(([k, label]) => (
-                  <SelectItem key={k} value={k}>
-                    {label}
+                <SelectItem value={ALL}>Todas</SelectItem>
+                {FILTER_WARNING_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
                   </SelectItem>
                 ))}
               </SelectContent>

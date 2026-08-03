@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react"
 
+import { CostV2InfoHint } from "@/components/costos-v2/cost-v2-info-hint"
 import { CostV2StatusBadge } from "@/components/costos-v2/cost-v2-status-badge"
 import { ChangeCell } from "@/components/costos-v2/cost-v2-recent-changes"
 import {
@@ -41,7 +42,11 @@ import {
   formatPercentCL,
   formatTaxRate,
 } from "@/lib/costos-v2/format"
-import { warningLabel } from "@/lib/costos-v2/labels"
+import {
+  statusLabel,
+  statusShortHelp,
+  warningLabel,
+} from "@/lib/costos-v2/labels"
 import type { CostV2ProductItem } from "@/lib/costos-v2/types"
 
 function Field({ label, value }: { label: string; value: ReactNode }) {
@@ -61,6 +66,7 @@ export function CostV2ProductDetailDrawer({
   officeId,
   dateFrom,
   dateTo,
+  onOpenSymbology,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -69,6 +75,7 @@ export function CostV2ProductDetailDrawer({
   officeId: number
   dateFrom: string
   dateTo: string
+  onOpenSymbology?: () => void
 }) {
   const [item, setItem] = useState<CostV2ProductItem | null>(null)
   const [loading, setLoading] = useState(false)
@@ -263,15 +270,35 @@ export function CostV2ProductDetailDrawer({
             </section>
 
             <section className="space-y-2">
-              <h3 className="text-sm font-semibold">Calidad tributaria</h3>
-              <div className="flex flex-wrap gap-1.5">
-                <CostV2StatusBadge status={status} />
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="inline-flex items-center gap-1.5 text-sm font-semibold">
+                  Estado del costo
+                  <CostV2InfoHint
+                    title={statusLabel(status)}
+                    text={statusShortHelp(status)}
+                  />
+                </h3>
+                {onOpenSymbology ? (
+                  <Button
+                    type="button"
+                    variant="link"
+                    size="sm"
+                    className="h-auto px-0 text-xs"
+                    onClick={onOpenSymbology}
+                  >
+                    Ver simbología
+                  </Button>
+                ) : null}
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <CostV2StatusBadge status={status} showHelp={false} />
                 {(item.current_warnings ?? []).map((w) => (
                   <Badge key={w} variant="outline" className="font-normal">
                     {warningLabel(w)}
                   </Badge>
                 ))}
               </div>
+              <p className="text-sm text-muted-foreground">{statusShortHelp(status)}</p>
               <dl className="grid grid-cols-2 gap-2">
                 <Field label="Origen tax IDs" value={item.tax_ids_source ?? "—"} />
                 <Field label="Origen tasas" value={item.tax_rates_source ?? "—"} />
@@ -281,10 +308,24 @@ export function CostV2ProductDetailDrawer({
             <Accordion type="single" collapsible>
               <AccordionItem value="trace">
                 <AccordionTrigger className="text-sm">
-                  Trazabilidad técnica
+                  Detalle técnico
                 </AccordionTrigger>
                 <AccordionContent>
                   <dl className="space-y-2 text-xs">
+                    <Field
+                      label="effective_quality_status"
+                      value={
+                        <span className="font-mono">{status ?? "—"}</span>
+                      }
+                    />
+                    <Field
+                      label="warnings"
+                      value={
+                        <span className="font-mono">
+                          {(item.current_warnings ?? []).join(", ") || "—"}
+                        </span>
+                      }
+                    />
                     <Field label="calculation_version" value={item.calculation_version} />
                     <Field
                       label="source_history_fingerprint"

@@ -1,5 +1,9 @@
 "use client"
 
+import {
+  COST_V2_STATUS_LABEL,
+  COST_V2_WARNING_LABEL,
+} from "@/lib/costos-v2/labels"
 import type { CostV2ProductsSummaryBody } from "@/lib/costos-v2/types"
 import { cn } from "@/lib/utils"
 
@@ -21,22 +25,22 @@ export function CostV2AlertsPanel({
   const rows: { key: AlertKey; label: string; count: number }[] = [
     {
       key: "incomplete_tax_context",
-      label: "Contexto tributario incompleto",
+      label: COST_V2_STATUS_LABEL.incomplete_tax_context,
       count: summary?.products_incomplete_tax_context ?? 0,
     },
     {
       key: "missing_cost",
-      label: "Costo faltante",
+      label: COST_V2_STATUS_LABEL.missing_cost,
       count: summary?.products_missing_cost ?? 0,
     },
     {
       key: "suspicious_outlier",
-      label: "Costo atípico",
+      label: COST_V2_WARNING_LABEL.suspicious_outlier,
       count: summary?.products_with_outlier ?? 0,
     },
     {
       key: "stored_components_rounding",
-      label: "Diferencias de redondeo",
+      label: COST_V2_WARNING_LABEL.stored_components_rounding,
       count: summary?.products_rounding_warning ?? 0,
     },
   ]

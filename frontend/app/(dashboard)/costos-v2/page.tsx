@@ -14,6 +14,7 @@ import { CostV2ProductsTable } from "@/components/costos-v2/cost-v2-products-tab
 import { CostV2RecentChanges } from "@/components/costos-v2/cost-v2-recent-changes"
 import { CostV2ReceptionsTable } from "@/components/costos-v2/cost-v2-receptions-table"
 import { CostV2DetailDrawer } from "@/components/costos-v2/cost-v2-detail-drawer"
+import { CostV2SymbologyPanel } from "@/components/costos-v2/cost-v2-symbology-panel"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -386,9 +387,19 @@ export default function CostosV2Page() {
       ) : null}
 
       {!applied ? (
-        <p className="rounded-md border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
-          Configure oficina y fechas, luego Actualizar.
-        </p>
+        <div className="space-y-3">
+          <p className="rounded-md border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
+            Configure oficina y fechas, luego Actualizar.
+          </p>
+          <Tabs defaultValue="simbologia" className="gap-3">
+            <TabsList>
+              <TabsTrigger value="simbologia">Simbología</TabsTrigger>
+            </TabsList>
+            <TabsContent value="simbologia">
+              <CostV2SymbologyPanel />
+            </TabsContent>
+          </Tabs>
+        </div>
       ) : (
         <Tabs value={tab} onValueChange={setTab} className="gap-3">
           <TabsList>
@@ -396,6 +407,7 @@ export default function CostosV2Page() {
             <TabsTrigger value="productos">Productos</TabsTrigger>
             <TabsTrigger value="alertas">Alertas</TabsTrigger>
             <TabsTrigger value="recepciones">Recepciones</TabsTrigger>
+            <TabsTrigger value="simbologia">Simbología</TabsTrigger>
           </TabsList>
 
           <TabsContent value="resumen" className="space-y-3">
@@ -545,6 +557,10 @@ export default function CostosV2Page() {
               </div>
             ) : null}
           </TabsContent>
+
+          <TabsContent value="simbologia" className="space-y-3">
+            <CostV2SymbologyPanel />
+          </TabsContent>
         </Tabs>
       )}
 
@@ -558,6 +574,10 @@ export default function CostosV2Page() {
             officeId={Number(applied.officeId)}
             dateFrom={applied.dateFrom}
             dateTo={applied.dateTo}
+            onOpenSymbology={() => {
+              setDetailOpen(false)
+              setTab("simbologia")
+            }}
           />
           <CostV2DetailDrawer
             open={recDetailOpen}
@@ -565,6 +585,10 @@ export default function CostosV2Page() {
             historyId={recDetailId}
             companyId={companyId}
             officeId={Number(applied.officeId)}
+            onOpenSymbology={() => {
+              setRecDetailOpen(false)
+              setTab("simbologia")
+            }}
           />
         </>
       ) : null}

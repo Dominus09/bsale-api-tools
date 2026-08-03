@@ -1,5 +1,6 @@
 "use client"
 
+import { CostV2InfoHint } from "@/components/costos-v2/cost-v2-info-hint"
 import { CostV2StatusBadge } from "@/components/costos-v2/cost-v2-status-badge"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -24,7 +25,7 @@ import {
   formatMoneyCLPTable,
   formatTaxRate,
 } from "@/lib/costos-v2/format"
-import { warningLabel } from "@/lib/costos-v2/labels"
+import { warningLabel, warningShortHelp } from "@/lib/costos-v2/labels"
 import type { CostV2ReceptionListItem } from "@/lib/costos-v2/types"
 import { cn } from "@/lib/utils"
 
@@ -60,8 +61,24 @@ export function CostV2ReceptionsTable({
             <TableHead className="text-right">Bruto corregido V2</TableHead>
             <TableHead className="text-right">Diferencia unitaria</TableHead>
             <TableHead className="hidden lg:table-cell text-right">Tasa total</TableHead>
-            <TableHead>Estado</TableHead>
-            <TableHead className="hidden md:table-cell">Alertas</TableHead>
+            <TableHead>
+              <span className="inline-flex items-center gap-1">
+                Estado
+                <CostV2InfoHint
+                  title="Estado del costo"
+                  text="Indica la calidad del costo y del cálculo tributario."
+                />
+              </span>
+            </TableHead>
+            <TableHead className="hidden md:table-cell">
+              <span className="inline-flex items-center gap-1">
+                Alertas
+                <CostV2InfoHint
+                  title="Alertas"
+                  text="Advertencias adicionales; no reemplazan el estado principal."
+                />
+              </span>
+            </TableHead>
             <TableHead className="text-right">Acción</TableHead>
           </TableRow>
         </TableHeader>
@@ -114,8 +131,9 @@ export function CostV2ReceptionsTable({
                             {warningLabel(w)}
                           </Badge>
                         </TooltipTrigger>
-                        <TooltipContent>
-                          <p className="font-mono text-xs">{w}</p>
+                        <TooltipContent className="max-w-xs text-xs">
+                          <p className="font-medium">{warningLabel(w)}</p>
+                          <p className="mt-0.5">{warningShortHelp(w)}</p>
                         </TooltipContent>
                       </Tooltip>
                     </TooltipProvider>
