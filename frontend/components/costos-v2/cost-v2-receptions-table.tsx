@@ -21,7 +21,7 @@ import {
   displayCorrectedGross,
   displayUnitDifference,
   formatDateCL,
-  formatDecimalMoneyCLP,
+  formatMoneyCLPTable,
   formatTaxRate,
 } from "@/lib/costos-v2/format"
 import { warningLabel } from "@/lib/costos-v2/labels"
@@ -84,10 +84,10 @@ export function CostV2ReceptionsTable({
                 {row.barcode ?? "—"}
               </TableCell>
               <TableCell className="text-right tabular-nums">
-                {formatDecimalMoneyCLP(row.stored_cost_net)}
+                {formatMoneyCLPTable(row.stored_cost_net)}
               </TableCell>
               <TableCell className="hidden text-right tabular-nums xl:table-cell">
-                {formatDecimalMoneyCLP(row.stored_cost_gross)}
+                {formatMoneyCLPTable(row.stored_cost_gross)}
               </TableCell>
               <TableCell className="text-right tabular-nums">
                 {displayCorrectedGross(row.corrected_gross_cost)}

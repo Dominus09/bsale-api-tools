@@ -365,3 +365,456 @@ WHERE c.calculation_version = %s
             "n": int(row.get("n") or 0),
             "n_pairs": int(row.get("n_pairs") or 0),
         }
+
+    def _product_ranked_cte(
+        self,
+        where: str,
+    ) -> str:
+        """Última y penúltima recepción por variant_id (Decimal en SQL)."""
+        return f"""
+WITH ranked AS (
+    SELECT
+        c.variant_id,
+        c.history_id,
+        c.company_id,
+        c.office_id,
+        h.admission_date::date AS admission_date,
+        h.document_number,
+        h.document,
+        h.barcode,
+        h.product_name,
+        h.variant_name,
+        c.stored_cost_net,
+        c.corrected_gross_cost,
+        c.stored_gross_cost,
+        c.calculated_iva_amount,
+        c.additional_tax_amount_total,
+        c.additional_taxes_json,
+        c.total_tax_rate,
+        c.iva_rate,
+        c.iva_tax_id,
+        c.effective_quality_status,
+        c.warnings_json,
+        c.tax_ids_source,
+        c.tax_rates_source,
+        c.tax_context_source,
+        c.tax_resolution_quality,
+        c.tax_context_is_historical,
+        c.calculation_version,
+        c.calculation_batch_id,
+        c.calculated_at,
+        c.source_history_fingerprint,
+        c.tax_context_fingerprint,
+        c.calculation_result_fingerprint,
+        ROW_NUMBER() OVER (
+            PARTITION BY c.variant_id
+            ORDER BY h.admission_date DESC, h.id DESC
+        ) AS rn,
+        COUNT(*) OVER (PARTITION BY c.variant_id) AS receptions_count
+    FROM analytics.cost_reception_calculated c
+    INNER JOIN analytics.cost_reception_history h
+        ON h.id = c.history_id
+    WHERE {where}
+),
+products AS (
+    SELECT
+        cur.variant_id,
+        cur.company_id,
+        cur.office_id,
+        cur.barcode,
+        cur.product_name,
+        cur.variant_name,
+        cur.history_id AS latest_history_id,
+        cur.admission_date AS latest_admission_date,
+        cur.document_number AS latest_document_number,
+        cur.document AS latest_document,
+        cur.stored_cost_net AS current_stored_cost_net,
+        cur.corrected_gross_cost AS current_corrected_gross_cost,
+        cur.stored_gross_cost AS current_stored_gross_cost,
+        cur.calculated_iva_amount AS current_calculated_iva_amount,
+        cur.additional_tax_amount_total AS current_additional_tax_amount_total,
+        cur.additional_taxes_json AS current_additional_taxes_json,
+        cur.total_tax_rate AS current_total_tax_rate,
+        cur.iva_rate AS current_iva_rate,
+        cur.iva_tax_id AS current_iva_tax_id,
+        cur.effective_quality_status AS current_quality_status,
+        cur.warnings_json AS current_warnings_json,
+        cur.tax_ids_source,
+        cur.tax_rates_source,
+        cur.tax_context_source,
+        cur.tax_resolution_quality,
+        cur.tax_context_is_historical,
+        cur.calculation_version,
+        cur.calculation_batch_id,
+        cur.calculated_at AS last_calculated_at,
+        cur.source_history_fingerprint,
+        cur.tax_context_fingerprint,
+        cur.calculation_result_fingerprint,
+        cur.receptions_count,
+        prev.history_id AS previous_history_id,
+        prev.admission_date AS previous_admission_date,
+        prev.corrected_gross_cost AS previous_corrected_gross_cost,
+        CASE
+            WHEN cur.corrected_gross_cost IS NOT NULL
+             AND prev.corrected_gross_cost IS NOT NULL
+            THEN cur.corrected_gross_cost - prev.corrected_gross_cost
+            ELSE NULL
+        END AS unit_change_amount,
+        CASE
+            WHEN cur.corrected_gross_cost IS NOT NULL
+             AND prev.corrected_gross_cost IS NOT NULL
+             AND prev.corrected_gross_cost <> 0
+            THEN (
+                (cur.corrected_gross_cost - prev.corrected_gross_cost)
+                / prev.corrected_gross_cost
+            ) * 100
+            ELSE NULL
+        END AS unit_change_percent
+    FROM ranked cur
+    LEFT JOIN ranked prev
+        ON prev.variant_id = cur.variant_id
+       AND prev.rn = 2
+    WHERE cur.rn = 1
+)
+""".strip()
+
+    def list_products(
+        self,
+        *,
+        company_id: int,
+        office_id: int,
+        date_from: date,
+        date_to: date,
+        limit: int,
+        sort: str = "latest_reception",
+        cursor: dict[str, Any] | None = None,
+        statuses: list[str] | None = None,
+        warnings: list[str] | None = None,
+        barcode: str | None = None,
+        search: str | None = None,
+        only_with_changes: bool = False,
+        only_needs_review: bool = False,
+        min_abs_change_percent: Decimal | None = None,
+        needs_review_statuses: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        where, params = self._scope_clauses(
+            company_id=company_id,
+            office_id=office_id,
+            date_from=date_from,
+            date_to=date_to,
+            statuses=None,  # status filtra el vigente (post-agg)
+            warnings=None,
+            barcode=barcode,
+            search=search,
+        )
+        review = needs_review_statuses or [
+            "incomplete_tax_context",
+            "missing_cost",
+        ]
+        filters: list[str] = []
+        if statuses:
+            filters.append("p.current_quality_status = ANY(%s)")
+            params.append(list(statuses))
+        if warnings:
+            filters.append("p.current_warnings_json ?| %s::text[]")
+            params.append(list(warnings))
+        if only_with_changes:
+            filters.append("p.unit_change_amount IS NOT NULL AND p.unit_change_amount <> 0")
+        if only_needs_review:
+            filters.append(
+                "(p.current_corrected_gross_cost IS NULL "
+                "OR p.current_quality_status = ANY(%s))"
+            )
+            params.append(list(review))
+        if min_abs_change_percent is not None:
+            filters.append(
+                "p.unit_change_percent IS NOT NULL "
+                "AND ABS(p.unit_change_percent) >= %s"
+            )
+            params.append(min_abs_change_percent)
+
+        # Keyset
+        if cursor:
+            c_sort = cursor.get("sort") or sort
+            if c_sort != sort:
+                from backend.schemas.cost_v2_read import CostV2ReadValidationError
+
+                raise CostV2ReadValidationError(
+                    "cursor sort mismatch",
+                    error_type="invalid_cursor",
+                )
+            vid = int(cursor["variant_id"])
+            if sort == "latest_reception":
+                filters.append(
+                    "(p.latest_admission_date, p.variant_id) < (%s::date, %s::bigint)"
+                )
+                params.extend([cursor["admission_date"], vid])
+            elif sort == "product":
+                filters.append(
+                    "(LOWER(COALESCE(p.product_name, '')), p.variant_id) > "
+                    "(LOWER(%s), %s::bigint)"
+                )
+                params.extend([cursor.get("product_name") or "", vid])
+            elif sort == "current_cost":
+                # DESC NULLS LAST
+                filters.append(
+                    """(
+                        (p.current_corrected_gross_cost IS NOT NULL
+                         AND %s::numeric IS NOT NULL
+                         AND (p.current_corrected_gross_cost, p.variant_id)
+                             < (%s::numeric, %s::bigint))
+                     OR (p.current_corrected_gross_cost IS NULL AND %s::numeric IS NOT NULL)
+                     OR (p.current_corrected_gross_cost IS NULL
+                         AND %s::numeric IS NULL
+                         AND p.variant_id < %s::bigint)
+                    )"""
+                )
+                cc = cursor.get("current_cost")
+                params.extend([cc, cc, vid, cc, cc, vid])
+            elif sort == "pct_increase":
+                filters.append(
+                    """(
+                        (p.unit_change_percent IS NOT NULL
+                         AND %s::numeric IS NOT NULL
+                         AND (p.unit_change_percent, p.variant_id)
+                             < (%s::numeric, %s::bigint))
+                     OR (p.unit_change_percent IS NULL AND %s::numeric IS NOT NULL)
+                     OR (p.unit_change_percent IS NULL
+                         AND %s::numeric IS NULL
+                         AND p.variant_id < %s::bigint)
+                    )"""
+                )
+                pct = cursor.get("unit_change_percent")
+                params.extend([pct, pct, vid, pct, pct, vid])
+            elif sort == "pct_decrease":
+                # ASC (más negativo primero): continuar con valores mayores
+                filters.append(
+                    """(
+                        (p.unit_change_percent IS NOT NULL
+                         AND %s::numeric IS NOT NULL
+                         AND (p.unit_change_percent, p.variant_id)
+                             > (%s::numeric, %s::bigint))
+                     OR (p.unit_change_percent IS NULL AND %s::numeric IS NOT NULL)
+                     OR (p.unit_change_percent IS NULL
+                         AND %s::numeric IS NULL
+                         AND p.variant_id > %s::bigint)
+                    )"""
+                )
+                pct = cursor.get("unit_change_percent")
+                params.extend([pct, pct, vid, pct, pct, vid])
+            elif sort == "status":
+                filters.append(
+                    "(COALESCE(p.current_quality_status, ''), p.variant_id) > (%s, %s::bigint)"
+                )
+                params.extend([cursor.get("status") or "", vid])
+
+        filter_sql = (" AND " + " AND ".join(filters)) if filters else ""
+
+        order_map = {
+            "latest_reception": (
+                "p.latest_admission_date DESC, p.variant_id DESC"
+            ),
+            "pct_increase": (
+                "p.unit_change_percent DESC NULLS LAST, p.variant_id DESC"
+            ),
+            "pct_decrease": (
+                "p.unit_change_percent ASC NULLS LAST, p.variant_id ASC"
+            ),
+            "product": "LOWER(COALESCE(p.product_name, '')) ASC, p.variant_id ASC",
+            "current_cost": (
+                "p.current_corrected_gross_cost DESC NULLS LAST, p.variant_id DESC"
+            ),
+            "status": (
+                "COALESCE(p.current_quality_status, '') ASC, p.variant_id ASC"
+            ),
+        }
+        order_sql = order_map.get(sort, order_map["latest_reception"])
+
+        sql = f"""
+{self._product_ranked_cte(where)}
+SELECT * FROM products p
+WHERE TRUE{filter_sql}
+ORDER BY {order_sql}
+LIMIT %s
+""".strip()
+        params.append(int(limit) + 1)
+        rows = self._run(sql, tuple(params))
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            row = dict(r)
+            for key in (
+                "current_stored_cost_net",
+                "current_corrected_gross_cost",
+                "current_stored_gross_cost",
+                "current_calculated_iva_amount",
+                "current_additional_tax_amount_total",
+                "current_total_tax_rate",
+                "current_iva_rate",
+                "previous_corrected_gross_cost",
+                "unit_change_amount",
+                "unit_change_percent",
+            ):
+                if key in row:
+                    row[key] = coerce_optional_decimal(row.get(key))
+            out.append(row)
+        return out
+
+    def get_product(
+        self,
+        *,
+        company_id: int,
+        office_id: int,
+        variant_id: int,
+        date_from: date,
+        date_to: date,
+        history_limit: int = 20,
+    ) -> dict[str, Any] | None:
+        where, params = self._scope_clauses(
+            company_id=company_id,
+            office_id=office_id,
+            date_from=date_from,
+            date_to=date_to,
+            variant_id=variant_id,
+        )
+        sql = f"""
+{self._product_ranked_cte(where)}
+SELECT * FROM products p
+LIMIT 1
+""".strip()
+        rows = self._run(sql, tuple(params))
+        if not rows:
+            return None
+        product = dict(rows[0])
+        for key in (
+            "current_stored_cost_net",
+            "current_corrected_gross_cost",
+            "current_stored_gross_cost",
+            "current_calculated_iva_amount",
+            "current_additional_tax_amount_total",
+            "current_total_tax_rate",
+            "current_iva_rate",
+            "previous_corrected_gross_cost",
+            "unit_change_amount",
+            "unit_change_percent",
+        ):
+            if key in product:
+                product[key] = coerce_optional_decimal(product.get(key))
+
+        hist = self.list_receptions(
+            company_id=company_id,
+            office_id=office_id,
+            date_from=date_from,
+            date_to=date_to,
+            limit=history_limit,
+            variant_id=variant_id,
+        )
+        product["receptions"] = hist
+        return product
+
+    def summarize_products(
+        self,
+        *,
+        company_id: int,
+        office_id: int,
+        date_from: date,
+        date_to: date,
+        change_threshold_percent: Decimal,
+        barcode: str | None = None,
+        search: str | None = None,
+        statuses: list[str] | None = None,
+        warnings: list[str] | None = None,
+        needs_review_statuses: list[str] | None = None,
+    ) -> dict[str, Any]:
+        where, cte_params = self._scope_clauses(
+            company_id=company_id,
+            office_id=office_id,
+            date_from=date_from,
+            date_to=date_to,
+            barcode=barcode,
+            search=search,
+        )
+        review = needs_review_statuses or [
+            "incomplete_tax_context",
+            "missing_cost",
+        ]
+        filters: list[str] = []
+        filter_params: list[Any] = []
+        if statuses:
+            filters.append("p.current_quality_status = ANY(%s)")
+            filter_params.append(list(statuses))
+        if warnings:
+            filters.append("p.current_warnings_json ?| %s::text[]")
+            filter_params.append(list(warnings))
+        filter_sql = (" AND " + " AND ".join(filters)) if filters else ""
+
+        # Orden de %s en el SQL: CTE where → SELECT filters → outer WHERE
+        sql = f"""
+{self._product_ranked_cte(where)}
+SELECT
+    COUNT(*)::bigint AS total_products,
+    COUNT(*) FILTER (
+        WHERE p.current_corrected_gross_cost IS NOT NULL
+    )::bigint AS products_with_current_cost,
+    COUNT(*) FILTER (
+        WHERE p.current_corrected_gross_cost IS NULL
+    )::bigint AS products_without_calculable_cost,
+    COUNT(*) FILTER (
+        WHERE p.current_quality_status = 'incomplete_tax_context'
+    )::bigint AS products_incomplete_tax_context,
+    COUNT(*) FILTER (
+        WHERE p.current_warnings_json ? 'suspicious_outlier'
+    )::bigint AS products_with_outlier,
+    COUNT(*) FILTER (
+        WHERE p.unit_change_amount IS NOT NULL AND p.unit_change_amount > 0
+    )::bigint AS products_with_increase,
+    COUNT(*) FILTER (
+        WHERE p.unit_change_amount IS NOT NULL AND p.unit_change_amount < 0
+    )::bigint AS products_with_decrease,
+    COUNT(*) FILTER (
+        WHERE p.unit_change_percent IS NOT NULL
+          AND ABS(p.unit_change_percent) >= %s
+    )::bigint AS products_with_change_over_threshold,
+    COUNT(*) FILTER (
+        WHERE p.current_corrected_gross_cost IS NULL
+           OR p.current_quality_status = ANY(%s)
+    )::bigint AS products_needing_review,
+    COUNT(*) FILTER (
+        WHERE p.current_quality_status = 'missing_cost'
+    )::bigint AS products_missing_cost,
+    COUNT(*) FILTER (
+        WHERE p.current_warnings_json ? 'stored_components_rounding'
+    )::bigint AS products_rounding_warning,
+    MAX(p.latest_admission_date) AS latest_reception_date,
+    MAX(p.last_calculated_at) AS latest_calculation_at
+FROM products p
+WHERE TRUE{filter_sql}
+""".strip()
+        params = (
+            list(cte_params)
+            + [change_threshold_percent, list(review)]
+            + filter_params
+        )
+        rows = self._run(sql, tuple(params))
+        row = rows[0] if rows else {}
+        return {
+            "total_products": int(row.get("total_products") or 0),
+            "products_with_current_cost": int(row.get("products_with_current_cost") or 0),
+            "products_without_calculable_cost": int(
+                row.get("products_without_calculable_cost") or 0
+            ),
+            "products_incomplete_tax_context": int(
+                row.get("products_incomplete_tax_context") or 0
+            ),
+            "products_with_outlier": int(row.get("products_with_outlier") or 0),
+            "products_with_increase": int(row.get("products_with_increase") or 0),
+            "products_with_decrease": int(row.get("products_with_decrease") or 0),
+            "products_with_change_over_threshold": int(
+                row.get("products_with_change_over_threshold") or 0
+            ),
+            "products_needing_review": int(row.get("products_needing_review") or 0),
+            "products_missing_cost": int(row.get("products_missing_cost") or 0),
+            "products_rounding_warning": int(row.get("products_rounding_warning") or 0),
+            "latest_reception_date": row.get("latest_reception_date"),
+            "latest_calculation_at": row.get("latest_calculation_at"),
+            "change_threshold_percent": change_threshold_percent,
+        }

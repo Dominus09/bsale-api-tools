@@ -163,3 +163,94 @@ export type CostV2SummaryParams = {
 export const COST_V2_MAX_LIMIT = 200
 export const COST_V2_DEFAULT_LIMIT = 50
 export const COST_V2_DEFAULT_OFFICE_ID = 3
+
+export type CostV2ProductItem = {
+  variant_id: number
+  company_id: number | null
+  office_id: number | null
+  barcode: string | null
+  product_name: string | null
+  variant_name: string | null
+  latest_history_id: number | null
+  latest_admission_date: string | null
+  latest_document_number: number | string | null
+  latest_document?: string | null
+  current_stored_cost_net: string | null
+  current_corrected_gross_cost: string | null
+  current_stored_gross_cost?: string | null
+  current_calculated_iva_amount?: string | null
+  current_additional_tax_amount_total?: string | null
+  current_additional_taxes?: CostV2AdditionalTax[]
+  current_total_tax_rate: string | null
+  current_iva_rate?: string | null
+  current_quality_status: CostV2QualityStatus | null
+  current_warnings: CostV2WarningCode[]
+  previous_history_id: number | null
+  previous_admission_date: string | null
+  previous_corrected_gross_cost: string | null
+  unit_change_amount: string | null
+  unit_change_percent: string | null
+  receptions_count: number
+  last_calculated_at: string | null
+  needs_review?: boolean
+  tax_ids_source?: string | null
+  tax_rates_source?: string | null
+  tax_context_source?: string | null
+  calculation_version?: string | null
+  source_history_fingerprint?: string | null
+  tax_context_fingerprint?: string | null
+  calculation_result_fingerprint?: string | null
+  receptions?: CostV2ReceptionListItem[]
+  calculation?: CostV2CalculationBlock
+}
+
+export type CostV2ProductsResponse = {
+  items: CostV2ProductItem[]
+  page: CostV2PageInfo & { sort?: string }
+  meta: CostV2Meta
+}
+
+export type CostV2ProductDetailResponse = {
+  item: CostV2ProductItem
+  meta: CostV2Meta
+}
+
+export type CostV2ProductsSummaryBody = {
+  total_products: number
+  products_with_current_cost: number
+  products_without_calculable_cost: number
+  products_incomplete_tax_context: number
+  products_with_outlier: number
+  products_with_increase: number
+  products_with_decrease: number
+  products_with_change_over_threshold: number
+  products_needing_review: number
+  products_missing_cost: number
+  products_rounding_warning: number
+  latest_reception_date: string | null
+  latest_calculation_at: string | null
+  change_threshold_percent: string | null
+}
+
+export type CostV2ProductsSummaryResponse = {
+  summary: CostV2ProductsSummaryBody
+  meta: CostV2Meta
+}
+
+export type CostV2ProductListParams = {
+  company_id: number
+  office_id: number
+  date_from: string
+  date_to: string
+  status?: string | null
+  warning?: string | null
+  barcode?: string | null
+  search?: string | null
+  sort?: string | null
+  only_with_changes?: boolean
+  only_needs_review?: boolean
+  min_abs_change_percent?: string | number | null
+  limit?: number
+  cursor?: string | null
+  signal?: AbortSignal
+}

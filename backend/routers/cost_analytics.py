@@ -123,6 +123,106 @@ def v2_summary(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.get("/v2/products")
+def list_v2_products(
+    company_id: int = Query(..., ge=1),
+    office_id: int = Query(..., ge=1),
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+    status: list[str] | None = Query(None),
+    warning: list[str] | None = Query(None),
+    barcode: str | None = Query(None, max_length=64),
+    search: str | None = Query(None, max_length=120),
+    sort: str | None = Query("latest_reception"),
+    only_with_changes: bool = Query(False),
+    only_needs_review: bool = Query(False),
+    min_abs_change_percent: float | None = Query(None, ge=0),
+    limit: int = Query(DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
+    cursor: str | None = Query(None, max_length=1024),
+    _user: dict = Depends(require_staff_user),
+):
+    """Listado por producto/variante (último + penúltimo costo). Read-only."""
+    try:
+        return v2svc.list_v2_products(
+            company_id=company_id,
+            office_id=office_id,
+            date_from=date_from,
+            date_to=date_to,
+            limit=limit,
+            cursor=cursor,
+            sort=sort,
+            status=status,
+            warning=warning,
+            barcode=barcode,
+            search=search,
+            only_with_changes=only_with_changes,
+            only_needs_review=only_needs_review,
+            min_abs_change_percent=min_abs_change_percent,
+        )
+    except (CostV2ReadValidationError, LookupError, ValueError) as exc:
+        raise _v2_http_error(exc) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/v2/products-summary")
+def v2_products_summary(
+    company_id: int = Query(..., ge=1),
+    office_id: int = Query(..., ge=1),
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+    change_threshold_percent: float | None = Query(10, ge=0),
+    status: list[str] | None = Query(None),
+    warning: list[str] | None = Query(None),
+    barcode: str | None = Query(None, max_length=64),
+    search: str | None = Query(None, max_length=120),
+    _user: dict = Depends(require_staff_user),
+):
+    """Resumen orientado a decisiones por producto. Sin sumas de costo unitario."""
+    try:
+        return v2svc.summarize_v2_products(
+            company_id=company_id,
+            office_id=office_id,
+            date_from=date_from,
+            date_to=date_to,
+            change_threshold_percent=change_threshold_percent,
+            status=status,
+            warning=warning,
+            barcode=barcode,
+            search=search,
+        )
+    except (CostV2ReadValidationError, LookupError) as exc:
+        raise _v2_http_error(exc) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/v2/products/{variant_id}")
+def get_v2_product(
+    variant_id: int,
+    company_id: int = Query(..., ge=1),
+    office_id: int = Query(..., ge=1),
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+    history_limit: int = Query(20, ge=1, le=MAX_LIMIT),
+    _user: dict = Depends(require_staff_user),
+):
+    """Detalle de producto con historial de recepciones V2."""
+    try:
+        return v2svc.get_v2_product(
+            company_id=company_id,
+            office_id=office_id,
+            variant_id=variant_id,
+            date_from=date_from,
+            date_to=date_to,
+            history_limit=history_limit,
+        )
+    except (CostV2ReadValidationError, LookupError) as exc:
+        raise _v2_http_error(exc) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @router.get("/dashboard")
 def cost_dashboard(
     company_id: int = Query(..., ge=1),

@@ -13,16 +13,21 @@ from backend.schemas.cost_v2_read import (
     CALCULATION_VERSION_PIN,
     DATA_SOURCE,
     DEFAULT_LIMIT,
+    NEEDS_REVIEW_STATUSES,
     CostV2ReadValidationError,
     decode_cursor,
+    decode_product_cursor,
     encode_cursor,
+    encode_product_cursor,
     money_to_json,
     normalize_statuses,
     normalize_warnings,
     parse_iso_date,
     unit_difference,
+    validate_change_threshold,
     validate_date_range,
     validate_limit,
+    validate_product_sort,
     warnings_list,
 )
 from backend.services.analytics.validate_distribuidora_source import (
@@ -332,9 +337,281 @@ def summarize_v2(
     return _with_repo(_run, get_conn=get_conn)
 
 
+def _map_product_item(row: dict[str, Any]) -> dict[str, Any]:
+    warns = warnings_list(row.get("current_warnings_json"))
+    adm = row.get("latest_admission_date")
+    prev_adm = row.get("previous_admission_date")
+    calc_at = row.get("last_calculated_at")
+
+    def _d(v: Any) -> str | None:
+        if hasattr(v, "isoformat"):
+            return v.isoformat()
+        return str(v) if v is not None else None
+
+    return {
+        "variant_id": int(row["variant_id"]) if row.get("variant_id") is not None else None,
+        "company_id": int(row["company_id"]) if row.get("company_id") is not None else None,
+        "office_id": int(row["office_id"]) if row.get("office_id") is not None else None,
+        "barcode": row.get("barcode"),
+        "product_name": row.get("product_name"),
+        "variant_name": row.get("variant_name"),
+        "latest_history_id": (
+            int(row["latest_history_id"]) if row.get("latest_history_id") is not None else None
+        ),
+        "latest_admission_date": _d(adm),
+        "latest_document_number": row.get("latest_document_number"),
+        "latest_document": row.get("latest_document"),
+        "current_stored_cost_net": money_to_json(row.get("current_stored_cost_net")),
+        "current_corrected_gross_cost": money_to_json(
+            row.get("current_corrected_gross_cost")
+        ),
+        "current_stored_gross_cost": money_to_json(row.get("current_stored_gross_cost")),
+        "current_calculated_iva_amount": money_to_json(
+            row.get("current_calculated_iva_amount")
+        ),
+        "current_additional_tax_amount_total": money_to_json(
+            row.get("current_additional_tax_amount_total")
+        ),
+        "current_additional_taxes": _json_list(row.get("current_additional_taxes_json")),
+        "current_total_tax_rate": money_to_json(row.get("current_total_tax_rate")),
+        "current_iva_rate": money_to_json(row.get("current_iva_rate")),
+        "current_quality_status": row.get("current_quality_status"),
+        "current_warnings": warns,
+        "previous_history_id": (
+            int(row["previous_history_id"])
+            if row.get("previous_history_id") is not None
+            else None
+        ),
+        "previous_admission_date": _d(prev_adm),
+        "previous_corrected_gross_cost": money_to_json(
+            row.get("previous_corrected_gross_cost")
+        ),
+        "unit_change_amount": money_to_json(row.get("unit_change_amount")),
+        "unit_change_percent": money_to_json(row.get("unit_change_percent")),
+        "receptions_count": int(row.get("receptions_count") or 0),
+        "last_calculated_at": (
+            calc_at.isoformat() if hasattr(calc_at, "isoformat") else calc_at
+        ),
+        "tax_ids_source": row.get("tax_ids_source"),
+        "tax_rates_source": row.get("tax_rates_source"),
+        "tax_context_source": row.get("tax_context_source"),
+        "calculation_version": row.get("calculation_version"),
+        "source_history_fingerprint": row.get("source_history_fingerprint"),
+        "tax_context_fingerprint": row.get("tax_context_fingerprint"),
+        "calculation_result_fingerprint": row.get("calculation_result_fingerprint"),
+        "needs_review": (
+            row.get("current_corrected_gross_cost") is None
+            or str(row.get("current_quality_status") or "") in NEEDS_REVIEW_STATUSES
+        ),
+    }
+
+
+def list_v2_products(
+    *,
+    company_id: int,
+    office_id: int,
+    date_from: date | str,
+    date_to: date | str,
+    limit: int = DEFAULT_LIMIT,
+    cursor: str | None = None,
+    sort: str | None = None,
+    status: list[str] | None = None,
+    warning: list[str] | None = None,
+    barcode: str | None = None,
+    search: str | None = None,
+    only_with_changes: bool = False,
+    only_needs_review: bool = False,
+    min_abs_change_percent: Decimal | float | str | None = None,
+    get_conn: Callable[[], Any] = get_connection,
+) -> dict[str, Any]:
+    d_from = parse_iso_date(date_from)
+    d_to = parse_iso_date(date_to)
+    validate_date_range(date_from=d_from, date_to=d_to)
+    lim = validate_limit(int(limit))
+    sort_key = validate_product_sort(sort)
+    statuses = normalize_statuses(status)
+    warnings = normalize_warnings(warning)
+    cur: dict[str, Any] | None = None
+    if cursor:
+        cur = decode_product_cursor(cursor)
+        if cur.get("sort") != sort_key:
+            raise CostV2ReadValidationError(
+                "cursor no corresponde al sort actual",
+                error_type="invalid_cursor",
+            )
+    min_abs: Decimal | None = None
+    if min_abs_change_percent is not None and str(min_abs_change_percent).strip() != "":
+        min_abs = Decimal(str(min_abs_change_percent))
+
+    def _run(repo: CostV2ReadRepository) -> dict[str, Any]:
+        rows = repo.list_products(
+            company_id=company_id,
+            office_id=office_id,
+            date_from=d_from,
+            date_to=d_to,
+            limit=lim,
+            sort=sort_key,
+            cursor=cur,
+            statuses=statuses,
+            warnings=warnings,
+            barcode=barcode,
+            search=search,
+            only_with_changes=only_with_changes,
+            only_needs_review=only_needs_review,
+            min_abs_change_percent=min_abs,
+            needs_review_statuses=list(NEEDS_REVIEW_STATUSES),
+        )
+        has_more = len(rows) > lim
+        page_rows = rows[:lim]
+        items = [_map_product_item(r) for r in page_rows]
+        next_cursor = None
+        if has_more and page_rows:
+            last = page_rows[-1]
+            adm = last.get("latest_admission_date")
+            if adm is not None and not isinstance(adm, date):
+                adm = parse_iso_date(adm)
+            next_cursor = encode_product_cursor(
+                sort=sort_key,
+                variant_id=int(last["variant_id"]),
+                admission_date=adm if isinstance(adm, date) else None,
+                product_name=last.get("product_name"),
+                current_cost=last.get("current_corrected_gross_cost"),
+                unit_change_percent=last.get("unit_change_percent"),
+                status=last.get("current_quality_status"),
+            )
+        return {
+            "items": items,
+            "page": {
+                "limit": lim,
+                "has_more": has_more,
+                "next_cursor": next_cursor,
+                "sort": sort_key,
+            },
+            "meta": _meta(),
+        }
+
+    return _with_repo(_run, get_conn=get_conn)
+
+
+def get_v2_product(
+    *,
+    company_id: int,
+    office_id: int,
+    variant_id: int,
+    date_from: date | str,
+    date_to: date | str,
+    history_limit: int = 20,
+    get_conn: Callable[[], Any] = get_connection,
+) -> dict[str, Any]:
+    d_from = parse_iso_date(date_from)
+    d_to = parse_iso_date(date_to)
+    validate_date_range(date_from=d_from, date_to=d_to)
+    hist_lim = validate_limit(int(history_limit))
+
+    def _run(repo: CostV2ReadRepository) -> dict[str, Any]:
+        row = repo.get_product(
+            company_id=company_id,
+            office_id=office_id,
+            variant_id=variant_id,
+            date_from=d_from,
+            date_to=d_to,
+            history_limit=hist_lim,
+        )
+        if row is None:
+            raise LookupError("Producto V2 no encontrado en el scope autorizado")
+        item = _map_product_item(row)
+        receptions = [_map_list_item(r) for r in (row.get("receptions") or [])]
+        item["receptions"] = receptions
+        item["calculation"] = {
+            "stored_cost_net": item["current_stored_cost_net"],
+            "iva": {
+                "tax_id": row.get("current_iva_tax_id"),
+                "rate": item["current_iva_rate"],
+                "amount": item["current_calculated_iva_amount"],
+            },
+            "additional_taxes": item["current_additional_taxes"],
+            "corrected_gross_cost": item["current_corrected_gross_cost"],
+            "formula": "net + iva + additional_taxes",
+        }
+        return {"item": item, "meta": _meta()}
+
+    return _with_repo(_run, get_conn=get_conn)
+
+
+def summarize_v2_products(
+    *,
+    company_id: int,
+    office_id: int,
+    date_from: date | str,
+    date_to: date | str,
+    change_threshold_percent: Decimal | float | str | None = None,
+    status: list[str] | None = None,
+    warning: list[str] | None = None,
+    barcode: str | None = None,
+    search: str | None = None,
+    get_conn: Callable[[], Any] = get_connection,
+) -> dict[str, Any]:
+    d_from = parse_iso_date(date_from)
+    d_to = parse_iso_date(date_to)
+    validate_date_range(date_from=d_from, date_to=d_to)
+    thr = validate_change_threshold(change_threshold_percent)
+    statuses = normalize_statuses(status)
+    warnings = normalize_warnings(warning)
+
+    def _run(repo: CostV2ReadRepository) -> dict[str, Any]:
+        summary = repo.summarize_products(
+            company_id=company_id,
+            office_id=office_id,
+            date_from=d_from,
+            date_to=d_to,
+            change_threshold_percent=thr,
+            barcode=barcode,
+            search=search,
+            statuses=statuses,
+            warnings=warnings,
+            needs_review_statuses=list(NEEDS_REVIEW_STATUSES),
+        )
+        latest = summary.get("latest_reception_date")
+        calc_at = summary.get("latest_calculation_at")
+        if hasattr(latest, "isoformat"):
+            latest = latest.isoformat()
+        if hasattr(calc_at, "isoformat"):
+            calc_at = calc_at.isoformat()
+        return {
+            "summary": {
+                "total_products": summary["total_products"],
+                "products_with_current_cost": summary["products_with_current_cost"],
+                "products_without_calculable_cost": summary[
+                    "products_without_calculable_cost"
+                ],
+                "products_incomplete_tax_context": summary[
+                    "products_incomplete_tax_context"
+                ],
+                "products_with_outlier": summary["products_with_outlier"],
+                "products_with_increase": summary["products_with_increase"],
+                "products_with_decrease": summary["products_with_decrease"],
+                "products_with_change_over_threshold": summary[
+                    "products_with_change_over_threshold"
+                ],
+                "products_needing_review": summary["products_needing_review"],
+                "products_missing_cost": summary["products_missing_cost"],
+                "products_rounding_warning": summary["products_rounding_warning"],
+                "latest_reception_date": latest,
+                "latest_calculation_at": calc_at,
+                "change_threshold_percent": money_to_json(thr),
+            },
+            "meta": _meta(),
+        }
+
+    return _with_repo(_run, get_conn=get_conn)
+
+
 __all__ = [
     "CostV2ReadValidationError",
     "get_v2_reception",
     "list_v2_receptions",
+    "list_v2_products",
+    "get_v2_product",
     "summarize_v2",
+    "summarize_v2_products",
 ]

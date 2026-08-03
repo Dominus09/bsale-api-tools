@@ -45,11 +45,135 @@ KNOWN_WARNING_FILTERS: frozenset[str] = frozenset(
     }
 )
 
+# Vista productos (E.7.1)
+DEFAULT_CHANGE_THRESHOLD_PERCENT = Decimal("10")
+ALLOWED_PRODUCT_SORTS: frozenset[str] = frozenset(
+    {
+        "latest_reception",
+        "pct_increase",
+        "pct_decrease",
+        "product",
+        "current_cost",
+        "status",
+    }
+)
+NEEDS_REVIEW_STATUSES: frozenset[str] = frozenset(
+    {
+        "incomplete_tax_context",
+        "missing_cost",
+    }
+)
+
 
 class CostV2ReadValidationError(ValueError):
     def __init__(self, message: str, *, error_type: str = "invalid_args") -> None:
         super().__init__(message)
         self.error_type = error_type
+
+
+def validate_change_threshold(value: Decimal | float | int | str | None) -> Decimal:
+    if value is None:
+        return DEFAULT_CHANGE_THRESHOLD_PERCENT
+    thr = value if isinstance(value, Decimal) else Decimal(str(value))
+    if thr < 0:
+        raise CostV2ReadValidationError(
+            "change_threshold_percent debe ser >= 0",
+            error_type="invalid_threshold",
+        )
+    return thr
+
+
+def validate_product_sort(sort: str | None) -> str:
+    key = (sort or "latest_reception").strip()
+    if key not in ALLOWED_PRODUCT_SORTS:
+        raise CostV2ReadValidationError(
+            f"sort inválido: {key}",
+            error_type="invalid_sort",
+        )
+    return key
+
+
+def encode_product_cursor(
+    *,
+    sort: str,
+    variant_id: int,
+    admission_date: date | None = None,
+    product_name: str | None = None,
+    current_cost: Decimal | None = None,
+    unit_change_percent: Decimal | None = None,
+    status: str | None = None,
+) -> str:
+    payload: dict[str, Any] = {
+        "sort": sort,
+        "variant_id": int(variant_id),
+    }
+    if admission_date is not None:
+        payload["admission_date"] = admission_date.isoformat()
+    if product_name is not None:
+        payload["product_name"] = product_name
+    if current_cost is not None:
+        payload["current_cost"] = format(current_cost, "f")
+    if unit_change_percent is not None:
+        payload["unit_change_percent"] = format(unit_change_percent, "f")
+    if status is not None:
+        payload["status"] = status
+    raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def decode_product_cursor(token: str) -> dict[str, Any]:
+    text = (token or "").strip()
+    if not text:
+        raise CostV2ReadValidationError("cursor vacío", error_type="invalid_cursor")
+    pad = "=" * (-len(text) % 4)
+    try:
+        raw = base64.urlsafe_b64decode(text + pad)
+        data = json.loads(raw.decode("utf-8"))
+        vid = int(data["variant_id"])
+        sort = str(data.get("sort") or "latest_reception")
+    except Exception as exc:
+        raise CostV2ReadValidationError(
+            "cursor inválido",
+            error_type="invalid_cursor",
+        ) from exc
+    if vid <= 0:
+        raise CostV2ReadValidationError("cursor inválido", error_type="invalid_cursor")
+    if sort not in ALLOWED_PRODUCT_SORTS:
+        raise CostV2ReadValidationError(
+            "cursor con sort inválido",
+            error_type="invalid_cursor",
+        )
+    out: dict[str, Any] = {"sort": sort, "variant_id": vid}
+    if data.get("admission_date"):
+        out["admission_date"] = parse_iso_date(data["admission_date"])
+    if "product_name" in data:
+        out["product_name"] = data.get("product_name") or ""
+    if data.get("current_cost") is not None:
+        out["current_cost"] = Decimal(str(data["current_cost"]))
+    if data.get("unit_change_percent") is not None:
+        out["unit_change_percent"] = Decimal(str(data["unit_change_percent"]))
+    if data.get("status") is not None:
+        out["status"] = str(data["status"])
+    return out
+
+
+def unit_change_amount(
+    current: Decimal | None, previous: Decimal | None
+) -> Decimal | None:
+    if current is None or previous is None:
+        return None
+    return current - previous
+
+
+def unit_change_percent(
+    current: Decimal | None, previous: Decimal | None
+) -> Decimal | None:
+    if current is None or previous is None:
+        return None
+    if previous == 0:
+        return None
+    # (current - previous) / previous * 100 — Decimal puro
+    return ((current - previous) / previous) * Decimal("100")
 
 
 def parse_iso_date(value: date | datetime | str) -> date:

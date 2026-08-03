@@ -3,6 +3,10 @@ import { getApiBaseUrl } from "@/lib/api-base"
 import type {
   CostV2DetailParams,
   CostV2ListParams,
+  CostV2ProductDetailResponse,
+  CostV2ProductListParams,
+  CostV2ProductsResponse,
+  CostV2ProductsSummaryResponse,
   CostV2ReceptionDetailResponse,
   CostV2ReceptionsResponse,
   CostV2SummaryParams,
@@ -159,6 +163,105 @@ export async function getCostV2Summary(
   return res.json() as Promise<CostV2SummaryResponse>
 }
 
+export async function getCostV2Products(
+  params: CostV2ProductListParams,
+): Promise<CostV2ProductsResponse> {
+  assertDateRange(params.date_from, params.date_to)
+  const qs = buildCostV2Query({
+    company_id: params.company_id,
+    office_id: params.office_id,
+    date_from: params.date_from,
+    date_to: params.date_to,
+    status: params.status,
+    warning: params.warning,
+    barcode: params.barcode,
+    search: params.search,
+    limit: params.limit ?? COST_V2_DEFAULT_LIMIT,
+    cursor: params.cursor,
+  })
+  if (params.sort) qs.set("sort", params.sort)
+  if (params.only_with_changes) qs.set("only_with_changes", "true")
+  if (params.only_needs_review) qs.set("only_needs_review", "true")
+  if (
+    params.min_abs_change_percent != null &&
+    String(params.min_abs_change_percent).trim() !== ""
+  ) {
+    qs.set("min_abs_change_percent", String(params.min_abs_change_percent))
+  }
+  if (qs.has("offset")) qs.delete("offset")
+
+  const res = await fetch(`${API_URL}/cost-analytics/v2/products?${qs}`, {
+    headers: getCostV2AuthHeaders(),
+    signal: params.signal,
+  })
+  if (!res.ok) throw await parseError(res)
+  return res.json() as Promise<CostV2ProductsResponse>
+}
+
+export async function getCostV2ProductDetail(params: {
+  company_id: number
+  office_id: number
+  variant_id: number
+  date_from: string
+  date_to: string
+  history_limit?: number
+  signal?: AbortSignal
+}): Promise<CostV2ProductDetailResponse> {
+  assertDateRange(params.date_from, params.date_to)
+  const qs = buildCostV2Query({
+    company_id: params.company_id,
+    office_id: params.office_id,
+    date_from: params.date_from,
+    date_to: params.date_to,
+  })
+  if (params.history_limit != null) {
+    qs.set("history_limit", String(params.history_limit))
+  }
+  const res = await fetch(
+    `${API_URL}/cost-analytics/v2/products/${params.variant_id}?${qs}`,
+    {
+      headers: getCostV2AuthHeaders(),
+      signal: params.signal,
+    },
+  )
+  if (!res.ok) throw await parseError(res)
+  return res.json() as Promise<CostV2ProductDetailResponse>
+}
+
+export async function getCostV2ProductsSummary(params: {
+  company_id: number
+  office_id: number
+  date_from: string
+  date_to: string
+  change_threshold_percent?: number | string | null
+  status?: string | null
+  warning?: string | null
+  barcode?: string | null
+  search?: string | null
+  signal?: AbortSignal
+}): Promise<CostV2ProductsSummaryResponse> {
+  assertDateRange(params.date_from, params.date_to)
+  const qs = buildCostV2Query({
+    company_id: params.company_id,
+    office_id: params.office_id,
+    date_from: params.date_from,
+    date_to: params.date_to,
+    status: params.status,
+    warning: params.warning,
+    barcode: params.barcode,
+    search: params.search,
+  })
+  if (params.change_threshold_percent != null) {
+    qs.set("change_threshold_percent", String(params.change_threshold_percent))
+  }
+  const res = await fetch(`${API_URL}/cost-analytics/v2/products-summary?${qs}`, {
+    headers: getCostV2AuthHeaders(),
+    signal: params.signal,
+  })
+  if (!res.ok) throw await parseError(res)
+  return res.json() as Promise<CostV2ProductsSummaryResponse>
+}
+
 export function mergeReceptionItemsByHistoryId<T extends { history_id: number }>(
   existing: T[],
   incoming: T[],
@@ -168,6 +271,20 @@ export function mergeReceptionItemsByHistoryId<T extends { history_id: number }>
   for (const row of incoming) {
     if (seen.has(row.history_id)) continue
     seen.add(row.history_id)
+    out.push(row)
+  }
+  return out
+}
+
+export function mergeProductsByVariantId<T extends { variant_id: number }>(
+  existing: T[],
+  incoming: T[],
+): T[] {
+  const seen = new Set(existing.map((r) => r.variant_id))
+  const out = [...existing]
+  for (const row of incoming) {
+    if (seen.has(row.variant_id)) continue
+    seen.add(row.variant_id)
     out.push(row)
   }
   return out
