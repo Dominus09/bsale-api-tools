@@ -12,6 +12,7 @@ from backend.schemas.cost_v2_read import (
     CostV2ReadValidationError,
 )
 from backend.services import cost_analytics_service as svc
+from backend.services import cost_v2_company_read_service as v2company
 from backend.services import cost_v2_read_service as v2svc
 from backend.services.sync_cost_receptions import sync_cost_receptions
 from backend.utils.auth_staff import require_staff_user
@@ -216,6 +217,121 @@ def get_v2_product(
             date_from=date_from,
             date_to=date_to,
             history_limit=history_limit,
+        )
+    except (CostV2ReadValidationError, LookupError) as exc:
+        raise _v2_http_error(exc) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+# --- E.7.3 consolidado por empresa (paralelo; no reemplaza /v2/products*) ---
+
+
+@router.get("/v2/company-products")
+def list_v2_company_products(
+    company_id: int = Query(..., ge=1),
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+    search: str | None = Query(None, max_length=120),
+    barcode: str | None = Query(None, max_length=64),
+    warning: str | None = Query(None, max_length=64),
+    movement: str | None = Query(None, max_length=16),
+    situation: str | None = Query(None, max_length=32),
+    sort: str | None = Query(None, max_length=32),
+    only_relevant_changes: bool = Query(False),
+    min_abs_change_percent: float | None = Query(None),
+    change_threshold_percent: float | None = Query(None),
+    limit: int = Query(DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
+    cursor: str | None = Query(None, max_length=512),
+    _user: dict = Depends(require_staff_user),
+):
+    """Listado consolidado: una fila por variant_id a nivel empresa."""
+    try:
+        return v2company.list_company_products(
+            company_id=company_id,
+            date_from=date_from,
+            date_to=date_to,
+            limit=limit,
+            cursor=cursor,
+            sort=sort,
+            search=search,
+            barcode=barcode,
+            warning=warning,
+            movement=movement,
+            situation=situation,
+            only_relevant_changes=only_relevant_changes,
+            min_abs_change_percent=min_abs_change_percent,
+            change_threshold_percent=change_threshold_percent,
+        )
+    except (CostV2ReadValidationError, LookupError) as exc:
+        raise _v2_http_error(exc) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/v2/company-summary")
+def get_v2_company_summary(
+    company_id: int = Query(..., ge=1),
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+    change_threshold_percent: float | None = Query(None),
+    _user: dict = Depends(require_staff_user),
+):
+    """KPIs de decisión a nivel empresa."""
+    try:
+        return v2company.summarize_company_products(
+            company_id=company_id,
+            date_from=date_from,
+            date_to=date_to,
+            change_threshold_percent=change_threshold_percent,
+        )
+    except (CostV2ReadValidationError, LookupError) as exc:
+        raise _v2_http_error(exc) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/v2/company-products/{variant_id}")
+def get_v2_company_product(
+    variant_id: int,
+    company_id: int = Query(..., ge=1),
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+    _user: dict = Depends(require_staff_user),
+):
+    """Detalle consolidado + desglose por oficinas."""
+    try:
+        return v2company.get_company_product(
+            company_id=company_id,
+            variant_id=variant_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    except (CostV2ReadValidationError, LookupError) as exc:
+        raise _v2_http_error(exc) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/v2/company-products/{variant_id}/history")
+def get_v2_company_product_history(
+    variant_id: int,
+    company_id: int = Query(..., ge=1),
+    date_from: date = Query(...),
+    date_to: date = Query(...),
+    office_id: int | None = Query(None, ge=1),
+    limit: int = Query(200, ge=1, le=500),
+    _user: dict = Depends(require_staff_user),
+):
+    """Historial cronológico consolidado (filtro opcional por oficina)."""
+    try:
+        return v2company.list_company_product_history(
+            company_id=company_id,
+            variant_id=variant_id,
+            date_from=date_from,
+            date_to=date_to,
+            office_id=office_id,
+            limit=limit,
         )
     except (CostV2ReadValidationError, LookupError) as exc:
         raise _v2_http_error(exc) from exc

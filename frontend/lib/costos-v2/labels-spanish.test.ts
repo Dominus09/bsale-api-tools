@@ -56,7 +56,7 @@ describe("costos-v2 spanish labels", () => {
   it("symbology content has descriptions and no company_id", () => {
     expect(SYMBOLOGY_STATUSES).toHaveLength(6)
     expect(SYMBOLOGY_ALERTS).toHaveLength(3)
-    expect(SYMBOLOGY_SCOPE_NOTE).toContain("La Quillotana SpA")
+    expect(SYMBOLOGY_SCOPE_NOTE).toContain("Supermercado La Quillotana")
     expect(SYMBOLOGY_SCOPE_NOTE).not.toContain("company_id")
     expect(SYMBOLOGY_SCOPE_NOTE).not.toContain("office_id")
     for (const s of SYMBOLOGY_STATUSES) {
@@ -130,9 +130,8 @@ describe("costos-v2 UI no technical codes in main surfaces", () => {
     expect(drawer).toContain("Estado del costo")
     expect(drawer).toContain("Ver simbología")
     expect(drawer).toContain("Detalle técnico")
-    expect(drawer).toContain("Costo vigente V2")
-    expect(drawer).toContain("Desglose del costo")
-    expect(drawer).toContain("Ver historial completo")
+    expect(drawer).toContain("Costo vigente")
+    expect(drawer).toContain("Historial de costos")
     expect(drawer).toContain('value="resumen"')
     expect(drawer).toContain('value="historial"')
     expect(drawer).toContain('value="tecnico"')
@@ -140,7 +139,7 @@ describe("costos-v2 UI no technical codes in main surfaces", () => {
     expect(drawer).toContain("COST_V2_SCOPE_NOTE_DRAWER")
     expect(drawer).toContain("current_quality_status")
     expect(drawer).not.toContain("Calidad tributaria")
-    expect(drawer).not.toContain("formatMoneyCLPPrecise(item.current_stored_cost_net)")
+    expect(drawer).toContain("getCostV2CompanyProductHistory")
   })
 
   it("legacy /costos intact", () => {

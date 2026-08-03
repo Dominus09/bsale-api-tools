@@ -1,6 +1,11 @@
 import { getApiBaseUrl } from "@/lib/api-base"
 
 import type {
+  CompanyHistoryResponse,
+  CompanyProductListParams,
+  CompanyProductResponse,
+  CompanyProductsResponse,
+  CompanySummaryResponse,
   CostV2DetailParams,
   CostV2ListParams,
   CostV2ProductDetailResponse,
@@ -94,6 +99,93 @@ export function buildCostV2Query(params: {
 export function assertDateRange(dateFrom: string, dateTo: string): void {
   if (!dateFrom || !dateTo) throw new Error("Fechas obligatorias")
   if (dateFrom > dateTo) throw new Error("La fecha desde debe ser ≤ fecha hasta")
+}
+
+/** Query consolidada: deliberadamente nunca recibe ni agrega office_id. */
+export function buildCostV2CompanyQuery(params: {
+  company_id: number
+  date_from: string
+  date_to: string
+  search?: string | null
+  barcode?: string | null
+  warning?: string | null
+  movement?: string | null
+  situation?: string | null
+  limit?: number
+  cursor?: string | null
+}): URLSearchParams {
+  if (!params.company_id || params.company_id < 1) throw new Error("company_id es obligatorio")
+  assertDateRange(params.date_from, params.date_to)
+  const qs = new URLSearchParams({
+    company_id: String(params.company_id),
+    date_from: params.date_from,
+    date_to: params.date_to,
+  })
+  for (const key of ["search", "barcode", "warning", "movement", "situation"] as const) {
+    const value = params[key]
+    if (value?.trim()) qs.set(key, value.trim())
+  }
+  if (params.limit != null) {
+    qs.set("limit", String(Math.min(Math.max(1, Math.floor(params.limit)), COST_V2_MAX_LIMIT)))
+  }
+  if (params.cursor?.trim()) qs.set("cursor", params.cursor.trim())
+  return qs
+}
+
+export async function getCostV2CompanyProducts(
+  params: CompanyProductListParams,
+): Promise<CompanyProductsResponse> {
+  const qs = buildCostV2CompanyQuery(params)
+  if (params.sort) qs.set("sort", params.sort)
+  if (params.only_relevant_changes) qs.set("only_relevant_changes", "true")
+  if (params.min_abs_change_percent != null && String(params.min_abs_change_percent).trim()) {
+    qs.set("min_abs_change_percent", String(params.min_abs_change_percent))
+  }
+  const res = await fetch(`${API_URL}/cost-analytics/v2/company-products?${qs}`, {
+    headers: getCostV2AuthHeaders(), signal: params.signal,
+  })
+  if (!res.ok) throw await parseError(res)
+  return res.json() as Promise<CompanyProductsResponse>
+}
+
+export async function getCostV2CompanySummary(params: {
+  company_id: number; date_from: string; date_to: string
+  change_threshold_percent?: string | number | null; signal?: AbortSignal
+}): Promise<CompanySummaryResponse> {
+  const qs = buildCostV2CompanyQuery(params)
+  if (params.change_threshold_percent != null) {
+    qs.set("change_threshold_percent", String(params.change_threshold_percent))
+  }
+  const res = await fetch(`${API_URL}/cost-analytics/v2/company-summary?${qs}`, {
+    headers: getCostV2AuthHeaders(), signal: params.signal,
+  })
+  if (!res.ok) throw await parseError(res)
+  return res.json() as Promise<CompanySummaryResponse>
+}
+
+export async function getCostV2CompanyProduct(params: {
+  company_id: number; variant_id: number; date_from: string; date_to: string; signal?: AbortSignal
+}): Promise<CompanyProductResponse> {
+  const qs = buildCostV2CompanyQuery(params)
+  const res = await fetch(`${API_URL}/cost-analytics/v2/company-products/${params.variant_id}?${qs}`, {
+    headers: getCostV2AuthHeaders(), signal: params.signal,
+  })
+  if (!res.ok) throw await parseError(res)
+  return res.json() as Promise<CompanyProductResponse>
+}
+
+export async function getCostV2CompanyProductHistory(params: {
+  company_id: number; variant_id: number; date_from: string; date_to: string
+  office_id?: number | null; limit?: number; signal?: AbortSignal
+}): Promise<CompanyHistoryResponse> {
+  const qs = buildCostV2CompanyQuery(params)
+  if (params.office_id != null) qs.set("office_id", String(params.office_id))
+  if (params.limit != null) qs.set("limit", String(Math.min(params.limit, COST_V2_MAX_LIMIT)))
+  const res = await fetch(`${API_URL}/cost-analytics/v2/company-products/${params.variant_id}/history?${qs}`, {
+    headers: getCostV2AuthHeaders(), signal: params.signal,
+  })
+  if (!res.ok) throw await parseError(res)
+  return res.json() as Promise<CompanyHistoryResponse>
 }
 
 export async function getCostV2Receptions(

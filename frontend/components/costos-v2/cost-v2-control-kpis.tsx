@@ -6,7 +6,9 @@ export function CostV2ControlKpis({
   totalProducts,
   relevantChanges,
   needsReview,
-  outliers,
+  officeDifferences,
+  officeDifferenceComparable,
+  coverageLabel,
   thresholdLabel,
   loading,
   onSelect,
@@ -14,17 +16,19 @@ export function CostV2ControlKpis({
   totalProducts: number | null
   relevantChanges: number | null
   needsReview: number | null
-  outliers: number | null
+  officeDifferences: number | null
+  officeDifferenceComparable: boolean
+  coverageLabel: string
   thresholdLabel: string
   loading?: boolean
-  onSelect: (key: "all" | "changes" | "review" | "outlier") => void
+  onSelect: (key: "all" | "changes" | "review" | "office") => void
 }) {
   const cards = [
     {
       key: "all" as const,
-      title: "Productos controlados",
+      title: "Productos con costo vigente",
       value: totalProducts,
-      hint: "Con recepción V2 en el rango",
+      hint: "Costo vigente calculable",
     },
     {
       key: "changes" as const,
@@ -39,10 +43,10 @@ export function CostV2ControlKpis({
       hint: "Sin costo o contexto incompleto",
     },
     {
-      key: "outlier" as const,
-      title: "Costos atípicos",
-      value: outliers,
-      hint: "Costo fuera del patrón habitual",
+      key: "office" as const,
+      title: "Diferencias entre oficinas",
+      value: officeDifferenceComparable ? officeDifferences : "Sin comparación todavía",
+      hint: officeDifferenceComparable ? "Costo vigente distinto entre oficinas" : `Cobertura V2: ${coverageLabel}`,
     },
   ]
 

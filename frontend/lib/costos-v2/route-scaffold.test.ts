@@ -4,14 +4,14 @@ import path from "node:path"
 
 const root = path.resolve(__dirname, "../..")
 
-describe("costos-v2 route scaffolding E.7.1", () => {
+describe("costos-v2 route scaffolding E.7.3", () => {
   it("is product control center", () => {
     const page = path.join(root, "app/(dashboard)/costos-v2/page.tsx")
     expect(fs.existsSync(page)).toBe(true)
     const src = fs.readFileSync(page, "utf8")
     expect(src).toContain("Control de costos")
-    expect(src).toContain("getCostV2Products")
-    expect(src).toContain("getCostV2ProductsSummary")
+    expect(src).toContain("getCostV2CompanyProducts")
+    expect(src).toContain("getCostV2CompanySummary")
     expect(src).toContain('value="resumen"')
     expect(src).not.toContain("impacto total")
     expect(src).not.toContain("PieChart")
@@ -24,8 +24,8 @@ describe("costos-v2 route scaffolding E.7.1", () => {
     )
     expect(drawer).toContain('value="tecnico"')
     expect(drawer).toContain("source_history_fingerprint")
-    expect(drawer).toContain("displayAdditionalTaxTitle")
-    expect(drawer).toContain("Costo vigente V2")
+    expect(drawer).toContain("getCostV2CompanyProductHistory")
+    expect(drawer).toContain("Costo vigente")
     expect(drawer.toLowerCase()).not.toContain("iva adicional")
   })
 })

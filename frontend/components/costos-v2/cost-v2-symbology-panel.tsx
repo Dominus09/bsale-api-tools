@@ -4,6 +4,7 @@ import { CostV2StatusBadge } from "@/components/costos-v2/cost-v2-status-badge"
 import { Badge } from "@/components/ui/badge"
 import {
   SYMBOLOGY_ALERTS,
+  SYMBOLOGY_BUSINESS_STATUSES,
   SYMBOLOGY_INTRO,
   SYMBOLOGY_SCOPE_NOTE,
   SYMBOLOGY_STATUSES,
@@ -40,6 +41,19 @@ export function CostV2SymbologyPanel() {
                 <span className="font-medium text-foreground/80">Acción sugerida:</span>{" "}
                 {s.action}
               </p>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section className="space-y-2">
+        <h3 className="text-sm font-semibold">C. Situación entre oficinas</h3>
+        <ul className="space-y-2">
+          {SYMBOLOGY_BUSINESS_STATUSES.filter((s) => s.code !== "requires_review").map((s) => (
+            <li key={s.code} className="rounded-md border border-border/70 px-3 py-2.5">
+              <Badge variant="outline" className="mb-1.5 font-normal">{s.label}</Badge>
+              <p className="text-sm text-foreground">{s.description}</p>
+              <p className="mt-1 text-xs text-muted-foreground"><span className="font-medium text-foreground/80">Acción sugerida:</span> {s.action}</p>
             </li>
           ))}
         </ul>

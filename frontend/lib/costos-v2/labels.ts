@@ -56,7 +56,53 @@ export const SYMBOLOGY_INTRO =
   "Estas categorías indican la calidad del costo registrado y del cálculo tributario realizado por Costos V2."
 
 export const SYMBOLOGY_SCOPE_NOTE =
-  "Actualmente Costos V2 contiene información de La Quillotana SpA, Supermercado La Quillotana."
+  "Actualmente Costos V2 contiene información de Supermercado La Quillotana. Las demás oficinas se incorporarán progresivamente."
+
+export const BUSINESS_SITUATION_LABEL: Record<string, string> = {
+  requires_review: "Requiere revisión",
+  office_difference: "Diferencia entre oficinas",
+  partial_coverage: "Cobertura parcial",
+  offices_aligned: "Oficinas alineadas",
+  no_office_comparison: "Sin comparación entre oficinas",
+}
+
+export const SYMBOLOGY_BUSINESS_STATUSES: SymbologyStatusEntry[] = [
+  {
+    code: "partial_coverage",
+    label: "Cobertura parcial",
+    description:
+      "No todas las oficinas activas tienen costos V2 disponibles para el producto.",
+    action: "No interprete la falta de datos como una diferencia de costo.",
+  },
+  {
+    code: "no_office_comparison",
+    label: "Sin comparación entre oficinas",
+    description:
+      "Solo existe información suficiente de una oficina.",
+    action: "Se necesita información de al menos dos oficinas para evaluar alineación.",
+  },
+  {
+    code: "office_difference",
+    label: "Diferencia entre oficinas",
+    description:
+      "Dos o más oficinas muestran costos vigentes distintos.",
+    action: "Compare las recepciones y documentos de las oficinas involucradas.",
+  },
+  {
+    code: "offices_aligned",
+    label: "Oficinas alineadas",
+    description:
+      "Las oficinas con información disponible presentan el mismo costo vigente.",
+    action: "No requiere acción por comparación entre oficinas.",
+  },
+  {
+    code: "requires_review",
+    label: "Requiere revisión",
+    description:
+      "El producto presenta una condición tributaria o de cobertura que conviene validar antes de usarlo como referencia.",
+    action: "Revise el estado del costo y las alertas asociadas.",
+  },
+]
 
 export const SYMBOLOGY_STATUSES: SymbologyStatusEntry[] = [
   {

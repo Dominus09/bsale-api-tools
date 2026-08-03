@@ -4,6 +4,7 @@ import path from "node:path"
 
 import {
   buildCostV2Query,
+  getCostV2CompanyProducts,
   getCostV2Products,
   getCostV2ProductsSummary,
   mergeProductsByVariantId,
@@ -95,6 +96,18 @@ describe("E.7.1 products API client", () => {
   })
 })
 
+describe("E.7.3 company API client", () => {
+  it("uses company endpoint without office_id", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ items: [], page: {}, meta: {} }) })
+    vi.stubGlobal("window", { localStorage: { getItem: () => "jwt" } })
+    await getCostV2CompanyProducts({ company_id: 3, date_from: "2026-06-01", date_to: "2026-07-01" })
+    const url = String((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0])
+    expect(url).toContain("/cost-analytics/v2/company-products?")
+    expect(url).toContain("company_id=3")
+    expect(url).not.toContain("office_id=")
+  })
+})
+
 describe("E.7.1 UI scaffolding", () => {
   const root = path.resolve(__dirname, "../..")
 
@@ -108,22 +121,23 @@ describe("E.7.1 UI scaffolding", () => {
     expect(page).toContain("Control de costos")
     expect(page).not.toContain("PieChart")
     expect(page).not.toContain("CostV2StatusChart")
-    expect(page).toContain("Recepciones")
+    expect(page).not.toContain('value="recepciones"')
     expect(page).toContain("Productos")
     for (const p of FORBIDDEN_AGGREGATE_PHRASES) {
       expect(page.toLowerCase()).not.toContain(p)
     }
   })
 
-  it("products table has at most 9 columns", () => {
+  it("products table has at most 7 columns and no previous-cost column", () => {
     const table = fs.readFileSync(
       path.join(root, "components/costos-v2/cost-v2-products-table.tsx"),
       "utf8",
     )
     const heads = (table.match(/<TableHead[\s>]/g) || []).length
     expect(heads).toBeGreaterThan(0)
-    expect(heads).toBeLessThanOrEqual(9)
+    expect(heads).toBeLessThanOrEqual(7)
     expect(table).toContain("COST_V2_PRODUCT_TABLE_COLUMNS")
+    expect(table).not.toContain("Costo anterior")
   })
 
   it("legacy /costos intact", () => {

@@ -254,3 +254,121 @@ export type CostV2ProductListParams = {
   cursor?: string | null
   signal?: AbortSignal
 }
+
+/** Lectura consolidada por empresa (E.7.3). */
+export type CompanyOfficeRow = {
+  office_id: number
+  office_name: string
+  current_cost: string | null
+  admission_date: string | null
+  history_id: number | null
+  quality_status: CostV2QualityStatus | null
+  warnings: CostV2WarningCode[]
+  diff_vs_company: string | null
+  has_v2_data: boolean
+  situation: string
+  situation_label: string
+}
+
+export type CompanyProductItem = {
+  variant_id: number
+  company_id: number | null
+  barcode: string | null
+  product_name: string | null
+  variant_name: string | null
+  current_history_id: number | null
+  current_cost: string | null
+  current_cost_raw: string | null
+  current_admission_date: string | null
+  current_office_id: number | null
+  current_office_name: string | null
+  current_document_number: number | string | null
+  current_quality_status: CostV2QualityStatus | null
+  current_warnings: CostV2WarningCode[]
+  current_stored_cost_net: string | null
+  current_stored_gross_cost: string | null
+  current_calculated_iva_amount: string | null
+  current_additional_tax_amount_total: string | null
+  current_additional_taxes: CostV2AdditionalTax[]
+  current_total_tax_rate: string | null
+  previous_distinct_history_id: number | null
+  previous_distinct_cost: string | null
+  change_amount: string | null
+  change_percent: string | null
+  last_change_date: string | null
+  has_comparable_cost: boolean
+  visual_no_change: boolean
+  active_offices_count: number
+  offices_with_v2_data: number
+  offices_with_current_cost: number
+  coverage_label: string
+  requires_review: boolean
+  has_office_difference: boolean
+  office_alignment_status: string
+  business_statuses: string[]
+  last_reception_date: string | null
+  receptions_in_period: number
+  last_calculated_at: string | null
+  latest_history_id: number | null
+  tax_ids_source: string | null
+  tax_rates_source: string | null
+  tax_context_source: string | null
+  calculation_version: string | null
+  calculation_batch_id: string | null
+  source_history_fingerprint: string | null
+  tax_context_fingerprint: string | null
+  calculation_result_fingerprint: string | null
+  resolved_tax_ids: unknown[]
+  offices?: CompanyOfficeRow[]
+}
+
+export type CompanySummary = {
+  total_products: number
+  products_with_current_cost: number
+  products_without_current_cost: number
+  relevant_changes: number
+  products_requiring_review: number
+  products_with_outlier: number
+  products_with_office_difference: number | null
+  office_difference_comparable: boolean
+  active_offices_count: number
+  offices_with_v2_coverage: number
+  coverage_label: string
+  latest_reception_date: string | null
+  latest_sync_or_calculation_at: string | null
+  change_threshold_percent: string | null
+  active_offices: { office_id: number; office_name: string }[]
+}
+
+export type CompanyHistoryItem = CostV2ReceptionListItem & {
+  office_name: string | null
+  prev_cost_in_series: string | null
+  cost_changed: boolean
+}
+
+export type CompanyProductsResponse = {
+  items: CompanyProductItem[]
+  page: CostV2PageInfo & { sort?: string }
+  meta: CostV2Meta
+}
+
+export type CompanyProductResponse = { item: CompanyProductItem; meta: CostV2Meta }
+export type CompanySummaryResponse = { summary: CompanySummary; meta: CostV2Meta }
+export type CompanyHistoryResponse = { items: CompanyHistoryItem[]; meta: CostV2Meta }
+
+export type CompanyProductListParams = {
+  company_id: number
+  date_from: string
+  date_to: string
+  search?: string | null
+  barcode?: string | null
+  warning?: string | null
+  movement?: "up" | "down" | "flat" | null
+  situation?: "requires_review" | "office_difference" | "partial_coverage" | null
+  only_relevant_changes?: boolean
+  min_abs_change_percent?: string | number | null
+  sort?: string | null
+  limit?: number
+  cursor?: string | null
+  signal?: AbortSignal
+}

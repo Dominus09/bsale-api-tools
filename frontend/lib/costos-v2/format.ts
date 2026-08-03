@@ -212,3 +212,19 @@ export function changeDirection(amount: string | null | undefined): "up" | "down
   }
   return amount.startsWith("-") ? "down" : "up"
 }
+
+/** Celda operacional consolidada; $0,50 es el umbral visual de "Sin cambio". */
+export function formatChangeCell(params: {
+  amount: string | null | undefined
+  percent: string | null | undefined
+  hasComparable?: boolean
+  visualNoChange?: boolean
+}): string {
+  if (params.hasComparable === false || params.amount == null) return "Sin comparación"
+  const numeric = Number(params.amount)
+  if (params.visualNoChange || Number.isFinite(numeric) && Math.abs(numeric) < 0.5) {
+    return "Sin cambio"
+  }
+  const direction = numeric < 0 ? "↓" : "↑"
+  return `${direction} ${formatMoneyCLPTable(params.amount)} · ${numeric > 0 ? "+" : ""}${formatPercentCL(params.percent)}`
+}
