@@ -169,6 +169,43 @@ export function additionalTaxCategoryLabel(category: string | null | undefined):
   return "Impuesto adicional"
 }
 
+/**
+ * Título operativo de un impuesto adicional (nunca “IVA adicional”).
+ * Ej.: "ILA destilados 31,5 %", "Anticipo harina 12 %".
+ */
+export function displayAdditionalTaxTitle(tax: {
+  name?: string | null
+  category?: string | null
+  rate?: string | null
+}): string {
+  const rawName = (tax.name || "").trim()
+  const lower = rawName.toLowerCase()
+  const cat = (tax.category || "").toLowerCase()
+  let title = rawName
+
+  if (!title) {
+    if (cat.includes("ila") || lower.includes("ila")) title = "ILA"
+    else if (lower.includes("harina") || cat.includes("harina") || cat.includes("flour"))
+      title = "Anticipo harina"
+    else if (lower.includes("carne") || cat.includes("carne") || cat.includes("meat"))
+      title = "Anticipo carne"
+    else if (cat.includes("advance") || cat.includes("anticipo") || cat === "iva_advance")
+      title = "Anticipo tributario"
+    else title = "Impuesto adicional"
+  } else {
+    // Normalizar nombres que digan "IVA adicional"
+    if (/iva\s*adicional/i.test(title)) {
+      if (/harina/i.test(title)) title = "Anticipo harina"
+      else if (/carne/i.test(title)) title = "Anticipo carne"
+      else title = title.replace(/iva\s*adicional/gi, "Anticipo").trim()
+    }
+  }
+
+  const rate = formatTaxRate(tax.rate)
+  if (rate === "—") return title
+  return `${title} ${rate}`
+}
+
 export function changeDirection(amount: string | null | undefined): "up" | "down" | "flat" | "none" {
   if (amount == null || amount === "" || amount === "0" || /^-?0+(\.0+)?$/.test(amount)) {
     return amount == null || amount === "" ? "none" : "flat"

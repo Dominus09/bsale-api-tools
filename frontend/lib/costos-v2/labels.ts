@@ -166,10 +166,30 @@ export function statusShortHelp(status: CostV2QualityStatus | null | undefined):
   return COST_V2_STATUS_SHORT_HELP[status] ?? "Consulte la pestaña Simbología."
 }
 
+export function statusDrawerDescription(
+  status: CostV2QualityStatus | null | undefined,
+): string {
+  if (!status) return "Sin información de estado."
+  const entry = SYMBOLOGY_STATUSES.find((s) => s.code === status)
+  return entry?.description ?? statusShortHelp(status)
+}
+
+export function statusSuggestedAction(
+  status: CostV2QualityStatus | null | undefined,
+): string {
+  if (!status) return "Consulte la pestaña Simbología."
+  const entry = SYMBOLOGY_STATUSES.find((s) => s.code === status)
+  return entry?.action ?? "Consulte la pestaña Simbología."
+}
+
 export function warningShortHelp(code: CostV2WarningCode | null | undefined): string {
   if (!code) return ""
   return COST_V2_WARNING_SHORT_HELP[code] ?? "Consulte la pestaña Simbología."
 }
+
+/** Nota de alcance operativa (sin IDs técnicos). */
+export const COST_V2_SCOPE_NOTE_DRAWER =
+  "Datos disponibles actualmente para La Quillotana SpA, Supermercado La Quillotana."
 
 /** True si el texto contiene un código técnico expuesto (para tests / guardas). */
 export function containsTechnicalCode(text: string): boolean {

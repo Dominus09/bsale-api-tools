@@ -17,14 +17,15 @@ describe("costos-v2 route scaffolding E.7.1", () => {
     expect(src).not.toContain("PieChart")
   })
 
-  it("product detail has collapsible fingerprints", () => {
+  it("product detail isolates technical data in dedicated tab", () => {
     const drawer = fs.readFileSync(
       path.join(root, "components/costos-v2/cost-v2-product-detail-drawer.tsx"),
       "utf8",
     )
-    expect(drawer).toContain("Accordion")
+    expect(drawer).toContain('value="tecnico"')
     expect(drawer).toContain("source_history_fingerprint")
-    expect(drawer).toContain("additionalTaxCategoryLabel")
+    expect(drawer).toContain("displayAdditionalTaxTitle")
+    expect(drawer).toContain("Costo vigente V2")
     expect(drawer.toLowerCase()).not.toContain("iva adicional")
   })
 })

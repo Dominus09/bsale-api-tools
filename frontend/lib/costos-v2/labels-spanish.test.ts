@@ -122,7 +122,7 @@ describe("costos-v2 UI no technical codes in main surfaces", () => {
     expect(panel).not.toMatch(/>\s*missing_taxes_in_gross\s*</)
   })
 
-  it("product drawer uses Estado del costo and Ver simbología", () => {
+  it("product drawer redesigned with Spanish estado and technical tab", () => {
     const drawer = fs.readFileSync(
       path.join(root, "components/costos-v2/cost-v2-product-detail-drawer.tsx"),
       "utf8",
@@ -130,8 +130,17 @@ describe("costos-v2 UI no technical codes in main surfaces", () => {
     expect(drawer).toContain("Estado del costo")
     expect(drawer).toContain("Ver simbología")
     expect(drawer).toContain("Detalle técnico")
-    expect(drawer).toContain("effective_quality_status")
+    expect(drawer).toContain("Costo vigente V2")
+    expect(drawer).toContain("Desglose del costo")
+    expect(drawer).toContain("Ver historial completo")
+    expect(drawer).toContain('value="resumen"')
+    expect(drawer).toContain('value="historial"')
+    expect(drawer).toContain('value="tecnico"')
+    expect(drawer).toContain("sm:max-w-[min(820px,55vw)]")
+    expect(drawer).toContain("COST_V2_SCOPE_NOTE_DRAWER")
+    expect(drawer).toContain("current_quality_status")
     expect(drawer).not.toContain("Calidad tributaria")
+    expect(drawer).not.toContain("formatMoneyCLPPrecise(item.current_stored_cost_net)")
   })
 
   it("legacy /costos intact", () => {
