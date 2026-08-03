@@ -1,6 +1,6 @@
 "use client"
 
-import { CostV2InfoHint } from "@/components/costos-v2/cost-v2-info-hint"
+import { CostInfoHint } from "@/components/costos/cost-info-hint"
 import { Badge } from "@/components/ui/badge"
 import {
   Tooltip,
@@ -8,7 +8,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { statusLabel, statusShortHelp } from "@/lib/costos-v2/labels"
+import { statusLabel, statusShortHelp } from "@/lib/costos/control/labels"
 import { cn } from "@/lib/utils"
 
 const statusClass: Record<string, string> = {
@@ -25,7 +25,7 @@ const statusClass: Record<string, string> = {
     "bg-rose-100 text-rose-950 dark:bg-rose-950 dark:text-rose-100",
 }
 
-export function CostV2StatusBadge({
+export function CostStatusBadge({
   status,
   className,
   showHelp = true,
@@ -67,7 +67,7 @@ export function CostV2StatusBadge({
           </TooltipContent>
         </Tooltip>
       </TooltipProvider>
-      <CostV2InfoHint title={label} text={help} />
+      <CostInfoHint title={label} text={help} />
     </span>
   )
 }

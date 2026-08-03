@@ -1,5 +1,5 @@
 /**
- * Formato de presentación Costos V2.
+ * Formato de presentación Control de costos.
  * Conserva strings Decimal originales; solo formatea para UI.
  */
 

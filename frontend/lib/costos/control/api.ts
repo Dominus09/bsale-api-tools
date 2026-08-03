@@ -42,7 +42,7 @@ export class CostV2ApiError extends Error {
 
 function userFacingMessage(status: number, body: string): string {
   if (status === 401) return "Sesión expirada. Vuelva a iniciar sesión."
-  if (status === 403) return "No tiene permiso para ver Costos V2."
+  if (status === 403) return "No tiene permiso para ver Control de costos."
   if (status === 404) return "Recepción no encontrada en el alcance autorizado."
   if (status === 422) return "Filtros inválidos. Revise oficina y fechas."
   if (status >= 500) return "Error del servidor. Intente nuevamente."

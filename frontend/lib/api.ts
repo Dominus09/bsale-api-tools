@@ -5148,7 +5148,7 @@ export async function syncCostAnalytics(params?: {
   return res.json() as Promise<Record<string, unknown>>
 }
 
-/** Costos V2: importar desde `@/lib/costos-v2/api` (evita ciclo con este módulo). */
+/** Tipos read-only del módulo Control de costos (API /cost-analytics/v2/*). */
 export type {
   CostV2ReceptionListItem,
   CostV2ReceptionDetail,
@@ -5159,7 +5159,7 @@ export type {
   CostV2ListParams,
   CostV2QualityStatus,
   CostV2WarningCode,
-} from "@/lib/costos-v2/types"
+} from "@/lib/costos/control/types"
 
 // --- Logística: auditoría de pesos ---
 

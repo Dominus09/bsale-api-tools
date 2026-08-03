@@ -6,16 +6,16 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { FILTER_WARNING_OPTIONS } from "@/lib/costos-v2/labels"
+import { FILTER_WARNING_OPTIONS } from "@/lib/costos/control/labels"
 
 const ALL = "__all__"
-export type CostV2CompanyFilterDraft = {
+export type CostCompanyFilterDraft = {
   dateFrom: string; dateTo: string; search: string; minChangePercent: string
   movement: string; situation: string; warning: string; onlyRelevantChanges: boolean
 }
 
-export function CostV2CompanyFilters({ draft, onChange, onApply, onClear, loading, disabled, moreOpen, onMoreOpenChange }: {
-  draft: CostV2CompanyFilterDraft; onChange: (patch: Partial<CostV2CompanyFilterDraft>) => void
+export function CostCompanyFilters({ draft, onChange, onApply, onClear, loading, disabled, moreOpen, onMoreOpenChange }: {
+  draft: CostCompanyFilterDraft; onChange: (patch: Partial<CostCompanyFilterDraft>) => void
   onApply: () => void; onClear: () => void; loading?: boolean; disabled?: boolean
   moreOpen: boolean; onMoreOpenChange: (open: boolean) => void
 }) {

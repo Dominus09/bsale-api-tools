@@ -1,64 +1,35 @@
-# E.7.3 — Control de costos consolidado por empresa
+# Control de costos — ruta oficial `/costos`
 
-## Auditoría de endpoints (estado previo)
+## Cambio definitivo de ruta
 
-| Endpoint | Scope | Estado |
-|----------|-------|--------|
-| `/cost-analytics/v2/receptions` | office | Intactos |
-| `/cost-analytics/v2/products` | office | Intactos |
-| `/cost-analytics/v2/products-summary` | office | Intactos |
-| `/cost-analytics/v2/*` legacy office | office | Intactos |
-| `/costos` frontend legacy | — | Intactos |
+La interfaz consolidada por empresa vive únicamente en:
 
-## Nuevos endpoints (paralelos)
+- `https://test.quillotana.cl/costos`
+- `frontend/app/(dashboard)/costos/page.tsx`
 
-| Método | Path | Auth |
-|--------|------|------|
-| GET | `/cost-analytics/v2/company-products` | staff JWT |
-| GET | `/cost-analytics/v2/company-summary` | staff JWT |
-| GET | `/cost-analytics/v2/company-products/{variant_id}` | staff JWT |
-| GET | `/cost-analytics/v2/company-products/{variant_id}/history` | staff JWT |
+La ruta `/costos-v2` fue **eliminada** (sin redirect).
 
-- **No** exigen `office_id`.
-- `company_id` validado (whitelist inicial: `3`).
-- Solo SELECT read-only; sin `variant_cost`; sin promedios/ponderación.
+## Organización frontend
 
-## Modelo consolidado
+| Área | Ubicación |
+|------|-----------|
+| Página | `frontend/app/(dashboard)/costos/page.tsx` |
+| Componentes consolidados | `frontend/components/costos/cost-*.tsx` (sin prefijo v2 en nombre de archivo) |
+| Cliente/API/labels | `frontend/lib/costos/control/` |
+| Helpers legacy compartidos (márgenes, etc.) | `frontend/lib/costos/format.ts`, `quality-labels.ts`, `adapt-cost-analytics.ts` |
+| Componentes legacy no usados por la página | `cost-main-table`, `cost-detail-drawer`, `cost-history-chart`, `cost-quality-badge` (conservados por dependencias) |
 
-Jerarquía: Empresa → Producto consolidado → Oficinas → Recepciones.
+## Backend (intactos)
 
-- **Costo vigente**: última recepción con `corrected_gross_cost IS NOT NULL` hasta `date_to` (todas las oficinas con V2).
-- **Último cambio**: último costo calculable **distinto** (no `rn = 2`).
-- **`date_from`**: no elimina el vigente; limita cambios del periodo, historial mostrado y conteos.
-- **Cobertura**: oficinas operativas de control (empresa 3: Bodega Central, Supermercado, Q1, Q2) vs oficinas con filas V2.
+Endpoints `/cost-analytics/v2/*` y company-* siguen siendo la fuente de datos.
+No se eliminaron por el cambio de ruta frontend.
 
-## Archivos backend
+## Sidebar
 
-- `backend/schemas/cost_v2_company_read.py`
-- `backend/repositories/cost_v2_company_read_repo.py`
-- `backend/services/cost_v2_company_read_service.py`
-- `backend/routers/cost_analytics.py` (rutas nuevas)
-- `backend/tests/test_cost_v2_company_products_api.py`
-
-## Archivos frontend
-
-- `frontend/app/(dashboard)/costos-v2/page.tsx`
-- `frontend/components/costos-v2/cost-v2-company-filters.tsx`
-- `frontend/components/costos-v2/cost-v2-control-kpis.tsx`
-- `frontend/components/costos-v2/cost-v2-products-table.tsx`
-- `frontend/components/costos-v2/cost-v2-product-detail-drawer.tsx`
-- `frontend/components/costos-v2/cost-v2-symbology-panel.tsx`
-- `frontend/lib/costos-v2/{api,types,format,labels}.ts`
+`Control de costos` → `/costos`
 
 ## Confirmaciones
 
-- Cursor **no** desplegó producción.
-- Cursor **no** aplicó migraciones.
-- Cursor **no** ejecutó índices automáticamente.
-- Jobs / tablas históricas / cálculos tributarios V2 / `variant_cost` **no** modificados.
-
-Ver también:
-
-- `docs/e73_company_cost_examples.json`
-- `docs/e73_explain_and_indexes.md`
-- `docs/e73_office_coverage_commands.md`
+- Cursor no desplegó producción.
+- `/costos-v2` no existe (404 esperado).
+- No hay redirect `/costos-v2` → `/costos`.

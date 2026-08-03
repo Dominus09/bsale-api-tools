@@ -2,7 +2,7 @@
 
 import { cn } from "@/lib/utils"
 
-export function CostV2ControlKpis({
+export function CostControlKpis({
   totalProducts,
   relevantChanges,
   needsReview,
@@ -46,7 +46,7 @@ export function CostV2ControlKpis({
       key: "office" as const,
       title: "Diferencias entre oficinas",
       value: officeDifferenceComparable ? officeDifferences : "Sin comparación todavía",
-      hint: officeDifferenceComparable ? "Costo vigente distinto entre oficinas" : `Cobertura V2: ${coverageLabel}`,
+      hint: officeDifferenceComparable ? "Costo vigente distinto entre oficinas" : `Cobertura: ${coverageLabel}`,
     },
   ]
 

@@ -1,4 +1,4 @@
-/** Tipos de la API read-only Costos V2 (montos como string Decimal). */
+/** Tipos de la API read-only Control de costos (montos como string Decimal). */
 
 export type CostV2QualityStatus =
   | "missing_cost"

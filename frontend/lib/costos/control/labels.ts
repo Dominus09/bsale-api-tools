@@ -19,7 +19,7 @@ export const COST_V2_WARNING_LABEL: Record<string, string> = {
 /** Explicaciones breves (tooltip / panel). */
 export const COST_V2_STATUS_SHORT_HELP: Record<string, string> = {
   missing_taxes_in_gross:
-    "El bruto original no incluía todos los impuestos. V2 calculó el valor corregido.",
+    "El bruto original no incluía todos los impuestos. Se calculó el valor corregido.",
   incomplete_tax_context:
     "No fue posible determinar todos los impuestos aplicables.",
   missing_cost: "La recepción no tiene costo suficiente para realizar el cálculo.",
@@ -53,10 +53,10 @@ export type SymbologyAlertEntry = {
 }
 
 export const SYMBOLOGY_INTRO =
-  "Estas categorías indican la calidad del costo registrado y del cálculo tributario realizado por Costos V2."
+  "Estas categorías indican la calidad del costo registrado y del cálculo tributario del módulo Control de costos."
 
 export const SYMBOLOGY_SCOPE_NOTE =
-  "Actualmente Costos V2 contiene información de Supermercado La Quillotana. Las demás oficinas se incorporarán progresivamente."
+  "Actualmente el módulo contiene información de Supermercado La Quillotana. Las demás oficinas se incorporarán progresivamente."
 
 export const BUSINESS_SITUATION_LABEL: Record<string, string> = {
   requires_review: "Requiere revisión",
@@ -71,7 +71,7 @@ export const SYMBOLOGY_BUSINESS_STATUSES: SymbologyStatusEntry[] = [
     code: "partial_coverage",
     label: "Cobertura parcial",
     description:
-      "No todas las oficinas activas tienen costos V2 disponibles para el producto.",
+      "No todas las oficinas activas tienen costos calculados disponibles para el producto.",
     action: "No interprete la falta de datos como una diferencia de costo.",
   },
   {
@@ -109,8 +109,8 @@ export const SYMBOLOGY_STATUSES: SymbologyStatusEntry[] = [
     code: "missing_taxes_in_gross",
     label: COST_V2_STATUS_LABEL.missing_taxes_in_gross,
     description:
-      "El costo bruto almacenado no incluía todos los impuestos correspondientes. Costos V2 calculó un bruto corregido agregando IVA e impuestos adicionales.",
-    action: "Usar el costo corregido V2 como referencia.",
+      "El costo bruto almacenado no incluía todos los impuestos correspondientes. Se calculó un bruto corregido agregando IVA e impuestos adicionales.",
+    action: "Usar el costo corregido como referencia.",
   },
   {
     code: "incomplete_tax_context",

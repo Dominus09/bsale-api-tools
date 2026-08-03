@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 
-export function CostV2InfoHint({
+export function CostInfoHint({
   title,
   text,
   className,

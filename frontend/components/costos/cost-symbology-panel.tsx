@@ -1,6 +1,6 @@
 "use client"
 
-import { CostV2StatusBadge } from "@/components/costos-v2/cost-v2-status-badge"
+import { CostStatusBadge } from "@/components/costos/cost-status-badge"
 import { Badge } from "@/components/ui/badge"
 import {
   SYMBOLOGY_ALERTS,
@@ -9,12 +9,12 @@ import {
   SYMBOLOGY_SCOPE_NOTE,
   SYMBOLOGY_STATUSES,
   warningLabel,
-} from "@/lib/costos-v2/labels"
+} from "@/lib/costos/control/labels"
 
 /**
  * Pestaña estática — no realiza llamadas a la API.
  */
-export function CostV2SymbologyPanel() {
+export function CostSymbologyPanel() {
   return (
     <div className="space-y-5">
       <div className="space-y-1.5">
@@ -34,7 +34,7 @@ export function CostV2SymbologyPanel() {
               className="rounded-md border border-border/70 px-3 py-2.5"
             >
               <div className="mb-1.5 flex flex-wrap items-center gap-2">
-                <CostV2StatusBadge status={s.code} />
+                <CostStatusBadge status={s.code} />
               </div>
               <p className="text-sm text-foreground">{s.description}</p>
               <p className="mt-1 text-xs text-muted-foreground">

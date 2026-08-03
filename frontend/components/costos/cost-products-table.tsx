@@ -14,9 +14,9 @@ import {
   formatDateCL,
   formatChangeCell,
   formatMoneyCLPTable,
-} from "@/lib/costos-v2/format"
-import { BUSINESS_SITUATION_LABEL } from "@/lib/costos-v2/labels"
-import type { CompanyProductItem } from "@/lib/costos-v2/types"
+} from "@/lib/costos/control/format"
+import { BUSINESS_SITUATION_LABEL } from "@/lib/costos/control/labels"
+import type { CompanyProductItem } from "@/lib/costos/control/types"
 
 /** Máximo 7 columnas visibles en el control consolidado. */
 export const COST_V2_PRODUCT_TABLE_COLUMNS = [
@@ -29,7 +29,7 @@ export const COST_V2_PRODUCT_TABLE_COLUMNS = [
   "Ver",
 ] as const
 
-export function CostV2ProductsTable({
+export function CostProductsTable({
   items,
   loading,
   onOpen,

@@ -62,7 +62,7 @@ const navSections: { title: string; items: NavItem[] }[] = [
     items: [
       { href: "/margins", label: "Márgenes", icon: TrendingUp },
       { href: "/politica-margenes", label: "Política de Márgenes", icon: Scale },
-      { href: "/costos", label: "Costos", icon: CircleDollarSign },
+      { href: "/costos", label: "Control de costos", icon: CircleDollarSign },
       { href: "/promotions", label: "Promociones", icon: Percent },
       {
         href: "/analitica/comercial-vendedores",
