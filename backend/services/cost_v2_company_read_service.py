@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
+import traceback
 from datetime import date
 from decimal import Decimal
-from typing import Any
+from typing import Any, Callable
 
+from backend.db import get_connection
 from backend.repositories.cost_v2_company_read_repo import CostV2CompanyReadRepository
 from backend.schemas.cost_v2_company_read import (
     CALCULATION_VERSION_PIN,
@@ -35,6 +38,8 @@ from backend.services.analytics.validate_distribuidora_source import (
     make_psycopg_executor,
     open_readonly_connection,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _meta() -> dict[str, str]:
@@ -70,10 +75,44 @@ def _json_list(raw: Any) -> list[Any]:
     return []
 
 
-def _with_repo(fn):
-    conn = open_readonly_connection()
+def log_company_endpoint_error(
+    *,
+    endpoint: str,
+    company_id: int | None,
+    date_from: Any = None,
+    date_to: Any = None,
+    sort: str | None = None,
+    exc: BaseException,
+) -> None:
+    """Log estructurado seguro (sin JWT / secrets / SQL crudo)."""
+    logger.exception(
+        "cost_v2_company_endpoint_error endpoint=%s company_id=%s date_from=%s "
+        "date_to=%s sort=%s exc_type=%s exc=%s",
+        endpoint,
+        company_id,
+        date_from,
+        date_to,
+        sort,
+        type(exc).__name__,
+        str(exc),
+    )
+    # traceback completo solo en logs internos (logger.exception ya lo incluye)
+    _ = traceback.format_exc()
+
+
+def _with_repo(
+    fn: Callable[[CostV2CompanyReadRepository], Any],
+    *,
+    get_conn: Callable[[], Any] = get_connection,
+) -> Any:
+    """Misma apertura read-only que cost_v2_read_service (get_connection obligatorio)."""
+    conn = open_readonly_connection(get_conn)
     try:
-        executor = make_psycopg_executor(conn)
+        executor = make_psycopg_executor(
+            conn,
+            statement_timeout_seconds=20,
+            lock_timeout="3s",
+        )
         repo = CostV2CompanyReadRepository(executor)
         return fn(repo)
     finally:
@@ -81,7 +120,10 @@ def _with_repo(fn):
             conn.rollback()
         except Exception:
             pass
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def map_company_product_item(row: dict[str, Any]) -> dict[str, Any]:
@@ -91,13 +133,13 @@ def map_company_product_item(row: dict[str, Any]) -> dict[str, Any]:
     with_cost = int(row.get("offices_with_current_cost") or 0)
     has_diff = bool(row.get("has_office_difference"))
     requires_review = bool(row.get("requires_review"))
+    # Una sola oficina nunca es “alineada” ni diferencia comparable
+    if with_cost < 2:
+        has_diff = False
     alignment = derive_office_alignment_status(
         offices_with_current_cost=with_cost,
         has_office_difference=has_diff,
     )
-    # Una sola oficina nunca es “alineada”
-    if with_cost < 2:
-        has_diff = False
     business = derive_business_statuses(
         requires_review=requires_review,
         has_office_difference=has_diff and with_cost >= 2,
@@ -274,7 +316,18 @@ def list_company_products(
             "meta": _meta(),
         }
 
-    return _with_repo(_run)
+    try:
+        return _with_repo(_run)
+    except Exception as exc:
+        log_company_endpoint_error(
+            endpoint="company-products",
+            company_id=cid,
+            date_from=df,
+            date_to=dt,
+            sort=sort_key,
+            exc=exc,
+        )
+        raise
 
 
 def summarize_company_products(
@@ -301,7 +354,6 @@ def summarize_company_products(
         active = int(s.get("active_offices_count") or len(offices))
         with_v2 = int(s.get("offices_with_v2_coverage") or 0)
         office_diff = int(s.get("products_with_office_difference") or 0)
-        # Sin comparación real si <2 oficinas con V2
         office_diff_available = with_v2 >= 2
         return {
             "summary": {
@@ -337,7 +389,18 @@ def summarize_company_products(
             "meta": _meta(),
         }
 
-    return _with_repo(_run)
+    try:
+        return _with_repo(_run)
+    except Exception as exc:
+        log_company_endpoint_error(
+            endpoint="company-summary",
+            company_id=cid,
+            date_from=df,
+            date_to=dt,
+            sort=None,
+            exc=exc,
+        )
+        raise
 
 
 def get_company_product(
@@ -376,11 +439,11 @@ def get_company_product(
         for o in offices:
             sit = o.get("situation")
             if not o.get("has_v2_data"):
-                label = "Cobertura V2 pendiente"
+                label = "Cobertura pendiente"
                 sit = "coverage_pending"
             elif with_cost < 2 and o.get("current_cost") is not None:
                 label = "Sin comparación entre oficinas"
-                sit = "no_comparison"
+                sit = "insufficient_coverage"
             elif sit == "aligned":
                 label = "Alineada"
             elif sit == "different":
@@ -409,7 +472,20 @@ def get_company_product(
         item["offices"] = office_items
         return {"item": item, "meta": _meta()}
 
-    return _with_repo(_run)
+    try:
+        return _with_repo(_run)
+    except Exception as exc:
+        if isinstance(exc, LookupError):
+            raise
+        log_company_endpoint_error(
+            endpoint="company-products-detail",
+            company_id=cid,
+            date_from=df,
+            date_to=dt,
+            sort=None,
+            exc=exc,
+        )
+        raise
 
 
 def list_company_product_history(
@@ -441,11 +517,7 @@ def list_company_product_history(
         for r in rows:
             cost = r.get("corrected_gross_cost")
             prev = r.get("prev_cost_in_series")
-            changed = (
-                cost is not None
-                and prev is not None
-                and cost != prev
-            )
+            changed = cost is not None and prev is not None and cost != prev
             if isinstance(cost, Decimal):
                 costs.append(cost)
             elif cost is not None:
@@ -453,13 +525,11 @@ def list_company_product_history(
             change_amt = None
             change_pct = None
             if cost is not None and prev is not None:
-                change_amt = cost - prev if isinstance(cost, Decimal) else (
-                    Decimal(str(cost)) - Decimal(str(prev))
-                )
-                if prev != 0 and isinstance(prev, Decimal) or prev is not None:
-                    p = prev if isinstance(prev, Decimal) else Decimal(str(prev))
-                    if p != 0:
-                        change_pct = (change_amt / p) * Decimal("100")
+                c = cost if isinstance(cost, Decimal) else Decimal(str(cost))
+                p = prev if isinstance(prev, Decimal) else Decimal(str(prev))
+                change_amt = c - p
+                if p != 0:
+                    change_pct = (change_amt / p) * Decimal("100")
             items.append(
                 {
                     "history_id": int(r["history_id"]),
@@ -511,4 +581,15 @@ def list_company_product_history(
             "meta": _meta(),
         }
 
-    return _with_repo(_run)
+    try:
+        return _with_repo(_run)
+    except Exception as exc:
+        log_company_endpoint_error(
+            endpoint="company-products-history",
+            company_id=cid,
+            date_from=df,
+            date_to=dt,
+            sort=None,
+            exc=exc,
+        )
+        raise

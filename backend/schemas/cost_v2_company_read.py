@@ -34,11 +34,18 @@ COMPANY_PRODUCT_SORTS: frozenset[str] = frozenset(
         "pct_increase",
         "pct_decrease",
         "abs_change",
+        "absolute_change",  # alias → abs_change
         "product",
+        "product_name",  # alias → product
         "requires_review",
         "office_difference",
     }
 )
+
+COMPANY_PRODUCT_SORT_ALIASES: dict[str, str] = {
+    "absolute_change": "abs_change",
+    "product_name": "product",
+}
 
 # Umbral visual de “Sin cambio” en UI ($0,50). Backend conserva Decimal exacto.
 VISUAL_NO_CHANGE_ABS: Decimal = Decimal("0.5")
@@ -63,7 +70,9 @@ BUSINESS_STATUS_REQUIRES_REVIEW = "requires_review"
 BUSINESS_STATUS_OFFICE_DIFFERENCE = "office_difference"
 BUSINESS_STATUS_PARTIAL_COVERAGE = "partial_coverage"
 BUSINESS_STATUS_OFFICES_ALIGNED = "offices_aligned"
-BUSINESS_STATUS_NO_OFFICE_COMPARE = "no_office_comparison"
+BUSINESS_STATUS_INSUFFICIENT_COVERAGE = "insufficient_coverage"
+# Alias legacy (tests / clientes previos)
+BUSINESS_STATUS_NO_OFFICE_COMPARE = BUSINESS_STATUS_INSUFFICIENT_COVERAGE
 
 
 def validate_company_id_for_v2_company(company_id: int) -> int:
@@ -83,7 +92,7 @@ def validate_company_product_sort(sort: str | None) -> str:
             f"sort inválido: {key}",
             error_type="invalid_sort",
         )
-    return key
+    return COMPANY_PRODUCT_SORT_ALIASES.get(key, key)
 
 
 def encode_company_product_cursor(
@@ -164,7 +173,7 @@ def derive_office_alignment_status(
     """Alineación solo con ≥2 oficinas con costo vigente calculable."""
     n = int(offices_with_current_cost)
     if n < 2:
-        return BUSINESS_STATUS_NO_OFFICE_COMPARE
+        return BUSINESS_STATUS_INSUFFICIENT_COVERAGE
     if has_office_difference:
         return BUSINESS_STATUS_OFFICE_DIFFERENCE
     return BUSINESS_STATUS_OFFICES_ALIGNED
@@ -200,6 +209,7 @@ def derive_business_statuses(
 
 __all__ = [
     "ALLOWED_COMPANY_IDS_V2_COMPANY",
+    "BUSINESS_STATUS_INSUFFICIENT_COVERAGE",
     "BUSINESS_STATUS_NO_OFFICE_COMPARE",
     "BUSINESS_STATUS_OFFICE_DIFFERENCE",
     "BUSINESS_STATUS_OFFICES_ALIGNED",
@@ -207,6 +217,7 @@ __all__ = [
     "BUSINESS_STATUS_REQUIRES_REVIEW",
     "CALCULATION_VERSION_PIN",
     "COMPANY_PRODUCT_SORTS",
+    "COMPANY_PRODUCT_SORT_ALIASES",
     "COMPANY_REVIEW_STATUSES",
     "COMPANY_REVIEW_WARNINGS",
     "COST_CONTROL_OFFICE_IDS_BY_COMPANY",

@@ -25,8 +25,32 @@ def _v2_http_error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=422, detail=str(exc))
     if isinstance(exc, LookupError):
         return HTTPException(status_code=404, detail=str(exc))
-    return HTTPException(status_code=500, detail=str(exc))
+    return HTTPException(status_code=500, detail="Error interno al consultar Costos")
 
+
+def _company_http_error(
+    exc: Exception,
+    *,
+    endpoint: str,
+    company_id: int | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    sort: str | None = None,
+) -> HTTPException:
+    if isinstance(exc, (CostV2ReadValidationError, LookupError)):
+        return _v2_http_error(exc)
+    from backend.services.cost_v2_company_read_service import log_company_endpoint_error
+
+    log_company_endpoint_error(
+        endpoint=endpoint,
+        company_id=company_id,
+        date_from=date_from,
+        date_to=date_to,
+        sort=sort,
+        exc=exc,
+    )
+    # No exponer SQL ni TypeError al cliente
+    return HTTPException(status_code=500, detail="Error interno al consultar Costos")
 
 @router.get("/v2/receptions")
 def list_v2_receptions(
@@ -263,10 +287,15 @@ def list_v2_company_products(
             min_abs_change_percent=min_abs_change_percent,
             change_threshold_percent=change_threshold_percent,
         )
-    except (CostV2ReadValidationError, LookupError) as exc:
-        raise _v2_http_error(exc) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise _company_http_error(
+            exc,
+            endpoint="company-products",
+            company_id=company_id,
+            date_from=date_from,
+            date_to=date_to,
+            sort=sort,
+        ) from exc
 
 
 @router.get("/v2/company-summary")
@@ -285,10 +314,14 @@ def get_v2_company_summary(
             date_to=date_to,
             change_threshold_percent=change_threshold_percent,
         )
-    except (CostV2ReadValidationError, LookupError) as exc:
-        raise _v2_http_error(exc) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise _company_http_error(
+            exc,
+            endpoint="company-summary",
+            company_id=company_id,
+            date_from=date_from,
+            date_to=date_to,
+        ) from exc
 
 
 @router.get("/v2/company-products/{variant_id}")
@@ -307,10 +340,14 @@ def get_v2_company_product(
             date_from=date_from,
             date_to=date_to,
         )
-    except (CostV2ReadValidationError, LookupError) as exc:
-        raise _v2_http_error(exc) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise _company_http_error(
+            exc,
+            endpoint="company-products-detail",
+            company_id=company_id,
+            date_from=date_from,
+            date_to=date_to,
+        ) from exc
 
 
 @router.get("/v2/company-products/{variant_id}/history")
@@ -333,11 +370,14 @@ def get_v2_company_product_history(
             office_id=office_id,
             limit=limit,
         )
-    except (CostV2ReadValidationError, LookupError) as exc:
-        raise _v2_http_error(exc) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
+        raise _company_http_error(
+            exc,
+            endpoint="company-products-history",
+            company_id=company_id,
+            date_from=date_from,
+            date_to=date_to,
+        ) from exc
 
 @router.get("/dashboard")
 def cost_dashboard(

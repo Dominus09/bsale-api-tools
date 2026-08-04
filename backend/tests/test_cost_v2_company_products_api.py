@@ -35,7 +35,7 @@ def test_coverage_and_alignment_semantics():
     assert coverage_label(with_v2=1, active=4) == "1 de 4 oficinas"
     assert derive_office_alignment_status(
         offices_with_current_cost=1, has_office_difference=False
-    ) == "no_office_comparison"
+    ) == "insufficient_coverage"
     assert derive_office_alignment_status(
         offices_with_current_cost=2, has_office_difference=False
     ) == "offices_aligned"
@@ -50,7 +50,7 @@ def test_coverage_and_alignment_semantics():
         offices_with_current_cost=1,
     )
     assert "requires_review" in statuses
-    assert "no_office_comparison" in statuses
+    assert "insufficient_coverage" in statuses
     assert "partial_coverage" in statuses
     assert "offices_aligned" not in statuses
 
@@ -69,8 +69,12 @@ def test_company_cursor_roundtrip():
 def test_sort_validation():
     assert validate_company_product_sort(None) == "latest_reception"
     assert validate_company_product_sort("abs_change") == "abs_change"
+    assert validate_company_product_sort("absolute_change") == "abs_change"
+    assert validate_company_product_sort("product_name") == "product"
     with pytest.raises(CostV2ReadValidationError):
         validate_company_product_sort("impacto")
+    with pytest.raises(CostV2ReadValidationError):
+        validate_company_product_sort("DROP TABLE;--")
 
 
 def test_map_company_product_distinct_change_fields():
@@ -111,7 +115,7 @@ def test_map_company_product_distinct_change_fields():
     assert item["previous_distinct_cost"] == "9998"
     assert item["change_amount"] == "-200"
     assert item["coverage_label"] == "1 de 4 oficinas"
-    assert item["office_alignment_status"] == "no_office_comparison"
+    assert item["office_alignment_status"] == "insufficient_coverage"
     assert item["has_office_difference"] is False
     assert "partial_coverage" in item["business_statuses"]
     # Impuestos no incluidos con costo calculable → no revisión automática

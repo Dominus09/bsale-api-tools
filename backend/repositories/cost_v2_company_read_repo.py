@@ -11,6 +11,7 @@ mostrado y conteos de actividad.
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 from decimal import Decimal
 from typing import Any, Callable
@@ -29,6 +30,7 @@ from backend.services.analytics.validate_distribuidora_source import (
 )
 
 QueryExecutor = Callable[[str, tuple[Any, ...]], list[dict[str, Any]]]
+logger = logging.getLogger(__name__)
 
 
 class CostV2CompanyReadRepository:
@@ -37,7 +39,17 @@ class CostV2CompanyReadRepository:
 
     def _run(self, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
         assert_sql_is_read_only(sql)
-        return self._execute(sql, params)
+        try:
+            return self._execute(sql, params)
+        except Exception as exc:
+            # Sin SQL completo ni secrets; solo tipo y contexto de tamaño de params
+            logger.exception(
+                "cost_v2_company_repo_error exc_type=%s exc=%s param_count=%s",
+                type(exc).__name__,
+                str(exc),
+                len(params),
+            )
+            raise
 
     def _money_keys(self, row: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
         out = dict(row)
