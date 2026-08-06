@@ -42,9 +42,9 @@ import {
   type RouteOperationalCosts,
 } from "@/lib/planificacion-operational-costs"
 import {
-  estimateAssignedKgFromOrders,
   estimateAssignedKgFromStops,
   isTruckOverloaded,
+  summarizeAssignedKgFromOrders,
   truckUtilizationPct,
 } from "@/lib/ors-truck-capacity"
 import type { PlanificacionMapRoute, PlanificacionMapStop } from "@/components/distribuidora/planificacion-despacho-map-client"
@@ -399,7 +399,8 @@ export default function PlanificacionDespachoPage() {
       const truckId = stops[0]?.truck_id ?? 0
       const meta = trucksById.get(truckId)
       const maxWeightKg = meta?.max_weight_kg ?? null
-      const estimatedAssignedKg = estimateAssignedKgFromOrders(stops)
+      const weightEst = summarizeAssignedKgFromOrders(stops)
+      const estimatedAssignedKg = weightEst.assignedKg
       const utilizationPct = truckUtilizationPct(estimatedAssignedKg, maxWeightKg)
       return {
         camion,
@@ -407,6 +408,9 @@ export default function PlanificacionDespachoPage() {
         stopCount: stops.length,
         maxWeightKg,
         estimatedAssignedKg,
+        knownWeightKg: weightEst.knownKg,
+        unavailableWeightCount: weightEst.unavailableCount,
+        weightIncomplete: weightEst.incomplete,
         utilizationPct,
         overloaded: isTruckOverloaded(estimatedAssignedKg, maxWeightKg),
         plan: planByTruck.get(truckId) ?? null,

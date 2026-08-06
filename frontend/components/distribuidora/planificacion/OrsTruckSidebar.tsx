@@ -21,6 +21,9 @@ export type OrsTruckSidebarRow = {
   stopCount: number
   maxWeightKg?: number | null
   estimatedAssignedKg?: number | null
+  knownWeightKg?: number | null
+  unavailableWeightCount?: number
+  weightIncomplete?: boolean
   utilizationPct?: number | null
   overloaded?: boolean
   plan?: DispatchPlanSummary | null
@@ -77,7 +80,16 @@ export function OrsTruckSidebar({
                 </p>
                 {t.estimatedAssignedKg != null && t.utilizationPct != null ? (
                   <p className="mt-0.5 text-[10px] tabular-nums text-muted-foreground">
-                    ~{t.estimatedAssignedKg.toLocaleString("es-CL")} kg est. · {t.utilizationPct}%
+                    {t.weightIncomplete
+                      ? `conocido ${Number(t.knownWeightKg ?? 0).toLocaleString("es-CL")} kg`
+                      : `~${t.estimatedAssignedKg.toLocaleString("es-CL")} kg est.`}
+                    {" · "}
+                    {t.utilizationPct}%
+                  </p>
+                ) : null}
+                {t.weightIncomplete && (t.unavailableWeightCount ?? 0) > 0 ? (
+                  <p className="mt-1 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                    Peso incompleto · {t.unavailableWeightCount} sin peso
                   </p>
                 ) : null}
                 {t.overloaded ? (
@@ -113,11 +125,22 @@ export function OrsTruckSidebar({
             <div className="flex justify-between gap-2">
               <dt>Asignado est.</dt>
               <dd className="font-medium tabular-nums text-foreground">
-                {activeRow.estimatedAssignedKg != null
-                  ? `~${activeRow.estimatedAssignedKg.toLocaleString("es-CL")} kg`
-                  : "—"}
+                {activeRow.weightIncomplete
+                  ? `conocido ${Number(activeRow.knownWeightKg ?? 0).toLocaleString("es-CL")} kg`
+                  : activeRow.estimatedAssignedKg != null
+                    ? `~${activeRow.estimatedAssignedKg.toLocaleString("es-CL")} kg`
+                    : "—"}
               </dd>
             </div>
+            {activeRow.weightIncomplete && (activeRow.unavailableWeightCount ?? 0) > 0 ? (
+              <div className="flex justify-between gap-2 text-amber-700 dark:text-amber-300">
+                <dt>Sin peso</dt>
+                <dd className="font-medium tabular-nums">
+                  {activeRow.unavailableWeightCount} pedido
+                  {(activeRow.unavailableWeightCount ?? 0) === 1 ? "" : "s"}
+                </dd>
+              </div>
+            ) : null}
             <div className="flex justify-between gap-2">
               <dt>Paradas</dt>
               <dd className="font-medium tabular-nums text-foreground">{activeRow.stopCount}</dd>

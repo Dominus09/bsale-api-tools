@@ -179,14 +179,17 @@ def sql_resolve_delivery_day(
     comments_expr: str,
     dia_atencion_expr: str,
 ) -> str:
+    """Misma precedencia que ``resolve_delivery_day`` (Python).
+
+    1) día en observaciones
+    2) día en comentarios (aunque observaciones tenga texto sin día)
+    3) día de ruta / cliente
+    """
     obs_det = sql_detect_delivery_day(observaciones_expr)
     comments_det = sql_detect_delivery_day(comments_expr)
     route_det = sql_detect_delivery_day(dia_atencion_expr)
     return f"""COALESCE(
     {obs_det},
-    CASE
-        WHEN NULLIF(BTRIM({observaciones_expr}), '') IS NULL THEN {comments_det}
-        ELSE NULL
-    END,
+    {comments_det},
     {route_det}
 )"""

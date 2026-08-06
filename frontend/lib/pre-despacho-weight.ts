@@ -55,13 +55,67 @@ export function weightBadgeEmoji(kind: PreDespachoWeightBadgeKind): string {
 export function orderWeightToPlanningPatch(
   detail: OrderWeightDetail,
 ): Partial<DistribuidoraDispatchPrepPlanningRow> {
+  const status = detail.weight?.status
+  const value =
+    status === "unavailable" || status === "error"
+      ? null
+      : (detail.weight?.value_kg ?? detail.peso_total_kg)
   return {
-    weight_kg: detail.peso_total_kg,
-    peso_total_kg: detail.peso_total_kg,
+    weight_kg: value,
+    peso_total_kg: value,
+    weight: detail.weight ?? {
+      value_kg: value,
+      status: status ?? (value == null ? "unavailable" : "calculated"),
+      source: "product_lines",
+      reason: detail.weight?.reason ?? null,
+    },
     productos_sin_peso: detail.productos_sin_peso,
     productos_manuales: detail.productos_manuales,
     productos_estimados: detail.productos_estimados,
     porcentaje_cobertura_peso: detail.porcentaje_cobertura,
+  }
+}
+
+export type GroupWeightSummary = {
+  knownKg: number
+  unavailableCount: number
+  partialCount: number
+  incomplete: boolean
+}
+
+/** Suma solo pesos conocidos; unavailable no cuenta como 0 kg real. */
+export function summarizeGroupWeights(
+  rows: Array<
+    Pick<DistribuidoraDispatchPrepPlanningRow, "peso_total_kg" | "weight_kg" | "weight">
+  >,
+): GroupWeightSummary {
+  let knownKg = 0
+  let unavailableCount = 0
+  let partialCount = 0
+  for (const row of rows) {
+    const status = row.weight?.status
+    if (status === "unavailable" || status === "error") {
+      unavailableCount += 1
+      continue
+    }
+    if (status === "partial") partialCount += 1
+    const raw = row.weight?.value_kg ?? row.peso_total_kg ?? row.weight_kg
+    if (raw == null) {
+      unavailableCount += 1
+      continue
+    }
+    const v = typeof raw === "number" ? raw : Number(raw)
+    if (!Number.isFinite(v)) {
+      unavailableCount += 1
+      continue
+    }
+    knownKg += v
+  }
+  return {
+    knownKg,
+    unavailableCount,
+    partialCount,
+    incomplete: unavailableCount > 0 || partialCount > 0,
   }
 }
 

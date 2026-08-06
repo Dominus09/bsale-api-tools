@@ -272,6 +272,13 @@ def _enrich_row_delivery_day(row: dict[str, Any]) -> None:
     row["dia_entrega_detectado"] = day
     row["dia_entrega_fuente"] = source
     row["dia_entrega_label"] = delivery_day_label(day)
+    # Contrato explícito (frontend debe preferir estos campos).
+    row["delivery"] = {
+        "day": day,
+        "label": delivery_day_label(day),
+        "date": None,
+        "source": source,
+    }
 
 
 _PLANNING_ROWS_UNRENDERED_MARKERS = (
@@ -311,12 +318,23 @@ def _overlay_order_weights_to_rows(rows: list[dict[str, Any]]) -> None:
                 "[PLANNING_WEIGHT] order_id=%s weight_source=overlay_missing total_weight=null",
                 doc_id,
             )
+            row["weight_kg"] = None
+            row["peso_total_kg"] = None
+            row["weight"] = {
+                "value_kg": None,
+                "status": "unavailable",
+                "source": "order_weight_summary",
+                "reason": "products_load_failed",
+            }
             continue
         summary = metrics_to_order_weight_summary(w)
+        weight_meta = w.get("weight") if isinstance(w.get("weight"), dict) else {}
         apply_order_weight_summary_to_row(
             row,
             summary,
             weight_source="order_weight_summary",
+            weight_status=weight_meta.get("status"),
+            weight_reason=weight_meta.get("reason"),
             extras={
                 "cantidad_unidades": w.get("cantidad_unidades"),
                 "cantidad_cajas": w.get("cantidad_cajas"),
@@ -891,6 +909,27 @@ def _apply_status_fields_to_row(
     row["probable_score"] = score if score_f is not None and score_f >= 60 else None
     row["probable_tier"] = probable_tier
 
+    status_code = {
+        "FACTURADA_CONFIRMADA": "invoiced",
+        "ANULADA": "cancelled",
+        "PROBABLE_FACTURADA_HIGH": "probable",
+        "PROBABLE_FACTURADA_MEDIUM": "probable",
+        "PROBABLE_FACTURADA_LOW": "probable",
+        "PENDIENTE": "pending",
+    }.get(purchase_status, "pending")
+    status_source = (
+        "linked_invoice"
+        if is_inv
+        else "probable_match"
+        if score_f is not None and score_f >= 60
+        else "local_state"
+    )
+    row["status"] = {
+        "code": status_code,
+        "label": estado_real,
+        "source": status_source,
+    }
+
     if is_inv and conf:
         tipo = conf.get("invoicing_document_type_id")
         tipo_lbl = (
@@ -903,14 +942,27 @@ def _apply_status_fields_to_row(
         num = conf.get("invoicing_number") or conf.get("invoicing_document_id")
         row["associated_document_label"] = f"{tipo_lbl} {num}"
         row["display_score"] = 100
+        row["invoice"] = {
+            "id": conf.get("invoicing_document_id"),
+            "number": conf.get("invoicing_number"),
+            "document_type_id": conf.get("invoicing_document_type_id"),
+            "issued_at": None,
+        }
     elif score_f is not None and score_f >= 60 and prob:
         lbl = prob.get("candidate_document_type_label") or ""
         num = prob.get("candidate_number") or prob.get("candidate_document_id")
         row["associated_document_label"] = f"{lbl} {num}".strip()
         row["display_score"] = score
+        row["invoice"] = {
+            "id": prob.get("candidate_document_id"),
+            "number": prob.get("candidate_number"),
+            "document_type_id": prob.get("candidate_document_type"),
+            "issued_at": None,
+        }
     else:
         row["associated_document_label"] = None
         row["display_score"] = None
+        row["invoice"] = None
 
 
 def _merge_planning_rows_staged(

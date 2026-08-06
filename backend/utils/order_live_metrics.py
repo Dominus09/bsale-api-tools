@@ -231,11 +231,17 @@ def fetch_live_metrics_by_document_ids(
     _overlay_official_order_weights(by_id, ids)
 
     for entry in by_id.values():
-        if "weight_kg" not in entry:
-            entry["weight_kg"] = 0.0
-            entry["peso_total_kg"] = 0.0
+        if "weight_kg" not in entry and "peso_total_kg" not in entry:
+            entry["weight_kg"] = None
+            entry["peso_total_kg"] = None
             entry["productos_sin_peso"] = 0
             entry["porcentaje_cobertura_peso"] = 0.0
+            entry["weight"] = {
+                "value_kg": None,
+                "status": "unavailable",
+                "source": "order_weight_summary",
+                "reason": "products_load_failed",
+            }
         staleness = evaluate_planning_staleness(live=entry, snapshot=None)
         entry["bsale_updated_pending"] = staleness["bsale_updated_pending"]
     return by_id
@@ -257,10 +263,13 @@ def _overlay_official_order_weights(
         for doc_id, w in weights.items():
             entry = by_id.setdefault(doc_id, {"document_id": doc_id})
             summary = metrics_to_order_weight_summary(w)
+            weight_meta = w.get("weight") if isinstance(w.get("weight"), dict) else {}
             apply_order_weight_summary_to_row(
                 entry,
                 summary,
                 weight_source="order_weight_summary",
+                weight_status=weight_meta.get("status"),
+                weight_reason=weight_meta.get("reason"),
                 extras={
                     "cantidad_unidades": w.get("cantidad_unidades"),
                     "cantidad_cajas": w.get("cantidad_cajas"),

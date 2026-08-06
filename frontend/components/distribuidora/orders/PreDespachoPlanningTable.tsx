@@ -30,6 +30,7 @@ import { PreDespachoEmptyState } from "@/components/distribuidora/orders/PreDesp
 import type { PreDespachoWeightSheetMode } from "@/components/distribuidora/orders/PreDespachoWeightSheet"
 import {
   resolvePreDespachoWeightBadge,
+  summarizeGroupWeights,
   weightBadgeClass,
   weightBadgeEmoji,
 } from "@/lib/pre-despacho-weight"
@@ -70,8 +71,10 @@ function formatClp(n: number): string {
 }
 
 function formatKg(n: number | null | undefined): string {
-  const v = Number(n)
-  if (!Number.isFinite(v)) return "—"
+  // Number(null) === 0 → no tratar null/undefined como 0 kg real
+  if (n == null) return "Peso no disponible"
+  const v = typeof n === "number" ? n : Number(n)
+  if (!Number.isFinite(v)) return "Peso no disponible"
   return `${v.toLocaleString("es-CL", { maximumFractionDigits: 1 })} kg`
 }
 
@@ -197,9 +200,19 @@ function WeightCell({
     mode: PreDespachoWeightSheetMode,
   ) => void
 }) {
-  const kg = row.peso_total_kg ?? row.weight_kg
+  const weightStatus = row.weight?.status
+  const kg =
+    weightStatus === "unavailable" || weightStatus === "error"
+      ? null
+      : (row.weight?.value_kg ?? row.peso_total_kg ?? row.weight_kg)
   const badge = resolvePreDespachoWeightBadge(row)
   const coverage = Number(row.porcentaje_cobertura_peso ?? 0)
+  const label =
+    weightStatus === "unavailable" || weightStatus === "error"
+      ? "Peso no disponible"
+      : weightStatus === "partial"
+        ? formatKg(kg)
+        : formatKg(kg)
 
   return (
     <div className="flex min-w-0 flex-col items-end gap-0.5">
@@ -209,9 +222,23 @@ function WeightCell({
         className="text-[11px] tabular-nums text-foreground underline-offset-2 hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
         title="Ver detalle de peso"
       >
-        {formatKg(kg)}
+        {label}
       </button>
-      {badge ? (
+      {weightStatus === "unavailable" || weightStatus === "error" ? (
+        <Badge
+          variant="outline"
+          className="max-w-full truncate border-destructive/40 bg-destructive/5 px-1 py-0 text-[8px] font-medium leading-4 text-destructive"
+        >
+          ⚠ Sin peso
+        </Badge>
+      ) : weightStatus === "partial" ? (
+        <Badge
+          variant="outline"
+          className="max-w-full truncate border-amber-300 bg-amber-50 px-1 py-0 text-[8px] font-medium leading-4 text-amber-900"
+        >
+          ⚠ Peso parcial
+        </Badge>
+      ) : badge ? (
         badge.kind === "incomplete" ? (
           <button
             type="button"
@@ -574,6 +601,29 @@ export function PreDespachoPlanningTable({
                           {block.key}
                           <span className="ml-2 font-normal text-muted-foreground">
                             {block.rows.length} ped. · {formatClp(block.total)}
+                            {(() => {
+                              const gw = summarizeGroupWeights(block.rows)
+                              const known = `${gw.knownKg.toLocaleString("es-CL", {
+                                maximumFractionDigits: 1,
+                              })} kg`
+                              if (!gw.incomplete) {
+                                return ` · ${known}`
+                              }
+                              return (
+                                <>
+                                  {" · "}
+                                  <span className="text-amber-800 dark:text-amber-200">
+                                    Peso total incompleto
+                                  </span>
+                                  {` · conocido ${known}`}
+                                  {gw.unavailableCount > 0
+                                    ? ` · ${gw.unavailableCount} pedido${
+                                        gw.unavailableCount === 1 ? "" : "s"
+                                      } sin peso disponible`
+                                    : null}
+                                </>
+                              )
+                            })()}
                           </span>
                         </span>
                         <GroupTruckAssignMenu

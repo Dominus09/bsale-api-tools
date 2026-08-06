@@ -1167,6 +1167,12 @@ export type DistribuidoraDispatchPrepPlanningRow = {
   total_amount?: number | null
   weight_kg?: number | null
   peso_total_kg?: number | null
+  weight?: {
+    value_kg?: number | null
+    status?: "calculated" | "manual" | "partial" | "unavailable" | "loading" | "error" | string
+    source?: string | null
+    reason?: string | null
+  } | null
   productos_sin_peso?: number | null
   productos_manuales?: number | null
   productos_estimados?: number | null
@@ -1233,6 +1239,12 @@ export type DistribuidoraPlanningLiveMetrics = {
   total_amount?: number | null
   weight_kg?: number | null
   peso_total_kg?: number | null
+  weight?: {
+    value_kg?: number | null
+    status?: string | null
+    source?: string | null
+    reason?: string | null
+  } | null
   productos_sin_peso?: number | null
   porcentaje_cobertura_peso?: number | null
   cantidad_unidades?: number | null
@@ -5341,7 +5353,15 @@ export type OrderWeightDetail = {
   productos_sin_peso: number
   productos_manuales: number
   productos_estimados: number
-  peso_total_kg: number
+  peso_total_kg: number | null
+  weight?: {
+    value_kg?: number | null
+    status?: string
+    source?: string | null
+    reason?: string | null
+    lines_total?: number
+    lines_missing_weight?: number
+  } | null
   porcentaje_cobertura: number
   estado: string
   semaforo: string
@@ -5408,7 +5428,17 @@ export async function getOrderWeight(
   const res = await fetch(`${API_URL}/logistics/order-weights/${documentId}?${qs}`, {
     headers: getAuthHeaders(),
   })
-  if (!res.ok) throw new Error("Error al cargar peso de la orden")
+  if (!res.ok) {
+    const body = await res.json().catch(() => null)
+    const detail =
+      body && typeof body === "object" && typeof (body as { detail?: unknown }).detail === "string"
+        ? (body as { detail: string }).detail
+        : null
+    throw new Error(
+      detail ||
+        `No fue posible cargar los productos de esta preorden (HTTP ${res.status}).`,
+    )
+  }
   return res.json() as Promise<OrderWeightDetail>
 }
 

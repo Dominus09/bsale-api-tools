@@ -20,6 +20,12 @@ export type PlanificacionStoredOrder = {
   porcentaje_cobertura_peso?: number | null
   productos_sin_peso?: number | null
   peso_total_kg?: number | null
+  weight?: {
+    value_kg?: number | null
+    status?: string | null
+    source?: string | null
+    reason?: string | null
+  } | null
   stop_index: number
   /** Comuna / municipio del cliente. */
   municipality?: string | null

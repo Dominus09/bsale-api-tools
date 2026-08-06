@@ -1365,6 +1365,45 @@ def _fetch_and_persist_related_for_document(
     return it_rel, ins_det, calls_det
 
 
+def sync_related_for_single_oc(
+    client: BsaleClient,
+    *,
+    document_id: int,
+    throttle: float = 0.0,
+) -> dict[str, Any]:
+    """Sincroniza ``document_related`` para una sola OC (read/write controlado)."""
+    conn = get_connection()
+    stats: dict[str, Any] = {
+        "document_id": int(document_id),
+        "rows_inserted": 0,
+        "items_api": 0,
+        "http_calls": 0,
+    }
+    try:
+        cur = conn.cursor()
+        try:
+            items, inserted, calls = _fetch_and_persist_related_for_document(
+                client,
+                conn,
+                cur,
+                int(document_id),
+                throttle=float(throttle),
+                stats=stats,
+            )
+            conn.commit()
+            stats["items_api"] = int(items)
+            stats["rows_inserted"] = int(inserted)
+            stats["http_calls"] = int(calls)
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            cur.close()
+    finally:
+        conn.close()
+    return stats
+
+
 def sync_distribuidora_related_documents(
     *,
     strict_token: bool = False,

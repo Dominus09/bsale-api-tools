@@ -102,15 +102,30 @@ def apply_order_weight_summary_to_row(
     *,
     weight_source: str = "order_weight_summary",
     extras: dict[str, Any] | None = None,
+    weight_status: str | None = None,
+    weight_reason: str | None = None,
 ) -> None:
-    row["weight_kg"] = summary["total_weight"]
-    row["peso_total_kg"] = summary["total_weight"]
+    status = weight_status or "calculated"
+    value = summary["total_weight"]
+    # No presentar 0 como peso real cuando el cálculo no está disponible.
+    if status in {"unavailable", "error"}:
+        row["weight_kg"] = None
+        row["peso_total_kg"] = None
+    else:
+        row["weight_kg"] = value
+        row["peso_total_kg"] = value
     row["productos_sin_peso"] = summary["missing_products"]
     row["porcentaje_cobertura_peso"] = summary["coverage_percent"]
     row["porcentaje_cobertura"] = summary["coverage_percent"]
     row["productos_manuales"] = summary["manual_products"]
     row["productos_estimados"] = summary["estimated_products"]
     row["peso_fuente"] = weight_source
+    row["weight"] = {
+        "value_kg": None if status in {"unavailable", "error"} else value,
+        "status": status,
+        "source": weight_source,
+        "reason": weight_reason,
+    }
     if extras:
         row.update(extras)
 
@@ -180,6 +195,31 @@ def get_order_weight_summaries_batch(
             )
         except Exception:
             logger.exception("[PLANNING_WEIGHT] order_id=%s weight_source=error", doc_id)
+            # No omitir: el overlay debe marcar unavailable (nunca 0 kg falso).
+            out[doc_id] = {
+                "total_weight": 0.0,
+                "missing_products": 0,
+                "coverage_percent": 0.0,
+                "manual_products": 0,
+                "automatic_products": 0,
+                "estimated_products": 0,
+                "peso_total_kg": None,
+                "weight_kg": None,
+                "weight": {
+                    "value_kg": None,
+                    "status": "unavailable",
+                    "source": "product_lines",
+                    "reason": "products_load_failed",
+                },
+                "productos_sin_peso": 0,
+                "porcentaje_cobertura_peso": 0.0,
+                "porcentaje_cobertura": 0.0,
+                "productos_manuales": 0,
+                "productos_estimados": 0,
+                "productos_totales": 0,
+                "cantidad_unidades": 0,
+                "cantidad_cajas": 0,
+            }
     return out
 
 OC_PURCHASE_INVOICED_BY_RELATED_SQL = """
@@ -240,53 +280,53 @@ SELECT
     dd.quantity::numeric AS cantidad_unitaria,
     CASE
         WHEN pl_v.match_count = 1 THEN pl_v.units_per_box
-        WHEN pl_v.match_count = 0 AND pl_b.match_count = 1 THEN pl_b.units_per_box
+        WHEN pl_b.match_count = 1 THEN pl_b.units_per_box
         ELSE v.units_per_box
     END AS units_per_box,
     CASE
         WHEN pl_v.match_count = 1 THEN pl_v.weight_unit_kg
-        WHEN pl_v.match_count = 0 AND pl_b.match_count = 1 THEN pl_b.weight_unit_kg
+        WHEN pl_b.match_count = 1 THEN pl_b.weight_unit_kg
     END AS peso_unitario_kg,
     CASE
         WHEN pl_v.match_count = 1 THEN pl_v.weight_box_kg
-        WHEN pl_v.match_count = 0 AND pl_b.match_count = 1 THEN pl_b.weight_box_kg
+        WHEN pl_b.match_count = 1 THEN pl_b.weight_box_kg
     END AS peso_caja_kg,
     CASE
         WHEN pl_v.match_count = 1 THEN pl_v.products_master_id
-        WHEN pl_v.match_count = 0 AND pl_b.match_count = 1 THEN pl_b.products_master_id
+        WHEN pl_b.match_count = 1 THEN pl_b.products_master_id
     END AS products_master_id,
     CASE
         WHEN pl_v.match_count = 1 THEN pl_v.product_name
-        WHEN pl_v.match_count = 0 AND pl_b.match_count = 1 THEN pl_b.product_name
+        WHEN pl_b.match_count = 1 THEN pl_b.product_name
     END AS product_name,
     CASE
         WHEN pl_v.match_count = 1 THEN pl_v.variant_name
-        WHEN pl_v.match_count = 0 AND pl_b.match_count = 1 THEN pl_b.variant_name
+        WHEN pl_b.match_count = 1 THEN pl_b.variant_name
     END AS variante,
     p.name AS bsale_product_name,
     CASE
         WHEN pl_v.match_count = 1 THEN pl_v.logistics_completed
-        WHEN pl_v.match_count = 0 AND pl_b.match_count = 1 THEN pl_b.logistics_completed
+        WHEN pl_b.match_count = 1 THEN pl_b.logistics_completed
     END AS logistics_completed,
     CASE
         WHEN pl_v.match_count = 1 THEN pl_v.updated_at
-        WHEN pl_v.match_count = 0 AND pl_b.match_count = 1 THEN pl_b.updated_at
+        WHEN pl_b.match_count = 1 THEN pl_b.updated_at
     END AS pm_updated_at,
     CASE
         WHEN pl_v.match_count = 1 THEN pl_v.last_bsale_sync_at
-        WHEN pl_v.match_count = 0 AND pl_b.match_count = 1 THEN pl_b.last_bsale_sync_at
+        WHEN pl_b.match_count = 1 THEN pl_b.last_bsale_sync_at
     END AS last_bsale_sync_at,
     CASE
         WHEN pl_v.match_count = 1 THEN pl_v.height_cm
-        WHEN pl_v.match_count = 0 AND pl_b.match_count = 1 THEN pl_b.height_cm
+        WHEN pl_b.match_count = 1 THEN pl_b.height_cm
     END AS height_cm,
     CASE
         WHEN pl_v.match_count = 1 THEN pl_v.width_cm
-        WHEN pl_v.match_count = 0 AND pl_b.match_count = 1 THEN pl_b.width_cm
+        WHEN pl_b.match_count = 1 THEN pl_b.width_cm
     END AS width_cm,
     CASE
         WHEN pl_v.match_count = 1 THEN pl_v.length_cm
-        WHEN pl_v.match_count = 0 AND pl_b.match_count = 1 THEN pl_b.length_cm
+        WHEN pl_b.match_count = 1 THEN pl_b.length_cm
     END AS length_cm,
     v.product_id,
     NULLIF(BTRIM(v.bar_code), '') AS barcode,
@@ -297,25 +337,28 @@ SELECT
         AND pl_v.weight_unit_kg > 0
     ) AS join_variant_ok,
     (
-        pl_v.match_count = 0
+        pl_v.match_count <> 1
         AND pl_b.match_count = 1
         AND pl_b.weight_unit_kg IS NOT NULL
         AND pl_b.weight_unit_kg > 0
     ) AS join_barcode_ok,
     (
         pl_v.match_count = 1
-        OR (pl_v.match_count = 0 AND pl_b.match_count = 1)
+        OR pl_b.match_count = 1
     ) AS exists_in_pm,
     CASE
-        WHEN pl_v.match_count > 1 THEN 'conflict_variant'
         WHEN pl_v.match_count = 1 THEN 'matched_variant'
-        WHEN pl_b.match_count > 1 THEN 'conflict_barcode'
+        WHEN pl_b.match_count = 1 AND COALESCE(pl_v.match_count, 0) > 1
+            THEN 'matched_barcode_after_variant_conflict'
         WHEN pl_b.match_count = 1 THEN 'matched_barcode'
+        WHEN COALESCE(pl_v.match_count, 0) > 1 THEN 'conflict_variant'
+        WHEN COALESCE(pl_b.match_count, 0) > 1 THEN 'conflict_barcode'
         ELSE 'pending'
     END AS logistics_match_status,
     CASE
-        WHEN pl_v.match_count > 1 THEN pl_v.products_master_ids
-        WHEN pl_v.match_count = 0 AND pl_b.match_count > 1
+        WHEN COALESCE(pl_v.match_count, 0) > 1 AND COALESCE(pl_b.match_count, 0) <> 1
+            THEN pl_v.products_master_ids
+        WHEN COALESCE(pl_v.match_count, 0) <> 1 AND COALESCE(pl_b.match_count, 0) > 1
             THEN pl_b.products_master_ids
         ELSE ARRAY[]::bigint[]
     END AS conflicting_products_master_ids
@@ -366,7 +409,6 @@ LEFT JOIN LATERAL (
         MIN(pl.length_cm) AS length_cm
     FROM bsale.v_product_logistics pl
     WHERE pl.is_active = TRUE
-      AND pl_v.match_count = 0
       AND NULLIF(BTRIM(v.bar_code), '') IS NOT NULL
       AND BTRIM(pl.barcode) = BTRIM(v.bar_code)
 ) pl_b ON TRUE
@@ -526,29 +568,46 @@ def compute_order_lines(cur, *, document_id: int, company_id: int) -> list[dict[
     lines: list[dict[str, Any]] = []
     for row in rows:
         match_status = row.get("logistics_match_status")
+        line_warnings: list[str] = []
         if match_status in {"conflict_variant", "conflict_barcode"}:
             products_master_ids = [
                 int(value)
                 for value in (row.get("conflicting_products_master_ids") or [])
             ]
             match_type = "variant_id" if match_status == "conflict_variant" else "barcode"
-            logger.error(
-                "order_weight_logistics_match_conflict "
-                "variant_id=%s detail_id=%s match_type=%s products_master_ids=%s",
+            logger.warning(
+                "order_weight_logistics_match_conflict_soft "
+                "variant_id=%s detail_id=%s match_type=%s products_master_ids=%s "
+                "action=continue_line_without_weight",
                 row.get("variant_id"),
                 row.get("detail_id"),
                 match_type,
                 products_master_ids,
             )
-            raise LogisticsMatchConflictError(
-                variant_id=(
-                    int(row["variant_id"]) if row.get("variant_id") is not None else None
-                ),
-                detail_id=int(row["detail_id"]),
-                match_type=match_type,
-                products_master_ids=products_master_ids,
+            # No abortar el pedido completo: la línea sigue visible sin peso.
+            row = dict(row)
+            row["peso_unitario_kg"] = None
+            row["peso_caja_kg"] = None
+            row["products_master_id"] = None
+            row["join_variant_ok"] = False
+            row["join_barcode_ok"] = False
+            row["exists_in_pm"] = False
+            line_warnings.append(
+                f"logistics_match_conflict:{match_type}:{products_master_ids}"
             )
-        lines.append(compute_line_from_row(row))
+        elif match_status == "matched_barcode_after_variant_conflict":
+            logger.info(
+                "order_weight_variant_conflict_resolved_by_barcode "
+                "variant_id=%s detail_id=%s products_master_id=%s",
+                row.get("variant_id"),
+                row.get("detail_id"),
+                row.get("products_master_id"),
+            )
+            line_warnings.append("variant_conflict_resolved_by_barcode")
+        line = compute_line_from_row(row)
+        if line_warnings:
+            line["warnings"] = line_warnings
+        lines.append(line)
     deduplicated, duplicate_counts = _deduplicate_snapshot_lines(
         lines,
         snapshot_id=None,
@@ -561,6 +620,49 @@ def compute_order_lines(cur, *, document_id: int, company_id: int) -> list[dict[
         )
     return deduplicated
 
+
+def build_weight_payload(summary: dict[str, Any], *, lines: list[dict[str, Any]]) -> dict[str, Any]:
+    """Contrato de peso: distingue 0 real vs no calculable."""
+    total_lines = int(summary.get("productos_totales") or 0)
+    missing = int(summary.get("productos_sin_peso") or 0)
+    peso = summary.get("peso_total_kg")
+    peso_f = float(peso) if peso is not None else None
+    has_conflict = any(
+        "logistics_match_conflict" in (ln.get("warnings") or [])
+        for ln in lines
+    )
+    if total_lines <= 0:
+        status = "unavailable"
+        reason = "no_product_lines"
+        value = None
+    elif missing == 0 and peso_f is not None:
+        status = "calculated"
+        reason = None
+        value = peso_f
+    elif missing > 0 and (peso_f or 0) > 0:
+        status = "partial"
+        reason = "missing_unit_weights"
+        value = peso_f
+    elif has_conflict and (peso_f or 0) == 0:
+        status = "partial" if total_lines > missing else "unavailable"
+        reason = "logistics_match_conflict"
+        value = peso_f if (peso_f or 0) > 0 else None
+    elif missing == total_lines:
+        status = "unavailable"
+        reason = "all_lines_without_weight"
+        value = None
+    else:
+        status = "calculated"
+        reason = None
+        value = peso_f
+    return {
+        "value_kg": value,
+        "status": status,
+        "source": "product_lines",
+        "reason": reason,
+        "lines_total": total_lines,
+        "lines_missing_weight": missing,
+    }
 
 def _build_weight_metrics(summary: dict[str, Any]) -> dict[str, Any]:
     automatic = max(
@@ -586,10 +688,15 @@ def weight_dict_for_planning(
 ) -> dict[str, Any]:
     unidades = sum(float(ln.get("cantidad_unitaria") or 0) for ln in lines)
     cajas = sum(float(ln.get("cantidad_cajas") or 0) for ln in lines)
+    weight = summary.get("weight")
+    if not isinstance(weight, dict):
+        weight = build_weight_payload(summary, lines=lines)
+    value = weight.get("value_kg")
     return {
         **metrics,
-        "peso_total_kg": metrics["total_weight"],
-        "weight_kg": metrics["total_weight"],
+        "peso_total_kg": value,
+        "weight_kg": value,
+        "weight": weight,
         "productos_sin_peso": metrics["missing_products"],
         "porcentaje_cobertura_peso": metrics["coverage_percent"],
         "porcentaje_cobertura": metrics["coverage_percent"],
@@ -778,11 +885,13 @@ def calculate_order_weight(
     )
 
     estado = _order_estado_label(summary["porcentaje_cobertura"], summary["peso_total_kg"])
+    weight = build_weight_payload(summary, lines=lines)
     return {
         **header,
         **summary,
         **metrics,
-        "peso_total_kg": new_weight,
+        "peso_total_kg": new_weight if weight["value_kg"] is not None else None,
+        "weight": weight,
         "estado": estado,
         "semaforo": semaforo,
         "ultimo_calculo": calculated_at or datetime.utcnow().isoformat(),
@@ -832,11 +941,15 @@ def recalculate_order_weight_in_transaction(
         )
     metrics = _build_weight_metrics(summary)
 
+    weight = build_weight_payload(summary, lines=lines)
     return {
         **header,
         **summary,
         **metrics,
-        "peso_total_kg": float(metrics["total_weight"]),
+        "peso_total_kg": (
+            float(metrics["total_weight"]) if weight["value_kg"] is not None else None
+        ),
+        "weight": weight,
         "estado": _order_estado_label(
             float(summary["porcentaje_cobertura"]),
             float(summary["peso_total_kg"]),

@@ -11,11 +11,13 @@ from typing import Any, Iterator
 import psycopg2
 
 from backend.db import get_connection
+from backend.repositories.distribuidora.attributes_repo import replace_document_attributes
 from backend.repositories.distribuidora.details_repo import replace_document_details
 from backend.repositories.distribuidora.documents_repo import (
     document_dict_from_bsale,
     upsert_documents,
 )
+from backend.repositories.distribuidora.references_repo import replace_document_references
 from backend.services.distribuidora.bsale_client import BsaleClient
 from backend.services.distribuidora.bsale_params import merge_bsale_office_query
 from backend.services.distribuidora.oc_source_resolver import (
@@ -36,6 +38,7 @@ from backend.services.order_weight_service import (
     calculate_order_weight,
     recalculate_order_weight_in_transaction,
 )
+from backend.utils.delivery_day_detect import detect_delivery_day_from_observation
 
 logger = logging.getLogger(__name__)
 ADVISORY_LOCK_OC_RECONCILIATION = 5_927_184_013
@@ -117,14 +120,127 @@ def _line_from_bsale(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _normalize_obs_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def observaciones_from_attributes_payload(payload: dict[str, Any] | None) -> str | None:
+    """Extrae OBSERVACIONES desde payload Bsale ``attributes.json``."""
+    if not isinstance(payload, dict):
+        return None
+    items = payload.get("items") or []
+    if not isinstance(items, list):
+        return None
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name") or item.get("attributeName") or item.get("label")
+        if name is None or str(name).strip().upper() != "OBSERVACIONES":
+            continue
+        val = item.get("value") or item.get("text") or item.get("content")
+        return _normalize_obs_text(val)
+    return None
+
+
+def fetch_document_attributes_payload(
+    client: BsaleClient,
+    source_document_id: int,
+) -> dict[str, Any]:
+    raw = client.get(f"/documents/{int(source_document_id)}/attributes.json")
+    if isinstance(raw, dict):
+        return raw
+    return {"items": raw if isinstance(raw, list) else []}
+
+
+def fetch_document_references_payload(
+    client: BsaleClient,
+    source_document_id: int,
+) -> dict[str, Any]:
+    raw = client.get(f"/documents/{int(source_document_id)}/references.json")
+    if isinstance(raw, dict):
+        return raw
+    return {"items": raw if isinstance(raw, list) else []}
+
+
+def load_local_observaciones(document_id: int) -> str | None:
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT attribute_value
+            FROM distribuidora.document_attributes
+            WHERE document_id = %s
+              AND UPPER(BTRIM(attribute_name)) = 'OBSERVACIONES'
+            ORDER BY created_at DESC NULLS LAST
+            LIMIT 1
+            """,
+            (int(document_id),),
+        )
+        row = cur.fetchone()
+        cur.close()
+        return _normalize_obs_text(row[0] if row else None)
+    finally:
+        conn.close()
+
+
+def load_local_invoice_link_flags(document_id: int) -> dict[str, Any]:
+    """Flags read-only de facturación local (related + probable)."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM distribuidora.document_details dd
+                INNER JOIN distribuidora.document_related dr
+                    ON dr.detail_id = dd.detail_id
+                INNER JOIN distribuidora.documents inv
+                    ON inv.document_id = dr.related_document_id
+                   AND inv.document_type_id IN (1, 6)
+                   AND COALESCE(inv.state, 0) = 0
+                WHERE dd.document_id = %s
+            )
+            """,
+            (int(document_id),),
+        )
+        has_related = bool((cur.fetchone() or [False])[0])
+        cur.execute(
+            """
+            SELECT score, candidate_document_id
+            FROM distribuidora.document_probable_matches
+            WHERE oc_document_id = %s AND score >= 60
+            ORDER BY score DESC, candidate_document_id DESC
+            LIMIT 1
+            """,
+            (int(document_id),),
+        )
+        prob = cur.fetchone()
+        cur.close()
+        return {
+            "has_confirmed_invoice_link": has_related,
+            "has_probable_match": prob is not None,
+            "probable_score": float(prob[0]) if prob else None,
+            "probable_candidate_document_id": int(prob[1]) if prob else None,
+        }
+    finally:
+        conn.close()
+
+
 def compare_oc_state(
     *,
     pg_document: dict[str, Any] | None,
     pg_details: list[dict[str, Any]],
     bsale_document: dict[str, Any],
     bsale_details: list[dict[str, Any]],
+    pg_observaciones: str | None = None,
+    bsale_observaciones: str | None = None,
 ) -> dict[str, Any]:
-    """Diff operacional por encabezado y líneas."""
+    """Diff operacional por encabezado, líneas y OBSERVACIONES (día de entrega)."""
     bsale_summary = summarize_bsale_document(bsale_document)
     header_fields = (
         ("number", pg_document.get("number") if pg_document else None, bsale_summary["number"]),
@@ -193,6 +309,12 @@ def compare_oc_state(
     bsale_qty = sum(_num(line.get("quantity")) or 0 for line in bsale_lines)
     pg_total = sum(_num(line.get("total_amount")) or 0 for line in pg_details)
     bsale_total = sum(_num(line.get("total_amount")) or 0 for line in bsale_lines)
+    pg_obs = _normalize_obs_text(pg_observaciones)
+    bsale_obs = _normalize_obs_text(bsale_observaciones)
+    attributes_match = (pg_obs or "").casefold() == (bsale_obs or "").casefold()
+    pg_day = detect_delivery_day_from_observation(pg_obs)
+    bsale_day = detect_delivery_day_from_observation(bsale_obs)
+    delivery_day_match = pg_day == bsale_day
     matches = (
         pg_document is not None
         and all(item["matches"] for item in header_diff)
@@ -202,6 +324,7 @@ def compare_oc_state(
         and len(pg_details) == len(bsale_lines)
         and _equal(pg_qty, bsale_qty)
         and _equal(pg_total, bsale_total)
+        and attributes_match
     )
     return {
         "matches": matches,
@@ -215,6 +338,14 @@ def compare_oc_state(
         "bsale_line_total": bsale_total,
         "postgresql_lines": pg_details,
         "bsale_lines": bsale_lines,
+        "attributes": {
+            "postgresql_observaciones": pg_obs,
+            "bsale_observaciones": bsale_obs,
+            "matches": attributes_match,
+            "postgresql_delivery_day": pg_day,
+            "bsale_delivery_day": bsale_day,
+            "delivery_day_matches": delivery_day_match,
+        },
     }
 
 
@@ -277,6 +408,7 @@ def _load_local_oc(
             return None, []
         columns = [desc[0] for desc in cur.description]
         document = dict(zip(columns, row))
+        doc_id = int(document["document_id"])
         cur.execute(
             """
             SELECT detail_id, variant_id, quantity, total_amount
@@ -284,9 +416,56 @@ def _load_local_oc(
             WHERE document_id = %s
             ORDER BY line_number NULLS LAST, detail_id
             """,
-            (int(document["document_id"]),),
+            (doc_id,),
         )
         details = [_line_from_pg(item) for item in cur.fetchall()]
+        cur.execute(
+            """
+            SELECT attribute_value
+            FROM distribuidora.document_attributes
+            WHERE document_id = %s
+              AND UPPER(BTRIM(attribute_name)) = 'OBSERVACIONES'
+            ORDER BY created_at DESC NULLS LAST
+            LIMIT 1
+            """,
+            (doc_id,),
+        )
+        obs_row = cur.fetchone()
+        document["observaciones"] = _normalize_obs_text(obs_row[0] if obs_row else None)
+        cur.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM distribuidora.document_details dd
+                INNER JOIN distribuidora.document_related dr
+                    ON dr.detail_id = dd.detail_id
+                INNER JOIN distribuidora.documents inv
+                    ON inv.document_id = dr.related_document_id
+                   AND inv.document_type_id IN (1, 6)
+                   AND COALESCE(inv.state, 0) = 0
+                WHERE dd.document_id = %s
+            )
+            """,
+            (doc_id,),
+        )
+        has_related = bool((cur.fetchone() or [False])[0])
+        cur.execute(
+            """
+            SELECT score, candidate_document_id
+            FROM distribuidora.document_probable_matches
+            WHERE oc_document_id = %s AND score >= 60
+            ORDER BY score DESC, candidate_document_id DESC
+            LIMIT 1
+            """,
+            (doc_id,),
+        )
+        prob = cur.fetchone()
+        document["invoice_link"] = {
+            "has_confirmed_invoice_link": has_related,
+            "has_probable_match": prob is not None,
+            "probable_score": float(prob[0]) if prob else None,
+            "probable_candidate_document_id": int(prob[1]) if prob else None,
+        }
         cur.close()
         return document, details
     finally:
@@ -785,16 +964,44 @@ def _reconcile_one_oc(
         source_id,
     )
     details = fetch_all_document_details(client, source_id)
+    attributes_payload: dict[str, Any] | None = None
+    references_payload: dict[str, Any] | None = None
+    bsale_observaciones: str | None = None
+    try:
+        attributes_payload = fetch_document_attributes_payload(client, source_id)
+        bsale_observaciones = observaciones_from_attributes_payload(attributes_payload)
+    except Exception as exc:
+        logger.warning(
+            "reconcile_oc_attributes_fetch_failed folio=%s source_id=%s: %s",
+            resolved_folio,
+            source_id,
+            exc,
+        )
+    try:
+        references_payload = fetch_document_references_payload(client, source_id)
+    except Exception as exc:
+        logger.warning(
+            "reconcile_oc_references_fetch_failed folio=%s source_id=%s: %s",
+            resolved_folio,
+            source_id,
+            exc,
+        )
+    local_id = int((pg_document or {}).get("document_id") or 0) or None
+    pg_observaciones = _normalize_obs_text(
+        (pg_document or {}).get("observaciones")
+    )
     digest = compute_oc_source_hash(selected, details)
     diff = compare_oc_state(
         pg_document=pg_document,
         pg_details=pg_details,
         bsale_document=selected,
         bsale_details=details,
+        pg_observaciones=pg_observaciones,
+        bsale_observaciones=bsale_observaciones,
     )
     stored_hash = (pg_document or {}).get("source_hash")
     hash_matches = stored_hash == digest and stored_hash is not None
-    local_id = int((pg_document or {}).get("document_id") or 0) or None
+    invoice_flags = dict((pg_document or {}).get("invoice_link") or {})
     weight = _projected_weight(
         local_document_id=local_id,
         pg_details=pg_details,
@@ -850,6 +1057,16 @@ def _reconcile_one_oc(
         "diff": diff,
         "weight": weight,
         "source_discovery": discovery_report,
+        "delivery": {
+            "postgresql_observaciones": pg_observaciones,
+            "bsale_observaciones": bsale_observaciones,
+            "postgresql_day": (diff.get("attributes") or {}).get(
+                "postgresql_delivery_day"
+            ),
+            "bsale_day": (diff.get("attributes") or {}).get("bsale_delivery_day"),
+            "source_priority": "observacion>comentario>ruta",
+        },
+        "invoice_link": invoice_flags,
     }
     if dry_run:
         report["status"] = "dry_run_in_sync" if diff["matches"] else "dry_run_needs_sync"
@@ -861,6 +1078,9 @@ def _reconcile_one_oc(
         report["metadata_updated"] = local_id is not None
         return report
 
+    attributes_written = 0
+    references_written = 0
+    related_inserts = 0
     conn = get_connection()
     try:
         cur = conn.cursor()
@@ -887,6 +1107,19 @@ def _reconcile_one_oc(
                 details,
                 invalidate_cache=False,
             )
+            # Día de entrega vive en document_attributes (OBSERVACIONES), no en documents.
+            if attributes_payload is not None:
+                attributes_written = replace_document_attributes(
+                    cur,
+                    local_id,
+                    attributes_payload,
+                )
+            if references_payload is not None:
+                references_written = replace_document_references(
+                    cur,
+                    local_id,
+                    references_payload,
+                )
             cur.execute(
                 """
                 UPDATE distribuidora.documents
@@ -918,24 +1151,66 @@ def _reconcile_one_oc(
     finally:
         conn.close()
 
+    # Facturación confirmada depende de document_related (API relateddetailid).
+    related_stats: dict[str, Any] = {}
+    try:
+        from backend.services.distribuidora.sync_related_service import (
+            sync_related_for_single_oc,
+        )
+
+        related_stats = sync_related_for_single_oc(
+            client,
+            document_id=int(local_id),
+            throttle=0.0,
+        )
+        related_inserts = int(related_stats.get("rows_inserted") or 0)
+    except Exception as exc:
+        logger.warning(
+            "reconcile_oc_related_sync_failed folio=%s local_document_id=%s: %s",
+            resolved_folio,
+            local_id,
+            exc,
+        )
+        related_stats = {"error": str(exc)}
+        related_inserts = 0
+
+    obs_after = (
+        load_local_observaciones(int(local_id)) if local_id is not None else None
+    )
     report.update(
         {
             "status": "synced",
             "wrote": True,
             "local_document_id": local_id,
             "details_replaced": details_written,
+            "attributes_replaced": attributes_written,
+            "references_replaced": references_written,
+            "related_rows_inserted": related_inserts,
+            "related_sync": related_stats,
             "peso_despues_kg": weight_result.get("peso_total_kg"),
             "cobertura_despues": weight_result.get("porcentaje_cobertura"),
             "dispatch_plans_invalidated": invalidated_plans,
+            "invoice_link_after": (
+                load_local_invoice_link_flags(int(local_id))
+                if local_id is not None
+                else {}
+            ),
+            "delivery_after": {
+                "observaciones": obs_after,
+                "day": detect_delivery_day_from_observation(obs_after),
+            },
         }
     )
     logger.info(
         "reconcile_oc_done folio=%s local_document_id=%s "
-        "bsale_source_document_id=%s details_replaced=%s peso_total_kg=%s",
+        "bsale_source_document_id=%s details_replaced=%s attributes_replaced=%s "
+        "related_inserted=%s peso_total_kg=%s",
         resolved_folio,
         local_id,
         source_id,
         details_written,
+        attributes_written,
+        related_inserts,
         weight_result.get("peso_total_kg"),
     )
     return report

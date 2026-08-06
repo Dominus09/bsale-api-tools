@@ -10,18 +10,31 @@ export function mergeLiveMetricsIntoPlanOrders(
   return orders.map((o) => {
     const live = byId.get(o.document_id)
     if (!live) return o
+    const liveUnavailable =
+      live.weight?.status === "unavailable" || live.weight?.status === "error"
+    const liveWeight =
+      liveUnavailable
+        ? null
+        : live.weight?.value_kg != null
+          ? Number(live.weight.value_kg)
+          : live.peso_total_kg != null
+            ? Number(live.peso_total_kg)
+            : live.weight_kg != null
+              ? Number(live.weight_kg)
+              : null
+    const hasLiveWeightField =
+      liveUnavailable ||
+      live.weight != null ||
+      live.peso_total_kg != null ||
+      live.weight_kg != null
     return {
       ...o,
       nombre_fantasia: live.nombre_fantasia ?? o.nombre_fantasia,
       total_amount:
         live.total_amount != null ? Number(live.total_amount) : o.total_amount,
-      weight_kg: live.weight_kg != null ? Number(live.weight_kg) : o.weight_kg,
-      peso_total_kg:
-        live.peso_total_kg != null
-          ? Number(live.peso_total_kg)
-          : live.weight_kg != null
-            ? Number(live.weight_kg)
-            : o.peso_total_kg,
+      weight_kg: hasLiveWeightField ? liveWeight : o.weight_kg,
+      peso_total_kg: hasLiveWeightField ? liveWeight : o.peso_total_kg,
+      weight: live.weight ?? o.weight,
       productos_sin_peso:
         live.productos_sin_peso != null
           ? Number(live.productos_sin_peso)

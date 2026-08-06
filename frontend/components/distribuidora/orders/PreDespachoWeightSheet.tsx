@@ -42,8 +42,9 @@ type PreDespachoWeightSheetProps = {
 }
 
 function formatKg(n: number | null | undefined, digits = 1): string {
-  const v = Number(n)
-  if (!Number.isFinite(v)) return "—"
+  if (n == null) return "Peso no disponible"
+  const v = typeof n === "number" ? n : Number(n)
+  if (!Number.isFinite(v)) return "Peso no disponible"
   return `${v.toLocaleString("es-CL", { maximumFractionDigits: digits })} kg`
 }
 
@@ -294,7 +295,12 @@ export function PreDespachoWeightSheet({
 
   const pendientes = order?.productos_sin_peso ?? row?.productos_sin_peso ?? 0
   const cobertura = order?.porcentaje_cobertura ?? row?.porcentaje_cobertura_peso ?? 0
-  const pesoActual = order?.peso_total_kg ?? row?.peso_total_kg ?? row?.weight_kg
+  const pesoActual =
+    order?.weight?.status === "unavailable" || order?.weight?.status === "error"
+      ? null
+      : (order?.weight?.value_kg ??
+        order?.peso_total_kg ??
+        (row?.weight?.status === "unavailable" ? null : row?.peso_total_kg ?? row?.weight_kg))
 
   const applyOrderUpdate = useCallback(
     (detail: OrderWeightDetail) => {
@@ -433,10 +439,34 @@ export function PreDespachoWeightSheet({
           ) : (
             <>
               {error ? (
-                <div className="shrink-0 px-6 pt-4">
+                <div className="shrink-0 space-y-3 px-6 pt-4">
                   <p className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                    {error}
+                    No fue posible cargar los productos de esta preorden.
+                    {error ? (
+                      <span className="mt-1 block text-xs opacity-80">{error}</span>
+                    ) : null}
                   </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={loading || documentId == null}
+                      onClick={() => {
+                        if (documentId != null) void loadOrder(documentId, mode)
+                      }}
+                    >
+                      Reintentar
+                    </Button>
+                    <span className="text-xs text-muted-foreground">
+                      OC {row?.oc ?? documentId} ·{" "}
+                      {row?.nombre_fantasia?.trim() || "—"} ·{" "}
+                      {row?.total_amount != null
+                        ? `$${Number(row.total_amount).toLocaleString("es-CL")}`
+                        : "Monto —"}{" "}
+                      · Peso no disponible
+                    </span>
+                  </div>
                 </div>
               ) : null}
 
