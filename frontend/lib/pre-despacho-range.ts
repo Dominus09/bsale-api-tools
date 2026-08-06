@@ -1,7 +1,8 @@
 /** Utilidades de rango de fechas para Pre-despacho OC. */
 
 export const PRE_DESPACHO_WIDE_RANGE_DAYS = 7
-export const PRE_DESPACHO_PAGE_LIMIT = 500
+/** Primera página del navegador: no pedir 500 (evita ECONNRESET / timeouts). */
+export const PRE_DESPACHO_PAGE_LIMIT = 100
 
 export function parseIsoDate(s: string): Date | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null
@@ -27,4 +28,4 @@ export const PRE_DESPACHO_WIDE_RANGE_HINT =
   "Rango amplio: esto puede tardar más. Recomendado filtrar por semana o día."
 
 export const PRE_DESPACHO_TIMEOUT_MESSAGE =
-  "La carga tardó demasiado o se interrumpió. Intente un rango más corto (una semana o el día actual) y pulse Recargar."
+  "No fue posible cargar la planificación. La conexión se interrumpió o tardó demasiado. Use Reintentar o un rango más corto."

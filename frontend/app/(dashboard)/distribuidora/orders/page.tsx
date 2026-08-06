@@ -210,6 +210,10 @@ export default function DistribuidoraOrdersPage() {
     useState<PurchaseInvoiceStatusFilter>("pending")
   const [appliedDayFilters, setAppliedDayFilters] = useState<string[]>([])
 
+  const [draftSearch, setDraftSearch] = useState("")
+  const [appliedSearch, setAppliedSearch] = useState("")
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   const [observationTexts, setObservationTexts] = useState<string[]>([])
   const [planningRows, setPlanningRows] = useState<DistribuidoraDispatchPrepPlanningRow[]>([])
   const [planningHasMore, setPlanningHasMore] = useState(false)
@@ -224,6 +228,8 @@ export default function DistribuidoraOrdersPage() {
   const searchAbortRef = useRef<AbortController | null>(null)
   const [lastOrdersLoadAt, setLastOrdersLoadAt] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [showingStaleCache, setShowingStaleCache] = useState(false)
+  const planningAutoRetryRef = useRef(false)
   const [trucks, setTrucks] = useState<DistribuidoraTruck[]>([])
   const [trucksError, setTrucksError] = useState<string | null>(null)
   const [planificacionFeedback, setPlanificacionFeedback] = useState<string | null>(null)
@@ -322,15 +328,18 @@ export default function DistribuidoraOrdersPage() {
       dateTo: string
       onlyNotInvoiced: boolean
       dayFilters: string[]
+      search?: string
     }) => {
       const append = opts.append === true
       const offset = opts.offset ?? 0
       const dayParam = dayFiltersParam(opts.dayFilters)
+      const searchTerm = (opts.search ?? "").trim()
       const plan = await getDistribuidoraDispatchPrepPlanningRows({
         emission_date_from: opts.dateFrom,
         emission_date_to: opts.dateTo,
         only_not_invoiced: opts.onlyNotInvoiced,
         day_filter: dayParam,
+        search: searchTerm || undefined,
         limit: PRE_DESPACHO_PAGE_LIMIT,
         offset,
         signal: opts.signal,
@@ -405,13 +414,18 @@ export default function DistribuidoraOrdersPage() {
     dateTo: string
     onlyNotInvoiced: boolean
     dayFilters: string[]
+    search?: string
     offset?: number
   }
 
   const fetchPreDespachoBundle = useCallback(
     async (apiOpts: PreDespachoApiOpts) => {
       setLoadingPhase("consulting-orders")
-      const plan = await loadPlanningRows({ ...apiOpts, offset: apiOpts.offset ?? 0 })
+      const plan = await loadPlanningRows({
+        ...apiOpts,
+        offset: apiOpts.offset ?? 0,
+        search: apiOpts.search ?? appliedSearch,
+      })
       setLoadingPhase("analyzing-billing")
       await new Promise<void>((resolve) => {
         window.setTimeout(resolve, 150)
@@ -421,11 +435,16 @@ export default function DistribuidoraOrdersPage() {
       await yieldResumenPhase()
       return { plan, obs }
     },
-    [loadPlanningRows, loadObservaciones, yieldResumenPhase],
+    [loadPlanningRows, loadObservaciones, yieldResumenPhase, appliedSearch],
   )
 
   const loadDispatchPrepFromServer = useCallback(
-    async (opts?: { signal?: AbortSignal; append?: boolean; offset?: number }) => {
+    async (opts?: {
+      signal?: AbortSignal
+      append?: boolean
+      offset?: number
+      isAutoRetry?: boolean
+    }) => {
       const append = opts?.append === true
       const offset = opts?.offset ?? 0
       if (append) setLoadingMore(true)
@@ -440,10 +459,13 @@ export default function DistribuidoraOrdersPage() {
           dateTo: appliedDateTo,
           onlyNotInvoiced: appliedOnlyNotInvoiced,
           dayFilters: appliedDayFilters,
+          search: appliedSearch,
         }
         if (!append) {
           const { plan, obs } = await fetchPreDespachoBundle(apiOpts)
           setRangeWarning(plan.warning ?? obs.warning ?? null)
+          setShowingStaleCache(false)
+          planningAutoRetryRef.current = false
           setLastOrdersLoadAt(
             new Date().toLocaleString("es-CL", {
               dateStyle: "short",
@@ -456,7 +478,18 @@ export default function DistribuidoraOrdersPage() {
         }
       } catch (e: unknown) {
         if (e instanceof Error && e.name === "AbortError") return
-        setError(dispatchPrepLoadErrorMessage(e))
+        const msg = dispatchPrepLoadErrorMessage(e)
+        const canAutoRetry =
+          !append && !opts?.isAutoRetry && !planningAutoRetryRef.current
+        if (canAutoRetry) {
+          planningAutoRetryRef.current = true
+          await new Promise((r) => window.setTimeout(r, 600))
+          return loadDispatchPrepFromServer({ ...opts, isAutoRetry: true })
+        }
+        setError(msg)
+        if (!append && planningRows.length > 0) {
+          setShowingStaleCache(true)
+        }
       } finally {
         if (append) setLoadingMore(false)
         else setLoading(false)
@@ -467,8 +500,10 @@ export default function DistribuidoraOrdersPage() {
       appliedDateTo,
       appliedOnlyNotInvoiced,
       appliedDayFilters,
+      appliedSearch,
       fetchPreDespachoBundle,
       loadPlanningRows,
+      planningRows.length,
     ],
   )
 
@@ -510,6 +545,8 @@ export default function DistribuidoraOrdersPage() {
     setPlanningHasMore(false)
     setLoading(true)
     setError(null)
+    const searchTerm = draftSearch.trim()
+    setAppliedSearch(searchTerm)
     try {
       const apiOpts: PreDespachoApiOpts = {
         signal: ac.signal,
@@ -517,9 +554,12 @@ export default function DistribuidoraOrdersPage() {
         dateTo: nextTo,
         onlyNotInvoiced: nextOnly,
         dayFilters: nextDays,
+        search: searchTerm,
       }
       const { plan, obs } = await fetchPreDespachoBundle(apiOpts)
       setRangeWarning(plan.warning ?? obs.warning ?? null)
+      setShowingStaleCache(false)
+      planningAutoRetryRef.current = false
       setLastOrdersLoadAt(
         new Date().toLocaleString("es-CL", {
           dateStyle: "short",
@@ -529,6 +569,7 @@ export default function DistribuidoraOrdersPage() {
     } catch (e: unknown) {
       if (e instanceof Error && e.name === "AbortError") return
       setError(dispatchPrepLoadErrorMessage(e))
+      if (planningRows.length > 0) setShowingStaleCache(true)
     } finally {
       setLoading(false)
     }
@@ -538,6 +579,7 @@ export default function DistribuidoraOrdersPage() {
     draftOnlyNotInvoiced,
     draftDayFilters,
     draftEstadoResumen,
+    draftSearch,
     hasSearched,
     appliedDateFrom,
     appliedDateTo,
@@ -546,6 +588,7 @@ export default function DistribuidoraOrdersPage() {
     applyLocalResumenFilters,
     fetchPreDespachoBundle,
     yieldResumenPhase,
+    planningRows.length,
   ])
 
   const onBuscar = useCallback(() => {
@@ -559,6 +602,78 @@ export default function DistribuidoraOrdersPage() {
   const loadMorePlanning = useCallback(() => {
     void loadDispatchPrepFromServer({ append: true, offset: planningRows.length })
   }, [loadDispatchPrepFromServer, planningRows.length])
+
+  const runBackendSearch = useCallback(
+    (term: string) => {
+      const next = term.trim()
+      setAppliedSearch(next)
+      setPlanningHasMore(false)
+      if (!hasSearched) return
+      searchAbortRef.current?.abort()
+      const ac = new AbortController()
+      searchAbortRef.current = ac
+      setLoading(true)
+      setError(null)
+      void (async () => {
+        try {
+          await fetchPreDespachoBundle({
+            signal: ac.signal,
+            dateFrom: appliedDateFrom,
+            dateTo: appliedDateTo,
+            onlyNotInvoiced: appliedOnlyNotInvoiced,
+            dayFilters: appliedDayFilters,
+            search: next,
+            offset: 0,
+          })
+          setShowingStaleCache(false)
+          planningAutoRetryRef.current = false
+          setLastOrdersLoadAt(
+            new Date().toLocaleString("es-CL", {
+              dateStyle: "short",
+              timeStyle: "medium",
+            }),
+          )
+        } catch (e: unknown) {
+          if (e instanceof Error && e.name === "AbortError") return
+          setError(dispatchPrepLoadErrorMessage(e))
+          if (planningRows.length > 0) setShowingStaleCache(true)
+        } finally {
+          setLoading(false)
+        }
+      })()
+    },
+    [
+      hasSearched,
+      fetchPreDespachoBundle,
+      appliedDateFrom,
+      appliedDateTo,
+      appliedOnlyNotInvoiced,
+      appliedDayFilters,
+      planningRows.length,
+    ],
+  )
+
+  const clearBackendSearch = useCallback(() => {
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current)
+      searchDebounceRef.current = null
+    }
+    setDraftSearch("")
+    runBackendSearch("")
+  }, [runBackendSearch])
+
+  useEffect(() => {
+    if (!hasSearched) return
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
+    searchDebounceRef.current = setTimeout(() => {
+      const next = draftSearch.trim()
+      if (next === appliedSearch.trim()) return
+      runBackendSearch(next)
+    }, 350)
+    return () => {
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
+    }
+  }, [draftSearch, hasSearched, appliedSearch, runBackendSearch])
 
   const onSyncOrdersFromBsale = useCallback(async () => {
     const ac = new AbortController()
@@ -1050,14 +1165,41 @@ export default function DistribuidoraOrdersPage() {
 
       {error ? (
         <Alert variant="destructive">
-          <AlertTitle>No se pudieron actualizar los datos</AlertTitle>
+          <AlertTitle>No fue posible cargar la planificación.</AlertTitle>
           <AlertDescription>
-            {error}
-            {safePlanningRows.length > 0 ? (
+            <p>{error}</p>
+            {showingStaleCache && safePlanningRows.length > 0 ? (
+              <span className="mt-2 block text-sm">
+                Mostrando última información disponible ({safePlanningRows.length}{" "}
+                órdenes).
+              </span>
+            ) : safePlanningRows.length > 0 ? (
               <span className="mt-2 block text-sm">
                 Se mantienen las últimas {safePlanningRows.length} órdenes cargadas.
               </span>
             ) : null}
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={loading}
+                onClick={() => {
+                  planningAutoRetryRef.current = false
+                  void loadDispatchPrepFromServer()
+                }}
+              >
+                Reintentar
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => window.location.reload()}
+              >
+                Recargar página
+              </Button>
+            </div>
           </AlertDescription>
         </Alert>
       ) : null}
@@ -1112,6 +1254,34 @@ export default function DistribuidoraOrdersPage() {
                   disabled={loading && !loadingMore}
                 />
               </div>
+            </div>
+            <div className="space-y-2 min-w-[14rem] flex-1 sm:max-w-xs">
+              <Label htmlFor="prep-search">Buscar OC / cliente</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="prep-search"
+                  value={draftSearch}
+                  onChange={(e) => setDraftSearch(e.target.value)}
+                  placeholder="Ej. 68513 o Callo"
+                  disabled={loading && !loadingMore}
+                  autoComplete="off"
+                />
+                {draftSearch.trim() || appliedSearch.trim() ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="default"
+                    className="shrink-0"
+                    disabled={loading && !loadingMore}
+                    onClick={() => clearBackendSearch()}
+                  >
+                    Limpiar
+                  </Button>
+                ) : null}
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                Folio exacto o nombre (todo el rango, no solo la página actual).
+              </p>
             </div>
             <Button
               type="button"

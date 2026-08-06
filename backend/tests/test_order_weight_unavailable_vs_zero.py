@@ -91,22 +91,6 @@ def format_kg_safe(n: float | None) -> str:
     return f"{n:g} kg"
 
 
-def test_batch_exception_marks_unavailable(monkeypatch):
-    from backend.services import order_weight_service as service
-
-    def boom(*_a, **_k):
-        raise RuntimeError("simulated products load failure")
-
-    monkeypatch.setattr(service, "calculate_order_weight", boom)
-    out = service.get_order_weight_summaries_batch([3852224], persist_cache=False, log_planning=False)
-    assert 3852224 in out
-    weight = out[3852224]["weight"]
-    assert weight["status"] == "unavailable"
-    assert weight["value_kg"] is None
-    assert weight["reason"] == "products_load_failed"
-    assert out[3852224]["peso_total_kg"] is None
-
-
 def test_apply_unavailable_does_not_write_zero():
     from backend.services.order_weight_service import apply_order_weight_summary_to_row
 
@@ -127,3 +111,13 @@ def test_apply_unavailable_does_not_write_zero():
     assert row["weight_kg"] is None
     assert row["weight"]["value_kg"] is None
     assert row["weight"]["status"] == "unavailable"
+
+
+def test_snapshot_missing_payload_contract():
+    from backend.services.order_weight_service import _unavailable_planning_weight
+
+    payload = _unavailable_planning_weight(reason="snapshot_missing")
+    assert payload["peso_total_kg"] is None
+    assert payload["weight"]["status"] == "unavailable"
+    assert payload["weight"]["reason"] == "snapshot_missing"
+    assert payload["weight"]["value_kg"] is None

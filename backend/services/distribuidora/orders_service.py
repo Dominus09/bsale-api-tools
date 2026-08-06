@@ -72,7 +72,116 @@ EXISTS (
 )
 """.strip()
 
+# Legacy marker (tests / assert): no usar en SQL nuevo — preferir _dispatch_prep_invoice_filter_sql.
 _DISPATCH_PREP_NOT_INVOICED_FILTER = f"(%s = FALSE OR NOT {_OC_IS_INVOICED_SQL})"
+
+
+def _dispatch_prep_invoice_filter_sql(only_not_invoiced: bool) -> str:
+    """
+    Filtro de facturación para listados.
+
+    - True: excluye OC con link confirmado a boleta/factura (1/6).
+    - False: no aplica EXISTS (incluye facturadas) — evita costo del OR TRUE.
+    """
+    if only_not_invoiced:
+        return f"(NOT {_OC_IS_INVOICED_SQL})"
+    return "TRUE"
+
+
+_SQL_FOLD = "translate(lower(COALESCE({expr}, '')), 'áéíóúüÁÉÍÓÚÜ', 'aeiouuaeiouu')"
+
+
+def _fold_sql(expr: str) -> str:
+    return _SQL_FOLD.format(expr=expr)
+
+
+def _escape_like_term(term: str) -> str:
+    return (
+        term.replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+
+
+def resolve_planning_rows_search(
+    *,
+    search: str | None = None,
+    order_number: int | None = None,
+    customer_name: str | None = None,
+    seller_name: str | None = None,
+) -> dict[str, Any]:
+    """
+    Normaliza parámetros de búsqueda.
+
+    Prioridad de folio exacto:
+    1. ``order_number`` explícito;
+    2. ``search`` compuesto solo por dígitos.
+
+    Texto libre (no numérico) → cliente, salvo que venga ``customer_name`` /
+    ``seller_name`` explícitos.
+    """
+    folio: int | None = int(order_number) if order_number is not None else None
+    customer = (customer_name or "").strip() or None
+    seller = (seller_name or "").strip() or None
+    q = (search or "").strip()
+
+    if q:
+        if folio is None and q.isdigit():
+            folio = int(q)
+        elif customer is None and seller is None and not q.isdigit():
+            customer = q
+
+    return {
+        "order_number": folio,
+        "customer_name": customer,
+        "seller_name": seller,
+        "active": folio is not None or customer is not None or seller is not None,
+    }
+
+
+def _planning_rows_search_clause(resolved: dict[str, Any]) -> tuple[str, list[Any], bool]:
+    """
+    Devuelve (sql_clause, params, needs_client_join).
+
+    Folio: igualdad exacta. Texto: fold + ILIKE (sin tildes / case).
+    """
+    clauses: list[str] = []
+    params: list[Any] = []
+    needs_client = False
+
+    folio = resolved.get("order_number")
+    if folio is not None:
+        clauses.append("d.number = %s")
+        params.append(int(folio))
+
+    customer = resolved.get("customer_name")
+    if customer:
+        needs_client = True
+        folded = _escape_like_term(customer)
+        name_expr = (
+            "CONCAT_WS(' ', "
+            "NULLIF(BTRIM(c_search.nombre_fantasia), ''), "
+            "NULLIF(BTRIM(c_search.company), ''), "
+            "NULLIF(BTRIM(c_search.first_name), ''), "
+            "NULLIF(BTRIM(c_search.last_name), '')"
+            ")"
+        )
+        clauses.append(
+            f"{_fold_sql(name_expr)} LIKE ('%' || {_fold_sql('%s')} || '%') ESCAPE '\\'"
+        )
+        params.append(folded)
+
+    seller = resolved.get("seller_name")
+    if seller:
+        folded = _escape_like_term(seller)
+        clauses.append(
+            f"{_fold_sql('d.seller_name')} LIKE ('%' || {_fold_sql('%s')} || '%') ESCAPE '\\'"
+        )
+        params.append(folded)
+
+    if not clauses:
+        return "TRUE", [], False
+    return "(" + " AND ".join(clauses) + ")", params, needs_client
 
 _DAY_FILTER_ALLOW = frozenset({"lunes", "martes", "miercoles", "jueves", "viernes", "sabado"})
 
@@ -127,11 +236,10 @@ _PLANNING_ROWS_OBS_TEXT = """translate(lower(
     )
 ), 'áéíóúü', 'aeiouu')"""
 
-# Fase 2: facturación + probables en batch (sin LATERAL por fila ni vistas pesadas).
+# Fase 2: facturación + probables en batch (LATERAL LIMIT 1 — sin explosión details×related).
 _PLANNING_ROWS_ENRICH_STATUS_JOINS = """
-LEFT JOIN (
-    SELECT DISTINCT ON (dd.document_id)
-        dd.document_id AS oc_document_id,
+LEFT JOIN LATERAL (
+    SELECT
         TRUE AS is_invoiced,
         inv.document_id AS invoicing_document_id,
         inv.document_type_id AS invoicing_document_type_id,
@@ -143,12 +251,12 @@ LEFT JOIN (
        AND inv.document_type_id IN (1, 6)
        AND inv.company_id = 3
        AND inv.office_id = 1
-    INNER JOIN page_ids p ON p.document_id = dd.document_id
-    ORDER BY dd.document_id, inv.emission_date DESC NULLS LAST, inv.document_id DESC
-) conf ON conf.oc_document_id = d.document_id
-LEFT JOIN (
-    SELECT DISTINCT ON (pm.oc_document_id)
-        pm.oc_document_id,
+    WHERE dd.document_id = d.document_id
+    ORDER BY inv.emission_date DESC NULLS LAST, inv.document_id DESC
+    LIMIT 1
+) conf ON TRUE
+LEFT JOIN LATERAL (
+    SELECT
         pm.score,
         pm.candidate_document_id,
         dinv.number AS candidate_number,
@@ -164,11 +272,12 @@ LEFT JOIN (
        AND dinv.document_type_id IN (1, 6)
        AND dinv.company_id = 3
        AND dinv.office_id = 1
-    INNER JOIN page_ids p ON p.document_id = pm.oc_document_id
-    WHERE pm.score >= 60
-    ORDER BY pm.oc_document_id, pm.score DESC, pm.candidate_document_id DESC
-) prob ON prob.oc_document_id = d.document_id
-   AND NOT COALESCE(conf.is_invoiced, FALSE)
+    WHERE pm.oc_document_id = d.document_id
+      AND pm.score >= 60
+      AND NOT COALESCE(conf.is_invoiced, FALSE)
+    ORDER BY pm.score DESC, pm.candidate_document_id DESC
+    LIMIT 1
+) prob ON TRUE
 """
 
 _PLANNING_ROWS_STATUS_SELECT = """
@@ -299,17 +408,24 @@ def _assert_sql_template_rendered(sql: str, *, context: str = "planning_rows") -
 
 
 def _overlay_order_weights_to_rows(rows: list[dict[str, Any]]) -> None:
-    """Peso desde OrderWeightSummary — misma fuente que el popup."""
+    """Peso desde snapshots masivos — misma fuente que el listado (sin recalcular N+1)."""
     if not rows:
         return
+    import time as _time
+
     from backend.services.order_weight_service import (
         apply_order_weight_summary_to_row,
         get_order_weight_summaries_batch,
         metrics_to_order_weight_summary,
     )
 
+    t0 = _time.perf_counter()
     ids = [int(r["document_id"]) for r in rows if r.get("document_id") is not None]
-    by_w = get_order_weight_summaries_batch(ids, persist_cache=True, log_planning=True)
+    logger.info(
+        "planning_rows_metrics_start order_count=%s mode=snapshot_batch",
+        len(ids),
+    )
+    by_w = get_order_weight_summaries_batch(ids, persist_cache=False, log_planning=False)
     for row in rows:
         doc_id = int(row["document_id"])
         w = by_w.get(doc_id)
@@ -320,11 +436,12 @@ def _overlay_order_weights_to_rows(rows: list[dict[str, Any]]) -> None:
             )
             row["weight_kg"] = None
             row["peso_total_kg"] = None
+            row["peso_fuente"] = "order_weight_snapshot"
             row["weight"] = {
                 "value_kg": None,
                 "status": "unavailable",
-                "source": "order_weight_summary",
-                "reason": "products_load_failed",
+                "source": "order_weight_snapshot",
+                "reason": "snapshot_missing",
             }
             continue
         summary = metrics_to_order_weight_summary(w)
@@ -332,7 +449,7 @@ def _overlay_order_weights_to_rows(rows: list[dict[str, Any]]) -> None:
         apply_order_weight_summary_to_row(
             row,
             summary,
-            weight_source="order_weight_summary",
+            weight_source="order_weight_snapshot",
             weight_status=weight_meta.get("status"),
             weight_reason=weight_meta.get("reason"),
             extras={
@@ -341,6 +458,20 @@ def _overlay_order_weights_to_rows(rows: list[dict[str, Any]]) -> None:
                 "productos_totales": w.get("productos_totales"),
             },
         )
+        # Propagar metadatos de snapshot al contrato weight de la fila.
+        if isinstance(row.get("weight"), dict) and weight_meta:
+            row["weight"]["missing_lines"] = weight_meta.get("missing_lines")
+            row["weight"]["calculated_at"] = weight_meta.get("calculated_at")
+    logger.info(
+        "planning_rows_metrics_done order_count=%s elapsed_ms=%.1f",
+        len(ids),
+        (_time.perf_counter() - t0) * 1000.0,
+    )
+    logger.info(
+        "planning_rows_weights_done order_count=%s elapsed_ms=%.1f",
+        len(ids),
+        (_time.perf_counter() - t0) * 1000.0,
+    )
 
 
 def _apply_live_sync_flags(row: dict[str, Any]) -> None:
@@ -679,8 +810,23 @@ def list_dispatch_prep_by_municipality(
         conn.close()
 
 
-def _planning_rows_ids_sql(*, day_tokens: list[str]) -> str:
-    """Fase 1: IDs paginados sobre ``documents`` (filtro de fecha primero)."""
+def _planning_rows_ids_sql(
+    *,
+    day_tokens: list[str],
+    only_not_invoiced: bool = True,
+    search: dict[str, Any] | None = None,
+) -> tuple[str, list[Any]]:
+    """Fase 1: IDs paginados. Retorna (sql, params_extra antes de limit/offset)."""
+    resolved = search or {
+        "order_number": None,
+        "customer_name": None,
+        "seller_name": None,
+        "active": False,
+    }
+    search_clause, search_params, needs_client_search = _planning_rows_search_clause(
+        resolved
+    )
+
     obs_join = ""
     if day_tokens:
         obs_join = """
@@ -698,16 +844,29 @@ def _planning_rows_ids_sql(*, day_tokens: list[str]) -> str:
         )
     else:
         day_clause = "TRUE"
-    return f"""
+
+    client_join = ""
+    if needs_client_search:
+        client_join = """
+            LEFT JOIN bsale.clients c_search
+                ON c_search.company_id = d.company_id
+               AND c_search.bsale_id = d.client_id
+        """
+
+    invoice_filter = _dispatch_prep_invoice_filter_sql(only_not_invoiced)
+    sql = f"""
             SELECT d.document_id
             FROM distribuidora.documents d
             {obs_join}
+            {client_join}
             WHERE {_DISPATCH_PREP_DOC_FILTER}
-              AND {_DISPATCH_PREP_NOT_INVOICED_FILTER}
+              AND {invoice_filter}
               AND {day_clause}
+              AND {search_clause}
             ORDER BY d.number DESC NULLS LAST, d.document_id DESC
             LIMIT %s OFFSET %s
             """
+    return sql, list(search_params)
 
 
 def _planning_rows_enrich_sql() -> str:
@@ -791,53 +950,74 @@ def _planning_rows_base_orders_sql() -> str:
 
 
 def _planning_rows_purchase_status_sql() -> str:
+    """Una factura/boleta por OC vía LATERAL LIMIT 1 (sin DISTINCT ON sobre join explosivo)."""
     return """
             WITH page_ids AS (
                 SELECT unnest(%s::bigint[]) AS document_id
             )
-            SELECT DISTINCT ON (dd.document_id)
-                dd.document_id AS oc_document_id,
+            SELECT
+                p.document_id AS oc_document_id,
                 TRUE AS is_invoiced,
-                inv.document_id AS invoicing_document_id,
-                inv.document_type_id AS invoicing_document_type_id,
-                inv.number AS invoicing_number
-            FROM distribuidora.document_details dd
-            INNER JOIN distribuidora.document_related dr ON dr.detail_id = dd.detail_id
-            INNER JOIN distribuidora.documents inv
-                ON inv.document_id = dr.related_document_id
-               AND inv.document_type_id IN (1, 6)
-               AND inv.company_id = 3
-               AND inv.office_id = 1
-            INNER JOIN page_ids p ON p.document_id = dd.document_id
-            ORDER BY dd.document_id, inv.emission_date DESC NULLS LAST, inv.document_id DESC
+                inv.invoicing_document_id,
+                inv.invoicing_document_type_id,
+                inv.invoicing_number
+            FROM page_ids p
+            CROSS JOIN LATERAL (
+                SELECT
+                    inv.document_id AS invoicing_document_id,
+                    inv.document_type_id AS invoicing_document_type_id,
+                    inv.number AS invoicing_number
+                FROM distribuidora.document_details dd
+                INNER JOIN distribuidora.document_related dr
+                    ON dr.detail_id = dd.detail_id
+                INNER JOIN distribuidora.documents inv
+                    ON inv.document_id = dr.related_document_id
+                   AND inv.document_type_id IN (1, 6)
+                   AND inv.company_id = 3
+                   AND inv.office_id = 1
+                WHERE dd.document_id = p.document_id
+                ORDER BY inv.emission_date DESC NULLS LAST, inv.document_id DESC
+                LIMIT 1
+            ) inv
             """
 
 
 def _planning_rows_probable_matches_sql() -> str:
+    """Mejor probable por OC; page_ids ya debe excluir facturadas confirmadas."""
     return """
             WITH page_ids AS (
                 SELECT unnest(%s::bigint[]) AS document_id
             )
-            SELECT DISTINCT ON (pm.oc_document_id)
-                pm.oc_document_id,
+            SELECT
+                p.document_id AS oc_document_id,
                 pm.score,
                 pm.candidate_document_id,
-                dinv.number AS candidate_number,
-                dinv.document_type_id AS candidate_document_type,
-                CASE dinv.document_type_id
-                    WHEN 1 THEN 'Boleta'
-                    WHEN 6 THEN 'Factura'
-                    ELSE 'Tipo ' || dinv.document_type_id::text
-                END AS candidate_document_type_label
-            FROM distribuidora.document_probable_matches pm
-            INNER JOIN distribuidora.documents dinv
-                ON dinv.document_id = pm.candidate_document_id
-               AND dinv.document_type_id IN (1, 6)
-               AND dinv.company_id = 3
-               AND dinv.office_id = 1
-            INNER JOIN page_ids p ON p.document_id = pm.oc_document_id
-            WHERE pm.score >= 60
-            ORDER BY pm.oc_document_id, pm.score DESC, pm.candidate_document_id DESC
+                pm.candidate_number,
+                pm.candidate_document_type,
+                pm.candidate_document_type_label
+            FROM page_ids p
+            CROSS JOIN LATERAL (
+                SELECT
+                    pm.score,
+                    pm.candidate_document_id,
+                    dinv.number AS candidate_number,
+                    dinv.document_type_id AS candidate_document_type,
+                    CASE dinv.document_type_id
+                        WHEN 1 THEN 'Boleta'
+                        WHEN 6 THEN 'Factura'
+                        ELSE 'Tipo ' || dinv.document_type_id::text
+                    END AS candidate_document_type_label
+                FROM distribuidora.document_probable_matches pm
+                INNER JOIN distribuidora.documents dinv
+                    ON dinv.document_id = pm.candidate_document_id
+                   AND dinv.document_type_id IN (1, 6)
+                   AND dinv.company_id = 3
+                   AND dinv.office_id = 1
+                WHERE pm.oc_document_id = p.document_id
+                  AND pm.score >= 60
+                ORDER BY pm.score DESC, pm.candidate_document_id DESC
+                LIMIT 1
+            ) pm
             """
 
 
@@ -1050,20 +1230,30 @@ def _fetch_planning_rows_staged(
         elapsed_ms=ms,
         rows_count=len(conf_rows),
     )
-
-    ms = timed_query(
-        cur,
-        "planning_rows_probable_matches",
-        _planning_rows_probable_matches_sql(),
-        params,
-        audit=audit,
+    logger.info(
+        "planning_rows_related_done rows=%s elapsed_ms=%.1f",
+        len(conf_rows),
+        ms,
     )
-    prob_rows = [_row_to_dict(cur, r) for r in cur.fetchall() or []]
-    prob_by_doc = {int(r["oc_document_id"]): r for r in prob_rows}
+
+    # Probables solo para OCs sin factura confirmada (evita trabajo inútil con false).
+    pending_ids = [i for i in doc_ids if i not in conf_by_doc]
+    prob_by_doc: dict[int, dict[str, Any]] = {}
+    ms = 0.0
+    if pending_ids:
+        ms = timed_query(
+            cur,
+            "planning_rows_probable_matches",
+            _planning_rows_probable_matches_sql(),
+            (pending_ids,),
+            audit=audit,
+        )
+        prob_rows = [_row_to_dict(cur, r) for r in cur.fetchall() or []]
+        prob_by_doc = {int(r["oc_document_id"]): r for r in prob_rows}
     stages.record(
         "load_probable_matches",
         elapsed_ms=ms,
-        rows_count=len(prob_rows),
+        rows_count=len(prob_by_doc),
     )
 
     ms = timed_query(
@@ -1078,6 +1268,11 @@ def _fetch_planning_rows_staged(
         "load_observaciones",
         elapsed_ms=ms,
         rows_count=len(obs_rows),
+    )
+    logger.info(
+        "planning_rows_attributes_done rows=%s elapsed_ms=%.1f",
+        len(obs_rows),
+        ms,
     )
 
     client_ids = sorted(
@@ -1133,11 +1328,11 @@ def list_dispatch_prep_observation_texts(
         params: tuple[Any, ...] = (
             d0,
             d1,
-            only_not_invoiced,
             *day_params,
             fetch,
             off,
         )
+        invoice_filter = _dispatch_prep_invoice_filter_sql(only_not_invoiced)
         cur.execute(
             f"""
             SELECT obs_a.observaciones
@@ -1150,7 +1345,7 @@ def list_dispatch_prep_observation_texts(
             WHERE {_DISPATCH_PREP_DOC_FILTER}
               AND obs_a.observaciones IS NOT NULL
               AND BTRIM(obs_a.observaciones) <> ''
-              AND {_DISPATCH_PREP_NOT_INVOICED_FILTER}
+              AND {invoice_filter}
               AND {day_clause}
             ORDER BY obs_a.observaciones
             LIMIT %s OFFSET %s
@@ -1201,6 +1396,10 @@ def list_dispatch_prep_planning_rows(
     day_filter: str | None = None,
     limit: int = DEFAULT_DISPATCH_PREP_LIMIT,
     offset: int = 0,
+    search: str | None = None,
+    order_number: int | None = None,
+    customer_name: str | None = None,
+    seller_name: str | None = None,
 ) -> dict[str, Any]:
     """
     Filas OC (33) para tabla de pre‑planificación.
@@ -1219,6 +1418,10 @@ def list_dispatch_prep_planning_rows(
             day_filter=day_filter,
             limit=limit,
             offset=offset,
+            search=search,
+            order_number=order_number,
+            customer_name=customer_name,
+            seller_name=seller_name,
         )
     except BaseException as exc:  # nunca perder un traceback (incluye CancelledError)
         audit.log_fatal(exc)
@@ -1234,6 +1437,10 @@ def _list_dispatch_prep_planning_rows_impl(
     day_filter: str | None = None,
     limit: int = DEFAULT_DISPATCH_PREP_LIMIT,
     offset: int = 0,
+    search: str | None = None,
+    order_number: int | None = None,
+    customer_name: str | None = None,
+    seller_name: str | None = None,
 ) -> dict[str, Any]:
     """
     Cuerpo original de planning-rows (lógica comercial intacta).
@@ -1250,19 +1457,49 @@ def _list_dispatch_prep_planning_rows_impl(
     lim = effective_page_limit(limit, d0, d1)
     off = max(0, int(offset))
     fetch = lim + 1
-    ids_sql = _planning_rows_ids_sql(day_tokens=day_tokens)
+    search_resolved = resolve_planning_rows_search(
+        search=search,
+        order_number=order_number,
+        customer_name=customer_name,
+        seller_name=seller_name,
+    )
+    ids_sql, search_params = _planning_rows_ids_sql(
+        day_tokens=day_tokens,
+        only_not_invoiced=only_not_invoiced,
+        search=search_resolved,
+    )
     enrich_sql = _planning_rows_enrich_sql()
     _assert_sql_template_rendered(enrich_sql, context="_planning_rows_enrich_sql")
     ids_params: tuple[Any, ...] = (
         d0,
         d1,
-        only_not_invoiced,
         *day_tokens,
+        *search_params,
         fetch,
         off,
     )
     use_monolith = _planning_rows_use_monolith_enrich()
-    audit.step("parse_params", limit=lim, offset=off, date_from=d0, date_to=d1)
+    audit.step(
+        "parse_params",
+        limit=lim,
+        offset=off,
+        date_from=d0,
+        date_to=d1,
+        search_active=search_resolved["active"],
+        order_number=search_resolved["order_number"],
+    )
+    logger.info(
+        "planning_rows_start limit=%s offset=%s date_from=%s date_to=%s "
+        "only_not_invoiced=%s monolith=%s search_active=%s order_number=%s",
+        lim,
+        off,
+        d0,
+        d1,
+        only_not_invoiced,
+        use_monolith,
+        search_resolved["active"],
+        search_resolved["order_number"],
+    )
 
     conn = get_connection()
     sql_ids_ms = 0.0
@@ -1295,6 +1532,13 @@ def _list_dispatch_prep_planning_rows_impl(
         id_rows = cur.fetchall() or []
         timer.mark("sql_ids")
         audit.step("sql_ids", rows=len(id_rows), execution_ms=sql_ids_ms)
+        logger.info(
+            "planning_rows_base_query_done rows=%s limit=%s offset=%s elapsed_ms=%.1f",
+            len(id_rows),
+            lim,
+            off,
+            sql_ids_ms,
+        )
 
         has_more = len(id_rows) > lim
         doc_ids = [int(r[0]) for r in id_rows[:lim]]
@@ -1412,6 +1656,11 @@ def _list_dispatch_prep_planning_rows_impl(
             for row in merged:
                 _enrich_row_delivery_day(row)
                 _apply_live_sync_flags(row)
+            logger.info(
+                "planning_rows_serialization_done rows=%s elapsed_ms=%.1f mode=monolith",
+                len(merged),
+                (time.perf_counter() - t_build) * 1000.0,
+            )
             _overlay_order_weights_to_rows(merged)
             stages.record(
                 "build_rows",
@@ -1430,6 +1679,11 @@ def _list_dispatch_prep_planning_rows_impl(
             merged_raw = _fetch_planning_rows_staged(cur, doc_ids, stages, audit=audit)
             t_build = time.perf_counter()
             merged = [_serialize_row(r) for r in merged_raw]
+            logger.info(
+                "planning_rows_serialization_done rows=%s elapsed_ms=%.1f mode=staged",
+                len(merged),
+                (time.perf_counter() - t_build) * 1000.0,
+            )
             _overlay_order_weights_to_rows(merged)
             stages.record(
                 "build_rows",
@@ -1519,6 +1773,23 @@ def _list_dispatch_prep_planning_rows_impl(
             sql_enrich_ms=sql_enrich_ms,
             slowest_stage=top_stage,
             enrich_mode="monolith" if use_monolith else "staged",
+        )
+        logger.info(
+            "planning_rows_response_done rows=%s limit=%s offset=%s "
+            "payload_kb=%.1f total_ms=%.1f",
+            len(merged),
+            lim,
+            off,
+            pbytes / 1024.0,
+            total_ms,
+        )
+        logger.info(
+            "planning_rows_complete only_not_invoiced=%s rows=%s limit=%s "
+            "total_ms=%.1f",
+            only_not_invoiced,
+            len(merged),
+            lim,
+            total_ms,
         )
         log_planning_rows(
             "phase_ranking",

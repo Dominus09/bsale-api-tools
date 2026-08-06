@@ -151,6 +151,58 @@ def get_order_weight_summary(
     return metrics_to_order_weight_summary(_build_weight_metrics(result))
 
 
+def _unavailable_planning_weight(*, reason: str) -> dict[str, Any]:
+    return {
+        "total_weight": 0.0,
+        "missing_products": 0,
+        "coverage_percent": 0.0,
+        "manual_products": 0,
+        "automatic_products": 0,
+        "estimated_products": 0,
+        "peso_total_kg": None,
+        "weight_kg": None,
+        "weight": {
+            "value_kg": None,
+            "status": "unavailable",
+            "source": "order_weight_snapshot",
+            "reason": reason,
+            "missing_lines": None,
+            "calculated_at": None,
+        },
+        "productos_sin_peso": 0,
+        "porcentaje_cobertura_peso": 0.0,
+        "porcentaje_cobertura": 0.0,
+        "productos_manuales": 0,
+        "productos_estimados": 0,
+        "productos_totales": 0,
+        "cantidad_unidades": 0,
+        "cantidad_cajas": 0,
+    }
+
+
+def weight_payload_from_snapshot(row: dict[str, Any]) -> dict[str, Any]:
+    """Contrato de peso para listados: solo datos de snapshot (sin recalcular líneas)."""
+    total = int(row.get("productos_totales") or 0)
+    missing = int(row.get("productos_sin_peso") or 0)
+    peso = row.get("peso_total_kg")
+    peso_f = float(peso) if peso is not None else None
+    payload = build_weight_payload(
+        {
+            "productos_totales": total,
+            "productos_sin_peso": missing,
+            "peso_total_kg": peso_f if peso_f is not None else 0.0,
+        },
+        lines=[],
+    )
+    if payload.get("status") == "unavailable" and payload.get("reason") == "no_product_lines":
+        # Snapshot vacío / sin líneas: distinguir de fallo de cálculo.
+        payload["reason"] = "snapshot_incomplete"
+    payload["source"] = "order_weight_snapshot"
+    payload["missing_lines"] = missing
+    payload["calculated_at"] = row.get("calculated_at")
+    return payload
+
+
 def get_order_weight_summaries_batch(
     document_ids: list[int],
     *,
@@ -161,65 +213,72 @@ def get_order_weight_summaries_batch(
     log_planning: bool = True,
 ) -> dict[int, dict[str, Any]]:
     """
-    Batch para planificación: summary + campos auxiliares por OC.
-    Errores por orden no abortan el lote completo.
+    Batch para planificación / planning-rows: SOLO lectura de snapshots.
+
+    No recalcula líneas, no abre una conexión por OC, no llama Bsale.
+    O(1) consultas SQL respecto al número de document_ids (ANY + GROUP BY).
     """
+    del company_id, office_id, user_email, persist_cache  # API estable; no recalcula aquí
     if not document_ids:
         return {}
     ids = list(dict.fromkeys(int(x) for x in document_ids))
+    t0 = time.perf_counter()
+    snapshots = fetch_weights_by_document_ids(ids)
     out: dict[int, dict[str, Any]] = {}
     for doc_id in ids:
-        try:
-            result = calculate_order_weight(
-                doc_id,
-                company_id=company_id,
-                office_id=office_id,
-                user_email=user_email,
-                persist_cache=persist_cache,
-            )
-            if not result:
-                logger.warning("[PLANNING_WEIGHT] order_id=%s weight_source=missing_header", doc_id)
-                continue
-            metrics = _build_weight_metrics(result)
-            summary = metrics_to_order_weight_summary(metrics)
+        snap = snapshots.get(doc_id)
+        if not snap:
             if log_planning:
-                _log_planning_weight(
-                    order_id=doc_id,
-                    weight_source="order_weight_summary",
-                    summary=summary,
+                logger.info(
+                    "[PLANNING_WEIGHT] order_id=%s weight_source=snapshot_missing total_weight=null",
+                    doc_id,
                 )
-            out[doc_id] = weight_dict_for_planning(
-                metrics,
-                result,
-                result.get("lines") or [],
+            out[doc_id] = _unavailable_planning_weight(reason="snapshot_missing")
+            continue
+        metrics = {
+            "total_weight": float(snap.get("peso_total_kg") or 0),
+            "missing_products": int(snap.get("productos_sin_peso") or 0),
+            "coverage_percent": float(snap.get("porcentaje_cobertura") or 0),
+            "manual_products": int(snap.get("productos_manuales") or 0),
+            "automatic_products": max(
+                0,
+                int(snap.get("productos_con_peso") or 0)
+                - int(snap.get("productos_manuales") or 0)
+                - int(snap.get("productos_estimados") or 0),
+            ),
+            "estimated_products": int(snap.get("productos_estimados") or 0),
+        }
+        weight = weight_payload_from_snapshot(snap)
+        value = weight.get("value_kg")
+        if log_planning:
+            _log_planning_weight(
+                order_id=doc_id,
+                weight_source="order_weight_snapshot",
+                summary=metrics_to_order_weight_summary(metrics),
             )
-        except Exception:
-            logger.exception("[PLANNING_WEIGHT] order_id=%s weight_source=error", doc_id)
-            # No omitir: el overlay debe marcar unavailable (nunca 0 kg falso).
-            out[doc_id] = {
-                "total_weight": 0.0,
-                "missing_products": 0,
-                "coverage_percent": 0.0,
-                "manual_products": 0,
-                "automatic_products": 0,
-                "estimated_products": 0,
-                "peso_total_kg": None,
-                "weight_kg": None,
-                "weight": {
-                    "value_kg": None,
-                    "status": "unavailable",
-                    "source": "product_lines",
-                    "reason": "products_load_failed",
-                },
-                "productos_sin_peso": 0,
-                "porcentaje_cobertura_peso": 0.0,
-                "porcentaje_cobertura": 0.0,
-                "productos_manuales": 0,
-                "productos_estimados": 0,
-                "productos_totales": 0,
-                "cantidad_unidades": 0,
-                "cantidad_cajas": 0,
-            }
+        out[doc_id] = {
+            **metrics,
+            "peso_total_kg": value,
+            "weight_kg": value,
+            "weight": weight,
+            "productos_sin_peso": metrics["missing_products"],
+            "porcentaje_cobertura_peso": metrics["coverage_percent"],
+            "porcentaje_cobertura": metrics["coverage_percent"],
+            "productos_manuales": metrics["manual_products"],
+            "productos_estimados": metrics["estimated_products"],
+            "productos_totales": int(snap.get("productos_totales") or 0),
+            "cantidad_unidades": float(snap.get("cantidad_unidades") or 0),
+            "cantidad_cajas": float(snap.get("cantidad_cajas") or 0),
+        }
+    elapsed_ms = (time.perf_counter() - t0) * 1000.0
+    logger.info(
+        "planning_rows_metrics_done mode=snapshot ids=%s found=%s missing=%s "
+        "sql_queries=1 elapsed_ms=%.1f",
+        len(ids),
+        len(snapshots),
+        len(ids) - len(snapshots),
+        elapsed_ms,
+    )
     return out
 
 OC_PURCHASE_INVOICED_BY_RELATED_SQL = """
@@ -520,16 +579,12 @@ SELECT
     ows.porcentaje_cobertura,
     ows.productos_manuales,
     ows.productos_estimados,
-    COALESCE(line_agg.cantidad_unidades, 0) AS cantidad_unidades,
-    COALESCE(line_agg.cantidad_cajas, 0) AS cantidad_cajas
+    ows.productos_totales,
+    ows.productos_con_peso,
+    ows.calculated_at,
+    0::numeric AS cantidad_unidades,
+    0::numeric AS cantidad_cajas
 FROM distribuidora.order_weight_snapshots ows
-LEFT JOIN LATERAL (
-    SELECT
-        SUM(l.cantidad_unitaria) AS cantidad_unidades,
-        SUM(COALESCE(l.cantidad_cajas, 0)) AS cantidad_cajas
-    FROM distribuidora.order_weight_snapshot_lines l
-    WHERE l.snapshot_id = ows.id
-) line_agg ON TRUE
 WHERE ows.document_id = ANY(%s::bigint[])
 """
 
@@ -967,15 +1022,41 @@ def calculate_order_weights_batch(
     user_email: str | None = None,
     persist_cache: bool = True,
 ) -> dict[int, dict[str, Any]]:
-    """Recalcula peso real para varias OCs (planificación / live refresh)."""
-    return get_order_weight_summaries_batch(
-        document_ids,
-        company_id=company_id,
-        office_id=office_id,
-        user_email=user_email,
-        persist_cache=persist_cache,
-        log_planning=True,
-    )
+    """
+    Recalcula peso real OC por OC (job / endpoint de recalcular).
+
+    NO usar desde planning-rows: es O(n) conexiones + matching logístico.
+    """
+    if not document_ids:
+        return {}
+    ids = list(dict.fromkeys(int(x) for x in document_ids))
+    out: dict[int, dict[str, Any]] = {}
+    for doc_id in ids:
+        try:
+            result = calculate_order_weight(
+                doc_id,
+                company_id=company_id,
+                office_id=office_id,
+                user_email=user_email,
+                persist_cache=persist_cache,
+            )
+            if not result:
+                logger.warning(
+                    "[PLANNING_WEIGHT] order_id=%s weight_source=recalc_missing_header",
+                    doc_id,
+                )
+                continue
+            metrics = _build_weight_metrics(result)
+            out[doc_id] = weight_dict_for_planning(
+                metrics,
+                result,
+                result.get("lines") or [],
+            )
+        except Exception:
+            logger.exception("[PLANNING_WEIGHT] order_id=%s weight_source=recalc_error", doc_id)
+            out[doc_id] = _unavailable_planning_weight(reason="products_load_failed")
+            out[doc_id]["weight"]["source"] = "product_lines"
+    return out
 
 
 _SNAPSHOT_LINE_FIELDS = (
@@ -1376,15 +1457,20 @@ def fetch_weights_by_document_ids(document_ids: list[int]) -> dict[int, dict[str
         cur.execute(_WEIGHTS_BY_DOCS_SQL, (list(dict.fromkeys(int(x) for x in document_ids)),))
         out: dict[int, dict[str, Any]] = {}
         for row in cur.fetchall():
+            peso = float(row[1]) if row[1] is not None else None
             out[int(row[0])] = {
-                "peso_total_kg": float(row[1] or 0),
+                "peso_total_kg": peso,
                 "productos_sin_peso": int(row[2] or 0),
+                "porcentaje_cobertura": float(row[3] or 0),
                 "porcentaje_cobertura_peso": float(row[3] or 0),
-                "weight_kg": float(row[1] or 0),
+                "weight_kg": peso,
                 "productos_manuales": int(row[4] or 0),
                 "productos_estimados": int(row[5] or 0),
-                "cantidad_unidades": float(row[6] or 0),
-                "cantidad_cajas": float(row[7] or 0),
+                "productos_totales": int(row[6] or 0),
+                "productos_con_peso": int(row[7] or 0),
+                "calculated_at": _serialize(row[8]),
+                "cantidad_unidades": float(row[9] or 0),
+                "cantidad_cajas": float(row[10] or 0),
             }
         cur.close()
         return out

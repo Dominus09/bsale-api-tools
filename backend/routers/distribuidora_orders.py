@@ -420,6 +420,22 @@ def get_dispatch_prep_planning_rows(
         description="Si true: solo filas OC sin factura/boleta en document_related.",
     ),
     day_filter: str | None = Query(None),
+    search: str | None = Query(
+        None,
+        description="Texto libre: dígitos → folio exacto; otro → nombre cliente.",
+    ),
+    order_number: int | None = Query(
+        None,
+        description="Folio OC exacto (prioridad sobre search).",
+    ),
+    customer_name: str | None = Query(
+        None,
+        description="Nombre de cliente (insensible a mayúsculas/tildes).",
+    ),
+    seller_name: str | None = Query(
+        None,
+        description="Nombre de vendedor (insensible a mayúsculas/tildes).",
+    ),
     limit: int = Query(
         500,
         ge=1,
@@ -448,6 +464,10 @@ def get_dispatch_prep_planning_rows(
         day_filter=day_filter,
         limit=limit,
         offset=offset,
+        search=search,
+        order_number=order_number,
+        customer_name=customer_name,
+        seller_name=seller_name,
     )
 
 

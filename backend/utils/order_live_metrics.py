@@ -259,7 +259,9 @@ def _overlay_official_order_weights(
             metrics_to_order_weight_summary,
         )
 
-        weights = get_order_weight_summaries_batch(document_ids, persist_cache=True, log_planning=True)
+        weights = get_order_weight_summaries_batch(
+            document_ids, persist_cache=False, log_planning=False
+        )
         for doc_id, w in weights.items():
             entry = by_id.setdefault(doc_id, {"document_id": doc_id})
             summary = metrics_to_order_weight_summary(w)

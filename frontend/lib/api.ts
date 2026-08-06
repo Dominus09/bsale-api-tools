@@ -1142,7 +1142,7 @@ export async function getDistribuidoraDispatchPrepObservaciones(params: {
   qs.set("emission_date_to", params.emission_date_to)
   if (params.only_not_invoiced === false) qs.set("only_not_invoiced", "false")
   if (params.day_filter?.trim()) qs.set("day_filter", params.day_filter.trim())
-  qs.set("limit", String(params.limit ?? 500))
+  qs.set("limit", String(params.limit ?? 100))
   if (params.offset != null) qs.set("offset", String(params.offset))
   const res = await fetchWithTimeout(
     `${API_URL}/distribuidora/orders/dispatch-prep/observaciones?${qs}`,
@@ -1205,6 +1205,10 @@ export async function getDistribuidoraDispatchPrepPlanningRows(params: {
   emission_date_to: string
   only_not_invoiced?: boolean
   day_filter?: string | null
+  search?: string | null
+  order_number?: number | null
+  customer_name?: string | null
+  seller_name?: string | null
   limit?: number
   offset?: number
   signal?: AbortSignal
@@ -1214,7 +1218,13 @@ export async function getDistribuidoraDispatchPrepPlanningRows(params: {
   qs.set("emission_date_to", params.emission_date_to)
   if (params.only_not_invoiced === false) qs.set("only_not_invoiced", "false")
   if (params.day_filter?.trim()) qs.set("day_filter", params.day_filter.trim())
-  qs.set("limit", String(params.limit ?? 500))
+  if (params.search?.trim()) qs.set("search", params.search.trim())
+  if (params.order_number != null && Number.isFinite(params.order_number)) {
+    qs.set("order_number", String(params.order_number))
+  }
+  if (params.customer_name?.trim()) qs.set("customer_name", params.customer_name.trim())
+  if (params.seller_name?.trim()) qs.set("seller_name", params.seller_name.trim())
+  qs.set("limit", String(params.limit ?? 100))
   if (params.offset != null) qs.set("offset", String(params.offset))
   const res = await fetchWithTimeout(
     `${API_URL}/distribuidora/orders/dispatch-prep/planning-rows?${qs}`,
