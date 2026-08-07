@@ -838,10 +838,32 @@ def _refresh_document_children(
                 cur, local_document_id, detail_items or []
             )
             stats["details_rows"] = int(stats.get("details_rows") or 0) + details_replaced
-            if (
-                int(document_type_id or 0) == 33
-                and details_replaced > 0
-            ):
+            ensure_weight = False
+            if int(document_type_id or 0) == 33:
+                if details_replaced > 0:
+                    ensure_weight = True
+                else:
+                    try:
+                        cur.execute(
+                            """
+                            SELECT EXISTS(
+                                SELECT 1
+                                FROM distribuidora.document_details
+                                WHERE document_id = %s
+                            )
+                            AND NOT EXISTS(
+                                SELECT 1
+                                FROM distribuidora.order_weight_snapshots
+                                WHERE document_id = %s
+                            )
+                            """,
+                            (int(local_document_id), int(local_document_id)),
+                        )
+                        row_miss = cur.fetchone()
+                        ensure_weight = bool(row_miss and row_miss[0])
+                    except Exception:
+                        ensure_weight = False
+            if ensure_weight:
                 try:
                     from backend.services.order_weight_service import (
                         recalculate_order_weight_in_transaction,

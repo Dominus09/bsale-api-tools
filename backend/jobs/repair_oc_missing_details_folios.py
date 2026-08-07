@@ -51,16 +51,21 @@ def _summarize_dry_run(report: dict[str, Any]) -> dict[str, Any]:
     pg_details = report.get("postgresql_details") or []
     bsale_details = report.get("bsale_details") or []
     status = weight.get("status")
+    peso = weight.get("peso_total_kg")
+    if peso is None:
+        peso = weight.get("after_projected_kg")
     if status is None:
-        kg = weight.get("peso_total_kg")
         missing = weight.get("productos_sin_peso")
         total = weight.get("productos_totales")
-        if kg is None and not bsale_details:
+        coverage = weight.get("porcentaje_cobertura")
+        if peso is None and not bsale_details and not pg_details:
             status = "unavailable"
-        elif missing and total and int(missing) > 0:
+        elif missing and int(missing) > 0 and (peso or 0) > 0:
             status = "partial"
-        elif kg is not None:
+        elif coverage is not None and float(coverage) >= 100 and peso is not None:
             status = "calculated"
+        elif peso is not None:
+            status = "partial" if (missing and int(missing) > 0) else "calculated"
         else:
             status = "unavailable"
     return {
@@ -70,12 +75,15 @@ def _summarize_dry_run(report: dict[str, Any]) -> dict[str, Any]:
         "source_document_id": report.get("current_bsale_source_document_id"),
         "source_changed": report.get("source_changed"),
         "needs_detail_sync": report.get("needs_detail_sync"),
+        "needs_weight_snapshot_sync": report.get("needs_weight_snapshot_sync"),
         "source_hash_matches": report.get("source_hash_matches"),
         "lines_source": len(bsale_details),
         "lines_local_before": len(pg_details),
         "lines_projected_after": len(bsale_details),
-        "peso_projected_kg": weight.get("peso_total_kg"),
+        "peso_projected_kg": peso,
         "weight_status_projected": status,
+        "missing_products": weight.get("productos_sin_peso"),
+        "coverage": weight.get("porcentaje_cobertura"),
         "diff_matches": (report.get("diff") or {}).get("matches"),
     }
 

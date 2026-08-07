@@ -164,8 +164,16 @@ def test_dry_run_finds_new_source_and_reports_237200_diff_without_writes():
             "backend.services.distribuidora.oc_reconciliation_service.calculate_order_weight",
             return_value={
                 "peso_total_kg": 300.0,
+                "productos_totales": 1,
+                "productos_sin_peso": 0,
+                "porcentaje_cobertura": 100.0,
+                "weight": {"value_kg": 300.0, "status": "calculated"},
                 "lines": [{"variant_id": 27383, "peso_unitario_kg": 15.0}],
             },
+        ),
+        patch(
+            "backend.services.distribuidora.oc_reconciliation_service._has_weight_snapshot",
+            return_value=True,
         ),
         patch(
             "backend.services.distribuidora.oc_reconciliation_service.get_connection"
@@ -185,8 +193,8 @@ def test_dry_run_finds_new_source_and_reports_237200_diff_without_writes():
     assert report["bsale_document"]["totalAmount"] == 237200
     assert report["diff"]["postgresql_line_total"] == 219800
     assert report["diff"]["bsale_line_total"] == 237200
-    assert report["weight"]["before_kg"] == 300
-    assert report["weight"]["after_projected_kg"] == 300
+    assert report["weight"]["peso_total_kg"] == 300.0
+    assert report["weight"]["status"] == "calculated"
     get_connection.assert_not_called()
 
 
@@ -289,6 +297,10 @@ def test_next_sync_with_same_hash_and_data_is_idempotent():
         patch(
             "backend.services.distribuidora.oc_reconciliation_service._mark_reconciliation_attempt"
         ) as mark_attempt,
+        patch(
+            "backend.services.distribuidora.oc_reconciliation_service._has_weight_snapshot",
+            return_value=True,
+        ),
     ):
         report = reconcile_one_oc(
             FakeBsaleClient(),
@@ -791,8 +803,17 @@ def test_oc_68199_new_source_changes_discounts_and_amounts_not_quantity():
             "calculate_order_weight",
             return_value={
                 "peso_total_kg": 300.0,
+                "productos_totales": 1,
+                "productos_sin_peso": 0,
+                "porcentaje_cobertura": 100.0,
+                "weight": {"value_kg": 300.0, "status": "calculated"},
                 "lines": [{"variant_id": 27383, "peso_unitario_kg": 15.0}],
             },
+        ),
+        patch.object(
+            reconciliation,
+            "_has_weight_snapshot",
+            return_value=True,
         ),
     ):
         report = reconcile_one_oc(

@@ -36,6 +36,7 @@ from backend.services.distribuidora.oc_source_resolver import (
 )
 from backend.services.order_weight_service import (
     calculate_order_weight,
+    recalculate_order_weight,
     recalculate_order_weight_in_transaction,
 )
 from backend.utils.delivery_day_detect import detect_delivery_day_from_observation
@@ -519,6 +520,7 @@ def _projected_weight(
     company_id: int = COMPANY_ID,
     office_id: int = OFFICE_ID,
 ) -> dict[str, Any]:
+    """Proyección en memoria (no persiste). Preferir recalc local si hay líneas PG."""
     before: dict[str, Any] = {}
     if local_document_id is not None:
         try:
@@ -530,6 +532,26 @@ def _projected_weight(
             )
         except Exception:
             logger.exception("No se pudo calcular peso read-only de OC %s", local_document_id)
+
+    # Si hay líneas locales, el recalc en memoria ES la proyección (no depender de snapshot).
+    if before and int(before.get("productos_totales") or 0) > 0:
+        payload = before.get("weight") if isinstance(before.get("weight"), dict) else {}
+        status = payload.get("status") or "unavailable"
+        value = payload.get("value_kg")
+        if value is None and status not in {"unavailable", "error"}:
+            value = _num(before.get("peso_total_kg"))
+        return {
+            "before_kg": _num(before.get("peso_total_kg")),
+            "after_projected_kg": _num(value),
+            "peso_total_kg": _num(value),
+            "status": status,
+            "productos_sin_peso": int(before.get("productos_sin_peso") or 0),
+            "productos_totales": int(before.get("productos_totales") or 0),
+            "porcentaje_cobertura": _num(before.get("porcentaje_cobertura")),
+            "projected_unresolved_lines": int(before.get("productos_sin_peso") or 0),
+            "source": "local_details_recalc",
+        }
+
     unit_by_variant: dict[int, float] = {}
     for line in before.get("lines") or []:
         variant_id = line.get("variant_id")
@@ -546,11 +568,77 @@ def _projected_weight(
             unresolved += 1
             continue
         projected += (_num(line.get("quantity")) or 0) * unit
+    total_lines = len(bsale_details)
+    if total_lines <= 0:
+        status = "unavailable"
+        value = None
+    elif unresolved == 0 and projected > 0:
+        status = "calculated"
+        value = round(projected, 3)
+    elif unresolved > 0 and projected > 0:
+        status = "partial"
+        value = round(projected, 3)
+    else:
+        status = "unavailable"
+        value = None
+    coverage = None
+    if total_lines > 0:
+        coverage = round(100.0 * (total_lines - unresolved) / total_lines, 2)
     return {
         "before_kg": _num(before.get("peso_total_kg")),
-        "after_projected_kg": round(projected, 3),
+        "after_projected_kg": value,
+        "peso_total_kg": value,
+        "status": status,
+        "productos_sin_peso": unresolved,
+        "productos_totales": total_lines,
+        "porcentaje_cobertura": coverage,
         "projected_unresolved_lines": unresolved,
+        "source": "bsale_lines_projection",
     }
+
+
+def _has_weight_snapshot(document_id: int) -> bool:
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = 'distribuidora'
+              AND table_name = 'order_weight_snapshots'
+            """
+        )
+        if not cur.fetchone():
+            cur.close()
+            return False
+        cur.execute(
+            """
+            SELECT 1
+            FROM distribuidora.order_weight_snapshots
+            WHERE document_id = %s
+            LIMIT 1
+            """,
+            (int(document_id),),
+        )
+        found = cur.fetchone() is not None
+        cur.close()
+        return found
+    finally:
+        conn.close()
+
+
+def needs_weight_snapshot_sync(
+    *,
+    local_document_id: int | None,
+    pg_details: list[dict[str, Any]],
+) -> bool:
+    """Details locales OK pero falta snapshot que consume planning-rows."""
+    if local_document_id is None:
+        return False
+    if len(pg_details) <= 0:
+        return False
+    return not _has_weight_snapshot(int(local_document_id))
 
 
 def _assert_source_schema(cur) -> None:
@@ -1072,6 +1160,7 @@ def _reconcile_one_oc(
         "needs_detail_sync": detail_sync_needed,
         "header_synced": pg_document is not None,
         "details_synced": len(pg_details) > 0 and not detail_sync_needed,
+        "needs_weight_snapshot_sync": False,
         "source_updated_at": (
             source_updated_at(selected).isoformat()
             if source_updated_at(selected)
@@ -1097,9 +1186,16 @@ def _reconcile_one_oc(
         },
         "invoice_link": invoice_flags,
     }
+    weight_snapshot_needed = needs_weight_snapshot_sync(
+        local_document_id=local_id,
+        pg_details=pg_details,
+    )
+    report["needs_weight_snapshot_sync"] = weight_snapshot_needed
     if dry_run:
         if detail_sync_needed:
             report["status"] = "dry_run_needs_sync"
+        elif weight_snapshot_needed:
+            report["status"] = "dry_run_needs_weight_snapshot"
         else:
             report["status"] = (
                 "dry_run_in_sync" if diff["matches"] else "dry_run_needs_sync"
@@ -1107,6 +1203,44 @@ def _reconcile_one_oc(
         return report
     # Hash coincidente NO es sync completa si faltan details locales.
     if hash_matches and diff["matches"] and not detail_sync_needed:
+        if weight_snapshot_needed and local_id is not None:
+            logger.warning(
+                "oc_needs_weight_snapshot folio=%s local_document_id=%s "
+                "pg_details=%s status=rebuilding_snapshot",
+                resolved_folio,
+                local_id,
+                len(pg_details),
+            )
+            weight_result = recalculate_order_weight(
+                document_id=int(local_id),
+                company_id=company_id,
+                office_id=office_id,
+                user_email=user_email,
+                persist=True,
+            )
+            _mark_reconciliation_attempt(local_id, successful=True)
+            report.update(
+                {
+                    "status": "synced_weight_snapshot",
+                    "wrote": True,
+                    "weight_snapshot_rebuilt": True,
+                    "needs_weight_snapshot_sync": False,
+                    "peso_despues_kg": weight_result.get("peso_total_kg"),
+                    "cobertura_despues": weight_result.get("porcentaje_cobertura"),
+                    "weight": {
+                        **weight,
+                        "peso_total_kg": weight_result.get("peso_total_kg"),
+                        "status": (weight_result.get("weight") or {}).get("status")
+                        or weight.get("status"),
+                        "productos_sin_peso": weight_result.get("productos_sin_peso"),
+                        "productos_totales": weight_result.get("productos_totales"),
+                        "porcentaje_cobertura": weight_result.get(
+                            "porcentaje_cobertura"
+                        ),
+                    },
+                }
+            )
+            return report
         if local_id is not None:
             _mark_reconciliation_attempt(local_id, successful=True)
         report["status"] = "already_in_sync"

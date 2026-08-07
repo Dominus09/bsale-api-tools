@@ -891,7 +891,12 @@ def calculate_order_weight(
     try:
         cur = conn.cursor()
         can_persist = persist_cache and _table_exists(cur, "order_weight_snapshots")
-        old_weight = _snapshot_weight_only(cur, int(document_id)) if can_persist else None
+        # Siempre leer snapshot previo para el log; persistir solo si can_persist.
+        old_weight = (
+            _snapshot_weight_only(cur, int(document_id))
+            if _table_exists(cur, "order_weight_snapshots")
+            else None
+        )
 
         cur.execute(_ORDER_HEADER_SQL, (document_id, company_id))
         header_row = cur.fetchone()
