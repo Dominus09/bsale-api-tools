@@ -485,6 +485,17 @@ def _process_one_pending_document_row(
                 raw_document=raw_doc if isinstance(raw_doc, dict) else None,
                 folio=folio_int,
             )
+            if stats.get("last_children_details_pending"):
+                stats["documents_header_ok_details_pending"] = (
+                    int(stats.get("documents_header_ok_details_pending") or 0) + 1
+                )
+                logger.warning(
+                    "document_sync_incomplete status=header_ok_details_pending "
+                    "local_document_id=%s folio=%s bsale_id=%s",
+                    local_document_id,
+                    folio_int,
+                    doc_log_id,
+                )
             if isinstance(raw_doc, dict):
                 log_order_sync_audit(
                     raw_doc,
@@ -661,6 +672,28 @@ def _sync_document_sellers(
         )
 
 
+def _bsale_total_amount(raw_document: dict[str, Any] | None) -> float:
+    if not isinstance(raw_document, dict):
+        return 0.0
+    raw = raw_document.get("totalAmount")
+    if raw is None:
+        return 0.0
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _fetch_document_detail_items_paginated(
+    client: BsaleClient,
+    source_id: int,
+) -> list[dict[str, Any]]:
+    """Misma paginación que reconciliación; no aceptar un solo GET sin limit/offset."""
+    from backend.services.distribuidora.oc_source_resolver import fetch_all_document_details
+
+    return fetch_all_document_details(client, int(source_id))
+
+
 def _refresh_document_children(
     client: BsaleClient,
     cur,
@@ -682,6 +715,10 @@ def _refresh_document_children(
       se resolvió por folio y el id Bsale difiere.
 
     Firma: ``conn`` es obligatorio para liberar locks antes del HTTP.
+
+    Invariante OC (tipo 33, monto > 0): el header ya puede estar commiteado por el
+    caller, pero **no** se considera sync completa si fallan o faltan details.
+    En ese caso se marca ``header_ok_details_pending`` para reintento.
     """
     from backend.utils.bsale_document_ids import (
         ids_differ,
@@ -705,24 +742,30 @@ def _refresh_document_children(
             folio_val = None
 
     differ = ids_differ(local_document_id, source_id)
+    expects_oc_details = int(document_type_id or 0) == 33 and (
+        raw_document is None or _bsale_total_amount(raw_document) > 0
+    )
     job = f"sync_children:local={local_document_id}:bsale={source_id}"
     logger.info(
         "refresh_children folio=%s local_document_id=%s bsale_source_document_id=%s "
-        "ids_differ=%s document_type_id=%s",
+        "ids_differ=%s document_type_id=%s expects_oc_details=%s",
         folio_val,
         local_document_id,
         source_id,
         differ,
         document_type_id,
+        expects_oc_details,
     )
     # Garantizar que no hay TX abierta sosteniendo locks durante el HTTP.
     release_transaction(conn, job=job)
 
-    det: dict[str, Any] | None = None
+    detail_items: list[dict[str, Any]] | None = None
+    details_fetch_ok = False
     ad: dict[str, Any] | None = None
     rd: dict[str, Any] | None = None
     try:
-        det = client.get(f"/documents/{source_id}/details.json")
+        detail_items = _fetch_document_detail_items_paginated(client, source_id)
+        details_fetch_ok = True
     except Exception as e:
         logger.warning(
             "details local_document_id=%s bsale_source_document_id=%s: %s",
@@ -773,15 +816,53 @@ def _refresh_document_children(
                 e,
             )
 
+    details_pending = False
+    if not details_fetch_ok:
+        details_pending = bool(expects_oc_details)
+    elif expects_oc_details and not detail_items:
+        # No borrar líneas locales con un replace vacío si Bsale aún no entrega ítems.
+        details_pending = True
+        logger.error(
+            "header_ok_details_pending folio=%s local_document_id=%s "
+            "bsale_source_document_id=%s reason=empty_details_with_total_amount",
+            folio_val,
+            local_document_id,
+            source_id,
+        )
+
     details_replaced = 0
     log_tx("TX_BEGIN", job=job, conn=conn, step="persist_children")
     try:
-        if det is not None:
-            items = det.get("items") or []
-            if not isinstance(items, list):
-                items = []
-            details_replaced = replace_document_details(cur, local_document_id, items)
+        if details_fetch_ok and not details_pending:
+            details_replaced = replace_document_details(
+                cur, local_document_id, detail_items or []
+            )
             stats["details_rows"] = int(stats.get("details_rows") or 0) + details_replaced
+            if (
+                int(document_type_id or 0) == 33
+                and details_replaced > 0
+            ):
+                try:
+                    from backend.services.order_weight_service import (
+                        recalculate_order_weight_in_transaction,
+                    )
+
+                    recalculate_order_weight_in_transaction(
+                        cur,
+                        document_id=int(local_document_id),
+                        company_id=COMPANY_ID,
+                        office_id=OFFICE_ID,
+                        persist=True,
+                    )
+                    stats["order_weight_recalculated"] = (
+                        int(stats.get("order_weight_recalculated") or 0) + 1
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "order_weight_after_details failed local_document_id=%s: %s",
+                        local_document_id,
+                        e,
+                    )
         if ad is not None:
             n = replace_document_attributes(cur, local_document_id, ad)
             stats["attributes_rows"] = int(stats.get("attributes_rows") or 0) + n
@@ -810,19 +891,35 @@ def _refresh_document_children(
         safe_rollback(conn, job=job)
         raise
 
+    if details_pending:
+        stats["header_ok_details_pending"] = (
+            int(stats.get("header_ok_details_pending") or 0) + 1
+        )
+        logger.warning(
+            "refresh_children_incomplete folio=%s local_document_id=%s "
+            "bsale_source_document_id=%s status=header_ok_details_pending "
+            "details_fetch_ok=%s",
+            folio_val,
+            local_document_id,
+            source_id,
+            details_fetch_ok,
+        )
+
     logger.info(
         "refresh_children_done folio=%s local_document_id=%s bsale_source_document_id=%s "
-        "ids_differ=%s details_replaced=%s",
+        "ids_differ=%s details_replaced=%s details_pending=%s",
         folio_val,
         local_document_id,
         source_id,
         differ,
         details_replaced,
+        details_pending,
     )
     stats["last_children_local_document_id"] = local_document_id
     stats["last_children_bsale_source_document_id"] = source_id
     stats["last_children_ids_differ"] = differ
     stats["last_children_details_replaced"] = details_replaced
+    stats["last_children_details_pending"] = details_pending
 
 
 def _fetch_documents_window(

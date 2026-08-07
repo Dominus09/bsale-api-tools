@@ -99,6 +99,24 @@ def _equal(a: Any, b: Any, *, tolerance: float = 0.01) -> bool:
     return a == b
 
 
+def needs_detail_sync(
+    *,
+    pg_document: dict[str, Any] | None,
+    pg_details: list[dict[str, Any]],
+    bsale_document: dict[str, Any] | None,
+    bsale_details: list[dict[str, Any]],
+) -> bool:
+    """True si el header existe/tiene monto pero faltan líneas locales.
+
+    Un ``source_hash`` coincidente **no** exime de recuperar details.
+    """
+    if len(pg_details) > 0:
+        return False
+    total_pg = _num((pg_document or {}).get("total_amount")) or 0.0
+    total_bs = _num((bsale_document or {}).get("totalAmount")) or 0.0
+    return total_pg > 0 or total_bs > 0 or len(bsale_details) > 0
+
+
 def _line_from_pg(row: tuple[Any, ...]) -> dict[str, Any]:
     return {
         "detail_id": int(row[0]),
@@ -1001,6 +1019,12 @@ def _reconcile_one_oc(
     )
     stored_hash = (pg_document or {}).get("source_hash")
     hash_matches = stored_hash == digest and stored_hash is not None
+    detail_sync_needed = needs_detail_sync(
+        pg_document=pg_document,
+        pg_details=pg_details,
+        bsale_document=selected,
+        bsale_details=details,
+    )
     invoice_flags = dict((pg_document or {}).get("invoice_link") or {})
     weight = _projected_weight(
         local_document_id=local_id,
@@ -1045,6 +1069,9 @@ def _reconcile_one_oc(
         "source_hash": digest,
         "stored_source_hash": stored_hash,
         "source_hash_matches": hash_matches,
+        "needs_detail_sync": detail_sync_needed,
+        "header_synced": pg_document is not None,
+        "details_synced": len(pg_details) > 0 and not detail_sync_needed,
         "source_updated_at": (
             source_updated_at(selected).isoformat()
             if source_updated_at(selected)
@@ -1054,6 +1081,8 @@ def _reconcile_one_oc(
         "bsale_document": selected_summary,
         "postgresql_details": pg_details,
         "bsale_details": [_line_from_bsale(item) for item in details],
+        "postgresql_details_count": len(pg_details),
+        "bsale_details_count": len(details),
         "diff": diff,
         "weight": weight,
         "source_discovery": discovery_report,
@@ -1069,18 +1098,38 @@ def _reconcile_one_oc(
         "invoice_link": invoice_flags,
     }
     if dry_run:
-        report["status"] = "dry_run_in_sync" if diff["matches"] else "dry_run_needs_sync"
+        if detail_sync_needed:
+            report["status"] = "dry_run_needs_sync"
+        else:
+            report["status"] = (
+                "dry_run_in_sync" if diff["matches"] else "dry_run_needs_sync"
+            )
         return report
-    if hash_matches and diff["matches"]:
+    # Hash coincidente NO es sync completa si faltan details locales.
+    if hash_matches and diff["matches"] and not detail_sync_needed:
         if local_id is not None:
             _mark_reconciliation_attempt(local_id, successful=True)
         report["status"] = "already_in_sync"
         report["metadata_updated"] = local_id is not None
         return report
+    if detail_sync_needed:
+        logger.warning(
+            "oc_needs_detail_sync folio=%s local_document_id=%s "
+            "source_hash_matches=%s pg_details=%s bsale_details=%s",
+            resolved_folio,
+            local_id,
+            hash_matches,
+            len(pg_details),
+            len(details),
+        )
 
     attributes_written = 0
     references_written = 0
     related_inserts = 0
+    details_written = 0
+    details_pending = False
+    weight_result: dict[str, Any] = {}
+    invalidated_plans = 0
     conn = get_connection()
     try:
         cur = conn.cursor()
@@ -1101,12 +1150,30 @@ def _reconcile_one_oc(
                     f"PK local cambió inesperadamente: {local_id} -> {persisted_local_id}"
                 )
             local_id = persisted_local_id
-            details_written = replace_document_details(
-                cur,
-                local_id,
-                details,
-                invalidate_cache=False,
-            )
+            bsale_total = _num(selected.get("totalAmount")) or 0.0
+            details_pending = len(details) == 0 and bsale_total > 0
+            if details_pending:
+                # No borrar líneas locales con replace vacío; reintentar en el próximo ciclo.
+                details_written = 0
+                logger.error(
+                    "header_ok_details_pending folio=%s local_document_id=%s "
+                    "bsale_source_document_id=%s reason=empty_bsale_details_with_total",
+                    resolved_folio,
+                    local_id,
+                    source_id,
+                )
+            else:
+                details_written = replace_document_details(
+                    cur,
+                    local_id,
+                    details,
+                    invalidate_cache=False,
+                )
+                if len(details) > 0 and details_written == 0:
+                    raise RuntimeError(
+                        f"OC {resolved_folio}: Bsale entregó {len(details)} líneas "
+                        "pero replace_document_details escribió 0; abortando commit parcial"
+                    )
             # Día de entrega vive en document_attributes (OBSERVACIONES), no en documents.
             if attributes_payload is not None:
                 attributes_written = replace_document_attributes(
@@ -1120,27 +1187,42 @@ def _reconcile_one_oc(
                     local_id,
                     references_payload,
                 )
-            cur.execute(
-                """
-                UPDATE distribuidora.documents
-                SET source_document_id = %s,
-                    source_hash = %s,
-                    source_updated_at = %s,
-                    last_synced_at = NOW(),
-                    last_reconciliation_at = NOW(),
-                    updated_at = NOW()
-                WHERE document_id = %s
-                """,
-                (source_id, digest, source_updated_at(selected), local_id),
-            )
-            weight_result = recalculate_order_weight_in_transaction(
-                cur,
-                document_id=local_id,
-                company_id=company_id,
-                office_id=office_id,
-                user_email=user_email,
-                persist=True,
-            )
+            if details_pending:
+                cur.execute(
+                    """
+                    UPDATE distribuidora.documents
+                    SET source_document_id = %s,
+                        source_hash = NULL,
+                        source_updated_at = %s,
+                        last_reconciliation_at = NOW(),
+                        updated_at = NOW()
+                    WHERE document_id = %s
+                    """,
+                    (source_id, source_updated_at(selected), local_id),
+                )
+                weight_result = {}
+            else:
+                cur.execute(
+                    """
+                    UPDATE distribuidora.documents
+                    SET source_document_id = %s,
+                        source_hash = %s,
+                        source_updated_at = %s,
+                        last_synced_at = NOW(),
+                        last_reconciliation_at = NOW(),
+                        updated_at = NOW()
+                    WHERE document_id = %s
+                    """,
+                    (source_id, digest, source_updated_at(selected), local_id),
+                )
+                weight_result = recalculate_order_weight_in_transaction(
+                    cur,
+                    document_id=local_id,
+                    company_id=company_id,
+                    office_id=office_id,
+                    user_email=user_email,
+                    persist=True,
+                )
             invalidated_plans = _invalidate_affected_dispatch_plans(cur, local_id)
             conn.commit()
         except Exception:
@@ -1150,6 +1232,32 @@ def _reconcile_one_oc(
             cur.close()
     finally:
         conn.close()
+
+    if details_pending:
+        report.update(
+            {
+                "status": "header_ok_details_pending",
+                "wrote": True,
+                "local_document_id": local_id,
+                "details_replaced": 0,
+                "attributes_replaced": attributes_written,
+                "references_replaced": references_written,
+                "related_rows_inserted": 0,
+                "needs_detail_sync": True,
+                "details_synced": False,
+                "dispatch_plans_invalidated": invalidated_plans,
+                "peso_despues_kg": None,
+                "cobertura_despues": None,
+            }
+        )
+        logger.warning(
+            "reconcile_oc_incomplete folio=%s local_document_id=%s "
+            "status=header_ok_details_pending bsale_source_document_id=%s",
+            resolved_folio,
+            local_id,
+            source_id,
+        )
+        return report
 
     # Facturación confirmada depende de document_related (API relateddetailid).
     related_stats: dict[str, Any] = {}
@@ -1187,6 +1295,8 @@ def _reconcile_one_oc(
             "references_replaced": references_written,
             "related_rows_inserted": related_inserts,
             "related_sync": related_stats,
+            "needs_detail_sync": False,
+            "details_synced": details_written > 0 or len(details) == 0,
             "peso_despues_kg": weight_result.get("peso_total_kg"),
             "cobertura_despues": weight_result.get("porcentaje_cobertura"),
             "dispatch_plans_invalidated": invalidated_plans,

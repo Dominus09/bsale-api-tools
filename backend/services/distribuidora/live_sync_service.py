@@ -411,8 +411,13 @@ def live_sync_details(*, strict_token: bool = True) -> dict[str, Any]:
 
         cur.execute(
             """
-            SELECT document_id, document_type_id, number, raw_data->>'id'
-            FROM distribuidora.v_documents_latest
+            SELECT document_id, document_type_id, number,
+                   COALESCE(
+                       NULLIF(to_jsonb(d)->>'source_document_id', '')::bigint,
+                       NULLIF(raw_data->>'id', '')::bigint
+                   ) AS bsale_source_id,
+                   COALESCE(total_amount, 0)
+            FROM distribuidora.v_documents_latest d
             WHERE company_id = %s AND office_id = %s
               AND emission_date >= %s
               AND emission_date <= %s
@@ -434,7 +439,7 @@ def live_sync_details(*, strict_token: bool = True) -> dict[str, Any]:
         )
 
         client = BsaleClient(token)
-        for document_id, document_type_id, number, raw_bsale_id in rows:
+        for document_id, document_type_id, number, bsale_source_id, total_amount in rows:
             doc_id = int(document_id)
             doc_type = int(document_type_id) if document_type_id is not None else None
             try:
@@ -460,7 +465,7 @@ def live_sync_details(*, strict_token: bool = True) -> dict[str, Any]:
 
                     source_dbg = resolve_bsale_source_document_id(
                         local_document_id=doc_id,
-                        raw_data_id=raw_bsale_id,
+                        raw_data_id=bsale_source_id,
                     )
                     det_payload = client.get(f"/documents/{source_dbg}/details.json")
                     items_dbg, parser_key = _extract_bsale_detail_items(det_payload)
@@ -475,6 +480,11 @@ def live_sync_details(*, strict_token: bool = True) -> dict[str, Any]:
                         parser_key,
                     )
 
+                raw_for_children = {
+                    "id": bsale_source_id,
+                    "number": folio_int,
+                    "totalAmount": float(total_amount or 0),
+                }
                 _refresh_document_children(
                     client,
                     cur,
@@ -482,9 +492,12 @@ def live_sync_details(*, strict_token: bool = True) -> dict[str, Any]:
                     doc_id,
                     doc_type,
                     child_stats,
-                    raw_document=None,
+                    raw_document=raw_for_children,
                     folio=folio_int,
-                    raw_data_id=raw_bsale_id,
+                    bsale_source_document_id=(
+                        int(bsale_source_id) if bsale_source_id is not None else None
+                    ),
+                    raw_data_id=bsale_source_id,
                 )
 
                 cur.execute(
@@ -495,30 +508,38 @@ def live_sync_details(*, strict_token: bool = True) -> dict[str, Any]:
                 rows_after = int(ar[0] or 0) if ar else 0
                 conn.commit()
                 rows_written = int(child_stats.get("details_rows") or 0)
+                details_pending = bool(child_stats.get("last_children_details_pending"))
 
                 stats["details_replace_calls"] = int(stats.get("details_replace_calls") or 0) + 1
                 stats["details_rows_written"] = int(stats.get("details_rows_written") or 0) + rows_written
                 stats["details_api_items_total"] = int(stats.get("details_api_items_total") or 0) + (
                     details_api_count if _live_details_debug_enabled() else rows_written
                 )
+                if details_pending:
+                    stats["header_ok_details_pending"] = (
+                        int(stats.get("header_ok_details_pending") or 0) + 1
+                    )
 
                 if _live_details_debug_enabled():
                     logger.info(
                         "[LIVE_DETAILS_DEBUG] doc=%s replace_called=yes rows_deleted_then_inserted=%s "
-                        "rows_before=%s rows_after=%s attributes_rows=%s references_rows=%s",
+                        "rows_before=%s rows_after=%s attributes_rows=%s references_rows=%s "
+                        "details_pending=%s",
                         doc_id,
                         rows_written,
                         rows_before,
                         rows_after,
                         child_stats.get("attributes_rows"),
                         child_stats.get("references_rows"),
+                        details_pending,
                     )
-                elif rows_written == 0 and rows_after == 0:
+                elif details_pending or (rows_written == 0 and rows_after == 0 and doc_type == 33):
                     logger.warning(
-                        "live_sync_details document_id=%s: replace OK pero 0 líneas "
-                        "(type=%s); revisar API details",
+                        "live_sync_details document_id=%s: status=header_ok_details_pending "
+                        "(type=%s rows_after=%s); reintento en próximo ciclo",
                         doc_id,
                         doc_type,
+                        rows_after,
                     )
             except Exception as e:
                 safe_rollback(conn, job=f"live_sync_details:{doc_id}")
