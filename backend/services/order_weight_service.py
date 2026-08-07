@@ -181,11 +181,38 @@ def _unavailable_planning_weight(*, reason: str) -> dict[str, Any]:
 
 
 def weight_payload_from_snapshot(row: dict[str, Any]) -> dict[str, Any]:
-    """Contrato de peso para listados: solo datos de snapshot (sin recalcular líneas)."""
+    """Contrato de peso para listados: solo datos de snapshot (sin recalcular líneas).
+
+    Un snapshot con ``peso_total_kg`` persistido **no** debe degradarse a
+    ``unavailable`` solo porque ``productos_totales`` venga 0/NULL: planning-rows
+    perdería el valor real (p. ej. 37.353 → null).
+    """
     total = int(row.get("productos_totales") or 0)
     missing = int(row.get("productos_sin_peso") or 0)
     peso = row.get("peso_total_kg")
     peso_f = float(peso) if peso is not None else None
+    coverage_raw = row.get("porcentaje_cobertura")
+    try:
+        coverage_f = float(coverage_raw) if coverage_raw is not None else None
+    except (TypeError, ValueError):
+        coverage_f = None
+
+    if peso_f is not None and peso_f > 0:
+        is_partial = missing > 0 or (
+            coverage_f is not None and 0.0 < coverage_f < 100.0
+        )
+        status = "partial" if is_partial else "calculated"
+        return {
+            "value_kg": peso_f,
+            "status": status,
+            "source": "order_weight_snapshot",
+            "reason": "missing_unit_weights" if is_partial else None,
+            "lines_total": total,
+            "lines_missing_weight": missing,
+            "missing_lines": missing,
+            "calculated_at": row.get("calculated_at"),
+        }
+
     payload = build_weight_payload(
         {
             "productos_totales": total,

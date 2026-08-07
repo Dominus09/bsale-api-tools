@@ -835,7 +835,10 @@ def _refresh_document_children(
     try:
         if details_fetch_ok and not details_pending:
             details_replaced = replace_document_details(
-                cur, local_document_id, detail_items or []
+                cur,
+                local_document_id,
+                detail_items or [],
+                invalidate_cache=False,
             )
             stats["details_rows"] = int(stats.get("details_rows") or 0) + details_replaced
             ensure_weight = False

@@ -184,3 +184,81 @@ def test_recalc_batch_still_calculates(monkeypatch):
     monkeypatch.setattr(service, "calculate_order_weight", fake_calc)
     out = service.calculate_order_weights_batch([9], persist_cache=False)
     assert out[9]["peso_total_kg"] == 5.0
+
+
+def test_snapshot_with_peso_survives_zero_productos_totales():
+    """Regresión canario: peso persistido no debe volverse null/unavailable."""
+    payload = service.weight_payload_from_snapshot(
+        {
+            "peso_total_kg": 37.353,
+            "productos_totales": 0,
+            "productos_sin_peso": 0,
+            "porcentaje_cobertura": 100.0,
+            "calculated_at": "2026-08-07T20:00:00",
+        }
+    )
+    assert payload["value_kg"] == 37.353
+    assert payload["status"] == "calculated"
+
+
+def test_canary_local_ne_source_overlay_keeps_37_353(monkeypatch):
+    """68701: local 3853320 ≠ source 3853408; batch key = document_id local."""
+    local_id = 3853320
+
+    def fake_fetch(ids):
+        assert local_id in [int(x) for x in ids]
+        return {
+            local_id: {
+                "peso_total_kg": 37.353,
+                "productos_sin_peso": 0,
+                "porcentaje_cobertura": 100.0,
+                "productos_manuales": 0,
+                "productos_estimados": 0,
+                "productos_totales": 6,
+                "productos_con_peso": 6,
+                "calculated_at": "2026-08-07T20:00:00",
+                "cantidad_unidades": 0,
+                "cantidad_cajas": 0,
+            }
+        }
+
+    monkeypatch.setattr(service, "fetch_weights_by_document_ids", fake_fetch)
+    rows = [{"document_id": local_id, "oc": 68701, "peso_total_kg": None}]
+    orders_service._overlay_order_weights_to_rows(rows)
+    assert rows[0]["peso_total_kg"] == 37.353
+    assert rows[0]["weight"]["status"] == "calculated"
+    assert rows[0]["weight"]["value_kg"] == 37.353
+
+
+def test_canary_local_eq_source_partial_13_52(monkeypatch):
+    """68700: local == source; coverage 75 % → partial, no unavailable."""
+    doc_id = 3853317
+    monkeypatch.setattr(
+        service,
+        "fetch_weights_by_document_ids",
+        lambda _ids: {
+            doc_id: {
+                "peso_total_kg": 13.52,
+                "productos_sin_peso": 1,
+                "porcentaje_cobertura": 75.0,
+                "productos_manuales": 0,
+                "productos_estimados": 0,
+                "productos_totales": 4,
+                "productos_con_peso": 3,
+                "calculated_at": "2026-08-07T20:00:00",
+                "cantidad_unidades": 0,
+                "cantidad_cajas": 0,
+            }
+        },
+    )
+    rows = [{"document_id": doc_id, "oc": 68700, "peso_total_kg": None}]
+    orders_service._overlay_order_weights_to_rows(rows)
+    assert rows[0]["peso_total_kg"] == 13.52
+    assert rows[0]["weight"]["status"] == "partial"
+    assert rows[0]["weight"]["value_kg"] == 13.52
+
+
+def test_weights_sql_uses_local_document_id_not_source():
+    sql = service._WEIGHTS_BY_DOCS_SQL
+    assert "ows.document_id = ANY(%s::bigint[])" in sql
+    assert "source_document_id" not in sql
