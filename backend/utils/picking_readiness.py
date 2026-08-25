@@ -26,7 +26,8 @@ def evaluate_picking_readiness(
     confirmed = int(summary.get("confirmed") or 0)
     probable = int(summary.get("probable") or 0)
     missing = int(summary.get("missing") or 0)
-    total = int(summary.get("total") or 0)
+    total = int(summary.get("eligible") or summary.get("total") or 0)
+    excluded = int(summary.get("excluded") or 0)
 
     if inv.get("invoicing_unavailable"):
         err = inv.get("invoicing_error") or "vista de facturación no disponible"
@@ -77,11 +78,12 @@ def evaluate_picking_readiness(
             }
 
     if missing > 0:
+        excl_note = f" ({excluded} excluidas por factura previa)" if excluded else ""
         return {
             "ready": False,
             "reason": (
                 f"Faltan {missing} OC sin facturación confirmada "
-                f"({confirmed}/{total} confirmadas)."
+                f"({confirmed}/{total} confirmadas){excl_note}."
             ),
         }
 

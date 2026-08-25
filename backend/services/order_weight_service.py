@@ -356,7 +356,23 @@ WHERE d.document_id = %s
 LIMIT 1
 """
 
-_ORDER_LINES_SQL = """
+# Peso: variant_id solo si su barcode coincide con la línea OC. Sin match por nombre.
+_LOGISTICS_IDENTITY_VARIANT_SQL = """(
+    pl_v.match_count = 1
+    AND (
+        NULLIF(BTRIM(v.bar_code), '') IS NULL
+        OR (
+            NULLIF(BTRIM(pl_v.barcode), '') IS NOT NULL
+            AND BTRIM(pl_v.barcode) = BTRIM(v.bar_code)
+        )
+    )
+)"""
+
+_LOGISTICS_IDENTITY_BARCODE_SQL = """(
+    pl_b.match_count = 1
+)"""
+
+_ORDER_LINES_SQL = f"""
 SELECT
     dd.detail_id,
     dd.line_number,
@@ -365,83 +381,102 @@ SELECT
     NULLIF(BTRIM(dd.variant_description), '') AS producto,
     dd.quantity::numeric AS cantidad_unitaria,
     CASE
-        WHEN pl_v.match_count = 1 THEN pl_v.units_per_box
-        WHEN pl_b.match_count = 1 THEN pl_b.units_per_box
+        WHEN {_LOGISTICS_IDENTITY_VARIANT_SQL} THEN pl_v.units_per_box
+        WHEN {_LOGISTICS_IDENTITY_BARCODE_SQL} THEN pl_b.units_per_box
         ELSE v.units_per_box
     END AS units_per_box,
     CASE
-        WHEN pl_v.match_count = 1 THEN pl_v.weight_unit_kg
-        WHEN pl_b.match_count = 1 THEN pl_b.weight_unit_kg
+        WHEN {_LOGISTICS_IDENTITY_VARIANT_SQL} THEN pl_v.weight_unit_kg
+        WHEN {_LOGISTICS_IDENTITY_BARCODE_SQL} THEN pl_b.weight_unit_kg
     END AS peso_unitario_kg,
     CASE
-        WHEN pl_v.match_count = 1 THEN pl_v.weight_box_kg
-        WHEN pl_b.match_count = 1 THEN pl_b.weight_box_kg
+        WHEN {_LOGISTICS_IDENTITY_VARIANT_SQL} THEN pl_v.weight_box_kg
+        WHEN {_LOGISTICS_IDENTITY_BARCODE_SQL} THEN pl_b.weight_box_kg
     END AS peso_caja_kg,
     CASE
-        WHEN pl_v.match_count = 1 THEN pl_v.products_master_id
-        WHEN pl_b.match_count = 1 THEN pl_b.products_master_id
+        WHEN {_LOGISTICS_IDENTITY_VARIANT_SQL} THEN pl_v.products_master_id
+        WHEN {_LOGISTICS_IDENTITY_BARCODE_SQL} THEN pl_b.products_master_id
     END AS products_master_id,
     CASE
+        WHEN {_LOGISTICS_IDENTITY_VARIANT_SQL} THEN pl_v.product_name
+        WHEN {_LOGISTICS_IDENTITY_BARCODE_SQL} THEN pl_b.product_name
         WHEN pl_v.match_count = 1 THEN pl_v.product_name
         WHEN pl_b.match_count = 1 THEN pl_b.product_name
     END AS product_name,
     CASE
-        WHEN pl_v.match_count = 1 THEN pl_v.variant_name
-        WHEN pl_b.match_count = 1 THEN pl_b.variant_name
+        WHEN {_LOGISTICS_IDENTITY_VARIANT_SQL} THEN pl_v.variant_name
+        WHEN {_LOGISTICS_IDENTITY_BARCODE_SQL} THEN pl_b.variant_name
     END AS variante,
     p.name AS bsale_product_name,
     CASE
-        WHEN pl_v.match_count = 1 THEN pl_v.logistics_completed
-        WHEN pl_b.match_count = 1 THEN pl_b.logistics_completed
+        WHEN {_LOGISTICS_IDENTITY_VARIANT_SQL} THEN pl_v.barcode
+        WHEN {_LOGISTICS_IDENTITY_BARCODE_SQL} THEN pl_b.barcode
+        WHEN pl_v.match_count = 1 THEN pl_v.barcode
+        WHEN pl_b.match_count = 1 THEN pl_b.barcode
+    END AS matched_barcode,
+    CASE
+        WHEN {_LOGISTICS_IDENTITY_VARIANT_SQL} THEN pl_v.logistics_completed
+        WHEN {_LOGISTICS_IDENTITY_BARCODE_SQL} THEN pl_b.logistics_completed
     END AS logistics_completed,
     CASE
-        WHEN pl_v.match_count = 1 THEN pl_v.updated_at
-        WHEN pl_b.match_count = 1 THEN pl_b.updated_at
+        WHEN {_LOGISTICS_IDENTITY_VARIANT_SQL} THEN pl_v.updated_at
+        WHEN {_LOGISTICS_IDENTITY_BARCODE_SQL} THEN pl_b.updated_at
     END AS pm_updated_at,
     CASE
-        WHEN pl_v.match_count = 1 THEN pl_v.last_bsale_sync_at
-        WHEN pl_b.match_count = 1 THEN pl_b.last_bsale_sync_at
+        WHEN {_LOGISTICS_IDENTITY_VARIANT_SQL} THEN pl_v.last_bsale_sync_at
+        WHEN {_LOGISTICS_IDENTITY_BARCODE_SQL} THEN pl_b.last_bsale_sync_at
     END AS last_bsale_sync_at,
     CASE
-        WHEN pl_v.match_count = 1 THEN pl_v.height_cm
-        WHEN pl_b.match_count = 1 THEN pl_b.height_cm
+        WHEN {_LOGISTICS_IDENTITY_VARIANT_SQL} THEN pl_v.height_cm
+        WHEN {_LOGISTICS_IDENTITY_BARCODE_SQL} THEN pl_b.height_cm
     END AS height_cm,
     CASE
-        WHEN pl_v.match_count = 1 THEN pl_v.width_cm
-        WHEN pl_b.match_count = 1 THEN pl_b.width_cm
+        WHEN {_LOGISTICS_IDENTITY_VARIANT_SQL} THEN pl_v.width_cm
+        WHEN {_LOGISTICS_IDENTITY_BARCODE_SQL} THEN pl_b.width_cm
     END AS width_cm,
     CASE
-        WHEN pl_v.match_count = 1 THEN pl_v.length_cm
-        WHEN pl_b.match_count = 1 THEN pl_b.length_cm
+        WHEN {_LOGISTICS_IDENTITY_VARIANT_SQL} THEN pl_v.length_cm
+        WHEN {_LOGISTICS_IDENTITY_BARCODE_SQL} THEN pl_b.length_cm
     END AS length_cm,
     v.product_id,
     NULLIF(BTRIM(v.bar_code), '') AS barcode,
     NULLIF(BTRIM(v.code), '') AS codigo_interno,
     (
-        pl_v.match_count = 1
+        {_LOGISTICS_IDENTITY_VARIANT_SQL}
         AND pl_v.weight_unit_kg IS NOT NULL
         AND pl_v.weight_unit_kg > 0
     ) AS join_variant_ok,
     (
-        pl_v.match_count <> 1
-        AND pl_b.match_count = 1
+        NOT ({_LOGISTICS_IDENTITY_VARIANT_SQL})
+        AND {_LOGISTICS_IDENTITY_BARCODE_SQL}
         AND pl_b.weight_unit_kg IS NOT NULL
         AND pl_b.weight_unit_kg > 0
     ) AS join_barcode_ok,
     (
-        pl_v.match_count = 1
-        OR pl_b.match_count = 1
+        {_LOGISTICS_IDENTITY_VARIANT_SQL}
+        OR {_LOGISTICS_IDENTITY_BARCODE_SQL}
     ) AS exists_in_pm,
     CASE
-        WHEN pl_v.match_count = 1 THEN 'matched_variant'
-        WHEN pl_b.match_count = 1 AND COALESCE(pl_v.match_count, 0) > 1
+        WHEN {_LOGISTICS_IDENTITY_VARIANT_SQL} THEN 'matched_variant'
+        WHEN {_LOGISTICS_IDENTITY_BARCODE_SQL}
+            AND (
+                pl_v.match_count = 1
+                OR COALESCE(pl_v.match_count, 0) > 1
+            )
+            AND NOT ({_LOGISTICS_IDENTITY_VARIANT_SQL})
             THEN 'matched_barcode_after_variant_conflict'
-        WHEN pl_b.match_count = 1 THEN 'matched_barcode'
+        WHEN {_LOGISTICS_IDENTITY_BARCODE_SQL} THEN 'matched_barcode'
+        WHEN pl_v.match_count = 1 AND NOT ({_LOGISTICS_IDENTITY_VARIANT_SQL})
+            THEN 'match_conflict'
         WHEN COALESCE(pl_v.match_count, 0) > 1 THEN 'conflict_variant'
         WHEN COALESCE(pl_b.match_count, 0) > 1 THEN 'conflict_barcode'
         ELSE 'pending'
     END AS logistics_match_status,
     CASE
+        WHEN pl_v.match_count = 1
+            AND NOT ({_LOGISTICS_IDENTITY_VARIANT_SQL})
+            AND NOT ({_LOGISTICS_IDENTITY_BARCODE_SQL})
+            THEN pl_v.products_master_ids
         WHEN COALESCE(pl_v.match_count, 0) > 1 AND COALESCE(pl_b.match_count, 0) <> 1
             THEN pl_v.products_master_ids
         WHEN COALESCE(pl_v.match_count, 0) <> 1 AND COALESCE(pl_b.match_count, 0) > 1
@@ -466,6 +501,7 @@ LEFT JOIN LATERAL (
         MIN(pl.weight_box_kg) AS weight_box_kg,
         MIN(pl.product_name) AS product_name,
         MIN(pl.variant_name) AS variant_name,
+        MIN(pl.barcode) AS barcode,
         BOOL_AND(pl.logistics_completed) AS logistics_completed,
         MAX(pl.updated_at) AS updated_at,
         MAX(pl.last_bsale_sync_at) AS last_bsale_sync_at,
@@ -487,6 +523,7 @@ LEFT JOIN LATERAL (
         MIN(pl.weight_box_kg) AS weight_box_kg,
         MIN(pl.product_name) AS product_name,
         MIN(pl.variant_name) AS variant_name,
+        MIN(pl.barcode) AS barcode,
         BOOL_AND(pl.logistics_completed) AS logistics_completed,
         MAX(pl.updated_at) AS updated_at,
         MAX(pl.last_bsale_sync_at) AS last_bsale_sync_at,
@@ -651,12 +688,22 @@ def compute_order_lines(cur, *, document_id: int, company_id: int) -> list[dict[
     for row in rows:
         match_status = row.get("logistics_match_status")
         line_warnings: list[str] = []
-        if match_status in {"conflict_variant", "conflict_barcode"}:
+        if match_status in {
+            "conflict_variant",
+            "conflict_barcode",
+            "conflict_identity",
+            "match_conflict",
+        }:
             products_master_ids = [
                 int(value)
                 for value in (row.get("conflicting_products_master_ids") or [])
             ]
-            match_type = "variant_id" if match_status == "conflict_variant" else "barcode"
+            match_type = {
+                "conflict_variant": "variant_id",
+                "conflict_barcode": "barcode",
+                "conflict_identity": "identity",
+                "match_conflict": "identity",
+            }[match_status]
             logger.warning(
                 "order_weight_logistics_match_conflict_soft "
                 "variant_id=%s detail_id=%s match_type=%s products_master_ids=%s "
@@ -686,9 +733,24 @@ def compute_order_lines(cur, *, document_id: int, company_id: int) -> list[dict[
                 row.get("products_master_id"),
             )
             line_warnings.append("variant_conflict_resolved_by_barcode")
+        elif match_status == "matched_barcode_after_identity_conflict":
+            # Compat: misma regla que variant conflict resuelto por barcode.
+            logger.info(
+                "order_weight_variant_conflict_resolved_by_barcode "
+                "variant_id=%s detail_id=%s products_master_id=%s",
+                row.get("variant_id"),
+                row.get("detail_id"),
+                row.get("products_master_id"),
+            )
+            row = dict(row)
+            row["logistics_match_status"] = "matched_barcode_after_variant_conflict"
+            line_warnings.append("variant_conflict_resolved_by_barcode")
         line = compute_line_from_row(row)
         if line_warnings:
-            line["warnings"] = line_warnings
+            existing = list(line.get("warnings") or [])
+            line["warnings"] = existing + [
+                w for w in line_warnings if w not in existing
+            ]
         lines.append(line)
     deduplicated, duplicate_counts = _deduplicate_snapshot_lines(
         lines,
@@ -711,6 +773,7 @@ def build_weight_payload(summary: dict[str, Any], *, lines: list[dict[str, Any]]
     peso_f = float(peso) if peso is not None else None
     has_conflict = any(
         "logistics_match_conflict" in (ln.get("warnings") or [])
+        or ln.get("match_status") == "match_conflict"
         for ln in lines
     )
     if total_lines <= 0:

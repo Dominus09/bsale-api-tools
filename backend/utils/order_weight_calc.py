@@ -115,6 +115,21 @@ def compute_line_from_row(row: dict[str, Any]) -> dict[str, Any]:
     join_v = bool(row.get("join_variant_ok"))
     join_b = bool(row.get("join_barcode_ok"))
     pm_id = row.get("products_master_id")
+    identity_ok = logistics_identity_consistent(
+        source_barcode=row.get("barcode") or row.get("codigo"),
+        matched_barcode=row.get("matched_barcode"),
+    )
+    match_status = row.get("logistics_match_status")
+    if match_status == "matched_barcode_after_identity_conflict":
+        match_status = "matched_barcode_after_variant_conflict"
+    identity_conflict = (not identity_ok) or match_status in _IDENTITY_CONFLICT_STATUSES
+    if identity_conflict:
+        peso_unit = None
+        peso_caja = None
+        pm_id = None
+        join_v = False
+        join_b = False
+        match_status = MATCH_CONFLICT_STATUS
 
     fuente = classify_fuente_peso(
         peso_unitario=peso_unit,
@@ -134,13 +149,19 @@ def compute_line_from_row(row: dict[str, Any]) -> dict[str, Any]:
     peso_linea = _round3(qty * peso_unit) if peso_unit and peso_unit > 0 else 0.0
     cajas = cantidad_cajas(qty, upb_int)
 
-    diagnosis = build_line_diagnosis(row)
-    producto, variante = split_producto_variante(
-        line_description=row.get("producto"),
-        product_name=row.get("product_name") or row.get("bsale_product_name"),
-        variant_name=row.get("variante") or row.get("variant_name"),
+    diagnosis = build_line_diagnosis(
+        {
+            **row,
+            "peso_unitario_kg": peso_unit,
+            "products_master_id": pm_id,
+            "join_variant_ok": join_v,
+            "join_barcode_ok": join_b,
+            "exists_in_pm": False if identity_conflict else row.get("exists_in_pm"),
+            "logistics_match_status": match_status,
+        }
     )
-    return {
+    producto, variante = source_producto_variante(row)
+    line = {
         "detail_id": int(row["detail_id"]),
         "line_number": row.get("line_number"),
         "codigo": row.get("codigo"),
@@ -158,7 +179,17 @@ def compute_line_from_row(row: dict[str, Any]) -> dict[str, Any]:
         "variant_id": row.get("variant_id"),
         "join_debug": diagnosis,
         "has_logistics_record": pm_id is not None,
+        "match_status": match_status,
+        "weight_match": build_weight_match(
+            strategy=match_status,
+            join_variant_ok=join_v,
+            join_barcode_ok=join_b,
+            identity_conflict=identity_conflict,
+        ),
     }
+    if identity_conflict:
+        line["warnings"] = ["match_conflict"]
+    return line
 
 
 def aggregate_order_summary(lines: list[dict[str, Any]]) -> dict[str, Any]:
@@ -195,10 +226,94 @@ def coverage_semaphore(pct: float) -> str:
     return "rojo"
 
 
+WEIGHT_MATCH_PENDING_WARNING = "Asociación de peso pendiente"
+WEIGHT_SOURCE_VARIANT_LABEL = "Fuente del peso: Variante"
+WEIGHT_SOURCE_BARCODE_LABEL = "Fuente del peso: Código de barras"
+MATCH_CONFLICT_STATUS = "match_conflict"
+_IDENTITY_CONFLICT_STATUSES = {
+    "conflict_identity",
+    "conflict_variant",
+    "conflict_barcode",
+    MATCH_CONFLICT_STATUS,
+}
+
+
 def _norm_label(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def logistics_identity_consistent(
+    *,
+    source_barcode: Any = None,
+    matched_barcode: Any = None,
+    source_product_name: Any = None,
+    matched_product_name: Any = None,
+) -> bool:
+    """True si el barcode del match no contradice el de la línea OC.
+
+    No usa nombre de producto (ni fuzzy ni exacto) para aceptar o rechazar peso.
+    """
+    del source_product_name, matched_product_name
+    source_code = _norm_label(source_barcode)
+    matched_code = _norm_label(matched_barcode)
+    if source_code and matched_code and source_code.casefold() != matched_code.casefold():
+        return False
+    return True
+
+
+def build_weight_match(
+    *,
+    strategy: str | None,
+    join_variant_ok: bool = False,
+    join_barcode_ok: bool = False,
+    identity_conflict: bool = False,
+) -> dict[str, Any]:
+    """Contrato público de match de peso. No incluye identidad de producto."""
+    if identity_conflict or strategy in _IDENTITY_CONFLICT_STATUSES:
+        return {
+            "strategy": MATCH_CONFLICT_STATUS,
+            "status": MATCH_CONFLICT_STATUS,
+            "source": None,
+            "warning": WEIGHT_MATCH_PENDING_WARNING,
+        }
+    if strategy == "matched_variant" or (join_variant_ok and not join_barcode_ok):
+        return {
+            "strategy": "matched_variant",
+            "status": "ok",
+            "source": "variant",
+            "warning": None,
+        }
+    if strategy == "matched_barcode_after_variant_conflict":
+        return {
+            "strategy": "matched_barcode_after_variant_conflict",
+            "status": "ok",
+            "source": "barcode",
+            "warning": None,
+        }
+    if strategy == "matched_barcode" or join_barcode_ok:
+        return {
+            "strategy": "matched_barcode",
+            "status": "ok",
+            "source": "barcode",
+            "warning": None,
+        }
+    return {
+        "strategy": strategy or "pending",
+        "status": "pending",
+        "source": None,
+        "warning": None,
+    }
+
+
+def source_producto_variante(row: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Identidad visible: siempre la línea OC + catálogo Bsale, nunca logistics."""
+    return split_producto_variante(
+        line_description=row.get("producto"),
+        product_name=row.get("bsale_product_name"),
+        variant_name=row.get("producto"),
+    )
 
 
 def split_producto_variante(

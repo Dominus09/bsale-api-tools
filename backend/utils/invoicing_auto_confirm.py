@@ -96,7 +96,11 @@ def invoicing_summary_counts(items: list[dict[str, Any]]) -> dict[str, int]:
     auto_confirmed = 0
     probable = 0
     missing = 0
+    excluded = 0
     for x in items:
+        if x.get("fulfillment_status") == "excluded_preexisting_invoice":
+            excluded += 1
+            continue
         st = x.get("status")
         if st == STATUS_CONFIRMED:
             confirmed += 1
@@ -108,12 +112,15 @@ def invoicing_summary_counts(items: list[dict[str, Any]]) -> dict[str, int]:
             probable += 1
         else:
             missing += 1
+    eligible = confirmed + probable + missing
     return {
         "confirmed": confirmed,
         "auto_confirmed": auto_confirmed,
         "probable": probable,
         "missing": missing,
+        "excluded": excluded,
         "total": len(items),
+        "eligible": eligible,
     }
 
 

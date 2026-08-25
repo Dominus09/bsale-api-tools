@@ -5327,6 +5327,13 @@ export type OrderWeightLineDiagnosis = {
   codigo_interno?: string | null
 }
 
+export type OrderWeightMatch = {
+  strategy?: string | null
+  status?: string | null
+  source?: "variant" | "barcode" | string | null
+  warning?: string | null
+}
+
 export type OrderWeightLine = {
   detail_id: number
   line_number?: number | null
@@ -5346,6 +5353,9 @@ export type OrderWeightLine = {
   variant_id?: number | null
   has_logistics_record?: boolean
   join_debug?: OrderWeightLineDiagnosis
+  warnings?: string[]
+  match_status?: string | null
+  weight_match?: OrderWeightMatch | null
 }
 
 export type OrderWeightDetail = {

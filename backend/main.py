@@ -40,6 +40,7 @@ from backend.routers.operaciones_telemetry import router as operaciones_telemetr
 from backend.routers import labels
 from backend.routers import cost_analytics
 from backend.routers import logistics
+from backend.routers import cargas
 from backend.routers import margin_export
 from backend.routers import margin_problems
 from backend.routers import margin_rules
@@ -123,6 +124,7 @@ app.include_router(margins.router)
 app.include_router(margin_rules.router)
 app.include_router(cost_analytics.router)
 app.include_router(logistics.router)
+app.include_router(cargas.router)
 app.include_router(offers.router)
 app.include_router(promotions.router)
 app.include_router(alerts.router)

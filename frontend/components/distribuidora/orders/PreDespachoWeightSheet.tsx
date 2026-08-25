@@ -109,6 +109,20 @@ function WeightLineEditor({
             </p>
           </div>
         ) : null}
+        {line.weight_match?.status === "match_conflict" ||
+        line.match_status === "match_conflict" ? (
+          <p className="mt-1.5 text-[11px] leading-snug text-amber-800 dark:text-amber-200">
+            {line.weight_match?.warning || "Asociación de peso pendiente"}
+          </p>
+        ) : line.weight_match?.source === "barcode" ? (
+          <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+            Fuente del peso: Código de barras
+          </p>
+        ) : line.weight_match?.source === "variant" ? (
+          <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+            Fuente del peso: Variante
+          </p>
+        ) : null}
       </td>
       <td className="px-3 py-3 align-middle text-right text-sm tabular-nums font-medium">
         {line.cantidad_unitaria}

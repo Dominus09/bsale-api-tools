@@ -9,9 +9,32 @@ from backend.repositories.distribuidora import dispatch_plan_load_batch_repo as 
 from backend.repositories.distribuidora import dispatch_plan_picking_repo as picking_repo
 from backend.repositories.distribuidora import dispatch_plan_repo as plan_repo
 from backend.services.distribuidora import dispatch_plan_service as plan_svc
+from backend.services.distribuidora.oc_document_chain_resolver import (
+    resolve_operational_statuses_batch,
+)
+from backend.services.distribuidora.oc_operational_status import (
+    ADMISSION_BLOCK_MESSAGE,
+    blocks_planning_admission,
+)
 from backend.utils.json_safe import serialize_value
 
 BLOCKED_ADD_ORDER_STATUSES = frozenset({"dispatched", "delivered"})
+
+
+def _admission_block_payload(status) -> dict[str, Any]:
+    inv = status.confirmed_invoice or {}
+    return {
+        "blocked": True,
+        "message": ADMISSION_BLOCK_MESSAGE,
+        "billing_status": status.billing_status,
+        "billing_label_es": status.billing_label_es,
+        "dispatch_closed": status.dispatch_closed,
+        "planning_eligible": status.planning_eligible,
+        "confirmed_invoice": inv,
+        "invoice_number": inv.get("number"),
+        "invoice_issued_at": inv.get("issued_at"),
+        "credit_notes": status.credit_notes,
+    }
 
 
 def _staff_label(user: dict[str, Any] | None) -> str | None:
@@ -303,6 +326,15 @@ def add_order_to_plan(
         )
         if cur.fetchone():
             raise ValueError("La OC ya pertenece a este plan.")
+        status_map = resolve_operational_statuses_batch(cur, [oc_document_id])
+        oc_status = status_map.get(int(oc_document_id))
+        if oc_status is not None and blocks_planning_admission(oc_status):
+            detail = _admission_block_payload(oc_status)
+            raise ValueError(
+                f"{ADMISSION_BLOCK_MESSAGE} "
+                f"(factura={detail.get('invoice_number')}, "
+                f"estado={detail.get('billing_label_es')})"
+            )
         route_order = batch_repo.max_route_order(cur, plan_id) + 1
         order = {"oc_document_id": oc_document_id, "route_order": route_order}
         enriched = plan_svc._enrich_orders_snapshot(cur, [order])

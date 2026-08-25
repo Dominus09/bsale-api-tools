@@ -17,6 +17,12 @@ export type PurchaseInvoiceStatusFields = {
   is_invoiced?: boolean | null
   purchase_status?: string | null
   estado_real?: string | null
+  billing_status?: string | null
+  billing_label_es?: string | null
+  dispatch_closed?: boolean | null
+  planning_eligible?: boolean | null
+  fulfillment_status?: string | null
+  excluded_reason?: string | null
   probable_score?: number | null
   probable_tier?: string | null
   display_score?: number | null
@@ -56,7 +62,14 @@ export function resolvePurchaseStatusCode(
 
   const estado =
     typeof row.estado_real === "string" ? row.estado_real.trim() : ""
-  if (estado === "Facturada" || row.is_invoiced === true) return CONFIRMED
+  if (
+    estado === "Facturada" ||
+    estado.startsWith("Facturada con NC") ||
+    row.is_invoiced === true ||
+    row.dispatch_closed === true
+  ) {
+    return CONFIRMED
+  }
 
   const sc = operationalScore(row)
   if (sc != null && sc >= AUTO_CONFIRM_MIN_SCORE) return CONFIRMED
@@ -87,13 +100,24 @@ export function isBsaleConfirmed(row: PurchaseInvoiceStatusFields): boolean {
   if (raw === CONFIRMED) return true
   const estado =
     typeof row.estado_real === "string" ? row.estado_real.trim() : ""
-  return estado === "Facturada"
+  return (
+    estado === "Facturada" ||
+    estado.startsWith("Facturada con NC") ||
+    row.dispatch_closed === true
+  )
 }
 
 export function purchaseStatusBadgeLabel(
   code: PurchaseInvoiceStatusCode,
   row?: PurchaseInvoiceStatusFields,
 ): string {
+  if (row?.billing_label_es) return row.billing_label_es
+  if (
+    typeof row?.estado_real === "string" &&
+    row.estado_real.startsWith("Facturada")
+  ) {
+    return row.estado_real
+  }
   if (code === CONFIRMED && row && isAutoConfirmedOperational(row)) {
     const sc = operationalScore(row)
     return sc != null ? `Auto-confirmada (score ${Math.round(sc)})` : "Auto-confirmada"
@@ -106,7 +130,7 @@ export function purchaseStatusBadgeLabel(
     case LOW:
       return "Probable facturada"
     default:
-      return "Pendiente"
+      return "Pendiente por facturar"
   }
 }
 

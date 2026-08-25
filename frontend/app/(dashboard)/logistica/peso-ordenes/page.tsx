@@ -544,7 +544,23 @@ export default function PesoOrdenesPage() {
                           className={ln.estado_linea === "sin_peso" ? "bg-destructive/5" : undefined}
                         >
                           <TableCell className="font-mono text-xs">{ln.codigo || "—"}</TableCell>
-                          <TableCell className="max-w-[160px] text-sm font-medium">{ln.producto || "—"}</TableCell>
+                          <TableCell className="max-w-[160px] text-sm font-medium">
+                            <span>{ln.producto || "—"}</span>
+                            {ln.weight_match?.status === "match_conflict" ||
+                            ln.match_status === "match_conflict" ? (
+                              <span className="mt-1 block text-[11px] font-normal text-amber-800">
+                                {ln.weight_match?.warning || "Asociación de peso pendiente"}
+                              </span>
+                            ) : ln.weight_match?.source === "barcode" ? (
+                              <span className="mt-1 block text-[11px] font-normal text-muted-foreground">
+                                Fuente del peso: Código de barras
+                              </span>
+                            ) : ln.weight_match?.source === "variant" ? (
+                              <span className="mt-1 block text-[11px] font-normal text-muted-foreground">
+                                Fuente del peso: Variante
+                              </span>
+                            ) : null}
+                          </TableCell>
                           <TableCell className="max-w-[140px] text-xs text-muted-foreground">
                             {ln.variante || "—"}
                           </TableCell>

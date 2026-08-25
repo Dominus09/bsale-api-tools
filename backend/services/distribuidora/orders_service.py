@@ -1300,6 +1300,85 @@ def _fetch_planning_rows_staged(
     return _merge_planning_rows_staged(base_rows, conf_by_doc, prob_by_doc, geo_by_client)
 
 
+def _attach_operational_status_batch(
+    cur,
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Adjunta billing/dispatch canónico en batch (sin N+1 / sin Bsale)."""
+    if not rows:
+        return rows
+    try:
+        from backend.services.distribuidora.oc_document_chain_resolver import (
+            resolve_operational_statuses_batch,
+        )
+        from backend.services.distribuidora.oc_operational_status import (
+            BILLING_INVOICED,
+            BILLING_INVOICED_CN_UNSPECIFIED,
+            BILLING_INVOICED_FULL_CN,
+            BILLING_INVOICED_PARTIAL_CN,
+        )
+
+        ids = [int(r["document_id"]) for r in rows if r.get("document_id") is not None]
+        statuses = resolve_operational_statuses_batch(cur, ids)
+        for r in rows:
+            st = statuses.get(int(r["document_id"]))
+            if st is None:
+                continue
+            r["billing_status"] = st.billing_status
+            r["dispatch_status"] = st.dispatch_status
+            r["planning_eligible"] = st.planning_eligible
+            r["dispatch_closed"] = st.dispatch_closed
+            r["fulfillment_status"] = st.fulfillment_status
+            r["billing_label_es"] = st.billing_label_es
+            r["credit_notes"] = st.credit_notes
+            r["evidence_source"] = st.evidence_source
+            if st.confirmed_invoice:
+                r["confirmed_invoice"] = st.confirmed_invoice
+            # Preferir etiqueta canónica cuando hay factura (NC no reabre a Pendiente).
+            if st.billing_status in (
+                BILLING_INVOICED,
+                BILLING_INVOICED_PARTIAL_CN,
+                BILLING_INVOICED_FULL_CN,
+                BILLING_INVOICED_CN_UNSPECIFIED,
+            ):
+                r["estado_real"] = st.billing_label_es
+                r["is_invoiced"] = True
+                r["purchase_status"] = "FACTURADA_CONFIRMADA"
+                if isinstance(r.get("status"), dict):
+                    r["status"] = {
+                        **r["status"],
+                        "code": "invoiced",
+                        "label": st.billing_label_es,
+                        "source": st.evidence_source or r["status"].get("source"),
+                    }
+            elif st.billing_label_es and r.get("purchase_status") == "PENDIENTE":
+                # Cadena indirecta u otra evidencia que el SQL legacy no vio.
+                if st.dispatch_closed:
+                    r["estado_real"] = st.billing_label_es
+    except Exception:
+        logger.exception("planning_rows operational status batch failed")
+    return rows
+
+
+def _fetch_planning_rows_staged_with_operational(
+    cur,
+    doc_ids: list[int],
+    stages: "PlanningRowsStageCollector",
+    audit: "RequestAudit | None" = None,
+) -> list[dict[str, Any]]:
+    rows = _fetch_planning_rows_staged(cur, doc_ids, stages, audit=audit)
+    t0 = time.perf_counter()
+    rows = _attach_operational_status_batch(cur, rows)
+    if hasattr(stages, "record"):
+        stages.record(
+            "load_operational_status",
+            elapsed_ms=round((time.perf_counter() - t0) * 1000.0, 2),
+            rows_count=len(rows),
+        )
+    return rows
+
+
+
 def list_dispatch_prep_observation_texts(
     *,
     emission_date_from: date,
@@ -1676,7 +1755,9 @@ def _list_dispatch_prep_planning_rows_impl(
                     rows_count=len(doc_ids),
                     step="pagination",
                 )
-            merged_raw = _fetch_planning_rows_staged(cur, doc_ids, stages, audit=audit)
+            merged_raw = _fetch_planning_rows_staged_with_operational(
+                cur, doc_ids, stages, audit=audit
+            )
             t_build = time.perf_counter()
             merged = [_serialize_row(r) for r in merged_raw]
             logger.info(

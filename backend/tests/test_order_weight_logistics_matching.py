@@ -159,6 +159,8 @@ def test_variant_conflict_resolved_by_barcode_status():
     assert len(lines) == 1
     assert lines[0]["warnings"] == ["variant_conflict_resolved_by_barcode"]
     assert lines[0]["peso_unitario_kg"] is not None
+    assert lines[0]["weight_match"]["strategy"] == "matched_barcode_after_variant_conflict"
+    assert lines[0]["weight_match"]["source"] == "barcode"
 
 
 def test_conflict_still_allows_snapshot_when_other_lines_ok(monkeypatch):
@@ -236,3 +238,7 @@ def test_order_lines_sql_uses_only_cardinality_safe_canonical_source():
     # Barcode lateral ya no se bloquea cuando hay conflicto de variant
     assert "AND pl_v.match_count = 0" not in normalized
     assert "matched_barcode_after_variant_conflict" in normalized
+    assert "matched_barcode_after_identity_conflict" not in normalized
+    assert "match_conflict" in normalized
+    assert "dd.document_id = %s" in normalized
+    assert "source_document_id" not in normalized

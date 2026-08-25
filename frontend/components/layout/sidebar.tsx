@@ -36,6 +36,7 @@ import {
   UserCircle2,
   Stethoscope,
   PackageCheck,
+  Truck,
   Crosshair,
   UsersRound,
   FileWarning,
@@ -85,6 +86,7 @@ const navSections: { title: string; items: NavItem[] }[] = [
         icon: Package,
       },
       { href: "/logistica/peso-ordenes", label: "Peso de Órdenes", icon: PackageCheck },
+      { href: "/logistica/cargas", label: "Cargas", icon: Truck },
     ],
   },
   {

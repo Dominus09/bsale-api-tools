@@ -51,6 +51,13 @@ from backend.utils.invoicing_auto_confirm import (
     apply_operational_invoicing_rows,
     invoicing_summary_counts,
 )
+from backend.services.distribuidora.oc_document_chain_resolver import (
+    resolve_operational_statuses_batch,
+)
+from backend.services.distribuidora.oc_operational_status import (
+    FULFILL_EXCLUDED_PREEXISTING,
+    plan_progress_counts,
+)
 from backend.utils.dispatch_plan_picking import (
     build_picking_client_excel,
     build_picking_product_excel,
@@ -1150,8 +1157,48 @@ def _invoicing_payload_from_rows(
     invoicing_source: str = "full",
     invoicing_degraded: bool = False,
     extra_warnings: list[dict[str, Any]] | None = None,
+    operational_by_oc: dict[int, Any] | None = None,
 ) -> dict[str, Any]:
     items = serialize_rows(apply_operational_invoicing_rows(rows))
+    exclusions: list[dict[str, Any]] = []
+    if operational_by_oc:
+        for x in items:
+            oid = int(x.get("oc_document_id") or 0)
+            st = operational_by_oc.get(oid)
+            if st is None:
+                continue
+            x["billing_status"] = st.billing_status
+            x["dispatch_status"] = st.dispatch_status
+            x["planning_eligible"] = st.planning_eligible
+            x["dispatch_closed"] = st.dispatch_closed
+            x["fulfillment_status"] = st.fulfillment_status
+            x["excluded_reason"] = st.excluded_reason
+            x["completion_source"] = st.completion_source
+            x["billing_label_es"] = st.billing_label_es
+            x["fulfillment_label_es"] = st.fulfillment_label_es
+            x["credit_notes"] = st.credit_notes
+            if st.confirmed_invoice and not x.get("related_document_id"):
+                x["related_document_id"] = st.confirmed_invoice.get("document_id")
+                x["related_document_number"] = st.confirmed_invoice.get("number")
+                if st.evidence_source in ("direct_related", "indirect_related"):
+                    x["status"] = "confirmed"
+                    x["is_invoiced_confirmed"] = True
+                    x["relation_source"] = (
+                        "relateddetailid"
+                        if st.evidence_source == "direct_related"
+                        else "indirect_related"
+                    )
+            if st.fulfillment_status == FULFILL_EXCLUDED_PREEXISTING:
+                exclusions.append(
+                    {
+                        "oc_document_id": oid,
+                        "oc_number": x.get("oc_number"),
+                        "excluded_reason": st.excluded_reason,
+                        "billing_label_es": st.billing_label_es,
+                        "confirmed_invoice": st.confirmed_invoice,
+                        "message": "Excluida: ya estaba facturada antes de la planificación",
+                    }
+                )
     summary = invoicing_summary_counts(items)
     warnings = list(extra_warnings or [])
     warnings.extend(
@@ -1162,6 +1209,7 @@ def _invoicing_payload_from_rows(
         }
         for x in items
         if x.get("status") == "missing"
+        and x.get("fulfillment_status") != FULFILL_EXCLUDED_PREEXISTING
     )
     probable_notes = [
         {
@@ -1174,14 +1222,24 @@ def _invoicing_payload_from_rows(
         for x in items
         if x.get("status") == "probable"
     ]
-    ready = summary["missing"] == 0 and summary["confirmed"] > 0
+    eligible = int(summary.get("eligible") or 0)
+    ready = (
+        summary["missing"] == 0
+        and summary["confirmed"] > 0
+        and summary["confirmed"] == eligible
+    )
+    progress = None
+    if operational_by_oc:
+        progress = plan_progress_counts(list(operational_by_oc.values()))
     return {
         "dispatch_plan_id": plan_id,
         "items": items,
         "summary": summary,
         "warnings": warnings,
         "probable_notes": probable_notes,
-        "ready_for_picking": ready and summary["confirmed"] == summary["total"],
+        "exclusions": exclusions,
+        "operational_progress": progress,
+        "ready_for_picking": ready,
         "invoicing_source": invoicing_source,
         "invoicing_degraded": invoicing_degraded,
     }
@@ -1274,12 +1332,58 @@ def get_invoiced_documents(
                     "Coincidencias probables no evaluadas."
                 )
             )
+        operational_by_oc: dict[int, Any] = {}
+        try:
+            plan_row = repo.get_plan_by_id(cur, plan_id)
+            planned_at = None
+            if plan_row and plan_row.get("created_at"):
+                planned_at = plan_row["created_at"]
+                if getattr(planned_at, "tzinfo", None) is None:
+                    planned_at = planned_at.replace(tzinfo=timezone.utc)
+            oc_ids = [
+                int(r["oc_document_id"])
+                for r in rows
+                if r.get("oc_document_id") is not None
+            ]
+            planned_at_by_oc: dict[int, datetime] = {}
+            if oc_ids:
+                cur.execute(
+                    """
+                    SELECT oc_document_id, created_at
+                    FROM distribuidora.dispatch_plan_orders
+                    WHERE dispatch_plan_id = %s AND oc_document_id = ANY(%s)
+                    """,
+                    (plan_id, oc_ids),
+                )
+                for oid, added in cur.fetchall():
+                    if added is None:
+                        added = planned_at
+                    if added is None:
+                        continue
+                    if getattr(added, "tzinfo", None) is None:
+                        added = added.replace(tzinfo=timezone.utc)
+                    planned_at_by_oc[int(oid)] = added
+                # Fallback plan.created_at for any OC missing row timestamp
+                if planned_at is not None:
+                    for oid in oc_ids:
+                        planned_at_by_oc.setdefault(int(oid), planned_at)
+                operational_by_oc = resolve_operational_statuses_batch(
+                    cur,
+                    oc_ids,
+                    planned_at_by_oc=planned_at_by_oc,
+                    in_plan=True,
+                )
+        except Exception as exc:
+            logger.warning(
+                "[OC_OPERATIONAL] plan_id=%s enrich failed: %s", plan_id, exc
+            )
         return _invoicing_payload_from_rows(
             plan_id,
             rows,
             invoicing_source=source,
             invoicing_degraded=degraded,
             extra_warnings=extra,
+            operational_by_oc=operational_by_oc or None,
         )
 
     def _empty_from_invoicing_failure(
