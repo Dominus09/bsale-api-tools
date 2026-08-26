@@ -57,18 +57,15 @@ _DISPATCH_PREP_DOC_FILTER = """
     AND d.emission_date < (%s::date + interval '1 day')
 """.strip()
 
-# Facturación OC sin v_orders_purchase_status / v_documents_latest (misma semántica que 026).
+# Facturación OC: arista confirmada por related_document_type (1/6).
+# No exigir fila en documents (related huérfano no debe reabrir a pending).
 _OC_IS_INVOICED_SQL = """
 EXISTS (
     SELECT 1
     FROM distribuidora.document_details dd
     INNER JOIN distribuidora.document_related dr ON dr.detail_id = dd.detail_id
-    INNER JOIN distribuidora.documents inv
-        ON inv.document_id = dr.related_document_id
-       AND inv.document_type_id IN (1, 6)
-       AND inv.company_id = d.company_id
-       AND inv.office_id = d.office_id
     WHERE dd.document_id = d.document_id
+      AND dr.related_document_type IN (1, 6)
 )
 """.strip()
 
@@ -78,10 +75,13 @@ _DISPATCH_PREP_NOT_INVOICED_FILTER = f"(%s = FALSE OR NOT {_OC_IS_INVOICED_SQL})
 
 def _dispatch_prep_invoice_filter_sql(only_not_invoiced: bool) -> str:
     """
-    Filtro de facturación para listados.
+    Filtro de facturación para listados Pre-despacho.
 
-    - True: excluye OC con link confirmado a boleta/factura (1/6).
-    - False: no aplica EXISTS (incluye facturadas) — evita costo del OR TRUE.
+    - True: excluye OC con related confirmado tipo 1/6 (vía related_document_type).
+    - False: no aplica EXISTS (incluye facturadas).
+
+    Nota: ``invoiced`` / ``invoiced_with_*_credit_note`` son closed logísticamente;
+    la NC no reabre elegibilidad. El filtro SQL solo mira related 1/6.
     """
     if only_not_invoiced:
         return f"(NOT {_OC_IS_INVOICED_SQL})"
@@ -195,12 +195,8 @@ CASE
         SELECT 1
         FROM distribuidora.document_related dr
         INNER JOIN distribuidora.document_details dd ON dd.detail_id = dr.detail_id
-        INNER JOIN distribuidora.documents inv
-            ON inv.document_id = dr.related_document_id
-           AND inv.document_type_id IN (1, 6)
-           AND inv.company_id = d.company_id
-           AND inv.office_id = d.office_id
         WHERE dd.document_id = d.document_id
+          AND dr.related_document_type IN (1, 6)
     ) THEN 'Facturada'
     ELSE 'Pendiente'
 END
@@ -241,18 +237,17 @@ _PLANNING_ROWS_ENRICH_STATUS_JOINS = """
 LEFT JOIN LATERAL (
     SELECT
         TRUE AS is_invoiced,
-        inv.document_id AS invoicing_document_id,
-        inv.document_type_id AS invoicing_document_type_id,
+        COALESCE(inv.document_id, dr.related_document_id) AS invoicing_document_id,
+        COALESCE(inv.document_type_id, dr.related_document_type) AS invoicing_document_type_id,
         inv.number AS invoicing_number
     FROM distribuidora.document_details dd
     INNER JOIN distribuidora.document_related dr ON dr.detail_id = dd.detail_id
-    INNER JOIN distribuidora.documents inv
+    LEFT JOIN distribuidora.documents inv
         ON inv.document_id = dr.related_document_id
        AND inv.document_type_id IN (1, 6)
-       AND inv.company_id = 3
-       AND inv.office_id = 1
     WHERE dd.document_id = d.document_id
-    ORDER BY inv.emission_date DESC NULLS LAST, inv.document_id DESC
+      AND dr.related_document_type IN (1, 6)
+    ORDER BY inv.emission_date DESC NULLS LAST, dr.related_document_id DESC
     LIMIT 1
 ) conf ON TRUE
 LEFT JOIN LATERAL (
@@ -964,19 +959,19 @@ def _planning_rows_purchase_status_sql() -> str:
             FROM page_ids p
             CROSS JOIN LATERAL (
                 SELECT
-                    inv.document_id AS invoicing_document_id,
-                    inv.document_type_id AS invoicing_document_type_id,
+                    COALESCE(inv.document_id, dr.related_document_id) AS invoicing_document_id,
+                    COALESCE(inv.document_type_id, dr.related_document_type)
+                        AS invoicing_document_type_id,
                     inv.number AS invoicing_number
                 FROM distribuidora.document_details dd
                 INNER JOIN distribuidora.document_related dr
                     ON dr.detail_id = dd.detail_id
-                INNER JOIN distribuidora.documents inv
+                LEFT JOIN distribuidora.documents inv
                     ON inv.document_id = dr.related_document_id
                    AND inv.document_type_id IN (1, 6)
-                   AND inv.company_id = 3
-                   AND inv.office_id = 1
                 WHERE dd.document_id = p.document_id
-                ORDER BY inv.emission_date DESC NULLS LAST, inv.document_id DESC
+                  AND dr.related_document_type IN (1, 6)
+                ORDER BY inv.emission_date DESC NULLS LAST, dr.related_document_id DESC
                 LIMIT 1
             ) inv
             """
@@ -1373,10 +1368,17 @@ def _attach_operational_status_batch(
                         "label": st.billing_label_es,
                         "source": st.evidence_source or r["status"].get("source"),
                     }
+                # NC total/parcial: etiqueta financiera, pero NO reabrir a Pendiente.
+                r["planning_eligible"] = False
+                r["dispatch_closed"] = True
             elif st.billing_label_es and r.get("purchase_status") == "PENDIENTE":
                 # Cadena indirecta u otra evidencia que el SQL legacy no vio.
                 if st.dispatch_closed:
                     r["estado_real"] = st.billing_label_es
+                    if st.billing_status.startswith("invoiced"):
+                        r["purchase_status"] = "FACTURADA_CONFIRMADA"
+                        r["is_invoiced"] = True
+                        r["planning_eligible"] = False
     except Exception:
         logger.exception("planning_rows operational status batch failed")
     return rows

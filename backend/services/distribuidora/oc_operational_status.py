@@ -426,6 +426,33 @@ def blocks_planning_admission(status: OcOperationalStatus) -> bool:
     return (not status.planning_eligible) or status.dispatch_closed
 
 
+def is_predespacho_pending_row(
+    *,
+    billing_status: str | None,
+    planning_eligible: bool | None = None,
+    dispatch_closed: bool | None = None,
+) -> bool:
+    """
+    Una fila solo puede figurar como «Pendiente por facturar» en Pre-despacho si
+    es elegible y no está cerrada. Facturada (+ NC) y anulada quedan fuera.
+    """
+    billing = billing_status or BILLING_PENDING
+    if billing == BILLING_CANCELLED:
+        return False
+    if billing in (
+        BILLING_INVOICED,
+        BILLING_INVOICED_PARTIAL_CN,
+        BILLING_INVOICED_FULL_CN,
+        BILLING_INVOICED_CN_UNSPECIFIED,
+    ):
+        return False
+    if dispatch_closed is True:
+        return False
+    if planning_eligible is False:
+        return False
+    return billing in (BILLING_PENDING, BILLING_PROBABLE)
+
+
 ADMISSION_BLOCK_MESSAGE = (
     "Esta orden ya fue facturada y no corresponde a una nueva planificación."
 )

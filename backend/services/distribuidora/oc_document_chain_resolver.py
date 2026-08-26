@@ -247,16 +247,19 @@ def resolve_oc_operational_status_from_parts(
 _EDGES_SQL = """
 SELECT
     dd.document_id AS from_document_id,
-    inv.document_id AS to_document_id,
+    dr.related_document_id AS to_document_id,
     inv.number AS to_number,
-    inv.document_type_id AS to_document_type_id,
+    COALESCE(inv.document_type_id, dr.related_document_type) AS to_document_type_id,
     inv.total_amount AS to_total_amount,
     inv.raw_data AS to_raw_data,
-    inv.emission_date AS to_emission_date
+    inv.emission_date AS to_emission_date,
+    COALESCE(inv.state, 0) AS to_state
 FROM distribuidora.document_details dd
 INNER JOIN distribuidora.document_related dr ON dr.detail_id = dd.detail_id
-INNER JOIN distribuidora.documents inv ON inv.document_id = dr.related_document_id
+LEFT JOIN distribuidora.documents inv ON inv.document_id = dr.related_document_id
 WHERE dd.document_id = ANY(%s)
+  AND dr.related_document_id IS NOT NULL
+  AND COALESCE(inv.document_type_id, dr.related_document_type) IS NOT NULL
 """
 
 
