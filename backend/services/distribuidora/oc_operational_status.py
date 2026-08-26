@@ -28,9 +28,16 @@ FULFILL_PENDING = "pending"
 FULFILL_BY_PICKING = "fulfilled_by_picking"
 FULFILL_BY_INVOICE = "fulfilled_by_invoice"
 FULFILL_EXCLUDED_PREEXISTING = "excluded_preexisting_invoice"
+FULFILL_EXCLUDED_CANCELLED = "excluded_cancelled_order"
 FULFILL_UNRESOLVED = "unresolved"
 
 EXCLUDED_REASON_ALREADY_INVOICED = "already_invoiced_before_planning"
+EXCLUDED_REASON_CANCELLED_ORDER = "cancelled_order"
+
+# Precedencia canónica: CANCELLED > CONFIRMED INVOICE > PROBABLE > PENDING
+FULFILL_EXCLUDED_STATUSES = frozenset(
+    {FULFILL_EXCLUDED_PREEXISTING, FULFILL_EXCLUDED_CANCELLED}
+)
 
 INVOICE_DOC_TYPES = frozenset({1, 6})
 CREDIT_NOTE_DOC_TYPE = 9
@@ -52,6 +59,7 @@ FULFILL_LABELS_ES = {
     FULFILL_BY_PICKING: "Completada",
     FULFILL_BY_INVOICE: "Completada",
     FULFILL_EXCLUDED_PREEXISTING: "Excluida: ya estaba facturada",
+    FULFILL_EXCLUDED_CANCELLED: "Excluida: orden anulada",
     FULFILL_UNRESOLVED: "Revisión necesaria",
 }
 
@@ -193,6 +201,13 @@ def classify_credit_note_coverage(
 
 
 def derive_billing_status(chain: OcDocumentChain) -> str:
+    """
+    Precedencia canónica:
+    CANCELLED > CONFIRMED INVOICE > PROBABLE > PENDING.
+
+    Si ``documents.state != 0`` (Bsale anulación, p.ej. 8888), cancelled gana
+    incluso si existen related 1/6 o probable — no inventar semántica híbrida.
+    """
     if int(chain.oc_state or 0) != 0:
         return BILLING_CANCELLED
     if chain.confirmed_invoices:
@@ -216,9 +231,10 @@ def derive_dispatch_flags(billing_status: str) -> tuple[bool, bool, str]:
 
     Regla crítica: factura confirmada (con o sin NC) cierra despacho y
     NO vuelve a pending por nota de crédito.
+    OC anulada: planning_eligible=false, dispatch_closed=true (no requiere factura).
     """
     if billing_status == BILLING_CANCELLED:
-        return False, True, DISPATCH_CLOSED
+        return False, True, DISPATCH_EXCLUDED
     if billing_status in (
         BILLING_INVOICED,
         BILLING_INVOICED_PARTIAL_CN,
@@ -237,6 +253,10 @@ def earliest_confirmed_invoice_issued_at(chain: OcDocumentChain) -> datetime | N
     return min(times) if times else None
 
 
+def is_fulfillment_excluded(fulfillment_status: str | None) -> bool:
+    return fulfillment_status in FULFILL_EXCLUDED_STATUSES
+
+
 def resolve_plan_fulfillment(
     chain: OcDocumentChain,
     *,
@@ -250,6 +270,15 @@ def resolve_plan_fulfillment(
     """
     billing = derive_billing_status(chain)
     eligible, closed, base_dispatch = derive_dispatch_flags(billing)
+
+    # Anulada: fuera del denominador; no cuenta como pending ni como fulfilled_by_invoice.
+    if billing == BILLING_CANCELLED:
+        return (
+            FULFILL_EXCLUDED_CANCELLED,
+            EXCLUDED_REASON_CANCELLED_ORDER,
+            None,
+            DISPATCH_EXCLUDED,
+        )
 
     if force_excluded or (
         closed
@@ -317,11 +346,15 @@ def build_operational_status(
                 has_picking=has_picking,
             )
         )
-        if fulfillment == FULFILL_EXCLUDED_PREEXISTING:
+        if is_fulfillment_excluded(fulfillment):
             eligible = False
             closed = True
 
-    confirmed = chain.confirmed_invoices[0].as_dict() if chain.confirmed_invoices else None
+    confirmed = (
+        chain.confirmed_invoices[0].as_dict()
+        if chain.confirmed_invoices and billing != BILLING_CANCELLED
+        else None
+    )
     path: list[str] = []
     if chain.relation_paths:
         path = list(chain.relation_paths[0])
@@ -352,12 +385,12 @@ def plan_progress_counts(statuses: list[OcOperationalStatus]) -> dict[str, Any]:
     eligible = [
         s
         for s in statuses
-        if s.fulfillment_status != FULFILL_EXCLUDED_PREEXISTING
+        if not is_fulfillment_excluded(s.fulfillment_status)
     ]
     excluded = [
         s
         for s in statuses
-        if s.fulfillment_status == FULFILL_EXCLUDED_PREEXISTING
+        if is_fulfillment_excluded(s.fulfillment_status)
     ]
     completed = [
         s
@@ -396,3 +429,13 @@ def blocks_planning_admission(status: OcOperationalStatus) -> bool:
 ADMISSION_BLOCK_MESSAGE = (
     "Esta orden ya fue facturada y no corresponde a una nueva planificación."
 )
+
+ADMISSION_BLOCK_MESSAGE_CANCELLED = (
+    "Esta orden está anulada y no corresponde a una nueva planificación."
+)
+
+
+def admission_block_message(status: OcOperationalStatus) -> str:
+    if status.billing_status == BILLING_CANCELLED:
+        return ADMISSION_BLOCK_MESSAGE_CANCELLED
+    return ADMISSION_BLOCK_MESSAGE

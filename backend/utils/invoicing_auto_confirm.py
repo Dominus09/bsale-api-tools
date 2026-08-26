@@ -98,7 +98,14 @@ def invoicing_summary_counts(items: list[dict[str, Any]]) -> dict[str, int]:
     missing = 0
     excluded = 0
     for x in items:
-        if x.get("fulfillment_status") == "excluded_preexisting_invoice":
+        fulfillment = x.get("fulfillment_status")
+        if fulfillment in (
+            "excluded_preexisting_invoice",
+            "excluded_cancelled_order",
+        ) or x.get("excluded_reason") in (
+            "already_invoiced_before_planning",
+            "cancelled_order",
+        ) or x.get("billing_status") == "cancelled":
             excluded += 1
             continue
         st = x.get("status")

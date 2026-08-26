@@ -6,6 +6,7 @@ export type PurchaseInvoiceStatusCode =
   | "PROBABLE_FACTURADA_MEDIUM"
   | "PROBABLE_FACTURADA_LOW"
   | "PENDIENTE"
+  | "ANULADA"
 
 export type PurchaseInvoiceStatusFilter =
   | "all"
@@ -41,14 +42,29 @@ const HIGH: PurchaseInvoiceStatusCode = "PROBABLE_FACTURADA_HIGH"
 const MEDIUM: PurchaseInvoiceStatusCode = "PROBABLE_FACTURADA_MEDIUM"
 const LOW: PurchaseInvoiceStatusCode = "PROBABLE_FACTURADA_LOW"
 const PENDING: PurchaseInvoiceStatusCode = "PENDIENTE"
+const CANCELLED: PurchaseInvoiceStatusCode = "ANULADA"
 
 /** Umbrales operacionales (alineados con backend invoicing_auto_confirm). */
 export const AUTO_CONFIRM_MIN_SCORE = 75
 export const PROBABLE_MIN_SCORE = 60
 
+function isCancelledRow(row: PurchaseInvoiceStatusFields): boolean {
+  const raw =
+    typeof row.purchase_status === "string" ? row.purchase_status.trim() : ""
+  if (raw === CANCELLED || raw === "cancelled") return true
+  if (row.billing_status === "cancelled") return true
+  if (row.excluded_reason === "cancelled_order") return true
+  const estado =
+    typeof row.estado_real === "string" ? row.estado_real.trim() : ""
+  return estado === "Anulada" || estado.toLowerCase() === "anulada"
+}
+
 export function resolvePurchaseStatusCode(
   row: PurchaseInvoiceStatusFields,
 ): PurchaseInvoiceStatusCode {
+  // Precedencia: CANCELLED > CONFIRMED > PROBABLE > PENDING
+  if (isCancelledRow(row)) return CANCELLED
+
   const raw =
     typeof row.purchase_status === "string" ? row.purchase_status.trim() : ""
   if (raw === CONFIRMED) return CONFIRMED
@@ -66,7 +82,7 @@ export function resolvePurchaseStatusCode(
     estado === "Facturada" ||
     estado.startsWith("Facturada con NC") ||
     row.is_invoiced === true ||
-    row.dispatch_closed === true
+    (row.dispatch_closed === true && row.billing_status !== "cancelled")
   ) {
     return CONFIRMED
   }
@@ -94,6 +110,7 @@ export function isAutoConfirmedOperational(row: PurchaseInvoiceStatusFields): bo
 }
 
 export function isBsaleConfirmed(row: PurchaseInvoiceStatusFields): boolean {
+  if (isCancelledRow(row)) return false
   if (row.is_invoiced === true) return true
   const raw =
     typeof row.purchase_status === "string" ? row.purchase_status.trim() : ""
@@ -103,7 +120,7 @@ export function isBsaleConfirmed(row: PurchaseInvoiceStatusFields): boolean {
   return (
     estado === "Facturada" ||
     estado.startsWith("Facturada con NC") ||
-    row.dispatch_closed === true
+    (row.dispatch_closed === true && row.billing_status !== "cancelled")
   )
 }
 
@@ -118,6 +135,7 @@ export function purchaseStatusBadgeLabel(
   ) {
     return row.estado_real
   }
+  if (code === CANCELLED) return "Anulada"
   if (code === CONFIRMED && row && isAutoConfirmedOperational(row)) {
     const sc = operationalScore(row)
     return sc != null ? `Auto-confirmada (score ${Math.round(sc)})` : "Auto-confirmada"
@@ -142,6 +160,8 @@ export function purchaseStatusBadgeClass(code: PurchaseInvoiceStatusCode): strin
     case MEDIUM:
     case LOW:
       return "border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-50 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100"
+    case CANCELLED:
+      return "border-rose-200 bg-rose-50 text-rose-800 hover:bg-rose-50 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-200"
     default:
       return "border-slate-200 bg-slate-100 text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300"
   }

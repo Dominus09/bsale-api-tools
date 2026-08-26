@@ -11,6 +11,7 @@ from backend.services.distribuidora.oc_document_chain_resolver import (
 )
 from backend.services.distribuidora.oc_operational_status import (
     ADMISSION_BLOCK_MESSAGE,
+    BILLING_CANCELLED,
     BILLING_INVOICED,
     BILLING_INVOICED_FULL_CN,
     BILLING_INVOICED_PARTIAL_CN,
@@ -19,7 +20,9 @@ from backend.services.distribuidora.oc_operational_status import (
     DISPATCH_COMPLETED,
     DISPATCH_EXCLUDED,
     EXCLUDED_REASON_ALREADY_INVOICED,
+    EXCLUDED_REASON_CANCELLED_ORDER,
     FULFILL_BY_INVOICE,
+    FULFILL_EXCLUDED_CANCELLED,
     FULFILL_EXCLUDED_PREEXISTING,
     FULFILL_PENDING,
     FULFILL_UNRESOLVED,
@@ -362,3 +365,95 @@ def test_pending_in_plan():
         in_plan=True,
     )
     assert st.fulfillment_status == FULFILL_PENDING
+
+
+def test_cancelled_without_related_is_cancelled_not_pending():
+    st = resolve_oc_operational_status_from_parts(
+        _oc(state=8888),
+        [],
+    )
+    assert st.billing_status == BILLING_CANCELLED
+    assert st.billing_status != BILLING_PENDING
+    assert st.planning_eligible is False
+    assert st.dispatch_closed is True
+    assert st.dispatch_status == DISPATCH_EXCLUDED
+    assert blocks_planning_admission(st) is True
+
+
+def test_cancelled_dominates_probable():
+    st = resolve_oc_operational_status_from_parts(
+        _oc(state=8888),
+        [],
+        probable={
+            "document_id": 999,
+            "number": 1,
+            "document_type_id": 6,
+            "score": 100,
+            "total_amount": 10000,
+            "raw_data": {},
+        },
+    )
+    assert st.billing_status == BILLING_CANCELLED
+    assert st.billing_status != BILLING_PROBABLE
+
+
+def test_cancelled_in_plan_excluded_cancelled_order():
+    st = resolve_oc_operational_status_from_parts(
+        _oc(state=8888),
+        [],
+        planned_at=TS_PLAN,
+        in_plan=True,
+    )
+    assert st.fulfillment_status == FULFILL_EXCLUDED_CANCELLED
+    assert st.excluded_reason == EXCLUDED_REASON_CANCELLED_ORDER
+    assert st.dispatch_status == DISPATCH_EXCLUDED
+
+
+def test_cancelled_does_not_block_100_percent():
+    cancelled = resolve_oc_operational_status_from_parts(
+        _oc(100, 1, state=8888),
+        [],
+        planned_at=TS_PLAN,
+        in_plan=True,
+    )
+    completed = resolve_oc_operational_status_from_parts(
+        _oc(101, 2),
+        [_edge(101, 201, 6, issued=TS_AFTER)],
+        planned_at=TS_PLAN,
+        in_plan=True,
+    )
+    prog = plan_progress_counts([cancelled, completed])
+    assert cancelled.fulfillment_status == FULFILL_EXCLUDED_CANCELLED
+    assert prog["eligible_planned_orders"] == 1
+    assert prog["excluded_orders"] == 1
+    assert prog["completion_percent"] == 100.0
+    assert prog["fully_complete"] is True
+    assert prog["margin_blocked"] is False
+
+
+def test_active_without_related_remains_pending():
+    st = resolve_oc_operational_status_from_parts(
+        _oc(state=0),
+        [],
+    )
+    assert st.billing_status == BILLING_PENDING
+    assert st.planning_eligible is True
+    assert st.dispatch_closed is False
+
+
+def test_confirmed_then_cancelled_state_wins():
+    """
+    Semántica real Bsale: documents.state != 0 ⇒ anulada.
+    Si la OC queda anulada tras haber tenido related 1/6, cancelled domina
+    (no inventar híbrido facturada+anulada).
+    """
+    st = resolve_oc_operational_status_from_parts(
+        _oc(state=8888),
+        [_edge(100, 200, 6, number=1, issued=TS_AFTER)],
+        planned_at=TS_PLAN,
+        in_plan=True,
+    )
+    assert st.billing_status == BILLING_CANCELLED
+    assert st.fulfillment_status == FULFILL_EXCLUDED_CANCELLED
+    assert st.excluded_reason == EXCLUDED_REASON_CANCELLED_ORDER
+    assert st.confirmed_invoice is None

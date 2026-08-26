@@ -146,6 +146,22 @@ def test_cancelled_invoice_not_facturada_via_state():
     assert row["status"]["code"] == "cancelled"
 
 
+def test_cancelled_dominates_confirmed_invoice_in_row():
+    row: dict = {"state": 8888}
+    conf = {
+        "is_invoiced": True,
+        "invoicing_document_id": 99,
+        "invoicing_number": 123,
+        "invoicing_document_type_id": 6,
+    }
+    prob = {"score": 100, "candidate_document_id": 88, "candidate_number": 1}
+    _apply_status_fields_to_row(row, conf, prob)
+    assert row["purchase_status"] == "ANULADA"
+    assert row["estado_real"] == "Anulada"
+    assert row["status"]["code"] == "cancelled"
+    assert row.get("is_invoiced") is False
+
+
 def test_endpoint_fields_delivery_and_status_contract():
     row = {
         "observaciones": "Jueves",

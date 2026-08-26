@@ -1055,17 +1055,19 @@ def _apply_status_fields_to_row(
     conf: dict[str, Any] | None,
     prob: dict[str, Any] | None,
 ) -> None:
-    is_inv = bool(conf and conf.get("is_invoiced"))
-    score = prob.get("score") if prob and not is_inv else None
+    # Precedencia: CANCELLED > CONFIRMED > PROBABLE > PENDING
+    is_cancelled = int(row.get("state") or 0) != 0
+    is_inv = bool(conf and conf.get("is_invoiced")) and not is_cancelled
+    score = prob.get("score") if prob and not is_inv and not is_cancelled else None
     score_f = float(score) if score is not None else None
 
-    if is_inv:
-        purchase_status = "FACTURADA_CONFIRMADA"
-        estado_real = "Facturada"
-        probable_tier = None
-    elif int(row.get("state") or 0) != 0:
+    if is_cancelled:
         purchase_status = "ANULADA"
         estado_real = "Anulada"
+        probable_tier = None
+    elif is_inv:
+        purchase_status = "FACTURADA_CONFIRMADA"
+        estado_real = "Facturada"
         probable_tier = None
     elif score_f is not None and score_f >= 90:
         purchase_status = "PROBABLE_FACTURADA_HIGH"
@@ -1098,7 +1100,9 @@ def _apply_status_fields_to_row(
         "PENDIENTE": "pending",
     }.get(purchase_status, "pending")
     status_source = (
-        "linked_invoice"
+        "local_state"
+        if is_cancelled
+        else "linked_invoice"
         if is_inv
         else "probable_match"
         if score_f is not None and score_f >= 60
@@ -1110,7 +1114,12 @@ def _apply_status_fields_to_row(
         "source": status_source,
     }
 
-    if is_inv and conf:
+    if is_cancelled:
+        row["associated_document_label"] = None
+        row["display_score"] = None
+        row["invoice"] = None
+        row["is_invoiced"] = False
+    elif is_inv and conf:
         tipo = conf.get("invoicing_document_type_id")
         tipo_lbl = (
             "Boleta"
@@ -1167,6 +1176,7 @@ def _merge_planning_rows_staged(
             "document_id": doc_id,
             "oc": base.get("oc"),
             "client_id": client_id,
+            "state": base.get("state"),
             "nombre_fantasia": (geo or {}).get("nombre_fantasia"),
             "municipality": base.get("municipality")
             or (geo or {}).get("municipality"),
@@ -1312,6 +1322,7 @@ def _attach_operational_status_batch(
             resolve_operational_statuses_batch,
         )
         from backend.services.distribuidora.oc_operational_status import (
+            BILLING_CANCELLED,
             BILLING_INVOICED,
             BILLING_INVOICED_CN_UNSPECIFIED,
             BILLING_INVOICED_FULL_CN,
@@ -1329,13 +1340,24 @@ def _attach_operational_status_batch(
             r["planning_eligible"] = st.planning_eligible
             r["dispatch_closed"] = st.dispatch_closed
             r["fulfillment_status"] = st.fulfillment_status
+            r["excluded_reason"] = st.excluded_reason
             r["billing_label_es"] = st.billing_label_es
             r["credit_notes"] = st.credit_notes
             r["evidence_source"] = st.evidence_source
             if st.confirmed_invoice:
                 r["confirmed_invoice"] = st.confirmed_invoice
-            # Preferir etiqueta canónica cuando hay factura (NC no reabre a Pendiente).
-            if st.billing_status in (
+            if st.billing_status == BILLING_CANCELLED:
+                r["estado_real"] = st.billing_label_es or "Anulada"
+                r["is_invoiced"] = False
+                r["purchase_status"] = "ANULADA"
+                if isinstance(r.get("status"), dict):
+                    r["status"] = {
+                        **r["status"],
+                        "code": "cancelled",
+                        "label": r["estado_real"],
+                        "source": "local_state",
+                    }
+            elif st.billing_status in (
                 BILLING_INVOICED,
                 BILLING_INVOICED_PARTIAL_CN,
                 BILLING_INVOICED_FULL_CN,

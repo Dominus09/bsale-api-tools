@@ -1,4 +1,4 @@
-"""Tests: catchup OC→boleta/factura (dry-run real, apply guardado, dedupe)."""
+﻿"""Tests: catchup OCâ†’boleta/factura (dry-run real, apply guardado, dedupe)."""
 
 from __future__ import annotations
 
@@ -88,7 +88,7 @@ def test_fetch_relateddetailid_items_429_raises_rate_limited():
     "backend.services.distribuidora.catchup_oc_invoice_relations_service._bsale_source_id_from_pg"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service._oc_number_for_document"
+    "backend.services.distribuidora.catchup_oc_invoice_relations_service._oc_number_and_state"
 )
 def test_discover_invoice_relation_factura(
     mock_oc_num,
@@ -98,7 +98,7 @@ def test_discover_invoice_relation_factura(
     mock_fetch_items,
     mock_triples,
 ):
-    mock_oc_num.return_value = 68933
+    mock_oc_num.return_value = (68933, 0)
     mock_source.return_value = (100, 68933)
     mock_existing.return_value = (set(), set())
     mock_details.return_value = ([10, 11], 1)
@@ -113,7 +113,7 @@ def test_discover_invoice_relation_factura(
     assert res["confirmed_before"] is False
     assert res["would_confirm"] is True
     assert res["status"] == "would_insert"
-    assert len(res["edges"]) == 4  # 2 detail_ids × 2 triples por consulta Bsale
+    assert len(res["edges"]) == 4  # 2 detail_ids Ã— 2 triples por consulta Bsale
     assert len(res["unique_related_documents"]) == 1
     assert all(e["relation_source"] == "bsale_relateddetailid" for e in res["edges"])
 
@@ -134,7 +134,7 @@ def test_discover_invoice_relation_factura(
     "backend.services.distribuidora.catchup_oc_invoice_relations_service._bsale_source_id_from_pg"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service._oc_number_for_document"
+    "backend.services.distribuidora.catchup_oc_invoice_relations_service._oc_number_and_state"
 )
 def test_discover_boleta_and_existing(
     mock_oc_num,
@@ -144,7 +144,7 @@ def test_discover_boleta_and_existing(
     mock_fetch_items,
     mock_triples,
 ):
-    mock_oc_num.return_value = 69074
+    mock_oc_num.return_value = (69074, 0)
     mock_source.return_value = (1, 69074)
     mock_existing.return_value = ({(10, 2719368)}, {(2719368, 1)})
     mock_details.return_value = ([10], 1)
@@ -179,7 +179,7 @@ def test_discover_boleta_and_existing(
     "backend.services.distribuidora.catchup_oc_invoice_relations_service._bsale_source_id_from_pg"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service._oc_number_for_document"
+    "backend.services.distribuidora.catchup_oc_invoice_relations_service._oc_number_and_state"
 )
 def test_discover_nc_not_materialized(
     mock_oc_num,
@@ -189,7 +189,7 @@ def test_discover_nc_not_materialized(
     mock_fetch_items,
     mock_triples,
 ):
-    mock_oc_num.return_value = 1
+    mock_oc_num.return_value = (1, 0)
     mock_source.return_value = (1, 1)
     mock_existing.return_value = (set(), set())
     mock_details.return_value = ([10], 1)
@@ -216,7 +216,7 @@ def test_discover_nc_not_materialized(
     "backend.services.distribuidora.catchup_oc_invoice_relations_service._bsale_source_id_from_pg"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service._oc_number_for_document"
+    "backend.services.distribuidora.catchup_oc_invoice_relations_service._oc_number_and_state"
 )
 def test_discover_api_error_not_no_relation(
     mock_oc_num,
@@ -225,7 +225,7 @@ def test_discover_api_error_not_no_relation(
     mock_details,
     mock_fetch_items,
 ):
-    mock_oc_num.return_value = 1
+    mock_oc_num.return_value = (1, 0)
     mock_source.return_value = (1, 1)
     mock_existing.return_value = (set(), set())
     mock_details.return_value = ([10], 1)
@@ -546,7 +546,7 @@ def test_apply_idempotent_on_conflict(
     mock_discover,
     mock_insert,
 ):
-    """Segunda pasada: ON CONFLICT DO NOTHING → 0 insertadas."""
+    """Segunda pasada: ON CONFLICT DO NOTHING â†’ 0 insertadas."""
     conn = MagicMock()
     conn.cursor.return_value = MagicMock()
     mock_conn_fn.return_value = conn
@@ -686,3 +686,72 @@ def test_rate_limited_oc_not_counted_as_no_relation(
     kwargs = mock_client_cls.call_args.kwargs
     assert kwargs["max_429_retries"] == 5
     assert kwargs["min_interval_sec"] == CATCHUP_DEFAULT_MIN_INTERVAL_SEC
+
+@patch(
+    "backend.services.distribuidora.catchup_oc_invoice_relations_service.discover_invoice_edges_for_oc"
+)
+@patch(
+    "backend.services.distribuidora.catchup_oc_invoice_relations_service.fetch_oc_document_ids_for_range"
+)
+@patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.BsaleClient")
+@patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.get_connection")
+@patch.dict("os.environ", {"BSALE_TOKEN": "tok"})
+def test_no_relation_folios_lists_all(
+    mock_conn_fn,
+    mock_client_cls,
+    mock_oc_ids,
+    mock_discover,
+):
+    conn = MagicMock()
+    conn.cursor.return_value = MagicMock()
+    mock_conn_fn.return_value = conn
+    mock_oc_ids.return_value = list(range(1, 10))
+    mock_discover.side_effect = [
+        {
+            "oc_document_id": i,
+            "oc_number": 68000 + i,
+            "detail_ids_consulted": [],
+            "confirmed_before": False,
+            "would_confirm": False,
+            "status": "no_relation_found",
+            "rate_limited": False,
+            "edges": [],
+            "unique_related_documents": [],
+        }
+        for i in range(1, 10)
+    ]
+
+    report = run_catchup_oc_invoice_relations(
+        start_date=date(2026, 8, 3),
+        end_date=date(2026, 8, 15),
+        dry_run=True,
+    )
+
+    assert report.ocs_without_relation == 9
+    assert report.no_relation_folios == list(range(68001, 68010))
+    assert len(report.samples.get("no_relation_examples") or []) <= 8
+
+
+@patch(
+    "backend.services.distribuidora.catchup_oc_invoice_relations_service._oc_number_and_state"
+)
+@patch(
+    "backend.services.distribuidora.catchup_oc_invoice_relations_service.load_existing_invoice_relations_for_oc"
+)
+@patch(
+    "backend.services.distribuidora.catchup_oc_invoice_relations_service._bsale_source_id_from_pg"
+)
+def test_discover_cancelled_skips_bsale_and_not_no_relation(
+    mock_source,
+    mock_existing,
+    mock_num_state,
+):
+    mock_num_state.return_value = (68544, 8888)
+    mock_source.return_value = (1, 68544)
+    mock_existing.return_value = (set(), set())
+    client = MagicMock()
+    res = discover_invoice_edges_for_oc(client, MagicMock(), 1, office_id=1, throttle=0)
+    assert res["status"] == "cancelled"
+    assert res["would_confirm"] is False
+    client.get.assert_not_called()
+

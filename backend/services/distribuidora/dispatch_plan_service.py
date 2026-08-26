@@ -55,7 +55,9 @@ from backend.services.distribuidora.oc_document_chain_resolver import (
     resolve_operational_statuses_batch,
 )
 from backend.services.distribuidora.oc_operational_status import (
+    FULFILL_EXCLUDED_CANCELLED,
     FULFILL_EXCLUDED_PREEXISTING,
+    FULFILL_EXCLUDED_STATUSES,
     plan_progress_counts,
 )
 from backend.utils.dispatch_plan_picking import (
@@ -1199,6 +1201,17 @@ def _invoicing_payload_from_rows(
                         "message": "Excluida: ya estaba facturada antes de la planificación",
                     }
                 )
+            elif st.fulfillment_status == FULFILL_EXCLUDED_CANCELLED:
+                exclusions.append(
+                    {
+                        "oc_document_id": oid,
+                        "oc_number": x.get("oc_number"),
+                        "excluded_reason": st.excluded_reason or "cancelled_order",
+                        "billing_label_es": st.billing_label_es,
+                        "confirmed_invoice": None,
+                        "message": "Excluida: orden anulada",
+                    }
+                )
     summary = invoicing_summary_counts(items)
     warnings = list(extra_warnings or [])
     warnings.extend(
@@ -1209,7 +1222,8 @@ def _invoicing_payload_from_rows(
         }
         for x in items
         if x.get("status") == "missing"
-        and x.get("fulfillment_status") != FULFILL_EXCLUDED_PREEXISTING
+        and x.get("fulfillment_status") not in FULFILL_EXCLUDED_STATUSES
+        and x.get("billing_status") != "cancelled"
     )
     probable_notes = [
         {

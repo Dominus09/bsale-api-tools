@@ -13,7 +13,7 @@ from backend.services.distribuidora.oc_document_chain_resolver import (
     resolve_operational_statuses_batch,
 )
 from backend.services.distribuidora.oc_operational_status import (
-    ADMISSION_BLOCK_MESSAGE,
+    admission_block_message,
     blocks_planning_admission,
 )
 from backend.utils.json_safe import serialize_value
@@ -25,7 +25,7 @@ def _admission_block_payload(status) -> dict[str, Any]:
     inv = status.confirmed_invoice or {}
     return {
         "blocked": True,
-        "message": ADMISSION_BLOCK_MESSAGE,
+        "message": admission_block_message(status),
         "billing_status": status.billing_status,
         "billing_label_es": status.billing_label_es,
         "dispatch_closed": status.dispatch_closed,
@@ -331,7 +331,7 @@ def add_order_to_plan(
         if oc_status is not None and blocks_planning_admission(oc_status):
             detail = _admission_block_payload(oc_status)
             raise ValueError(
-                f"{ADMISSION_BLOCK_MESSAGE} "
+                f"{detail['message']} "
                 f"(factura={detail.get('invoice_number')}, "
                 f"estado={detail.get('billing_label_es')})"
             )

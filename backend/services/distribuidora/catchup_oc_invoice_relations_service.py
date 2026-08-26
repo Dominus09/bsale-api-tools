@@ -207,9 +207,31 @@ def discover_invoice_edges_for_oc(
 
     Retorna estructura con detail_ids, edges (detail-level), unique_docs (OC-level).
     """
-    oc_number = _oc_number_for_document(cur, oc_document_id)
+    oc_number, oc_state = _oc_number_and_state(cur, oc_document_id)
     log_ctx = _related_log_ctx(oc_number, oc_document_id)
     source_id, _folio = _bsale_source_id_from_pg(cur, oc_document_id)
+    cancelled = int(oc_state or 0) != 0
+
+    # OC anulada: no es "pendiente sin relación". Clasificar cancelled/skipped.
+    if cancelled:
+        existing_pairs, confirmed_doc_keys = load_existing_invoice_relations_for_oc(
+            cur, oc_document_id
+        )
+        return {
+            "oc_document_id": oc_document_id,
+            "oc_number": oc_number,
+            "oc_state": int(oc_state or 0),
+            "detail_ids_consulted": [],
+            "confirmed_before": bool(confirmed_doc_keys),
+            "would_confirm": False,
+            "status": "cancelled",
+            "api_error": None,
+            "rate_limited": False,
+            "edges": [],
+            "unique_related_documents": [],
+            "api_calls": 0,
+            "existing_pairs_count": len(existing_pairs),
+        }
 
     try:
         detail_ids, calls_details = _fetch_detail_ids_from_bsale_details(
@@ -324,6 +346,7 @@ def discover_invoice_edges_for_oc(
     return {
         "oc_document_id": oc_document_id,
         "oc_number": oc_number,
+        "oc_state": int(oc_state or 0),
         "detail_ids_consulted": [int(x) for x in detail_ids],
         "confirmed_before": confirmed_before,
         "would_confirm": would_confirm and not api_error,
@@ -334,6 +357,18 @@ def discover_invoice_edges_for_oc(
         "unique_related_documents": list(unique_docs.values()),
         "api_calls": api_calls,
     }
+
+
+def _oc_number_and_state(cur, document_id: int) -> tuple[int | None, int]:
+    cur.execute(
+        "SELECT number, COALESCE(state, 0) FROM distribuidora.documents WHERE document_id = %s",
+        (document_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None, 0
+    number = int(row[0]) if row[0] is not None else None
+    return number, int(row[1] or 0)
 
 
 @dataclass
@@ -353,6 +388,7 @@ class CatchupOcInvoiceReport:
     receipt_links_inserted: int = 0
     ocs_with_new_confirmed_relation: int = 0
     ocs_without_relation: int = 0
+    ocs_cancelled: int = 0
     api_errors: int = 0
     rate_limited: int = 0
     # Rate-limit / progreso
@@ -363,6 +399,8 @@ class CatchupOcInvoiceReport:
     ocs_completed: int = 0
     ocs_rate_limited: int = 0
     ocs_with_relation: int = 0
+    no_relation_folios: list[int] = field(default_factory=list)
+    cancelled_folios: list[int] = field(default_factory=list)
     samples: dict[str, Any] = field(default_factory=dict)
     plan_oc_results: list[dict[str, Any]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -510,9 +548,17 @@ def run_catchup_oc_invoice_relations(
                 report.ocs_rate_limited += 1
             elif oc_res.get("status") == "api_error":
                 report.api_errors += 1
+            elif oc_res.get("status") == "cancelled":
+                report.ocs_cancelled += 1
+                folio = oc_res.get("oc_number")
+                if folio is not None:
+                    report.cancelled_folios.append(int(folio))
 
             if oc_res.get("status") == "no_relation_found":
                 report.ocs_without_relation += 1
+                folio = oc_res.get("oc_number")
+                if folio is not None:
+                    report.no_relation_folios.append(int(folio))
 
             if oc_res.get("status") in ("existing", "would_insert"):
                 report.ocs_with_relation += 1
