@@ -114,10 +114,18 @@ def main(argv: list[str] | None = None) -> int:
     print(
         "[catchup_oc_invoice_relations] summary "
         f"dry_run={report.dry_run} oc_scanned={report.oc_scanned} "
+        f"ocs_completed={report.ocs_completed} "
+        f"ocs_with_relation={report.ocs_with_relation} "
+        f"ocs_without_relation={report.ocs_without_relation} "
+        f"ocs_rate_limited={report.ocs_rate_limited} "
+        f"requests_total={report.requests_total} "
+        f"rate_limit_events={report.rate_limit_events} "
+        f"retry_count={report.retry_count} "
+        f"wait_seconds_total={report.wait_seconds_total:.1f} "
         f"would_insert_inv={report.invoice_links_would_insert} "
         f"would_insert_boleta={report.receipt_links_would_insert} "
         f"existing={report.relations_existing} api_errors={report.api_errors} "
-        f"rate_limited={report.rate_limited} plan_ocs={len(report.plan_oc_results)}",
+        f"plan_ocs={len(report.plan_oc_results)}",
         flush=True,
     )
     return 1 if report.errors else 0

@@ -9,7 +9,9 @@ import pytest
 
 from backend.jobs.catchup_oc_invoice_relations import main as job_main
 from backend.services.distribuidora.catchup_oc_invoice_relations_service import (
+    CATCHUP_DEFAULT_MIN_INTERVAL_SEC,
     CATCHUP_INVOICE_TYPES,
+    CATCHUP_MAX_429_RETRIES,
     CatchupApiError,
     PLAN_OC_CANARIES,
     _generation_date_iso,
@@ -579,6 +581,11 @@ def test_apply_idempotent_on_conflict(
     assert report.invoice_links_inserted == 0
 
 
+def test_catchup_rate_limit_defaults():
+    assert CATCHUP_MAX_429_RETRIES == 5
+    assert 0.75 <= CATCHUP_DEFAULT_MIN_INTERVAL_SEC <= 1.0
+
+
 @patch(
     "backend.services.distribuidora.catchup_oc_invoice_relations_service.discover_invoice_edges_for_oc"
 )
@@ -631,3 +638,51 @@ def test_no_relation_found_counter(
 
     assert report.ocs_without_relation == 1
     assert report.api_errors == 1
+    assert report.ocs_completed == 2
+
+
+@patch(
+    "backend.services.distribuidora.catchup_oc_invoice_relations_service.discover_invoice_edges_for_oc"
+)
+@patch(
+    "backend.services.distribuidora.catchup_oc_invoice_relations_service.fetch_oc_document_ids_for_range"
+)
+@patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.BsaleClient")
+@patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.get_connection")
+@patch.dict("os.environ", {"BSALE_TOKEN": "tok"})
+def test_rate_limited_oc_not_counted_as_no_relation(
+    mock_conn_fn,
+    mock_client_cls,
+    mock_oc_ids,
+    mock_discover,
+):
+    conn = MagicMock()
+    conn.cursor.return_value = MagicMock()
+    mock_conn_fn.return_value = conn
+    mock_oc_ids.return_value = [100]
+    mock_discover.return_value = {
+        "oc_document_id": 100,
+        "oc_number": 68933,
+        "detail_ids_consulted": [1],
+        "confirmed_before": False,
+        "would_confirm": False,
+        "status": "rate_limited",
+        "rate_limited": True,
+        "edges": [],
+        "unique_related_documents": [],
+        "api_error": "Bsale HTTP 429",
+    }
+
+    report = run_catchup_oc_invoice_relations(
+        start_date=date(2026, 7, 11),
+        end_date=date(2026, 8, 25),
+        dry_run=True,
+    )
+
+    assert report.ocs_without_relation == 0
+    assert report.ocs_rate_limited == 1
+    assert report.rate_limited == 1
+    assert report.ocs_completed == 1
+    kwargs = mock_client_cls.call_args.kwargs
+    assert kwargs["max_429_retries"] == 5
+    assert kwargs["min_interval_sec"] == CATCHUP_DEFAULT_MIN_INTERVAL_SEC

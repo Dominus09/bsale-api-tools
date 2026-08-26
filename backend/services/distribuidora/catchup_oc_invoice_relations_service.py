@@ -5,6 +5,7 @@ Dry-run por defecto: consulta Bsale, clasifica aristas, NO escribe.
 Apply explícito: ``ON CONFLICT DO NOTHING`` (misma semántica que sync_related).
 
 Reutiliza helpers de ``sync_related_service``; no usa probable para crear relaciones.
+Rate-limit respetuoso: throttle global, Retry-After, backoff + jitter, max 5 retries.
 """
 
 from __future__ import annotations
@@ -40,6 +41,11 @@ CATCHUP_INVOICE_TYPES = frozenset({1, 6})  # boleta, factura — NO NC (9)
 PLAN_OC_CANARIES = frozenset(
     {68933, 68920, 68927, 68565, 68572, 68631, 68632, 68714, 68538, 68728}
 )
+
+# Throttle conservador entre requests Bsale (750–1000 ms + jitter interno).
+CATCHUP_DEFAULT_MIN_INTERVAL_SEC = 0.75
+CATCHUP_DEFAULT_INTERVAL_JITTER_SEC = 0.25  # → hasta ~1000 ms
+CATCHUP_MAX_429_RETRIES = 5
 
 
 class CatchupApiError(Exception):
@@ -77,6 +83,11 @@ def _related_number(blob: dict[str, Any]) -> int | None:
         return None
 
 
+def _is_rate_limit_message(msg: str) -> bool:
+    m = msg.lower()
+    return "429" in m or "rate limit" in m
+
+
 def fetch_oc_document_ids_for_range(
     cur,
     *,
@@ -110,7 +121,7 @@ def fetch_oc_document_ids_for_range(
 def load_existing_invoice_relations_for_oc(
     cur,
     oc_document_id: int,
-) -> tuple[set[tuple[int, int]], set[tuple[int, int, int]]]:
+) -> tuple[set[tuple[int, int]], set[tuple[int, int]]]:
     """
     Returns:
         existing_pairs: (detail_id, related_document_id)
@@ -142,11 +153,10 @@ def fetch_relateddetailid_items(
     throttle: float,
     log_ctx: str,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Paginación ``relateddetailid``; propaga CatchupApiError en fallo HTTP."""
+    """Paginación ``relateddetailid`` secuencial; propaga CatchupApiError en fallo HTTP."""
     merged: list[dict[str, Any]] = []
     api_calls = 0
     offset = 0
-    rate_limited_seen = False
     while True:
         try:
             data = client.get(
@@ -163,10 +173,9 @@ def fetch_relateddetailid_items(
             )
         except RuntimeError as exc:
             msg = str(exc)
-            rate_limited_seen = "429" in msg
-            raise CatchupApiError(msg, rate_limited=rate_limited_seen) from exc
+            raise CatchupApiError(msg, rate_limited=_is_rate_limit_message(msg)) from exc
         except Exception as exc:
-            raise CatchupApiError(str(exc)) from exc
+            raise CatchupApiError(str(exc), rate_limited=_is_rate_limit_message(str(exc))) from exc
 
         api_calls += 1
         items = data.get("items") or []
@@ -178,6 +187,7 @@ def fetch_relateddetailid_items(
         if len(items) < RELATED_DETAIL_PAGE_LIMIT:
             break
         offset += len(items)
+        # Espaciado lo maneja BsaleClient (throttle global). No paralelizar.
         if throttle > 0:
             time.sleep(throttle)
     return merged, api_calls
@@ -201,13 +211,18 @@ def discover_invoice_edges_for_oc(
     log_ctx = _related_log_ctx(oc_number, oc_document_id)
     source_id, _folio = _bsale_source_id_from_pg(cur, oc_document_id)
 
-    detail_ids, calls_details = _fetch_detail_ids_from_bsale_details(
-        client,
-        oc_document_id,
-        throttle=throttle,
-        log_ctx=log_ctx,
-        bsale_source_document_id=source_id,
-    )
+    try:
+        detail_ids, calls_details = _fetch_detail_ids_from_bsale_details(
+            client,
+            oc_document_id,
+            throttle=throttle,
+            log_ctx=log_ctx,
+            bsale_source_document_id=source_id,
+        )
+    except RuntimeError as exc:
+        msg = str(exc)
+        raise CatchupApiError(msg, rate_limited=_is_rate_limit_message(msg)) from exc
+
     if not detail_ids:
         detail_ids = _detail_ids_for_document(cur, oc_document_id)
 
@@ -236,17 +251,22 @@ def discover_invoice_edges_for_oc(
             break
 
         api_calls += c_rel
-        triples, tc = _documents_json_items_to_triples(
-            client,
-            cur,
-            detail_id,
-            items,
-            oc_document_id=oc_document_id,
-            throttle=throttle,
-            max_type33_depth=max_type33,
-            stats=stats,
-            log_ctx=log_ctx,
-        )
+        try:
+            triples, tc = _documents_json_items_to_triples(
+                client,
+                cur,
+                detail_id,
+                items,
+                oc_document_id=oc_document_id,
+                throttle=throttle,
+                max_type33_depth=max_type33,
+                stats=stats,
+                log_ctx=log_ctx,
+            )
+        except RuntimeError as exc:
+            msg = str(exc)
+            api_error = CatchupApiError(msg, rate_limited=_is_rate_limit_message(msg))
+            break
         api_calls += tc
 
         for did, rid, tid in triples:
@@ -291,7 +311,7 @@ def discover_invoice_edges_for_oc(
         for e in edges
     )
     if api_error is not None:
-        oc_status = "api_error" if not api_error.rate_limited else "rate_limited"
+        oc_status = "rate_limited" if api_error.rate_limited else "api_error"
     elif not edges:
         oc_status = "no_relation_found"
     elif would_confirm:
@@ -335,12 +355,37 @@ class CatchupOcInvoiceReport:
     ocs_without_relation: int = 0
     api_errors: int = 0
     rate_limited: int = 0
+    # Rate-limit / progreso
+    requests_total: int = 0
+    rate_limit_events: int = 0
+    retry_count: int = 0
+    wait_seconds_total: float = 0.0
+    ocs_completed: int = 0
+    ocs_rate_limited: int = 0
+    ocs_with_relation: int = 0
     samples: dict[str, Any] = field(default_factory=dict)
     plan_oc_results: list[dict[str, Any]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def _progress_line(
+    *,
+    index: int,
+    total: int,
+    oc_res: dict[str, Any],
+    rate_stats: dict[str, Any],
+) -> str:
+    return (
+        f"[catchup_oc_invoice_relations] OC {index}/{total} "
+        f"oc_number={oc_res.get('oc_number')} status={oc_res.get('status')} "
+        f"requests={int(rate_stats.get('requests_total') or 0)} "
+        f"429={int(rate_stats.get('rate_limit_events') or 0)} "
+        f"retries={int(rate_stats.get('retry_count') or 0)} "
+        f"wait_seconds={float(rate_stats.get('wait_seconds_total') or 0):.1f}"
+    )
 
 
 def run_catchup_oc_invoice_relations(
@@ -367,14 +412,19 @@ def run_catchup_oc_invoice_relations(
         report.errors.append("sin token Bsale (BSALE_TOKEN / BSALE_TOKEN_SPA)")
         return report
 
-    throttle_sec = (
-        float(throttle)
-        if throttle is not None
-        else float(os.getenv("DISTRIBUIDORA_RELATED_API_DELAY_SEC", "0.12"))
-    )
+    # Throttle de helpers internos: el espaciado principal lo hace BsaleClient.
+    # Si el caller pasa --throttle-sec, se suma como sleep extra en paginación.
+    helper_throttle = float(throttle) if throttle is not None else 0.0
+
+    rate_stats: dict[str, Any] = {
+        "requests_total": 0,
+        "rate_limit_events": 0,
+        "retry_count": 0,
+        "wait_seconds_total": 0.0,
+        "throttle_wait_seconds": 0.0,
+    }
 
     conn = get_connection()
-    oc_results: list[dict[str, Any]] = []
     sample_new: list[dict[str, Any]] = []
     sample_no_rel: list[dict[str, Any]] = []
 
@@ -388,20 +438,42 @@ def run_catchup_oc_invoice_relations(
             office_id=office_id,
         )
         report.oc_scanned = len(oc_ids)
+        total = len(oc_ids)
 
-        client = BsaleClient(token)
+        client = BsaleClient(
+            token,
+            min_interval_sec=CATCHUP_DEFAULT_MIN_INTERVAL_SEC,
+            min_interval_jitter_sec=CATCHUP_DEFAULT_INTERVAL_JITTER_SEC,
+            max_429_retries=CATCHUP_MAX_429_RETRIES,
+            rate_stats=rate_stats,
+        )
         stats: dict[str, Any] = {}
 
-        for oc_id in oc_ids:
+        for idx, oc_id in enumerate(oc_ids, start=1):
             try:
                 oc_res = discover_invoice_edges_for_oc(
                     client,
                     cur,
                     oc_id,
                     office_id=office_id,
-                    throttle=throttle_sec,
+                    throttle=helper_throttle,
                     stats=stats,
                 )
+            except CatchupApiError as exc:
+                oc_res = {
+                    "oc_document_id": oc_id,
+                    "oc_number": _oc_number_for_document(cur, oc_id),
+                    "status": "rate_limited" if exc.rate_limited else "api_error",
+                    "confirmed_before": False,
+                    "would_confirm": False,
+                    "edges": [],
+                    "unique_related_documents": [],
+                    "detail_ids_consulted": [],
+                    "api_error": str(exc),
+                    "rate_limited": bool(exc.rate_limited),
+                }
+                if not exc.rate_limited:
+                    report.errors.append(f"oc_id={oc_id}: {exc}")
             except Exception as exc:
                 report.api_errors += 1
                 report.errors.append(f"oc_id={oc_id}: {exc}")
@@ -415,18 +487,35 @@ def run_catchup_oc_invoice_relations(
                     "unique_related_documents": [],
                     "detail_ids_consulted": [],
                     "api_error": str(exc),
-                    "rate_limited": False,
+                    "rate_limited": _is_rate_limit_message(str(exc)),
                 }
+                if oc_res["rate_limited"]:
+                    oc_res["status"] = "rate_limited"
 
-            oc_results.append(oc_res)
+            report.ocs_completed += 1
             report.details_scanned += len(oc_res.get("detail_ids_consulted") or [])
 
-            if oc_res.get("rate_limited"):
+            print(
+                _progress_line(
+                    index=idx,
+                    total=total,
+                    oc_res=oc_res,
+                    rate_stats=rate_stats,
+                ),
+                flush=True,
+            )
+
+            if oc_res.get("rate_limited") or oc_res.get("status") == "rate_limited":
                 report.rate_limited += 1
+                report.ocs_rate_limited += 1
             elif oc_res.get("status") == "api_error":
                 report.api_errors += 1
+
             if oc_res.get("status") == "no_relation_found":
                 report.ocs_without_relation += 1
+
+            if oc_res.get("status") in ("existing", "would_insert"):
+                report.ocs_with_relation += 1
 
             seen_existing: set[tuple[int, int]] = set()
             seen_would_inv: set[tuple[int, int]] = set()
@@ -491,6 +580,11 @@ def run_catchup_oc_invoice_relations(
             conn.rollback()
     finally:
         conn.close()
+
+    report.requests_total = int(rate_stats.get("requests_total") or 0)
+    report.rate_limit_events = int(rate_stats.get("rate_limit_events") or 0)
+    report.retry_count = int(rate_stats.get("retry_count") or 0)
+    report.wait_seconds_total = float(rate_stats.get("wait_seconds_total") or 0.0)
 
     report.samples = {
         "would_insert_examples": sample_new,
