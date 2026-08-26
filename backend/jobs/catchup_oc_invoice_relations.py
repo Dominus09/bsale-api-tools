@@ -1,0 +1,127 @@
+"""
+Catchup histórico OC → boleta/factura con dry-run real (default).
+
+Dry-run (default) — consulta Bsale, NO escribe::
+
+    python -m backend.jobs.catchup_oc_invoice_relations \\
+      --company-id 3 \\
+      --office-id 1 \\
+      --start-date 2026-07-11 \\
+      --end-date 2026-08-25 \\
+      --dry-run
+
+Apply (requiere confirmación doble; NO ejecutar desde Cursor sin autorización)::
+
+    python -m backend.jobs.catchup_oc_invoice_relations \\
+      --company-id 3 \\
+      --office-id 1 \\
+      --start-date 2026-07-11 \\
+      --end-date 2026-08-25 \\
+      --apply \\
+      --i-understand-writes
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from datetime import date, datetime, timezone
+
+from backend.services.distribuidora.catchup_oc_invoice_relations_service import (
+    run_catchup_oc_invoice_relations,
+)
+from backend.utils.bsale_token_env import load_dotenv_if_available
+
+
+def _parse_date(value: str) -> date:
+    return date.fromisoformat(value.strip())
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Catchup OC→boleta/factura vía Bsale relateddetailid (dry-run default)",
+    )
+    p.add_argument("--company-id", type=int, default=3)
+    p.add_argument("--office-id", type=int, default=1)
+    p.add_argument("--start-date", type=_parse_date, required=True)
+    p.add_argument("--end-date", type=_parse_date, required=True)
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        default=True,
+        help="Consulta Bsale y reporta; no escribe (default).",
+    )
+    p.add_argument(
+        "--apply",
+        action="store_true",
+        help="Inserta relaciones verificadas (requiere --i-understand-writes).",
+    )
+    p.add_argument(
+        "--i-understand-writes",
+        action="store_true",
+        help="Confirmación explícita para --apply.",
+    )
+    p.add_argument(
+        "--throttle-sec",
+        type=float,
+        default=None,
+        help="Pausa entre llamadas Bsale (default: DISTRIBUIDORA_RELATED_API_DELAY_SEC).",
+    )
+    return p.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    load_dotenv_if_available()
+    args = _parse_args(argv)
+
+    dry_run = True
+    if args.apply:
+        if not args.i_understand_writes:
+            print(
+                "ERROR: --apply requiere --i-understand-writes. Abortado.",
+                file=sys.stderr,
+            )
+            return 2
+        dry_run = False
+    elif args.dry_run:
+        dry_run = True
+
+    started = datetime.now(timezone.utc)
+    print(
+        f"[catchup_oc_invoice_relations] start utc={started.isoformat()} "
+        f"company={args.company_id} office={args.office_id} "
+        f"range={args.start_date.isoformat()}..{args.end_date.isoformat()} "
+        f"dry_run={dry_run}",
+        flush=True,
+    )
+
+    try:
+        report = run_catchup_oc_invoice_relations(
+            start_date=args.start_date,
+            end_date=args.end_date,
+            company_id=args.company_id,
+            office_id=args.office_id,
+            dry_run=dry_run,
+            throttle=args.throttle_sec,
+        )
+    except Exception as exc:
+        print(f"[catchup_oc_invoice_relations] ERROR: {exc}", file=sys.stderr, flush=True)
+        return 1
+
+    payload = report.as_dict()
+    print(json.dumps(payload, ensure_ascii=False, indent=2, default=str), flush=True)
+    print(
+        "[catchup_oc_invoice_relations] summary "
+        f"dry_run={report.dry_run} oc_scanned={report.oc_scanned} "
+        f"would_insert_inv={report.invoice_links_would_insert} "
+        f"would_insert_boleta={report.receipt_links_would_insert} "
+        f"existing={report.relations_existing} api_errors={report.api_errors} "
+        f"rate_limited={report.rate_limited} plan_ocs={len(report.plan_oc_results)}",
+        flush=True,
+    )
+    return 1 if report.errors else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
