@@ -47,6 +47,7 @@ const ISSUE_TYPES = [
   { id: "insufficient_stock", label: "Stock insuficiente" },
   { id: "wrong_product", label: "Producto equivocado" },
   { id: "damaged", label: "Producto dañado" },
+  { id: "excess", label: "Exceso de unidades" },
   { id: "picking_error", label: "Error de picking" },
   { id: "other", label: "Otro" },
 ] as const

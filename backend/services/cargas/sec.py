@@ -2,12 +2,88 @@
 
 from __future__ import annotations
 
+import math
 import re
 import unicodedata
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 _SEC_RE = re.compile(r"\(SEC\s*([0-9]+)\)", re.IGNORECASE)
 _MULTISPACE_RE = re.compile(r"\s+")
+_FLOATISH_BARCODE_RE = re.compile(r"^(\d+)\.0+$")
+
+
+def normalize_barcode(value: Any) -> str | None:
+    """
+    Normaliza código de barras siempre como texto.
+
+    Acepta str/int/float/Decimal de Excel sin corromper EAN:
+    ``7802100505323.0`` → ``\"7802100505323\"`` (nunca ``...3230``).
+    Conserva ceros iniciales cuando el valor llega como texto.
+    """
+    if value is None:
+        return None
+
+    # pandas / numpy NaN
+    try:
+        if value is not None and value != value:  # NaN != NaN
+            return None
+    except Exception:
+        pass
+
+    if isinstance(value, bool):
+        return None
+
+    if isinstance(value, int):
+        return str(value) if value >= 0 else None
+
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return None
+        # Excel suele entregar EAN como float entero
+        if abs(value - round(value)) < 1e-9:
+            return str(int(round(value)))
+        return None
+
+    if isinstance(value, Decimal):
+        try:
+            if value != value:  # pragma: no cover
+                return None
+            if value == value.to_integral_value():
+                return str(int(value))
+        except (InvalidOperation, ValueError, OverflowError):
+            return None
+        return None
+
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none", "null", "<na>", "nat"}:
+        return None
+
+    # "7802100505323.0" / "7802100505323.000"
+    m = _FLOATISH_BARCODE_RE.fullmatch(text)
+    if m:
+        return m.group(1)
+
+    # Texto con ceros iniciales u otros dígitos: conservar solo dígitos
+    # si el valor es puramente numérico (con posibles separadores no dígito).
+    digits = re.sub(r"\D", "", text)
+    if digits and re.fullmatch(r"[\d\s\.\-]+", text):
+        # Evitar el bug ".0" → dígito extra: ya cubierto por FLOATISH arriba;
+        # si quedó algo como "7802.105" no es EAN entero → rechazar
+        if "." in text and not _FLOATISH_BARCODE_RE.fullmatch(text.replace(" ", "")):
+            # podría ser notación científica Excel
+            try:
+                as_float = float(text.replace(" ", "").replace(",", "."))
+            except ValueError:
+                return digits if digits.isdigit() else None
+            if math.isfinite(as_float) and abs(as_float - round(as_float)) < 1e-9:
+                return str(int(round(as_float)))
+            return None
+        return digits
+
+    # Alfanumérico raro: conservar limpio sin inventar
+    cleaned = text.strip()
+    return cleaned or None
 
 
 def extract_sec(product_text: Any) -> int | None:

@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from backend.services.cargas.sec import (
     extract_sec,
+    normalize_barcode,
     normalize_header,
     normalize_search_text,
     parse_number,
@@ -91,6 +92,7 @@ class ParsedLoadPreview:
     branch_default: str | None = None
     document_units_total: float | None = None
     document_value_total: float | None = None
+    file_hash: str | None = None
     lines: list[ParsedLoadLine] = field(default_factory=list)
     format_name: str | None = None
     errors: list[str] = field(default_factory=list)
@@ -153,6 +155,7 @@ class ParsedLoadPreview:
             "branch_default": self.branch_default,
             "document_units_total": self.document_units_total,
             "document_value_total": self.document_value_total,
+            "file_hash": self.file_hash,
             "summed_units": self.summed_units,
             "summed_value": self.summed_value,
             "total_items": len(valid),
@@ -200,14 +203,7 @@ def cell(row: list[Any] | tuple[Any, ...], idx: int | None) -> Any:
 
 def build_line_from_mapped_row(row: list[Any], mapping: dict[str, int]) -> ParsedLoadLine:
     product_name = str(cell(row, mapping.get("product_name")) or "").strip()
-    barcode_raw = cell(row, mapping.get("barcode"))
-    barcode = None
-    if barcode_raw is not None:
-        barcode = re.sub(r"\D", "", str(barcode_raw).strip()) or None
-        # Keep alphanumeric barcodes if stripping digits emptied it
-        if barcode is None:
-            cleaned = str(barcode_raw).strip()
-            barcode = cleaned or None
+    barcode = normalize_barcode(cell(row, mapping.get("barcode")))
 
     qty = parse_number(cell(row, mapping.get("quantity")))
     boxes = parse_number(cell(row, mapping.get("boxes")))

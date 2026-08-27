@@ -45,7 +45,10 @@ export default function NuevaCargaPage() {
     setImporting(true)
     setError(null)
     try {
-      const load = await confirmCargaImport(file, pickingOverride || undefined)
+      const load = await confirmCargaImport(file, {
+        pickingNumber: pickingOverride || undefined,
+        expectedFileHash: preview.file_hash || undefined,
+      })
       router.push(`/logistica/cargas/${load.id}/certificar`)
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al importar")

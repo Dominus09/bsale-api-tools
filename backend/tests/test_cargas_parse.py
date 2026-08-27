@@ -14,6 +14,7 @@ from backend.services.cargas.parse_common import (
 )
 from backend.services.cargas.parse_excel import PickingParseError, parse_picking_excel
 from backend.services.cargas.parse_pdf import parse_picking_pdf
+from backend.services.cargas.service import compute_file_hash
 
 
 def test_map_headers_picking_columns():
@@ -47,6 +48,15 @@ def test_build_line_uses_cantidad_not_boxes():
     assert line.requested_units == 480
     assert line.source_boxes_value == 20
     assert line.sec == 24
+    assert line.barcode == "7802100505323"
+
+
+def test_build_line_barcode_from_excel_float():
+    mapping = {"quantity": 0, "product_name": 1, "barcode": 2}
+    line = build_line_from_mapped_row(
+        [24, "PROD (SEC 24)", 7802100505323.0],
+        mapping,
+    )
     assert line.barcode == "7802100505323"
 
 
@@ -91,7 +101,27 @@ def test_validate_totals_ok():
     assert preview.to_dict()["can_import"] is True
 
 
-def test_parse_excel_minimal(tmp_path=None):
+def test_validate_pdf_total_general_blocks_3825_vs_3849():
+    preview = ParsedLoadPreview(
+        source_type="pdf",
+        original_filename="picking.pdf",
+        picking_number="2531",
+        document_units_total=3849,
+        lines=[
+            ParsedLoadLine(
+                product_name="A (SEC 24)",
+                requested_units=3825,
+                barcode="1",
+                normalized_product_name="a",
+            )
+        ],
+    )
+    preview.validate_totals()
+    assert any("3849" in e and "3825" in e for e in preview.errors)
+    assert preview.to_dict()["can_import"] is False
+
+
+def test_parse_excel_realistic_barcodes():
     pytest.importorskip("openpyxl")
     import pandas as pd
 
@@ -118,7 +148,7 @@ def test_parse_excel_minimal(tmp_path=None):
                 "CERVEZA",
                 20,
                 "CRISTAL LATA 470 CC (SEC 24)",
-                "7802100505323",
+                7802100505323.0,  # float Excel
                 120000,
             ],
             [
@@ -136,13 +166,18 @@ def test_parse_excel_minimal(tmp_path=None):
     )
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, header=False)
-    preview = parse_picking_excel(data=buf.getvalue(), filename="picking.xlsx")
+    raw = buf.getvalue()
+    preview = parse_picking_excel(data=raw, filename="picking.xlsx")
     assert preview.picking_number == "2531"
     assert preview.destination == "MELINKA"
     assert preview.truck == "HINO 4"
     assert len(preview.valid_lines) == 2
     assert preview.summed_units == 744
     assert preview.valid_lines[0].sec == 24
+    assert preview.valid_lines[0].barcode == "7802100505323"
+    assert preview.valid_lines[1].barcode == "7801610001196"
+    # file_hash se asigna en service._parse_file; parser puro no lo setea
+    assert compute_file_hash(raw) == compute_file_hash(raw)
 
 
 def test_pdf_without_text_rejected(monkeypatch):
@@ -173,3 +208,75 @@ def test_pdf_without_text_rejected(monkeypatch):
     )
     with pytest.raises(PickingParseError, match="texto seleccionable"):
         parse_picking_pdf(data=b"%PDF-fake", filename="x.pdf")
+
+
+def test_pdf_total_general_from_text_table(monkeypatch):
+    headers = [
+        "Sucursal",
+        "CANTIDAD",
+        "Tipo",
+        "Cajas x cargar",
+        "Producto / Servicio + Variante",
+        "Código de Barras",
+        "TOTAL",
+    ]
+    body = [
+        headers,
+        [
+            "CASTRO",
+            "480",
+            "CERVEZA",
+            "20",
+            "CRISTAL LATA 470 CC (SEC 24)",
+            "7802100505323",
+            "1000",
+        ],
+        [
+            "CASTRO",
+            "3369",
+            "BEBIDAS",
+            "10",
+            "COCA 350 (SEC 24)",
+            "7801610001196",
+            "2000",
+        ],
+    ]
+
+    class FakePage:
+        def extract_text(self):
+            return (
+                "N.º Picking: 2531\n"
+                "Destino: MELINKA\n"
+                "Camión: HINO\n"
+                "Sello: X1\n"
+                "Fecha: 22-08-2026\n"
+                "Cantidad Total general unidades: 3849\n"
+            )
+
+        def extract_tables(self):
+            return [body]
+
+    class FakePdf:
+        pages = [FakePage()]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    class FakePlumber:
+        @staticmethod
+        def open(_buf):
+            return FakePdf()
+
+    monkeypatch.setattr(
+        "backend.services.cargas.parse_pdf._require_pdfplumber",
+        lambda: FakePlumber,
+    )
+    preview = parse_picking_pdf(data=b"%PDF-fake", filename="ok.pdf")
+    assert preview.picking_number == "2531"
+    assert preview.document_units_total == 3849
+    assert preview.summed_units == 3849
+    assert not preview.errors
+    assert preview.to_dict()["can_import"] is True

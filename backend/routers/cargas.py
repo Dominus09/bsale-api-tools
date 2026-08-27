@@ -19,9 +19,10 @@ def _email(user: dict) -> str:
 class AddUnitsBody(BaseModel):
     boxes: float = Field(0, ge=0)
     loose_units: float = Field(0)
-    allow_excess: bool = False
     notes: str | None = Field(None, max_length=500)
     complete_remaining: bool = False
+    # Si True y hay exceso: registra incidencia excess (sin bypass de certified_units)
+    register_excess_issue: bool = False
 
 
 class IssueBody(BaseModel):
@@ -37,7 +38,11 @@ class ResolveIssueBody(BaseModel):
 
 
 class ReopenBody(BaseModel):
-    notes: str | None = Field(None, max_length=500)
+    reason: str = Field(..., min_length=3, max_length=500)
+
+
+class CancelBody(BaseModel):
+    reason: str = Field(..., min_length=3, max_length=500)
 
 
 @router.post("/import-preview")
@@ -61,6 +66,7 @@ async def import_preview(
 async def import_confirm(
     file: UploadFile = File(...),
     picking_number: str | None = Form(None),
+    expected_file_hash: str | None = Form(None),
     user: dict = Depends(require_staff_user),
 ):
     raw = await file.read()
@@ -72,6 +78,7 @@ async def import_confirm(
             filename=file.filename or "picking",
             user_email=_email(user),
             picking_number_override=picking_number,
+            expected_file_hash=expected_file_hash,
         )
     except PickingParseError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -172,9 +179,9 @@ def add_units(
             user_email=_email(user),
             boxes=body.boxes,
             loose_units=body.loose_units,
-            allow_excess=body.allow_excess,
             notes=body.notes,
             complete_remaining=body.complete_remaining,
+            register_excess_issue=body.register_excess_issue,
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -201,6 +208,8 @@ def report_issue(
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -221,6 +230,8 @@ def resolve_issue(
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -240,6 +251,24 @@ def certify(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+@router.post("/{load_id}/cancel")
+def cancel(
+    load_id: int,
+    body: CancelBody,
+    user: dict = Depends(require_staff_user),
+):
+    try:
+        return cargas_svc.cancel_load(
+            load_id=load_id, user_email=_email(user), reason=body.reason
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @router.post("/{load_id}/reopen")
 def reopen(
     load_id: int,
@@ -248,8 +277,10 @@ def reopen(
 ):
     try:
         return cargas_svc.reopen_load(
-            load_id=load_id, user_email=_email(user), notes=body.notes
+            load_id=load_id, user_email=_email(user), reason=body.reason
         )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:

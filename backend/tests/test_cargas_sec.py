@@ -1,8 +1,11 @@
-"""Tests SEC y normalización módulo Cargas."""
+"""Tests SEC, barcode y normalización módulo Cargas."""
+
+from decimal import Decimal
 
 from backend.services.cargas.sec import (
     boxes_and_loose_from_units,
     extract_sec,
+    normalize_barcode,
     normalize_search_text,
     units_from_boxes_and_loose,
 )
@@ -28,3 +31,38 @@ def test_boxes_and_loose_interpretation():
 
 def test_normalize_search_accents_and_case():
     assert normalize_search_text("  Cristál   LATA ") == "cristal lata"
+
+
+def test_normalize_barcode_string():
+    assert normalize_barcode("7802100505323") == "7802100505323"
+
+
+def test_normalize_barcode_int():
+    assert normalize_barcode(7802100505323) == "7802100505323"
+
+
+def test_normalize_barcode_float_dot_zero():
+    assert normalize_barcode(7802100505323.0) == "7802100505323"
+    assert normalize_barcode(7802100505323.0) != "78021005053230"
+
+
+def test_normalize_barcode_string_floatish():
+    assert normalize_barcode("7802100505323.0") == "7802100505323"
+    assert normalize_barcode("7802100505323.000") == "7802100505323"
+
+
+def test_normalize_barcode_nan_none():
+    assert normalize_barcode(None) is None
+    assert normalize_barcode(float("nan")) is None
+    assert normalize_barcode("nan") is None
+    assert normalize_barcode("None") is None
+    assert normalize_barcode("") is None
+
+
+def test_normalize_barcode_leading_zeros_as_text():
+    assert normalize_barcode("007802100505323") == "007802100505323"
+
+
+def test_normalize_barcode_decimal():
+    assert normalize_barcode(Decimal("7802100505323")) == "7802100505323"
+    assert normalize_barcode(Decimal("7802100505323.0")) == "7802100505323"

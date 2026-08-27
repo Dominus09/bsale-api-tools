@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -18,6 +19,14 @@ from backend.services.cargas.sec import (
 )
 
 logger = logging.getLogger(__name__)
+
+CANCELABLE_STATUSES = frozenset({"pending", "in_progress"})
+CERTIFIABLE_STATUSES = frozenset({"pending", "in_progress", "completed"})
+
+
+def compute_file_hash(data: bytes) -> str:
+    """SHA-256 hex de los bytes originales del archivo."""
+    return hashlib.sha256(data).hexdigest()
 
 
 def _f(value: Any) -> float:
@@ -78,7 +87,7 @@ def _item_status(requested: float, certified: float, *, has_open_issue: bool = F
     return "excess"
 
 
-def preview_import(*, data: bytes, filename: str) -> dict[str, Any]:
+def _parse_file(*, data: bytes, filename: str) -> ParsedLoadPreview:
     name = (filename or "").lower()
     if name.endswith(".pdf"):
         preview = parse_picking_pdf(data=data, filename=filename)
@@ -86,6 +95,31 @@ def preview_import(*, data: bytes, filename: str) -> dict[str, Any]:
         preview = parse_picking_excel(data=data, filename=filename)
     else:
         raise PickingParseError("Formato no soportado. Use .xlsx, .xls o .pdf")
+    preview.file_hash = compute_file_hash(data)
+    return preview
+
+
+def _insert_status_event(
+    cur,
+    *,
+    load_id: int,
+    from_status: str | None,
+    to_status: str,
+    user_email: str,
+    reason: str | None,
+) -> None:
+    cur.execute(
+        """
+        INSERT INTO distribuidora.load_status_events (
+            load_id, from_status, to_status, user_email, reason
+        ) VALUES (%s, %s, %s, %s, %s)
+        """,
+        (load_id, from_status, to_status, user_email, reason),
+    )
+
+
+def preview_import(*, data: bytes, filename: str) -> dict[str, Any]:
+    preview = _parse_file(data=data, filename=filename)
     return preview.to_dict()
 
 
@@ -95,14 +129,25 @@ def confirm_import(
     filename: str,
     user_email: str,
     picking_number_override: str | None = None,
+    expected_file_hash: str | None = None,
 ) -> dict[str, Any]:
-    name = (filename or "").lower()
-    if name.endswith(".pdf"):
-        preview = parse_picking_pdf(data=data, filename=filename)
-    elif name.endswith((".xlsx", ".xls")):
-        preview = parse_picking_excel(data=data, filename=filename)
-    else:
-        raise PickingParseError("Formato no soportado. Use .xlsx, .xls o .pdf")
+    """
+    Re-parsea y valida el archivo definitivo.
+
+    Si ``expected_file_hash`` viene del preview, debe coincidir con el SHA-256
+    de estos bytes (vínculo preview↔import por contenido real).
+    """
+    preview = _parse_file(data=data, filename=filename)
+    actual_hash = preview.file_hash or compute_file_hash(data)
+
+    if expected_file_hash:
+        expected = expected_file_hash.strip().lower()
+        if expected != actual_hash.lower():
+            raise PickingParseError(
+                "El archivo de confirmación no coincide con el preview "
+                f"(hash esperado {expected[:12]}…, recibido {actual_hash[:12]}…). "
+                "Vuelva a generar el preview con el mismo archivo."
+            )
 
     if picking_number_override:
         preview.picking_number = picking_number_override.strip()
@@ -137,13 +182,13 @@ def confirm_import(
             """
             INSERT INTO distribuidora.loads (
                 picking_number, picking_date, destination, truck, seal,
-                status, original_filename, source_type,
+                status, original_filename, source_type, file_hash,
                 total_requested_units, total_items, total_value,
                 document_units_total, document_value_total,
                 created_by
             ) VALUES (
                 %s, %s, %s, %s, %s,
-                'pending', %s, %s,
+                'pending', %s, %s, %s,
                 %s, %s, %s,
                 %s, %s,
                 %s
@@ -158,6 +203,7 @@ def confirm_import(
                 preview.seal,
                 filename,
                 preview.source_type,
+                actual_hash,
                 preview.summed_units,
                 len(preview.valid_lines),
                 preview.summed_value,
@@ -197,6 +243,14 @@ def confirm_import(
                     ln.total_value,
                 ),
             )
+        _insert_status_event(
+            cur,
+            load_id=load_id,
+            from_status=None,
+            to_status="pending",
+            user_email=user_email,
+            reason="import",
+        )
         conn.commit()
         cur.close()
         return get_load(load_id)
@@ -374,17 +428,39 @@ def start_loading(load_id: int, *, user_email: str) -> dict[str, Any]:
         cur = conn.cursor()
         cur.execute(
             """
+            SELECT status FROM distribuidora.loads WHERE id = %s FOR UPDATE
+            """,
+            (load_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise LookupError("Carga no encontrada")
+        if row[0] == "cancelled":
+            raise ValueError("La carga está cancelada")
+        if row[0] == "certified":
+            raise ValueError("La carga ya está certificada")
+        cur.execute(
+            """
             UPDATE distribuidora.loads
             SET status = 'in_progress',
                 loading_started_at = COALESCE(loading_started_at, NOW())
             WHERE id = %s AND status IN ('pending', 'draft', 'in_progress')
-            RETURNING id
+            RETURNING id, status
             """,
             (load_id,),
         )
-        if not cur.fetchone():
-            conn.rollback()
+        updated = cur.fetchone()
+        if not updated:
             raise LookupError("Carga no disponible para iniciar")
+        if row[0] != "in_progress":
+            _insert_status_event(
+                cur,
+                load_id=load_id,
+                from_status=row[0],
+                to_status="in_progress",
+                user_email=user_email,
+                reason="start",
+            )
         conn.commit()
         cur.close()
         logger.info("load_started load_id=%s user=%s", load_id, user_email)
@@ -403,10 +479,18 @@ def add_units(
     user_email: str,
     boxes: float = 0,
     loose_units: float = 0,
-    allow_excess: bool = False,
     notes: str | None = None,
     complete_remaining: bool = False,
+    register_excess_issue: bool = False,
 ) -> dict[str, Any]:
+    """
+    Acumula unidades certificadas. No hay bypass ``allow_excess``.
+
+    Si la operación superaría ``requested_units``:
+    - no actualiza certified_units;
+    - opcionalmente registra incidencia ``excess`` (trazabilidad);
+    - lanza ValueError claro.
+    """
     conn = get_connection()
     try:
         cur = conn.cursor()
@@ -467,9 +551,29 @@ def add_units(
         new_total = round(certified + delta, 3)
         if new_total < 0:
             raise ValueError("No se puede dejar unidades negativas")
-        if new_total > requested + 1e-9 and not allow_excess:
+
+        if new_total > requested + 1e-9:
             excess = round(new_total - requested, 3)
-            raise ValueError(f"EXCESO DE {excess:g} UNIDADES")
+            if register_excess_issue:
+                _create_excess_issue(
+                    cur,
+                    load_id=load_id,
+                    item_id=item_id,
+                    user_email=user_email,
+                    requested=requested,
+                    attempted=new_total,
+                    certified=certified,
+                    notes=notes,
+                )
+                conn.commit()
+            else:
+                conn.rollback()
+            raise ValueError(
+                f"EXCESO DE {excess:g} UNIDADES "
+                f"(solicitadas={requested:g}, intento={new_total:g}). "
+                "No se certificó el exceso. "
+                "Registre incidencia 'excess' o corrija la cantidad."
+            )
 
         status = _item_status(requested, new_total)
         cur.execute(
@@ -505,11 +609,69 @@ def add_units(
         conn.commit()
         cur.close()
         return get_load(load_id)
+    except ValueError:
+        raise
     except Exception:
         conn.rollback()
         raise
     finally:
-        conn.close()
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _create_excess_issue(
+    cur,
+    *,
+    load_id: int,
+    item_id: int,
+    user_email: str,
+    requested: float,
+    attempted: float,
+    certified: float,
+    notes: str | None,
+) -> None:
+    cur.execute(
+        """
+        INSERT INTO distribuidora.load_issues (
+            load_id, load_item_id, issue_type, description,
+            expected_units, actual_units, status, created_by
+        ) VALUES (%s, %s, 'excess', %s, %s, %s, 'open', %s)
+        """,
+        (
+            load_id,
+            item_id,
+            notes
+            or f"Intento de certificar {attempted:g} u sobre {requested:g} solicitadas",
+            requested,
+            attempted,
+            user_email,
+        ),
+    )
+    cur.execute(
+        """
+        UPDATE distribuidora.load_items
+        SET status = 'issue', updated_at = NOW()
+        WHERE id = %s
+        """,
+        (item_id,),
+    )
+    cur.execute(
+        """
+        INSERT INTO distribuidora.load_item_events (
+            load_id, load_item_id, user_email, action,
+            units_delta, units_after, notes
+        ) VALUES (%s, %s, %s, 'issue', 0, %s, %s)
+        """,
+        (
+            load_id,
+            item_id,
+            user_email,
+            certified,
+            f"excess_attempted={attempted:g}",
+        ),
+    )
 
 
 def report_issue(
@@ -523,6 +685,15 @@ def report_issue(
     conn = get_connection()
     try:
         cur = conn.cursor()
+        cur.execute(
+            "SELECT status FROM distribuidora.loads WHERE id = %s FOR UPDATE",
+            (load_id,),
+        )
+        load_row = cur.fetchone()
+        if not load_row:
+            raise LookupError("Carga no encontrada")
+        if load_row[0] in {"certified", "cancelled"}:
+            raise ValueError("La carga está bloqueada")
         cur.execute(
             """
             SELECT requested_units, certified_units
@@ -590,6 +761,15 @@ def resolve_issue(
     conn = get_connection()
     try:
         cur = conn.cursor()
+        cur.execute(
+            "SELECT status FROM distribuidora.loads WHERE id = %s FOR UPDATE",
+            (load_id,),
+        )
+        load_row = cur.fetchone()
+        if not load_row:
+            raise LookupError("Carga no encontrada")
+        if load_row[0] in {"certified", "cancelled"}:
+            raise ValueError("La carga está bloqueada")
         if issue_id is not None:
             cur.execute(
                 """
@@ -647,34 +827,102 @@ def resolve_issue(
 
 
 def certify_load(*, load_id: int, user_email: str) -> dict[str, Any]:
-    load = get_load(load_id)
-    summary = load["summary"]
-    if summary["items_complete"] != summary["total_items"]:
-        raise ValueError("Quedan productos incompletos")
-    if summary["items_excess"] > 0:
-        raise ValueError("Hay excesos sin resolver")
-    if summary.get("open_issues", 0) > 0:
-        raise ValueError("Hay incidencias abiertas")
-    if abs(summary["requested_units"] - summary["certified_units"]) > 1e-6:
-        raise ValueError("Unidades certificadas no coinciden con solicitadas")
-
+    """Validación final + UPDATE a certified en UNA sola transacción con FOR UPDATE."""
     conn = get_connection()
     try:
         cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT status, certified_by, certified_at
+            FROM distribuidora.loads
+            WHERE id = %s
+            FOR UPDATE
+            """,
+            (load_id,),
+        )
+        load_row = cur.fetchone()
+        if not load_row:
+            raise LookupError("Carga no encontrada")
+        current_status = load_row[0]
+        if current_status == "cancelled":
+            raise ValueError("No se puede certificar una carga cancelada")
+        if current_status == "certified":
+            raise ValueError("La carga ya está certificada")
+        if current_status not in CERTIFIABLE_STATUSES:
+            raise ValueError(f"Estado no certificable: {current_status}")
+
+        # Bloquear también ítems para lectura consistente bajo la misma TX
+        cur.execute(
+            """
+            SELECT id, requested_units, certified_units, status
+            FROM distribuidora.load_items
+            WHERE load_id = %s
+            ORDER BY id
+            FOR UPDATE
+            """,
+            (load_id,),
+        )
+        items = cur.fetchall()
+        if not items:
+            raise ValueError("La carga no tiene ítems")
+
+        total = len(items)
+        complete = 0
+        excess = 0
+        sum_req = 0.0
+        sum_cert = 0.0
+        for _id, req, cert, st in items:
+            req_f = _f(req)
+            cert_f = _f(cert)
+            sum_req += req_f
+            sum_cert += cert_f
+            if st == "excess" or cert_f > req_f + 1e-9:
+                excess += 1
+            elif abs(cert_f - req_f) <= 1e-9 and cert_f > 0:
+                complete += 1
+
+        if complete != total:
+            raise ValueError("Quedan productos incompletos")
+        if excess > 0:
+            raise ValueError("Hay excesos sin resolver")
+        if abs(sum_req - sum_cert) > 1e-6:
+            raise ValueError("Unidades certificadas no coinciden con solicitadas")
+
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM distribuidora.load_issues
+            WHERE load_id = %s AND status = 'open'
+            """,
+            (load_id,),
+        )
+        open_issues = int(cur.fetchone()[0] or 0)
+        if open_issues > 0:
+            raise ValueError("Hay incidencias abiertas")
+
         cur.execute(
             """
             UPDATE distribuidora.loads
             SET status = 'certified',
                 certified_by = %s,
                 certified_at = NOW(),
+                last_certified_by = %s,
+                last_certified_at = NOW(),
                 loading_finished_at = COALESCE(loading_finished_at, NOW())
-            WHERE id = %s AND status IN ('in_progress', 'completed', 'pending')
+            WHERE id = %s
             RETURNING id
             """,
-            (user_email, load_id),
+            (user_email, user_email, load_id),
         )
         if not cur.fetchone():
             raise ValueError("No se pudo certificar la carga")
+        _insert_status_event(
+            cur,
+            load_id=load_id,
+            from_status=current_status,
+            to_status="certified",
+            user_email=user_email,
+            reason="certify",
+        )
         conn.commit()
         cur.close()
         return get_load(load_id)
@@ -685,25 +933,120 @@ def certify_load(*, load_id: int, user_email: str) -> dict[str, Any]:
         conn.close()
 
 
-def reopen_load(*, load_id: int, user_email: str, notes: str | None = None) -> dict[str, Any]:
+def cancel_load(*, load_id: int, user_email: str, reason: str) -> dict[str, Any]:
+    reason_clean = (reason or "").strip()
+    if len(reason_clean) < 3:
+        raise ValueError("Motivo de cancelación obligatorio (mín. 3 caracteres)")
+
     conn = get_connection()
     try:
         cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT status FROM distribuidora.loads WHERE id = %s FOR UPDATE
+            """,
+            (load_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise LookupError("Carga no encontrada")
+        current = row[0]
+        if current == "certified":
+            raise ValueError(
+                "No se puede cancelar una carga certificada sin flujo especial"
+            )
+        if current == "cancelled":
+            raise ValueError("La carga ya está cancelada")
+        if current not in CANCELABLE_STATUSES:
+            raise ValueError(f"Solo se pueden cancelar cargas {sorted(CANCELABLE_STATUSES)}")
+
+        cur.execute(
+            """
+            UPDATE distribuidora.loads
+            SET status = 'cancelled',
+                cancel_reason = %s,
+                cancelled_by = %s,
+                cancelled_at = NOW()
+            WHERE id = %s
+            RETURNING id
+            """,
+            (reason_clean, user_email, load_id),
+        )
+        if not cur.fetchone():
+            raise ValueError("No se pudo cancelar la carga")
+        _insert_status_event(
+            cur,
+            load_id=load_id,
+            from_status=current,
+            to_status="cancelled",
+            user_email=user_email,
+            reason=reason_clean,
+        )
+        conn.commit()
+        cur.close()
+        return get_load(load_id)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def reopen_load(*, load_id: int, user_email: str, reason: str) -> dict[str, Any]:
+    reason_clean = (reason or "").strip()
+    if len(reason_clean) < 3:
+        raise ValueError("Motivo de reapertura obligatorio (mín. 3 caracteres)")
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT status, certified_by, certified_at, last_certified_by, last_certified_at
+            FROM distribuidora.loads
+            WHERE id = %s
+            FOR UPDATE
+            """,
+            (load_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise LookupError("Carga no encontrada")
+        if row[0] != "certified":
+            raise ValueError("Solo se pueden reabrir cargas certificadas")
+
+        certified_by = row[1]
+        certified_at = row[2]
+        # Conservar histórico: no perder quién certificó
+        last_by = row[3] or certified_by
+        last_at = row[4] or certified_at
+
         cur.execute(
             """
             UPDATE distribuidora.loads
             SET status = 'in_progress',
                 reopened_by = %s,
                 reopened_at = NOW(),
+                reopen_reason = %s,
+                last_certified_by = COALESCE(%s, last_certified_by),
+                last_certified_at = COALESCE(%s, last_certified_at),
                 certified_by = NULL,
                 certified_at = NULL
             WHERE id = %s AND status = 'certified'
             RETURNING id
             """,
-            (user_email, load_id),
+            (user_email, reason_clean, last_by, last_at, load_id),
         )
         if not cur.fetchone():
             raise ValueError("Solo se pueden reabrir cargas certificadas")
+        _insert_status_event(
+            cur,
+            load_id=load_id,
+            from_status="certified",
+            to_status="in_progress",
+            user_email=user_email,
+            reason=reason_clean,
+        )
         cur.execute(
             """
             INSERT INTO distribuidora.load_item_events (
@@ -716,7 +1059,7 @@ def reopen_load(*, load_id: int, user_email: str, notes: str | None = None) -> d
             ORDER BY i.id
             LIMIT 1
             """,
-            (load_id, user_email, notes, load_id),
+            (load_id, user_email, reason_clean, load_id),
         )
         conn.commit()
         cur.close()

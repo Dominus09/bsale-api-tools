@@ -87,6 +87,7 @@ export type ImportPreview = {
   seal?: string | null
   document_units_total?: number | null
   document_value_total?: number | null
+  file_hash?: string | null
   summed_units: number
   summed_value?: number | null
   total_items: number
@@ -150,11 +151,12 @@ export async function previewCargaImport(file: File): Promise<ImportPreview> {
 
 export async function confirmCargaImport(
   file: File,
-  pickingNumber?: string,
+  opts?: { pickingNumber?: string; expectedFileHash?: string },
 ): Promise<LoadDetail> {
   const form = new FormData()
   form.append("file", file)
-  if (pickingNumber) form.append("picking_number", pickingNumber)
+  if (opts?.pickingNumber) form.append("picking_number", opts.pickingNumber)
+  if (opts?.expectedFileHash) form.append("expected_file_hash", opts.expectedFileHash)
   const token =
     typeof window !== "undefined" ? localStorage.getItem("token") : null
   const res = await fetch(`${API_URL}/cargas/import`, {
@@ -196,9 +198,9 @@ export async function addCargaUnits(
   body: {
     boxes?: number
     loose_units?: number
-    allow_excess?: boolean
     notes?: string
     complete_remaining?: boolean
+    register_excess_issue?: boolean
   },
 ): Promise<LoadDetail> {
   const res = await fetch(`${API_URL}/cargas/${loadId}/items/${itemId}/add`, {
@@ -228,6 +230,32 @@ export async function certifyCarga(loadId: number): Promise<LoadDetail> {
   const res = await fetch(`${API_URL}/cargas/${loadId}/certify`, {
     method: "POST",
     headers: getAuthHeaders(),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  return res.json()
+}
+
+export async function cancelCarga(
+  loadId: number,
+  reason: string,
+): Promise<LoadDetail> {
+  const res = await fetch(`${API_URL}/cargas/${loadId}/cancel`, {
+    method: "POST",
+    headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  return res.json()
+}
+
+export async function reopenCarga(
+  loadId: number,
+  reason: string,
+): Promise<LoadDetail> {
+  const res = await fetch(`${API_URL}/cargas/${loadId}/reopen`, {
+    method: "POST",
+    headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
   })
   if (!res.ok) throw new Error(await parseError(res))
   return res.json()
