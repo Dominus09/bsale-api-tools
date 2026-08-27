@@ -43,6 +43,9 @@ export type LoadItem = {
   certified_units: number
   remaining_units?: number
   requested_boxes?: number | null
+  requested_loose?: number | null
+  certified_boxes?: number | null
+  certified_loose?: number | null
   remaining_boxes?: number | null
   remaining_loose?: number | null
   source_boxes_value?: number | null

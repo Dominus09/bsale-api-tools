@@ -9,7 +9,7 @@ from typing import Annotated, Any
 from fastapi import Header, HTTPException, Request
 
 from backend.db import get_connection
-from backend.utils.auth_staff import decode_staff_token
+from backend.auth.jwt import decode_staff_token
 
 logger = logging.getLogger(__name__)
 

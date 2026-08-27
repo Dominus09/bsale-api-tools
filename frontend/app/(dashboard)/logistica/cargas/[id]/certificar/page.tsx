@@ -32,13 +32,19 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
 import { cn } from "@/lib/utils"
 
 const STATUS_FILTERS = [
-  { id: "all", label: "Todos" },
-  { id: "pending", label: "Pendientes" },
+  { id: "pending", label: "PENDIENTES" },
   { id: "partial", label: "Parciales" },
   { id: "complete", label: "Completos" },
+  { id: "all", label: "Todos" },
   { id: "diff", label: "Diferencias" },
 ] as const
 
@@ -51,6 +57,51 @@ const ISSUE_TYPES = [
   { id: "picking_error", label: "Error de picking" },
   { id: "other", label: "Otro" },
 ] as const
+
+function statusLabel(status: string): string {
+  switch (status) {
+    case "complete":
+      return "Completo"
+    case "partial":
+      return "Parcial"
+    case "issue":
+      return "Incidencia"
+    case "excess":
+      return "Exceso"
+    default:
+      return "Pendiente"
+  }
+}
+
+function statusTone(status: string): string {
+  switch (status) {
+    case "complete":
+      return "border-l-emerald-500 bg-emerald-50/40 dark:bg-emerald-950/20"
+    case "partial":
+      return "border-l-amber-500 bg-amber-50/50 dark:bg-amber-950/20"
+    case "issue":
+    case "excess":
+      return "border-l-destructive bg-destructive/5"
+    default:
+      return "border-l-slate-400 bg-card"
+  }
+}
+
+function faltanText(item: LoadItem): string {
+  const rem = Math.max(0, Number(item.remaining_units ?? 0))
+  if (rem <= 0) return "Listo"
+  const boxes = item.remaining_boxes
+  const loose = item.remaining_loose
+  if (boxes != null && item.sec && boxes > 0) {
+    const boxPart =
+      boxes === 1 ? "FALTA 1 CAJA" : `FALTAN ${boxes} CAJAS`
+    if (loose && loose > 0) {
+      return `${boxPart} + ${loose} UN`
+    }
+    return boxPart
+  }
+  return rem === 1 ? "FALTA 1 UNIDAD" : `FALTAN ${rem} UNIDADES`
+}
 
 export default function CertificarCargaPage() {
   const params = useParams()
@@ -71,8 +122,10 @@ export default function CertificarCargaPage() {
   const [certifyOpen, setCertifyOpen] = useState(false)
   const [scanOpen, setScanOpen] = useState(false)
   const [scanMsg, setScanMsg] = useState<string | null>(null)
+  const [flashOk, setFlashOk] = useState<string | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const streamRef = useRef<MediaStream | null>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const refresh = useCallback(async () => {
@@ -92,6 +145,13 @@ export default function CertificarCargaPage() {
     },
     [loadId],
   )
+
+  const focusSearch = useCallback(() => {
+    window.setTimeout(() => {
+      searchRef.current?.focus()
+      searchRef.current?.select()
+    }, 120)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -122,7 +182,7 @@ export default function CertificarCargaPage() {
       void runSearch(q, statusFilter, typeFilter).catch((e) =>
         setError(e instanceof Error ? e.message : "Error búsqueda"),
       )
-    }, 180)
+    }, 160)
     return () => {
       if (searchTimer.current) clearTimeout(searchTimer.current)
     }
@@ -139,6 +199,17 @@ export default function CertificarCargaPage() {
     setBoxes(0)
     setLoose(0)
     setError(null)
+  }
+
+  function closeItemAndReadySearch(message?: string) {
+    setActive(null)
+    setBoxes(0)
+    setLoose(0)
+    if (message) {
+      setFlashOk(message)
+      window.setTimeout(() => setFlashOk(null), 1800)
+    }
+    focusSearch()
   }
 
   async function applyAdd(opts?: {
@@ -162,14 +233,9 @@ export default function CertificarCargaPage() {
       }
       const updated = await addCargaUnits(loadId, active.id, body)
       setLoad(updated)
-      const fresh = updated.items.find((i) => i.id === active.id) || null
-      setActive(fresh)
-      setBoxes(0)
-      setLoose(0)
       await runSearch(q, statusFilter, typeFilter)
-      if (fresh?.status === "complete") {
-        setTimeout(() => setActive(null), 450)
-      }
+      const name = active.product_name.split(" ").slice(0, 3).join(" ")
+      closeItemAndReadySearch(`✓ ${name}`)
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al guardar")
     } finally {
@@ -185,9 +251,9 @@ export default function CertificarCargaPage() {
         issue_type: issueType,
       })
       setLoad(updated)
-      setActive(updated.items.find((i) => i.id === active.id) || null)
       setIssueOpen(false)
       await runSearch(q, statusFilter, typeFilter)
+      closeItemAndReadySearch("Incidencia registrada")
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error incidencia")
     } finally {
@@ -221,14 +287,20 @@ export default function CertificarCargaPage() {
         videoRef.current.srcObject = stream
         await videoRef.current.play()
       }
-      const BD = (window as unknown as { BarcodeDetector?: new (o: { formats: string[] }) => {
-        detect: (s: ImageBitmapSource) => Promise<{ rawValue: string }[]>
-      } }).BarcodeDetector
+      const BD = (
+        window as unknown as {
+          BarcodeDetector?: new (o: { formats: string[] }) => {
+            detect: (s: ImageBitmapSource) => Promise<{ rawValue: string }[]>
+          }
+        }
+      ).BarcodeDetector
       if (!BD || !videoRef.current) {
         setScanMsg("Escáner nativo no disponible. Use el buscador.")
         return
       }
-      const detector = new BD({ formats: ["ean_13", "ean_8", "code_128", "upc_a"] })
+      const detector = new BD({
+        formats: ["ean_13", "ean_8", "code_128", "upc_a"],
+      })
       const tick = async () => {
         if (!videoRef.current || !streamRef.current) return
         try {
@@ -237,7 +309,8 @@ export default function CertificarCargaPage() {
           if (code) {
             stopScan()
             const found = (load?.items || []).find(
-              (i) => (i.barcode || "").replace(/\D/g, "") === code.replace(/\D/g, ""),
+              (i) =>
+                (i.barcode || "").replace(/\D/g, "") === code.replace(/\D/g, ""),
             )
             if (!found) {
               setScanMsg("PRODUCTO NO PERTENECE A ESTA CARGA")
@@ -283,16 +356,18 @@ export default function CertificarCargaPage() {
     summary.total_items > 0 &&
     (summary.open_issues || 0) === 0 &&
     summary.items_excess === 0 &&
-    load.status !== "certified"
+    load.status !== "certified" &&
+    load.status !== "cancelled"
+  const isCompleteView = canCertify
 
   return (
-    <div className="mx-auto flex min-h-[100dvh] max-w-lg flex-col bg-background pb-8">
+    <div className="mx-auto flex min-h-[100dvh] max-w-lg flex-col bg-background pb-28">
       <header className="sticky top-0 z-20 border-b bg-background/95 px-3 py-3 backdrop-blur">
         <div className="flex items-center gap-2">
           <Button
             variant="ghost"
             size="icon"
-            className="size-10"
+            className="size-11"
             onClick={() => router.push("/logistica/cargas")}
           >
             <ArrowLeft className="size-5" />
@@ -306,67 +381,79 @@ export default function CertificarCargaPage() {
               {load.truck ? ` · ${load.truck}` : ""}
             </p>
           </div>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-10"
-            disabled={!canCertify}
-            onClick={() => setCertifyOpen(true)}
-          >
-            <ShieldCheck className="mr-1 size-4" />
-            Certificar
-          </Button>
         </div>
         <div className="mt-3">
-          <div className="mb-1 flex justify-between text-xs text-muted-foreground">
+          <div className="mb-1 flex justify-between text-xs font-medium text-muted-foreground">
             <span>
               {summary.items_complete} / {summary.total_items} productos
             </span>
-            <span>{summary.progress_pct}%</span>
+            <span className="tabular-nums">{summary.progress_pct}%</span>
           </div>
-          <div className="h-2.5 overflow-hidden rounded-full bg-muted">
+          <div className="h-3 overflow-hidden rounded-full bg-muted">
             <div
-              className="h-full rounded-full bg-primary"
+              className={cn(
+                "h-full rounded-full transition-all",
+                isCompleteView ? "bg-emerald-600" : "bg-primary",
+              )}
               style={{ width: `${Math.min(100, summary.progress_pct)}%` }}
             />
           </div>
+          <p className="mt-1 text-[11px] tabular-nums text-muted-foreground">
+            Unidades {summary.certified_units} / {summary.requested_units}
+            {(summary.open_issues || 0) > 0
+              ? ` · Incidencias ${summary.open_issues}`
+              : ""}
+          </p>
         </div>
       </header>
 
-      <div className="sticky top-[7.5rem] z-10 space-y-2 border-b bg-background px-3 py-3">
+      <div className="sticky top-[7.25rem] z-10 space-y-2 border-b bg-background px-3 py-3 shadow-sm">
         <div className="flex gap-2">
           <div className="relative flex-1">
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
+              ref={searchRef}
               className="h-12 pl-10 text-base"
-              placeholder="Buscar producto..."
+              placeholder="Buscar: cristal 470, coca…"
               value={q}
               onChange={(e) => setQ(e.target.value)}
+              autoComplete="off"
+              autoCorrect="off"
+              enterKeyHint="search"
             />
           </div>
-          <Button className="h-12 px-4" variant="secondary" onClick={() => void startScan()}>
+          <Button
+            className="h-12 px-4"
+            variant="secondary"
+            onClick={() => void startScan()}
+          >
             <ScanLine className="size-5" />
           </Button>
         </div>
-        <div className="flex gap-1.5 overflow-x-auto pb-1">
+        <div className="flex gap-1.5 overflow-x-auto pb-0.5">
           {STATUS_FILTERS.map((f) => (
             <button
               key={f.id}
               type="button"
               onClick={() => setStatusFilter(f.id)}
               className={cn(
-                "shrink-0 rounded-full px-3 py-1.5 text-xs font-medium",
+                "shrink-0 rounded-full px-3.5 py-2 text-xs font-bold tracking-wide",
                 statusFilter === f.id
-                  ? "bg-primary text-primary-foreground"
+                  ? f.id === "pending"
+                    ? "bg-amber-600 text-white"
+                    : "bg-primary text-primary-foreground"
                   : "bg-muted text-muted-foreground",
               )}
             >
               {f.label}
+              {f.id === "pending" && summary.items_pending
+                ? ` (${summary.items_pending})`
+                : ""}
             </button>
           ))}
         </div>
         {(load.product_types?.length || 0) > 0 ? (
-          <div className="flex gap-1.5 overflow-x-auto pb-1">
+          <div className="flex gap-1.5 overflow-x-auto pb-0.5">
             <button
               type="button"
               onClick={() => setTypeFilter("all")}
@@ -394,13 +481,36 @@ export default function CertificarCargaPage() {
         ) : null}
       </div>
 
+      {flashOk ? (
+        <p className="mx-3 mt-3 rounded-md border border-emerald-400/50 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-800">
+          {flashOk}
+        </p>
+      ) : null}
+
       {error ? (
         <p className="mx-3 mt-3 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
           {error}
         </p>
       ) : null}
 
-      {(load.recent_certified?.length || 0) > 0 ? (
+      {isCompleteView ? (
+        <div className="mx-3 mt-4 rounded-2xl border border-emerald-500/40 bg-emerald-50 p-4 dark:bg-emerald-950/30">
+          <p className="text-2xl font-black text-emerald-800">100%</p>
+          <ul className="mt-2 space-y-1 text-sm text-emerald-900">
+            <li>
+              Productos: {summary.items_complete}/{summary.total_items}
+            </li>
+            <li>
+              Unidades: {summary.certified_units}/{summary.requested_units}
+            </li>
+            <li>Faltantes: 0</li>
+            <li>Excesos: {summary.items_excess}</li>
+            <li>Incidencias: {summary.open_issues || 0}</li>
+          </ul>
+        </div>
+      ) : null}
+
+      {(load.recent_certified?.length || 0) > 0 && !isCompleteView ? (
         <div className="px-3 pt-3">
           <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             Últimos certificados
@@ -416,7 +526,9 @@ export default function CertificarCargaPage() {
                   if (it) openItem(it)
                 }}
               >
-                <p className="line-clamp-2 font-medium leading-snug">{r.product_name}</p>
+                <p className="line-clamp-2 font-medium leading-snug">
+                  {r.product_name}
+                </p>
               </button>
             ))}
           </div>
@@ -426,107 +538,142 @@ export default function CertificarCargaPage() {
       <div className="flex-1 space-y-3 px-3 py-4">
         {items.length === 0 ? (
           <p className="py-12 text-center text-sm text-muted-foreground">
-            Sin productos para este filtro.
+            {statusFilter === "pending"
+              ? "No quedan pendientes con este filtro."
+              : "Sin productos para este filtro."}
           </p>
         ) : (
           items.map((item) => (
-            <article
+            <button
               key={item.id}
-              className="rounded-xl border bg-card p-4 shadow-sm"
+              type="button"
+              onClick={() => openItem(item)}
+              className={cn(
+                "w-full rounded-xl border border-l-4 p-4 text-left shadow-sm active:scale-[0.99]",
+                statusTone(item.status),
+              )}
             >
               <p className="text-base font-bold leading-snug">{item.product_name}</p>
-              <p className="mt-1 text-xs uppercase tracking-wide text-muted-foreground">
-                {item.product_type || "—"}
-                {item.sec ? ` · SEC ${item.sec}` : ""}
+              <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                {item.sec ? `SEC ${item.sec}` : "SIN SEC"}
+                {item.product_type ? ` · ${item.product_type}` : ""}
               </p>
-              <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+              <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
                 <div>
-                  <p className="text-[10px] uppercase text-muted-foreground">Solicitado</p>
-                  <p className="text-lg font-semibold tabular-nums">
-                    {item.requested_units} UN
+                  <p className="text-[10px] uppercase text-muted-foreground">
+                    Solicitado
                   </p>
-                  {item.requested_boxes != null ? (
-                    <p className="text-xs text-muted-foreground">
-                      ≡ {item.requested_boxes} cajas
-                    </p>
-                  ) : null}
+                  <p className="text-lg font-semibold tabular-nums">
+                    {item.requested_units}
+                    <span className="ml-1 text-xs font-normal">UN</span>
+                  </p>
                 </div>
                 <div>
-                  <p className="text-[10px] uppercase text-muted-foreground">Estado</p>
+                  <p className="text-[10px] uppercase text-muted-foreground">
+                    Cargado
+                  </p>
+                  <p className="text-lg font-semibold tabular-nums">
+                    {item.certified_units}
+                    <span className="ml-1 text-xs font-normal">
+                      / {item.requested_units}
+                    </span>
+                  </p>
+                </div>
+                <div className="col-span-2">
+                  <p className="text-[10px] uppercase text-muted-foreground">
+                    Faltan · {statusLabel(item.status)}
+                  </p>
                   <p
                     className={cn(
-                      "font-semibold capitalize",
-                      item.status === "complete" && "text-emerald-700",
-                      item.status === "partial" && "text-amber-700",
-                      item.status === "issue" && "text-destructive",
+                      "text-base font-bold",
+                      item.status === "complete"
+                        ? "text-emerald-700"
+                        : "text-amber-800",
                     )}
                   >
-                    {item.status === "complete"
-                      ? "✓ Completo"
-                      : item.status === "partial"
-                        ? "Parcial"
-                        : item.status === "issue"
-                          ? "Incidencia"
-                          : "Pendiente"}
-                  </p>
-                  <p className="text-xs tabular-nums text-muted-foreground">
-                    {item.certified_units} / {item.requested_units}
+                    {faltanText(item)}
                   </p>
                 </div>
               </div>
-              <Button
-                className="mt-3 h-12 w-full text-base"
-                onClick={() => openItem(item)}
-              >
-                ABRIR
-              </Button>
-            </article>
+            </button>
           ))
         )}
       </div>
 
-      <Dialog open={!!active} onOpenChange={(o) => !o && setActive(null)}>
-        <DialogContent className="max-h-[92dvh] max-w-lg overflow-y-auto p-0 sm:rounded-xl">
-          {active ? (
-            <div className="space-y-4 p-4 pb-6">
-              <DialogHeader className="text-left">
-                <DialogTitle className="text-xl leading-snug">
-                  {active.product_name}
-                </DialogTitle>
-                <p className="text-sm text-muted-foreground">
-                  {active.product_type || "—"}
-                </p>
-              </DialogHeader>
+      {canCertify ? (
+        <div className="fixed inset-x-0 bottom-0 z-30 border-t bg-background/95 p-3 backdrop-blur">
+          <div className="mx-auto max-w-lg">
+            <Button
+              className="h-14 w-full text-base font-bold"
+              onClick={() => setCertifyOpen(true)}
+            >
+              <ShieldCheck className="mr-2 size-5" />
+              CERTIFICAR CARGA
+            </Button>
+          </div>
+        </div>
+      ) : null}
 
-              <div className="grid grid-cols-2 gap-3 rounded-xl bg-muted/50 p-3 text-sm">
+      <Sheet
+        open={!!active}
+        onOpenChange={(o) => {
+          if (!o) {
+            setActive(null)
+            focusSearch()
+          }
+        }}
+      >
+        <SheetContent
+          side="bottom"
+          className="max-h-[92dvh] overflow-y-auto rounded-t-2xl p-0 sm:max-w-lg sm:mx-auto"
+        >
+          {active ? (
+            <div className="space-y-4 p-4 pb-8">
+              <SheetHeader className="space-y-1 text-left">
+                <SheetTitle className="text-xl leading-snug">
+                  {active.product_name}
+                </SheetTitle>
+                <p className="text-sm font-semibold text-muted-foreground">
+                  {active.sec ? `SEC ${active.sec}` : "SIN SEC"}
+                  {active.product_type ? ` · ${active.product_type}` : ""}
+                </p>
+              </SheetHeader>
+
+              <div className="grid grid-cols-3 gap-2 rounded-xl bg-muted/60 p-3 text-center">
                 <div>
-                  <p className="text-[10px] uppercase text-muted-foreground">SEC</p>
-                  <p className="text-lg font-bold">{active.sec ?? "—"}</p>
+                  <p className="text-[10px] font-semibold uppercase text-muted-foreground">
+                    Solicitado
+                  </p>
+                  <p className="text-xl font-black tabular-nums">
+                    {active.requested_units}
+                  </p>
+                  {active.requested_boxes != null ? (
+                    <p className="text-[11px] text-muted-foreground">
+                      {active.requested_boxes} cajas
+                    </p>
+                  ) : null}
                 </div>
                 <div>
-                  <p className="text-[10px] uppercase text-muted-foreground">Barcode</p>
-                  <p className="font-mono text-sm">{active.barcode || "—"}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] uppercase text-muted-foreground">Solicitado</p>
-                  <p className="text-lg font-bold tabular-nums">
-                    {active.requested_units} u
+                  <p className="text-[10px] font-semibold uppercase text-muted-foreground">
+                    Cargado
+                  </p>
+                  <p className="text-xl font-black tabular-nums">
+                    {active.certified_units}
                   </p>
                 </div>
                 <div>
-                  <p className="text-[10px] uppercase text-muted-foreground">Cargado</p>
-                  <p className="text-lg font-bold tabular-nums">
-                    {active.certified_units} / {active.requested_units}
+                  <p className="text-[10px] font-semibold uppercase text-muted-foreground">
+                    Faltan
                   </p>
-                </div>
-                <div className="col-span-2">
-                  <p className="text-[10px] uppercase text-muted-foreground">Faltan</p>
-                  <p className="text-xl font-bold tabular-nums text-amber-800">
-                    {Math.max(0, active.remaining_units ?? 0)} unidades
-                    {active.remaining_boxes != null
-                      ? ` · ${active.remaining_boxes} cajas`
-                      : ""}
+                  <p className="text-xl font-black tabular-nums text-amber-800">
+                    {Math.max(0, active.remaining_units ?? 0)}
                   </p>
+                  {active.remaining_boxes != null &&
+                  (active.remaining_units || 0) > 0 ? (
+                    <p className="text-[11px] text-amber-800">
+                      {active.remaining_boxes} cajas
+                    </p>
+                  ) : null}
                 </div>
               </div>
 
@@ -547,12 +694,14 @@ export default function CertificarCargaPage() {
                   </div>
                   <p className="text-center text-sm text-muted-foreground">
                     Esta operación agregará{" "}
-                    <span className="font-semibold text-foreground">{deltaUnits}</span>{" "}
+                    <span className="font-semibold text-foreground">
+                      {deltaUnits}
+                    </span>{" "}
                     unidades
                   </p>
                   <div className="grid grid-cols-2 gap-2">
                     <Button
-                      className="h-12"
+                      className="h-14 text-base"
                       variant="secondary"
                       disabled={saving || !active.sec}
                       onClick={() => void applyAdd({ oneBox: true })}
@@ -560,7 +709,7 @@ export default function CertificarCargaPage() {
                       + 1 CAJA
                     </Button>
                     <Button
-                      className="h-12"
+                      className="h-14 text-base"
                       variant="secondary"
                       disabled={saving}
                       onClick={() => void applyAdd({ oneUnit: true })}
@@ -569,11 +718,15 @@ export default function CertificarCargaPage() {
                     </Button>
                   </div>
                   <Button
-                    className="h-14 w-full text-base"
+                    className="h-14 w-full text-base font-bold"
                     disabled={saving || deltaUnits <= 0}
                     onClick={() => void applyAdd()}
                   >
-                    {saving ? <Loader2 className="size-5 animate-spin" /> : "INGRESAR CANTIDAD"}
+                    {saving ? (
+                      <Loader2 className="size-5 animate-spin" />
+                    ) : (
+                      "CONFIRMAR CANTIDAD"
+                    )}
                   </Button>
                   {(active.remaining_units || 0) > 0 ? (
                     <Button
@@ -601,8 +754,8 @@ export default function CertificarCargaPage() {
               </Button>
             </div>
           ) : null}
-        </DialogContent>
-      </Dialog>
+        </SheetContent>
+      </Sheet>
 
       <Dialog open={issueOpen} onOpenChange={setIssueOpen}>
         <DialogContent>
@@ -645,7 +798,10 @@ export default function CertificarCargaPage() {
             <Button variant="outline" onClick={() => setCertifyOpen(false)}>
               Cancelar
             </Button>
-            <Button disabled={saving || !canCertify} onClick={() => void onCertify()}>
+            <Button
+              disabled={saving || !canCertify}
+              onClick={() => void onCertify()}
+            >
               CONFIRMAR CERTIFICACIÓN
             </Button>
           </DialogFooter>
@@ -658,9 +814,14 @@ export default function CertificarCargaPage() {
           if (!o) stopScan()
         }}
       >
-        <DialogContent className="max-w-md p-0 overflow-hidden">
+        <DialogContent className="max-w-md overflow-hidden p-0">
           <div className="bg-black">
-            <video ref={videoRef} className="aspect-[3/4] w-full object-cover" muted playsInline />
+            <video
+              ref={videoRef}
+              className="aspect-[3/4] w-full object-cover"
+              muted
+              playsInline
+            />
           </div>
           <div className="space-y-2 p-4">
             <p className="text-sm text-muted-foreground">

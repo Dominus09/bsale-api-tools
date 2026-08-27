@@ -137,8 +137,34 @@ export default function NuevaCargaPage() {
                 </dd>
               </div>
               <div>
-                <dt className="text-muted-foreground">Fuente</dt>
-                <dd className="font-medium uppercase">{preview.source_type}</dd>
+                <dt className="text-muted-foreground">Doc. unidades</dt>
+                <dd className="font-medium">
+                  {preview.document_units_total != null
+                    ? preview.document_units_total.toLocaleString("es-CL")
+                    : "—"}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">Hash archivo</dt>
+                <dd className="font-mono text-xs break-all">
+                  {preview.file_hash
+                    ? `${preview.file_hash.slice(0, 16)}…`
+                    : "—"}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-muted-foreground">Doc. unidades</dt>
+                <dd className="font-medium">
+                  {preview.document_units_total != null
+                    ? preview.document_units_total.toLocaleString("es-CL")
+                    : "—"}
+                </dd>
+              </div>
+              <div className="col-span-2">
+                <dt className="text-muted-foreground">Hash archivo (SHA-256)</dt>
+                <dd className="break-all font-mono text-[11px]">
+                  {preview.file_hash || "—"}
+                </dd>
               </div>
             </dl>
 
