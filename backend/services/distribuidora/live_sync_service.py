@@ -611,6 +611,7 @@ def live_sync_related(*, strict_token: bool = True) -> dict[str, Any]:
     stats = sync_distribuidora_related_documents(
         strict_token=strict_token,
         lookback_days=win_days,
+        live_mode=True,
     )
     stats["sync_type"] = SYNC_TYPE_RELATED_LIVE
     stats["window_from"] = window_from.isoformat()

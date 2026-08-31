@@ -42,7 +42,12 @@ from backend.services.distribuidora.bsale_client import BsaleClient
 from backend.services.distribuidora.bsale_params import merge_bsale_office_query
 from backend.services.distribuidora.oc_related_discovery_service import (
     CatchupApiError,
+    DISCOVERY_MODE_FAST_CONFIRM,
+    DISCOVERY_MODE_FULL,
     OcRelatedApiError,
+    STOP_REASON_COMPLETED,
+    STOP_REASON_RUNTIME_BUDGET,
+    STOP_REASON_SKIPPED_ALREADY_RUNNING,
     apply_discovered_invoice_edges,
     classify_oc_discovery_result,
     compute_pending_rotation_offset,
@@ -52,8 +57,10 @@ from backend.services.distribuidora.oc_related_discovery_service import (
     emission_date_bounds_for_document_ids,
     fetch_pending_oc_ids_for_incremental,
     fetch_recent_oc_ids_for_refresh,
+    load_existing_invoice_relations_for_oc,
     merge_oc_candidate_ids,
     resolve_related_sync_lookback_days,
+    resolve_related_sync_max_runtime_sec,
 )
 from backend.utils.bsale_document_ids import (
     ids_differ,
@@ -238,6 +245,8 @@ def _fetch_oc_document_ids_for_incremental(
         "pending_offset": int(pending_offset),
         "recent_refresh_candidates": len(recent_ids),
         "merged_unique": len(merged),
+        "pending_ids": pending_ids,
+        "refresh_ids": [x for x in recent_ids if x not in set(pending_ids)],
     }
     return merged, meta
 
@@ -1386,20 +1395,151 @@ def sync_related_for_single_oc(
     return stats
 
 
+def _live_related_stats_template() -> dict[str, Any]:
+    return {
+        "live_mode": False,
+        "discovery_mode": DISCOVERY_MODE_FULL,
+        "max_runtime_sec": None,
+        "ocs_pending_processed": 0,
+        "ocs_refresh_processed": 0,
+        "ocs_confirmed": 0,
+        "ocs_skipped_already_confirmed": 0,
+        "ocs_no_relation": 0,
+        "api_calls_saved_by_early_exit": 0,
+        "details_considered": 0,
+        "details_queried": 0,
+        "details_skipped_after_confirmation": 0,
+        "fast_confirmations": 0,
+        "full_edges_inserted": 0,
+        "stop_reason": STOP_REASON_COMPLETED,
+        "skipped_already_running": False,
+    }
+
+
+def _process_one_oc_related_sync(
+    *,
+    conn: PgConnection,
+    cur,
+    client,
+    doc_id: int,
+    stats: dict[str, Any],
+    discovery_mode: str,
+    helper_throttle: float,
+    dry_run: bool = False,
+) -> dict[str, Any] | None:
+    """Descubre y opcionalmente persiste relaciones para una OC. Retorna oc_res o None si skip local."""
+    if discovery_mode == DISCOVERY_MODE_FAST_CONFIRM:
+        _pairs, confirmed_keys = load_existing_invoice_relations_for_oc(cur, doc_id)
+        if confirmed_keys:
+            stats["ocs_skipped_already_confirmed"] = int(
+                stats.get("ocs_skipped_already_confirmed") or 0
+            ) + 1
+            stats["existing"] = int(stats.get("existing") or 0) + 1
+            return None
+
+    try:
+        oc_res = discover_invoice_edges_for_oc(
+            client,
+            cur,
+            doc_id,
+            office_id=OFFICE_ID,
+            throttle=helper_throttle,
+            stats=stats,
+            discovery_mode=discovery_mode,
+        )
+    except (CatchupApiError, OcRelatedApiError) as e:
+        logger.warning("sync_related document_id=%s api: %s", doc_id, e)
+        if e.rate_limited:
+            stats["rate_limited"] = int(stats.get("rate_limited") or 0) + 1
+        else:
+            stats["api_errors"] = int(stats.get("api_errors") or 0) + 1
+        stats["document_errors"] = int(stats.get("document_errors") or 0) + 1
+        return None
+    except Exception as e:
+        logger.warning("sync_related document_id=%s: %s", doc_id, e)
+        stats["document_errors"] = int(stats.get("document_errors") or 0) + 1
+        stats["api_errors"] = int(stats.get("api_errors") or 0) + 1
+        return None
+
+    bucket = classify_oc_discovery_result(oc_res)
+    if bucket == "existing":
+        stats["existing"] = int(stats.get("existing") or 0) + 1
+    elif bucket == "discovered":
+        stats["discovered"] = int(stats.get("discovered") or 0) + 1
+        stats["ocs_confirmed"] = int(stats.get("ocs_confirmed") or 0) + 1
+        if oc_res.get("fast_confirmed"):
+            stats["fast_confirmations"] = int(stats.get("fast_confirmations") or 0) + 1
+    elif bucket == "no_relation":
+        stats["no_relation"] = int(stats.get("no_relation") or 0) + 1
+        stats["ocs_no_relation"] = int(stats.get("ocs_no_relation") or 0) + 1
+    elif bucket == "rate_limited":
+        stats["rate_limited"] = int(stats.get("rate_limited") or 0) + 1
+    elif bucket == "api_error":
+        stats["api_errors"] = int(stats.get("api_errors") or 0) + 1
+
+    stats["api_calls"] = int(stats.get("api_calls") or 0) + int(oc_res.get("api_calls") or 0)
+    stats["api_calls_saved_by_early_exit"] = int(
+        stats.get("api_calls_saved_by_early_exit") or 0
+    ) + int(oc_res.get("api_calls_saved_by_early_exit") or 0)
+    stats["details_queried"] = int(stats.get("details_queried") or 0) + int(
+        oc_res.get("details_queried") or 0
+    )
+    stats["details_skipped_after_confirmation"] = int(
+        stats.get("details_skipped_after_confirmation") or 0
+    ) + int(oc_res.get("details_skipped_after_confirmation") or 0)
+    stats["relateddetail_details_processed"] = int(
+        stats.get("relateddetail_details_processed") or 0
+    ) + len(oc_res.get("detail_ids_consulted") or [])
+    stats["relateddetail_items_total"] = int(
+        stats.get("relateddetail_items_total") or 0
+    ) + len(oc_res.get("edges") or [])
+    stats["details_considered"] = int(stats.get("relateddetail_details_processed") or 0)
+
+    try:
+        ins = apply_discovered_invoice_edges(conn, cur, oc_res, stats=stats)
+    except Exception as e:
+        logger.warning("sync_related apply document_id=%s: %s", doc_id, e)
+        stats["document_errors"] = int(stats.get("document_errors") or 0) + 1
+        return oc_res
+
+    stats["rows_inserted"] += ins
+    if discovery_mode == DISCOVERY_MODE_FULL:
+        stats["full_edges_inserted"] = int(stats.get("full_edges_inserted") or 0) + ins
+    logger.debug(
+        "related doc_id=%s status=%s edges=%s inserted=%s mode=%s",
+        doc_id,
+        oc_res.get("status"),
+        len(oc_res.get("edges") or []),
+        ins,
+        discovery_mode,
+    )
+    return oc_res
+
+
 def sync_distribuidora_related_documents(
     *,
     strict_token: bool = False,
     lookback_days: int | None = None,
     limit_details: int | None = None,
     limit_documents: int | None = None,
+    live_mode: bool = False,
+    max_runtime_sec: int | None = None,
 ) -> dict[str, Any]:
     """
     Por cada OC reciente: ``details.json`` y ``documents.json?relateddetailid=`` por ``detail.id``.
 
+    **Live** (``live_mode=True``): modo ``fast_confirm`` — corta al primer tipo 1/6;
+    prioriza bucket *pending* y luego *refresh* si queda presupuesto; respeta
+    ``RELATED_SYNC_MAX_RUNTIME_SEC`` (default 240 s). Catchup manual no usa este límite.
+
+    **Concurrencia**: ``pg_try_advisory_lock(ADVISORY_LOCK_RELATED)``. Si el cron anterior
+    sigue activo, retorna ``stop_reason=SKIPPED_ALREADY_RUNNING`` sin procesar.
+
     Env:
-      DISTRIBUIDORA_RELATED_LOOKBACK_DAYS (default 10)
+      DISTRIBUIDORA_RELATED_LOOKBACK_DAYS (default 10; canónico RELATED_SYNC_LOOKBACK_DAYS=14)
       DISTRIBUIDORA_RELATED_DETAIL_LIMIT (default 250) — cupo bucket refresh por ``document_id``
       DISTRIBUIDORA_RELATED_PENDING_LIMIT (default 400) — cupo bucket OC sin factura confirmada
+      RELATED_SYNC_MAX_RUNTIME_SEC (default 240, solo live)
     """
     token = _bsale_token()
     if not token:
@@ -1416,6 +1556,13 @@ def sync_distribuidora_related_documents(
     )
 
     t0 = time.perf_counter()
+    runtime_limit = (
+        max_runtime_sec
+        if max_runtime_sec is not None
+        else resolve_related_sync_max_runtime_sec(live_mode)
+    )
+    discovery_mode = DISCOVERY_MODE_FAST_CONFIRM if live_mode else DISCOVERY_MODE_FULL
+
     stats: dict[str, Any] = {
         "documents_considered": 0,
         "details_considered": 0,
@@ -1458,7 +1605,11 @@ def sync_distribuidora_related_documents(
         "documents_pending_without_related": 0,
         "documents_recent_refresh": 0,
         "documents_merged_unique": 0,
+        **_live_related_stats_template(),
     }
+    stats["live_mode"] = live_mode
+    stats["discovery_mode"] = discovery_mode
+    stats["max_runtime_sec"] = runtime_limit
 
     conn = get_connection()
     got_lock = False
@@ -1468,6 +1619,8 @@ def sync_distribuidora_related_documents(
         got_lock = bool(cur.fetchone()[0])
         if not got_lock:
             stats["omitido_concurrencia"] = True
+            stats["skipped_already_running"] = True
+            stats["stop_reason"] = STOP_REASON_SKIPPED_ALREADY_RUNNING
             cur.close()
             stats["duration_seconds"] = round(time.perf_counter() - t0, 3)
             return stats
@@ -1521,70 +1674,62 @@ def sync_distribuidora_related_documents(
         client = create_bsale_client_for_related_discovery(token, rate_stats=rate_stats)
         helper_throttle = float(os.getenv("DISTRIBUIDORA_RELATED_API_DELAY_SEC", "0"))
 
-        for doc_id in document_ids:
-            try:
-                oc_res = discover_invoice_edges_for_oc(
-                    client,
-                    cur,
-                    doc_id,
-                    office_id=OFFICE_ID,
-                    throttle=helper_throttle,
-                    stats=stats,
+        pending_ids = pick_meta.get("pending_ids") or []
+        refresh_ids = pick_meta.get("refresh_ids") or []
+        phases: list[tuple[str, list[int]]] = [
+            ("pending", pending_ids),
+            ("refresh", refresh_ids if live_mode else []),
+        ]
+        if not live_mode:
+            phases = [("all", document_ids)]
+
+        def _runtime_exhausted() -> bool:
+            if runtime_limit is None:
+                return False
+            return (time.perf_counter() - t0) >= float(runtime_limit)
+
+        for phase_name, phase_ids in phases:
+            if phase_name == "refresh" and _runtime_exhausted():
+                logger.info(
+                    "sync related live: omitiendo bucket refresh (presupuesto %.0fs agotado)",
+                    float(runtime_limit or 0),
                 )
-            except (CatchupApiError, OcRelatedApiError) as e:
-                logger.warning("sync_related document_id=%s api: %s", doc_id, e)
-                if e.rate_limited:
-                    stats["rate_limited"] = int(stats.get("rate_limited") or 0) + 1
-                else:
-                    stats["api_errors"] = int(stats.get("api_errors") or 0) + 1
-                stats["document_errors"] = int(stats.get("document_errors") or 0) + 1
-                continue
-            except Exception as e:
-                logger.warning("sync_related document_id=%s: %s", doc_id, e)
-                stats["document_errors"] = int(stats.get("document_errors") or 0) + 1
-                stats["api_errors"] = int(stats.get("api_errors") or 0) + 1
-                continue
+                break
+            for doc_id in phase_ids:
+                if _runtime_exhausted():
+                    stats["stop_reason"] = STOP_REASON_RUNTIME_BUDGET
+                    logger.info(
+                        "sync related live: stop_reason=%s tras %s OC (presupuesto %ss)",
+                        STOP_REASON_RUNTIME_BUDGET,
+                        stats.get("ocs_pending_processed", 0)
+                        + stats.get("ocs_refresh_processed", 0),
+                        runtime_limit,
+                    )
+                    break
 
-            bucket = classify_oc_discovery_result(oc_res)
-            if bucket == "existing":
-                stats["existing"] = int(stats.get("existing") or 0) + 1
-            elif bucket == "discovered":
-                stats["discovered"] = int(stats.get("discovered") or 0) + 1
-            elif bucket == "no_relation":
-                stats["no_relation"] = int(stats.get("no_relation") or 0) + 1
-            elif bucket == "rate_limited":
-                stats["rate_limited"] = int(stats.get("rate_limited") or 0) + 1
-            elif bucket == "api_error":
-                stats["api_errors"] = int(stats.get("api_errors") or 0) + 1
+                _process_one_oc_related_sync(
+                    conn=conn,
+                    cur=cur,
+                    client=client,
+                    doc_id=doc_id,
+                    stats=stats,
+                    discovery_mode=discovery_mode,
+                    helper_throttle=helper_throttle,
+                )
+                if phase_name == "pending":
+                    stats["ocs_pending_processed"] = int(
+                        stats.get("ocs_pending_processed") or 0
+                    ) + 1
+                elif phase_name == "refresh":
+                    stats["ocs_refresh_processed"] = int(
+                        stats.get("ocs_refresh_processed") or 0
+                    ) + 1
 
-            stats["api_calls"] = int(stats.get("api_calls") or 0) + int(
-                oc_res.get("api_calls") or 0
-            )
-            stats["relateddetail_details_processed"] = int(
-                stats.get("relateddetail_details_processed") or 0
-            ) + len(oc_res.get("detail_ids_consulted") or [])
-            stats["relateddetail_items_total"] = int(
-                stats.get("relateddetail_items_total") or 0
-            ) + len(oc_res.get("edges") or [])
-
-            try:
-                ins = apply_discovered_invoice_edges(conn, cur, oc_res, stats=stats)
-            except Exception as e:
-                logger.warning("sync_related apply document_id=%s: %s", doc_id, e)
-                stats["document_errors"] = int(stats.get("document_errors") or 0) + 1
-                continue
-            stats["rows_inserted"] += ins
-            logger.debug(
-                "related doc_id=%s status=%s edges=%s inserted=%s",
-                doc_id,
-                oc_res.get("status"),
-                len(oc_res.get("edges") or []),
-                ins,
-            )
+            if stats.get("stop_reason") == STOP_REASON_RUNTIME_BUDGET:
+                break
 
         stats["retries"] = int(rate_stats.get("retry_count") or 0)
         stats["wait_seconds"] = float(rate_stats.get("wait_seconds_total") or 0.0)
-
         stats["details_considered"] = int(stats.get("relateddetail_details_processed") or 0)
 
         def _finalize_incremental() -> None:
@@ -1599,22 +1744,22 @@ def sync_distribuidora_related_documents(
         _with_deadlock_retry(conn, "related incremental insert_sync_status", _finalize_incremental)
         cur.close()
         logger.info(
-            "sync related OK: scanned=%s discovered=%s inserted=%s existing=%s "
-            "no_relation=%s rate_limited=%s api_errors=%s lookback=%sd offset=%s "
-            "oldest=%s newest=%s api=%s wait_s=%.1f s=%.2f",
+            "sync related OK: mode=%s scanned=%s pending=%s refresh=%s discovered=%s "
+            "inserted=%s fast_confirm=%s api_saved_early_exit=%s details_queried=%s "
+            "details_skipped=%s stop_reason=%s lookback=%sd api=%s s=%.2f",
+            stats.get("discovery_mode"),
             stats.get("scanned"),
+            stats.get("ocs_pending_processed"),
+            stats.get("ocs_refresh_processed"),
             stats.get("discovered"),
             stats["rows_inserted"],
-            stats.get("existing"),
-            stats.get("no_relation"),
-            stats.get("rate_limited"),
-            stats.get("api_errors"),
+            stats.get("fast_confirmations"),
+            stats.get("api_calls_saved_by_early_exit"),
+            stats.get("details_queried"),
+            stats.get("details_skipped_after_confirmation"),
+            stats.get("stop_reason"),
             stats.get("lookback_days"),
-            stats.get("candidate_offset"),
-            stats.get("oldest_candidate_date"),
-            stats.get("newest_candidate_date"),
             stats["api_calls"],
-            float(stats.get("wait_seconds") or 0),
             time.perf_counter() - t0,
         )
     except Exception as e:

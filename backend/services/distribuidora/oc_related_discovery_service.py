@@ -30,6 +30,7 @@ CONFIRMED_INVOICE_TYPES = frozenset({1, 6})
 CATCHUP_INVOICE_TYPES = CONFIRMED_INVOICE_TYPES
 
 DEFAULT_RELATED_SYNC_LOOKBACK_DAYS = 14
+DEFAULT_RELATED_SYNC_MAX_RUNTIME_SEC = 240
 DEFAULT_MIN_INTERVAL_SEC = 0.75
 DEFAULT_INTERVAL_JITTER_SEC = 0.25
 DEFAULT_MAX_429_RETRIES = 5
@@ -39,6 +40,26 @@ DEFAULT_PENDING_ROTATION_SLOT_SEC = 300
 CATCHUP_DEFAULT_MIN_INTERVAL_SEC = DEFAULT_MIN_INTERVAL_SEC
 CATCHUP_DEFAULT_INTERVAL_JITTER_SEC = DEFAULT_INTERVAL_JITTER_SEC
 CATCHUP_MAX_429_RETRIES = DEFAULT_MAX_429_RETRIES
+
+DISCOVERY_MODE_FULL = "full"
+DISCOVERY_MODE_FAST_CONFIRM = "fast_confirm"
+
+STOP_REASON_COMPLETED = "completed"
+STOP_REASON_RUNTIME_BUDGET = "runtime_budget_exhausted"
+STOP_REASON_SKIPPED_ALREADY_RUNNING = "SKIPPED_ALREADY_RUNNING"
+
+
+def resolve_related_sync_max_runtime_sec(live_mode: bool) -> int | None:
+    """Presupuesto de ejecución solo para live incremental (segundos)."""
+    if not live_mode:
+        return None
+    raw = os.getenv("RELATED_SYNC_MAX_RUNTIME_SEC", "").strip()
+    if raw:
+        try:
+            return max(30, int(raw))
+        except ValueError:
+            pass
+    return DEFAULT_RELATED_SYNC_MAX_RUNTIME_SEC
 
 
 class OcRelatedApiError(Exception):
@@ -426,6 +447,7 @@ def discover_confirmed_related_documents_for_oc(
     office_id: int = OFFICE_ID,
     throttle: float = 0.0,
     stats: dict[str, Any] | None = None,
+    discovery_mode: str = DISCOVERY_MODE_FULL,
 ) -> dict[str, Any]:
     """Alias canónico de ``discover_invoice_edges_for_oc``."""
     return discover_invoice_edges_for_oc(
@@ -435,6 +457,7 @@ def discover_confirmed_related_documents_for_oc(
         office_id=office_id,
         throttle=throttle,
         stats=stats,
+        discovery_mode=discovery_mode,
     )
 
 
@@ -446,28 +469,34 @@ def discover_invoice_edges_for_oc(
     office_id: int = OFFICE_ID,
     throttle: float = 0.0,
     stats: dict[str, Any] | None = None,
+    discovery_mode: str = DISCOVERY_MODE_FULL,
 ) -> dict[str, Any]:
     """
     Descubre aristas detail→(1|6) desde Bsale sin persistir.
 
-    Retorna estructura con detail_ids, edges (detail-level), unique_docs (OC-level).
+    ``discovery_mode``:
+      - ``full``: recorre todos los detalles (catchup / mantenimiento).
+      - ``fast_confirm``: corta al primer tipo 1/6 confirmado (live incremental).
     """
+    fast = discovery_mode == DISCOVERY_MODE_FAST_CONFIRM
     srs = _sync_helpers()
     oc_number, oc_state = _oc_number_and_state(cur, oc_document_id)
     log_ctx = srs._related_log_ctx(oc_number, oc_document_id)
     source_id, _folio = srs._bsale_source_id_from_pg(cur, oc_document_id)
     cancelled = int(oc_state or 0) != 0
 
+    existing_pairs, confirmed_doc_keys = load_existing_invoice_relations_for_oc(
+        cur, oc_document_id
+    )
+    confirmed_before = bool(confirmed_doc_keys)
+
     if cancelled:
-        existing_pairs, confirmed_doc_keys = load_existing_invoice_relations_for_oc(
-            cur, oc_document_id
-        )
         return {
             "oc_document_id": oc_document_id,
             "oc_number": oc_number,
             "oc_state": int(oc_state or 0),
             "detail_ids_consulted": [],
-            "confirmed_before": bool(confirmed_doc_keys),
+            "confirmed_before": confirmed_before,
             "would_confirm": False,
             "status": "cancelled",
             "api_error": None,
@@ -476,6 +505,36 @@ def discover_invoice_edges_for_oc(
             "unique_related_documents": [],
             "api_calls": 0,
             "existing_pairs_count": len(existing_pairs),
+            "discovery_mode": discovery_mode,
+            "details_total": 0,
+            "details_queried": 0,
+            "details_skipped_after_confirmation": 0,
+            "early_exit": False,
+            "fast_confirmed": False,
+        }
+
+    if fast and confirmed_before:
+        return {
+            "oc_document_id": oc_document_id,
+            "oc_number": oc_number,
+            "oc_state": int(oc_state or 0),
+            "detail_ids_consulted": [],
+            "confirmed_before": True,
+            "would_confirm": False,
+            "status": "existing",
+            "api_error": None,
+            "rate_limited": False,
+            "edges": [],
+            "unique_related_documents": [],
+            "api_calls": 0,
+            "existing_pairs_count": len(existing_pairs),
+            "discovery_mode": discovery_mode,
+            "details_total": 0,
+            "details_queried": 0,
+            "details_skipped_after_confirmation": 0,
+            "early_exit": True,
+            "fast_confirmed": True,
+            "skipped_local_already_confirmed": True,
         }
 
     try:
@@ -493,18 +552,24 @@ def discover_invoice_edges_for_oc(
     if not detail_ids:
         detail_ids = srs._detail_ids_for_document(cur, oc_document_id)
 
-    existing_pairs, confirmed_doc_keys = load_existing_invoice_relations_for_oc(
-        cur, oc_document_id
-    )
-    confirmed_before = bool(confirmed_doc_keys)
-
+    details_total = len(detail_ids)
+    detail_ids_queried: list[int] = []
     edges: list[dict[str, Any]] = []
     unique_docs: dict[tuple[int, int], dict[str, Any]] = {}
     api_calls = calls_details
     api_error: OcRelatedApiError | None = None
     max_type33 = srs._related_max_type33_depth()
+    early_exit = False
+    fast_confirmed = False
+    details_skipped_after_confirmation = 0
+    found_confirmed_invoice = confirmed_before
 
-    for detail_id in detail_ids:
+    for idx, detail_id in enumerate(detail_ids):
+        if fast and found_confirmed_invoice:
+            details_skipped_after_confirmation = details_total - len(detail_ids_queried)
+            early_exit = True
+            break
+
         try:
             items, c_rel = fetch_relateddetailid_items(
                 client,
@@ -517,6 +582,7 @@ def discover_invoice_edges_for_oc(
             api_error = exc
             break
 
+        detail_ids_queried.append(int(detail_id))
         api_calls += c_rel
         try:
             triples, tc = srs._documents_json_items_to_triples(
@@ -536,9 +602,12 @@ def discover_invoice_edges_for_oc(
             break
         api_calls += tc
 
+        found_invoice_this_detail = False
         for did, rid, tid in triples:
             if int(tid) not in CONFIRMED_INVOICE_TYPES:
                 continue
+            found_invoice_this_detail = True
+            found_confirmed_invoice = True
             pair = (int(did), int(rid))
             already = pair in existing_pairs
             classification = "existing" if already else (
@@ -569,6 +638,12 @@ def discover_invoice_edges_for_oc(
                     "relation_source": "bsale_relateddetailid",
                 }
 
+        if fast and found_invoice_this_detail:
+            fast_confirmed = True
+            early_exit = True
+            details_skipped_after_confirmation = details_total - len(detail_ids_queried)
+            break
+
     would_confirm = any(
         e["classification"] in ("would_insert_invoice", "would_insert_receipt")
         for e in edges
@@ -584,11 +659,14 @@ def discover_invoice_edges_for_oc(
     else:
         oc_status = "no_relation_found"
 
+    hypothetical_related_calls = details_total
+    api_calls_saved = max(0, hypothetical_related_calls - len(detail_ids_queried))
+
     return {
         "oc_document_id": oc_document_id,
         "oc_number": oc_number,
         "oc_state": int(oc_state or 0),
-        "detail_ids_consulted": [int(x) for x in detail_ids],
+        "detail_ids_consulted": detail_ids_queried,
         "confirmed_before": confirmed_before,
         "would_confirm": would_confirm and not api_error,
         "status": oc_status,
@@ -597,6 +675,13 @@ def discover_invoice_edges_for_oc(
         "edges": edges,
         "unique_related_documents": list(unique_docs.values()),
         "api_calls": api_calls,
+        "discovery_mode": discovery_mode,
+        "details_total": details_total,
+        "details_queried": len(detail_ids_queried),
+        "details_skipped_after_confirmation": details_skipped_after_confirmation,
+        "early_exit": early_exit,
+        "fast_confirmed": fast_confirmed,
+        "api_calls_saved_by_early_exit": api_calls_saved if fast else 0,
     }
 
 
