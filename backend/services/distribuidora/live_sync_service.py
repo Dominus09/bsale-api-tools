@@ -52,7 +52,7 @@ ADVISORY_LOCK_GLOBAL_LIVE_NOW = 5_927_184_019
 
 DEFAULT_DOCUMENTS_WINDOW_HOURS = 2
 DEFAULT_DETAILS_WINDOW_HOURS = 24
-DEFAULT_RELATED_WINDOW_DAYS = 3
+DEFAULT_RELATED_WINDOW_DAYS = 14
 DEFAULT_PROBABLE_WINDOW_DAYS = 5
 
 DEFAULT_OVERLAP_SECONDS_DOCUMENTS = 900
@@ -591,10 +591,14 @@ def live_sync_details(*, strict_token: bool = True) -> dict[str, Any]:
 
 
 def live_sync_related(*, strict_token: bool = True) -> dict[str, Any]:
-    """``document_related`` para OC con emisión en lookback ~3 días."""
+    """``document_related`` para OC con emisión en lookback configurable (default 14 días)."""
     t0 = time.perf_counter()
     now = _utc_now()
-    win_days = _env_int("LIVE_SYNC_RELATED_WINDOW_DAYS", DEFAULT_RELATED_WINDOW_DAYS)
+    from backend.services.distribuidora.oc_related_discovery_service import (
+        resolve_related_sync_lookback_days,
+    )
+
+    win_days = resolve_related_sync_lookback_days()
     overlap_days = _env_int("LIVE_SYNC_RELATED_OVERLAP_DAYS", DEFAULT_OVERLAP_DAYS_RELATED)
 
     window_from, window_to = _compute_window(

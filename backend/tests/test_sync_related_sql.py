@@ -51,8 +51,16 @@ def assert_pg_distinct_order_compatible(sql: str) -> None:
 
 
 def _incremental_fetch_sql_blocks() -> list[str]:
-    src = inspect.getsource(srs._fetch_oc_document_ids_for_incremental)
-    return re.findall(r'"""(.*?)"""', src, flags=re.DOTALL)
+    from backend.services.distribuidora import oc_related_discovery_service as ods
+
+    blocks: list[str] = []
+    for fn_name in (
+        "fetch_pending_oc_ids_for_incremental",
+        "fetch_recent_oc_ids_for_refresh",
+        "count_pending_ocs_in_lookback",
+    ):
+        blocks.extend(re.findall(r'"""(.*?)"""', inspect.getsource(getattr(ods, fn_name)), flags=re.DOTALL))
+    return blocks
 
 
 def test_incremental_oc_pick_queries_pg_distinct_order():
@@ -61,8 +69,10 @@ def test_incremental_oc_pick_queries_pg_distinct_order():
 
 
 def test_incremental_pending_orders_by_emission_date():
-    blocks = _incremental_fetch_sql_blocks()
-    assert any("order by d.emission_date asc nulls last" in b.lower() for b in blocks)
+    from backend.services.distribuidora import oc_related_discovery_service as ods
+
+    src = inspect.getsource(ods.fetch_pending_oc_ids_for_incremental)
+    assert "order by d.emission_date asc nulls last" in src.lower()
 
 
 def test_emission_day_fetch_has_no_distinct():

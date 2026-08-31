@@ -1,86 +1,50 @@
 """
-Catchup histórico OC → boleta/factura vía Bsale ``relateddetailid``.
+Catchup histórico OC → boleta/factura (orquestador).
 
-Dry-run por defecto: consulta Bsale, clasifica aristas, NO escribe.
-Apply explícito: ``ON CONFLICT DO NOTHING`` (misma semántica que sync_related).
-
-Reutiliza helpers de ``sync_related_service``; no usa probable para crear relaciones.
-Rate-limit respetuoso: throttle global, Retry-After, backoff + jitter, max 5 retries.
+La lógica de descubrimiento vive en ``oc_related_discovery_service`` (motor canónico).
+Este módulo solo selecciona rango, dry-run/apply y reporta.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import time
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date
 from typing import Any
 
 from backend.db import get_connection
-from backend.services.distribuidora.bsale_client import BsaleClient
-from backend.services.distribuidora.bsale_params import merge_bsale_office_query
+from backend.services.distribuidora.oc_related_discovery_service import (
+    CATCHUP_DEFAULT_INTERVAL_JITTER_SEC,
+    CATCHUP_DEFAULT_MIN_INTERVAL_SEC,
+    CATCHUP_INVOICE_TYPES,
+    CATCHUP_MAX_429_RETRIES,
+    CatchupApiError,
+    OcRelatedApiError,
+    apply_discovered_invoice_edges,
+    create_bsale_client_for_related_discovery,
+    discover_confirmed_related_documents_for_oc,
+    discover_invoice_edges_for_oc,
+    edges_to_insert_triples,
+    fetch_oc_document_ids_for_range,
+    fetch_relateddetailid_items,
+    load_existing_invoice_relations_for_oc,
+)
 from backend.services.distribuidora.sync_related_service import (
-    DOC_TYPE_OC,
-    RELATED_DETAIL_PAGE_LIMIT,
-    _bsale_source_id_from_pg,
-    _detail_ids_for_document,
-    _documents_json_items_to_triples,
-    _fetch_detail_ids_from_bsale_details,
     _insert_related_triples,
     _oc_number_for_document,
-    _parse_related_document_blob,
     _related_log_ctx,
-    _related_max_type33_depth,
-    _utc_day_emission_bounds,
 )
 
 logger = logging.getLogger(__name__)
 
-CATCHUP_INVOICE_TYPES = frozenset({1, 6})  # boleta, factura — NO NC (9)
 PLAN_OC_CANARIES = frozenset(
     {68933, 68920, 68927, 68565, 68572, 68631, 68632, 68714, 68538, 68728}
 )
 
-# Throttle conservador entre requests Bsale (750–1000 ms + jitter interno).
-CATCHUP_DEFAULT_MIN_INTERVAL_SEC = 0.75
-CATCHUP_DEFAULT_INTERVAL_JITTER_SEC = 0.25  # → hasta ~1000 ms
-CATCHUP_MAX_429_RETRIES = 5
-
-
-class CatchupApiError(Exception):
-    """Error Bsale (incl. 429 agotado) — NO clasificar como sin relación."""
-
-    def __init__(self, message: str, *, rate_limited: bool = False) -> None:
-        super().__init__(message)
-        self.rate_limited = rate_limited
-
 
 def _bsale_token() -> str:
     return (os.getenv("BSALE_TOKEN") or "").strip() or (os.getenv("BSALE_TOKEN_SPA") or "").strip()
-
-
-def _generation_date_iso(blob: dict[str, Any]) -> str | None:
-    raw = blob.get("generationDate") or blob.get("generation_date")
-    if raw is None:
-        return None
-    try:
-        ts = int(raw)
-    except (TypeError, ValueError):
-        return None
-    if ts <= 0:
-        return None
-    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
-
-
-def _related_number(blob: dict[str, Any]) -> int | None:
-    n = blob.get("number")
-    if n is None and isinstance(blob.get("document"), dict):
-        n = blob["document"].get("number")
-    try:
-        return int(n) if n is not None else None
-    except (TypeError, ValueError):
-        return None
 
 
 def _is_rate_limit_message(msg: str) -> bool:
@@ -88,287 +52,10 @@ def _is_rate_limit_message(msg: str) -> bool:
     return "429" in m or "rate limit" in m
 
 
-def fetch_oc_document_ids_for_range(
-    cur,
-    *,
-    start_date: date,
-    end_date: date,
-    company_id: int,
-    office_id: int,
-) -> list[int]:
-    """OC tipo 33 emitidas en [start_date, end_date] inclusive (días UTC)."""
-    if start_date > end_date:
-        start_date, end_date = end_date, start_date
-    day_start, _ = _utc_day_emission_bounds(start_date)
-    _, day_end_excl = _utc_day_emission_bounds(end_date)
-    cur.execute(
-        """
-        SELECT d.document_id
-        FROM distribuidora.documents d
-        WHERE d.document_type_id = %s
-          AND d.company_id = %s
-          AND d.office_id = %s
-          AND d.emission_date IS NOT NULL
-          AND d.emission_date >= %s
-          AND d.emission_date < %s
-        ORDER BY d.emission_date ASC, d.document_id ASC
-        """,
-        (DOC_TYPE_OC, company_id, office_id, day_start, day_end_excl),
-    )
-    return [int(r[0]) for r in cur.fetchall()]
+def _generation_date_iso(blob: dict[str, Any]) -> str | None:
+    from backend.services.distribuidora.oc_related_discovery_service import _generation_date_iso as _g
 
-
-def load_existing_invoice_relations_for_oc(
-    cur,
-    oc_document_id: int,
-) -> tuple[set[tuple[int, int]], set[tuple[int, int]]]:
-    """
-    Returns:
-        existing_pairs: (detail_id, related_document_id)
-        confirmed_doc_keys: (related_document_id, related_type) unique at OC level
-    """
-    cur.execute(
-        """
-        SELECT dr.detail_id, dr.related_document_id, dr.related_document_type
-        FROM distribuidora.document_details dd
-        INNER JOIN distribuidora.document_related dr ON dr.detail_id = dd.detail_id
-        WHERE dd.document_id = %s
-          AND dr.related_document_type IN (1, 6)
-        """,
-        (oc_document_id,),
-    )
-    pairs: set[tuple[int, int]] = set()
-    doc_keys: set[tuple[int, int]] = set()
-    for detail_id, related_id, related_type in cur.fetchall():
-        pairs.add((int(detail_id), int(related_id)))
-        doc_keys.add((int(related_id), int(related_type)))
-    return pairs, doc_keys
-
-
-def fetch_relateddetailid_items(
-    client: BsaleClient,
-    detail_id: int,
-    *,
-    office_id: int,
-    throttle: float,
-    log_ctx: str,
-) -> tuple[list[dict[str, Any]], int]:
-    """Paginación ``relateddetailid`` secuencial; propaga CatchupApiError en fallo HTTP."""
-    merged: list[dict[str, Any]] = []
-    api_calls = 0
-    offset = 0
-    while True:
-        try:
-            data = client.get(
-                "/documents.json",
-                merge_bsale_office_query(
-                    {
-                        "relateddetailid": detail_id,
-                        "limit": RELATED_DETAIL_PAGE_LIMIT,
-                        "offset": offset,
-                    },
-                    office_id,
-                    context="catchup_relateddetailid",
-                ),
-            )
-        except RuntimeError as exc:
-            msg = str(exc)
-            raise CatchupApiError(msg, rate_limited=_is_rate_limit_message(msg)) from exc
-        except Exception as exc:
-            raise CatchupApiError(str(exc), rate_limited=_is_rate_limit_message(str(exc))) from exc
-
-        api_calls += 1
-        items = data.get("items") or []
-        if not items:
-            break
-        for it in items:
-            if isinstance(it, dict):
-                merged.append(it)
-        if len(items) < RELATED_DETAIL_PAGE_LIMIT:
-            break
-        offset += len(items)
-        # Espaciado lo maneja BsaleClient (throttle global). No paralelizar.
-        if throttle > 0:
-            time.sleep(throttle)
-    return merged, api_calls
-
-
-def discover_invoice_edges_for_oc(
-    client: BsaleClient,
-    cur,
-    oc_document_id: int,
-    *,
-    office_id: int,
-    throttle: float,
-    stats: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """
-    Descubre aristas detail→(1|6) desde Bsale sin persistir.
-
-    Retorna estructura con detail_ids, edges (detail-level), unique_docs (OC-level).
-    """
-    oc_number, oc_state = _oc_number_and_state(cur, oc_document_id)
-    log_ctx = _related_log_ctx(oc_number, oc_document_id)
-    source_id, _folio = _bsale_source_id_from_pg(cur, oc_document_id)
-    cancelled = int(oc_state or 0) != 0
-
-    # OC anulada: no es "pendiente sin relación". Clasificar cancelled/skipped.
-    if cancelled:
-        existing_pairs, confirmed_doc_keys = load_existing_invoice_relations_for_oc(
-            cur, oc_document_id
-        )
-        return {
-            "oc_document_id": oc_document_id,
-            "oc_number": oc_number,
-            "oc_state": int(oc_state or 0),
-            "detail_ids_consulted": [],
-            "confirmed_before": bool(confirmed_doc_keys),
-            "would_confirm": False,
-            "status": "cancelled",
-            "api_error": None,
-            "rate_limited": False,
-            "edges": [],
-            "unique_related_documents": [],
-            "api_calls": 0,
-            "existing_pairs_count": len(existing_pairs),
-        }
-
-    try:
-        detail_ids, calls_details = _fetch_detail_ids_from_bsale_details(
-            client,
-            oc_document_id,
-            throttle=throttle,
-            log_ctx=log_ctx,
-            bsale_source_document_id=source_id,
-        )
-    except RuntimeError as exc:
-        msg = str(exc)
-        raise CatchupApiError(msg, rate_limited=_is_rate_limit_message(msg)) from exc
-
-    if not detail_ids:
-        detail_ids = _detail_ids_for_document(cur, oc_document_id)
-
-    existing_pairs, confirmed_doc_keys = load_existing_invoice_relations_for_oc(
-        cur, oc_document_id
-    )
-    confirmed_before = bool(confirmed_doc_keys)
-
-    edges: list[dict[str, Any]] = []
-    unique_docs: dict[tuple[int, int], dict[str, Any]] = {}
-    api_calls = calls_details
-    api_error: CatchupApiError | None = None
-    max_type33 = _related_max_type33_depth()
-
-    for detail_id in detail_ids:
-        try:
-            items, c_rel = fetch_relateddetailid_items(
-                client,
-                detail_id,
-                office_id=office_id,
-                throttle=throttle,
-                log_ctx=log_ctx,
-            )
-        except CatchupApiError as exc:
-            api_error = exc
-            break
-
-        api_calls += c_rel
-        try:
-            triples, tc = _documents_json_items_to_triples(
-                client,
-                cur,
-                detail_id,
-                items,
-                oc_document_id=oc_document_id,
-                throttle=throttle,
-                max_type33_depth=max_type33,
-                stats=stats,
-                log_ctx=log_ctx,
-            )
-        except RuntimeError as exc:
-            msg = str(exc)
-            api_error = CatchupApiError(msg, rate_limited=_is_rate_limit_message(msg))
-            break
-        api_calls += tc
-
-        for did, rid, tid in triples:
-            if int(tid) not in CATCHUP_INVOICE_TYPES:
-                continue
-            pair = (int(did), int(rid))
-            already = pair in existing_pairs
-            classification = "existing" if already else (
-                "would_insert_receipt" if int(tid) == 1 else "would_insert_invoice"
-            )
-            blob = next(
-                (
-                    it
-                    for it in items
-                    if _parse_related_document_blob(it)[0] == rid
-                ),
-                {},
-            )
-            edge = {
-                "detail_id": int(did),
-                "related_document_id": int(rid),
-                "related_document_type": int(tid),
-                "related_number": _related_number(blob if isinstance(blob, dict) else {}),
-                "generation_date": _generation_date_iso(blob if isinstance(blob, dict) else {}),
-                "classification": classification,
-                "already_in_document_related": already,
-                "relation_source": "bsale_relateddetailid",
-            }
-            edges.append(edge)
-            key = (int(rid), int(tid))
-            if key not in unique_docs:
-                unique_docs[key] = {
-                    "related_document_id": int(rid),
-                    "related_document_type": int(tid),
-                    "related_number": edge["related_number"],
-                    "generation_date": edge["generation_date"],
-                    "relation_source": "bsale_relateddetailid",
-                }
-
-    would_confirm = any(
-        e["classification"] in ("would_insert_invoice", "would_insert_receipt")
-        for e in edges
-    )
-    if api_error is not None:
-        oc_status = "rate_limited" if api_error.rate_limited else "api_error"
-    elif not edges:
-        oc_status = "no_relation_found"
-    elif would_confirm:
-        oc_status = "would_insert"
-    elif confirmed_before or edges:
-        oc_status = "existing"
-    else:
-        oc_status = "no_relation_found"
-
-    return {
-        "oc_document_id": oc_document_id,
-        "oc_number": oc_number,
-        "oc_state": int(oc_state or 0),
-        "detail_ids_consulted": [int(x) for x in detail_ids],
-        "confirmed_before": confirmed_before,
-        "would_confirm": would_confirm and not api_error,
-        "status": oc_status,
-        "api_error": str(api_error) if api_error else None,
-        "rate_limited": bool(api_error and api_error.rate_limited),
-        "edges": edges,
-        "unique_related_documents": list(unique_docs.values()),
-        "api_calls": api_calls,
-    }
-
-
-def _oc_number_and_state(cur, document_id: int) -> tuple[int | None, int]:
-    cur.execute(
-        "SELECT number, COALESCE(state, 0) FROM distribuidora.documents WHERE document_id = %s",
-        (document_id,),
-    )
-    row = cur.fetchone()
-    if not row:
-        return None, 0
-    number = int(row[0]) if row[0] is not None else None
-    return number, int(row[1] or 0)
+    return _g(blob)
 
 
 @dataclass
@@ -391,7 +78,6 @@ class CatchupOcInvoiceReport:
     ocs_cancelled: int = 0
     api_errors: int = 0
     rate_limited: int = 0
-    # Rate-limit / progreso
     requests_total: int = 0
     rate_limit_events: int = 0
     retry_count: int = 0
@@ -450,8 +136,6 @@ def run_catchup_oc_invoice_relations(
         report.errors.append("sin token Bsale (BSALE_TOKEN / BSALE_TOKEN_SPA)")
         return report
 
-    # Throttle de helpers internos: el espaciado principal lo hace BsaleClient.
-    # Si el caller pasa --throttle-sec, se suma como sleep extra en paginación.
     helper_throttle = float(throttle) if throttle is not None else 0.0
 
     rate_stats: dict[str, Any] = {
@@ -478,13 +162,7 @@ def run_catchup_oc_invoice_relations(
         report.oc_scanned = len(oc_ids)
         total = len(oc_ids)
 
-        client = BsaleClient(
-            token,
-            min_interval_sec=CATCHUP_DEFAULT_MIN_INTERVAL_SEC,
-            min_interval_jitter_sec=CATCHUP_DEFAULT_INTERVAL_JITTER_SEC,
-            max_429_retries=CATCHUP_MAX_429_RETRIES,
-            rate_stats=rate_stats,
-        )
+        client = create_bsale_client_for_related_discovery(token, rate_stats=rate_stats)
         stats: dict[str, Any] = {}
 
         for idx, oc_id in enumerate(oc_ids, start=1):
@@ -497,7 +175,7 @@ def run_catchup_oc_invoice_relations(
                     throttle=helper_throttle,
                     stats=stats,
                 )
-            except CatchupApiError as exc:
+            except (CatchupApiError, OcRelatedApiError) as exc:
                 oc_res = {
                     "oc_document_id": oc_id,
                     "oc_number": _oc_number_for_document(cur, oc_id),
@@ -598,16 +276,7 @@ def run_catchup_oc_invoice_relations(
                 report.plan_oc_results.append(_plan_oc_entry(oc_res))
 
             if not dry_run and oc_res.get("would_confirm"):
-                triples = [
-                    (
-                        int(e["detail_id"]),
-                        int(e["related_document_id"]),
-                        int(e["related_document_type"]),
-                    )
-                    for e in oc_res.get("edges") or []
-                    if e.get("classification")
-                    in ("would_insert_invoice", "would_insert_receipt")
-                ]
+                triples = edges_to_insert_triples(oc_res)
                 if triples:
                     inv_triples = [t for t in triples if t[2] == 6]
                     rec_triples = [t for t in triples if t[2] == 1]

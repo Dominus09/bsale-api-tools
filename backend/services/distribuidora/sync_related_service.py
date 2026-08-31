@@ -40,10 +40,26 @@ from backend.repositories.distribuidora.sync_repo import (
 )
 from backend.services.distribuidora.bsale_client import BsaleClient
 from backend.services.distribuidora.bsale_params import merge_bsale_office_query
+from backend.services.distribuidora.oc_related_discovery_service import (
+    CatchupApiError,
+    OcRelatedApiError,
+    apply_discovered_invoice_edges,
+    classify_oc_discovery_result,
+    compute_pending_rotation_offset,
+    count_pending_ocs_in_lookback,
+    create_bsale_client_for_related_discovery,
+    discover_invoice_edges_for_oc,
+    emission_date_bounds_for_document_ids,
+    fetch_pending_oc_ids_for_incremental,
+    fetch_recent_oc_ids_for_refresh,
+    merge_oc_candidate_ids,
+    resolve_related_sync_lookback_days,
+)
 from backend.utils.bsale_document_ids import (
     ids_differ,
     resolve_bsale_source_document_id,
 )
+from backend.utils.distribuidora_oc_sql import OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL
 
 logger = logging.getLogger(__name__)
 
@@ -65,20 +81,8 @@ DEFAULT_RELATED_LOOKBACK_DAYS = 10
 DEFAULT_RELATED_DETAIL_LIMIT = 250
 DEFAULT_RELATED_PENDING_LIMIT = 400
 
-# OC sin boleta/factura confirmada vía ``document_related`` (tipos 1/6).
-_OC_WITHOUT_CONFIRMED_INVOICE_SQL = """
-NOT EXISTS (
-    SELECT 1
-    FROM distribuidora.document_details dd
-    INNER JOIN distribuidora.document_related dr ON dr.detail_id = dd.detail_id
-    INNER JOIN distribuidora.documents inv
-        ON inv.document_id = dr.related_document_id
-       AND inv.document_type_id IN (1, 6)
-       AND inv.company_id = d.company_id
-       AND inv.office_id = d.office_id
-    WHERE dd.document_id = d.document_id
-)
-"""
+# OC sin boleta/factura confirmada vía ``document_related`` (tipos 1/6, sin JOIN header).
+_OC_WITHOUT_CONFIRMED_INVOICE_SQL = OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL
 
 
 def _related_max_type33_depth() -> int:
@@ -196,12 +200,13 @@ def _fetch_oc_document_ids_for_incremental(
     *,
     lookback_days: int,
     limit_documents: int,
+    pending_offset: int | None = None,
 ) -> tuple[list[int], dict[str, int]]:
     """
     Selección en dos buckets para el sync incremental:
 
     1. **Pendientes**: OC en ventana sin factura/boleta confirmada en ``document_related``.
-       Orden por emisión ascendente (las más antiguas primero: más tiempo para que Bsale indexe).
+       Orden por emisión ascendente; offset rotativo para evitar starvation.
     2. **Refresh**: OC recientes por ``document_id`` para revalidar relaciones ya conocidas.
 
     La unión prioriza pendientes y evita duplicados.
@@ -210,50 +215,27 @@ def _fetch_oc_document_ids_for_incremental(
     pending_lim = _related_pending_limit()
     recent_lim = max(1, limit_documents)
 
-    cur.execute(
-        f"""
-        SELECT d.document_id
-        FROM distribuidora.documents d
-        WHERE d.document_type_id = %s
-          AND d.company_id = %s
-          AND d.office_id = %s
-          AND d.emission_date >= (NOW() AT TIME ZONE 'UTC' - (%s * interval '1 day'))
-          AND {_OC_WITHOUT_CONFIRMED_INVOICE_SQL}
-        ORDER BY d.emission_date ASC NULLS LAST, d.document_id ASC
-        LIMIT %s
-        """,
-        (DOC_TYPE_OC, COMPANY_ID, OFFICE_ID, lb, pending_lim),
-    )
-    pending_ids = [int(r[0]) for r in cur.fetchall()]
+    total_pending = count_pending_ocs_in_lookback(cur, lookback_days=lb)
+    if pending_offset is None:
+        pending_offset = compute_pending_rotation_offset(total_pending, pending_lim)
 
-    cur.execute(
-        """
-        SELECT d.document_id
-        FROM distribuidora.documents d
-        WHERE d.document_type_id = %s
-          AND d.company_id = %s
-          AND d.office_id = %s
-          AND d.emission_date >= (NOW() AT TIME ZONE 'UTC' - (%s * interval '1 day'))
-        ORDER BY d.document_id DESC
-        LIMIT %s
-        """,
-        (DOC_TYPE_OC, COMPANY_ID, OFFICE_ID, lb, recent_lim),
+    pending_ids = fetch_pending_oc_ids_for_incremental(
+        cur,
+        lookback_days=lb,
+        pending_limit=pending_lim,
+        pending_offset=pending_offset,
     )
-    recent_ids = [int(r[0]) for r in cur.fetchall()]
-
-    seen: set[int] = set()
-    merged: list[int] = []
-    for doc_id in pending_ids:
-        if doc_id not in seen:
-            seen.add(doc_id)
-            merged.append(doc_id)
-    for doc_id in recent_ids:
-        if doc_id not in seen:
-            seen.add(doc_id)
-            merged.append(doc_id)
+    recent_ids = fetch_recent_oc_ids_for_refresh(
+        cur,
+        lookback_days=lb,
+        refresh_limit=recent_lim,
+    )
+    merged = merge_oc_candidate_ids(pending_ids, recent_ids)
 
     meta = {
         "pending_without_related": len(pending_ids),
+        "pending_total_in_window": total_pending,
+        "pending_offset": int(pending_offset),
         "recent_refresh_candidates": len(recent_ids),
         "merged_unique": len(merged),
     }
@@ -1425,11 +1407,7 @@ def sync_distribuidora_related_documents(
             raise ValueError("Ningún token Bsale: defina BSALE_TOKEN o BSALE_TOKEN_SPA.")
         return {"skipped": True, "skip_reason": "sin token", "inserted": 0}
 
-    lb = (
-        lookback_days
-        if lookback_days is not None
-        else int(os.getenv("DISTRIBUIDORA_RELATED_LOOKBACK_DAYS", str(DEFAULT_RELATED_LOOKBACK_DAYS)))
-    )
+    lb = resolve_related_sync_lookback_days(lookback_days)
     lim_src = limit_documents if limit_documents is not None else limit_details
     lim = (
         lim_src
@@ -1464,6 +1442,19 @@ def sync_distribuidora_related_documents(
         "related_type33_loops": 0,
         "related_type33_depth1_hits": 0,
         "lookback_days": 0,
+        "candidate_window_days": 0,
+        "candidate_offset": 0,
+        "pending_total_in_window": 0,
+        "scanned": 0,
+        "existing": 0,
+        "discovered": 0,
+        "no_relation": 0,
+        "rate_limited": 0,
+        "api_errors": 0,
+        "retries": 0,
+        "wait_seconds": 0.0,
+        "oldest_candidate_date": None,
+        "newest_candidate_date": None,
         "documents_pending_without_related": 0,
         "documents_recent_refresh": 0,
         "documents_merged_unique": 0,
@@ -1495,42 +1486,104 @@ def sync_distribuidora_related_documents(
             cur, lookback_days=lb, limit_documents=lim
         )
         stats["lookback_days"] = max(1, lb)
+        stats["candidate_window_days"] = stats["lookback_days"]
         stats["documents_pending_without_related"] = pick_meta["pending_without_related"]
+        stats["pending_total_in_window"] = pick_meta.get("pending_total_in_window", 0)
+        stats["candidate_offset"] = pick_meta.get("pending_offset", 0)
         stats["documents_recent_refresh"] = pick_meta["recent_refresh_candidates"]
         stats["documents_merged_unique"] = pick_meta["merged_unique"]
         stats["documents_considered"] = len(document_ids)
+        stats["scanned"] = len(document_ids)
+        oldest, newest = emission_date_bounds_for_document_ids(cur, document_ids)
+        stats["oldest_candidate_date"] = oldest
+        stats["newest_candidate_date"] = newest
         conn.commit()
         logger.info(
             "sync related selección OC: lookback=%sd pending_sin_factura=%s "
-            "refresh_recientes=%s total_unicos=%s (pending_limit=%s refresh_limit=%s)",
+            "pending_total=%s offset=%s refresh_recientes=%s total_unicos=%s "
+            "(pending_limit=%s refresh_limit=%s)",
             stats["lookback_days"],
             stats["documents_pending_without_related"],
+            stats["pending_total_in_window"],
+            stats["candidate_offset"],
             stats["documents_recent_refresh"],
             stats["documents_merged_unique"],
             _related_pending_limit(),
             lim,
         )
 
-        client = BsaleClient(token)
-        throttle = float(os.getenv("DISTRIBUIDORA_RELATED_API_DELAY_SEC", "0.12"))
+        rate_stats: dict[str, Any] = {
+            "requests_total": 0,
+            "rate_limit_events": 0,
+            "retry_count": 0,
+            "wait_seconds_total": 0.0,
+        }
+        client = create_bsale_client_for_related_discovery(token, rate_stats=rate_stats)
+        helper_throttle = float(os.getenv("DISTRIBUIDORA_RELATED_API_DELAY_SEC", "0"))
 
         for doc_id in document_ids:
             try:
-                n_items, ins, calls = _fetch_and_persist_related_for_document(
-                    client, conn, cur, doc_id, throttle=throttle, stats=stats
+                oc_res = discover_invoice_edges_for_oc(
+                    client,
+                    cur,
+                    doc_id,
+                    office_id=OFFICE_ID,
+                    throttle=helper_throttle,
+                    stats=stats,
                 )
+            except (CatchupApiError, OcRelatedApiError) as e:
+                logger.warning("sync_related document_id=%s api: %s", doc_id, e)
+                if e.rate_limited:
+                    stats["rate_limited"] = int(stats.get("rate_limited") or 0) + 1
+                else:
+                    stats["api_errors"] = int(stats.get("api_errors") or 0) + 1
+                stats["document_errors"] = int(stats.get("document_errors") or 0) + 1
+                continue
             except Exception as e:
                 logger.warning("sync_related document_id=%s: %s", doc_id, e)
                 stats["document_errors"] = int(stats.get("document_errors") or 0) + 1
+                stats["api_errors"] = int(stats.get("api_errors") or 0) + 1
                 continue
-            stats["api_calls"] += calls
+
+            bucket = classify_oc_discovery_result(oc_res)
+            if bucket == "existing":
+                stats["existing"] = int(stats.get("existing") or 0) + 1
+            elif bucket == "discovered":
+                stats["discovered"] = int(stats.get("discovered") or 0) + 1
+            elif bucket == "no_relation":
+                stats["no_relation"] = int(stats.get("no_relation") or 0) + 1
+            elif bucket == "rate_limited":
+                stats["rate_limited"] = int(stats.get("rate_limited") or 0) + 1
+            elif bucket == "api_error":
+                stats["api_errors"] = int(stats.get("api_errors") or 0) + 1
+
+            stats["api_calls"] = int(stats.get("api_calls") or 0) + int(
+                oc_res.get("api_calls") or 0
+            )
+            stats["relateddetail_details_processed"] = int(
+                stats.get("relateddetail_details_processed") or 0
+            ) + len(oc_res.get("detail_ids_consulted") or [])
+            stats["relateddetail_items_total"] = int(
+                stats.get("relateddetail_items_total") or 0
+            ) + len(oc_res.get("edges") or [])
+
+            try:
+                ins = apply_discovered_invoice_edges(conn, cur, oc_res, stats=stats)
+            except Exception as e:
+                logger.warning("sync_related apply document_id=%s: %s", doc_id, e)
+                stats["document_errors"] = int(stats.get("document_errors") or 0) + 1
+                continue
             stats["rows_inserted"] += ins
             logger.debug(
-                "related doc_id=%s items=%s inserted=%s",
+                "related doc_id=%s status=%s edges=%s inserted=%s",
                 doc_id,
-                n_items,
+                oc_res.get("status"),
+                len(oc_res.get("edges") or []),
                 ins,
             )
+
+        stats["retries"] = int(rate_stats.get("retry_count") or 0)
+        stats["wait_seconds"] = float(rate_stats.get("wait_seconds_total") or 0.0)
 
         stats["details_considered"] = int(stats.get("relateddetail_details_processed") or 0)
 
@@ -1546,14 +1599,22 @@ def sync_distribuidora_related_documents(
         _with_deadlock_retry(conn, "related incremental insert_sync_status", _finalize_incremental)
         cur.close()
         logger.info(
-            "sync related OK: documents=%s relateddetail_details=%s "
-            "relateddetail_items=%s inserted=%s omitidas otra office=%s api=%s s=%.2f",
-            stats["documents_considered"],
-            stats.get("relateddetail_details_processed", 0),
-            stats.get("relateddetail_items_total", 0),
+            "sync related OK: scanned=%s discovered=%s inserted=%s existing=%s "
+            "no_relation=%s rate_limited=%s api_errors=%s lookback=%sd offset=%s "
+            "oldest=%s newest=%s api=%s wait_s=%.1f s=%.2f",
+            stats.get("scanned"),
+            stats.get("discovered"),
             stats["rows_inserted"],
-            stats.get("related_skipped_other_office", 0),
+            stats.get("existing"),
+            stats.get("no_relation"),
+            stats.get("rate_limited"),
+            stats.get("api_errors"),
+            stats.get("lookback_days"),
+            stats.get("candidate_offset"),
+            stats.get("oldest_candidate_date"),
+            stats.get("newest_candidate_date"),
             stats["api_calls"],
+            float(stats.get("wait_seconds") or 0),
             time.perf_counter() - t0,
         )
     except Exception as e:

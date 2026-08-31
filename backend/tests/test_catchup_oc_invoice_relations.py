@@ -73,22 +73,22 @@ def test_fetch_relateddetailid_items_429_raises_rate_limited():
 
 
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service._documents_json_items_to_triples"
+    "backend.services.distribuidora.sync_related_service._documents_json_items_to_triples"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service.fetch_relateddetailid_items"
+    "backend.services.distribuidora.oc_related_discovery_service.fetch_relateddetailid_items"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service._fetch_detail_ids_from_bsale_details"
+    "backend.services.distribuidora.sync_related_service._fetch_detail_ids_from_bsale_details"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service.load_existing_invoice_relations_for_oc"
+    "backend.services.distribuidora.oc_related_discovery_service.load_existing_invoice_relations_for_oc"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service._bsale_source_id_from_pg"
+    "backend.services.distribuidora.sync_related_service._bsale_source_id_from_pg"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service._oc_number_and_state"
+    "backend.services.distribuidora.oc_related_discovery_service._oc_number_and_state"
 )
 def test_discover_invoice_relation_factura(
     mock_oc_num,
@@ -119,22 +119,22 @@ def test_discover_invoice_relation_factura(
 
 
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service._documents_json_items_to_triples"
+    "backend.services.distribuidora.sync_related_service._documents_json_items_to_triples"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service.fetch_relateddetailid_items"
+    "backend.services.distribuidora.oc_related_discovery_service.fetch_relateddetailid_items"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service._fetch_detail_ids_from_bsale_details"
+    "backend.services.distribuidora.sync_related_service._fetch_detail_ids_from_bsale_details"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service.load_existing_invoice_relations_for_oc"
+    "backend.services.distribuidora.oc_related_discovery_service.load_existing_invoice_relations_for_oc"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service._bsale_source_id_from_pg"
+    "backend.services.distribuidora.sync_related_service._bsale_source_id_from_pg"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service._oc_number_and_state"
+    "backend.services.distribuidora.oc_related_discovery_service._oc_number_and_state"
 )
 def test_discover_boleta_and_existing(
     mock_oc_num,
@@ -164,22 +164,22 @@ def test_discover_boleta_and_existing(
 
 
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service._documents_json_items_to_triples"
+    "backend.services.distribuidora.sync_related_service._documents_json_items_to_triples"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service.fetch_relateddetailid_items"
+    "backend.services.distribuidora.oc_related_discovery_service.fetch_relateddetailid_items"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service._fetch_detail_ids_from_bsale_details"
+    "backend.services.distribuidora.sync_related_service._fetch_detail_ids_from_bsale_details"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service.load_existing_invoice_relations_for_oc"
+    "backend.services.distribuidora.oc_related_discovery_service.load_existing_invoice_relations_for_oc"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service._bsale_source_id_from_pg"
+    "backend.services.distribuidora.sync_related_service._bsale_source_id_from_pg"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service._oc_number_and_state"
+    "backend.services.distribuidora.oc_related_discovery_service._oc_number_and_state"
 )
 def test_discover_nc_not_materialized(
     mock_oc_num,
@@ -204,19 +204,19 @@ def test_discover_nc_not_materialized(
 
 
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service.fetch_relateddetailid_items"
+    "backend.services.distribuidora.oc_related_discovery_service.fetch_relateddetailid_items"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service._fetch_detail_ids_from_bsale_details"
+    "backend.services.distribuidora.sync_related_service._fetch_detail_ids_from_bsale_details"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service.load_existing_invoice_relations_for_oc"
+    "backend.services.distribuidora.oc_related_discovery_service.load_existing_invoice_relations_for_oc"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service._bsale_source_id_from_pg"
+    "backend.services.distribuidora.sync_related_service._bsale_source_id_from_pg"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service._oc_number_and_state"
+    "backend.services.distribuidora.oc_related_discovery_service._oc_number_and_state"
 )
 def test_discover_api_error_not_no_relation(
     mock_oc_num,
@@ -271,7 +271,7 @@ def test_plan_oc_entry_fields():
 @patch(
     "backend.services.distribuidora.catchup_oc_invoice_relations_service.fetch_oc_document_ids_for_range"
 )
-@patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.BsaleClient")
+@patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.create_bsale_client_for_related_discovery")
 @patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.get_connection")
 @patch.dict("os.environ", {"BSALE_TOKEN": "tok"})
 def test_dry_run_does_not_insert(
@@ -326,7 +326,7 @@ def test_dry_run_does_not_insert(
 @patch(
     "backend.services.distribuidora.catchup_oc_invoice_relations_service.fetch_oc_document_ids_for_range"
 )
-@patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.BsaleClient")
+@patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.create_bsale_client_for_related_discovery")
 @patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.get_connection")
 @patch.dict("os.environ", {"BSALE_TOKEN": "tok"})
 def test_apply_inserts_verified_triples(
@@ -386,7 +386,7 @@ def test_apply_inserts_verified_triples(
 @patch(
     "backend.services.distribuidora.catchup_oc_invoice_relations_service.fetch_oc_document_ids_for_range"
 )
-@patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.BsaleClient")
+@patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.create_bsale_client_for_related_discovery")
 @patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.get_connection")
 @patch.dict("os.environ", {"BSALE_TOKEN": "tok"})
 def test_dedupe_summary_counts_one_invoice_per_oc(
@@ -441,7 +441,7 @@ def test_dedupe_summary_counts_one_invoice_per_oc(
 @patch(
     "backend.services.distribuidora.catchup_oc_invoice_relations_service.fetch_oc_document_ids_for_range"
 )
-@patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.BsaleClient")
+@patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.create_bsale_client_for_related_discovery")
 @patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.get_connection")
 @patch.dict("os.environ", {"BSALE_TOKEN": "tok"})
 def test_plan_oc_canaries_in_report(
@@ -536,7 +536,7 @@ def test_job_default_dry_run(mock_run):
 @patch(
     "backend.services.distribuidora.catchup_oc_invoice_relations_service.fetch_oc_document_ids_for_range"
 )
-@patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.BsaleClient")
+@patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.create_bsale_client_for_related_discovery")
 @patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.get_connection")
 @patch.dict("os.environ", {"BSALE_TOKEN": "tok"})
 def test_apply_idempotent_on_conflict(
@@ -592,7 +592,7 @@ def test_catchup_rate_limit_defaults():
 @patch(
     "backend.services.distribuidora.catchup_oc_invoice_relations_service.fetch_oc_document_ids_for_range"
 )
-@patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.BsaleClient")
+@patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.create_bsale_client_for_related_discovery")
 @patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.get_connection")
 @patch.dict("os.environ", {"BSALE_TOKEN": "tok"})
 def test_no_relation_found_counter(
@@ -647,7 +647,7 @@ def test_no_relation_found_counter(
 @patch(
     "backend.services.distribuidora.catchup_oc_invoice_relations_service.fetch_oc_document_ids_for_range"
 )
-@patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.BsaleClient")
+@patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.create_bsale_client_for_related_discovery")
 @patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.get_connection")
 @patch.dict("os.environ", {"BSALE_TOKEN": "tok"})
 def test_rate_limited_oc_not_counted_as_no_relation(
@@ -683,9 +683,11 @@ def test_rate_limited_oc_not_counted_as_no_relation(
     assert report.ocs_rate_limited == 1
     assert report.rate_limited == 1
     assert report.ocs_completed == 1
-    kwargs = mock_client_cls.call_args.kwargs
-    assert kwargs["max_429_retries"] == 5
-    assert kwargs["min_interval_sec"] == CATCHUP_DEFAULT_MIN_INTERVAL_SEC
+    mock_client_cls.assert_called_once()
+    assert mock_client_cls.call_args.args[0] == "tok"
+    assert "rate_stats" in mock_client_cls.call_args.kwargs
+    assert CATCHUP_MAX_429_RETRIES == 5
+    assert CATCHUP_DEFAULT_MIN_INTERVAL_SEC == 0.75
 
 @patch(
     "backend.services.distribuidora.catchup_oc_invoice_relations_service.discover_invoice_edges_for_oc"
@@ -693,7 +695,7 @@ def test_rate_limited_oc_not_counted_as_no_relation(
 @patch(
     "backend.services.distribuidora.catchup_oc_invoice_relations_service.fetch_oc_document_ids_for_range"
 )
-@patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.BsaleClient")
+@patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.create_bsale_client_for_related_discovery")
 @patch("backend.services.distribuidora.catchup_oc_invoice_relations_service.get_connection")
 @patch.dict("os.environ", {"BSALE_TOKEN": "tok"})
 def test_no_relation_folios_lists_all(
@@ -733,13 +735,13 @@ def test_no_relation_folios_lists_all(
 
 
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service._oc_number_and_state"
+    "backend.services.distribuidora.oc_related_discovery_service._oc_number_and_state"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service.load_existing_invoice_relations_for_oc"
+    "backend.services.distribuidora.oc_related_discovery_service.load_existing_invoice_relations_for_oc"
 )
 @patch(
-    "backend.services.distribuidora.catchup_oc_invoice_relations_service._bsale_source_id_from_pg"
+    "backend.services.distribuidora.sync_related_service._bsale_source_id_from_pg"
 )
 def test_discover_cancelled_skips_bsale_and_not_no_relation(
     mock_source,
