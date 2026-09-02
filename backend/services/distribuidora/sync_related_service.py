@@ -59,6 +59,7 @@ from backend.services.distribuidora.oc_related_discovery_service import (
     fetch_recent_oc_ids_for_refresh,
     load_existing_invoice_relations_for_oc,
     merge_oc_candidate_ids,
+    resolve_related_recent_pending_limit,
     resolve_related_sync_lookback_days,
     resolve_related_sync_max_runtime_sec,
 )
@@ -84,7 +85,7 @@ DOC_TYPE_OC = 33
 RELATED_DOCUMENT_TYPES_ALLOWED = frozenset({1, 6, 9})
 RELATED_DETAIL_PAGE_LIMIT = 50
 DETAILS_PAGE_LIMIT = 50
-DEFAULT_RELATED_LOOKBACK_DAYS = 10
+DEFAULT_RELATED_LOOKBACK_DAYS = 30
 DEFAULT_RELATED_DETAIL_LIMIT = 250
 DEFAULT_RELATED_PENDING_LIMIT = 400
 
@@ -212,25 +213,35 @@ def _fetch_oc_document_ids_for_incremental(
     """
     Selección en dos buckets para el sync incremental:
 
-    1. **Pendientes**: OC en ventana sin factura/boleta confirmada en ``document_related``.
-       Orden por emisión ascendente; offset rotativo para evitar starvation.
-    2. **Refresh**: OC recientes por ``document_id`` para revalidar relaciones ya conocidas.
+    1. **Pendientes** (prioridad operacional):
+       - cupo reciente (emisión DESC) siempre primero;
+       - cupo aging con offset rotativo (anti-starvation hasta lookback).
+    2. **Refresh**: OC recientes por ``document_id`` si queda presupuesto de ciclo.
 
-    La unión prioriza pendientes y evita duplicados.
+    La unión prioriza pendientes y evita duplicados. El lookback es cobertura,
+    no un batch completo por ciclo.
     """
     lb = max(1, lookback_days)
     pending_lim = _related_pending_limit()
     recent_lim = max(1, limit_documents)
+    recent_pending_cap = resolve_related_recent_pending_limit(pending_lim)
+    aging_lim = max(0, pending_lim - recent_pending_cap)
 
     total_pending = count_pending_ocs_in_lookback(cur, lookback_days=lb)
+    aging_pool = max(0, total_pending - recent_pending_cap)
     if pending_offset is None:
-        pending_offset = compute_pending_rotation_offset(total_pending, pending_lim)
+        pending_offset = (
+            compute_pending_rotation_offset(aging_pool, aging_lim)
+            if aging_lim > 0
+            else 0
+        )
 
     pending_ids = fetch_pending_oc_ids_for_incremental(
         cur,
         lookback_days=lb,
         pending_limit=pending_lim,
         pending_offset=pending_offset,
+        recent_pending_limit=recent_pending_cap,
     )
     recent_ids = fetch_recent_oc_ids_for_refresh(
         cur,
@@ -243,6 +254,8 @@ def _fetch_oc_document_ids_for_incremental(
         "pending_without_related": len(pending_ids),
         "pending_total_in_window": total_pending,
         "pending_offset": int(pending_offset),
+        "recent_pending_cap": int(recent_pending_cap),
+        "aging_pending_cap": int(aging_lim),
         "recent_refresh_candidates": len(recent_ids),
         "merged_unique": len(merged),
         "pending_ids": pending_ids,
@@ -1536,9 +1549,11 @@ def sync_distribuidora_related_documents(
     sigue activo, retorna ``stop_reason=SKIPPED_ALREADY_RUNNING`` sin procesar.
 
     Env:
-      DISTRIBUIDORA_RELATED_LOOKBACK_DAYS (default 10; canónico RELATED_SYNC_LOOKBACK_DAYS=14)
+      RELATED_SYNC_LOOKBACK_DAYS (canónico, default 30)
+      LIVE_SYNC_RELATED_WINDOW_DAYS / DISTRIBUIDORA_RELATED_LOOKBACK_DAYS (legacy aliases)
       DISTRIBUIDORA_RELATED_DETAIL_LIMIT (default 250) — cupo bucket refresh por ``document_id``
       DISTRIBUIDORA_RELATED_PENDING_LIMIT (default 400) — cupo bucket OC sin factura confirmada
+      RELATED_SYNC_RECENT_PENDING_LIMIT (default 100) — cupo pending recientes por ciclo
       RELATED_SYNC_MAX_RUNTIME_SEC (default 240, solo live)
     """
     token = _bsale_token()

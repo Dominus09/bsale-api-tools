@@ -292,6 +292,42 @@ def test_runtime_budget_env_override():
     assert resolve_related_sync_max_runtime_sec(True) == 90
 
 
+@patch.dict("os.environ", {}, clear=True)
+def test_default_lookback_30_and_recent_pending_cap():
+    from backend.services.distribuidora.oc_related_discovery_service import (
+        resolve_related_recent_pending_limit,
+        resolve_related_sync_lookback_days,
+    )
+
+    assert resolve_related_sync_lookback_days() == 30
+    assert resolve_related_recent_pending_limit(400) == 100
+
+
+def test_pending_fetch_returns_recent_before_aging():
+    from backend.services.distribuidora.oc_related_discovery_service import (
+        fetch_pending_oc_ids_for_incremental,
+    )
+
+    cur = MagicMock()
+    cur.fetchall.side_effect = [
+        [(300,), (200,)],  # recent DESC
+        [(10,), (20,)],  # aging ASC
+    ]
+    ids = fetch_pending_oc_ids_for_incremental(
+        cur,
+        lookback_days=30,
+        pending_limit=4,
+        pending_offset=0,
+        recent_pending_limit=2,
+    )
+    assert ids == [300, 200, 10, 20]
+    assert cur.execute.call_count == 2
+    first_sql = cur.execute.call_args_list[0].args[0]
+    second_sql = cur.execute.call_args_list[1].args[0]
+    assert "ORDER BY d.emission_date DESC" in first_sql
+    assert "ORDER BY d.emission_date ASC" in second_sql
+
+
 def _pick_meta(pending: list[int], refresh: list[int] | None = None) -> dict:
     refresh = refresh or []
     merged = list(dict.fromkeys(pending + refresh))

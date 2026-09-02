@@ -10,8 +10,10 @@ Ejecución manual (raíz del repo, ``PG_*`` y token Bsale en entorno o ``.env``)
 
     python -m backend.jobs.sync_distribuidora_related
 
-Variables útiles: ``DISTRIBUIDORA_RELATED_LOOKBACK_DAYS``, ``DISTRIBUIDORA_RELATED_DETAIL_LIMIT``,
-``DISTRIBUIDORA_RELATED_PENDING_LIMIT``, ``DISTRIBUIDORA_RELATED_API_DELAY_SEC``, ``LOG_LEVEL``.
+Variables útiles: ``RELATED_SYNC_LOOKBACK_DAYS`` (canónico, default 30),
+``LIVE_SYNC_RELATED_WINDOW_DAYS`` / ``DISTRIBUIDORA_RELATED_LOOKBACK_DAYS`` (legacy),
+``DISTRIBUIDORA_RELATED_DETAIL_LIMIT``, ``DISTRIBUIDORA_RELATED_PENDING_LIMIT``,
+``DISTRIBUIDORA_RELATED_API_DELAY_SEC``, ``LOG_LEVEL``.
 Ver ``COOLIFY_JOB_SETUP.md`` en la raíz del repositorio.
 """
 
@@ -22,6 +24,9 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 
+from backend.services.distribuidora.oc_related_discovery_service import (
+    resolve_related_sync_lookback_days,
+)
 from backend.services.distribuidora.sync_related_service import (
     sync_distribuidora_related_documents,
 )
@@ -91,7 +96,7 @@ def main() -> int:
     load_dotenv_if_available()
     _configure_logging()
 
-    lookback = int(os.getenv("DISTRIBUIDORA_RELATED_LOOKBACK_DAYS", "10"))
+    lookback = resolve_related_sync_lookback_days()
     limit = int(os.getenv("DISTRIBUIDORA_RELATED_DETAIL_LIMIT", "250"))
     pending_limit = int(os.getenv("DISTRIBUIDORA_RELATED_PENDING_LIMIT", "400"))
 

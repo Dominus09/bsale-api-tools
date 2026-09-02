@@ -14,6 +14,7 @@ from backend.services.distribuidora.oc_related_discovery_service import (
     discover_confirmed_related_documents_for_oc,
     discover_invoice_edges_for_oc,
     fetch_pending_oc_ids_for_incremental,
+    is_emission_age_within_lookback,
     resolve_related_sync_lookback_days,
 )
 from backend.services.distribuidora.sync_related_service import (
@@ -40,8 +41,8 @@ def _invoice_item(
 
 
 @patch.dict("os.environ", {}, clear=True)
-def test_default_lookback_is_14_days():
-    assert resolve_related_sync_lookback_days() == 14
+def test_default_lookback_is_30_days():
+    assert resolve_related_sync_lookback_days() == 30
 
 
 @patch.dict("os.environ", {"RELATED_SYNC_LOOKBACK_DAYS": "21"})
@@ -52,6 +53,49 @@ def test_lookback_env_override():
 @patch.dict("os.environ", {"LIVE_SYNC_RELATED_WINDOW_DAYS": "3"})
 def test_legacy_live_window_env_still_works():
     assert resolve_related_sync_lookback_days() == 3
+
+
+@patch.dict(
+    "os.environ",
+    {
+        "RELATED_SYNC_LOOKBACK_DAYS": "",
+        "LIVE_SYNC_RELATED_WINDOW_DAYS": "",
+        "DISTRIBUIDORA_RELATED_LOOKBACK_DAYS": "10",
+    },
+    clear=True,
+)
+def test_legacy_distribuidora_lookback_still_overrides_when_set():
+    assert resolve_related_sync_lookback_days() == 10
+
+
+@patch.dict("os.environ", {}, clear=True)
+def test_lookback_coverage_ages_1_to_31():
+    """Cobertura 30d inclusiva en el borde; 31 fuera."""
+    assert is_emission_age_within_lookback(1) is True
+    assert is_emission_age_within_lookback(14) is True
+    assert is_emission_age_within_lookback(16) is True
+    assert is_emission_age_within_lookback(20) is True
+    assert is_emission_age_within_lookback(29) is True
+    assert is_emission_age_within_lookback(30) is True
+    assert is_emission_age_within_lookback(30.0) is True
+    assert is_emission_age_within_lookback(30.0001) is False
+    assert is_emission_age_within_lookback(31) is False
+
+
+@patch.dict("os.environ", {}, clear=True)
+def test_aging_ocs_68884_68885_68923_within_30_day_coverage():
+    """Regresión: OCs ~15–16d (Aug 17–18 → Sep 2) entran con lookback 30, no con 14."""
+    # Sep 2 2026 relative to Aug 17/18 2026
+    age_aug17 = (date(2026, 9, 2) - date(2026, 8, 17)).days  # 16
+    age_aug18 = (date(2026, 9, 2) - date(2026, 8, 18)).days  # 15
+    assert age_aug17 == 16
+    assert age_aug18 == 15
+    assert is_emission_age_within_lookback(age_aug17, 14) is False
+    assert is_emission_age_within_lookback(age_aug18, 14) is False
+    assert is_emission_age_within_lookback(age_aug17, 30) is True
+    assert is_emission_age_within_lookback(age_aug18, 30) is True
+    assert is_emission_age_within_lookback(age_aug17) is True
+    assert is_emission_age_within_lookback(age_aug18) is True
 
 
 def test_rotation_offset_cycles_when_many_pending():
@@ -82,7 +126,7 @@ def test_rotation_offset_zero_when_few_pending():
 )
 @patch(
     "backend.services.distribuidora.sync_related_service.compute_pending_rotation_offset",
-    return_value=400,
+    return_value=300,
 )
 def test_incremental_fetch_passes_rotation_offset(
     mock_offset,
@@ -94,12 +138,17 @@ def test_incremental_fetch_passes_rotation_offset(
     mock_pending.return_value = [68995]
     mock_refresh.return_value = []
     ids, meta = _fetch_oc_document_ids_for_incremental(
-        cur, lookback_days=14, limit_documents=250
+        cur, lookback_days=30, limit_documents=250
     )
     assert 68995 in ids
-    assert meta["pending_offset"] == 400
+    assert meta["pending_offset"] == 300
+    assert meta["recent_pending_cap"] == 100
+    assert meta["aging_pending_cap"] == 300
     mock_pending.assert_called_once()
-    assert mock_pending.call_args.kwargs["pending_offset"] == 400
+    assert mock_pending.call_args.kwargs["pending_offset"] == 300
+    assert mock_pending.call_args.kwargs["recent_pending_limit"] == 100
+    # Rotación sobre pool aging (500 - 100), no sobre pending_limit completo
+    mock_offset.assert_called_once_with(400, 300)
 
 
 @patch(
@@ -342,4 +391,6 @@ def test_lookback_3_excludes_oc_8_days_old():
     age_days = (now - emission).days
     assert age_days == 8
     assert age_days > resolve_related_sync_lookback_days(3)
-    assert age_days <= resolve_related_sync_lookback_days(14)
+    assert is_emission_age_within_lookback(age_days, 3) is False
+    assert is_emission_age_within_lookback(age_days, 30) is True
+    assert age_days <= resolve_related_sync_lookback_days(30)

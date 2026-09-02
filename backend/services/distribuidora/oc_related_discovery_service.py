@@ -29,8 +29,9 @@ RELATED_DETAIL_PAGE_LIMIT = 50
 CONFIRMED_INVOICE_TYPES = frozenset({1, 6})
 CATCHUP_INVOICE_TYPES = CONFIRMED_INVOICE_TYPES
 
-DEFAULT_RELATED_SYNC_LOOKBACK_DAYS = 14
+DEFAULT_RELATED_SYNC_LOOKBACK_DAYS = 30
 DEFAULT_RELATED_SYNC_MAX_RUNTIME_SEC = 240
+DEFAULT_RELATED_RECENT_PENDING_LIMIT = 100
 DEFAULT_MIN_INTERVAL_SEC = 0.75
 DEFAULT_INTERVAL_JITTER_SEC = 0.25
 DEFAULT_MAX_429_RETRIES = 5
@@ -103,17 +104,26 @@ def _env_int(name: str, default: int) -> int:
 
 def resolve_related_sync_lookback_days(lookback_days: int | None = None) -> int:
     """
-    Días de emisión hacia atrás para candidatas OC en sync incremental.
+    Días de emisión hacia atrás para candidatas OC en sync incremental (cobertura).
 
-    Prioridad: argumento explícito → ``RELATED_SYNC_LOOKBACK_DAYS`` (14) →
-    ``LIVE_SYNC_RELATED_WINDOW_DAYS`` (legacy) → ``DISTRIBUIDORA_RELATED_LOOKBACK_DAYS`` (10).
+    Límite inclusivo en el borde: ``emission_date >= now_utc - N days``
+    (edad exacta N días entra; N+ε sale).
+
+    Precedencia (primer valor presente gana; default canónico **30**):
+      1. argumento explícito ``lookback_days``
+      2. ``RELATED_SYNC_LOOKBACK_DAYS``
+      3. ``LIVE_SYNC_RELATED_WINDOW_DAYS`` (legacy)
+      4. ``DISTRIBUIDORA_RELATED_LOOKBACK_DAYS`` (legacy)
+      5. ``DEFAULT_RELATED_SYNC_LOOKBACK_DAYS`` (30)
+
+    Ningún fallback numérico antiguo (10/14) se aplica si la variable no está seteada.
     """
     if lookback_days is not None:
         return max(1, int(lookback_days))
-    for env_name, default in (
-        ("RELATED_SYNC_LOOKBACK_DAYS", DEFAULT_RELATED_SYNC_LOOKBACK_DAYS),
-        ("LIVE_SYNC_RELATED_WINDOW_DAYS", DEFAULT_RELATED_SYNC_LOOKBACK_DAYS),
-        ("DISTRIBUIDORA_RELATED_LOOKBACK_DAYS", 10),
+    for env_name in (
+        "RELATED_SYNC_LOOKBACK_DAYS",
+        "LIVE_SYNC_RELATED_WINDOW_DAYS",
+        "DISTRIBUIDORA_RELATED_LOOKBACK_DAYS",
     ):
         raw = os.getenv(env_name, "").strip()
         if raw:
@@ -122,6 +132,42 @@ def resolve_related_sync_lookback_days(lookback_days: int | None = None) -> int:
             except ValueError:
                 pass
     return DEFAULT_RELATED_SYNC_LOOKBACK_DAYS
+
+
+def resolve_related_recent_pending_limit(pending_limit: int) -> int:
+    """
+    Cupo reservado cada ciclo para OCs pending más recientes (emisión DESC).
+
+    El resto del ``pending_limit`` se usa para aging con rotación anti-starvation.
+    Env: ``RELATED_SYNC_RECENT_PENDING_LIMIT`` (default 100, acotado a pending_limit).
+    """
+    lim = max(1, int(pending_limit))
+    raw = os.getenv("RELATED_SYNC_RECENT_PENDING_LIMIT", "").strip()
+    if raw:
+        try:
+            return max(0, min(int(raw), lim))
+        except ValueError:
+            pass
+    return min(DEFAULT_RELATED_RECENT_PENDING_LIMIT, lim)
+
+
+def is_emission_age_within_lookback(
+    age_days: float,
+    lookback_days: int | None = None,
+) -> bool:
+    """
+    Equivalente lógico del filtro SQL de cobertura:
+
+    ``emission_date >= now() - lookback_days * interval '1 day'``
+
+    Inclusivo en el borde: ``age_days <= lookback`` entra; ``age_days > lookback`` sale.
+    """
+    lb = (
+        max(1, int(lookback_days))
+        if lookback_days is not None
+        else resolve_related_sync_lookback_days()
+    )
+    return float(age_days) <= float(lb)
 
 
 def compute_pending_rotation_offset(
@@ -273,26 +319,91 @@ def fetch_pending_oc_ids_for_incremental(
     pending_offset: int = 0,
     company_id: int = COMPANY_ID,
     office_id: int = OFFICE_ID,
+    recent_pending_limit: int | None = None,
 ) -> list[int]:
-    """OC pendientes (sin arista 1/6) dentro del lookback, con offset rotativo."""
+    """
+    OC pendientes (sin arista 1/6) dentro del lookback.
+
+    Prioridad operacional:
+      1. Pending recientes (``emission_date DESC``) — cupo ``recent_pending_limit``
+      2. Pending aging (``emission_date ASC``) con ``pending_offset`` rotativo
+
+    No procesa todas las OC del lookback: solo un cupo por ciclo.
+    """
     lb = max(1, lookback_days)
-    offset = max(0, int(pending_offset))
-    cur.execute(
-        f"""
-        SELECT d.document_id
-        FROM distribuidora.documents d
-        WHERE d.document_type_id = %s
-          AND d.company_id = %s
-          AND d.office_id = %s
-          AND d.emission_date >= (NOW() AT TIME ZONE 'UTC' - (%s * interval '1 day'))
-          AND {OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL}
-        ORDER BY d.emission_date ASC NULLS LAST, d.document_id ASC
-        OFFSET %s
-        LIMIT %s
-        """,
-        (DOC_TYPE_OC, company_id, office_id, lb, offset, max(1, pending_limit)),
+    total_lim = max(1, int(pending_limit))
+    recent_cap = (
+        resolve_related_recent_pending_limit(total_lim)
+        if recent_pending_limit is None
+        else max(0, min(int(recent_pending_limit), total_lim))
     )
-    return [int(r[0]) for r in cur.fetchall()]
+    offset = max(0, int(pending_offset))
+
+    recent_ids: list[int] = []
+    if recent_cap > 0:
+        cur.execute(
+            f"""
+            SELECT d.document_id
+            FROM distribuidora.documents d
+            WHERE d.document_type_id = %s
+              AND d.company_id = %s
+              AND d.office_id = %s
+              AND d.emission_date >= (NOW() AT TIME ZONE 'UTC' - (%s * interval '1 day'))
+              AND {OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL}
+            ORDER BY d.emission_date DESC NULLS LAST, d.document_id DESC
+            LIMIT %s
+            """,
+            (DOC_TYPE_OC, company_id, office_id, lb, recent_cap),
+        )
+        recent_ids = [int(r[0]) for r in cur.fetchall()]
+
+    aging_lim = total_lim - len(recent_ids)
+    if aging_lim <= 0:
+        return recent_ids
+
+    if recent_ids:
+        cur.execute(
+            f"""
+            SELECT d.document_id
+            FROM distribuidora.documents d
+            WHERE d.document_type_id = %s
+              AND d.company_id = %s
+              AND d.office_id = %s
+              AND d.emission_date >= (NOW() AT TIME ZONE 'UTC' - (%s * interval '1 day'))
+              AND {OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL}
+              AND NOT (d.document_id = ANY(%s::bigint[]))
+            ORDER BY d.emission_date ASC NULLS LAST, d.document_id ASC
+            OFFSET %s
+            LIMIT %s
+            """,
+            (
+                DOC_TYPE_OC,
+                company_id,
+                office_id,
+                lb,
+                recent_ids,
+                offset,
+                aging_lim,
+            ),
+        )
+    else:
+        cur.execute(
+            f"""
+            SELECT d.document_id
+            FROM distribuidora.documents d
+            WHERE d.document_type_id = %s
+              AND d.company_id = %s
+              AND d.office_id = %s
+              AND d.emission_date >= (NOW() AT TIME ZONE 'UTC' - (%s * interval '1 day'))
+              AND {OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL}
+            ORDER BY d.emission_date ASC NULLS LAST, d.document_id ASC
+            OFFSET %s
+            LIMIT %s
+            """,
+            (DOC_TYPE_OC, company_id, office_id, lb, offset, aging_lim),
+        )
+    aging_ids = [int(r[0]) for r in cur.fetchall()]
+    return recent_ids + aging_ids
 
 
 def fetch_recent_oc_ids_for_refresh(
