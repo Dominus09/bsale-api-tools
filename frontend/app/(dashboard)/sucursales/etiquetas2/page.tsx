@@ -752,57 +752,80 @@ export default function Etiquetas2Page() {
       </Card>
 
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Vista previa · Socio Estándar</DialogTitle>
+            <DialogTitle>Vista previa · Socio Estándar 10×4 cm</DialogTitle>
             <DialogDescription>
-              Precio Socio destacado en azul. La marca &quot;Provisional&quot; no
-              aparece en la etiqueta impresa.
+              Formato horizontal góndola · {SOCIO_ESTANDAR_FORMAT.perPage}{" "}
+              etiquetas/hoja. &quot;Provisional&quot; no se imprime.
             </DialogDescription>
           </DialogHeader>
-          <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-1 md:grid-cols-2">
             {printableRows.slice(0, 6).map((r) => (
               <div
                 key={r.id}
-                className="rounded border bg-white p-3 text-center shadow-sm"
+                className="rounded border bg-white shadow-sm overflow-hidden"
+                style={{ aspectRatio: "10 / 4" }}
               >
-                <img
-                  src={QUILLOTANA_LOGO_GRUPO_URL}
-                  alt=""
-                  className="mx-auto mb-2 h-6 object-contain"
-                />
-                {showProductType && r.productType && (
-                  <p className="text-[10px] uppercase text-muted-foreground">
-                    {r.productType}
-                  </p>
-                )}
-                <p className="text-xs font-bold leading-tight">{r.productName}</p>
-                {r.variantName && (
-                  <p className="text-[10px] text-muted-foreground">
-                    {r.variantName}
-                  </p>
-                )}
-                {showPrices && (
-                  <>
-                    <p className="mt-2 text-[10px] text-muted-foreground">
-                      PRECIO NORMAL
-                    </p>
-                    <p className="text-sm font-semibold">
-                      {formatCurrency(r.normalPrice)}
-                    </p>
-                    <div className="mt-1 rounded-md border border-[#005AA8] bg-[#E6F2FF] px-2 py-1.5">
-                      <p className="text-[10px] font-bold text-[#005AA8]">
-                        PRECIO SOCIO
+                <div className="flex h-full flex-col px-3 py-1.5">
+                  <div className="flex items-start gap-2 min-h-0">
+                    <img
+                      src={QUILLOTANA_LOGO_GRUPO_URL}
+                      alt=""
+                      className="h-5 w-auto shrink-0 object-contain mt-0.5"
+                    />
+                    <div className="min-w-0 flex-1 text-left">
+                      {showProductType && r.productType && (
+                        <p className="text-[9px] uppercase leading-none text-muted-foreground truncate">
+                          {r.productType}
+                        </p>
+                      )}
+                      <p className="text-[11px] font-bold leading-tight line-clamp-2">
+                        {r.productName}
                       </p>
-                      <p className="text-lg font-bold text-[#005AA8]">
-                        {formatCurrency(r.socioPrice)}
+                      {r.variantName &&
+                        r.variantName.trim().toLowerCase() !==
+                          r.productName.trim().toLowerCase() && (
+                          <p className="text-[9px] text-muted-foreground truncate">
+                            {r.variantName}
+                          </p>
+                        )}
+                    </div>
+                  </div>
+
+                  {showPrices && (
+                    <div className="mt-1 grid grid-cols-2 gap-1.5 border-t pt-1">
+                      <div className="flex flex-col items-center justify-center py-0.5">
+                        <p className="text-[8px] uppercase tracking-wide text-muted-foreground">
+                          Precio Normal
+                        </p>
+                        <p className="text-sm font-bold tabular-nums text-neutral-900">
+                          {formatCurrency(r.normalPrice)}
+                        </p>
+                      </div>
+                      <div className="flex flex-col items-center justify-center rounded border border-[#005AA8] bg-[#E6F2FF] py-0.5">
+                        <p className="text-[8px] font-bold uppercase tracking-wide text-[#005AA8]">
+                          Precio Socio
+                        </p>
+                        <p className="text-base font-bold tabular-nums text-[#005AA8]">
+                          {formatCurrency(r.socioPrice)}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {showBarcode && (
+                    <div className="mt-auto border-t pt-0.5 text-center">
+                      <div
+                        className="mx-auto h-3 w-3/4 bg-[repeating-linear-gradient(90deg,#111_0,#111_1px,#fff_1px,#fff_2px)] opacity-80"
+                        aria-hidden
+                      />
+                      <p className="text-[9px] tracking-wider text-neutral-800">
+                        {r.barcode}
                       </p>
                     </div>
-                  </>
-                )}
-                {showBarcode && (
-                  <p className="mt-2 text-[10px] tracking-wider">{r.barcode}</p>
-                )}
+                  )}
+                </div>
               </div>
             ))}
           </div>
