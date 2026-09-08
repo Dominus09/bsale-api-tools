@@ -185,8 +185,8 @@ function drawSocioEstandarLabel(
   const band1Top = y + padY
   const band1Bottom = y + BAND_PRODUCT_H
 
-  // Logo ~16–18 mm ancho
-  const logoW = 17
+  // Logo ~20 mm ancho (+~18% vs 17 mm)
+  const logoW = 20
   const logoH = logoW / logo.aspectRatio
   const logoY = band1Top + Math.max(0, (BAND_PRODUCT_H - padY - logoH) / 2)
   doc.addImage(
@@ -200,24 +200,25 @@ function drawSocioEstandarLabel(
     "FAST",
   )
 
-  const textX = innerX + logoW + 2.2
-  const textW = innerW - logoW - 2.2
-  let ty = band1Top + 2.0
+  const textX = innerX + logoW + 2.0
+  const textW = innerW - logoW - 2.0
+  let ty = band1Top + 1.85
 
   if (options.showProductType && item.productType) {
-    doc.setFontSize(5.2)
+    doc.setFontSize(5)
     doc.setFont("helvetica", "normal")
     doc.setTextColor(COLOR_CATEGORY.r, COLOR_CATEGORY.g, COLOR_CATEGORY.b)
     doc.text(item.productType.toUpperCase(), textX, ty, { maxWidth: textW })
-    ty += 2.35
+    ty += 2.2
   }
 
+  // Nombre producto ~+15% (9 → 10.4)
   doc.setFont("helvetica", "bold")
   doc.setTextColor(15, 15, 15)
-  const productLines = fitLines(doc, item.productName, textW, 2, 9)
-  doc.setFontSize(9)
+  const productLines = fitLines(doc, item.productName, textW, 2, 10.4)
+  doc.setFontSize(10.4)
   doc.text(productLines, textX, ty)
-  ty += productLines.length * 3.1
+  ty += productLines.length * 3.35
 
   const variant =
     item.variantName &&
@@ -242,11 +243,19 @@ function drawSocioEstandarLabel(
     const socioW = innerW * 0.6
     const socioX = innerX + normalW
 
-    // Fondo celeste muy suave solo en sector Socio (sin borde grueso)
+    // Fondo celeste ~12% más compacto (no llena todo el sector Socio)
+    const softInsetX = socioW * 0.06
+    const softInsetY = BAND_PRICES_H * 0.08
     doc.setFillColor(COLOR_SOCIO_SOFT.r, COLOR_SOCIO_SOFT.g, COLOR_SOCIO_SOFT.b)
-    doc.rect(socioX, band2Top + 0.4, socioW, BAND_PRICES_H - 0.8, "F")
+    doc.rect(
+      socioX + softInsetX,
+      band2Top + softInsetY,
+      socioW - softInsetX * 2,
+      BAND_PRICES_H - softInsetY * 2,
+      "F",
+    )
 
-    // —— Precio Normal (40%) ——
+    // —— Precio Normal (40%) ~+10% tipografía ——
     const nCx = innerX + normalW / 2
     doc.setFontSize(5)
     doc.setFont("helvetica", "normal")
@@ -257,14 +266,14 @@ function drawSocioEstandarLabel(
     )
     doc.text("PRECIO NORMAL", nCx, band2MidY - 3.2, { align: "center" })
 
-    doc.setFontSize(14)
+    doc.setFontSize(15.4)
     doc.setFont("helvetica", "bold")
     doc.setTextColor(20, 20, 20)
-    doc.text(formatClp(item.normalPrice), nCx, band2MidY + 4.2, {
+    doc.text(formatClp(item.normalPrice), nCx, band2MidY + 4.4, {
       align: "center",
     })
 
-    // —— Precio Socio (60%) ——
+    // —— Precio Socio (60%) — sigue siendo el protagonista ——
     const sCx = socioX + socioW / 2
 
     // Píldora azul pequeña
@@ -273,17 +282,17 @@ function drawSocioEstandarLabel(
     doc.setFont("helvetica", "bold")
     const pillTw = doc.getTextWidth(pillText)
     const pillPadX = 1.8
-    const pillW = Math.min(socioW - 4, pillTw + pillPadX * 2)
+    const pillW = Math.min(socioW - 6, pillTw + pillPadX * 2)
     const pillH = 3.6
     const pillX = sCx - pillW / 2
-    const pillY = band2Top + 2.2
+    const pillY = band2Top + 2.4
 
     doc.setFillColor(COLOR_SOCIO.r, COLOR_SOCIO.g, COLOR_SOCIO.b)
     doc.roundedRect(pillX, pillY, pillW, pillH, 1.2, 1.2, "F")
     doc.setTextColor(255, 255, 255)
     doc.text(pillText, sCx, pillY + 2.55, { align: "center" })
 
-    // Precio Socio grande
+    // Precio Socio grande (sin cambio de jerarquía)
     doc.setFontSize(18)
     doc.setFont("helvetica", "bold")
     doc.setTextColor(COLOR_SOCIO.r, COLOR_SOCIO.g, COLOR_SOCIO.b)

@@ -776,15 +776,15 @@ export default function Etiquetas2Page() {
                     <img
                       src={QUILLOTANA_LOGO_GRUPO_URL}
                       alt=""
-                      className="mt-0.5 h-8 w-auto shrink-0 object-contain"
+                      className="mt-0.5 h-9 w-auto shrink-0 object-contain"
                     />
                     <div className="min-w-0 flex-1 text-left leading-tight">
                       {showProductType && r.productType && (
-                        <p className="truncate text-[9px] uppercase tracking-wide text-neutral-500">
+                        <p className="truncate text-[8px] uppercase tracking-wide text-neutral-500">
                           {r.productType}
                         </p>
                       )}
-                      <p className="line-clamp-2 text-[12px] font-bold text-neutral-900">
+                      <p className="line-clamp-2 text-[14px] font-bold text-neutral-900">
                         {r.productName}
                       </p>
                       {r.variantName &&
@@ -807,17 +807,19 @@ export default function Etiquetas2Page() {
                         <p className="text-[8px] uppercase tracking-wide text-neutral-500">
                           Precio Normal
                         </p>
-                        <p className="text-[17px] font-bold tabular-nums text-neutral-900">
+                        <p className="text-[19px] font-bold tabular-nums text-neutral-900">
                           {formatCurrency(r.normalPrice)}
                         </p>
                       </div>
-                      <div className="col-span-3 flex h-full flex-col items-center justify-center bg-[#F2F8FF] px-1">
-                        <span className="rounded-full bg-[#005AA8] px-2 py-0.5 text-[8px] font-bold uppercase tracking-wide text-white">
-                          Socio Quillotana
-                        </span>
-                        <p className="mt-0.5 text-[22px] font-bold tabular-nums leading-none text-[#005AA8]">
-                          {formatCurrency(r.socioPrice)}
-                        </p>
+                      <div className="col-span-3 flex h-full items-center justify-center px-1">
+                        <div className="flex w-[88%] flex-col items-center justify-center rounded-sm bg-[#F2F8FF] py-1">
+                          <span className="rounded-full bg-[#005AA8] px-2 py-0.5 text-[8px] font-bold uppercase tracking-wide text-white">
+                            Socio Quillotana
+                          </span>
+                          <p className="mt-0.5 text-[22px] font-bold tabular-nums leading-none text-[#005AA8]">
+                            {formatCurrency(r.socioPrice)}
+                          </p>
+                        </div>
                       </div>
                     </div>
                   )}
