@@ -1,11 +1,7 @@
 /**
- * PDF carta — Etiquetas Socios V2 · Socio Estándar góndola 100×40 mm.
- *
- * Tres franjas (sin líneas divisorias):
- *   producto ~11 mm | precios ~17.5 mm | barcode ~11.5 mm
- *
- * Precio Socio: píldora azul pequeña + valor grande (sin rectángulo gigante).
- * "Provisional" nunca se imprime.
+ * PDF — Etiquetas Socios V2 · Socio Estándar 100×40 mm
+ * Look retail premium (mockup aprobado): limpio, integrado, jerarquía clara.
+ * Sin % / provisional. Solo visual.
  */
 
 import {
@@ -29,11 +25,10 @@ export type SocioLabelPrintItem = {
   quantity: number
 }
 
-/** 10 cm × 4 cm — 2×6 = 12/hoja carta. */
 export const SOCIO_ESTANDAR_FORMAT = {
   id: "SOCIO_ESTANDAR" as const,
   label: "Socio Estándar",
-  description: "12 etiquetas · 10×4 cm · góndola horizontal",
+  description: "12 etiquetas · 10×4 cm · góndola retail",
   cols: 2,
   rows: 6,
   perPage: 12,
@@ -45,21 +40,23 @@ const PAGE_W = 215.9
 const PAGE_H = 279.4
 const MARGIN_MM = 5
 
-/** Franjas internas (mm) sobre alto 40 */
-const BAND_PRODUCT_H = 11
-const BAND_PRICES_H = 17.5
-// barcode = resto ≈ 11.5
+/** Franjas (mm) — total 40 */
+const BAND_PRODUCT_H = 12.0
+const BAND_PRICES_H = 16.5
+// barcode ≈ 11.5
 
-const COLOR_CATEGORY = { r: 120, g: 120, b: 120 }
-const COLOR_VARIANT = { r: 75, g: 75, b: 75 }
-const COLOR_BORDER = { r: 210, g: 210, b: 210 }
-const COLOR_SOCIO = { r: 0, g: 90, b: 168 }
-const COLOR_SOCIO_SOFT = { r: 242, g: 248, b: 255 }
-const COLOR_NORMAL_LABEL = { r: 110, g: 110, b: 110 }
+const C = {
+  category: { r: 130, g: 130, b: 130 },
+  variant: { r: 85, g: 85, b: 85 },
+  border: { r: 220, g: 220, b: 220 },
+  ink: { r: 18, g: 18, b: 18 },
+  normalLabel: { r: 120, g: 120, b: 120 },
+  socio: { r: 0, g: 90, b: 168 },
+  socioSoft: { r: 245, g: 249, b: 253 },
+}
 
 type BarcodeSpec = { w: number; h: number; bar: number; minMm: number }
-
-const BARCODE_SPEC: BarcodeSpec = { w: 480, h: 34, bar: 1.25, minMm: 7 }
+const BARCODE_SPEC: BarcodeSpec = { w: 500, h: 32, bar: 1.2, minMm: 6.8 }
 
 function formatClp(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return "—"
@@ -87,7 +84,7 @@ function fitLines(
   fontSize: number,
 ): string[] {
   doc.setFontSize(fontSize)
-  const lines = doc.splitTextToSize(text.trim(), maxWidth) as string[]
+  const lines = doc.splitTextToSize(String(text || "").trim(), maxWidth) as string[]
   if (lines.length <= maxLines) return lines
   const kept = lines.slice(0, maxLines)
   let last = kept[maxLines - 1] ?? ""
@@ -127,7 +124,7 @@ async function barcodeDataUrl(
     ctx.fillRect(0, 0, spec.w, spec.h)
     ctx.imageSmoothingEnabled = false
     ctx.drawImage(raw, 0, 0, spec.w, spec.h)
-    return scaled.toDataURL("image/jpeg", 0.92)
+    return scaled.toDataURL("image/jpeg", 0.93)
   } catch {
     return null
   }
@@ -167,166 +164,142 @@ function drawSocioEstandarLabel(
   logo: PdfLogoPayload,
   barcodeImg: string | null,
 ) {
-  const padX = 2.4
-  const padY = 1.2
+  const padX = 2.8
+  const padY = 1.5
   const innerX = x + padX
-  const innerRight = x + w - padX
-  const innerW = innerRight - innerX
+  const innerW = w - padX * 2
 
-  // Contorno suave (una sola pieza)
-  doc.setDrawColor(COLOR_BORDER.r, COLOR_BORDER.g, COLOR_BORDER.b)
-  doc.setLineWidth(0.12)
+  // Pieza única — borde muy suave
+  doc.setDrawColor(C.border.r, C.border.g, C.border.b)
+  doc.setLineWidth(0.1)
   doc.setFillColor(255, 255, 255)
-  doc.rect(x, y, w, h, "FD")
+  doc.roundedRect(x, y, w, h, 0.6, 0.6, "FD")
 
-  // ═══════════════════════════════════════════
-  // FRANJA 1 — PRODUCTO (~11 mm)
-  // ═══════════════════════════════════════════
+  // ─── PRODUCTO ───
   const band1Top = y + padY
-  const band1Bottom = y + BAND_PRODUCT_H
-
-  // Logo ~20 mm ancho (+~18% vs 17 mm)
-  const logoW = 20
+  const logoW = 18.5
   const logoH = logoW / logo.aspectRatio
-  const logoY = band1Top + Math.max(0, (BAND_PRODUCT_H - padY - logoH) / 2)
+  const logoY = band1Top + 0.2
   doc.addImage(
     logo.dataUrl,
     logo.format,
     innerX,
     logoY,
     logoW,
-    logoH,
+    Math.min(logoH, BAND_PRODUCT_H - 1.2),
     undefined,
     "FAST",
   )
 
-  const textX = innerX + logoW + 2.0
-  const textW = innerW - logoW - 2.0
-  let ty = band1Top + 1.85
+  const textX = innerX + logoW + 2.4
+  const textW = innerW - logoW - 2.4
+  let ty = band1Top + 2.1
 
   if (options.showProductType && item.productType) {
-    doc.setFontSize(5)
     doc.setFont("helvetica", "normal")
-    doc.setTextColor(COLOR_CATEGORY.r, COLOR_CATEGORY.g, COLOR_CATEGORY.b)
+    doc.setFontSize(4.8)
+    doc.setTextColor(C.category.r, C.category.g, C.category.b)
     doc.text(item.productType.toUpperCase(), textX, ty, { maxWidth: textW })
-    ty += 2.2
+    ty += 2.15
   }
 
-  // Nombre producto ~+15% (9 → 10.4)
   doc.setFont("helvetica", "bold")
-  doc.setTextColor(15, 15, 15)
-  const productLines = fitLines(doc, item.productName, textW, 2, 10.4)
-  doc.setFontSize(10.4)
-  doc.text(productLines, textX, ty)
-  ty += productLines.length * 3.35
+  doc.setFontSize(10.2)
+  doc.setTextColor(C.ink.r, C.ink.g, C.ink.b)
+  const nameLines = fitLines(doc, item.productName, textW, 2, 10.2)
+  doc.text(nameLines, textX, ty)
+  ty += nameLines.length * 3.2
 
   const variant =
     item.variantName &&
     item.variantName.trim().toLowerCase() !== item.productName.trim().toLowerCase()
       ? item.variantName.trim()
       : ""
-  if (variant && ty < band1Bottom - 0.5) {
-    doc.setFontSize(6.2)
+  if (variant) {
     doc.setFont("helvetica", "normal")
-    doc.setTextColor(COLOR_VARIANT.r, COLOR_VARIANT.g, COLOR_VARIANT.b)
-    doc.text(fitLines(doc, variant, textW, 1, 6.2), textX, ty)
+    doc.setFontSize(6)
+    doc.setTextColor(C.variant.r, C.variant.g, C.variant.b)
+    doc.text(fitLines(doc, variant, textW, 1, 6), textX, Math.min(ty, y + BAND_PRODUCT_H - 0.4))
   }
 
-  // ═══════════════════════════════════════════
-  // FRANJA 2 — PRECIOS (~17.5 mm)  40% / 60%
-  // ═══════════════════════════════════════════
+  // ─── PRECIOS (40 / 60) ───
   const band2Top = y + BAND_PRODUCT_H
-  const band2MidY = band2Top + BAND_PRICES_H / 2
+  const band2Mid = band2Top + BAND_PRICES_H / 2
 
   if (options.showPrices) {
-    const normalW = innerW * 0.4
-    const socioW = innerW * 0.6
+    const normalW = innerW * 0.38
+    const socioW = innerW * 0.62
     const socioX = innerX + normalW
 
-    // Fondo celeste ~12% más compacto (no llena todo el sector Socio)
-    const softInsetX = socioW * 0.06
-    const softInsetY = BAND_PRICES_H * 0.08
-    doc.setFillColor(COLOR_SOCIO_SOFT.r, COLOR_SOCIO_SOFT.g, COLOR_SOCIO_SOFT.b)
-    doc.rect(
-      socioX + softInsetX,
-      band2Top + softInsetY,
-      socioW - softInsetX * 2,
-      BAND_PRICES_H - softInsetY * 2,
+    // Wash celeste sutil solo detrás del precio socio (inset elegante)
+    const inset = 1.2
+    doc.setFillColor(C.socioSoft.r, C.socioSoft.g, C.socioSoft.b)
+    doc.roundedRect(
+      socioX + inset * 0.4,
+      band2Top + inset,
+      socioW - inset * 0.8,
+      BAND_PRICES_H - inset * 2,
+      1.0,
+      1.0,
       "F",
     )
 
-    // —— Precio Normal (40%) ~+10% tipografía ——
+    // Normal
     const nCx = innerX + normalW / 2
-    doc.setFontSize(5)
     doc.setFont("helvetica", "normal")
-    doc.setTextColor(
-      COLOR_NORMAL_LABEL.r,
-      COLOR_NORMAL_LABEL.g,
-      COLOR_NORMAL_LABEL.b,
-    )
-    doc.text("PRECIO NORMAL", nCx, band2MidY - 3.2, { align: "center" })
+    doc.setFontSize(4.6)
+    doc.setTextColor(C.normalLabel.r, C.normalLabel.g, C.normalLabel.b)
+    doc.text("PRECIO NORMAL", nCx, band2Mid - 3.4, { align: "center" })
 
-    doc.setFontSize(15.4)
     doc.setFont("helvetica", "bold")
-    doc.setTextColor(20, 20, 20)
-    doc.text(formatClp(item.normalPrice), nCx, band2MidY + 4.4, {
-      align: "center",
-    })
+    doc.setFontSize(15)
+    doc.setTextColor(C.ink.r, C.ink.g, C.ink.b)
+    doc.text(formatClp(item.normalPrice), nCx, band2Mid + 4.0, { align: "center" })
 
-    // —— Precio Socio (60%) — sigue siendo el protagonista ——
+    // Socio — píldora + valor hero
     const sCx = socioX + socioW / 2
-
-    // Píldora azul pequeña
-    const pillText = "SOCIO QUILLOTANA"
-    doc.setFontSize(5)
+    const pill = "SOCIO QUILLOTANA"
     doc.setFont("helvetica", "bold")
-    const pillTw = doc.getTextWidth(pillText)
-    const pillPadX = 1.8
-    const pillW = Math.min(socioW - 6, pillTw + pillPadX * 2)
-    const pillH = 3.6
+    doc.setFontSize(4.6)
+    const pillTw = doc.getTextWidth(pill)
+    const pillW = Math.min(socioW - 8, pillTw + 3.6)
+    const pillH = 3.4
     const pillX = sCx - pillW / 2
-    const pillY = band2Top + 2.4
+    const pillY = band2Top + 2.6
 
-    doc.setFillColor(COLOR_SOCIO.r, COLOR_SOCIO.g, COLOR_SOCIO.b)
-    doc.roundedRect(pillX, pillY, pillW, pillH, 1.2, 1.2, "F")
+    doc.setFillColor(C.socio.r, C.socio.g, C.socio.b)
+    doc.roundedRect(pillX, pillY, pillW, pillH, pillH / 2, pillH / 2, "F")
     doc.setTextColor(255, 255, 255)
-    doc.text(pillText, sCx, pillY + 2.55, { align: "center" })
+    doc.text(pill, sCx, pillY + 2.4, { align: "center" })
 
-    // Precio Socio grande (sin cambio de jerarquía)
-    doc.setFontSize(18)
     doc.setFont("helvetica", "bold")
-    doc.setTextColor(COLOR_SOCIO.r, COLOR_SOCIO.g, COLOR_SOCIO.b)
-    doc.text(formatClp(item.socioPrice), sCx, band2MidY + 6.4, {
-      align: "center",
-    })
+    doc.setFontSize(17.5)
+    doc.setTextColor(C.socio.r, C.socio.g, C.socio.b)
+    doc.text(formatClp(item.socioPrice), sCx, band2Mid + 6.2, { align: "center" })
   }
 
-  // ═══════════════════════════════════════════
-  // FRANJA 3 — BARCODE (~11.5 mm)
-  // ═══════════════════════════════════════════
+  // ─── BARCODE ───
   if (options.showBarcode) {
     const band3Top = y + BAND_PRODUCT_H + BAND_PRICES_H
     const band3H = h - BAND_PRODUCT_H - BAND_PRICES_H
-    const quiet = 4 // quiet zone lateral
-    const bcW = Math.min(innerW - quiet * 2, innerW * 0.78)
-    const bcH = Math.min(BARCODE_SPEC.minMm, band3H - 4.2)
+    const quiet = 5
+    const bcW = Math.min(innerW - quiet * 2, innerW * 0.76)
+    const bcH = Math.min(BARCODE_SPEC.minMm, band3H - 4.5)
     const bcX = innerX + (innerW - bcW) / 2
-    const bcY = band3Top + 1.0
+    const bcY = band3Top + 1.2
 
     if (barcodeImg) {
       try {
         doc.addImage(barcodeImg, "JPEG", bcX, bcY, bcW, bcH, undefined, "FAST")
       } catch {
-        /* solo número */
+        /* número */
       }
     }
 
-    doc.setFontSize(6)
     doc.setFont("helvetica", "normal")
-    doc.setTextColor(35, 35, 35)
-    doc.text(item.barcode, x + w / 2, band3Top + band3H - 1.4, {
-      align: "center",
-    })
+    doc.setFontSize(5.8)
+    doc.setTextColor(50, 50, 50)
+    doc.text(item.barcode, x + w / 2, y + h - 1.6, { align: "center" })
   }
 }
 
@@ -344,9 +317,7 @@ export async function generateSocioLabelsPdf(
   if (flat.length === 0) return
 
   const logo = await loadQuillotanaLogoForPdf()
-  if (!logo) {
-    throw new Error("No se pudo cargar el logo Quillotana")
-  }
+  if (!logo) throw new Error("No se pudo cargar el logo Quillotana")
 
   const barcodeCache = await buildBarcodeCache(
     flat.map((it) => it.barcode),
@@ -364,13 +335,11 @@ export async function generateSocioLabelsPdf(
   const { cols, rows, labelWMm, labelHMm, perPage } = SOCIO_ESTANDAR_FORMAT
 
   for (let i = 0; i < flat.length; i++) {
-    const posOnPage = i % perPage
-    if (i > 0 && posOnPage === 0) doc.addPage()
-
-    const col = posOnPage % cols
-    const row = Math.floor(posOnPage / cols)
+    const pos = i % perPage
+    if (i > 0 && pos === 0) doc.addPage()
+    const col = pos % cols
+    const row = Math.floor(pos / cols)
     if (row >= rows) continue
-
     const { x, y } = labelPlacement(col, row)
     drawSocioEstandarLabel(
       doc,
