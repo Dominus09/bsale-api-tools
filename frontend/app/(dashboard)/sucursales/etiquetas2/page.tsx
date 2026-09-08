@@ -756,71 +756,83 @@ export default function Etiquetas2Page() {
           <DialogHeader>
             <DialogTitle>Vista previa · Socio Estándar 10×4 cm</DialogTitle>
             <DialogDescription>
-              Formato horizontal góndola · {SOCIO_ESTANDAR_FORMAT.perPage}{" "}
-              etiquetas/hoja. &quot;Provisional&quot; no se imprime.
+              Góndola horizontal · {SOCIO_ESTANDAR_FORMAT.perPage} etiquetas/hoja.
+              &quot;Provisional&quot; no se imprime.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 sm:grid-cols-1 md:grid-cols-2">
             {printableRows.slice(0, 6).map((r) => (
               <div
                 key={r.id}
-                className="rounded border bg-white shadow-sm overflow-hidden"
+                className="overflow-hidden rounded border border-neutral-200 bg-white shadow-sm"
                 style={{ aspectRatio: "10 / 4" }}
               >
-                <div className="flex h-full flex-col px-3 py-1.5">
-                  <div className="flex items-start gap-2 min-h-0">
+                <div className="flex h-full flex-col">
+                  {/* Franja producto ~27.5% */}
+                  <div
+                    className="flex items-start gap-2 px-2.5 pt-1.5"
+                    style={{ flex: "0 0 27.5%" }}
+                  >
                     <img
                       src={QUILLOTANA_LOGO_GRUPO_URL}
                       alt=""
-                      className="h-5 w-auto shrink-0 object-contain mt-0.5"
+                      className="mt-0.5 h-8 w-auto shrink-0 object-contain"
                     />
-                    <div className="min-w-0 flex-1 text-left">
+                    <div className="min-w-0 flex-1 text-left leading-tight">
                       {showProductType && r.productType && (
-                        <p className="text-[9px] uppercase leading-none text-muted-foreground truncate">
+                        <p className="truncate text-[9px] uppercase tracking-wide text-neutral-500">
                           {r.productType}
                         </p>
                       )}
-                      <p className="text-[11px] font-bold leading-tight line-clamp-2">
+                      <p className="line-clamp-2 text-[12px] font-bold text-neutral-900">
                         {r.productName}
                       </p>
                       {r.variantName &&
                         r.variantName.trim().toLowerCase() !==
                           r.productName.trim().toLowerCase() && (
-                          <p className="text-[9px] text-muted-foreground truncate">
+                          <p className="truncate text-[10px] text-neutral-600">
                             {r.variantName}
                           </p>
                         )}
                     </div>
                   </div>
 
+                  {/* Franja precios ~44% — 40/60 */}
                   {showPrices && (
-                    <div className="mt-1 grid grid-cols-2 gap-1.5 border-t pt-1">
-                      <div className="flex flex-col items-center justify-center py-0.5">
-                        <p className="text-[8px] uppercase tracking-wide text-muted-foreground">
+                    <div
+                      className="grid grid-cols-5 items-center"
+                      style={{ flex: "0 0 43.75%" }}
+                    >
+                      <div className="col-span-2 flex flex-col items-center justify-center px-1">
+                        <p className="text-[8px] uppercase tracking-wide text-neutral-500">
                           Precio Normal
                         </p>
-                        <p className="text-sm font-bold tabular-nums text-neutral-900">
+                        <p className="text-[17px] font-bold tabular-nums text-neutral-900">
                           {formatCurrency(r.normalPrice)}
                         </p>
                       </div>
-                      <div className="flex flex-col items-center justify-center rounded border border-[#005AA8] bg-[#E6F2FF] py-0.5">
-                        <p className="text-[8px] font-bold uppercase tracking-wide text-[#005AA8]">
-                          Precio Socio
-                        </p>
-                        <p className="text-base font-bold tabular-nums text-[#005AA8]">
+                      <div className="col-span-3 flex h-full flex-col items-center justify-center bg-[#F2F8FF] px-1">
+                        <span className="rounded-full bg-[#005AA8] px-2 py-0.5 text-[8px] font-bold uppercase tracking-wide text-white">
+                          Socio Quillotana
+                        </span>
+                        <p className="mt-0.5 text-[22px] font-bold tabular-nums leading-none text-[#005AA8]">
                           {formatCurrency(r.socioPrice)}
                         </p>
                       </div>
                     </div>
                   )}
 
+                  {/* Franja barcode ~28.75% */}
                   {showBarcode && (
-                    <div className="mt-auto border-t pt-0.5 text-center">
+                    <div
+                      className="flex flex-col items-center justify-center px-3"
+                      style={{ flex: "1 1 auto" }}
+                    >
                       <div
-                        className="mx-auto h-3 w-3/4 bg-[repeating-linear-gradient(90deg,#111_0,#111_1px,#fff_1px,#fff_2px)] opacity-80"
+                        className="h-[14px] w-[78%] bg-[repeating-linear-gradient(90deg,#1a1a1a_0,#1a1a1a_1.2px,#fff_1.2px,#fff_2.4px)]"
                         aria-hidden
                       />
-                      <p className="text-[9px] tracking-wider text-neutral-800">
+                      <p className="mt-0.5 text-[10px] tracking-wider text-neutral-800">
                         {r.barcode}
                       </p>
                     </div>

@@ -1,8 +1,11 @@
 /**
- * PDF carta — Etiquetas Socios V2 · Socio Estándar horizontal góndola.
- * Medida objetivo por etiqueta: 100 mm × 40 mm (10 cm × 4 cm).
- * Precio Normal (izq.) + Precio Socio (der., azul dominante).
- * Sin % descuento. "Provisional" nunca se imprime.
+ * PDF carta — Etiquetas Socios V2 · Socio Estándar góndola 100×40 mm.
+ *
+ * Tres franjas (sin líneas divisorias):
+ *   producto ~11 mm | precios ~17.5 mm | barcode ~11.5 mm
+ *
+ * Precio Socio: píldora azul pequeña + valor grande (sin rectángulo gigante).
+ * "Provisional" nunca se imprime.
  */
 
 import {
@@ -26,7 +29,7 @@ export type SocioLabelPrintItem = {
   quantity: number
 }
 
-/** 10 cm × 4 cm — 2×6 = 12/hoja carta (legibilidad > densidad). */
+/** 10 cm × 4 cm — 2×6 = 12/hoja carta. */
 export const SOCIO_ESTANDAR_FORMAT = {
   id: "SOCIO_ESTANDAR" as const,
   label: "Socio Estándar",
@@ -34,9 +37,7 @@ export const SOCIO_ESTANDAR_FORMAT = {
   cols: 2,
   rows: 6,
   perPage: 12,
-  /** Ancho real de la etiqueta impresa (mm) */
   labelWMm: 100,
-  /** Alto real de la etiqueta impresa (mm) */
   labelHMm: 40,
 }
 
@@ -44,17 +45,21 @@ const PAGE_W = 215.9
 const PAGE_H = 279.4
 const MARGIN_MM = 5
 
-const COLOR_CATEGORY = { r: 110, g: 110, b: 110 }
-const COLOR_VARIANT = { r: 70, g: 70, b: 70 }
-const COLOR_BORDER = { r: 180, g: 180, b: 180 }
+/** Franjas internas (mm) sobre alto 40 */
+const BAND_PRODUCT_H = 11
+const BAND_PRICES_H = 17.5
+// barcode = resto ≈ 11.5
+
+const COLOR_CATEGORY = { r: 120, g: 120, b: 120 }
+const COLOR_VARIANT = { r: 75, g: 75, b: 75 }
+const COLOR_BORDER = { r: 210, g: 210, b: 210 }
 const COLOR_SOCIO = { r: 0, g: 90, b: 168 }
-const COLOR_SOCIO_BOX = { r: 230, g: 242, b: 255 }
-const COLOR_NORMAL_LABEL = { r: 90, g: 90, b: 90 }
+const COLOR_SOCIO_SOFT = { r: 242, g: 248, b: 255 }
+const COLOR_NORMAL_LABEL = { r: 110, g: 110, b: 110 }
 
 type BarcodeSpec = { w: number; h: number; bar: number; minMm: number }
 
-/** Barcode bajo y ancho para franja inferior horizontal */
-const BARCODE_SPEC: BarcodeSpec = { w: 420, h: 36, bar: 1.35, minMm: 6.5 }
+const BARCODE_SPEC: BarcodeSpec = { w: 480, h: 34, bar: 1.25, minMm: 7 }
 
 function formatClp(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return "—"
@@ -108,7 +113,7 @@ async function barcodeDataUrl(
       width: spec.bar,
       height: spec.h,
       displayValue: false,
-      margin: 1,
+      margin: 2,
       marginTop: 0,
       marginBottom: 0,
       flat: true,
@@ -139,10 +144,6 @@ async function buildBarcodeCache(
   return new Map(pairs)
 }
 
-/**
- * Centra celdas fijas 100×40 mm en hoja carta (2 columnas × 6 filas).
- * Gap residual se reparte alrededor para centrar el bloque.
- */
 function labelPlacement(col: number, row: number): { x: number; y: number } {
   const { cols, rows, labelWMm, labelHMm } = SOCIO_ESTANDAR_FORMAT
   const usableW = PAGE_W - MARGIN_MM * 2
@@ -166,146 +167,157 @@ function drawSocioEstandarLabel(
   logo: PdfLogoPayload,
   barcodeImg: string | null,
 ) {
-  const padX = 2.2
-  const padY = 1.4
+  const padX = 2.4
+  const padY = 1.2
   const innerX = x + padX
-  const innerW = w - padX * 2
+  const innerRight = x + w - padX
+  const innerW = innerRight - innerX
 
+  // Contorno suave (una sola pieza)
   doc.setDrawColor(COLOR_BORDER.r, COLOR_BORDER.g, COLOR_BORDER.b)
-  doc.setLineWidth(0.15)
+  doc.setLineWidth(0.12)
   doc.setFillColor(255, 255, 255)
   doc.rect(x, y, w, h, "FD")
 
-  // —— Franja superior: logo + categoría ——
-  const logoH = 4.2
-  const logoW = Math.min(22, logoH * logo.aspectRatio)
+  // ═══════════════════════════════════════════
+  // FRANJA 1 — PRODUCTO (~11 mm)
+  // ═══════════════════════════════════════════
+  const band1Top = y + padY
+  const band1Bottom = y + BAND_PRODUCT_H
+
+  // Logo ~16–18 mm ancho
+  const logoW = 17
+  const logoH = logoW / logo.aspectRatio
+  const logoY = band1Top + Math.max(0, (BAND_PRODUCT_H - padY - logoH) / 2)
   doc.addImage(
     logo.dataUrl,
     logo.format,
     innerX,
-    y + padY,
+    logoY,
     logoW,
-    logoW / logo.aspectRatio,
+    logoH,
     undefined,
     "FAST",
   )
 
-  let textLeft = innerX + logoW + 1.8
-  let textTop = y + padY + 1.2
+  const textX = innerX + logoW + 2.2
+  const textW = innerW - logoW - 2.2
+  let ty = band1Top + 2.0
 
   if (options.showProductType && item.productType) {
-    doc.setFontSize(5)
+    doc.setFontSize(5.2)
     doc.setFont("helvetica", "normal")
     doc.setTextColor(COLOR_CATEGORY.r, COLOR_CATEGORY.g, COLOR_CATEGORY.b)
-    doc.text(
-      item.productType.toUpperCase(),
-      textLeft,
-      textTop,
-      { maxWidth: innerW - logoW - 2 },
-    )
-    textTop += 2.1
-  } else {
-    textTop += 0.4
+    doc.text(item.productType.toUpperCase(), textX, ty, { maxWidth: textW })
+    ty += 2.35
   }
 
-  // Producto (1–2 líneas)
-  const nameMaxW = innerW - (logoW + 2)
   doc.setFont("helvetica", "bold")
-  doc.setTextColor(0, 0, 0)
-  const productLines = fitLines(doc, item.productName, nameMaxW, 2, 8)
-  doc.setFontSize(8)
-  doc.text(productLines, textLeft, textTop)
-  textTop += productLines.length * 2.85
+  doc.setTextColor(15, 15, 15)
+  const productLines = fitLines(doc, item.productName, textW, 2, 9)
+  doc.setFontSize(9)
+  doc.text(productLines, textX, ty)
+  ty += productLines.length * 3.1
 
   const variant =
     item.variantName &&
     item.variantName.trim().toLowerCase() !== item.productName.trim().toLowerCase()
       ? item.variantName.trim()
       : ""
-  if (variant) {
-    doc.setFontSize(6)
+  if (variant && ty < band1Bottom - 0.5) {
+    doc.setFontSize(6.2)
     doc.setFont("helvetica", "normal")
     doc.setTextColor(COLOR_VARIANT.r, COLOR_VARIANT.g, COLOR_VARIANT.b)
-    doc.text(fitLines(doc, variant, nameMaxW, 1, 6), textLeft, textTop)
-    textTop += 2.3
+    doc.text(fitLines(doc, variant, textW, 1, 6.2), textX, ty)
   }
 
-  // —— Separador ——
-  const pricesTop = Math.max(textTop + 0.6, y + 14.5)
-  doc.setDrawColor(210, 210, 210)
-  doc.setLineWidth(0.12)
-  doc.line(innerX, pricesTop, x + w - padX, pricesTop)
-
-  // —— Precios lado a lado ——
-  const priceBandTop = pricesTop + 1.0
-  const priceBandH = 12.5
-  const gap = 1.6
-  const colW = (innerW - gap) / 2
+  // ═══════════════════════════════════════════
+  // FRANJA 2 — PRECIOS (~17.5 mm)  40% / 60%
+  // ═══════════════════════════════════════════
+  const band2Top = y + BAND_PRODUCT_H
+  const band2MidY = band2Top + BAND_PRICES_H / 2
 
   if (options.showPrices) {
-    // Izquierda: Precio Normal
-    const nX = innerX
-    doc.setFontSize(4.8)
+    const normalW = innerW * 0.4
+    const socioW = innerW * 0.6
+    const socioX = innerX + normalW
+
+    // Fondo celeste muy suave solo en sector Socio (sin borde grueso)
+    doc.setFillColor(COLOR_SOCIO_SOFT.r, COLOR_SOCIO_SOFT.g, COLOR_SOCIO_SOFT.b)
+    doc.rect(socioX, band2Top + 0.4, socioW, BAND_PRICES_H - 0.8, "F")
+
+    // —— Precio Normal (40%) ——
+    const nCx = innerX + normalW / 2
+    doc.setFontSize(5)
     doc.setFont("helvetica", "normal")
     doc.setTextColor(
       COLOR_NORMAL_LABEL.r,
       COLOR_NORMAL_LABEL.g,
       COLOR_NORMAL_LABEL.b,
     )
-    doc.text("PRECIO NORMAL", nX + colW / 2, priceBandTop + 2.4, {
-      align: "center",
-    })
-    doc.setFontSize(11)
+    doc.text("PRECIO NORMAL", nCx, band2MidY - 3.2, { align: "center" })
+
+    doc.setFontSize(14)
     doc.setFont("helvetica", "bold")
-    doc.setTextColor(25, 25, 25)
-    doc.text(formatClp(item.normalPrice), nX + colW / 2, priceBandTop + 8.2, {
+    doc.setTextColor(20, 20, 20)
+    doc.text(formatClp(item.normalPrice), nCx, band2MidY + 4.2, {
       align: "center",
     })
 
-    // Derecha: Precio Socio (bloque horizontal azul)
-    const sX = innerX + colW + gap
-    doc.setFillColor(COLOR_SOCIO_BOX.r, COLOR_SOCIO_BOX.g, COLOR_SOCIO_BOX.b)
-    doc.setDrawColor(COLOR_SOCIO.r, COLOR_SOCIO.g, COLOR_SOCIO.b)
-    doc.setLineWidth(0.3)
-    doc.roundedRect(sX, priceBandTop, colW, priceBandH - 0.5, 0.6, 0.6, "FD")
+    // —— Precio Socio (60%) ——
+    const sCx = socioX + socioW / 2
 
-    doc.setFontSize(4.8)
+    // Píldora azul pequeña
+    const pillText = "SOCIO QUILLOTANA"
+    doc.setFontSize(5)
+    doc.setFont("helvetica", "bold")
+    const pillTw = doc.getTextWidth(pillText)
+    const pillPadX = 1.8
+    const pillW = Math.min(socioW - 4, pillTw + pillPadX * 2)
+    const pillH = 3.6
+    const pillX = sCx - pillW / 2
+    const pillY = band2Top + 2.2
+
+    doc.setFillColor(COLOR_SOCIO.r, COLOR_SOCIO.g, COLOR_SOCIO.b)
+    doc.roundedRect(pillX, pillY, pillW, pillH, 1.2, 1.2, "F")
+    doc.setTextColor(255, 255, 255)
+    doc.text(pillText, sCx, pillY + 2.55, { align: "center" })
+
+    // Precio Socio grande
+    doc.setFontSize(18)
     doc.setFont("helvetica", "bold")
     doc.setTextColor(COLOR_SOCIO.r, COLOR_SOCIO.g, COLOR_SOCIO.b)
-    doc.text("PRECIO SOCIO", sX + colW / 2, priceBandTop + 2.6, {
-      align: "center",
-    })
-    doc.setFontSize(13.5)
-    doc.setFont("helvetica", "bold")
-    doc.setTextColor(COLOR_SOCIO.r, COLOR_SOCIO.g, COLOR_SOCIO.b)
-    doc.text(formatClp(item.socioPrice), sX + colW / 2, priceBandTop + 9.2, {
+    doc.text(formatClp(item.socioPrice), sCx, band2MidY + 6.4, {
       align: "center",
     })
   }
 
-  // —— Barcode inferior ——
+  // ═══════════════════════════════════════════
+  // FRANJA 3 — BARCODE (~11.5 mm)
+  // ═══════════════════════════════════════════
   if (options.showBarcode) {
-    const bcZoneTop = y + h - padY - 9.2
-    doc.setDrawColor(220, 220, 220)
-    doc.setLineWidth(0.1)
-    doc.line(innerX, bcZoneTop - 0.6, x + w - padX, bcZoneTop - 0.6)
-
-    const bcH = BARCODE_SPEC.minMm
-    const bcW = innerW * 0.72
+    const band3Top = y + BAND_PRODUCT_H + BAND_PRICES_H
+    const band3H = h - BAND_PRODUCT_H - BAND_PRICES_H
+    const quiet = 4 // quiet zone lateral
+    const bcW = Math.min(innerW - quiet * 2, innerW * 0.78)
+    const bcH = Math.min(BARCODE_SPEC.minMm, band3H - 4.2)
     const bcX = innerX + (innerW - bcW) / 2
+    const bcY = band3Top + 1.0
 
     if (barcodeImg) {
       try {
-        doc.addImage(barcodeImg, "JPEG", bcX, bcZoneTop, bcW, bcH, undefined, "FAST")
+        doc.addImage(barcodeImg, "JPEG", bcX, bcY, bcW, bcH, undefined, "FAST")
       } catch {
-        /* número solo */
+        /* solo número */
       }
     }
 
-    doc.setFontSize(5.5)
+    doc.setFontSize(6)
     doc.setFont("helvetica", "normal")
-    doc.setTextColor(30, 30, 30)
-    doc.text(item.barcode, x + w / 2, y + h - padY - 0.3, { align: "center" })
+    doc.setTextColor(35, 35, 35)
+    doc.text(item.barcode, x + w / 2, band3Top + band3H - 1.4, {
+      align: "center",
+    })
   }
 }
 
@@ -348,22 +360,19 @@ export async function generateSocioLabelsPdf(
 
     const col = posOnPage % cols
     const row = Math.floor(posOnPage / cols)
-    // safety if rows math drifts
     if (row >= rows) continue
 
     const { x, y } = labelPlacement(col, row)
-    const item = flat[i]
-
     drawSocioEstandarLabel(
       doc,
-      item,
+      flat[i],
       x,
       y,
       labelWMm,
       labelHMm,
       options,
       logo,
-      barcodeCache.get(item.barcode.trim()) ?? null,
+      barcodeCache.get(flat[i].barcode.trim()) ?? null,
     )
   }
 
