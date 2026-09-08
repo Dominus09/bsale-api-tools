@@ -96,6 +96,7 @@ const navSections: { title: string; items: NavItem[] }[] = [
       { href: "/sucursales/ofertas", label: "Ofertas y Remates", icon: Tag },
       { href: "/sucursales/trazabilidad", label: "Revisión de Góndola", icon: ScanLine },
       { href: "/sucursales/etiquetas", label: "Generador de Etiquetas", icon: Printer },
+      { href: "/sucursales/etiquetas2", label: "Etiquetas Socios (Beta)", icon: Users },
     ],
   },
   {
