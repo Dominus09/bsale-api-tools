@@ -72,6 +72,13 @@ def test_different_client_scores_low():
     from dataclasses import replace
 
     oc = _oc_66697_snapshot()
-    boleta = replace(_boleta_2616098_snapshot(), client_id=9999)
+    boleta = replace(
+        _boleta_2616098_snapshot(),
+        client_id=9999,
+        # También distintos productos: sin overlap el score no debe persistir.
+        lines=(DocumentLine(1, 1.0),),
+    )
     result = compute_probable_match_score(oc, boleta)
+    assert result.same_client is False
     assert result.score < 60.0
+    assert score_tier(result.score) is None

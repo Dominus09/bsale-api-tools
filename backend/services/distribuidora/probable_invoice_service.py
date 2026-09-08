@@ -17,6 +17,7 @@ from typing import Any
 from backend.db import get_connection
 from backend.repositories.distribuidora.probable_matches_repo import (
     delete_probable_matches_below_score,
+    delete_probable_matches_for_oc,
     upsert_probable_matches,
 )
 
@@ -39,6 +40,10 @@ WEIGHT_SUPERSET_BONUS = 10.0
 
 DEFAULT_WINDOW_DAYS = 3
 DEFAULT_AMOUNT_TOLERANCE_PCT = 15.0
+
+# Rechazos de elegibilidad (capa probable; no afectan document_related).
+REJECT_INVOICE_BEFORE_OC = "invoice_emission_before_oc"
+REJECT_ALREADY_RELATED_OTHER_OC = "invoice_already_related_to_other_oc"
 
 
 def _env_float(name: str, default: float) -> float:
@@ -152,17 +157,77 @@ def _pct_amount_diff(a: float, b: float) -> float:
     return abs(a - b) / base * 100.0
 
 
+def _emission_calendar_date(dt: datetime | None) -> date | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).date()
+
+
+def evaluate_probable_candidate_eligibility(
+    oc: DocumentSnapshot,
+    candidate: DocumentSnapshot,
+    *,
+    related_from_oc_document_ids: set[int] | frozenset[int] | None = None,
+) -> str | None:
+    """
+    Gates duros antes de score/persistencia.
+
+    A) Boleta/factura con emission_date **anterior** a la OC → rechazar.
+       Mismo día o posterior OK (ventana futura sigue en el fetch).
+    B) Ya relacionada (document_related tipo 1/6) a **otra** OC → no reutilizar.
+    C) Una NC **no** libera la boleta: si el related 1/6 sigue, B sigue bloqueando.
+
+    Retorna código de rechazo o ``None`` si es elegible.
+    """
+    oc_d = _emission_calendar_date(oc.emission_date)
+    cand_d = _emission_calendar_date(candidate.emission_date)
+    if oc_d is not None and cand_d is not None and cand_d < oc_d:
+        return REJECT_INVOICE_BEFORE_OC
+
+    if related_from_oc_document_ids:
+        others = {
+            int(x)
+            for x in related_from_oc_document_ids
+            if int(x) != int(oc.document_id)
+        }
+        if others:
+            return REJECT_ALREADY_RELATED_OTHER_OC
+    return None
+
+
 def compute_probable_match_score(
     oc: DocumentSnapshot,
     candidate: DocumentSnapshot,
     *,
     amount_tol_pct: float | None = None,
     window_days: int | None = None,
+    related_from_oc_document_ids: set[int] | frozenset[int] | None = None,
 ) -> MatchScoreResult:
     """
     Score 0–100. Factores: productos (variant_id+cantidad), cliente, fecha, monto,
     vendedor, tracking, dirección; bonus si la boleta contiene todas las líneas de la OC.
+
+    Gates A/B (eligibility) anulan el score a 0 — probable sigue siendo solo informativo.
     """
+    reject = evaluate_probable_candidate_eligibility(
+        oc,
+        candidate,
+        related_from_oc_document_ids=related_from_oc_document_ids,
+    )
+    if reject is not None:
+        return MatchScoreResult(
+            score=0.0,
+            tier=None,
+            match_products_pct=0.0,
+            same_client=False,
+            same_seller=False,
+            same_day=False,
+            same_amount=False,
+            tracking_match=False,
+        )
+
     tol = amount_tol_pct if amount_tol_pct is not None else amount_tolerance_pct()
     win = window_days if window_days is not None else match_window_days()
 
@@ -209,10 +274,11 @@ def compute_probable_match_score(
         oc_d = oc.emission_date.date()
         cand_d = candidate.emission_date.date()
         same_day = oc_d == cand_d
-        delta = abs((cand_d - oc_d).days)
+        # Solo días en [OC, OC+window]: anteriores ya rechazados por eligibility.
+        delta = (cand_d - oc_d).days
         if same_day:
             date_points = WEIGHT_DATE
-        elif delta <= win:
+        elif 0 < delta <= win:
             date_points = WEIGHT_DATE * (1.0 - (delta / max(win, 1)) * 0.35)
     score += date_points
 
@@ -378,12 +444,19 @@ def _fetch_invoice_candidates_for_oc(
     *,
     window_days: int,
 ) -> list[int]:
+    """
+    Candidatos boleta/factura para probable:
+
+    - mismo cliente;
+    - emission_date en ``[OC, OC+N]`` (nunca anteriores a la OC — regla A);
+    - no ya ligadas vía ``document_related`` tipo 1/6 a **otra** OC (reglas B/C).
+    """
     if oc.client_id is None or oc.emission_date is None:
         return []
     em = oc.emission_date
     if em.tzinfo is None:
         em = em.replace(tzinfo=timezone.utc)
-    d0 = (em - timedelta(days=window_days)).date()
+    d0 = em.date()
     d1 = (em + timedelta(days=window_days)).date()
     cur.execute(
         """
@@ -396,11 +469,54 @@ def _fetch_invoice_candidates_for_oc(
           AND d.emission_date >= %s::date
           AND d.emission_date < (%s::date + interval '1 day')
           AND d.document_id <> %s
+          AND NOT EXISTS (
+              SELECT 1
+              FROM distribuidora.document_related dr
+              INNER JOIN distribuidora.document_details dd
+                  ON dd.detail_id = dr.detail_id
+              WHERE dr.related_document_id = d.document_id
+                AND dr.related_document_type IN (1, 6)
+                AND dd.document_id <> %s
+          )
         ORDER BY d.emission_date DESC NULLS LAST, d.document_id DESC
         """,
-        (COMPANY_ID, OFFICE_ID, oc.client_id, d0, d1, oc.document_id),
+        (
+            COMPANY_ID,
+            OFFICE_ID,
+            oc.client_id,
+            d0,
+            d1,
+            oc.document_id,
+            oc.document_id,
+        ),
     )
     return [int(r[0]) for r in cur.fetchall()]
+
+
+def _fetch_related_source_oc_ids_for_invoices(
+    cur,
+    invoice_document_ids: list[int],
+) -> dict[int, set[int]]:
+    """Mapa candidate_document_id → set de OC (tipo 33) que ya la tienen en document_related 1/6."""
+    if not invoice_document_ids:
+        return {}
+    cur.execute(
+        """
+        SELECT dr.related_document_id, dd.document_id
+        FROM distribuidora.document_related dr
+        INNER JOIN distribuidora.document_details dd ON dd.detail_id = dr.detail_id
+        INNER JOIN distribuidora.documents oc
+            ON oc.document_id = dd.document_id
+           AND oc.document_type_id = %s
+        WHERE dr.related_document_id = ANY(%s::bigint[])
+          AND dr.related_document_type IN (1, 6)
+        """,
+        (DOC_TYPE_OC, list(invoice_document_ids)),
+    )
+    out: dict[int, set[int]] = {}
+    for related_id, oc_id in cur.fetchall():
+        out.setdefault(int(related_id), set()).add(int(oc_id))
+    return out
 
 
 def build_probable_matches_for_oc(
@@ -419,13 +535,24 @@ def build_probable_matches_for_oc(
     win = window_days if window_days is not None else match_window_days()
     tol = amount_tol_pct if amount_tol_pct is not None else amount_tolerance_pct()
     cand_ids = _fetch_invoice_candidates_for_oc(cur, oc, window_days=win)
+    related_by_invoice = _fetch_related_source_oc_ids_for_invoices(cur, cand_ids)
     rows: list[dict[str, Any]] = []
     for cid in cand_ids:
         cand = _fetch_document_bundle(cur, cid)
         if cand is None or cand.document_type_id not in DOC_TYPES_INVOICE:
             continue
+        related_ocs = related_by_invoice.get(cid) or set()
+        reject = evaluate_probable_candidate_eligibility(
+            oc, cand, related_from_oc_document_ids=related_ocs
+        )
+        if reject is not None:
+            continue
         result = compute_probable_match_score(
-            oc, cand, amount_tol_pct=tol, window_days=win
+            oc,
+            cand,
+            amount_tol_pct=tol,
+            window_days=win,
+            related_from_oc_document_ids=related_ocs,
         )
         if result.score < min_score or result.tier is None:
             continue
@@ -452,7 +579,8 @@ def build_probable_invoice_matches_may_2026(
     emission_to: date | None = None,
 ) -> dict[str, Any]:
     """
-    Job mayo 2026: OCs sin factura confirmada → candidatos boleta/factura en ventana ±N días.
+    Job: OCs sin factura confirmada → candidatos boleta/factura en ventana
+    ``[OC, OC+N]`` días (nunca anteriores). Excluye facturas ya relacionadas a otra OC.
     Solo escribe ``document_probable_matches`` (lectura DB; sin mutar API Bsale).
     """
     d0 = emission_from or date(2026, 5, 1)
@@ -482,6 +610,8 @@ def build_probable_invoice_matches_may_2026(
         for oc_id in oc_ids:
             try:
                 rows = build_probable_matches_for_oc(cur, oc_id)
+                # Limpia stale (p.ej. boleta de ciclo anterior) antes de reinsertar válidos.
+                delete_probable_matches_for_oc(cur, oc_id)
                 stats["ocs_processed"] += 1
                 stats["candidates_evaluated"] += len(rows)
                 for r in rows:
