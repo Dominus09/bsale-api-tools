@@ -201,6 +201,11 @@ export default function PlanificacionDetallePage() {
         </div>
         {displayPlan ? (
           <div className="flex flex-wrap gap-2">
+            <Button asChild size="sm" className="h-10">
+              <Link href={`/distribuidora/planificaciones/${planId}/mapa`}>
+                🗺️ Mapa de entregas
+              </Link>
+            </Button>
             <Button
               type="button"
               variant="outline"

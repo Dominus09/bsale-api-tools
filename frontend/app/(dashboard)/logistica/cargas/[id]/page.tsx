@@ -90,6 +90,9 @@ export default function CargaDetallePage() {
           <Link href={`/logistica/cargas/${load.id}/certificar`}>Continuar certificación</Link>
         </Button>
       ) : null}
+      <Button asChild className="h-12 w-full" variant="secondary">
+        <Link href={`/logistica/cargas/${load.id}/mapa`}>🗺️ Mapa de entregas</Link>
+      </Button>
       <Button asChild variant="outline" className="h-11 w-full">
         <Link href="/logistica/cargas">Volver al listado</Link>
       </Button>

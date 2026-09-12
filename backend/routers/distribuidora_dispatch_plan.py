@@ -784,3 +784,72 @@ def close_cuadratura(plan_id: int, body: CuadraturaCloseBody | None = None):
     except Exception as exc:
         log_error("POST /dispatch-plans/cuadratura/close", exc)
         raise HTTPException(status_code=500, detail="Error al cerrar cuadratura") from exc
+
+
+class DeliveryStopStatusBody(BaseModel):
+    status: str = Field(..., pattern=r"^(pending|delivered)$")
+
+
+@router.get("/by-code/{planning_code}/delivery-map")
+def delivery_map_by_code(
+    planning_code: str,
+    user: dict = Depends(require_staff_user),
+):
+    """Mapa de entregas por código PLAN-xxxxx (uso en terreno)."""
+    _ = user
+    from backend.services.distribuidora import delivery_map_service as dmap
+
+    try:
+        plan_id = dmap.resolve_plan_id_from_picking_number(planning_code)
+        if plan_id is None:
+            raise LookupError(f"Plan '{planning_code}' no encontrado")
+        return dmap.get_delivery_map(plan_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        log_error("GET /dispatch-plans/by-code/delivery-map", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/{plan_id}/delivery-map")
+def delivery_map(
+    plan_id: int,
+    user: dict = Depends(require_staff_user),
+):
+    """Clientes/destinos del plan agrupados (1 marcador por cliente) + GPS."""
+    _ = user
+    from backend.services.distribuidora import delivery_map_service as dmap
+
+    try:
+        return dmap.get_delivery_map(plan_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        log_error("GET /dispatch-plans/delivery-map", exc, planning_id=plan_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/{plan_id}/delivery-map/stops/{customer_key}/status")
+def delivery_map_set_stop_status(
+    plan_id: int,
+    customer_key: str,
+    body: DeliveryStopStatusBody,
+    user: dict = Depends(require_staff_user),
+):
+    """Marca parada cliente como delivered/pending (persiste en order_events)."""
+    from backend.services.distribuidora import delivery_map_service as dmap
+
+    try:
+        return dmap.set_delivery_stop_status(
+            plan_id,
+            customer_key,
+            body.status,
+            user_email=str(user.get("email") or "").strip() or "staff",
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        log_error("POST /dispatch-plans/delivery-map/status", exc, planning_id=plan_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc

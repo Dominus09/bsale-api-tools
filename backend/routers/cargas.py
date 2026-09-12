@@ -285,3 +285,57 @@ def reopen(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+class DeliveryStopStatusBody(BaseModel):
+    status: str = Field(..., pattern=r"^(pending|delivered)$")
+
+
+@router.get("/{load_id}/delivery-map")
+def delivery_map(
+    load_id: int,
+    user: dict = Depends(require_staff_user),
+):
+    """
+    Mapa de entregas para una carga de certificación.
+    Resuelve picking_number → planificación (PLAN-xxxxx) y agrupa por cliente.
+    """
+    _ = user
+    from backend.services.distribuidora import delivery_map_service as dmap
+
+    try:
+        plan_id, _picking = dmap.resolve_plan_id_from_load_id(load_id)
+        payload = dmap.get_delivery_map(plan_id)
+        payload["source_load_id"] = load_id
+        return payload
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.post("/{load_id}/delivery-map/stops/{customer_key}/status")
+def delivery_map_set_status(
+    load_id: int,
+    customer_key: str,
+    body: DeliveryStopStatusBody,
+    user: dict = Depends(require_staff_user),
+):
+    from backend.services.distribuidora import delivery_map_service as dmap
+
+    try:
+        plan_id, _picking = dmap.resolve_plan_id_from_load_id(load_id)
+        payload = dmap.set_delivery_stop_status(
+            plan_id,
+            customer_key,
+            body.status,
+            user_email=_email(user) or "staff",
+        )
+        payload["source_load_id"] = load_id
+        return payload
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc

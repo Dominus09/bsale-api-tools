@@ -64,6 +64,7 @@ import {
   SOCIO_ESTANDAR_FORMAT,
   type SocioLabelPrintItem,
 } from "@/lib/sucursales-labels-socios-pdf"
+import { resolvePpumLabel } from "@/lib/etiquetas2-ppum"
 import { QUILLOTANA_LOGO_GRUPO_URL } from "@/lib/quillotana-brand"
 
 function formatCurrency(value: number | null) {
@@ -513,7 +514,7 @@ export default function Etiquetas2Page() {
                 />
               </div>
               <div className="flex items-center justify-between">
-                <Label htmlFor="show-bc">Código de barras</Label>
+                <Label htmlFor="show-bc">Código (Cód:)</Label>
                 <Switch
                   id="show-bc"
                   checked={showBarcode}
@@ -756,92 +757,110 @@ export default function Etiquetas2Page() {
           <DialogHeader>
             <DialogTitle>Vista previa · Socio Estándar 10×4 cm</DialogTitle>
             <DialogDescription>
-              Look retail premium · {SOCIO_ESTANDAR_FORMAT.perPage} etiquetas/hoja ·
-              coherente con el PDF.
+              Look retail + PPUM · {SOCIO_ESTANDAR_FORMAT.perPage} etiquetas/hoja ·
+              coherente con el PDF · sin barcode gráfico.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-4 sm:grid-cols-1 md:grid-cols-2">
-            {printableRows.slice(0, 6).map((r) => (
+            {printableRows.slice(0, 6).map((r) => {
+              const presentation =
+                r.variantName &&
+                r.variantName.trim().toLowerCase() !==
+                  r.productName.trim().toLowerCase()
+                  ? r.variantName.trim()
+                  : ""
+              const normalPpum = resolvePpumLabel(
+                r.normalPrice,
+                r.productName,
+                r.variantName,
+              )
+              const socioPpum = resolvePpumLabel(
+                r.socioPrice,
+                r.productName,
+                r.variantName,
+              )
+              return (
               <div
                 key={r.id}
                 className="overflow-hidden rounded-md border border-neutral-200/90 bg-white"
                 style={{ aspectRatio: "10 / 4" }}
               >
                 <div className="flex h-full flex-col">
-                  {/* Producto ~30% */}
+                  {/* Producto ~33% */}
                   <div
-                    className="flex items-start gap-2.5 px-3 pt-2"
-                    style={{ flex: "0 0 30%" }}
+                    className="flex items-start gap-2.5 px-3 pt-2 pb-0.5"
+                    style={{ flex: "0 0 33%" }}
                   >
                     <img
                       src={QUILLOTANA_LOGO_GRUPO_URL}
                       alt=""
-                      className="mt-0.5 h-[34px] w-auto shrink-0 object-contain"
+                      className="mt-0.5 h-[38px] w-auto shrink-0 object-contain"
                     />
-                    <div className="min-w-0 flex-1 text-left leading-snug">
+                    <div className="min-w-0 flex-1 overflow-hidden text-left">
                       {showProductType && r.productType && (
-                        <p className="truncate text-[8px] font-medium uppercase tracking-[0.06em] text-neutral-400">
+                        <p className="truncate text-[8px] font-medium uppercase leading-tight tracking-[0.06em] text-neutral-400">
                           {r.productType}
                         </p>
                       )}
-                      <p className="line-clamp-2 text-[13px] font-bold tracking-tight text-neutral-900">
+                      <p className="mt-0.5 line-clamp-2 text-[12.5px] font-bold leading-[1.15] tracking-tight text-neutral-900">
                         {r.productName}
                       </p>
-                      {r.variantName &&
-                        r.variantName.trim().toLowerCase() !==
-                          r.productName.trim().toLowerCase() && (
-                          <p className="truncate text-[10px] text-neutral-500">
-                            {r.variantName}
-                          </p>
-                        )}
+                      {presentation && (
+                        <p className="mt-0.5 truncate text-[9.5px] leading-tight text-neutral-500">
+                          {presentation}
+                        </p>
+                      )}
                     </div>
                   </div>
 
-                  {/* Precios ~41% — 38/62 */}
+                  {/* Precios + PPUM ~50% — 40/60 */}
                   {showPrices && (
                     <div
-                      className="grid grid-cols-[38%_62%] items-stretch"
-                      style={{ flex: "0 0 41.25%" }}
+                      className="grid grid-cols-[40%_60%] items-stretch px-1"
+                      style={{ flex: "0 0 50%" }}
                     >
-                      <div className="flex flex-col items-center justify-center px-2">
+                      <div className="flex flex-col justify-center px-2.5 py-1">
                         <p className="text-[7.5px] font-medium uppercase tracking-[0.08em] text-neutral-400">
                           Precio Normal
                         </p>
-                        <p className="mt-0.5 text-[18px] font-bold tabular-nums tracking-tight text-neutral-900">
+                        <p className="mt-0.5 text-[17px] font-bold tabular-nums leading-none tracking-tight text-neutral-900">
                           {formatCurrency(r.normalPrice)}
                         </p>
+                        <p className="mt-1 truncate text-[8.5px] leading-tight text-neutral-500">
+                          {normalPpum}
+                        </p>
                       </div>
-                      <div className="flex items-center justify-center px-2 py-1">
-                        <div className="flex w-full max-w-[92%] flex-col items-center justify-center rounded-md bg-[#F5F9FD] py-1.5">
+                      <div className="flex items-center justify-center px-1.5 py-1">
+                        <div className="flex w-full flex-col items-center justify-center rounded-md bg-[#F4F9FD] px-2 py-1.5">
                           <span className="rounded-full bg-[#005AA8] px-2.5 py-[3px] text-[7.5px] font-bold uppercase tracking-[0.06em] text-white">
                             Socio Quillotana
                           </span>
-                          <p className="mt-1 text-[21px] font-bold tabular-nums leading-none tracking-tight text-[#005AA8]">
+                          <p className="mt-1 text-[20px] font-bold tabular-nums leading-none tracking-tight text-[#005AA8]">
                             {formatCurrency(r.socioPrice)}
+                          </p>
+                          <p className="mt-1 truncate text-[8.5px] leading-tight text-[#466E96]">
+                            {socioPpum}
                           </p>
                         </div>
                       </div>
                     </div>
                   )}
 
-                  {/* Barcode ~29% */}
+                  {/* Código textual */}
                   {showBarcode && (
                     <div
-                      className="flex flex-col items-center justify-center px-4 pb-1"
+                      className="flex items-end justify-end px-3 pb-1.5"
                       style={{ flex: "1 1 auto" }}
                     >
-                      <div
-                        className="h-[13px] w-[74%] bg-[repeating-linear-gradient(90deg,#222_0,#222_1px,#fff_1px,#fff_2.2px)]"
-                        aria-hidden
-                      />
-                      <p className="mt-0.5 text-[9px] tracking-[0.12em] text-neutral-700">
-                        {r.barcode}
+                      <p className="text-[9px] tracking-wide text-neutral-500">
+                        Cód: {r.barcode}
                       </p>
                     </div>
                   )}
                 </div>
               </div>
-            ))}
+              )
+            })}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setPreviewOpen(false)}>
