@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { LogOut, Building2, User, Wifi, WifiOff, PanelLeft, PanelLeftClose } from "lucide-react"
+import { LogOut, Building2, User, WifiOff, PanelLeft, PanelLeftClose } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -30,7 +30,6 @@ export function Header({ sidebarOpen, onToggleSidebar }: HeaderProps) {
     setCompanyName(getStoredCompanyName())
     setIsDemoMode(getIsDemoMode())
 
-    // Check for demo mode changes periodically
     const interval = setInterval(() => {
       setIsDemoMode(getIsDemoMode())
     }, 1000)
@@ -50,14 +49,14 @@ export function Header({ sidebarOpen, onToggleSidebar }: HeaderProps) {
   }
 
   return (
-    <header className="flex h-16 items-center justify-between border-b border-border bg-card px-6">
-      <div className="flex min-w-0 items-center gap-3">
+    <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border bg-card px-3 sm:h-16 sm:px-6">
+      <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
         {onToggleSidebar ? (
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            className="shrink-0"
+            className="h-10 w-10 shrink-0"
             onClick={onToggleSidebar}
             aria-label={sidebarOpen ? "Ocultar menú lateral" : "Mostrar menú lateral"}
           >
@@ -68,32 +67,40 @@ export function Header({ sidebarOpen, onToggleSidebar }: HeaderProps) {
             )}
           </Button>
         ) : null}
-        <Building2 className="h-5 w-5 shrink-0 text-muted-foreground" />
-        <span className="font-medium text-foreground">
-          {companyName || "Selecciona una empresa"}
+        <Building2 className="hidden h-5 w-5 shrink-0 text-muted-foreground sm:block" />
+        <span className="min-w-0 truncate text-sm font-medium text-foreground sm:text-base">
+          {companyName || "Empresa"}
         </span>
         {isDemoMode && (
-          <Badge variant="outline" className="ml-2 border-amber-500 bg-amber-50 text-amber-700">
+          <Badge
+            variant="outline"
+            className="ml-1 hidden shrink-0 border-amber-500 bg-amber-50 text-amber-700 sm:inline-flex"
+          >
             <WifiOff className="mr-1 h-3 w-3" />
             Modo demo
           </Badge>
         )}
       </div>
 
-      <div className="flex items-center gap-4">
+      <div className="flex shrink-0 items-center">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" className="flex items-center gap-2">
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground">
+            <Button
+              variant="ghost"
+              className="flex h-10 max-w-[40vw] items-center gap-2 px-2 sm:max-w-none sm:px-3"
+            >
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
                 <User className="h-4 w-4" />
               </div>
-              <span className="text-sm text-muted-foreground">{email}</span>
+              <span className="hidden truncate text-sm text-muted-foreground md:inline">
+                {email}
+              </span>
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
             <div className="px-2 py-1.5">
-              <p className="text-sm font-medium">{email}</p>
-              <p className="text-xs text-muted-foreground">{companyName}</p>
+              <p className="truncate text-sm font-medium">{email}</p>
+              <p className="truncate text-xs text-muted-foreground">{companyName}</p>
               {isDemoMode && (
                 <p className="mt-1 text-xs text-amber-600">
                   Usando datos de demostración

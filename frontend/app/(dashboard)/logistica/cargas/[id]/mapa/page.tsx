@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react"
 import Link from "next/link"
 import { useParams } from "next/navigation"
-import { ArrowLeft, Loader2 } from "lucide-react"
+import { Loader2 } from "lucide-react"
 
 import { DeliveryMapClient } from "@/components/logistica/DeliveryMapClient"
 import {
@@ -56,16 +56,11 @@ export default function CargaMapaPage() {
   }
 
   return (
-    <div>
-      <div className="border-b px-3 py-2">
-        <Button asChild variant="ghost" size="sm" className="-ml-2">
-          <Link href={`/logistica/cargas/${loadId}`}>
-            <ArrowLeft className="mr-1 size-4" />
-            Volver a la carga
-          </Link>
-        </Button>
-      </div>
-      <DeliveryMapClient initial={data} loadId={loadId} />
-    </div>
+    <DeliveryMapClient
+      initial={data}
+      loadId={loadId}
+      backHref={`/logistica/cargas/${loadId}`}
+      backLabel="Volver a la carga"
+    />
   )
 }

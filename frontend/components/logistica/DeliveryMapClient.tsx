@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import dynamic from "next/dynamic"
+import Link from "next/link"
 import {
+  ArrowLeft,
   Crosshair,
   Loader2,
   MapPin,
@@ -28,7 +30,7 @@ import { cn } from "@/lib/utils"
 const DeliveryLeafletMap = dynamic(() => import("./delivery-leaflet-map"), {
   ssr: false,
   loading: () => (
-    <div className="flex h-full items-center justify-center bg-slate-100 text-sm text-muted-foreground">
+    <div className="flex h-full items-center justify-center rounded-xl bg-slate-100 text-sm text-muted-foreground">
       Cargando mapa…
     </div>
   ),
@@ -37,6 +39,8 @@ const DeliveryLeafletMap = dynamic(() => import("./delivery-leaflet-map"), {
 type Props = {
   initial: DeliveryMapPayload
   loadId?: number | null
+  backHref?: string | null
+  backLabel?: string
 }
 
 type MyPos = { lat: number; lng: number }
@@ -50,7 +54,12 @@ function formatClp(n: number | null | undefined) {
   }).format(n)
 }
 
-export function DeliveryMapClient({ initial, loadId = null }: Props) {
+export function DeliveryMapClient({
+  initial,
+  loadId = null,
+  backHref = null,
+  backLabel = "Volver",
+}: Props) {
   const [data, setData] = useState(initial)
   const [myPos, setMyPos] = useState<MyPos | null>(null)
   const [geoError, setGeoError] = useState<string | null>(null)
@@ -89,10 +98,13 @@ export function DeliveryMapClient({ initial, loadId = null }: Props) {
     const q = query.trim().toLowerCase()
     let list = withDistance
     if (q) {
-      list = list.filter((s) => (s.search_text || "").includes(q) ||
-        s.customer_name.toLowerCase().includes(q) ||
-        (s.address || "").toLowerCase().includes(q) ||
-        (s.documents || []).some((d) => d.includes(q)))
+      list = list.filter(
+        (s) =>
+          (s.search_text || "").includes(q) ||
+          s.customer_name.toLowerCase().includes(q) ||
+          (s.address || "").toLowerCase().includes(q) ||
+          (s.documents || []).some((d) => d.includes(q)),
+      )
     }
     if (sortNear && myPos) {
       list = [...list].sort((a, b) => {
@@ -183,43 +195,52 @@ export function DeliveryMapClient({ initial, loadId = null }: Props) {
   }
 
   return (
-    <div className="mx-auto flex min-h-[100dvh] max-w-lg flex-col bg-background">
-      <header className="sticky top-0 z-20 space-y-2 border-b bg-background/95 px-3 py-3 backdrop-blur">
-        <div className="flex items-start justify-between gap-2">
-          <div>
-            <h1 className="text-xl font-bold tracking-tight">
-              {data.load.picking_number}
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              Entregas: {summary.delivered} / {summary.customers}
-              {data.load.truck_name ? ` · ${data.load.truck_name}` : ""}
-            </p>
-          </div>
+    <div className="mx-auto flex w-full max-w-lg flex-col overflow-x-hidden bg-background pb-[max(1.5rem,env(safe-area-inset-bottom))] md:max-w-2xl">
+      <header className="sticky top-0 z-20 space-y-3 border-b bg-background/95 px-3 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/90 sm:px-4">
+        {backHref ? (
+          <Button asChild variant="ghost" size="sm" className="-ml-2 h-9 px-2">
+            <Link href={backHref}>
+              <ArrowLeft className="mr-1 size-4" />
+              {backLabel}
+            </Link>
+          </Button>
+        ) : null}
+
+        <div className="min-w-0">
+          <h1 className="truncate text-xl font-bold tracking-tight sm:text-2xl">
+            {data.load.picking_number}
+          </h1>
+          <p className="mt-0.5 truncate text-sm text-muted-foreground">
+            Entregas: {summary.delivered} / {summary.customers}
+            {data.load.truck_name ? ` · ${data.load.truck_name}` : ""}
+          </p>
         </div>
+
         <div className="grid grid-cols-2 gap-2">
           <Button
             type="button"
             variant="secondary"
-            className="h-12 text-sm"
+            className="h-12 w-full px-2 text-sm font-medium"
             onClick={requestGeo}
             disabled={geoLoading}
           >
             {geoLoading ? (
-              <Loader2 className="mr-2 size-4 animate-spin" />
+              <Loader2 className="mr-1.5 size-4 shrink-0 animate-spin" />
             ) : (
-              <LocateFixed className="mr-2 size-4" />
+              <LocateFixed className="mr-1.5 size-4 shrink-0" />
             )}
-            Mi ubicación
+            <span className="truncate">Mi ubicación</span>
           </Button>
           <Button
             type="button"
-            className="h-12 text-sm"
+            className="h-12 w-full px-2 text-sm font-medium"
             onClick={goNearest}
           >
-            <Crosshair className="mr-2 size-4" />
-            Más cercano
+            <Crosshair className="mr-1.5 size-4 shrink-0" />
+            <span className="truncate">Más cercano</span>
           </Button>
         </div>
+
         {geoError ? (
           <p className="text-xs text-amber-700">{geoError}</p>
         ) : myPos ? (
@@ -227,54 +248,58 @@ export function DeliveryMapClient({ initial, loadId = null }: Props) {
         ) : null}
       </header>
 
-      <div className="relative h-[42vh] min-h-[220px] w-full shrink-0 border-b">
-        <DeliveryLeafletMap
-          stops={withDistance}
-          myPos={myPos}
-          selectedKey={selectedKey}
-          focusToken={focusToken}
-          onSelect={(key) => setSelectedKey(key)}
-          mapRef={mapRef}
-        />
+      <div className="w-full px-3 pt-3 sm:px-4">
+        <div className="relative h-[46vh] min-h-[240px] w-full overflow-hidden rounded-xl border border-border shadow-sm sm:h-[42vh]">
+          <DeliveryLeafletMap
+            stops={withDistance}
+            myPos={myPos}
+            selectedKey={selectedKey}
+            focusToken={focusToken}
+            onSelect={(key) => setSelectedKey(key)}
+            mapRef={mapRef}
+          />
+        </div>
       </div>
 
       {selected ? (
-        <div className="border-b bg-card px-3 py-3 shadow-sm">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <p className="font-semibold leading-tight">{selected.customer_name}</p>
-              {selected.fantasy_name ? (
-                <p className="text-xs text-muted-foreground">{selected.fantasy_name}</p>
-              ) : null}
-              <p className="mt-1 text-sm text-muted-foreground">
-                {[selected.address, selected.city].filter(Boolean).join(", ") ||
-                  "Sin dirección"}
+        <div className="mx-3 mt-3 rounded-xl border bg-card px-3 py-3 shadow-sm sm:mx-4">
+          <div className="min-w-0">
+            <p className="truncate font-semibold leading-tight">
+              {selected.customer_name}
+            </p>
+            {selected.fantasy_name ? (
+              <p className="truncate text-xs text-muted-foreground">
+                {selected.fantasy_name}
               </p>
-              <p className="mt-1 text-xs">
-                OC {selected.documents.join(", ") || "—"} ·{" "}
-                {formatClp(selected.amount)} · {selected.items_count} doc.
-                {selected.distance_km != null
-                  ? ` · ${formatKm(selected.distance_km)}`
-                  : ""}
-              </p>
-              <p
-                className={cn(
-                  "mt-1 text-xs font-medium",
-                  selected.status === "delivered"
-                    ? "text-emerald-700"
-                    : "text-amber-700",
-                )}
-              >
-                {selected.status === "delivered" ? "Entregado" : "Pendiente"}
-                {!selected.has_coordinates ? " · Sin GPS" : ""}
-              </p>
-            </div>
+            ) : null}
+            <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+              {[selected.address, selected.city].filter(Boolean).join(", ") ||
+                "Sin dirección"}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              OC {selected.documents.join(", ") || "—"} ·{" "}
+              {formatClp(selected.amount)}
+              {selected.distance_km != null
+                ? ` · ${formatKm(selected.distance_km)}`
+                : ""}
+            </p>
+            <p
+              className={cn(
+                "mt-1 text-xs font-medium",
+                selected.status === "delivered"
+                  ? "text-emerald-700"
+                  : "text-amber-700",
+              )}
+            >
+              {selected.status === "delivered" ? "Entregado" : "Pendiente"}
+              {!selected.has_coordinates ? " · Sin GPS" : ""}
+            </p>
           </div>
-          <div className="mt-3 grid grid-cols-2 gap-2">
+          <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
             {selected.has_coordinates &&
             selected.latitude != null &&
             selected.longitude != null ? (
-              <Button asChild className="h-11">
+              <Button asChild className="h-12">
                 <a
                   href={googleMapsNavUrl(selected.latitude, selected.longitude)}
                   target="_blank"
@@ -285,7 +310,7 @@ export function DeliveryMapClient({ initial, loadId = null }: Props) {
                 </a>
               </Button>
             ) : (
-              <Button asChild variant="secondary" className="h-11">
+              <Button asChild variant="secondary" className="h-12">
                 <a
                   href={googleMapsSearchUrl(
                     [selected.address, selected.city, selected.customer_name]
@@ -304,8 +329,9 @@ export function DeliveryMapClient({ initial, loadId = null }: Props) {
               type="button"
               variant={selected.status === "delivered" ? "outline" : "default"}
               className={cn(
-                "h-11",
-                selected.status === "delivered" && "border-emerald-600 text-emerald-800",
+                "h-12",
+                selected.status === "delivered" &&
+                  "border-emerald-600 text-emerald-800",
               )}
               disabled={busyKey === selected.customer_key}
               onClick={() => void toggleStatus(selected)}
@@ -319,12 +345,12 @@ export function DeliveryMapClient({ initial, loadId = null }: Props) {
         </div>
       ) : null}
 
-      <div className="space-y-3 px-3 py-3 pb-24">
-        <div className="flex gap-2">
-          <div className="relative flex-1">
-            <Search className="pointer-events-none absolute left-2.5 top-3 size-4 text-muted-foreground" />
+      <div className="space-y-4 px-3 py-4 sm:px-4">
+        <div className="space-y-2">
+          <div className="relative w-full">
+            <Search className="pointer-events-none absolute left-3 top-3.5 size-4 text-muted-foreground" />
             <Input
-              className="h-11 pl-9"
+              className="h-12 w-full pl-10 text-base"
               placeholder="Buscar cliente, dirección u OC…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -333,10 +359,10 @@ export function DeliveryMapClient({ initial, loadId = null }: Props) {
           <Button
             type="button"
             variant={sortNear ? "default" : "outline"}
-            className="h-11 shrink-0 px-3 text-xs"
+            className="h-10 w-full sm:w-auto"
             onClick={() => setSortNear((v) => !v)}
           >
-            Cercanos
+            {sortNear ? "✓ Cercanos primero" : "Ordenar: cercanos primero"}
           </Button>
         </div>
 
@@ -398,7 +424,7 @@ function StopSection({
               type="button"
               onClick={() => onSelect(s)}
               className={cn(
-                "flex w-full items-start gap-3 rounded-xl border px-3 py-3 text-left transition",
+                "flex w-full items-start gap-3 rounded-xl border px-3 py-3.5 text-left transition active:scale-[0.99]",
                 selectedKey === s.customer_key
                   ? "border-blue-500 bg-blue-50"
                   : "border-border bg-card",
@@ -416,15 +442,33 @@ function StopSection({
                 )}
               />
               <div className="min-w-0 flex-1">
-                <p className="font-medium leading-tight">{s.customer_name}</p>
-                <p className="mt-0.5 truncate text-sm text-muted-foreground">
-                  {[s.address, s.city].filter(Boolean).join(", ") || "Sin dirección"}
+                <p className="truncate font-medium leading-tight">
+                  {s.customer_name}
                 </p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {s.distance_km != null ? formatKm(s.distance_km) : "—"} ·{" "}
-                  {s.status === "delivered" ? "Entregado" : "Pendiente"}
-                  {s.documents?.length ? ` · OC ${s.documents.join(", ")}` : ""}
+                <p className="mt-0.5 line-clamp-2 text-sm text-muted-foreground">
+                  {[s.address, s.city].filter(Boolean).join(", ") ||
+                    "Sin dirección"}
                 </p>
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+                  <span>{s.distance_km != null ? formatKm(s.distance_km) : "—"}</span>
+                  <span>·</span>
+                  <span
+                    className={cn(
+                      "font-medium",
+                      s.status === "delivered"
+                        ? "text-emerald-700"
+                        : "text-amber-700",
+                    )}
+                  >
+                    {s.status === "delivered" ? "Entregado" : "Pendiente"}
+                  </span>
+                  {s.documents?.length ? (
+                    <>
+                      <span>·</span>
+                      <span className="truncate">OC {s.documents.join(", ")}</span>
+                    </>
+                  ) : null}
+                </div>
               </div>
             </button>
           </li>

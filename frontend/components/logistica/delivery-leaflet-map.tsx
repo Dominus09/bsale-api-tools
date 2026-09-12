@@ -100,6 +100,16 @@ function MapRefCapture({
   const map = useMap()
   useEffect(() => {
     mapRef.current = map
+    // Safari / drawers: forzar resize al montar y al rotar
+    const t = window.setTimeout(() => map.invalidateSize(), 80)
+    const onResize = () => map.invalidateSize()
+    window.addEventListener("resize", onResize)
+    window.addEventListener("orientationchange", onResize)
+    return () => {
+      window.clearTimeout(t)
+      window.removeEventListener("resize", onResize)
+      window.removeEventListener("orientationchange", onResize)
+    }
   }, [map, mapRef])
   return null
 }
@@ -125,9 +135,11 @@ export default function DeliveryLeafletMap({
     <MapContainer
       center={[-42.48, -73.76]}
       zoom={10}
-      className="h-full w-full"
+      className="h-full w-full rounded-xl [&_.leaflet-control-zoom]:!mt-3 [&_.leaflet-control-zoom]:!ml-2"
       scrollWheelZoom
       zoomControl
+      touchZoom
+      dragging
     >
       <TileLayer
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
