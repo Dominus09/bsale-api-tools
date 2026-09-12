@@ -124,6 +124,11 @@ const navSections: { title: string; items: NavItem[] }[] = [
         label: "Resumen vendedor",
         icon: CalendarDays,
       },
+      {
+        href: "/logistica/mapa-entregas/PLAN-00044",
+        label: "Mapa de entregas",
+        icon: MapPin,
+      },
     ],
   },
   {
