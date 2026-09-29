@@ -213,8 +213,18 @@ def _print_summary(title: str, stats: dict[str, Any]) -> None:
     print("=" * 60, flush=True)
 
 
+def live_documents_date_range_field() -> str:
+    """
+    Bsale entrega ``emissionDate`` como medianoche UTC del día: una ventana de ~2 h en
+    ``emissiondaterange`` solo la contiene entre 00:00 y ~02:15 UTC. ``generationDate``
+    es la hora real de creación y sí cae dentro de la ventana corta.
+    """
+    raw = os.getenv("LIVE_SYNC_DOCUMENTS_DATE_FIELD", "generationdaterange").strip().lower()
+    return raw if raw in ("emissiondaterange", "generationdaterange") else "generationdaterange"
+
+
 def live_sync_documents(*, strict_token: bool = True) -> dict[str, Any]:
-    """OC (33) + ventas (1/6/9) en ventana ~2 h UTC vía API Bsale."""
+    """OC (33) + ventas (1/6/9) creadas en ventana ~2 h UTC vía API Bsale."""
     t0 = time.perf_counter()
     if not bsale_token_distribuidora_configured():
         if strict_token:
@@ -261,16 +271,18 @@ def live_sync_documents(*, strict_token: bool = True) -> dict[str, Any]:
         hasta_ts = int(window_to.timestamp())
         if desde_ts >= hasta_ts:
             desde_ts = hasta_ts - 3600
+        date_field = live_documents_date_range_field()
 
         if os.getenv("LIVE_SYNC_DEBUG", "").strip().lower() in ("1", "true", "yes"):
             wm = (state or {}).get("last_watermark")
             logger.info(
                 "[LIVE_SYNC_DEBUG] live_sync_documents state_exists=%s watermark=%s "
-                "window_from=%s window_to=%s emissiondaterange=[%s,%s] overlap_sec=%s",
+                "window_from=%s window_to=%s %s=[%s,%s] overlap_sec=%s",
                 state is not None,
                 wm.isoformat() if isinstance(wm, datetime) else wm,
                 window_from.isoformat(),
                 window_to.isoformat(),
+                date_field,
                 desde_ts,
                 hasta_ts,
                 overlap_sec,
@@ -281,6 +293,7 @@ def live_sync_documents(*, strict_token: bool = True) -> dict[str, Any]:
             window_from,
             window_to,
             overlap_seconds=overlap_sec,
+            date_range_field=date_field,
             documents_processed=0,
             documents_inserted=0,
             documents_updated=0,
@@ -298,6 +311,7 @@ def live_sync_documents(*, strict_token: bool = True) -> dict[str, Any]:
                 hasta_ts=hasta_ts,
                 stats=stats,
                 log_id=None,
+                date_range_field=date_field,
             )
             stats.pop("_allowed_document_type_ids", None)
 
