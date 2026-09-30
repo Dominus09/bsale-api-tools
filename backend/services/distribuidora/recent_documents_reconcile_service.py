@@ -5,7 +5,7 @@ Canario por folio OC y reconciliación liviana de OCs recientes (Bsale → Postg
   cualquier sucursal), lo busca en PostgreSQL en **todas** las company/office y entrega la
   causa concreta por la que el sync lo omitiría.
 * Reconciliación (``reconcile_recent_oc_documents``): lista OCs (tipo 33) de Bsale por
-  ``generationdaterange`` de los últimos N días, compara folios contra PostgreSQL y repara
+  ``emissiondaterange`` de los últimos N días completos UTC, compara folios contra PostgreSQL y repara
   solo los faltantes vía ``reconcile_one_oc`` (``document_dict_from_bsale`` →
   ``upsert_documents`` → details/attributes/references/related/peso).
 """
@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Callable, Iterable
 
 from backend.repositories.distribuidora.documents_repo import document_dict_from_bsale
@@ -207,21 +207,12 @@ def load_local_oc_matches(
     return sorted(rows.values(), key=lambda r: r["document_id"])
 
 
-def compute_live_emission_window(
-    *,
-    now: datetime,
-    last_watermark: datetime | None,
-    window_hours: float = 2.0,
-    overlap_seconds: int = 900,
-) -> tuple[int, int]:
-    """Replica ``live_sync_service._compute_window`` (epoch) para diagnóstico."""
-    window_from = now - timedelta(hours=window_hours)
-    if last_watermark is not None:
-        wm = last_watermark if last_watermark.tzinfo else last_watermark.replace(tzinfo=timezone.utc)
-        wm_from = wm - timedelta(seconds=overlap_seconds)
-        if wm_from < window_from:
-            window_from = wm_from
-    return int(window_from.timestamp()), int(now.timestamp())
+def emission_day_window(now: datetime, *, days_back: int = 1) -> tuple[int, int]:
+    """Epoch de ``live_sync_service.live_documents_emission_window`` (días completos UTC)."""
+    from backend.services.distribuidora.live_sync_service import live_documents_emission_window
+
+    start, end = live_documents_emission_window(now, days_back=days_back)
+    return int(start.timestamp()), int(end.timestamp())
 
 
 def emission_visible_in_window(emission_ts: int | None, window: tuple[int, int]) -> bool:
@@ -297,7 +288,7 @@ def diagnose_oc_skip(
     if mapped is None:
         reasons.append("document_dict_from_bsale_rejected")
 
-    live_window = compute_live_emission_window(now=now, last_watermark=now)
+    live_window = emission_day_window(now, days_back=1)
     emission_ts = summary.get("emissionDate")
     generation_ts = summary.get("generationDate")
     detail["emission_is_utc_midnight"] = emission_ts is not None and int(emission_ts) % 86400 == 0
@@ -483,13 +474,13 @@ def fetch_recent_bsale_ocs(
     max_pages: int,
     now: datetime | None = None,
 ) -> tuple[list[dict[str, Any]], int, bool]:
-    """OCs tipo 33 con ``generationDate`` en los últimos ``days`` días (hora real de creación)."""
+    """OCs tipo 33 con ``emissionDate`` en los últimos ``days`` días completos UTC (+ hoy)."""
     now = now or _utc_now()
-    start = now - timedelta(days=max(1, int(days)))
+    start, end = emission_day_window(now, days_back=max(1, int(days)))
     params = merge_bsale_office_query(
         {
             "documenttypeid": OC_DOCUMENT_TYPE_ID,
-            "generationdaterange": f"[{int(start.timestamp())},{int(now.timestamp())}]",
+            "emissiondaterange": f"[{start},{end}]",
         },
         int(office_id),
         context="reconcile_recent_oc_documents",

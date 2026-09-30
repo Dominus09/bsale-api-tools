@@ -58,7 +58,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument(
         "--reconcile-recent",
         action="store_true",
-        help="Reconciliar OCs creadas en los últimos --days días (Bsale vs PostgreSQL)",
+        help="Reconciliar OCs con emisión en los últimos --days días completos (Bsale vs PostgreSQL)",
     )
     p.add_argument("--days", type=int, default=3)
     p.add_argument("--max-pages", type=int, default=20)

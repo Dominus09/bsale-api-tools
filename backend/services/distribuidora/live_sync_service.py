@@ -213,18 +213,29 @@ def _print_summary(title: str, stats: dict[str, Any]) -> None:
     print("=" * 60, flush=True)
 
 
-def live_documents_date_range_field() -> str:
+def live_documents_emission_window(now: datetime, *, days_back: int = 1) -> tuple[datetime, datetime]:
     """
-    Bsale entrega ``emissionDate`` como medianoche UTC del día: una ventana de ~2 h en
-    ``emissiondaterange`` solo la contiene entre 00:00 y ~02:15 UTC. ``generationDate``
-    es la hora real de creación y sí cae dentro de la ventana corta.
+    Días completos UTC ``[inicio(hoy - days_back), fin(hoy)]`` para ``emissiondaterange``.
+
+    Bsale entrega ``emissionDate`` como medianoche UTC del día; solo un rango por días
+    completos la contiene. No depende del watermark: una OC de hoy/ayer que aparezca tarde
+    en Bsale sigue dentro del rango.
     """
-    raw = os.getenv("LIVE_SYNC_DOCUMENTS_DATE_FIELD", "generationdaterange").strip().lower()
-    return raw if raw in ("emissiondaterange", "generationdaterange") else "generationdaterange"
+    today = now.astimezone(timezone.utc).date()
+    start_day = today - timedelta(days=max(0, int(days_back)))
+    start = datetime(start_day.year, start_day.month, start_day.day, tzinfo=timezone.utc)
+    end = datetime(today.year, today.month, today.day, tzinfo=timezone.utc) + timedelta(
+        days=1, seconds=-1
+    )
+    return start, end
+
+
+def _live_skip_unchanged_enabled() -> bool:
+    return os.getenv("LIVE_SYNC_SKIP_UNCHANGED", "1").strip().lower() not in ("0", "false", "no")
 
 
 def live_sync_documents(*, strict_token: bool = True) -> dict[str, Any]:
-    """OC (33) + ventas (1/6/9) creadas en ventana ~2 h UTC vía API Bsale."""
+    """OC (33) + ventas (1/6/9) con emisión hoy + ayer (días completos UTC) vía API Bsale."""
     t0 = time.perf_counter()
     if not bsale_token_distribuidora_configured():
         if strict_token:
@@ -232,8 +243,7 @@ def live_sync_documents(*, strict_token: bool = True) -> dict[str, Any]:
         return {"skipped": True, "skip_reason": "sin token", "duration_seconds": 0}
 
     now = _utc_now()
-    win_h = float(os.getenv("LIVE_SYNC_DOCUMENTS_WINDOW_HOURS", str(DEFAULT_DOCUMENTS_WINDOW_HOURS)))
-    overlap_sec = _env_int("LIVE_SYNC_DOCUMENTS_OVERLAP_SECONDS", DEFAULT_OVERLAP_SECONDS_DOCUMENTS)
+    days_back = max(0, _env_int("LIVE_SYNC_DOCUMENTS_DAYS_BACK", 1))
 
     conn = get_connection()
     got_lock = False
@@ -261,47 +271,45 @@ def live_sync_documents(*, strict_token: bool = True) -> dict[str, Any]:
         state = get_sync_state(
             cur, sync_type=SYNC_TYPE_DOCUMENTS_LIVE, mode=MODE_INCREMENTAL, office_id=OFFICE_ID
         )
-        window_from, window_to = _compute_window(
-            now=now,
-            window_hours=win_h,
-            overlap_seconds=overlap_sec,
-            state=state,
-        )
+        window_from, window_to = live_documents_emission_window(now, days_back=days_back)
         desde_ts = int(window_from.timestamp())
         hasta_ts = int(window_to.timestamp())
-        if desde_ts >= hasta_ts:
-            desde_ts = hasta_ts - 3600
-        date_field = live_documents_date_range_field()
 
         if os.getenv("LIVE_SYNC_DEBUG", "").strip().lower() in ("1", "true", "yes"):
             wm = (state or {}).get("last_watermark")
             logger.info(
                 "[LIVE_SYNC_DEBUG] live_sync_documents state_exists=%s watermark=%s "
-                "window_from=%s window_to=%s %s=[%s,%s] overlap_sec=%s",
+                "window_from=%s window_to=%s emissiondaterange=[%s,%s] days_back=%s",
                 state is not None,
                 wm.isoformat() if isinstance(wm, datetime) else wm,
                 window_from.isoformat(),
                 window_to.isoformat(),
-                date_field,
                 desde_ts,
                 hasta_ts,
-                overlap_sec,
+                days_back,
             )
 
         stats: dict[str, Any] = _base_stats(
             SYNC_TYPE_DOCUMENTS_LIVE,
             window_from,
             window_to,
-            overlap_seconds=overlap_sec,
-            date_range_field=date_field,
+            date_range_field="emissiondaterange",
+            days_back=days_back,
             documents_processed=0,
             documents_inserted=0,
             documents_updated=0,
+            documents_unchanged_skipped=0,
             details_rows=0,
         )
+        if _live_skip_unchanged_enabled():
+            stats["_skip_unchanged_documents"] = True
 
         client = BsaleClient(_bsale_token())
-        for allowed in (DOC_TYPES_OC, DOC_TYPES_SALES):
+        passes = (
+            (DOC_TYPES_OC, {"documenttypeid": 33}),
+            (DOC_TYPES_SALES, None),
+        )
+        for allowed, extra in passes:
             stats["_allowed_document_type_ids"] = allowed
             _fetch_documents_window(
                 client,
@@ -311,9 +319,11 @@ def live_sync_documents(*, strict_token: bool = True) -> dict[str, Any]:
                 hasta_ts=hasta_ts,
                 stats=stats,
                 log_id=None,
-                date_range_field=date_field,
+                date_range_field="emissiondaterange",
+                extra_params=extra,
             )
             stats.pop("_allowed_document_type_ids", None)
+        stats.pop("_skip_unchanged_documents", None)
 
         proc = int(stats.get("documents_processed") or 0)
         stats["documents_inserted"] = max(
@@ -322,13 +332,13 @@ def live_sync_documents(*, strict_token: bool = True) -> dict[str, Any]:
         stats["documents_updated"] = int(stats.get("updated_documents") or 0)
         stats["details_processed"] = int(stats.get("details_rows") or 0)
 
+        # Watermark = ``now`` solo como métrica; no participa en el rango consultado.
         _finalize_success(
             cur,
             sync_type=SYNC_TYPE_DOCUMENTS_LIVE,
             stats=stats,
             window_from=window_from,
-            window_to=window_to,
-            overlap_seconds=overlap_sec,
+            window_to=now,
             items_processed=proc,
         )
         conn.commit()
