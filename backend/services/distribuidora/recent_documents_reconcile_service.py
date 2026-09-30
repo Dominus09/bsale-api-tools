@@ -14,14 +14,14 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterable
+from urllib.parse import urlencode
 
 from backend.repositories.distribuidora.documents_repo import document_dict_from_bsale
 from backend.services.distribuidora.bsale_client import BsaleClient
 from backend.services.distribuidora.bsale_params import (
-    build_documents_range_params,
-    documents_query_preview,
+    BSALE_QUERY_OFFICE_ID,
     merge_bsale_office_query,
 )
 from backend.services.distribuidora.oc_source_resolver import (
@@ -212,11 +212,32 @@ def load_local_oc_matches(
 
 
 def emission_day_window(now: datetime, *, days_back: int = 1) -> tuple[int, int]:
-    """Epoch de ``live_sync_service.live_documents_emission_window`` (días completos UTC)."""
-    from backend.services.distribuidora.live_sync_service import live_documents_emission_window
+    """Epoch ``[00:00 UTC de (hoy - days_back), now]``. Solo para esta herramienta."""
+    now_utc = now.astimezone(timezone.utc)
+    start_day = now_utc.date() - timedelta(days=max(0, int(days_back)))
+    start = datetime(start_day.year, start_day.month, start_day.day, tzinfo=timezone.utc)
+    return int(start.timestamp()), int(now_utc.timestamp())
 
-    start, end = live_documents_emission_window(now, days_back=days_back)
+
+def live_window_epochs(now: datetime) -> tuple[int, int]:
+    """Ventana que usaría ``live_sync_documents`` con watermark = ``now`` (diagnóstico)."""
+    from backend.services.distribuidora.live_sync_service import (
+        DEFAULT_DOCUMENTS_WINDOW_HOURS,
+        DEFAULT_OVERLAP_SECONDS_DOCUMENTS,
+        _compute_window,
+    )
+
+    start, end = _compute_window(
+        now=now,
+        window_hours=DEFAULT_DOCUMENTS_WINDOW_HOURS,
+        overlap_seconds=DEFAULT_OVERLAP_SECONDS_DOCUMENTS,
+        state={"last_watermark": now},
+    )
     return int(start.timestamp()), int(end.timestamp())
+
+
+def _documents_query_preview(params: dict[str, Any]) -> str:
+    return urlencode(params, doseq=True)
 
 
 def emission_visible_in_window(emission_ts: int | None, window: tuple[int, int]) -> bool:
@@ -292,7 +313,7 @@ def diagnose_oc_skip(
     if mapped is None:
         reasons.append("document_dict_from_bsale_rejected")
 
-    live_window = emission_day_window(now, days_back=1)
+    live_window = live_window_epochs(now)
     emission_ts = summary.get("emissionDate")
     generation_ts = summary.get("generationDate")
     detail["emission_is_utc_midnight"] = emission_ts is not None and int(emission_ts) % 86400 == 0
@@ -492,13 +513,12 @@ def recent_documents_params(
 ) -> dict[str, Any]:
     now = now or _utc_now()
     start, end = emission_day_window(now, days_back=max(1, int(days)))
-    return build_documents_range_params(
-        start_epoch=start,
-        end_epoch=end,
-        office_id=int(office_id),
-        limit=PAGE_LIMIT,
-        offset=0,
-    )
+    return {
+        "limit": PAGE_LIMIT,
+        "offset": 0,
+        "emissiondaterange": f"[{start},{end}]",
+        BSALE_QUERY_OFFICE_ID: int(office_id),
+    }
 
 
 def reconcile_recent_oc_documents(
@@ -530,7 +550,7 @@ def reconcile_recent_oc_documents(
         range_to,
         office_id,
         OC_DOCUMENT_TYPE_ID,
-        documents_query_preview(query),
+        _documents_query_preview(query),
     )
     items, pages, truncated = fetch_recent_bsale_ocs(
         client, office_id=office_id, days=days, max_pages=max_pages, now=now
@@ -608,7 +628,7 @@ def reconcile_recent_oc_documents(
         "range_from": _iso(range_from),
         "range_to": _iso(range_to),
         "document_type_id": OC_DOCUMENT_TYPE_ID,
-        "query_preview": documents_query_preview(query),
+        "query_preview": _documents_query_preview(query),
         "api_pages": pages,
         "api_truncated_by_budget": truncated,
         "bsale_items": len(items),

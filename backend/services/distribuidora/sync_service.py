@@ -35,7 +35,6 @@ from backend.repositories.distribuidora.sync_repo import (
 )
 from backend.services.distribuidora.bsale_client import BASE_BSALE, BsaleClient
 from backend.services.distribuidora.bsale_params import (
-    build_emission_date_range,
     log_office_filter_debug_response,
     merge_bsale_office_query,
 )
@@ -435,64 +434,6 @@ def _document_log_id_from_row(row: dict[str, Any]) -> Any:
     return row.get("document_id")
 
 
-def _same_number(a: Any, b: Any) -> bool:
-    if a is None or b is None:
-        return a is None and b is None
-    try:
-        return float(a) == float(b)
-    except (TypeError, ValueError):
-        return False
-
-
-def _local_document_unchanged(cur, row: dict[str, Any]) -> bool:
-    """
-    True solo si la fila local (clave folio) viene del mismo source Bsale, con los mismos
-    montos/estados/``generationDate`` y ya tiene details (o total 0). Ante cualquier duda: False.
-    """
-    raw = row.get("_bsale_document")
-    if not isinstance(raw, dict) or row.get("number") is None or row.get("document_type_id") is None:
-        return False
-    cur.execute(
-        """
-        SELECT d.raw_data->>'id',
-               d.raw_data->>'generationDate',
-               d.total_amount, d.net_amount, d.tax_amount,
-               d.state, d.commercial_state,
-               EXISTS (
-                   SELECT 1 FROM distribuidora.document_details dd
-                   WHERE dd.document_id = d.document_id
-               )
-        FROM distribuidora.documents d
-        WHERE d.company_id = %s AND d.office_id = %s
-          AND d.document_type_id = %s AND d.number = %s
-        LIMIT 1
-        """,
-        (
-            int(row["company_id"]),
-            int(row["office_id"]),
-            int(row["document_type_id"]),
-            int(row["number"]),
-        ),
-    )
-    local = cur.fetchone()
-    if not local:
-        return False
-    src_id, gen, total, net, tax, state, cstate, has_details = local
-    if str(src_id or "") != str(raw.get("id")):
-        return False
-    if str(gen or "") != str(raw.get("generationDate") or ""):
-        return False
-    if not (
-        _same_number(total, row.get("total_amount"))
-        and _same_number(net, row.get("net_amount"))
-        and _same_number(tax, row.get("tax_amount"))
-        and _same_number(state, row.get("state"))
-        and _same_number(cstate, row.get("commercial_state"))
-    ):
-        return False
-    return bool(has_details) or _same_number(total, 0)
-
-
 def _process_one_pending_document_row(
     client: BsaleClient,
     cur,
@@ -502,18 +443,6 @@ def _process_one_pending_document_row(
 ) -> None:
     doc_log_id = _document_log_id_from_row(row)
     job = f"sync_doc:{doc_log_id}"
-    if stats.get("_skip_unchanged_documents"):
-        try:
-            unchanged = _local_document_unchanged(cur, row)
-        except Exception:
-            safe_rollback(conn, job=job)
-            unchanged = False
-        release_transaction(conn, job=job)
-        if unchanged:
-            stats["documents_unchanged_skipped"] = (
-                int(stats.get("documents_unchanged_skipped") or 0) + 1
-            )
-            return
     try:
         try:
             upsert_documents(cur, [row], stats)
@@ -1041,7 +970,7 @@ def _fetch_documents_window(
         params = {
             "limit": LIMIT_BSALE,
             "offset": offset,
-            date_range_field: build_emission_date_range(desde_ts, hasta_ts),
+            date_range_field: f"[{desde_ts},{hasta_ts}]",
         }
         # Paginación HTTP: nunca sostener TX abierta mientras se espera a Bsale.
         release_transaction(conn, job="fetch_documents_window")

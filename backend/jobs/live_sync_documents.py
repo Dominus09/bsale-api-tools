@@ -15,8 +15,12 @@ Reparación de un folio (pipeline normal ``reconcile_one_oc``; NO ejecutar sin a
     python -m backend.jobs.live_sync_documents --company-id 3 --office-id 1 \\
       --oc-number 69882 --apply --i-understand-writes
 
-Reconciliación liviana de OCs recientes (dry-run default; cron sugerido ``*/30 * * * *``
-con ``--apply --i-understand-writes``)::
+Rango de folios OC (mismo canario/reparación que ``--oc-number``, folio por folio)::
+
+    python -m backend.jobs.live_sync_documents --company-id 3 --office-id 1 \\
+      --oc-from 69906 --oc-to 69924 --dry-run
+
+Reconciliación de OCs recientes (herramienta manual, no cron; dry-run default)::
 
     python -m backend.jobs.live_sync_documents --company-id 3 --office-id 1 \\
       --reconcile-recent --days 3 --dry-run
@@ -29,7 +33,7 @@ import json
 import logging
 import os
 import sys
-from typing import Any
+from typing import Any, Callable
 
 from backend.services.distribuidora.live_sync_service import (
     _print_summary,
@@ -38,6 +42,7 @@ from backend.services.distribuidora.live_sync_service import (
 from backend.utils.bsale_token_env import load_dotenv_if_available
 
 _LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
+MAX_OC_RANGE = 200
 
 
 def _configure_logging() -> None:
@@ -55,6 +60,8 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument("--company-id", type=int, default=3)
     p.add_argument("--office-id", type=int, default=1)
     p.add_argument("--oc-number", type=int, default=None, help="Canario/reparación por folio OC")
+    p.add_argument("--oc-from", type=int, default=None, help="Rango de folios OC (inclusive)")
+    p.add_argument("--oc-to", type=int, default=None, help="Rango de folios OC (inclusive)")
     p.add_argument(
         "--reconcile-recent",
         action="store_true",
@@ -140,6 +147,125 @@ def _run_repair(args: argparse.Namespace, token: str) -> dict[str, Any]:
     }
 
 
+def _canary_eligible(report: dict[str, Any], *, office_id: int) -> bool:
+    return bool(
+        report.get("found_in_bsale")
+        and report.get("active_source_selected")
+        and report.get("document_type_id") == 33
+        and report.get("bsale_office_id") == int(office_id)
+    )
+
+
+def run_oc_range(
+    folios: list[int],
+    *,
+    office_id: int,
+    canary: Callable[[int], dict[str, Any]],
+    repair: Callable[[int], dict[str, Any]] | None,
+    apply: bool,
+    max_repairs: int,
+) -> dict[str, Any]:
+    """
+    Folio por folio con el canario de ``--oc-number``; con ``apply`` repara solo los
+    elegibles ausentes vía la reparación puntual. Idempotente: lo ya local queda en
+    ``already_exists``.
+    """
+    items: list[dict[str, Any]] = []
+    summary = {
+        "folios_requested": len(folios),
+        "found_in_bsale": 0,
+        "already_local": 0,
+        "would_repair": 0,
+        "repaired": 0,
+        "not_found": 0,
+        "not_eligible": 0,
+        "skipped": 0,
+        "errors": 0,
+    }
+    attempts = 0
+    for folio in folios:
+        item: dict[str, Any] = {"folio": folio}
+        try:
+            rep = canary(folio)
+        except Exception as exc:
+            summary["errors"] += 1
+            items.append({**item, "action": "error", "error": str(exc)[:500]})
+            continue
+        found = bool(rep.get("found_in_bsale"))
+        local = bool(rep.get("found_locally"))
+        eligible = _canary_eligible(rep, office_id=office_id)
+        item.update(
+            {
+                "found_in_bsale": found,
+                "found_locally": local,
+                "eligible": eligible,
+                "bsale_document_id": rep.get("bsale_document_id"),
+                "bsale_office_id": rep.get("bsale_office_id"),
+                "state": rep.get("state"),
+                "total": rep.get("total"),
+                "local_document_id": rep.get("local_document_id"),
+                "primary_cause": (rep.get("diagnosis") or {}).get("primary_cause"),
+            }
+        )
+        if found:
+            summary["found_in_bsale"] += 1
+        if local:
+            summary["already_local"] += 1
+            item["action"] = "already_exists"
+        elif not found:
+            summary["not_found"] += 1
+            item["action"] = "not_found"
+        elif not eligible:
+            summary["not_eligible"] += 1
+            item["action"] = "not_eligible"
+        elif not apply or repair is None:
+            summary["would_repair"] += 1
+            item["action"] = "would_repair"
+        elif attempts >= max_repairs:
+            summary["skipped"] += 1
+            item["action"] = "skip"
+            item["reason"] = "max_repairs"
+        else:
+            attempts += 1
+            try:
+                out = repair(folio)
+            except Exception as exc:
+                summary["errors"] += 1
+                item["action"] = "error"
+                item["error"] = str(exc)[:500]
+            else:
+                item["repair_status"] = out.get("status")
+                item["local_document_id"] = out.get("local_document_id")
+                item["details_replaced"] = out.get("details_replaced")
+                if out.get("wrote") and out.get("found_locally_after", True):
+                    summary["repaired"] += 1
+                    item["action"] = "repaired"
+                elif out.get("status") == "already_present":
+                    summary["already_local"] += 1
+                    item["action"] = "already_exists"
+                else:
+                    summary["errors"] += 1
+                    item["action"] = "error"
+        items.append(item)
+    return {"mode": "apply" if apply else "dry_run", **summary, "items": items}
+
+
+def _run_oc_range(args: argparse.Namespace, token: str, *, apply: bool) -> dict[str, Any]:
+    folios = list(range(int(args.oc_from), int(args.oc_to) + 1))
+
+    def _args_for(folio: int) -> argparse.Namespace:
+        return argparse.Namespace(**{**vars(args), "oc_number": folio})
+
+    return run_oc_range(
+        folios,
+        office_id=int(args.office_id),
+        canary=lambda f: _run_canary(_args_for(f), token),
+        repair=(lambda f: _run_repair(_args_for(f), token)) if apply else None,
+        apply=apply,
+        max_repairs=int(args.max_repairs),
+    )
+
+
 def _run_reconcile_recent(args: argparse.Namespace, token: str, *, apply: bool) -> dict[str, Any]:
     from backend.services.distribuidora.bsale_client import BsaleClient
     from backend.services.distribuidora.oc_reconciliation_service import reconcile_one_oc
@@ -185,28 +311,52 @@ def _run_reconcile_recent(args: argparse.Namespace, token: str, *, apply: bool) 
         conn.close()
 
 
-def main(argv: list[str] | None = None) -> int:
+def _main_tools(argv: list[str]) -> int:
     load_dotenv_if_available()
     _configure_logging()
     args = _parse_args(argv)
+    use_range = args.oc_from is not None or args.oc_to is not None
+    modes = sum((args.oc_number is not None, bool(args.reconcile_recent), use_range))
+    if modes != 1:
+        raise SystemExit(
+            "Use uno de: --oc-number, --oc-from/--oc-to, --reconcile-recent; "
+            "sin argumentos corre el live normal"
+        )
+    if use_range:
+        if args.oc_from is None or args.oc_to is None:
+            raise SystemExit("--oc-from y --oc-to van juntos")
+        if not 0 < args.oc_from <= args.oc_to or args.oc_to - args.oc_from >= MAX_OC_RANGE:
+            raise SystemExit(f"Rango inválido (1 <= from <= to, máximo {MAX_OC_RANGE} folios)")
 
-    if args.oc_number is not None or args.reconcile_recent:
-        from backend.utils.bsale_token_env import require_bsale_token
+    from backend.utils.bsale_token_env import require_bsale_token
 
-        writes = _wants_writes(args)
-        token = require_bsale_token(label="live_sync_documents")
-        try:
-            if args.oc_number is not None:
-                out = _run_repair(args, token) if writes else _run_canary(args, token)
-            else:
-                out = _run_reconcile_recent(args, token, apply=writes)
-        except Exception as e:
-            logging.getLogger(__name__).exception("live_sync_documents canary/reconcile")
-            print(f"[live_sync_documents] ERROR: {e}", file=sys.stderr, flush=True)
-            return 1
-        print(json.dumps(out, ensure_ascii=False, indent=2, default=str), flush=True)
-        return 1 if int(out.get("errors") or 0) > 0 else 0
+    writes = _wants_writes(args)
+    token = require_bsale_token(label="live_sync_documents")
+    try:
+        if use_range:
+            out = _run_oc_range(args, token, apply=writes)
+        elif args.oc_number is not None:
+            out = _run_repair(args, token) if writes else _run_canary(args, token)
+        else:
+            out = _run_reconcile_recent(args, token, apply=writes)
+    except Exception as e:
+        logging.getLogger(__name__).exception("live_sync_documents canary/reconcile")
+        print(f"[live_sync_documents] ERROR: {e}", file=sys.stderr, flush=True)
+        return 1
+    print(json.dumps(out, ensure_ascii=False, indent=2, default=str), flush=True)
+    return 1 if int(out.get("errors") or 0) > 0 else 0
 
+
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv:
+        return _main_tools(argv)
+    return _main_live()
+
+
+def _main_live() -> int:
+    load_dotenv_if_available()
+    _configure_logging()
     print("[live_sync_documents] INICIO", flush=True)
     try:
         stats = live_sync_documents(strict_token=True)

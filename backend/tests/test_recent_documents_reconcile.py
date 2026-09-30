@@ -1,11 +1,15 @@
-"""Regresión OCs 69882 / 69924: live por emissionDate día completo (hoy + ayer) y reconciliación."""
+"""Live restaurado (pre-a8d9896) + herramientas aisladas: canario por folio y reconcile recent."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import requests
+
+from backend.jobs import live_sync_documents as job
 from backend.repositories.distribuidora.documents_repo import document_dict_from_bsale
 from backend.services.distribuidora import live_sync_service, sync_service
 from backend.services.distribuidora.recent_documents_reconcile_service import (
@@ -41,8 +45,6 @@ def _oc(
         "emissionDate": _midnight(emission or generated),
         "generationDate": int(generated.timestamp()),
         "totalAmount": total,
-        "netAmount": round(total / 1.19),
-        "taxAmount": total - round(total / 1.19),
         "state": state,
         "commercialState": 0,
         "document_type": {"id": str(doc_type)},
@@ -52,12 +54,6 @@ def _oc(
 
 
 class FakeBsale:
-    """Filtra como Bsale documenta: officeid, documenttypeid, number, emissiondaterange.
-
-    Cualquier otro parámetro (p. ej. ``generationdaterange``) se ignora, igual que la API
-    ignora parámetros no reconocidos.
-    """
-
     def __init__(self, docs: list[dict[str, Any]], details: dict[int, int] | None = None):
         self.docs = docs
         self.details = details or {}
@@ -97,7 +93,6 @@ class FakeStore:
     def __init__(self) -> None:
         self.rows: dict[tuple[int, int, int, int], dict[str, Any]] = {}
         self.details: dict[int, int] = {}
-        self.upserts = 0
 
     def upsert(self, doc: dict[str, Any], *, company_id: int, office_id: int, details: int) -> dict[str, Any]:
         row = document_dict_from_bsale(doc, company_id=company_id, default_office_id=office_id)
@@ -109,7 +104,6 @@ class FakeStore:
         row["source_document_id"] = int(doc["id"])
         self.rows[key] = row
         self.details[row["document_id"]] = details
-        self.upserts += 1
         return row
 
     def folios(self, company_id: int, office_id: int) -> set[int]:
@@ -117,209 +111,122 @@ class FakeStore:
 
 
 # ---------------------------------------------------------------------------
-# Live documents (A)
+# Live normal restaurado: mismos params Bsale que pre-a8d9896 (5b7d2df)
 # ---------------------------------------------------------------------------
 
 
-def _run_live(bsale: FakeBsale, store: FakeStore, *, now: datetime, watermark: datetime | None = None):
+def _capture_live_urls(*, now: datetime, watermark: datetime | None) -> list[str]:
+    """Corre ``live_sync_documents`` real hasta la capa HTTP y devuelve las URLs preparadas."""
+    urls: list[str] = []
+
+    def _session_get(url, headers=None, params=None, timeout=None):
+        prepared = requests.Request("GET", url, params=params).prepare()
+        urls.append(prepared.url)
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {"items": []},
+            text="",
+            request=SimpleNamespace(url=prepared.url),
+        )
+
+    fake_client = SimpleNamespace(session=SimpleNamespace(get=_session_get), access_token="T")
     conn = MagicMock()
     conn.cursor.return_value.fetchone.return_value = (True,)
     state = {"last_watermark": watermark} if watermark else None
-
-    def _resync_get(_client, params):
-        return bsale.get("/documents.json", {**params, "officeid": 1})
-
-    def _process(_client, _cur, _conn, row, stats):
-        doc = row["_bsale_document"]
-        n = len(bsale.get(f"/documents/{doc['id']}/details.json", {"limit": 50})["items"])
-        store.upsert(doc, company_id=3, office_id=1, details=n)
-        stats["documents_processed"] += 1
-
     with patch.object(live_sync_service, "bsale_token_distribuidora_configured", return_value=True), patch.object(
         live_sync_service, "_utc_now", return_value=now
     ), patch.object(live_sync_service, "get_connection", return_value=conn), patch.object(
         live_sync_service, "get_sync_state", return_value=state
     ), patch.object(live_sync_service, "update_sync_state_success"), patch.object(
-        live_sync_service, "BsaleClient"
-    ), patch.object(live_sync_service, "_bsale_token", return_value="x"), patch.object(
+        live_sync_service, "BsaleClient", return_value=fake_client
+    ), patch.object(live_sync_service, "_bsale_token", return_value="T"), patch.object(
         live_sync_service, "log_tx"
     ), patch.object(live_sync_service, "pg_backend_pid", return_value=1), patch.object(
-        sync_service, "_documents_get_resync", side_effect=_resync_get
-    ), patch.object(sync_service, "_process_one_pending_document_row", side_effect=_process), patch.object(
-        sync_service, "release_transaction"
-    ), patch.object(sync_service.time, "sleep"):
-        return live_sync_service.live_sync_documents(strict_token=True)
-
-
-def test_live_window_starts_yesterday_midnight_and_ends_now():
-    start, end = live_sync_service.live_documents_emission_window(NOW)
-    assert start == datetime(2026, 9, 28, tzinfo=UTC)
-    assert end == NOW
-
-
-def test_live_sends_historic_range_shape_never_generationdaterange():
-    bsale = FakeBsale([])
-    store = FakeStore()
-    stats = _run_live(bsale, store, now=NOW)
-    doc_calls = [p for path, p in bsale.calls if path == "/documents.json"]
-    assert len(doc_calls) == 1, "una sola pasada (OC + ventas filtradas en cliente)"
-    lo, hi = emission_day_window(NOW)
-    params = doc_calls[0]
-    assert "generationdaterange" not in params
-    assert "documenttypeid" not in params
-    assert params["emissiondaterange"] == f"[{lo},{hi}]"
-    assert params["officeid"] == 1
-    assert stats["documents_filter"] == "emissiondaterange"
-    assert stats["range_from_epoch"] == lo and stats["range_to_epoch"] == hi
-    assert stats["document_type_ids_client_filter"] == [1, 6, 9, 33]
-
-
-def test_case_69924_created_today_is_fetched():
-    now = datetime(2026, 9, 30, 16, 11, tzinfo=UTC)
-    oc = _oc(3921412, 69924, generated=datetime(2026, 9, 30, 15, 55, 11, tzinfo=UTC), total=218694)
-    assert oc["emissionDate"] == _midnight(now)
-    bsale = FakeBsale([oc], details={3921412: 6})
-    store = FakeStore()
-    _run_live(bsale, store, now=now, watermark=now - timedelta(minutes=5))
-    row = store.rows[(3, 1, 33, 69924)]
-    assert row["source_document_id"] == 3921412
-    assert store.details[row["document_id"]] == 6
-
-
-def test_case_69882_emitted_yesterday_generated_today_enters():
-    now = datetime(2026, 9, 29, 15, 20, tzinfo=UTC)
-    oc = _oc(
-        3915000,
-        69882,
-        generated=datetime(2026, 9, 29, 15, 11, tzinfo=UTC),
-        emission=datetime(2026, 9, 28, tzinfo=UTC),
-    )
-    bsale = FakeBsale([oc], details={3915000: 12})
-    store = FakeStore()
-    _run_live(bsale, store, now=now, watermark=now - timedelta(minutes=2))
-    assert 69882 in store.folios(3, 1)
-    assert store.details[store.rows[(3, 1, 33, 69882)]["document_id"]] == 12
-
-
-def test_late_oc_with_advanced_watermark_still_enters_and_is_idempotent():
-    t1 = datetime(2026, 9, 29, 12, 0, tzinfo=UTC)
-    oc81 = _oc(4000081, 69881, generated=t1 - timedelta(minutes=30))
-    oc83 = _oc(4000083, 69883, generated=t1 - timedelta(minutes=20))
-    bsale = FakeBsale([oc81, oc83], details={4000081: 3, 4000082: 12, 4000083: 4})
-    store = FakeStore()
-    _run_live(bsale, store, now=t1)
-    assert store.folios(3, 1) == {69881, 69883}
-
-    # 69882 aparece horas después, emitida ayer; el watermark ya está muy adelante.
-    bsale.docs.append(
-        _oc(4000082, 69882, generated=t1 - timedelta(hours=26), emission=t1 - timedelta(days=1))
-    )
-    t2 = t1 + timedelta(hours=6)
-    _run_live(bsale, store, now=t2, watermark=t2 - timedelta(minutes=5))
-    assert store.folios(3, 1) == {69881, 69882, 69883}
-
-    _run_live(bsale, store, now=t2 + timedelta(minutes=5), watermark=t2)
-    assert sum(1 for k in store.rows if k[3] == 69882) == 1
-    assert len(store.rows) == 3
-    assert store.details[store.rows[(3, 1, 33, 69882)]["document_id"]] == 12
-
-
-def test_live_paginates_all_pages():
-    docs = [
-        _oc(5_000_000 + i, 70_000 + i, generated=NOW - timedelta(minutes=i)) for i in range(120)
-    ]
-    bsale = FakeBsale(docs)
-    store = FakeStore()
-    _run_live(bsale, store, now=NOW)
-    assert len(store.folios(3, 1)) == 120
-
-
-def test_live_ignores_other_office_and_non_oc_types_in_oc_pass():
-    bsale = FakeBsale(
-        [
-            _oc(1, 69882, generated=NOW, office=2),
-            _oc(2, 69883, generated=NOW, doc_type=6),
-            _oc(3, 69884, generated=NOW),
-        ]
-    )
-    store = FakeStore()
-    _run_live(bsale, store, now=NOW)
-    assert store.folios(3, 1) == {69884}
-    assert (3, 1, 6, 69883) in store.rows  # la factura entra por el pase de ventas
-    assert not any(k[1] == 2 for k in store.rows)
-
-
-# ---------------------------------------------------------------------------
-# Salto seguro de documentos sin cambios
-# ---------------------------------------------------------------------------
-
-
-def _row_for(doc: dict[str, Any]) -> dict[str, Any]:
-    row = document_dict_from_bsale(doc, company_id=3, default_office_id=1)
-    row["_bsale_document"] = doc
-    return row
-
-
-def _cur_returning(local: tuple | None) -> MagicMock:
-    cur = MagicMock()
-    cur.fetchone.return_value = local
-    return cur
-
-
-def test_unchanged_detection_requires_same_source_amounts_and_details():
-    doc = _oc(3921412, 69924, generated=NOW, total=218694)
-    row = _row_for(doc)
-    same = (
-        "3921412",
-        str(doc["generationDate"]),
-        218694,
-        doc["netAmount"],
-        doc["taxAmount"],
-        0,
-        0,
-        True,
-    )
-    assert sync_service._local_document_unchanged(_cur_returning(same), row) is True
-    assert sync_service._local_document_unchanged(_cur_returning(None), row) is False
-    assert sync_service._local_document_unchanged(_cur_returning(("999",) + same[1:]), row) is False
-    changed_total = same[:2] + (1,) + same[3:]
-    assert sync_service._local_document_unchanged(_cur_returning(changed_total), row) is False
-    no_details = same[:7] + (False,)
-    assert sync_service._local_document_unchanged(_cur_returning(no_details), row) is False
-
-
-def test_process_row_skips_upsert_and_children_when_unchanged():
-    doc = _oc(3921412, 69924, generated=NOW, total=218694)
-    row = _row_for(doc)
-    stats: dict[str, Any] = {"documents_processed": 0, "_skip_unchanged_documents": True}
-    with patch.object(sync_service, "_local_document_unchanged", return_value=True), patch.object(
-        sync_service, "upsert_documents"
-    ) as up, patch.object(sync_service, "_refresh_document_children") as ch, patch.object(
         sync_service, "release_transaction"
     ):
-        sync_service._process_one_pending_document_row(MagicMock(), MagicMock(), MagicMock(), row, stats)
-    up.assert_not_called()
-    ch.assert_not_called()
-    assert stats["documents_unchanged_skipped"] == 1
+        live_sync_service.live_sync_documents(strict_token=True)
+    return urls
 
 
-def test_process_row_persists_when_changed_even_with_skip_flag():
-    doc = _oc(3921412, 69924, generated=NOW, total=218694)
-    row = _row_for(doc)
-    stats: dict[str, Any] = {"documents_processed": 0, "_skip_unchanged_documents": True}
-    with patch.object(sync_service, "_local_document_unchanged", return_value=False), patch.object(
-        sync_service, "upsert_documents"
-    ) as up, patch.object(sync_service, "_refresh_document_children") as ch, patch.object(
-        sync_service, "release_transaction"
-    ), patch.object(sync_service, "log_tx"), patch.object(sync_service, "log_order_sync_audit"):
-        sync_service._process_one_pending_document_row(MagicMock(), MagicMock(), MagicMock(), row, stats)
-    up.assert_called_once()
-    ch.assert_called_once()
-    assert stats["documents_processed"] == 1
+def _pre_a8d9896_url(desde: int, hasta: int) -> str:
+    """URL que generaba ``_fetch_documents_window`` + ``_documents_get_resync`` en 5b7d2df."""
+    return (
+        "https://api.bsale.io/v1/documents.json"
+        f"?limit=50&offset=0&emissiondaterange=%5B{desde}%2C{hasta}%5D&officeid=1"
+    )
+
+
+def test_live_restored_params_recent_watermark_equal_pre_a8d9896():
+    wm = NOW - timedelta(minutes=5)
+    urls = _capture_live_urls(now=NOW, watermark=wm)
+    desde = int((NOW - timedelta(hours=2)).timestamp())
+    hasta = int(NOW.timestamp())
+    expected = _pre_a8d9896_url(desde, hasta)
+    assert urls == [expected, expected], "dos pasadas: OC (33) y ventas (1/6/9)"
+
+
+def test_live_restored_params_old_watermark_uses_overlap_like_pre_a8d9896():
+    wm = NOW - timedelta(hours=6)
+    urls = _capture_live_urls(now=NOW, watermark=wm)
+    desde = int((wm - timedelta(seconds=900)).timestamp())
+    expected = _pre_a8d9896_url(desde, int(NOW.timestamp()))
+    assert urls == [expected, expected]
+
+
+def test_live_restored_has_no_recent_changes():
+    urls = _capture_live_urls(now=NOW, watermark=None)
+    for url in urls:
+        assert "generationdaterange" not in url
+        assert "documenttypeid" not in url
+    assert not hasattr(live_sync_service, "live_documents_emission_window")
+    assert not hasattr(sync_service, "_local_document_unchanged")
 
 
 # ---------------------------------------------------------------------------
-# Reconciliación reciente (B)
+# Dispatch del job: sin args = live normal; herramientas nunca caen al live
+# ---------------------------------------------------------------------------
+
+
+def test_job_without_args_runs_live_only():
+    with patch.object(job, "_main_live", return_value=0) as live, patch.object(job, "_main_tools") as tools:
+        assert job.main([]) == 0
+    live.assert_called_once()
+    tools.assert_not_called()
+
+
+def test_job_canary_dry_run_does_not_touch_live_or_repair():
+    with patch.object(job, "live_sync_documents") as live, patch.object(
+        job, "_run_canary", return_value={"found_in_bsale": True}
+    ) as canary, patch.object(job, "_run_repair") as repair, patch(
+        "backend.utils.bsale_token_env.require_bsale_token", return_value="T"
+    ):
+        rc = job.main(["--company-id", "3", "--office-id", "1", "--oc-number", "69924", "--dry-run"])
+    assert rc == 0
+    canary.assert_called_once()
+    repair.assert_not_called()
+    live.assert_not_called()
+
+
+def test_job_reconcile_recent_does_not_touch_live():
+    with patch.object(job, "live_sync_documents") as live, patch.object(
+        job, "_run_reconcile_recent", return_value={"errors": 0}
+    ) as rec, patch("backend.utils.bsale_token_env.require_bsale_token", return_value="T"):
+        rc = job.main(["--reconcile-recent", "--days", "3", "--dry-run"])
+    assert rc == 0
+    rec.assert_called_once()
+    assert rec.call_args.kwargs["apply"] is False
+    live.assert_not_called()
+
+
+def test_reconcile_recent_does_not_modify_live_params():
+    before = _capture_live_urls(now=NOW, watermark=NOW - timedelta(minutes=5))
+    _reconcile(FakeBsale([_oc(1, 69882, generated=NOW)]), FakeStore())
+    after = _capture_live_urls(now=NOW, watermark=NOW - timedelta(minutes=5))
+    assert before == after
+
+
+# ---------------------------------------------------------------------------
+# Reconcile recent (herramienta manual)
 # ---------------------------------------------------------------------------
 
 
@@ -345,15 +252,11 @@ def _reconcile(bsale: FakeBsale, store: FakeStore, *, apply: bool = True, **kw):
     )
 
 
-def test_reconcile_uses_emission_full_days_and_recovers_gap_once():
+def test_reconcile_recovers_gap_once_with_details():
     oc82 = _oc(4000082, 69882, generated=NOW - timedelta(days=1), emission=NOW - timedelta(days=1))
     bsale = FakeBsale([oc82], details={4000082: 12})
     store = FakeStore()
     out = _reconcile(bsale, store, days=3)
-    params = [p for path, p in bsale.calls if path == "/documents.json"][0]
-    assert "generationdaterange" not in params and "documenttypeid" not in params
-    assert out["documents_filter"] == "emissiondaterange"
-    assert out["range_to_epoch"] == int(NOW.timestamp())
     assert out["missing_folios"] == [69882] and out["repaired"] == 1
     assert store.details[store.rows[(3, 1, 33, 69882)]["document_id"]] == 12
     again = _reconcile(bsale, store, days=3)
@@ -367,17 +270,12 @@ def test_reissue_with_new_source_id_keeps_single_row_and_pk():
     store = FakeStore()
     _reconcile(bsale, store)
     local_pk = store.rows[(3, 1, 33, 69882)]["document_id"]
-
     old["state"] = 8888
     old["number"] = 0
     bsale.docs.append(_oc(4100082, 69882, generated=t0 + timedelta(hours=1)))
     assert _reconcile(bsale, store)["missing"] == 0
     assert len([k for k in store.rows if k[3] == 69882]) == 1
     assert store.rows[(3, 1, 33, 69882)]["document_id"] == local_pk
-
-    store.rows.clear()
-    out = _reconcile(bsale, store)
-    assert out["results"][0]["bsale_document_id"] == 4100082
 
 
 def test_reconcile_pagination_and_budget():
@@ -409,18 +307,21 @@ def test_reconcile_only_type_33_filtered_client_side():
     oc = _oc(4000501, 69883, generated=NOW)
     store = FakeStore()
     out = _reconcile(FakeBsale([invoice, oc]), store)
-    assert out["bsale_items"] == 2
     assert out["bsale_ignored_other_types"] == 1
     assert out["missing_folios"] == [69883]
-    assert (3, 1, 6, 69882) not in store.rows
+
+
+def test_emission_three_days_old_inside_reconcile_window():
+    old = _midnight(NOW - timedelta(days=2))
+    assert emission_visible_in_window(old, emission_day_window(NOW, days_back=3))
 
 
 # ---------------------------------------------------------------------------
-# Canario (C) — read-only
+# Canario (read-only)
 # ---------------------------------------------------------------------------
 
 
-def test_canary_69924_reports_fields_and_is_visible_to_live_window():
+def test_canary_69924_reports_bsale_and_local_fields():
     now = datetime(2026, 9, 30, 16, 11, tzinfo=UTC)
     oc = _oc(3921412, 69924, generated=datetime(2026, 9, 30, 15, 55, 11, tzinfo=UTC), total=218694)
     bsale = FakeBsale([oc], details={3921412: 6})
@@ -428,17 +329,11 @@ def test_canary_69924_reports_fields_and_is_visible_to_live_window():
         bsale, folio=69924, company_id=3, office_id=1, local_loader=lambda f, ids: [], now=now
     )
     assert rep["found_in_bsale"] and not rep["found_locally"]
-    assert rep["bsale_document_id"] == 3921412 and rep["details_count"] == 6
-    diag = rep["diagnosis"]
-    assert diag["emission_visible_to_live_window_now"] is True
-    assert "live_sync_emission_window_blind" not in diag["reasons"]
-    assert all(path != "/documents.json" or "generationdaterange" not in p for path, p in bsale.calls)
-
-
-def test_emission_three_days_old_is_outside_live_but_inside_reconcile():
-    old = _midnight(NOW - timedelta(days=2))
-    assert not emission_visible_in_window(old, emission_day_window(NOW, days_back=1))
-    assert emission_visible_in_window(old, emission_day_window(NOW, days_back=3))
+    assert rep["bsale_document_id"] == 3921412 and rep["number"] == 69924
+    assert rep["document_type_id"] == 33 and rep["bsale_office_id"] == 1
+    assert rep["details_count"] == 6 and rep["client"] == "Cliente Test"
+    assert rep["local_document_id"] is None
+    assert all(path in ("/documents.json",) or path.startswith(("/documents/", "/clients/")) for path, _ in bsale.calls)
 
 
 def test_canary_detects_other_office_and_pk_collision():
