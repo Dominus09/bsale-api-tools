@@ -151,25 +151,27 @@ def _run_live(bsale: FakeBsale, store: FakeStore, *, now: datetime, watermark: d
         return live_sync_service.live_sync_documents(strict_token=True)
 
 
-def test_live_window_is_yesterday_and_today_full_utc_days():
+def test_live_window_starts_yesterday_midnight_and_ends_now():
     start, end = live_sync_service.live_documents_emission_window(NOW)
     assert start == datetime(2026, 9, 28, tzinfo=UTC)
-    assert end == datetime(2026, 9, 29, 23, 59, 59, tzinfo=UTC)
+    assert end == NOW
 
 
-def test_live_sends_emissiondaterange_full_days_never_generationdaterange():
+def test_live_sends_historic_range_shape_never_generationdaterange():
     bsale = FakeBsale([])
     store = FakeStore()
     stats = _run_live(bsale, store, now=NOW)
     doc_calls = [p for path, p in bsale.calls if path == "/documents.json"]
-    assert doc_calls, "debe consultar Bsale"
+    assert len(doc_calls) == 1, "una sola pasada (OC + ventas filtradas en cliente)"
     lo, hi = emission_day_window(NOW)
-    for params in doc_calls:
-        assert "generationdaterange" not in params
-        assert params["emissiondaterange"] == f"[{lo},{hi}]"
-        assert params["officeid"] == 1
-    assert doc_calls[0]["documenttypeid"] == 33
-    assert stats["date_range_field"] == "emissiondaterange"
+    params = doc_calls[0]
+    assert "generationdaterange" not in params
+    assert "documenttypeid" not in params
+    assert params["emissiondaterange"] == f"[{lo},{hi}]"
+    assert params["officeid"] == 1
+    assert stats["documents_filter"] == "emissiondaterange"
+    assert stats["range_from_epoch"] == lo and stats["range_to_epoch"] == hi
+    assert stats["document_type_ids_client_filter"] == [1, 6, 9, 33]
 
 
 def test_case_69924_created_today_is_fetched():
@@ -349,7 +351,9 @@ def test_reconcile_uses_emission_full_days_and_recovers_gap_once():
     store = FakeStore()
     out = _reconcile(bsale, store, days=3)
     params = [p for path, p in bsale.calls if path == "/documents.json"][0]
-    assert "generationdaterange" not in params and "emissiondaterange" in params
+    assert "generationdaterange" not in params and "documenttypeid" not in params
+    assert out["documents_filter"] == "emissiondaterange"
+    assert out["range_to_epoch"] == int(NOW.timestamp())
     assert out["missing_folios"] == [69882] and out["repaired"] == 1
     assert store.details[store.rows[(3, 1, 33, 69882)]["document_id"]] == 12
     again = _reconcile(bsale, store, days=3)
@@ -400,19 +404,15 @@ def test_reconcile_same_folio_other_office_not_confused():
     assert store.rows[(3, 2, 33, 69882)]["source_document_id"] == 4000999
 
 
-def test_reconcile_only_type_33():
+def test_reconcile_only_type_33_filtered_client_side():
     invoice = _oc(4000500, 69882, generated=NOW, doc_type=6)
-
-    class LeakyBsale(FakeBsale):
-        def get(self, path, params=None, **kw):
-            params = dict(params or {})
-            params.pop("documenttypeid", None)
-            return super().get(path, params, **kw)
-
+    oc = _oc(4000501, 69883, generated=NOW)
     store = FakeStore()
-    assert _reconcile(FakeBsale([invoice]), store)["bsale_items"] == 0
-    leaky = _reconcile(LeakyBsale([invoice]), store)
-    assert leaky["bsale_ignored_other_scope"] == 1 and not store.rows
+    out = _reconcile(FakeBsale([invoice, oc]), store)
+    assert out["bsale_items"] == 2
+    assert out["bsale_ignored_other_types"] == 1
+    assert out["missing_folios"] == [69883]
+    assert (3, 1, 6, 69882) not in store.rows
 
 
 # ---------------------------------------------------------------------------

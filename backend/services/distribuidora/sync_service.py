@@ -35,6 +35,7 @@ from backend.repositories.distribuidora.sync_repo import (
 )
 from backend.services.distribuidora.bsale_client import BASE_BSALE, BsaleClient
 from backend.services.distribuidora.bsale_params import (
+    build_emission_date_range,
     log_office_filter_debug_response,
     merge_bsale_office_query,
 )
@@ -1029,7 +1030,6 @@ def _fetch_documents_window(
     raw_items_counter_key: str | None = None,
     date_range_field: str = "emissiondaterange",
     finalize_log: bool = True,
-    extra_params: dict[str, Any] | None = None,
 ) -> None:
     """Paginación por ``offset``; mismo cliente robusto que resync (429/5xx/red)."""
     if date_range_field not in ("emissiondaterange", "generationdaterange"):
@@ -1039,10 +1039,9 @@ def _fetch_documents_window(
     pages = 0
     while True:
         params = {
-            **(extra_params or {}),
             "limit": LIMIT_BSALE,
             "offset": offset,
-            date_range_field: f"[{desde_ts},{hasta_ts}]",
+            date_range_field: build_emission_date_range(desde_ts, hasta_ts),
         }
         # Paginación HTTP: nunca sostener TX abierta mientras se espera a Bsale.
         release_transaction(conn, job="fetch_documents_window")

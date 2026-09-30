@@ -19,7 +19,11 @@ from typing import Any, Callable, Iterable
 
 from backend.repositories.distribuidora.documents_repo import document_dict_from_bsale
 from backend.services.distribuidora.bsale_client import BsaleClient
-from backend.services.distribuidora.bsale_params import merge_bsale_office_query
+from backend.services.distribuidora.bsale_params import (
+    build_documents_range_params,
+    documents_query_preview,
+    merge_bsale_office_query,
+)
 from backend.services.distribuidora.oc_source_resolver import (
     OC_DOCUMENT_TYPE_ID,
     PAGE_LIMIT,
@@ -31,7 +35,7 @@ from backend.services.distribuidora.oc_source_resolver import (
 logger = logging.getLogger(__name__)
 
 DEFAULT_RECENT_DAYS = 3
-DEFAULT_MAX_PAGES = 20
+DEFAULT_MAX_PAGES = 60
 DEFAULT_MAX_REPAIRS = 25
 ORDERS_EMISSION_WINDOW_DAYS_DEFAULT = 45
 ORDERS_GENERATION_WINDOW_DAYS_DEFAULT = 14
@@ -474,18 +478,27 @@ def fetch_recent_bsale_ocs(
     max_pages: int,
     now: datetime | None = None,
 ) -> tuple[list[dict[str, Any]], int, bool]:
-    """OCs tipo 33 con ``emissionDate`` en los últimos ``days`` días completos UTC (+ hoy)."""
+    """
+    Documentos de la sucursal con ``emissionDate`` desde las 00:00 UTC de hace ``days`` días
+    hasta ``now``. Misma query que el live (sin ``documenttypeid``); el tipo 33 se filtra
+    en ``reconcile_recent_oc_documents``.
+    """
+    params = recent_documents_params(office_id=office_id, days=days, now=now)
+    return _paged_documents(client, params, max_pages=max(1, int(max_pages)))
+
+
+def recent_documents_params(
+    *, office_id: int, days: int, now: datetime | None = None
+) -> dict[str, Any]:
     now = now or _utc_now()
     start, end = emission_day_window(now, days_back=max(1, int(days)))
-    params = merge_bsale_office_query(
-        {
-            "documenttypeid": OC_DOCUMENT_TYPE_ID,
-            "emissiondaterange": f"[{start},{end}]",
-        },
-        int(office_id),
-        context="reconcile_recent_oc_documents",
+    return build_documents_range_params(
+        start_epoch=start,
+        end_epoch=end,
+        office_id=int(office_id),
+        limit=PAGE_LIMIT,
+        offset=0,
     )
-    return _paged_documents(client, params, max_pages=max(1, int(max_pages)))
 
 
 def reconcile_recent_oc_documents(
@@ -508,15 +521,27 @@ def reconcile_recent_oc_documents(
     Idempotente: un folio ya persistido deja de ser faltante y no se vuelve a tocar.
     """
     t0 = time.perf_counter()
+    query = recent_documents_params(office_id=office_id, days=days, now=now)
+    range_from, range_to = (int(x) for x in query["emissiondaterange"].strip("[]").split(","))
+    logger.info(
+        "reconcile_recent documents_filter=emissiondaterange range_from_epoch=%s "
+        "range_to_epoch=%s office_id=%s document_type_id=%s(client_filter) query=%s",
+        range_from,
+        range_to,
+        office_id,
+        OC_DOCUMENT_TYPE_ID,
+        documents_query_preview(query),
+    )
     items, pages, truncated = fetch_recent_bsale_ocs(
         client, office_id=office_id, days=days, max_pages=max_pages, now=now
     )
     by_folio: dict[int, list[dict[str, Any]]] = {}
     ignored_other_scope = 0
+    ignored_other_types = 0
     for item in items:
         s = summarize_bsale_document(item, expected_company_id=company_id)
         if s.get("document_type_id") != OC_DOCUMENT_TYPE_ID:
-            ignored_other_scope += 1
+            ignored_other_types += 1
             continue
         if s.get("office_id") != int(office_id) or s.get("company_id") != int(company_id):
             ignored_other_scope += 1
@@ -577,9 +602,17 @@ def reconcile_recent_oc_documents(
         "company_id": int(company_id),
         "office_id": int(office_id),
         "days": int(days),
+        "documents_filter": "emissiondaterange",
+        "range_from_epoch": range_from,
+        "range_to_epoch": range_to,
+        "range_from": _iso(range_from),
+        "range_to": _iso(range_to),
+        "document_type_id": OC_DOCUMENT_TYPE_ID,
+        "query_preview": documents_query_preview(query),
         "api_pages": pages,
         "api_truncated_by_budget": truncated,
         "bsale_items": len(items),
+        "bsale_ignored_other_types": ignored_other_types,
         "bsale_ignored_other_scope": ignored_other_scope,
         "bsale_active_folios": len(active_by_folio),
         "local_present": len(present),

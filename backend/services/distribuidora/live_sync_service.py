@@ -14,6 +14,10 @@ from typing import Any
 
 from backend.db import get_connection
 from backend.services.distribuidora.bsale_client import BsaleClient
+from backend.services.distribuidora.bsale_params import (
+    build_documents_range_params,
+    documents_query_preview,
+)
 from backend.services.distribuidora.probable_invoice_service import (
     build_probable_invoice_matches_may_2026,
 )
@@ -24,6 +28,7 @@ from backend.services.distribuidora.sync_service import (
     COMPANY_ID,
     DOC_TYPES_OC,
     DOC_TYPES_SALES,
+    LIMIT_BSALE,
     OFFICE_ID,
     _bsale_token,
     _fetch_documents_window,
@@ -215,19 +220,17 @@ def _print_summary(title: str, stats: dict[str, Any]) -> None:
 
 def live_documents_emission_window(now: datetime, *, days_back: int = 1) -> tuple[datetime, datetime]:
     """
-    Días completos UTC ``[inicio(hoy - days_back), fin(hoy)]`` para ``emissiondaterange``.
+    ``[inicio UTC de (hoy - days_back), ahora]`` para ``emissiondaterange``.
 
-    Bsale entrega ``emissionDate`` como medianoche UTC del día; solo un rango por días
-    completos la contiene. No depende del watermark: una OC de hoy/ayer que aparezca tarde
-    en Bsale sigue dentro del rango.
+    Bsale entrega ``emissionDate`` como medianoche UTC del día; el rango arranca en una
+    medianoche para contenerla. El fin es ``now`` (nunca futuro), igual que los sync
+    históricos. No depende del watermark: una OC de hoy/ayer que aparezca tarde en Bsale
+    sigue dentro del rango.
     """
-    today = now.astimezone(timezone.utc).date()
-    start_day = today - timedelta(days=max(0, int(days_back)))
+    now_utc = now.astimezone(timezone.utc)
+    start_day = now_utc.date() - timedelta(days=max(0, int(days_back)))
     start = datetime(start_day.year, start_day.month, start_day.day, tzinfo=timezone.utc)
-    end = datetime(today.year, today.month, today.day, tzinfo=timezone.utc) + timedelta(
-        days=1, seconds=-1
-    )
-    return start, end
+    return start, now_utc.replace(microsecond=0)
 
 
 def _live_skip_unchanged_enabled() -> bool:
@@ -289,11 +292,26 @@ def live_sync_documents(*, strict_token: bool = True) -> dict[str, Any]:
                 days_back,
             )
 
+        allowed_types = DOC_TYPES_OC | DOC_TYPES_SALES
         stats: dict[str, Any] = _base_stats(
             SYNC_TYPE_DOCUMENTS_LIVE,
             window_from,
             window_to,
             date_range_field="emissiondaterange",
+            documents_filter="emissiondaterange",
+            range_from_epoch=desde_ts,
+            range_to_epoch=hasta_ts,
+            office_id=OFFICE_ID,
+            document_type_ids_client_filter=sorted(allowed_types),
+            query_preview=documents_query_preview(
+                build_documents_range_params(
+                    start_epoch=desde_ts,
+                    end_epoch=hasta_ts,
+                    office_id=OFFICE_ID,
+                    limit=LIMIT_BSALE,
+                    offset=0,
+                )
+            ),
             days_back=days_back,
             documents_processed=0,
             documents_inserted=0,
@@ -305,24 +323,18 @@ def live_sync_documents(*, strict_token: bool = True) -> dict[str, Any]:
             stats["_skip_unchanged_documents"] = True
 
         client = BsaleClient(_bsale_token())
-        passes = (
-            (DOC_TYPES_OC, {"documenttypeid": 33}),
-            (DOC_TYPES_SALES, None),
+        stats["_allowed_document_type_ids"] = allowed_types
+        _fetch_documents_window(
+            client,
+            cur,
+            conn,
+            desde_ts=desde_ts,
+            hasta_ts=hasta_ts,
+            stats=stats,
+            log_id=None,
+            date_range_field="emissiondaterange",
         )
-        for allowed, extra in passes:
-            stats["_allowed_document_type_ids"] = allowed
-            _fetch_documents_window(
-                client,
-                cur,
-                conn,
-                desde_ts=desde_ts,
-                hasta_ts=hasta_ts,
-                stats=stats,
-                log_id=None,
-                date_range_field="emissiondaterange",
-                extra_params=extra,
-            )
-            stats.pop("_allowed_document_type_ids", None)
+        stats.pop("_allowed_document_type_ids", None)
         stats.pop("_skip_unchanged_documents", None)
 
         proc = int(stats.get("documents_processed") or 0)

@@ -6,6 +6,7 @@ import logging
 import random
 import time
 from typing import Any
+from urllib.parse import urlencode
 
 import requests
 
@@ -195,7 +196,10 @@ class BsaleClient:
                 continue
 
             if not (200 <= r.status_code < 300):
-                raise RuntimeError(f"Bsale HTTP {r.status_code}: {(r.text or '')[:500]}")
+                raise RuntimeError(
+                    f"Bsale HTTP {r.status_code}: {(r.text or '')[:500]} "
+                    f"[GET {path}?{urlencode(params, doseq=True)}]"
+                )
 
             if BSALE_QUERY_OFFICE_ID in params:
                 log_office_filter_debug_response(

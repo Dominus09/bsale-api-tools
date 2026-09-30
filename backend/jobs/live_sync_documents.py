@@ -61,7 +61,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Reconciliar OCs con emisión en los últimos --days días completos (Bsale vs PostgreSQL)",
     )
     p.add_argument("--days", type=int, default=3)
-    p.add_argument("--max-pages", type=int, default=20)
+    p.add_argument("--max-pages", type=int, default=60)
     p.add_argument("--max-repairs", type=int, default=25)
     p.add_argument("--dry-run", action="store_true", help="Read-only (default en canario)")
     p.add_argument("--apply", action="store_true", help="Escribe (requiere --i-understand-writes)")
