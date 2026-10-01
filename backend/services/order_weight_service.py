@@ -11,6 +11,10 @@ from decimal import Decimal
 from typing import Any, TypedDict
 
 from backend.db import get_connection
+from backend.services.bsale.product_master_mapping import (
+    normalize_barcode,
+    upsert_mapping_for_pair,
+)
 from backend.utils.distribuidora_oc_sql import OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL
 from backend.utils.order_weight_calc import (
     aggregate_order_summary,
@@ -1578,50 +1582,87 @@ def create_logistics_from_variant(
     variant_id: int,
     company_id: int = 3,
 ) -> dict[str, Any]:
+    """
+    Busca la variante por (company_id, variant_id), crea la ficha canónica por barcode si no
+    existe y asegura el mapping de esa empresa en ``bsale.product_master_variants``.
+
+    Si la ficha ya existe no se tocan product_id/variant_id legacy ni datos manuales/logísticos.
+    """
     conn = get_connection()
     try:
         cur = conn.cursor()
         cur.execute(
             """
-            INSERT INTO bsale.products_master (
-                barcode, sku, product_id, variant_id, product_name, variant_name,
-                product_type, companies, units_per_box, is_active, created_at, updated_at, last_bsale_sync_at
-            )
-            SELECT
-                NULLIF(BTRIM(v.bar_code), ''),
-                NULLIF(BTRIM(v.code), ''),
-                v.product_id,
-                v.bsale_id,
-                p.name,
-                v.description,
-                pt.name,
-                jsonb_build_array(v.company_id),
-                NULLIF(v.units_per_box, 0),
-                TRUE, NOW(), NOW(), NOW()
+            SELECT v.bar_code, NULLIF(BTRIM(v.code), ''), v.product_id, v.bsale_id,
+                   p.name, v.description, pt.name, NULLIF(v.units_per_box, 0)
             FROM bsale.variants v
             LEFT JOIN bsale.products p
                 ON p.company_id = v.company_id AND p.bsale_id = v.product_id
             LEFT JOIN bsale.product_types pt
                 ON pt.company_id = p.company_id AND pt.bsale_id = p.product_type_id
             WHERE v.company_id = %s AND v.bsale_id = %s
-              AND NULLIF(BTRIM(v.bar_code), '') IS NOT NULL
-            ON CONFLICT (barcode) DO UPDATE SET
-                variant_id = EXCLUDED.variant_id,
-                product_name = EXCLUDED.product_name,
-                variant_name = EXCLUDED.variant_name,
-                updated_at = NOW()
-            RETURNING id, barcode, variant_id, product_name, variant_name
             """,
             (company_id, variant_id),
         )
-        row = cur.fetchone()
-        if not row:
-            conn.rollback()
+        vrow = cur.fetchone()
+        if not vrow:
+            raise ValueError(
+                f"Variante {variant_id} no existe para company_id={company_id}"
+            )
+        barcode = normalize_barcode(vrow[0])
+        if not barcode:
             raise ValueError("Variante sin barcode — no se puede crear ficha automática")
-        conn.commit()
+
+        cur.execute(
+            """
+            INSERT INTO bsale.products_master (
+                barcode, sku, product_id, variant_id, product_name, variant_name,
+                product_type, companies, units_per_box, is_active, created_at, updated_at, last_bsale_sync_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, jsonb_build_array(%s::bigint), %s,
+                TRUE, NOW(), NOW(), NOW()
+            )
+            ON CONFLICT (barcode) DO NOTHING
+            RETURNING id
+            """,
+            (barcode, vrow[1], vrow[2], vrow[3], vrow[4], vrow[5], vrow[6], company_id, vrow[7]),
+        )
+        inserted = cur.fetchone()
+        if inserted:
+            pm_id = int(inserted[0])
+        else:
+            cur.execute("SELECT id FROM bsale.products_master WHERE barcode = %s", (barcode,))
+            pm_id = int(cur.fetchone()[0])
+            cur.execute(
+                """
+                UPDATE bsale.products_master
+                SET companies = companies || jsonb_build_array(%s::bigint),
+                    updated_at = NOW()
+                WHERE id = %s AND NOT (companies @> jsonb_build_array(%s::bigint))
+                """,
+                (company_id, pm_id, company_id),
+            )
+
+        mapping = upsert_mapping_for_pair(
+            cur, product_master_id=pm_id, company_id=company_id, barcode=barcode
+        )
+        cur.execute(
+            """
+            SELECT id, barcode, variant_id, product_name, variant_name
+            FROM bsale.products_master WHERE id = %s
+            """,
+            (pm_id,),
+        )
+        row = cur.fetchone()
         cols = [d[0] for d in cur.description]
+        conn.commit()
         cur.close()
-        return dict(zip(cols, row))
+        out = dict(zip(cols, row))
+        out["created"] = bool(inserted)
+        out["mapping_company_id"] = company_id
+        out["mapping_status"] = mapping.get("mapping_status")
+        out["mapping_variant_id"] = mapping.get("variant_id")
+        return out
     except Exception:
         conn.rollback()
         raise

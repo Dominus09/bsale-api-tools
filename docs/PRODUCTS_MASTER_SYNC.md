@@ -11,9 +11,10 @@
 
 - Nunca `DELETE` ni `TRUNCATE` de `products_master`.
 - UPSERT incremental por `barcode` (`ON CONFLICT DO UPDATE`).
-- En UPDATE desde Bsale: solo nombre, variante, ids, `units_per_box`, `sku`, `product_type`, `companies`, `last_bsale_sync_at`.
-- No se tocan en sync: `supplier_id`, `weight_box_kg`, `height_cm`, `width_cm`, `length_cm`, `logistics_completed`.
-- En UPDATE solo: `product_name`, `variant_name`, `product_id`, `variant_id`, `units_per_box`, `last_bsale_sync_at` (+ metadatos de inserción en altas nuevas).
+- No se tocan en sync: `supplier_id`, `weight_box_kg`, `height_cm`, `width_cm`, `length_cm`, `logistics_completed`, `sale_type`, `quantity_step`, `is_active`.
+- En UPDATE: `sku`, `product_name`, `variant_name`, `product_type`, `companies` (desde `variants`), `units_per_box` (sin vaciar), `last_bsale_sync_at`.
+- `product_id` / `variant_id` de `products_master` son **LEGACY**: sólo se rellenan si están vacíos y nunca son clave global (un `variant_id` no es único entre empresas).
+- Identidad Bsale autoritativa: `bsale.product_master_variants` (`product_master_id`, `company_id`) → `variant_id`. Estados `AUTO_EXACT` / `MISSING` / `AMBIGUOUS` (escritos con `mapping_source='BARCODE'`); `MANUAL` nunca se modifica. Esquema autoritativo: `backend/sql/051_product_master_variants_sync_columns.sql`.
 
 ## Migración DDL
 
@@ -32,13 +33,26 @@ Añade columnas logísticas, `units_per_box` en `variants` y `products_master`, 
 python -m backend.jobs.sync_bsale_catalog
 ```
 
-Secuencia:
+Secuencia (en proceso, bajo advisory lock de sesión `5927184030`; una segunda ejecución sale con código 3):
 
-1. `sync_catalog.py` (raíz del repo)
-2. `sync_prices_costs.py`
-3. `sync_stock.py`
+1. Catálogo por empresa (`sync_catalog.py`)
+2. Costos + precios por empresa (`sync_prices_costs.py`), con reconciliación de precios obsoletos
+3. Stock por empresa (`sync_stock.py`), con reconciliación de stocks obsoletos
 4. `backfill_units_per_box_from_sec()` — patrón `(SEC N)` en `variants.description`
 5. `refresh_products_master()` — UPSERT seguro
+6. `refresh_product_master_variants()` — mappings por (company_id, barcode)
+
+Cada empresa: descarga HTTP completa primero, luego una sola transacción (ROLLBACK ante error).
+Empresas: `bsale.companies WHERE active` + variable de entorno indicada en `bsale_token`; si falta
+alguna (o no están 1, 2 y 3; configurable con `BSALE_REQUIRED_COMPANY_IDS`) el job falla.
+
+Fusible de reconciliación (stock y `variant_prices`): snapshot vacío con filas existentes o
+`stale_percentage` mayor al umbral → la empresa falla con ROLLBACK y sin DELETE. Umbral (0–100, default 20):
+`BSALE_RECONCILE_MAX_STALE_PCT_STOCKS`, `BSALE_RECONCILE_MAX_STALE_PCT_VARIANT_PRICES` o
+`BSALE_RECONCILE_MAX_STALE_PCT` (global).
+
+Exit codes: `0` success · `1` failed · `2` partial · `3` lock ocupado. Historial en `bsale.sync_runs`
+(migración `050_bsale_sync_runs.sql`).
 
 Logs con prefijo `[CATALOG_SYNC]`:
 
@@ -52,7 +66,10 @@ Variables: mismas que el backend (`PG_*`, tokens Bsale de los scripts raíz).
 
 Frecuencia sugerida: **1–2 veces al día** (o tras cambios masivos de catálogo en Bsale). Timeout: **45–90 min** según volumen.
 
-`sync_catalog.py` tolera fallos por producto (ej. 502 en `product_taxes`): log `[CATALOG_SYNC_ERROR]` y continúa; resumen `[CATALOG_SYNC] products_processed/errors/omitted`.
+HTTP Bsale (`backend/services/bsale/http_client.py`): timeouts (10 s conexión / 60 s lectura), máx. 5
+intentos sólo para 408/425/429/5xx transitorios, timeouts y errores de conexión (`Retry-After` o
+backoff exponencial con jitter). Un fallo de `product_taxes` tras los reintentos hace fallar la
+sincronización de esa empresa: nunca se guarda un producto con `tax_factor` inventado.
 
 ## Job SEC independiente
 

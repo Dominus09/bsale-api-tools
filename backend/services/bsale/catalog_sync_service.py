@@ -7,6 +7,7 @@ import time
 from typing import Any
 
 from backend.db import get_connection
+from backend.services.bsale.product_master_mapping import refresh_all_mappings
 
 logger = logging.getLogger(__name__)
 
@@ -50,55 +51,43 @@ SELECT
 FROM bsale.variants v
 """
 
-_SYNC_PM_UNITS_SQL = """
+# units_per_box hacia products_master sólo por barcode normalizado (BTRIM).
+# products_master.variant_id es LEGACY y nunca se usa como identidad (no es global entre empresas).
+_PM_UNITS_SOURCE_SQL = """
+SELECT
+    BTRIM(v.bar_code) AS barcode,
+    (
+        array_agg(v.units_per_box ORDER BY v.company_id, v.bsale_id)
+        FILTER (WHERE v.units_per_box IS NOT NULL AND v.units_per_box > 0)
+    )[1] AS units_per_box
+FROM bsale.variants v
+WHERE NULLIF(BTRIM(v.bar_code), '') IS NOT NULL
+  AND v.units_per_box IS NOT NULL
+  AND v.units_per_box > 0
+GROUP BY BTRIM(v.bar_code)
+"""
+
+_SYNC_PM_UNITS_SQL = f"""
 UPDATE bsale.products_master pm
 SET units_per_box = src.units_per_box,
     updated_at = NOW()
-FROM (
-    SELECT
-        BTRIM(v.bar_code) AS barcode,
-        (
-            array_agg(v.units_per_box ORDER BY v.company_id, v.bsale_id)
-            FILTER (WHERE v.units_per_box IS NOT NULL AND v.units_per_box > 0)
-        )[1] AS units_per_box
-    FROM bsale.variants v
-    WHERE NULLIF(BTRIM(v.bar_code), '') IS NOT NULL
-      AND v.units_per_box IS NOT NULL
-      AND v.units_per_box > 0
-    GROUP BY BTRIM(v.bar_code)
-) src
+FROM ({_PM_UNITS_SOURCE_SQL}) src
 WHERE pm.barcode = src.barcode
   AND pm.units_per_box IS DISTINCT FROM src.units_per_box
 """
 
-_SYNC_PM_UNITS_BY_VARIANT_SQL = """
-UPDATE bsale.products_master pm
-SET units_per_box = v.units_per_box,
-    updated_at = NOW()
-FROM bsale.variants v
-WHERE pm.variant_id = v.bsale_id
-  AND v.units_per_box IS NOT NULL
-  AND v.units_per_box > 0
-  AND (pm.units_per_box IS NULL OR pm.units_per_box = 0)
-  AND pm.units_per_box IS DISTINCT FROM v.units_per_box
-"""
-
-_PM_UNITS_SYNCABLE_COUNT_SQL = """
+_PM_UNITS_SYNCABLE_COUNT_SQL = f"""
 SELECT COUNT(*)::bigint
 FROM bsale.products_master pm
-WHERE EXISTS (
-    SELECT 1
-    FROM bsale.variants v
-    WHERE (
-        (NULLIF(BTRIM(v.bar_code), '') IS NOT NULL AND pm.barcode = BTRIM(v.bar_code))
-        OR (pm.variant_id IS NOT NULL AND pm.variant_id = v.bsale_id)
-    )
-    AND v.units_per_box IS NOT NULL
-    AND v.units_per_box > 0
-    AND pm.units_per_box IS DISTINCT FROM v.units_per_box
-)
+JOIN ({_PM_UNITS_SOURCE_SQL}) src ON src.barcode = pm.barcode
+WHERE pm.units_per_box IS DISTINCT FROM src.units_per_box
 """
 
+# products_master = producto canónico/logístico (por barcode), no la identidad Bsale.
+# La identidad Bsale por empresa vive en bsale.product_master_variants.
+# product_id / variant_id son LEGACY: sólo se rellenan si están vacíos; jamás son clave global.
+# No se sobrescriben datos ERP/manuales: supplier_id, weight_box_kg, dimensiones,
+# logistics_completed, sale_type, quantity_step, is_active.
 _REFRESH_PRODUCTS_MASTER_SQL = """
 WITH source AS (
     SELECT
@@ -128,10 +117,7 @@ WITH source AS (
             FILTER (WHERE pt.name IS NOT NULL)
         )[1] AS product_type,
         COALESCE(
-            to_jsonb(
-                array_agg(DISTINCT vp.company_id ORDER BY vp.company_id)
-                    FILTER (WHERE vp.company_id IS NOT NULL)
-            ),
+            to_jsonb(array_agg(DISTINCT v.company_id ORDER BY v.company_id)),
             '[]'::jsonb
         ) AS companies,
         (
@@ -148,9 +134,6 @@ WITH source AS (
     LEFT JOIN bsale.product_types pt
         ON pt.company_id = p.company_id
        AND pt.bsale_id = p.product_type_id
-    LEFT JOIN bsale.variant_prices vp
-        ON vp.company_id = v.company_id
-       AND vp.variant_id = v.bsale_id
     WHERE v.bar_code IS NOT NULL
       AND BTRIM(v.bar_code) <> ''
     GROUP BY BTRIM(v.bar_code)
@@ -187,11 +170,17 @@ upserted AS (
         NOW()
     FROM source s
     ON CONFLICT (barcode) DO UPDATE SET
-        product_id = EXCLUDED.product_id,
-        variant_id = EXCLUDED.variant_id,
+        product_id = CASE
+            WHEN bsale.products_master.variant_id IS NULL THEN EXCLUDED.product_id
+            ELSE bsale.products_master.product_id
+        END,
+        variant_id = COALESCE(bsale.products_master.variant_id, EXCLUDED.variant_id),
+        sku = EXCLUDED.sku,
         product_name = EXCLUDED.product_name,
         variant_name = EXCLUDED.variant_name,
-        units_per_box = EXCLUDED.units_per_box,
+        product_type = EXCLUDED.product_type,
+        companies = EXCLUDED.companies,
+        units_per_box = COALESCE(EXCLUDED.units_per_box, bsale.products_master.units_per_box),
         updated_at = NOW(),
         last_bsale_sync_at = NOW()
     RETURNING (xmax = 0) AS inserted
@@ -238,8 +227,6 @@ def run_sec_backfill(*, dry_run: bool = False) -> dict[str, Any]:
             variants_updated = int(cur.rowcount)
             cur.execute(_SYNC_PM_UNITS_SQL)
             pm_updated = int(cur.rowcount)
-            cur.execute(_SYNC_PM_UNITS_BY_VARIANT_SQL)
-            pm_updated += int(cur.rowcount)
             conn.commit()
 
         cur.close()
@@ -326,6 +313,36 @@ def refresh_products_master() -> dict[str, Any]:
             "products_master_actualizados": 0,
             "error": str(exc),
         }
+    finally:
+        conn.close()
+
+
+def refresh_product_master_variants() -> dict[str, Any]:
+    """
+    Recalcula bsale.product_master_variants (ejecutar DESPUÉS de refresh_products_master).
+    AUTO_EXACT / MISSING / AMBIGUOUS por (company_id, barcode); MANUAL nunca se modifica.
+    """
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        summary = refresh_all_mappings(cur)
+        conn.commit()
+        cur.close()
+        logger.info(
+            "%s product_master_variants auto_exact=%s missing=%s ambiguous=%s "
+            "manual_skipped=%s changed=%s",
+            LOG_PREFIX,
+            summary["auto_exact"],
+            summary["missing"],
+            summary["ambiguous"],
+            summary["manual_skipped"],
+            summary["changed"],
+        )
+        return {"ok": True, **summary}
+    except Exception as exc:
+        conn.rollback()
+        logger.exception("%s refresh_product_master_variants failed", LOG_PREFIX)
+        return {"ok": False, "error": str(exc)}
     finally:
         conn.close()
 
