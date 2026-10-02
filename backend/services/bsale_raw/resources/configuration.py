@@ -3,7 +3,15 @@
 from __future__ import annotations
 
 from backend.services.bsale_raw.core.rate_limit import RequestPriority
-from backend.services.bsale_raw.core.registry import REGISTRY, KeyKind, Priority, ResourceSpec
+from backend.services.bsale_raw.core.registry import (
+    REGISTRY,
+    KeyKind,
+    Priority,
+    ResourceSpec,
+    TypedColumn,
+    optional_int,
+    optional_text,
+)
 
 SIX_HOURS = 6 * 3600
 P6 = RequestPriority.P6_CLIENTS_CONFIG
@@ -20,6 +28,13 @@ OFFICES = REGISTRY.register(
         state_filter=True,
         freshness_sla_seconds=SIX_HOURS,
         needs_live_verification=("listado sin state ¿incluye inactivas? (verificado sólo en products/variants/clients)",),
+        typed_columns=(
+            TypedColumn("state", "state", optional_int),
+            TypedColumn("name", "name", optional_text),
+            TypedColumn("is_virtual", "isVirtual", optional_int),
+            TypedColumn("cost_center", "costCenter", optional_text),
+        ),
+        pipeline_enabled=True,
     )
 )
 

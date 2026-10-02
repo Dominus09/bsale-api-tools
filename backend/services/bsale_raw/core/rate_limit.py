@@ -166,6 +166,27 @@ class CompanyRateLimiters:
             return limiter
 
 
+@dataclass
+class RequestStats:
+    """Contadores de requests HTTP reales (reintentos incluidos) de una sesión."""
+
+    requests: int = 0
+    http_429: int = 0
+    http_5xx: int = 0
+    network_errors: int = 0
+
+    def record_status(self, status: int) -> None:
+        self.requests += 1
+        if status == 429:
+            self.http_429 += 1
+        elif 500 <= status < 600:
+            self.http_5xx += 1
+
+    def record_network_error(self) -> None:
+        self.requests += 1
+        self.network_errors += 1
+
+
 class RateLimitedSession(requests.Session):
     """``requests.Session`` que pide turno al limitador de la empresa antes de cada request, reintentos incluidos."""
 
@@ -174,10 +195,16 @@ class RateLimitedSession(requests.Session):
         self._limiter = limiter
         self.priority = priority
         self.last_rate_limit_headers: dict[str, str] = {}
+        self.stats = RequestStats()
 
     def request(self, method, url, *args, **kwargs):  # type: ignore[override]
         self._limiter.acquire(self.priority)
-        response = super().request(method, url, *args, **kwargs)
+        try:
+            response = super().request(method, url, *args, **kwargs)
+        except (requests.Timeout, requests.ConnectionError):
+            self.stats.record_network_error()
+            raise
+        self.stats.record_status(response.status_code)
         self.last_rate_limit_headers = {
             k: v for k, v in response.headers.items() if k.lower().startswith(("x-ratelimit", "ratelimit", "retry-after"))
         }

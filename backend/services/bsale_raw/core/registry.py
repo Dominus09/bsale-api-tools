@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any, Callable
 
 from backend.services.bsale_raw.core.rate_limit import RequestPriority
 
@@ -43,6 +44,35 @@ class KeyKind(str, Enum):
     CHILD = "CHILD"  # (company_id, bsale_id) del hijo + id del padre como columna
 
 
+def optional_int(value: Any) -> int | None:
+    """Entero Bsale (int o string numérico). Cualquier otro valor invalida el snapshot."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        return int(value.strip())
+    raise ValueError(f"valor no entero: {type(value).__name__}")
+
+
+def optional_text(value: Any) -> str | None:
+    return None if value is None else str(value)
+
+
+@dataclass(frozen=True)
+class TypedColumn:
+    """Columna de búsqueda derivada del payload (el payload se guarda siempre completo, sin cambios)."""
+
+    column: str
+    payload_key: str
+    convert: Callable[[Any], Any]
+
+    def extract(self, payload: dict[str, Any]) -> Any:
+        return self.convert(payload.get(self.payload_key))
+
+
 @dataclass(frozen=True)
 class ResourceSpec:
     name: str
@@ -66,6 +96,9 @@ class ResourceSpec:
     expand: tuple[str, ...] = ()
     freshness_sla_seconds: int | None = None
     needs_live_verification: tuple[str, ...] = field(default_factory=tuple)
+    typed_columns: tuple[TypedColumn, ...] = ()
+    # Habilitación explícita y gradual del motor productivo (fase 4A: sólo offices).
+    pipeline_enabled: bool = False
 
 
 class ResourceRegistry:
@@ -93,6 +126,9 @@ class ResourceRegistry:
 
     def names(self) -> list[str]:
         return list(self._specs)
+
+    def pipeline_names(self) -> list[str]:
+        return [name for name, spec in self._specs.items() if spec.pipeline_enabled]
 
 
 REGISTRY = ResourceRegistry()
