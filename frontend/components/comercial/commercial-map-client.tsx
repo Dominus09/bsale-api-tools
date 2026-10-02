@@ -7,6 +7,7 @@ import { Loader2 } from "lucide-react"
 import { getCommercialMap, type CommercialAnalyticsParams, type CommercialMapPoint } from "@/lib/api"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { CARTO_ATTRIBUTION_HTML, cartoTileUrlTemplate } from "@/lib/carto-basemap"
 
 const MapContainer = dynamic(() => import("react-leaflet").then((m) => m.MapContainer), { ssr: false })
 const TileLayer = dynamic(() => import("react-leaflet").then((m) => m.TileLayer), { ssr: false })
@@ -79,8 +80,8 @@ export function CommercialMapClient({
           <div style={{ height }} className="w-full">
             <MapContainer center={center} zoom={11} className="h-full w-full z-0" scrollWheelZoom>
               <TileLayer
-                attribution='&copy; CARTO'
-                url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+                attribution={CARTO_ATTRIBUTION_HTML}
+                url={cartoTileUrlTemplate("light_all")}
               />
               {points.map((p) => (
                 <CircleMarker

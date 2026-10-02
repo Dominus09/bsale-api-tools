@@ -59,6 +59,7 @@ import {
   type DistribuidoraRutaSugerenciaJson,
 } from "@/lib/api"
 import { diaSemanaSortKey } from "@/lib/resumen-vendedor-pdf-clientes-layout"
+import { CARTO_ATTRIBUTION_HTML, cartoTileUrlTemplate } from "@/lib/carto-basemap"
 
 import "leaflet/dist/leaflet.css"
 import "react-leaflet-cluster/dist/assets/MarkerCluster.css"
@@ -135,9 +136,6 @@ function formatearMinutos(m: number): string {
 
 /** Fila de cliente en respuesta ruta-detalle / optimizar-ruta. */
 type RutaClienteFila = Record<string, unknown>
-
-/** Voyager: más contraste y calles que light_all (sigue siendo CARTO / OSM). */
-const CARTO_VOYAGER_TILES = "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png"
 
 /** Evita franjas grises: Leaflet debe medir el contenedor tras layout, sidebar y carga de tiles. */
 function MapaRuteroInvalidateSize() {
@@ -2228,8 +2226,8 @@ export default function MapaRuteroClient() {
                     attributionControl
                   >
                     <TileLayer
-                      url={CARTO_VOYAGER_TILES}
-                      attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
+                      url={cartoTileUrlTemplate("voyager", { retina: false })}
+                      attribution={CARTO_ATTRIBUTION_HTML}
                       subdomains="abcd"
                     />
                     <MapaRuteroInvalidateSize />

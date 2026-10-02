@@ -5,6 +5,7 @@ import dynamic from "next/dynamic"
 import L from "leaflet"
 import { Marker, Popup, Tooltip, useMap } from "react-leaflet"
 import "leaflet/dist/leaflet.css"
+import { CARTO_ATTRIBUTION_HTML, cartoTileUrlTemplate } from "@/lib/carto-basemap"
 import { OrsStopPopup } from "@/components/distribuidora/planificacion/OrsStopPopup"
 import { SEMAPHORE_RING_COLOR, type CommercialSemaphore } from "@/lib/ors-commercial-semaphore"
 import type { OrsStopPopupData } from "@/lib/ors-map-ui"
@@ -211,8 +212,8 @@ export function PlanificacionDespachoMapClient({
         scrollWheelZoom
       >
         <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
-          url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
+          attribution={CARTO_ATTRIBUTION_HTML}
+          url={cartoTileUrlTemplate("voyager")}
         />
         <FitBoundsInner routes={routes} depot={depot} />
         <MapFlyToController flyToTarget={flyToTarget} />

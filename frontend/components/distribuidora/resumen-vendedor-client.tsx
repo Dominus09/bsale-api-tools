@@ -52,6 +52,7 @@ import {
   RESUMEN_VENDEDOR_PRINT_POPUP_BLOCKED,
   writeResumenVendedorPrintToWindow,
 } from "@/lib/resumen-vendedor-print-html"
+import { CARTO_ATTRIBUTION_HTML, cartoTileUrlTemplate } from "@/lib/carto-basemap"
 
 import "leaflet/dist/leaflet.css"
 
@@ -60,7 +61,6 @@ const TileLayer = dynamic(() => import("react-leaflet").then((m) => m.TileLayer)
 const Marker = dynamic(() => import("react-leaflet").then((m) => m.Marker), { ssr: false })
 const Popup = dynamic(() => import("react-leaflet").then((m) => m.Popup), { ssr: false })
 
-const CARTO_LIGHT = "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
 const MAP_CENTER: [number, number] = [-33.0, -71.5]
 const MAP_ZOOM = 10
 
@@ -721,7 +721,7 @@ export default function ResumenVendedorClient() {
                   <div className="relative h-[min(72vh,560px)] w-full">
                     <MapContainer center={MAP_CENTER} zoom={MAP_ZOOM} className="h-full w-full z-0">
                       <CaptureMapRef mapRef={mapRef} />
-                      <TileLayer attribution="&copy; CARTO" url={CARTO_LIGHT} />
+                      <TileLayer attribution={CARTO_ATTRIBUTION_HTML} url={cartoTileUrlTemplate("light_all")} />
                       <ResumenMapInvalidate />
                       <RutasSemanaCapas
                         resumen={resumen}

@@ -34,6 +34,9 @@ RUN npm ci --no-audit --no-fund \
   || (echo "npm ci reintento 2..." && npm ci --no-audit --no-fund --prefer-offline)
 
 COPY . .
+# NEXT_PUBLIC_* se incrusta en el bundle durante `next build`: Coolify debe pasarla como Build Variable.
+ARG NEXT_PUBLIC_CARTO_BASEMAPS_KEY
+ENV NEXT_PUBLIC_CARTO_BASEMAPS_KEY=${NEXT_PUBLIC_CARTO_BASEMAPS_KEY}
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 # Menos RAM en fase webpack (Coolify 2–4 GB).

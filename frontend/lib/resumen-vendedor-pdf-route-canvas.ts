@@ -6,11 +6,8 @@
 import type { DistribuidoraResumenDiaJson, DistribuidoraResumenVendedorJson } from "@/lib/api"
 import { geometryToLatLngs, type LatLngTuple } from "@/lib/distribuidora-resumen-geometry"
 import { diaSemanaSortKey } from "@/lib/resumen-vendedor-pdf-clientes-layout"
+import { CARTO_ATTRIBUTION_TEXT, CARTO_SUBDOMAINS, cartoTileUrl } from "@/lib/carto-basemap"
 
-const CARTO_VOYAGER_TILE = (sub: string, z: number, x: number, y: number) =>
-  `https://${sub}.basemaps.cartocdn.com/rastertiles/voyager/${z}/${x}/${y}.png`
-
-const TILE_SUBS = ["a", "b", "c", "d"] as const
 const MAX_TILES = 56
 
 /** Píxeles mundo Web Mercator / esfera (igual que slippy map estándar). */
@@ -140,8 +137,8 @@ async function drawCartoVoyagerBasemap(
   const jobs: Promise<void>[] = []
   for (let tx = minTX; tx <= maxTX; tx++) {
     for (let ty = minTY; ty <= maxTY; ty++) {
-      const sub = TILE_SUBS[Math.abs(tx + ty) % 4]
-      const url = CARTO_VOYAGER_TILE(sub, z, tx, ty)
+      const sub = CARTO_SUBDOMAINS[Math.abs(tx + ty) % 4]
+      const url = cartoTileUrl("voyager", sub, z, tx, ty)
       jobs.push(
         (async () => {
           const bmp = await loadTileBitmap(url)
@@ -360,9 +357,11 @@ export async function buildPdfWeeklyRouteMapDataUrl(
 
   const picked = pickZoomForBounds(bbox.minLat, bbox.maxLat, bbox.minLon, bbox.maxLon)
   let project: ProjectFn
+  let cartoDrawn = false
 
   if (picked) {
     const ok = await drawCartoVoyagerBasemap(ctx, cw, ch, pad, picked)
+    cartoDrawn = ok
     if (ok) {
       project = makeMercatorProjector(cw, ch, pad, picked)
     } else {
@@ -434,5 +433,23 @@ export async function buildPdfWeeklyRouteMapDataUrl(
     }
   }
 
+  if (cartoDrawn) drawAttribution(ctx, cw, ch, CARTO_ATTRIBUTION_TEXT)
+
   return canvas.toDataURL("image/jpeg", 0.92)
+}
+
+function drawAttribution(ctx: CanvasRenderingContext2D, cw: number, ch: number, text: string): void {
+  const fontPx = Math.max(10, Math.min(14, Math.round(cw / 110)))
+  const padX = Math.round(fontPx * 0.5)
+  const padY = Math.round(fontPx * 0.3)
+  ctx.font = `500 ${fontPx}px system-ui,Segoe UI,sans-serif`
+  ctx.textAlign = "right"
+  ctx.textBaseline = "bottom"
+  const textW = ctx.measureText(text).width
+  const boxW = textW + padX * 2
+  const boxH = fontPx + padY * 2
+  ctx.fillStyle = "rgba(255,255,255,0.82)"
+  ctx.fillRect(cw - boxW, ch - boxH, boxW, boxH)
+  ctx.fillStyle = "#1e293b"
+  ctx.fillText(text, cw - padX, ch - padY)
 }
