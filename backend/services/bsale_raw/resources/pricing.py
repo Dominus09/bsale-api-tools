@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.services.bsale_raw.core.rate_limit import RequestPriority
 from backend.services.bsale_raw.core.registry import REGISTRY, KeyKind, Priority, ResourceSpec
 
 TWO_HOURS = 2 * 3600
@@ -14,14 +15,11 @@ VARIANT_PRICES = REGISTRY.register(
         raw_table="bsale_raw.variant_prices",
         key_kind=KeyKind.CHILD,
         priority=Priority.MEDIUM,
+        request_priority=RequestPriority.P3_PRICES,
         parent="price_lists",
         webhook_topics=("price",),
         point_filters=("variantid", "code", "barcode"),
         freshness_sla_seconds=TWO_HOURS,
-        needs_live_verification=(
-            "webhook resource /v2/price_lists/{pl}/details.json?variant= ¿equivale a /v1 ?variantid=?",
-            "details.json no documenta filtro state ni fecha: sólo full reconcile por lista",
-        ),
     )
 )
 
@@ -33,12 +31,12 @@ VARIANT_COSTS = REGISTRY.register(
         raw_table="bsale_raw.variant_costs",
         key_kind=KeyKind.ENTITY,
         priority=Priority.MEDIUM,
+        request_priority=RequestPriority.P5_COSTS,
         parent="variants",
         full_reconcile=True,
         freshness_sla_seconds=TWO_HOURS,
         needs_live_verification=(
-            "costs.json es 1 request por variante: medir volumen real",
-            "history ¿está paginado o completo?",
+            "history sin metadata de paginación: NO se declara histórico completo",
             "¿responde para variantes inactivas?",
         ),
     )

@@ -19,6 +19,7 @@ class SyncMode(str, Enum):
     INCREMENTAL = "INCREMENTAL"
     FULL_RECONCILE = "FULL_RECONCILE"
     SCANNER = "SCANNER"
+    WINDOW_RECONCILE = "WINDOW_RECONCILE"
 
 
 class RunStatus(str, Enum):
@@ -35,6 +36,23 @@ class WebhookStatus(str, Enum):
     DONE = "DONE"
     RETRY = "RETRY"
     FAILED_FINAL = "FAILED_FINAL"
+    COALESCED = "COALESCED"  # absorbido por otro evento en cola con el mismo refresh_key
+
+
+class ResponseEnvelope(str, Enum):
+    """Forma de la respuesta del GET exacto de un webhook (evidencia en webhook_resource_responses)."""
+
+    V2_CODE_DATA = "V2_CODE_DATA"
+    OTHER = "OTHER"
+    NO_JSON = "NO_JSON"
+    NETWORK_ERROR = "NETWORK_ERROR"
+
+
+class DocumentChangeKind(str, Enum):
+    """Tipo de fila en document_change_log. Facturación/anulación se leen de state, no se codifican aquí."""
+
+    CREATED = "CREATED"
+    MODIFIED = "MODIFIED"
 
 
 def payload_hash(payload: Any) -> str:

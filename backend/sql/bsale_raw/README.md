@@ -1,13 +1,20 @@
 # backend/sql/bsale_raw
 
-**Fase 1: sin migraciones.** El modelo conceptual está en `docs/BSALE_RAW_ARCHITECTURE.md` (sección "Tablas propuestas").
+**Migraciones generadas, NO aplicadas.** Diseño y decisiones: `docs/BSALE_RAW_PHASE3_SQL_PROPOSAL.md`.
 
-Cuando se aprueben, las migraciones de este directorio deberán:
+Orden de aplicación manual (primero en entorno de prueba). Paso a paso: `docs/BSALE_RAW_PHASE3_APPLY_RUNBOOK.md`.
 
-- Crear el schema `bsale_raw` de forma idempotente (`CREATE SCHEMA IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`).
-- Usar PK `(company_id, bsale_id)` en entidades; `(company_id, variant_id, office_id)` como clave única operativa en `stocks`.
-- No agregar CHECKs rígidos sobre valores externos de Bsale (estados, tipos, códigos SII).
-- No agregar FKs entre tablas raw (los hijos pueden llegar antes que el padre); sólo FK a `bsale.companies(id)`.
-- Guardar siempre `payload JSONB` completo + `payload_hash`.
-- No tocar tablas del schema `bsale` ni `distribuidora`.
-- Aplicarse manualmente con el playbook habitual; nunca desde el código de la aplicación.
+1. `001_schema_sources.sql` … `008_webhooks.sql` (cada una en su propia transacción).
+2. `verify_bsale_raw.sql`: verificación de sólo lectura; falla con `RAISE EXCEPTION` ante drift.
+3. `009_seed_sources.sql`: seed idempotente (paso separado, requiere aprobación).
+
+Reglas:
+
+- `IF NOT EXISTS` sólo para el bootstrap inicial. Las migraciones posteriores deben ser explícitas y actualizar `verify_bsale_raw.sql` (el bloque GENERATED lo valida `backend/tests/bsale_raw/test_bsale_raw_migrations.py`).
+- Una columna por línea y constraints con nombre (`CONSTRAINT pk_/fk_/uq_/ck_…`): lo exige el parser de los tests.
+- Sólo FK a `bsale.companies (company_id)` (`BIGINT`) y FK internas de control. No hay FK entre tablas raw de datos.
+- No agregar CHECKs sobre valores externos de Bsale ni sobre `scope`.
+- Guardar siempre `payload JSONB` completo + `payload_hash` + `api_fetched_at`.
+- No guardar secretos ni headers de request; `sources.token_env` es el nombre de la variable.
+- No tocar los schemas `bsale` ni `distribuidora`; no usar `DROP` / `TRUNCATE` / `DELETE` / `UPDATE` / `ALTER` en estas migraciones.
+- Rollback con `DROP SCHEMA bsale_raw CASCADE` sólo antes del cutover (ver la propuesta, §8).

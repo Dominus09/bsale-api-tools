@@ -1,8 +1,17 @@
-"""Recursos de inventario: stock actual (crítico), recepciones y consumos."""
+"""Recursos de inventario: stock actual (crítico), recepciones y consumos.
+
+Stock (observado en fase 2): count C1=12.587, C2=1.264, C3=35.160; filtros ``variantid``,
+``officeid`` y ambos combinados funcionan. El scanner se particiona por company + office, es NO
+destructivo (sólo UPSERT) y la frescura se lleva por company + office. El reconcile destructivo
+es un proceso separado y menos frecuente.
+"""
 
 from __future__ import annotations
 
+from backend.services.bsale_raw.core.rate_limit import RequestPriority
 from backend.services.bsale_raw.core.registry import REGISTRY, KeyKind, Priority, ResourceSpec
+
+P2 = RequestPriority.P2_STOCK
 
 STOCKS = REGISTRY.register(
     ResourceSpec(
@@ -12,14 +21,14 @@ STOCKS = REGISTRY.register(
         raw_table="bsale_raw.stocks",
         key_kind=KeyKind.STOCK,
         priority=Priority.CRITICAL,
+        request_priority=P2,
         webhook_topics=("stock", "document"),
+        partition_by_office=True,
         point_filters=("variantid", "officeid", "code", "barcode"),
         freshness_sla_seconds=15 * 60,
         needs_live_verification=(
-            "webhook resource /v2/stocks.json?variant=&office= ¿equivale a /v1 ?variantid=&officeid=?",
+            "¿filas con quantity=0 para todas las combinaciones variante×sucursal?",
             "¿stocks.json devuelve filas de variantes inactivas?",
-            "¿existen filas con quantity=0 para todas las combinaciones variante×sucursal?",
-            "packs: sólo stock físico",
         ),
     )
 )
@@ -32,8 +41,11 @@ STOCK_RECEPTIONS = REGISTRY.register(
         raw_table="bsale_raw.stock_receptions",
         key_kind=KeyKind.ENTITY,
         priority=Priority.MEDIUM,
+        request_priority=RequestPriority.P5_COSTS,
         incremental_filter="admissiondate",
         point_filters=("officeid", "documentnumber"),
+        full_scan_global_allowed=False,
+        reconcile_window_days=7,
         freshness_sla_seconds=2 * 3600,
         needs_live_verification=("admissiondate filtra día exacto; no hay rango documentado",),
     )
@@ -47,6 +59,7 @@ STOCK_RECEPTION_DETAILS = REGISTRY.register(
         raw_table="bsale_raw.stock_reception_details",
         key_kind=KeyKind.CHILD,
         priority=Priority.MEDIUM,
+        request_priority=RequestPriority.P5_COSTS,
         parent="stock_receptions",
         freshness_sla_seconds=2 * 3600,
     )
@@ -60,8 +73,11 @@ STOCK_CONSUMPTIONS = REGISTRY.register(
         raw_table="bsale_raw.stock_consumptions",
         key_kind=KeyKind.ENTITY,
         priority=Priority.MEDIUM,
+        request_priority=RequestPriority.P5_COSTS,
         incremental_filter="consumptiondate",
         point_filters=("officeid",),
+        full_scan_global_allowed=False,
+        reconcile_window_days=7,
         freshness_sla_seconds=2 * 3600,
         needs_live_verification=("consumptiondate filtra día exacto; no hay rango documentado",),
     )
@@ -75,6 +91,7 @@ STOCK_CONSUMPTION_DETAILS = REGISTRY.register(
         raw_table="bsale_raw.stock_consumption_details",
         key_kind=KeyKind.CHILD,
         priority=Priority.MEDIUM,
+        request_priority=RequestPriority.P5_COSTS,
         parent="stock_consumptions",
         freshness_sla_seconds=2 * 3600,
     )

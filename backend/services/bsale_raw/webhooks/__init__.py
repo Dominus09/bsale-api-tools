@@ -10,13 +10,22 @@ Nunca se asume entrega exactly-once: el procesamiento debe ser idempotente.
 oficiales usan ``/v2/...`` para product/variant/price/stock y ``/documents/{id}.json`` para
 document. Sólo se aceptan rutas relativas que calcen con los patrones documentados del topic,
 coherentes con ``resourceId``/``officeId``/``priceListId``, y siempre sobre ``https://api.bsale.io``.
+
+Observado en fase 2: las respuestas ``/v2`` usan envelope ``code`` + ``data`` (no la forma V1) y
+pueden devolver 503 transitorios. Por eso la respuesta exacta sólo se guarda como evidencia y la
+entidad se refresca luego con su endpoint canónico V1, que es la única forma que alimenta las
+tablas operativas RAW.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Mapping
+
+from backend.services.bsale_raw.core.models import ResponseEnvelope
+from backend.services.bsale_raw.core.rate_limit import RequestPriority
 
 KNOWN_TOPICS = frozenset({"product", "variant", "price", "stock", "document"})
 KNOWN_ACTIONS = frozenset({"post", "put", "delete"})
@@ -51,7 +60,7 @@ class WebhookEvent:
 
     @property
     def dedupe_key(self) -> tuple[Any, ...]:
-        """Clave de idempotencia: el mismo evento reenviado no se procesa dos veces."""
+        """Reenvío exacto del mismo evento (Bsale no documenta event_id). No es único en BD."""
         return (
             self.company_id,
             self.topic,
@@ -63,8 +72,21 @@ class WebhookEvent:
         )
 
     @property
+    def refresh_key(self) -> str:
+        """Trabajo de refresh del recurso (sin action/send): base del coalescing en webhook_events."""
+        return _key_text((self.company_id, self.topic, self.resource_id, self.office_id, self.price_list_id))
+
+    @property
+    def dedupe_key_text(self) -> str:
+        return _key_text(self.dedupe_key)
+
+    @property
     def resource_url(self) -> str:
         return BSALE_API_ORIGIN + self.resource
+
+
+def _key_text(parts: tuple[Any, ...]) -> str:
+    return "|".join("" if p is None else str(p) for p in parts)
 
 
 def _opt_int(value: Any) -> int | None:
@@ -133,31 +155,87 @@ def parse_webhook(payload: Mapping[str, Any], cpn_to_company: Mapping[int, int])
 
 
 @dataclass(frozen=True)
+class ExactResourceResponse:
+    """Respuesta del GET exacto, guardada tal cual (evidencia); no alimenta tablas operativas."""
+
+    http_status: int | None
+    envelope: ResponseEnvelope
+    code: Any
+    body: Any
+
+
+def classify_exact_response(http_status: int | None, body: Any) -> ExactResourceResponse:
+    if http_status is None:
+        return ExactResourceResponse(None, ResponseEnvelope.NETWORK_ERROR, None, body)
+    if not isinstance(body, Mapping):
+        envelope = ResponseEnvelope.NO_JSON if body is None else ResponseEnvelope.OTHER
+        return ExactResourceResponse(http_status, envelope, None, body)
+    if "code" in body and "data" in body:
+        return ExactResourceResponse(http_status, ResponseEnvelope.V2_CODE_DATA, body.get("code"), body)
+    return ExactResourceResponse(http_status, ResponseEnvelope.OTHER, None, body)
+
+
+class TaskKind(str, Enum):
+    RESOURCE_EXACT = "RESOURCE_EXACT"  # GET exacto de `resource`; se guarda la respuesta original
+    CANONICAL_V1 = "CANONICAL_V1"  # refresh puntual V1: única fuente de las tablas operativas RAW
+    DERIVED = "DERIVED"  # efectos derivados (costos de variante nueva, stock de variantes del documento)
+
+
+@dataclass(frozen=True)
 class RefreshTask:
+    kind: TaskKind
     resource: str
     company_id: int
+    priority: RequestPriority
     params: Mapping[str, int]
     url: str | None = None
 
 
-def route(event: WebhookEvent) -> list[RefreshTask]:
-    """Refrescos que dispara un evento. La primera tarea consulta exactamente ``event.resource_url``."""
-    cid = event.company_id
-    primary = {
-        "product": "products",
-        "variant": "variants",
-        "price": "variant_prices",
-        "stock": "stocks",
-        "document": "documents",
-    }[event.topic]
-    params: dict[str, int] = {"id": event.resource_id}
-    if event.office_id is not None:
-        params["office_id"] = event.office_id
-    if event.price_list_id is not None:
-        params["price_list_id"] = event.price_list_id
-    tasks = [RefreshTask(primary, cid, params, url=event.resource_url)]
+_PRIMARY_RESOURCE = {
+    "product": "products",
+    "variant": "variants",
+    "price": "variant_prices",
+    "stock": "stocks",
+    "document": "documents",
+}
+
+
+def _canonical_v1(event: WebhookEvent) -> tuple[str, dict[str, int]]:
+    rid = event.resource_id
+    if event.topic == "product":
+        return f"/v1/products/{rid}.json", {"id": rid}
     if event.topic == "variant":
-        tasks.append(RefreshTask("variant_costs", cid, {"variant_id": event.resource_id}))
+        return f"/v1/variants/{rid}.json", {"id": rid}
+    if event.topic == "price":
+        if event.price_list_id is None:
+            raise WebhookValidationError("webhook price sin priceListId")
+        return (
+            f"/v1/price_lists/{event.price_list_id}/details.json?variantid={rid}",
+            {"price_list_id": event.price_list_id, "variantid": rid},
+        )
+    if event.topic == "stock":
+        if event.office_id is None:
+            return f"/v1/stocks.json?variantid={rid}", {"variantid": rid}
+        return (
+            f"/v1/stocks.json?variantid={rid}&officeid={event.office_id}",
+            {"variantid": rid, "officeid": event.office_id},
+        )
+    return f"/v1/documents/{rid}.json", {"id": rid}
+
+
+def route(event: WebhookEvent) -> list[RefreshTask]:
+    """Tareas de un evento: exacto (respuesta original) → canónico V1 → derivados. Todas P0."""
+    cid = event.company_id
+    p0 = RequestPriority.P0_TARGETED
+    primary = _PRIMARY_RESOURCE[event.topic]
+    canonical_path, canonical_params = _canonical_v1(event)
+    tasks = [
+        RefreshTask(TaskKind.RESOURCE_EXACT, primary, cid, p0, {"id": event.resource_id}, url=event.resource_url),
+        RefreshTask(TaskKind.CANONICAL_V1, primary, cid, p0, canonical_params, url=BSALE_API_ORIGIN + canonical_path),
+    ]
+    if event.topic == "variant" and event.action == "post":
+        tasks.append(RefreshTask(TaskKind.DERIVED, "variant_costs", cid, p0, {"variant_id": event.resource_id}))
     if event.topic == "document":
-        tasks.append(RefreshTask("stocks_for_document", cid, {"document_id": event.resource_id}))
+        tasks.append(RefreshTask(TaskKind.DERIVED, "document_details", cid, p0, {"document_id": event.resource_id}))
+        tasks.append(RefreshTask(TaskKind.DERIVED, "stocks_for_document", cid, p0, {"document_id": event.resource_id}))
     return tasks

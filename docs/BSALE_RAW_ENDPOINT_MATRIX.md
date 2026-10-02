@@ -4,6 +4,27 @@ Fuente: <https://docs.bsale.dev/first-steps/> y páginas Chile enlazadas (`/prod
 
 **Regla:** todo lo que no está explícito en la documentación se marca `NEEDS_LIVE_VERIFICATION` (abreviado **NLV**). No se programa ningún endpoint que no esté en esta matriz.
 
+**Fase 2 aprobada (2026-10-02):** las NLV verificadas se marcan **OBSERVED** o **REJECTED**; el detalle está en `BSALE_RAW_LIVE_VERIFICATION.md`. Datos clave:
+
+- **cpnId:** C1 = 96674, C2 = 5807, C3 = 21884.
+- **Stock count:** C1 12.587, C2 1.264, C3 35.160.
+- **Documentos C3:** 3.880.542, por lo que el full scan global está prohibido.
+- **`generationdaterange` en `/documents.json`:** 403 (REJECTED).
+
+### Prioridad central de requests (por empresa / token)
+
+Todos los consumidores de una empresa comparten **un único** `PriorityRateLimiter` (`core/rate_limit.py`). Cada token liberado se asigna al waiter de mayor prioridad (FIFO dentro del mismo nivel).
+
+| Prioridad | Uso |
+|---|---|
+| P0 | webhook / refresh puntual (targeted) |
+| P1 | OC 33 (documentos, detalles, refs, sellers) |
+| P2 | stock (escáner y reconcile) |
+| P3 | precios |
+| P4 | catálogo (productos, variantes) |
+| P5 | costos, recepciones, consumos |
+| P6 | clientes y configuración |
+
 ---
 
 ## 0. Hechos transversales (documentados)
@@ -17,7 +38,7 @@ Fuente: <https://docs.bsale.dev/first-steps/> y páginas Chile enlazadas (`/prod
 | Relaciones | Nodos `{"href": ..., "id": "12"}`; el `id` llega como **string**. |
 | `state` | En todos los recursos con estado: **0 = activo, 1 = inactivo** (productos, variantes, listas de precio, clientes, sucursales, impuestos, tipos, documentos, usuarios). |
 | Borrado | Productos y variantes **no se borran**, se desactivan (`state=1`) y se notifica con webhook `PUT`. |
-| Rate limit | FAQ: `429 Too Many Requests` al exceder **3.000 requests × 300 segundos** (~10 req/s). Alcance (token / instancia / IP): **NLV**. Headers de rate limit: no documentados (**NLV**). |
+| Rate limit | FAQ: `429 Too Many Requests` al exceder **3.000 requests × 300 segundos** (~10 req/s). Alcance (token / instancia / IP): **NLV** (sigue abierto). Headers de cuota: **OBSERVED: no aparecen** en respuestas normales → limiter local conservador + manejo de 429 / `Retry-After`. |
 | Errores | 400, 401 (token), 402 (instancia bloqueada por no pago), 403, 404, 405, 429, 500, 502. La FAQ indica que un 500 "The requested resource is not available" puede deberse al rate limit. |
 | Instancia | `GET https://credential.bsale.io/v1/instances/basic/{access_token}.json` → `id` (= `cpnId` de los webhooks), `code` (RUT), `name`, `state`, `country`. **Host distinto** a `api.bsale.io`: requiere allow-list explícita. |
 
@@ -41,9 +62,16 @@ Fuente: <https://docs.bsale.dev/first-steps/> y páginas Chile enlazadas (`/prod
   - solo usa el host `https://api.bsale.io`;
   - usa el token de la empresa resuelta por `cpnId`.
 
-  Rutas fuera de patrón se rechazan (`FAILED_FINAL`) hasta documentarlas (`backend/services/bsale_raw/webhooks`). Si las rutas `/v2` o sin versión responden con el mismo token y formato es **NLV**.
+  Rutas fuera de patrón se rechazan (`FAILED_FINAL`) hasta documentarlas (`backend/services/bsale_raw/webhooks`).
+- **OBSERVED:** las rutas `/v2` responden con el mismo token, pero con envelope **`code` + `data`** (≠ forma V1); un GET V2 de product devolvió **503 transitorio**.
+- **Flujo adoptado:**
+  1. GET exacto de `resource` (P0);
+  2. guardar la respuesta original como evidencia (`webhook_resource_responses`);
+  3. refresh **canónico V1** del mismo recurso (`/v1/products/{id}.json`, `/v1/variants/{id}.json`, `/v1/price_lists/{pl}/details.json?variantid=`, `/v1/stocks.json?variantid=&officeid=`, `/v1/documents/{id}.json`).
+
+  Las tablas operativas RAW sólo reciben forma V1. Un 5xx en el GET exacto no bloquea el refresh V1.
 - Documentado: los webhooks de stock "representan movimientos de entradas y salidas de stock, ya sea por recepción de productos, tomas de inventario, consumos o despachos".
-- Documentado: en el webhook de documento "podrán obtener el objeto document, pero con los datos de stock disponible de cada variante incluida". Cómo se expone ese stock en la respuesta es **NLV**.
+- Documentado: en el webhook de documento "podrán obtener el objeto document, pero con los datos de stock disponible de cada variante incluida". **OBSERVED:** el documento V1 no trae stock directo (sólo links a details / sellers / references) → stock puntual por variante.
 - No se documentan: firma o secreto del webhook, reintentos de entrega, orden de entrega ni exactly-once. Se asume **at-least-once, sin orden** y **sin autenticación propia** → validación por `cpnId` conocido + reconsulta a la API (nunca confiar en el contenido del webhook como dato).
 
 ---
@@ -65,12 +93,15 @@ Las frecuencias son la **propuesta** de la sección 2. "Tabla RAW" refiere al mo
 | Filtro state | No documentado |
 | Webhook | `stock` (put, `resourceId` = variante, `officeId`) y `document` (post) |
 | Incremental | **No hay filtro por fecha de modificación documentado.** El incremental real es: webhook → refresco puntual `variantid`+`officeid`; documento nuevo → refresco de sus variantes |
-| Full reconcile | Barrido por sucursal (`officeid`) paginado; snapshot completo por empresa con fusible de % de stale (patrón ya existente en `snapshot_reconcile.py`) |
-| Rate limit | 1 request por página de 50. Volumen real por empresa: **NLV** (variantes × sucursales con fila) |
-| Frecuencia propuesta | Webhook inmediato; escáner continuo que cubra cada empresa en ≤ 15 min; full reconcile cada 6 h |
-| SLA frescura | 15 min (peor caso sin webhook); objetivo < 1 min con webhook |
+| Filtros OBSERVED | `variantid`, `officeid` y combinados **funcionan** |
+| Escáner frecuente | Particionado por **empresa + sucursal**; **NO destructivo** (sólo UPSERT); checkpoint en `sync_cursors`; frescura en `sync_state` con scope `office:<id>` |
+| Reconcile destructivo | Separado y menos frecuente, por empresa + sucursal: snapshot completo de la sucursal en staging → fusible de % → elimina las filas de esa sucursal no vistas (patrón de `snapshot_reconcile.py`). Es el **único** modo que borra |
+| Prioridad | Webhook / targeted (P0) y OC 33 → stock puntual (P0) siempre adelantan al escáner (P2) |
+| Rate limit | 1 request por página de 50. **OBSERVED:** C1 12.587 (~252 pág.), C2 1.264 (~26), C3 35.160 (~704) |
+| Frecuencia propuesta | Webhook inmediato; escáner continuo ≤ 15 min por empresa (C3 ≈ 704 req ≈ 2,5 min a 5 rps); reconcile destructivo cada 6 h |
+| SLA frescura | 15 min por empresa + sucursal (peor caso sin webhook); objetivo < 1 min con webhook |
 | Tabla RAW | `bsale_raw.stocks` (estado ACTUAL, sin historia por poll) |
-| Riesgos / NLV | ¿filas con `quantity=0` para todo par variante×sucursal o sólo con movimiento?; ¿incluye variantes inactivas?; packs = sólo stock físico (documentado); webhook `/v2/stocks.json?variant=&office=` ↔ `/v1?variantid=&officeid=` |
+| Riesgos / NLV | ¿filas con `quantity=0` para todo par variante×sucursal o sólo con movimiento?; ¿incluye variantes inactivas?; packs = sólo stock físico (documentado) |
 
 ### 1.2 Documentos — CRÍTICO (prioridad empresa 3 / `document_type_id` 33 = OC de vendedores)
 
@@ -84,15 +115,22 @@ Las frecuencias son la **propuesta** de la sección 2. "Tabla RAW" refiere al mo
 | Filtros documentados | `emissiondate`, `expirationdate`, `emissiondaterange=[desde,hasta]`, `number`, `token`, `documenttypeid`, `clientid`, `clientcode`, `officeid`, `informedsii`, `codesii`, `totalamount`, `referencecode`, `referencenumber`, `rcofdate`, `detailid`, `state` |
 | Filtro state | Sí: `state=0` activos, `state=1` inactivos |
 | Webhook | `document` — documentado **sólo** `action=post` (creación) + `officeId` |
-| Incremental | `emissiondaterange` + `documenttypeid` + `officeid` con solape. **`generationdaterange` sólo está documentado en `/documents/summary.json`, NO en `/documents.json`** (el sync actual de Distribuidora lo usa → NLV crítico) |
-| Full reconcile | Re-barrido por `emissiondaterange` en ventanas de días hacia atrás (p. ej. 45 días para OC 33) + `count.json` para comparar totales por ventana |
-| Rate limit | 1 request por página + hijos (details/references/sellers) por documento si `expand` no basta |
+| Volumen OBSERVED | C3 sin filtros: **3.880.542** documentos → **full scan global PROHIBIDO** (`full_scan_global_allowed=False`) |
+| Incremental | `emissiondaterange` + `documenttypeid` + `officeid` acotado, con solape. **OBSERVED** C3: `documenttypeid=33` + `emissiondaterange` → 32 docs en la ventana de prueba |
+| `generationdaterange` | **REJECTED (HTTP 403)** en `/v1/documents.json`. Prohibido en bsale_raw (`FORBIDDEN_DOCUMENT_FILTERS`). **Riesgo:** `distribuidora/sync_service.py` (`sync_bsale_distribuidora_incremental`, modo dual) lo usa; no se modifica sin auditar su fallback |
+| Full reconcile | Re-barrido por `emissiondaterange` en ventanas (45 días OC 33, 7 días resto) + `count.json` por ventana. Nunca sin ventana |
+| Rate limit | 1 request por página + hijos (details/references/sellers) por documento. **`expand=[details]` INCONCLUSIVE** → no depender de expand |
 | Frecuencia propuesta | Webhook inmediato; incremental cada 2 min (empresa 3 / tipo 33, ventana 2 días, solape 10 min); resto de tipos cada 15 min; reconcile nocturno 45 días |
 | SLA frescura | 5 min para OC 33 empresa 3; 30 min para el resto |
 | Tabla RAW | `bsale_raw.documents` |
-| Riesgos / NLV | ¿Bsale envía webhook al anular o modificar (PUT)? No documentado → por eso el reconcile es obligatorio; `emissionDate` sin zona horaria (ventanas deben solaparse ±1 día); OC modificadas después de emitidas no se detectan por `emissiondaterange` si su emisión es antigua; `expand=[details]` ¿pagina a 25? |
+| Riesgos / NLV | ¿Bsale envía webhook al anular o modificar (PUT)? No documentado → por eso el reconcile es obligatorio; `emissionDate` sin zona horaria (ventanas deben solaparse ±1 día); OC modificadas después de emitidas no se detectan por `emissiondaterange` si su emisión es antigua |
 
-**Acción derivada documentada como requisito de negocio:** cuando llega una OC 33 (webhook o incremental), refrescar inmediatamente el stock de sus variantes (`/v1/stocks.json?variantid=X`) porque una OC puede reservar stock (`quantityReserved`).
+**Flujo OC 33 (OBSERVED: el documento trae links a details / sellers / references, pero NO stock directo):**
+
+1. webhook `document` (o incremental) → `/v1/documents/{id}.json`;
+2. `/v1/documents/{id}/details.json` **paginado completo** (fuente de integridad);
+3. variantes distintas de los detalles;
+4. `/v1/stocks.json?variantid=X&officeid=Y` puntual (P0) para cada variante en la sucursal del documento.
 
 ### 1.3 Detalles de documento — CRÍTICO
 
@@ -102,7 +140,7 @@ Las frecuencias son la **propuesta** de la sección 2. "Tabla RAW" refiere al mo
 | Clave Bsale | `id` del detalle (+ `document_id` padre como columna) |
 | Relaciones | `variant{id, description, code}` |
 | Campos | `id`, `lineNumber`, `quantity`, `netUnitValue`, `totalUnitValue`, `netAmount`, `taxAmount`, `totalAmount`, `netDiscount`, `totalDiscount`, `variant`, `note`, `relatedDetailId` |
-| Paginación | Sí (`count/limit/offset`, default 25) — paginar siempre |
+| Paginación | Sí (`count/limit/offset`, default 25) — paginar siempre. Es la **fuente de integridad** (no `expand`) |
 | Webhook / incremental | Heredado del documento |
 | Full reconcile | Reemplazo del set de detalles del documento en la misma transacción (detalles desaparecidos → borrar en RAW sólo si el documento se leyó completo) |
 | Tabla RAW | `bsale_raw.document_details` |
@@ -138,7 +176,7 @@ Las frecuencias son la **propuesta** de la sección 2. "Tabla RAW" refiere al mo
 | Filtro state | Sí (0 activo / 1 inactivo) |
 | Webhook | `product` (post/put; desactivación = put) |
 | Incremental | No hay filtro por fecha de modificación → webhook + reconcile |
-| Full reconcile | `products.json?state=0` + `products.json?state=1` (dos barridos explícitos; el comportamiento del listado **sin** `state` es NLV) |
+| Full reconcile | **1 barrido sin `state`** (OBSERVED: devuelve activos + inactivos); se guarda el `state` de cada ítem. `state=0` / `state=1` sólo para auditoría |
 | Frecuencia | Webhook inmediato; reconcile cada 2 h |
 | SLA | 2 h |
 | Tabla RAW | `bsale_raw.products` |
@@ -154,7 +192,7 @@ Las frecuencias son la **propuesta** de la sección 2. "Tabla RAW" refiere al mo
 | Filtros | `barcode`, `code`, `serialnumber`, `productid`, `state`, `fields`, `expand` |
 | Webhook | `variant` (post/put) |
 | Incremental | Webhook; para hidratar referencias faltantes: `GET /v1/variants/{id}.json` (punto) |
-| Full reconcile | `variants.json?state=0` + `variants.json?state=1` |
+| Full reconcile | 1 barrido sin `state` (OBSERVED: activos + inactivos); `state=0/1` sólo auditoría |
 | Frecuencia / SLA | Webhook inmediato; reconcile cada 2 h / 2 h |
 | Tabla RAW | `bsale_raw.variants` |
 | Riesgos | SKU y barcode no son únicos ni PK; RAW guarda la relación variante→producto tal cual la entrega Bsale |
@@ -190,10 +228,10 @@ Las frecuencias son la **propuesta** de la sección 2. "Tabla RAW" refiere al mo
 | Campo | Valor |
 |---|---|
 | Endpoint | `GET /v1/variants/{id}/costs.json` |
-| Respuesta | `averageCost` (string con decimal), `history[]` con `reception_detail{id}`, `admissionDate`, `cost`, `availableFifo` |
-| Paginación | No documentada para `history` (**NLV**) |
+| Respuesta | `averageCost` (string con decimal), `history[]` con `reception_detail{id}`, `admissionDate`, `cost`, `availableFifo`. **OBSERVED:** `averageCost`, `totalCost`, `history` |
+| Paginación | **OBSERVED:** `history` sin metadata de paginación → se guarda el JSON completo pero **NO se declara histórico completo** |
 | Webhook | No existe webhook de costo |
-| Estrategia eficiente | El costo cambia por **recepciones** de stock. En vez de pedir costos de todas las variantes: (1) costo inmediato para variantes nuevas (webhook `variant` post); (2) leer recepciones nuevas (`/v1/stocks/receptions.json?admissiondate=`) y sus detalles → refrescar costos sólo de esas variantes; (3) refresco selectivo bajo demanda; (4) barrido completo rotativo cada 2 h con presupuesto de requests |
+| Estrategia eficiente | El costo cambia por **recepciones** de stock. En vez de pedir costos de todas las variantes: (1) costo inmediato para variantes nuevas (webhook `variant` post); (2) leer recepciones nuevas (`/v1/stocks/receptions.json?admissiondate=`) y sus detalles → refrescar costos sólo de esas variantes; (3) refresco selectivo bajo demanda; (4) **escáner continuo de baja prioridad (P5)** que recorre todas las variantes con checkpoint en `sync_cursors`, SLA ≈ 2 h |
 | Rate limit | 1 request por variante: es el recurso más caro. Volumen real: **NLV** |
 | SLA | 2 h |
 | Tabla RAW | `bsale_raw.variant_costs` (JSON completo incluyendo `history`) |
@@ -226,7 +264,7 @@ Las frecuencias son la **propuesta** de la sección 2. "Tabla RAW" refiere al mo
 | Endpoint | `GET /v1/clients.json`; `/v1/clients/{id}.json`; `/clients/{id}/contacts.json`; `/clients/{id}/addresses.json`; `/clients/{id}/attributes.json`; `/clients/count.json` |
 | Filtros | `code` (RUT), `firstname`, `lastname`, `email`, `paymenttypeid`, `state` |
 | Webhook | **No documentado en CL** |
-| Incremental | No hay filtro de fecha → full reconcile; refresco puntual cuando un documento trae un `client.id` desconocido |
+| Incremental | No hay filtro de fecha → full reconcile (1 barrido sin `state`, OBSERVED: activos + inactivos); refresco puntual cuando un documento trae un `client.id` desconocido |
 | Frecuencia / SLA | Reconcile cada 6 h; punto inmediato por documento / 6 h |
 | Tabla RAW | `bsale_raw.clients` |
 | Riesgos | Coordenadas viven hoy en un campo libre (`facebook`, ver `sync_clients.py`): RAW lo guarda tal cual, la interpretación queda en `bsale` |
@@ -240,7 +278,7 @@ Las frecuencias son la **propuesta** de la sección 2. "Tabla RAW" refiere al mo
 | Tipos de documento | `/v1/document_types.json`, `/document_types/{id}.json` | `name`, `codesii`, `ledgeraccount`, `iselectronicdocument`, `state`; expand `book_type` | `bsale_raw.document_types` |
 | Tipos de producto | `/v1/product_types.json`, `/product_types/{id}.json`, `/product_types/{id}/attributes.json` | `name`, `state` | `bsale_raw.product_types` |
 
-Todos: sin webhook, sin filtro de fecha → full reconcile cada 6 h, SLA 6 h. Barrido explícito `state=0` y `state=1`.
+Todos: sin webhook, sin filtro de fecha → full reconcile cada 6 h, SLA 6 h. Barrido sin `state`; si incluye inactivos en estos recursos sigue **NLV** (sólo se verificó en products / variants / clients) → la auditoría `state=1` se ejecuta en el primer reconcile.
 
 ### 1.15 Recursos documentados fuera del alcance de fase 1
 
@@ -252,35 +290,35 @@ Usuarios (`/v1/users.json`), devoluciones (`/v1/returns.json`, filtro `returndat
 
 Presupuesto por empresa: **5 req/s** (50 % del límite documentado de 3.000/300 s) para dejar margen a los syncs legacy que comparten token. Configurable por `BSALE_RAW_RPS_<company_id>`.
 
-| Recurso | Webhook | Incremental / escáner | Full reconcile | SLA |
-|---|---|---|---|---|
-| stocks | inmediato | escáner continuo (ciclo ≤ 15 min por empresa) | 6 h | 15 min |
-| documents (emp. 3, tipo 33) | inmediato | cada 2 min, ventana 2 días, solape 10 min | nocturno 45 días | 5 min |
-| documents (resto) | inmediato | cada 15 min | nocturno 7 días | 30 min |
-| products / variants | inmediato | — | 2 h | 2 h |
-| variant_prices | inmediato | — | 2 h | 2 h |
-| variant_costs | (variant post) | recepciones nuevas → variantes afectadas | rotativo 2 h | 2 h |
-| clients | — | punto por documento | 6 h | 6 h |
-| receptions / consumptions | — | cada 30 min (día actual + anterior) | nocturno 7 días | 2 h |
-| offices, taxes, document_types, product_types, price_lists | — | — | 6 h | 6 h |
+| Recurso | Prioridad | Webhook | Incremental / escáner | Full reconcile | SLA |
+|---|---|---|---|---|---|
+| stocks | P2 (P0 si targeted) | inmediato → exacto + V1 puntual | escáner continuo NO destructivo por empresa + sucursal (ciclo ≤ 15 min) | destructivo por sucursal cada 6 h | 15 min por sucursal |
+| documents (emp. 3, tipo 33) | P1 | inmediato | cada 2 min, ventana 2 días, solape 10 min | por ventana 45 días, nocturno | 5 min |
+| documents (resto) | P1 | inmediato | cada 15 min | por ventana 7 días, nocturno | 30 min |
+| variant_prices | P3 | inmediato | — | 2 h | 2 h |
+| products / variants | P4 | inmediato | — | 2 h (1 barrido sin `state`) | 2 h |
+| variant_costs | P5 | (variant post → P0) | recepciones nuevas + escáner continuo | — (el escáner cubre todo en ≈ 2 h) | ≈ 2 h |
+| receptions / consumptions | P5 | — | cada 30 min (día actual + anterior) | por ventana 7 días, nocturno | 2 h |
+| clients | P6 | — | punto por documento | 6 h | 6 h |
+| offices, taxes, document_types, product_types, price_lists | P6 | — | — | 6 h | 6 h |
 
-Los intervalos se confirman tras medir volúmenes reales (sección 3).
+**Prohibido:** full scan global de documentos (3,88 M en C3) y `generationdaterange` en `/documents.json`.
 
 ---
 
-## 3. Dudas que requieren prueba en vivo (NEEDS_LIVE_VERIFICATION) contra las 3 APIs
+## 3. Estado de las dudas NEEDS_LIVE_VERIFICATION (tras fase 2)
 
-Ejecutar con un script de sólo lectura, autorizado explícitamente, empresa por empresa:
-
-1. **Rate limit:** alcance del límite 3.000/300 s (¿por token, instancia o IP?) y si la API devuelve headers de rate limit / `Retry-After`.
-2. **`cpnId` por empresa:** obtener `id` de instancia de cada token vía `credential.bsale.io` (necesario para mapear webhooks → `company_id`).
-3. **Listados sin `state`:** ¿`products.json`, `variants.json`, `offices.json`, etc. devuelven activos e inactivos, o sólo activos? (Caso real: variantes 10203 emp. 1, 31300/31301 emp. 3 referenciadas por stock y ausentes localmente.)
-4. **Stock:** volumen de filas por empresa; ¿filas con cantidad 0?; ¿filas para variantes inactivas?; ¿`variantid`+`officeid` devuelve exactamente 1 fila?
-5. **Webhooks `/v2`:** ¿`/v2/stocks.json?variant=&office=` y `/v2/price_lists/{pl}/details.json?variant=` responden con el mismo token? ¿Mismo formato que `/v1`?
-6. **Documento webhook:** ¿se recibe algo al anular (`state=1`) o modificar un documento?
-7. **`generationdaterange` en `/documents.json`:** ¿funciona aunque no esté documentado? (lo usa el sync Distribuidora actual).
-8. **`expand=[details]`** en listados de documentos: ¿trae todos los detalles o se trunca a 25?
-9. **Costos:** ¿`history` completo?; ¿responde para variantes inactivas?; tiempo de respuesta medio.
-10. **Recepciones / consumos:** ¿existe filtro de rango de fecha no documentado?
-11. **`commercialState`** en documentos CL: ¿existe en el JSON?
-12. **Stock en webhook de documento:** dónde y cómo aparece el "stock disponible de cada variante incluida".
+| # | Duda | Estado |
+|---|---|---|
+| 1 | Rate limit: headers / alcance | Headers: **OBSERVED ausentes**. Alcance: **abierto** |
+| 2 | `cpnId` por empresa | **OBSERVED**: 96674 / 5807 / 21884 |
+| 3 | Listados sin `state` | **OBSERVED** activos + inactivos en products, variants, clients. Configuración: **abierto** |
+| 4 | Stock: volumen y filtros | **OBSERVED** 12.587 / 1.264 / 35.160; filtros `variantid` / `officeid` funcionan. `quantity=0` e inactivas: **abierto** |
+| 5 | Webhooks `/v2` | **OBSERVED** responden; envelope `code` + `data` (≠ V1); 503 transitorio → exacto + V1 canónico |
+| 6 | Webhook al anular / modificar documento | **abierto** (reconcile por ventana obligatorio) |
+| 7 | `generationdaterange` en `/documents.json` | **REJECTED (403)**; riesgo legacy registrado |
+| 8 | `expand=[details]` | **INCONCLUSIVE** → details paginado |
+| 9 | Costos | **OBSERVED** `averageCost`, `totalCost`, `history` sin paginación. Inactivas / truncado: **abierto** |
+| 10 | Recepciones / consumos rango de fecha | **abierto** (se itera por día con solape) |
+| 11 | `commercialState` | **abierto** (se guarda en `payload` si existe) |
+| 12 | Stock en documento | **OBSERVED**: sin stock directo, sólo links → stock puntual por variante |

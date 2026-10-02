@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from backend.services.bsale_raw.core.rate_limit import RequestPriority
 from backend.services.bsale_raw.core.registry import REGISTRY, KeyKind, Priority, ResourceSpec
 
 SIX_HOURS = 6 * 3600
+P6 = RequestPriority.P6_CLIENTS_CONFIG
 
 OFFICES = REGISTRY.register(
     ResourceSpec(
@@ -14,9 +16,10 @@ OFFICES = REGISTRY.register(
         raw_table="bsale_raw.offices",
         key_kind=KeyKind.ENTITY,
         priority=Priority.LOW,
+        request_priority=P6,
         state_filter=True,
         freshness_sla_seconds=SIX_HOURS,
-        needs_live_verification=("listado sin state ¿incluye inactivas?",),
+        needs_live_verification=("listado sin state ¿incluye inactivas? (verificado sólo en products/variants/clients)",),
     )
 )
 
@@ -28,6 +31,7 @@ TAXES = REGISTRY.register(
         raw_table="bsale_raw.taxes",
         key_kind=KeyKind.ENTITY,
         priority=Priority.LOW,
+        request_priority=P6,
         state_filter=True,
         freshness_sla_seconds=SIX_HOURS,
     )
@@ -41,6 +45,7 @@ DOCUMENT_TYPES = REGISTRY.register(
         raw_table="bsale_raw.document_types",
         key_kind=KeyKind.ENTITY,
         priority=Priority.LOW,
+        request_priority=P6,
         state_filter=True,
         expand=("book_type",),
         freshness_sla_seconds=SIX_HOURS,
@@ -55,6 +60,7 @@ PRODUCT_TYPES = REGISTRY.register(
         raw_table="bsale_raw.product_types",
         key_kind=KeyKind.ENTITY,
         priority=Priority.LOW,
+        request_priority=P6,
         state_filter=True,
         freshness_sla_seconds=SIX_HOURS,
     )
@@ -68,6 +74,7 @@ PRICE_LISTS = REGISTRY.register(
         raw_table="bsale_raw.price_lists",
         key_kind=KeyKind.ENTITY,
         priority=Priority.LOW,
+        request_priority=P6,
         state_filter=True,
         expand=("coin",),
         freshness_sla_seconds=SIX_HOURS,

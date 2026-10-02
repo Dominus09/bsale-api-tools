@@ -1,4 +1,4 @@
-"""Frescura por ``(company_id, resource)``.
+"""Frescura por ``(company_id, resource, scope)``; scopes canónicos definidos en ``registry.py``.
 
 Responde: "¿cuándo fue confirmado por última vez este dato contra Bsale?". Persistencia futura en
 ``bsale_raw.sync_state`` (ver ``docs/BSALE_RAW_ARCHITECTURE.md``); aquí sólo el modelo y la
@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from enum import Enum
 
 from backend.services.bsale_raw.core.models import RunStatus
+from backend.services.bsale_raw.core.registry import GLOBAL_SCOPE, office_scope  # noqa: F401
 
 
 class FreshnessLevel(str, Enum):
@@ -25,6 +26,7 @@ class FreshnessLevel(str, Enum):
 class FreshnessState:
     company_id: int
     resource: str
+    scope: str = GLOBAL_SCOPE
     last_attempt_at: datetime | None = None
     last_success_at: datetime | None = None
     last_webhook_at: datetime | None = None
