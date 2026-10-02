@@ -367,12 +367,20 @@ Se aplican los webhooks documentados más el full reconcile según la matriz. En
 
 1. **Fase 1 (aprobada):** arquitectura, matriz, inventario, scaffold y tests puros.
 2. **Fase 2 (aprobada):** verificación en vivo, de solo lectura, de las dudas NLV (`BSALE_RAW_LIVE_VERIFICATION.md`).
-3. **Fase 3 (migraciones generadas, no aplicadas):**
-   - `backend/sql/bsale_raw/001…008` → `verify_bsale_raw.sql` → `009_seed_sources.sql` (aplicación manual, primero en entorno de prueba; ver `docs/BSALE_RAW_PHASE3_APPLY_RUNBOOK.md`);
-   - motor de full reconcile para los recursos de configuración, sin consumidores.
-4. **Fase 4:** stock (escáner y puntual) y documentos (incremental), en paralelo a los syncs actuales para comparar paridad.
-5. **Fase 5:** inbox y worker de webhooks; solicitud de activación a Bsale.
-6. **Fase 6:** `bsale` pasa a leer desde `bsale_raw`; retiro gradual de los syncs legacy según `BSALE_SYNC_INDEX.md`.
+3. **Fase 3 (aplicada y verificada):** `backend/sql/bsale_raw/001…008` → `verify_bsale_raw.sql` → `009_seed_sources.sql` (ver `docs/BSALE_RAW_PHASE3_APPLY_RUNBOOK.md`).
+4. **Fase 4A / 4B:** motor genérico `run_entity_sync` (FULL_RECONCILE, manual, `python -m backend.jobs.bsale_raw`) para los recursos de configuración, sin consumidores. Estado por recurso:
+
+   | Recurso | Estado |
+   |---|---|
+   | `offices` | IMPLEMENTED + LIVE VALIDATED C3 (dry-run, RUN 1 / RUN 2 idempotente, paridad legacy) |
+   | `taxes` | IMPLEMENTED / NOT YET LIVE VALIDATED |
+   | `document_types` | IMPLEMENTED / NOT YET LIVE VALIDATED (sólo metadata; sin lógica OC 33) |
+   | `product_types` | IMPLEMENTED / NOT YET LIVE VALIDATED |
+   | `price_lists` | IMPLEMENTED / NOT YET LIVE VALIDATED (sólo metadata; sin `variant_prices`) |
+
+5. **Fase 4 (siguiente):** catálogo, stock (escáner y puntual) y documentos (incremental), en paralelo a los syncs actuales para comparar paridad.
+6. **Fase 5:** inbox y worker de webhooks; solicitud de activación a Bsale.
+7. **Fase 6:** `bsale` pasa a leer desde `bsale_raw`; retiro gradual de los syncs legacy según `BSALE_SYNC_INDEX.md`.
 
 **Rollback:**
 - **Antes del cutover** (sin jobs productivos, sin webhooks, sin consumidores y con RAW aún no productivo), `DROP SCHEMA bsale_raw CASCADE` es aceptable.

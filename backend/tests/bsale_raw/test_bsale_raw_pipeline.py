@@ -173,7 +173,7 @@ class FakeStore:
             2: SourceConfig(2, 5807, "Romero", "BSALE_TOKEN_Romero"),
             3: SourceConfig(3, 21884, "La Quillotana SPA", "BSALE_TOKEN_SPA"),
         }
-        self.tables: dict[str, dict] = {TABLE: {}}
+        self.tables: dict[str, dict] = {REGISTRY.get(n).raw_table: {} for n in REGISTRY.pipeline_names()}
         self.runs: dict[int, dict] = {}
         self.entity_runs: dict[int, dict] = {}
         self.sync_state: dict[tuple, dict] = {}
@@ -187,8 +187,8 @@ class FakeStore:
     def now(self) -> datetime:
         return self._tx_now or self.db_clock()
 
-    def seed(self, company_id: int, payload: dict, *, fetched_at: datetime, missing_since=None) -> None:
-        self.tables[TABLE][(company_id, int(payload["id"]))] = {
+    def seed(self, company_id: int, payload: dict, *, fetched_at: datetime, missing_since=None, table=TABLE) -> None:
+        self.tables[table][(company_id, int(payload["id"]))] = {
             "payload": payload,
             "payload_hash": payload_hash(payload),
             "first_seen_at": fetched_at,
@@ -200,8 +200,8 @@ class FakeStore:
             "sync_run_id": None,
         }
 
-    def rows(self, company_id: int) -> dict[int, dict]:
-        return {bid: r for (cid, bid), r in self.tables[TABLE].items() if cid == company_id}
+    def rows(self, company_id: int, table: str = TABLE) -> dict[int, dict]:
+        return {bid: r for (cid, bid), r in self.tables[table].items() if cid == company_id}
 
     def resolve_source(self, company_id):
         self.events.append("resolve_source")
@@ -352,11 +352,12 @@ def client_factory_for(adapter: FakeBsale):
     return factory
 
 
-def run(store: FakeStore, adapter: FakeBsale, *, company_id=3, dry_run=False, clock=None, env=None):
+def run(store: FakeStore, adapter: FakeBsale, *, company_id=3, dry_run=False, clock=None, env=None,
+        resource="offices"):
     return run_entity_sync(
         store=store,
         company_id=company_id,
-        resource="offices",
+        resource=resource,
         mode=SyncMode.FULL_RECONCILE,
         dry_run=dry_run,
         client_factory=client_factory_for(adapter),
@@ -787,10 +788,18 @@ def test_dry_run_reports_fuse_without_writing():
     assert out.status == "FAILED" and out.fuse["tripped"] and "tx_begin" not in store.events
 
 
-def test_only_offices_enabled():
-    assert REGISTRY.pipeline_names() == ["offices"]
-    with pytest.raises(UnsupportedSyncError):
-        run_entity_sync(store=FakeStore(), company_id=3, resource="stocks")
+CONFIG_RESOURCES = ["offices", "taxes", "document_types", "product_types", "price_lists"]
+NOT_YET_ENABLED = ["products", "variants", "clients", "stocks", "variant_prices", "variant_costs",
+                   "documents", "document_details", "stock_receptions", "stock_consumptions"]
+
+
+def test_only_configuration_resources_enabled():
+    assert REGISTRY.pipeline_names() == CONFIG_RESOURCES
+    for name in NOT_YET_ENABLED:
+        if name in REGISTRY.names():
+            assert not REGISTRY.get(name).pipeline_enabled, name
+        with pytest.raises(UnsupportedSyncError):
+            run_entity_sync(store=FakeStore(), company_id=3, resource=name)
     with pytest.raises(UnsupportedSyncError):
         run_entity_sync(store=FakeStore(), company_id=3, resource="offices", mode=SyncMode.INCREMENTAL)
 
@@ -823,7 +832,8 @@ def test_cli_output_and_args():
 def test_cli_rejects_unsupported_resource_and_mode():
     never = lambda **kw: pytest.fail("no debe ejecutarse")  # noqa: E731
     base = ["sync", "--company", "3", "--mode", "full-reconcile"]
-    assert cli.main([*base, "--resource", "stocks"], runner=never, out=io.StringIO()) == cli.EXIT_USAGE
+    for name in NOT_YET_ENABLED:
+        assert cli.main([*base, "--resource", name], runner=never, out=io.StringIO()) == cli.EXIT_USAGE
     assert cli.main(["sync", "--company", "3", "--resource", "offices", "--mode", "incremental"],
                     runner=never, out=io.StringIO()) == cli.EXIT_USAGE
 

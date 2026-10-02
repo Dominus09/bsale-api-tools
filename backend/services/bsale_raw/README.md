@@ -8,9 +8,20 @@ Documentación:
 - Matriz de endpoints (oficial): [`docs/BSALE_RAW_ENDPOINT_MATRIX.md`](../../../docs/BSALE_RAW_ENDPOINT_MATRIX.md)
 - Inventario de syncs existentes: [`docs/BSALE_SYNC_INDEX.md`](../../../docs/BSALE_SYNC_INDEX.md)
 
-## Estado: fase 4A (primer pipeline: offices, FULL_RECONCILE, manual)
+## Estado: fase 4B (configuración, FULL_RECONCILE, manual)
 
 Motor genérico en `core/` + entrypoint `python -m backend.jobs.bsale_raw`. Sin jobs programados ni endpoint de webhooks.
+Un recurso se habilita sólo con su `ResourceSpec` (`typed_columns` + `pipeline_enabled=True`); no hay código por recurso.
+
+| Recurso | Estado |
+|---|---|
+| `offices` | IMPLEMENTED + LIVE VALIDATED C3 |
+| `taxes` | IMPLEMENTED / NOT YET LIVE VALIDATED |
+| `document_types` | IMPLEMENTED / NOT YET LIVE VALIDATED (sólo metadata, sin lógica OC 33) |
+| `product_types` | IMPLEMENTED / NOT YET LIVE VALIDATED |
+| `price_lists` | IMPLEMENTED / NOT YET LIVE VALIDATED (sólo metadata, sin `variant_prices`) |
+
+El barrido es uno solo, sin `state` ni `expand` (sólo `limit`/`offset`).
 
 | Módulo | Contenido |
 |---|---|

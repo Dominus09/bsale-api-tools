@@ -8,6 +8,7 @@ script por endpoint. La fuente de verdad de cada campo es ``docs/BSALE_RAW_ENDPO
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any, Callable
 
@@ -59,6 +60,31 @@ def optional_int(value: Any) -> int | None:
 
 def optional_text(value: Any) -> str | None:
     return None if value is None else str(value)
+
+
+def optional_numeric(value: Any) -> Decimal | None:
+    """Número Bsale (int, float o string numérico, p. ej. ``"19.0"``) como ``Decimal`` exacto."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        raise ValueError("valor no numérico: bool")
+    if isinstance(value, (int, float, str)):
+        try:
+            number = Decimal(str(value).strip())
+        except InvalidOperation:
+            raise ValueError(f"valor no numérico: {type(value).__name__}") from None
+        if number.is_finite():
+            return number
+    raise ValueError(f"valor no numérico: {type(value).__name__}")
+
+
+def optional_relation_id(value: Any) -> int | None:
+    """Id de un nodo relación Bsale (``{"href": ..., "id": "1"}``); ausente → None."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError(f"relación no es objeto: {type(value).__name__}")
+    return optional_int(value.get("id"))
 
 
 @dataclass(frozen=True)
