@@ -153,6 +153,10 @@ class FakeTx:
         self.s.events.append("read_existing_stock")
         return self.s._existing_stock(spec, company_id, office_id)
 
+    def read_existing_stock_variants(self, spec, company_id, variant_ids):
+        self.s.events.append("read_existing_stock_variants")
+        return self.s._existing_stock_variants(spec, company_id, variant_ids)
+
     def upsert_stock(self, spec, rows, *, sync_run_id, last_source):
         self.s.events.append("upsert_stock")
         table = self.s.tables[spec.raw_table]
@@ -199,7 +203,7 @@ class FakeTx:
 
     def finish_success(self, handle, outcome):
         self.s._close(handle, outcome)
-        st = self.s.sync_state[(outcome.company_id, outcome.resource, outcome.scope)]
+        st = self.s.sync_state[(outcome.company_id, outcome.resource, outcome.sync_state_scope)]
         now = self.s.now()
         st.update(
             last_attempt_at=handle.started_at,
@@ -270,7 +274,8 @@ class FakeStore:
             self.held.discard(key)
             self.events.append("unlock")
 
-    def start_run(self, *, mode, trigger, host, company_id, resource, scope):
+    def start_run(self, *, mode, trigger, host, company_id, resource, scope, state_scope=None):
+        state_key = (company_id, resource, state_scope or scope)
         with self.transaction():
             now = self.now()
             run_id = next(self._ids)
@@ -280,7 +285,7 @@ class FakeStore:
             self.entity_runs[entity_run_id] = {"sync_run_id": run_id, "company_id": company_id,
                                                "resource": resource, "scope": scope, "status": "RUNNING"}
             st = self.sync_state.setdefault(
-                (company_id, resource, scope),
+                state_key,
                 {"last_success_at": None, "last_full_reconcile_at": None, "last_error_at": None, "last_error": None},
             )
             st.update(last_attempt_at=now, status="RUNNING", last_sync_run_id=run_id)
@@ -308,6 +313,18 @@ class FakeStore:
     def read_existing_stock(self, spec, company_id, office_id):
         self.events.append("read_existing_stock")
         return self._existing_stock(spec, company_id, office_id)
+
+    def _existing_stock_variants(self, spec, company_id, variant_ids):
+        wanted = set(variant_ids)
+        return {
+            (vid, oid): ExistingRow(vid, r["payload_hash"], r["api_fetched_at"], None)
+            for (cid, vid, oid), r in self.tables[spec.raw_table].items()
+            if cid == company_id and vid in wanted
+        }
+
+    def read_existing_stock_variants(self, spec, company_id, variant_ids):
+        self.events.append("read_existing_stock_variants")
+        return self._existing_stock_variants(spec, company_id, variant_ids)
 
     def seed_stock(self, company_id: int, payload: dict, *, fetched_at: datetime, table="bsale_raw.stocks") -> None:
         key = (company_id, int(payload["variant"]["id"]), int(payload["office"]["id"]))
@@ -353,7 +370,7 @@ class FakeStore:
     def finish_failed(self, handle, outcome):
         with self.transaction():
             self._close(handle, outcome)
-            st = self.sync_state[(outcome.company_id, outcome.resource, outcome.scope)]
+            st = self.sync_state[(outcome.company_id, outcome.resource, outcome.sync_state_scope)]
             st.update(
                 last_attempt_at=handle.started_at,
                 last_error_at=self.now(),
@@ -903,7 +920,7 @@ def test_cli_output_and_args():
                     runner=runner, out=buf)
     assert code == cli.EXIT_SUCCESS
     assert seen == {"company_id": 3, "resource": "offices", "mode": SyncMode.FULL_RECONCILE, "dry_run": True,
-                    "office_id": None}
+                    "office_id": None, "variant_id": None}
     lines = buf.getvalue().splitlines()
     assert lines[0] == "dry_run=true"
     keys = [line.split("=", 1)[0] for line in lines[1:]]

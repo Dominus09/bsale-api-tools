@@ -49,7 +49,7 @@ STOCKS = REGISTRY.register(
             TypedColumn("quantity_available", "quantityAvailable", optional_numeric),
         ),
         pipeline_enabled=True,
-        pipeline_modes=(SyncMode.SCANNER, SyncMode.FULL_RECONCILE),
+        pipeline_modes=(SyncMode.SCANNER, SyncMode.FULL_RECONCILE, SyncMode.POINT),
     )
 )
 

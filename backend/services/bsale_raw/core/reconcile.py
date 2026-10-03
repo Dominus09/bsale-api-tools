@@ -66,18 +66,28 @@ class ReconcilePlan:
             "reason": self.fuse_reason,
         }
 
-    def counts(self, applied_ids: Iterable[Any]) -> dict[str, int]:
-        """Conteos reales a partir de las filas que el UPSERT efectivamente aplicó."""
+    def predicted_classes(self) -> dict[Any, str]:
+        """Clase prevista por fila antes de escribir (dry-run)."""
+        return dict(self._classes)
+
+    def classify(self, applied_ids: Iterable[Any]) -> dict[Any, str]:
+        """Clase real de cada fila del snapshot a partir de lo que el UPSERT efectivamente aplicó."""
         applied = set(applied_ids)
-        out = {"inserted": 0, "updated": 0, "unchanged": 0, "skipped_newer": 0}
-        for bsale_id, kind in self._classes.items():
-            if bsale_id not in applied:
-                out["skipped_newer"] += 1
+        out: dict[Any, str] = {}
+        for key, kind in self._classes.items():
+            if key not in applied:
+                out[key] = "skipped_newer"
             elif kind == "skipped_newer":
                 # La fila destino cambió entre la lectura y el UPSERT: se aplicó igual.
-                out["updated"] += 1
+                out[key] = "updated"
             else:
-                out[kind] += 1
+                out[key] = kind
+        return out
+
+    def counts(self, applied_ids: Iterable[Any]) -> dict[str, int]:
+        out = {"inserted": 0, "updated": 0, "unchanged": 0, "skipped_newer": 0}
+        for kind in self.classify(applied_ids).values():
+            out[kind] += 1
         return out
 
 

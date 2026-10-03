@@ -218,7 +218,12 @@ def _required_relation(payload: dict[str, Any], name: str) -> int:
 
 
 def build_stock_rows(
-    spec: ResourceSpec, company_id: int, snapshot: Snapshot, *, office_id: int | None = None
+    spec: ResourceSpec,
+    company_id: int,
+    snapshot: Snapshot,
+    *,
+    office_id: int | None = None,
+    variant_id: int | None = None,
 ) -> list[StockRow]:
     """
     Una fila por ítem. Invalida el snapshot completo: ``variant.id`` / ``office.id`` ausentes o no
@@ -230,13 +235,17 @@ def build_stock_rows(
     seen: set[tuple[int, int]] = set()
     duplicates: list[tuple[int, int]] = []
     wrong_office: set[int] = set()
+    wrong_variant: set[int] = set()
     for item in snapshot.items:
-        variant_id = _required_relation(item.payload, "variant")
+        item_variant = _required_relation(item.payload, "variant")
         item_office = _required_relation(item.payload, "office")
+        if variant_id is not None and item_variant != variant_id:
+            wrong_variant.add(item_variant)
+            continue
         if office_id is not None and item_office != office_id:
             wrong_office.add(item_office)
             continue
-        key = (variant_id, item_office)
+        key = (item_variant, item_office)
         if key in seen:
             duplicates.append(key)
             continue
@@ -245,18 +254,22 @@ def build_stock_rows(
             typed = {col.column: col.extract(item.payload) for col in spec.typed_columns}
         except ValueError as exc:
             raise SnapshotValidationError(
-                f"{spec.name} variant={variant_id} office={item_office}: {exc}"
+                f"{spec.name} variant={item_variant} office={item_office}: {exc}"
             ) from exc
         rows.append(
             StockRow(
                 company_id=company_id,
-                variant_id=variant_id,
+                variant_id=item_variant,
                 office_id=item_office,
                 typed=typed,
                 payload=item.payload,
                 payload_hash=payload_hash(item.payload),
                 api_fetched_at=item.fetched_at,
             )
+        )
+    if wrong_variant:
+        raise SnapshotValidationError(
+            f"{spec.name}: filas de variantes {sorted(wrong_variant)[:5]} en un refresh de variant={variant_id}"
         )
     if wrong_office:
         raise SnapshotValidationError(

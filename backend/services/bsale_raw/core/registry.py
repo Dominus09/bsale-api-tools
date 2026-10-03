@@ -33,6 +33,25 @@ def document_type_scope(document_type_id: int) -> str:
     return f"document_type:{int(document_type_id)}"
 
 
+# POINT (refresh dirigido de stock). El scope detallado va SÓLO a sync_entity_runs (historial por
+# corrida); sync_state guarda una única fila agregada POINT_STATE_SCOPE por empresa/recurso, para no
+# crear una fila por variante y no marcar como fresca una sucursal entera por refrescar una variante.
+POINT_STATE_SCOPE = "point"
+
+
+def variant_scope(variant_id: int, office_id: int | None = None) -> str:
+    base = f"variant:{int(variant_id)}"
+    return base if office_id is None else f"{base}:office:{int(office_id)}"
+
+
+def point_scope(variant_ids: list[int], office_id: int | None = None) -> str:
+    """Una variante → ``variant:<v>[:office:<o>]``; varias → ``variants:<n>[:office:<o>]`` (lista en el summary)."""
+    if len(variant_ids) == 1:
+        return variant_scope(variant_ids[0], office_id)
+    base = f"variants:{len(variant_ids)}"
+    return base if office_id is None else f"{base}:office:{int(office_id)}"
+
+
 class Priority(str, Enum):
     CRITICAL = "CRITICAL"
     HIGH = "HIGH"

@@ -22,7 +22,9 @@ Un recurso se habilita sólo con su `ResourceSpec` (`typed_columns` + `pipeline_
 | `price_lists` | IMPLEMENTED + LIVE VALIDATED C3 (sólo metadata, sin `variant_prices`) |
 | `products` | IMPLEMENTED + LIVE VALIDATED C3 |
 | `variants` | IMPLEMENTED + LIVE VALIDATED C3 (sin stock, precios ni costos) |
-| `stocks` | IMPLEMENTED / NOT YET LIVE VALIDATED (por sucursal: `--office`, modos `scanner` / `full-reconcile`) |
+| `stocks` SCANNER | IMPLEMENTED + LIVE VALIDATED C3 office 1 / office 4 (5.860 filas, 118 requests, ~41 s) |
+| `stocks` FULL_RECONCILE | IMPLEMENTED / NOT YET LIVE VALIDATED |
+| `stocks` POINT | IMPLEMENTED / NOT YET LIVE VALIDATED (`--variant` [+ `--office`]) |
 
 Entidades: un barrido sin `state` ni `expand` (sólo `limit`/`offset`); devuelve activos e inactivos.
 En `variants`, SKU (`code`) y barcode (`bar_code`) se guardan tal cual (sin unicidad ni deduplicación) y
@@ -44,13 +46,22 @@ En `variants`, SKU (`code`) y barcode (`bar_code`) se guardan tal cual (sin unic
 - Lectura de existentes sin `FOR UPDATE`; UPSERT por lotes de 500; una sola transacción corta después del HTTP.
 - Idempotencia: a diferencia del catálogo, `updated > 0` en RUN 2 es correcto si hubo ventas/reservas entre corridas;
   lo que no debe aparecer es `inserted` para claves ya existentes, ni borrados en scanner.
-- Futuro (no implementado): refresh dirigido `variantid` / `variantid+officeid` (P0) con el mismo UPSERT, disparado por
-  webhook `stock` o por OC 33 tras el COMMIT del documento.
+- `POINT` (refresh dirigido, `refresh_stock_point` / `refresh_stock_variants`): un request
+  `stocks.json?variantid=V[&officeid=O]` por variante (Bsale no documenta listas de ids), prioridad **P0** en el mismo
+  limitador de la empresa, mismo UPSERT con frescura sobre las mismas filas (`last_source = 'POINT'`).
+  - `variant + office`: 1 fila → UPSERT; 0 filas → `NO_ROWS` sin escritura (no se fabrica 0 ni se borra); >1 fila → FAILED (ambigua).
+  - `variant` sola: UPSERT de todas las sucursales devueltas; las que no vinieron no se tocan.
+  - Sin advisory lock: un scanner de ~41 s nunca bloquea un POINT; la frescura por fila decide (un scanner con datos
+    anteriores al POINT termina en `skipped_newer`). Un POINT con datos viejos tampoco pisa una fila más nueva.
+  - Un `sync_runs` + `sync_entity_runs` por llamada (scope `variant:<v>[:office:<o>]` o `variants:<n>[:office:<o>]`),
+    detalle por variante en `summary.point`. `sync_state` usa UNA fila agregada `(company, stocks, point)`, no una por variante.
+  - Lote: PARTIAL si fallan algunas variantes, FAILED si fallan todas; máximo 500 variantes por llamada.
+- Futuro (no implementado): OC 33 / webhook `stock` → `affected_variants` → COMMIT → `refresh_stock_variants(...)`.
 
 | Módulo | Contenido |
 |---|---|
 | `core/engine.py` | `run_entity_sync`: fuente → lock → run RUNNING → fetch completo → transacción corta (fusible, UPSERT con frescura, `missing_since`, run/state) → unlock. |
-| `core/stock_engine.py` | `run_stock_sync`: mismo flujo por `office:<id>`; scanner no destructivo / reconcile estricto con DELETE stale acotado. |
+| `core/stock_engine.py` | `run_stock_sync`: mismo flujo por `office:<id>`; scanner no destructivo / reconcile estricto con DELETE stale acotado. `refresh_stock_point` / `refresh_stock_variants`: POINT P0 por variante, sin lock, sin borrado. |
 | `core/snapshot.py` | `fetch_snapshot` (paginación contra `count`, estricta o con `CountDrift`), `build_rows`, `build_stock_rows`. |
 | `core/reconcile.py` | `plan_reconcile`: conteos, faltantes elegibles (`api_fetched_at <= snapshot_started_at`), fusible 20 %. |
 | `core/store.py` | `PgRawStore` (toda la SQL), advisory lock `(int, int)`, `sync_runs` / `sync_entity_runs` / `sync_state`. |

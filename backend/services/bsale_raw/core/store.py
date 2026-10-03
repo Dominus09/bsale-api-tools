@@ -79,6 +79,15 @@ class EntityOutcome:
     fuse: dict[str, Any] | None = None
     error: str | None = None
     sync_run_id: int | None = None
+    # Fila de sync_state cuando difiere del scope de la corrida (POINT: scope detallado por
+    # variante en sync_entity_runs, una sola fila agregada en sync_state).
+    state_scope: str | None = None
+    # POINT: variantes pedidas y resultado por variante (queda en sync_runs.summary).
+    point: dict[str, Any] | None = None
+
+    @property
+    def sync_state_scope(self) -> str:
+        return self.state_scope or self.scope
 
     def summary(self) -> dict[str, Any]:
         data = asdict(self)
@@ -218,6 +227,12 @@ _SELECT_EXISTING_STOCK = (
     "WHERE company_id = %s AND office_id = %s"
 )
 
+# POINT: todas las sucursales de las variantes pedidas en UNA consulta (usa la PK).
+_SELECT_EXISTING_STOCK_VARIANTS = (
+    "SELECT variant_id, office_id, payload_hash, api_fetched_at FROM {table} "
+    "WHERE company_id = %s AND variant_id = ANY(%s)"
+)
+
 _SELECT_EXISTING = "SELECT bsale_id, payload_hash, api_fetched_at, missing_since FROM {table} WHERE company_id = %s"
 
 _RESOLVE_SOURCE = """
@@ -300,6 +315,10 @@ class RawTx(Protocol):
         self, spec: ResourceSpec, company_id: int, office_id: int
     ) -> dict[tuple[int, int], ExistingRow]: ...
 
+    def read_existing_stock_variants(
+        self, spec: ResourceSpec, company_id: int, variant_ids: list[int]
+    ) -> dict[tuple[int, int], ExistingRow]: ...
+
     def upsert_stock(
         self, spec: ResourceSpec, rows: list[StockRow], *, sync_run_id: int | None, last_source: str
     ) -> set[tuple[int, int]]: ...
@@ -316,9 +335,16 @@ class RawStore(Protocol):
 
     def advisory_lock(self, company_id: int, resource: str, scope: str) -> Any: ...
 
-    def start_run(self, *, mode: str, trigger: str, host: str | None, company_id: int, resource: str, scope: str) -> RunHandle: ...
+    def start_run(
+        self, *, mode: str, trigger: str, host: str | None, company_id: int, resource: str, scope: str,
+        state_scope: str | None = None,
+    ) -> RunHandle: ...
 
     def read_existing(self, spec: ResourceSpec, company_id: int) -> dict[int, ExistingRow]: ...
+
+    def read_existing_stock_variants(
+        self, spec: ResourceSpec, company_id: int, variant_ids: list[int]
+    ) -> dict[tuple[int, int], ExistingRow]: ...
 
     def read_existing_stock(
         self, spec: ResourceSpec, company_id: int, office_id: int
@@ -376,6 +402,15 @@ def _read_existing_stock(cur: Any, spec: ResourceSpec, company_id: int, office_i
     return _existing_stock_from_rows(cur.fetchall())
 
 
+def _read_existing_stock_variants(
+    cur: Any, spec: ResourceSpec, company_id: int, variant_ids: list[int]
+) -> dict[tuple[int, int], ExistingRow]:
+    if not variant_ids:
+        return {}
+    cur.execute(_SELECT_EXISTING_STOCK_VARIANTS.format(table=_table(spec)), (company_id, list(variant_ids)))
+    return _existing_stock_from_rows(cur.fetchall())
+
+
 @dataclass
 class PgRawTx:
     cur: Any
@@ -411,6 +446,11 @@ class PgRawTx:
     ) -> dict[tuple[int, int], ExistingRow]:
         """Lectura MVCC sin ``FOR UPDATE``: no bloquea refresh dirigidos; la frescura la garantiza el SQL."""
         return _read_existing_stock(self.cur, spec, company_id, office_id)
+
+    def read_existing_stock_variants(
+        self, spec: ResourceSpec, company_id: int, variant_ids: list[int]
+    ) -> dict[tuple[int, int], ExistingRow]:
+        return _read_existing_stock_variants(self.cur, spec, company_id, variant_ids)
 
     def upsert_stock(
         self, spec: ResourceSpec, rows: list[StockRow], *, sync_run_id: int | None, last_source: str
@@ -463,7 +503,7 @@ class PgRawTx:
             (
                 outcome.company_id,
                 outcome.resource,
-                outcome.scope,
+                outcome.sync_state_scope,
                 handle.started_at,
                 outcome.mode == "FULL_RECONCILE",
                 outcome.rows_received,
@@ -550,7 +590,8 @@ class PgRawStore:
             conn.close()
 
     def start_run(
-        self, *, mode: str, trigger: str, host: str | None, company_id: int, resource: str, scope: str
+        self, *, mode: str, trigger: str, host: str | None, company_id: int, resource: str, scope: str,
+        state_scope: str | None = None,
     ) -> RunHandle:
         self._require_writable()
         with self.transaction() as tx:
@@ -567,7 +608,7 @@ class PgRawStore:
                 (run_id, company_id, resource, scope),
             )
             (entity_run_id,) = cur.fetchone()
-            cur.execute(_STATE_START, (company_id, resource, scope, started_at, run_id))
+            cur.execute(_STATE_START, (company_id, resource, state_scope or scope, started_at, run_id))
         return RunHandle(run_id=int(run_id), entity_run_id=int(entity_run_id), started_at=started_at)
 
     def read_existing(self, spec: ResourceSpec, company_id: int) -> dict[int, ExistingRow]:
@@ -583,6 +624,15 @@ class PgRawStore:
         cur = self._work().cursor()
         try:
             return _read_existing_stock(cur, spec, company_id, office_id)
+        finally:
+            cur.close()
+
+    def read_existing_stock_variants(
+        self, spec: ResourceSpec, company_id: int, variant_ids: list[int]
+    ) -> dict[tuple[int, int], ExistingRow]:
+        cur = self._work().cursor()
+        try:
+            return _read_existing_stock_variants(cur, spec, company_id, variant_ids)
         finally:
             cur.close()
 
@@ -614,7 +664,7 @@ class PgRawStore:
                 (
                     outcome.company_id,
                     outcome.resource,
-                    outcome.scope,
+                    outcome.sync_state_scope,
                     handle.started_at,
                     outcome.error,
                     outcome.rows_received,

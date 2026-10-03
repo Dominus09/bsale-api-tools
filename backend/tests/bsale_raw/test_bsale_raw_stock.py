@@ -70,15 +70,16 @@ def stock(variant_id: int, office_id: int = 1, *, sid: int | None = None, quanti
 
 
 class StockBsale(BaseAdapter):
-    """``/v1/stocks.json`` paginado por limit/offset y filtrado por ``officeid``.
+    """``/v1/stocks.json`` paginado por limit/offset y filtrado por ``officeid`` / ``variantid``.
 
     ``counts``: count informado en cada llamada (endpoint mutable). ``pages``: páginas explícitas.
     ``script``: acciones previas (Exception o (status, body, headers)). ``on_call(n)``: hook por llamada.
     """
 
     def __init__(self, items=None, *, store=None, counts=None, pages=None, script=None, on_call=None,
-                 ignore_office_filter=False):
+                 ignore_office_filter=False, ignore_variant_filter=False):
         super().__init__()
+        self.ignore_variant_filter = ignore_variant_filter
         self.items = list(items or [])
         self.store = store
         self.counts = list(counts) if counts is not None else None
@@ -108,6 +109,8 @@ class StockBsale(BaseAdapter):
         items = self.items
         if "officeid" in q and not self.ignore_office_filter:
             items = [it for it in items if it["office"]["id"] == q["officeid"][0]]
+        if "variantid" in q and not self.ignore_variant_filter:
+            items = [it for it in items if it["variant"]["id"] == q["variantid"][0]]
         if self.pages is not None:
             page = self.pages[min(len(self.calls), len(self.pages)) - 1]
         else:
@@ -145,7 +148,7 @@ def old():
 
 def test_stock_spec_enabled_with_real_modes_and_typed_columns():
     assert STOCKS.pipeline_enabled and STOCKS.key_kind is KeyKind.STOCK and STOCKS.partition_by_office
-    assert STOCKS.pipeline_modes == (SCANNER, RECONCILE)
+    assert STOCKS.pipeline_modes == (SCANNER, RECONCILE, SyncMode.POINT)
     assert STOCKS.request_priority is RequestPriority.P2_STOCK
     assert [(c.column, c.payload_key) for c in STOCKS.typed_columns] == [
         ("bsale_stock_id", "id"), ("quantity", "quantity"),
@@ -598,7 +601,8 @@ def test_cli_stocks_with_office(mode_arg, mode, dry_run):
     argv = ["sync", "--company", "3", "--resource", "stocks", "--office", "1", "--mode", mode_arg]
     buf = io.StringIO()
     assert cli.main(argv + (["--dry-run"] if dry_run else []), runner=runner, out=buf) == cli.EXIT_SUCCESS
-    assert seen == {"company_id": 3, "resource": "stocks", "mode": mode, "dry_run": dry_run, "office_id": 1}
+    assert seen == {"company_id": 3, "resource": "stocks", "mode": mode, "dry_run": dry_run, "office_id": 1,
+                    "variant_id": None}
     assert "scope=office:1" in buf.getvalue()
 
 
@@ -611,6 +615,7 @@ def test_cli_stocks_with_office(mode_arg, mode, dry_run):
         ["--resource", "offices", "--office", "1", "--mode", "full-reconcile"],  # --office en entidad
         ["--resource", "offices", "--mode", "scanner"],  # scanner sólo para stock
         ["--resource", "stocks", "--office", "1", "--mode", "incremental"],
+        ["--resource", "stocks", "--office", "1", "--variant", "10888", "--mode", "scanner"],
     ],
 )
 def test_cli_usage_errors(argv):

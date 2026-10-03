@@ -2,6 +2,7 @@
 
     python -m backend.jobs.bsale_raw sync --company 3 --resource offices --mode full-reconcile [--dry-run]
     python -m backend.jobs.bsale_raw sync --company 3 --resource stocks --office 1 --mode scanner [--dry-run]
+    python -m backend.jobs.bsale_raw sync --company 3 --resource stocks --variant 10888 [--office 1] --mode point [--dry-run]
 
 Exit: 0 SUCCESS, 1 FAILED, 2 PARTIAL, 3 lock ocupado (SKIPPED), 64 uso inválido.
 La salida nunca incluye token ni payload.
@@ -24,7 +25,7 @@ EXIT_PARTIAL = 2
 EXIT_LOCKED = 3
 EXIT_USAGE = 64
 
-MODES = {"full-reconcile": SyncMode.FULL_RECONCILE, "scanner": SyncMode.SCANNER}
+MODES = {"full-reconcile": SyncMode.FULL_RECONCILE, "scanner": SyncMode.SCANNER, "point": SyncMode.POINT}
 
 OUTPUT_FIELDS = (
     ("company", "company_id"),
@@ -62,6 +63,11 @@ def format_outcome(outcome: EntityOutcome) -> str:
         lines.append(f"{label}={'' if value is None else value}")
     if outcome.sync_run_id is not None:
         lines.append(f"sync_run_id={outcome.sync_run_id}")
+    if outcome.point is not None:
+        statuses = [r.get("status") for r in outcome.point.get("results", {}).values()]
+        lines.append(f"variants={len(outcome.point.get('variant_ids', []))}")
+        lines.append(f"no_rows={statuses.count('NO_ROWS')}")
+        lines.append(f"failed_variants={statuses.count('FAILED')}")
     if outcome.fuse is not None and outcome.fuse.get("tripped"):
         lines.append(f"fuse={outcome.fuse.get('reason')}")
     if outcome.error:
@@ -75,7 +81,8 @@ def build_parser(resources: list[str]) -> argparse.ArgumentParser:
     sync = sub.add_parser("sync", help="sincroniza un recurso de una empresa")
     sync.add_argument("--company", type=int, required=True, help="company_id (bsale_raw.sources)")
     sync.add_argument("--resource", required=True, choices=resources)
-    sync.add_argument("--office", type=int, help="office_id (obligatorio y exclusivo de recursos por sucursal)")
+    sync.add_argument("--office", type=int, help="office_id (recursos por sucursal; opcional en --mode point)")
+    sync.add_argument("--variant", type=int, help="variant_id (sólo --mode point)")
     sync.add_argument("--mode", required=True, choices=sorted(MODES))
     sync.add_argument("--dry-run", action="store_true", help="consulta API y valida; no escribe en la BD")
     return parser
@@ -87,17 +94,30 @@ def usage_error(args: argparse.Namespace, spec) -> str | None:
     if mode not in spec.pipeline_modes:
         allowed = ", ".join(k for k, v in MODES.items() if v in spec.pipeline_modes)
         return f"--mode {args.mode} no habilitado para {spec.name} (permitidos: {allowed})"
-    if spec.partition_by_office and args.office is None:
-        return f"{spec.name} exige --office"
+    if mode is SyncMode.POINT:
+        if args.variant is None:
+            return "--mode point exige --variant"
+    elif args.variant is not None:
+        return "--variant sólo se acepta con --mode point"
+    elif spec.partition_by_office and args.office is None:
+        return f"{spec.name} exige --office en --mode {args.mode}"
     if not spec.partition_by_office and args.office is not None:
         return f"{spec.name} no acepta --office"
     if args.office is not None and args.office <= 0:
         return "--office debe ser un entero positivo"
+    if args.variant is not None and args.variant <= 0:
+        return "--variant debe ser un entero positivo"
     return None
 
 
 def _default_runner(
-    *, company_id: int, resource: str, mode: SyncMode, dry_run: bool, office_id: int | None = None
+    *,
+    company_id: int,
+    resource: str,
+    mode: SyncMode,
+    dry_run: bool,
+    office_id: int | None = None,
+    variant_id: int | None = None,
 ) -> EntityOutcome:
     from backend.services.bsale_raw.core.store import PgRawStore
     from backend.utils.bsale_token_env import load_dotenv_if_available
@@ -105,6 +125,13 @@ def _default_runner(
     load_dotenv_if_available()
     store = PgRawStore(read_only=dry_run)
     try:
+        if mode is SyncMode.POINT:
+            from backend.services.bsale_raw.core.stock_engine import refresh_stock_point
+
+            return refresh_stock_point(
+                store=store, company_id=company_id, variant_id=variant_id, office_id=office_id,
+                resource=resource, dry_run=dry_run, host=socket.gethostname(),
+            )
         if office_id is not None:
             from backend.services.bsale_raw.core.stock_engine import run_stock_sync
 
@@ -152,6 +179,7 @@ def main(
         mode=MODES[args.mode],
         dry_run=args.dry_run,
         office_id=args.office,
+        variant_id=args.variant,
     )
     print(format_outcome(outcome), file=out)
     return exit_code(outcome)

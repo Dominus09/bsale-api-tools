@@ -305,6 +305,17 @@ Volumen observado: C1 12.587, C2 1.264 y C3 35.160 filas, unas 704 páginas en C
 - **Escritura:** lectura de existentes sin `FOR UPDATE` (no bloquea refresh dirigidos), UPSERT por lotes de 500 con `WHERE t.api_fetched_at <= EXCLUDED.api_fetched_at RETURNING variant_id, office_id`, y en reconcile un único `DELETE … WHERE company_id AND office_id AND variant_id = ANY(...) AND api_fetched_at <= snapshot_started_at`.
 - **Idempotencia:** en RUN 2 `updated > 0` es correcto si hubo ventas o reservas; deben quedar `inserted = 0` para claves existentes, `first_seen_at` intacto y ningún borrado en scanner.
 - **Preparado para OC 33 / webhooks (no implementado):** `OC 33 cambia → affected_variants → COMMIT documento → refresh dirigido stocks.json?variantid=&officeid= (P0) → UPSERT con el mismo SQL`. El refresh dirigido no toma el lock de la sucursal; la frescura por fila impide que un scanner posterior y más viejo lo pise.
+- **Estado:** `SCANNER` LIVE VALIDATED C3 office 1 y office 4 (5.860 filas, 118 requests, ~41 s, 0 × 429/5xx; RUN 2 sin inserts ni borrados).
+
+**Implementación fase 4D2 (`refresh_stock_point` / `refresh_stock_variants`, mode `POINT`) — IMPLEMENTED / NOT YET LIVE VALIDATED:**
+
+- **Endpoint:** `GET /v1/stocks.json?variantid=V[&officeid=O]`; un request por variante (listas de `variantid` no documentadas), mismo cliente y limitador de la empresa con prioridad `P0_TARGETED` (scanner P2, catálogo P4). No hay limitador nuevo.
+- **Mismas filas que el scanner** (`(company_id, variant_id, office_id)`, nunca `bsale_stock_id`), mismo UPSERT con frescura, `last_source = 'POINT'`. Tres cantidades tal cual.
+- **variant + office:** 1 fila → UPSERT; 0 filas → `NO_ROWS`, sin escritura (nunca 0 fabricado, nunca DELETE); >1 fila → FAILED (respuesta ambigua). Sucursal o variante distinta a la pedida, clave repetida o cantidad no numérica → FAILED.
+- **variant sola:** UPSERT de todas las sucursales devueltas; las ausentes no se tocan.
+- **Locks:** POINT no toma advisory lock. Un try-lock haría SKIP de un refresh posterior a un cambio (pérdida de actualización) y un lock por sucursal lo bloquearía ~41 s detrás del scanner. La corrección la dan la frescura por fila (`api_fetched_at`) y transacciones cortas sin HTTP adentro; dos POINT simultáneos sólo duplican un GET.
+- **Tracking:** un `sync_runs` + `sync_entity_runs` por llamada (scope `variant:<v>[:office:<o>]` / `variants:<n>[:office:<o>]`); detalle por variante (`FETCHED`/`NO_ROWS`/`FAILED` y clase por sucursal) en `sync_runs.summary->'point'`. `sync_state` usa una única fila `(company, stocks, point)` para no crear miles de filas ni mezclar con la frescura `office:<id>` del scanner.
+- **Lote (API interna para OC 33):** `refresh_stock_variants(company_id, office_id, variant_ids)`, máx. 500 variantes; PARTIAL si fallan algunas, FAILED si fallan todas; una sola transacción de escritura al final.
 
 ### Documentos (crítico; empresa 3 / tipo 33 primero)
 
@@ -391,7 +402,9 @@ Se aplican los webhooks documentados más el full reconcile según la matriz. En
    | `price_lists` | IMPLEMENTED + LIVE VALIDATED C3 (sólo metadata; sin `variant_prices`) |
    | `products` | IMPLEMENTED + LIVE VALIDATED C3 |
    | `variants` | IMPLEMENTED + LIVE VALIDATED C3 (sin stock, precios ni costos) |
-   | `stocks` | IMPLEMENTED / NOT YET LIVE VALIDATED (primera prueba prevista: C3 / office 1, scanner) |
+   | `stocks` SCANNER | IMPLEMENTED + LIVE VALIDATED C3 office 1 / office 4 |
+   | `stocks` FULL_RECONCILE | IMPLEMENTED / NOT YET LIVE VALIDATED |
+   | `stocks` POINT | IMPLEMENTED / NOT YET LIVE VALIDATED (variant [+ office], P0, sin borrado) |
 
 5. **Fase 4 (siguiente):** refresh puntual de stock, precios, costos, clientes y documentos (incremental), en paralelo a los syncs actuales para comparar paridad.
 6. **Fase 5:** inbox y worker de webhooks; solicitud de activación a Bsale.
