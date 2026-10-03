@@ -149,6 +149,54 @@ class FakeTx:
             raise RuntimeError("fallo inyectado en mark_missing")
         return n
 
+    def read_existing_stock(self, spec, company_id, office_id):
+        self.s.events.append("read_existing_stock")
+        return self.s._existing_stock(spec, company_id, office_id)
+
+    def upsert_stock(self, spec, rows, *, sync_run_id, last_source):
+        self.s.events.append("upsert_stock")
+        table = self.s.tables[spec.raw_table]
+        now = self.s.now()
+        applied = set()
+        for r in rows:
+            key = (r.company_id, r.variant_id, r.office_id)
+            prev = table.get(key)
+            if prev is not None and prev["api_fetched_at"] > r.api_fetched_at:
+                continue  # WHERE t.api_fetched_at <= EXCLUDED.api_fetched_at
+            new = {
+                **r.typed,
+                "payload": r.payload,
+                "payload_hash": r.payload_hash,
+                "last_seen_at": now,
+                "api_fetched_at": r.api_fetched_at,
+                "last_source": last_source,
+                "sync_run_id": sync_run_id,
+            }
+            if prev is None:
+                new.update(first_seen_at=now, last_changed_at=now)
+            else:
+                new.update(
+                    first_seen_at=prev["first_seen_at"],
+                    last_changed_at=now if prev["payload_hash"] != r.payload_hash else prev["last_changed_at"],
+                )
+            table[key] = new
+            applied.add((r.variant_id, r.office_id))
+        if self.s.fail_on == "upsert":
+            raise RuntimeError("fallo inyectado en upsert")
+        return applied
+
+    def delete_stale_stock(self, spec, company_id, office_id, variant_ids, snapshot_started_at):
+        self.s.events.append("delete_stale_stock")
+        table = self.s.tables[spec.raw_table]
+        n = 0
+        for vid in variant_ids:
+            key = (company_id, vid, office_id)
+            row = table.get(key)
+            if row is not None and row["api_fetched_at"] <= snapshot_started_at:
+                del table[key]
+                n += 1
+        return n
+
     def finish_success(self, handle, outcome):
         self.s._close(handle, outcome)
         st = self.s.sync_state[(outcome.company_id, outcome.resource, outcome.scope)]
@@ -249,6 +297,36 @@ class FakeStore:
     def read_existing(self, spec, company_id):
         self.events.append("read_existing")
         return self._existing(spec, company_id)
+
+    def _existing_stock(self, spec, company_id, office_id):
+        return {
+            (vid, oid): ExistingRow(vid, r["payload_hash"], r["api_fetched_at"], None)
+            for (cid, vid, oid), r in self.tables[spec.raw_table].items()
+            if cid == company_id and oid == office_id
+        }
+
+    def read_existing_stock(self, spec, company_id, office_id):
+        self.events.append("read_existing_stock")
+        return self._existing_stock(spec, company_id, office_id)
+
+    def seed_stock(self, company_id: int, payload: dict, *, fetched_at: datetime, table="bsale_raw.stocks") -> None:
+        key = (company_id, int(payload["variant"]["id"]), int(payload["office"]["id"]))
+        self.tables[table][key] = {
+            "payload": payload,
+            "payload_hash": payload_hash(payload),
+            "first_seen_at": fetched_at,
+            "last_seen_at": fetched_at,
+            "last_changed_at": fetched_at,
+            "api_fetched_at": fetched_at,
+            "last_source": "SCANNER",
+            "sync_run_id": None,
+        }
+
+    def stock_rows(self, company_id: int, office_id: int | None = None, table="bsale_raw.stocks") -> dict:
+        return {
+            (vid, oid): r for (cid, vid, oid), r in self.tables[table].items()
+            if cid == company_id and (office_id is None or oid == office_id)
+        }
 
     @contextmanager
     def transaction(self):
@@ -790,12 +868,15 @@ def test_dry_run_reports_fuse_without_writing():
 
 CONFIG_RESOURCES = ["offices", "taxes", "document_types", "product_types", "price_lists"]
 CATALOG_RESOURCES = ["products", "variants"]
-NOT_YET_ENABLED = ["clients", "stocks", "variant_prices", "variant_costs",
+STOCK_RESOURCES = ["stocks"]
+NOT_YET_ENABLED = ["clients", "variant_prices", "variant_costs",
                    "documents", "document_details", "stock_receptions", "stock_consumptions"]
 
 
-def test_only_configuration_and_catalog_resources_enabled():
-    assert REGISTRY.pipeline_names() == CONFIG_RESOURCES + CATALOG_RESOURCES
+def test_only_configuration_catalog_and_stock_resources_enabled():
+    assert REGISTRY.pipeline_names() == CONFIG_RESOURCES + CATALOG_RESOURCES + STOCK_RESOURCES
+    with pytest.raises(UnsupportedSyncError):  # stock nunca entra al motor de entidades
+        run_entity_sync(store=FakeStore(), company_id=3, resource="stocks")
     for name in NOT_YET_ENABLED:
         if name in REGISTRY.names():
             assert not REGISTRY.get(name).pipeline_enabled, name
@@ -821,12 +902,14 @@ def test_cli_output_and_args():
     code = cli.main(["sync", "--company", "3", "--resource", "offices", "--mode", "full-reconcile", "--dry-run"],
                     runner=runner, out=buf)
     assert code == cli.EXIT_SUCCESS
-    assert seen == {"company_id": 3, "resource": "offices", "mode": SyncMode.FULL_RECONCILE, "dry_run": True}
+    assert seen == {"company_id": 3, "resource": "offices", "mode": SyncMode.FULL_RECONCILE, "dry_run": True,
+                    "office_id": None}
     lines = buf.getvalue().splitlines()
     assert lines[0] == "dry_run=true"
     keys = [line.split("=", 1)[0] for line in lines[1:]]
-    assert keys == ["company", "resource", "mode", "api_count", "received", "inserted", "updated", "unchanged",
-                    "skipped_newer", "missing", "deleted", "requests", "duration_ms", "status"]
+    assert keys == ["company", "resource", "scope", "mode", "api_count", "received", "inserted", "updated",
+                    "unchanged", "skipped_newer", "missing", "deleted", "requests", "duration_ms", "status"]
+    assert "scope=global" in lines
     assert "status=SUCCESS" in lines
 
 

@@ -12,6 +12,7 @@ from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any, Callable
 
+from backend.services.bsale_raw.core.models import SyncMode
 from backend.services.bsale_raw.core.rate_limit import RequestPriority
 
 
@@ -125,6 +126,8 @@ class ResourceSpec:
     typed_columns: tuple[TypedColumn, ...] = ()
     # Habilitación explícita y gradual del motor productivo (fase 4A: sólo offices).
     pipeline_enabled: bool = False
+    # Modos que el motor acepta para el recurso (deben existir en los CHECK de sync_runs).
+    pipeline_modes: tuple[SyncMode, ...] = (SyncMode.FULL_RECONCILE,)
 
 
 class ResourceRegistry:

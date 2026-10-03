@@ -294,6 +294,18 @@ Volumen observado: C1 12.587, C2 1.264 y C3 35.160 filas, unas 704 páginas en C
    Es el **único** modo que borra. Las filas que fueron refrescadas por P0 durante el snapshot (`api_fetched_at` ≥ inicio del snapshot) **no** se borran.
 5. **Frescura por empresa + sucursal:** el SLA de 15 min se evalúa por `office:<id>`, y una sucursal atrasada no oculta el estado de las demás.
 
+**Implementación fase 4D1 (`core/stock_engine.py`, `run_stock_sync`):**
+
+- **Modos existentes en los CHECK:** `SCANNER` (no destructivo) y `FULL_RECONCILE` (destructivo por sucursal). Scope `office:<id>`; advisory lock `(company, stocks, office:<id>)`.
+- **Tres cantidades fuente:** `quantity` (existencia física), `quantityReserved` (comprometido, p. ej. OC 33) y `quantityAvailable` (disponible comercial) → `quantity`, `quantity_reserved`, `quantity_available`. Nunca se recalculan (`available ≠ quantity − reserved` se reporta, no se corrige). Un `0` explícito se guarda como 0; un valor ausente queda NULL. La ausencia de una fila **nunca** se convierte en 0.
+- **Snapshot mutable (diferencia con catálogo):** el stock cambia mientras se pagina.
+  - Ambos modos invalidan el snapshot ante JSON inválido, `items` no lista, `count` ausente, `variant.id` / `office.id` inválidos, sucursal distinta de la pedida, clave `(variant, office)` repetida, cantidad no numérica o truncado evidente (página vacía antes de `count − tolerancia`).
+  - `SCANNER`: `count` puede variar hasta `max(10, 1 %)` del primero y el total recibido debe quedar dentro de esa tolerancia del último `count`. Una fila omitida por desplazamiento de páginas sólo queda sin refrescar en ese ciclo (no se borra ni se pone en 0).
+  - `FULL_RECONCILE`: estricto como catálogo (count estable, total exacto), porque decide borrados.
+- **Escritura:** lectura de existentes sin `FOR UPDATE` (no bloquea refresh dirigidos), UPSERT por lotes de 500 con `WHERE t.api_fetched_at <= EXCLUDED.api_fetched_at RETURNING variant_id, office_id`, y en reconcile un único `DELETE … WHERE company_id AND office_id AND variant_id = ANY(...) AND api_fetched_at <= snapshot_started_at`.
+- **Idempotencia:** en RUN 2 `updated > 0` es correcto si hubo ventas o reservas; deben quedar `inserted = 0` para claves existentes, `first_seen_at` intacto y ningún borrado en scanner.
+- **Preparado para OC 33 / webhooks (no implementado):** `OC 33 cambia → affected_variants → COMMIT documento → refresh dirigido stocks.json?variantid=&officeid= (P0) → UPSERT con el mismo SQL`. El refresh dirigido no toma el lock de la sucursal; la frescura por fila impide que un scanner posterior y más viejo lo pise.
+
 ### Documentos (crítico; empresa 3 / tipo 33 primero)
 
 - **Full scan global PROHIBIDO:** C3 tiene 3.880.542 documentos (`full_scan_global_allowed=False`; el registry exige `reconcile_window_days`).
@@ -368,7 +380,7 @@ Se aplican los webhooks documentados más el full reconcile según la matriz. En
 1. **Fase 1 (aprobada):** arquitectura, matriz, inventario, scaffold y tests puros.
 2. **Fase 2 (aprobada):** verificación en vivo, de solo lectura, de las dudas NLV (`BSALE_RAW_LIVE_VERIFICATION.md`).
 3. **Fase 3 (aplicada y verificada):** `backend/sql/bsale_raw/001…008` → `verify_bsale_raw.sql` → `009_seed_sources.sql` (ver `docs/BSALE_RAW_PHASE3_APPLY_RUNBOOK.md`).
-4. **Fase 4A / 4B / 4C:** motor genérico `run_entity_sync` (FULL_RECONCILE, manual, `python -m backend.jobs.bsale_raw`) para configuración y catálogo, sin consumidores. Estado por recurso:
+4. **Fase 4A / 4B / 4C / 4D1:** motor genérico `run_entity_sync` (FULL_RECONCILE) para configuración y catálogo, y `run_stock_sync` (SCANNER / FULL_RECONCILE por `office:<id>`) para stock; manual (`python -m backend.jobs.bsale_raw`), sin consumidores. Estado por recurso:
 
    | Recurso | Estado |
    |---|---|
@@ -377,10 +389,11 @@ Se aplican los webhooks documentados más el full reconcile según la matriz. En
    | `document_types` | IMPLEMENTED + LIVE VALIDATED C3 (sólo metadata; sin lógica OC 33) |
    | `product_types` | IMPLEMENTED + LIVE VALIDATED C3 |
    | `price_lists` | IMPLEMENTED + LIVE VALIDATED C3 (sólo metadata; sin `variant_prices`) |
-   | `products` | IMPLEMENTED / NOT YET LIVE VALIDATED |
-   | `variants` | IMPLEMENTED / NOT YET LIVE VALIDATED (sin stock, precios ni costos) |
+   | `products` | IMPLEMENTED + LIVE VALIDATED C3 |
+   | `variants` | IMPLEMENTED + LIVE VALIDATED C3 (sin stock, precios ni costos) |
+   | `stocks` | IMPLEMENTED / NOT YET LIVE VALIDATED (primera prueba prevista: C3 / office 1, scanner) |
 
-5. **Fase 4 (siguiente):** stock (escáner y puntual), precios, costos, clientes y documentos (incremental), en paralelo a los syncs actuales para comparar paridad.
+5. **Fase 4 (siguiente):** refresh puntual de stock, precios, costos, clientes y documentos (incremental), en paralelo a los syncs actuales para comparar paridad.
 6. **Fase 5:** inbox y worker de webhooks; solicitud de activación a Bsale.
 7. **Fase 6:** `bsale` pasa a leer desde `bsale_raw`; retiro gradual de los syncs legacy según `BSALE_SYNC_INDEX.md`.
 

@@ -21,7 +21,7 @@ from typing import Any, Callable, Iterator, Protocol
 
 from backend.services.bsale_raw.core.reconcile import ExistingRow
 from backend.services.bsale_raw.core.registry import ResourceSpec
-from backend.services.bsale_raw.core.snapshot import RawRow
+from backend.services.bsale_raw.core.snapshot import RawRow, StockRow
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +153,71 @@ def build_mark_missing(spec: ResourceSpec) -> str:
     )
 
 
+STOCK_KEY_COLUMNS = ("company_id", "variant_id", "office_id")
+UPSERT_PAGE_SIZE = 500
+
+
+def stock_columns(spec: ResourceSpec) -> list[str]:
+    return [
+        *STOCK_KEY_COLUMNS,
+        *(c.column for c in spec.typed_columns),
+        "payload",
+        "payload_hash",
+        "first_seen_at",
+        "last_seen_at",
+        "last_changed_at",
+        "api_fetched_at",
+        "last_source",
+        "sync_run_id",
+    ]
+
+
+def build_stock_upsert(spec: ResourceSpec) -> tuple[str, str]:
+    """
+    (sql, template) para stock current-state. Misma regla de frescura que entidades: ningún
+    scanner/reconcile pisa una fila obtenida después (webhook / targeted refresh). Devuelve las
+    claves aplicadas; las omitidas son ``skipped_newer``. Sirve igual para un refresh dirigido
+    (``variantid`` y/o ``officeid``), que escribe con el mismo SQL.
+    """
+    table = _table(spec)
+    typed = [c.column for c in spec.typed_columns]
+    cols = ", ".join(stock_columns(spec))
+    template = "(" + ", ".join(
+        ["%s", "%s", "%s", *("%s" for _ in typed), "%s", "%s", "now()", "now()", "now()", "%s", "%s", "%s"]
+    ) + ")"
+    sets = [f"{c} = EXCLUDED.{c}" for c in typed]
+    sets += [
+        "payload = EXCLUDED.payload",
+        "payload_hash = EXCLUDED.payload_hash",
+        "last_seen_at = EXCLUDED.last_seen_at",
+        "last_changed_at = CASE WHEN t.payload_hash IS DISTINCT FROM EXCLUDED.payload_hash "
+        "THEN EXCLUDED.last_changed_at ELSE t.last_changed_at END",
+        "api_fetched_at = EXCLUDED.api_fetched_at",
+        "last_source = EXCLUDED.last_source",
+        "sync_run_id = EXCLUDED.sync_run_id",
+    ]
+    sql = (
+        f"INSERT INTO {table} AS t ({cols}) VALUES %s\n"
+        f"ON CONFLICT ({', '.join(STOCK_KEY_COLUMNS)}) DO UPDATE SET\n    "
+        + ",\n    ".join(sets)
+        + "\nWHERE t.api_fetched_at <= EXCLUDED.api_fetched_at\nRETURNING variant_id, office_id"
+    )
+    return sql, template
+
+
+def build_stock_delete_stale(spec: ResourceSpec) -> str:
+    """Sólo FULL_RECONCILE de UNA sucursal tras snapshot estricto; re-chequea frescura al borrar."""
+    return (
+        f"DELETE FROM {_table(spec)} "
+        "WHERE company_id = %s AND office_id = %s AND variant_id = ANY(%s) AND api_fetched_at <= %s"
+    )
+
+
+_SELECT_EXISTING_STOCK = (
+    "SELECT variant_id, office_id, payload_hash, api_fetched_at FROM {table} "
+    "WHERE company_id = %s AND office_id = %s"
+)
+
 _SELECT_EXISTING = "SELECT bsale_id, payload_hash, api_fetched_at, missing_since FROM {table} WHERE company_id = %s"
 
 _RESOLVE_SOURCE = """
@@ -231,6 +296,18 @@ class RawTx(Protocol):
         self, spec: ResourceSpec, company_id: int, bsale_ids: list[int], snapshot_started_at: datetime
     ) -> int: ...
 
+    def read_existing_stock(
+        self, spec: ResourceSpec, company_id: int, office_id: int
+    ) -> dict[tuple[int, int], ExistingRow]: ...
+
+    def upsert_stock(
+        self, spec: ResourceSpec, rows: list[StockRow], *, sync_run_id: int | None, last_source: str
+    ) -> set[tuple[int, int]]: ...
+
+    def delete_stale_stock(
+        self, spec: ResourceSpec, company_id: int, office_id: int, variant_ids: list[int], snapshot_started_at: datetime
+    ) -> int: ...
+
     def finish_success(self, handle: RunHandle, outcome: EntityOutcome) -> None: ...
 
 
@@ -242,6 +319,10 @@ class RawStore(Protocol):
     def start_run(self, *, mode: str, trigger: str, host: str | None, company_id: int, resource: str, scope: str) -> RunHandle: ...
 
     def read_existing(self, spec: ResourceSpec, company_id: int) -> dict[int, ExistingRow]: ...
+
+    def read_existing_stock(
+        self, spec: ResourceSpec, company_id: int, office_id: int
+    ) -> dict[tuple[int, int], ExistingRow]: ...
 
     def transaction(self) -> Any: ...
 
@@ -283,6 +364,18 @@ def _existing_from_rows(rows: list[tuple]) -> dict[int, ExistingRow]:
     }
 
 
+def _existing_stock_from_rows(rows: list[tuple]) -> dict[tuple[int, int], ExistingRow]:
+    return {
+        (int(r[0]), int(r[1])): ExistingRow(bsale_id=int(r[0]), payload_hash=r[2], api_fetched_at=r[3], missing_since=None)
+        for r in rows
+    }
+
+
+def _read_existing_stock(cur: Any, spec: ResourceSpec, company_id: int, office_id: int) -> dict[tuple[int, int], ExistingRow]:
+    cur.execute(_SELECT_EXISTING_STOCK.format(table=_table(spec)), (company_id, office_id))
+    return _existing_stock_from_rows(cur.fetchall())
+
+
 @dataclass
 class PgRawTx:
     cur: Any
@@ -310,8 +403,49 @@ class PgRawTx:
             )
             for r in rows
         ]
-        returned = execute_values(self.cur, sql, values, template=template, page_size=500, fetch=True)
+        returned = execute_values(self.cur, sql, values, template=template, page_size=UPSERT_PAGE_SIZE, fetch=True)
         return {int(r[0]) for r in returned}
+
+    def read_existing_stock(
+        self, spec: ResourceSpec, company_id: int, office_id: int
+    ) -> dict[tuple[int, int], ExistingRow]:
+        """Lectura MVCC sin ``FOR UPDATE``: no bloquea refresh dirigidos; la frescura la garantiza el SQL."""
+        return _read_existing_stock(self.cur, spec, company_id, office_id)
+
+    def upsert_stock(
+        self, spec: ResourceSpec, rows: list[StockRow], *, sync_run_id: int | None, last_source: str
+    ) -> set[tuple[int, int]]:
+        if not rows:
+            return set()
+        from psycopg2.extras import Json, execute_values
+
+        sql, template = build_stock_upsert(spec)
+        values = [
+            (
+                r.company_id,
+                r.variant_id,
+                r.office_id,
+                *(r.typed[c.column] for c in spec.typed_columns),
+                Json(r.payload),
+                r.payload_hash,
+                r.api_fetched_at,
+                last_source,
+                sync_run_id,
+            )
+            for r in rows
+        ]
+        returned = execute_values(self.cur, sql, values, template=template, page_size=UPSERT_PAGE_SIZE, fetch=True)
+        return {(int(r[0]), int(r[1])) for r in returned}
+
+    def delete_stale_stock(
+        self, spec: ResourceSpec, company_id: int, office_id: int, variant_ids: list[int], snapshot_started_at: datetime
+    ) -> int:
+        if not variant_ids:
+            return 0
+        self.cur.execute(
+            build_stock_delete_stale(spec), (company_id, office_id, list(variant_ids), snapshot_started_at)
+        )
+        return int(self.cur.rowcount or 0)
 
     def mark_missing(
         self, spec: ResourceSpec, company_id: int, bsale_ids: list[int], snapshot_started_at: datetime
@@ -442,6 +576,15 @@ class PgRawStore:
         rows = cur.fetchall()
         cur.close()
         return _existing_from_rows(rows)
+
+    def read_existing_stock(
+        self, spec: ResourceSpec, company_id: int, office_id: int
+    ) -> dict[tuple[int, int], ExistingRow]:
+        cur = self._work().cursor()
+        try:
+            return _read_existing_stock(cur, spec, company_id, office_id)
+        finally:
+            cur.close()
 
     @contextmanager
     def transaction(self) -> Iterator[PgRawTx]:

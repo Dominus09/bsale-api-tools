@@ -3,13 +3,25 @@
 Stock (observado en fase 2): count C1=12.587, C2=1.264, C3=35.160; filtros ``variantid``,
 ``officeid`` y ambos combinados funcionan. El scanner se particiona por company + office, es NO
 destructivo (sólo UPSERT) y la frescura se lleva por company + office. El reconcile destructivo
-es un proceso separado y menos frecuente.
+es un proceso separado y menos frecuente. Motor: ``core/stock_engine.py``.
+
+Identidad ``(company_id, variant_id, office_id)``; el ``id`` Bsale del registro va a
+``bsale_stock_id`` sin unicidad. Las tres cantidades se guardan tal cual (sin recalcular).
 """
 
 from __future__ import annotations
 
+from backend.services.bsale_raw.core.models import SyncMode
 from backend.services.bsale_raw.core.rate_limit import RequestPriority
-from backend.services.bsale_raw.core.registry import REGISTRY, KeyKind, Priority, ResourceSpec
+from backend.services.bsale_raw.core.registry import (
+    REGISTRY,
+    KeyKind,
+    Priority,
+    ResourceSpec,
+    TypedColumn,
+    optional_int,
+    optional_numeric,
+)
 
 P2 = RequestPriority.P2_STOCK
 
@@ -30,6 +42,14 @@ STOCKS = REGISTRY.register(
             "¿filas con quantity=0 para todas las combinaciones variante×sucursal?",
             "¿stocks.json devuelve filas de variantes inactivas?",
         ),
+        typed_columns=(
+            TypedColumn("bsale_stock_id", "id", optional_int),
+            TypedColumn("quantity", "quantity", optional_numeric),
+            TypedColumn("quantity_reserved", "quantityReserved", optional_numeric),
+            TypedColumn("quantity_available", "quantityAvailable", optional_numeric),
+        ),
+        pipeline_enabled=True,
+        pipeline_modes=(SyncMode.SCANNER, SyncMode.FULL_RECONCILE),
     )
 )
 

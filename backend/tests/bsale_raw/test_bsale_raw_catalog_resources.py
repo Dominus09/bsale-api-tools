@@ -383,7 +383,7 @@ def test_cli_accepts_resource(resource, dry_run):
     assert seen["resource"] == resource and seen["dry_run"] is dry_run
 
 
-@pytest.mark.parametrize("name", ["stocks", "variant_prices", "variant_costs", "documents", "clients"])
+@pytest.mark.parametrize("name", ["variant_prices", "variant_costs", "documents", "clients"])
 def test_cli_still_rejects_out_of_scope(name):
     assert name in NOT_YET_ENABLED
     never = lambda **kw: pytest.fail("no debe ejecutarse")  # noqa: E731

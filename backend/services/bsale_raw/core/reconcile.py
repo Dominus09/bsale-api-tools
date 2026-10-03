@@ -15,9 +15,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Iterable
-
-from backend.services.bsale_raw.core.snapshot import RawRow
+from typing import Any, Callable, Hashable, Iterable
 
 DEFAULT_MAX_MISSING_PCT = 20.0
 
@@ -48,13 +46,13 @@ class ReconcilePlan:
     threshold_pct: float
     present_existing: int
     already_missing: int
-    missing_ids: list[int]
+    missing_ids: list[Any]
     protected_newer: int
     missing_pct: float
     fuse_tripped: bool
     fuse_reason: str | None
     predicted: dict[str, int] = field(default_factory=dict)
-    _classes: dict[int, str] = field(default_factory=dict, repr=False)
+    _classes: dict[Any, str] = field(default_factory=dict, repr=False)
 
     def fuse_json(self) -> dict[str, Any]:
         return {
@@ -68,7 +66,7 @@ class ReconcilePlan:
             "reason": self.fuse_reason,
         }
 
-    def counts(self, applied_ids: Iterable[int]) -> dict[str, int]:
+    def counts(self, applied_ids: Iterable[Any]) -> dict[str, int]:
         """Conteos reales a partir de las filas que el UPSERT efectivamente aplicó."""
         applied = set(applied_ids)
         out = {"inserted": 0, "updated": 0, "unchanged": 0, "skipped_newer": 0}
@@ -83,29 +81,36 @@ class ReconcilePlan:
         return out
 
 
+def entity_key(row: Any) -> Hashable:
+    return row.bsale_id
+
+
 def plan_reconcile(
-    existing: dict[int, ExistingRow],
-    rows: list[RawRow],
+    existing: dict[Hashable, ExistingRow],
+    rows: list[Any],
     *,
     snapshot_started_at: datetime,
     threshold_pct: float,
+    key: Callable[[Any], Hashable] = entity_key,
 ) -> ReconcilePlan:
-    classes: dict[int, str] = {}
+    """``existing`` y ``key(row)`` usan la misma clave: ``bsale_id`` en entidades, ``(variant_id, office_id)`` en stock."""
+    classes: dict[Hashable, str] = {}
     for row in rows:
-        prev = existing.get(row.bsale_id)
+        row_key = key(row)
+        prev = existing.get(row_key)
         if prev is None:
-            classes[row.bsale_id] = "inserted"
+            classes[row_key] = "inserted"
         elif prev.api_fetched_at > row.api_fetched_at:
-            classes[row.bsale_id] = "skipped_newer"
+            classes[row_key] = "skipped_newer"
         elif prev.payload_hash == row.payload_hash:
-            classes[row.bsale_id] = "unchanged"
+            classes[row_key] = "unchanged"
         else:
-            classes[row.bsale_id] = "updated"
+            classes[row_key] = "updated"
 
-    seen = {row.bsale_id for row in rows}
-    present = [e for e in existing.values() if e.missing_since is None]
-    absent = [e for e in present if e.bsale_id not in seen]
-    missing_ids = sorted(e.bsale_id for e in absent if e.api_fetched_at <= snapshot_started_at)
+    seen = set(classes)
+    present = [(k, e) for k, e in existing.items() if e.missing_since is None]
+    absent = [(k, e) for k, e in present if k not in seen]
+    missing_ids = sorted(k for k, e in absent if e.api_fetched_at <= snapshot_started_at)
     protected_newer = len(absent) - len(missing_ids)
     missing_pct = round(len(missing_ids) * 100.0 / len(present), 2) if present else 0.0
 
