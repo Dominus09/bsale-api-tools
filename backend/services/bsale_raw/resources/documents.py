@@ -10,29 +10,40 @@ Observado en fase 2:
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any
 
-from backend.services.bsale_raw.core.models import payload_hash, relation_id
+from backend.services.bsale_raw.core.document_version import (  # noqa: F401  (API pública previa)
+    DOCUMENT_REFRESH_PARTS,
+    DocumentVersion,
+    affected_variants,
+    changed_parts,
+)
+from backend.services.bsale_raw.core.models import SyncMode
 from backend.services.bsale_raw.core.rate_limit import RequestPriority
 from backend.services.bsale_raw.core.registry import (
     REGISTRY,
     KeyKind,
     Priority,
     ResourceSpec,
+    TypedColumn,
     document_type_scope,
+    optional_int,
+    optional_numeric,
+    optional_relation_id,
+    optional_text,
+    optional_unix_date,
+    optional_unix_datetime,
 )
 
 PRIORITY_DOCUMENT_SCOPES: tuple[tuple[int, int], ...] = ((3, 33),)
 FORBIDDEN_DOCUMENT_FILTERS: frozenset[str] = frozenset({"generationdaterange"})
 P1 = RequestPriority.P1_OC33
 
-
-# Partes de un refresh completo; todas se persisten en UNA transacción con el mismo version_hash.
-DOCUMENT_REFRESH_PARTS: tuple[str, ...] = ("header", "details", "references", "sellers", "attributes")
+# Fase 4E1: el refresh POINT de documentos sólo acepta estos document_type_id (identidad por id,
+# nunca por nombre). Un documento de otro tipo falla sin escribir.
+POINT_DOCUMENT_TYPE_IDS: frozenset[int] = frozenset({33})
 
 
 class WatchAction(str, Enum):
@@ -103,59 +114,6 @@ OPEN_DOCUMENT_WATCHES: tuple[OpenDocumentWatch, ...] = (
 )
 
 
-def _sorted_by_id(items: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
-    return sorted(items, key=lambda item: (str(item.get("id", "")), payload_hash(item)))
-
-
-@dataclass(frozen=True)
-class DocumentVersion:
-    """Versión observada completa de un documento: todas sus partes de un mismo refresh."""
-
-    header: Mapping[str, Any]
-    details: Sequence[Mapping[str, Any]]
-    references: Sequence[Mapping[str, Any]]
-    sellers: Sequence[Mapping[str, Any]]
-    attributes: Any = None
-
-    def part_hashes(self) -> dict[str, str]:
-        return {
-            "header": payload_hash(self.header),
-            "details": payload_hash(_sorted_by_id(self.details)),
-            "references": payload_hash(_sorted_by_id(self.references)),
-            "sellers": payload_hash(_sorted_by_id(self.sellers)),
-            "attributes": payload_hash(self.attributes),
-        }
-
-    @property
-    def children_hash(self) -> str:
-        hashes = self.part_hashes()
-        return payload_hash({k: v for k, v in hashes.items() if k != "header"})
-
-    @property
-    def version_hash(self) -> str:
-        return payload_hash(self.part_hashes())
-
-    def variant_ids(self) -> frozenset[int]:
-        ids = set()
-        for detail in self.details:
-            vid = relation_id(dict(detail), "variant")
-            if vid is not None:
-                ids.add(vid)
-        return frozenset(ids)
-
-
-def changed_parts(previous: Mapping[str, str] | None, current: DocumentVersion) -> dict[str, bool]:
-    """Partes cambiadas respecto de los hashes anteriores (None = primera observación)."""
-    hashes = current.part_hashes()
-    if previous is None:
-        return {part: True for part in DOCUMENT_REFRESH_PARTS}
-    return {part: previous.get(part) != hashes[part] for part in DOCUMENT_REFRESH_PARTS}
-
-
-def affected_variants(previous_variants: Iterable[int], current_variants: Iterable[int]) -> frozenset[int]:
-    """previous ∪ current: cubre líneas agregadas, quitadas, cambiadas, facturación y anulación."""
-    return frozenset(previous_variants) | frozenset(current_variants)
-
 DOCUMENTS = REGISTRY.register(
     ResourceSpec(
         name="documents",
@@ -175,7 +133,27 @@ DOCUMENTS = REGISTRY.register(
         needs_live_verification=(
             "webhook document sólo documenta action=post: ¿llegan PUT al anular/modificar?",
             "documentos con state=1 (anulados) ¿aparecen sin filtro state?",
+            "endpoint de attributes del documento no documentado: attributes_payload = nodo del header",
         ),
+        # details_count, details_complete, children_fetched_at, attributes_payload y hashes los
+        # calcula core/document_engine.py desde el bundle completo.
+        typed_columns=(
+            TypedColumn("state", "state", optional_int),
+            TypedColumn("commercial_state", "commercialState", optional_text),
+            TypedColumn("document_type_id", "document_type", optional_relation_id),
+            TypedColumn("office_id", "office", optional_relation_id),
+            TypedColumn("client_id", "client", optional_relation_id),
+            TypedColumn("user_id", "user", optional_relation_id),
+            TypedColumn("number", "number", optional_int),
+            TypedColumn("emission_date", "emissionDate", optional_unix_date),
+            TypedColumn("generation_date", "generationDate", optional_unix_datetime),
+            TypedColumn("total_amount", "totalAmount", optional_numeric),
+            TypedColumn("informed_sii", "informedSii", optional_int),
+        ),
+        # Sólo POINT por id técnico (fase 4E1). Sin FULL_RECONCILE: el full scan global está prohibido.
+        pipeline_enabled=True,
+        pipeline_modes=(SyncMode.POINT,),
+        point_key="document",
     )
 )
 
@@ -190,6 +168,12 @@ DOCUMENT_DETAILS = REGISTRY.register(
         request_priority=P1,
         parent="documents",
         freshness_sla_seconds=5 * 60,
+        typed_columns=(
+            TypedColumn("variant_id", "variant", optional_relation_id),
+            TypedColumn("line_number", "lineNumber", optional_int),
+            TypedColumn("quantity", "quantity", optional_numeric),
+            TypedColumn("related_detail_id", "relatedDetailId", optional_int),
+        ),
     )
 )
 
@@ -205,6 +189,11 @@ DOCUMENT_REFERENCES = REGISTRY.register(
         parent="documents",
         freshness_sla_seconds=5 * 60,
         needs_live_verification=("sólo retorna referencias electrónicas (XML) según docs",),
+        typed_columns=(
+            TypedColumn("number", "number", optional_text),
+            TypedColumn("dte_code_id", "dte_code", optional_relation_id),
+            TypedColumn("reference_date", "referenceDate", optional_unix_date),
+        ),
     )
 )
 

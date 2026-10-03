@@ -162,6 +162,8 @@ def run_entity_sync(
     spec = pipeline_spec(resource)
     if mode is not SyncMode.FULL_RECONCILE:
         raise UnsupportedSyncError(f"modo no habilitado en fase 4A: {mode.value}")
+    if mode not in spec.pipeline_modes or not spec.full_scan_global_allowed:
+        raise UnsupportedSyncError(f"{resource}: barrido completo no habilitado (modos {spec.pipeline_modes})")
     scope = GLOBAL_SCOPE
     outcome = EntityOutcome(company_id=company_id, resource=resource, scope=scope, mode=mode.value, dry_run=dry_run)
     t0 = monotonic()

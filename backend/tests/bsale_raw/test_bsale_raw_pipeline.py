@@ -218,6 +218,8 @@ class FakeTx:
 
 
 class FakeStore:
+    tx_class = FakeTx
+
     def __init__(self, db_clock: TickClock | None = None) -> None:
         self.db_clock = db_clock or TickClock(BASE)
         self.sources = {
@@ -352,7 +354,7 @@ class FakeStore:
         self._tx_now = self.db_clock()
         self.events.append("tx_begin")
         try:
-            yield FakeTx(self)
+            yield self.tx_class(self)
         except BaseException:
             self.tables, self.runs, self.entity_runs, self.sync_state = backup
             self.events.append("tx_rollback")
@@ -886,14 +888,18 @@ def test_dry_run_reports_fuse_without_writing():
 CONFIG_RESOURCES = ["offices", "taxes", "document_types", "product_types", "price_lists"]
 CATALOG_RESOURCES = ["products", "variants"]
 STOCK_RESOURCES = ["stocks"]
+DOCUMENT_RESOURCES = ["documents"]  # sólo POINT por id (fase 4E1); nunca barrido completo
 NOT_YET_ENABLED = ["clients", "variant_prices", "variant_costs",
-                   "documents", "document_details", "stock_receptions", "stock_consumptions"]
+                   "document_details", "stock_receptions", "stock_consumptions"]
 
 
-def test_only_configuration_catalog_and_stock_resources_enabled():
-    assert REGISTRY.pipeline_names() == CONFIG_RESOURCES + CATALOG_RESOURCES + STOCK_RESOURCES
+def test_only_configuration_catalog_stock_and_document_point_enabled():
+    assert REGISTRY.pipeline_names() == CONFIG_RESOURCES + CATALOG_RESOURCES + STOCK_RESOURCES + DOCUMENT_RESOURCES
     with pytest.raises(UnsupportedSyncError):  # stock nunca entra al motor de entidades
         run_entity_sync(store=FakeStore(), company_id=3, resource="stocks")
+    with pytest.raises(UnsupportedSyncError):  # documentos: full scan global prohibido
+        run_entity_sync(store=FakeStore(), company_id=3, resource="documents")
+    assert REGISTRY.get("documents").pipeline_modes == (SyncMode.POINT,)
     for name in NOT_YET_ENABLED:
         if name in REGISTRY.names():
             assert not REGISTRY.get(name).pipeline_enabled, name
@@ -920,7 +926,7 @@ def test_cli_output_and_args():
                     runner=runner, out=buf)
     assert code == cli.EXIT_SUCCESS
     assert seen == {"company_id": 3, "resource": "offices", "mode": SyncMode.FULL_RECONCILE, "dry_run": True,
-                    "office_id": None, "variant_id": None}
+                    "office_id": None, "variant_id": None, "document_id": None}
     lines = buf.getvalue().splitlines()
     assert lines[0] == "dry_run=true"
     keys = [line.split("=", 1)[0] for line in lines[1:]]
@@ -933,7 +939,7 @@ def test_cli_output_and_args():
 def test_cli_rejects_unsupported_resource_and_mode():
     never = lambda **kw: pytest.fail("no debe ejecutarse")  # noqa: E731
     base = ["sync", "--company", "3", "--mode", "full-reconcile"]
-    for name in NOT_YET_ENABLED:
+    for name in NOT_YET_ENABLED + DOCUMENT_RESOURCES:
         assert cli.main([*base, "--resource", name], runner=never, out=io.StringIO()) == cli.EXIT_USAGE
     assert cli.main(["sync", "--company", "3", "--resource", "offices", "--mode", "incremental"],
                     runner=never, out=io.StringIO()) == cli.EXIT_USAGE

@@ -422,7 +422,7 @@ def test_cli_point(office_args, office_id, dry_run):
     buf = io.StringIO()
     assert cli.main(argv + (["--dry-run"] if dry_run else []), runner=runner, out=buf) == cli.EXIT_SUCCESS
     assert seen == {"company_id": 3, "resource": "stocks", "mode": POINT, "dry_run": dry_run,
-                    "office_id": office_id, "variant_id": 10888}
+                    "office_id": office_id, "variant_id": 10888, "document_id": None}
     text = buf.getvalue()
     assert "mode=POINT" in text and "variants=1" in text and "no_rows=0" in text and "status=SUCCESS" in text
 

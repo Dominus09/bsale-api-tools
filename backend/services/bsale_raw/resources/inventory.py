@@ -50,6 +50,7 @@ STOCKS = REGISTRY.register(
         ),
         pipeline_enabled=True,
         pipeline_modes=(SyncMode.SCANNER, SyncMode.FULL_RECONCILE, SyncMode.POINT),
+        point_key="variant",
     )
 )
 

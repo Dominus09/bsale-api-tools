@@ -8,7 +8,7 @@ Documentación:
 - Matriz de endpoints (oficial): [`docs/BSALE_RAW_ENDPOINT_MATRIX.md`](../../../docs/BSALE_RAW_ENDPOINT_MATRIX.md)
 - Inventario de syncs existentes: [`docs/BSALE_SYNC_INDEX.md`](../../../docs/BSALE_SYNC_INDEX.md)
 
-## Estado: fase 4D1 (configuración + catálogo + stock por sucursal, manual)
+## Estado: fase 4E1 (configuración + catálogo + stock + OC 33 POINT, manual)
 
 Motor genérico en `core/` + entrypoint `python -m backend.jobs.bsale_raw`. Sin jobs programados ni endpoint de webhooks.
 Un recurso se habilita sólo con su `ResourceSpec` (`typed_columns` + `pipeline_enabled=True` + `pipeline_modes`); no hay código por recurso.
@@ -24,7 +24,8 @@ Un recurso se habilita sólo con su `ResourceSpec` (`typed_columns` + `pipeline_
 | `variants` | IMPLEMENTED + LIVE VALIDATED C3 (sin stock, precios ni costos) |
 | `stocks` SCANNER | IMPLEMENTED + LIVE VALIDATED C3 office 1 / office 4 (5.860 filas, 118 requests, ~41 s) |
 | `stocks` FULL_RECONCILE | IMPLEMENTED / NOT YET LIVE VALIDATED |
-| `stocks` POINT | IMPLEMENTED / NOT YET LIVE VALIDATED (`--variant` [+ `--office`]) |
+| `stocks` POINT | IMPLEMENTED + LIVE VALIDATED C3 (`--variant` [+ `--office`]; 10888 + office 1 y 10888 sin office) |
+| `documents` OC 33 POINT | IMPLEMENTED / NOT YET LIVE VALIDATED (`--document <id técnico>`; stock post-COMMIT) |
 
 Entidades: un barrido sin `state` ni `expand` (sólo `limit`/`offset`); devuelve activos e inactivos.
 En `variants`, SKU (`code`) y barcode (`bar_code`) se guardan tal cual (sin unicidad ni deduplicación) y
@@ -56,12 +57,46 @@ En `variants`, SKU (`code`) y barcode (`bar_code`) se guardan tal cual (sin unic
   - Un `sync_runs` + `sync_entity_runs` por llamada (scope `variant:<v>[:office:<o>]` o `variants:<n>[:office:<o>]`),
     detalle por variante en `summary.point`. `sync_state` usa UNA fila agregada `(company, stocks, point)`, no una por variante.
   - Lote: PARTIAL si fallan algunas variantes, FAILED si fallan todas; máximo 500 variantes por llamada.
-- Futuro (no implementado): OC 33 / webhook `stock` → `affected_variants` → COMMIT → `refresh_stock_variants(...)`.
+- Consumidor: OC 33 POINT (abajo) → `affected_variants` → COMMIT → `refresh_stock_variants(...)`. Webhook `stock`: no implementado.
+
+### Documentos OC 33 POINT (`core/document_engine.py`, fase 4E1)
+
+- `refresh_document_point(company_id, document_id)`: refresca UNA OC por su **id técnico Bsale** (no folio / `number`;
+  no hay búsqueda por folio). Sólo `--mode point`; sin scanner, sin full scan, sin `generationdaterange`, sin watcher.
+- Endpoints: `/v1/documents/{id}.json` (header, sin `expand`), `/v1/documents/{id}/details.json` paginado completo
+  (fuente de integridad), `/references.json` y `/sellers.json` (paginados). Attributes: el endpoint no está documentado,
+  así que `attributes_payload` = nodo `attributes` del header tal cual. Los links hijos del header deben apuntar a
+  `https://api.bsale.io` con el path exacto (sin query); si no, FAILED.
+- Guard de tipo: `document_type.id` debe ser 33 (por id, nunca por nombre); si no, FAILED sin escritura.
+- Fetch completo antes de escribir (nunca HTTP dentro de una transacción). Si falla cualquier hijo → FAILED y la versión
+  anterior queda intacta. `details_complete = true` sólo con details completo y validado; `variant_id` NULL se conserva
+  como línea pero no entra en `affected`.
+- **Versión:** `payload_hash` = header; hash por parte (details / references / sellers ordenados por id, attributes);
+  `version_hash` = hash de los 5 hashes de parte; `children_hash` = hash de las partes sin header. Cada hijo lleva
+  `document_version_hash = documents.version_hash`. Determinista e independiente del orden.
+- **Transacción atómica corta:** `pg_advisory_xact_lock(company, documents, document:<id>)` + `SELECT … FOR UPDATE` →
+  lectura de la versión previa (hashes, variantes, pendientes) → frescura → reemplazo COMPLETO de cada conjunto hijo
+  (DELETE de los que ya no vienen + UPSERT) → UPSERT del header → `document_change_log` → COMMIT. ROLLBACK total ante error.
+- **Frescura:** si la fila guardada tiene `api_fetched_at` más nuevo que el bundle → sin escrituras, `skipped_newer = 1`, sin stock.
+- **Change log:** `CREATED` (primera vez) / `MODIFIED` (cambia `version_hash`) con booleanos reales por componente,
+  `previous/current/affected_variant_ids` y `stock_refresh_requested_at`; versión igual → sin fila.
+- **Stock post-COMMIT:** `affected = previous ∪ current` → `refresh_stock_variants(company, office_id de la OC, affected)`
+  (P0, mismo limitador). Sin `office_id` en la OC, o si la sucursal cambió, se refrescan todas las sucursales (nunca se
+  inventa la office 1). Un fallo de stock **no** revierte la OC: la fila queda con `requested` y sin `done`, run PARTIAL.
+- **Pendientes:** filas del log con `stock_refresh_requested_at` NOT NULL y `done` NULL se reintentan en el siguiente
+  refresh aunque la versión no cambie, sin fila MODIFIED falsa.
+- Sin reglas de estados terminales: se guardan `state`, `commercial_state`, references y payload; nunca DELETE de la OC;
+  `watch_*` quedan NULL.
+- Tracking: modo POINT, scope `document:<id>`, `sync_state` agregado `(company, documents, point)`, summary sin PII,
+  token ni URLs.
 
 | Módulo | Contenido |
 |---|---|
 | `core/engine.py` | `run_entity_sync`: fuente → lock → run RUNNING → fetch completo → transacción corta (fusible, UPSERT con frescura, `missing_since`, run/state) → unlock. |
 | `core/stock_engine.py` | `run_stock_sync`: mismo flujo por `office:<id>`; scanner no destructivo / reconcile estricto con DELETE stale acotado. `refresh_stock_point` / `refresh_stock_variants`: POINT P0 por variante, sin lock, sin borrado. |
+| `core/document_engine.py` | `refresh_document_point`: OC 33 POINT (fetch bundle → tx atómica → COMMIT → stock POINT). |
+| `core/document_bundle.py` | Validación del bundle (header, hijos, hrefs), `StoredDocument`, `plan_document` (frescura, change kind, affected, pendientes). |
+| `core/document_version.py` | `DocumentVersion` (hashes por parte, `version_hash`), `changed_parts`, `affected_variants`. |
 | `core/snapshot.py` | `fetch_snapshot` (paginación contra `count`, estricta o con `CountDrift`), `build_rows`, `build_stock_rows`. |
 | `core/reconcile.py` | `plan_reconcile`: conteos, faltantes elegibles (`api_fetched_at <= snapshot_started_at`), fusible 20 %. |
 | `core/store.py` | `PgRawStore` (toda la SQL), advisory lock `(int, int)`, `sync_runs` / `sync_entity_runs` / `sync_state`. |

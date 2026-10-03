@@ -385,7 +385,7 @@ def test_cli_accepts_resource(resource, dry_run):
 
 @pytest.mark.parametrize("name", ["variant_prices", "variant_costs", "documents", "clients"])
 def test_cli_still_rejects_out_of_scope(name):
-    assert name in NOT_YET_ENABLED
+    assert name in NOT_YET_ENABLED or name == "documents"  # documents: sólo --mode point
     never = lambda **kw: pytest.fail("no debe ejecutarse")  # noqa: E731
     for extra in ([], ["--dry-run"]):
         argv = ["sync", "--company", "3", "--resource", name, "--mode", "full-reconcile", *extra]

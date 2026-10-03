@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from backend.jobs.bsale_raw import cli
+from backend.services.bsale_raw.core.models import SyncMode
 from backend.services.bsale_raw.core.registry import REGISTRY, KeyKind
 from backend.tests.bsale_raw._raw_sql_schema import parse
 from backend.tests.bsale_raw.test_bsale_raw_pipeline import (
@@ -245,7 +246,7 @@ def test_document_type_33_preserved_without_oc33_logic():
     row = store.rows(3, table)[33]
     assert row["payload"] == item and row["code_sii"] == "801" and row["name"] == "ORDEN DE COMPRA"
     assert {urlsplit(c.url).path for c in adapter.calls} == {"/v1/document_types.json"}
-    assert not REGISTRY.get("documents").pipeline_enabled
+    assert REGISTRY.get("documents").pipeline_modes == (SyncMode.POINT,)  # nunca full scan
     assert set(store.tables) == {REGISTRY.get(n).raw_table for n in REGISTRY.pipeline_names()}
     assert all(not rows for name, rows in store.tables.items() if name != table)
 

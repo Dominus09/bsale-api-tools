@@ -602,7 +602,7 @@ def test_cli_stocks_with_office(mode_arg, mode, dry_run):
     buf = io.StringIO()
     assert cli.main(argv + (["--dry-run"] if dry_run else []), runner=runner, out=buf) == cli.EXIT_SUCCESS
     assert seen == {"company_id": 3, "resource": "stocks", "mode": mode, "dry_run": dry_run, "office_id": 1,
-                    "variant_id": None}
+                    "variant_id": None, "document_id": None}
     assert "scope=office:1" in buf.getvalue()
 
 

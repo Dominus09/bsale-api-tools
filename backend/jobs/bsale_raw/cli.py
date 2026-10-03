@@ -3,9 +3,13 @@
     python -m backend.jobs.bsale_raw sync --company 3 --resource offices --mode full-reconcile [--dry-run]
     python -m backend.jobs.bsale_raw sync --company 3 --resource stocks --office 1 --mode scanner [--dry-run]
     python -m backend.jobs.bsale_raw sync --company 3 --resource stocks --variant 10888 [--office 1] --mode point [--dry-run]
+    python -m backend.jobs.bsale_raw sync --company 3 --resource documents --document <ID> --mode point [--dry-run]
+
+``--document`` es el id TÉCNICO del documento en Bsale (``/v1/documents/{id}.json``), no el folio
+(``number``) ni el número visible de la OC. No hay búsqueda por folio.
 
 Exit: 0 SUCCESS, 1 FAILED, 2 PARTIAL, 3 lock ocupado (SKIPPED), 64 uso inválido.
-La salida nunca incluye token ni payload.
+La salida nunca incluye token, payload ni datos del cliente.
 """
 
 from __future__ import annotations
@@ -46,6 +50,48 @@ OUTPUT_FIELDS = (
 )
 
 
+def _flag(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _format_document(outcome: EntityOutcome) -> list[str]:
+    doc = outcome.document or {}
+
+    def count(key: str) -> str:
+        values = doc.get(key)
+        return "" if values is None else str(len(values))
+
+    return [
+        f"company={outcome.company_id}",
+        f"resource={outcome.resource}",
+        f"scope={outcome.scope}",
+        f"mode={outcome.mode}",
+        f"document_type_id={_flag(doc.get('document_type_id'))}",
+        f"office_id={_flag(doc.get('office_id'))}",
+        f"details={_flag(doc.get('details'))}",
+        f"references={_flag(doc.get('references'))}",
+        f"sellers={_flag(doc.get('sellers'))}",
+        f"change_kind={_flag(doc.get('change_kind'))}",
+        f"version_changed={_flag(doc.get('version_changed'))}",
+        f"skipped_newer={outcome.rows_skipped_newer}",
+        f"previous_variants={count('previous_variants')}",
+        f"current_variants={count('current_variants')}",
+        f"affected_variants={count('affected_variants')}",
+        f"pending_stock_changes={count('pending_change_ids')}",
+        f"stock_variants={count('stock_variants')}",
+        f"stock_office_id={_flag(doc.get('stock_office_id'))}",
+        f"stock_refresh={_flag(doc.get('stock_refresh'))}",
+        f"requests={outcome.requests}",
+        f"stock_requests={_flag(doc.get('stock_requests', 0))}",
+        f"duration_ms={outcome.duration_ms}",
+        f"status={outcome.status}",
+    ]
+
+
 def exit_code(outcome: EntityOutcome) -> int:
     return {
         RunStatus.SUCCESS.value: EXIT_SUCCESS,
@@ -58,9 +104,12 @@ def format_outcome(outcome: EntityOutcome) -> str:
     lines = []
     if outcome.dry_run:
         lines.append("dry_run=true")
-    for label, attr in OUTPUT_FIELDS:
-        value = getattr(outcome, attr)
-        lines.append(f"{label}={'' if value is None else value}")
+    if outcome.document is not None:
+        lines.extend(_format_document(outcome))
+    else:
+        for label, attr in OUTPUT_FIELDS:
+            value = getattr(outcome, attr)
+            lines.append(f"{label}={'' if value is None else value}")
     if outcome.sync_run_id is not None:
         lines.append(f"sync_run_id={outcome.sync_run_id}")
     if outcome.point is not None:
@@ -82,7 +131,11 @@ def build_parser(resources: list[str]) -> argparse.ArgumentParser:
     sync.add_argument("--company", type=int, required=True, help="company_id (bsale_raw.sources)")
     sync.add_argument("--resource", required=True, choices=resources)
     sync.add_argument("--office", type=int, help="office_id (recursos por sucursal; opcional en --mode point)")
-    sync.add_argument("--variant", type=int, help="variant_id (sólo --mode point)")
+    sync.add_argument("--variant", type=int, help="variant_id (sólo stocks --mode point)")
+    sync.add_argument(
+        "--document", type=int,
+        help="id TÉCNICO Bsale del documento (sólo documents --mode point); NO es folio/number",
+    )
     sync.add_argument("--mode", required=True, choices=sorted(MODES))
     sync.add_argument("--dry-run", action="store_true", help="consulta API y valida; no escribe en la BD")
     return parser
@@ -94,19 +147,29 @@ def usage_error(args: argparse.Namespace, spec) -> str | None:
     if mode not in spec.pipeline_modes:
         allowed = ", ".join(k for k, v in MODES.items() if v in spec.pipeline_modes)
         return f"--mode {args.mode} no habilitado para {spec.name} (permitidos: {allowed})"
+    targets = {"variant": args.variant, "document": args.document}
     if mode is SyncMode.POINT:
-        if args.variant is None:
-            return "--mode point exige --variant"
-    elif args.variant is not None:
-        return "--variant sólo se acepta con --mode point"
-    elif spec.partition_by_office and args.office is None:
-        return f"{spec.name} exige --office en --mode {args.mode}"
+        key = spec.point_key
+        if key not in targets:
+            return f"{spec.name} no tiene refresh POINT"
+        if targets[key] is None:
+            return f"--mode point en {spec.name} exige --{key}"
+        for other, value in targets.items():
+            if other != key and value is not None:
+                return f"--{other} no se acepta en {spec.name}"
+    else:
+        for name, value in targets.items():
+            if value is not None:
+                return f"--{name} sólo se acepta con --mode point"
+        if spec.partition_by_office and args.office is None:
+            return f"{spec.name} exige --office en --mode {args.mode}"
     if not spec.partition_by_office and args.office is not None:
         return f"{spec.name} no acepta --office"
     if args.office is not None and args.office <= 0:
         return "--office debe ser un entero positivo"
-    if args.variant is not None and args.variant <= 0:
-        return "--variant debe ser un entero positivo"
+    for name, value in targets.items():
+        if value is not None and value <= 0:
+            return f"--{name} debe ser un entero positivo"
     return None
 
 
@@ -118,6 +181,7 @@ def _default_runner(
     dry_run: bool,
     office_id: int | None = None,
     variant_id: int | None = None,
+    document_id: int | None = None,
 ) -> EntityOutcome:
     from backend.services.bsale_raw.core.store import PgRawStore
     from backend.utils.bsale_token_env import load_dotenv_if_available
@@ -125,6 +189,13 @@ def _default_runner(
     load_dotenv_if_available()
     store = PgRawStore(read_only=dry_run)
     try:
+        if mode is SyncMode.POINT and document_id is not None:
+            from backend.services.bsale_raw.core.document_engine import refresh_document_point
+
+            return refresh_document_point(
+                store=store, company_id=company_id, document_id=document_id, resource=resource,
+                dry_run=dry_run, host=socket.gethostname(),
+            )
         if mode is SyncMode.POINT:
             from backend.services.bsale_raw.core.stock_engine import refresh_stock_point
 
@@ -180,6 +251,7 @@ def main(
         dry_run=args.dry_run,
         office_id=args.office,
         variant_id=args.variant,
+        document_id=args.document,
     )
     print(format_outcome(outcome), file=out)
     return exit_code(outcome)

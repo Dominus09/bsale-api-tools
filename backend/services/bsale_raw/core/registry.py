@@ -8,6 +8,7 @@ script por endpoint. La fuente de verdad de cada campo es ``docs/BSALE_RAW_ENDPO
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any, Callable
@@ -42,6 +43,11 @@ POINT_STATE_SCOPE = "point"
 def variant_scope(variant_id: int, office_id: int | None = None) -> str:
     base = f"variant:{int(variant_id)}"
     return base if office_id is None else f"{base}:office:{int(office_id)}"
+
+
+def document_scope(document_id: int) -> str:
+    """POINT de documento: ``document:<bsale_document_id>`` (id técnico Bsale, no folio)."""
+    return f"document:{int(document_id)}"
 
 
 def point_scope(variant_ids: list[int], office_id: int | None = None) -> str:
@@ -98,6 +104,30 @@ def optional_numeric(value: Any) -> Decimal | None:
     raise ValueError(f"valor no numérico: {type(value).__name__}")
 
 
+def _unix_seconds(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        raise ValueError("fecha no es entero unix: bool")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+        return int(value.strip())
+    raise ValueError(f"fecha no es entero unix: {type(value).__name__}")
+
+
+def optional_unix_date(value: Any) -> date | None:
+    """``emissionDate`` / ``referenceDate``: Bsale indica no aplicar zona horaria → fecha UTC del entero."""
+    seconds = _unix_seconds(value)
+    return None if seconds is None else datetime.fromtimestamp(seconds, timezone.utc).date()
+
+
+def optional_unix_datetime(value: Any) -> datetime | None:
+    """``generationDate``: fecha y hora (entero unix) → TIMESTAMPTZ UTC."""
+    seconds = _unix_seconds(value)
+    return None if seconds is None else datetime.fromtimestamp(seconds, timezone.utc)
+
+
 def optional_relation_id(value: Any) -> int | None:
     """Id de un nodo relación Bsale (``{"href": ..., "id": "1"}``); ausente → None."""
     if value is None:
@@ -147,6 +177,8 @@ class ResourceSpec:
     pipeline_enabled: bool = False
     # Modos que el motor acepta para el recurso (deben existir en los CHECK de sync_runs).
     pipeline_modes: tuple[SyncMode, ...] = (SyncMode.FULL_RECONCILE,)
+    # Argumento CLI que identifica el objetivo de un refresh POINT ("variant" en stock, "document").
+    point_key: str | None = None
 
 
 class ResourceRegistry:

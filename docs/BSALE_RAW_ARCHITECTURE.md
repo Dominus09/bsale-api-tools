@@ -307,7 +307,7 @@ Volumen observado: C1 12.587, C2 1.264 y C3 35.160 filas, unas 704 páginas en C
 - **Preparado para OC 33 / webhooks (no implementado):** `OC 33 cambia → affected_variants → COMMIT documento → refresh dirigido stocks.json?variantid=&officeid= (P0) → UPSERT con el mismo SQL`. El refresh dirigido no toma el lock de la sucursal; la frescura por fila impide que un scanner posterior y más viejo lo pise.
 - **Estado:** `SCANNER` LIVE VALIDATED C3 office 1 y office 4 (5.860 filas, 118 requests, ~41 s, 0 × 429/5xx; RUN 2 sin inserts ni borrados).
 
-**Implementación fase 4D2 (`refresh_stock_point` / `refresh_stock_variants`, mode `POINT`) — IMPLEMENTED / NOT YET LIVE VALIDATED:**
+**Implementación fase 4D2 (`refresh_stock_point` / `refresh_stock_variants`, mode `POINT`) — IMPLEMENTED + LIVE VALIDATED C3** (10888 + office 1: 1 request, 201 ms; 10888 sin office: 6 sucursales, 1 request, 242 ms)**:**
 
 - **Endpoint:** `GET /v1/stocks.json?variantid=V[&officeid=O]`; un request por variante (listas de `variantid` no documentadas), mismo cliente y limitador de la empresa con prioridad `P0_TARGETED` (scanner P2, catálogo P4). No hay limitador nuevo.
 - **Mismas filas que el scanner** (`(company_id, variant_id, office_id)`, nunca `bsale_stock_id`), mismo UPSERT con frescura, `last_source = 'POINT'`. Tres cantidades tal cual.
@@ -332,6 +332,16 @@ Volumen observado: C1 12.587, C2 1.264 y C3 35.160 filas, unas 704 páginas en C
 - **Hijos:** `expand=[details]` es **INCONCLUSIVE**, así que la fuente de integridad es siempre `/documents/{id}/details.json` paginado completo.
 
 **Flujo OC 33:** webhook → documento → detalles paginados → variantes → stock puntual. El documento no trae stock directo (OBSERVED).
+
+**Implementación fase 4E1 (`refresh_document_point`, `--resource documents --document <id> --mode point`) — IMPLEMENTED / NOT YET LIVE VALIDATED:**
+
+- `--document` es el **id técnico** Bsale (`/v1/documents/{id}.json`), no el folio (`number`); no hay búsqueda por folio. Sólo modo POINT; `run_entity_sync` rechaza `documents` (sin full scan).
+- Guard: `document_type.id == 33` (por id); otro tipo → FAILED sin escritura.
+- Bundle: header (sin `expand`) + `details.json` paginado completo + `references.json` + `sellers.json` (paginados, `limit=50`); attributes = nodo `attributes` del header (endpoint NLV, no se sigue). Links hijos validados contra `https://api.bsale.io` y path exacto. Todo se descarga y valida **antes** de abrir la transacción.
+- Versión: hash por parte (header, details, references, sellers, attributes; hijos ordenados por id) → `version_hash`; `children_hash` sin header; `document_version_hash` de cada hijo = `version_hash` del padre.
+- Transacción corta: `pg_advisory_xact_lock(company, documents, document:<id>)` + `FOR UPDATE` → versión previa → frescura (`api_fetched_at` guardado más nuevo → `skipped_newer`, sin escritura ni stock) → reemplazo completo de hijos (DELETE ausentes + UPSERT) → UPSERT header → `document_change_log` (CREATED / MODIFIED con booleanos por componente) → COMMIT.
+- Post-COMMIT: `refresh_stock_variants(company, office_id de la OC, previous ∪ current)`; sin office u office cambiada → todas las sucursales. Fallo de stock: OC confirmada, log `requested` sin `done`, run PARTIAL; el siguiente refresh reintenta los pendientes aunque la versión no cambie.
+- Sin reglas terminales; `watch_*` NULL; nunca DELETE de la OC.
 
 **Open document watch:** el webhook sólo garantiza la creación y `generationdaterange` está rechazado. Por eso los documentos de C3 / tipo 33 que siguen abiertos se seleccionan desde `bsale_raw.documents` y se refrescan por ID, sin tabla adicional.
 - La selección usa el índice `ix_raw_documents_watch (company_id, document_type_id, api_fetched_at)`, con lookback de 45 días.
@@ -404,7 +414,8 @@ Se aplican los webhooks documentados más el full reconcile según la matriz. En
    | `variants` | IMPLEMENTED + LIVE VALIDATED C3 (sin stock, precios ni costos) |
    | `stocks` SCANNER | IMPLEMENTED + LIVE VALIDATED C3 office 1 / office 4 |
    | `stocks` FULL_RECONCILE | IMPLEMENTED / NOT YET LIVE VALIDATED |
-   | `stocks` POINT | IMPLEMENTED / NOT YET LIVE VALIDATED (variant [+ office], P0, sin borrado) |
+   | `stocks` POINT | IMPLEMENTED + LIVE VALIDATED C3 (variant [+ office], P0, sin borrado) |
+   | `documents` OC 33 POINT | IMPLEMENTED / NOT YET LIVE VALIDATED (fase 4E1; id técnico, bundle atómico, stock post-COMMIT) |
 
 5. **Fase 4 (siguiente):** refresh puntual de stock, precios, costos, clientes y documentos (incremental), en paralelo a los syncs actuales para comparar paridad.
 6. **Fase 5:** inbox y worker de webhooks; solicitud de activación a Bsale.
