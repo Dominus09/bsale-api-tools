@@ -789,12 +789,13 @@ def test_dry_run_reports_fuse_without_writing():
 
 
 CONFIG_RESOURCES = ["offices", "taxes", "document_types", "product_types", "price_lists"]
-NOT_YET_ENABLED = ["products", "variants", "clients", "stocks", "variant_prices", "variant_costs",
+CATALOG_RESOURCES = ["products", "variants"]
+NOT_YET_ENABLED = ["clients", "stocks", "variant_prices", "variant_costs",
                    "documents", "document_details", "stock_receptions", "stock_consumptions"]
 
 
-def test_only_configuration_resources_enabled():
-    assert REGISTRY.pipeline_names() == CONFIG_RESOURCES
+def test_only_configuration_and_catalog_resources_enabled():
+    assert REGISTRY.pipeline_names() == CONFIG_RESOURCES + CATALOG_RESOURCES
     for name in NOT_YET_ENABLED:
         if name in REGISTRY.names():
             assert not REGISTRY.get(name).pipeline_enabled, name

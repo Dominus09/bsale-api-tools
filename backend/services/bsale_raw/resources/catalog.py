@@ -1,13 +1,28 @@
 """Recursos de catálogo (prioridad alta): productos, variantes y clientes.
 
 Observado en fase 2: el listado SIN ``state`` devuelve activos e inactivos. El full scan usa una
-sola consulta sin ``state`` y conserva el ``state`` de cada ítem; ``state=0/1`` es sólo auditoría.
+sola consulta sin ``state`` (ni ``expand``) y conserva el ``state`` de cada ítem; ``state=0/1`` es
+sólo auditoría.
+
+Identidad técnica siempre ``(company_id, bsale_id)``. SKU (``code``) y barcode (``bar_code``) son
+columnas de búsqueda: sin unicidad, sin deduplicación; duplicados o vacíos se guardan tal cual.
+``product_id`` es la relación que entrega Bsale para ESA empresa: nunca se resuelve ni se repara
+por SKU, barcode o nombre.
 """
 
 from __future__ import annotations
 
 from backend.services.bsale_raw.core.rate_limit import RequestPriority
-from backend.services.bsale_raw.core.registry import REGISTRY, KeyKind, Priority, ResourceSpec
+from backend.services.bsale_raw.core.registry import (
+    REGISTRY,
+    KeyKind,
+    Priority,
+    ResourceSpec,
+    TypedColumn,
+    optional_int,
+    optional_relation_id,
+    optional_text,
+)
 
 TWO_HOURS = 2 * 3600
 
@@ -24,6 +39,14 @@ PRODUCTS = REGISTRY.register(
         state_filter=True,
         expand=("product_type",),
         freshness_sla_seconds=TWO_HOURS,
+        typed_columns=(
+            TypedColumn("state", "state", optional_int),
+            TypedColumn("name", "name", optional_text),
+            TypedColumn("product_type_id", "product_type", optional_relation_id),
+            TypedColumn("classification", "classification", optional_int),
+            TypedColumn("stock_control", "stockControl", optional_int),
+        ),
+        pipeline_enabled=True,
     )
 )
 
@@ -41,6 +64,15 @@ VARIANTS = REGISTRY.register(
         state_filter=True,
         point_filters=("productid", "code", "barcode"),
         freshness_sla_seconds=TWO_HOURS,
+        typed_columns=(
+            TypedColumn("state", "state", optional_int),
+            TypedColumn("product_id", "product", optional_relation_id),
+            TypedColumn("code", "code", optional_text),
+            TypedColumn("bar_code", "barCode", optional_text),
+            TypedColumn("description", "description", optional_text),
+            TypedColumn("unlimited_stock", "unlimitedStock", optional_int),
+        ),
+        pipeline_enabled=True,
     )
 )
 

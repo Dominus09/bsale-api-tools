@@ -7,7 +7,7 @@ python -m backend.jobs.bsale_raw sync --company 3 --resource offices --mode full
 python -m backend.jobs.bsale_raw sync --company 3 --resource offices --mode full-reconcile
 ```
 
-Fase 4B: `--resource` ∈ `offices` (LIVE VALIDATED C3), `taxes`, `document_types`, `product_types`, `price_lists` (IMPLEMENTED / NOT YET LIVE VALIDATED); sólo `--mode full-reconcile`. Habilitación por `ResourceSpec.pipeline_enabled`; el resto de recursos se rechaza (exit 64).
+Fase 4C: `--resource` ∈ `offices`, `taxes`, `document_types`, `product_types`, `price_lists` (LIVE VALIDATED C3), `products`, `variants` (IMPLEMENTED / NOT YET LIVE VALIDATED; correr `products` antes que `variants`); sólo `--mode full-reconcile`. Habilitación por `ResourceSpec.pipeline_enabled`; el resto de recursos se rechaza (exit 64).
 No está programado en Coolify; se ejecuta manualmente con autorización.
 
 - `--dry-run`: consulta la API, valida, pagina y calcula hashes; abre la BD en **sólo lectura** (no crea `sync_runs`, no toca `sync_state`, no toma lock). Imprime los conteos que *se aplicarían*.
