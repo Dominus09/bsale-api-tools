@@ -1,15 +1,17 @@
 """Bundle de UNA versión observada de un documento Bsale, en memoria (sin BD ni red).
 
-Bundle = header + details (paginados completos) + references + sellers + attributes. Todas las
-partes se validan antes de abrir cualquier transacción; un bundle inválido nunca se escribe.
+Bundle = header + details + references + sellers + attributes, cada hijo paginado completo desde
+su endpoint. Todas las partes se validan antes de abrir cualquier transacción; un bundle inválido
+nunca se escribe.
 
 Identidad de hijos SIEMPRE acotada al padre: details / references ``(company_id, document_id,
 bsale_id)``, sellers ``(company_id, document_id, user_id)``. El id de un hijo nunca se trata como
-identidad global.
+identidad global. Attributes no tiene tabla: la colección completa va a
+``documents.attributes_payload`` como ``{"count": n, "items": [...]}`` (orden recibido).
 
 Hashes (``core/document_version.DocumentVersion``):
-- ``payload_hash``  = hash canónico del header RAW;
-- ``children_hash`` = hash de los hashes de details / references / sellers / attributes;
+- ``payload_hash``  = hash canónico del header RAW (incluye el nodo ``attributes`` con su href);
+- ``children_hash`` = hash de los hashes de details / references / sellers / attributes completos;
 - ``version_hash``  = hash de los hashes de las 5 partes (header + children).
 Las colecciones se ordenan por id antes de hashear: el orden de la API no cambia la versión, y el
 contenido completo de cada ítem sí entra al hash (cambiar una cantidad cambia children/version).
@@ -22,7 +24,11 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import urlsplit
 
-from backend.services.bsale_raw.core.document_version import DOCUMENT_REFRESH_PARTS, DocumentVersion
+from backend.services.bsale_raw.core.document_version import (
+    DOCUMENT_REFRESH_PARTS,
+    DocumentVersion,
+    stored_attributes_hash,
+)
 from backend.services.bsale_raw.core.models import DocumentChangeKind, payload_hash
 from backend.services.bsale_raw.core.registry import ResourceSpec, optional_relation_id
 from backend.services.bsale_raw.core.snapshot import Snapshot, SnapshotValidationError, _bsale_id
@@ -33,6 +39,14 @@ CHILD_SPEC_NAMES = {"details": "document_details", "references": "document_refer
 CHILD_KEY_COLUMN = {"details": "bsale_id", "references": "bsale_id", "sellers": "user_id"}
 # Ítems con id propio de relación bajo el documento (sellers son usuarios: href a /users/{id}).
 _CHILD_ITEM_PATH = {"details": "details", "references": "references"}
+# Verificado LIVE (C3, documento 3925780): objeto paginado count/items/limit/offset/href;
+# ítems id / name / value / href. Sin tabla propia.
+ATTRIBUTES_LINK = "attributes"
+
+
+def attributes_path(document_id: int) -> str:
+    """Relativa a la base ``/v1`` (igual que ``child_path``)."""
+    return f"documents/{int(document_id)}/attributes.json"
 
 
 class DocumentTypeNotAllowedError(SnapshotValidationError):
@@ -67,8 +81,14 @@ class DocumentBundle:
     version: DocumentVersion = field(repr=False)
 
     @property
-    def attributes(self) -> Any:
-        return self.version.attributes
+    def attributes(self) -> list[dict[str, Any]]:
+        return list(self.version.attributes or ())
+
+    @property
+    def attributes_payload(self) -> dict[str, Any]:
+        """Lo que se guarda en ``documents.attributes_payload``: colección completa, ítems tal cual."""
+        items = self.attributes
+        return {"count": len(items), "items": items}
 
     @property
     def payload_hash(self) -> str:
@@ -114,6 +134,18 @@ def _check_href(href: Any, expected_path: str, what: str) -> None:
         raise SnapshotValidationError(f"{what}: href fuera de https://{BSALE_API_HOST} (rechazado)")
     if parts.path != expected_path or parts.query or parts.fragment:
         raise SnapshotValidationError(f"{what}: href inesperado {parts.path!r} (esperado {expected_path!r})")
+
+
+def _check_api_href(href: Any, what: str) -> None:
+    """href de un ítem cuya ruta exacta no está documentada: https://api.bsale.io/v1/….json, sin query."""
+    if not isinstance(href, str):
+        raise SnapshotValidationError(f"{what}: href no es texto")
+    parts = urlsplit(href)
+    if parts.scheme != "https" or parts.netloc != BSALE_API_HOST:
+        raise SnapshotValidationError(f"{what}: href fuera de https://{BSALE_API_HOST} (rechazado)")
+    path = parts.path
+    if not path.startswith("/v1/") or not path.endswith(".json") or ".." in path or parts.query or parts.fragment:
+        raise SnapshotValidationError(f"{what}: href con ruta no permitida {path!r}")
 
 
 def check_child_link(header: dict[str, Any], name: str, document_id: int) -> None:
@@ -194,6 +226,37 @@ def build_child_rows(kind: str, spec: ResourceSpec, document_id: int, snapshot: 
     return rows
 
 
+def build_attribute_items(document_id: int, snapshot: Snapshot) -> list[dict[str, Any]]:
+    """
+    Ítems de ``attributes.json`` tal cual (orden recibido). Se valida identidad y forma, nunca el
+    ``value`` (texto, vacío, null o número como texto se guardan sin normalizar).
+    """
+    items: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    duplicates: set[int] = set()
+    for item in snapshot.items:
+        payload = item.payload
+        try:
+            key = _bsale_id(payload)
+        except SnapshotValidationError as exc:
+            raise SnapshotValidationError(f"documento {document_id} attributes: {exc}") from exc
+        if key in seen:
+            duplicates.add(key)
+            continue
+        seen.add(key)
+        name = payload.get("name")
+        if name is not None and not isinstance(name, str):
+            raise SnapshotValidationError(f"documento {document_id} attributes id={key}: name no es texto")
+        if "href" in payload:
+            _check_api_href(payload["href"], f"documento {document_id} attributes id={key}")
+        items.append(payload)
+    if duplicates:
+        raise SnapshotValidationError(
+            f"documento {document_id} attributes: ids repetidos {sorted(duplicates)[:5]} (posible paginación inconsistente)"
+        )
+    return items
+
+
 def make_bundle(
     *,
     company_id: int,
@@ -201,6 +264,7 @@ def make_bundle(
     header: dict[str, Any],
     typed: dict[str, Any],
     children: dict[str, list[ChildRow]],
+    attributes: list[dict[str, Any]],
     api_fetched_at: datetime,
     children_fetched_at: datetime,
 ) -> DocumentBundle:
@@ -209,7 +273,7 @@ def make_bundle(
         details=[r.payload for r in children["details"]],
         references=[r.payload for r in children["references"]],
         sellers=[r.payload for r in children["sellers"]],
-        attributes=header.get("attributes"),
+        attributes=list(attributes),
     )
     return DocumentBundle(
         company_id=company_id,
@@ -298,7 +362,7 @@ def plan_document(stored: StoredDocument, bundle: DocumentBundle) -> DocumentPla
             "details": stored.child_hashes("details") != bundle.child_hashes("details"),
             "references": stored.child_hashes("references") != bundle.child_hashes("references"),
             "sellers": stored.child_hashes("sellers") != bundle.child_hashes("sellers"),
-            "attributes": payload_hash(stored.attributes_payload) != payload_hash(bundle.attributes),
+            "attributes": stored_attributes_hash(stored.attributes_payload) != bundle.version.part_hashes()["attributes"],
         }
         kind = DocumentChangeKind.MODIFIED.value if stored.version_hash != bundle.version_hash else None
 

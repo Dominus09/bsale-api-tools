@@ -9,7 +9,7 @@ Orden (nunca hay una transacción PostgreSQL abierta durante HTTP):
  2. run RUNNING (``sync_runs`` / ``sync_entity_runs`` scope ``document:<id>``; ``sync_state``
     agregado ``(company, documents, point)``);
  3. header ``/v1/documents/{id}.json`` (sin ``expand``) → guard ``document_type_id`` ∈ permitidos;
- 4. details / references / sellers por sus endpoints documentados, paginados COMPLETOS (los links
+ 4. details / references / sellers / attributes por sus endpoints, paginados COMPLETOS (los links
     del header deben coincidir exacto con esas rutas en ``https://api.bsale.io``);
  5. bundle validado + hashes (payload / children / version);
  6. UNA transacción corta: advisory xact lock del documento + ``FOR UPDATE`` → versión vigente →
@@ -34,12 +34,15 @@ import time
 from typing import Any, Callable
 
 from backend.services.bsale_raw.core.document_bundle import (
+    ATTRIBUTES_LINK,
     CHILD_KINDS,
     CHILD_SPEC_NAMES,
     EMPTY_STORED,
     DocumentBundle,
     DocumentPlan,
     StoredDocument,
+    attributes_path,
+    build_attribute_items,
     build_child_rows,
     build_header,
     check_child_link,
@@ -107,6 +110,7 @@ def _bundle_summary(bundle: DocumentBundle) -> dict[str, Any]:
         "details": len(bundle.details),
         "references": len(bundle.references),
         "sellers": len(bundle.sellers),
+        "attributes": len(bundle.attributes),
         "details_without_variant": sum(1 for r in bundle.details if r.variant_id is None),
         "version_hash": bundle.version_hash,
     }
@@ -209,9 +213,13 @@ def refresh_document_point(
             snapshot = fetch_snapshot(client, child_path(child_specs[kind], document_id), clock=clock)
             outcome.pages += snapshot.pages
             children[kind] = build_child_rows(kind, child_specs[kind], document_id, snapshot)
+        check_child_link(header, ATTRIBUTES_LINK, document_id)
+        snapshot = fetch_snapshot(client, attributes_path(document_id), clock=clock)
+        outcome.pages += snapshot.pages
+        attributes = build_attribute_items(document_id, snapshot)
         bundle = make_bundle(
             company_id=company_id, document_id=document_id, header=header, typed=typed, children=children,
-            api_fetched_at=header_fetched_at, children_fetched_at=clock(),
+            attributes=attributes, api_fetched_at=header_fetched_at, children_fetched_at=clock(),
         )
     except Exception as exc:
         _collect_request_stats(client, outcome)

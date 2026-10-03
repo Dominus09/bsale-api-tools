@@ -64,14 +64,15 @@ En `variants`, SKU (`code`) y barcode (`bar_code`) se guardan tal cual (sin unic
 - `refresh_document_point(company_id, document_id)`: refresca UNA OC por su **id técnico Bsale** (no folio / `number`;
   no hay búsqueda por folio). Sólo `--mode point`; sin scanner, sin full scan, sin `generationdaterange`, sin watcher.
 - Endpoints: `/v1/documents/{id}.json` (header, sin `expand`), `/v1/documents/{id}/details.json` paginado completo
-  (fuente de integridad), `/references.json` y `/sellers.json` (paginados). Attributes: el endpoint no está documentado,
-  así que `attributes_payload` = nodo `attributes` del header tal cual. Los links hijos del header deben apuntar a
+  (fuente de integridad), `/references.json`, `/sellers.json` y `/attributes.json` (paginados). `attributes.json` está
+  LIVE VERIFIED (C3, documento 3925780, `count=4`); sin tabla propia: `attributes_payload` = `{"count", "items"}` con los
+  ítems tal cual (`value` sin normalizar). Los links hijos del header deben apuntar a
   `https://api.bsale.io` con el path exacto (sin query); si no, FAILED.
 - Guard de tipo: `document_type.id` debe ser 33 (por id, nunca por nombre); si no, FAILED sin escritura.
 - Fetch completo antes de escribir (nunca HTTP dentro de una transacción). Si falla cualquier hijo → FAILED y la versión
   anterior queda intacta. `details_complete = true` sólo con details completo y validado; `variant_id` NULL se conserva
   como línea pero no entra en `affected`.
-- **Versión:** `payload_hash` = header; hash por parte (details / references / sellers ordenados por id, attributes);
+- **Versión:** `payload_hash` = header; hash por parte (details / references / sellers / attributes completos, ordenados por id);
   `version_hash` = hash de los 5 hashes de parte; `children_hash` = hash de las partes sin header. Cada hijo lleva
   `document_version_hash = documents.version_hash`. Determinista e independiente del orden.
 - **Transacción atómica corta:** `pg_advisory_xact_lock(company, documents, document:<id>)` + `SELECT … FOR UPDATE` →

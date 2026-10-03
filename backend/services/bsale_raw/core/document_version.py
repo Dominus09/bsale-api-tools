@@ -16,6 +16,19 @@ def _sorted_by_id(items: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]
     return sorted(items, key=lambda item: (str(item.get("id", "")), payload_hash(item)))
 
 
+def attributes_hash(items: Sequence[Mapping[str, Any]]) -> str:
+    return payload_hash(_sorted_by_id(items))
+
+
+def stored_attributes_hash(attributes_payload: Any) -> str | None:
+    """Hash comparable de ``documents.attributes_payload`` (``{"count", "items"}``); otra forma → None."""
+    if isinstance(attributes_payload, Mapping) and isinstance(attributes_payload.get("items"), list):
+        items = attributes_payload["items"]
+        if all(isinstance(item, Mapping) for item in items):
+            return attributes_hash(items)
+    return None
+
+
 @dataclass(frozen=True)
 class DocumentVersion:
     """Versión observada completa de un documento: todas sus partes de un mismo refresh."""
@@ -24,7 +37,9 @@ class DocumentVersion:
     details: Sequence[Mapping[str, Any]]
     references: Sequence[Mapping[str, Any]]
     sellers: Sequence[Mapping[str, Any]]
-    attributes: Any = None
+    # Ítems completos de /v1/documents/{id}/attributes.json (no el nodo ``attributes`` del header,
+    # que sólo trae el href y ya entra en el hash del header).
+    attributes: Sequence[Mapping[str, Any]] | None = None
 
     def part_hashes(self) -> dict[str, str]:
         return {
@@ -32,7 +47,7 @@ class DocumentVersion:
             "details": payload_hash(_sorted_by_id(self.details)),
             "references": payload_hash(_sorted_by_id(self.references)),
             "sellers": payload_hash(_sorted_by_id(self.sellers)),
-            "attributes": payload_hash(self.attributes),
+            "attributes": attributes_hash(self.attributes or ()),
         }
 
     @property

@@ -75,6 +75,7 @@ def _format_document(outcome: EntityOutcome) -> list[str]:
         f"details={_flag(doc.get('details'))}",
         f"references={_flag(doc.get('references'))}",
         f"sellers={_flag(doc.get('sellers'))}",
+        f"attributes={_flag(doc.get('attributes'))}",
         f"change_kind={_flag(doc.get('change_kind'))}",
         f"version_changed={_flag(doc.get('version_changed'))}",
         f"skipped_newer={outcome.rows_skipped_newer}",

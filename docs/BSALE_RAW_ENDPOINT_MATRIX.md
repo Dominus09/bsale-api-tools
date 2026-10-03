@@ -119,7 +119,8 @@ Las frecuencias son la **propuesta** de la sección 2. "Tabla RAW" refiere al mo
 | Incremental | `emissiondaterange` + `documenttypeid` + `officeid` acotado, con solape. **OBSERVED** C3: `documenttypeid=33` + `emissiondaterange` → 32 docs en la ventana de prueba |
 | `generationdaterange` | **REJECTED (HTTP 403)** en `/v1/documents.json`. Prohibido en bsale_raw (`FORBIDDEN_DOCUMENT_FILTERS`). **Riesgo:** `distribuidora/sync_service.py` (`sync_bsale_distribuidora_incremental`, modo dual) lo usa; no se modifica sin auditar su fallback |
 | Full reconcile | Re-barrido por `emissiondaterange` en ventanas (45 días OC 33, 7 días resto) + `count.json` por ventana. Nunca sin ventana |
-| Rate limit | 1 request por página + hijos (details/references/sellers) por documento. **`expand=[details]` INCONCLUSIVE** → no depender de expand |
+| Rate limit | 1 request por página + hijos (details/references/sellers/attributes) por documento. **`expand=[details]` INCONCLUSIVE** → no depender de expand |
+| Attributes | `GET /v1/documents/{id}/attributes.json?limit=50&offset=N` — **LIVE VERIFIED** (C3, documento 3925780 / OC 33 folio 69989): HTTP 200, objeto paginado `count` / `items` / `limit` / `offset` / `href`; `count=4`; ítems `id`, `name`, `value`, `href`. Sin tabla propia: colección completa en `documents.attributes_payload` = `{"count", "items"}` |
 | Frecuencia propuesta | Webhook inmediato; incremental cada 2 min (empresa 3 / tipo 33, ventana 2 días, solape 10 min); resto de tipos cada 15 min; reconcile nocturno 45 días |
 | SLA frescura | 5 min para OC 33 empresa 3; 30 min para el resto |
 | Tabla RAW | `bsale_raw.documents` |
@@ -128,7 +129,7 @@ Las frecuencias son la **propuesta** de la sección 2. "Tabla RAW" refiere al mo
 **Flujo OC 33 (OBSERVED: el documento trae links a details / sellers / references, pero NO stock directo):**
 
 1. webhook `document` (o incremental) → `/v1/documents/{id}.json`;
-2. `/v1/documents/{id}/details.json` **paginado completo** (fuente de integridad);
+2. `/v1/documents/{id}/details.json` **paginado completo** (fuente de integridad), más references / sellers / attributes paginados;
 3. variantes distintas de los detalles;
 4. `/v1/stocks.json?variantid=X&officeid=Y` puntual (P0) para cada variante en la sucursal del documento.
 

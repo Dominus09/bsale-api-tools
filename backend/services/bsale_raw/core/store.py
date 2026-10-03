@@ -737,7 +737,7 @@ class PgRawTx:
                 *(bundle.typed[c.column] for c in spec.typed_columns),
                 len(bundle.details),
                 bundle.children_fetched_at,
-                _json(bundle.attributes),
+                _json(bundle.attributes_payload),
                 bundle.children_hash,
                 bundle.version_hash,
                 _json(bundle.header),

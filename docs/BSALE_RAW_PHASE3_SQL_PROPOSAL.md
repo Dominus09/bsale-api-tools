@@ -306,7 +306,7 @@ Los scopes nuevos se definen **exclusivamente** en `registry.py` y no requieren 
 
 - Unicidad de los ids de hijos por empresa (la deduplicación de staging la vigila).
 - Estados terminales de OC 33 (`state` / `commercial_state`), que se configuran en Python.
-- Endpoint exacto de attributes del documento y cómo resolver los related documents (NLV): se guardan en `attributes_payload` / `payload` / `document_references` tal como lleguen.
+- Attributes del documento: `GET /v1/documents/{id}/attributes.json` LIVE VERIFIED (paginado, `count`/`items`); se guarda la colección completa en `attributes_payload` = `{"count", "items"}`. Related documents (NLV): se guardan en `payload` / `document_references` tal como lleguen.
 - Retención de `document_change_log` (sin purga en la fase 3).
 - Retención de `webhook_events` y `webhook_resource_responses` (propuesta: 90 / 30 días; job futuro).
 - Stock con `quantity = 0` y variantes inactivas (no cambia el DDL).

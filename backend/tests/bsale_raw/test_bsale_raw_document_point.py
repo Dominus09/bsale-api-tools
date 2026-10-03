@@ -21,6 +21,7 @@ from backend.services.bsale_raw.core.document_bundle import (
     CHILD_SPEC_NAMES,
     EMPTY_STORED,
     StoredDocument,
+    build_attribute_items,
     build_child_rows,
     build_header,
     make_bundle,
@@ -110,6 +111,12 @@ def seller(uid: int, **over) -> dict:
     return item
 
 
+def attribute(aid: int, value="Jueves", *, name="OBSERVACIONES", **over) -> dict:
+    item = {"href": f"{API}/document_types/attributes/{aid}.json", "id": aid, "name": name, "value": value}
+    item.update(over)
+    return item
+
+
 # --- fake BD ----------------------------------------------------------------------------------
 
 
@@ -135,7 +142,7 @@ class DocTx(FakeTx):
         table[key] = {
             **bundle.typed,
             "details_count": len(bundle.details), "details_complete": True,
-            "children_fetched_at": bundle.children_fetched_at, "attributes_payload": copy.deepcopy(bundle.attributes),
+            "children_fetched_at": bundle.children_fetched_at, "attributes_payload": copy.deepcopy(bundle.attributes_payload),
             "children_hash": bundle.children_hash, "version_hash": bundle.version_hash,
             "version_changed_at": now if changed else prev["version_changed_at"],
             "payload": bundle.header, "payload_hash": bundle.payload_hash,
@@ -257,7 +264,8 @@ class DocStore(FakeStore):
 # --- fake Bsale -------------------------------------------------------------------------------
 
 _HEADER_RE = re.compile(r"^/v1/documents/(\d+)\.json$")
-_CHILD_RE = re.compile(r"^/v1/documents/(\d+)/(details|references|sellers)\.json$")
+_CHILD_RE = re.compile(r"^/v1/documents/(\d+)/(details|references|sellers|attributes)\.json$")
+KIDS = ("details", "references", "sellers", "attributes")
 
 
 class DocBsale(BaseAdapter):
@@ -313,7 +321,7 @@ class DocBsale(BaseAdapter):
             items = [it for it in self.stock_items
                      if ("variantid" not in q or it["variant"]["id"] == q["variantid"])
                      and ("officeid" not in q or it["office"]["id"] == q["officeid"])]
-        elif kind in ("details", "references", "sellers"):
+        elif kind in KIDS:
             doc = int(_CHILD_RE.match(parts.path).group(1))
             items = list(self.kids.get((doc, kind), []))
             if self.reverse:
@@ -335,10 +343,10 @@ class DocBsale(BaseAdapter):
         return [{k: v[0] for k, v in parse_qs(urlsplit(c.url).query).items() if k in ("variantid", "officeid")}
                 for c in self.calls if self.kind_of(urlsplit(c.url).path) == "stocks"]
 
-    def set(self, *, details=None, references=None, sellers=None, doc=DOC, **header_over):
+    def set(self, *, details=None, references=None, sellers=None, attributes=None, doc=DOC, **header_over):
         if header_over or doc not in self.docs:
             self.docs[doc] = header(doc, **header_over)
-        for kind, items in (("details", details), ("references", references), ("sellers", sellers)):
+        for kind, items in zip(KIDS, (details, references, sellers, attributes)):
             if items is not None:
                 self.kids[(doc, kind)] = list(items)
 
@@ -347,12 +355,12 @@ def variants_of(details) -> set[int]:
     return {d["variant"]["id"] for d in details if "variant" in d}
 
 
-def setup(details=(), references=(), sellers=(seller(9),), *, office=1, stocks=None, **kw):
+def setup(details=(), references=(), sellers=(seller(9),), *, attributes=(), office=1, stocks=None, **kw):
     store = DocStore()
     if stocks is None:
         stocks = [stock(v, office or 1) for v in sorted(variants_of(details))]
     adapter = DocBsale(store, stocks=stocks, **kw)
-    adapter.set(details=details, references=references, sellers=sellers, office_id=office)
+    adapter.set(details=details, references=references, sellers=sellers, attributes=attributes, office_id=office)
     return store, adapter
 
 
@@ -368,7 +376,7 @@ def snapshot_of(items) -> Snapshot:
     return Snapshot(items=[FetchedItem(i, BASE) for i in items], api_count=len(items), pages=1)
 
 
-def bundle_of(details=(), references=(), sellers=(), *, doc=DOC, fetched_at=BASE, **header_over):
+def bundle_of(details=(), references=(), sellers=(), *, attributes=(), doc=DOC, fetched_at=BASE, **header_over):
     h = header(doc, **header_over)
     typed = build_header(SPEC, doc, h, frozenset({33}))
     children = {
@@ -376,6 +384,7 @@ def bundle_of(details=(), references=(), sellers=(), *, doc=DOC, fetched_at=BASE
         for kind, items in (("details", details), ("references", references), ("sellers", sellers))
     }
     return make_bundle(company_id=3, document_id=doc, header=h, typed=typed, children=children,
+                       attributes=build_attribute_items(doc, snapshot_of(attributes)),
                        api_fetched_at=fetched_at, children_fetched_at=fetched_at)
 
 
@@ -391,7 +400,9 @@ A, B, C, D = 10888, 10892, 10961, 10963
 
 
 def test_oc33_created_with_full_bundle_then_stock_post_commit():
-    store, adapter = setup([detail(1, A, qty=2.0), detail(2, B)], [reference(70)], [seller(9)])
+    attrs = [attribute(12, "Jueves"), attribute(13, "", name="RUTA"), attribute(14, None, name="EXTRA"),
+             attribute(15, "0042", name="CODIGO")]
+    store, adapter = setup([detail(1, A, qty=2.0), detail(2, B)], [reference(70)], [seller(9)], attributes=attrs)
     out = go(store, adapter)
     assert out.status == "SUCCESS" and out.mode == "POINT" and out.scope == "document:500"
     assert (out.rows_received, out.rows_inserted, out.rows_updated, out.rows_unchanged) == (1, 1, 0, 0)
@@ -403,7 +414,9 @@ def test_oc33_created_with_full_bundle_then_stock_post_commit():
     assert doc["total_amount"] == Decimal("11900.0") and doc["informed_sii"] == 2
     assert doc["details_count"] == 2 and doc["details_complete"] is True and doc["children_fetched_at"] is not None
     assert doc["payload"] == adapter.docs[DOC] and doc["last_source"] == "POINT"
-    assert doc["attributes_payload"] == {"href": f"{API}/documents/{DOC}/attributes.json"}
+    assert doc["attributes_payload"] == {"count": 4, "items": attrs}
+    assert doc["payload"]["attributes"] == {"href": f"{API}/documents/{DOC}/attributes.json"}
+    assert out.document["attributes"] == 4
     assert doc["watch_terminal_seen_at"] is None and doc["watch_closed_at"] is None
     details = store.children("details")
     assert set(details) == {1, 2} and details[1]["variant_id"] == A and details[1]["quantity"] == Decimal("2.0")
@@ -416,12 +429,13 @@ def test_oc33_created_with_full_bundle_then_stock_post_commit():
     assert log["change_kind"] == "CREATED" and log["detected_by"] == "POINT" and log["sync_run_id"] == out.sync_run_id
     assert log["affected_variant_ids"] == [A, B] and log["previous_variant_ids"] == []
     assert log["stock_refresh_requested_at"] is not None and log["stock_refresh_done_at"] is not None
-    assert adapter.paths()[:4] == [f"/v1/documents/{DOC}.json", f"/v1/documents/{DOC}/details.json",
-                                   f"/v1/documents/{DOC}/references.json", f"/v1/documents/{DOC}/sellers.json"]
+    assert adapter.paths()[:5] == [f"/v1/documents/{DOC}.json", f"/v1/documents/{DOC}/details.json",
+                                   f"/v1/documents/{DOC}/references.json", f"/v1/documents/{DOC}/sellers.json",
+                                   f"/v1/documents/{DOC}/attributes.json"]
     assert sorted(adapter.stock_queries(), key=lambda q: q["variantid"]) == [
         {"variantid": str(A), "officeid": "1"}, {"variantid": str(B), "officeid": "1"}]
     assert set(store.stocks()) == {(A, 1), (B, 1)} and store.stocks()[(A, 1)]["last_source"] == "POINT"
-    assert out.document["stock_refresh"] == "SUCCESS" and out.requests == 4
+    assert out.document["stock_refresh"] == "SUCCESS" and out.requests == 5
     assert not adapter.tx_violations
 
 
@@ -489,7 +503,7 @@ def test_multipage_details_read_completely_without_n_plus_one():
     store, adapter = setup(lines, stocks=[])
     out = go(store, adapter)
     assert out.status == "SUCCESS" and len(store.children("details")) == 120 and store.doc()["details_count"] == 120
-    assert len(adapter.paths("details")) == 3 and out.requests == 1 + 3 + 1 + 1
+    assert len(adapter.paths("details")) == 3 and out.requests == 1 + 3 + 1 + 1 + 1
     assert not any("/variants/" in p for p in adapter.paths())
     assert out.document["stock_refresh"] == "SUCCESS" and len(adapter.stock_queries()) == 120  # NO_ROWS por variante
 
@@ -522,13 +536,16 @@ def test_details_pagination_failure_keeps_previous_version():
     assert all(store.tables[t] == before[t] for t in CHILD_TABLES.values())
 
 
-def run_twice(first, second, *, references=((), ()), sellers=((seller(9),), (seller(9),)), header2=None):
+def run_twice(first, second, *, references=((), ()), sellers=((seller(9),), (seller(9),)), attributes=((), ()),
+              header2=None):
     clock = TickClock(BASE)
     variants = sorted(variants_of(first) | variants_of(second))
-    store, adapter = setup(first, references[0], sellers[0], stocks=[stock(v, 1) for v in variants])
+    store, adapter = setup(first, references[0], sellers[0], attributes=attributes[0],
+                           stocks=[stock(v, 1) for v in variants])
     out1 = go(store, adapter, clock=clock)
     snap = copy.deepcopy(store.tables)
-    adapter.set(details=second, references=references[1], sellers=sellers[1], **(header2 or {}))
+    adapter.set(details=second, references=references[1], sellers=sellers[1], attributes=attributes[1],
+                **(header2 or {}))
     out2 = go(store, adapter, clock=clock)
     assert out1.status == "SUCCESS" and out2.status == "SUCCESS", (out1.error, out2.error)
     return store, adapter, out1, out2, snap
@@ -624,16 +641,134 @@ def test_duplicate_seller_fails():
     assert go(store, adapter).status == "FAILED" and store.doc() is None
 
 
-def test_attributes_changed_and_empty():
-    store, adapter, _, _, _ = run_twice([detail(1, A)], [detail(1, A)], header2={"attributes": [{"name": "Ruta", "value": "R2"}]})
-    log = store.log()[-1]
-    assert log["attributes_changed"] and log["header_changed"] and not log["details_changed"]
-    assert store.doc()["attributes_payload"] == [{"name": "Ruta", "value": "R2"}]
-    assert not any(p.endswith("/attributes.json") for p in adapter.paths())
+def test_attributes_count_zero():
+    store, adapter = setup([detail(1, A)], attributes=[])
+    out = go(store, adapter)
+    assert out.status == "SUCCESS" and store.doc()["attributes_payload"] == {"count": 0, "items": []}
+    assert out.document["attributes"] == 0 and len(adapter.paths("attributes")) == 1
 
-    store, adapter = setup([detail(1, A)])
-    adapter.docs[DOC] = {k: v for k, v in header(DOC).items() if k != "attributes"}
-    assert go(store, adapter).status == "SUCCESS" and store.doc()["attributes_payload"] is None
+
+def test_attributes_one_item_value_kept_as_is():
+    store, adapter = setup([detail(1, A)], attributes=[attribute(12, " 0042 ")])
+    assert go(store, adapter).status == "SUCCESS"
+    assert store.doc()["attributes_payload"] == {"count": 1, "items": [attribute(12, " 0042 ")]}
+
+
+def test_attributes_multipage_without_per_attribute_requests():
+    attrs = [attribute(i, f"v{i}") for i in range(1, 121)]
+    store, adapter = setup([detail(1, A)], attributes=attrs)
+    out = go(store, adapter)
+    assert out.status == "SUCCESS" and store.doc()["attributes_payload"] == {"count": 120, "items": attrs}
+    assert len(adapter.paths("attributes")) == 3 and out.requests == 1 + 1 + 1 + 1 + 3
+    assert not any("/document_types/attributes/" in p for p in adapter.paths())
+    offsets = [parse_qs(urlsplit(c.url).query)["offset"][0] for c in adapter.calls
+               if urlsplit(c.url).path.endswith("/attributes.json")]
+    assert offsets == ["0", "50", "100"]
+
+
+@pytest.mark.parametrize("attrs, msg", [
+    ([attribute(12), attribute(12, "otro")], "repetidos"),
+    ([attribute(12, id="abc")], "id"),
+    ([attribute(12, id=None)], "id"),
+    ([attribute(12, name=7)], "name"),
+    ([attribute(12, href="https://evil.example/v1/document_types/attributes/12.json")], "href"),
+    ([attribute(12, href="http://api.bsale.io/v1/document_types/attributes/12.json")], "href"),
+    ([attribute(12, href=f"{API}/document_types/attributes/12.json?x=1")], "href"),
+    ([attribute(12, href=5)], "href"),
+])
+def test_invalid_attributes_fail_whole_bundle(attrs, msg):
+    store, adapter = setup([detail(1, A)], attributes=attrs)
+    out = go(store, adapter)
+    assert out.status == "FAILED" and msg in out.error
+    assert store.doc() is None and store.children("details") == {} and store.log() == []
+    assert adapter.stock_queries() == []
+
+
+def test_attributes_pagination_incomplete_fails():
+    store, adapter = setup([detail(1, A)], attributes=[attribute(1), attribute(2)], counts={"attributes": 60})
+    out = go(store, adapter)
+    assert out.status == "FAILED" and "truncada" in out.error and store.doc() is None
+
+
+def test_attributes_header_link_to_other_host_rejected():
+    store, adapter = setup([detail(1, A)], attributes=[attribute(1)])
+    adapter.docs[DOC]["attributes"] = {"href": "https://evil.example/v1/documents/500/attributes.json"}
+    out = go(store, adapter)
+    assert out.status == "FAILED" and store.doc() is None and adapter.paths("attributes") == []
+
+
+@pytest.mark.parametrize("action", [requests.Timeout("lento"), (500, b"{}"), (403, b"{}")])
+def test_attributes_failure_keeps_previous_version_and_no_stock(action):
+    clock = TickClock(BASE)
+    store, adapter = setup([detail(1, A)], attributes=[attribute(12, "Jueves")])
+    assert go(store, adapter, clock=clock).status == "SUCCESS"
+    before = copy.deepcopy(store.tables)
+    stock_calls = len(adapter.stock_queries())
+    adapter.set(details=[detail(1, A, qty=4.0)], attributes=[attribute(12, "Viernes")])
+    adapter.fail = {"attributes": [action] * 4}
+    mark = len(store.events)
+    out = go(store, adapter, clock=clock)
+    assert out.status == "FAILED" and store.tables == before
+    assert len(adapter.stock_queries()) == stock_calls
+    second = store.events[mark:]
+    assert "http:attributes" in second and "lock_document" not in second and "upsert_document" not in second
+
+
+def test_attributes_reorder_keeps_hash():
+    attrs = [attribute(12, "a"), attribute(13, "b"), attribute(14, "c")]
+    assert bundle_of(attributes=attrs).version_hash == bundle_of(attributes=list(reversed(attrs))).version_hash
+
+    clock = TickClock(BASE)
+    store, adapter = setup([detail(1, A)], attributes=attrs)
+    go(store, adapter, clock=clock)
+    adapter.reverse = True
+    out = go(store, adapter, clock=clock)
+    assert out.rows_unchanged == 1 and out.document["changed"]["attributes"] is False and len(store.log()) == 1
+
+
+@pytest.mark.parametrize("second", [
+    [attribute(12, "Viernes"), attribute(13, "R1")],  # value cambia
+    [attribute(12, "Jueves"), attribute(13, "R1"), attribute(14, "X")],  # nuevo
+    [attribute(12, "Jueves")],  # eliminado
+])
+def test_attribute_change_only_marks_attributes(second):
+    first = [attribute(12, "Jueves"), attribute(13, "R1")]
+    store, _, _, out2, snap = run_twice([detail(1, A)], [detail(1, A)], attributes=(first, second))
+    old, new = snap[DOC_TABLE][(3, DOC)], store.doc()
+    assert new["payload_hash"] == old["payload_hash"]
+    assert new["children_hash"] != old["children_hash"] and new["version_hash"] != old["version_hash"]
+    log = store.log()[-1]
+    assert log["change_kind"] == "MODIFIED" and log["attributes_changed"] and not log["header_changed"]
+    assert not log["details_changed"] and not log["references_changed"] and not log["sellers_changed"]
+    assert new["attributes_payload"] == {"count": len(second), "items": second}
+    assert out2.rows_updated == 1 and consistent(store)
+
+
+def test_attribute_hash_components():
+    base = bundle_of([detail(1, A)], attributes=[attribute(12, "Jueves")])
+    changed = bundle_of([detail(1, A)], attributes=[attribute(12, "Viernes")])
+    assert changed.payload_hash == base.payload_hash
+    assert changed.children_hash != base.children_hash and changed.version_hash != base.version_hash
+    assert base.version.part_hashes()["attributes"] != changed.version.part_hashes()["attributes"]
+    stored = StoredDocument(header_exists=True, api_fetched_at=BASE - timedelta(hours=1), version_hash=base.version_hash,
+                            payload_hash=base.payload_hash, details={1: (base.details[0].payload_hash, A)},
+                            attributes_payload=base.attributes_payload)
+    assert plan_document(stored, base).change_kind is None
+    plan = plan_document(stored, changed)
+    assert plan.changed == {"header": False, "details": False, "references": False, "sellers": False,
+                            "attributes": True}
+    legacy = StoredDocument(header_exists=True, api_fetched_at=BASE - timedelta(hours=1), version_hash="viejo",
+                            payload_hash=base.payload_hash, details={1: (base.details[0].payload_hash, A)},
+                            attributes_payload={"href": f"{API}/documents/{DOC}/attributes.json"})
+    assert plan_document(legacy, base).changed["attributes"] is True
+
+
+def test_attributes_dry_run_writes_nothing():
+    store, adapter = setup([detail(1, A)], attributes=[attribute(12), attribute(13)])
+    before = copy.deepcopy(store.tables)
+    out = go(store, adapter, dry_run=True)
+    assert out.status == "SUCCESS" and out.document["attributes"] == 2 and store.tables == before
+    assert len(adapter.paths("attributes")) == 1 and adapter.stock_queries() == []
 
 
 # --- atomicidad -------------------------------------------------------------------------------
@@ -917,9 +1052,9 @@ def test_cli_document_point(dry_run):
         seen.update(kw)
         return EntityOutcome(
             company_id=3, resource="documents", scope="document:123456", mode="POINT", status="SUCCESS",
-            dry_run=dry_run, requests=4, duration_ms=321,
+            dry_run=dry_run, requests=5, duration_ms=321,
             document={"document_id": 123456, "document_type_id": 33, "office_id": 1, "details": 6, "references": 0,
-                      "sellers": 1, "change_kind": "CREATED", "version_changed": True, "previous_variants": [],
+                      "sellers": 1, "attributes": 4, "change_kind": "CREATED", "version_changed": True, "previous_variants": [],
                       "current_variants": [1, 2, 3, 4, 5, 6], "affected_variants": [1, 2, 3, 4, 5, 6],
                       "pending_change_ids": [], "stock_variants": [1, 2, 3, 4, 5, 6], "stock_office_id": 1,
                       "stock_refresh": "SUCCESS", "stock_requests": 6},
@@ -936,9 +1071,11 @@ def test_cli_document_point(dry_run):
     keys = [line.split("=", 1)[0] for line in lines]
     assert keys[:4] == ["company", "resource", "scope", "mode"] and keys[-1] == "status"
     for expected in ("scope=document:123456", "document_type_id=33", "office_id=1", "details=6", "references=0",
-                     "sellers=1", "version_changed=true", "previous_variants=0", "current_variants=6",
-                     "affected_variants=6", "stock_refresh=SUCCESS", "requests=4", "status=SUCCESS"):
+                     "sellers=1", "attributes=4", "version_changed=true", "previous_variants=0",
+                     "current_variants=6", "affected_variants=6", "stock_refresh=SUCCESS", "requests=5",
+                     "status=SUCCESS"):
         assert expected in lines, expected
+    assert keys.index("attributes") == keys.index("sellers") + 1
 
 
 @pytest.mark.parametrize("argv", [
@@ -963,9 +1100,10 @@ def test_cli_document_usage_errors(argv):
 
 
 def test_cli_output_from_real_outcome_is_sanitized():
-    store, adapter = setup([detail(1, A)], [reference(70)], [seller(9)])
+    store, adapter = setup([detail(1, A)], [reference(70)], [seller(9)], attributes=[attribute(12, "Calle Secreta 123")])
     text = cli.format_outcome(go(store, adapter))
-    for secret in (TOKEN, DOC_TOKEN, CLIENT_NAME, "Pérez", "urlPdf", "app.bsale.cl"):
+    assert "attributes=1" in text.splitlines()
+    for secret in (TOKEN, DOC_TOKEN, CLIENT_NAME, "Pérez", "urlPdf", "app.bsale.cl", "Calle Secreta", "OBSERVACIONES"):
         assert secret not in text
 
 

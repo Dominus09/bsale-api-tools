@@ -133,8 +133,9 @@ DOCUMENTS = REGISTRY.register(
         needs_live_verification=(
             "webhook document sólo documenta action=post: ¿llegan PUT al anular/modificar?",
             "documentos con state=1 (anulados) ¿aparecen sin filtro state?",
-            "endpoint de attributes del documento no documentado: attributes_payload = nodo del header",
         ),
+        # attributes: /v1/documents/{id}/attributes.json (LIVE VERIFIED C3, paginado) → la colección
+        # completa va a documents.attributes_payload = {"count", "items"}; no hay tabla de attributes.
         # details_count, details_complete, children_fetched_at, attributes_payload y hashes los
         # calcula core/document_engine.py desde el bundle completo.
         typed_columns=(
