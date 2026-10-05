@@ -4572,6 +4572,37 @@ export async function resolveLabelProductsBatch(
   return { resolved, errors }
 }
 
+/** Fila de GET /labels/price-list-export (bsale.variant_prices de una empresa + lista) */
+export interface PriceListExportRow {
+  product_type: string | null
+  product_name: string | null
+  variant_name: string | null
+  barcode: string | null
+  sku: string | null
+  price_gross: number | null
+  price_list_name: string | null
+  variant_id: number
+}
+
+export async function getPriceListExport(
+  companyId: number,
+  priceListId: number,
+): Promise<PriceListExportRow[]> {
+  const params = new URLSearchParams({
+    company_id: String(companyId),
+    price_list_id: String(priceListId),
+  })
+  const res = await fetch(`${API_URL}/labels/price-list-export?${params}`, {
+    headers: getAuthHeaders(),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error((err as { detail?: string }).detail || `Error ${res.status}`)
+  }
+  const data = (await res.json()) as { rows: PriceListExportRow[] }
+  return data.rows
+}
+
 // --- Analítica → Costos ---
 
 export type CostAnalyticsSyncState = {

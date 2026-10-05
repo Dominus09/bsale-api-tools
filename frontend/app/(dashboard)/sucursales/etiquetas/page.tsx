@@ -38,11 +38,14 @@ import {
 } from "lucide-react"
 import {
   downloadEtiquetasExcelTemplate,
+  downloadPriceListExcel,
   mergeEtiquetasExcelRows,
   parseEtiquetasExcel,
+  priceListExcelFileName,
 } from "@/lib/etiquetas-excel"
 import {
   getCompanies,
+  getPriceListExport,
   getPriceLists,
   getProductsMaster,
   getStoredCompanyId,
@@ -161,6 +164,7 @@ export default function EtiquetasPage() {
   const [pdfLoading, setPdfLoading] = useState(false)
   const [excelReviewOpen, setExcelReviewOpen] = useState(false)
   const [excelReview, setExcelReview] = useState<ExcelImportReview | null>(null)
+  const [priceListExportLoading, setPriceListExportLoading] = useState(false)
 
   const cid = parseInt(companyId, 10)
   const plid = parseInt(priceListId, 10)
@@ -177,6 +181,30 @@ export default function EtiquetasPage() {
     () => priceLists.find((pl) => pl.id === plid)?.name ?? appliedPriceListName,
     [priceLists, plid, appliedPriceListName],
   )
+
+  const handleDownloadPriceList = useCallback(async () => {
+    if (!configReady) return
+    setPriceListExportLoading(true)
+    try {
+      const exportRows = await getPriceListExport(cid, plid)
+      if (exportRows.length === 0) {
+        setScanError(true)
+        setScanMessage("La lista de precios no tiene registros para esta empresa")
+        return
+      }
+      const listName =
+        exportRows.find((r) => r.price_list_name)?.price_list_name ??
+        (selectedPriceListName || `lista-${plid}`)
+      downloadPriceListExcel(exportRows, priceListExcelFileName(activeCompanyName, listName))
+    } catch (e) {
+      setScanError(true)
+      setScanMessage(
+        e instanceof Error ? e.message : "No se pudo descargar la lista de precios",
+      )
+    } finally {
+      setPriceListExportLoading(false)
+    }
+  }, [configReady, cid, plid, selectedPriceListName, activeCompanyName])
 
   const totalLabels = rows.reduce((s, r) => s + r.quantity, 0)
   const estimatedPages = estimateLabelPages(totalLabels, labelFormat)
@@ -767,6 +795,19 @@ export default function EtiquetasPage() {
               >
                 <Download className="mr-2 h-4 w-4" />
                 Descargar plantilla Excel
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void handleDownloadPriceList()}
+                disabled={priceListExportLoading || !configReady}
+              >
+                {priceListExportLoading ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Download className="mr-2 h-4 w-4" />
+                )}
+                Descargar lista de precios
               </Button>
               <Button
                 type="button"

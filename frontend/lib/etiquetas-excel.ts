@@ -260,3 +260,88 @@ export function downloadEtiquetasExcelTemplate(): void {
   XLSX.utils.book_append_sheet(wb, ws, "etiquetas")
   XLSX.writeFile(wb, "plantilla-etiquetas.xlsx")
 }
+
+export type PriceListExcelRow = {
+  product_type: string | null
+  product_name: string | null
+  variant_name: string | null
+  barcode: string | null
+  sku: string | null
+  price_gross: number | null
+  price_list_name: string | null
+  variant_id: number
+}
+
+function fileSlug(value: string): string {
+  return (
+    value
+      .normalize("NFD")
+      .replace(/\p{M}/gu, "")
+      .replace(/[^A-Za-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .toLowerCase() || "sin-nombre"
+  )
+}
+
+export function priceListExcelFileName(
+  companyName: string,
+  priceListName: string,
+  date: Date = new Date(),
+): string {
+  const pad = (n: number) => String(n).padStart(2, "0")
+  const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+  return `lista-precios_${fileSlug(companyName)}_${fileSlug(priceListName)}_${day}.xlsx`
+}
+
+export function downloadPriceListExcel(rows: PriceListExcelRow[], fileName: string): void {
+  const header = [
+    "Tipo de producto",
+    "Producto",
+    "Variante",
+    "Código de barras",
+    "SKU",
+    "Precio bruto",
+    "Lista de precios",
+    "ID de variante Bsale",
+  ]
+  const ws = XLSX.utils.aoa_to_sheet([
+    header,
+    ...rows.map((r) => [
+      r.product_type ?? "",
+      r.product_name ?? "",
+      r.variant_name ?? "",
+      r.barcode ?? "",
+      r.sku ?? "",
+      r.price_gross ?? "",
+      r.price_list_name ?? "",
+      r.variant_id,
+    ]),
+  ])
+
+  // Códigos de barras y SKU como texto: evita notación científica y pérdida de ceros a la izquierda.
+  for (let i = 0; i < rows.length; i++) {
+    for (const col of ["D", "E"]) {
+      const cell = ws[`${col}${i + 2}`]
+      if (cell) {
+        cell.t = "s"
+        cell.z = "@"
+      }
+    }
+  }
+
+  ws["!cols"] = [
+    { wch: 22 },
+    { wch: 40 },
+    { wch: 28 },
+    { wch: 18 },
+    { wch: 16 },
+    { wch: 14 },
+    { wch: 22 },
+    { wch: 20 },
+  ]
+  ws["!autofilter"] = { ref: `A1:H${rows.length + 1}` }
+
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, "lista_precios")
+  XLSX.writeFile(wb, fileName)
+}

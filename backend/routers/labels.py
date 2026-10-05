@@ -50,6 +50,35 @@ LIMIT 1
 """
 
 
+_PRICE_LIST_EXPORT_SQL = """
+SELECT
+    pt.name AS product_type,
+    p.name AS product_name,
+    v.description AS variant_name,
+    BTRIM(v.bar_code) AS barcode,
+    v.code AS sku,
+    vp.price_gross,
+    pl.name AS price_list_name,
+    vp.variant_id
+FROM bsale.variant_prices vp
+LEFT JOIN bsale.variants v
+    ON v.company_id = vp.company_id
+   AND v.bsale_id = vp.variant_id
+LEFT JOIN bsale.products p
+    ON p.company_id = v.company_id
+   AND p.bsale_id = v.product_id
+LEFT JOIN bsale.product_types pt
+    ON pt.company_id = p.company_id
+   AND pt.bsale_id = p.product_type_id
+LEFT JOIN bsale.price_lists pl
+    ON pl.company_id = vp.company_id
+   AND pl.bsale_id = vp.price_list_id
+WHERE vp.company_id = %s
+  AND vp.price_list_id = %s
+ORDER BY p.name NULLS LAST, v.description NULLS LAST, vp.variant_id
+"""
+
+
 def _to_float(value: Any) -> float | None:
     if value is None:
         return None
@@ -192,6 +221,46 @@ def get_label_product(
     if product is None:
         raise HTTPException(status_code=404, detail="Producto no encontrado")
     return product
+
+
+def _serialize_price_list_row(row: tuple) -> dict[str, Any]:
+    (
+        product_type,
+        product_name,
+        variant_name,
+        barcode,
+        sku,
+        price_gross,
+        price_list_name,
+        variant_id,
+    ) = row
+    return {
+        "product_type": (product_type or "").strip() or None,
+        "product_name": (product_name or "").strip() or None,
+        "variant_name": (variant_name or "").strip() or None,
+        "barcode": (barcode or "").strip() or None,
+        "sku": (sku or "").strip() or None,
+        "price_gross": _to_float(price_gross),
+        "price_list_name": (price_list_name or "").strip() or None,
+        "variant_id": int(variant_id),
+    }
+
+
+@router.get("/labels/price-list-export")
+def export_price_list(
+    company_id: int = Query(..., ge=1),
+    price_list_id: int = Query(..., ge=1),
+) -> dict[str, Any]:
+    """Todos los precios de ``bsale.variant_prices`` de una empresa y lista (solo lectura)."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(_PRICE_LIST_EXPORT_SQL, (company_id, price_list_id))
+        rows = [_serialize_price_list_row(r) for r in cur.fetchall()]
+        cur.close()
+    finally:
+        conn.close()
+    return {"company_id": company_id, "price_list_id": price_list_id, "rows": rows}
 
 
 @router.post("/labels/resolve")
