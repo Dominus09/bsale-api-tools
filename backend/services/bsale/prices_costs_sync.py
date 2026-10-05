@@ -3,9 +3,11 @@ Sync de costos y precios Bsale por empresa (ex ``sync_prices_costs.py``).
 
 Dos fases independientes, cada una con su propia transacción y COMMIT:
 
-1. Precios: descarga todas las listas (sin transacción abierta), valida cada lista por separado
-   y, en una transacción, hace UPSERT + reconciliación SÓLO de las listas confirmadas completas
-   (``reported_count == fetched``, sin errores). Listas degradadas conservan sus precios.
+1. Precios: sólo las listas administradas por la ERP (``managed_price_lists.py``). Se descargan
+   sin transacción abierta, se valida cada lista por separado y, en una transacción, se hace
+   UPSERT + reconciliación SÓLO de las listas administradas confirmadas completas
+   (``reported_count == fetched``, sin errores). Listas administradas degradadas conservan sus
+   precios. Listas no administradas no se descargan, no se cuentan y nunca se borran.
 2. Costos: descarga por variante y UPSERT. Un fallo aquí no revierte los precios ya confirmados.
 """
 
@@ -14,12 +16,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 from psycopg2.extras import execute_batch
 
 from backend.services.bsale.companies import BsaleCompany
 from backend.services.bsale.http_client import BsaleHttpClient
+from backend.services.bsale.managed_price_lists import managed_price_lists
 from backend.services.bsale.snapshot_reconcile import (
     VARIANT_PRICES_SPEC,
     upsert_and_reconcile_snapshot,
@@ -37,8 +40,12 @@ PHASE = "prices_costs"
 
 logger = logging.getLogger(__name__)
 
+PRICE_LIST_STATE_ACTIVE = 0
+
 LIST_OK = "OK"
 LIST_ERROR = "ERROR"
+LIST_MISSING = "MISSING"
+LIST_INACTIVE = "INACTIVE"
 LIST_INCONSISTENT = "INCONSISTENT"
 LIST_DEGRADED = "DEGRADED"
 
@@ -53,31 +60,33 @@ ON CONFLICT (company_id, variant_id) DO UPDATE SET
 _EXISTING_PRICES_BY_LIST = """
 SELECT price_list_id, COUNT(*)
 FROM bsale.variant_prices
-WHERE company_id = %s
+WHERE company_id = %s AND price_list_id = ANY(%s)
 GROUP BY price_list_id
 """
+
+
+def _ids(values: Sequence[int]) -> str:
+    return "[" + ",".join(str(v) for v in values) + "]"
 
 
 @dataclass
 class PriceListFetch:
     price_list_id: int
-    name: Any
-    state: Any
+    name: Any = None
+    state: Any = None
     rows: list[tuple] = field(default_factory=list)
     fetched: int = 0
     reported_count: int | None = None
     status: str = LIST_OK
     reason: str | None = None
 
-    @property
-    def is_active(self) -> bool:
-        return self.state is None or self.state == 0
-
 
 @dataclass
 class PricesSnapshot:
     company_id: int
+    managed: tuple[int, ...]
     lists: dict[int, PriceListFetch]
+    ignored: list[int] = field(default_factory=list)
 
     @property
     def total_rows(self) -> int:
@@ -95,9 +104,11 @@ def load_company_variant_ids(conn: Any, company_id: int) -> list[int]:
     return ids
 
 
-def load_existing_prices_by_list(conn: Any, company_id: int) -> dict[int, int]:
+def load_existing_prices_by_list(
+    conn: Any, company_id: int, price_list_ids: Sequence[int]
+) -> dict[int, int]:
     cur = conn.cursor()
-    cur.execute(_EXISTING_PRICES_BY_LIST, (company_id,))
+    cur.execute(_EXISTING_PRICES_BY_LIST, (company_id, list(price_list_ids)))
     out = {int(r[0]): int(r[1] or 0) for r in cur.fetchall()}
     cur.close()
     return out
@@ -129,9 +140,24 @@ def _pagination_diag(client: Any) -> str:
     return f" pages={stats.get('pages')} stop={stats.get('stop_reason')}"
 
 
-def _fetch_price_list(
-    client: BsaleHttpClient, company_id: int, pl: PriceListFetch
-) -> None:
+def _log_list(company_id: int, pl: PriceListFetch, extra: str = "") -> None:
+    ok = pl.status == LIST_OK
+    logger.log(
+        logging.INFO if ok else logging.WARNING,
+        "company_id=%s price_list_id=%s status=%s fetched=%s name=%s state=%s reported_count=%s%s%s",
+        company_id,
+        pl.price_list_id,
+        "OK" if ok else "ERROR",
+        pl.fetched,
+        pl.name,
+        pl.state,
+        pl.reported_count,
+        extra,
+        f" reason={pl.reason}" if pl.reason else "",
+    )
+
+
+def _fetch_price_list(client: BsaleHttpClient, company_id: int, pl: PriceListFetch) -> None:
     """Descarga y valida una lista; nunca lanza: deja el resultado en ``pl.status``/``pl.reason``."""
     try:
         details = client.fetch_all_items(f"price_lists/{pl.price_list_id}/details.json")
@@ -157,15 +183,7 @@ def _fetch_price_list(
     except Exception as exc:
         pl.status = LIST_ERROR
         pl.reason = f"{type(exc).__name__}: {exc}"
-        logger.warning(
-            "company_id=%s price_list_id=%s name=%s fetched=%s status=ERROR state=%s error=%s",
-            company_id,
-            pl.price_list_id,
-            pl.name,
-            pl.fetched,
-            pl.state,
-            pl.reason,
-        )
+        _log_list(company_id, pl)
         return
 
     if pl.reported_count is None:
@@ -177,55 +195,68 @@ def _fetch_price_list(
         pl.status, pl.reason = LIST_INCONSISTENT, "variant_id duplicado en la lista"
     if pl.status == LIST_OK:
         pl.rows = rows
-    logger.info(
-        "company_id=%s price_list_id=%s name=%s fetched=%s status=%s state=%s reported_count=%s%s%s",
-        company_id,
-        pl.price_list_id,
-        pl.name,
-        pl.fetched,
-        "OK" if pl.status == LIST_OK else "ERROR",
-        pl.state,
-        pl.reported_count,
-        _pagination_diag(client),
-        f" reason={pl.reason}" if pl.reason else "",
-    )
+    _log_list(company_id, pl, _pagination_diag(client))
 
 
-def fetch_company_prices(client: BsaleHttpClient, company_id: int) -> PricesSnapshot:
+def fetch_company_prices(
+    client: BsaleHttpClient,
+    company_id: int,
+    managed: Sequence[int] | None = None,
+) -> PricesSnapshot:
     """
-    Falla la empresa sólo si ``price_lists.json`` no se puede obtener o es inválido.
-    Un error en el detalle de una lista queda registrado en esa lista y no afecta a las demás.
+    Descarga sólo las listas administradas de la empresa.
+
+    Falla la empresa sólo si ``price_lists.json`` no se puede obtener o es inválido. Una lista
+    administrada ausente, inactiva o con error queda registrada en esa lista; las listas no
+    administradas se ignoran sin descargarlas.
     """
-    price_lists = client.fetch_all_items("price_lists.json")
-    lists: dict[int, PriceListFetch] = {}
-    for raw in price_lists:
+    managed_ids = tuple(managed) if managed is not None else managed_price_lists(company_id)
+    logger.info("company_id=%s managed_price_lists=%s", company_id, _ids(managed_ids))
+
+    endpoint: dict[int, dict[str, Any]] = {}
+    for raw in client.fetch_all_items("price_lists.json"):
         try:
             price_list_id = int(raw["id"])
         except (KeyError, TypeError, ValueError) as exc:
             raise CompanySyncError("price_list sin id válido") from exc
-        if price_list_id in lists:
+        if price_list_id in endpoint:
             raise CompanySyncError(f"price_list_id={price_list_id} duplicado en price_lists.json")
-        lists[price_list_id] = PriceListFetch(
-            price_list_id=price_list_id, name=raw.get("name"), state=raw.get("state")
-        )
-    logger.info(
-        "[PRICES_DIAG] company_id=%s price_lists_endpoint lists=%s",
-        company_id,
-        [(pl.price_list_id, pl.state) for pl in lists.values()],
-    )
-    for pl in lists.values():
-        _fetch_price_list(client, company_id, pl)
-    return PricesSnapshot(company_id=company_id, lists=lists)
+        endpoint[price_list_id] = raw
+
+    ignored = sorted(pid for pid in endpoint if pid not in managed_ids)
+    if ignored:
+        logger.info("company_id=%s ignored_price_lists=%s (no administradas)", company_id, _ids(ignored))
+
+    lists: dict[int, PriceListFetch] = {}
+    for price_list_id in managed_ids:
+        raw = endpoint.get(price_list_id)
+        if raw is None:
+            pl = PriceListFetch(
+                price_list_id=price_list_id,
+                status=LIST_MISSING,
+                reason="lista administrada ausente de price_lists.json",
+            )
+            _log_list(company_id, pl)
+        else:
+            pl = PriceListFetch(price_list_id=price_list_id, name=raw.get("name"), state=raw.get("state"))
+            if pl.state != PRICE_LIST_STATE_ACTIVE:
+                pl.status = LIST_INACTIVE
+                pl.reason = f"lista administrada inactiva en Bsale (state={pl.state})"
+                _log_list(company_id, pl)
+            else:
+                _fetch_price_list(client, company_id, pl)
+        lists[price_list_id] = pl
+    return PricesSnapshot(company_id=company_id, managed=managed_ids, lists=lists, ignored=ignored)
 
 
 def classify_price_lists(
-    snapshot: PricesSnapshot, existing_by_list: dict[int, int]
+    snapshot: PricesSnapshot, existing_by_list: Mapping[int, int]
 ) -> tuple[list[int], dict[int, str]]:
     """
-    Devuelve (listas confirmadas completas, {lista degradada: motivo}).
+    Devuelve (listas administradas confirmadas completas, {lista administrada degradada: motivo}).
 
-    Degradadas (sin UPSERT ni DELETE): error/inconsistencia de descarga, lista activa con
-    ``fetched=0`` y precios existentes, o lista con precios existentes ausente de price_lists.json.
+    Degradadas (sin UPSERT ni DELETE): ausente o inactiva en Bsale, error/inconsistencia de
+    descarga, o ``fetched=0`` con precios existentes. Sólo se evalúan listas administradas.
     """
     complete: list[int] = []
     degraded: dict[int, str] = {}
@@ -233,20 +264,14 @@ def classify_price_lists(
         existing = existing_by_list.get(pl.price_list_id, 0)
         if pl.status != LIST_OK:
             degraded[pl.price_list_id] = pl.reason or pl.status
-        elif pl.fetched == 0 and existing > 0 and pl.is_active:
-            degraded[pl.price_list_id] = f"lista activa vacía con {existing} precios existentes"
-        else:
-            complete.append(pl.price_list_id)
             continue
-        if pl.status == LIST_OK:
+        if pl.fetched == 0 and existing > 0:
             pl.status = LIST_DEGRADED
-            pl.reason = degraded[pl.price_list_id]
+            pl.reason = f"lista administrada vacía con {existing} precios existentes"
             pl.rows = []
-    for price_list_id, existing in sorted(existing_by_list.items()):
-        if existing > 0 and price_list_id not in snapshot.lists:
-            degraded[price_list_id] = (
-                f"ausente de price_lists.json con {existing} precios existentes"
-            )
+            degraded[pl.price_list_id] = pl.reason
+            continue
+        complete.append(pl.price_list_id)
     for price_list_id, reason in degraded.items():
         logger.warning(
             "company_id=%s price_list_id=%s status=DEGRADED existing=%s reason=%s",
@@ -261,7 +286,7 @@ def classify_price_lists(
 def persist_company_prices(conn: Any, snapshot: PricesSnapshot) -> dict[str, Any]:
     company_id = snapshot.company_id
     try:
-        existing_by_list = load_existing_prices_by_list(conn, company_id)
+        existing_by_list = load_existing_prices_by_list(conn, company_id, snapshot.managed)
         complete, degraded = classify_price_lists(snapshot, existing_by_list)
         rows = [r for pid in complete for r in snapshot.lists[pid].rows]
         if complete:
@@ -283,8 +308,8 @@ def persist_company_prices(conn: Any, snapshot: PricesSnapshot) -> dict[str, Any
         "company_id=%s lists_expected=%s lists_fetched=%s prices_by_list=%s snapshot_total=%s "
         "lists_degraded=%s",
         company_id,
-        list(snapshot.lists),
-        complete,
+        _ids(snapshot.managed),
+        _ids(complete),
         {pid: snapshot.lists[pid].fetched for pid in complete},
         len(rows),
         degraded,
@@ -312,9 +337,12 @@ def persist_company_costs(conn: Any, cost_rows: list[tuple]) -> int:
 
 
 def _run_prices(
-    company: BsaleCompany, client: BsaleHttpClient, connection_factory: ConnectionFactory
+    company: BsaleCompany,
+    client: BsaleHttpClient,
+    connection_factory: ConnectionFactory,
+    managed: Sequence[int] | None,
 ) -> tuple[PricesSnapshot, dict[str, Any]]:
-    snapshot = fetch_company_prices(client, company.company_id)
+    snapshot = fetch_company_prices(client, company.company_id, managed)
     conn = connection_factory()
     try:
         return snapshot, persist_company_prices(conn, snapshot)
@@ -344,7 +372,10 @@ def sync_company_prices_costs(
     *,
     client_factory: ClientFactory = default_client_factory,
     connection_factory: ConnectionFactory = default_connection_factory,
+    managed_lists: Mapping[int, Sequence[int]] | None = None,
 ) -> dict[str, Any]:
+    """``managed_lists`` sólo para tests; en producción se usa ``MANAGED_PRICE_LISTS``."""
+
     def _run() -> dict[str, Any]:
         client = client_factory(company)
         errors: list[str] = []
@@ -357,7 +388,12 @@ def sync_company_prices_costs(
         }
 
         try:
-            snapshot, prices = _run_prices(company, client, connection_factory)
+            managed = None
+            if managed_lists is not None:
+                managed = managed_price_lists(company.company_id, managed_lists)
+            snapshot, prices = _run_prices(company, client, connection_factory, managed)
+            out["managed_price_lists"] = list(snapshot.managed)
+            out["ignored_price_lists"] = snapshot.ignored
             out["fetched"]["prices"] = snapshot.total_rows
             out["upserted"]["prices"] = prices["upserted"]
             out["deleted"]["prices"] = prices["deleted"]
@@ -376,7 +412,7 @@ def sync_company_prices_costs(
             out["degraded_price_lists"] = prices["degraded_lists"]
             if prices["degraded_lists"]:
                 errors.append(
-                    "prices: listas degradadas (precios conservados) "
+                    "prices: listas administradas degradadas (precios conservados) "
                     + ", ".join(f"{pid}: {r}" for pid, r in prices["degraded_lists"].items())
                 )
         except Exception as exc:

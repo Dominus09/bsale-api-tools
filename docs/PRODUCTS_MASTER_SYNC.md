@@ -35,8 +35,8 @@ python -m backend.jobs.sync_bsale_catalog
 
 Secuencia (en proceso, bajo advisory lock de sesión `5927184030`; una segunda ejecución sale con código 3):
 
-1. Catálogo por empresa (`sync_catalog.py`)
-2. Precios y luego costos por empresa (`sync_prices_costs.py`), en transacciones separadas: la reconciliación de precios obsoletos se limita a las listas confirmadas completas (`count` informado == descargado); listas con error, inconsistentes, activas vacías con precios existentes o ausentes de `price_lists.json` quedan degradadas y conservan sus precios. Un fallo de costos no revierte precios ya confirmados.
+1. Catálogo por empresa (`sync_catalog.py`). Las listas de `bsale.price_lists` que dejan de aparecer en `price_lists.json` se marcan `state=1` (inactiva); nunca se borran.
+2. Precios y luego costos por empresa (`sync_prices_costs.py`), en transacciones separadas. Sólo se sincronizan las listas administradas por la ERP (`backend/services/bsale/managed_price_lists.py`); las demás se ignoran (no se descargan, no cuentan como stale ni error, nunca se borran). La reconciliación de precios obsoletos se limita a las listas administradas confirmadas completas (`count` informado == descargado); una lista administrada ausente o inactiva en Bsale, con error, inconsistente o vacía con precios existentes queda degradada y conserva sus precios. Un fallo de costos no revierte precios ya confirmados.
 3. Stock por empresa (`sync_stock.py`), con reconciliación de stocks obsoletos
 4. `backfill_units_per_box_from_sec()` — patrón `(SEC N)` en `variants.description`
 5. `refresh_products_master()` — UPSERT seguro

@@ -8,6 +8,7 @@ variants) sin conexión DB abierta; luego una única transacción por empresa.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -26,6 +27,8 @@ from backend.services.bsale.sync_common import (
 )
 
 PHASE = "catalog"
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -195,6 +198,18 @@ ON CONFLICT (company_id, bsale_id) DO UPDATE SET
     state = EXCLUDED.state
 """
 
+# Bsale: state 0 = activa, 1 = inactiva.
+PRICE_LIST_STATE_INACTIVE = 1
+
+_RETIRE_MISSING_PRICE_LISTS = """
+UPDATE bsale.price_lists
+SET state = %s
+WHERE company_id = %s
+  AND NOT (bsale_id = ANY(%s))
+  AND state IS DISTINCT FROM %s
+RETURNING bsale_id
+"""
+
 _UPSERT_OFFICES = """
 INSERT INTO bsale.offices (company_id, bsale_id, name, state)
 VALUES (%s,%s,%s,%s)
@@ -226,11 +241,40 @@ ON CONFLICT (company_id, bsale_id) DO UPDATE SET
 """
 
 
-def persist_company_catalog(conn: Any, snap: CatalogSnapshot) -> dict[str, int]:
+def retire_missing_price_lists(conn: Any, snap: CatalogSnapshot) -> list[int]:
+    """
+    Marca inactivas (sin borrar) las listas de la empresa que ya no aparecen en price_lists.json.
+    Requiere un snapshot no vacío de price_lists (validado por el llamador).
+    """
+    seen = sorted({int(row[1]) for row in snap.price_lists})
+    cur = conn.cursor()
+    cur.execute(
+        _RETIRE_MISSING_PRICE_LISTS,
+        (PRICE_LIST_STATE_INACTIVE, snap.company_id, seen, PRICE_LIST_STATE_INACTIVE),
+    )
+    retired = sorted(int(r[0]) for r in cur.fetchall())
+    cur.close()
+    if retired:
+        logger.info(
+            "company_id=%s price_lists_retired=%s (ausentes de price_lists.json -> state=%s)",
+            snap.company_id,
+            retired,
+            PRICE_LIST_STATE_INACTIVE,
+        )
+    return retired
+
+
+def persist_company_catalog(conn: Any, snap: CatalogSnapshot) -> dict[str, Any]:
     """Una transacción: COMMIT sólo si todas las entidades se persistieron; si no, ROLLBACK."""
     try:
         existing_products = count_company_rows(conn, "bsale.products", snap.company_id)
         existing_variants = count_company_rows(conn, "bsale.variants", snap.company_id)
+        existing_price_lists = count_company_rows(conn, "bsale.price_lists", snap.company_id)
+        if not snap.price_lists and existing_price_lists > 0:
+            raise CompanySyncError(
+                f"price_lists=0 desde Bsale pero hay {existing_price_lists} en BD "
+                f"(company_id={snap.company_id})"
+            )
         if not snap.products and existing_products > 0:
             raise CompanySyncError(
                 f"products=0 desde Bsale pero hay {existing_products} en BD (company_id={snap.company_id})"
@@ -254,11 +298,12 @@ def persist_company_catalog(conn: Any, snap: CatalogSnapshot) -> dict[str, int]:
             if rows:
                 execute_batch(cur, sql, rows, page_size=500)
         cur.close()
+        retired = retire_missing_price_lists(conn, snap) if snap.price_lists else []
         conn.commit()
     except Exception:
         conn.rollback()
         raise
-    return snap.counts()
+    return {**snap.counts(), "price_lists_retired": retired}
 
 
 def sync_company_catalog(
