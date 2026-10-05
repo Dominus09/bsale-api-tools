@@ -109,18 +109,33 @@ class FakeConn:
 
 
 class FakeBsaleClient:
-    """Client con respuestas por endpoint; un valor Exception se lanza al pedir ese endpoint."""
+    """
+    Client con respuestas por endpoint; un valor Exception se lanza al pedir ese endpoint.
 
-    def __init__(self, items: dict[str, Any], json_by_path: dict[str, Any] | None = None) -> None:
+    ``last_pagination["reported_count"]`` imita el ``count`` de Bsale: por defecto ``len(items)``,
+    sobreescribible por endpoint con ``counts``.
+    """
+
+    def __init__(
+        self,
+        items: dict[str, Any],
+        json_by_path: dict[str, Any] | None = None,
+        counts: dict[str, int | None] | None = None,
+    ) -> None:
         self.items = items
         self.json_by_path = json_by_path or {}
+        self.counts = counts or {}
         self.requested: list[str] = []
+        self.last_pagination: dict[str, Any] | None = None
 
     def fetch_all_items(self, path, params=None, **kwargs):
         self.requested.append(path)
+        self.last_pagination = None
         val = self.items.get(path, [])
         if isinstance(val, BaseException):
             raise val
+        reported = self.counts[path] if path in self.counts else len(val)
+        self.last_pagination = {"reported_count": reported, "pages": 1, "stop_reason": "fake"}
         return list(val)
 
     def get_json(self, path, params=None):

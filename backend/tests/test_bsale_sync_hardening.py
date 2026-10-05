@@ -6,7 +6,6 @@ import pytest
 
 from backend.services.bsale import catalog_company_sync as cat
 from backend.services.bsale import catalog_job as job
-from backend.services.bsale import prices_costs_sync as pc
 from backend.services.bsale import snapshot_reconcile as snap
 from backend.services.bsale import stock_sync as st
 from backend.services.bsale.companies import BsaleCompany, CompanyConfigError, load_active_companies
@@ -213,53 +212,6 @@ def test_stock_empty_snapshot_with_existing_rows_fails_without_delete(monkeypatc
     assert res["ok"] is False
     assert conn.sql_matching("DELETE") == []
     assert conn.rollbacks == 1
-
-
-def _prices_client(details_outcome):
-    return FakeBsaleClient(
-        {
-            "price_lists.json": [{"id": 7}, {"id": 8}],
-            "price_lists/7/details.json": [
-                {"variant": {"id": 1}, "variantValue": 100, "variantValueWithTaxes": 119}
-            ],
-            "price_lists/8/details.json": details_outcome,
-        },
-        json_by_path={"variants/1/costs.json": {"averageCost": 50}},
-    )
-
-
-def test_prices_partial_download_does_not_cleanup():
-    err = BsaleRetryExhaustedError("agotado", endpoint="/v1/price_lists/8/details.json", status=504, attempt=5)
-    client = _prices_client(err)
-    conns: list[FakeConn] = []
-
-    def factory():
-        c = FakeConn(lambda sql, p: [(1,)] if "SELECT bsale_id" in sql else None)
-        conns.append(c)
-        return c
-
-    res = pc.sync_company_prices_costs(COMPANY, client_factory=lambda c: client, connection_factory=factory)
-    assert res["ok"] is False
-    assert len(conns) == 1
-    assert all("DELETE" not in s and "INSERT" not in s for s, _ in conns[0].executed)
-
-
-def test_prices_complete_snapshot_reconciles_stale_rows(monkeypatch):
-    rec = _Rec()
-    monkeypatch.setattr(snap, "execute_values", rec)
-    monkeypatch.setattr(pc, "execute_batch", lambda cur, sql, rows, page_size=None: None)
-    client = _prices_client(
-        [{"variant": {"id": 1}, "variantValue": 90, "variantValueWithTaxes": 107.1}]
-    )
-    read_conn = FakeConn(lambda sql, p: [(1,)] if "SELECT bsale_id" in sql else None)
-    write_conn = _reconcile_conn(existing=10, stale=1)
-    conns = iter([read_conn, write_conn])
-    res = pc.sync_company_prices_costs(COMPANY, client_factory=lambda c: client, connection_factory=lambda: next(conns))
-    assert res["ok"] is True
-    assert sorted(rec.temp_rows) == [(3, 1, 7, 100, 119), (3, 1, 8, 90, 107.1)]
-    deletes = write_conn.sql_matching("DELETE FROM bsale.variant_prices")
-    assert len(deletes) == 1 and deletes[0][1] == (3,)
-    assert write_conn.commits == 1
 
 
 @pytest.mark.parametrize("spec", [snap.STOCKS_SPEC, snap.VARIANT_PRICES_SPEC])

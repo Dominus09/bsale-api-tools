@@ -42,11 +42,28 @@ def run_company_phase(
     company: BsaleCompany,
     fn: Callable[[], dict[str, Any]],
 ) -> dict[str, Any]:
-    """Ejecuta ``fn`` y normaliza el resultado; nunca propaga la excepción."""
+    """
+    Ejecuta ``fn`` y normaliza el resultado; nunca propaga la excepción.
+
+    Si ``fn`` devuelve una clave ``error`` (resultado parcial ya persistido), la fase queda
+    ``ok=False`` conservando el detalle devuelto.
+    """
     t0 = time.perf_counter()
     result: dict[str, Any] = {"phase": phase, "company_id": company.company_id, "ok": False}
     try:
         result.update(fn())
+        if result.get("error"):
+            logger.error(
+                "[BSALE_SYNC] phase=%s company_id=%s PARTIAL error=%s fetched=%s upserted=%s deleted=%s",
+                phase,
+                company.company_id,
+                result["error"],
+                result.get("fetched"),
+                result.get("upserted"),
+                result.get("deleted"),
+            )
+            result["duration_ms"] = int((time.perf_counter() - t0) * 1000)
+            return result
         result["ok"] = True
         logger.info(
             "[BSALE_SYNC] phase=%s company_id=%s ok fetched=%s upserted=%s deleted=%s",

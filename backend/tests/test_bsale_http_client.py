@@ -120,6 +120,36 @@ def test_fetch_all_items_paginates_until_short_page():
     assert [c["params"]["offset"] for c in session.calls] == [0, 50]
 
 
+def test_fetch_all_items_empty_page_before_count_fails():
+    page1 = {"count": 120, "items": [{"id": i} for i in range(50)]}
+    page2 = {"count": 120, "items": []}
+    client, _ = _client([FakeResponse(200, page1), FakeResponse(200, page2)], [])
+    with pytest.raises(BsalePaginationError, match="count=120"):
+        client.fetch_all_items("price_lists/4/details.json")
+
+
+def test_fetch_all_items_empty_first_page_with_positive_count_fails():
+    client, _ = _client([FakeResponse(200, {"count": 4387, "items": []})], [])
+    with pytest.raises(BsalePaginationError):
+        client.fetch_all_items("price_lists/4/details.json")
+
+
+def test_fetch_all_items_empty_page_with_zero_count_is_ok_and_reports_stats():
+    client, _ = _client([FakeResponse(200, {"count": 0, "items": []})], [])
+    assert client.fetch_all_items("price_lists/14/details.json") == []
+    assert client.last_pagination["reported_count"] == 0
+    assert client.last_pagination["stop_reason"] == "empty_page"
+
+
+def test_fetch_all_items_records_reported_count():
+    page1 = {"count": 51, "items": [{"id": i} for i in range(50)]}
+    page2 = {"count": 51, "items": [{"id": 100}]}
+    client, _ = _client([FakeResponse(200, page1), FakeResponse(200, page2)], [])
+    assert len(client.fetch_all_items("price_lists/2/details.json")) == 51
+    assert client.last_pagination["reported_count"] == 51
+    assert client.last_pagination["pages"] == 2
+
+
 def test_fetch_all_items_detects_repeated_page():
     page = {"items": [{"id": i} for i in range(50)]}
     client, _ = _client([FakeResponse(200, page), FakeResponse(200, page)], [])

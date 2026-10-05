@@ -125,6 +125,7 @@ class BsaleHttpClient:
         self.retry_after_max = retry_after_max
         self._sleep = sleep
         self._rng = rng
+        self.last_pagination: dict[str, Any] | None = None
 
     def __repr__(self) -> str:
         return f"BsaleHttpClient(base_url={self.base_url!r})"
@@ -242,7 +243,8 @@ class BsaleHttpClient:
         Descarga todas las páginas con limit/offset.
 
         Termina con página vacía, página menor a ``limit`` u ``offset >= count``.
-        Falla ante offset repetido, página idéntica a la anterior o ``max_pages`` excedido.
+        Falla ante offset repetido, página idéntica a la anterior, página vacía con
+        ``offset < count`` o ``max_pages`` excedido.
         """
         base_params = dict(params or {})
         url = self._url(path_or_url)
@@ -251,6 +253,19 @@ class BsaleHttpClient:
         seen_offsets: set[int] = set()
         prev_signature: tuple[Any, ...] | None = None
         offset = 0
+        stats: dict[str, Any] = {
+            "endpoint": endpoint,
+            "reported_count": None,
+            "pages": 0,
+            "items": 0,
+            "stop_reason": None,
+        }
+        self.last_pagination = stats
+
+        def _done(reason: str) -> list[dict[str, Any]]:
+            stats["items"] = len(items)
+            stats["stop_reason"] = reason
+            return items
 
         for _ in range(max_pages):
             if offset in seen_offsets:
@@ -258,13 +273,22 @@ class BsaleHttpClient:
             seen_offsets.add(offset)
 
             data = self.get_json(url, {**base_params, "limit": limit, "offset": offset})
+            stats["pages"] += 1
+            if isinstance(data.get("count"), int):
+                stats["reported_count"] = data["count"]
             page = data.get("items")
             if page is None:
                 raise BsaleResponseError("Respuesta paginada sin 'items'", endpoint=endpoint)
             if not isinstance(page, list):
                 raise BsaleResponseError("'items' no es lista", endpoint=endpoint)
             if not page:
-                return items
+                count = data.get("count")
+                if isinstance(count, int) and offset < count:
+                    raise BsalePaginationError(
+                        f"Página vacía en offset {offset} con count={count} informado",
+                        endpoint=endpoint,
+                    )
+                return _done("empty_page")
 
             signature = tuple(
                 it.get("id") if isinstance(it, dict) else repr(it) for it in page
@@ -281,10 +305,10 @@ class BsaleHttpClient:
             items.extend(page)
 
             if len(page) < limit:
-                return items
+                return _done("short_page")
             offset += limit
             count = data.get("count")
             if isinstance(count, int) and offset >= count:
-                return items
+                return _done("offset_ge_count")
 
         raise BsalePaginationError(f"Se excedió max_pages={max_pages}", endpoint=endpoint)
