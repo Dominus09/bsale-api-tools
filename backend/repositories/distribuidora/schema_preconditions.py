@@ -20,6 +20,11 @@ REISSUE_SCHEMA_OBJECTS: tuple[str, ...] = (
     "distribuidora.v_document_related_resolved",
 )
 
+# Lo que el runner exige tras aplicar todo (además de 048: roles de tipos, 049).
+RUNNER_REQUIRED_OBJECTS: tuple[str, ...] = REISSUE_SCHEMA_OBJECTS + (
+    "distribuidora.document_type_roles",
+)
+
 _REISSUE_SCHEMA_OK = False
 
 
@@ -27,12 +32,16 @@ class SchemaPreconditionError(RuntimeError):
     """Falta schema requerido por el código desplegado."""
 
 
-def missing_reissue_schema_objects(cur) -> list[str]:
+def missing_schema_objects(cur, names: tuple[str, ...]) -> list[str]:
     cur.execute(
         "SELECT name FROM unnest(%s::text[]) AS name WHERE to_regclass(name) IS NULL ORDER BY name",
-        (list(REISSUE_SCHEMA_OBJECTS),),
+        (list(names),),
     )
     return [str(r[0]) for r in (cur.fetchall() or [])]
+
+
+def missing_reissue_schema_objects(cur) -> list[str]:
+    return missing_schema_objects(cur, REISSUE_SCHEMA_OBJECTS)
 
 
 def require_reissue_schema(cur) -> None:

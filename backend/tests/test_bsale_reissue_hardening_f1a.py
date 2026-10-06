@@ -237,7 +237,10 @@ def test_runner_schema_drops_cascade_fk_and_restricts_folio_index():
     from backend.repositories.distribuidora.sync_repo import DISTRIBUIDORA_SCHEMA_FILES
 
     sql_dir = Path(details_repo.__file__).resolve().parents[2] / "sql" / "distribuidora"
-    assert DISTRIBUIDORA_SCHEMA_FILES[-1] == "048_document_reissue_lineage.sql"
+    order = DISTRIBUIDORA_SCHEMA_FILES
+    assert order.index("048_document_reissue_lineage.sql") > order.index(
+        "026_dispatch_plan_invoiced_view_perf.sql"
+    )
     mig = (sql_dir / "048_document_reissue_lineage.sql").read_text(encoding="utf-8")
     assert "CREATE TABLE IF NOT EXISTS distribuidora.document_detail_history" in mig
     assert "DROP CONSTRAINT IF EXISTS fk_distribuidora_document_related_detail" in mig

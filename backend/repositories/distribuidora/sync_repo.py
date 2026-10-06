@@ -123,6 +123,7 @@ DISTRIBUIDORA_SCHEMA_FILES: tuple[str, ...] = (
     "046_cargas.sql",
     "047_cargas_hardening.sql",
     "048_document_reissue_lineage.sql",
+    "049_document_type_roles.sql",
 )
 
 _ENSURE_SCHEMA_NOOP_WARNED = False

@@ -18,7 +18,10 @@ from pathlib import Path
 import pytest
 
 from backend.repositories.distribuidora import sync_repo
-from backend.repositories.distribuidora.schema_preconditions import REISSUE_SCHEMA_OBJECTS
+from backend.repositories.distribuidora.schema_preconditions import (
+    REISSUE_SCHEMA_OBJECTS,
+    RUNNER_REQUIRED_OBJECTS,
+)
 from backend.repositories.distribuidora.sync_repo import DISTRIBUIDORA_SCHEMA_FILES
 
 SQL_DIR = Path(sync_repo.__file__).resolve().parents[2] / "sql" / "distribuidora"
@@ -37,6 +40,7 @@ RECREATED_COMMERCIAL_VIEWS = {
     "v_dispatch_plan_invoiced_documents": "026_dispatch_plan_invoiced_view_perf.sql",
 }
 REISSUE_FILE = "048_document_reissue_lineage.sql"
+ROLES_FILE = "049_document_type_roles.sql"
 
 
 # --------------------------------------------------------------------- lexer
@@ -273,7 +277,7 @@ def test_every_sql_file_is_registered_or_explicitly_excluded():
     assert sorted(on_disk - registered) == sorted(NOT_IN_RUNNER)
     assert list(DISTRIBUIDORA_SCHEMA_FILES) == sorted(DISTRIBUIDORA_SCHEMA_FILES)
     assert len(set(DISTRIBUIDORA_SCHEMA_FILES)) == len(DISTRIBUIDORA_SCHEMA_FILES)
-    assert DISTRIBUIDORA_SCHEMA_FILES[-1] == REISSUE_FILE
+    assert DISTRIBUIDORA_SCHEMA_FILES[-2:] == (REISSUE_FILE, ROLES_FILE)
 
 
 def test_bootstrap_from_empty_database_has_no_forward_references(runs):
@@ -285,6 +289,15 @@ def test_rerun_over_migrated_database_is_idempotent_and_converges(runs):
     fresh, first, rerun = runs
     assert rerun.errors == []
     assert rerun.snapshot() == first
+
+
+def test_runner_required_objects_exist_after_fresh_and_rerun(runs):
+    fresh, _, rerun = runs
+    for cat in (fresh, rerun):
+        for qualified in RUNNER_REQUIRED_OBJECTS:
+            assert qualified.split(".", 1)[1] in cat.objects, qualified
+        roles = cat.objects["document_type_roles"]
+        assert roles.kind == "table" and roles.source.startswith(ROLES_FILE)
 
 
 def test_reissue_objects_exist_after_bootstrap(runs):

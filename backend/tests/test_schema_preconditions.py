@@ -109,10 +109,17 @@ def _runner(monkeypatch, missing):
     monkeypatch.setattr(mod, "get_connection", lambda: conn)
     monkeypatch.setattr(mod, "pg_backend_pid", lambda c: 1)
     monkeypatch.setattr(mod, "apply_distribuidora_migrations", lambda cur: ["x.sql"])
-    monkeypatch.setattr(mod, "missing_reissue_schema_objects", lambda cur: missing)
+    seen = []
+    monkeypatch.setattr(
+        mod, "missing_schema_objects", lambda cur, names: seen.append(names) or missing
+    )
     monkeypatch.setattr(mod, "safe_commit", lambda c, job: setattr(c, "committed", True))
     monkeypatch.setattr(mod, "safe_rollback", lambda c, job: setattr(c, "rolled_back", True))
-    return mod.main(), conn
+    rc = mod.main()
+    assert seen == [sp.RUNNER_REQUIRED_OBJECTS]
+    assert set(sp.REISSUE_SCHEMA_OBJECTS) < set(sp.RUNNER_REQUIRED_OBJECTS)
+    assert "distribuidora.document_type_roles" in sp.RUNNER_REQUIRED_OBJECTS
+    return rc, conn
 
 
 def test_runner_rolls_back_if_048_objects_missing(monkeypatch):
