@@ -1,38 +1,9 @@
 -- Extensión: relación OC↔factura vía API relateddetailid, trazabilidad de sync, vistas v_orders / v_sales / v_sync_status.
 -- No altera ``documents`` ni el flujo base de sync. Ejecutar después de 003_views (``ensure_distribuidora_schema``).
 
-CREATE TABLE IF NOT EXISTS distribuidora.document_related (
-    id SERIAL PRIMARY KEY,
-    detail_id BIGINT NOT NULL,
-    related_document_id BIGINT NOT NULL,
-    related_document_type INT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_distribuidora_document_related_detail_doc UNIQUE (detail_id, related_document_id)
-);
--- +go
-
-CREATE INDEX IF NOT EXISTS idx_distribuidora_document_related_detail
-    ON distribuidora.document_related (detail_id);
--- +go
-
-CREATE INDEX IF NOT EXISTS idx_distribuidora_document_related_related_doc
-    ON distribuidora.document_related (related_document_id);
--- +go
-
-DO $fk_dr$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'fk_distribuidora_document_related_detail'
-    ) THEN
-        ALTER TABLE distribuidora.document_related
-            ADD CONSTRAINT fk_distribuidora_document_related_detail
-            FOREIGN KEY (detail_id)
-            REFERENCES distribuidora.document_details (detail_id)
-            ON DELETE CASCADE;
-    END IF;
-END
-$fk_dr$;
--- +go
+-- ``distribuidora.document_related`` y sus índices se crean en 001 (003 la referencia).
+-- El FK ``fk_distribuidora_document_related_detail`` (ON DELETE CASCADE hacia
+-- ``document_details``) se retiró: 048 lo elimina y aquí ya no se vuelve a crear.
 
 CREATE TABLE IF NOT EXISTS distribuidora.sync_status (
     id SERIAL PRIMARY KEY,

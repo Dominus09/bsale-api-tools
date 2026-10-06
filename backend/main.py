@@ -200,6 +200,28 @@ def _startup_attach_diagnostics_log_handler() -> None:
 
 
 @app.on_event("startup")
+def _startup_require_distribuidora_reissue_schema() -> None:
+    """Código F1A/F1B no arranca sobre un schema sin 048 (resultados de facturación erróneos).
+
+    ``DISTRIBUIDORA_SCHEMA_CHECK=warn`` solo registra el error (emergencia).
+    """
+    from backend.repositories.distribuidora.schema_preconditions import (
+        missing_reissue_schema_objects_new_connection,
+    )
+
+    missing = missing_reissue_schema_objects_new_connection()
+    if not missing:
+        return
+    msg = (
+        f"Schema distribuidora incompleto (falta 048): {', '.join(missing)}. "
+        "Ejecutar: python -m backend.jobs.apply_distribuidora_schema"
+    )
+    logger.critical(msg)
+    if os.getenv("DISTRIBUIDORA_SCHEMA_CHECK", "strict").strip().lower() != "warn":
+        raise RuntimeError(msg)
+
+
+@app.on_event("startup")
 def _startup_log_operaciones_telemetry_routes() -> None:
     """Confirma en logs que gps_track está en OpenAPI (revisar tras deploy)."""
     wanted = ("/operaciones/gps_track", "/operaciones/heartbeat", "/operaciones/gps-track")

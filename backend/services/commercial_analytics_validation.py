@@ -299,9 +299,8 @@ def _fetch_credit_notes_interpretation(
             FROM nc_emitidas nc
             LEFT JOIN LATERAL (
                 SELECT dr.related_document_id
-                FROM distribuidora.document_details dd
-                INNER JOIN distribuidora.document_related dr ON dr.detail_id = dd.detail_id
-                WHERE dd.document_id = nc.document_id
+                FROM distribuidora.v_document_related_resolved dr
+                WHERE dr.origin_document_id = nc.document_id
                 ORDER BY dr.related_document_id
                 LIMIT 1
             ) rel ON TRUE
@@ -340,10 +339,9 @@ def _fetch_credit_notes_interpretation(
         FROM nc_scoped nc
         WHERE EXISTS (
             SELECT 1
-            FROM distribuidora.document_details dd
-            INNER JOIN distribuidora.document_related dr ON dr.detail_id = dd.detail_id
+            FROM distribuidora.v_document_related_resolved dr
             INNER JOIN period_sales ps ON ps.document_id = dr.related_document_id
-            WHERE dd.document_id = nc.document_id
+            WHERE dr.origin_document_id = nc.document_id
         )
     """
     nc_rows = session.query_all("validation_nc_interpretation", nc_sql, period_only_bound)
@@ -645,9 +643,8 @@ def _build_auto_audit_rules(
             (SELECT COUNT(*)::bigint FROM period_e nc
                 WHERE nc.document_type_id = {DOC_NC}
                   AND NOT EXISTS (
-                    SELECT 1 FROM distribuidora.document_details dd
-                    INNER JOIN distribuidora.document_related dr ON dr.detail_id = dd.detail_id
-                    WHERE dd.document_id = nc.document_id
+                    SELECT 1 FROM distribuidora.v_document_related_resolved dr
+                    WHERE dr.origin_document_id = nc.document_id
                   )) AS nc_sin_documento,
             (SELECT COUNT(*)::bigint FROM scope_docs sd
                 WHERE sd.municipality IS NULL OR BTRIM(sd.municipality) = '') AS comunas_vacias,

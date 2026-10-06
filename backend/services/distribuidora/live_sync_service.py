@@ -13,6 +13,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from backend.db import get_connection
+from backend.repositories.distribuidora.document_source_repo import (
+    SOURCE_EVIDENCE_COLUMNS_SQL,
+    source_evidence_from_row,
+)
 from backend.services.distribuidora.bsale_client import BsaleClient
 from backend.services.distribuidora.probable_invoice_service import (
     build_probable_invoice_matches_may_2026,
@@ -30,6 +34,7 @@ from backend.services.distribuidora.sync_service import (
     _refresh_document_children,
     bsale_token_distribuidora_configured,
 )
+from backend.utils.bsale_document_ids import resolve_current_source_document_id
 from backend.utils.db_tx import log_tx, pg_backend_pid, release_transaction, safe_rollback
 from backend.utils.sync_state import (
     MODE_INCREMENTAL,
@@ -410,22 +415,31 @@ def live_sync_details(*, strict_token: bool = True) -> dict[str, Any]:
             )
 
         cur.execute(
-            """
-            SELECT document_id, document_type_id, number,
-                   COALESCE(
-                       NULLIF(to_jsonb(d)->>'source_document_id', '')::bigint,
-                       NULLIF(raw_data->>'id', '')::bigint
-                   ) AS bsale_source_id,
-                   COALESCE(total_amount, 0)
-            FROM distribuidora.v_documents_latest d
-            WHERE company_id = %s AND office_id = %s
-              AND emission_date >= %s
-              AND emission_date <= %s
-            ORDER BY document_id
+            f"""
+            SELECT d.document_type_id,
+                   COALESCE(d.total_amount, 0),
+                   {SOURCE_EVIDENCE_COLUMNS_SQL}
+            FROM distribuidora.v_documents_latest v
+            JOIN distribuidora.documents d ON d.document_id = v.document_id
+            WHERE v.company_id = %s AND v.office_id = %s
+              AND v.emission_date >= %s
+              AND v.emission_date <= %s
+            ORDER BY d.document_id
             """,
             (COMPANY_ID, OFFICE_ID, window_from, window_to),
         )
-        rows = cur.fetchall()
+        rows = []
+        for r in cur.fetchall():
+            ev = source_evidence_from_row(r[2:])
+            rows.append(
+                (
+                    ev.local_document_id,
+                    r[0],
+                    ev.folio,
+                    resolve_current_source_document_id(ev),
+                    r[1],
+                )
+            )
         stats["documents_reviewed"] = len(rows)
         # Liberar AccessShareLock del SELECT de listado antes del loop HTTP.
         conn.commit()
@@ -461,12 +475,7 @@ def live_sync_details(*, strict_token: bool = True) -> dict[str, Any]:
                 parser_key = "not_fetched"
                 details_api_count = 0
                 if _live_details_debug_enabled():
-                    from backend.utils.bsale_document_ids import resolve_bsale_source_document_id
-
-                    source_dbg = resolve_bsale_source_document_id(
-                        local_document_id=doc_id,
-                        raw_data_id=bsale_source_id,
-                    )
+                    source_dbg = int(bsale_source_id)
                     det_payload = client.get(f"/documents/{source_dbg}/details.json")
                     items_dbg, parser_key = _extract_bsale_detail_items(det_payload)
                     details_api_count = len(items_dbg)
@@ -494,10 +503,7 @@ def live_sync_details(*, strict_token: bool = True) -> dict[str, Any]:
                     child_stats,
                     raw_document=raw_for_children,
                     folio=folio_int,
-                    bsale_source_document_id=(
-                        int(bsale_source_id) if bsale_source_id is not None else None
-                    ),
-                    raw_data_id=bsale_source_id,
+                    bsale_source_document_id=int(bsale_source_id),
                 )
 
                 cur.execute(

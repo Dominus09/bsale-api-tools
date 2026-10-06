@@ -12,6 +12,7 @@ import logging
 import os
 import sys
 
+from backend.repositories.distribuidora.schema_preconditions import reissue_schema_exit_code
 from backend.services.distribuidora.live_sync_service import (
     _print_summary,
     live_sync_probable_matches,
@@ -35,6 +36,9 @@ def main() -> int:
     load_dotenv_if_available()
     _configure_logging()
     print("[live_sync_probable_matches] INICIO", flush=True)
+    rc = reissue_schema_exit_code("live_sync_probable_matches")
+    if rc:
+        return rc
     try:
         stats = live_sync_probable_matches(strict_token=True)
     except Exception as e:

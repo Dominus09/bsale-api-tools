@@ -12,6 +12,7 @@ import logging
 import os
 import sys
 
+from backend.repositories.distribuidora.schema_preconditions import reissue_schema_exit_code
 from backend.services.distribuidora.live_sync_service import (
     _print_summary,
     live_sync_related,
@@ -35,6 +36,9 @@ def main() -> int:
     load_dotenv_if_available()
     _configure_logging()
     print("[live_sync_related] INICIO", flush=True)
+    rc = reissue_schema_exit_code("live_sync_related")
+    if rc:
+        return rc
     try:
         stats = live_sync_related(strict_token=True)
     except ValueError as e:

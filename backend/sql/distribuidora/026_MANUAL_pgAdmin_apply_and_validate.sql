@@ -9,6 +9,10 @@
 --   related_document_type_id, related_document_type_label,
 --   probable_document_id, probable_document_number, probable_document_type_id,
 --   probable_document_type_label, probable_score, status, relation_source
+--
+-- OBSOLETO como vía de deploy: el runner (``apply_distribuidora_schema``) ya aplica
+-- 026 y la definición vigente en 048. Este script requiere 048 aplicado
+-- (``v_document_related_resolved``) y replica la definición de 048.
 -- =============================================================================
 
 BEGIN;
@@ -56,15 +60,13 @@ LEFT JOIN LATERAL (
         d.document_id AS invoicing_document_id,
         d.document_type_id AS invoicing_document_type_id,
         d.number AS invoicing_number
-    FROM distribuidora.document_details dd
-    INNER JOIN distribuidora.document_related dr
-        ON dr.detail_id = dd.detail_id
+    FROM distribuidora.v_document_related_resolved dr
     INNER JOIN distribuidora.documents d
         ON d.document_id = dr.related_document_id
        AND d.document_type_id IN (1, 6)
        AND d.company_id = 3
        AND d.office_id = 1
-    WHERE dd.document_id = dpo.oc_document_id
+    WHERE dr.origin_document_id = dpo.oc_document_id
     ORDER BY d.emission_date DESC NULLS LAST, d.document_id DESC
     LIMIT 1
 ) st ON TRUE

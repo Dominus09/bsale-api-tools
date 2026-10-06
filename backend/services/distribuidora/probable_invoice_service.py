@@ -382,14 +382,13 @@ def _fetch_oc_without_confirmed_invoice(
           AND d.emission_date < (%s::date + interval '1 day')
           AND NOT EXISTS (
               SELECT 1
-              FROM distribuidora.document_related dr
-              INNER JOIN distribuidora.document_details dd ON dd.detail_id = dr.detail_id
+              FROM distribuidora.v_document_related_resolved dr
               INNER JOIN distribuidora.v_documents_latest inv
                   ON inv.document_id = dr.related_document_id
                  AND inv.document_type_id IN (1, 6)
                  AND inv.company_id = d.company_id
                  AND inv.office_id = d.office_id
-              WHERE dd.document_id = d.document_id
+              WHERE dr.origin_document_id = d.document_id
           )
         ORDER BY d.document_id
         """,
@@ -471,12 +470,10 @@ def _fetch_invoice_candidates_for_oc(
           AND d.document_id <> %s
           AND NOT EXISTS (
               SELECT 1
-              FROM distribuidora.document_related dr
-              INNER JOIN distribuidora.document_details dd
-                  ON dd.detail_id = dr.detail_id
+              FROM distribuidora.v_document_related_resolved dr
               WHERE dr.related_document_id = d.document_id
                 AND dr.related_document_type IN (1, 6)
-                AND dd.document_id <> %s
+                AND dr.origin_document_id <> %s
           )
         ORDER BY d.emission_date DESC NULLS LAST, d.document_id DESC
         """,
@@ -502,11 +499,10 @@ def _fetch_related_source_oc_ids_for_invoices(
         return {}
     cur.execute(
         """
-        SELECT dr.related_document_id, dd.document_id
-        FROM distribuidora.document_related dr
-        INNER JOIN distribuidora.document_details dd ON dd.detail_id = dr.detail_id
+        SELECT DISTINCT dr.related_document_id, dr.origin_document_id
+        FROM distribuidora.v_document_related_resolved dr
         INNER JOIN distribuidora.documents oc
-            ON oc.document_id = dd.document_id
+            ON oc.document_id = dr.origin_document_id
            AND oc.document_type_id = %s
         WHERE dr.related_document_id = ANY(%s::bigint[])
           AND dr.related_document_type IN (1, 6)

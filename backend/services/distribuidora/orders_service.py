@@ -59,12 +59,12 @@ _DISPATCH_PREP_DOC_FILTER = """
 
 # Facturación OC: arista confirmada por related_document_type (1/6).
 # No exigir fila en documents (related huérfano no debe reabrir a pending).
+# Detalle vigente o histórico (reemisión): ``v_document_related_resolved``.
 _OC_IS_INVOICED_SQL = """
 EXISTS (
     SELECT 1
-    FROM distribuidora.document_details dd
-    INNER JOIN distribuidora.document_related dr ON dr.detail_id = dd.detail_id
-    WHERE dd.document_id = d.document_id
+    FROM distribuidora.v_document_related_resolved dr
+    WHERE dr.origin_document_id = d.document_id
       AND dr.related_document_type IN (1, 6)
 )
 """.strip()
@@ -193,9 +193,8 @@ CASE
     WHEN COALESCE(d.state, 0) <> 0 THEN 'Anulada'
     WHEN EXISTS (
         SELECT 1
-        FROM distribuidora.document_related dr
-        INNER JOIN distribuidora.document_details dd ON dd.detail_id = dr.detail_id
-        WHERE dd.document_id = d.document_id
+        FROM distribuidora.v_document_related_resolved dr
+        WHERE dr.origin_document_id = d.document_id
           AND dr.related_document_type IN (1, 6)
     ) THEN 'Facturada'
     ELSE 'Pendiente'
@@ -240,12 +239,11 @@ LEFT JOIN LATERAL (
         COALESCE(inv.document_id, dr.related_document_id) AS invoicing_document_id,
         COALESCE(inv.document_type_id, dr.related_document_type) AS invoicing_document_type_id,
         inv.number AS invoicing_number
-    FROM distribuidora.document_details dd
-    INNER JOIN distribuidora.document_related dr ON dr.detail_id = dd.detail_id
+    FROM distribuidora.v_document_related_resolved dr
     LEFT JOIN distribuidora.documents inv
         ON inv.document_id = dr.related_document_id
        AND inv.document_type_id IN (1, 6)
-    WHERE dd.document_id = d.document_id
+    WHERE dr.origin_document_id = d.document_id
       AND dr.related_document_type IN (1, 6)
     ORDER BY inv.emission_date DESC NULLS LAST, dr.related_document_id DESC
     LIMIT 1
@@ -963,13 +961,11 @@ def _planning_rows_purchase_status_sql() -> str:
                     COALESCE(inv.document_type_id, dr.related_document_type)
                         AS invoicing_document_type_id,
                     inv.number AS invoicing_number
-                FROM distribuidora.document_details dd
-                INNER JOIN distribuidora.document_related dr
-                    ON dr.detail_id = dd.detail_id
+                FROM distribuidora.v_document_related_resolved dr
                 LEFT JOIN distribuidora.documents inv
                     ON inv.document_id = dr.related_document_id
                    AND inv.document_type_id IN (1, 6)
-                WHERE dd.document_id = p.document_id
+                WHERE dr.origin_document_id = p.document_id
                   AND dr.related_document_type IN (1, 6)
                 ORDER BY inv.emission_date DESC NULLS LAST, dr.related_document_id DESC
                 LIMIT 1

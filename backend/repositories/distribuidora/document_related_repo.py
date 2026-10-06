@@ -20,13 +20,11 @@ SELECT
     array_agg(DISTINCT oc.number ORDER BY oc.number) AS oc_numbers,
     array_agg(DISTINCT dr.detail_id ORDER BY dr.detail_id) AS origin_detail_ids,
     MIN(oc.emission_date) AS earliest_oc_emission
-FROM distribuidora.document_related dr
+FROM distribuidora.v_document_related_resolved dr
 LEFT JOIN distribuidora.documents d
     ON d.document_id = dr.related_document_id
-INNER JOIN distribuidora.document_details dd
-    ON dd.detail_id = dr.detail_id
 INNER JOIN distribuidora.documents oc
-    ON oc.document_id = dd.document_id
+    ON oc.document_id = dr.origin_document_id
    AND oc.document_type_id = 33
 WHERE dr.related_document_type = ANY(%s)
   AND d.document_id IS NULL
@@ -59,7 +57,7 @@ FROM distribuidora.documents nc
 INNER JOIN distribuidora.document_details ncd
     ON ncd.document_id = nc.document_id
    AND ncd.related_detail_id IS NOT NULL
-INNER JOIN distribuidora.document_details invd
+INNER JOIN distribuidora.v_document_detail_lineage invd
     ON invd.detail_id = ncd.related_detail_id
 INNER JOIN distribuidora.documents inv
     ON inv.document_id = invd.document_id

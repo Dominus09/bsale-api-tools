@@ -291,6 +291,26 @@ UPDATE distribuidora.document_details SET raw_data = '{}'::jsonb WHERE raw_data 
 ALTER TABLE distribuidora.document_details ALTER COLUMN raw_data SET NOT NULL;
 -- +go
 
+-- Relación detalle → documento relacionado (Bsale relateddetailid). Vive aquí porque
+-- ``003_views.sql`` la referencia; antes se creaba recién en 007 y una base vacía fallaba.
+CREATE TABLE IF NOT EXISTS distribuidora.document_related (
+    id SERIAL PRIMARY KEY,
+    detail_id BIGINT NOT NULL,
+    related_document_id BIGINT NOT NULL,
+    related_document_type INT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_distribuidora_document_related_detail_doc UNIQUE (detail_id, related_document_id)
+);
+-- +go
+
+CREATE INDEX IF NOT EXISTS idx_distribuidora_document_related_detail
+    ON distribuidora.document_related (detail_id);
+-- +go
+
+CREATE INDEX IF NOT EXISTS idx_distribuidora_document_related_related_doc
+    ON distribuidora.document_related (related_document_id);
+-- +go
+
 CREATE TABLE IF NOT EXISTS distribuidora.document_attributes (
     id BIGSERIAL PRIMARY KEY,
     document_id BIGINT NOT NULL,

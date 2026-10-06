@@ -8,6 +8,7 @@ import logging
 import os
 import sys
 
+from backend.repositories.distribuidora.schema_preconditions import reissue_schema_exit_code
 from backend.services.distribuidora.bsale_client import BsaleClient
 from backend.services.distribuidora.oc_reconciliation_service import (
     reconcile_open_purchase_orders_batch,
@@ -56,6 +57,10 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("--company-id y --office-id deben ser positivos")
 
     execute = bool(args.execute and not args.dry_run)
+    if execute:
+        rc = reissue_schema_exit_code("reconcile_open_purchase_orders")
+        if rc:
+            return rc
     token = require_bsale_token(label="reconcile_open_purchase_orders")
     try:
         result = reconcile_open_purchase_orders_batch(

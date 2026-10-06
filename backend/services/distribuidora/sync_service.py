@@ -17,6 +17,10 @@ import requests
 from backend.db import get_connection
 from backend.repositories.distribuidora.attributes_repo import replace_document_attributes
 from backend.repositories.distribuidora.details_repo import replace_document_details
+from backend.repositories.distribuidora.document_source_repo import (
+    children_source_is_current,
+    load_current_source,
+)
 from backend.repositories.distribuidora.documents_repo import (
     document_dict_from_bsale,
     replace_document_sellers,
@@ -249,15 +253,13 @@ def _log_orders_sync_summary(
                 COUNT(*) FILTER (
                     WHERE EXISTS (
                         SELECT 1
-                        FROM distribuidora.document_related dr
-                        INNER JOIN distribuidora.document_details dd
-                            ON dd.detail_id = dr.detail_id
+                        FROM distribuidora.v_document_related_resolved dr
                         INNER JOIN distribuidora.v_documents_latest inv
                             ON inv.document_id = dr.related_document_id
                            AND inv.document_type_id IN (1, 6)
                            AND inv.company_id = oc.company_id
                            AND inv.office_id = oc.office_id
-                        WHERE dd.document_id = oc.document_id
+                        WHERE dr.origin_document_id = oc.document_id
                     )
                 ),
                 0
@@ -461,7 +463,12 @@ def _process_one_pending_document_row(
             safe_rollback(conn, job=job)
             _notify_progress(stats)
             return
-        if not stats.get("_documents_only_skip_children"):
+        if row.get("stale_revision_skipped"):
+            # Revisión más antigua que la vigente: ni header ni hijos.
+            stats["documents_stale_revision_skipped"] = (
+                int(stats.get("documents_stale_revision_skipped") or 0) + 1
+            )
+        elif not stats.get("_documents_only_skip_children"):
             raw_doc = row.get("_bsale_document")
             local_document_id = int(row["document_id"])
             folio = row.get("number")
@@ -833,12 +840,27 @@ def _refresh_document_children(
     details_replaced = 0
     log_tx("TX_BEGIN", job=job, conn=conn, step="persist_children")
     try:
+        if not children_source_is_current(cur, local_document_id, source_id):
+            # Otra revisión más nueva quedó vigente mientras se hacía el HTTP.
+            safe_rollback(conn, job=job)
+            stats["children_skipped_stale_source"] = (
+                int(stats.get("children_skipped_stale_source") or 0) + 1
+            )
+            stats["last_children_local_document_id"] = local_document_id
+            stats["last_children_bsale_source_document_id"] = source_id
+            stats["last_children_ids_differ"] = differ
+            stats["last_children_details_replaced"] = 0
+            stats["last_children_details_pending"] = False
+            stats["last_children_skipped_stale_source"] = True
+            return
+        stats["last_children_skipped_stale_source"] = False
         if details_fetch_ok and not details_pending:
             details_replaced = replace_document_details(
                 cur,
                 local_document_id,
                 detail_items or [],
                 invalidate_cache=False,
+                superseded_by_source_document_id=source_id,
             )
             stats["details_rows"] = int(stats.get("details_rows") or 0) + details_replaced
             ensure_weight = False
@@ -2145,19 +2167,13 @@ def backfill_distribuidora_document_details_may_2026_only(
                 break
             stats["document_batches"] = int(stats.get("document_batches") or 0) + 1
 
-            from backend.utils.bsale_document_ids import (
-                ids_differ,
-                resolve_bsale_source_document_id,
-            )
+            from backend.utils.bsale_document_ids import ids_differ
 
-            for document_id, number, raw_bsale_id in id_rows:
+            for document_id, number, _raw_bsale_id in id_rows:
                 if max_docs and processed_cap >= max_docs:
                     break
                 doc_id = int(document_id)
-                source_id = resolve_bsale_source_document_id(
-                    local_document_id=doc_id,
-                    raw_data_id=raw_bsale_id,
-                )
+                source_id, _folio = load_current_source(cur, doc_id)
                 try:
                     folio_int = int(number) if number is not None else None
                 except (TypeError, ValueError):
@@ -2177,11 +2193,30 @@ def backfill_distribuidora_document_details_may_2026_only(
                             source_id,
                             ids_differ(doc_id, source_id),
                         )
-                        det = client.get(f"/documents/{source_id}/details.json", timeout=90)
-                        items = det.get("items") if isinstance(det, dict) else []
-                        if not isinstance(items, list):
-                            items = []
-                        written = replace_document_details(cur, doc_id, items)
+                        items = _fetch_document_detail_items_paginated(client, source_id)
+                        if not items and before_n:
+                            logger.warning(
+                                "backfill_details local=%s bsale_source=%s sin líneas en Bsale; "
+                                "se conservan %s locales",
+                                doc_id,
+                                source_id,
+                                before_n,
+                            )
+                            last_err = None
+                            break
+                        if not children_source_is_current(cur, doc_id, source_id):
+                            conn.rollback()
+                            stats["children_skipped_stale_source"] = (
+                                int(stats.get("children_skipped_stale_source") or 0) + 1
+                            )
+                            last_err = None
+                            break
+                        written = replace_document_details(
+                            cur,
+                            doc_id,
+                            items,
+                            superseded_by_source_document_id=source_id,
+                        )
                         conn.commit()
                         logger.info(
                             "backfill_details_done folio=%s local_document_id=%s "

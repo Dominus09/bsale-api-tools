@@ -486,9 +486,8 @@ def load_existing_invoice_relations_for_oc(
     cur.execute(
         """
         SELECT dr.detail_id, dr.related_document_id, dr.related_document_type
-        FROM distribuidora.document_details dd
-        INNER JOIN distribuidora.document_related dr ON dr.detail_id = dd.detail_id
-        WHERE dd.document_id = %s
+        FROM distribuidora.v_document_related_resolved dr
+        WHERE dr.origin_document_id = %s
           AND dr.related_document_type IN (1, 6)
         """,
         (oc_document_id,),

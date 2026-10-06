@@ -315,14 +315,13 @@ def get_order_weight_summaries_batch(
 OC_PURCHASE_INVOICED_BY_RELATED_SQL = """
 EXISTS (
     SELECT 1
-    FROM distribuidora.document_related dr
-    INNER JOIN distribuidora.document_details dd ON dd.detail_id = dr.detail_id
+    FROM distribuidora.v_document_related_resolved dr
     INNER JOIN distribuidora.documents inv
         ON inv.document_id = dr.related_document_id
        AND inv.document_type_id IN (1, 6)
        AND inv.company_id = d.company_id
        AND inv.office_id = d.office_id
-    WHERE dd.document_id = d.document_id
+    WHERE dr.origin_document_id = d.document_id
 )
 """.strip()
 

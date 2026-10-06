@@ -63,10 +63,11 @@ from backend.services.distribuidora.oc_related_discovery_service import (
     resolve_related_sync_lookback_days,
     resolve_related_sync_max_runtime_sec,
 )
-from backend.utils.bsale_document_ids import (
-    ids_differ,
-    resolve_bsale_source_document_id,
+from backend.repositories.distribuidora.document_source_repo import (
+    children_source_is_current,
+    load_current_source,
 )
+from backend.utils.bsale_document_ids import ids_differ
 from backend.utils.distribuidora_oc_sql import OC_PURCHASE_NOT_INVOICED_BY_RELATED_SQL
 
 logger = logging.getLogger(__name__)
@@ -328,34 +329,10 @@ def _detail_ids_missing_for_document(
 
 def _bsale_source_id_from_pg(cur, local_document_id: int) -> tuple[int, int | None]:
     """
-    Resuelve id Bsale vigente desde ``raw_data->>'id'`` (si existe).
-
-    Retorna ``(bsale_source_document_id, folio)``.
+    Revisión Bsale vigente según el resolver canónico (``source_document_id`` /
+    ``raw_data`` / frescura). Retorna ``(bsale_source_document_id, folio)``.
     """
-    cur.execute(
-        """
-        SELECT number, raw_data->>'id'
-        FROM distribuidora.documents
-        WHERE document_id = %s
-        LIMIT 1
-        """,
-        (int(local_document_id),),
-    )
-    row = cur.fetchone()
-    folio = None
-    raw_id = None
-    if row:
-        folio = row[0]
-        raw_id = row[1]
-    source = resolve_bsale_source_document_id(
-        local_document_id=int(local_document_id),
-        raw_data_id=raw_id,
-    )
-    try:
-        folio_int = int(folio) if folio is not None else None
-    except (TypeError, ValueError):
-        folio_int = None
-    return source, folio_int
+    return load_current_source(cur, int(local_document_id))
 
 
 def _fetch_all_detail_items_from_bsale(
@@ -365,8 +342,12 @@ def _fetch_all_detail_items_from_bsale(
     throttle: float,
     log_ctx: str,
     bsale_source_document_id: int | None = None,
-) -> tuple[list[dict[str, Any]], int]:
-    """Paginación completa de ``details.json`` (items crudos para ``replace_document_details``)."""
+) -> tuple[list[dict[str, Any]], int, bool]:
+    """
+    Paginación completa de ``details.json`` (items crudos para ``replace_document_details``).
+
+    Retorna ``(items, llamadas, completo)``; ``completo=False`` si alguna página falló.
+    """
     source_id = (
         int(bsale_source_document_id)
         if bsale_source_document_id is not None
@@ -391,11 +372,11 @@ def _fetch_all_detail_items_from_bsale(
                 offset,
                 e,
             )
-            break
+            return items_out, api_calls, False
         api_calls += 1
-        items = data.get("items") or []
+        items = data.get("items") if isinstance(data, dict) else None
         if not isinstance(items, list):
-            break
+            return items_out, api_calls, False
         for it in items:
             if isinstance(it, dict):
                 items_out.append(it)
@@ -404,7 +385,7 @@ def _fetch_all_detail_items_from_bsale(
         offset += len(items)
         if throttle > 0:
             time.sleep(throttle)
-    return items_out, api_calls
+    return items_out, api_calls, True
 
 
 def _self_heal_document_details_if_needed(
@@ -458,7 +439,7 @@ def _self_heal_document_details_if_needed(
             ids_differ(document_id, source_id),
             attempt,
         )
-        items, c_fetch = _fetch_all_detail_items_from_bsale(
+        items, c_fetch, complete = _fetch_all_detail_items_from_bsale(
             client,
             document_id,
             throttle=throttle,
@@ -466,8 +447,32 @@ def _self_heal_document_details_if_needed(
             bsale_source_document_id=source_id,
         )
         extra_calls += c_fetch
+        if not complete or not items:
+            # Un replace con páginas faltantes archivaría líneas vigentes.
+            logger.warning(
+                "%s self-heal omitido document_id=%s bsale_source_document_id=%s "
+                "complete=%s items=%s",
+                log_ctx,
+                document_id,
+                source_id,
+                complete,
+                len(items),
+            )
+            break
         try:
-            n_written = replace_document_details(cur, document_id, items)
+            if not children_source_is_current(cur, document_id, source_id):
+                conn.rollback()
+                if stats is not None:
+                    stats["children_skipped_stale_source"] = int(
+                        stats.get("children_skipped_stale_source") or 0
+                    ) + 1
+                break
+            n_written = replace_document_details(
+                cur,
+                document_id,
+                items,
+                superseded_by_source_document_id=source_id,
+            )
             logger.info(
                 "%s self-heal replace folio=%s local_document_id=%s "
                 "bsale_source_document_id=%s details_replaced=%s",
@@ -663,10 +668,16 @@ def _insert_related_triples(
     stats: dict[str, Any] | None = None,
     log_ctx: str = "",
 ) -> int:
-    """Inserta relaciones con ``ON CONFLICT DO NOTHING``; un commit por fila + reintento deadlock."""
+    """
+    Inserta relaciones con ``ON CONFLICT DO NOTHING``; un commit por fila + reintento deadlock.
+
+    Un error SQL en una fila se revierte (``rollback``) y se cuenta en
+    ``related_insert_failures``; las demás filas del lote continúan en una TX sana.
+    """
     attempted = 0
     inserted_new = 0
     conflicts = 0
+    failures = 0
     for detail_id, rid, tid in triples:
         attempted += 1
 
@@ -675,6 +686,7 @@ def _insert_related_triples(
             _rid: int = rid,
             _tid: int = tid,
         ) -> int:
+            cur.execute("SAVEPOINT document_related_row")
             cur.execute(
                 """
                 INSERT INTO distribuidora.document_related (
@@ -689,26 +701,48 @@ def _insert_related_triples(
             conn.commit()
             return rc
 
-        ins = _with_deadlock_retry(
-            conn,
-            f"document_related detail_id={detail_id} related_document_id={rid}",
-            _insert_one,
-        )
+        try:
+            ins = _with_deadlock_retry(
+                conn,
+                f"document_related detail_id={detail_id} related_document_id={rid}",
+                _insert_one,
+            )
+        except psycopg2.Error as e:
+            failures += 1
+            try:
+                cur.execute("ROLLBACK TO SAVEPOINT document_related_row")
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    logger.exception("%s rollback tras error document_related", log_ctx)
+            logger.error(
+                "%s document_related insert falló detail_id=%s related_document_id=%s "
+                "related_document_type=%s: %s",
+                log_ctx,
+                detail_id,
+                rid,
+                tid,
+                e,
+            )
+            continue
         if ins > 0:
             inserted_new += ins
         else:
             conflicts += 1
 
     logger.info(
-        "%s INSERT resumen intentos=%s insertadas=%s conflictos_duplicado=%s",
+        "%s INSERT resumen intentos=%s insertadas=%s conflictos_duplicado=%s fallidas=%s",
         log_ctx,
         attempted,
         inserted_new,
         conflicts,
+        failures,
     )
     if stats is not None:
         stats["related_insert_attempts"] = int(stats.get("related_insert_attempts") or 0) + attempted
         stats["related_insert_conflicts"] = int(stats.get("related_insert_conflicts") or 0) + conflicts
+        stats["related_insert_failures"] = int(stats.get("related_insert_failures") or 0) + failures
     return inserted_new
 
 
@@ -1429,6 +1463,14 @@ def _live_related_stats_template() -> dict[str, Any]:
     }
 
 
+def _rollback_after_oc_error(conn: PgConnection, doc_id: int) -> None:
+    """Sin esto, un error SQL deja la conexión en InFailedSqlTransaction para las OCs siguientes."""
+    try:
+        conn.rollback()
+    except Exception:
+        logger.exception("sync_related rollback falló document_id=%s", doc_id)
+
+
 def _process_one_oc_related_sync(
     *,
     conn: PgConnection,
@@ -1472,6 +1514,7 @@ def _process_one_oc_related_sync(
         logger.warning("sync_related document_id=%s: %s", doc_id, e)
         stats["document_errors"] = int(stats.get("document_errors") or 0) + 1
         stats["api_errors"] = int(stats.get("api_errors") or 0) + 1
+        _rollback_after_oc_error(conn, doc_id)
         return None
 
     bucket = classify_oc_discovery_result(oc_res)
@@ -1513,6 +1556,7 @@ def _process_one_oc_related_sync(
     except Exception as e:
         logger.warning("sync_related apply document_id=%s: %s", doc_id, e)
         stats["document_errors"] = int(stats.get("document_errors") or 0) + 1
+        _rollback_after_oc_error(conn, doc_id)
         return oc_res
 
     stats["rows_inserted"] += ins
@@ -2195,9 +2239,8 @@ def debug_sync_related_for_document(document_number: int) -> dict[str, Any]:
         cur.execute(
             """
             SELECT dr.detail_id, dr.related_document_id, dr.related_document_type
-            FROM distribuidora.document_related dr
-            INNER JOIN distribuidora.document_details dd ON dd.detail_id = dr.detail_id
-            WHERE dd.document_id = %s
+            FROM distribuidora.v_document_related_resolved dr
+            WHERE dr.origin_document_id = %s
             ORDER BY dr.related_document_id
             """,
             (document_id,),

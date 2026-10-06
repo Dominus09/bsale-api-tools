@@ -143,10 +143,9 @@ def run_audit(cur) -> dict[str, Any]:
     cur.execute(
         """
         SELECT dr.id, dr.detail_id, dr.related_document_id, dr.related_document_type, dr.created_at,
-               dd.document_id AS parent_document_id, d.document_type_id AS parent_type
-        FROM distribuidora.document_related dr
-        INNER JOIN distribuidora.document_details dd ON dd.detail_id = dr.detail_id
-        INNER JOIN distribuidora.documents d ON d.document_id = dd.document_id
+               dr.origin_document_id AS parent_document_id, d.document_type_id AS parent_type
+        FROM distribuidora.v_document_related_resolved dr
+        INNER JOIN distribuidora.documents d ON d.document_id = dr.origin_document_id
         WHERE d.document_type_id <> %s
         ORDER BY dr.id
         """,
@@ -180,9 +179,8 @@ def run_audit(cur) -> dict[str, Any]:
         SELECT dr.id, dr.detail_id, dr.related_document_id, dr.related_document_type, dr.created_at,
                oc.document_id AS oc_document_id, oc.company_id AS oc_company_id, oc.office_id AS oc_office_id,
                rel.company_id AS related_company_id, rel.office_id AS related_office_id
-        FROM distribuidora.document_related dr
-        INNER JOIN distribuidora.document_details dd ON dd.detail_id = dr.detail_id
-        INNER JOIN distribuidora.documents oc ON oc.document_id = dd.document_id
+        FROM distribuidora.v_document_related_resolved dr
+        INNER JOIN distribuidora.documents oc ON oc.document_id = dr.origin_document_id
         INNER JOIN distribuidora.documents rel ON rel.document_id = dr.related_document_id
         WHERE oc.company_id IS DISTINCT FROM rel.company_id
            OR oc.office_id IS DISTINCT FROM rel.office_id
@@ -208,13 +206,19 @@ def run_audit(cur) -> dict[str, Any]:
     cur.execute(
         """
         SELECT dr.id, dr.detail_id, dr.related_document_id, dr.related_document_type, dr.created_at
-        FROM distribuidora.document_related dr
-        LEFT JOIN distribuidora.document_details dd ON dd.detail_id = dr.detail_id
-        WHERE dd.detail_id IS NULL
+        FROM distribuidora.v_document_related_resolved dr
+        WHERE dr.origin_document_id IS NULL
         ORDER BY dr.id
         """
     )
     orphan_detail_rows = _rows(cur)
+    historical_detail_relations = int(
+        _scalar(
+            cur,
+            "SELECT COUNT(*) FROM distribuidora.v_document_related_resolved WHERE detail_is_historical",
+        )
+        or 0
+    )
 
     cur.execute(
         """
@@ -244,6 +248,7 @@ def run_audit(cur) -> dict[str, Any]:
         "count_cross_office_relations": len(cross_office_relations),
         "count_type_mismatches": len(type_mismatches),
         "count_orphan_detail_id": len(orphan_detail_rows),
+        "count_historical_detail_relations": historical_detail_relations,
         "count_duplicate_logical_pairs": len(duplicate_pairs),
         "related_type_distribution": related_type_distribution,
     }
@@ -330,6 +335,7 @@ def _print_audit_summary(audit: dict[str, Any], metrics: dict[str, Any], *, out:
     p(f"count_cross_office_relations:    {m['count_cross_office_relations']}")
     p(f"count_type_mismatches:           {m['count_type_mismatches']}")
     p(f"count_orphan_detail_id:          {m['count_orphan_detail_id']}")
+    p(f"count_historical_detail_rel:     {m.get('count_historical_detail_relations', 0)}")
     p(f"count_duplicate_logical_pairs:   {m['count_duplicate_logical_pairs']}")
     p()
     p("related_type_distribution:")

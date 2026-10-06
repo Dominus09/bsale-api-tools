@@ -354,6 +354,10 @@ def test_refresh_children_persists_weight_after_details():
         patch("backend.services.distribuidora.sync_service.log_tx"),
         patch("backend.services.distribuidora.sync_service.safe_rollback"),
         patch(
+            "backend.services.distribuidora.sync_service.children_source_is_current",
+            return_value=True,
+        ),
+        patch(
             "backend.services.distribuidora.sync_service.replace_document_details",
             return_value=1,
         ),

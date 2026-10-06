@@ -46,6 +46,7 @@ from backend.services.distribuidora.sync_related_service import (
     _insert_related_triples,
 )
 from backend.services.distribuidora.sync_service import _refresh_document_children
+from backend.utils.bsale_document_ids import is_non_positive_folio
 from backend.utils.db_tx import release_transaction, safe_rollback
 
 logger = logging.getLogger(__name__)
@@ -169,6 +170,8 @@ def validate_bsale_against_candidate(
         return False, "missing_document_type"
     if int(bsale_type) != int(expected_type):
         return False, f"type_mismatch expected={expected_type} bsale={bsale_type}"
+    if is_non_positive_folio(blob.get("number")):
+        return False, "non_positive_folio"
     row = document_dict_from_bsale(
         blob,
         company_id=company_id,
@@ -246,7 +249,12 @@ def _persist_document_from_bsale(
     office_id: int,
     stats: dict[str, Any],
 ) -> int:
-    """Upsert header + refresh hijos (details, references, …)."""
+    """
+    Upsert header + refresh hijos (details, references, …).
+
+    Retorna la PK local persistida: si el folio ya existía con otra PK (reemisión
+    A→B), es A; los hijos se descargan desde B y se guardan bajo A.
+    """
     row = document_dict_from_bsale(
         blob,
         company_id=company_id,
@@ -256,17 +264,27 @@ def _persist_document_from_bsale(
     if row is None:
         raise ValueError("document_dict_from_bsale returned None after validation")
     row["_bsale_document"] = blob
-    local_document_id = int(row["document_id"])
+    bsale_source_document_id = int(row["document_id"])
     folio = row.get("number")
     try:
         folio_int = int(folio) if folio is not None else None
     except (TypeError, ValueError):
         folio_int = None
 
-    job = f"sync_missing_related:{local_document_id}"
+    job = f"sync_missing_related:{bsale_source_document_id}"
     try:
         upsert_documents(cur, [row], stats)
         conn.commit()
+        local_document_id = int(row["document_id"])
+        if row.get("stale_revision_skipped"):
+            logger.warning(
+                "missing_related stale_revision_skipped local_document_id=%s "
+                "bsale_source_document_id=%s folio=%s",
+                local_document_id,
+                bsale_source_document_id,
+                folio_int,
+            )
+            return local_document_id
         _refresh_document_children(
             client,
             cur,
@@ -276,6 +294,7 @@ def _persist_document_from_bsale(
             stats,
             raw_document=blob,
             folio=folio_int,
+            bsale_source_document_id=bsale_source_document_id,
         )
         release_transaction(conn, job=job)
     except Exception:
@@ -496,7 +515,7 @@ def run_sync_missing_related_documents(
 
             # APPLY: upsert header + hijos
             try:
-                _persist_document_from_bsale(
+                persisted_id = _persist_document_from_bsale(
                     client,
                     cur,
                     conn,
@@ -507,7 +526,7 @@ def run_sync_missing_related_documents(
                 )
                 report.headers_inserted += 1
                 if int(expected_type) in INVOICE_TYPES:
-                    synced_invoice_ids.append(related_id)
+                    synced_invoice_ids.append(persisted_id)
             except Exception as exc:
                 report.errors.append(f"insert {related_id}: {exc}")
                 sample["api_error"] = str(exc)
@@ -519,7 +538,7 @@ def run_sync_missing_related_documents(
                     cur,
                     company_id=company_id,
                     office_id=office_id,
-                    invoice_document_id=related_id,
+                    invoice_document_id=persisted_id,
                     dry_run=False,
                     stats=stats,
                 )
@@ -530,7 +549,7 @@ def run_sync_missing_related_documents(
                 derived = discover_nc_bsale_ids_for_invoice(
                     client,
                     cur,
-                    related_id,
+                    persisted_id,
                     office_id=office_id,
                     throttle=helper_throttle,
                 )
@@ -568,7 +587,7 @@ def run_sync_missing_related_documents(
                             cur,
                             company_id=company_id,
                             office_id=office_id,
-                            invoice_document_id=related_id,
+                            invoice_document_id=persisted_id,
                             dry_run=False,
                             stats=stats,
                         )

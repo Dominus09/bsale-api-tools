@@ -9,9 +9,33 @@ from typing import Any
 
 from psycopg2.extras import Json, execute_values
 
+from backend.utils.bsale_document_ids import (
+    coerce_folio_number,
+    positive_folio_number,
+)
+
 logger = logging.getLogger(__name__)
 
 _DOCS_BSALE_MODIFIED_COL: bool | None = None
+_DOCS_SOURCE_COLS: bool | None = None
+
+_SOURCE_SYNC_COLUMNS = (
+    "source_document_id",
+    "source_hash",
+    "source_updated_at",
+    "last_synced_at",
+)
+
+# Revisión vigente del header: (bsale_modified_at, id Bsale del raw_data). Debe coincidir
+# con ``backend.utils.bsale_document_ids.is_revision_not_older``.
+_CURRENT_REVISION_ID_SQL = (
+    "COALESCE(NULLIF(distribuidora.documents.raw_data->>'id', '')::bigint, "
+    "distribuidora.documents.source_document_id, distribuidora.documents.document_id)"
+)
+_CURRENT_REVISION_ID_SQL_NO_SOURCE = (
+    "COALESCE(NULLIF(distribuidora.documents.raw_data->>'id', '')::bigint, "
+    "distribuidora.documents.document_id)"
+)
 
 _DOCUMENT_UPSERT_COLS_BASE = [
     "document_id",
@@ -89,11 +113,32 @@ def _documents_has_bsale_modified_at(cur) -> bool:
     return _DOCS_BSALE_MODIFIED_COL
 
 
+def _documents_has_source_sync_cols(cur) -> bool:
+    """Columnas de 044 (``source_document_id``, ``source_hash``, …) presentes."""
+    global _DOCS_SOURCE_COLS
+    if _DOCS_SOURCE_COLS is not None:
+        return _DOCS_SOURCE_COLS
+    cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM information_schema.columns
+        WHERE table_schema = 'distribuidora'
+          AND table_name = 'documents'
+          AND column_name = ANY(%s)
+        """,
+        (list(_SOURCE_SYNC_COLUMNS),),
+    )
+    _DOCS_SOURCE_COLS = int(cur.fetchone()[0]) == len(_SOURCE_SYNC_COLUMNS)
+    return _DOCS_SOURCE_COLS
+
+
 def _document_upsert_cols(cur) -> list[str]:
     cols = list(_DOCUMENT_UPSERT_COLS_BASE)
     if _documents_has_bsale_modified_at(cur):
         idx = cols.index("generation_date") + 1
         cols.insert(idx, "bsale_modified_at")
+    if _documents_has_source_sync_cols(cur):
+        cols.extend(["source_document_id", "source_updated_at", "last_synced_at"])
     return cols
 
 
@@ -102,17 +147,54 @@ def _document_upsert_update_set(cur) -> str:
     if _documents_has_bsale_modified_at(cur):
         idx = parts.index("generation_date = EXCLUDED.generation_date") + 1
         parts.insert(idx, "bsale_modified_at = EXCLUDED.bsale_modified_at")
+    if _documents_has_source_sync_cols(cur):
+        parts.extend(
+            [
+                "source_document_id = EXCLUDED.source_document_id",
+                "source_updated_at = EXCLUDED.source_updated_at",
+                # El hash describe header+details de una revisión concreta; otra revisión lo invalida.
+                "source_hash = CASE WHEN distribuidora.documents.source_document_id "
+                "IS NOT DISTINCT FROM EXCLUDED.source_document_id "
+                "THEN distribuidora.documents.source_hash ELSE NULL END",
+                "last_synced_at = EXCLUDED.last_synced_at",
+            ]
+        )
     return ",\n                ".join(parts)
 
 
-def _emission_sort_key(r: dict[str, Any]) -> tuple[float, int]:
-    """Mayor = más reciente: ``emission_date`` (timestamp), empate ``document_id``."""
-    em = r.get("emission_date")
+def _document_upsert_freshness_where(cur) -> str:
+    """
+    ``WHERE`` del ``DO UPDATE``: una revisión Bsale más antigua nunca pisa a la vigente.
+
+    Sin ``bsale_modified_at`` (columna o valor) se compara solo por id de revisión.
+    """
+    if not _documents_has_bsale_modified_at(cur):
+        return ""
+    current_id = (
+        _CURRENT_REVISION_ID_SQL
+        if _documents_has_source_sync_cols(cur)
+        else _CURRENT_REVISION_ID_SQL_NO_SOURCE
+    )
+    return f"""
+            WHERE (
+                CASE
+                    WHEN EXCLUDED.bsale_modified_at IS NOT NULL
+                     AND distribuidora.documents.bsale_modified_at IS NOT NULL
+                    THEN (EXCLUDED.bsale_modified_at, EXCLUDED.document_id)
+                         >= (distribuidora.documents.bsale_modified_at, {current_id})
+                    ELSE EXCLUDED.document_id >= {current_id}
+                END
+            )"""
+
+
+def _revision_sort_key(r: dict[str, Any]) -> tuple[float, int]:
+    """Mayor = revisión Bsale más reciente: ``bsale_modified_at`` (o generación), empate id."""
+    ts_raw = r.get("bsale_modified_at") or r.get("generation_date")
     did = int(r["document_id"])
-    if em is None:
+    if ts_raw is None:
         return (-1.0, did)
     try:
-        ts = float(em.timestamp())
+        ts = float(ts_raw.timestamp())
     except Exception:
         ts = -1.0
     return (ts, did)
@@ -121,7 +203,7 @@ def _emission_sort_key(r: dict[str, Any]) -> tuple[float, int]:
 def _dedupe_logical_latest(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     Misma clave (company_id, office_id, document_type_id, number): deja una fila
-    (la de emisión más reciente; empate por mayor ``document_id``).
+    (la revisión Bsale más reciente; empate por mayor ``document_id``).
     Filas sin ``number`` o sin ``document_type_id`` se conservan todas (clave por PK).
     """
     by_logical: dict[tuple[int, int, int, int], dict[str, Any]] = {}
@@ -133,7 +215,7 @@ def _dedupe_logical_latest(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
         k = (int(r["company_id"]), int(r["office_id"]), int(tid), int(num))
         prev = by_logical.get(k)
-        if prev is None or _emission_sort_key(r) > _emission_sort_key(prev):
+        if prev is None or _revision_sort_key(r) > _revision_sort_key(prev):
             by_logical[k] = r
     return list(by_logical.values()) + rest
 
@@ -152,28 +234,11 @@ def _num(v: Any) -> Any:
 def _folio_number_from_bsale(d: dict[str, Any]) -> int | None:
     """
     Folio numérico para clave lógica (company, office, type, number).
-    Si Bsale envía folio no numérico, retorna None y el upsert usa solo ``document_id``.
+
+    Solo enteros > 0: ``number <= 0`` (p. ej. revisión técnica reemplazada) no es folio
+    comercial. Folio no numérico → None y el upsert usa solo ``document_id``.
     """
-    raw = d.get("number")
-    if raw is None:
-        return None
-    if isinstance(raw, bool):
-        return None
-    if isinstance(raw, int):
-        return raw
-    if isinstance(raw, float):
-        try:
-            i = int(raw)
-            return i if i == raw else None
-        except (TypeError, ValueError, OverflowError):
-            return None
-    s = str(raw).strip()
-    if not s:
-        return None
-    try:
-        return int(s, 10)
-    except ValueError:
-        return None
+    return positive_folio_number(d.get("number"))
 
 
 def document_dict_from_bsale(
@@ -251,6 +316,22 @@ def document_dict_from_bsale(
         )
         return None
 
+    folio_raw = coerce_folio_number(d.get("number"))
+    if folio_raw is not None and folio_raw <= 0:
+        # Revisión sin folio comercial: insertarla por PK crearía "OC 0" o pisaría el
+        # documento comercial que comparte su id técnico.
+        if sync_stats is not None:
+            sync_stats["skipped_non_positive_folio"] = (
+                int(sync_stats.get("skipped_non_positive_folio") or 0) + 1
+            )
+        logger.info(
+            "Documento omitido por folio no comercial: id=%s number=%s state=%s",
+            doc_id,
+            folio_raw,
+            d.get("state"),
+        )
+        return None
+
     doc_type = d.get("document_type") or {}
     client = d.get("client") or {}
     user = d.get("user") or {}
@@ -303,11 +384,62 @@ def _execute_values_batch(
     batch: list[dict[str, Any]],
     cols: list[str],
     template: str,
-) -> None:
+) -> set[int] | None:
+    """Ejecuta el upsert; retorna los ids Bsale efectivamente escritos (``RETURNING``)."""
     if not batch:
-        return
+        return set()
     vals = [tuple(r[c] for c in cols) for r in batch]
-    execute_values(cur, sql, vals, template=template, page_size=len(vals))
+    returned = execute_values(
+        cur, sql, vals, template=template, page_size=len(vals), fetch=True
+    )
+    if returned is None:
+        return None
+    applied: set[int] = set()
+    for row in returned:
+        try:
+            applied.add(int(row[0]))
+        except (TypeError, ValueError, IndexError):
+            continue
+    return applied
+
+
+def _raw_revision_id(r: dict[str, Any]) -> int | None:
+    """Id Bsale que ``RETURNING raw_data->>'id'`` devolverá para esta fila (si se escribe)."""
+    raw = r.get("raw_data")
+    payload = getattr(raw, "adapted", raw)
+    if not isinstance(payload, dict):
+        return None
+    try:
+        rid = int(payload.get("id"))
+    except (TypeError, ValueError):
+        return None
+    return rid if rid == int(r["document_id"]) else None
+
+
+def _mark_stale_revisions(
+    batch: list[dict[str, Any]],
+    applied: set[int] | None,
+    sync_stats: dict[str, Any] | None,
+) -> None:
+    """Marca ``stale_revision_skipped`` en filas cuyo ``DO UPDATE`` fue bloqueado por frescura."""
+    for r in batch:
+        rev = r.get("_bsale_revision_id")
+        skipped = applied is not None and rev is not None and int(rev) not in applied
+        r["stale_revision_skipped"] = skipped
+        if not skipped:
+            continue
+        if sync_stats is not None:
+            sync_stats["stale_revisions_skipped"] = (
+                int(sync_stats.get("stale_revisions_skipped") or 0) + 1
+            )
+        logger.warning(
+            "documents_upsert stale_revision_skipped bsale_document_id=%s folio=%s "
+            "document_type_id=%s bsale_modified_at=%s",
+            rev,
+            r.get("number"),
+            r.get("document_type_id"),
+            r.get("bsale_modified_at"),
+        )
 
 
 def _apply_persisted_document_ids_for_folio_rows(cur, rows: list[dict[str, Any]]) -> None:
@@ -387,15 +519,53 @@ def upsert_documents(
       relevantes desde Bsale (incl. ``state``, montos, fechas, ``raw_data``, etc.).
     * Sin folio (``number`` o ``document_type_id`` nulos): upsert por ``document_id`` (PK).
 
+    * ``number <= 0`` nunca se persiste (no es folio comercial).
+    * Una revisión Bsale más antigua que la vigente no actualiza la fila
+      (``row["stale_revision_skipped"] = True``); sus hijos no deben persistirse.
+    * Con columnas de 044, ``source_document_id`` / ``source_updated_at`` /
+      ``last_synced_at`` se escriben junto al header y ``source_hash`` se invalida
+      si cambia la revisión.
+
     Retorna ``(total_filas, filas_que_ya_existían_en_bd)``; la segunda sirve para
     ``updated_documents`` en logs de sync (aprox. conflictos / refrescos).
     """
     if not rows:
         return 0, 0
-    rows = _dedupe_logical_latest(rows)
+    kept: list[dict[str, Any]] = []
+    for r in rows:
+        n = coerce_folio_number(r.get("number"))
+        if n is not None and n <= 0:
+            if sync_stats is not None:
+                sync_stats["skipped_non_positive_folio"] = (
+                    int(sync_stats.get("skipped_non_positive_folio") or 0) + 1
+                )
+            logger.warning(
+                "documents_upsert skipped_non_positive_folio document_id=%s number=%s",
+                r.get("document_id"),
+                r.get("number"),
+            )
+            continue
+        kept.append(r)
+    if not kept:
+        return 0, 0
+    rows = _dedupe_logical_latest(kept)
+    kept_ids = {id(r) for r in rows}
+    for r in kept:
+        if id(r) not in kept_ids:
+            # Misma clave lógica en el lote con una revisión más nueva.
+            r["stale_revision_skipped"] = True
     cols = _document_upsert_cols(cur)
     update_set = _document_upsert_update_set(cur)
+    freshness_where = _document_upsert_freshness_where(cur)
     template = "(" + ",".join(["%s"] * len(cols)) + ",NOW(),NOW())"
+    has_source_cols = "source_document_id" in cols
+    synced_at = datetime.now(timezone.utc)
+    for r in rows:
+        r["_bsale_revision_id"] = _raw_revision_id(r)
+        if has_source_cols:
+            r["source_document_id"] = int(r["document_id"])
+            r["source_updated_at"] = r.get("bsale_modified_at") or r.get("generation_date")
+            r["last_synced_at"] = synced_at
 
     folio_rows = [
         r
@@ -439,18 +609,20 @@ def upsert_documents(
             INSERT INTO distribuidora.documents ({", ".join(cols)}, created_at, updated_at)
             VALUES %s
             ON CONFLICT (company_id, office_id, document_type_id, number)
-            WHERE document_type_id IS NOT NULL AND number IS NOT NULL
+            WHERE document_type_id IS NOT NULL AND number > 0
             DO UPDATE SET
-                {update_set}
+                {update_set}{freshness_where}
+            RETURNING raw_data->>'id'
         """
         try:
-            _execute_values_batch(cur, sql_folio_upsert, folio_rows, cols, template)
+            applied = _execute_values_batch(cur, sql_folio_upsert, folio_rows, cols, template)
         except Exception:
             try:
                 cur.connection.rollback()
             except Exception:
                 pass
             raise
+        _mark_stale_revisions(folio_rows, applied, sync_stats)
         _apply_persisted_document_ids_for_folio_rows(cur, rows)
 
         seen_folio_count: set[tuple[int, int, int, int]] = set()
@@ -491,16 +663,18 @@ def upsert_documents(
             INSERT INTO distribuidora.documents ({", ".join(cols)}, created_at, updated_at)
             VALUES %s
             ON CONFLICT (document_id) DO UPDATE SET
-                {update_set}
+                {update_set}{freshness_where}
+            RETURNING raw_data->>'id'
         """
         try:
-            _execute_values_batch(cur, sql_pk, pk_rows, cols, template)
+            applied_pk = _execute_values_batch(cur, sql_pk, pk_rows, cols, template)
         except Exception:
             try:
                 cur.connection.rollback()
             except Exception:
                 pass
             raise
+        _mark_stale_revisions(pk_rows, applied_pk, sync_stats)
 
         seen_pk_count: set[int] = set()
         for r in pk_rows:

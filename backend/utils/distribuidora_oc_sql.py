@@ -7,12 +7,16 @@ from __future__ import annotations
 # Fuente de verdad del tipo: ``document_related.related_document_type``.
 # NO exigir JOIN a ``documents``: puede existir related huérfano (doc aún no
 # sincronizado) y la OC seguiría apareciendo como "para facturar" (canario 68677).
-OC_PURCHASE_IS_INVOICED_BY_RELATED_SQL = """
+#
+# El detalle de la OC puede ser vigente o histórico (reemisión Bsale): la relación
+# se resuelve al ``document_id`` local estable vía ``v_document_related_resolved``.
+DOCUMENT_RELATED_RESOLVED_VIEW = "distribuidora.v_document_related_resolved"
+
+OC_PURCHASE_IS_INVOICED_BY_RELATED_SQL = f"""
 EXISTS (
     SELECT 1
-    FROM distribuidora.document_details dd
-    INNER JOIN distribuidora.document_related dr ON dr.detail_id = dd.detail_id
-    WHERE dd.document_id = d.document_id
+    FROM {DOCUMENT_RELATED_RESOLVED_VIEW} dr
+    WHERE dr.origin_document_id = d.document_id
       AND dr.related_document_type IN (1, 6)
 )
 """.strip()

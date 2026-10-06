@@ -454,8 +454,12 @@ def test_refresh_children_local_eq_source_writes_details_and_weight():
         patch("backend.services.distribuidora.sync_service.log_tx"),
         patch("backend.services.distribuidora.sync_service.safe_rollback"),
         patch(
+            "backend.services.distribuidora.sync_service.children_source_is_current",
+            return_value=True,
+        ),
+        patch(
             "backend.services.distribuidora.sync_service.replace_document_details",
-            side_effect=lambda _c, doc_id, items: (
+            side_effect=lambda _c, doc_id, items, **_kw: (
                 captured.__setitem__("replace", (doc_id, len(items))),
                 len(items),
             )[1],
@@ -511,6 +515,10 @@ def test_refresh_children_local_ne_source_fetches_new_source():
         patch("backend.services.distribuidora.sync_service.log_tx"),
         patch("backend.services.distribuidora.sync_service.safe_rollback"),
         patch(
+            "backend.services.distribuidora.sync_service.children_source_is_current",
+            return_value=True,
+        ),
+        patch(
             "backend.services.distribuidora.sync_service.replace_document_details",
             return_value=1,
         ),
@@ -555,6 +563,10 @@ def test_refresh_children_empty_details_does_not_replace_when_total_gt_0():
         patch("backend.services.distribuidora.sync_service.release_transaction"),
         patch("backend.services.distribuidora.sync_service.log_tx"),
         patch("backend.services.distribuidora.sync_service.safe_rollback"),
+        patch(
+            "backend.services.distribuidora.sync_service.children_source_is_current",
+            return_value=True,
+        ),
         patch(
             "backend.services.distribuidora.sync_service.replace_document_details",
         ) as replace_details,

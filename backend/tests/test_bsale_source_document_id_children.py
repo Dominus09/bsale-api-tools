@@ -91,8 +91,12 @@ def test_refresh_children_fetches_from_bsale_source_persists_local():
         patch("backend.services.distribuidora.sync_service.log_tx"),
         patch("backend.services.distribuidora.sync_service.safe_rollback"),
         patch(
+            "backend.services.distribuidora.sync_service.children_source_is_current",
+            return_value=True,
+        ),
+        patch(
             "backend.services.distribuidora.sync_service.replace_document_details",
-            side_effect=lambda _cur, doc_id, items: (
+            side_effect=lambda _cur, doc_id, items, **_kw: (
                 captured["replace_calls"].append(
                     {"local_document_id": doc_id, "qty": items[0]["quantity"]}
                 ),

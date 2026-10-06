@@ -15,6 +15,9 @@ import sys
 import time
 
 from backend.db import get_connection
+from backend.repositories.distribuidora.schema_preconditions import (
+    missing_reissue_schema_objects,
+)
 from backend.repositories.distribuidora.sync_repo import (
     DISTRIBUIDORA_SCHEMA_FILES,
     apply_distribuidora_migrations,
@@ -53,6 +56,9 @@ def main() -> int:
         cur = conn.cursor()
         log_tx("TX_BEGIN", job=JOB, pid=pid)
         applied = apply_distribuidora_migrations(cur)
+        missing = missing_reissue_schema_objects(cur)
+        if missing:
+            raise RuntimeError(f"schema incompleto tras aplicar migraciones: {missing}")
         safe_commit(conn, job=JOB)
         cur.close()
         elapsed = round(time.perf_counter() - t0, 3)

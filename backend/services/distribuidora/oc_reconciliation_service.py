@@ -215,14 +215,12 @@ def load_local_invoice_link_flags(document_id: int) -> dict[str, Any]:
             """
             SELECT EXISTS (
                 SELECT 1
-                FROM distribuidora.document_details dd
-                INNER JOIN distribuidora.document_related dr
-                    ON dr.detail_id = dd.detail_id
+                FROM distribuidora.v_document_related_resolved dr
                 INNER JOIN distribuidora.documents inv
                     ON inv.document_id = dr.related_document_id
                    AND inv.document_type_id IN (1, 6)
                    AND COALESCE(inv.state, 0) = 0
-                WHERE dd.document_id = %s
+                WHERE dr.origin_document_id = %s
             )
             """,
             (int(document_id),),
@@ -455,14 +453,12 @@ def _load_local_oc(
             """
             SELECT EXISTS (
                 SELECT 1
-                FROM distribuidora.document_details dd
-                INNER JOIN distribuidora.document_related dr
-                    ON dr.detail_id = dd.detail_id
+                FROM distribuidora.v_document_related_resolved dr
                 INNER JOIN distribuidora.documents inv
                     ON inv.document_id = dr.related_document_id
                    AND inv.document_type_id IN (1, 6)
                    AND COALESCE(inv.state, 0) = 0
-                WHERE dd.document_id = %s
+                WHERE dr.origin_document_id = %s
             )
             """,
             (doc_id,),
@@ -1278,6 +1274,11 @@ def _reconcile_one_oc(
             if row is None:
                 raise RuntimeError("El source activo no pudo mapearse a documents")
             upsert_documents(cur, [row])
+            if row.get("stale_revision_skipped") is True:
+                raise RuntimeError(
+                    f"OC {resolved_folio}: source {source_id} es más antiguo que la revisión "
+                    "vigente en PostgreSQL; no se persisten header ni hijos"
+                )
             persisted_local_id = int(row["document_id"])
             if local_id is not None and persisted_local_id != local_id:
                 raise RuntimeError(
@@ -1302,6 +1303,7 @@ def _reconcile_one_oc(
                     local_id,
                     details,
                     invalidate_cache=False,
+                    superseded_by_source_document_id=source_id,
                 )
                 if len(details) > 0 and details_written == 0:
                     raise RuntimeError(
@@ -1587,16 +1589,14 @@ _ELIGIBLE_OC_CTE = """
           AND d.number > 0
           AND NOT EXISTS (
               SELECT 1
-              FROM distribuidora.document_details dd
-              INNER JOIN distribuidora.document_related dr
-                  ON dr.detail_id = dd.detail_id
+              FROM distribuidora.v_document_related_resolved dr
               INNER JOIN distribuidora.documents invoice
                   ON invoice.document_id = dr.related_document_id
                  AND invoice.company_id = d.company_id
                  AND invoice.office_id = d.office_id
                  AND invoice.document_type_id IN (1, 6)
                  AND invoice.state = 0
-              WHERE dd.document_id = d.document_id
+              WHERE dr.origin_document_id = d.document_id
           )
           AND (
               EXISTS (

@@ -115,9 +115,8 @@ def _confirmed_invoice_not_exists_sql(oc_alias: str = "o") -> str:
     return f"""
     NOT EXISTS (
         SELECT 1
-        FROM distribuidora.document_details dd
-        INNER JOIN distribuidora.document_related dr ON dr.detail_id = dd.detail_id
-        WHERE dd.document_id = {oc_alias}.document_id
+        FROM distribuidora.v_document_related_resolved dr
+        WHERE dr.origin_document_id = {oc_alias}.document_id
           AND dr.related_document_type IN (1, 6)
     )
     """.strip()
@@ -210,7 +209,7 @@ def discover_credit_note_invoice_links_sql() -> str:
     INNER JOIN distribuidora.document_details ncd
         ON ncd.document_id = nc.document_id
        AND ncd.related_detail_id IS NOT NULL
-    INNER JOIN distribuidora.document_details invd
+    INNER JOIN distribuidora.v_document_detail_lineage invd
         ON invd.detail_id = ncd.related_detail_id
     INNER JOIN distribuidora.documents inv
         ON inv.document_id = invd.document_id
@@ -244,12 +243,11 @@ def dry_run_plan_fulfillment_sql() -> str:
     INNER JOIN distribuidora.dispatch_plan dp ON dp.id = dpo.dispatch_plan_id
     INNER JOIN LATERAL (
         SELECT inv.*
-        FROM distribuidora.document_details dd
-        INNER JOIN distribuidora.document_related dr ON dr.detail_id = dd.detail_id
+        FROM distribuidora.v_document_related_resolved dr
         INNER JOIN distribuidora.documents inv
             ON inv.document_id = dr.related_document_id
            AND inv.document_type_id IN (1, 6)
-        WHERE dd.document_id = dpo.oc_document_id
+        WHERE dr.origin_document_id = dpo.oc_document_id
         ORDER BY COALESCE(
             to_timestamp((inv.raw_data->>'generationDate')::bigint),
             inv.emission_date
@@ -353,7 +351,7 @@ def run_relation_sync_audit(
               AND NOT EXISTS (
                 SELECT 1
                 FROM distribuidora.document_details ncd
-                INNER JOIN distribuidora.document_details invd
+                INNER JOIN distribuidora.v_document_detail_lineage invd
                     ON invd.detail_id = ncd.related_detail_id
                 INNER JOIN distribuidora.documents inv
                     ON inv.document_id = invd.document_id

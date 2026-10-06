@@ -115,8 +115,14 @@ DISTRIBUIDORA_SCHEMA_FILES: tuple[str, ...] = (
     "035_dispatch_plan_cuadratura_v2.sql",
     "036_dispatch_plan_cuadratura_cash_count.sql",
     "037_dispatch_plan_load_batches.sql",
+    "041_documents_bsale_modified_at.sql",
+    "042_order_weight_snapshots.sql",
+    "043_dispatch_plan_weight_snapshots.sql",
     "044_documents_source_sync_metadata.sql",
     "045_dispatch_plan_source_invalidation.sql",
+    "046_cargas.sql",
+    "047_cargas_hardening.sql",
+    "048_document_reissue_lineage.sql",
 )
 
 _ENSURE_SCHEMA_NOOP_WARNED = False

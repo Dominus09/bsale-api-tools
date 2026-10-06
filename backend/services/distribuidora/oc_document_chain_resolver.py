@@ -244,9 +244,10 @@ def resolve_oc_operational_status_from_parts(
     )
 
 
+# Origen: detalle vigente o histórico (reemisión) → ``document_id`` local estable.
 _EDGES_SQL = """
 SELECT
-    dd.document_id AS from_document_id,
+    dr.origin_document_id AS from_document_id,
     dr.related_document_id AS to_document_id,
     inv.number AS to_number,
     COALESCE(inv.document_type_id, dr.related_document_type) AS to_document_type_id,
@@ -254,10 +255,9 @@ SELECT
     inv.raw_data AS to_raw_data,
     inv.emission_date AS to_emission_date,
     COALESCE(inv.state, 0) AS to_state
-FROM distribuidora.document_details dd
-INNER JOIN distribuidora.document_related dr ON dr.detail_id = dd.detail_id
+FROM distribuidora.v_document_related_resolved dr
 LEFT JOIN distribuidora.documents inv ON inv.document_id = dr.related_document_id
-WHERE dd.document_id = ANY(%s)
+WHERE dr.origin_document_id = ANY(%s)
   AND dr.related_document_id IS NOT NULL
   AND COALESCE(inv.document_type_id, dr.related_document_type) IS NOT NULL
 """
@@ -303,7 +303,7 @@ FROM distribuidora.document_details ncd
 INNER JOIN distribuidora.documents nc
     ON nc.document_id = ncd.document_id
    AND nc.document_type_id = 9
-INNER JOIN distribuidora.document_details invd
+INNER JOIN distribuidora.v_document_detail_lineage invd
     ON invd.detail_id = ncd.related_detail_id
 WHERE invd.document_id = ANY(%s)
   AND ncd.related_detail_id IS NOT NULL
