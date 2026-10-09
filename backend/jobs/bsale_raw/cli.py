@@ -4,11 +4,15 @@
     python -m backend.jobs.bsale_raw sync --company 3 --resource stocks --office 1 --mode scanner [--dry-run]
     python -m backend.jobs.bsale_raw sync --company 3 --resource stocks --variant 10888 [--office 1] --mode point [--dry-run]
     python -m backend.jobs.bsale_raw sync --company 3 --resource documents --document <ID> --mode point [--dry-run]
+    python -m backend.jobs.bsale_raw scan-stocks --company 3 [--dry-run]
+    python -m backend.jobs.bsale_raw sync-nightly [--company N ...] [--dry-run]
 
 ``--document`` es el id TÉCNICO del documento en Bsale (``/v1/documents/{id}.json``), no el folio
 (``number``) ni el número visible de la OC. No hay búsqueda por folio.
 
 Exit: 0 SUCCESS, 1 FAILED, 2 PARTIAL, 3 lock ocupado (SKIPPED), 64 uso inválido.
+``scan-stocks``: 3 = otro ciclo de la empresa en curso (no escaneó nada).
+``sync-nightly`` usa 0/1/2/64 (un lock ocupado cuenta como recurso FAILED → PARTIAL).
 La salida nunca incluye token, payload ni datos del cliente.
 """
 
@@ -139,6 +143,21 @@ def build_parser(resources: list[str]) -> argparse.ArgumentParser:
     )
     sync.add_argument("--mode", required=True, choices=sorted(MODES))
     sync.add_argument("--dry-run", action="store_true", help="consulta API y valida; no escribe en la BD")
+    scan_stocks = sub.add_parser(
+        "scan-stocks",
+        help="SCANNER serial de stock de todas las sucursales activas de una empresa (bsale_raw.offices)",
+    )
+    scan_stocks.add_argument("--company", type=int, required=True, help="company_id (bsale_raw.sources)")
+    scan_stocks.add_argument("--dry-run", action="store_true", help="consulta API y valida; no escribe en la BD")
+    nightly = sub.add_parser(
+        "sync-nightly",
+        help="metadata + catálogo (full-reconcile) de todas las empresas activas de bsale_raw.sources",
+    )
+    nightly.add_argument(
+        "--company", type=int, action="append",
+        help="limita a esta empresa (repetible); por defecto todas las activas",
+    )
+    nightly.add_argument("--dry-run", action="store_true", help="consulta API y valida; no escribe en la BD")
     return parser
 
 
@@ -221,10 +240,46 @@ def _default_runner(
         store.close()
 
 
+def _default_stock_cycle_runner(*, company_id: int, dry_run: bool):
+    from backend.services.bsale_raw.stock_cycle import PgStockCycleStore, run_stock_cycle
+    from backend.utils.bsale_token_env import load_dotenv_if_available
+
+    load_dotenv_if_available()
+    store = PgStockCycleStore()
+    try:
+        return run_stock_cycle(company_id=company_id, dry_run=dry_run, reader=store, lock=store)
+    finally:
+        store.close()
+
+
+def stock_cycle_exit_code(report) -> int:
+    return {"SUCCESS": EXIT_SUCCESS, "PARTIAL": EXIT_PARTIAL, "SKIPPED": EXIT_LOCKED}.get(
+        report.status, EXIT_FAILED
+    )
+
+
+def _default_nightly_runner(*, companies: list[int] | None, dry_run: bool):
+    from backend.services.bsale_raw.nightly import PgNightlyReader, run_nightly
+    from backend.utils.bsale_token_env import load_dotenv_if_available
+
+    load_dotenv_if_available()
+    reader = PgNightlyReader()
+    try:
+        return run_nightly(reader=reader, companies=companies, dry_run=dry_run)
+    finally:
+        reader.close()
+
+
+def nightly_exit_code(report) -> int:
+    return {"SUCCESS": EXIT_SUCCESS, "PARTIAL": EXIT_PARTIAL}.get(report.status, EXIT_FAILED)
+
+
 def main(
     argv: list[str] | None = None,
     *,
     runner: Callable[..., EntityOutcome] = _default_runner,
+    stock_cycle_runner: Callable[..., object] = _default_stock_cycle_runner,
+    nightly_runner: Callable[..., object] = _default_nightly_runner,
     out: TextIO | None = None,
     err: TextIO | None = None,
 ) -> int:
@@ -238,6 +293,28 @@ def main(
         args = parser.parse_args(argv)
     except SystemExit as exc:
         return EXIT_SUCCESS if exc.code == 0 else EXIT_USAGE
+
+    if args.command == "scan-stocks":
+        from backend.services.bsale_raw.stock_cycle import format_cycle
+
+        if args.company <= 0:
+            print("uso inválido: --company debe ser un entero positivo", file=err)
+            return EXIT_USAGE
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stderr)
+        report = stock_cycle_runner(company_id=args.company, dry_run=args.dry_run)
+        print(format_cycle(report), file=out)
+        return stock_cycle_exit_code(report)
+
+    if args.command == "sync-nightly":
+        from backend.services.bsale_raw.nightly import format_report
+
+        if any(c <= 0 for c in args.company or []):
+            print("uso inválido: --company debe ser un entero positivo", file=err)
+            return EXIT_USAGE
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stderr)
+        report = nightly_runner(companies=args.company, dry_run=args.dry_run)
+        print(format_report(report), file=out)
+        return nightly_exit_code(report)
 
     problem = usage_error(args, REGISTRY.get(args.resource))
     if problem:
