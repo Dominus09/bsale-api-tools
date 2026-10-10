@@ -5,6 +5,8 @@
     python -m backend.jobs.bsale_raw sync --company 3 --resource stocks --variant 10888 [--office 1] --mode point [--dry-run]
     python -m backend.jobs.bsale_raw sync --company 3 --resource documents --document <ID> --mode point [--dry-run]
     python -m backend.jobs.bsale_raw scan-stocks --company 3 [--dry-run]
+    python -m backend.jobs.bsale_raw scan-costs --company 3 [--batch 1000] [--dry-run]
+    python -m backend.jobs.bsale_raw refresh-costs --company 3 --variant <ID> [--variant <ID> ...] [--dry-run]
     python -m backend.jobs.bsale_raw sync-nightly [--company N ...] [--dry-run]
 
 ``--document`` es el id TÉCNICO del documento en Bsale (``/v1/documents/{id}.json``), no el folio
@@ -12,6 +14,7 @@
 
 Exit: 0 SUCCESS, 1 FAILED, 2 PARTIAL, 3 lock ocupado (SKIPPED), 64 uso inválido.
 ``scan-stocks``: 3 = otro ciclo de la empresa en curso (no escaneó nada).
+``scan-costs``: 3 = otro scanner de costos de la empresa en curso; 2 = lote con variantes con error.
 ``sync-nightly`` usa 0/1/2/64 (un lock ocupado cuenta como recurso FAILED → PARTIAL).
 La salida nunca incluye token, payload ni datos del cliente.
 """
@@ -149,6 +152,17 @@ def build_parser(resources: list[str]) -> argparse.ArgumentParser:
     )
     scan_stocks.add_argument("--company", type=int, required=True, help="company_id (bsale_raw.sources)")
     scan_stocks.add_argument("--dry-run", action="store_true", help="consulta API y valida; no escribe en la BD")
+    scan_costs = sub.add_parser(
+        "scan-costs",
+        help="SCANNER de costos (variants/{id}/costs.json): un lote de bsale_raw.variants por corrida, con cursor",
+    )
+    scan_costs.add_argument("--company", type=int, required=True, help="company_id (bsale_raw.sources)")
+    scan_costs.add_argument("--batch", type=int, default=1000, help="variantes por corrida (1..5000; default 1000)")
+    scan_costs.add_argument("--dry-run", action="store_true", help="consulta API y valida; no escribe en la BD")
+    refresh_costs = sub.add_parser("refresh-costs", help="costos de variantes explícitas (POINT, prioridad P0)")
+    refresh_costs.add_argument("--company", type=int, required=True, help="company_id (bsale_raw.sources)")
+    refresh_costs.add_argument("--variant", type=int, action="append", required=True, help="variant_id (repetible)")
+    refresh_costs.add_argument("--dry-run", action="store_true", help="consulta API y valida; no escribe en la BD")
     nightly = sub.add_parser(
         "sync-nightly",
         help="metadata + catálogo (full-reconcile) de todas las empresas activas de bsale_raw.sources",
@@ -258,6 +272,42 @@ def stock_cycle_exit_code(report) -> int:
     )
 
 
+def _default_cost_runner(
+    *, command: str, company_id: int, dry_run: bool, batch: int | None = None, variant_ids: list[int] | None = None
+) -> EntityOutcome:
+    from backend.services.bsale_raw.core.cost_engine import PgCostStore, refresh_costs, run_cost_scan
+    from backend.utils.bsale_token_env import load_dotenv_if_available
+
+    load_dotenv_if_available()
+    store = PgCostStore(read_only=dry_run)
+    try:
+        if command == "refresh-costs":
+            return refresh_costs(
+                store=store, company_id=company_id, variant_ids=variant_ids or [], dry_run=dry_run,
+                host=socket.gethostname(),
+            )
+        return run_cost_scan(
+            store=store, company_id=company_id, batch_size=batch, dry_run=dry_run, host=socket.gethostname(),
+        )
+    finally:
+        store.close()
+
+
+def cost_usage_error(args: argparse.Namespace) -> str | None:
+    from backend.services.bsale_raw.core.cost_engine import MAX_BATCH, MAX_POINT_VARIANTS
+
+    if args.company <= 0:
+        return "--company debe ser un entero positivo"
+    if args.command == "scan-costs" and not 1 <= args.batch <= MAX_BATCH:
+        return f"--batch debe estar entre 1 y {MAX_BATCH}"
+    if args.command == "refresh-costs":
+        if any(v <= 0 for v in args.variant):
+            return "--variant debe ser un entero positivo"
+        if len(set(args.variant)) > MAX_POINT_VARIANTS:
+            return f"máximo {MAX_POINT_VARIANTS} variantes por refresh"
+    return None
+
+
 def _default_nightly_runner(*, companies: list[int] | None, dry_run: bool):
     from backend.services.bsale_raw.nightly import PgNightlyReader, run_nightly
     from backend.utils.bsale_token_env import load_dotenv_if_available
@@ -279,6 +329,7 @@ def main(
     *,
     runner: Callable[..., EntityOutcome] = _default_runner,
     stock_cycle_runner: Callable[..., object] = _default_stock_cycle_runner,
+    cost_runner: Callable[..., EntityOutcome] = _default_cost_runner,
     nightly_runner: Callable[..., object] = _default_nightly_runner,
     out: TextIO | None = None,
     err: TextIO | None = None,
@@ -304,6 +355,24 @@ def main(
         report = stock_cycle_runner(company_id=args.company, dry_run=args.dry_run)
         print(format_cycle(report), file=out)
         return stock_cycle_exit_code(report)
+
+    if args.command in ("scan-costs", "refresh-costs"):
+        from backend.services.bsale_raw.core.cost_engine import format_cost_outcome
+
+        problem = cost_usage_error(args)
+        if problem:
+            print(f"uso inválido: {problem}", file=err)
+            return EXIT_USAGE
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stderr)
+        outcome = cost_runner(
+            command=args.command,
+            company_id=args.company,
+            dry_run=args.dry_run,
+            batch=getattr(args, "batch", None),
+            variant_ids=getattr(args, "variant", None),
+        )
+        print(format_cost_outcome(outcome), file=out)
+        return exit_code(outcome)
 
     if args.command == "sync-nightly":
         from backend.services.bsale_raw.nightly import format_report

@@ -45,6 +45,11 @@ def variant_scope(variant_id: int, office_id: int | None = None) -> str:
     return base if office_id is None else f"{base}:office:{int(office_id)}"
 
 
+def variant_range_scope(first_variant_id: int, last_variant_id: int) -> str:
+    """Lote del scanner de costos (sync_entity_runs); sync_state usa una fila agregada por empresa."""
+    return f"variant_range:{int(first_variant_id)}-{int(last_variant_id)}"
+
+
 def document_scope(document_id: int) -> str:
     """POINT de documento: ``document:<bsale_document_id>`` (id técnico Bsale, no folio)."""
     return f"document:{int(document_id)}"

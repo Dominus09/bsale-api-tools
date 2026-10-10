@@ -37,6 +37,22 @@ python -m backend.jobs.bsale_raw scan-stocks --company 3
 - Exit: 0 SUCCESS (todas), 2 PARTIAL (alguna falló u omitida), 1 FAILED (ninguna completó, sin sucursales activas o `offices` ilegible), 3 SKIPPED (ciclo solapado), 64 uso.
 - `--dry-run`: sin escrituras ni locks; conteos previstos.
 
+## scan-costs / refresh-costs (costos por variante)
+
+```bash
+python -m backend.jobs.bsale_raw scan-costs --company 3 --batch 1000 --dry-run
+python -m backend.jobs.bsale_raw scan-costs --company 3 --batch 1000
+python -m backend.jobs.bsale_raw refresh-costs --company 3 --variant 29567 --variant 8716 --dry-run
+```
+
+`backend/services/bsale_raw/core/cost_engine.py`: `GET /v1/variants/{id}/costs.json` por variante → `bsale_raw.variant_costs` (`(company_id, variant_id)`; el costo no es por sucursal).
+
+- RAW guarda sólo lo que entrega Bsale: payload completo; `average_cost` = `averageCost` (costo NETO) y `total_cost` = `totalCost` como Decimal exacto; `history_count` / `last_admission_date` de `history`; `history_complete` siempre false. Nunca costo bruto ni impuestos: eso es de la capa de negocio.
+- `scan-costs` (SCANNER): un lote de `bsale_raw.variants` (`missing_since IS NULL`, activas e inactivas) por `bsale_id`, con cursor en `sync_cursors` (`variant_costs/global/scanner`); al terminar la vuelta reinicia. Lock `(company, variant_costs, global)`: solapado → exit 3. `sync_state` agregado en scope `scanner`.
+- `refresh-costs` (POINT): variantes explícitas, prioridad P0, sin lock ni cursor.
+- UPSERT con frescura (`api_fetched_at`); nunca DELETE. Una variante con error no se escribe y no detiene el lote (PARTIAL, exit 2) y entra a la cola `retry` del cursor: se reintenta al inicio de las corridas siguientes (hasta 100 por corrida, 3 intentos; luego la retoma la vuelta). 404 / respuesta inválida = falla de la variante; 10 errores de API seguidos (5xx, 429 agotado, red) cortan el lote y el cursor queda en la última intentada. Caída total → FAILED sin avanzar; lote sólo con 404 → FAILED pero el cursor avanza (no se atasca).
+- Ritmo propio `BSALE_RAW_COST_RPS` (default 2 rps; máx. 5) para no competir con `scan-stocks`.
+
 ## sync-nightly (metadata + catálogo)
 
 ```bash
