@@ -6,7 +6,9 @@ Orden fijo (orden de sincronización, no de FK: RAW no tiene FK entre tablas de 
 2. ``product_types``  — ``run_entity_sync``
 3. ``products``       — ``run_entity_sync``; trae ``product_type{id}`` y sólo ``product_taxes{href}``
 4. ``variants``       — ``run_entity_sync``; trae ``product{id}``. Exige ``products`` SUCCESS
-5. ``product_taxes``  — ``run_product_tax_sync`` (un GET por producto). Exige ``products`` y ``taxes`` SUCCESS
+5. ``product_taxes``  — ``run_product_tax_sync``: por defecto ``products.json?expand=[product_taxes]``
+   (~1 request cada 50 productos) con consulta individual sólo para relaciones no expandidas o
+   incompletas; ``individual`` = un GET por producto. Exige ``products`` y ``taxes`` SUCCESS
 
 Una falla de ``product_taxes`` no afecta a ``variants`` (corre antes y no depende de ella). Cada recurso
 conserva su propio lock, run, fusible y ``sync_state``; este módulo sólo orquesta y agrega un lock
@@ -81,7 +83,9 @@ class CatalogStore(Protocol):
 
 
 EntitySync = Callable[[int, str, bool], EntityOutcome]
-TaxSync = Callable[[int, bool, "int | None"], EntityOutcome]
+TaxSync = Callable[[int, bool, "int | None", str], EntityOutcome]
+TAX_SOURCES = ("expand", "individual")
+DEFAULT_TAX_SOURCE = "expand"
 
 
 def default_entity_sync(company_id: int, resource: str, dry_run: bool) -> EntityOutcome:
@@ -97,14 +101,14 @@ def default_entity_sync(company_id: int, resource: str, dry_run: bool) -> Entity
         store.close()
 
 
-def default_tax_sync(company_id: int, dry_run: bool, limit: int | None) -> EntityOutcome:
+def default_tax_sync(company_id: int, dry_run: bool, limit: int | None, source: str) -> EntityOutcome:
     from backend.services.bsale_raw.core.product_tax_engine import PgProductTaxStore, run_product_tax_sync
 
     store = PgProductTaxStore(read_only=dry_run)
     try:
         return run_product_tax_sync(
-            store=store, company_id=company_id, dry_run=dry_run, limit=limit, trigger=TRIGGER_CATALOG,
-            host=socket.gethostname(),
+            store=store, company_id=company_id, dry_run=dry_run, limit=limit, source=source,
+            trigger=TRIGGER_CATALOG, host=socket.gethostname(),
         )
     finally:
         store.close()
@@ -141,6 +145,7 @@ def run_catalog_sync(
     dry_run: bool = False,
     skip_product_taxes: bool = False,
     product_taxes_limit: int | None = None,
+    product_taxes_source: str = DEFAULT_TAX_SOURCE,
     entity_sync: EntitySync = default_entity_sync,
     tax_sync: TaxSync = default_tax_sync,
     getenv: Callable[[str], str | None] = os.getenv,
@@ -160,6 +165,9 @@ def run_catalog_sync(
     if product_taxes_limit is not None and not dry_run:
         report.error = "--product-taxes-limit sólo se acepta con --dry-run"
         return done()
+    if product_taxes_source not in TAX_SOURCES:
+        report.error = f"fuente de product_taxes inválida: {product_taxes_source!r} (válidas {list(TAX_SOURCES)})"
+        return done()
     try:
         source = store.resolve_source(company_id)
         report.secrets.append(read_token(source, getenv))
@@ -170,7 +178,10 @@ def run_catalog_sync(
     lock = nullcontext() if dry_run else store.advisory_lock(company_id, LOCK_RESOURCE, LOCK_SCOPE)
     try:
         with lock:
-            _run_steps(report, company_id, dry_run, skip_product_taxes, product_taxes_limit, entity_sync, tax_sync, monotonic)
+            _run_steps(
+                report, company_id, dry_run, skip_product_taxes, product_taxes_limit, product_taxes_source,
+                entity_sync, tax_sync, monotonic,
+            )
     except LockBusyError as exc:
         report.status = SKIPPED
         report.error = f"otro sync-catalog de company_id={company_id} en curso: {sanitize_error(exc, report.secrets)}"
@@ -190,6 +201,7 @@ def _run_steps(
     dry_run: bool,
     skip_product_taxes: bool,
     limit: int | None,
+    tax_source: str,
     entity_sync: EntitySync,
     tax_sync: TaxSync,
     monotonic: Callable[[], float],
@@ -203,7 +215,9 @@ def _run_steps(
             reasons = ", ".join(f"{d} {statuses.get(d, 'no ejecutado')}" for d in blocked)
             result = StepResult(resource, SKIPPED_DEPENDENCY, error=f"requiere SUCCESS de: {reasons}")
         elif resource == PRODUCT_TAXES:
-            result = _step(resource, lambda: tax_sync(company_id, dry_run, limit), report.secrets, monotonic)
+            result = _step(
+                resource, lambda: tax_sync(company_id, dry_run, limit, tax_source), report.secrets, monotonic
+            )
         else:
             result = _step(
                 resource, lambda r=resource: entity_sync(company_id, r, dry_run), report.secrets, monotonic
@@ -223,8 +237,10 @@ def _run_steps(
 # --- salida ---------------------------------------------------------------------------------------
 
 _TAX_FIELDS = (
-    "products", "targets", "limit", "attempted", "fetched", "with_taxes", "without_taxes", "failed",
-    "not_attempted", "unknown_tax_count", "failures_pending", "rps", "effective_rps", "aborted",
+    "source", "products", "targets", "limit", "expanded", "fallback_needed", "fallback_ok", "fallback_skipped",
+    "attempted", "fetched", "with_taxes", "without_taxes", "failed", "not_attempted", "unknown_tax_count",
+    "failures_pending", "not_in_raw_products", "raw_products_not_in_listing", "missing_evaluated", "rps",
+    "effective_rps", "aborted",
 )
 
 
@@ -236,7 +252,7 @@ def format_catalog_report(report: CatalogReport) -> str:
     """key=value; nunca payload, token ni datos de clientes."""
     lines = ["CATALOG RAW SUMMARY", f"company={report.company_id}", f"status={report.status}"]
     if report.dry_run:
-        lines.append("dry_run=true (sin escrituras; product_taxes usa los productos ya guardados en bsale_raw.products)")
+        lines.append("dry_run=true (sin escrituras ni lock)")
     if report.error:
         lines.append(f"error={report.error}")
     total_requests = 0
@@ -256,7 +272,7 @@ def format_catalog_report(report: CatalogReport) -> str:
         lines.append(" ".join(parts))
         if o is not None and s.resource == PRODUCT_TAXES and o.point:
             lines.append("  " + " ".join(f"{k}={_v(o.point.get(k))}" for k in _TAX_FIELDS if k in o.point))
-            for key in ("unknown_tax_products", "failed_sample"):
+            for key in ("unknown_tax_products", "failed_sample", "fallback_sample"):
                 sample = o.point.get(key)
                 if sample:
                     lines.append(f"  {key}={sample}")

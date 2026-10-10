@@ -9,7 +9,7 @@
     python -m backend.jobs.bsale_raw refresh-costs --company 3 --variant <ID> [--variant <ID> ...] [--dry-run]
     python -m backend.jobs.bsale_raw sync-prices --company 3 [--lists active|inactive|all] [--price-list <ID> ...] [--dry-run]
     python -m backend.jobs.bsale_raw refresh-prices --company 3 --variant <ID> [--variant <ID> ...] [--price-list <ID> ...] [--dry-run]
-    python -m backend.jobs.bsale_raw sync-catalog --company 3 [--skip-product-taxes] [--dry-run [--product-taxes-limit N]]
+    python -m backend.jobs.bsale_raw sync-catalog --company 3 [--skip-product-taxes | --product-taxes-source expand|individual] [--dry-run [--product-taxes-limit N]]
     python -m backend.jobs.bsale_raw sync-nightly [--company N ...] [--dry-run]
 
 ``--document`` es el id TÉCNICO del documento en Bsale (``/v1/documents/{id}.json``), no el folio
@@ -201,7 +201,12 @@ def build_parser(resources: list[str]) -> argparse.ArgumentParser:
     catalog.add_argument("--company", type=int, required=True, help="company_id (bsale_raw.sources)")
     catalog.add_argument(
         "--skip-product-taxes", action="store_true",
-        help="no consulta products/{id}/product_taxes.json (un request por producto)",
+        help="omite el paso product_taxes",
+    )
+    catalog.add_argument(
+        "--product-taxes-source", choices=("expand", "individual"),
+        help="expand (default): products.json?expand=[product_taxes] + consulta individual sólo si la relación "
+        "no viene completa; individual: un request por producto",
     )
     catalog.add_argument(
         "--product-taxes-limit", type=int,
@@ -396,7 +401,8 @@ def price_exit_code(report) -> int:
 
 
 def _default_catalog_runner(
-    *, company_id: int, dry_run: bool, skip_product_taxes: bool, product_taxes_limit: int | None
+    *, company_id: int, dry_run: bool, skip_product_taxes: bool, product_taxes_limit: int | None,
+    product_taxes_source: str,
 ):
     from backend.services.bsale_raw.catalog_daily import run_catalog_sync
     from backend.services.bsale_raw.core.store import PgRawStore
@@ -407,7 +413,7 @@ def _default_catalog_runner(
     try:
         return run_catalog_sync(
             store=store, company_id=company_id, dry_run=dry_run, skip_product_taxes=skip_product_taxes,
-            product_taxes_limit=product_taxes_limit,
+            product_taxes_limit=product_taxes_limit, product_taxes_source=product_taxes_source,
         )
     finally:
         store.close()
@@ -425,6 +431,8 @@ def catalog_usage_error(args: argparse.Namespace) -> str | None:
             return "--product-taxes-limit no se combina con --skip-product-taxes"
         if args.product_taxes_limit <= 0:
             return "--product-taxes-limit debe ser un entero positivo"
+    if args.product_taxes_source is not None and args.skip_product_taxes:
+        return "--product-taxes-source no se combina con --skip-product-taxes"
     return None
 
 
@@ -533,6 +541,7 @@ def main(
         report = catalog_runner(
             company_id=args.company, dry_run=args.dry_run, skip_product_taxes=args.skip_product_taxes,
             product_taxes_limit=args.product_taxes_limit,
+            product_taxes_source=args.product_taxes_source or "expand",
         )
         print(format_catalog_report(report), file=out)
         return catalog_exit_code(report)

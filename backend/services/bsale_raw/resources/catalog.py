@@ -10,9 +10,11 @@ columnas de búsqueda: sin unicidad, sin deduplicación; duplicados o vacíos se
 por SKU, barcode o nombre.
 
 Asociaciones: ``variants.product{id}`` → ``product_id`` y ``products.product_type{id}`` →
-``product_type_id`` vienen en el mismo ítem del listado (sin requests extra). ``products.product_taxes``
-trae sólo ``{href}``: los impuestos de un producto exigen ``GET /v1/products/{id}/product_taxes.json``
-(un request por producto); los resuelve ``core/product_tax_engine.py``, no el motor genérico.
+``product_type_id`` vienen en el mismo ítem del listado (sin requests extra). Sin ``expand``,
+``products.product_taxes`` trae sólo ``{href}``; con ``expand=[product_taxes]`` el listado entrega la
+relación completa (LIVE VALIDATED C3: probe ``EXPAND_COMPLETE``). La resuelve ``core/product_tax_engine.py``
+(no el motor genérico), con ``GET /v1/products/{id}/product_taxes.json`` sólo como respaldo. El paso
+``products`` sigue sin ``expand`` para no alterar el payload que ya guarda.
 """
 
 from __future__ import annotations
@@ -92,9 +94,6 @@ PRODUCT_TAXES = REGISTRY.register(
         request_priority=RequestPriority.P4_CATALOG,
         parent="products",
         freshness_sla_seconds=26 * 3600,
-        needs_live_verification=(
-            "¿products.json acepta expand=[product_taxes] con la relación completa? (probe read-only)",
-        ),
     )
 )
 

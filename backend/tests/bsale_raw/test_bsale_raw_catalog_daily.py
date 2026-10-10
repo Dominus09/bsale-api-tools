@@ -70,6 +70,20 @@ def tax_page(product_id: int, items: list, *, offset=0, limit=50, count=None) ->
             "limit": limit, "offset": offset, "items": items[offset:offset + limit]}
 
 
+def expanded_node(product_id: int, tax_ids: list, *, limit=25) -> dict:
+    """Nodo ``product_taxes`` como lo entrega ``products.json?expand=[product_taxes]`` (``limit`` 25)."""
+    items = [tax_item(product_id, t, n) for n, t in enumerate(tax_ids)]
+    return {"href": f"{API}/products/{product_id}/product_taxes.json", "count": len(items), "limit": limit,
+            "offset": 0, "items": items[:limit]}
+
+
+def expanded_node(product_id: int, tax_ids: list, *, limit=25) -> dict:
+    """Nodo ``product_taxes`` como lo entrega ``products.json?expand=[product_taxes]`` (tope de 25 ítems)."""
+    items = [tax_item(product_id, t, n) for n, t in enumerate(tax_ids)]
+    return {"href": f"{API}/products/{product_id}/product_taxes.json", "count": len(items), "limit": limit,
+            "offset": 0, "items": items[:limit]}
+
+
 class TaxesBsale(BaseAdapter):
     """``responses[p]``: lista de tax_ids (paginada por offset), dict (200 tal cual), ``(status, body)`` o
     Exception. Sin entrada = ``[1]`` (sólo IVA)."""
@@ -113,7 +127,7 @@ class FakeTaxTx:
     def __init__(self, store):
         self.s = store
 
-    def upsert_product_taxes(self, rows, *, sync_run_id, last_source):
+    def upsert_product_taxes(self, rows, *, sync_run_id):
         if self.s.fail_upsert_after is not None:
             if self.s.fail_upsert_after <= 0:
                 raise RuntimeError(f"fallo BD con {TOKEN}")
@@ -130,7 +144,7 @@ class FakeTaxTx:
                 "payload_hash": r.payload_hash, "api_fetched_at": r.api_fetched_at, "missing_since": None,
                 "first_seen_at": prev["first_seen_at"] if prev else now,
                 "last_changed_at": now if prev is None or prev["payload_hash"] != r.payload_hash else prev["last_changed_at"],
-                "last_source": last_source, "sync_run_id": sync_run_id,
+                "last_source": r.last_source, "sync_run_id": sync_run_id,
             }
             applied.add(r.product_id)
         return applied
@@ -245,7 +259,9 @@ def seed_row(store, pid, tax_ids, *, fetched_at=BASE, missing_since=None):
 
 
 def sync_taxes(store, adapter, **kw):
+    """Modo ``individual`` (un GET por producto) salvo que el test pida ``source="expand"``."""
     kw.setdefault("clock", TickClock(BASE + timedelta(hours=2)))
+    kw.setdefault("source", "individual")
     return run_product_tax_sync(
         store=store, company_id=kw.pop("company_id", 3), client_factory=client_factory_for(adapter),
         getenv=kw.pop("env", ENV).get, host="test", **kw,
@@ -305,6 +321,7 @@ def test_multiple_taxes_in_order_and_confirmed_empty_with_exact_payload():
     assert out.point["with_taxes"] == 2 and out.point["without_taxes"] == 1
     assert out.rows_inserted == 3 and adapter.calls == [10, 11, 12] and not adapter.tx_violations
     assert store.runs[1]["trigger"] == "MANUAL" and store.runs[1]["status"] == "SUCCESS"
+    assert store.row(10)["last_source"] == "POINT"  # endpoint individual
 
 
 def test_complete_pagination_keeps_every_page():
@@ -473,6 +490,271 @@ def test_missing_token_fails_without_http_or_run():
     assert out.status == "FAILED" and "BSALE_TOKEN_SPA" in out.error and not adapter.calls and not store.runs
 
 
+# --- product_taxes: expand=[product_taxes] -----------------------------------------------------------
+
+PRODUCTS_RE = re.compile(r"/v1/products\.json$")
+UNEXPANDED = object()
+
+
+class ExpandBsale(BaseAdapter):
+    """``products.json?expand=[product_taxes]`` paginado + endpoint individual (``TaxesBsale``) de respaldo.
+
+    ``taxes[p]``: tax_ids del nodo expandido (default ``[1]``); ``nodes[p]``: nodo tal cual, ``None`` = sin
+    clave ``product_taxes``, ``UNEXPANDED`` = sólo ``{href}``. ``individual``: respuestas del respaldo.
+    ``count`` fija el count del listado; ``page_errors[offset]`` = ``(status, body)``.
+    """
+
+    def __init__(self, products, taxes=None, *, nodes=None, individual=None, count=None, page_errors=None,
+                 store=None):
+        super().__init__()
+        self.products = list(products)
+        self.taxes = dict(taxes or {})
+        self.nodes = dict(nodes or {})
+        self.count = count
+        self.page_errors = dict(page_errors or {})
+        self.individual = TaxesBsale(individual, store=store)
+        self.store = store
+        self.listing_offsets: list[int] = []
+        self.tx_violations: list[str] = []
+
+    def item(self, pid):
+        item = product(pid)
+        if pid in self.nodes:
+            node = self.nodes[pid]
+            if node is None:
+                del item["product_taxes"]
+            elif node is not UNEXPANDED:
+                item["product_taxes"] = node
+        else:
+            item["product_taxes"] = expanded_node(pid, self.taxes.get(pid, [1]))
+        return item
+
+    def send(self, request, **kwargs):
+        path = urlsplit(request.url).path
+        if TAX_RE.search(path):
+            return self.individual.send(request, **kwargs)
+        if self.store is not None and self.store.in_tx:
+            self.tx_violations.append(request.url)
+        assert PRODUCTS_RE.search(path), request.url
+        assert request.headers.get("access_token") == TOKEN
+        q = parse_qs(urlsplit(request.url).query)
+        assert q["expand"] == ["[product_taxes]"] and "state" not in q, request.url
+        offset, limit = int(q["offset"][0]), int(q["limit"][0])
+        self.listing_offsets.append(offset)
+        if offset in self.page_errors:
+            status, body = self.page_errors[offset]
+            return make_response(request, status, json.dumps(body).encode())
+        count = self.count(offset) if callable(self.count) else self.count
+        body = {"href": f"{API}/products.json", "count": len(self.products) if count is None else count,
+                "limit": limit, "offset": offset,
+                "items": [self.item(p) for p in self.products[offset:offset + limit]]}
+        return make_response(request, 200, json.dumps(body).encode())
+
+    def close(self):
+        pass
+
+
+def expand_world(products, taxes=None, *, taxes_known=(1, 2, 3, 4, 5, 6, 7, 8), **kw):
+    store = FakeTaxStore(products, taxes=taxes_known)
+    return store, ExpandBsale(products, taxes, store=store, **kw)
+
+
+def sync_expand(store, adapter, **kw):
+    return sync_taxes(store, adapter, source="expand", **kw)
+
+
+def test_expand_is_the_default_source():
+    store, adapter = expand_world([10])
+    out = run_product_tax_sync(store=store, company_id=3, client_factory=client_factory_for(adapter),
+                               getenv=ENV.get, clock=TickClock(BASE + timedelta(hours=2)), host="test")
+    assert out.status == "SUCCESS" and out.point["source"] == "expand"
+    assert adapter.listing_offsets == [0] and not adapter.individual.calls
+    with pytest.raises(UnsupportedSyncError):
+        sync_taxes(store, adapter, source="otro")
+
+
+def test_expand_complete_multiple_taxes_in_order_and_confirmed_empty():
+    store, adapter = expand_world([7213, 7608, 10], {7213: [], 7608: [2, 1], 10: [1]})
+    out = sync_expand(store, adapter)
+    assert out.status == "SUCCESS", out.error
+    assert store.row(7608)["tax_ids"] == [2, 1] and store.row(7608)["items_count"] == 2  # orden de Bsale
+    assert store.row(7213)["tax_ids"] == [] and store.row(7213)["items_count"] == 0     # cero confirmado
+    assert out.requests == 1 and not adapter.individual.calls and not adapter.tx_violations
+    assert out.point["expanded"] == 3 and out.point["fallback_needed"] == 0 and out.point["with_taxes"] == 2
+    assert out.api_count == 3 and out.pages == 1 and out.rows_inserted == 3
+
+
+def test_expand_payload_is_the_original_node_and_marked_as_expand():
+    store, adapter = expand_world([7608], {7608: [2, 1]})
+    sync_expand(store, adapter)
+    row = store.row(7608)
+    assert row["payload"] == [expanded_node(7608, [2, 1])]  # nodo tal cual, sin recortes ni cálculos
+    assert row["payload_hash"] == payload_hash([expanded_node(7608, [2, 1])])
+    assert row["last_source"] == "FULL_RECONCILE"  # listado expandido; el individual queda como POINT
+
+
+def test_expand_second_page():
+    products = list(range(1000, 1060))
+    store, adapter = expand_world(products, {1055: [8, 1]})
+    out = sync_expand(store, adapter)
+    assert out.status == "SUCCESS", out.error
+    assert adapter.listing_offsets == [0, 50] and out.requests == 2 and out.pages == 2
+    assert len(store.taxes_rows) == 60 and store.row(1055)["tax_ids"] == [8, 1]
+
+
+def test_unexpanded_incomplete_or_invalid_relations_use_individual_fallback():
+    many = [1 + (n % 8) for n in range(30)]
+    nodes = {
+        10: UNEXPANDED,                                                    # sólo href
+        11: None,                                                          # sin clave product_taxes
+        12: expanded_node(12, many),                                       # 25 de 30: incompleta
+        13: {**expanded_node(13, [1]), "next": f"{API}/products/13/product_taxes.json?offset=25"},
+        14: {**expanded_node(14, [1, 8]), "items": [tax_item(14, 1, 0), tax_item(14, 1, 0)]},  # ítem repetido
+        15: expanded_node(99, [1]),                                        # ítems de otro producto
+    }
+    individual = {10: [8, 1], 11: [], 12: many, 13: [1], 14: [1, 8], 15: [2]}
+    store, adapter = expand_world([10, 11, 12, 13, 14, 15, 16], nodes=nodes, individual=individual)
+    out = sync_expand(store, adapter)
+    assert out.status == "SUCCESS", out.error
+    assert adapter.individual.calls == [10, 11, 12, 13, 14, 15]
+    assert store.row(10)["tax_ids"] == [8, 1] and store.row(11)["items_count"] == 0
+    assert store.row(12)["tax_ids"] == many and store.row(12)["items_count"] == 30
+    assert all(store.row(p)["last_source"] == "POINT" for p in (10, 11, 12, 13, 14, 15))
+    assert store.row(10)["payload"] == [tax_page(10, [tax_item(10, 8, 0), tax_item(10, 1, 1)])]
+    assert store.row(16)["last_source"] == "FULL_RECONCILE"
+    assert out.point["fallback_needed"] == 6 and out.point["fallback_ok"] == 6 and out.point["expanded"] == 1
+    sample = out.point["fallback_sample"]
+    assert "no expandida" in sample["10"] and "sin product_taxes" in sample["11"]
+    assert "25 de 30" in sample["12"] and "next" in sample["13"] and "repetido" in sample["14"]
+    assert "otro producto" in sample["15"]
+    assert not adapter.tx_violations and not adapter.individual.tx_violations
+
+
+def test_absent_relation_with_failed_fallback_is_never_zero_taxes():
+    store, adapter = expand_world([10, 11], nodes={10: None}, individual={10: (404, {"error": "x"})})
+    seed_row(store, 10, [1, 8], fetched_at=BASE - timedelta(days=1))
+    before = copy.deepcopy(store.row(10))
+    out = sync_expand(store, adapter)
+    assert out.status == "PARTIAL"
+    assert store.row(10) == before and 10 in store.failures and "status=404" in store.failures[10]["error"]
+    assert store.row(11)["tax_ids"] == [1]
+
+
+def test_individual_fallback_is_capped_and_expand_ignored_is_reported(monkeypatch):
+    monkeypatch.setattr(pte, "MAX_INDIVIDUAL_FALLBACK", 2)
+    products = [10, 11, 12, 13, 14]
+    store, adapter = expand_world(products, nodes={p: UNEXPANDED for p in products})
+    for p in products:
+        seed_row(store, p, [1])
+    out = sync_expand(store, adapter)
+    assert out.status == "PARTIAL"
+    assert adapter.individual.calls == [10, 11] and out.point["fallback_skipped"] == 3
+    assert out.point["not_attempted"] == 3 and out.point["expand_ignored"] is True
+    assert "tope de 2 consultas individuales" in out.error and "expand no entregó" in out.error
+    assert out.rows_missing == 0 and all(store.row(p)["missing_since"] is None for p in products)
+
+
+def test_truncated_snapshot_writes_nothing_and_marks_nothing_missing():
+    store, adapter = expand_world([10, 11, 12], count=5)  # count dice 5, llegan 3
+    for p in (10, 11, 12, 20):
+        seed_row(store, p, [1])
+    store.failures = {20: {"attempts": 1, "error": "x"}}
+    before = copy.deepcopy((store.taxes_rows, store.failures))
+    out = sync_expand(store, adapter)
+    assert out.status == "FAILED" and "truncada" in out.error
+    assert (store.taxes_rows, store.failures) == before and not adapter.individual.calls
+    assert store.runs[1]["status"] == "FAILED" and "tx_begin" not in store.events
+
+
+def test_count_change_or_http_error_on_second_page_writes_nothing():
+    products = list(range(1000, 1060))
+    store, adapter = expand_world(products, count=lambda off: 60 if off == 0 else 61)
+    out = sync_expand(store, adapter)
+    assert out.status == "FAILED" and "count cambió" in out.error and not store.taxes_rows
+
+    store, adapter = expand_world(products, page_errors={50: (500, {"error": "x"})})
+    out = sync_expand(store, adapter)
+    assert out.status == "FAILED" and not store.taxes_rows and TOKEN not in out.error
+
+
+def test_duplicate_product_in_snapshot_fails_whole_run():
+    store, adapter = expand_world([10, 11, 11, 12])
+    out = sync_expand(store, adapter)
+    assert out.status == "FAILED" and "duplicados" in out.error and not store.taxes_rows
+
+
+def test_expand_stale_guard_never_overwrites_newer_row():
+    store, adapter = expand_world([10, 11], {10: [8]})
+    seed_row(store, 10, [1], fetched_at=BASE + timedelta(days=5))
+    out = sync_expand(store, adapter)
+    assert out.status == "SUCCESS" and out.rows_skipped_newer == 1 and store.row(10)["tax_ids"] == [1]
+
+
+def test_expand_absence_and_reappearance():
+    products = list(range(10, 20))
+    store, adapter = expand_world(products[:-1])  # 19 ya no está en el listado
+    for pid in products:
+        seed_row(store, pid, [1])
+    out = sync_expand(store, adapter)
+    assert out.status == "SUCCESS" and out.rows_missing == 1
+    assert store.row(19)["missing_since"] is not None and store.row(19)["tax_ids"] == [1]
+
+    adapter.products = products  # reaparece
+    out = sync_expand(store, adapter, clock=TickClock(BASE + timedelta(hours=3)))
+    assert out.status == "SUCCESS" and store.row(19)["missing_since"] is None and out.rows_missing == 0
+
+
+def test_expand_missing_fuse_blocks_marking():
+    store, adapter = expand_world([10])
+    for pid in range(10, 15):
+        seed_row(store, pid, [1])
+    out = sync_expand(store, adapter)
+    assert out.status == "PARTIAL" and out.fuse["tripped"]
+    assert all(store.row(p)["missing_since"] is None for p in range(11, 15))
+
+
+def test_expand_unknown_tax_is_stored_and_partial():
+    store, adapter = expand_world([10, 11], {10: [1, 99]}, taxes_known=(1, 8))
+    out = sync_expand(store, adapter)
+    assert out.status == "PARTIAL" and store.row(10)["tax_ids"] == [1, 99]
+    assert out.point["unknown_tax_products"] == {"10": [99]}
+
+
+def test_expand_dry_run_writes_nothing_and_takes_no_lock():
+    products = list(range(1000, 1060))
+    store, adapter = expand_world(products, nodes={1001: UNEXPANDED}, individual={1001: [8]})
+    for pid in (1000, 1001, 1002, 1003, 1004, 2000):  # 2000 ya no está: 1/6 bajo el fusible
+        seed_row(store, pid, [1])
+    before = copy.deepcopy((store.taxes_rows, store.failures))
+    out = sync_expand(store, adapter, dry_run=True)
+    assert out.status == "SUCCESS" and out.dry_run and out.sync_run_id is None
+    assert (store.taxes_rows, store.failures) == before and not store.runs and "lock" not in store.events
+    assert "tx_begin" not in store.events and adapter.individual.calls == [1001]
+    # las filas sembradas tienen payload individual: el nodo expandido es otro payload original
+    assert out.rows_updated == 5 and out.rows_inserted == 55 and out.rows_missing == 1
+
+
+def test_expand_dry_run_limit_reads_only_needed_pages_and_skips_absences():
+    products = list(range(1000, 1120))
+    store, adapter = expand_world(products, nodes={1070: UNEXPANDED}, individual={1070: [8]})
+    seed_row(store, 2000, [1])
+    out = sync_expand(store, adapter, dry_run=True, limit=60)
+    assert out.status == "SUCCESS", out.error
+    assert adapter.listing_offsets == [0, 50] and adapter.individual.calls == []  # 1070 fuera del límite
+    assert out.point["targets"] == 60 and out.rows_inserted == 60
+    assert out.point["missing_evaluated"] is False and out.rows_missing == 0 and out.fuse is None
+    assert not store.taxes_rows.keys() - {(3, 2000)} and not store.runs
+
+
+def test_expand_writes_in_short_batches_without_http_inside(monkeypatch):
+    monkeypatch.setattr(pte, "WRITE_BATCH", 2)
+    store, adapter = expand_world([10, 11, 12, 13, 14], nodes={14: UNEXPANDED}, individual={14: []})
+    out = sync_expand(store, adapter)
+    assert out.status == "SUCCESS", out.error
+    assert store.events.count("tx_begin") == 4  # 2 lotes expand + 1 lote respaldo + final
+    assert not adapter.tx_violations and not adapter.individual.tx_violations
+
+
 # --- orquestador ----------------------------------------------------------------------------------
 
 
@@ -514,8 +796,8 @@ class Recorder:
             raise RuntimeError(f"conexión caída {TOKEN}")
         return outcome(resource, self.statuses.get(resource, "SUCCESS"), error=self.statuses.get(f"{resource}_error"))
 
-    def taxes(self, company_id, dry_run, limit):
-        self.calls.append(("product_taxes", dry_run, limit))
+    def taxes(self, company_id, dry_run, limit, source):
+        self.calls.append(("product_taxes", dry_run, limit, source))
         return outcome("product_taxes", self.statuses.get("product_taxes", "SUCCESS"))
 
 
@@ -579,8 +861,15 @@ def test_skip_product_taxes_flag():
 
 def test_dry_run_propagates_and_takes_no_lock():
     report, rec, store = catalog(dry_run=True, product_taxes_limit=20)
-    assert all(c[1] is True for c in rec.calls) and rec.calls[-1] == ("product_taxes", True, 20)
+    assert all(c[1] is True for c in rec.calls) and rec.calls[-1] == ("product_taxes", True, 20, "expand")
     assert not store.events and report.dry_run
+
+
+def test_product_taxes_source_is_forwarded_and_validated():
+    report, rec, _ = catalog(product_taxes_source="individual")
+    assert rec.calls[-1] == ("product_taxes", False, None, "individual")
+    report, rec, _ = catalog(product_taxes_source="otro")
+    assert report.status == "FAILED" and not rec.calls
 
 
 def test_catalog_lock_busy_is_skipped_without_calls():
@@ -628,7 +917,8 @@ def run_cli(argv, report=None):
 def test_cli_exit_codes(status, code):
     rc, out, _, calls = run_cli(["sync-catalog", "--company", "3"], CatalogReport(company_id=3, status=status))
     assert rc == code and f"status={status}" in out
-    assert calls == [{"company_id": 3, "dry_run": False, "skip_product_taxes": False, "product_taxes_limit": None}]
+    assert calls == [{"company_id": 3, "dry_run": False, "skip_product_taxes": False, "product_taxes_limit": None,
+                      "product_taxes_source": "expand"}]
 
 
 @pytest.mark.parametrize("argv", [
@@ -637,6 +927,8 @@ def test_cli_exit_codes(status, code):
     ["sync-catalog", "--company", "3", "--product-taxes-limit", "5"],
     ["sync-catalog", "--company", "3", "--dry-run", "--product-taxes-limit", "0"],
     ["sync-catalog", "--company", "3", "--dry-run", "--skip-product-taxes", "--product-taxes-limit", "5"],
+    ["sync-catalog", "--company", "3", "--skip-product-taxes", "--product-taxes-source", "expand"],
+    ["sync-catalog", "--company", "3", "--product-taxes-source", "otro"],
     ["sync-catalog"],
 ])
 def test_cli_usage_errors(argv):
@@ -647,9 +939,11 @@ def test_cli_usage_errors(argv):
 def test_cli_flags_are_forwarded():
     rc, _, _, calls = run_cli(["sync-catalog", "--company", "3", "--dry-run", "--product-taxes-limit", "25"])
     assert rc == 0 and calls[0] == {"company_id": 3, "dry_run": True, "skip_product_taxes": False,
-                                    "product_taxes_limit": 25}
+                                    "product_taxes_limit": 25, "product_taxes_source": "expand"}
     rc, _, _, calls = run_cli(["sync-catalog", "--company", "3", "--skip-product-taxes"])
     assert calls[0]["skip_product_taxes"] is True
+    rc, _, _, calls = run_cli(["sync-catalog", "--company", "3", "--product-taxes-source", "individual"])
+    assert rc == 0 and calls[0]["product_taxes_source"] == "individual"
 
 
 def test_sync_resource_choices_do_not_include_product_taxes():
@@ -687,9 +981,14 @@ class CatalogBsale(BaseAdapter):
         if TAX_RE.search(path):
             return self.taxes.send(request, **kwargs)
         q = parse_qs(urlsplit(request.url).query)
-        assert set(q) == {"limit", "offset"}, request.url  # barrido sin state ni expand
         name = path.removeprefix("/v1/").removesuffix(".json")
         items = self.listings[name]
+        if "expand" in q:  # sólo el paso product_taxes; el paso products barre sin expand
+            assert name == "products" and q["expand"] == ["[product_taxes]"], request.url
+            items = [{**p, "product_taxes": expanded_node(p["id"], self.taxes.responses.get(p["id"], [1]))}
+                     for p in items]
+        else:
+            assert set(q) == {"limit", "offset"}, request.url  # barrido sin state ni expand
         offset, limit = int(q["offset"][0]), int(q["limit"][0])
         body = {"href": f"{API}/{name}.json", "count": len(items), "limit": limit, "offset": offset,
                 "items": items[offset:offset + limit]}
@@ -707,9 +1006,9 @@ def e2e(entity_store, tax_store, adapter, *, at, dry_run=False):
                                mode=SyncMode.FULL_RECONCILE, dry_run=dry, client_factory=factory,
                                clock=TickClock(at), getenv=ENV.get, trigger="CATALOG_DAILY", host="test")
 
-    def tax_sync(company_id, dry, limit):
+    def tax_sync(company_id, dry, limit, source):
         return run_product_tax_sync(store=tax_store, company_id=company_id, dry_run=dry, limit=limit,
-                                    client_factory=factory, clock=TickClock(at + timedelta(minutes=5)),
+                                    source=source, client_factory=factory, clock=TickClock(at + timedelta(minutes=5)),
                                     getenv=ENV.get, trigger="CATALOG_DAILY", host="test")
 
     return run_catalog_sync(store=LockStore(), company_id=3, dry_run=dry_run, entity_sync=entity_sync,
@@ -729,6 +1028,10 @@ def test_end_to_end_new_product_new_variants_deactivation_and_taxes():
     report = e2e(entity_store, tax_store, adapter, at=BASE)
     assert report.status == "SUCCESS", format_catalog_report(report)
     assert tax_store.row(100)["tax_ids"] == [1, 8] and tax_store.row(101)["items_count"] == 0
+    assert not any(TAX_RE.search(p) for p in adapter.paths)  # expand: sin consultas individuales
+    assert report.step("product_taxes").outcome.requests == 1
+    products_day1 = copy.deepcopy(entity_store.rows(3, "bsale_raw.products"))
+    assert products_day1[100]["payload"] == product(100)  # products guarda el listado sin expand
 
     day2 = copy.deepcopy(day1)
     day2["products"] = [product(100), product(101, state=1), product(102, name="Nuevo")]
