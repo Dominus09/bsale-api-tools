@@ -73,6 +73,24 @@ python -m backend.jobs.bsale_raw refresh-prices --company 3 --variant 2 [--price
 - Ritmo propio `BSALE_RAW_PRICE_RPS` (default 2 rps; máx. 5).
 - `--dry-run`: sin escrituras ni locks; la metadata se valida pero no se guarda, así que las listas se toman de lo ya guardado.
 
+## sync-catalog (catálogo diario, sólo company 3)
+
+```bash
+python -m backend.jobs.bsale_raw sync-catalog --company 3 --dry-run --product-taxes-limit 50
+python -m backend.jobs.bsale_raw sync-catalog --company 3 --skip-product-taxes
+python -m backend.jobs.bsale_raw sync-catalog --company 3
+```
+
+`backend/services/bsale_raw/catalog_daily.py` ejecuta, en serie y sin otros recursos: `taxes` → `product_types` → `products` → `variants` (motor de entidades, FULL_RECONCILE, `trigger='CATALOG_DAILY'`) → `product_taxes` (`core/product_tax_engine.py`). Requiere la migración `011_product_taxes.sql`.
+
+- Asociaciones: `variants.product{id}` y `products.product_type{id}` vienen en el mismo ítem del listado y se guardan como `product_id` / `product_type_id` (sin requests extra; payload completo intacto, incluidos `attribute_values{href}` y `costs{href}` de la variante). `products.product_taxes` trae sólo `{href}`: completarlo exige `GET /v1/products/{id}/product_taxes.json` por producto.
+- Dependencias: `variants` exige `products` SUCCESS; `product_taxes` exige `products` y `taxes` SUCCESS (si no → `SKIPPED_DEPENDENCY`). Una falla de `product_taxes` no afecta a `variants`. Cada recurso conserva su lock, run, fusible y `sync_state`.
+- Lock de catálogo `(company, catalog, daily)`: otro `sync-catalog` en curso → exit 3 sin consultar nada.
+- `product_taxes`: productos vigentes de `bsale_raw.products` (activos e inactivos); snapshot estricto por producto; payload = páginas tal cual; `tax_ids` en el orden de Bsale; `items_count = 0` = sin impuestos confirmado. 404 / error / paginación incompleta = falla (nunca lista vacía), registrada en `sync_cursors` (`product_taxes/global/failures`) y reintentada en la corrida siguiente; la fila anterior queda intacta. `tax.id` ausente de `bsale_raw.taxes` se guarda igual y deja la corrida PARTIAL. Producto que deja de estar vigente → `missing_since` (fusible `BSALE_RAW_MAX_MISSING_PCT_PRODUCT_TAXES`, default 20 %). Escritura en lotes de 200 (transacciones cortas, nunca durante HTTP): una caída a mitad conserva lo ya guardado. Sin cálculos de IVA, ILA, factor ni montos.
+- Cuota: limitador propio `BSALE_RAW_PRODUCT_TAX_RPS` (default 1 rps, máx. 2); se corta ante 5 respuestas 429 o 10 errores de API seguidos (los demás procesos — stock, costos, precios, legacy — tienen limitadores independientes).
+- Exit: 0 SUCCESS; 2 PARTIAL (algún recurso falló, quedó PARTIAL u omitido por dependencia); 1 FAILED (ninguno); 3 SKIPPED (catálogo solapado); 64 uso (`--company` ≠ 3, `--product-taxes-limit` sin `--dry-run`).
+- `--dry-run`: sin escrituras ni locks; `product_taxes` usa los productos ya guardados. `--product-taxes-limit N` (sólo dry-run) consulta los primeros N productos.
+
 ## sync-nightly (metadata + catálogo)
 
 ```bash

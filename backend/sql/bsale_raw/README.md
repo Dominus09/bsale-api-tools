@@ -8,10 +8,11 @@ Orden de aplicación manual (primero en entorno de prueba). Paso a paso: `docs/B
 2. `verify_bsale_raw.sql`: verificación de sólo lectura; falla con `RAISE EXCEPTION` ante drift.
 3. `009_seed_sources.sql`: seed idempotente (paso separado, requiere aprobación).
 4. `010_variant_prices_missing_since.sql`: agrega `variant_prices.missing_since` (no destructiva, nullable, sin DEFAULT). Aplicar ANTES de desplegar/ejecutar `sync-prices`; luego `verify_bsale_raw.sql`.
+5. `011_product_taxes.sql`: crea `bsale_raw.product_taxes` (no destructiva; `CREATE TABLE` explícito, sin `IF NOT EXISTS`). Aplicar ANTES de ejecutar `sync-catalog` con `product_taxes`; luego `verify_bsale_raw.sql`.
 
 Reglas:
 
-- `IF NOT EXISTS` sólo para el bootstrap inicial. Las migraciones posteriores deben ser explícitas y actualizar `verify_bsale_raw.sql` (el bloque GENERATED lo valida `backend/tests/bsale_raw/test_bsale_raw_migrations.py`).
+- `IF NOT EXISTS` sólo para el bootstrap inicial. Las migraciones posteriores deben ser explícitas (`CREATE TABLE bsale_raw.x`, `CREATE INDEX ix_raw_…`) y actualizar `verify_bsale_raw.sql` (el bloque GENERATED lo valida `backend/tests/bsale_raw/test_bsale_raw_migrations.py`).
 - Una columna por línea y constraints con nombre (`CONSTRAINT pk_/fk_/uq_/ck_…`): lo exige el parser de los tests.
 - Sólo FK a `bsale.companies (company_id)` (`BIGINT`) y FK internas de control. No hay FK entre tablas raw de datos.
 - No agregar CHECKs sobre valores externos de Bsale ni sobre `scope`.

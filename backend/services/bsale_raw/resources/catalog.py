@@ -8,6 +8,11 @@ Identidad técnica siempre ``(company_id, bsale_id)``. SKU (``code``) y barcode 
 columnas de búsqueda: sin unicidad, sin deduplicación; duplicados o vacíos se guardan tal cual.
 ``product_id`` es la relación que entrega Bsale para ESA empresa: nunca se resuelve ni se repara
 por SKU, barcode o nombre.
+
+Asociaciones: ``variants.product{id}`` → ``product_id`` y ``products.product_type{id}`` →
+``product_type_id`` vienen en el mismo ítem del listado (sin requests extra). ``products.product_taxes``
+trae sólo ``{href}``: los impuestos de un producto exigen ``GET /v1/products/{id}/product_taxes.json``
+(un request por producto); los resuelve ``core/product_tax_engine.py``, no el motor genérico.
 """
 
 from __future__ import annotations
@@ -73,6 +78,23 @@ VARIANTS = REGISTRY.register(
             TypedColumn("unlimited_stock", "unlimitedStock", optional_int),
         ),
         pipeline_enabled=True,
+    )
+)
+
+PRODUCT_TAXES = REGISTRY.register(
+    ResourceSpec(
+        name="product_taxes",
+        list_endpoint="/v1/products/{parent_id}/product_taxes.json",
+        item_endpoint=None,
+        raw_table="bsale_raw.product_taxes",
+        key_kind=KeyKind.ENTITY,
+        priority=Priority.HIGH,
+        request_priority=RequestPriority.P4_CATALOG,
+        parent="products",
+        freshness_sla_seconds=26 * 3600,
+        needs_live_verification=(
+            "¿products.json acepta expand=[product_taxes] con la relación completa? (probe read-only)",
+        ),
     )
 )
 

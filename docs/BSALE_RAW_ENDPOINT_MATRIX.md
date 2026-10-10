@@ -180,7 +180,7 @@ Las frecuencias son la **propuesta** de la sección 2. "Tabla RAW" refiere al mo
 | Full reconcile | **1 barrido sin `state`** (OBSERVED: devuelve activos + inactivos); se guarda el `state` de cada ítem. `state=0` / `state=1` sólo para auditoría |
 | Frecuencia | Webhook inmediato; reconcile cada 2 h |
 | SLA | 2 h |
-| Tabla RAW | `bsale_raw.products` |
+| Tabla RAW | `bsale_raw.products`; impuestos por producto en `bsale_raw.product_taxes` (migración 011, `sync-catalog`): `GET /v1/products/{id}/product_taxes.json` por producto. `expand=[product_taxes]` en el listado: **NO VERIFICADO** (probe `backend/debug/bsale_product_taxes_expand_probe.py`) → no se depende de expand |
 
 ### 1.7 Variantes — ALTO
 

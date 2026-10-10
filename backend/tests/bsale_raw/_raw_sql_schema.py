@@ -4,8 +4,9 @@ Convención de formato que el parser asume (y los tests exigen):
 - una columna por línea: ``    nombre TIPO [NOT NULL] [DEFAULT ...],``;
 - PK / FK / UNIQUE / CHECK siempre como ``CONSTRAINT <nombre> ...``;
 - índices con ``CREATE [UNIQUE] INDEX IF NOT EXISTS <nombre> ON bsale_raw.<tabla> (...)``;
-- migraciones posteriores: sólo ``ALTER TABLE bsale_raw.<tabla> ADD COLUMN <nombre> TIPO [NOT NULL];``
-  (una columna por sentencia, sin ``IF NOT EXISTS``).
+- migraciones posteriores, explícitas (sin ``IF NOT EXISTS``): ``CREATE TABLE bsale_raw.<tabla> (...)``,
+  ``CREATE [UNIQUE] INDEX <nombre> ON ...`` y ``ALTER TABLE bsale_raw.<tabla> ADD COLUMN <nombre> TIPO
+  [NOT NULL];`` (una columna por sentencia).
 """
 
 from __future__ import annotations
@@ -30,7 +31,8 @@ SQL_TYPES = {
     "TIMESTAMPTZ": "timestamp with time zone",
 }
 
-_TABLE_RE = re.compile(r"CREATE TABLE IF NOT EXISTS bsale_raw\.(\w+) \((.*?)\n\);", re.DOTALL)
+CREATE_TABLE = r"CREATE TABLE (?:IF NOT EXISTS )?bsale_raw\.(\w+) \("
+_TABLE_RE = re.compile(CREATE_TABLE + r"(.*?)\n\);", re.DOTALL)
 _COLUMN_RE = re.compile(
     rf"^\s+([a-z_][a-z0-9_]*)\s+({'|'.join(SQL_TYPES)})(\[\])?(?=[\s,]|$)(.*)$", re.MULTILINE
 )
@@ -43,7 +45,7 @@ ADD_COLUMN_RE = re.compile(
     rf"ALTER TABLE bsale_raw\.(\w+) ADD COLUMN ([a-z_][a-z0-9_]*) ({'|'.join(SQL_TYPES)})(\[\])?([^;]*);"
 )
 _INDEX_RE = re.compile(
-    r"CREATE (UNIQUE )?INDEX IF NOT EXISTS (\w+)\s+ON bsale_raw\.(\w+) \(([^)]*)\)(?:\s+WHERE ([^;]*))?;"
+    r"CREATE (UNIQUE )?INDEX (?:IF NOT EXISTS )?(\w+)\s+ON bsale_raw\.(\w+) \(([^)]*)\)(?:\s+WHERE ([^;]*))?;"
 )
 
 

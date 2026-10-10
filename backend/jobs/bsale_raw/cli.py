@@ -9,6 +9,7 @@
     python -m backend.jobs.bsale_raw refresh-costs --company 3 --variant <ID> [--variant <ID> ...] [--dry-run]
     python -m backend.jobs.bsale_raw sync-prices --company 3 [--lists active|inactive|all] [--price-list <ID> ...] [--dry-run]
     python -m backend.jobs.bsale_raw refresh-prices --company 3 --variant <ID> [--variant <ID> ...] [--price-list <ID> ...] [--dry-run]
+    python -m backend.jobs.bsale_raw sync-catalog --company 3 [--skip-product-taxes] [--dry-run [--product-taxes-limit N]]
     python -m backend.jobs.bsale_raw sync-nightly [--company N ...] [--dry-run]
 
 ``--document`` es el id TÉCNICO del documento en Bsale (``/v1/documents/{id}.json``), no el folio
@@ -19,6 +20,8 @@ Exit: 0 SUCCESS, 1 FAILED, 2 PARTIAL, 3 lock ocupado (SKIPPED), 64 uso inválido
 ``scan-costs``: 3 = otro scanner de costos de la empresa en curso; 2 = lote con variantes con error.
 ``sync-prices``: 3 = otra sincronización de precios de la empresa en curso; 2 = alguna lista (o la
 metadata de listas) falló; 1 = ninguna lista sincronizada.
+``sync-catalog``: 3 = otro catálogo de la empresa en curso; 2 = algún recurso falló, quedó PARTIAL u
+omitido por dependencia; 1 = ningún recurso sincronizado.
 ``sync-nightly`` usa 0/1/2/64 (un lock ocupado cuenta como recurso FAILED → PARTIAL).
 La salida nunca incluye token, payload ni datos del cliente.
 """
@@ -191,6 +194,20 @@ def build_parser(resources: list[str]) -> argparse.ArgumentParser:
         help="lista a consultar (repetible); por defecto todas las activas de bsale_raw.price_lists",
     )
     refresh_prices.add_argument("--dry-run", action="store_true", help="consulta API y valida; no escribe en la BD")
+    catalog = sub.add_parser(
+        "sync-catalog",
+        help="catálogo diario: taxes, product_types, products, variants y product_taxes (sólo esos recursos)",
+    )
+    catalog.add_argument("--company", type=int, required=True, help="company_id (bsale_raw.sources)")
+    catalog.add_argument(
+        "--skip-product-taxes", action="store_true",
+        help="no consulta products/{id}/product_taxes.json (un request por producto)",
+    )
+    catalog.add_argument(
+        "--product-taxes-limit", type=int,
+        help="sólo con --dry-run: consulta los impuestos de los primeros N productos",
+    )
+    catalog.add_argument("--dry-run", action="store_true", help="consulta API y valida; no escribe en la BD")
     nightly = sub.add_parser(
         "sync-nightly",
         help="metadata + catálogo (full-reconcile) de todas las empresas activas de bsale_raw.sources",
@@ -378,6 +395,43 @@ def price_exit_code(report) -> int:
     return {"SUCCESS": EXIT_SUCCESS, "PARTIAL": EXIT_PARTIAL, "SKIPPED": EXIT_LOCKED}.get(report.status, EXIT_FAILED)
 
 
+def _default_catalog_runner(
+    *, company_id: int, dry_run: bool, skip_product_taxes: bool, product_taxes_limit: int | None
+):
+    from backend.services.bsale_raw.catalog_daily import run_catalog_sync
+    from backend.services.bsale_raw.core.store import PgRawStore
+    from backend.utils.bsale_token_env import load_dotenv_if_available
+
+    load_dotenv_if_available()
+    store = PgRawStore(read_only=dry_run)
+    try:
+        return run_catalog_sync(
+            store=store, company_id=company_id, dry_run=dry_run, skip_product_taxes=skip_product_taxes,
+            product_taxes_limit=product_taxes_limit,
+        )
+    finally:
+        store.close()
+
+
+def catalog_usage_error(args: argparse.Namespace) -> str | None:
+    from backend.services.bsale_raw.catalog_daily import CATALOG_COMPANIES
+
+    if args.company not in CATALOG_COMPANIES:
+        return f"sync-catalog habilitado sólo para --company {', '.join(map(str, sorted(CATALOG_COMPANIES)))}"
+    if args.product_taxes_limit is not None:
+        if not args.dry_run:
+            return "--product-taxes-limit sólo se acepta con --dry-run"
+        if args.skip_product_taxes:
+            return "--product-taxes-limit no se combina con --skip-product-taxes"
+        if args.product_taxes_limit <= 0:
+            return "--product-taxes-limit debe ser un entero positivo"
+    return None
+
+
+def catalog_exit_code(report) -> int:
+    return {"SUCCESS": EXIT_SUCCESS, "PARTIAL": EXIT_PARTIAL, "SKIPPED": EXIT_LOCKED}.get(report.status, EXIT_FAILED)
+
+
 def _default_nightly_runner(*, companies: list[int] | None, dry_run: bool):
     from backend.services.bsale_raw.nightly import PgNightlyReader, run_nightly
     from backend.utils.bsale_token_env import load_dotenv_if_available
@@ -401,6 +455,7 @@ def main(
     stock_cycle_runner: Callable[..., object] = _default_stock_cycle_runner,
     cost_runner: Callable[..., EntityOutcome] = _default_cost_runner,
     price_runner: Callable[..., object] = _default_price_runner,
+    catalog_runner: Callable[..., object] = _default_catalog_runner,
     nightly_runner: Callable[..., object] = _default_nightly_runner,
     out: TextIO | None = None,
     err: TextIO | None = None,
@@ -466,6 +521,21 @@ def main(
             return exit_code(result)
         print(format_price_report(result), file=out)
         return price_exit_code(result)
+
+    if args.command == "sync-catalog":
+        from backend.services.bsale_raw.catalog_daily import format_catalog_report
+
+        problem = catalog_usage_error(args)
+        if problem:
+            print(f"uso inválido: {problem}", file=err)
+            return EXIT_USAGE
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stderr)
+        report = catalog_runner(
+            company_id=args.company, dry_run=args.dry_run, skip_product_taxes=args.skip_product_taxes,
+            product_taxes_limit=args.product_taxes_limit,
+        )
+        print(format_catalog_report(report), file=out)
+        return catalog_exit_code(report)
 
     if args.command == "sync-nightly":
         from backend.services.bsale_raw.nightly import format_report

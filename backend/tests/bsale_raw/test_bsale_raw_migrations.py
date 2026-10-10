@@ -16,6 +16,7 @@ from backend.services.bsale_raw.core.models import (
 )
 from backend.services.bsale_raw.core.registry import REGISTRY
 from backend.tests.bsale_raw._raw_sql_schema import (
+    CREATE_TABLE,
     VERIFY_FILE,
     check_in_values,
     migration_files,
@@ -40,6 +41,7 @@ EXPECTED_PKS = {
     "price_lists": ("company_id", "bsale_id"),
     "products": ("company_id", "bsale_id"),
     "variants": ("company_id", "bsale_id"),
+    "product_taxes": ("company_id", "product_id"),
     "clients": ("company_id", "bsale_id"),
     "stocks": ("company_id", "variant_id", "office_id"),
     "variant_prices": ("company_id", "price_list_id", "variant_id"),
@@ -85,16 +87,16 @@ def test_ordered_migration_files():
     assert names == [
         "001_schema_sources.sql", "002_sync_control.sql", "003_configuration.sql", "004_catalog.sql",
         "005_inventory_pricing.sql", "006_documents.sql", "007_stock_movements.sql", "008_webhooks.sql",
-        "009_seed_sources.sql", "010_variant_prices_missing_since.sql",
+        "009_seed_sources.sql", "010_variant_prices_missing_since.sql", "011_product_taxes.sql",
     ]
 
 
-def test_all_27_tables_exist_once():
-    # 26 de la propuesta + document_change_log (auditoría OC 33, reglas 2.B)
+def test_all_28_tables_exist_once():
+    # 26 de la propuesta + document_change_log (auditoría OC 33, reglas 2.B) + product_taxes (011)
     assert set(TABLES) == set(EXPECTED_PKS)
-    assert len(TABLES) == 27
-    created = [m for p in migration_files() for m in re.findall(r"CREATE TABLE IF NOT EXISTS bsale_raw\.(\w+)", _sql(p))]
-    assert len(created) == len(set(created)) == 27
+    assert len(TABLES) == 28
+    created = [m for p in migration_files() for m in re.findall(CREATE_TABLE, _sql(p))]
+    assert len(created) == len(set(created)) == 28
 
 
 def test_registry_tables_have_migrations():
@@ -107,7 +109,7 @@ def test_parser_reads_every_column_line():
         for match in re.finditer(r"ALTER TABLE bsale_raw\.(\w+) ADD COLUMN", _sql(path)):
             added[match.group(1)] = added.get(match.group(1), 0) + 1
     for path in migration_files():
-        for match in re.finditer(r"CREATE TABLE IF NOT EXISTS bsale_raw\.(\w+) \((.*?)\n\);", _sql(path), re.DOTALL):
+        for match in re.finditer(CREATE_TABLE + r"(.*?)\n\);", _sql(path), re.DOTALL):
             lines = [ln for ln in match.group(2).splitlines() if re.match(r"^    [a-z_]", ln)]
             name = match.group(1)
             assert len(lines) + added.get(name, 0) == len(TABLES[name].columns), name
@@ -122,6 +124,19 @@ def test_variant_prices_missing_since_added_by_010_only():
     alter = _statements(next(p for p in migration_files() if p.name == "010_variant_prices_missing_since.sql"))
     assert "ALTER TABLE bsale_raw.variant_prices ADD COLUMN missing_since TIMESTAMPTZ" in alter
     assert not any("DEFAULT" in s.upper() or "NOT NULL" in s.upper() for s in alter if s.startswith("ALTER"))
+
+
+def test_product_taxes_created_explicitly_by_011():
+    table = TABLES["product_taxes"]
+    assert table.file == "011_product_taxes.sql"
+    cols = table.columns
+    assert cols["tax_ids"].type == "bigint[]" and cols["tax_ids"].not_null
+    assert cols["items_count"].type == "integer" and cols["items_count"].not_null
+    assert cols["missing_since"].type == "timestamp with time zone" and not cols["missing_since"].not_null
+    assert not {"tax_factor", "factor", "percentage", "gross", "net"} & set(cols)
+    statements = _statements(next(p for p in migration_files() if p.name == "011_product_taxes.sql"))
+    creates = [s for s in statements if s.startswith("CREATE")]
+    assert creates and not any("IF NOT EXISTS" in s for s in creates)
 
 
 @pytest.mark.parametrize("table", sorted(EXPECTED_PKS))
@@ -202,7 +217,7 @@ def test_reconcile_indexes_by_scope_and_fetched_at():
 
     assert has("stocks", ("company_id", "office_id", "api_fetched_at"))
     assert has("variant_prices", ("company_id", "price_list_id", "api_fetched_at"))
-    for table in ("products", "variants", "clients", "variant_costs"):
+    for table in ("products", "variants", "clients", "variant_costs", "product_taxes"):
         assert has(table, ("company_id", "api_fetched_at")), table
 
 
@@ -376,8 +391,8 @@ def test_migrations_are_transactional_and_non_destructive(path):
         if stmt.upper().startswith("INSERT"):
             assert stmt.startswith("INSERT INTO bsale_raw."), stmt[:60]
         allowed_start = ("BEGIN", "COMMIT", "CREATE SCHEMA IF NOT EXISTS bsale_raw", "CREATE TABLE IF NOT EXISTS bsale_raw.",
-                         "CREATE INDEX IF NOT EXISTS", "CREATE UNIQUE INDEX IF NOT EXISTS", "COMMENT ON",
-                         "INSERT INTO bsale_raw.")
+                         "CREATE TABLE bsale_raw.", "CREATE INDEX IF NOT EXISTS", "CREATE UNIQUE INDEX IF NOT EXISTS",
+                         "CREATE INDEX ix_raw_", "COMMENT ON", "INSERT INTO bsale_raw.")
         assert stmt.startswith(allowed_start), stmt[:60]
 
 
@@ -391,7 +406,7 @@ def test_sql_punctuation_balanced(path):
 
 @pytest.mark.parametrize("path", migration_files(), ids=lambda p: p.name)
 def test_create_table_items_separated_by_commas(path):
-    for m in re.finditer(r"CREATE TABLE IF NOT EXISTS (\S+) \((.*?)\n\);", _sql(path), re.DOTALL):
+    for m in re.finditer(CREATE_TABLE + r"(.*?)\n\);", _sql(path), re.DOTALL):
         items: list[str] = []
         for line in m.group(2).strip("\n").splitlines():
             if not line.strip():
