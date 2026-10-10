@@ -85,7 +85,7 @@ def test_ordered_migration_files():
     assert names == [
         "001_schema_sources.sql", "002_sync_control.sql", "003_configuration.sql", "004_catalog.sql",
         "005_inventory_pricing.sql", "006_documents.sql", "007_stock_movements.sql", "008_webhooks.sql",
-        "009_seed_sources.sql",
+        "009_seed_sources.sql", "010_variant_prices_missing_since.sql",
     ]
 
 
@@ -102,10 +102,26 @@ def test_registry_tables_have_migrations():
 
 
 def test_parser_reads_every_column_line():
+    added: dict[str, int] = {}
+    for path in migration_files():
+        for match in re.finditer(r"ALTER TABLE bsale_raw\.(\w+) ADD COLUMN", _sql(path)):
+            added[match.group(1)] = added.get(match.group(1), 0) + 1
     for path in migration_files():
         for match in re.finditer(r"CREATE TABLE IF NOT EXISTS bsale_raw\.(\w+) \((.*?)\n\);", _sql(path), re.DOTALL):
             lines = [ln for ln in match.group(2).splitlines() if re.match(r"^    [a-z_]", ln)]
-            assert len(lines) == len(TABLES[match.group(1)].columns), match.group(1)
+            name = match.group(1)
+            assert len(lines) + added.get(name, 0) == len(TABLES[name].columns), name
+
+
+def test_variant_prices_missing_since_added_by_010_only():
+    col = TABLES["variant_prices"].columns["missing_since"]
+    assert col.type == "timestamp with time zone" and not col.not_null
+    created = _sql(next(p for p in migration_files() if p.name == "005_inventory_pricing.sql"))
+    block = re.search(r"CREATE TABLE IF NOT EXISTS bsale_raw\.variant_prices \((.*?)\n\);", created, re.DOTALL)
+    assert "missing_since" not in block.group(1)
+    alter = _statements(next(p for p in migration_files() if p.name == "010_variant_prices_missing_since.sql"))
+    assert "ALTER TABLE bsale_raw.variant_prices ADD COLUMN missing_since TIMESTAMPTZ" in alter
+    assert not any("DEFAULT" in s.upper() or "NOT NULL" in s.upper() for s in alter if s.startswith("ALTER"))
 
 
 @pytest.mark.parametrize("table", sorted(EXPECTED_PKS))
@@ -344,6 +360,8 @@ def test_check_enums_match_python():
 # --- seguridad de los archivos SQL ---
 
 FORBIDDEN_STATEMENT = re.compile(r"^(DROP|TRUNCATE|DELETE|UPDATE|ALTER|GRANT|REVOKE|COPY|VACUUM)\b", re.IGNORECASE)
+# Única forma de ALTER permitida: agregar UNA columna (no destructivo); nunca DROP / TYPE / RENAME.
+ADD_COLUMN_STATEMENT = re.compile(r"^ALTER TABLE bsale_raw\.[a-z_]+ ADD COLUMN [a-z_][a-z0-9_]* [A-Z]+(\[\])?( NOT NULL)?$")
 
 
 @pytest.mark.parametrize("path", migration_files(), ids=lambda p: p.name)
@@ -351,6 +369,8 @@ def test_migrations_are_transactional_and_non_destructive(path):
     statements = _statements(path)
     assert statements[0].upper() == "BEGIN" and statements[-1].upper() == "COMMIT"
     for stmt in statements:
+        if ADD_COLUMN_STATEMENT.match(stmt):
+            continue
         assert not FORBIDDEN_STATEMENT.match(stmt), stmt[:60]
         assert "CONCURRENTLY" not in stmt.upper()
         if stmt.upper().startswith("INSERT"):

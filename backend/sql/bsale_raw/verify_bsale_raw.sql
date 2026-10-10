@@ -406,6 +406,7 @@ DECLARE
         'variant_prices.last_changed_at:timestamp with time zone:NOT NULL',
         'variant_prices.last_seen_at:timestamp with time zone:NOT NULL',
         'variant_prices.last_source:text:NOT NULL',
+        'variant_prices.missing_since:timestamp with time zone:NULL',
         'variant_prices.payload:jsonb:NOT NULL',
         'variant_prices.payload_hash:text:NOT NULL',
         'variant_prices.price_list_id:bigint:NOT NULL',

@@ -53,6 +53,26 @@ python -m backend.jobs.bsale_raw refresh-costs --company 3 --variant 29567 --var
 - UPSERT con frescura (`api_fetched_at`); nunca DELETE. Una variante con error no se escribe y no detiene el lote (PARTIAL, exit 2) y entra a la cola `retry` del cursor: se reintenta al inicio de las corridas siguientes (hasta 100 por corrida, 3 intentos; luego la retoma la vuelta). 404 / respuesta inválida = falla de la variante; 10 errores de API seguidos (5xx, 429 agotado, red) cortan el lote y el cursor queda en la última intentada. Caída total → FAILED sin avanzar; lote sólo con 404 → FAILED pero el cursor avanza (no se atasca).
 - Ritmo propio `BSALE_RAW_COST_RPS` (default 2 rps; máx. 5) para no competir con `scan-stocks`.
 
+## sync-prices / refresh-prices (precios por lista)
+
+```bash
+python -m backend.jobs.bsale_raw sync-prices --company 3 --dry-run
+python -m backend.jobs.bsale_raw sync-prices --company 3 --price-list 12
+python -m backend.jobs.bsale_raw sync-prices --company 3 --lists inactive --dry-run
+python -m backend.jobs.bsale_raw refresh-prices --company 3 --variant 2 [--price-list 12] --dry-run
+```
+
+`backend/services/bsale_raw/core/price_engine.py`: `GET /v1/price_lists/{id}/details.json` paginado → `bsale_raw.variant_prices` (`(company_id, price_list_id, variant_id)`; `bsale_detail_id` es metadata). Requiere la migración `010_variant_prices_missing_since.sql`.
+
+- RAW guarda sólo lo que entrega Bsale: payload completo; `variant_value` = `variantValue` y `variant_value_with_taxes` = `variantValueWithTaxes` como Decimal exacto. Nunca recalcula IVA, impuestos ni márgenes.
+- `sync-prices`: lock `(company, variant_prices, sync-prices)` (solapado → exit 3) → refresca `price_lists` con el motor de entidades → barre las listas de `bsale_raw.price_lists` según `--lists` (`active` = `state 0`, default; `inactive`; `all`), nunca las ausentes en Bsale; `--price-list` limita dentro de esa selección. Si la metadata falla se usan las listas guardadas y la corrida queda como máximo PARTIAL, con el motivo en la salida.
+- Por lista: lock `price_list:N`, su propio `sync_runs`, snapshot ESTRICTO (count estable, total exacto) sin transacción abierta, variante repetida o detalle repetido = lista inválida (no se elige uno), luego UNA transacción: UPSERT con frescura (`missing_since = NULL` al reaparecer) + `missing_since` para precios conocidos que el snapshot completo no trajo y no fueron refrescados después de su inicio. Fusible por lista `BSALE_RAW_MAX_MISSING_PCT_VARIANT_PRICES` (default 20 %; snapshot vacío con precios presentes = fusible). Nunca DELETE.
+- Una lista con error no escribe nada y no afecta a las demás: SUCCESS (0) todas OK; PARTIAL (2) alguna falló o falló la metadata; FAILED (1) ninguna; SKIPPED (3) lock ocupado. Variantes ausentes de `bsale_raw.variants` se guardan igual y se informan como `uncatalogued`.
+- `refresh-prices` (POINT): `details.json?variantid=V` por (lista, variante), prioridad P0, sin lock; sin `--price-list` usa las listas activas guardadas (no refresca metadata). 0 filas = `NO_ROWS`: no escribe precio 0 ni marca ausencia. Máx. 50 variantes.
+- Los precios de listas inactivas no son vigentes: la capa de negocio filtra por `bsale_raw.price_lists.state = 0`.
+- Ritmo propio `BSALE_RAW_PRICE_RPS` (default 2 rps; máx. 5).
+- `--dry-run`: sin escrituras ni locks; la metadata se valida pero no se guarda, así que las listas se toman de lo ya guardado.
+
 ## sync-nightly (metadata + catálogo)
 
 ```bash

@@ -7,6 +7,8 @@
     python -m backend.jobs.bsale_raw scan-stocks --company 3 [--dry-run]
     python -m backend.jobs.bsale_raw scan-costs --company 3 [--batch 1000] [--dry-run]
     python -m backend.jobs.bsale_raw refresh-costs --company 3 --variant <ID> [--variant <ID> ...] [--dry-run]
+    python -m backend.jobs.bsale_raw sync-prices --company 3 [--lists active|inactive|all] [--price-list <ID> ...] [--dry-run]
+    python -m backend.jobs.bsale_raw refresh-prices --company 3 --variant <ID> [--variant <ID> ...] [--price-list <ID> ...] [--dry-run]
     python -m backend.jobs.bsale_raw sync-nightly [--company N ...] [--dry-run]
 
 ``--document`` es el id TÉCNICO del documento en Bsale (``/v1/documents/{id}.json``), no el folio
@@ -15,6 +17,8 @@
 Exit: 0 SUCCESS, 1 FAILED, 2 PARTIAL, 3 lock ocupado (SKIPPED), 64 uso inválido.
 ``scan-stocks``: 3 = otro ciclo de la empresa en curso (no escaneó nada).
 ``scan-costs``: 3 = otro scanner de costos de la empresa en curso; 2 = lote con variantes con error.
+``sync-prices``: 3 = otra sincronización de precios de la empresa en curso; 2 = alguna lista (o la
+metadata de listas) falló; 1 = ninguna lista sincronizada.
 ``sync-nightly`` usa 0/1/2/64 (un lock ocupado cuenta como recurso FAILED → PARTIAL).
 La salida nunca incluye token, payload ni datos del cliente.
 """
@@ -163,6 +167,30 @@ def build_parser(resources: list[str]) -> argparse.ArgumentParser:
     refresh_costs.add_argument("--company", type=int, required=True, help="company_id (bsale_raw.sources)")
     refresh_costs.add_argument("--variant", type=int, action="append", required=True, help="variant_id (repetible)")
     refresh_costs.add_argument("--dry-run", action="store_true", help="consulta API y valida; no escribe en la BD")
+    sync_prices = sub.add_parser(
+        "sync-prices",
+        help="refresca price_lists y barre price_lists/{id}/details.json por lista (snapshot completo, sin DELETE)",
+    )
+    sync_prices.add_argument("--company", type=int, required=True, help="company_id (bsale_raw.sources)")
+    sync_prices.add_argument(
+        "--lists", choices=("active", "inactive", "all"), default="active",
+        help="listas a barrer según bsale_raw.price_lists.state (default active)",
+    )
+    sync_prices.add_argument(
+        "--price-list", type=int, action="append", dest="price_list",
+        help="limita a esta lista (repetible); debe estar dentro de --lists",
+    )
+    sync_prices.add_argument("--dry-run", action="store_true", help="consulta API y valida; no escribe en la BD")
+    refresh_prices = sub.add_parser(
+        "refresh-prices", help="precios de variantes explícitas (POINT, prioridad P0); no marca ausencias",
+    )
+    refresh_prices.add_argument("--company", type=int, required=True, help="company_id (bsale_raw.sources)")
+    refresh_prices.add_argument("--variant", type=int, action="append", required=True, help="variant_id (repetible)")
+    refresh_prices.add_argument(
+        "--price-list", type=int, action="append", dest="price_list",
+        help="lista a consultar (repetible); por defecto todas las activas de bsale_raw.price_lists",
+    )
+    refresh_prices.add_argument("--dry-run", action="store_true", help="consulta API y valida; no escribe en la BD")
     nightly = sub.add_parser(
         "sync-nightly",
         help="metadata + catálogo (full-reconcile) de todas las empresas activas de bsale_raw.sources",
@@ -308,6 +336,48 @@ def cost_usage_error(args: argparse.Namespace) -> str | None:
     return None
 
 
+def _default_price_runner(
+    *, command: str, company_id: int, dry_run: bool, lists: str = "active",
+    price_list_ids: list[int] | None = None, variant_ids: list[int] | None = None,
+):
+    from backend.services.bsale_raw.core.price_engine import PgPriceStore, refresh_prices, sync_prices
+    from backend.utils.bsale_token_env import load_dotenv_if_available
+
+    load_dotenv_if_available()
+    store = PgPriceStore(read_only=dry_run)
+    try:
+        if command == "refresh-prices":
+            return refresh_prices(
+                store=store, company_id=company_id, variant_ids=variant_ids or [], price_list_ids=price_list_ids,
+                dry_run=dry_run, host=socket.gethostname(),
+            )
+        return sync_prices(
+            store=store, company_id=company_id, selection=lists, price_list_ids=price_list_ids, dry_run=dry_run,
+            host=socket.gethostname(),
+        )
+    finally:
+        store.close()
+
+
+def price_usage_error(args: argparse.Namespace) -> str | None:
+    from backend.services.bsale_raw.core.price_engine import MAX_POINT_VARIANTS
+
+    if args.company <= 0:
+        return "--company debe ser un entero positivo"
+    if any(v <= 0 for v in args.price_list or []):
+        return "--price-list debe ser un entero positivo"
+    if args.command == "refresh-prices":
+        if any(v <= 0 for v in args.variant):
+            return "--variant debe ser un entero positivo"
+        if len(set(args.variant)) > MAX_POINT_VARIANTS:
+            return f"máximo {MAX_POINT_VARIANTS} variantes por refresh"
+    return None
+
+
+def price_exit_code(report) -> int:
+    return {"SUCCESS": EXIT_SUCCESS, "PARTIAL": EXIT_PARTIAL, "SKIPPED": EXIT_LOCKED}.get(report.status, EXIT_FAILED)
+
+
 def _default_nightly_runner(*, companies: list[int] | None, dry_run: bool):
     from backend.services.bsale_raw.nightly import PgNightlyReader, run_nightly
     from backend.utils.bsale_token_env import load_dotenv_if_available
@@ -330,6 +400,7 @@ def main(
     runner: Callable[..., EntityOutcome] = _default_runner,
     stock_cycle_runner: Callable[..., object] = _default_stock_cycle_runner,
     cost_runner: Callable[..., EntityOutcome] = _default_cost_runner,
+    price_runner: Callable[..., object] = _default_price_runner,
     nightly_runner: Callable[..., object] = _default_nightly_runner,
     out: TextIO | None = None,
     err: TextIO | None = None,
@@ -373,6 +444,28 @@ def main(
         )
         print(format_cost_outcome(outcome), file=out)
         return exit_code(outcome)
+
+    if args.command in ("sync-prices", "refresh-prices"):
+        from backend.services.bsale_raw.core.price_engine import format_price_point, format_price_report
+
+        problem = price_usage_error(args)
+        if problem:
+            print(f"uso inválido: {problem}", file=err)
+            return EXIT_USAGE
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stderr)
+        result = price_runner(
+            command=args.command,
+            company_id=args.company,
+            dry_run=args.dry_run,
+            lists=getattr(args, "lists", "active"),
+            price_list_ids=args.price_list,
+            variant_ids=getattr(args, "variant", None),
+        )
+        if args.command == "refresh-prices":
+            print(format_price_point(result), file=out)
+            return exit_code(result)
+        print(format_price_report(result), file=out)
+        return price_exit_code(result)
 
     if args.command == "sync-nightly":
         from backend.services.bsale_raw.nightly import format_report

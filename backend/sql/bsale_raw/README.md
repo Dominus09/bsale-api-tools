@@ -7,6 +7,7 @@ Orden de aplicación manual (primero en entorno de prueba). Paso a paso: `docs/B
 1. `001_schema_sources.sql` … `008_webhooks.sql` (cada una en su propia transacción).
 2. `verify_bsale_raw.sql`: verificación de sólo lectura; falla con `RAISE EXCEPTION` ante drift.
 3. `009_seed_sources.sql`: seed idempotente (paso separado, requiere aprobación).
+4. `010_variant_prices_missing_since.sql`: agrega `variant_prices.missing_since` (no destructiva, nullable, sin DEFAULT). Aplicar ANTES de desplegar/ejecutar `sync-prices`; luego `verify_bsale_raw.sql`.
 
 Reglas:
 
@@ -16,5 +17,5 @@ Reglas:
 - No agregar CHECKs sobre valores externos de Bsale ni sobre `scope`.
 - Guardar siempre `payload JSONB` completo + `payload_hash` + `api_fetched_at`.
 - No guardar secretos ni headers de request; `sources.token_env` es el nombre de la variable.
-- No tocar los schemas `bsale` ni `distribuidora`; no usar `DROP` / `TRUNCATE` / `DELETE` / `UPDATE` / `ALTER` en estas migraciones.
+- No tocar los schemas `bsale` ni `distribuidora`; no usar `DROP` / `TRUNCATE` / `DELETE` / `UPDATE` / `ALTER` en estas migraciones. Única excepción: `ALTER TABLE bsale_raw.<tabla> ADD COLUMN <col> <TIPO>` (una columna por sentencia, sin `IF NOT EXISTS`).
 - Rollback con `DROP SCHEMA bsale_raw CASCADE` sólo antes del cutover (ver la propuesta, §8).

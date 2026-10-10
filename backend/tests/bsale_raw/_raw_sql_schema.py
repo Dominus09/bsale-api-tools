@@ -3,7 +3,9 @@
 Convención de formato que el parser asume (y los tests exigen):
 - una columna por línea: ``    nombre TIPO [NOT NULL] [DEFAULT ...],``;
 - PK / FK / UNIQUE / CHECK siempre como ``CONSTRAINT <nombre> ...``;
-- índices con ``CREATE [UNIQUE] INDEX IF NOT EXISTS <nombre> ON bsale_raw.<tabla> (...)``.
+- índices con ``CREATE [UNIQUE] INDEX IF NOT EXISTS <nombre> ON bsale_raw.<tabla> (...)``;
+- migraciones posteriores: sólo ``ALTER TABLE bsale_raw.<tabla> ADD COLUMN <nombre> TIPO [NOT NULL];``
+  (una columna por sentencia, sin ``IF NOT EXISTS``).
 """
 
 from __future__ import annotations
@@ -37,6 +39,9 @@ _UNIQUE_RE = re.compile(r"CONSTRAINT (\w+) UNIQUE \(([^)]*)\)")
 _FK_RE = re.compile(r"CONSTRAINT (\w+)\s+FOREIGN KEY \(([^)]*)\) REFERENCES ([\w.]+) \(([^)]*)\)")
 _CHECK_RE = re.compile(r"CONSTRAINT (\w+)\s+CHECK \((.*?)\)\s*(?:,|$)", re.DOTALL)
 _CHECK_IN_RE = re.compile(r"^(\w+) IN \(([^)]*)\)$")
+ADD_COLUMN_RE = re.compile(
+    rf"ALTER TABLE bsale_raw\.(\w+) ADD COLUMN ([a-z_][a-z0-9_]*) ({'|'.join(SQL_TYPES)})(\[\])?([^;]*);"
+)
 _INDEX_RE = re.compile(
     r"CREATE (UNIQUE )?INDEX IF NOT EXISTS (\w+)\s+ON bsale_raw\.(\w+) \(([^)]*)\)(?:\s+WHERE ([^;]*))?;"
 )
@@ -102,6 +107,9 @@ def parse() -> tuple[dict[str, Table], dict[str, Index]]:
             for ck in _CHECK_RE.finditer(body):
                 table.checks[ck.group(1)] = " ".join(ck.group(2).split())
             tables[name] = table
+        for add in ADD_COLUMN_RE.finditer(sql):
+            col_type = SQL_TYPES[add.group(3)] + (add.group(4) or "")
+            tables[add.group(1)].columns[add.group(2)] = Column(add.group(2), col_type, "NOT NULL" in add.group(5))
         for ix in _INDEX_RE.finditer(sql):
             indexes[ix.group(2)] = Index(ix.group(2), ix.group(3), _cols(ix.group(4)), bool(ix.group(1)), ix.group(5))
     return tables, indexes
