@@ -15,6 +15,7 @@ from backend.client_rut import require_valid_rut, city_is_melinka
 from backend.db import get_connection
 from backend.utils.auth_staff import require_staff_user
 from backend.utils.catalog_admin_rut import is_catalog_admin_rut
+from backend.utils.catalog_client import lookup_catalog_client
 
 router = APIRouter()
 auth_router = APIRouter(prefix="/auth")
@@ -63,20 +64,12 @@ def login_client(body: LoginClientRequest):
     conn = get_connection()
     try:
         cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT bsale_id, first_name, last_name, city
-            FROM bsale.clients
-            WHERE rut_clean = %s
-            """,
-            (rut_clean,),
-        )
-        row = cur.fetchone()
+        client = lookup_catalog_client(cur, rut_clean=rut_clean)
         cur.close()
     finally:
         conn.close()
 
-    if not row:
+    if client is None:
         return JSONResponse(
             status_code=404,
             content={
@@ -84,14 +77,11 @@ def login_client(body: LoginClientRequest):
             },
         )
 
-    bsale_id, first_name, last_name, city = row
-    name = f"{first_name or ''} {last_name or ''}".strip()
-
     return {
-        "id": bsale_id,
-        "name": name,
-        "city": city,
-        "is_melinka": city_is_melinka(city),
+        "id": client.bsale_id,
+        "name": client.name,
+        "city": client.city,
+        "is_melinka": city_is_melinka(client.city),
         "is_catalog_admin": is_catalog_admin_rut(rut_clean),
     }
 
