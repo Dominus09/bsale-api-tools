@@ -1,27 +1,26 @@
 from datetime import date
-from decimal import Decimal
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 
-from backend.client_rut import clean_rut_for_lookup
+from backend.client_rut import city_is_melinka, clean_rut_for_lookup
 from backend.db import get_connection
+from backend.utils.catalog_client import CatalogClient, lookup_catalog_client
+from backend.utils.order_pricing import OrderPricing, fetch_catalog_prices, price_order_items
 from backend.utils.sale_quantity import validate_order_items
 
 router = APIRouter(tags=["Pedidos"])
 
-# Empresa catálogo / distribuidora web (misma que sync_clients y rutero).
-_CLIENT_COMPANY_ID = 3
-
 _ALLOWED_ORDER_STATUSES = frozenset({"pendiente", "generado", "anulado", "revisar"})
 
 # Lista de precios (catálogo): slug → ID Bsale. Independiente del tipo de documento tributario.
+# "comoditi" se conserva solo para leer pedidos históricos; no se acepta en pedidos nuevos.
 _PRICE_LIST_SLUG_TO_ID: dict[str, int] = {
     "factura": 13,
     "comoditi": 14,
     "melinka": 16,
 }
-_ALLOWED_PRICE_LISTS = frozenset(_PRICE_LIST_SLUG_TO_ID)
+_ALLOWED_PRICE_LISTS = frozenset({"factura", "melinka"})
 
 # Tipo de documento solicitado en checkout (tributario): no se cruza con lista de precios.
 _ALLOWED_DOCUMENT_TYPES = frozenset({"factura", "boleta"})
@@ -150,10 +149,15 @@ def _resolve_price_list_commercial(body: CreateOrderBody) -> str:
     slug = (body.price_list or "").strip().lower() or None
     if not slug:
         raise HTTPException(status_code=400, detail="price_list es obligatorio")
+    if slug == "comoditi" or body.price_list_id == 14:
+        raise HTTPException(
+            status_code=400,
+            detail="La lista COMODITI está descontinuada",
+        )
     if slug not in _ALLOWED_PRICE_LISTS:
         raise HTTPException(
             status_code=400,
-            detail="price_list debe ser factura, comoditi o melinka",
+            detail="price_list debe ser factura o melinka",
         )
     derived_id = _PRICE_LIST_SLUG_TO_ID[slug]
     if body.price_list_id is not None and int(body.price_list_id) != derived_id:
@@ -162,6 +166,82 @@ def _resolve_price_list_commercial(body: CreateOrderBody) -> str:
             detail="price_list_id no coincide con price_list",
         )
     return slug
+
+
+def _expected_price_list_for_city(client_city: str | None) -> str:
+    """Melinka → lista 16; otra ciudad o sin ciudad → lista 13 (Ruta/Web)."""
+    return "melinka" if city_is_melinka(client_city) else "factura"
+
+
+def _require_price_list_matches_city(price_list_slug: str, client_city: str | None) -> None:
+    expected = _expected_price_list_for_city(client_city)
+    if price_list_slug != expected:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "price_list_mismatch",
+                "message": (
+                    "Tu lista de precios cambió según la ciudad registrada. "
+                    "Actualizamos tu carrito; revisa el total y confirma nuevamente."
+                ),
+                "price_list": price_list_slug,
+                "expected_price_list": expected,
+                "expected_price_list_id": _PRICE_LIST_SLUG_TO_ID[expected],
+            },
+        )
+
+
+def _require_registered_client(
+    cur,
+    *,
+    client_id: int | None,
+    client_rut: str | None,
+) -> CatalogClient:
+    rut_clean = (
+        clean_rut_for_lookup(str(client_rut).strip())
+        if client_rut and str(client_rut).strip()
+        else None
+    )
+    client = lookup_catalog_client(cur, rut_clean=rut_clean, client_id=client_id)
+    if client is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Cliente no registrado. Vuelve a iniciar sesión en el catálogo.",
+        )
+    return client
+
+
+def _require_unique_items(items: list[OrderItemIn]) -> None:
+    seen: set[int] = set()
+    for it in items:
+        if it.id in seen:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Producto repetido en el pedido: {it.id}",
+            )
+        seen.add(it.id)
+
+
+def _require_pricing_ok(pricing: OrderPricing, price_list_slug: str) -> None:
+    """Precios o total distintos a los vigentes: no se crea el pedido; el frontend debe
+    actualizar el carrito y pedir confirmación al cliente."""
+    if pricing.ok:
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "error": "price_mismatch",
+            "message": (
+                "Algunos precios de tu carrito cambiaron. "
+                "Actualizamos tu carrito; revisa el total y confirma nuevamente."
+            ),
+            "price_list": price_list_slug,
+            "price_list_id": _PRICE_LIST_SLUG_TO_ID[price_list_slug],
+            "items": pricing.price_issues,
+            "total_matches": pricing.total_matches,
+            "expected_total": float(pricing.total) if not pricing.price_issues else None,
+        },
+    )
 
 
 def _resolve_document_type(raw: str | None) -> str:
@@ -201,67 +281,6 @@ def _seller_fields_from_row(row: dict) -> dict[str, int | str | None]:
         "seller_name": (str(sname).strip() if sname is not None else None) or None,
         "client_city": (str(city).strip() if city is not None else None) or None,
     }
-
-
-def _lookup_client_seller_and_city(
-    cur,
-    *,
-    client_id: int | None,
-    client_rut: str | None,
-) -> tuple[int | None, str | None, str | None]:
-    """
-    Vendedor asignado al cliente desde bsale.clients.vendedor (atributo Bsale «Vendedor»)
-    enriquecido con bsale.vendedores_app (nombre legible e id interno).
-    """
-    rut_clean: str | None = None
-    if client_rut and str(client_rut).strip():
-        rut_clean = clean_rut_for_lookup(str(client_rut).strip())
-
-    if client_id is None and not rut_clean:
-        return None, None, None
-
-    cur.execute(
-        """
-        SELECT
-            NULLIF(BTRIM(c.city), '') AS client_city,
-            va.id AS seller_id,
-            COALESCE(
-                NULLIF(BTRIM(va.nombre), ''),
-                NULLIF(BTRIM(c.vendedor::text), '')
-            ) AS seller_name
-        FROM bsale.clients c
-        LEFT JOIN bsale.vendedores_app va
-            ON LOWER(TRIM(COALESCE(va.codigo, '')))
-             = LOWER(TRIM(COALESCE(c.vendedor::text, '')))
-           AND va.activo IS TRUE
-        WHERE c.company_id = %s
-          AND (
-              (%s IS NOT NULL AND c.bsale_id = %s)
-              OR (%s IS NOT NULL AND c.rut_clean = %s)
-          )
-        ORDER BY
-            CASE WHEN %s IS NOT NULL AND c.bsale_id = %s THEN 0 ELSE 1 END,
-            c.bsale_id
-        LIMIT 1
-        """,
-        (
-            _CLIENT_COMPANY_ID,
-            client_id,
-            client_id,
-            rut_clean,
-            rut_clean,
-            client_id,
-            client_id,
-        ),
-    )
-    row = cur.fetchone()
-    if not row:
-        return None, None, None
-    city, seller_id, seller_name = row
-    sid = int(seller_id) if seller_id is not None else None
-    return sid, (str(seller_name).strip() if seller_name else None), (
-        str(city).strip() if city else None
-    )
 
 
 def _insert_order(
@@ -521,10 +540,18 @@ def create_order(body: CreateOrderBody):
     delivery = _delivery_date_value(body.delivery_date)
 
     client_id, client_name, client_rut = _resolve_client(body)
+    _require_unique_items(body.items)
 
     conn = get_connection()
     cur = conn.cursor()
     try:
+        client = _require_registered_client(
+            cur,
+            client_id=client_id,
+            client_rut=client_rut,
+        )
+        _require_price_list_matches_city(price_list_slug, client.city)
+
         qty_errors = validate_order_items(
             cur,
             [
@@ -550,15 +577,29 @@ def create_order(body: CreateOrderBody):
                 },
             )
 
-        available = _orders_table_columns(cur)
-        seller_id, seller_name, client_city = _lookup_client_seller_and_city(
+        catalog_prices = fetch_catalog_prices(
             cur,
-            client_id=client_id,
-            client_rut=client_rut,
+            (it.id for it in body.items),
+            price_list_slug,
         )
+        pricing = price_order_items(
+            [
+                {
+                    "id": it.id,
+                    "name": it.name,
+                    "quantity": it.quantity,
+                    "price": it.price,
+                }
+                for it in body.items
+            ],
+            catalog_prices,
+            sent_total=body.total,
+        )
+        _require_pricing_ok(pricing, price_list_slug)
 
+        available = _orders_table_columns(cur)
         insert_values: dict[str, object] = {
-            "client_id": client_id,
+            "client_id": client.bsale_id,
             "client_name": client_name,
             "client_rut": client_rut,
             "price_list": price_list_slug,
@@ -568,19 +609,16 @@ def create_order(body: CreateOrderBody):
             "contact_phone": phone,
             "delivery_date": delivery,
             "notes": (body.notes or "").strip() or None,
-            "total": Decimal(str(body.total)),
+            "total": pricing.total,
             "status": "pendiente",
-            "seller_id": seller_id,
-            "seller_name": seller_name,
-            "client_city": client_city,
+            "seller_id": client.seller_id,
+            "seller_name": client.seller_name,
+            "client_city": client.city,
         }
 
         order_id = _insert_order(cur, available_cols=available, values=insert_values)
 
-        for it in body.items:
-            qty = int(it.quantity)
-            price_dec = Decimal(str(it.price))
-            subtotal = price_dec * qty
+        for line in pricing.lines:
             cur.execute(
                 """
                 INSERT INTO app.order_items (
@@ -596,12 +634,12 @@ def create_order(body: CreateOrderBody):
                 """,
                 (
                     order_id,
-                    it.id,
-                    (it.name or "").strip() or None,
-                    (it.barcode or "").strip() or None,
-                    qty,
-                    price_dec,
-                    subtotal,
+                    line.variant_id,
+                    line.name or None,
+                    line.barcode,
+                    line.quantity,
+                    line.price,
+                    line.subtotal,
                 ),
             )
 
@@ -613,4 +651,10 @@ def create_order(body: CreateOrderBody):
         cur.close()
         conn.close()
 
-    return {"status": "ok", "order_id": order_id}
+    return {
+        "status": "ok",
+        "order_id": order_id,
+        "price_list": price_list_slug,
+        "price_list_id": _PRICE_LIST_SLUG_TO_ID[price_list_slug],
+        "total": float(pricing.total),
+    }

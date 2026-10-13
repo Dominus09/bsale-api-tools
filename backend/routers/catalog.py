@@ -7,7 +7,9 @@ from backend.utils.sale_quantity import build_commercial_rules
 
 router = APIRouter()
 
-_ALLOWED_PRICE_LISTS = frozenset({"factura", "comoditi", "melinka"})
+# factura → lista 13 (Ruta/Web), melinka → lista 16. La 14 (COMODITI) está descontinuada.
+_ALLOWED_PRICE_LISTS = frozenset({"factura", "melinka"})
+_DISCONTINUED_PRICE_LISTS = frozenset({"comoditi", "14"})
 _CATALOG_COMPANY_ID = 3
 
 _CATALOG_QUERY = """
@@ -22,7 +24,6 @@ SELECT
     cv.image_url AS image,
     CASE
         WHEN %s = 'factura' THEN cv.price_13
-        WHEN %s = 'comoditi' THEN cv.price_14
         WHEN %s = 'melinka' THEN cv.price_16
     END AS price,
     v.description AS variant_description,
@@ -91,10 +92,16 @@ def get_catalog(
             detail="price_list es obligatorio",
         )
 
+    if key in _DISCONTINUED_PRICE_LISTS:
+        raise HTTPException(
+            status_code=400,
+            detail="La lista COMODITI está descontinuada",
+        )
+
     if key not in _ALLOWED_PRICE_LISTS:
         raise HTTPException(
             status_code=400,
-            detail="price_list debe ser factura, comoditi o melinka",
+            detail="price_list debe ser factura o melinka",
         )
 
     query = _CATALOG_QUERY.strip()
@@ -112,7 +119,7 @@ def get_catalog(
         cur = conn.cursor()
         cur.execute(
             query,
-            (key, key, key, _CATALOG_COMPANY_ID),
+            (key, key, _CATALOG_COMPANY_ID),
         )
         rows = cur.fetchall()
         cur.close()
