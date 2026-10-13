@@ -93,6 +93,30 @@ python -m backend.jobs.bsale_raw sync-catalog --company 3 --product-taxes-source
 - Exit: 0 SUCCESS; 2 PARTIAL (algún recurso falló, quedó PARTIAL u omitido por dependencia); 1 FAILED (ninguno); 3 SKIPPED (catálogo solapado); 64 uso (`--company` ≠ 3, `--product-taxes-limit` sin `--dry-run`, `--product-taxes-source` con `--skip-product-taxes`).
 - `--dry-run`: sin escrituras ni locks. `--product-taxes-limit N` (sólo dry-run): con `expand` lee sólo las páginas necesarias para los primeros N productos del listado y NO evalúa ausencias (`missing_evaluated=False`); con `individual`, los primeros N productos de `bsale_raw.products`.
 
+## sync-receptions (recepciones + líneas, sólo company 3)
+
+```bash
+python -m backend.jobs.bsale_raw sync-receptions --company 3 --date 2026-07-31 --dry-run
+python -m backend.jobs.bsale_raw sync-receptions --company 3 --from 2026-01-01 --to 2026-01-31 [--dry-run]
+python -m backend.jobs.bsale_raw sync-receptions --company 3 --reception <ID> [--reception <ID> ...]
+python -m backend.jobs.bsale_raw sync-receptions --company 3 --retry-failures [--limit 50]
+```
+
+`core/reception_engine.py`. Requiere la migración `012_stock_receptions_history.sql`. Sin cron.
+
+- Alcance: recepciones desde **2025-01-01** (fechas anteriores → uso inválido). No hay barrido global del histórico (desde 2013) ni descarga completa diaria. Carga inicial en lotes por fechas (p. ej. un mes por corrida); sincronización periódica = los últimos días con `--from/--to`.
+
+- Fuente: `receptions.json?expand=[details]` (LIVE VALIDATED C3.1A). Nodo `details` validado (`count` == líneas, sin `next`/`offset`, ids únicos, `variant.id`, `quantity`/`cost` numéricos o nulos); truncado o inconsistente → `details.json` paginado. Sin todas las líneas nunca queda `details_complete`: recepción nueva → cabecera con `details_complete = false`; ya guardada → no se toca. Falla en `sync_cursors` (`stock_receptions/global/failures`) → `--retry-failures`.
+- `--date` / `--from --to` (`WINDOW_RECONCILE`, máx. 370 días): `admissiondate` día por día, snapshot estricto; un ítem de otra fecha (filtro ignorado) invalida el día. Única modalidad que marca ausencias: recepción guardada de ese día que Bsale ya no lista → GET individual (404 = `missing_since`; otra fecha = se actualiza), con fusible por día (`BSALE_RAW_MAX_MISSING_PCT_STOCK_RECEPTIONS`, default 20 %, o día vacío con recepciones guardadas).
+  Cada día se escribe en su propia transacción: si la corrida se corta (429, tope de requests, caída), la salida informa `resume_from` y se retoma con `--from <resume_from>`; repetir días ya cargados es idempotente (sin eventos si nada cambió). Recepciones de días no consultados nunca se marcan ausentes.
+- `--reception` (`POINT`, máx. 50): sin lock de corrida; 404 de una recepción guardada → `missing_since`.
+- `payload` = recepción completa tal como llegó (con su nodo `details`); `payload_hash` = su hash. Los cambios se detectan por `content_hash` (cabecera sin `details`; línea sin `variantStock`), `details_hash` y `version_hash`: un cambio sólo de `variantStock` actualiza el payload pero no genera MODIFIED ni mueve `last_changed_at`.
+- Escritura por día en una transacción corta (nunca durante HTTP): `pg_advisory_xact_lock` + `FOR UPDATE` por recepción, cabecera con frescura (`api_fetched_at`), líneas UPSERT + `missing_since` de las ausentes (nunca DELETE), `stock_reception_change_log` (CREATED / MODIFIED con ids de líneas nuevas, ausentes, con cambio de cantidad, costo o variante / REAPPEARED / MISSING) y fallas.
+- Guarda `cost` y `quantity` tal cual (cost = costo unitario; carácter neto pendiente de validar con facturas). No calcula IVA, ILA, bruto, promedio ni total; no toca `variant_costs`; no relaciona proveedores ni OC. `note` y `user` sólo en el payload: nunca en la salida ni en logs.
+- Cuota: `BSALE_RAW_RECEPTION_RPS` (default 1, máx. 2); tope `--max-requests` / `BSALE_RAW_RECEPTION_MAX_REQUESTS` (default 3.000); corte ante 5 respuestas 429 o 10 errores seguidos.
+- Exit: 0 SUCCESS; 2 PARTIAL (días fallidos, recepciones incompletas, fusible, corte); 1 FAILED; 3 SKIPPED (otra carga de recepciones en curso); 64 uso. `--dry-run`: sin escrituras ni lock.
+- Validación posterior (sólo lectura): `backend/sql/bsale_raw/checks/receptions_validation.sql`.
+
 ## sync-nightly (metadata + catálogo)
 
 ```bash

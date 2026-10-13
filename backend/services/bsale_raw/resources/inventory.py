@@ -65,10 +65,17 @@ STOCK_RECEPTIONS = REGISTRY.register(
         request_priority=RequestPriority.P5_COSTS,
         incremental_filter="admissiondate",
         point_filters=("officeid", "documentnumber"),
+        expand=("details",),
         full_scan_global_allowed=False,
         reconcile_window_days=7,
         freshness_sla_seconds=2 * 3600,
-        needs_live_verification=("admissiondate filtra día exacto; no hay rango documentado",),
+        # LIVE VALIDATED C3.1A: admissiondate filtra el día; admissiondaterange se ignora; listado ASC por
+        # id; expand=[details] completo en las muestras. Motor propio: core/reception_engine.py.
+        needs_live_verification=(
+            "expand=[details] en recepciones de más de 50 líneas (el motor cae a details.json si viene truncado)",
+            "carácter neto de cost (unitario confirmado) contra facturas reales",
+            "variantStock de la línea: stock vivo o al momento de la recepción (excluido del content_hash)",
+        ),
     )
 )
 

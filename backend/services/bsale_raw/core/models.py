@@ -55,6 +55,15 @@ class DocumentChangeKind(str, Enum):
     MODIFIED = "MODIFIED"
 
 
+class ReceptionEventKind(str, Enum):
+    """Tipo de fila en stock_reception_change_log."""
+
+    CREATED = "CREATED"
+    MODIFIED = "MODIFIED"
+    REAPPEARED = "REAPPEARED"
+    MISSING = "MISSING"
+
+
 def payload_hash(payload: Any) -> str:
     """SHA-256 del JSON canónico (claves ordenadas, sin espacios). Detecta cambios reales."""
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str)

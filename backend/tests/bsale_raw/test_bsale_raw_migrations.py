@@ -9,6 +9,7 @@ import pytest
 import backend.services.bsale_raw.resources  # noqa: F401
 from backend.services.bsale_raw.core.models import (
     DocumentChangeKind,
+    ReceptionEventKind,
     ResponseEnvelope,
     RunStatus,
     SyncMode,
@@ -53,13 +54,14 @@ EXPECTED_PKS = {
     "document_change_log": ("id",),
     "stock_receptions": ("company_id", "bsale_id"),
     "stock_reception_details": ("company_id", "reception_id", "bsale_id"),
+    "stock_reception_change_log": ("id",),
     "stock_consumptions": ("company_id", "bsale_id"),
     "stock_consumption_details": ("company_id", "consumption_id", "bsale_id"),
     "webhook_events": ("id",),
     "webhook_resource_responses": ("id",),
 }
 CONTROL_TABLES = {"sources", "sync_runs", "sync_entity_runs", "sync_state", "sync_cursors",
-                  "webhook_events", "webhook_resource_responses", "document_change_log"}
+                  "webhook_events", "webhook_resource_responses", "document_change_log", "stock_reception_change_log"}
 DOCUMENT_CHILDREN = ("document_details", "document_references", "document_sellers")
 RAW_DATA_TABLES = set(EXPECTED_PKS) - CONTROL_TABLES
 ALLOWED_FK_TARGETS = {
@@ -88,15 +90,17 @@ def test_ordered_migration_files():
         "001_schema_sources.sql", "002_sync_control.sql", "003_configuration.sql", "004_catalog.sql",
         "005_inventory_pricing.sql", "006_documents.sql", "007_stock_movements.sql", "008_webhooks.sql",
         "009_seed_sources.sql", "010_variant_prices_missing_since.sql", "011_product_taxes.sql",
+        "012_stock_receptions_history.sql",
     ]
 
 
-def test_all_28_tables_exist_once():
+def test_all_29_tables_exist_once():
     # 26 de la propuesta + document_change_log (auditoría OC 33, reglas 2.B) + product_taxes (011)
+    # + stock_reception_change_log (012)
     assert set(TABLES) == set(EXPECTED_PKS)
-    assert len(TABLES) == 28
+    assert len(TABLES) == 29
     created = [m for p in migration_files() for m in re.findall(CREATE_TABLE, _sql(p))]
-    assert len(created) == len(set(created)) == 28
+    assert len(created) == len(set(created)) == 29
 
 
 def test_registry_tables_have_migrations():
@@ -135,6 +139,47 @@ def test_product_taxes_created_explicitly_by_011():
     assert cols["missing_since"].type == "timestamp with time zone" and not cols["missing_since"].not_null
     assert not {"tax_factor", "factor", "percentage", "gross", "net"} & set(cols)
     statements = _statements(next(p for p in migration_files() if p.name == "011_product_taxes.sql"))
+    creates = [s for s in statements if s.startswith("CREATE")]
+    assert creates and not any("IF NOT EXISTS" in s for s in creates)
+
+
+RECEPTION_012_COLUMNS = {
+    "stock_receptions": {
+        "document": "text", "user_id": "bigint", "internal_dispatch_id": "bigint", "admission_date_unix": "bigint",
+        "details_count": "integer", "details_complete": "boolean", "details_hash": "text", "version_hash": "text",
+        "details_source": "text", "details_fetched_at": "timestamp with time zone", "content_hash": "text",
+    },
+    "stock_reception_details": {"missing_since": "timestamp with time zone", "content_hash": "text"},
+}
+
+
+def test_receptions_columns_added_by_012_only_nullable_without_default():
+    path = next(p for p in migration_files() if p.name == "012_stock_receptions_history.sql")
+    alters = [s for s in _statements(path) if s.startswith("ALTER")]
+    assert len(alters) == sum(len(c) for c in RECEPTION_012_COLUMNS.values())
+    assert not any("DEFAULT" in s.upper() or "NOT NULL" in s.upper() for s in alters)
+    created = _sql(next(p for p in migration_files() if p.name == "007_stock_movements.sql"))
+    for table, columns in RECEPTION_012_COLUMNS.items():
+        for name, col_type in columns.items():
+            col = TABLES[table].columns[name]
+            assert col.type == col_type and not col.not_null, (table, name)
+            assert f"ALTER TABLE bsale_raw.{table} ADD COLUMN {name} " in "\n".join(alters)
+        block = re.search(rf"CREATE TABLE IF NOT EXISTS bsale_raw\.{table} \((.*?)\n\);", created, re.DOTALL)
+        assert not set(columns) & set(re.findall(r"^\s+([a-z_]+)\s", block.group(1), re.MULTILINE)), table
+    assert not {"cost_net", "iva", "gross", "cost_total", "average_cost", "supplier_id"} & set(
+        TABLES["stock_reception_details"].columns
+    )
+
+
+def test_reception_change_log_created_explicitly_by_012_without_payload():
+    log = TABLES["stock_reception_change_log"]
+    assert log.file == "012_stock_receptions_history.sql"
+    assert "payload" not in log.columns and "note" not in log.columns
+    for col in ("added_detail_ids", "removed_detail_ids", "quantity_changed_detail_ids", "cost_changed_detail_ids",
+                "variant_changed_detail_ids"):
+        assert log.columns[col].type == "bigint[]" and log.columns[col].not_null
+    assert INDEXES["ix_raw_stock_reception_change_log_reception"].columns == ("company_id", "reception_id", "detected_at")
+    statements = _statements(next(p for p in migration_files() if p.name == "012_stock_receptions_history.sql"))
     creates = [s for s in statements if s.startswith("CREATE")]
     assert creates and not any("IF NOT EXISTS" in s for s in creates)
 
@@ -355,6 +400,7 @@ def test_check_enums_match_python():
         "envelope": {e.value for e in ResponseEnvelope},
         "detected_by": {m.value for m in SyncMode},
         "change_kind": {k.value for k in DocumentChangeKind},
+        "event_kind": {k.value for k in ReceptionEventKind},
     }
     seen = set()
     for name, table in TABLES.items():
@@ -369,7 +415,7 @@ def test_check_enums_match_python():
                 assert values == target, name
             else:
                 assert values == expected[column], (name, column)
-    assert seen == {"last_source", "mode", "status", "envelope", "detected_by", "change_kind"}
+    assert seen == {"last_source", "mode", "status", "envelope", "detected_by", "change_kind", "event_kind"}
 
 
 # --- seguridad de los archivos SQL ---

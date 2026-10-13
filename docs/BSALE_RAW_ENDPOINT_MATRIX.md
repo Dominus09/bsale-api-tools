@@ -247,7 +247,10 @@ Las frecuencias son la **propuesta** de la sección 2. "Tabla RAW" refiere al mo
 | Campos detalle | `id`, `quantity`, `cost`, `variantStock`, `serialNumber`, `variant{id}` |
 | Incremental | `admissiondate` (día exacto; rango **no documentado** → iterar días con solape) |
 | Uso | Disparador de refresco de costos y stock |
-| Tablas RAW | `bsale_raw.stock_receptions`, `bsale_raw.stock_reception_details` |
+| Tablas RAW | `bsale_raw.stock_receptions`, `bsale_raw.stock_reception_details`, `bsale_raw.stock_reception_change_log` (012) |
+| LIVE VALIDATED C3.1A | count ≈ 118.640 (desde 2013); listado ASC por id; `admissiondate` filtra el día; `admissiondaterange` **IGNORADO**; `officeid` y `documentnumber` filtran; `expand=[details]` completo en las muestras (no verificado > 50 líneas); `cost` unitario (neto por verificar); `variant_costs.history[].reception_detail.id` enlaza con la línea |
+| Motor | `core/reception_engine.py` / `sync-receptions`: expand + `details.json` si el nodo viene truncado; por día (`--date`, `--from/--to`, máx. 370 días, ausencias sólo en días consultados) y POINT. Alcance desde 2025-01-01: sin barrido global del histórico |
+| Cambios | `payload` completo; detección por `content_hash` (cabecera sin `details`, línea sin `variantStock`) para no generar MODIFIED falsos |
 
 ### 1.12 Consumos de stock y detalles — MEDIO
 

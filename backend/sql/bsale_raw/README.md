@@ -9,6 +9,9 @@ Orden de aplicación manual (primero en entorno de prueba). Paso a paso: `docs/B
 3. `009_seed_sources.sql`: seed idempotente (paso separado, requiere aprobación).
 4. `010_variant_prices_missing_since.sql`: agrega `variant_prices.missing_since` (no destructiva, nullable, sin DEFAULT). Aplicar ANTES de desplegar/ejecutar `sync-prices`; luego `verify_bsale_raw.sql`.
 5. `011_product_taxes.sql`: crea `bsale_raw.product_taxes` (no destructiva; `CREATE TABLE` explícito, sin `IF NOT EXISTS`). Aplicar ANTES de ejecutar `sync-catalog` con `product_taxes`; luego `verify_bsale_raw.sql`.
+6. `012_stock_receptions_history.sql`: columnas nullable de recepciones (document, user_id, internal_dispatch_id, admission_date_unix, completitud y hashes), `stock_reception_details.missing_since` y `bsale_raw.stock_reception_change_log` (no destructiva). Aplicar ANTES de ejecutar `sync-receptions`; luego `verify_bsale_raw.sql`. `stock_receptions.payload` guarda la recepción completa (con su nodo `details`) y cada línea queda además con su payload original en `stock_reception_details`. `content_hash` (cabecera sin `details`; línea sin `variantStock`) es la base de la detección de cambios; `payload_hash` sigue siendo el hash del payload completo.
+
+Consultas de validación (sólo lectura, no son migraciones): `checks/receptions_validation.sql`.
 
 Reglas:
 

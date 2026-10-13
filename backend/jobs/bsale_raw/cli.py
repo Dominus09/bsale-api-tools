@@ -11,6 +11,11 @@
     python -m backend.jobs.bsale_raw refresh-prices --company 3 --variant <ID> [--variant <ID> ...] [--price-list <ID> ...] [--dry-run]
     python -m backend.jobs.bsale_raw sync-catalog --company 3 [--skip-product-taxes | --product-taxes-source expand|individual] [--dry-run [--product-taxes-limit N]]
     python -m backend.jobs.bsale_raw sync-nightly [--company N ...] [--dry-run]
+    python -m backend.jobs.bsale_raw sync-receptions --company 3 --date YYYY-MM-DD [--dry-run]
+    python -m backend.jobs.bsale_raw sync-receptions --company 3 --from YYYY-MM-DD --to YYYY-MM-DD [--dry-run]
+    python -m backend.jobs.bsale_raw sync-receptions --company 3 --reception <ID> [--reception <ID> ...] [--dry-run]
+    python -m backend.jobs.bsale_raw sync-receptions --company 3 --retry-failures [--limit 50] [--dry-run]
+    (todas aceptan --max-requests N)
 
 ``--document`` es el id TÉCNICO del documento en Bsale (``/v1/documents/{id}.json``), no el folio
 (``number``) ni el número visible de la OC. No hay búsqueda por folio.
@@ -23,6 +28,9 @@ metadata de listas) falló; 1 = ninguna lista sincronizada.
 ``sync-catalog``: 3 = otro catálogo de la empresa en curso; 2 = algún recurso falló, quedó PARTIAL u
 omitido por dependencia; 1 = ningún recurso sincronizado.
 ``sync-nightly`` usa 0/1/2/64 (un lock ocupado cuenta como recurso FAILED → PARTIAL).
+``sync-receptions``: 3 = otra carga de recepciones de la empresa en curso; 2 = días sin snapshot, recepciones
+con detalle incompleto, fusible o corte (429 / tope de requests). Fechas desde 2025-01-01 y hasta 370 días por
+corrida; si una corrida se corta, ``resume_from`` indica el ``--from`` para retomarla.
 La salida nunca incluye token, payload ni datos del cliente.
 """
 
@@ -222,6 +230,19 @@ def build_parser(resources: list[str]) -> argparse.ArgumentParser:
         help="limita a esta empresa (repetible); por defecto todas las activas",
     )
     nightly.add_argument("--dry-run", action="store_true", help="consulta API y valida; no escribe en la BD")
+    receptions = sub.add_parser(
+        "sync-receptions",
+        help="recepciones de stock + líneas (receptions.json?expand=[details]); sólo company 3",
+    )
+    receptions.add_argument("--company", type=int, required=True, help="company_id (bsale_raw.sources)")
+    receptions.add_argument("--date", help="un día YYYY-MM-DD (admissiondate)")
+    receptions.add_argument("--from", dest="date_from", help="primer día YYYY-MM-DD (con --to)")
+    receptions.add_argument("--to", dest="date_to", help="último día YYYY-MM-DD (con --from)")
+    receptions.add_argument("--reception", type=int, action="append", help="id Bsale de la recepción (POINT, repetible)")
+    receptions.add_argument("--retry-failures", action="store_true", help="reintenta recepciones fallidas o incompletas")
+    receptions.add_argument("--limit", type=int, help="máximo de recepciones a reintentar (sólo --retry-failures)")
+    receptions.add_argument("--max-requests", type=int, help="tope de requests de esta corrida")
+    receptions.add_argument("--dry-run", action="store_true", help="consulta API y valida; no escribe en la BD")
     return parser
 
 
@@ -456,6 +477,63 @@ def nightly_exit_code(report) -> int:
     return {"SUCCESS": EXIT_SUCCESS, "PARTIAL": EXIT_PARTIAL}.get(report.status, EXIT_FAILED)
 
 
+def _default_reception_runner(*, company_id: int, request, dry_run: bool) -> EntityOutcome:
+    from backend.services.bsale_raw.core.reception_engine import PgReceptionStore, run_reception_sync
+    from backend.utils.bsale_token_env import load_dotenv_if_available
+
+    load_dotenv_if_available()
+    store = PgReceptionStore(read_only=dry_run)
+    try:
+        return run_reception_sync(
+            store=store, company_id=company_id, request=request, dry_run=dry_run, host=socket.gethostname(),
+        )
+    finally:
+        store.close()
+
+
+def reception_request(args: argparse.Namespace):
+    """(ReceptionRequest, None) o (None, problema). Exactamente una modalidad por corrida."""
+    from datetime import date
+
+    from backend.services.bsale_raw.core import reception_engine as re_
+
+    def day(value: str, flag: str) -> date:
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            raise ValueError(f"{flag} debe ser YYYY-MM-DD") from None
+
+    chosen = [name for name, on in (
+        ("--date", args.date is not None),
+        ("--from/--to", args.date_from is not None or args.date_to is not None),
+        ("--reception", bool(args.reception)),
+        ("--retry-failures", args.retry_failures),
+    ) if on]
+    if len(chosen) != 1:
+        return None, "elegir exactamente una modalidad: --date, --from/--to, --reception o --retry-failures"
+    if args.limit is not None and not args.retry_failures:
+        return None, "--limit sólo se acepta con --retry-failures"
+    try:
+        if args.date is not None:
+            d = day(args.date, "--date")
+            req = re_.ReceptionRequest(mode=re_.MODE_DATES, date_from=d, date_to=d, max_requests=args.max_requests)
+        elif chosen == ["--from/--to"]:
+            if args.date_from is None or args.date_to is None:
+                return None, "--from y --to van juntos"
+            req = re_.ReceptionRequest(mode=re_.MODE_DATES, date_from=day(args.date_from, "--from"),
+                                       date_to=day(args.date_to, "--to"), max_requests=args.max_requests)
+        elif args.reception:
+            req = re_.ReceptionRequest(mode=re_.MODE_POINT, reception_ids=tuple(dict.fromkeys(args.reception)),
+                                       max_requests=args.max_requests)
+        else:
+            limit = re_.MAX_POINT if args.limit is None else args.limit
+            req = re_.ReceptionRequest(mode=re_.MODE_RETRY, limit=limit, max_requests=args.max_requests)
+        re_.validate_request(args.company, req)
+    except ValueError as exc:
+        return None, str(exc)
+    return req, None
+
+
 def main(
     argv: list[str] | None = None,
     *,
@@ -465,6 +543,7 @@ def main(
     price_runner: Callable[..., object] = _default_price_runner,
     catalog_runner: Callable[..., object] = _default_catalog_runner,
     nightly_runner: Callable[..., object] = _default_nightly_runner,
+    reception_runner: Callable[..., EntityOutcome] = _default_reception_runner,
     out: TextIO | None = None,
     err: TextIO | None = None,
 ) -> int:
@@ -556,6 +635,18 @@ def main(
         report = nightly_runner(companies=args.company, dry_run=args.dry_run)
         print(format_report(report), file=out)
         return nightly_exit_code(report)
+
+    if args.command == "sync-receptions":
+        from backend.services.bsale_raw.core.reception_engine import format_reception_outcome
+
+        request, problem = reception_request(args)
+        if problem:
+            print(f"uso inválido: {problem}", file=err)
+            return EXIT_USAGE
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stderr)
+        outcome = reception_runner(company_id=args.company, request=request, dry_run=args.dry_run)
+        print(format_reception_outcome(outcome), file=out)
+        return exit_code(outcome)
 
     problem = usage_error(args, REGISTRY.get(args.resource))
     if problem:
