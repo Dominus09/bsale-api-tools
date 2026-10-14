@@ -42,7 +42,13 @@ import {
   FileWarning,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
-import { canAccessDiagnostics, staffUserFromLocalStorage } from "@/lib/permissions"
+import {
+  canAccessDiagnostics,
+  hasManagementAccess,
+  hasMarginViewAccess,
+  hasPromotionsV2ViewAccess,
+  staffUserFromLocalStorage,
+} from "@/lib/permissions"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
 type NavItem = {
@@ -160,16 +166,30 @@ const navSections: { title: string; items: NavItem[] }[] = [
 function buildNavSectionsForRole(role: string | null) {
   const user = staffUserFromLocalStorage()
   if (role) user.role = role
-  if (!canAccessDiagnostics(user)) return navSections
+  const diagnostics = canAccessDiagnostics(user)
+  const management = hasManagementAccess(user)
+  const marginViewer = hasMarginViewAccess(user)
+  const promotionsViewer = hasPromotionsV2ViewAccess(user)
+  if (!diagnostics && !management && !marginViewer && !promotionsViewer) return navSections
   return navSections.map((section) => {
-    if (section.title !== "Administración") return section
-    return {
-      ...section,
-      items: [
-        ...section.items,
-        { href: "/admin/diagnostico", label: "Diagnóstico ERP", icon: Stethoscope },
-      ],
+    if (section.title === "Analítica" && (management || marginViewer || promotionsViewer)) {
+      const v2: NavItem[] = []
+      if (marginViewer) v2.push({ href: "/analitica-v2/dashboard", label: "Dashboard V2", icon: LayoutDashboard })
+      if (management) v2.push({ href: "/analitica-v2/costos", label: "Control de costos V2", icon: CircleDollarSign })
+      if (marginViewer) v2.push({ href: "/analitica-v2/margenes", label: "Márgenes V2", icon: TrendingUp })
+      if (promotionsViewer) v2.push({ href: "/analitica-v2/promociones", label: "Promociones V2", icon: Percent })
+      return { ...section, items: [...section.items, ...v2] }
     }
+    if (section.title === "Administración" && diagnostics) {
+      return {
+        ...section,
+        items: [
+          ...section.items,
+          { href: "/admin/diagnostico", label: "Diagnóstico ERP", icon: Stethoscope },
+        ],
+      }
+    }
+    return section
   })
 }
 

@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { LogOut, Building2, User, WifiOff, PanelLeft, PanelLeftClose } from "lucide-react"
+import { LogOut, Building2, User, PanelLeft, PanelLeftClose } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -10,8 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Badge } from "@/components/ui/badge"
-import { logout, getStoredEmail, getStoredCompanyName, getIsDemoMode, initDemoMode } from "@/lib/api"
+import { logout, getStoredEmail, getStoredCompanyName } from "@/lib/api"
 
 type HeaderProps = {
   /** Si se pasa, muestra botón para colapsar/expandir el sidebar del dashboard. */
@@ -22,19 +21,10 @@ type HeaderProps = {
 export function Header({ sidebarOpen, onToggleSidebar }: HeaderProps) {
   const [email, setEmail] = useState<string | null>(null)
   const [companyName, setCompanyName] = useState<string | null>(null)
-  const [isDemoMode, setIsDemoMode] = useState(false)
 
   useEffect(() => {
-    initDemoMode()
     setEmail(getStoredEmail())
     setCompanyName(getStoredCompanyName())
-    setIsDemoMode(getIsDemoMode())
-
-    const interval = setInterval(() => {
-      setIsDemoMode(getIsDemoMode())
-    }, 1000)
-
-    return () => clearInterval(interval)
   }, [])
 
   const handleLogout = () => {
@@ -71,15 +61,6 @@ export function Header({ sidebarOpen, onToggleSidebar }: HeaderProps) {
         <span className="min-w-0 truncate text-sm font-medium text-foreground sm:text-base">
           {companyName || "Empresa"}
         </span>
-        {isDemoMode && (
-          <Badge
-            variant="outline"
-            className="ml-1 hidden shrink-0 border-amber-500 bg-amber-50 text-amber-700 sm:inline-flex"
-          >
-            <WifiOff className="mr-1 h-3 w-3" />
-            Modo demo
-          </Badge>
-        )}
       </div>
 
       <div className="flex shrink-0 items-center">
@@ -101,11 +82,6 @@ export function Header({ sidebarOpen, onToggleSidebar }: HeaderProps) {
             <div className="px-2 py-1.5">
               <p className="truncate text-sm font-medium">{email}</p>
               <p className="truncate text-xs text-muted-foreground">{companyName}</p>
-              {isDemoMode && (
-                <p className="mt-1 text-xs text-amber-600">
-                  Usando datos de demostración
-                </p>
-              )}
             </div>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={handleChangeCompany}>

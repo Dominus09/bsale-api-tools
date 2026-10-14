@@ -9,14 +9,15 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from backend.db import get_connection
+from backend.utils.auth_staff import require_staff_user
 from backend.utils.promotion_price_list_map import mapped_price_list_for_company
 from backend.utils.promotion_prices import calc_sale_price
 
-router = APIRouter(tags=["promotions"])
+router = APIRouter(tags=["promotions"], dependencies=[Depends(require_staff_user)])
 
 CANAL_RUTA = "ruta"
 COMPANY_ID_RUTA_FIJO = 3

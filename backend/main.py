@@ -18,6 +18,7 @@ from backend.routers.catalog_admin import router as catalog_admin_router
 
 # Panel / analytics (rutas legacy usadas por el frontend admin)
 from backend.routers import alerts
+from backend.routers import analytics_v2
 from backend.routers import companies
 from backend.routers import dashboard
 from backend.routers import distribuidora
@@ -136,6 +137,9 @@ app.include_router(purchases.router)
 app.include_router(uploads.router)
 app.include_router(margin_problems.router)
 app.include_router(margin_export.router)
+
+# --- Analítica V2 (BSALE RAW, solo lectura; en paralelo a los módulos legacy) ---
+app.include_router(analytics_v2.router)
 
 # --- Distribuidora ---
 app.include_router(distribuidora.router)

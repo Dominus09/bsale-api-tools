@@ -65,6 +65,15 @@ export function hasMarginViewAccess(
   return hasManagementAccess(user) || MARGIN_VIEW_EXTRA_ROLES.has(role)
 }
 
+const PROMOTIONS_V2_VIEW_EXTRA_ROLES = new Set(["finanzas", "finance", "comercial"])
+
+/** Solo controla visibilidad del menú: el backend valida cada acción. */
+export function hasPromotionsV2ViewAccess(
+  user: StaffUserLike | string | null | undefined,
+): boolean {
+  return hasManagementAccess(user) || PROMOTIONS_V2_VIEW_EXTRA_ROLES.has(roleFromUser(user))
+}
+
 /** Futuro: módulos operacionales. */
 export function hasOperationalAccess(
   user: StaffUserLike | string | null | undefined,

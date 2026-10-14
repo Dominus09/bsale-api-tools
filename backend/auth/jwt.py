@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import jwt
@@ -52,6 +53,23 @@ def _load_jwt_secret() -> str:
 SECRET = _load_jwt_secret()
 
 
+def _env_flag(name: str) -> bool:
+    return (os.getenv(name) or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def token_lifetime_minutes() -> int | None:
+    """``JWT_EXPIRE_MINUTES`` > 0 activa ``exp`` en tokens nuevos; sin definir se mantiene el comportamiento actual."""
+    raw = (os.getenv("JWT_EXPIRE_MINUTES") or "").strip()
+    if not raw:
+        return None
+    try:
+        minutes = int(raw)
+    except ValueError:
+        logger.warning("JWT_EXPIRE_MINUTES inválido; se ignora")
+        return None
+    return minutes if minutes > 0 else None
+
+
 def create_staff_token(
     *,
     email: str,
@@ -61,12 +79,19 @@ def create_staff_token(
     payload: dict[str, Any] = {"email": email, "role": role}
     if extra:
         payload.update(extra)
+    minutes = token_lifetime_minutes()
+    if minutes is not None:
+        now = datetime.now(timezone.utc)
+        payload["iat"] = now
+        payload["exp"] = now + timedelta(minutes=minutes)
     return jwt.encode(payload, SECRET, algorithm=ALGORITHM)
 
 
 def decode_jwt_token(token: str) -> dict[str, Any]:
-    """Decodifica un JWT staff sin lógica HTTP."""
-    return jwt.decode(token, SECRET, algorithms=[ALGORITHM])
+    """Decodifica un JWT staff sin lógica HTTP. ``exp`` se valida siempre que venga en el token;
+    con ``JWT_REQUIRE_EXP`` activo, los tokens sin ``exp`` se rechazan."""
+    options = {"require": ["exp"]} if _env_flag("JWT_REQUIRE_EXP") else None
+    return jwt.decode(token, SECRET, algorithms=[ALGORITHM], options=options)
 
 
 def bearer_token_from_authorization(authorization: str | None) -> str | None:
@@ -85,6 +110,8 @@ def decode_staff_token(authorization: str | None) -> dict[str, Any]:
         raise HTTPException(status_code=401, detail="Token vacío")
     try:
         payload = decode_jwt_token(token)
+    except jwt.ExpiredSignatureError as exc:
+        raise HTTPException(status_code=401, detail="Sesión expirada") from exc
     except jwt.PyJWTError as exc:
         raise HTTPException(status_code=401, detail="Token inválido") from exc
     if not payload.get("email"):

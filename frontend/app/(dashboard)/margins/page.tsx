@@ -195,10 +195,10 @@ export default function MarginsPage() {
       setSummary(adaptPriceControlSummary(res.summary))
       setPage(1)
     } catch (e) {
-      setRows([])
+          setRows([])
       setSummary(null)
       setError(e instanceof Error ? e.message : "Error al cargar control de precios")
-    } finally {
+      } finally {
       setLoading(false)
     }
   }, [applied.companyId, applied.priceListId])
@@ -464,7 +464,7 @@ export default function MarginsPage() {
                   <SelectItem value="unknown">Sin fecha</SelectItem>
                 </SelectContent>
               </Select>
-            </div>
+      </div>
             <div className="space-y-1.5">
               <Label className="text-xs">Tipo de producto</Label>
               <Select value={productTypeFilter} onValueChange={setProductTypeFilter}>
@@ -480,14 +480,14 @@ export default function MarginsPage() {
                   ))}
                 </SelectContent>
               </Select>
-            </div>
+          </div>
           </>
         }
       >
         <div className="space-y-1.5">
           <Label className="text-xs">Empresa</Label>
           <Select
-            value={companyId}
+              value={companyId}
             onValueChange={(v) => {
               setCompanyId(v)
               setPriceListId(ALL)
@@ -504,7 +504,7 @@ export default function MarginsPage() {
               ))}
             </SelectContent>
           </Select>
-        </div>
+          </div>
         <div className="space-y-1.5">
           <Label className="text-xs">Lista de precios</Label>
           <Select value={priceListId} onValueChange={setPriceListId}>
@@ -529,7 +529,7 @@ export default function MarginsPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-        </div>
+          </div>
       </AnalyticsFilterBar>
 
       {error ? (
@@ -585,8 +585,8 @@ export default function MarginsPage() {
           value={filteredSummary?.needsReview ?? "—"}
           loading={loading}
           tooltip="Todo lo que no está dentro de política."
-        />
-      </div>
+            />
+          </div>
 
       <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
         <Card className="shadow-none xl:col-span-1">
@@ -630,9 +630,9 @@ export default function MarginsPage() {
                 }
               }}
             />
-          </CardContent>
-        </Card>
-      </div>
+        </CardContent>
+      </Card>
+              </div>
 
       <Card className="shadow-none">
         <CardHeader className="pb-2">

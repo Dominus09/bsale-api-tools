@@ -11,81 +11,11 @@ import {
 
 const API_URL = getApiBaseUrl()
 
-// Demo mode state - tracks if we're using fallback data
-let isDemoMode = false
+/** Token ficticio que emitía el antiguo modo demo; nunca es una sesión válida. */
+const LEGACY_DEMO_TOKEN = "demo-token-12345"
 
-// Get demo mode state
-export function getIsDemoMode(): boolean {
-  return isDemoMode
-}
-
-// Set demo mode state
-function setDemoMode(value: boolean) {
-  isDemoMode = value
-  if (typeof window !== "undefined") {
-    // Store in sessionStorage so it persists across page navigations
-    sessionStorage.setItem("demo_mode", value.toString())
-  }
-}
-
-// Initialize demo mode from sessionStorage
-export function initDemoMode() {
-  if (typeof window !== "undefined") {
-    const stored = sessionStorage.getItem("demo_mode")
-    if (stored === "true") {
-      isDemoMode = true
-    }
-  }
-}
-
-// Demo fallback credentials
-const DEMO_EMAIL = "prueba.q@gmail.com"
-const DEMO_PASSWORD = "123456"
-
-// Mock data for demo mode when API is unavailable
-const mockCompanies: Company[] = [
-  { company_id: 1, name: "Supermercado Quillotana Centro" },
-  { company_id: 2, name: "Supermercado Quillotana Norte" },
-  { company_id: 3, name: "Distribuidora Quillotana" },
-]
-
-const mockMarginSummary: MarginSummary = {
-  total_products: 1250,
-  low_margin_count: 45,
-  ok_count: 890,
-  high_margin_count: 280,
-  ultra_high_margin_count: 35,
-  average_margin: 23.5,
-}
-
-const mockMarginAlerts: MarginAlert[] = [
-  { id: 1, product_name: "Leche Entera 1L", current_margin: 8.2, expected_margin: 15, alert_type: "LOW_MARGIN" },
-  { id: 2, product_name: "Pan de Molde Integral", current_margin: 6.5, expected_margin: 12, alert_type: "LOW_MARGIN" },
-  { id: 3, product_name: "Aceite Vegetal 1L", current_margin: 9.1, expected_margin: 14, alert_type: "LOW_MARGIN" },
-  { id: 4, product_name: "Arroz Grado 1 1kg", current_margin: 7.8, expected_margin: 13, alert_type: "LOW_MARGIN" },
-  { id: 5, product_name: "Azúcar Blanca 1kg", current_margin: 5.2, expected_margin: 11, alert_type: "LOW_MARGIN" },
-]
-
-const mockMarginProducts: MarginProduct[] = [
-  { id: 1, product_name: "Leche Entera 1L", cost: 850, price: 925, margin: 8.2, status: "LOW_MARGIN", suggested_price: 1000 },
-  { id: 2, product_name: "Pan de Molde Integral", cost: 1200, price: 1280, margin: 6.5, status: "LOW_MARGIN", suggested_price: 1370 },
-  { id: 3, product_name: "Aceite Vegetal 1L", cost: 2100, price: 2300, margin: 9.1, status: "LOW_MARGIN", suggested_price: 2450 },
-  { id: 4, product_name: "Arroz Grado 1 1kg", cost: 980, price: 1060, margin: 7.8, status: "LOW_MARGIN", suggested_price: 1125 },
-  { id: 5, product_name: "Coca-Cola 2L", cost: 1500, price: 1890, margin: 20.6, status: "OK", suggested_price: 1890 },
-  { id: 6, product_name: "Detergente Omo 3kg", cost: 4200, price: 5490, margin: 23.5, status: "OK", suggested_price: 5490 },
-  { id: 7, product_name: "Papel Higiénico 12un", cost: 3800, price: 4990, margin: 23.9, status: "OK", suggested_price: 4990 },
-  { id: 8, product_name: "Café Nescafé 170g", cost: 3500, price: 4890, margin: 28.4, status: "HIGH_MARGIN", suggested_price: 4550 },
-  { id: 9, product_name: "Chocolates Surtidos", cost: 2800, price: 4290, margin: 34.7, status: "HIGH_MARGIN", suggested_price: 3640 },
-  { id: 10, product_name: "Snacks Premium", cost: 1200, price: 2490, margin: 51.8, status: "ULTRA_HIGH_MARGIN", suggested_price: 1560 },
-]
-
-const mockProductsWithoutCost: ProductWithoutCost[] = [
-  { id: 1, product_name: "Yogurt Natural 1L", sku: "YOG-001", category: "Lácteos" },
-  { id: 2, product_name: "Queso Gouda 250g", sku: "QUE-002", category: "Lácteos" },
-  { id: 3, product_name: "Jamón Serrano 100g", sku: "JAM-003", category: "Fiambres" },
-  { id: 4, product_name: "Vino Tinto Reserva", sku: "VIN-004", category: "Bebidas" },
-  { id: 5, product_name: "Galletas Integrales", sku: "GAL-005", category: "Snacks" },
-]
+const NETWORK_ERROR_MESSAGE =
+  "No se pudo conectar con el servidor. Verifique su conexión e intente nuevamente."
 
 export interface LoginResponse {
   token: string
@@ -427,36 +357,38 @@ function isNetworkError(error: unknown): boolean {
   )
 }
 
+function toNetworkAwareError(error: unknown): unknown {
+  return isNetworkError(error) ? new Error(NETWORK_ERROR_MESSAGE) : error
+}
+
 export async function login(email: string, password: string): Promise<LoginResponse> {
+  let res: Response
   try {
-    const res = await fetch(`${API_URL}/login`, {
+    res = await fetch(`${API_URL}/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
     })
-    if (!res.ok) {
-      throw new Error("Credenciales inválidas")
-    }
-    setDemoMode(false)
-    return res.json()
   } catch (error) {
     if (isNetworkError(error)) {
-      console.warn("[API] Network error on login, falling back to demo mode", {
+      console.warn("[API] Network error on login", {
         apiUrl: API_URL,
         origin: typeof window !== "undefined" ? window.location.origin : "(ssr)",
         hint:
           "Fetch vía /api-upstream (rewrite Next) evita CORS; si falla: CSP/Cloudflare, NEXT_PUBLIC_API_URL en build y que el API responda.",
       })
-      setDemoMode(true)
-      // Allow demo login with specific credentials or any credentials
-      if ((email === DEMO_EMAIL && password === DEMO_PASSWORD) || (email && password)) {
-        await new Promise((resolve) => setTimeout(resolve, 500))
-        return { token: "demo-token-12345", email, role: "admin" }
-      }
-      throw new Error("Credenciales inválidas")
+      throw new Error(NETWORK_ERROR_MESSAGE)
     }
     throw error
   }
+  if (!res.ok) {
+    throw new Error("Credenciales inválidas")
+  }
+  const data = (await res.json()) as Partial<LoginResponse>
+  if (!data?.token || typeof data.token !== "string") {
+    throw new Error("Respuesta de autenticación inválida")
+  }
+  return data as LoginResponse
 }
 
 export async function getAuthMe(): Promise<AuthMeResponse> {
@@ -479,13 +411,7 @@ export async function getCompanies(): Promise<Company[]> {
     }
     return res.json()
   } catch (error) {
-    if (isNetworkError(error)) {
-      console.warn("[API] Network error on getCompanies, using fallback data")
-      setDemoMode(true)
-      await new Promise((resolve) => setTimeout(resolve, 300))
-      return mockCompanies
-    }
-    throw error
+    throw toNetworkAwareError(error)
   }
 }
 
@@ -500,13 +426,7 @@ export async function getMarginSummary(): Promise<MarginSummary> {
     }
     return res.json()
   } catch (error) {
-    if (isNetworkError(error)) {
-      console.warn("[API] Network error on getMarginSummary, using fallback data")
-      setDemoMode(true)
-      await new Promise((resolve) => setTimeout(resolve, 300))
-      return mockMarginSummary
-    }
-    throw error
+    throw toNetworkAwareError(error)
   }
 }
 
@@ -521,13 +441,7 @@ export async function getMarginAlerts(): Promise<MarginAlert[]> {
     }
     return res.json()
   } catch (error) {
-    if (isNetworkError(error)) {
-      console.warn("[API] Network error on getMarginAlerts, using fallback data")
-      setDemoMode(true)
-      await new Promise((resolve) => setTimeout(resolve, 300))
-      return mockMarginAlerts
-    }
-    throw error
+    throw toNetworkAwareError(error)
   }
 }
 
@@ -542,13 +456,7 @@ export async function getMarginAnalysis(): Promise<MarginProduct[]> {
     }
     return res.json()
   } catch (error) {
-    if (isNetworkError(error)) {
-      console.warn("[API] Network error on getMarginAnalysis, using fallback data")
-      setDemoMode(true)
-      await new Promise((resolve) => setTimeout(resolve, 300))
-      return mockMarginProducts
-    }
-    throw error
+    throw toNetworkAwareError(error)
   }
 }
 
@@ -721,13 +629,7 @@ export async function getProductsWithoutCost(): Promise<ProductWithoutCost[]> {
     }
     return res.json()
   } catch (error) {
-    if (isNetworkError(error)) {
-      console.warn("[API] Network error on getProductsWithoutCost, using fallback data")
-      setDemoMode(true)
-      await new Promise((resolve) => setTimeout(resolve, 300))
-      return mockProductsWithoutCost
-    }
-    throw error
+    throw toNetworkAwareError(error)
   }
 }
 
@@ -1065,8 +967,8 @@ export async function getDistribuidoraOrdersPurchase(params: {
   const res = await fetchDistinguishingTimeout(
     `${API_URL}/distribuidora/orders/purchase?${qs}`,
     {
-      headers: getAuthHeaders(),
-      signal: params.signal,
+    headers: getAuthHeaders(),
+    signal: params.signal,
     },
     ORDERS_PURCHASE_FETCH_TIMEOUT_MS,
   )
@@ -1125,8 +1027,8 @@ export type DistribuidoraDispatchPrepPaginatedMeta = {
 
 export type DistribuidoraDispatchPrepObservacionesResponse =
   DistribuidoraDispatchPrepPaginatedMeta & {
-    items: string[]
-  }
+  items: string[]
+}
 
 export async function getDistribuidoraDispatchPrepObservaciones(params: {
   emission_date_from: string
@@ -1197,8 +1099,8 @@ export type DistribuidoraDispatchPrepPlanningRow = {
 
 export type DistribuidoraDispatchPrepPlanningRowsResponse =
   DistribuidoraDispatchPrepPaginatedMeta & {
-    items: DistribuidoraDispatchPrepPlanningRow[]
-  }
+  items: DistribuidoraDispatchPrepPlanningRow[]
+}
 
 export async function getDistribuidoraDispatchPrepPlanningRows(params: {
   emission_date_from: string
@@ -1995,10 +1897,10 @@ export async function postDistribuidoraPlanificacionOrsRoutes(params: {
   const res = await fetchWithTimeout(
     `${API_URL}/distribuidora/planificacion/ors-routes`,
     {
-      method: "POST",
-      headers: getAuthHeaders(),
+    method: "POST",
+    headers: getAuthHeaders(),
       body: JSON.stringify(body),
-      signal: params.signal,
+    signal: params.signal,
     },
     ORS_FETCH_TIMEOUT_MS,
   )
@@ -4429,13 +4331,18 @@ export function logout() {
     localStorage.removeItem("company_id")
     localStorage.removeItem("company_name")
     sessionStorage.removeItem("demo_mode")
-    isDemoMode = false
   }
 }
 
 export function isAuthenticated(): boolean {
   if (typeof window === "undefined") return false
-  return !!localStorage.getItem("token")
+  const token = localStorage.getItem("token")
+  if (!token) return false
+  if (token === LEGACY_DEMO_TOKEN) {
+    logout()
+    return false
+  }
+  return true
 }
 
 export function getStoredEmail(): string | null {
