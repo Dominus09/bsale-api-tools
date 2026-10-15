@@ -47,6 +47,7 @@ from backend.services.analytics_v2.cost_control_service import (
     run_cost_control,
 )
 from backend.services.analytics_v2.dashboard_service import run_dashboard
+from backend.services.analytics_v2.packs_service import PacksV2Service, run_packs
 from backend.services.analytics_v2.margins_service import (
     MarginsNotFound,
     MarginsV2Service,
@@ -166,6 +167,7 @@ def costs_products(
     anomaly_code: str | None = Query(None),
     office_id: int | None = Query(None, ge=1),
     min_abs_change_pct: Decimal | None = Query(None, ge=0, le=100000),
+    kind: str = Query("all", max_length=20),
     sort: str = Query("reliability"),
     page: int = PageQuery,
     page_size: int = PageSizeQuery,
@@ -185,6 +187,7 @@ def costs_products(
             anomaly_code=anomaly_code,
             office_id=office_id,
             min_abs_change_pct=min_abs_change_pct,
+            kind=kind,
             sort=sort,
             page=page,
             page_size=page_size,
@@ -349,6 +352,66 @@ def margins_policy_review(
     user: dict = Depends(require_margins_v2),
 ):
     return _run_margins("margins_policy_review", user, company_id, lambda s: s.policy_review(only_issues=only_issues))
+
+
+# ---------------------------------------------------------------- Packs Bsale
+
+
+def _run_packs(endpoint: str, user: dict[str, Any], company_id: int, fn: Callable[[PacksV2Service], Any]) -> Any:
+    return _guard(endpoint, company_id, lambda: run_packs(user, company_id, fn))
+
+
+@router.get("/packs/summary")
+def packs_summary(
+    company_id: int = CompanyQuery,
+    cost_basis: str = CostBasisQuery,
+    user: dict = Depends(require_margins_v2),
+):
+    return _run_packs("packs_summary", user, company_id, lambda s: s.summary(cost_basis=cost_basis))
+
+
+@router.get("/packs/rows")
+def packs_rows(
+    company_id: int = CompanyQuery,
+    q: str | None = Query(None, max_length=100),
+    price_list_id: int | None = Query(None, ge=1),
+    pack_status: str | None = Query(None, max_length=60),
+    margin_status: str | None = Query(None, max_length=60),
+    problem: str | None = Query(None, max_length=60),
+    pack_state: str = Query("active", max_length=20),
+    cost_basis: str = CostBasisQuery,
+    sort: str = Query("status", max_length=20),
+    page: int = PageQuery,
+    page_size: int = PageSizeQuery,
+    user: dict = Depends(require_margins_v2),
+):
+    return _run_packs(
+        "packs_rows",
+        user,
+        company_id,
+        lambda s: s.list_rows(
+            q=q.strip() if q else None,
+            price_list_id=price_list_id,
+            pack_status=pack_status,
+            margin_status=margin_status,
+            problem=problem,
+            pack_state=pack_state,
+            cost_basis=cost_basis,
+            sort=sort,
+            page=page,
+            page_size=page_size,
+        ),
+    )
+
+
+@router.get("/packs/{variant_id}")
+def packs_detail(
+    variant_id: int = Path(..., ge=1),
+    company_id: int = CompanyQuery,
+    cost_basis: str = CostBasisQuery,
+    user: dict = Depends(require_margins_v2),
+):
+    return _run_packs("packs_detail", user, company_id, lambda s: s.detail(variant_id, cost_basis=cost_basis))
 
 
 # ---------------------------------------------------------------- Dashboard V2

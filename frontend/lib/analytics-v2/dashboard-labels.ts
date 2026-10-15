@@ -64,6 +64,8 @@ export const WARNING_LABELS: Record<string, string> = {
   bloque_costos_no_disponible: "Costos no disponible",
   bloque_impuestos_no_disponible: "Impuestos no disponible",
   bloque_promociones_no_disponible: "Promociones no disponible",
+  packs_con_costo_pendiente: "Hay packs Bsale activos sin costo calculable por componentes",
+  bloque_packs_no_disponible: "Rentabilidad de packs no disponible",
 }
 
 export function warningLabel(code: string): string {

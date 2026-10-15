@@ -1,5 +1,7 @@
 /** Contratos de Analítica V2 (espejo de backend/services/analytics_v2). Montos = string decimal. */
 
+import type { PackCostDetail } from "./packs-types"
+
 export type MovementClass =
   | "factura"
   | "guia_despacho"
@@ -49,6 +51,7 @@ export type GrossCostStatus =
   | "requiere_revision_tributaria"
   | "sin_configuracion_tributaria"
   | "sin_costo_base"
+  | "pack_no_calculable"
 
 export type Money = string | null
 
@@ -116,7 +119,7 @@ export type CommercialGrossCost = {
   gross: Money
   status: GrossCostStatus
   reason: string | null
-  base: "promedio_bsale"
+  base: "promedio_bsale" | "componentes_promedio_bsale"
   tax_ids: number[]
   taxes_applied: AppliedTax[]
   source: string
@@ -132,6 +135,8 @@ export type AppliedTax = {
 export type CostProductItem = {
   variant_id: number
   product_id: number | null
+  is_pack: boolean
+  pack: PackCostDetail | null
   code: string | null
   barcode: string | null
   product_name: string | null
@@ -306,6 +311,7 @@ export type ProductListParams = {
   anomaly_code?: AnomalyCode | null
   office_id?: number | null
   min_abs_change_pct?: number | null
+  kind?: "all" | "individual" | "pack"
   sort?: string
   page?: number
   page_size?: number

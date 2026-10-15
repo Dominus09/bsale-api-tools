@@ -1,4 +1,5 @@
 import type { MarginRisk, MarginStatus, PromotionCheck } from "./margins-types"
+import type { PacksSummary } from "./packs-types"
 import type { PriceVerification } from "./promotions-types"
 import type {
   AlertItem,
@@ -186,6 +187,18 @@ export type DashboardPromotions = {
   writes_bsale: false
 }
 
+export type DashboardPacks = Pick<
+  PacksSummary,
+  | "packs_active"
+  | "packs_active_calculable"
+  | "packs_active_pending"
+  | "coverage_pct"
+  | "by_pack_status"
+  | "packs_by_problem"
+  | "top_below_cost"
+  | "top_below_policy"
+>
+
 export type DashboardFreshness = {
   overall: FreshnessStatus
   stale_after_hours: number
@@ -217,6 +230,7 @@ export type DashboardResponse = {
   costs: Block<DashboardCosts>
   taxes: Block<DashboardTaxes>
   promotions: Block<DashboardPromotions>
+  packs: Block<DashboardPacks>
   meta: {
     company_id: number
     company_name: string

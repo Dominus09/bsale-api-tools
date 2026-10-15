@@ -254,6 +254,11 @@ export function MarginV2Table({
                   {r.variant_name ? ` · ${r.variant_name}` : ""}
                 </span>
                 <span className="block truncate text-[11px] text-muted-foreground">{r.product_type.name ?? "Sin tipo"}</span>
+                {r.is_pack ? (
+                  <span className="mt-1 inline-block rounded border border-indigo-300 bg-indigo-50 px-1 py-px text-[10px] font-medium text-indigo-800">
+                    Pack Bsale · {r.pack?.components_count ?? 0} componentes
+                  </span>
+                ) : null}
                 {canOpenCostHistory ? (
                   <button
                     type="button"
@@ -272,7 +277,13 @@ export function MarginV2Table({
                 <StatusCell row={r} />
               </td>
               <td className="px-3 py-2 text-right tabular-nums">{formatMoney(r.price.gross)}</td>
-              <td className="px-3 py-2 text-right tabular-nums">{formatMoney(r.costs.bsale_average_net)}</td>
+              <td className="px-3 py-2 text-right tabular-nums">
+                {r.is_pack ? (
+                  <span className="text-[11px] text-muted-foreground">Suma de componentes</span>
+                ) : (
+                  formatMoney(r.costs.bsale_average_net)
+                )}
+              </td>
               <td className="px-3 py-2 text-right tabular-nums">
                 {formatMoney(r.costs.reference.gross)}
                 <span className="block text-[10px] text-muted-foreground">

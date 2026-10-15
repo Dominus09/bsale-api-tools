@@ -1,3 +1,4 @@
+import type { PackCostCompact } from "./packs-types"
 import type { AppliedTax, CostReliability, GrossCostStatus, Money, TaxProfileStatus, TaxValidation } from "./types"
 
 export type MarginStatus =
@@ -9,6 +10,7 @@ export type MarginStatus =
   | "sin_regla"
   | "costo_no_verificado"
   | "requiere_revision_tributaria"
+  | "pack_no_calculable"
   | "politica_provisional"
   | "promocion_vigente"
   | "remate_vigente"
@@ -106,6 +108,8 @@ export type MarginRow = {
   variant_name: string | null
   variant_state: string
   product_type: { id: number | null; name: string | null }
+  is_pack: boolean
+  pack: PackCostCompact | null
   price_list: { id: number; name: string | null; label: string | null }
   status: MarginStatus
   confirmation: "calculado" | "confirmado"
@@ -123,8 +127,8 @@ export type MarginRow = {
       gross: Money
       gross_status: GrossCostStatus
       gross_reason: string | null
-      tax_status: TaxProfileStatus
-      tax_validation: TaxValidation
+      tax_status: TaxProfileStatus | "por_componente"
+      tax_validation: TaxValidation | "pack_no_calculable"
       iva_rate_pct: Money
       ila_rate_pct: Money
       tax_rate_pct: Money

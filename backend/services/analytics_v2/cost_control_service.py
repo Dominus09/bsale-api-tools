@@ -5,6 +5,9 @@ Distingue siempre:
 - costo de recepción (stock_reception_details.cost, un movimiento concreto);
 - costo bruto comercial: promedio Bsale × factor tributario RAW (``tax_profile``), provisional
   mientras la configuración tributaria no se contraste con documentos.
+
+Packs Bsale (classification = 3): su costo es la suma de sus componentes (``pack_engine``); el
+promedio propio del SKU del pack y sus impuestos propios no se usan para costear.
 """
 
 from __future__ import annotations
@@ -34,13 +37,16 @@ from backend.services.analytics_v2.contracts import (
     HISTORY_START,
     INCREASE_ALERT_PCT,
     NET_COST_VERIFIED,
+    PACK_CLASSIFICATION,
     TAX_CONFIG_VERIFIED,
     CONFIRMED_TAX_ROLES,
     VERIFIED_EXEMPT_PRODUCT_IDS,
     AnomalyCode,
+    CostBasis,
     CostReliability,
     GrossCostStatus,
     MovementClass,
+    PackCostStatus,
     Severity,
     TaxProfileStatus,
     TaxValidation,
@@ -60,6 +66,13 @@ from backend.services.analytics_v2.cost_signals import (
     to_decimal,
 )
 from backend.services.analytics_v2.movement_classification import normalize_label
+from backend.services.analytics_v2.pack_engine import (
+    COMPOSITION_SOURCE,
+    ComponentFacts,
+    PackCost,
+    PackCostEngine,
+    parse_pack_details,
+)
 from backend.services.analytics_v2.tax_profile import (
     TaxEntry,
     build_tax_catalog,
@@ -73,6 +86,8 @@ PRODUCT_SORTS = frozenset(
     {"product", "change_pct_desc", "change_pct_asc", "last_date_desc", "average_cost_desc", "reliability"}
 )
 VARIANT_STATES = frozenset({"active", "inactive", "all"})
+PRODUCT_KINDS = frozenset({"all", "individual", "pack"})
+PACK_COST_BASE = "componentes_promedio_bsale"
 
 _RELIABILITY_ORDER = {
     CostReliability.REQUIERE_REVISION: 0,
@@ -99,8 +114,13 @@ class CompanyContext:
     offices: dict[int, str]
     generated_at: datetime
     verified_exempt: frozenset[int] = frozenset()
+    # Composición original de packs por product_id: (pack_details, api_fetched_at).
+    pack_details: dict[int, tuple[Any, Any]] = field(default_factory=dict)
     # Ítems ya evaluados por fecha (la confiabilidad depende de "hoy"); solo lectura para los consumidores.
     items_cache: dict[date, list[dict[str, Any]]] = field(default_factory=dict)
+    # Índice de componentes y costos de packs por base, derivados de items_cache.
+    component_index: dict[date, dict[int, ComponentFacts]] = field(default_factory=dict)
+    pack_cache: dict[tuple[date, str], dict[int, PackCost]] = field(default_factory=dict)
 
 
 _cache: dict[int, tuple[float, CompanyContext]] = {}
@@ -136,6 +156,46 @@ def _line_json(row: dict[str, Any], prefix: str, offices: dict[int, str]) -> dic
     }
 
 
+def _int(value: Any) -> int | None:
+    return int(value) if value is not None else None
+
+
+def _is_pack_row(row: dict[str, Any]) -> bool:
+    value = row.get("product_classification")
+    return value is not None and int(value) == PACK_CLASSIFICATION
+
+
+def _attach_pack(item: dict[str, Any], pack: PackCost, details: tuple[Any, Any] | None) -> None:
+    """El costo del pack sale de sus componentes; el promedio propio del SKU del pack queda solo informativo."""
+    calculable = pack.calculable
+    status = GrossCostStatus.PRELIMINAR_NO_VERIFICADO if calculable else GrossCostStatus.PACK_NO_CALCULABLE
+    item["pack"] = {**pack.to_json(lines=True), "composition_fetched_at": iso(details[1]) if details else None}
+    item["commercial_gross_cost"] = {
+        "net": money(pack.net_total),
+        "iva_rate_pct": None,
+        "ila_rate_pct": None,
+        "factor": None,
+        "gross": money(pack.gross_total),
+        "status": status.value,
+        "reason": None if calculable else pack.status.value,
+        "tax_ids": [],
+        "taxes_applied": [],
+        "source": COMPOSITION_SOURCE,
+        "base": PACK_COST_BASE,
+    }
+    item["gross_cost_preliminary"] = {"value": money(pack.gross_total), "status": status.value, "base": PACK_COST_BASE}
+    if calculable:
+        reliability = pack.reliability or CostReliability.SOLO_PROMEDIO_BSALE
+        reason = "pack_por_componentes"
+    elif pack.status is PackCostStatus.COMPONENTE_SIN_COSTO:
+        reliability, reason = CostReliability.SIN_COSTO, f"pack_{pack.status.value}"
+    else:
+        reliability, reason = CostReliability.REQUIERE_REVISION, f"pack_{pack.status.value}"
+    item["reliability"] = {"status": reliability.value, "reason": reason}
+    item["_sort"]["reliability"] = reliability
+    item["_sort"]["pack_cost"] = pack
+
+
 class CostControlV2Service:
     def __init__(
         self,
@@ -159,8 +219,16 @@ class CostControlV2Service:
                 hit = _cache.get(company_id)
             if hit and time.monotonic() - hit[0] < FACTS_CACHE_TTL_SECONDS:
                 return hit[1]
+        facts = self._repo.variant_facts(company_id=company_id, history_start=HISTORY_START)
+        pack_details: dict[int, tuple[Any, Any]] = {}
+        if any(_is_pack_row(r) for r in facts):
+            pack_details = {
+                int(r["product_id"]): (r.get("pack_details"), r.get("composition_fetched_at"))
+                for r in self._repo.pack_details(company_id=company_id)
+            }
         ctx = CompanyContext(
-            facts=self._repo.variant_facts(company_id=company_id, history_start=HISTORY_START),
+            facts=facts,
+            pack_details=pack_details,
             tax_catalog=build_tax_catalog(
                 self._repo.tax_catalog(company_id=company_id), CONFIRMED_TAX_ROLES.get(company_id)
             ),
@@ -239,9 +307,12 @@ class CostControlV2Service:
 
         amount = (lc_cost - pc_cost) if lc_cost is not None and pc_cost is not None else None
         pct = change_pct(lc_cost, pc_cost)
+        is_pack = _is_pack_row(row)
         return {
             "variant_id": int(row["variant_id"]),
             "product_id": row.get("product_id"),
+            "is_pack": is_pack,
+            "pack": None,
             "code": row.get("code"),
             "barcode": row.get("bar_code"),
             "product_name": row.get("product_name"),
@@ -282,6 +353,9 @@ class CostControlV2Service:
                 "tax_profile": profile,
                 "commercial_gross": commercial,
                 "tax_ids": sorted({int(t) for t in tax_ids}) if tax_ids is not None else None,
+                "is_pack": is_pack,
+                "product_active": row.get("product_state") in (None, 0),
+                "pack_cost": None,
                 "search": normalize_label(
                     " ".join(
                         str(x)
@@ -297,8 +371,61 @@ class CostControlV2Service:
         if items is None:
             items = [self._build_item(row, ctx) for row in ctx.facts]
             ctx.items_cache.clear()
+            ctx.component_index.clear()
+            ctx.pack_cache.clear()
+            index = self._component_index(items, ctx)
+            ctx.component_index[self._today] = index
+            if any(i["is_pack"] for i in items):
+                costs = self._evaluate_packs(index, CostBasis.PROMEDIO_BSALE)
+                ctx.pack_cache[(self._today, CostBasis.PROMEDIO_BSALE.value)] = costs
+                for item in items:
+                    if item["is_pack"]:
+                        _attach_pack(item, costs[item["variant_id"]], ctx.pack_details.get(_int(item["product_id"])))
             ctx.items_cache[self._today] = items
         return items
+
+    @staticmethod
+    def _component_index(items: list[dict[str, Any]], ctx: CompanyContext) -> dict[int, ComponentFacts]:
+        index: dict[int, ComponentFacts] = {}
+        for item in items:
+            s = item["_sort"]
+            composition = None
+            if item["is_pack"]:
+                raw = ctx.pack_details.get(_int(item["product_id"]), (None, None))[0]
+                composition = parse_pack_details(raw)
+            name = " ".join(x for x in (item.get("product_name"), item.get("variant_name")) if x)
+            index[item["variant_id"]] = ComponentFacts(
+                variant_id=item["variant_id"],
+                product_id=_int(item["product_id"]),
+                code=item.get("code"),
+                name=name or f"Variante {item['variant_id']}",
+                active=item["variant_state"] == "activa" and s["product_active"],
+                average_net=s["average_cost"],
+                last_comparable_net=s["lc_cost"],
+                tax_profile=s["tax_profile"],
+                reliability=s["reliability"],
+                cost_change_pct=s["pct"],
+                composition=composition,
+            )
+        return index
+
+    @staticmethod
+    def _evaluate_packs(index: dict[int, ComponentFacts], basis: CostBasis) -> dict[int, PackCost]:
+        engine = PackCostEngine(index, basis=basis)
+        out: dict[int, PackCost] = {}
+        for vid, facts in index.items():
+            if facts.is_pack:
+                out[vid] = engine.evaluate(vid)  # type: ignore[assignment]
+        return out
+
+    def pack_costs(self, basis: CostBasis = CostBasis.PROMEDIO_BSALE) -> dict[int, PackCost]:
+        """Costo por componentes de cada variante pack, con la base de costo pedida (sin sustituciones)."""
+        ctx = self._load_context()
+        self._all_items(ctx)
+        key = (self._today, basis.value)
+        if key not in ctx.pack_cache:
+            ctx.pack_cache[key] = self._evaluate_packs(ctx.component_index[self._today], basis)
+        return ctx.pack_cache[key]
 
     def sku_items(self) -> tuple[list[dict[str, Any]], datetime]:
         """Hechos de costo por SKU (con ``_sort`` interno) para otros motores V2 de la misma empresa."""
@@ -324,12 +451,15 @@ class CostControlV2Service:
         anomaly_code: str | None = None,
         office_id: int | None = None,
         min_abs_change_pct: Decimal | None = None,
+        kind: str = "all",
         sort: str = "reliability",
         page: int = 1,
         page_size: int = 50,
     ) -> dict[str, Any]:
         if sort not in PRODUCT_SORTS:
             raise CostControlValidationError(f"sort inválido: {sort}")
+        if kind not in PRODUCT_KINDS:
+            raise CostControlValidationError(f"kind inválido: {kind}")
         if variant_state not in VARIANT_STATES:
             raise CostControlValidationError(f"variant_state inválido: {variant_state}")
         if reliability is not None and reliability not in {r.value for r in CostReliability}:
@@ -350,6 +480,8 @@ class CostControlV2Service:
             if variant_state != "all" and item["variant_state"] != ("activa" if variant_state == "active" else "inactiva"):
                 return False
             if needle and needle not in s["search"]:
+                return False
+            if kind != "all" and item["is_pack"] != (kind == "pack"):
                 return False
             if product_type_id is not None and item["product_type"]["id"] != product_type_id:
                 return False
@@ -378,9 +510,9 @@ class CostControlV2Service:
 
     def get_product(self, variant_id: int) -> dict[str, Any]:
         ctx = self._load_context()
-        for row in ctx.facts:
-            if int(row["variant_id"]) == variant_id:
-                item = self._public(self._build_item(row, ctx))
+        for found in self._all_items(ctx):
+            if found["variant_id"] == variant_id:
+                item = self._public(found)
                 item["meta"] = self._meta(ctx)
                 return item
         raise CostControlNotFound("SKU inexistente en la empresa")
@@ -639,6 +771,8 @@ class CostControlV2Service:
             reliability_counts[item["reliability"]["status"]] += 1
             for code in {a["code"] for a in item["anomalies"]}:
                 anomaly_skus[code] = anomaly_skus.get(code, 0) + 1
+            if item["is_pack"]:
+                continue
             tax_status = item["tax_profile"]["status"]
             tax_counts[tax_status] = tax_counts.get(tax_status, 0) + 1
         movements = self._repo.movement_summary(
@@ -656,6 +790,7 @@ class CostControlV2Service:
             "skus_active_by_reliability": reliability_counts,
             "skus_active_by_anomaly": anomaly_skus,
             "skus_active_by_tax_profile": tax_counts,
+            "packs_active": _pack_counts(active),
             "movements": [
                 {
                     "movement_class": m.get("movement_class"),
@@ -730,9 +865,14 @@ class CostControlV2Service:
         }
 
     def tax_coverage(self, *, examples: int = 5) -> dict[str, Any]:
-        """Cobertura tributaria de SKUs activos: mismos perfiles y bruto que usan Costos y Márgenes."""
+        """Cobertura tributaria de productos individuales activos: mismos perfiles y bruto que usan Costos y Márgenes.
+
+        Los packs se informan aparte: sus impuestos propios (p. ej. dos ILA) no se usan para costear,
+        porque cada componente aporta los suyos; no son un error tributario por sí mismos.
+        """
         ctx = self._load_context()
-        active = [i for i in self._all_items(ctx) if i["variant_state"] == "activa"]
+        all_active = [i for i in self._all_items(ctx) if i["variant_state"] == "activa"]
+        active = [i for i in all_active if not i["is_pack"]]
         by_status = {s.value: 0 for s in TaxProfileStatus}
         by_validation = {v.value: 0 for v in TaxValidation}
         by_gross = {g.value: 0 for g in GrossCostStatus}
@@ -818,6 +958,8 @@ class CostControlV2Service:
                 for tax_id, entry in sorted(ctx.tax_catalog.items())
             ],
             "cost_base": "promedio_bsale",
+            "scope": "productos_individuales",
+            "packs": _pack_counts(all_active),
             "tax_config_verified": TAX_CONFIG_VERIFIED,
             "meta": self._meta(ctx),
         }
@@ -860,6 +1002,25 @@ class CostControlV2Service:
             ],
             "meta": self._meta(),
         }
+
+
+def _pack_counts(items: list[dict[str, Any]]) -> dict[str, Any]:
+    by_status = {s.value: 0 for s in PackCostStatus}
+    total = 0
+    for item in items:
+        pack = item["_sort"]["pack_cost"]
+        # Mismo criterio que Packs V2 y Dashboard: un pack activo exige también producto activo en Bsale.
+        if not item["is_pack"] or pack is None or not item["_sort"]["product_active"]:
+            continue
+        total += 1
+        by_status[pack.status.value] += 1
+    return {
+        "total": total,
+        "calculable": by_status[PackCostStatus.CALCULADO.value],
+        "pending": total - by_status[PackCostStatus.CALCULADO.value],
+        "by_status": by_status,
+        "cost_base": PACK_COST_BASE,
+    }
 
 
 def _sort_key(sort: str) -> Callable[[dict[str, Any]], Any]:

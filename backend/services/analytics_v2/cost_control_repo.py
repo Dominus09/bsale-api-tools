@@ -2,6 +2,8 @@
 
 Reglas: toda consulta filtra por company_id; nunca se leen tablas legacy; nunca se seleccionan
 ``payload``, ``note`` ni ``user`` de las recepciones (contienen texto libre y datos personales).
+Única excepción: ``PACK_DETAILS_SQL`` extrae solo la clave ``pack_details`` del payload de productos
+pack (classification = 3), sin texto libre ni datos personales.
 """
 
 from __future__ import annotations
@@ -147,6 +149,7 @@ SELECT
     p.bsale_id AS product_id,
     p.name AS product_name,
     p.state AS product_state,
+    p.classification AS product_classification,
     p.product_type_id,
     pt.name AS product_type_name,
     ptx.tax_ids,
@@ -360,6 +363,17 @@ WHERE company_id = %s AND missing_since IS NULL
 ORDER BY name
 """.strip()
 
+PACK_DETAILS_SQL = """
+SELECT
+    p.bsale_id AS product_id,
+    p.payload -> 'pack_details' AS pack_details,
+    p.api_fetched_at AS composition_fetched_at
+FROM bsale_raw.products p
+WHERE p.company_id = %s
+  AND p.classification = 3
+  AND p.missing_since IS NULL
+""".strip()
+
 SYNC_STATE_SQL = """
 SELECT resource, scope, status, last_success_at, last_attempt_at, last_full_reconcile_at
 FROM bsale_raw.sync_state
@@ -431,6 +445,9 @@ class CostControlV2Repository:
 
     def product_types(self, *, company_id: int) -> list[dict[str, Any]]:
         return self._run(PRODUCT_TYPES_SQL, (company_id,))
+
+    def pack_details(self, *, company_id: int) -> list[dict[str, Any]]:
+        return self._run(PACK_DETAILS_SQL, (company_id,))
 
     def sync_state(self, *, company_id: int) -> list[dict[str, Any]]:
         return self._run(SYNC_STATE_SQL, (company_id,))

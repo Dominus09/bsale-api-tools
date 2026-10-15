@@ -80,6 +80,7 @@ export const GROSS_STATUS_LABELS: Record<GrossCostStatus, string> = {
   requiere_revision_tributaria: "Requiere revisión tributaria",
   sin_configuracion_tributaria: "Sin configuración tributaria",
   sin_costo_base: "Sin costo base",
+  pack_no_calculable: "Pack con costo pendiente",
 }
 
 export const TAX_ISSUE_LABELS: Record<string, string> = {

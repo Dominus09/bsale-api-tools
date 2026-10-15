@@ -22,6 +22,7 @@ import type {
   DashboardCosts,
   DashboardFreshness,
   DashboardMargins,
+  DashboardPacks,
   DashboardPromotions,
   DashboardTaxes,
   DataClass,
@@ -40,6 +41,8 @@ import {
 } from "@/lib/analytics-v2/labels"
 import { LIST_SCOPE_LABELS, MARGIN_RISK_LABELS, MARGIN_STATUS_LABELS, MARGIN_STATUS_TONES } from "@/lib/analytics-v2/margins-labels"
 import type { PriceListScopeStatus } from "@/lib/analytics-v2/margins-types"
+import { PACK_PROBLEM_LABELS, PACK_STATUS_LABELS } from "@/lib/analytics-v2/packs-labels"
+import type { PackCostStatus, PackProblem } from "@/lib/analytics-v2/packs-types"
 import { withQuery } from "@/lib/analytics-v2/url"
 import type { AnomalyCode, CostReliability } from "@/lib/analytics-v2/types"
 
@@ -49,6 +52,7 @@ const sectionTitle = "text-[11px] font-medium uppercase tracking-wide text-muted
 export const MARGINS_PATH = "/analitica-v2/margenes"
 export const COSTS_PATH = "/analitica-v2/costos"
 export const PROMOTIONS_PATH = "/analitica-v2/promociones"
+export const PACKS_PATH = "/analitica-v2/packs"
 
 export function DataClassBadge({ value }: { value: DataClass }) {
   return (
@@ -660,6 +664,49 @@ export function PromotionsOverview({ data }: { data: DashboardPromotions }) {
       {data.legacy.promotions ? (
         <p className="text-[11px] text-muted-foreground">
           Módulo anterior: {data.legacy.promotions} promociones ({data.legacy.active_flag} marcadas activas), no se usan para excluir alertas.
+        </p>
+      ) : null}
+    </section>
+  )
+}
+
+export function PacksOverview({ data, costBasis }: { data: DashboardPacks; costBasis: string }) {
+  const link = (params: Record<string, string>) => withQuery(PACKS_PATH, { cost_basis: costBasis, ...params })
+  const pending = (Object.entries(data.by_pack_status) as [PackCostStatus, number][]).filter(([s, n]) => s !== "calculado" && n > 0)
+  const problems = (Object.entries(data.packs_by_problem) as [PackProblem, number][]).filter(([, n]) => n > 0)
+  return (
+    <section className="space-y-2">
+      <div className="flex flex-wrap items-baseline gap-2">
+        <h2 className="text-base font-semibold">Packs Bsale</h2>
+        <span className="text-[11px] text-muted-foreground">Costo = suma de componentes con sus propios impuestos · rentabilidad actual estimada</span>
+      </div>
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <Kpi title="Packs activos" value={data.packs_active} href={link({})} />
+        <Kpi
+          title="Con costo calculable"
+          value={data.packs_active_calculable}
+          hint={data.coverage_pct != null ? `Cobertura ${formatPct(data.coverage_pct)}` : undefined}
+          href={link({ pack_status: "calculado" })}
+        />
+        <Kpi
+          title="Costo pendiente"
+          value={data.packs_active_pending}
+          hint="Sin margen definitivo"
+          tone={data.packs_active_pending ? "border-amber-300" : undefined}
+        />
+        <Kpi
+          title="Bajo costo / bajo política"
+          value={`${data.packs_by_problem.precio_bajo_costo ?? 0} / ${data.packs_by_problem.bajo_politica ?? 0}`}
+          hint="Packs con al menos una lista afectada"
+          href={link({ problem: "precio_bajo_costo" })}
+          tone={data.packs_by_problem.precio_bajo_costo ? "border-red-300" : undefined}
+        />
+      </div>
+      {pending.length || problems.length ? (
+        <p className="text-[11px] text-muted-foreground">
+          {pending.map(([s, n]) => `${PACK_STATUS_LABELS[s]}: ${n}`).join(" · ")}
+          {pending.length && problems.length ? " — " : ""}
+          {problems.map(([p, n]) => `${PACK_PROBLEM_LABELS[p]}: ${n}`).join(" · ")}
         </p>
       ) : null}
     </section>

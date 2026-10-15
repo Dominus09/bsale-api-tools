@@ -7,6 +7,7 @@ import { Pager } from "@/components/analytics-v2/costs/cost-v2-products"
 import { PromotionCampaignSheet } from "@/components/analytics-v2/promotions/promotion-v2-campaign-sheet"
 import { CampaignFormDialog } from "@/components/analytics-v2/promotions/promotion-v2-dialogs"
 import { PromotionLegacyPanel } from "@/components/analytics-v2/promotions/promotion-v2-legacy"
+import { PromotionPacksInfo } from "@/components/analytics-v2/promotions/promotion-v2-packs"
 import { PromotionV2Kpis, PromotionV2MonthOverview } from "@/components/analytics-v2/promotions/promotion-v2-summary"
 import {
   PromotionCampaignsTable,
@@ -53,9 +54,9 @@ import type {
 const PAGE_SIZE = 50
 const ITEM_SECTIONS: PromotionSection[] = ["vigentes", "remates", "proximas", "pendientes"]
 
-type Tab = "resumen" | PromotionSection | "anteriores"
+type Tab = "resumen" | PromotionSection | "anteriores" | "packs"
 
-const URL_TABS: readonly Tab[] = ["resumen", "vigentes", "remates", "proximas", "historial", "pendientes", "anteriores"]
+const URL_TABS: readonly Tab[] = ["resumen", "vigentes", "remates", "proximas", "historial", "pendientes", "anteriores", "packs"]
 
 type FilterDraft = {
   priceListId: string
@@ -130,7 +131,7 @@ export default function PromotionsV2Page() {
   }, [companyId, month, reloadKey])
 
   const loadList = useCallback(() => {
-    if (companyId == null || blocking || tab === "anteriores") return
+    if (companyId == null || blocking || tab === "anteriores" || tab === "packs") return
     listAbort.current?.abort()
     const ac = new AbortController()
     listAbort.current = ac
@@ -371,6 +372,7 @@ export default function PromotionsV2Page() {
                 ) : null}
               </TabsTrigger>
               <TabsTrigger value="anteriores">Promociones anteriores</TabsTrigger>
+              <TabsTrigger value="packs">Packs Bsale</TabsTrigger>
             </TabsList>
 
             <TabsContent value="resumen" className="space-y-3">
@@ -410,6 +412,10 @@ export default function PromotionsV2Page() {
                 onOpenCampaign={setCampaignId}
                 onImported={refresh}
               />
+            </TabsContent>
+
+            <TabsContent value="packs">
+              {tab === "packs" ? <PromotionPacksInfo companyId={companyId} /> : null}
             </TabsContent>
           </Tabs>
 

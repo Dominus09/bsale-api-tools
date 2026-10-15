@@ -13,6 +13,7 @@ import {
   FreshnessPanel,
   MarginRowsTable,
   MarginsOverview,
+  PacksOverview,
   PolicyCard,
   PromotionsOverview,
   TaxesOverview,
@@ -216,6 +217,12 @@ export default function DashboardV2Page() {
           <BlockState title="Ofertas y remates" block={data.promotions}>
             {(p) => <PromotionsOverview data={p} />}
           </BlockState>
+
+          {data.packs ? (
+            <BlockState title="Packs Bsale" block={data.packs}>
+              {(p) => <PacksOverview data={p} costBasis={data.cost_basis} />}
+            </BlockState>
+          ) : null}
         </>
       ) : null}
 

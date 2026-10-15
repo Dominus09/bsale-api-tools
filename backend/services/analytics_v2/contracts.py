@@ -112,6 +112,41 @@ class GrossCostStatus(StrEnum):
     REQUIERE_REVISION_TRIBUTARIA = "requiere_revision_tributaria"
     SIN_CONFIGURACION_TRIBUTARIA = "sin_configuracion_tributaria"
     SIN_COSTO_BASE = "sin_costo_base"
+    PACK_NO_CALCULABLE = "pack_no_calculable"
+
+
+# Bsale: products.classification = 3 identifica packs/promociones; su composición está en
+# products.payload -> 'pack_details'. Nunca se deduce un pack por nombre ni categoría.
+PACK_CLASSIFICATION = 3
+# Profundidad máxima de packs dentro de packs; más allá queda pendiente (protección ante datos anómalos).
+PACK_MAX_DEPTH = 4
+# Precio bruto máximo / mínimo entre listas evaluadas desde el cual se pide revisar el pack.
+PACK_LIST_PRICE_RATIO_ALERT = Decimal("2")
+
+
+class PackCostStatus(StrEnum):
+    """Estado del costo de un pack Bsale: solo ``calculado`` permite un margen."""
+
+    CALCULADO = "calculado"
+    SIN_COMPOSICION = "sin_composicion"
+    COMPOSICION_NO_INTERPRETABLE = "composicion_no_interpretable"
+    PACK_ABIERTO = "pack_abierto"
+    CICLO_DETECTADO = "ciclo_detectado"
+    COMPONENTE_INEXISTENTE = "componente_inexistente"
+    COMPONENTE_PACK_NO_CALCULABLE = "componente_pack_no_calculable"
+    COMPONENTE_REQUIERE_REVISION_TRIBUTARIA = "componente_requiere_revision_tributaria"
+    COMPONENTE_SIN_COSTO = "componente_sin_costo"
+
+
+class PackComponentStatus(StrEnum):
+    CALCULADO = "calculado"
+    INEXISTENTE = "inexistente_o_retirado"
+    SIN_COSTO = "sin_costo"
+    REQUIERE_REVISION_TRIBUTARIA = "requiere_revision_tributaria"
+    PACK_NO_CALCULABLE = "pack_no_calculable"
+    CICLO = "ciclo"
+    ANIDAMIENTO_EXCESIVO = "anidamiento_excesivo"
+    VARIANTE_NO_DETERMINADA = "variante_no_determinada"
 
 
 # La configuración tributaria de Bsale aún no se contrasta con facturas reales: todo bruto calculado
@@ -149,6 +184,7 @@ class MarginComplianceStatus(StrEnum):
     SIN_REGLA = "sin_regla"
     COSTO_NO_VERIFICADO = "costo_no_verificado"
     REQUIERE_REVISION_TRIBUTARIA = "requiere_revision_tributaria"
+    PACK_NO_CALCULABLE = "pack_no_calculable"
     POLITICA_PROVISIONAL = "politica_provisional"
     PROMOCION_VIGENTE = "promocion_vigente"
     REMATE_VIGENTE = "remate_vigente"

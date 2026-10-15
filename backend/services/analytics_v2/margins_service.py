@@ -71,6 +71,7 @@ _STATUS_ORDER = {
     MarginComplianceStatus.COSTO_NO_VERIFICADO.value: 1,
     MarginComplianceStatus.SIN_REGLA.value: 2,
     MarginComplianceStatus.SIN_COSTO.value: 3,
+    MarginComplianceStatus.PACK_NO_CALCULABLE.value: 3,
     MarginComplianceStatus.SIN_PRECIO.value: 4,
     MarginComplianceStatus.SOBRE_POLITICA.value: 5,
     MarginComplianceStatus.REMATE_VIGENTE.value: 6,
@@ -142,6 +143,10 @@ class MarginsV2Service:
         self._use_cache = use_cache
         self._promotions = promotions or UnavailablePromotionSource()
 
+    @property
+    def costs(self) -> CostControlV2Service:
+        return self._costs
+
     # ---------- contexto ----------
 
     def _load_context(self) -> MarginsContext:
@@ -206,6 +211,7 @@ class MarginsV2Service:
 
     def _build_rows(self, ctx: MarginsContext, cost_basis: CostBasis, variant_state: str) -> tuple[list[dict[str, Any]], datetime]:
         items, cost_generated_at = self._costs.sku_items()
+        pack_costs = self._costs.pack_costs(cost_basis) if any(i["is_pack"] for i in items) else {}
         index = self._rule_index(ctx.rules)
         exceptions = list(self._promotions.exceptions_for(self._scope.company_id)) if self._promotions.available else []
         lists = {e.price_list_id: e for e in ctx.scope.entries}
@@ -220,6 +226,7 @@ class MarginsV2Service:
                 reliability=CostReliability(item["reliability"]["status"]),
                 tax_profile=s["tax_profile"],
                 anomaly_codes=tuple(a["code"] for a in item["anomalies"]),
+                pack=pack_costs.get(item["variant_id"]) if item["is_pack"] else None,
             )
             type_id = item["product_type"]["id"]
             for list_id in sorted(ctx.scope.evaluated_ids):
@@ -259,6 +266,7 @@ class MarginsV2Service:
                         "variant_name": item["variant_name"],
                         "variant_state": item["variant_state"],
                         "product_type": item["product_type"],
+                        "is_pack": item["is_pack"],
                         "price_list": {
                             "id": list_id,
                             "name": entry.name,
@@ -576,6 +584,18 @@ class MarginsV2Service:
             "meta": self._meta(ctx),
         }
 
+    def evaluated_rows(self, *, cost_basis: str = DEFAULT_COST_BASIS.value) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Filas internas SKU × lista (todas las variantes; solo lectura) para otros motores V2 de la misma empresa."""
+        basis = self._validate_common(cost_basis, "all")
+        ctx = self._load_context()
+        rows, cost_generated_at = self._rows(ctx, basis, "all")
+        lists = [
+            {"id": e.price_list_id, "name": e.name, "label": e.commercial_label}
+            for e in ctx.scope.entries
+            if e.status is PriceListScopeStatus.EVALUADA
+        ]
+        return rows, {"meta": self._meta(ctx, cost_generated_at), "price_lists": lists, "cost_basis": basis.value}
+
     def product(self, variant_id: int, *, cost_basis: str = DEFAULT_COST_BASIS.value) -> dict[str, Any]:
         basis = self._validate_common(cost_basis, "all")
         ctx = self._load_context()
@@ -593,6 +613,7 @@ _UNAVAILABLE_STATUSES = frozenset(
         MarginComplianceStatus.SIN_REGLA.value,
         MarginComplianceStatus.COSTO_NO_VERIFICADO.value,
         MarginComplianceStatus.REQUIERE_REVISION_TRIBUTARIA.value,
+        MarginComplianceStatus.PACK_NO_CALCULABLE.value,
     }
 )
 

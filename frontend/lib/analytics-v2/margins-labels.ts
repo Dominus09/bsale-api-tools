@@ -1,5 +1,7 @@
 import { TAX_LABELS } from "./labels"
 import type { CostBasis, MarginRisk, MarginStatus, PriceListScopeStatus, PromotionCheck, RuleIssue } from "./margins-types"
+import { PACK_STATUS_LABELS } from "./packs-labels"
+import type { PackCostStatus } from "./packs-types"
 import type { TaxProfileStatus } from "./types"
 
 export const MARGIN_STATUS_LABELS: Record<MarginStatus, string> = {
@@ -11,6 +13,7 @@ export const MARGIN_STATUS_LABELS: Record<MarginStatus, string> = {
   sin_regla: "Sin regla",
   costo_no_verificado: "Costo no verificado",
   requiere_revision_tributaria: "Requiere revisión tributaria",
+  pack_no_calculable: "Pack con costo pendiente",
   politica_provisional: "Política provisional",
   promocion_vigente: "Promoción vigente",
   remate_vigente: "Remate vigente",
@@ -26,6 +29,7 @@ export const MARGIN_STATUS_TONES: Record<MarginStatus, string> = {
   sin_regla: "border-amber-300 bg-amber-50 text-amber-800",
   costo_no_verificado: "border-amber-300 bg-amber-50 text-amber-800",
   requiere_revision_tributaria: "border-orange-300 bg-orange-50 text-orange-800",
+  pack_no_calculable: "border-zinc-300 bg-zinc-100 text-zinc-700",
   politica_provisional: "border-violet-300 bg-violet-50 text-violet-800",
   promocion_vigente: "border-fuchsia-300 bg-fuchsia-50 text-fuchsia-800",
   remate_vigente: "border-fuchsia-300 bg-fuchsia-50 text-fuchsia-800",
@@ -38,6 +42,7 @@ export const PRIMARY_STATUSES: MarginStatus[] = [
   "sobre_politica",
   "costo_no_verificado",
   "requiere_revision_tributaria",
+  "pack_no_calculable",
   "sin_regla",
   "sin_costo",
   "sin_precio",
@@ -116,6 +121,10 @@ export const MARGIN_SORT_LABELS: Record<string, string> = {
 }
 
 export function reasonLabel(code: string): string {
+  if (code.startsWith("pack_")) {
+    const status = code.slice(5) as PackCostStatus
+    return `Pack: ${PACK_STATUS_LABELS[status] ?? status.replaceAll("_", " ")}`
+  }
   if (code.startsWith("impuesto_")) {
     const status = code.slice(9) as TaxProfileStatus
     return `Revisión tributaria: ${TAX_LABELS[status] ?? status.replaceAll("_", " ")}`

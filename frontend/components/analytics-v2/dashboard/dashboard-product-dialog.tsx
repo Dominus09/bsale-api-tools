@@ -108,7 +108,10 @@ export function DashboardProductDialog({
               </span>
             </div>
             <p className="text-[11px] text-muted-foreground">
-              {TAX_LABELS[first.costs.reference.tax_status]} · {GROSS_STATUS_LABELS[first.costs.reference.gross_status]} ·
+              {first.costs.reference.tax_status === "por_componente"
+                ? "Impuestos por componente del pack"
+                : TAX_LABELS[first.costs.reference.tax_status]}{" "}
+              · {GROSS_STATUS_LABELS[first.costs.reference.gross_status]} ·
               neto última compra {formatMoney(first.costs.last_reception_net)} · promedio Bsale{" "}
               {formatMoney(first.costs.bsale_average_net)}
             </p>

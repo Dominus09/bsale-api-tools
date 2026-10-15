@@ -94,12 +94,13 @@ def purchase(prefix: str, reception_id: int, cost: str, when: date, *, qty: str 
 
 
 class FakeRepo(CostControlV2Repository):
-    def __init__(self, facts=None, lines=None, alerts=None, reception=None) -> None:
+    def __init__(self, facts=None, lines=None, alerts=None, reception=None, packs=None) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self._facts = facts or []
         self._lines = lines or []
         self._alerts = alerts or []
         self._reception = reception
+        self._packs = packs or []
 
     def _rec(self, name, **kw):
         self.calls.append((name, kw))
@@ -131,6 +132,10 @@ class FakeRepo(CostControlV2Repository):
     def reception_events(self, **kw):
         self._rec("reception_events", **kw)
         return []
+
+    def pack_details(self, **kw):
+        self._rec("pack_details", **kw)
+        return self._packs
 
     def tax_catalog(self, **kw):
         self._rec("tax_catalog", **kw)
@@ -165,7 +170,12 @@ def test_sql_reads_only_bsale_raw_and_never_legacy_tables():
 def test_sql_never_selects_payload_note_or_user():
     for name, sql in ALL_SQL.items():
         lowered = sql.lower()
-        assert "payload" not in lowered, name
+        if name == "PACK_DETAILS_SQL":
+            # única excepción: solo la clave pack_details de productos pack, nunca el payload completo
+            assert lowered.count("payload") == 1 and "p.payload -> 'pack_details'" in lowered
+            assert "classification = 3" in lowered and "from bsale_raw.products p" in lowered
+        else:
+            assert "payload" not in lowered, name
         assert re.search(r"\bnote\b", lowered) is None, name
         assert re.search(r"\.user_id\b|\buser\b", lowered) is None, name
 

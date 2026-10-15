@@ -177,6 +177,7 @@ function buildNavSectionsForRole(role: string | null) {
       if (marginViewer) v2.push({ href: "/analitica-v2/dashboard", label: "Dashboard V2", icon: LayoutDashboard })
       if (management) v2.push({ href: "/analitica-v2/costos", label: "Control de costos V2", icon: CircleDollarSign })
       if (marginViewer) v2.push({ href: "/analitica-v2/margenes", label: "Márgenes V2", icon: TrendingUp })
+      if (marginViewer) v2.push({ href: "/analitica-v2/packs", label: "Rentabilidad de packs", icon: Boxes })
       if (promotionsViewer) v2.push({ href: "/analitica-v2/promociones", label: "Promociones V2", icon: Percent })
       return { ...section, items: [...section.items, ...v2] }
     }

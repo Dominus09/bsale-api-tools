@@ -10,6 +10,7 @@ import type {
   MarginsSummary,
   PolicyReviewResponse,
 } from "./margins-types"
+import type { PackDetailResponse, PackRowsParams, PackRowsResponse, PacksSummary } from "./packs-types"
 
 import type {
   CampaignApproval,
@@ -377,6 +378,22 @@ export function getDashboard(companyId: number, costBasis: string, refresh: bool
 export function getMarginProduct(companyId: number, variantId: number, costBasis: string, signal?: AbortSignal) {
   return getJson<{ variant_id: number; rows: MarginRow[]; cost_basis: string }>(
     `/analytics-v2/margins/products/${variantId}`,
+    { company_id: companyId, cost_basis: costBasis },
+    signal,
+  )
+}
+
+export function getPacksSummary(companyId: number, costBasis: string, signal?: AbortSignal) {
+  return getJson<PacksSummary>("/analytics-v2/packs/summary", { company_id: companyId, cost_basis: costBasis }, signal)
+}
+
+export function getPackRows(params: PackRowsParams, signal?: AbortSignal) {
+  return getJson<PackRowsResponse>("/analytics-v2/packs/rows", { ...params }, signal)
+}
+
+export function getPackDetail(companyId: number, variantId: number, costBasis: string, signal?: AbortSignal) {
+  return getJson<PackDetailResponse>(
+    `/analytics-v2/packs/${variantId}`,
     { company_id: companyId, cost_basis: costBasis },
     signal,
   )

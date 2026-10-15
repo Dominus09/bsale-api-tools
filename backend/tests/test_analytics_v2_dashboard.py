@@ -382,7 +382,7 @@ def runner(monkeypatch):
 
     def build(self, *, cost_basis):
         state["builds"] += 1
-        blocks = {b: {"status": BLOCK_OK, "data": {}} for b in ("freshness", "margins", "costs", "taxes", "promotions")}
+        blocks = {b: {"status": BLOCK_OK, "data": {}} for b in ("freshness", "margins", "costs", "taxes", "promotions", "packs")}
         return {**blocks, "cost_basis": cost_basis, "meta": {"cached": False}}
 
     monkeypatch.setattr(dash_mod, "open_readonly_connection", open_conn)

@@ -41,6 +41,7 @@ from backend.services.analytics_v2.cost_control_repo import CostControlV2Reposit
 from backend.services.analytics_v2.cost_control_service import CostControlV2Service
 from backend.services.analytics_v2.margins_repo import MarginsV2Repository
 from backend.services.analytics_v2.margins_service import MarginsV2Service, MarginsValidationError
+from backend.services.analytics_v2.packs_service import PacksV2Service
 from backend.services.analytics_v2.promotion_campaigns import CampaignValidationError
 from backend.services.analytics_v2.promotion_source import CampaignExceptionSource
 from backend.services.analytics_v2.promotions_repo import PromotionsV2Repository
@@ -210,22 +211,43 @@ class DashboardV2Service:
             "writes_bsale": False,
         }
 
+    def _packs_data(self, cost_basis: str) -> dict[str, Any]:
+        summary = PacksV2Service(self._margins, self._costs).summary(cost_basis=cost_basis, top=5)
+        keys = (
+            "packs_active",
+            "packs_active_calculable",
+            "packs_active_pending",
+            "coverage_pct",
+            "by_pack_status",
+            "packs_by_problem",
+            "top_below_cost",
+            "top_below_policy",
+        )
+        return {k: summary[k] for k in keys}
+
     def build(self, *, cost_basis: str) -> dict[str, Any]:
         freshness = self._block("freshness", True, lambda: summarize_freshness(self._costs.freshness()["resources"], self._now))
         margins = self._block("margins", self._caps["margins"], lambda: self._margins.overview(cost_basis=cost_basis))
         costs = self._block("costs", self._caps["costs"], self._costs.overview)
         taxes = self._block("taxes", self._caps["margins"] or self._caps["costs"], self._costs.tax_coverage)
         promotions = self._block("promotions", self._caps["promotions"], self._promotions_data)
+        packs = self._block("packs", self._caps["margins"], lambda: self._packs_data(cost_basis))
+        reliability = self._reliability(freshness, margins, costs, promotions, taxes)
+        if packs["status"] == BLOCK_OK and packs["data"]["packs_active_pending"]:
+            reliability["warnings"].append("packs_con_costo_pendiente")
+        elif packs["status"] == BLOCK_UNAVAILABLE:
+            reliability["warnings"].append("bloque_packs_no_disponible")
         return {
             "today": local_today().isoformat(),
             "cost_basis": cost_basis,
             "permissions": dict(self._caps),
-            "reliability": self._reliability(freshness, margins, costs, promotions, taxes),
+            "reliability": reliability,
             "freshness": freshness,
             "margins": margins,
             "costs": costs,
             "taxes": taxes,
             "promotions": promotions,
+            "packs": packs,
             "meta": {
                 "contract_version": CONTRACT_VERSION,
                 "data_source": DATA_SOURCE,
@@ -323,7 +345,7 @@ def run_dashboard(
             scope=scope, capabilities=caps, costs=costs, margins=margins, promotions=promotions, reset=reset
         ).build(cost_basis=cost_basis)
         payload["meta"]["elapsed_ms"] = int((time.perf_counter() - start) * 1000)
-        if not any(payload[b]["status"] == BLOCK_UNAVAILABLE for b in ("freshness", "margins", "costs", "taxes", "promotions")):
+        if not any(payload[b]["status"] == BLOCK_UNAVAILABLE for b in ("freshness", "margins", "costs", "taxes", "promotions", "packs")):
             with _cache_lock:
                 _cache[key] = (time.monotonic(), payload)
         return payload

@@ -3,6 +3,8 @@
 Precedencia del estado principal:
 SIN_PRECIO → SIN_COSTO → SIN_REGLA → REQUIERE_REVISION_TRIBUTARIA (bruto no calculable por impuestos)
 → BAJO / DENTRO / SOBRE_POLITICA → (excepción verificada) PROMOCION_VIGENTE / REMATE_VIGENTE.
+Packs Bsale: el costo de referencia es la suma de sus componentes (``pack_engine``); si la composición
+no es completa el estado es PACK_NO_CALCULABLE (después de SIN_PRECIO) y no hay porcentajes.
 
 Calificadores (no reemplazan el estado): COSTO_NO_VERIFICADO, POLITICA_PROVISIONAL y
 PROMOCION_PENDIENTE_VERIFICACION. Un estado comparativo solo es "confirmado" sin calificadores.
@@ -39,6 +41,7 @@ from backend.services.analytics_v2.margin_math import (
     round_pct,
     target_price,
 )
+from backend.services.analytics_v2.pack_engine import COMPOSITION_SOURCE, PackCost
 from backend.services.analytics_v2.promotion_exceptions import ExceptionResolution
 from backend.services.analytics_v2.tax_profile import TAX_DATA_SOURCE, TaxProfile, commercial_gross_cost
 
@@ -97,6 +100,8 @@ class CostFacts:
     reliability: CostReliability
     tax_profile: TaxProfile
     anomaly_codes: tuple[str, ...] = ()
+    # Solo packs Bsale: costo por componentes con la misma base de costo de la evaluación.
+    pack: PackCost | None = None
 
 
 def price_issue(price: PriceFact | None) -> str | None:
@@ -128,9 +133,17 @@ def evaluate(
     issue = price_issue(price)
     gross_price = price.gross if price and issue is None else None
 
-    reference_net = cost.last_comparable_net if cost_basis is CostBasis.ULTIMO_COMPARABLE else cost.average_net
-    gross = commercial_gross_cost(reference_net, cost.tax_profile)
-    gross_cost = gross.gross
+    pack = cost.pack
+    if pack is not None and pack.basis is not cost_basis:
+        raise ValueError("el costo del pack debe calcularse con la misma base de costo")
+    if pack is not None:
+        reference_net, gross_cost = pack.net_total, pack.gross_total
+        reference = _pack_reference(pack, cost_basis)
+    else:
+        reference_net = cost.last_comparable_net if cost_basis is CostBasis.ULTIMO_COMPARABLE else cost.average_net
+        gross = commercial_gross_cost(reference_net, cost.tax_profile)
+        gross_cost = gross.gross
+        reference = _sku_reference(gross, cost, cost_basis, reference_net)
     net_verified = cost_basis is CostBasis.PROMEDIO_BSALE or net_cost_verified
     cost_verified = gross_cost is not None and tax_config_verified and net_verified
 
@@ -138,6 +151,9 @@ def evaluate(
     if issue is not None:
         status = S.SIN_PRECIO
         reasons.append(issue)
+    elif pack is not None and not pack.calculable:
+        status = S.PACK_NO_CALCULABLE
+        reasons.append(f"pack_{pack.status.value}")
     elif reference_net is None or reference_net <= 0:
         status = S.SIN_COSTO
         reasons.append(f"sin_costo_{cost_basis.value}")
@@ -172,7 +188,7 @@ def evaluate(
     risks: list[MarginRisk] = []
     if issue is not None:
         risks.append(MarginRisk.PRECIO_NO_VERIFICADO)
-    if status is S.SIN_COSTO or status is S.REQUIERE_REVISION_TRIBUTARIA:
+    if status in (S.SIN_COSTO, S.REQUIERE_REVISION_TRIBUTARIA, S.PACK_NO_CALCULABLE):
         risks.append(MarginRisk.SIN_COSTO_VALIDO)
     if markup is not None and markup < 0:
         risks.append(MarginRisk.VENTA_BAJO_COSTO)
@@ -210,25 +226,7 @@ def evaluate(
         "costs": {
             "bsale_average_net": money(cost.average_net),
             "last_reception_net": money(cost.last_comparable_net),
-            "reference": {
-                "basis": cost_basis.value,
-                "net": money(reference_net),
-                "gross": money(gross_cost),
-                "gross_status": gross.status.value,
-                "gross_reason": gross.reason,
-                "tax_status": cost.tax_profile.status.value,
-                "tax_validation": cost.tax_profile.validation.value,
-                "iva_rate_pct": money(gross.iva_rate_pct),
-                "ila_rate_pct": money(gross.ila_rate_pct),
-                "tax_rate_pct": money(cost.tax_profile.total_rate_pct),
-                "tax_factor": money(gross.factor),
-                "tax_ids": list(gross.tax_ids),
-                "taxes_applied": [
-                    {"tax_id": t.tax_id, "code": t.code, "percentage": money(t.percentage), "kind": t.role}
-                    for t in gross.applied
-                ],
-                "tax_source": TAX_DATA_SOURCE,
-            },
+            "reference": reference,
             "validated_gross": {"value": None, "status": "no_disponible"},
             "reliability": cost.reliability.value,
             "anomaly_codes": list(cost.anomaly_codes),
@@ -256,5 +254,48 @@ def evaluate(
             "provisional": validity.value != "validado",
         },
         "promotion": promotion.to_json(),
+        "pack": pack.compact() if pack is not None else None,
         "_markup": markup,
+    }
+
+
+def _sku_reference(gross: Any, cost: CostFacts, basis: CostBasis, net: Decimal | None) -> dict[str, Any]:
+    return {
+        "basis": basis.value,
+        "net": money(net),
+        "gross": money(gross.gross),
+        "gross_status": gross.status.value,
+        "gross_reason": gross.reason,
+        "tax_status": cost.tax_profile.status.value,
+        "tax_validation": cost.tax_profile.validation.value,
+        "iva_rate_pct": money(gross.iva_rate_pct),
+        "ila_rate_pct": money(gross.ila_rate_pct),
+        "tax_rate_pct": money(cost.tax_profile.total_rate_pct),
+        "tax_factor": money(gross.factor),
+        "tax_ids": list(gross.tax_ids),
+        "taxes_applied": [
+            {"tax_id": t.tax_id, "code": t.code, "percentage": money(t.percentage), "kind": t.role}
+            for t in gross.applied
+        ],
+        "tax_source": TAX_DATA_SOURCE,
+    }
+
+
+def _pack_reference(pack: PackCost, basis: CostBasis) -> dict[str, Any]:
+    """Los impuestos van por componente (detalle del pack); los impuestos propios del pack no se aplican."""
+    return {
+        "basis": basis.value,
+        "net": money(pack.net_total),
+        "gross": money(pack.gross_total),
+        "gross_status": "preliminar_no_verificado" if pack.calculable else "pack_no_calculable",
+        "gross_reason": None if pack.calculable else pack.status.value,
+        "tax_status": "por_componente",
+        "tax_validation": "calculable" if pack.calculable else "pack_no_calculable",
+        "iva_rate_pct": None,
+        "ila_rate_pct": None,
+        "tax_rate_pct": None,
+        "tax_factor": None,
+        "tax_ids": [],
+        "taxes_applied": [],
+        "tax_source": COMPOSITION_SOURCE,
     }
