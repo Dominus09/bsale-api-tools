@@ -5,6 +5,7 @@ import { Loader2 } from "lucide-react"
 import { CartesianGrid, Line, LineChart, ReferenceLine, XAxis, YAxis } from "recharts"
 
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart"
+import { SectionCard, StatusBadge } from "@/components/analytics-v2/shared/analytics-ui"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { cn } from "@/lib/utils"
 import { getCostProduct, getCostProductHistory } from "@/lib/analytics-v2/api"
@@ -41,10 +42,10 @@ function CostCard({
   onOpenReception?: (receptionId: number, detailId: number) => void
 }) {
   return (
-    <div className="rounded-md border p-3">
-      <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{title}</p>
-      <p className="mt-1 text-xl font-semibold tabular-nums">{value}</p>
-      {hint ? <p className="text-[11px] text-muted-foreground">{hint}</p> : null}
+    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+      <p className="text-[13px] font-medium text-slate-600">{title}</p>
+      <p className="mt-2 text-2xl font-semibold tracking-[-0.025em] tabular-nums text-slate-950">{value}</p>
+      {hint ? <p className="mt-1 text-xs leading-5 text-slate-500">{hint}</p> : null}
       {line ? (
         <div className="mt-1 space-y-0.5 text-[11px] text-muted-foreground">
           <p>
@@ -147,9 +148,9 @@ export function CostV2ProductSheet({
 
   return (
     <Sheet open={variantId != null} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-3xl">
-        <SheetHeader>
-          <SheetTitle>{product?.product_name ?? (loading ? "Cargando…" : "Producto")}</SheetTitle>
+      <SheetContent side="right" className="w-full overflow-y-auto border-l-slate-200 bg-slate-50 p-0 sm:max-w-[min(1050px,92vw)]">
+        <SheetHeader className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-5 py-4 backdrop-blur md:px-6">
+          <SheetTitle className="pr-8 text-xl tracking-[-0.015em]">{product?.product_name ?? (loading ? "Cargando…" : "Producto")}</SheetTitle>
           <SheetDescription>
             {product
               ? `${product.code ?? "—"}${product.barcode && product.barcode !== product.code ? ` · ${product.barcode}` : ""} · ${product.product_type.name ?? "Sin tipo"} · SKU ${product.variant_state}`
@@ -157,7 +158,7 @@ export function CostV2ProductSheet({
           </SheetDescription>
         </SheetHeader>
 
-        <div className="space-y-4 px-4 pb-6">
+        <div className="space-y-5 px-4 pb-8 md:px-6">
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
           {loading && !product ? (
             <div className="flex justify-center py-8">
@@ -167,9 +168,10 @@ export function CostV2ProductSheet({
 
           {product ? (
             <>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2 pt-1">
                 <ReliabilityBadge status={product.reliability.status} />
-                <span className="text-sm text-muted-foreground">{product.reliability.reason}</span>
+                <span className="text-sm text-slate-600">{product.reliability.reason}</span>
+                <StatusBadge tone="warning">Validación contable pendiente</StatusBadge>
               </div>
 
               <section className="grid gap-2 sm:grid-cols-3">
@@ -218,15 +220,14 @@ export function CostV2ProductSheet({
                 </div>
               ) : null}
 
-              <section className="grid gap-3 sm:grid-cols-2">
-                <div className="rounded-md border p-3">
-                  <h3 className="text-sm font-semibold">Alertas</h3>
+              <section className="grid gap-4 sm:grid-cols-2">
+                <SectionCard title="Alertas y revisión" description="Señales detectadas en la última compra comparable.">
                   <div className="mt-2">
                     <AnomalyList anomalies={product.anomalies} />
                   </div>
-                </div>
-                <div className="rounded-md border p-3 text-sm">
-                  <h3 className="font-semibold">Impuestos y costo bruto</h3>
+                </SectionCard>
+                <SectionCard title="Impuestos y costo bruto" description="Desglose comercial calculado desde los impuestos Bsale.">
+                  <div className="text-sm">
                   <p className="mt-2">
                     {TAX_LABELS[product.tax_profile.status]}
                     {product.tax_profile.total_rate_pct ? ` · ${product.tax_profile.total_rate_pct}%` : ""}
@@ -273,11 +274,11 @@ export function CostV2ProductSheet({
                       ? ""
                       : " · el carácter neto del costo de recepción aún no se valida contra facturas"}
                   </p>
-                </div>
+                  </div>
+                </SectionCard>
               </section>
 
-              <section className="rounded-md border p-3">
-                <h3 className="text-sm font-semibold">Evolución del costo de compra comparable</h3>
+              <SectionCard title="Evolución del costo de compra" description="Solo movimientos comparables; la línea punteada representa el promedio Bsale actual.">
                 {series.length === 0 ? (
                   <p className="py-8 text-center text-sm text-muted-foreground">
                     Sin compras comparables para graficar.
@@ -302,15 +303,15 @@ export function CostV2ProductSheet({
                     </LineChart>
                   </ChartContainer>
                 )}
-                <p className="mt-1 text-[11px] text-muted-foreground">
-                  Línea punteada: costo promedio Bsale actual.
+                <p className="mt-2 text-xs text-slate-500">
                   {history?.series_truncated ? " Se muestran los últimos 1.000 puntos." : ""}
                 </p>
-              </section>
+              </SectionCard>
 
-              <section className="space-y-2">
+              <SectionCard title="Recepciones" description="Trazabilidad de compras y movimientos desde el 01-01-2025.">
+              <section className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h3 className="text-sm font-semibold">Recepciones desde 01-01-2025</h3>
+                  <span className="text-sm font-medium text-slate-700">Filtrar historial</span>
                   <select
                     className="h-8 rounded-md border border-input bg-background px-2 text-sm"
                     value={officeId}
@@ -385,6 +386,7 @@ export function CostV2ProductSheet({
                   />
                 ) : null}
               </section>
+              </SectionCard>
             </>
           ) : null}
         </div>

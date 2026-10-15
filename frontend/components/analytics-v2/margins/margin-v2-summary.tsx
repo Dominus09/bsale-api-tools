@@ -1,5 +1,8 @@
 "use client"
 
+import { CheckCircle2, CircleDollarSign, ListChecks, ShieldAlert, TrendingDown, TrendingUp } from "lucide-react"
+
+import { MetricCard, SectionCard, StatusBadge } from "@/components/analytics-v2/shared/analytics-ui"
 import { cn } from "@/lib/utils"
 import { LIST_SCOPE_LABELS, MARGIN_STATUS_LABELS, MARGIN_STATUS_TONES, PRIMARY_STATUSES } from "@/lib/analytics-v2/margins-labels"
 import type { MarginStatus, MarginsSummary } from "@/lib/analytics-v2/margins-types"
@@ -14,61 +17,82 @@ export function MarginV2Kpis({
   onSelectStatus: (status: MarginStatus | null) => void
 }) {
   const value = (n: number | undefined) => (loading && !summary ? "…" : (n ?? "—"))
-  const cards: { key: string; title: string; value: number | string; hint: string; filter: MarginStatus | null }[] = [
+  const cards: {
+    key: string
+    title: string
+    value: number | string
+    hint: string
+    filter: MarginStatus | null
+    tone: "neutral" | "success" | "warning" | "danger" | "info"
+    icon: typeof ListChecks
+  }[] = [
     {
       key: "rows",
-      title: "SKU × lista evaluados",
+      title: "Combinaciones evaluadas",
       value: value(summary?.rows_total),
-      hint: `Listas ${summary?.meta.evaluated_price_list_ids.join(", ") ?? "—"} · SKUs activos`,
+      hint: `SKU × lista · Listas ${summary?.meta.evaluated_price_list_ids.join(", ") ?? "—"}`,
       filter: null,
+      tone: "info",
+      icon: ListChecks,
     },
     {
       key: "bajo",
       title: "Bajo política",
       value: value(summary?.by_status.bajo_politica),
-      hint: summary?.meta.promotions_integrated
-        ? "Excluye solo promociones y remates verificados"
-        : "Calculado; promociones aún no verificables",
+      hint: "Recargo inferior al mínimo configurado",
       filter: "bajo_politica",
+      tone: summary?.by_status.bajo_politica ? "danger" : "success",
+      icon: TrendingDown,
     },
     {
-      key: "regla",
-      title: "Sin regla",
-      value: value(summary?.by_status.sin_regla),
-      hint: `${summary?.policy.missing_rule_combinations ?? "—"} combinaciones lista × tipo sin regla`,
-      filter: "sin_regla",
+      key: "dentro",
+      title: "Dentro de política",
+      value: value(summary?.by_status.dentro_politica),
+      hint: "Recargo dentro del rango configurado",
+      filter: "dentro_politica",
+      tone: "success",
+      icon: CheckCircle2,
+    },
+    {
+      key: "sobre",
+      title: "Sobre política",
+      value: value(summary?.by_status.sobre_politica),
+      hint: "Recargo superior al máximo, cuando existe",
+      filter: "sobre_politica",
+      tone: "info",
+      icon: TrendingUp,
     },
     {
       key: "costo",
-      title: "Sin costo",
-      value: loading && !summary ? "…" : summary ? summary.by_status.sin_costo + summary.by_status.costo_no_verificado : "—",
-      hint: "Sin costo base para la base elegida",
+      title: "Sin costo utilizable",
+      value: value(summary?.by_status.sin_costo),
+      hint: "No se puede calcular recargo ni margen",
       filter: "sin_costo",
+      tone: summary?.by_status.sin_costo ? "warning" : "success",
+      icon: CircleDollarSign,
     },
     {
       key: "impuestos",
       title: "Revisión tributaria",
       value: value(summary?.by_status.requiere_revision_tributaria),
-      hint: "IVA anticipado, más de un ILA o impuesto inconsistente: sin recargo",
+      hint: "IVA o ILA impiden obtener costo bruto",
       filter: "requiere_revision_tributaria",
+      tone: summary?.by_status.requiere_revision_tributaria ? "warning" : "success",
+      icon: ShieldAlert,
     },
   ]
   return (
-    <div className="grid grid-cols-2 gap-2 lg:grid-cols-5">
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
       {cards.map((c) => (
-        <button
+        <MetricCard
           key={c.key}
-          type="button"
+          label={c.title}
+          value={c.value}
+          context={c.hint}
+          tone={c.tone}
+          icon={c.icon}
           onClick={() => onSelectStatus(c.filter)}
-          className={cn(
-            "rounded-md border border-border/70 bg-card px-3 py-2.5 text-left transition-colors",
-            "hover:border-red-700/40 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-700/40",
-          )}
-        >
-          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{c.title}</p>
-          <p className="mt-1 text-2xl font-semibold tabular-nums tracking-tight">{c.value}</p>
-          <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{c.hint}</p>
-        </button>
+        />
       ))}
     </div>
   )
@@ -83,26 +107,31 @@ export function MarginV2ListBreakdown({
 }) {
   if (!summary) return null
   return (
-    <div className="space-y-3">
-      <div className="overflow-x-auto rounded-md border">
-        <table className="w-full min-w-[820px] text-sm">
-          <thead className="bg-muted/40 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+    <div className="space-y-4">
+      <SectionCard
+        title="Comparación por lista de precios"
+        description="Cada cifra corresponde a combinaciones SKU × lista. Selecciona una cantidad para explorar sus productos."
+        contentClassName="p-0"
+      >
+        <div className="overflow-x-auto">
+        <table className="w-full min-w-[780px] text-sm">
+          <thead className="border-b border-slate-100 bg-slate-50/75 text-left text-xs text-slate-500">
             <tr>
-              <th className="px-3 py-2 font-medium">Lista</th>
+              <th className="px-5 py-3 font-medium">Lista</th>
               {PRIMARY_STATUSES.map((s) => (
                 <th key={s} className="px-3 py-2 text-right font-medium">
                   {MARGIN_STATUS_LABELS[s]}
                 </th>
               ))}
-              <th className="px-3 py-2 text-right font-medium">Provisionales</th>
+              <th className="px-5 py-3 text-right font-medium">En validación</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-border/60">
+          <tbody className="divide-y divide-slate-100">
             {summary.by_price_list.map((l) => (
-              <tr key={l.price_list_id}>
-                <td className="px-3 py-2">
-                  <span className="font-medium">{l.label ?? l.name}</span>
-                  <span className="block text-[11px] text-muted-foreground">
+              <tr key={l.price_list_id} className="hover:bg-slate-50/70">
+                <td className="px-5 py-3">
+                  <span className="font-medium text-slate-900">{l.label ?? l.name}</span>
+                  <span className="mt-0.5 block text-xs text-slate-500">
                     #{l.price_list_id} · {l.name}
                   </span>
                 </td>
@@ -121,34 +150,28 @@ export function MarginV2ListBreakdown({
                     )}
                   </td>
                 ))}
-                <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">
+                <td className="px-5 py-3 text-right tabular-nums text-slate-500">
                   {l.provisional} / {l.rows}
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
-      </div>
+        </div>
+      </SectionCard>
 
-      <div className="rounded-md border p-3">
-        <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Alcance de listas (BSALE RAW)</p>
+      <SectionCard title="Alcance de listas Bsale" description="Solo las listas vigentes y autorizadas participan del análisis.">
         <div className="flex flex-wrap gap-1.5">
           {summary.scope.price_lists.map((e) => (
-            <span
+            <StatusBadge
               key={e.price_list_id}
-              className={cn(
-                "rounded-md border px-2 py-0.5 text-xs",
-                e.status === "evaluada" && "border-emerald-300 bg-emerald-50 text-emerald-800",
-                e.discrepancy && "border-red-300 bg-red-50 text-red-800",
-                !e.discrepancy && e.status !== "evaluada" && "bg-muted/40 text-muted-foreground",
-              )}
-              title={LIST_SCOPE_LABELS[e.status]}
+              tone={e.discrepancy ? "danger" : e.status === "evaluada" ? "success" : "neutral"}
             >
               #{e.price_list_id} {e.commercial_label ?? e.name ?? ""} · {LIST_SCOPE_LABELS[e.status]}
-            </span>
+            </StatusBadge>
           ))}
         </div>
-      </div>
+      </SectionCard>
     </div>
   )
 }

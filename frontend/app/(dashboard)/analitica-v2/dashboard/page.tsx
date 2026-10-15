@@ -1,15 +1,16 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { AlertTriangle, Info, Loader2, RefreshCw } from "lucide-react"
+import { AlertTriangle, ChevronDown, Info, Loader2, RefreshCw } from "lucide-react"
 
 import { CostV2ProductSheet } from "@/components/analytics-v2/costs/cost-v2-product-sheet"
 import { CostV2ReceptionDialog } from "@/components/analytics-v2/costs/cost-v2-reception-dialog"
 import { DashboardProductDialog } from "@/components/analytics-v2/dashboard/dashboard-product-dialog"
 import {
   BlockState,
+  AttentionPanel,
   CostsOverview,
-  DataClassBadge,
+  DashboardExecutiveSummary,
   FreshnessPanel,
   MarginRowsTable,
   MarginsOverview,
@@ -18,6 +19,13 @@ import {
   PromotionsOverview,
   TaxesOverview,
 } from "@/components/analytics-v2/dashboard/dashboard-sections"
+import {
+  AnalyticPageHeader,
+  AnalyticsLoading,
+  DataStatusBar,
+  SectionCard,
+  StatusBadge,
+} from "@/components/analytics-v2/shared/analytics-ui"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { getStoredCompanyId } from "@/lib/api"
@@ -99,26 +107,20 @@ export default function DashboardV2Page() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-4 p-3 md:p-4">
-      <header className="flex flex-col gap-2 border-b border-border/60 pb-3 md:flex-row md:items-end md:justify-between">
-        <div className="flex flex-col gap-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-xl font-semibold tracking-tight md:text-2xl">Dashboard V2</h1>
-            <span className="rounded-md border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800">
-              En validación
-            </span>
-            {data ? <DataClassBadge value={data.reliability.level} /> : null}
-          </div>
-          <p className="text-sm text-muted-foreground">
-            {data?.meta.company_name ?? `Empresa ${companyId}`} · Costos, márgenes, listas y promociones · BSALE RAW (solo lectura)
-          </p>
-          <p className="text-xs text-muted-foreground">
-            Calculado {formatDateTime(data?.meta.generated_at)}
-            {data?.meta.cached ? " (caché de hasta 60 s)" : ""}
+    <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6 pb-10">
+      <AnalyticPageHeader
+        eyebrow="Analítica V2"
+        title="Centro de inteligencia comercial"
+        description={`${data?.meta.company_name ?? `Empresa ${companyId}`} · Costos, márgenes, listas y packs en una vista orientada a decisiones.`}
+        updatedAt={
+          <>
+            Última actualización: {formatDateTime(data?.meta.generated_at)}
+            {data?.meta.cached ? " · respuesta en caché" : ""}
             {data?.meta.elapsed_ms != null ? ` · ${data.meta.elapsed_ms} ms` : ""}
-          </p>
-        </div>
-        <div className="flex items-end gap-2">
+          </>
+        }
+        actions={
+          <>
           <label className="flex flex-col gap-1 text-[11px] font-medium uppercase text-muted-foreground">
             Base de costo
             <select
@@ -138,8 +140,9 @@ export default function DashboardV2Page() {
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
             Actualizar
           </Button>
-        </div>
-      </header>
+          </>
+        }
+      />
 
       {blocking ? (
         <Alert>
@@ -157,37 +160,54 @@ export default function DashboardV2Page() {
         </Alert>
       ) : null}
 
-      {!data && loading ? (
-        <p className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" /> Calculando indicadores…
-        </p>
-      ) : null}
+      {!data && loading ? <AnalyticsLoading label="Preparando el panorama comercial…" /> : null}
 
       {data && !blocking ? (
         <>
-          {data.reliability.warnings.length ? (
-            <Alert>
-              <Info className="h-4 w-4" />
-              <AlertTitle>Confiabilidad de los datos</AlertTitle>
-              <AlertDescription>
-                <ul className="list-disc pl-4">
-                  {data.reliability.warnings.map((w) => (
-                    <li key={w}>{warningLabel(w)}</li>
-                  ))}
+          <DataStatusBar
+            status={data.reliability.level === "confirmado" ? "success" : data.reliability.level === "no_disponible" ? "danger" : "warning"}
+            title={data.reliability.level === "confirmado" ? "Datos confirmados" : "Resultados en validación"}
+            summary="Los cálculos conservan su condición provisional hasta la validación contable."
+          >
+            <div className="grid gap-3 md:grid-cols-2">
+              <div>
+                <p className="font-medium text-slate-900">Criterios de validación</p>
+                <ul className="mt-1 list-disc pl-5 text-slate-600">
+                  <li>Precios: leídos desde Bsale RAW.</li>
+                  <li>Impuestos IVA/ILA: configuración aún no contrastada contablemente.</li>
+                  <li>Costo bruto comercial: cálculo provisional.</li>
+                  <li>Política de márgenes: pendiente de revisión con el Excel de gerencia.</li>
                 </ul>
-              </AlertDescription>
-            </Alert>
-          ) : null}
+              </div>
+              {data.reliability.warnings.length ? (
+                <div>
+                  <p className="font-medium text-slate-900">Observaciones actuales</p>
+                  <ul className="mt-1 list-disc pl-5 text-slate-600">
+                    {data.reliability.warnings.map((w) => <li key={w}>{warningLabel(w)}</li>)}
+                  </ul>
+                </div>
+              ) : null}
+            </div>
+          </DataStatusBar>
 
-          <BlockState title="Sincronización BSALE RAW" block={data.freshness}>
-            {(f) => <FreshnessPanel freshness={f} />}
-          </BlockState>
+          <DashboardExecutiveSummary data={data} />
+          <AttentionPanel data={data} />
 
           <BlockState title="Márgenes" block={data.margins}>
             {(m) => (
-              <>
+              <div className="space-y-6">
                 <MarginsOverview data={m} costBasis={data.cost_basis} />
-                <div className="grid gap-3 xl:grid-cols-[1fr_1fr_280px]">
+                <section>
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div>
+                      <h2 className="text-[19px] font-semibold tracking-[-0.015em] text-slate-950">Problemas destacados</h2>
+                      <p className="mt-1 text-[13px] text-slate-500">Mayores brechas comerciales para iniciar la revisión.</p>
+                    </div>
+                    <StatusBadge tone={m.top_alerts.length ? "danger" : "success"}>
+                      {m.top_alerts.length ? `${m.top_alerts.length} destacados` : "Sin alertas"}
+                    </StatusBadge>
+                  </div>
+                  <div className="grid gap-4 xl:grid-cols-2">
                   <MarginRowsTable
                     title="Mayores brechas bajo política"
                     rows={m.top_alerts}
@@ -200,29 +220,61 @@ export default function DashboardV2Page() {
                     empty="Ninguna promoción o remate vigente con riesgo de costo."
                     onOpenProduct={setProductId}
                   />
-                  <PolicyCard data={m} />
-                </div>
-              </>
+                  </div>
+                </section>
+              </div>
             )}
           </BlockState>
 
-          <BlockState title="Costos" block={data.costs}>
-            {(c) => <CostsOverview data={c} onOpenProduct={setProductId} />}
+          <BlockState title="Sincronización BSALE RAW" block={data.freshness}>
+            {(f) => <FreshnessPanel freshness={f} />}
           </BlockState>
 
-          <BlockState title="Impuestos y costo bruto comercial" block={data.taxes}>
-            {(t) => <TaxesOverview data={t} canSeeCosts={canSeeCosts} />}
-          </BlockState>
-
-          <BlockState title="Ofertas y remates" block={data.promotions}>
-            {(p) => <PromotionsOverview data={p} />}
-          </BlockState>
-
-          {data.packs ? (
-            <BlockState title="Packs Bsale" block={data.packs}>
-              {(p) => <PacksOverview data={p} costBasis={data.cost_basis} />}
-            </BlockState>
-          ) : null}
+          <SectionCard
+            title="Análisis complementario"
+            description="Costos, impuestos, packs y campañas permanecen disponibles sin competir con el resumen ejecutivo."
+            contentClassName="p-0"
+          >
+            <div className="divide-y divide-slate-100">
+              <details className="group">
+                <summary className="flex cursor-pointer list-none items-center justify-between px-5 py-4 text-sm font-semibold text-slate-800 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
+                  Control de costos
+                  <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
+                </summary>
+                <div className="border-t border-slate-100 p-4 md:p-5">
+                  <BlockState title="Costos" block={data.costs}>{(c) => <CostsOverview data={c} onOpenProduct={setProductId} />}</BlockState>
+                </div>
+              </details>
+              <details className="group">
+                <summary className="flex cursor-pointer list-none items-center justify-between px-5 py-4 text-sm font-semibold text-slate-800 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
+                  Impuestos y costo bruto comercial
+                  <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
+                </summary>
+                <div className="border-t border-slate-100 p-4 md:p-5">
+                  <BlockState title="Impuestos" block={data.taxes}>{(t) => <TaxesOverview data={t} canSeeCosts={canSeeCosts} />}</BlockState>
+                </div>
+              </details>
+              <details className="group">
+                <summary className="flex cursor-pointer list-none items-center justify-between px-5 py-4 text-sm font-semibold text-slate-800 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
+                  Packs Bsale
+                  <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
+                </summary>
+                <div className="border-t border-slate-100 p-4 md:p-5">
+                  <BlockState title="Packs" block={data.packs}>{(p) => <PacksOverview data={p} costBasis={data.cost_basis} />}</BlockState>
+                </div>
+              </details>
+              <details className="group">
+                <summary className="flex cursor-pointer list-none items-center justify-between px-5 py-4 text-sm font-semibold text-slate-800 hover:bg-slate-50 [&::-webkit-details-marker]:hidden">
+                  Política y campañas
+                  <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
+                </summary>
+                <div className="grid gap-4 border-t border-slate-100 p-4 lg:grid-cols-[320px_1fr] md:p-5">
+                  {data.margins.status === "ok" && data.margins.data ? <PolicyCard data={data.margins.data} /> : null}
+                  <BlockState title="Ofertas y remates" block={data.promotions}>{(p) => <PromotionsOverview data={p} />}</BlockState>
+                </div>
+              </details>
+            </div>
+          </SectionCard>
         </>
       ) : null}
 

@@ -1,8 +1,9 @@
 "use client"
 
 import { Fragment, useEffect, useState } from "react"
-import { AlertTriangle, Loader2 } from "lucide-react"
+import { AlertTriangle, Calculator, CircleDollarSign, Layers3, Loader2, Percent } from "lucide-react"
 
+import { MetricCard, SectionCard, StatusBadge } from "@/components/analytics-v2/shared/analytics-ui"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { cn } from "@/lib/utils"
@@ -17,7 +18,9 @@ import { PackStatusBadge } from "./pack-v2-table"
 function taxesText(line: PackLine): string {
   if (line.is_pack) return "Pack anidado: impuestos por componente"
   if (!line.taxes_applied.length) return line.tax_ids.length ? `IDs ${line.tax_ids.join(", ")} sin resolver` : "—"
-  return line.taxes_applied.map((t) => `#${t.tax_id} ${formatPct(t.percentage)}`).join(" + ")
+  return line.taxes_applied
+    .map((t) => `${t.kind === "ila" ? "ILA" : t.kind === "iva" ? "IVA" : "IVA anticipado"} ${formatPct(t.percentage)}`)
+    .join(" + ")
 }
 
 function ComponentRows({ lines, depth = 0 }: { lines: PackLine[]; depth?: number }) {
@@ -52,6 +55,31 @@ function ComponentRows({ lines, depth = 0 }: { lines: PackLine[]; depth?: number
         </Fragment>
       ))}
     </>
+  )
+}
+
+function ComponentCards({ lines, depth = 0 }: { lines: PackLine[]; depth?: number }) {
+  return (
+    <div className="space-y-3">
+      {lines.map((line) => (
+        <div key={`${depth}-${line.position}-${line.variant_id ?? "x"}`} className="rounded-lg border border-slate-200 bg-white p-4" style={{ marginLeft: depth * 12 }}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-slate-950">{line.name ?? (line.variant_id ? `Variante ${line.variant_id}` : "Variante no determinada")}</p>
+              <p className="mt-1 text-xs text-slate-500">{line.code ?? "Sin SKU"} · Cantidad {formatQty(line.quantity)}</p>
+            </div>
+            <StatusBadge tone={line.status === "calculado" ? "success" : "warning"}>{PACK_COMPONENT_STATUS_LABELS[line.status]}</StatusBadge>
+          </div>
+          <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
+            <div><dt className="text-xs text-slate-500">Costo neto unitario</dt><dd className="mt-0.5 font-medium tabular-nums">{formatMoney(line.unit_net)}</dd></div>
+            <div><dt className="text-xs text-slate-500">Costo bruto unitario</dt><dd className="mt-0.5 font-medium tabular-nums">{formatMoney(line.unit_gross)}</dd></div>
+            <div><dt className="text-xs text-slate-500">Impuestos</dt><dd className="mt-0.5 font-medium">{taxesText(line)}</dd></div>
+            <div><dt className="text-xs text-slate-500">Subtotal bruto</dt><dd className="mt-0.5 font-semibold tabular-nums">{formatMoney(line.subtotal_gross)}</dd></div>
+          </dl>
+          {line.nested_pack ? <div className="mt-3"><ComponentCards lines={line.nested_pack.lines} depth={depth + 1} /></div> : null}
+        </div>
+      ))}
+    </div>
   )
 }
 
@@ -92,15 +120,15 @@ export function PackV2DetailSheet({
   const pack = data?.pack
   return (
     <Sheet open={variantId != null} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full overflow-y-auto sm:max-w-4xl">
-        <SheetHeader>
-          <SheetTitle>{data?.product_name ?? (loading ? "Cargando…" : "Pack")}</SheetTitle>
+      <SheetContent side="right" className="w-full overflow-y-auto border-l-slate-200 bg-slate-50 p-0 sm:max-w-[min(1100px,92vw)]">
+        <SheetHeader className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-5 py-4 backdrop-blur md:px-6">
+          <SheetTitle className="pr-8 text-xl tracking-[-0.015em]">{data?.product_name ?? (loading ? "Cargando…" : "Pack")}</SheetTitle>
           <SheetDescription>
-            {data ? `${data.code ?? "—"} · variante #${data.variant_id} · ${data.pack_state}` : null}
+            {data ? `${data.code ?? "Sin SKU"} · variante #${data.variant_id} · ${data.pack_state} · ${pack?.components_count ?? 0} componentes` : null}
           </SheetDescription>
         </SheetHeader>
 
-        <div className="space-y-4 px-4 pb-6">
+        <div className="space-y-5 px-4 pb-8 md:px-6">
           {loading && !data ? (
             <div className="flex justify-center py-10">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -116,28 +144,19 @@ export function PackV2DetailSheet({
 
           {data && pack ? (
             <>
-              <section className="grid gap-2 rounded-md border p-3 text-sm sm:grid-cols-2">
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
                 <div>
-                  <span className="block text-[11px] uppercase text-muted-foreground">Costo del pack</span>
-                  <PackStatusBadge status={pack.status} />
-                  <span className="mt-1 block text-[11px] text-muted-foreground">
-                    Base {COST_BASIS_LABELS[pack.basis]} de cada componente · composición {formatDateTime(pack.composition_fetched_at)}
-                  </span>
+                  <p className="text-xs font-medium uppercase tracking-[0.14em] text-slate-500">Resultado del cálculo</p>
+                  <p className="mt-1 text-sm text-slate-600">Base {COST_BASIS_LABELS[pack.basis]} · composición {formatDateTime(pack.composition_fetched_at)}</p>
                 </div>
-                <div className="grid grid-cols-2 gap-2 tabular-nums">
-                  <div>
-                    <span className="block text-[11px] uppercase text-muted-foreground">Costo neto total</span>
-                    {formatMoney(pack.net_total)}
-                  </div>
-                  <div>
-                    <span className="block text-[11px] uppercase text-muted-foreground">Costo bruto comercial</span>
-                    {formatMoney(pack.gross_total)}
-                  </div>
-                </div>
-                <p className="text-[11px] text-muted-foreground sm:col-span-2">
-                  El costo promedio propio del SKU del pack ({formatMoney(data.pack_sku_own.bsale_average_cost.value)}) y sus impuestos propios
-                  (IDs {data.pack_sku_own.tax_ids?.join(", ") || "—"}) no se usan: cada componente aporta su costo y sus impuestos.
-                </p>
+                <PackStatusBadge status={pack.status} />
+              </div>
+
+              <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <MetricCard label="Costo neto total" value={formatMoney(pack.net_total)} icon={Layers3} tone="neutral" context="Suma neta de componentes" />
+                <MetricCard label="Costo bruto comercial" value={formatMoney(pack.gross_total)} icon={CircleDollarSign} tone={pack.calculable ? "warning" : "neutral"} context="Incluye IVA e ILA por componente" />
+                <MetricCard label="Recargo de referencia" value={formatPct(data.rows.find((r) => r.markup_pct != null)?.markup_pct ?? null)} icon={Percent} context="Primera lista con precio evaluable" />
+                <MetricCard label="Margen de referencia" value={formatPct(data.rows.find((r) => r.margin_on_sale_pct != null)?.margin_on_sale_pct ?? null)} icon={Calculator} context="Precio menos costo sobre precio" />
               </section>
 
               {data.problems.length ? (
@@ -150,23 +169,27 @@ export function PackV2DetailSheet({
                 </Alert>
               ) : null}
 
-              <section className="space-y-2">
-                <h3 className="text-sm font-semibold">Componentes ({pack.components_count})</h3>
-                <div className="overflow-x-auto rounded-md border">
-                  <table className="w-full min-w-[820px] text-xs">
-                    <thead className="bg-muted/40 text-left text-[10px] uppercase tracking-wide text-muted-foreground">
+              <SectionCard
+                title={`Composición del pack (${pack.components_count})`}
+                description="Cada componente aporta su cantidad, costo neto e impuestos propios al costo total."
+                contentClassName="p-0"
+              >
+                <div className="p-4 md:hidden"><ComponentCards lines={pack.lines} /></div>
+                <div className="hidden overflow-x-auto md:block">
+                  <table className="w-full min-w-[820px] text-sm">
+                    <thead className="border-b border-slate-100 bg-slate-50/75 text-left text-xs text-slate-500">
                       <tr>
-                        <th className="px-2 py-1.5 font-medium">Componente</th>
-                        <th className="px-2 py-1.5 text-right font-medium">Cantidad</th>
-                        <th className="px-2 py-1.5 text-right font-medium">Costo neto unit.</th>
-                        <th className="px-2 py-1.5 font-medium">Impuestos (ID Bsale)</th>
-                        <th className="px-2 py-1.5 text-right font-medium">Costo bruto unit.</th>
-                        <th className="px-2 py-1.5 text-right font-medium">Subtotal neto</th>
-                        <th className="px-2 py-1.5 text-right font-medium">Subtotal bruto</th>
-                        <th className="px-2 py-1.5 font-medium">Estado</th>
+                        <th className="px-4 py-3 font-medium">Componente</th>
+                        <th className="px-3 py-3 text-right font-medium">Cantidad</th>
+                        <th className="px-3 py-3 text-right font-medium">Neto unit.</th>
+                        <th className="px-3 py-3 font-medium">Impuestos</th>
+                        <th className="px-3 py-3 text-right font-medium">Bruto unit.</th>
+                        <th className="px-3 py-3 text-right font-medium">Subtotal neto</th>
+                        <th className="px-3 py-3 text-right font-medium">Subtotal bruto</th>
+                        <th className="px-4 py-3 font-medium">Estado</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-border/60">
+                    <tbody className="divide-y divide-slate-100">
                       <ComponentRows lines={pack.lines} />
                       {pack.lines.length === 0 ? (
                         <tr>
@@ -183,35 +206,38 @@ export function PackV2DetailSheet({
                     {pack.warnings.map((w) => PACK_PROBLEM_LABELS[w as keyof typeof PACK_PROBLEM_LABELS] ?? w.replaceAll("_", " ")).join(" · ")}
                   </p>
                 ) : null}
-              </section>
+              </SectionCard>
 
-              <section className="space-y-2">
-                <h3 className="text-sm font-semibold">Rentabilidad estimada actual por lista</h3>
-                <div className="overflow-x-auto rounded-md border">
-                  <table className="w-full text-xs">
-                    <thead className="bg-muted/40 text-left text-[10px] uppercase tracking-wide text-muted-foreground">
+              <SectionCard
+                title="Precios y rentabilidad por lista"
+                description="Compara el mismo costo del pack con cada precio bruto vigente."
+                contentClassName="p-0"
+              >
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-[680px] text-sm">
+                    <thead className="border-b border-slate-100 bg-slate-50/75 text-left text-xs text-slate-500">
                       <tr>
-                        <th className="px-2 py-1.5 font-medium">Lista</th>
-                        <th className="px-2 py-1.5 text-right font-medium">Precio bruto</th>
-                        <th className="px-2 py-1.5 text-right font-medium">Recargo %</th>
-                        <th className="px-2 py-1.5 text-right font-medium">Margen s/venta</th>
-                        <th className="px-2 py-1.5 text-right font-medium">Política mín / máx</th>
-                        <th className="px-2 py-1.5 font-medium">Estado</th>
+                        <th className="px-5 py-3 font-medium">Lista</th>
+                        <th className="px-4 py-3 text-right font-medium">Precio bruto</th>
+                        <th className="px-4 py-3 text-right font-medium">Recargo</th>
+                        <th className="px-4 py-3 text-right font-medium">Margen venta</th>
+                        <th className="px-4 py-3 text-right font-medium">Política mín / máx</th>
+                        <th className="px-5 py-3 font-medium">Estado</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-border/60">
+                    <tbody className="divide-y divide-slate-100">
                       {data.rows.map((r) => (
                         <tr key={r.price_list.id}>
-                          <td className="px-2 py-1.5">
+                          <td className="px-5 py-3">
                             {r.price_list.label ?? r.price_list.name} <span className="text-muted-foreground">#{r.price_list.id}</span>
                           </td>
-                          <td className="px-2 py-1.5 text-right tabular-nums">{formatMoney(r.price_gross)}</td>
-                          <td className="px-2 py-1.5 text-right tabular-nums">{formatPct(r.markup_pct)}</td>
-                          <td className="px-2 py-1.5 text-right tabular-nums">{formatPct(r.margin_on_sale_pct)}</td>
-                          <td className="px-2 py-1.5 text-right tabular-nums">
+                          <td className="px-4 py-3 text-right font-medium tabular-nums">{formatMoney(r.price_gross)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">{formatPct(r.markup_pct)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">{formatPct(r.margin_on_sale_pct)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">
                             {r.rule ? `${formatPct(r.rule.min_markup_pct)} / ${Number(r.rule.max_markup_pct) > 0 ? formatPct(r.rule.max_markup_pct) : "—"}` : "Sin regla"}
                           </td>
-                          <td className="px-2 py-1.5">
+                          <td className="px-5 py-3">
                             <span className={cn("rounded-md border px-1.5 py-0.5 text-[11px]", MARGIN_STATUS_TONES[r.margin_status])}>
                               {MARGIN_STATUS_LABELS[r.margin_status]}
                             </span>
@@ -222,15 +248,27 @@ export function PackV2DetailSheet({
                   </table>
                 </div>
                 {data.list_price_spread?.alert ? (
-                  <p className="text-[11px] text-red-800">
+                  <p className="border-t border-red-100 bg-red-50 px-5 py-3 text-xs text-red-800">
                     Diferencia entre listas: máximo {formatMoney(data.list_price_spread.max)} vs mínimo {formatMoney(data.list_price_spread.min)}
                     (×{data.list_price_spread.ratio}). Confirmar en BSALE RAW antes de clasificarlo como anomalía.
                   </p>
                 ) : null}
-                <p className="text-[11px] text-muted-foreground">
+                <p className="border-t border-slate-100 px-5 py-3 text-xs text-slate-500">
                   Rentabilidad estimada con precios vigentes y costos actuales; la rentabilidad histórica de ventas no está implementada.
                 </p>
-              </section>
+              </SectionCard>
+
+              <SectionCard title="¿Cómo se calcula?" description="Explicación del cálculo comercial, sin modificar datos de Bsale.">
+                <ol className="grid gap-3 text-sm leading-6 text-slate-600 md:grid-cols-3">
+                  <li className="rounded-lg bg-slate-50 p-3"><strong className="block text-slate-900">1. Costo neto</strong>Cantidad × costo neto de cada componente.</li>
+                  <li className="rounded-lg bg-slate-50 p-3"><strong className="block text-slate-900">2. Costo bruto</strong>Al costo neto se suma IVA e ILA propios de cada componente.</li>
+                  <li className="rounded-lg bg-slate-50 p-3"><strong className="block text-slate-900">3. Rentabilidad</strong>El precio de cada lista se compara con el costo bruto total.</li>
+                </ol>
+                <p className="mt-4 text-xs leading-5 text-slate-500">
+                  El costo promedio propio del SKU del pack ({formatMoney(data.pack_sku_own.bsale_average_cost.value)}) y sus impuestos propios
+                  no participan del cálculo. El resultado continúa siendo provisional hasta la validación contable.
+                </p>
+              </SectionCard>
             </>
           ) : null}
         </div>

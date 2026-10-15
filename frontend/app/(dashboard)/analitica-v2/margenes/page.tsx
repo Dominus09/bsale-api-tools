@@ -6,6 +6,7 @@ import { AlertTriangle, Info } from "lucide-react"
 import { CostV2ProductSheet } from "@/components/analytics-v2/costs/cost-v2-product-sheet"
 import { Pager } from "@/components/analytics-v2/costs/cost-v2-products"
 import { CostV2ReceptionDialog } from "@/components/analytics-v2/costs/cost-v2-reception-dialog"
+import { DashboardProductDialog } from "@/components/analytics-v2/dashboard/dashboard-product-dialog"
 import { MarginV2PolicyReview } from "@/components/analytics-v2/margins/margin-v2-policy-review"
 import { MarginV2Kpis, MarginV2ListBreakdown } from "@/components/analytics-v2/margins/margin-v2-summary"
 import {
@@ -14,6 +15,7 @@ import {
   MarginV2Table,
   type MarginFilterDraft,
 } from "@/components/analytics-v2/margins/margin-v2-table"
+import { AnalyticPageHeader, DataStatusBar, StatusBadge } from "@/components/analytics-v2/shared/analytics-ui"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { getStoredCompanyId } from "@/lib/api"
@@ -60,6 +62,7 @@ export default function MarginsV2Page() {
   const [blocking, setBlocking] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [variantId, setVariantId] = useState<number | null>(null)
+  const [costVariantId, setCostVariantId] = useState<number | null>(null)
   const [reception, setReception] = useState<{ id: number; detailId: number } | null>(null)
   const rowsAbort = useRef<AbortController | null>(null)
 
@@ -179,22 +182,14 @@ export default function MarginsV2Page() {
   const discrepancies = summary?.scope.discrepancies ?? []
 
   return (
-    <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-3 p-3 md:p-4">
-      <header className="flex flex-col gap-1 border-b border-border/60 pb-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <h1 className="text-xl font-semibold tracking-tight md:text-2xl">Márgenes V2</h1>
-          <span className="rounded-md border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800">
-            En validación
-          </span>
-        </div>
-        <p className="text-sm text-muted-foreground">
-          {summary?.meta.company_name ?? `Empresa ${companyId}`} · Precios y costos: BSALE RAW (solo lectura) · Reglas:
-          política de márgenes vigente
-        </p>
-        <p className="text-xs text-muted-foreground">
-          Calculado {formatDateTime(summary?.meta.generated_at)} · Recargo % = (Precio bruto / Costo bruto − 1) × 100
-        </p>
-      </header>
+    <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6 pb-10">
+      <AnalyticPageHeader
+        eyebrow="Analítica V2"
+        title="Márgenes comerciales"
+        description={`Compara precios, costos y políticas para detectar rápidamente qué productos requieren atención · ${summary?.meta.company_name ?? `Empresa ${companyId}`}.`}
+        updatedAt={<>Última actualización: {formatDateTime(summary?.meta.generated_at)} · Recargo = (precio bruto / costo bruto − 1) × 100</>}
+        actions={<StatusBadge tone="warning">Resultados provisionales</StatusBadge>}
+      />
 
       {blocking ? (
         <Alert>
@@ -213,19 +208,14 @@ export default function MarginsV2Page() {
           ) : null}
 
           {summary ? (
-            <Alert>
-              <Info className="h-4 w-4" />
-              <AlertTitle>Resultados provisionales</AlertTitle>
-              <AlertDescription>
-                {!summary.meta.policies_reviewed ? "La política de márgenes está pendiente de revisión con el Excel de gerencia. " : ""}
-                {!summary.meta.net_cost_verified
-                  ? "El costo bruto es preliminar (costo neto de recepción + IVA/ILA, sin contrastar con facturas). "
-                  : ""}
-                {!summary.meta.promotions_integrated
-                  ? "Promociones V2 aún no está integrado: un SKU bajo política puede estar promocionado y no se descarta."
-                  : "Una promoción o remate solo excluye la alerta si está aprobado, vigente y su precio coincide con Bsale; los riesgos de costo siguen visibles."}
-              </AlertDescription>
-            </Alert>
+            <DataStatusBar status="warning" title="Márgenes en validación" summary="Precios reales de Bsale; costos, impuestos y políticas conservan su estado provisional.">
+              <div className="grid gap-3 text-slate-600 md:grid-cols-2">
+                <p><strong className="text-slate-900">Costo bruto comercial:</strong> incorpora IVA/ILA, pero aún no está contrastado contablemente.</p>
+                <p><strong className="text-slate-900">Política:</strong> las reglas actuales se mantienen sin cambios hasta la revisión del Excel de gerencia.</p>
+                <p><strong className="text-slate-900">Promociones:</strong> solo justifican una excepción cuando están aprobadas, vigentes y verificadas.</p>
+                <p><strong className="text-slate-900">Riesgos:</strong> una excepción nunca oculta ventas bajo costo o costos sospechosos.</p>
+              </div>
+            </DataStatusBar>
           ) : null}
 
           {discrepancies.length ? (
@@ -249,11 +239,11 @@ export default function MarginsV2Page() {
             }
           />
 
-          <Tabs value={tab} onValueChange={setTab} className="gap-3">
-            <TabsList>
+          <Tabs value={tab} onValueChange={setTab} className="gap-4">
+            <TabsList className="h-11 rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
               <TabsTrigger value="resumen">Resumen por lista</TabsTrigger>
-              <TabsTrigger value="detalle">SKU × lista</TabsTrigger>
-              <TabsTrigger value="politica">Política pendiente de revisión</TabsTrigger>
+              <TabsTrigger value="detalle">Explorar productos</TabsTrigger>
+              <TabsTrigger value="politica">Política comercial</TabsTrigger>
             </TabsList>
 
             <TabsContent value="resumen">
@@ -277,8 +267,7 @@ export default function MarginsV2Page() {
               <MarginV2Table
                 items={rows?.items ?? []}
                 loading={loadingRows}
-                canOpenCostHistory={canSeeCosts}
-                onOpenCostHistory={setVariantId}
+                onOpenProduct={setVariantId}
               />
               {rows ? (
                 <Pager page={rows.page} totalPages={rows.total_pages} total={rows.total} loading={loadingRows} onPage={setPage} />
@@ -292,14 +281,26 @@ export default function MarginsV2Page() {
         </>
       )}
 
+      <DashboardProductDialog
+        companyId={companyId}
+        variantId={variantId}
+        costBasis={applied.costBasis}
+        canSeeCosts={canSeeCosts}
+        onOpenChange={(open) => { if (!open) setVariantId(null) }}
+        onOpenCostHistory={(id) => {
+          setVariantId(null)
+          setCostVariantId(id)
+        }}
+      />
+
       {canSeeCosts ? (
         <>
           <CostV2ProductSheet
             companyId={companyId}
-            variantId={variantId}
+            variantId={costVariantId}
             offices={costFilters?.offices ?? []}
             onOpenChange={(open) => {
-              if (!open) setVariantId(null)
+              if (!open) setCostVariantId(null)
             }}
             onOpenReception={(id, detailId) => setReception({ id, detailId })}
           />

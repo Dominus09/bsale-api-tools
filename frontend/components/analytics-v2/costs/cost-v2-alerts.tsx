@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react"
 import { Loader2 } from "lucide-react"
 
+import { ProfessionalDataTable, SectionCard, SmartFilterBar, StatusBadge } from "@/components/analytics-v2/shared/analytics-ui"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
@@ -28,6 +29,16 @@ function isoDaysAgo(days: number): string {
 }
 
 const selectClass = "h-9 rounded-md border border-input bg-background px-2 text-sm"
+
+const reviewAction: Partial<Record<AnomalyCode, string>> = {
+  alza_anormal: "Comparar con la compra anterior y revisar el documento.",
+  baja_sospechosa: "Confirmar unidades y costo informado en la recepción.",
+  costo_cero: "Revisar el documento: el costo informado es cero.",
+  costo_nulo: "Revisar el documento: no se recibió un costo utilizable.",
+  cantidad_extrema: "Verificar las unidades registradas en la recepción.",
+  cantidad_no_positiva: "Corregir la cantidad en el sistema de origen.",
+  movimiento_no_determinado: "Revisar el tipo de documento y su origen.",
+}
 
 export function CostV2Alerts({
   companyId,
@@ -86,13 +97,14 @@ export function CostV2Alerts({
   return (
     <div className="space-y-3">
       <form
-        className="flex flex-wrap items-end gap-2 rounded-md border p-3"
         onSubmit={(e) => {
           e.preventDefault()
           setPage(1)
           setApplied({ ...draft })
         }}
       >
+        <SmartFilterBar>
+        <div className="flex flex-wrap items-end gap-3">
         <label className="flex flex-col gap-1 text-[11px] font-medium uppercase text-muted-foreground">
           Desde
           <Input
@@ -161,21 +173,26 @@ export function CostV2Alerts({
           {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
           Aplicar
         </Button>
+        </div>
+        </SmartFilterBar>
       </form>
 
       {countKeys.length ? (
-        <div className="flex flex-wrap gap-1.5 text-xs">
+        <SectionCard title="Prioridades del período" description="Cantidad de alertas por causa; cada una conserva el vínculo a su recepción original.">
+        <div className="flex flex-wrap gap-2">
           {countKeys.map((k) => (
-            <span key={k} className="rounded-md border bg-muted/40 px-2 py-0.5">
+            <StatusBadge key={k} tone="warning">
               {ANOMALY_LABELS[k]}: <strong className="tabular-nums">{counts[k]}</strong>
-            </span>
+            </StatusBadge>
           ))}
         </div>
+        </SectionCard>
       ) : null}
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
-      <div className={cn("overflow-x-auto rounded-md border", loading && "opacity-60")}>
+      <ProfessionalDataTable loading={loading}>
+        <div className="overflow-x-auto">
         <table className="w-full min-w-[1000px] text-sm">
           <thead className="bg-muted/40 text-left text-[11px] uppercase tracking-wide text-muted-foreground">
             <tr>
@@ -236,7 +253,9 @@ export function CostV2Alerts({
                 <td className="px-3 py-2 text-right tabular-nums">{formatPct(a.change_pct)}</td>
                 <td className="px-3 py-2">
                   <AnomalyChips anomalies={a.anomalies} max={3} />
-                  <p className="mt-1 text-[11px] text-muted-foreground">{a.anomalies[0]?.message}</p>
+                  <p className="mt-1 max-w-[260px] text-xs leading-5 text-slate-500">
+                    {a.anomalies[0] ? reviewAction[a.anomalies[0].code] ?? a.anomalies[0].message : "Revisar la recepción original."}
+                  </p>
                 </td>
               </tr>
             ))}
@@ -249,7 +268,8 @@ export function CostV2Alerts({
             ) : null}
           </tbody>
         </table>
-      </div>
+        </div>
+      </ProfessionalDataTable>
       {data ? (
         <Pager page={data.page} totalPages={data.total_pages} total={data.total} loading={loading} onPage={setPage} />
       ) : null}

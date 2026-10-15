@@ -1,6 +1,8 @@
 "use client"
 
-import { cn } from "@/lib/utils"
+import { CircleAlert, CircleCheck, Clock3, Database, ReceiptText } from "lucide-react"
+
+import { MetricCard, SectionCard } from "@/components/analytics-v2/shared/analytics-ui"
 import {
   ANOMALY_LABELS,
   MOVEMENT_LABELS,
@@ -44,27 +46,41 @@ export function CostV2Kpis({
   onSelectReliability: (status: CostReliability | null) => void
 }) {
   const value = (n: number | undefined) => (loading && !summary ? "…" : (n ?? "—"))
-  const cards: { key: string; title: string; value: number | string; hint: string; filter: CostReliability | null }[] = [
+  const cards: {
+    key: string
+    title: string
+    value: number | string
+    hint: string
+    filter: CostReliability | null
+    tone: "neutral" | "success" | "warning" | "danger" | "info"
+    icon: typeof Database
+  }[] = [
     {
       key: "active",
       title: "SKUs activos",
       value: value(summary?.skus_active),
       hint: `${summary?.skus_total ?? "—"} SKUs en RAW (incluye inactivos)`,
       filter: null,
+      tone: "info",
+      icon: Database,
     },
     {
       key: "avg",
-      title: "Con costo promedio Bsale",
-      value: value(summary?.skus_active_with_bsale_average),
-      hint: "variant_costs.average_cost > 0",
-      filter: null,
+      title: "Costos consistentes",
+      value: value(summary?.skus_active_by_reliability.consistente),
+      hint: "Costo utilizable sin señales de revisión",
+      filter: "consistente",
+      tone: "success",
+      icon: CircleCheck,
     },
     {
       key: "cmp",
-      title: "Con compra comparable",
-      value: value(summary?.skus_active_with_comparable_reception),
-      hint: "Factura o guía desde 01-01-2025",
-      filter: null,
+      title: "Solo promedio Bsale",
+      value: value(summary?.skus_active_by_reliability.solo_promedio_bsale),
+      hint: "Sin compra comparable desde 2025",
+      filter: "solo_promedio_bsale",
+      tone: "neutral",
+      icon: ReceiptText,
     },
     {
       key: "review",
@@ -72,24 +88,40 @@ export function CostV2Kpis({
       value: value(summary?.skus_active_by_reliability.requiere_revision),
       hint: "Anomalía en la última compra",
       filter: "requiere_revision",
+      tone: summary?.skus_active_by_reliability.requiere_revision ? "danger" : "success",
+      icon: CircleAlert,
+    },
+    {
+      key: "stale",
+      title: "Costos desactualizados",
+      value: value(summary?.skus_active_by_reliability.desactualizado),
+      hint: "Sin actualización reciente suficiente",
+      filter: "desactualizado",
+      tone: summary?.skus_active_by_reliability.desactualizado ? "warning" : "success",
+      icon: Clock3,
+    },
+    {
+      key: "missing",
+      title: "Sin costo",
+      value: value(summary?.skus_active_by_reliability.sin_costo),
+      hint: "No existe un costo positivo utilizable",
+      filter: "sin_costo",
+      tone: summary?.skus_active_by_reliability.sin_costo ? "warning" : "success",
+      icon: CircleAlert,
     },
   ]
   return (
-    <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
       {cards.map((c) => (
-        <button
+        <MetricCard
           key={c.key}
-          type="button"
+          label={c.title}
+          value={c.value}
+          context={c.hint}
+          tone={c.tone}
+          icon={c.icon}
           onClick={() => onSelectReliability(c.filter)}
-          className={cn(
-            "rounded-md border border-border/70 bg-card px-3 py-2.5 text-left transition-colors",
-            "hover:border-red-700/40 hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-700/40",
-          )}
-        >
-          <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{c.title}</p>
-          <p className="mt-1 text-2xl font-semibold tabular-nums tracking-tight">{c.value}</p>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">{c.hint}</p>
-        </button>
+        />
       ))}
     </div>
   )
@@ -110,8 +142,7 @@ function CountList<K extends string>({
 }) {
   const keys = (order ?? (Object.keys(counts) as K[])).filter((k) => (counts[k] ?? 0) > 0)
   return (
-    <div className="rounded-md border p-3">
-      <h2 className="text-sm font-semibold">{title}</h2>
+    <SectionCard title={title}>
       {keys.length === 0 ? (
         <p className="mt-2 text-sm text-muted-foreground">Sin registros.</p>
       ) : (
@@ -130,7 +161,7 @@ function CountList<K extends string>({
           ))}
         </ul>
       )}
-    </div>
+    </SectionCard>
   )
 }
 

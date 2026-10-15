@@ -14,6 +14,7 @@ import {
 } from "@/components/analytics-v2/costs/cost-v2-products"
 import { CostV2ReceptionDialog } from "@/components/analytics-v2/costs/cost-v2-reception-dialog"
 import { CostV2Kpis, CostV2SummaryPanels } from "@/components/analytics-v2/costs/cost-v2-summary"
+import { AnalyticPageHeader, DataStatusBar, StatusBadge } from "@/components/analytics-v2/shared/analytics-ui"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { getStoredCompanyId } from "@/lib/api"
@@ -157,22 +158,14 @@ export default function CostControlV2Page() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-3 p-3 md:p-4">
-      <header className="flex flex-col gap-1 border-b border-border/60 pb-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <h1 className="text-xl font-semibold tracking-tight md:text-2xl">Control de costos V2</h1>
-          <span className="rounded-md border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800">
-            En validación
-          </span>
-        </div>
-        <p className="text-sm text-muted-foreground">
-          {summary?.meta.company_name ?? `Empresa ${companyId}`} · Fuente: BSALE RAW (solo lectura)
-        </p>
-        <p className="text-xs text-muted-foreground">
-          Calculado {formatDateTime(summary?.meta.generated_at)} · Promedio Bsale, costo de recepción y costo
-          comercial se muestran por separado.
-        </p>
-      </header>
+    <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6 pb-10">
+      <AnalyticPageHeader
+        eyebrow="Analítica V2"
+        title="Centro de control de costos"
+        description={`Revisa la calidad de los costos, detecta anomalías de compra y consulta la trazabilidad de cada SKU · ${summary?.meta.company_name ?? `Empresa ${companyId}`}.`}
+        updatedAt={<>Última actualización: {formatDateTime(summary?.meta.generated_at)} · Fuente Bsale RAW de solo lectura</>}
+        actions={<StatusBadge tone="warning">Validación contable pendiente</StatusBadge>}
+      />
 
       {blocking ? (
         <Alert>
@@ -191,15 +184,14 @@ export default function CostControlV2Page() {
           ) : null}
 
           {summary && !summary.meta.net_cost_verified ? (
-            <Alert>
-              <Info className="h-4 w-4" />
-              <AlertTitle>Costos brutos preliminares</AlertTitle>
-              <AlertDescription>
-                El costo de recepción se trata como neto, pero aún no se contrasta contra facturas. El bruto se
-                muestra solo como referencia en perfiles IVA o IVA + un ILA; IVA anticipado (harina, carne), ILA
-                combinados e impuestos no reconocidos quedan pendientes de definición tributaria.
-              </AlertDescription>
-            </Alert>
+            <DataStatusBar status="warning" title="Costos comerciales en validación" summary="La consistencia operativa no equivale a validación contable.">
+              <div className="grid gap-3 text-slate-600 md:grid-cols-2">
+                <p><strong className="text-slate-900">Costo promedio Bsale:</strong> se muestra sin recalcular ni modificar.</p>
+                <p><strong className="text-slate-900">Última compra:</strong> corresponde a la recepción comparable más reciente.</p>
+                <p><strong className="text-slate-900">Costo bruto comercial:</strong> aplica IVA/ILA cuando el perfil tributario es calculable.</p>
+                <p><strong className="text-slate-900">Pendiente:</strong> contrastar costos netos e impuestos contra documentación contable.</p>
+              </div>
+            </DataStatusBar>
           ) : null}
 
           <CostV2Kpis
@@ -208,10 +200,10 @@ export default function CostControlV2Page() {
             onSelectReliability={(status) => applyFilters({ ...EMPTY_PRODUCT_FILTERS, reliability: status ?? "" })}
           />
 
-          <Tabs value={tab} onValueChange={setTab} className="gap-3">
-            <TabsList>
+          <Tabs value={tab} onValueChange={setTab} className="gap-4">
+            <TabsList className="h-11 rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
               <TabsTrigger value="resumen">Resumen</TabsTrigger>
-              <TabsTrigger value="productos">Productos</TabsTrigger>
+              <TabsTrigger value="productos">Explorar productos</TabsTrigger>
               <TabsTrigger value="alertas">Alertas de recepción</TabsTrigger>
             </TabsList>
 
