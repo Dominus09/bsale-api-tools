@@ -226,12 +226,28 @@ WHERE session_id = %s AND variant_id = %s AND company_id = %s
 """.strip()
 
 MARK_FOUND_SQL = """
-UPDATE app.gondola_session_items
+UPDATE app.gondola_session_items i
 SET exhibition_status = 'encontrado', found_at = now(),
     found_by = %s, found_device = %s
-WHERE session_id = %s AND variant_id = %s AND company_id = %s
-  AND exhibition_status = 'pendiente'
-RETURNING variant_id, found_at
+WHERE i.session_id = %s AND i.variant_id = %s AND i.company_id = %s
+  AND i.exhibition_status = 'pendiente'
+  AND EXISTS (
+      SELECT 1 FROM app.gondola_sessions s
+      WHERE s.id = i.session_id AND s.company_id = i.company_id AND s.status = 'en_curso'
+  )
+RETURNING i.variant_id, i.found_at
+""".strip()
+
+# Candado transaccional del recorrido: esta actualización toma el bloqueo de la
+# fila de la sesión hasta el fin de la transacción del escaneo. Un cierre o una
+# cancelación concurrente espera ese bloqueo y, al avanzar, su condición
+# `status = 'en_curso'` ya no se cumple si el escaneo cerró primero (y viceversa:
+# si el cierre tomó primero el bloqueo, este retorno viene vacío).
+TOUCH_ACTIVE_SESSION_SQL = """
+UPDATE app.gondola_sessions
+SET stock_snapshot_at = stock_snapshot_at
+WHERE id = %s AND company_id = %s AND status = 'en_curso'
+RETURNING id
 """.strip()
 
 INSERT_SCAN_SQL = """
@@ -262,7 +278,11 @@ ON CONFLICT (session_id, variant_id) DO NOTHING
 RETURNING variant_id
 """.strip()
 
-CLOSE_SESSION_SQL = """
+# El cierre se reclama ANTES de congelar stock y generar reposición: al pasar la
+# sesión a 'cerrado' en la misma transacción, cualquier escaneo concurrente
+# queda bloqueado por la fila de la sesión y luego es rechazado; y la lista de
+# reposición se genera viendo ya los hallazgos confirmados antes del cierre.
+CLAIM_CLOSE_SQL = """
 UPDATE app.gondola_sessions
 SET status = 'cerrado', finished_at = now(), finished_by = %s
 WHERE id = %s AND company_id = %s AND status = 'en_curso'
@@ -377,8 +397,12 @@ class GondolasRepository:
     def create_replenishment(self, company_id: int, session_id: int) -> int:
         return len(self._execute(CREATE_REPLENISHMENT_SQL, (session_id, company_id)))
 
-    def close_session(self, company_id: int, session_id: int, actor: str) -> dict[str, Any] | None:
-        rows = self._execute(CLOSE_SESSION_SQL, (actor, session_id, company_id))
+    def touch_active_session(self, company_id: int, session_id: int) -> bool:
+        """Bloquea la fila de la sesión si sigue en curso (candado del escaneo)."""
+        return bool(self._execute(TOUCH_ACTIVE_SESSION_SQL, (session_id, company_id)))
+
+    def claim_close(self, company_id: int, session_id: int, actor: str) -> dict[str, Any] | None:
+        rows = self._execute(CLAIM_CLOSE_SQL, (actor, session_id, company_id))
         return rows[0] if rows else None
 
     def cancel_session(self, company_id: int, session_id: int, actor: str,

@@ -134,6 +134,9 @@ CREATE TABLE IF NOT EXISTS app.gondola_replenishment (
     CONSTRAINT fk_gondola_replenishment_session
         FOREIGN KEY (session_id, company_id)
         REFERENCES app.gondola_sessions (id, company_id) ON DELETE RESTRICT,
+    CONSTRAINT fk_gondola_replenishment_item
+        FOREIGN KEY (session_id, variant_id)
+        REFERENCES app.gondola_session_items (session_id, variant_id) ON DELETE RESTRICT,
     CONSTRAINT uq_gondola_replenishment_variant UNIQUE (session_id, variant_id),
     CONSTRAINT ck_gondola_replenishment_status
         CHECK (status IN (
@@ -154,5 +157,7 @@ COMMENT ON TABLE app.gondola_scans IS
     'Bitácora de escaneos del recorrido: un SKU se marca encontrado una sola vez; los duplicados quedan como intentos.';
 COMMENT ON TABLE app.gondola_replenishment IS
     'Lista operativa de SKU no detectados al cerrar el recorrido. No afirma que el producto esté en bodega.';
+COMMENT ON CONSTRAINT fk_gondola_replenishment_item ON app.gondola_replenishment IS
+    'Solo puede aparecer en reposición un SKU del universo congelado del recorrido (gondola_session_items).';
 
 COMMIT;

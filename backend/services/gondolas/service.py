@@ -324,6 +324,10 @@ class GondolasService:
         session = self._session_or_404(session_id)
         if session.get("status") != "en_curso":
             raise GondolasValidationError("El recorrido no está en curso")
+        # Candado transaccional: si un cierre/cancelación ganó la fila de la
+        # sesión, esta actualización no devuelve fila y el escaneo se rechaza.
+        if not self._repo.touch_active_session(self.company_id, session_id):
+            raise GondolasValidationError("El recorrido ya no está en curso")
         office_id = int(session["office_id"])
         product_type_id = int(session["product_type_id"])
         candidates = self._repo.scan_candidates(self.company_id, office_id, code)
@@ -345,7 +349,16 @@ class GondolasService:
                 self.company_id, session_id, int(candidate["variant_id"]), self._actor, device
             )
             if marked is None:
-                result = "duplicado"
+                # La actualización condicional no marcó: otro escaneo simultáneo
+                # ya registró el hallazgo (duplicado) o el recorrido dejó de
+                # estar en curso. Se distingue antes de responder.
+                current = self._repo.session_item(
+                    self.company_id, session_id, int(candidate["variant_id"])
+                )
+                if current is not None and current.get("exhibition_status") == "encontrado":
+                    result = "duplicado"
+                else:
+                    raise GondolasValidationError("El recorrido ya no está en curso")
             else:
                 found_at = _iso(marked.get("found_at"))
         self._repo.insert_scan(
@@ -380,11 +393,14 @@ class GondolasService:
         session = self._session_or_404(session_id)
         if session.get("status") != "en_curso":
             raise GondolasValidationError("Solo se puede cerrar un recorrido en curso")
-        self._repo.close_items(self.company_id, session_id)
-        created = self._repo.create_replenishment(self.company_id, session_id)
-        closed = self._repo.close_session(self.company_id, session_id, self._actor)
+        # Primero se reclama el cierre (bloquea escaneos concurrentes); recién
+        # después se congela el stock actual y se genera la reposición, viendo
+        # todos los hallazgos confirmados antes del cierre.
+        closed = self._repo.claim_close(self.company_id, session_id, self._actor)
         if closed is None:
             raise GondolasValidationError("El recorrido ya no está en curso")
+        self._repo.close_items(self.company_id, session_id)
+        created = self._repo.create_replenishment(self.company_id, session_id)
         out = self.get_session(session_id)
         out["replenishment_created"] = created
         return out
