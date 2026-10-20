@@ -11,6 +11,10 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { logout, getStoredEmail, getStoredCompanyName } from "@/lib/api"
+// El selector de apariencia (components/layout/appearance-selector.tsx) no se
+// monta todavía: solo el tema Graphite claro es funcional y no se ofrecen
+// opciones que el usuario no pueda usar. Se activará cuando el modo oscuro
+// esté validado por áreas (ver lib/appearance.ts).
 
 type HeaderProps = {
   /** Si se pasa, muestra botón para colapsar/expandir el sidebar del dashboard. */
@@ -39,7 +43,7 @@ export function Header({ sidebarOpen, onToggleSidebar }: HeaderProps) {
   }
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-border bg-card px-3 sm:h-16 sm:px-6">
+    <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-lq-line bg-lq-surface px-3 shadow-lq-xs sm:h-16 sm:px-6">
       <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
         {onToggleSidebar ? (
           <Button

@@ -158,11 +158,11 @@ export function SectionCard({
   contentClassName?: string
 }) {
   return (
-    <section className={cn("overflow-hidden rounded-xl border border-lq-line bg-white", className)}>
+    <section className={cn("overflow-hidden rounded-xl border border-lq-line bg-lq-surface shadow-lq-xs", className)}>
       {title || description || action ? (
         <div className="flex flex-col gap-2 border-b border-lq-line-soft px-4 py-4 sm:flex-row sm:items-center sm:justify-between md:px-6">
           <div>
-            {title ? <h2 className="text-[17px] font-semibold tracking-[-0.01em] text-lq-ink">{title}</h2> : null}
+            {title ? <h2 className="text-base font-semibold tracking-[-0.01em] text-lq-ink">{title}</h2> : null}
             {description ? <p className="mt-1 text-[13px] leading-5 text-lq-muted">{description}</p> : null}
           </div>
           {action ? <div className="shrink-0">{action}</div> : null}
@@ -247,8 +247,8 @@ export function AttentionRow({
   tone?: AnalyticTone
 }) {
   return (
-    <Link href={href} className="group flex items-center gap-4 px-4 py-3.5 transition-colors hover:bg-lq-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/30 md:px-5">
-      <span className={cn("min-w-12 text-[22px] font-semibold leading-none tabular-nums tracking-[-0.02em]", toneText[tone])}>{count}</span>
+    <Link href={href} className="group flex items-center gap-4 px-4 py-4 transition-colors hover:bg-lq-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/30 md:px-5">
+      <span className={cn("min-w-14 text-[26px] font-semibold leading-none tabular-nums tracking-[-0.03em]", toneText[tone])}>{count}</span>
       <span className="min-w-0 flex-1">
         <span className="block text-sm font-medium text-lq-ink">{label}</span>
         <span className="mt-0.5 block text-xs leading-5 text-lq-muted">{description}</span>

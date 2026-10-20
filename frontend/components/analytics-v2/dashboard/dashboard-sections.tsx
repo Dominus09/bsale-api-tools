@@ -158,23 +158,27 @@ export function DashboardExecutiveSummary({ data }: { data: DashboardResponse })
           </p>
         ) : null}
       </div>
-      <div className="grid gap-px overflow-hidden rounded-card border border-lq-line bg-lq-line-soft shadow-lq-xs sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
-        {metrics.map((metric) => (
-          <Link
-            key={metric.label}
-            href={metric.href}
-            className="group min-w-0 bg-white px-5 py-5 transition-colors hover:bg-lq-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/30"
-          >
-            <span className="flex items-center gap-2 text-[12px] font-medium leading-4 text-lq-muted">
-              <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", executiveDots[metric.tone])} aria-hidden="true" />
-              <span className="truncate">{metric.label}</span>
-            </span>
-            <span className="mt-3 block text-metric-lg font-semibold tabular-nums tracking-[-0.04em] text-lq-ink">
-              {metric.value}
-            </span>
-            <span className="mt-2 block min-h-8 text-xs leading-4 text-lq-faint">{metric.context}</span>
-          </Link>
-        ))}
+      {/* Único panel grafito destacado de la pantalla: concentra el panorama
+          ejecutivo. El resto de la superficie de trabajo permanece blanca. */}
+      <div className="overflow-hidden rounded-panel bg-lq-graphite-deep shadow-lq-sm ring-1 ring-black/25">
+        <div className="grid gap-px bg-white/10 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+          {metrics.map((metric) => (
+            <Link
+              key={metric.label}
+              href={metric.href}
+              className="group min-w-0 bg-lq-graphite px-5 py-5 transition-colors hover:bg-lq-graphite-elev focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/70"
+            >
+              <span className="flex items-center gap-2 text-[12px] font-medium leading-4 text-lq-on-graphite-muted">
+                <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", executiveDots[metric.tone])} aria-hidden="true" />
+                <span className="truncate">{metric.label}</span>
+              </span>
+              <span className="mt-3 block text-metric-lg font-semibold tabular-nums tracking-[-0.04em] text-white">
+                {metric.value}
+              </span>
+              <span className="mt-2 block min-h-8 text-xs leading-4 text-lq-on-graphite-faint">{metric.context}</span>
+            </Link>
+          ))}
+        </div>
       </div>
     </section>
   )

@@ -43,7 +43,7 @@ import { COST_BASIS_LABELS } from "@/lib/analytics-v2/margins-labels"
 import type { CostBasis } from "@/lib/analytics-v2/margins-types"
 import type { CostFilters } from "@/lib/analytics-v2/types"
 
-const selectClass = "h-9 rounded-md border border-input bg-background px-2 text-sm"
+const selectClass = "h-9 rounded-md border border-lq-line bg-lq-surface px-2 text-sm text-lq-ink shadow-lq-xs"
 
 export default function DashboardV2Page() {
   const [companyId, setCompanyId] = useState<number | null>(null)
@@ -115,7 +115,7 @@ export default function DashboardV2Page() {
   return (
     <AnalyticPageShell>
       <AnalyticPageHeader
-        eyebrow="Analítica V2"
+        eyebrow="Inteligencia comercial"
         title="Centro de inteligencia comercial"
         description={`${data?.meta.company_name ?? `Empresa ${companyId}`} · Costos, márgenes, listas y packs en una vista orientada a decisiones.`}
         updatedAt={

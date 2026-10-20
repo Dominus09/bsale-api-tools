@@ -258,24 +258,27 @@ export function Sidebar({ compact = false, onToggleCompact }: SidebarProps) {
   return (
     <aside
       className={cn(
-        "flex h-full shrink-0 flex-col border-r border-border bg-card transition-[width] duration-200 ease-out",
+        "flex h-full shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-200 ease-out",
         compact ? "w-[4.25rem]" : "w-64",
       )}
     >
       <div
         className={cn(
-          "flex shrink-0 items-center border-b border-border",
+          "flex shrink-0 items-center border-b border-white/10",
           compact ? "flex-col gap-2 py-3" : "h-16 gap-2 px-4",
         )}
       >
-        <div className={cn("flex items-center gap-2", compact ? "justify-center" : "min-w-0 flex-1")}>
+        <div className={cn("flex items-center gap-2.5", compact ? "justify-center" : "min-w-0 flex-1")}>
           <img
             src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Emblema%20auxiliar%20sin%20sucursal-3muphOJR8q7mpoZPwKQhJb7RbLYvdu.png"
             alt="Quillotana"
             className={cn("shrink-0 object-contain", compact ? "h-8 w-8" : "h-10 w-10")}
           />
           {!compact ? (
-            <span className="min-w-0 truncate font-semibold text-foreground">Quillotana ERP</span>
+            <span className="min-w-0">
+              <span className="block truncate text-[15px] font-semibold leading-tight text-white">Quillotana ERP</span>
+              <span className="block truncate text-[11px] leading-tight text-white/45">Grupo Quillotana</span>
+            </span>
           ) : null}
         </div>
         {onToggleCompact ? (
@@ -283,7 +286,7 @@ export function Sidebar({ compact = false, onToggleCompact }: SidebarProps) {
             type="button"
             onClick={onToggleCompact}
             className={cn(
-              "flex size-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
+              "flex size-9 shrink-0 items-center justify-center rounded-md text-white/55 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/70",
               compact ? "" : "ml-auto",
             )}
             aria-label={compact ? "Expandir menú lateral" : "Modo compacto (solo iconos)"}
@@ -294,7 +297,7 @@ export function Sidebar({ compact = false, onToggleCompact }: SidebarProps) {
         ) : null}
       </div>
 
-      <nav className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-3">
+      <nav className="flex-1 overflow-y-auto overflow-x-hidden px-3 py-4 [scrollbar-color:rgb(255_255_255/0.18)_transparent]">
         {sections.map((section) => {
           const renderItem = (item: NavItem) => {
             const isActive =
@@ -307,7 +310,7 @@ export function Sidebar({ compact = false, onToggleCompact }: SidebarProps) {
               const disabledNode = (
                 <div
                   className={cn(
-                    "flex cursor-not-allowed items-center rounded-md text-sm font-medium text-muted-foreground/50",
+                    "flex cursor-not-allowed items-center rounded-md text-sm font-medium text-white/30",
                     compact ? "justify-center px-2.5 py-2.5" : "gap-3 px-3 py-2.5",
                   )}
                 >
@@ -329,15 +332,19 @@ export function Sidebar({ compact = false, onToggleCompact }: SidebarProps) {
             const linkInner = (
               <Link
                 href={item.href}
+                aria-current={isActive ? "page" : undefined}
                 className={cn(
-                  "flex items-center rounded-md text-sm font-medium transition-colors duration-150",
+                  "relative flex items-center rounded-md text-sm font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/70",
                   compact ? "justify-center px-2.5 py-2.5" : "gap-3 px-3 py-2.5",
                   isActive
-                    ? "bg-primary/10 text-primary shadow-none"
-                    : "text-muted-foreground hover:bg-muted/70 hover:text-foreground",
+                    ? "bg-white/[0.09] text-white"
+                    : "text-[#B7BFC9] hover:bg-white/[0.06] hover:text-white",
                 )}
               >
-                <item.icon className="h-[1.125rem] w-[1.125rem] shrink-0" />
+                {isActive ? (
+                  <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-primary" aria-hidden="true" />
+                ) : null}
+                <item.icon className={cn("h-[1.125rem] w-[1.125rem] shrink-0", isActive ? "text-white" : "text-current opacity-70")} />
                 {!compact ? (
                   <span className="min-w-0 flex-1 truncate leading-snug">{item.label}</span>
                 ) : null}
@@ -358,7 +365,7 @@ export function Sidebar({ compact = false, onToggleCompact }: SidebarProps) {
 
           if (compact) {
             return (
-              <div key={section.title} className="mb-4">
+              <div key={section.title} className="mb-3 border-t border-white/[0.07] pt-3 first:border-t-0 first:pt-0">
                 <div className="sr-only">{section.title}</div>
                 <div className="space-y-1">{section.items.map((item) => renderItem(item))}</div>
               </div>
@@ -376,8 +383,8 @@ export function Sidebar({ compact = false, onToggleCompact }: SidebarProps) {
                   setOpenSection((prev) => (prev === section.title ? null : section.title))
                 }
                 className={cn(
-                  "flex w-full cursor-pointer items-center justify-between rounded-md px-3 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground transition-colors duration-150",
-                  "hover:bg-muted/60 hover:text-foreground",
+                  "flex w-full cursor-pointer items-center justify-between rounded-md px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-white/40 transition-colors duration-150",
+                  "hover:bg-white/[0.05] hover:text-white/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/70",
                 )}
               >
                 <span className="truncate">{section.title}</span>
@@ -388,7 +395,7 @@ export function Sidebar({ compact = false, onToggleCompact }: SidebarProps) {
                 )}
               </button>
               {isOpen ? (
-                <div className="mt-1 space-y-0.5 border-l-2 border-border/70 pl-3 ml-3">
+                <div className="ml-3 mt-1 space-y-0.5 border-l border-white/10 pl-3">
                   {section.items.map((item) => renderItem(item))}
                 </div>
               ) : null}
@@ -397,13 +404,14 @@ export function Sidebar({ compact = false, onToggleCompact }: SidebarProps) {
         })}
       </nav>
 
-      <div className={cn("border-t border-border", compact ? "p-2" : "p-4")}>
+      <div className={cn("border-t border-white/10", compact ? "p-2" : "p-4")}>
         <p
           className={cn(
-            "text-xs text-muted-foreground",
+            "flex items-center gap-2 text-xs text-white/40",
             compact && "sr-only",
           )}
         >
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" aria-hidden="true" />
           Grupo Quillotana ERP v1.0
         </p>
       </div>
