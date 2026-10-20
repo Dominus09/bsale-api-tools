@@ -93,7 +93,7 @@ export function DashboardProductDialog({
             <Loader2 className="h-4 w-4 animate-spin" /> Cargando…
           </p>
         ) : null}
-        {error ? <p className="text-sm text-red-700">{error}</p> : null}
+        {error ? <p className="text-sm text-red-700 dark:text-red-300">{error}</p> : null}
 
         {first ? (
           <div className="space-y-1 text-sm">
@@ -149,7 +149,7 @@ export function DashboardProductDialog({
                         <span className={cn(chip, MARGIN_STATUS_TONES[r.status])}>{MARGIN_STATUS_LABELS[r.status]}</span>
                         <DataClassBadge value={rowDataClass(r)} />
                         {r.risks.map((k) => (
-                          <span key={k} className={cn(chip, "border-red-300 bg-red-50 text-red-800")}>
+                          <span key={k} className={cn(chip, "border-red-300 bg-red-50 text-red-800 dark:text-red-200 dark:border-red-400/25 dark:bg-red-400/10 dark:text-red-200")}>
                             {MARGIN_RISK_LABELS[k]}
                           </span>
                         ))}

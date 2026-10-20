@@ -1,89 +1,41 @@
 "use client"
 
-import { useEffect, useState } from "react"
-import { Check, Monitor, Moon, Sun } from "lucide-react"
+import { Moon, Sun } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import {
-  readAppearancePreference,
-  storeAppearancePreference,
-  type AppearancePreference,
-} from "@/lib/appearance"
-
-const OPTIONS: {
-  value: AppearancePreference
-  label: string
-  icon: typeof Sun
-  available: boolean
-  hint?: string
-}[] = [
-  { value: "light", label: "Claro", icon: Sun, available: true },
-  { value: "dark", label: "Oscuro", icon: Moon, available: false, hint: "Próximamente" },
-  { value: "system", label: "Sistema", icon: Monitor, available: false, hint: "Próximamente" },
-]
+import { useAppearance } from "@/components/layout/appearance-context"
+import { cn } from "@/lib/utils"
 
 /**
- * Selector de apariencia (área de usuario).
+ * Selector luna/sol del encabezado.
  *
- * Solo el modo claro está activo: el oscuro y el de sistema se muestran como
- * preparación de la arquitectura, deshabilitados hasta que cada área esté
- * validada. La preferencia elegida queda persistida en el equipo.
+ * - Luna: activa Graphite Dark. Sol: vuelve a Graphite claro.
+ * - Sin recargar la página; la preferencia queda persistida en el navegador.
+ * - Solo se muestra en las rutas con ambos temas adaptados
+ *   (`DARK_THEME_ROUTE_PREFIXES` en lib/appearance.ts). En el resto de la ERP
+ *   no aparece, para que el usuario nunca encuentre una interfaz mezclada.
  */
-export function AppearanceSelector() {
-  const [preference, setPreference] = useState<AppearancePreference>("light")
+export function AppearanceSelector({ className }: { className?: string }) {
+  const { theme, routeSupportsDark, toggleTheme } = useAppearance()
 
-  useEffect(() => {
-    setPreference(readAppearancePreference())
-  }, [])
+  if (!routeSupportsDark) return null
 
-  const choose = (value: AppearancePreference) => {
-    setPreference(value)
-    storeAppearancePreference(value)
-  }
+  const isDark = theme === "dark"
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="h-10 w-10 shrink-0 text-muted-foreground hover:text-foreground"
-          aria-label="Apariencia de la interfaz"
-          title="Apariencia"
-        >
-          <Sun className="h-5 w-5" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-60">
-        <DropdownMenuLabel>Apariencia</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        {OPTIONS.map((option) => (
-          <DropdownMenuItem
-            key={option.value}
-            disabled={!option.available}
-            onSelect={() => choose(option.value)}
-            className="flex items-center gap-2"
-          >
-            <option.icon className="h-4 w-4 shrink-0" />
-            <span className="flex-1">{option.label}</span>
-            {option.hint ? <span className="text-[11px] text-muted-foreground">{option.hint}</span> : null}
-            {option.available && preference === option.value ? <Check className="h-4 w-4 shrink-0" /> : null}
-          </DropdownMenuItem>
-        ))}
-        <DropdownMenuSeparator />
-        <p className="px-2 py-1.5 text-[11px] leading-4 text-muted-foreground">
-          El modo oscuro se habilitará por áreas una vez validadas, para no mezclar temas en una misma pantalla.
-        </p>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      onClick={toggleTheme}
+      className={cn(
+        "h-10 w-10 shrink-0 text-lq-on-graphite-muted transition-colors hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-primary/70",
+        className,
+      )}
+      aria-label={isDark ? "Activar modo claro" : "Activar modo oscuro"}
+      title={isDark ? "Activar modo claro" : "Activar modo oscuro"}
+    >
+      {isDark ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
+    </Button>
   )
 }

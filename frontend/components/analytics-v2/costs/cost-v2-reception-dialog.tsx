@@ -113,7 +113,7 @@ export function CostV2ReceptionDialog({
                   {data.lines.map((l) => (
                     <tr
                       key={l.detail_id}
-                      className={l.detail_id === highlightDetailId ? "bg-amber-50" : l.missing_since ? "opacity-50" : ""}
+                      className={l.detail_id === highlightDetailId ? "bg-amber-50 dark:bg-amber-400/15" : l.missing_since ? "opacity-50" : ""}
                     >
                       <td className="px-2 py-1.5 tabular-nums">{l.detail_id}</td>
                       <td className="px-2 py-1.5">

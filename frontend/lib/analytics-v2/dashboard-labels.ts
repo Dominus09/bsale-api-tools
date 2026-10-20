@@ -13,9 +13,9 @@ export const DATA_CLASS_HINTS: Record<DataClass, string> = {
 }
 
 export const DATA_CLASS_TONES: Record<DataClass, string> = {
-  confirmado: "border-emerald-300 bg-emerald-50 text-emerald-800",
-  provisional: "border-amber-300 bg-amber-50 text-amber-800",
-  no_disponible: "border-zinc-300 bg-zinc-100 text-zinc-700",
+  confirmado: "border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-400/25 dark:bg-emerald-400/10 dark:text-emerald-200",
+  provisional: "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-400/25 dark:bg-amber-400/10 dark:text-amber-200",
+  no_disponible: "border-lq-line bg-lq-canvas text-lq-body",
 }
 
 export const FRESHNESS_LABELS: Record<FreshnessStatus, string> = {
@@ -26,10 +26,10 @@ export const FRESHNESS_LABELS: Record<FreshnessStatus, string> = {
 }
 
 export const FRESHNESS_TONES: Record<FreshnessStatus, string> = {
-  al_dia: "border-emerald-300 bg-emerald-50 text-emerald-800",
-  atrasada: "border-amber-300 bg-amber-50 text-amber-800",
-  con_error: "border-red-300 bg-red-50 text-red-800",
-  sin_datos: "border-zinc-300 bg-zinc-100 text-zinc-700",
+  al_dia: "border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-400/25 dark:bg-emerald-400/10 dark:text-emerald-200",
+  atrasada: "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-400/25 dark:bg-amber-400/10 dark:text-amber-200",
+  con_error: "border-red-300 bg-red-50 text-red-800 dark:border-red-400/25 dark:bg-red-400/10 dark:text-red-200",
+  sin_datos: "border-lq-line bg-lq-canvas text-lq-body",
 }
 
 export const RAW_RESOURCE_LABELS: Record<string, string> = {

@@ -1,35 +1,53 @@
 /**
- * Arquitectura de apariencia La Quillotana (Premium 4.0).
+ * Apariencia La Quillotana — Graphite claro / Graphite Dark (Premium 4.1).
  *
- * Estado actual deliberado:
- * - `light` (Graphite claro) es la única experiencia activa y estable.
- * - `dark` y `system` están definidos como preferencia, pero NO se aplican:
- *   existen páginas legacy que aún no están validadas en oscuro y activar la
- *   clase `.dark` global dejaría pantallas mezcladas e ilegibles.
- *
- * Cuando un área completa esté adaptada y verificada, la activación consistirá
- * en resolver la preferencia aquí (con `prefers-color-scheme` para `system`) y
- * aplicar la clase al contenedor de esa área, nunca a ciegas en toda la ERP.
+ * Reglas de alcance (para nunca mostrar una interfaz mezclada o ilegible):
+ * - La preferencia del usuario (claro/oscuro) se persiste en el navegador.
+ * - El tema oscuro SOLO se aplica en las rutas adaptadas y verificadas de
+ *   `DARK_THEME_ROUTE_PREFIXES`. En cualquier otra ruta la ERP se renderiza
+ *   en claro aunque la preferencia sea oscura, y el selector luna/sol no se
+ *   muestra.
+ * - La clase `.dark` se aplica únicamente al contenedor del dashboard
+ *   (no a <html>), de modo que los módulos legacy jamás heredan el tema.
+ * - Al volver a una ruta adaptada, la preferencia oscura se reaplica sola.
  */
-export type AppearancePreference = "light" | "dark" | "system"
+export type AppearanceTheme = "light" | "dark"
 
 export const APPEARANCE_STORAGE_KEY = "lq-appearance"
 
-/** Preferencia vigente con la que realmente se renderiza hoy. */
-export const ACTIVE_APPEARANCE: AppearancePreference = "light"
+export const DEFAULT_THEME: AppearanceTheme = "light"
 
-export function readAppearancePreference(): AppearancePreference {
-  if (typeof window === "undefined") return ACTIVE_APPEARANCE
-  const stored = window.localStorage.getItem(APPEARANCE_STORAGE_KEY)
-  return stored === "dark" || stored === "system" || stored === "light" ? stored : ACTIVE_APPEARANCE
+/** Rutas con ambos temas terminados. El resto permanece en claro. */
+export const DARK_THEME_ROUTE_PREFIXES = [
+  "/analitica-v2/dashboard",
+  "/analitica-v2/costos",
+  "/analitica-v2/margenes",
+  "/analitica-v2/packs",
+] as const
+
+export function isDarkThemeRoute(pathname: string | null | undefined): boolean {
+  if (!pathname) return false
+  return DARK_THEME_ROUTE_PREFIXES.some(
+    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+  )
 }
 
-export function storeAppearancePreference(preference: AppearancePreference): void {
+export function readAppearanceTheme(): AppearanceTheme {
+  if (typeof window === "undefined") return DEFAULT_THEME
+  return window.localStorage.getItem(APPEARANCE_STORAGE_KEY) === "dark" ? "dark" : DEFAULT_THEME
+}
+
+export function storeAppearanceTheme(theme: AppearanceTheme): void {
   if (typeof window === "undefined") return
-  window.localStorage.setItem(APPEARANCE_STORAGE_KEY, preference)
+  window.localStorage.setItem(APPEARANCE_STORAGE_KEY, theme)
 }
 
-/** true cuando el modo oscuro esté habilitado para el área actual. Hoy: nunca. */
-export function isDarkAppearanceEnabled(): boolean {
-  return false
-}
+/**
+ * Script inline (anti-parpadeo): se ejecuta durante el parseo del contenedor
+ * del dashboard, antes del primer pintado del contenido, y agrega la clase
+ * `dark` al propio contenedor cuando corresponde. Después React sincroniza
+ * el mismo estado desde la preferencia persistida, sin parpadeos.
+ */
+export const APPEARANCE_BOOTSTRAP_SCRIPT = `(function(){try{var t=window.localStorage.getItem("${APPEARANCE_STORAGE_KEY}");var ok=${JSON.stringify(
+  DARK_THEME_ROUTE_PREFIXES,
+)}.some(function(p){return window.location.pathname===p||window.location.pathname.indexOf(p+"/")===0});if(t==="dark"&&ok&&document.currentScript&&document.currentScript.parentElement){document.currentScript.parentElement.classList.add("dark")}}catch(e){}})();`

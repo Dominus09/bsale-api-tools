@@ -201,8 +201,8 @@ export function ProfessionalDataTable({
   className?: string
 }) {
   return (
-    <div className={cn("relative overflow-x-auto rounded-xl border border-lq-line bg-white shadow-[0_1px_3px_rgba(15,23,42,0.035)]", className)}>
-      {loading ? <div className="pointer-events-none absolute inset-0 z-10 bg-white/55 backdrop-blur-[1px]" /> : null}
+    <div className={cn("relative overflow-x-auto rounded-xl border border-lq-line bg-lq-surface shadow-[0_1px_3px_rgba(15,23,42,0.035)]", className)}>
+      {loading ? <div className="pointer-events-none absolute inset-0 z-10 bg-lq-surface/55 backdrop-blur-[1px]" /> : null}
       {children}
     </div>
   )
@@ -226,7 +226,7 @@ export function EmptyState({
 
 export function AnalyticsLoading({ label = "Preparando información…" }: { label?: string }) {
   return (
-    <div className="flex min-h-56 flex-col items-center justify-center gap-3 rounded-xl border border-lq-line bg-white">
+    <div className="flex min-h-56 flex-col items-center justify-center gap-3 rounded-xl border border-lq-line bg-lq-surface">
       <Loader2 className="h-6 w-6 animate-spin text-primary" />
       <p className="text-sm text-lq-muted">{label}</p>
     </div>

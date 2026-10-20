@@ -181,7 +181,7 @@ export default function PacksV2Page() {
             title="Costo comercial en validación"
             summary="Los cálculos son correctos matemáticamente, pero aún no constituyen cifras contables definitivas."
           >
-            <ul className="grid gap-2 text-slate-600 md:grid-cols-2">
+            <ul className="grid gap-2 text-lq-body md:grid-cols-2">
               <li>• El costo del pack suma costo neto × cantidad por componente.</li>
               <li>• IVA e ILA se aplican por componente mediante IDs Bsale.</li>
               <li>• El costo propio del SKU del pack no se usa para la rentabilidad.</li>
@@ -241,12 +241,12 @@ export default function PacksV2Page() {
                     <button
                       key={s}
                       type="button"
-                      className="flex min-h-20 items-center justify-between gap-4 rounded-lg border border-slate-200 bg-slate-50/60 px-4 py-3 text-left transition hover:border-amber-300 hover:bg-amber-50/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+                      className="flex min-h-20 items-center justify-between gap-4 rounded-lg border border-lq-line bg-lq-canvas/60 px-4 py-3 text-left transition hover:border-amber-300 hover:bg-amber-50/50 dark:hover:bg-amber-400/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
                       onClick={() => applyFilters({ ...EMPTY_PACK_FILTERS, costBasis: draft.costBasis, packStatus: s })}
                     >
                       <span>
-                        <span className="block text-sm font-medium text-slate-900">{PACK_STATUS_LABELS[s]}</span>
-                        <span className="mt-1 block text-xs text-slate-500">Ver packs afectados</span>
+                        <span className="block text-sm font-medium text-lq-ink">{PACK_STATUS_LABELS[s]}</span>
+                        <span className="mt-1 block text-xs text-lq-muted">Ver packs afectados</span>
                       </span>
                       <span className="text-2xl font-semibold tabular-nums text-amber-800">{n}</span>
                     </button>
@@ -256,8 +256,8 @@ export default function PacksV2Page() {
 
           <section className="space-y-3">
             <div>
-              <h2 className="text-[19px] font-semibold tracking-[-0.015em] text-slate-950">Explorar packs</h2>
-              <p className="mt-1 text-[13px] text-slate-500">
+              <h2 className="text-[19px] font-semibold tracking-[-0.015em] text-lq-ink">Explorar packs</h2>
+              <p className="mt-1 text-[13px] text-lq-muted">
                 Selecciona una lista para ver una fila por pack. Usa “Todas” cuando necesites comparar combinaciones pack × lista.
               </p>
             </div>

@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation"
 import { isAuthenticated } from "@/lib/api"
 import { Sidebar } from "@/components/layout/sidebar"
 import { Header } from "@/components/layout/header"
+import { AppearanceScope } from "@/components/layout/appearance-context"
 import { Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -96,7 +97,7 @@ export default function DashboardLayout({
   )
 
   return (
-    <div className="flex h-[100dvh] max-h-[100dvh] overflow-hidden bg-background pt-[env(safe-area-inset-top)]">
+    <AppearanceScope className="flex h-[100dvh] max-h-[100dvh] overflow-hidden bg-background text-foreground transition-colors duration-200 pt-[env(safe-area-inset-top)]">
       {/* Desktop: sidebar en flujo */}
       {!isMobile && sidebarOpen ? sidebarEl : null}
 
@@ -129,6 +130,6 @@ export default function DashboardLayout({
           {children}
         </main>
       </div>
-    </div>
+    </AppearanceScope>
   )
 }

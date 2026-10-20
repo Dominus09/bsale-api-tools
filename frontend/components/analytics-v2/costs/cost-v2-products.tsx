@@ -55,11 +55,11 @@ export const EMPTY_PRODUCT_FILTERS: ProductFilterDraft = {
 }
 
 const selectClass =
-  "h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm shadow-sm outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/15"
+  "h-10 w-full rounded-lg border border-lq-line bg-lq-surface px-3 text-sm shadow-sm outline-none focus:border-primary/50 focus:ring-2 focus:ring-primary/15"
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <label className="flex min-w-0 flex-col gap-1.5 text-xs font-medium text-slate-600">
+    <label className="flex min-w-0 flex-col gap-1.5 text-xs font-medium text-lq-body">
       {label}
       {children}
     </label>
@@ -91,12 +91,12 @@ export function CostV2ProductFilters({
       <SmartFilterBar>
       <div className="flex flex-col gap-3 sm:flex-row">
         <div className="relative min-w-0 flex-1">
-          <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-slate-400" />
+          <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-lq-faint" />
           <Input
             value={draft.q}
             onChange={(e) => onChange({ q: e.target.value })}
             placeholder="Buscar por SKU, código de barras o nombre"
-            className="h-10 rounded-lg border-slate-200 pl-9 shadow-sm"
+            className="h-10 rounded-lg border-lq-line pl-9 shadow-sm"
             maxLength={100}
           />
         </div>
@@ -110,8 +110,8 @@ export function CostV2ProductFilters({
           </Button>
         </div>
       </div>
-      <details className="group border-t border-slate-100 pt-3">
-        <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 text-xs font-medium text-slate-600 hover:text-slate-950 [&::-webkit-details-marker]:hidden">
+      <details className="group border-t border-lq-line-soft pt-3">
+        <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 text-xs font-medium text-lq-body hover:text-lq-ink [&::-webkit-details-marker]:hidden">
           Filtros avanzados <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
         </summary>
         <div className="mt-3 space-y-3">
@@ -221,7 +221,7 @@ export function CostV2ProductFilters({
         </Field>
       </div>
       <div className="flex items-center gap-2">
-        <span className="text-xs font-medium text-slate-600">Orden</span>
+        <span className="text-xs font-medium text-lq-body">Orden</span>
         <select
           className={cn(selectClass, "w-auto")}
           value={draft.sort}
@@ -292,7 +292,7 @@ function ChangeCell({ item }: { item: CostProductItem }) {
     <span
       className={cn(
         "tabular-nums",
-        pct > 0 ? "text-red-700" : pct < 0 ? "text-emerald-700" : "text-muted-foreground",
+        pct > 0 ? "text-red-700 dark:text-red-300" : pct < 0 ? "text-emerald-700" : "text-muted-foreground",
       )}
     >
       {formatPct(item.change?.pct ?? null)}
@@ -322,25 +322,25 @@ export function CostV2ProductsTable({
   }
   return (
     <ProfessionalDataTable loading={loading}>
-      <div className="divide-y divide-slate-100 md:hidden">
+      <div className="divide-y divide-lq-line-soft md:hidden">
         {items.map((item) => (
           <article key={item.variant_id} className="p-4">
             <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0"><p className="truncate text-sm font-semibold text-slate-950">{item.product_name ?? "Sin nombre"}</p><p className="mt-1 truncate text-xs text-slate-500">{item.code ?? "Sin SKU"} · {item.product_type.name ?? "Sin tipo"}</p></div>
+              <div className="min-w-0"><p className="truncate text-sm font-semibold text-lq-ink">{item.product_name ?? "Sin nombre"}</p><p className="mt-1 truncate text-xs text-lq-muted">{item.code ?? "Sin SKU"} · {item.product_type.name ?? "Sin tipo"}</p></div>
               <ReliabilityBadge status={item.reliability.status} />
             </div>
             <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
-              <div><dt className="text-xs text-slate-500">Promedio Bsale</dt><dd className="mt-0.5 font-medium tabular-nums">{formatMoney(item.bsale_average_cost.value)}</dd></div>
-              <div><dt className="text-xs text-slate-500">Última compra</dt><dd className="mt-0.5 font-medium tabular-nums">{formatMoney(item.last_comparable?.cost ?? null)}</dd></div>
-              <div><dt className="text-xs text-slate-500">Variación</dt><dd className="mt-0.5 font-medium"><ChangeCell item={item} /></dd></div>
-              <div><dt className="text-xs text-slate-500">Movimiento</dt><dd className="mt-0.5">{item.last_reception ? <MovementBadge movement={item.last_reception.movement_class} /> : "Sin recepciones"}</dd></div>
+              <div><dt className="text-xs text-lq-muted">Promedio Bsale</dt><dd className="mt-0.5 font-medium tabular-nums">{formatMoney(item.bsale_average_cost.value)}</dd></div>
+              <div><dt className="text-xs text-lq-muted">Última compra</dt><dd className="mt-0.5 font-medium tabular-nums">{formatMoney(item.last_comparable?.cost ?? null)}</dd></div>
+              <div><dt className="text-xs text-lq-muted">Variación</dt><dd className="mt-0.5 font-medium"><ChangeCell item={item} /></dd></div>
+              <div><dt className="text-xs text-lq-muted">Movimiento</dt><dd className="mt-0.5">{item.last_reception ? <MovementBadge movement={item.last_reception.movement_class} /> : "Sin recepciones"}</dd></div>
             </dl>
             <Button type="button" variant="outline" className="mt-4 w-full" onClick={() => onOpen(item.variant_id)}>Analizar costo <ArrowRight className="h-4 w-4" /></Button>
           </article>
         ))}
       </div>
       <table className="hidden w-full min-w-[960px] table-fixed text-sm md:table">
-        <thead className="border-b border-slate-100 bg-slate-50/75 text-left text-xs text-slate-500">
+        <thead className="border-b border-lq-line-soft bg-lq-canvas text-left text-xs text-lq-muted">
           <tr>
             <th className="w-[29%] px-5 py-3 font-medium">Producto</th>
             <th className="w-[14%] px-3 py-3 text-right font-medium">Promedio Bsale</th>
@@ -351,29 +351,29 @@ export function CostV2ProductsTable({
             <th className="w-[6%] px-4 py-3"><span className="sr-only">Acción</span></th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-slate-100">
+        <tbody className="divide-y divide-lq-line-soft">
           {items.map((item) => (
             <tr
               key={item.variant_id}
-              className="group cursor-pointer hover:bg-slate-50/70"
+              className="group cursor-pointer hover:bg-lq-canvas"
               onClick={() => onOpen(item.variant_id)}
             >
               <td className="px-5 py-3.5">
-                <p className="truncate font-medium text-slate-950 group-hover:text-primary">{item.product_name ?? "Sin nombre"}</p>
-                <p className="mt-0.5 truncate text-xs text-slate-500">
+                <p className="truncate font-medium text-lq-ink group-hover:text-primary">{item.product_name ?? "Sin nombre"}</p>
+                <p className="mt-0.5 truncate text-xs text-lq-muted">
                   {item.code ?? "—"}
                   {item.barcode && item.barcode !== item.code ? ` · ${item.barcode}` : ""}
                   {item.variant_name ? ` · ${item.variant_name}` : ""}
                   {item.variant_state !== "activa" ? " · inactivo" : ""}
                 </p>
-                <p className="mt-0.5 truncate text-xs text-slate-500">{item.product_type.name ?? "Sin tipo"}</p>
+                <p className="mt-0.5 truncate text-xs text-lq-muted">{item.product_type.name ?? "Sin tipo"}</p>
               </td>
               <td className="px-3 py-3.5 text-right font-medium tabular-nums">
                 {formatMoney(item.bsale_average_cost.value)}
               </td>
               <td className="px-3 py-3.5 text-right tabular-nums">
                 {formatMoney(item.last_comparable?.cost ?? null)}
-                <span className="mt-0.5 block text-xs text-slate-500">
+                <span className="mt-0.5 block text-xs text-lq-muted">
                   {formatDate(item.last_comparable?.admission_date)}
                   {item.last_comparable?.office_name ? ` · ${item.last_comparable.office_name}` : ""}
                 </span>
@@ -390,12 +390,12 @@ export function CostV2ProductsTable({
               </td>
               <td className="px-3 py-3.5">
                 <ReliabilityBadge status={item.reliability.status} title={item.reliability.reason} />
-                <p className="mt-1.5 truncate text-xs text-slate-500" title={item.anomalies.map((a) => ANOMALY_LABELS[a.code]).join(" · ")}>
+                <p className="mt-1.5 truncate text-xs text-lq-muted" title={item.anomalies.map((a) => ANOMALY_LABELS[a.code]).join(" · ")}>
                   {item.anomalies.length ? `${ANOMALY_LABELS[item.anomalies[0].code]}${item.anomalies.length > 1 ? ` · +${item.anomalies.length - 1}` : ""}` : "Sin alertas"}
                 </p>
               </td>
               <td className="px-4 py-3.5">
-                <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 text-slate-500 group-hover:border-primary/30 group-hover:bg-white group-hover:text-primary"><ArrowRight className="h-4 w-4" /></span>
+                <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-lq-line text-lq-muted group-hover:border-primary/30 group-hover:bg-lq-surface group-hover:text-primary"><ArrowRight className="h-4 w-4" /></span>
               </td>
             </tr>
           ))}

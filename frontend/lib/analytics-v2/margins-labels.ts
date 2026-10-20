@@ -21,19 +21,19 @@ export const MARGIN_STATUS_LABELS: Record<MarginStatus, string> = {
 }
 
 export const MARGIN_STATUS_TONES: Record<MarginStatus, string> = {
-  bajo_politica: "border-red-300 bg-red-50 text-red-800",
-  dentro_politica: "border-emerald-300 bg-emerald-50 text-emerald-800",
-  sobre_politica: "border-sky-300 bg-sky-50 text-sky-800",
-  sin_costo: "border-zinc-300 bg-zinc-100 text-zinc-700",
-  sin_precio: "border-zinc-300 bg-zinc-100 text-zinc-700",
-  sin_regla: "border-amber-300 bg-amber-50 text-amber-800",
-  costo_no_verificado: "border-amber-300 bg-amber-50 text-amber-800",
-  requiere_revision_tributaria: "border-orange-300 bg-orange-50 text-orange-800",
-  pack_no_calculable: "border-zinc-300 bg-zinc-100 text-zinc-700",
-  politica_provisional: "border-violet-300 bg-violet-50 text-violet-800",
+  bajo_politica: "border-red-300 bg-red-50 text-red-800 dark:border-red-400/25 dark:bg-red-400/10 dark:text-red-200",
+  dentro_politica: "border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-400/25 dark:bg-emerald-400/10 dark:text-emerald-200",
+  sobre_politica: "border-sky-300 bg-sky-50 text-sky-800 dark:border-sky-400/25 dark:bg-sky-400/10 dark:text-sky-200",
+  sin_costo: "border-lq-line bg-lq-canvas text-lq-body",
+  sin_precio: "border-lq-line bg-lq-canvas text-lq-body",
+  sin_regla: "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-400/25 dark:bg-amber-400/10 dark:text-amber-200",
+  costo_no_verificado: "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-400/25 dark:bg-amber-400/10 dark:text-amber-200",
+  requiere_revision_tributaria: "border-orange-300 bg-orange-50 text-orange-800 dark:border-orange-400/25 dark:bg-orange-400/10 dark:text-orange-200",
+  pack_no_calculable: "border-lq-line bg-lq-canvas text-lq-body",
+  politica_provisional: "border-violet-300 bg-violet-50 text-violet-800 dark:border-violet-400/25 dark:bg-violet-400/10 dark:text-violet-200",
   promocion_vigente: "border-fuchsia-300 bg-fuchsia-50 text-fuchsia-800",
   remate_vigente: "border-fuchsia-300 bg-fuchsia-50 text-fuchsia-800",
-  promocion_pendiente_verificacion: "border-orange-300 bg-orange-50 text-orange-800",
+  promocion_pendiente_verificacion: "border-orange-300 bg-orange-50 text-orange-800 dark:border-orange-400/25 dark:bg-orange-400/10 dark:text-orange-200",
 }
 
 export const PRIMARY_STATUSES: MarginStatus[] = [

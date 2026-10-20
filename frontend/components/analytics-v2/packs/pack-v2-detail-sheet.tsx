@@ -46,7 +46,7 @@ function ComponentRows({ lines, depth = 0 }: { lines: PackLine[]; depth?: number
             <td className="px-2 py-1.5 text-right tabular-nums">{formatMoney(l.subtotal_net)}</td>
             <td className="px-2 py-1.5 text-right tabular-nums">{formatMoney(l.subtotal_gross)}</td>
             <td className="px-2 py-1.5 text-[11px]">
-              <span className={cn(l.status !== "calculado" && "font-medium text-red-700")}>{PACK_COMPONENT_STATUS_LABELS[l.status]}</span>
+              <span className={cn(l.status !== "calculado" && "font-medium text-red-700 dark:text-red-300")}>{PACK_COMPONENT_STATUS_LABELS[l.status]}</span>
               {l.reliability ? <span className="block text-muted-foreground">{RELIABILITY_LABELS[l.reliability]}</span> : null}
               {l.cost_change_pct ? <span className="block text-muted-foreground">Última variación {formatPct(l.cost_change_pct)}</span> : null}
             </td>
@@ -62,19 +62,19 @@ function ComponentCards({ lines, depth = 0 }: { lines: PackLine[]; depth?: numbe
   return (
     <div className="space-y-3">
       {lines.map((line) => (
-        <div key={`${depth}-${line.position}-${line.variant_id ?? "x"}`} className="rounded-lg border border-slate-200 bg-white p-4" style={{ marginLeft: depth * 12 }}>
+        <div key={`${depth}-${line.position}-${line.variant_id ?? "x"}`} className="rounded-lg border border-lq-line bg-lq-surface p-4" style={{ marginLeft: depth * 12 }}>
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <p className="truncate text-sm font-semibold text-slate-950">{line.name ?? (line.variant_id ? `Variante ${line.variant_id}` : "Variante no determinada")}</p>
-              <p className="mt-1 text-xs text-slate-500">{line.code ?? "Sin SKU"} · Cantidad {formatQty(line.quantity)}</p>
+              <p className="truncate text-sm font-semibold text-lq-ink">{line.name ?? (line.variant_id ? `Variante ${line.variant_id}` : "Variante no determinada")}</p>
+              <p className="mt-1 text-xs text-lq-muted">{line.code ?? "Sin SKU"} · Cantidad {formatQty(line.quantity)}</p>
             </div>
             <StatusBadge tone={line.status === "calculado" ? "success" : "warning"}>{PACK_COMPONENT_STATUS_LABELS[line.status]}</StatusBadge>
           </div>
           <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
-            <div><dt className="text-xs text-slate-500">Costo neto unitario</dt><dd className="mt-0.5 font-medium tabular-nums">{formatMoney(line.unit_net)}</dd></div>
-            <div><dt className="text-xs text-slate-500">Costo bruto unitario</dt><dd className="mt-0.5 font-medium tabular-nums">{formatMoney(line.unit_gross)}</dd></div>
-            <div><dt className="text-xs text-slate-500">Impuestos</dt><dd className="mt-0.5 font-medium">{taxesText(line)}</dd></div>
-            <div><dt className="text-xs text-slate-500">Subtotal bruto</dt><dd className="mt-0.5 font-semibold tabular-nums">{formatMoney(line.subtotal_gross)}</dd></div>
+            <div><dt className="text-xs text-lq-muted">Costo neto unitario</dt><dd className="mt-0.5 font-medium tabular-nums">{formatMoney(line.unit_net)}</dd></div>
+            <div><dt className="text-xs text-lq-muted">Costo bruto unitario</dt><dd className="mt-0.5 font-medium tabular-nums">{formatMoney(line.unit_gross)}</dd></div>
+            <div><dt className="text-xs text-lq-muted">Impuestos</dt><dd className="mt-0.5 font-medium">{taxesText(line)}</dd></div>
+            <div><dt className="text-xs text-lq-muted">Subtotal bruto</dt><dd className="mt-0.5 font-semibold tabular-nums">{formatMoney(line.subtotal_gross)}</dd></div>
           </dl>
           {line.nested_pack ? <div className="mt-3"><ComponentCards lines={line.nested_pack.lines} depth={depth + 1} /></div> : null}
         </div>
@@ -120,8 +120,8 @@ export function PackV2DetailSheet({
   const pack = data?.pack
   return (
     <Sheet open={variantId != null} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full overflow-y-auto border-l-slate-200 bg-slate-50 p-0 sm:max-w-[min(1100px,92vw)]">
-        <SheetHeader className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-5 py-4 backdrop-blur md:px-6">
+      <SheetContent side="right" className="w-full overflow-y-auto border-l-lq-line bg-lq-canvas p-0 sm:max-w-[min(1100px,92vw)]">
+        <SheetHeader className="sticky top-0 z-20 border-b border-lq-line bg-lq-surface/95 px-5 py-4 backdrop-blur md:px-6">
           <SheetTitle className="pr-8 text-xl tracking-[-0.015em]">{data?.product_name ?? (loading ? "Cargando…" : "Pack")}</SheetTitle>
           <SheetDescription>
             {data ? `${data.code ?? "Sin SKU"} · variante #${data.variant_id} · ${data.pack_state} · ${pack?.components_count ?? 0} componentes` : null}
@@ -146,8 +146,8 @@ export function PackV2DetailSheet({
             <>
               <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
                 <div>
-                  <p className="text-xs font-medium uppercase tracking-[0.14em] text-slate-500">Resultado del cálculo</p>
-                  <p className="mt-1 text-sm text-slate-600">Base {COST_BASIS_LABELS[pack.basis]} · composición {formatDateTime(pack.composition_fetched_at)}</p>
+                  <p className="text-xs font-medium uppercase tracking-[0.14em] text-lq-muted">Resultado del cálculo</p>
+                  <p className="mt-1 text-sm text-lq-body">Base {COST_BASIS_LABELS[pack.basis]} · composición {formatDateTime(pack.composition_fetched_at)}</p>
                 </div>
                 <PackStatusBadge status={pack.status} />
               </div>
@@ -177,7 +177,7 @@ export function PackV2DetailSheet({
                 <div className="p-4 md:hidden"><ComponentCards lines={pack.lines} /></div>
                 <div className="hidden overflow-x-auto md:block">
                   <table className="w-full min-w-[820px] text-sm">
-                    <thead className="border-b border-slate-100 bg-slate-50/75 text-left text-xs text-slate-500">
+                    <thead className="border-b border-lq-line-soft bg-lq-canvas text-left text-xs text-lq-muted">
                       <tr>
                         <th className="px-4 py-3 font-medium">Componente</th>
                         <th className="px-3 py-3 text-right font-medium">Cantidad</th>
@@ -189,7 +189,7 @@ export function PackV2DetailSheet({
                         <th className="px-4 py-3 font-medium">Estado</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-100">
+                    <tbody className="divide-y divide-lq-line-soft">
                       <ComponentRows lines={pack.lines} />
                       {pack.lines.length === 0 ? (
                         <tr>
@@ -215,7 +215,7 @@ export function PackV2DetailSheet({
               >
                 <div className="overflow-x-auto">
                   <table className="w-full min-w-[680px] text-sm">
-                    <thead className="border-b border-slate-100 bg-slate-50/75 text-left text-xs text-slate-500">
+                    <thead className="border-b border-lq-line-soft bg-lq-canvas text-left text-xs text-lq-muted">
                       <tr>
                         <th className="px-5 py-3 font-medium">Lista</th>
                         <th className="px-4 py-3 text-right font-medium">Precio bruto</th>
@@ -225,7 +225,7 @@ export function PackV2DetailSheet({
                         <th className="px-5 py-3 font-medium">Estado</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-100">
+                    <tbody className="divide-y divide-lq-line-soft">
                       {data.rows.map((r) => (
                         <tr key={r.price_list.id}>
                           <td className="px-5 py-3">
@@ -248,23 +248,23 @@ export function PackV2DetailSheet({
                   </table>
                 </div>
                 {data.list_price_spread?.alert ? (
-                  <p className="border-t border-red-100 bg-red-50 px-5 py-3 text-xs text-red-800">
+                  <p className="border-t border-red-100 bg-red-50 dark:border-red-400/20 dark:bg-red-400/10 px-5 py-3 text-xs text-red-800 dark:text-red-200">
                     Diferencia entre listas: máximo {formatMoney(data.list_price_spread.max)} vs mínimo {formatMoney(data.list_price_spread.min)}
                     (×{data.list_price_spread.ratio}). Confirmar en BSALE RAW antes de clasificarlo como anomalía.
                   </p>
                 ) : null}
-                <p className="border-t border-slate-100 px-5 py-3 text-xs text-slate-500">
+                <p className="border-t border-lq-line-soft px-5 py-3 text-xs text-lq-muted">
                   Rentabilidad estimada con precios vigentes y costos actuales; la rentabilidad histórica de ventas no está implementada.
                 </p>
               </SectionCard>
 
               <SectionCard title="¿Cómo se calcula?" description="Explicación del cálculo comercial, sin modificar datos de Bsale.">
-                <ol className="grid gap-3 text-sm leading-6 text-slate-600 md:grid-cols-3">
-                  <li className="rounded-lg bg-slate-50 p-3"><strong className="block text-slate-900">1. Costo neto</strong>Cantidad × costo neto de cada componente.</li>
-                  <li className="rounded-lg bg-slate-50 p-3"><strong className="block text-slate-900">2. Costo bruto</strong>Al costo neto se suma IVA e ILA propios de cada componente.</li>
-                  <li className="rounded-lg bg-slate-50 p-3"><strong className="block text-slate-900">3. Rentabilidad</strong>El precio de cada lista se compara con el costo bruto total.</li>
+                <ol className="grid gap-3 text-sm leading-6 text-lq-body md:grid-cols-3">
+                  <li className="rounded-lg bg-lq-canvas p-3"><strong className="block text-lq-ink">1. Costo neto</strong>Cantidad × costo neto de cada componente.</li>
+                  <li className="rounded-lg bg-lq-canvas p-3"><strong className="block text-lq-ink">2. Costo bruto</strong>Al costo neto se suma IVA e ILA propios de cada componente.</li>
+                  <li className="rounded-lg bg-lq-canvas p-3"><strong className="block text-lq-ink">3. Rentabilidad</strong>El precio de cada lista se compara con el costo bruto total.</li>
                 </ol>
-                <p className="mt-4 text-xs leading-5 text-slate-500">
+                <p className="mt-4 text-xs leading-5 text-lq-muted">
                   El costo promedio propio del SKU del pack ({formatMoney(data.pack_sku_own.bsale_average_cost.value)}) y sus impuestos propios
                   no participan del cálculo. El resultado continúa siendo provisional hasta la validación contable.
                 </p>

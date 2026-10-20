@@ -42,10 +42,10 @@ function CostCard({
   onOpenReception?: (receptionId: number, detailId: number) => void
 }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
-      <p className="text-[13px] font-medium text-slate-600">{title}</p>
-      <p className="mt-2 text-2xl font-semibold tracking-[-0.025em] tabular-nums text-slate-950">{value}</p>
-      {hint ? <p className="mt-1 text-xs leading-5 text-slate-500">{hint}</p> : null}
+    <div className="rounded-xl border border-lq-line bg-lq-surface p-4 shadow-[0_1px_2px_rgba(15,23,42,0.03)]">
+      <p className="text-[13px] font-medium text-lq-body">{title}</p>
+      <p className="mt-2 text-2xl font-semibold tracking-[-0.025em] tabular-nums text-lq-ink">{value}</p>
+      {hint ? <p className="mt-1 text-xs leading-5 text-lq-muted">{hint}</p> : null}
       {line ? (
         <div className="mt-1 space-y-0.5 text-[11px] text-muted-foreground">
           <p>
@@ -148,8 +148,8 @@ export function CostV2ProductSheet({
 
   return (
     <Sheet open={variantId != null} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full overflow-y-auto border-l-slate-200 bg-slate-50 p-0 sm:max-w-[min(1050px,92vw)]">
-        <SheetHeader className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 px-5 py-4 backdrop-blur md:px-6">
+      <SheetContent side="right" className="w-full overflow-y-auto border-l-lq-line bg-lq-canvas p-0 sm:max-w-[min(1050px,92vw)]">
+        <SheetHeader className="sticky top-0 z-20 border-b border-lq-line bg-lq-surface/95 px-5 py-4 backdrop-blur md:px-6">
           <SheetTitle className="pr-8 text-xl tracking-[-0.015em]">{product?.product_name ?? (loading ? "Cargando…" : "Producto")}</SheetTitle>
           <SheetDescription>
             {product
@@ -170,7 +170,7 @@ export function CostV2ProductSheet({
             <>
               <div className="flex flex-wrap items-center gap-2 pt-1">
                 <ReliabilityBadge status={product.reliability.status} />
-                <span className="text-sm text-slate-600">{product.reliability.reason}</span>
+                <span className="text-sm text-lq-body">{product.reliability.reason}</span>
                 <StatusBadge tone="warning">Validación contable pendiente</StatusBadge>
               </div>
 
@@ -303,7 +303,7 @@ export function CostV2ProductSheet({
                     </LineChart>
                   </ChartContainer>
                 )}
-                <p className="mt-2 text-xs text-slate-500">
+                <p className="mt-2 text-xs text-lq-muted">
                   {history?.series_truncated ? " Se muestran los últimos 1.000 puntos." : ""}
                 </p>
               </SectionCard>
@@ -311,7 +311,7 @@ export function CostV2ProductSheet({
               <SectionCard title="Recepciones" description="Trazabilidad de compras y movimientos desde el 01-01-2025.">
               <section className="space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-sm font-medium text-slate-700">Filtrar historial</span>
+                  <span className="text-sm font-medium text-lq-body">Filtrar historial</span>
                   <select
                     className="h-8 rounded-md border border-input bg-background px-2 text-sm"
                     value={officeId}

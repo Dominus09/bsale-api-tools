@@ -115,7 +115,7 @@ export function MarginV2ListBreakdown({
       >
         <div className="overflow-x-auto">
         <table className="w-full min-w-[780px] text-sm">
-          <thead className="border-b border-slate-100 bg-slate-50/75 text-left text-xs text-slate-500">
+          <thead className="border-b border-lq-line-soft bg-lq-canvas text-left text-xs text-lq-muted">
             <tr>
               <th className="px-5 py-3 font-medium">Lista</th>
               {PRIMARY_STATUSES.map((s) => (
@@ -126,12 +126,12 @@ export function MarginV2ListBreakdown({
               <th className="px-5 py-3 text-right font-medium">En validación</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody className="divide-y divide-lq-line-soft">
             {summary.by_price_list.map((l) => (
-              <tr key={l.price_list_id} className="hover:bg-slate-50/70">
+              <tr key={l.price_list_id} className="hover:bg-lq-canvas">
                 <td className="px-5 py-3">
-                  <span className="font-medium text-slate-900">{l.label ?? l.name}</span>
-                  <span className="mt-0.5 block text-xs text-slate-500">
+                  <span className="font-medium text-lq-ink">{l.label ?? l.name}</span>
+                  <span className="mt-0.5 block text-xs text-lq-muted">
                     #{l.price_list_id} · {l.name}
                   </span>
                 </td>
@@ -150,7 +150,7 @@ export function MarginV2ListBreakdown({
                     )}
                   </td>
                 ))}
-                <td className="px-5 py-3 text-right tabular-nums text-slate-500">
+                <td className="px-5 py-3 text-right tabular-nums text-lq-muted">
                   {l.provisional} / {l.rows}
                 </td>
               </tr>

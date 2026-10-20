@@ -26,7 +26,7 @@ export function MovementBadge({ movement }: { movement: MovementClass }) {
     <span
       className={cn(
         base,
-        purchase ? "border-border bg-background text-foreground" : "border-violet-300 bg-violet-50 text-violet-800",
+        purchase ? "border-border bg-background text-foreground" : "border-violet-300 bg-violet-50 text-violet-800 dark:border-violet-400/25 dark:bg-violet-400/10 dark:text-violet-200",
       )}
     >
       {MOVEMENT_LABELS[movement]}

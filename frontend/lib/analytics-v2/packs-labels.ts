@@ -13,15 +13,15 @@ export const PACK_STATUS_LABELS: Record<PackCostStatus, string> = {
 }
 
 export const PACK_STATUS_TONES: Record<PackCostStatus, string> = {
-  calculado: "border-emerald-300 bg-emerald-50 text-emerald-800",
-  sin_composicion: "border-zinc-300 bg-zinc-100 text-zinc-700",
-  composicion_no_interpretable: "border-orange-300 bg-orange-50 text-orange-800",
-  pack_abierto: "border-amber-300 bg-amber-50 text-amber-800",
-  ciclo_detectado: "border-red-300 bg-red-50 text-red-800",
-  componente_inexistente: "border-red-300 bg-red-50 text-red-800",
-  componente_pack_no_calculable: "border-amber-300 bg-amber-50 text-amber-800",
-  componente_requiere_revision_tributaria: "border-orange-300 bg-orange-50 text-orange-800",
-  componente_sin_costo: "border-zinc-300 bg-zinc-100 text-zinc-700",
+  calculado: "border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-400/25 dark:bg-emerald-400/10 dark:text-emerald-200",
+  sin_composicion: "border-lq-line bg-lq-canvas text-lq-body",
+  composicion_no_interpretable: "border-orange-300 bg-orange-50 text-orange-800 dark:border-orange-400/25 dark:bg-orange-400/10 dark:text-orange-200",
+  pack_abierto: "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-400/25 dark:bg-amber-400/10 dark:text-amber-200",
+  ciclo_detectado: "border-red-300 bg-red-50 text-red-800 dark:border-red-400/25 dark:bg-red-400/10 dark:text-red-200",
+  componente_inexistente: "border-red-300 bg-red-50 text-red-800 dark:border-red-400/25 dark:bg-red-400/10 dark:text-red-200",
+  componente_pack_no_calculable: "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-400/25 dark:bg-amber-400/10 dark:text-amber-200",
+  componente_requiere_revision_tributaria: "border-orange-300 bg-orange-50 text-orange-800 dark:border-orange-400/25 dark:bg-orange-400/10 dark:text-orange-200",
+  componente_sin_costo: "border-lq-line bg-lq-canvas text-lq-body",
 }
 
 export const PACK_COMPONENT_STATUS_LABELS: Record<PackComponentStatus, string> = {

@@ -185,11 +185,11 @@ export default function CostControlV2Page() {
 
           {summary && !summary.meta.net_cost_verified ? (
             <DataStatusBar status="warning" title="Costos comerciales en validación" summary="La consistencia operativa no equivale a validación contable.">
-              <div className="grid gap-3 text-slate-600 md:grid-cols-2">
-                <p><strong className="text-slate-900">Costo promedio Bsale:</strong> se muestra sin recalcular ni modificar.</p>
-                <p><strong className="text-slate-900">Última compra:</strong> corresponde a la recepción comparable más reciente.</p>
-                <p><strong className="text-slate-900">Costo bruto comercial:</strong> aplica IVA/ILA cuando el perfil tributario es calculable.</p>
-                <p><strong className="text-slate-900">Pendiente:</strong> contrastar costos netos e impuestos contra documentación contable.</p>
+              <div className="grid gap-3 text-lq-body md:grid-cols-2">
+                <p><strong className="text-lq-ink">Costo promedio Bsale:</strong> se muestra sin recalcular ni modificar.</p>
+                <p><strong className="text-lq-ink">Última compra:</strong> corresponde a la recepción comparable más reciente.</p>
+                <p><strong className="text-lq-ink">Costo bruto comercial:</strong> aplica IVA/ILA cuando el perfil tributario es calculable.</p>
+                <p><strong className="text-lq-ink">Pendiente:</strong> contrastar costos netos e impuestos contra documentación contable.</p>
               </div>
             </DataStatusBar>
           ) : null}
@@ -201,7 +201,7 @@ export default function CostControlV2Page() {
           />
 
           <Tabs value={tab} onValueChange={setTab} className="gap-4">
-            <TabsList className="h-11 rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
+            <TabsList className="h-11 rounded-xl border border-lq-line bg-lq-surface p-1 shadow-sm">
               <TabsTrigger value="resumen">Resumen</TabsTrigger>
               <TabsTrigger value="productos">Explorar productos</TabsTrigger>
               <TabsTrigger value="alertas">Alertas de recepción</TabsTrigger>

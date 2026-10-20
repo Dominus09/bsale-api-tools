@@ -76,7 +76,7 @@ export function BlockState<T>({ title, block, children }: { title: string; block
   return (
     <section className="rounded-md border border-dashed p-4">
       <p className={sectionTitle}>{title}</p>
-      <p className={cn("mt-1 flex items-center gap-1.5 text-sm", forbidden ? "text-muted-foreground" : "text-red-700")}>
+      <p className={cn("mt-1 flex items-center gap-1.5 text-sm", forbidden ? "text-muted-foreground" : "text-red-700 dark:text-red-300")}>
         {forbidden ? <Info className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
         {BLOCK_REASON_LABELS[block.reason ?? ""] ?? "No disponible."}
       </p>
@@ -160,13 +160,13 @@ export function DashboardExecutiveSummary({ data }: { data: DashboardResponse })
       </div>
       {/* Único panel grafito destacado de la pantalla: concentra el panorama
           ejecutivo. El resto de la superficie de trabajo permanece blanca. */}
-      <div className="overflow-hidden rounded-panel bg-lq-graphite-deep shadow-lq-sm ring-1 ring-black/25">
+      <div className="overflow-hidden rounded-panel bg-lq-graphite-deep shadow-lq-sm ring-1 ring-black/25 dark:ring-white/10">
         <div className="grid gap-px bg-white/10 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
           {metrics.map((metric) => (
             <Link
               key={metric.label}
               href={metric.href}
-              className="group min-w-0 bg-lq-graphite px-5 py-5 transition-colors hover:bg-lq-graphite-elev focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/70"
+              className="group min-w-0 bg-lq-graphite px-5 py-5 transition-colors hover:bg-lq-graphite-elev focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/70 dark:bg-lq-surface dark:hover:bg-lq-graphite-elev"
             >
               <span className="flex items-center gap-2 text-[12px] font-medium leading-4 text-lq-on-graphite-muted">
                 <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", executiveDots[metric.tone])} aria-hidden="true" />
@@ -400,7 +400,7 @@ function PriceListTable({
                   {cell(l.above, link({ price_list_id: l.price_list_id, status: "sobre_politica" }), MARGIN_STATUS_TONES.sobre_politica)}
                 </td>
                 <td className="px-5 py-3 text-right tabular-nums">
-                  {cell(l.unavailable, link({ price_list_id: l.price_list_id, status: "sin_costo" }), "border-amber-200 bg-amber-50 text-amber-800")}
+                  {cell(l.unavailable, link({ price_list_id: l.price_list_id, status: "sin_costo" }), "border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-400/25 dark:bg-amber-400/10 dark:text-amber-200")}
                 </td>
               </tr>
             ))}
@@ -432,7 +432,7 @@ export function MarginRowsTable({
   onOpenProduct: (variantId: number) => void
 }) {
   return (
-    <section className="overflow-hidden rounded-xl border border-lq-line bg-white">
+    <section className="overflow-hidden rounded-xl border border-lq-line bg-lq-surface">
       <p className="border-b border-lq-line-soft px-5 py-3.5 text-sm font-semibold text-lq-ink">{title}</p>
       {rows.length ? (
         <div className="overflow-x-auto">
@@ -478,7 +478,7 @@ export function MarginRowsTable({
                       {r.risks
                         .filter((k) => k === "venta_bajo_costo" || k === "costo_sospechoso" || k === "costo_desactualizado")
                         .map((k) => (
-                          <span key={k} className={cn(chip, "border-red-300 bg-red-50 text-red-800")}>
+                          <span key={k} className={cn(chip, "border-red-300 bg-red-50 text-red-800 dark:text-red-200 dark:border-red-400/25 dark:bg-red-400/10 dark:text-red-200")}>
                             {MARGIN_RISK_LABELS[k]}
                           </span>
                         ))}
@@ -509,7 +509,7 @@ export function PolicyCard({ data }: { data: DashboardMargins }) {
         <li>{p.rules_max_zero_in_scope} con máximo 0 · {p.rules_with_issues_in_scope} con observaciones</li>
         <li>{p.missing_rule_combinations} combinaciones lista × tipo sin regla</li>
       </ul>
-      <Link href={withQuery(MARGINS_PATH, { tab: "politica" })} className="mt-2 inline-block text-xs text-red-700 hover:underline">
+      <Link href={withQuery(MARGINS_PATH, { tab: "politica" })} className="mt-2 inline-block text-xs text-red-700 dark:text-red-300 hover:underline">
         Revisar política
       </Link>
     </section>
@@ -575,7 +575,7 @@ export function CostsOverview({ data, onOpenProduct }: { data: DashboardCosts; o
                       {r.code ?? "—"} · {formatMoney(r.previous_comparable?.cost)} → {formatMoney(r.last_comparable?.cost)}
                     </span>
                   </button>
-                  <span className="shrink-0 tabular-nums font-medium text-red-700">{formatPct(r.change_pct)}</span>
+                  <span className="shrink-0 tabular-nums font-medium text-red-700 dark:text-red-300">{formatPct(r.change_pct)}</span>
                 </li>
               ))}
             </ul>
@@ -588,7 +588,7 @@ export function CostsOverview({ data, onOpenProduct }: { data: DashboardCosts; o
           {Object.keys(data.high_alerts.counts_by_code).length ? (
             <p className="flex flex-wrap gap-1 border-b px-3 py-1.5">
               {Object.entries(data.high_alerts.counts_by_code).map(([code, n]) => (
-                <span key={code} className={cn(chip, "border-red-300 bg-red-50 text-red-800")}>
+                <span key={code} className={cn(chip, "border-red-300 bg-red-50 text-red-800 dark:text-red-200 dark:border-red-400/25 dark:bg-red-400/10 dark:text-red-200")}>
                   {ANOMALY_LABELS[code as AnomalyCode] ?? code}: {n}
                 </span>
               ))}

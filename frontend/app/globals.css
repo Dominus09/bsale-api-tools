@@ -5,8 +5,8 @@
 
 /* Tokens en rgb/#hex (sin oklch) para compatibilidad con Docker / postcss antiguos. */
 :root {
-  /* Graphite Premium — modo claro estable (predeterminado en toda la ERP). */
-  --background: rgb(244 245 247);
+  /* Graphite Premium — modo claro (predeterminado en toda la ERP). */
+  --background: rgb(233 237 242);
   --foreground: rgb(23 25 30);
   --card: rgb(255 255 255);
   --card-foreground: rgb(23 25 30);
@@ -16,15 +16,15 @@
   --primary-foreground: rgb(255 255 255);
   --secondary: rgb(247 248 250);
   --secondary-foreground: rgb(52 56 64);
-  --muted: rgb(240 242 245);
+  --muted: rgb(238 241 245);
   --muted-foreground: rgb(100 112 125);
-  --accent: rgb(240 242 245);
+  --accent: rgb(238 241 245);
   --accent-foreground: rgb(52 56 64);
   /* El peligro es un rojo semántico propio, distinto del rojo de marca. */
   --destructive: rgb(185 28 28);
   --destructive-foreground: rgb(255 255 255);
-  --border: rgb(226 228 232);
-  --input: rgb(226 228 232);
+  --border: rgb(216 221 229);
+  --input: rgb(216 221 229);
   --ring: rgb(196 41 60);
   --chart-1: rgb(196 41 60);
   --chart-2: rgb(34 160 120);
@@ -43,39 +43,59 @@
   --sidebar-ring: rgb(196 41 60);
 }
 
+/*
+ * Graphite Dark (Premium 4.1). La clase `.dark` se aplica al contenedor del
+ * dashboard y, sincronizada, a <html> SOLO mientras la ruta activa está
+ * adaptada (ver lib/appearance.ts y AppearanceScope): al salir de la ruta se
+ * retira, de modo que ninguna página legacy se renderiza en oscuro.
+ */
 .dark {
-  --background: rgb(37 37 37);
-  --foreground: rgb(250 250 250);
-  --card: rgb(37 37 37);
-  --card-foreground: rgb(250 250 250);
-  --popover: rgb(37 37 37);
-  --popover-foreground: rgb(250 250 250);
-  --primary: rgb(250 250 250);
-  --primary-foreground: rgb(52 52 52);
-  --secondary: rgb(63 63 63);
-  --secondary-foreground: rgb(250 250 250);
-  --muted: rgb(63 63 63);
-  --muted-foreground: rgb(180 180 180);
-  --accent: rgb(63 63 63);
-  --accent-foreground: rgb(250 250 250);
-  --destructive: rgb(200 70 70);
-  --destructive-foreground: rgb(255 180 180);
-  --border: rgb(63 63 63);
-  --input: rgb(63 63 63);
-  --ring: rgb(110 110 110);
-  --chart-1: rgb(140 170 255);
+  --background: rgb(16 19 24);
+  --foreground: rgb(244 245 247);
+  --card: rgb(27 31 39);
+  --card-foreground: rgb(244 245 247);
+  --popover: rgb(36 41 51);
+  --popover-foreground: rgb(244 245 247);
+  /* Rojo institucional aclarado solo en presentación para contraste. */
+  --primary: rgb(224 73 94);
+  --primary-foreground: rgb(255 255 255);
+  --secondary: rgb(36 41 51);
+  --secondary-foreground: rgb(244 245 247);
+  --muted: rgb(36 41 51);
+  --muted-foreground: rgb(174 183 196);
+  --accent: rgb(36 41 51);
+  --accent-foreground: rgb(244 245 247);
+  --destructive: rgb(248 113 113);
+  --destructive-foreground: rgb(69 10 10);
+  --border: rgb(52 59 70);
+  --input: rgb(52 59 70);
+  --ring: rgb(224 73 94);
+  --chart-1: rgb(224 73 94);
   --chart-2: rgb(52 211 153);
-  --chart-3: rgb(252 211 77);
-  --chart-4: rgb(196 181 253);
-  --chart-5: rgb(251 113 133);
-  --sidebar: rgb(48 48 48);
-  --sidebar-foreground: rgb(250 250 250);
-  --sidebar-primary: rgb(99 132 232);
-  --sidebar-primary-foreground: rgb(250 250 250);
-  --sidebar-accent: rgb(63 63 63);
-  --sidebar-accent-foreground: rgb(250 250 250);
-  --sidebar-border: rgb(63 63 63);
-  --sidebar-ring: rgb(110 110 110);
+  --chart-3: rgb(147 178 255);
+  --chart-4: rgb(252 211 77);
+  --chart-5: rgb(196 181 253);
+  --sidebar: rgb(17 19 24);
+  --sidebar-foreground: rgb(244 245 247);
+  --sidebar-primary: rgb(224 73 94);
+  --sidebar-primary-foreground: rgb(255 255 255);
+  --sidebar-accent: rgb(31 34 42);
+  --sidebar-accent-foreground: rgb(255 255 255);
+  --sidebar-border: rgb(38 42 50);
+  --sidebar-ring: rgb(224 73 94);
+  /* Tokens La Quillotana en oscuro: niveles de superficie diferenciados. */
+  --lq-ink: rgb(244 245 247);
+  --lq-body: rgb(195 202 212);
+  --lq-muted: rgb(174 183 196);
+  --lq-faint: rgb(126 136 150);
+  --lq-line: rgb(52 59 70);
+  --lq-line-soft: rgb(38 44 54);
+  --lq-surface: rgb(27 31 39);
+  --lq-canvas: rgb(16 19 24);
+  --lq-success: rgb(52 211 153);
+  --lq-warning: rgb(251 191 36);
+  --lq-danger: rgb(248 113 113);
+  --lq-info: rgb(147 178 255);
 }
 
 /* =============================================================================
@@ -83,9 +103,10 @@
    Grafito profundo como superficie de acento (sidebar y paneles ejecutivos),
    gris frío de fondo, superficies blancas de trabajo, rojo institucional solo
    como acento de acción y estados semánticos sobrios, diferenciados de marca.
-   Tema: el modo claro es la experiencia estable; el modo oscuro se habilitará
-   por áreas validadas (las primitivas .dark existen, pero no se activan de
-   forma global en esta etapa). Ver frontend/lib/appearance.ts.
+   Temas: claro predeterminado y Graphite Dark con tokens propios (bloque
+   .dark). La clase .dark se aplica solo al contenedor del dashboard en las
+   rutas adaptadas listadas en frontend/lib/appearance.ts; el resto de la ERP
+   permanece en claro hasta completar su adaptación.
    ============================================================================= */
 :root {
   --lq-brand: rgb(196 41 60);
@@ -94,10 +115,10 @@
   --lq-body: rgb(62 69 79);
   --lq-muted: rgb(100 112 125);
   --lq-faint: rgb(148 158 170);
-  --lq-line: rgb(226 228 232);
-  --lq-line-soft: rgb(238 240 243);
+  --lq-line: rgb(216 221 229);
+  --lq-line-soft: rgb(231 235 240);
   --lq-surface: rgb(255 255 255);
-  --lq-canvas: rgb(244 245 247);
+  --lq-canvas: rgb(233 237 242);
   /* Graphite: superficies oscuras de acento (sidebar, paneles ejecutivos). */
   --lq-graphite: rgb(23 25 30);
   --lq-graphite-deep: rgb(17 19 24);

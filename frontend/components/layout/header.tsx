@@ -11,10 +11,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { logout, getStoredEmail, getStoredCompanyName } from "@/lib/api"
-// El selector de apariencia (components/layout/appearance-selector.tsx) no se
-// monta todavía: solo el tema Graphite claro es funcional y no se ofrecen
-// opciones que el usuario no pueda usar. Se activará cuando el modo oscuro
-// esté validado por áreas (ver lib/appearance.ts).
+import { AppearanceSelector } from "@/components/layout/appearance-selector"
 
 type HeaderProps = {
   /** Si se pasa, muestra botón para colapsar/expandir el sidebar del dashboard. */
@@ -43,14 +40,14 @@ export function Header({ sidebarOpen, onToggleSidebar }: HeaderProps) {
   }
 
   return (
-    <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-lq-line bg-lq-surface px-3 shadow-lq-xs sm:h-16 sm:px-6">
+    <header className="flex h-14 shrink-0 items-center justify-between gap-2 border-b border-black/40 bg-lq-graphite px-3 text-lq-on-graphite sm:h-16 sm:px-6 dark:bg-lq-graphite-deep">
       <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
         {onToggleSidebar ? (
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            className="h-10 w-10 shrink-0"
+            className="h-10 w-10 shrink-0 text-lq-on-graphite-muted hover:bg-white/10 hover:text-white"
             onClick={onToggleSidebar}
             aria-label={sidebarOpen ? "Ocultar menú lateral" : "Mostrar menú lateral"}
           >
@@ -61,23 +58,24 @@ export function Header({ sidebarOpen, onToggleSidebar }: HeaderProps) {
             )}
           </Button>
         ) : null}
-        <Building2 className="hidden h-5 w-5 shrink-0 text-muted-foreground sm:block" />
-        <span className="min-w-0 truncate text-sm font-medium text-foreground sm:text-base">
+        <Building2 className="hidden h-5 w-5 shrink-0 text-lq-on-graphite-faint sm:block" />
+        <span className="min-w-0 truncate text-sm font-medium text-lq-on-graphite sm:text-base">
           {companyName || "Empresa"}
         </span>
       </div>
 
-      <div className="flex shrink-0 items-center">
+      <div className="flex shrink-0 items-center gap-1">
+        <AppearanceSelector />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
-              className="flex h-10 max-w-[40vw] items-center gap-2 px-2 sm:max-w-none sm:px-3"
+              className="flex h-10 max-w-[40vw] items-center gap-2 px-2 hover:bg-white/10 sm:max-w-none sm:px-3"
             >
               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
                 <User className="h-4 w-4" />
               </div>
-              <span className="hidden truncate text-sm text-muted-foreground md:inline">
+              <span className="hidden truncate text-sm text-lq-on-graphite-muted md:inline">
                 {email}
               </span>
             </Button>

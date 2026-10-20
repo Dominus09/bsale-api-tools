@@ -253,7 +253,7 @@ export function CostV2Alerts({
                 <td className="px-3 py-2 text-right tabular-nums">{formatPct(a.change_pct)}</td>
                 <td className="px-3 py-2">
                   <AnomalyChips anomalies={a.anomalies} max={3} />
-                  <p className="mt-1 max-w-[260px] text-xs leading-5 text-slate-500">
+                  <p className="mt-1 max-w-[260px] text-xs leading-5 text-lq-muted">
                     {a.anomalies[0] ? reviewAction[a.anomalies[0].code] ?? a.anomalies[0].message : "Revisar la recepción original."}
                   </p>
                 </td>

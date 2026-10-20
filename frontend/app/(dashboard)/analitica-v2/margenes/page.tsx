@@ -209,11 +209,11 @@ export default function MarginsV2Page() {
 
           {summary ? (
             <DataStatusBar status="warning" title="Márgenes en validación" summary="Precios reales de Bsale; costos, impuestos y políticas conservan su estado provisional.">
-              <div className="grid gap-3 text-slate-600 md:grid-cols-2">
-                <p><strong className="text-slate-900">Costo bruto comercial:</strong> incorpora IVA/ILA, pero aún no está contrastado contablemente.</p>
-                <p><strong className="text-slate-900">Política:</strong> las reglas actuales se mantienen sin cambios hasta la revisión del Excel de gerencia.</p>
-                <p><strong className="text-slate-900">Promociones:</strong> solo justifican una excepción cuando están aprobadas, vigentes y verificadas.</p>
-                <p><strong className="text-slate-900">Riesgos:</strong> una excepción nunca oculta ventas bajo costo o costos sospechosos.</p>
+              <div className="grid gap-3 text-lq-body md:grid-cols-2">
+                <p><strong className="text-lq-ink">Costo bruto comercial:</strong> incorpora IVA/ILA, pero aún no está contrastado contablemente.</p>
+                <p><strong className="text-lq-ink">Política:</strong> las reglas actuales se mantienen sin cambios hasta la revisión del Excel de gerencia.</p>
+                <p><strong className="text-lq-ink">Promociones:</strong> solo justifican una excepción cuando están aprobadas, vigentes y verificadas.</p>
+                <p><strong className="text-lq-ink">Riesgos:</strong> una excepción nunca oculta ventas bajo costo o costos sospechosos.</p>
               </div>
             </DataStatusBar>
           ) : null}
@@ -240,7 +240,7 @@ export default function MarginsV2Page() {
           />
 
           <Tabs value={tab} onValueChange={setTab} className="gap-4">
-            <TabsList className="h-11 rounded-xl border border-slate-200 bg-white p-1 shadow-sm">
+            <TabsList className="h-11 rounded-xl border border-lq-line bg-lq-surface p-1 shadow-sm">
               <TabsTrigger value="resumen">Resumen por lista</TabsTrigger>
               <TabsTrigger value="detalle">Explorar productos</TabsTrigger>
               <TabsTrigger value="politica">Política comercial</TabsTrigger>
