@@ -25,7 +25,8 @@ import { AnomalyChips, AnomalyList, MovementBadge, ReliabilityBadge } from "./ba
 import { Pager } from "./cost-v2-products"
 
 const chartConfig = {
-  cost: { label: "Costo compra", color: "hsl(215 70% 40%)" },
+  cost: { label: "Costo compra", theme: { light: "hsl(215 70% 40%)", dark: "hsl(210 90% 72%)" } },
+  average: { label: "Promedio Bsale", theme: { light: "hsl(160 45% 35%)", dark: "hsl(160 60% 60%)" } },
 } satisfies ChartConfig
 
 function CostCard({
@@ -238,7 +239,7 @@ export function CostV2ProductSheet({
                       .join(", ") || product.tax_profile.reason}
                   </p>
                   {product.tax_profile.issues.length ? (
-                    <p className="text-[11px] text-orange-700">
+                    <p className="text-[11px] text-orange-700 dark:text-orange-300">
                       {product.tax_profile.issues.map((i) => TAX_ISSUE_LABELS[i] ?? i).join(" · ")}
                     </p>
                   ) : null}
@@ -264,7 +265,7 @@ export function CostV2ProductSheet({
                       {formatMoney(product.commercial_gross_cost.gross)}
                     </dd>
                   </dl>
-                  <p className="text-[11px] text-amber-700">
+                  <p className="text-[11px] text-amber-700 dark:text-amber-300">
                     {GROSS_STATUS_LABELS[product.commercial_gross_cost.status]}
                     {product.meta.tax_config_verified ? "" : " · configuración tributaria aún no contrastada"}
                   </p>
@@ -297,7 +298,7 @@ export function CostV2ProductSheet({
                       />
                       <ChartTooltip content={<ChartTooltipContent formatter={(v) => formatMoney(Number(v))} />} />
                       {average !== null && average > 0 ? (
-                        <ReferenceLine y={average} stroke="hsl(160 45% 35%)" strokeDasharray="4 4" />
+                        <ReferenceLine y={average} stroke="var(--color-average)" strokeDasharray="4 4" />
                       ) : null}
                       <Line type="stepAfter" dataKey="cost" stroke="var(--color-cost)" strokeWidth={2} dot={{ r: 2 }} />
                     </LineChart>

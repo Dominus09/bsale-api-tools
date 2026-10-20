@@ -292,7 +292,7 @@ function ChangeCell({ item }: { item: CostProductItem }) {
     <span
       className={cn(
         "tabular-nums",
-        pct > 0 ? "text-red-700 dark:text-red-300" : pct < 0 ? "text-emerald-700" : "text-muted-foreground",
+        pct > 0 ? "text-red-700 dark:text-red-300" : pct < 0 ? "text-emerald-700 dark:text-emerald-300" : "text-muted-foreground",
       )}
     >
       {formatPct(item.change?.pct ?? null)}

@@ -83,19 +83,9 @@
   --sidebar-accent-foreground: rgb(255 255 255);
   --sidebar-border: rgb(38 42 50);
   --sidebar-ring: rgb(224 73 94);
-  /* Tokens La Quillotana en oscuro: niveles de superficie diferenciados. */
-  --lq-ink: rgb(244 245 247);
-  --lq-body: rgb(195 202 212);
-  --lq-muted: rgb(174 183 196);
-  --lq-faint: rgb(126 136 150);
-  --lq-line: rgb(52 59 70);
-  --lq-line-soft: rgb(38 44 54);
-  --lq-surface: rgb(27 31 39);
-  --lq-canvas: rgb(16 19 24);
-  --lq-success: rgb(52 211 153);
-  --lq-warning: rgb(251 191 36);
-  --lq-danger: rgb(248 113 113);
-  --lq-info: rgb(147 178 255);
+  /* Los tokens --lq-* oscuros se definen en un bloque .dark posterior al
+     :root claro del Design System (ver más abajo): a igual especificidad,
+     el orden del archivo decide y los valores claros ganarían siempre. */
 }
 
 /* =============================================================================
@@ -130,6 +120,28 @@
   --lq-warning: rgb(180 83 9);
   --lq-danger: rgb(185 28 28);
   --lq-info: rgb(29 78 216);
+}
+
+/*
+ * Graphite Dark — tokens La Quillotana.
+ * Este bloque DEBE permanecer después del :root claro anterior: ambos
+ * selectores tienen la misma especificidad y el último en el archivo gana.
+ * Si se mueve antes, las superficies lq-* vuelven a verse claras en oscuro
+ * (defecto corregido: textos claros sobre fondos blancos en drawers).
+ */
+.dark {
+  --lq-ink: rgb(244 245 247);
+  --lq-body: rgb(195 202 212);
+  --lq-muted: rgb(174 183 196);
+  --lq-faint: rgb(126 136 150);
+  --lq-line: rgb(52 59 70);
+  --lq-line-soft: rgb(38 44 54);
+  --lq-surface: rgb(27 31 39);
+  --lq-canvas: rgb(16 19 24);
+  --lq-success: rgb(52 211 153);
+  --lq-warning: rgb(251 191 36);
+  --lq-danger: rgb(248 113 113);
+  --lq-info: rgb(147 178 255);
 }
 
 @theme inline {
