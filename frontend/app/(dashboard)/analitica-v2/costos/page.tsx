@@ -158,7 +158,7 @@ export default function CostControlV2Page() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6 pb-10">
+    <div className="flex w-full min-w-0 flex-col gap-6 pb-10">
       <AnalyticPageHeader
         eyebrow="Analítica V2"
         title="Centro de control de costos"

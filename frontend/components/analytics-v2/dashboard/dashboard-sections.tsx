@@ -2,10 +2,11 @@
 
 import type { ReactNode } from "react"
 import Link from "next/link"
-import { AlertTriangle, Boxes, CircleDollarSign, Info, ReceiptText, ShieldAlert, TrendingDown, Warehouse } from "lucide-react"
+import { AlertTriangle, Info } from "lucide-react"
 
 import { ReliabilityBadge } from "@/components/analytics-v2/costs/badges"
-import { AttentionRow, MetricCard, SectionCard, StatusBadge } from "@/components/analytics-v2/shared/analytics-ui"
+import { AttentionRow, SectionCard, StatusBadge } from "@/components/analytics-v2/shared/analytics-ui"
+import { toneDots } from "@/components/analytics-v2/shared/tokens"
 import { cn } from "@/lib/utils"
 import {
   BLOCK_REASON_LABELS,
@@ -83,75 +84,97 @@ export function BlockState<T>({ title, block, children }: { title: string; block
   )
 }
 
+type ExecutiveMetric = {
+  label: string
+  value: number | string
+  context: string
+  href: string
+  tone: "neutral" | "success" | "warning" | "danger" | "info"
+}
+
+const executiveDots = toneDots
+
 export function DashboardExecutiveSummary({ data }: { data: DashboardResponse }) {
   const margins = data.margins.status === "ok" ? data.margins.data : null
   const taxes = data.taxes.status === "ok" ? data.taxes.data : null
   const packs = data.packs.status === "ok" ? data.packs.data : null
   const noCost = margins?.by_status.sin_costo
   const taxReview = margins?.by_status.requiere_revision_tributaria
+  const metrics: ExecutiveMetric[] = [
+    {
+      label: "SKUs únicos evaluados",
+      value: margins?.totals.skus ?? "—",
+      context: margins ? `${margins.totals.combinations} combinaciones en ${margins.totals.price_lists} listas` : "Márgenes no disponibles",
+      href: MARGINS_PATH,
+      tone: "info",
+    },
+    {
+      label: "Productos bajo política",
+      value: margins?.alerts.skus ?? "—",
+      context: margins ? `${margins.alerts.combinations} combinaciones afectadas` : "Márgenes no disponibles",
+      href: withQuery(MARGINS_PATH, { status: "bajo_politica", sort: "gap_asc" }),
+      tone: margins?.alerts.skus ? "danger" : "success",
+    },
+    {
+      label: "Venta bajo costo",
+      value: margins?.by_risk.venta_bajo_costo?.skus ?? "—",
+      context: margins ? `${margins.by_risk.venta_bajo_costo?.combinations ?? 0} combinaciones SKU × lista` : "Márgenes no disponibles",
+      href: withQuery(MARGINS_PATH, { sort: "markup_asc" }),
+      tone: margins?.by_risk.venta_bajo_costo?.skus ? "danger" : "success",
+    },
+    {
+      label: "Sin costo utilizable",
+      value: noCost?.skus ?? "—",
+      context: noCost ? `${noCost.combinations} combinaciones no evaluables` : "Sin información disponible",
+      href: withQuery(MARGINS_PATH, { status: "sin_costo" }),
+      tone: noCost?.skus ? "warning" : "success",
+    },
+    {
+      label: "Revisión tributaria",
+      value: taxReview?.skus ?? taxes?.skus_tax_review ?? "—",
+      context: "IVA/ILA pendientes de revisión",
+      href: withQuery(MARGINS_PATH, { status: "requiere_revision_tributaria" }),
+      tone: (taxReview?.skus ?? taxes?.skus_tax_review) ? "warning" : "success",
+    },
+    {
+      label: "Packs con problemas",
+      value: packs?.packs_active_pending ?? "—",
+      context: packs ? `${packs.packs_active_calculable} de ${packs.packs_active} con costo calculable` : "Packs no disponibles",
+      href: PACKS_PATH,
+      tone: packs?.packs_active_pending ? "warning" : "success",
+    },
+  ]
   return (
     <section aria-labelledby="executive-title">
-      <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-2">
         <div>
-          <h2 id="executive-title" className="text-[19px] font-semibold tracking-[-0.015em] text-slate-950">Panorama comercial</h2>
-          <p className="mt-1 text-[13px] text-slate-500">Una lectura rápida del alcance y los principales riesgos actuales.</p>
+          <h2 id="executive-title" className="text-[20px] font-semibold tracking-[-0.02em] text-lq-ink">Panorama comercial</h2>
+          <p className="mt-1 text-[13px] leading-5 text-lq-muted">El alcance evaluado y los principales riesgos, en una sola lectura.</p>
         </div>
         {margins ? (
-          <p className="text-xs text-slate-500">
-            <strong className="font-semibold text-slate-700">{margins.totals.skus}</strong> SKUs únicos ·{" "}
-            <strong className="font-semibold text-slate-700">{margins.totals.combinations}</strong> combinaciones SKU × lista
+          <p className="text-xs tabular-nums text-lq-faint">
+            <strong className="font-semibold text-lq-body">{margins.totals.skus}</strong> SKUs únicos ·{" "}
+            <strong className="font-semibold text-lq-body">{margins.totals.combinations}</strong> combinaciones SKU × lista
           </p>
         ) : null}
       </div>
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
-        <MetricCard
-          label="SKUs únicos evaluados"
-          value={margins?.totals.skus ?? "—"}
-          context={margins ? `${margins.totals.combinations} combinaciones en ${margins.totals.price_lists} listas` : "Márgenes no disponibles"}
-          icon={Warehouse}
-          href={MARGINS_PATH}
-          tone="info"
-        />
-        <MetricCard
-          label="Productos bajo política"
-          value={margins?.alerts.skus ?? "—"}
-          context={margins ? `${margins.alerts.combinations} combinaciones afectadas` : "Márgenes no disponibles"}
-          icon={TrendingDown}
-          href={withQuery(MARGINS_PATH, { status: "bajo_politica", sort: "gap_asc" })}
-          tone={margins?.alerts.skus ? "danger" : "success"}
-        />
-        <MetricCard
-          label="Venta bajo costo"
-          value={margins?.by_risk.venta_bajo_costo?.skus ?? "—"}
-          context={margins ? `${margins.by_risk.venta_bajo_costo?.combinations ?? 0} combinaciones SKU × lista` : "Márgenes no disponibles"}
-          icon={CircleDollarSign}
-          href={withQuery(MARGINS_PATH, { sort: "markup_asc" })}
-          tone={margins?.by_risk.venta_bajo_costo?.skus ? "danger" : "success"}
-        />
-        <MetricCard
-          label="Sin costo utilizable"
-          value={noCost?.skus ?? "—"}
-          context={noCost ? `${noCost.combinations} combinaciones no evaluables` : "Sin información disponible"}
-          icon={ReceiptText}
-          href={withQuery(MARGINS_PATH, { status: "sin_costo" })}
-          tone={noCost?.skus ? "warning" : "success"}
-        />
-        <MetricCard
-          label="Revisión tributaria"
-          value={taxReview?.skus ?? taxes?.skus_tax_review ?? "—"}
-          context="IVA/ILA pendientes de revisión"
-          icon={ShieldAlert}
-          href={withQuery(MARGINS_PATH, { status: "requiere_revision_tributaria" })}
-          tone={(taxReview?.skus ?? taxes?.skus_tax_review) ? "warning" : "success"}
-        />
-        <MetricCard
-          label="Packs con problemas"
-          value={packs?.packs_active_pending ?? "—"}
-          context={packs ? `${packs.packs_active_calculable} de ${packs.packs_active} con costo calculable` : "Packs no disponibles"}
-          icon={Boxes}
-          href={PACKS_PATH}
-          tone={packs?.packs_active_pending ? "warning" : "success"}
-        />
+      <div className="grid gap-px overflow-hidden rounded-card border border-lq-line bg-lq-line-soft shadow-lq-xs sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+        {metrics.map((metric) => (
+          <Link
+            key={metric.label}
+            href={metric.href}
+            className="group min-w-0 bg-white px-5 py-5 transition-colors hover:bg-lq-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/30"
+          >
+            <span className="flex items-center gap-2 text-[12px] font-medium leading-4 text-lq-muted">
+              <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", executiveDots[metric.tone])} aria-hidden="true" />
+              <span className="truncate">{metric.label}</span>
+            </span>
+            <span className="mt-3 block text-metric-lg font-semibold tabular-nums tracking-[-0.04em] text-lq-ink">
+              {metric.value}
+            </span>
+            <span className="mt-2 block min-h-8 text-xs leading-4 text-lq-faint">{metric.context}</span>
+          </Link>
+        ))}
       </div>
     </section>
   )
@@ -162,47 +185,72 @@ export function AttentionPanel({ data }: { data: DashboardResponse }) {
   const costs = data.costs.status === "ok" ? data.costs.data : null
   const taxes = data.taxes.status === "ok" ? data.taxes.data : null
   const packs = data.packs.status === "ok" ? data.packs.data : null
+  // Prioridad editorial por GRAVEDAD del problema; la cantidad de afectados
+  // solo desempata dentro de la misma gravedad. No se altera ninguna
+  // clasificación ni cálculo: solo el orden de presentación.
+  //   1 venta bajo costo (pérdida directa por unidad vendida)
+  //   2 bajo política (incumplimiento de la política comercial)
+  //   3 revisión tributaria (bloquea la confiabilidad del costo bruto)
+  //   4 costos con anomalías (señales de revisión en recepciones)
+  //   5 packs con costo pendiente (rentabilidad aún no calculable)
+  const rows = [
+    {
+      label: "Productos vendidos bajo costo",
+      count: margins?.by_risk.venta_bajo_costo?.skus ?? 0,
+      description: "Revisar precio, costo de referencia y excepciones vigentes.",
+      href: withQuery(MARGINS_PATH, { sort: "markup_asc" }),
+      tone: "danger" as const,
+      severity: 1,
+    },
+    {
+      label: "Productos bajo política",
+      count: margins?.alerts.skus ?? 0,
+      description: "Recargo inferior al mínimo configurado para su lista.",
+      href: withQuery(MARGINS_PATH, { status: "bajo_politica", sort: "gap_asc" }),
+      tone: "danger" as const,
+      severity: 2,
+    },
+    {
+      label: "Revisión tributaria",
+      count: taxes?.skus_tax_review ?? 0,
+      description: "Impuestos IVA/ILA que impiden obtener costo bruto.",
+      href: withQuery(MARGINS_PATH, { status: "requiere_revision_tributaria" }),
+      tone: "warning" as const,
+      severity: 3,
+    },
+    {
+      label: "Costos con anomalías",
+      count: costs?.skus_with_high_anomaly ?? 0,
+      description: "Cambios de costo o recepciones con señales de revisión.",
+      href: withQuery(COSTS_PATH, { reliability: "requiere_revision" }),
+      tone: "warning" as const,
+      severity: 4,
+    },
+    {
+      label: "Packs con costo pendiente",
+      count: packs?.packs_active_pending ?? 0,
+      description: "Composición, componentes o costos requieren revisión.",
+      href: PACKS_PATH,
+      tone: "warning" as const,
+      severity: 5,
+    },
+  ].sort((a, b) => a.severity - b.severity || b.count - a.count)
   return (
     <SectionCard
       title="Lo que necesita atención"
-      description="Prioridades operativas basadas en las señales disponibles; no representan una estimación monetaria."
-      contentClassName="grid p-2 md:grid-cols-2 xl:grid-cols-3"
+      description="Ordenado por gravedad del problema; la cantidad de afectados desempata. No representa una estimación monetaria."
+      contentClassName="divide-y divide-lq-line-soft p-0"
     >
-      <AttentionRow
-        label="Productos vendidos bajo costo"
-        count={margins?.by_risk.venta_bajo_costo?.skus ?? 0}
-        description="Revisar precio, costo de referencia y excepciones vigentes."
-        href={withQuery(MARGINS_PATH, { sort: "markup_asc" })}
-        tone="danger"
-      />
-      <AttentionRow
-        label="Productos bajo política"
-        count={margins?.alerts.skus ?? 0}
-        description="Recargo inferior al mínimo configurado para su lista."
-        href={withQuery(MARGINS_PATH, { status: "bajo_politica", sort: "gap_asc" })}
-        tone="danger"
-      />
-      <AttentionRow
-        label="Packs con costo pendiente"
-        count={packs?.packs_active_pending ?? 0}
-        description="Composición, componentes o costos requieren revisión."
-        href={PACKS_PATH}
-        tone="warning"
-      />
-      <AttentionRow
-        label="Costos con anomalías"
-        count={costs?.skus_with_high_anomaly ?? 0}
-        description="Cambios de costo o recepciones con señales de revisión."
-        href={withQuery(COSTS_PATH, { reliability: "requiere_revision" })}
-        tone="warning"
-      />
-      <AttentionRow
-        label="Revisión tributaria"
-        count={taxes?.skus_tax_review ?? 0}
-        description="Impuestos IVA/ILA que impiden obtener costo bruto."
-        href={withQuery(MARGINS_PATH, { status: "requiere_revision_tributaria" })}
-        tone="warning"
-      />
+      {rows.map((row) => (
+        <AttentionRow
+          key={row.label}
+          label={row.label}
+          count={row.count}
+          description={row.description}
+          href={row.href}
+          tone={row.tone}
+        />
+      ))}
     </SectionCard>
   )
 }
@@ -265,21 +313,21 @@ export function FreshnessPanel({ freshness }: { freshness: DashboardFreshness })
       contentClassName="p-0"
     >
       <details className="group">
-        <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium text-slate-700 hover:bg-slate-50 md:px-5 [&::-webkit-details-marker]:hidden">
+        <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-sm font-medium text-lq-body hover:bg-lq-canvas md:px-5 [&::-webkit-details-marker]:hidden">
           Ver sincronizaciones individuales
-          <span className="text-xs font-normal text-slate-500">{freshness.resources.length} recursos</span>
+          <span className="text-xs font-normal text-lq-muted">{freshness.resources.length} recursos</span>
         </summary>
-        <div className="grid gap-2 border-t border-slate-100 p-4 sm:grid-cols-2 lg:grid-cols-4 md:p-5">
+        <ul className="divide-y divide-lq-line-soft border-t border-lq-line-soft">
           {freshness.resources.map((r) => (
-            <div key={r.resource} className="rounded-lg border border-slate-200 px-3 py-2.5" title={r.raw_status ?? undefined}>
-              <div className="flex items-center justify-between gap-2">
-                <span className="truncate text-xs font-medium text-slate-800">{RAW_RESOURCE_LABELS[r.resource] ?? r.resource}</span>
-                <FreshnessBadge value={r.status} />
-              </div>
-              <p className="mt-1.5 text-xs text-slate-500">Último éxito: {formatDateTime(r.last_success_at)}</p>
-            </div>
+            <li key={r.resource} className="flex items-center justify-between gap-3 px-5 py-2.5" title={r.raw_status ?? undefined}>
+              <span className="min-w-0">
+                <span className="block truncate text-[13px] font-medium text-lq-body">{RAW_RESOURCE_LABELS[r.resource] ?? r.resource}</span>
+                <span className="mt-0.5 block text-xs tabular-nums text-lq-faint">Último éxito: {formatDateTime(r.last_success_at)}</span>
+              </span>
+              <FreshnessBadge value={r.status} />
+            </li>
           ))}
-        </div>
+        </ul>
       </details>
     </SectionCard>
   )
@@ -318,7 +366,7 @@ function PriceListTable({
     <div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[720px] text-sm">
-          <thead className="border-b border-slate-100 bg-slate-50/70 text-left text-xs text-slate-500">
+          <thead className="border-b border-lq-line-soft bg-lq-canvas text-left text-xs text-lq-muted">
             <tr>
               <th className="px-5 py-3 font-medium">Lista de precios</th>
               <th className="px-4 py-3 text-right font-medium">Evaluados</th>
@@ -328,16 +376,16 @@ function PriceListTable({
               <th className="px-5 py-3 text-right font-medium">No evaluables</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody className="divide-y divide-lq-line-soft">
             {data.by_price_list.map((l) => (
-              <tr key={l.price_list_id} className="transition-colors hover:bg-slate-50/70">
+              <tr key={l.price_list_id} className="transition-colors hover:bg-lq-canvas">
                 <td className="px-5 py-3">
-                  <span className="font-medium text-slate-900">{l.label ?? l.name}</span>
-                  <span className="mt-0.5 block text-xs text-slate-500">
+                  <span className="font-medium text-lq-ink">{l.label ?? l.name}</span>
+                  <span className="mt-0.5 block text-xs text-lq-muted">
                     #{l.price_list_id} · {l.name}
                   </span>
                 </td>
-                <td className="px-4 py-3 text-right font-medium tabular-nums text-slate-800">{l.combinations}</td>
+                <td className="px-4 py-3 text-right font-medium tabular-nums text-lq-body">{l.combinations}</td>
                 <td className="px-4 py-3 text-right tabular-nums">
                   {cell(l.alerts, link({ price_list_id: l.price_list_id, status: "bajo_politica", sort: "gap_asc" }), MARGIN_STATUS_TONES.bajo_politica)}
                 </td>
@@ -356,7 +404,7 @@ function PriceListTable({
         </table>
       </div>
       {data.scope.excluded.length ? (
-        <p className="border-t border-slate-100 px-5 py-3 text-xs leading-5 text-slate-500">
+        <p className="border-t border-lq-line-soft px-5 py-3 text-xs leading-5 text-lq-muted">
           Fuera del análisis:{" "}
           {data.scope.excluded
             .map((e) => `#${e.price_list_id} ${e.name ?? ""} (${LIST_SCOPE_LABELS[e.status as PriceListScopeStatus] ?? e.status})`)
@@ -380,25 +428,25 @@ export function MarginRowsTable({
   onOpenProduct: (variantId: number) => void
 }) {
   return (
-    <section className="rounded-md border">
-      <p className={cn(sectionTitle, "border-b px-3 py-2")}>{title}</p>
+    <section className="overflow-hidden rounded-xl border border-lq-line bg-white">
+      <p className="border-b border-lq-line-soft px-5 py-3.5 text-sm font-semibold text-lq-ink">{title}</p>
       {rows.length ? (
         <div className="overflow-x-auto">
           <table className="w-full min-w-[640px] text-sm">
-            <thead className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+            <thead className="bg-lq-canvas text-left text-[11px] uppercase tracking-wide text-lq-muted">
               <tr>
-                <th className="px-3 py-1.5 font-medium">Producto</th>
-                <th className="px-3 py-1.5 font-medium">Lista</th>
-                <th className="px-3 py-1.5 text-right font-medium">Precio</th>
-                <th className="px-3 py-1.5 text-right font-medium">Costo ref.</th>
-                <th className="px-3 py-1.5 text-right font-medium">Recargo / mín.</th>
-                <th className="px-3 py-1.5 font-medium">Estado</th>
+                <th className="px-5 py-2.5 font-medium">Producto</th>
+                <th className="px-4 py-2.5 font-medium">Lista</th>
+                <th className="px-4 py-2.5 text-right font-medium">Precio</th>
+                <th className="px-4 py-2.5 text-right font-medium">Costo ref.</th>
+                <th className="px-4 py-2.5 text-right font-medium">Recargo / mín.</th>
+                <th className="px-5 py-2.5 font-medium">Estado</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-border/60">
+            <tbody className="divide-y divide-lq-line-soft">
               {rows.map((r) => (
-                <tr key={`${r.variant_id}-${r.price_list.id}`} className="align-top">
-                  <td className="px-3 py-1.5">
+                <tr key={`${r.variant_id}-${r.price_list.id}`} className="align-top transition-colors hover:bg-lq-canvas">
+                  <td className="px-5 py-3">
                     <button
                       type="button"
                       className="text-left font-medium hover:underline"

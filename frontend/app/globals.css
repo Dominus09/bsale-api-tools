@@ -75,9 +75,54 @@
   --sidebar-ring: rgb(110 110 110);
 }
 
+/* =============================================================================
+   Design System La Quillotana — tokens de Analítica V2 (identidad luminosa).
+   Neutros cálidos propios (no slate/blue genérico), rojo institucional como
+   acento de acción y estados semánticos sobrios. Solo se agregan tokens:
+   no se altera ningún token global existente de la ERP.
+   ============================================================================= */
+:root {
+  --lq-brand: rgb(196 41 60);
+  --lq-brand-strong: rgb(164 32 50);
+  --lq-ink: rgb(28 27 31);
+  --lq-body: rgb(72 71 79);
+  --lq-muted: rgb(113 112 120);
+  --lq-faint: rgb(163 162 170);
+  --lq-line: rgb(230 228 226);
+  --lq-line-soft: rgb(240 238 236);
+  --lq-surface: rgb(255 255 255);
+  --lq-canvas: rgb(250 249 248);
+  --lq-success: rgb(4 120 87);
+  --lq-warning: rgb(180 83 9);
+  --lq-danger: rgb(185 28 28);
+  --lq-info: rgb(29 78 216);
+}
+
 @theme inline {
   --font-sans: 'Geist', 'Geist Fallback';
   --font-mono: 'Geist Mono', 'Geist Mono Fallback';
+  --color-lq-brand: var(--lq-brand);
+  --color-lq-brand-strong: var(--lq-brand-strong);
+  --color-lq-ink: var(--lq-ink);
+  --color-lq-body: var(--lq-body);
+  --color-lq-muted: var(--lq-muted);
+  --color-lq-faint: var(--lq-faint);
+  --color-lq-line: var(--lq-line);
+  --color-lq-line-soft: var(--lq-line-soft);
+  --color-lq-surface: var(--lq-surface);
+  --color-lq-canvas: var(--lq-canvas);
+  --color-lq-success: var(--lq-success);
+  --color-lq-warning: var(--lq-warning);
+  --color-lq-danger: var(--lq-danger);
+  --color-lq-info: var(--lq-info);
+  --radius-card: 0.75rem;
+  --radius-panel: 1rem;
+  --shadow-lq-xs: 0 1px 2px rgb(28 27 31 / 0.04);
+  --shadow-lq-sm: 0 1px 3px rgb(28 27 31 / 0.05), 0 4px 14px -6px rgb(28 27 31 / 0.06);
+  --text-metric: 2.125rem;
+  --text-metric--line-height: 1;
+  --text-metric-lg: 2.375rem;
+  --text-metric-lg--line-height: 1;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
