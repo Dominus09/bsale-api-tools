@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { AlertTriangle, Info } from "lucide-react"
+import { AlertTriangle, Download, Info, Loader2 } from "lucide-react"
 
 import { CostV2ProductSheet } from "@/components/analytics-v2/costs/cost-v2-product-sheet"
 import { Pager } from "@/components/analytics-v2/costs/cost-v2-products"
@@ -17,10 +17,12 @@ import {
 } from "@/components/analytics-v2/margins/margin-v2-table"
 import { AnalyticPageHeader, DataStatusBar, StatusBadge } from "@/components/analytics-v2/shared/analytics-ui"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { getStoredCompanyId } from "@/lib/api"
 import {
   AnalyticsV2Error,
+  downloadXlsx,
   getCostFilters,
   getMarginRows,
   getMarginsFilters,
@@ -181,6 +183,34 @@ export default function MarginsV2Page() {
 
   const discrepancies = summary?.scope.discrepancies ?? []
 
+  const [exportingMode, setExportingMode] = useState<string | null>(null)
+  const handleExport = async (mode: "bajo_costo" | "bajo_politica" | "completo") => {
+    if (companyId == null) return
+    setExportingMode(mode)
+    setError(null)
+    try {
+      await downloadXlsx(
+        "/analytics-v2/margins/export.xlsx",
+        {
+          company_id: companyId,
+          mode,
+          q: applied.q.trim() || null,
+          price_list_id: applied.priceListId ? Number(applied.priceListId) : null,
+          product_type_id: applied.productTypeId ? Number(applied.productTypeId) : null,
+          status: applied.status || null,
+          qualifier: applied.qualifier || null,
+          reliability: applied.reliability || null,
+          cost_basis: applied.costBasis,
+        },
+        `margenes-empresa-${companyId}-${mode}.xlsx`,
+      )
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo generar el Excel")
+    } finally {
+      setExportingMode(null)
+    }
+  }
+
   return (
     <div className="flex w-full min-w-0 flex-col gap-6 pb-10">
       <AnalyticPageHeader
@@ -188,7 +218,33 @@ export default function MarginsV2Page() {
         title="Márgenes comerciales"
         description={`Compara precios, costos y políticas para detectar rápidamente qué productos requieren atención · ${summary?.meta.company_name ?? `Empresa ${companyId}`}.`}
         updatedAt={<>Última actualización: {formatDateTime(summary?.meta.generated_at)} · Recargo = (precio bruto / costo bruto − 1) × 100</>}
-        actions={<StatusBadge tone="warning">Resultados provisionales</StatusBadge>}
+        actions={
+          <>
+            <span className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] font-medium uppercase text-lq-muted">Exportar análisis Excel</span>
+              {(
+                [
+                  ["bajo_costo", "Bajo costo"],
+                  ["bajo_politica", "Bajo política"],
+                  ["completo", "Completo"],
+                ] as const
+              ).map(([mode, label]) => (
+                <Button
+                  key={mode}
+                  variant="outline"
+                  size="sm"
+                  className="h-9"
+                  onClick={() => handleExport(mode)}
+                  disabled={exportingMode != null}
+                >
+                  {exportingMode === mode ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                  {label}
+                </Button>
+              ))}
+            </span>
+            <StatusBadge tone="warning">Resultados provisionales</StatusBadge>
+          </>
+        }
       />
 
       {blocking ? (

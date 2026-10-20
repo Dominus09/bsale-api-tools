@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 import psycopg2
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.services.analytics.validate_distribuidora_source import AnalyticsValidationError
@@ -39,7 +40,14 @@ from backend.services.analytics_v2.promotions_service import (
     run_promotions_read,
     run_promotions_write,
 )
-from backend.services.analytics_v2.contracts import DEFAULT_COST_BASIS, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
+from backend.services.analytics_v2 import excel_export
+from backend.services.analytics_v2.catalog_service import CatalogValidationError, run_catalog
+from backend.services.analytics_v2.contracts import (
+    DEFAULT_COST_BASIS,
+    DEFAULT_PAGE_SIZE,
+    HISTORY_START,
+    MAX_PAGE_SIZE,
+)
 from backend.services.analytics_v2.cost_control_service import (
     CostControlNotFound,
     CostControlV2Service,
@@ -87,7 +95,12 @@ def _guard(endpoint: str, company_id: int, call: Callable[[], Any]) -> Any:
         return call()
     except AnalyticsV2AccessError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    except (CostControlValidationError, MarginsValidationError, CampaignValidationError) as exc:
+    except (
+        CostControlValidationError,
+        MarginsValidationError,
+        CampaignValidationError,
+        CatalogValidationError,
+    ) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except (CostControlNotFound, MarginsNotFound, CampaignNotFound) as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -352,6 +365,397 @@ def margins_policy_review(
     user: dict = Depends(require_margins_v2),
 ):
     return _run_margins("margins_policy_review", user, company_id, lambda s: s.policy_review(only_issues=only_issues))
+
+
+# ------------------------------------------- Catálogo Maestro y exportadores Excel
+#
+# Todo es solo lectura sobre BSALE RAW (o sobre los motores V2 existentes) y se
+# acota por empresa validada en backend. Las exportaciones devuelven TODAS las
+# filas que cumplen los filtros, no solo la página visible.
+
+_XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_EXPORT_ALL = 1_000_000
+# Topes de la hoja de recepciones dentro del Excel de costos. Superarlos NUNCA
+# produce una exportación silenciosamente incompleta: la cobertura queda
+# declarada en el archivo y el historial completo se descarga por segmentos
+# con /costs/receptions/export.xlsx (mismos filtros).
+_RECEPTION_VARIANT_LIMIT = 300
+_RECEPTION_LINE_LIMIT = 20_000
+
+
+def _reception_lines_for(
+    s: Any,
+    *,
+    company_id: int,
+    items: list[dict[str, Any]],
+    variant_offset: int = 0,
+    variant_limit: int = _RECEPTION_VARIANT_LIMIT,
+    line_limit: int = _RECEPTION_LINE_LIMIT,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Líneas de recepción originales de un tramo de variantes del universo.
+
+    Devuelve (líneas, cobertura). La cobertura declara con exactitud si el
+    tramo quedó completo o parcial y por qué límite.
+    """
+    total = len(items)
+    tramo = items[variant_offset : variant_offset + variant_limit]
+    by_id = {int(it["variant_id"]): it for it in tramo}
+    lines: list[dict[str, Any]] = []
+    truncated_lines = False
+    for vid in by_id:
+        if len(lines) >= line_limit:
+            truncated_lines = True
+            break
+        for raw in s._repo.variant_lines(
+            company_id=company_id, variant_id=vid, history_start=HISTORY_START
+        ):
+            if len(lines) >= line_limit:
+                truncated_lines = True
+                break
+            it = by_id[vid]
+            lines.append(
+                {
+                    "variant_id": vid,
+                    "code": it.get("code"),
+                    "product_name": it.get("product_name"),
+                    "variant_name": it.get("variant_name") or it.get("description"),
+                    "reception_id": raw.get("reception_id"),
+                    "detail_id": raw.get("detail_id"),
+                    "admission_date": raw.get("admission_date"),
+                    "office_id": raw.get("office_id"),
+                    "movement_class": str(raw.get("movement_class")),
+                    "document": raw.get("document"),
+                    "document_number": raw.get("document_number"),
+                    "quantity": raw.get("quantity"),
+                    "cost": raw.get("cost"),
+                    "comparable": bool(raw.get("comparable")),
+                }
+            )
+    variants_covered = variant_offset + len(tramo) >= total
+    complete = variants_covered and not truncated_lines
+    reasons: list[str] = []
+    if not variants_covered:
+        reasons.append(
+            f"se incluyeron {len(tramo)} de {total} variantes del universo filtrado "
+            f"(tope de {_RECEPTION_VARIANT_LIMIT} variantes por archivo)"
+        )
+    if truncated_lines:
+        reasons.append(f"se alcanzó el tope de {line_limit} líneas de recepción")
+    coverage = {
+        "complete": complete,
+        "lines_truncated": truncated_lines,
+        "reason": "; ".join(reasons) if reasons else None,
+        "variants_total": total,
+        "variants_included": len(tramo),
+        "limits": f"máx. {variant_limit} variantes y {line_limit} líneas por archivo",
+        "segmented_hint": (
+            "Descargue el historial completo por segmentos con el exportador independiente "
+            "«Historial de recepciones» de esta misma pantalla (mismos filtros; cada segmento "
+            f"cubre hasta {variant_limit} variantes)."
+        ),
+    }
+    return lines, coverage
+
+
+def _xlsx(content: bytes, filename: str) -> StreamingResponse:
+    from io import BytesIO
+
+    return StreamingResponse(
+        BytesIO(content),
+        media_type=_XLSX_MEDIA,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _filters_label(**parts: Any) -> str:
+    activos = [f"{k}={v}" for k, v in parts.items() if v not in (None, "", "all")]
+    return "; ".join(activos) if activos else "Sin filtros adicionales"
+
+
+@router.get("/catalog/meta")
+def catalog_meta(
+    company_id: int = CompanyQuery,
+    user: dict = Depends(require_margins_v2),
+):
+    return _guard("catalog_meta", company_id, lambda: run_catalog(user, company_id, lambda s: s.meta()))
+
+
+@router.get("/catalog/rows")
+def catalog_rows(
+    company_id: int = CompanyQuery,
+    q: str | None = Query(None, max_length=100),
+    product_type_id: int | None = Query(None, ge=1),
+    state: str = Query("all"),
+    cost: str = Query("all"),
+    tax: str = Query("all"),
+    price_list_id: int | None = Query(None, ge=1),
+    price_presence: str | None = Query(None),
+    price_list_ids: str | None = Query(None, max_length=100),
+    sort: str = Query("product"),
+    page: int = PageQuery,
+    page_size: int = PageSizeQuery,
+    user: dict = Depends(require_margins_v2),
+):
+    f = {
+        "q": q.strip() if q else None,
+        "product_type_id": product_type_id,
+        "state": state,
+        "cost": cost,
+        "tax": tax,
+        "price_list_id": price_list_id,
+        "price_presence": price_presence,
+        "price_list_ids": [int(x) for x in price_list_ids.split(",") if x.strip()] if price_list_ids else None,
+        "sort": sort,
+    }
+    return _guard(
+        "catalog_rows", company_id, lambda: run_catalog(user, company_id, lambda s: s.list_rows(f, page, page_size))
+    )
+
+
+@router.get("/catalog/export.xlsx")
+def catalog_export(
+    company_id: int = CompanyQuery,
+    scope: str = Query("full"),
+    q: str | None = Query(None, max_length=100),
+    product_type_id: int | None = Query(None, ge=1),
+    state: str = Query("all"),
+    cost: str = Query("all"),
+    tax: str = Query("all"),
+    price_list_id: int | None = Query(None, ge=1),
+    price_presence: str | None = Query(None),
+    price_list_ids: str | None = Query(None, max_length=100),
+    sort: str = Query("product"),
+    user: dict = Depends(require_margins_v2),
+):
+    if scope not in ("full", "filtered"):
+        raise HTTPException(status_code=422, detail="scope debe ser full o filtered")
+    f: dict[str, Any] = {
+        "price_list_ids": [int(x) for x in price_list_ids.split(",") if x.strip()] if price_list_ids else None,
+        "sort": sort,
+    }
+    if scope == "filtered":
+        f.update(
+            {
+                "q": q.strip() if q else None,
+                "product_type_id": product_type_id,
+                "state": state,
+                "cost": cost,
+                "tax": tax,
+                "price_list_id": price_list_id,
+                "price_presence": price_presence,
+            }
+        )
+
+    def build(s: Any) -> tuple[bytes, dict[str, Any]]:
+        meta = s.meta()
+        names = {pl["id"]: pl["name"] for pl in meta["price_lists"]}
+        # iter_rows valida las listas contra la empresa y levanta 422 si no
+        # están vigentes; aquí solo se resuelven las columnas a exportar.
+        list_ids = f.get("price_list_ids") or [pl["id"] for pl in meta["price_lists"]]
+        content, count, _codes, _bars = excel_export.catalog_xlsx(
+            rows=s.iter_rows(f),
+            meta=meta,
+            list_ids=list_ids,
+            list_names=names,
+            scope_label="Catálogo completo de la empresa" if scope == "full" else "Resultados filtrados",
+            filters_label=_filters_label(
+                q=f.get("q"), tipo=f.get("product_type_id"), estado=f.get("state"),
+                costo=f.get("cost"), impuestos=f.get("tax"),
+            ),
+        )
+        return content, {"count": count}
+
+    content, _info = _guard("catalog_export", company_id, lambda: run_catalog(user, company_id, build))
+    return _xlsx(content, f"catalogo-maestro-empresa-{company_id}.xlsx")
+
+
+@router.get("/costs/export.xlsx")
+def costs_export(
+    company_id: int = CompanyQuery,
+    q: str | None = Query(None, max_length=100),
+    product_type_id: int | None = Query(None, ge=1),
+    variant_state: str = Query("active"),
+    reliability: str | None = Query(None),
+    tax_status: str | None = Query(None),
+    last_movement_class: str | None = Query(None),
+    anomaly_code: str | None = Query(None),
+    office_id: int | None = Query(None, ge=1),
+    min_abs_change_pct: Decimal | None = Query(None, ge=0, le=100000),
+    kind: str = Query("all", max_length=20),
+    sort: str = Query("reliability"),
+    user: dict = Depends(require_cost_control_v2),
+):
+    def build(s: Any) -> bytes:
+        result = s.list_products(
+            q=q.strip() if q else None,
+            product_type_id=product_type_id,
+            variant_state=variant_state,
+            reliability=reliability,
+            tax_status=tax_status,
+            last_movement_class=last_movement_class,
+            anomaly_code=anomaly_code,
+            office_id=office_id,
+            min_abs_change_pct=min_abs_change_pct,
+            kind=kind,
+            sort=sort,
+            page=1,
+            page_size=_EXPORT_ALL,
+        )
+        items = result["items"]
+        meta = dict(result.get("meta") or {})
+        meta.setdefault("company_id", company_id)
+        summary = s.summary()
+        priority = [
+            it
+            for it in items
+            if (it.get("reliability") or {}).get("status") == "requiere_revision"
+            or any(a.get("severity") == "alta" for a in (it.get("anomalies") or []))
+        ]
+        # Recepciones del universo filtrado (mismo repositorio del motor de
+        # costos): se preserva la clasificación de movimiento de cada línea,
+        # sin presentar transferencias internas como compras. La cobertura
+        # (completa o parcial y por qué) queda declarada en el archivo.
+        lines, coverage = _reception_lines_for(s, company_id=company_id, items=items)
+        return excel_export.costs_xlsx(
+            meta=meta,
+            summary=summary,
+            items=items,
+            priority=priority,
+            reception_lines=lines,
+            reception_coverage=coverage,
+            filters_label=_filters_label(
+                q=q, tipo=product_type_id, estado=variant_state, confiabilidad=reliability,
+                impuestos=tax_status, movimiento=last_movement_class, anomalia=anomaly_code,
+                oficina=office_id, tipo_sku=kind,
+            ),
+        )
+
+    content = _run("costs_export", user, company_id, build)
+    return _xlsx(content, f"control-costos-empresa-{company_id}.xlsx")
+
+
+@router.get("/costs/receptions/export.xlsx")
+def costs_receptions_export(
+    company_id: int = CompanyQuery,
+    segment: int = Query(1, ge=1),
+    segment_size: int = Query(_RECEPTION_VARIANT_LIMIT, ge=1, le=_RECEPTION_VARIANT_LIMIT),
+    q: str | None = Query(None, max_length=100),
+    product_type_id: int | None = Query(None, ge=1),
+    variant_state: str = Query("active"),
+    reliability: str | None = Query(None),
+    tax_status: str | None = Query(None),
+    last_movement_class: str | None = Query(None),
+    anomaly_code: str | None = Query(None),
+    office_id: int | None = Query(None, ge=1),
+    min_abs_change_pct: Decimal | None = Query(None, ge=0, le=100000),
+    kind: str = Query("all", max_length=20),
+    sort: str = Query("reliability"),
+    user: dict = Depends(require_cost_control_v2),
+):
+    """Historial de recepciones por segmentos de variantes (mismos filtros que
+    el exportador de costos). Cada archivo declara su segmento y cobertura."""
+
+    def build(s: Any) -> bytes:
+        result = s.list_products(
+            q=q.strip() if q else None,
+            product_type_id=product_type_id,
+            variant_state=variant_state,
+            reliability=reliability,
+            tax_status=tax_status,
+            last_movement_class=last_movement_class,
+            anomaly_code=anomaly_code,
+            office_id=office_id,
+            min_abs_change_pct=min_abs_change_pct,
+            kind=kind,
+            sort=sort,
+            page=1,
+            page_size=_EXPORT_ALL,
+        )
+        items = result["items"]
+        meta = dict(result.get("meta") or {})
+        meta.setdefault("company_id", company_id)
+        total = len(items)
+        segments_total = max(1, -(-total // segment_size)) if total else 1
+        offset = (segment - 1) * segment_size
+        lines, coverage = _reception_lines_for(
+            s,
+            company_id=company_id,
+            items=items,
+            variant_offset=offset,
+            variant_limit=segment_size,
+        )
+        return excel_export.receptions_xlsx(
+            meta=meta,
+            reception_lines=lines,
+            filters_label=_filters_label(
+                segmento=segment, q=q, tipo=product_type_id, estado=variant_state,
+                confiabilidad=reliability, impuestos=tax_status, movimiento=last_movement_class,
+                anomalia=anomaly_code, oficina=office_id, tipo_sku=kind,
+            ),
+            segment=segment,
+            segment_size=segment_size,
+            variants_total=total,
+            variants_included=coverage["variants_included"],
+            segments_total=segments_total,
+            lines_truncated=bool(coverage["lines_truncated"]),
+        )
+
+    content = _run("costs_receptions_export", user, company_id, build)
+    return _xlsx(content, f"recepciones-empresa-{company_id}-segmento-{segment}.xlsx")
+
+
+@router.get("/margins/export.xlsx")
+def margins_export(
+    company_id: int = CompanyQuery,
+    mode: str = Query("completo"),
+    q: str | None = Query(None, max_length=100),
+    price_list_id: int | None = Query(None, ge=1),
+    product_type_id: int | None = Query(None, ge=1),
+    status: str | None = Query(None, max_length=60),
+    qualifier: str | None = Query(None, max_length=60),
+    reliability: str | None = Query(None, max_length=60),
+    cost_basis: str = CostBasisQuery,
+    variant_state: str = Query("active"),
+    user: dict = Depends(require_margins_v2),
+):
+    if mode not in ("bajo_costo", "bajo_politica", "completo"):
+        raise HTTPException(status_code=422, detail="mode debe ser bajo_costo, bajo_politica o completo")
+
+    def build(s: Any) -> bytes:
+        result = s.list_rows(
+            q=q.strip() if q else None,
+            price_list_id=price_list_id,
+            product_type_id=product_type_id,
+            status=status,
+            qualifier=qualifier,
+            reliability=reliability,
+            cost_basis=cost_basis,
+            variant_state=variant_state,
+            sort="status",
+            page=1,
+            page_size=_EXPORT_ALL,
+        )
+        items = result["items"]
+        sheets: dict[str, list[dict[str, Any]]] = {}
+        if mode in ("bajo_costo", "completo"):
+            sheets["bajo_costo"] = [r for r in items if "venta_bajo_costo" in (r.get("risks") or [])]
+        if mode in ("bajo_politica", "completo"):
+            sheets["bajo_politica"] = [r for r in items if r.get("status") == "bajo_politica"]
+        if mode == "completo":
+            sheets["completo"] = items
+        meta = dict(result.get("meta") or {})
+        meta.setdefault("company_id", company_id)
+        return excel_export.margins_xlsx(
+            meta=meta,
+            sheets=sheets,
+            filters_label=_filters_label(
+                modalidad=mode, q=q, lista=price_list_id, tipo=product_type_id,
+                estado=status, confiabilidad=reliability, base_costo=cost_basis,
+            ),
+        )
+
+    content = _run_margins("margins_export", user, company_id, build)
+    return _xlsx(content, f"margenes-empresa-{company_id}.xlsx")
 
 
 # ---------------------------------------------------------------- Packs Bsale

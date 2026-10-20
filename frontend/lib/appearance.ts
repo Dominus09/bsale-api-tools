@@ -23,6 +23,7 @@ export const DARK_THEME_ROUTE_PREFIXES = [
   "/analitica-v2/costos",
   "/analitica-v2/margenes",
   "/analitica-v2/packs",
+  "/inteligencia-comercial/catalogo",
 ] as const
 
 export function isDarkThemeRoute(pathname: string | null | undefined): boolean {

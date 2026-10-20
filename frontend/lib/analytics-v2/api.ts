@@ -1,6 +1,7 @@
 import { logout } from "@/lib/api"
 import { getApiBaseUrl } from "@/lib/api-base"
 
+import type { CatalogMeta, CatalogParams, CatalogRowsResponse } from "./catalog-types"
 import type { DashboardResponse } from "./dashboard-types"
 import type {
   MarginRow,
@@ -405,4 +406,36 @@ export function getReception(companyId: number, receptionId: number, signal?: Ab
     { company_id: companyId },
     signal,
   )
+}
+
+/** Descarga un .xlsx del backend con la sesión actual y lo guarda en el equipo. */
+export async function downloadXlsx(path: string, params: Record<string, QueryValue>, filename: string): Promise<void> {
+  let res: Response
+  try {
+    res = await fetch(`${API_URL}${path}?${buildQuery(params)}`, { headers: authHeaders() })
+  } catch {
+    throw new AnalyticsV2Error(0, "No se pudo conectar con el servidor.")
+  }
+  if (res.status === 401 && typeof window !== "undefined") {
+    logout()
+    window.location.assign("/login")
+  }
+  if (!res.ok) throw new AnalyticsV2Error(res.status, messageFor(res.status))
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
+export function getCatalogMeta(companyId: number, signal?: AbortSignal) {
+  return getJson<CatalogMeta>("/analytics-v2/catalog/meta", { company_id: companyId }, signal)
+}
+
+export function getCatalogRows(params: CatalogParams, signal?: AbortSignal) {
+  return getJson<CatalogRowsResponse>("/analytics-v2/catalog/rows", { ...params }, signal)
 }

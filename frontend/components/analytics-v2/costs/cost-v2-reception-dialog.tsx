@@ -117,9 +117,14 @@ export function CostV2ReceptionDialog({
                     >
                       <td className="px-2 py-1.5 tabular-nums">{l.detail_id}</td>
                       <td className="px-2 py-1.5">
-                        <p className="font-medium">{l.product_name ?? "—"}</p>
+                        <p className="font-medium">
+                          {l.product_name ?? "—"}
+                          {l.variant_name ? <span className="font-normal"> — {l.variant_name}</span> : null}
+                        </p>
                         <p className="text-[11px] text-muted-foreground">
-                          {l.code ?? "—"}
+                          SKU {l.code ?? "—"}
+                          {l.barcode ? ` · Barras ${l.barcode}` : ""}
+                          {l.variant_id != null ? ` · Variante #${l.variant_id}` : ""}
                           {l.missing_since ? " · línea ausente en Bsale" : ""}
                         </p>
                       </td>

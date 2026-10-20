@@ -151,10 +151,13 @@ export function CostV2ProductSheet({
     <Sheet open={variantId != null} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="w-full overflow-y-auto border-l-lq-line bg-lq-canvas p-0 sm:max-w-[min(1050px,92vw)]">
         <SheetHeader className="sticky top-0 z-20 border-b border-lq-line bg-lq-surface/95 px-5 py-4 backdrop-blur md:px-6">
-          <SheetTitle className="pr-8 text-xl tracking-[-0.015em]">{product?.product_name ?? (loading ? "Cargando…" : "Producto")}</SheetTitle>
+          <SheetTitle className="pr-8 text-xl tracking-[-0.015em]">
+            {product?.product_name ?? (loading ? "Cargando…" : "Producto")}
+            {product?.variant_name ? <span className="font-normal text-lq-body"> — {product.variant_name}</span> : null}
+          </SheetTitle>
           <SheetDescription>
             {product
-              ? `${product.code ?? "—"}${product.barcode && product.barcode !== product.code ? ` · ${product.barcode}` : ""} · ${product.product_type.name ?? "Sin tipo"} · SKU ${product.variant_state}`
+              ? `SKU ${product.code ?? "—"}${product.barcode && product.barcode !== product.code ? ` · Barras ${product.barcode}` : ""} · ${product.product_type.name ?? "Sin tipo"} · Variante ${product.variant_state}`
               : "Control de costos V2"}
           </SheetDescription>
         </SheetHeader>

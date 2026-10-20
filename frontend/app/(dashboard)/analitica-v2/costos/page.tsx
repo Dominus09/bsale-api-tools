@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { AlertTriangle, Info } from "lucide-react"
+import { AlertTriangle, Download, Info, Loader2 } from "lucide-react"
 
 import { CostV2Alerts } from "@/components/analytics-v2/costs/cost-v2-alerts"
 import { CostV2ProductSheet } from "@/components/analytics-v2/costs/cost-v2-product-sheet"
@@ -16,9 +16,10 @@ import { CostV2ReceptionDialog } from "@/components/analytics-v2/costs/cost-v2-r
 import { CostV2Kpis, CostV2SummaryPanels } from "@/components/analytics-v2/costs/cost-v2-summary"
 import { AnalyticPageHeader, DataStatusBar, StatusBadge } from "@/components/analytics-v2/shared/analytics-ui"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { getStoredCompanyId } from "@/lib/api"
-import { AnalyticsV2Error, getCostFilters, getCostProducts, getCostSummary, getRawFreshness } from "@/lib/analytics-v2/api"
+import { AnalyticsV2Error, downloadXlsx, getCostFilters, getCostProducts, getCostSummary, getRawFreshness } from "@/lib/analytics-v2/api"
 import { RELIABILITY_LABELS, SORT_LABELS, TAX_LABELS, formatDateTime } from "@/lib/analytics-v2/labels"
 import { queryEnum, queryInt, queryText, readQuery } from "@/lib/analytics-v2/url"
 import type {
@@ -151,6 +152,74 @@ export default function CostControlV2Page() {
 
   const openReception = (id: number, detailId: number) => setReception({ id, detailId })
 
+  const [exporting, setExporting] = useState(false)
+  const [exportingReceptions, setExportingReceptions] = useState(false)
+  const [receptionSegment, setReceptionSegment] = useState(1)
+
+  const exportParams = () => {
+    const minChange = applied.minChange ? Number(applied.minChange) : null
+    return {
+      company_id: companyId,
+      q: applied.q.trim() || null,
+      product_type_id: applied.productTypeId ? Number(applied.productTypeId) : null,
+      variant_state: applied.variantState,
+      reliability: applied.reliability || null,
+      tax_status: applied.taxStatus || null,
+      last_movement_class: applied.movement || null,
+      anomaly_code: applied.anomaly || null,
+      office_id: applied.officeId ? Number(applied.officeId) : null,
+      min_abs_change_pct: minChange !== null && Number.isFinite(minChange) ? minChange : null,
+      sort: applied.sort,
+    }
+  }
+
+  const handleExportReceptions = async () => {
+    if (companyId == null) return
+    setExportingReceptions(true)
+    setError(null)
+    try {
+      await downloadXlsx(
+        "/analytics-v2/costs/receptions/export.xlsx",
+        { ...exportParams(), segment: receptionSegment },
+        `recepciones-empresa-${companyId}-segmento-${receptionSegment}.xlsx`,
+      )
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo generar el historial de recepciones")
+    } finally {
+      setExportingReceptions(false)
+    }
+  }
+
+  const handleExport = async () => {
+    if (companyId == null) return
+    setExporting(true)
+    setError(null)
+    const minChange = applied.minChange ? Number(applied.minChange) : null
+    try {
+      await downloadXlsx(
+        "/analytics-v2/costs/export.xlsx",
+        {
+          company_id: companyId,
+          q: applied.q.trim() || null,
+          product_type_id: applied.productTypeId ? Number(applied.productTypeId) : null,
+          variant_state: applied.variantState,
+          reliability: applied.reliability || null,
+          tax_status: applied.taxStatus || null,
+          last_movement_class: applied.movement || null,
+          anomaly_code: applied.anomaly || null,
+          office_id: applied.officeId ? Number(applied.officeId) : null,
+          min_abs_change_pct: minChange !== null && Number.isFinite(minChange) ? minChange : null,
+          sort: applied.sort,
+        },
+        `control-costos-empresa-${companyId}.xlsx`,
+      )
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo generar el Excel")
+    } finally {
+      setExporting(false)
+    }
+  }
+
   if (companyId == null) {
     return (
       <p className="p-6 text-sm text-muted-foreground">Seleccione una empresa para usar Control de Costos V2.</p>
@@ -164,7 +233,30 @@ export default function CostControlV2Page() {
         title="Centro de control de costos"
         description={`Revisa la calidad de los costos, detecta anomalías de compra y consulta la trazabilidad de cada SKU · ${summary?.meta.company_name ?? `Empresa ${companyId}`}.`}
         updatedAt={<>Última actualización: {formatDateTime(summary?.meta.generated_at)} · Fuente Bsale RAW de solo lectura</>}
-        actions={<StatusBadge tone="warning">Validación contable pendiente</StatusBadge>}
+        actions={
+          <>
+            <Button variant="outline" size="sm" className="h-9" onClick={handleExport} disabled={exporting}>
+              {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+              Exportar análisis Excel
+            </Button>
+            <div className="flex items-center gap-1.5" title="Historial de recepciones por segmentos de 300 variantes, con los filtros aplicados. Cada archivo declara su segmento y cobertura.">
+              <label htmlFor="reception-segment" className="text-xs text-muted-foreground">Segmento</label>
+              <input
+                id="reception-segment"
+                type="number"
+                min={1}
+                value={receptionSegment}
+                onChange={(e) => setReceptionSegment(Math.max(1, Number(e.target.value) || 1))}
+                className="h-9 w-16 rounded-md border bg-background px-2 text-sm"
+              />
+              <Button variant="outline" size="sm" className="h-9" onClick={handleExportReceptions} disabled={exportingReceptions}>
+                {exportingReceptions ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+                Historial de recepciones
+              </Button>
+            </div>
+            <StatusBadge tone="warning">Validación contable pendiente</StatusBadge>
+          </>
+        }
       />
 
       {blocking ? (

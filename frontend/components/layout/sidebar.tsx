@@ -41,6 +41,7 @@ import {
   Crosshair,
   UsersRound,
   FileWarning,
+  BookOpen,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { ANALYTICS_V2_COMPANY_IDS, ANALYTICS_V2_DASHBOARD_PATH } from "@/lib/home-path"
@@ -187,6 +188,7 @@ function buildNavSectionsForRole(role: string | null) {
     if (management) commercial.push({ href: "/analitica-v2/costos", label: "Control de costos", icon: CircleDollarSign })
     if (marginViewer) commercial.push({ href: "/analitica-v2/margenes", label: "Análisis de márgenes", icon: TrendingUp })
     if (marginViewer) commercial.push({ href: "/analitica-v2/packs", label: "Rentabilidad de packs", icon: Boxes })
+    if (marginViewer) commercial.push({ href: "/inteligencia-comercial/catalogo", label: "Catálogo Maestro", icon: BookOpen })
     if (promotionsViewer) commercial.push({ href: "/analitica-v2/promociones", label: "Promociones y ofertas", icon: Percent })
   }
 
