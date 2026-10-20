@@ -43,6 +43,7 @@ import {
   FileWarning,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { ANALYTICS_V2_COMPANY_IDS, ANALYTICS_V2_DASHBOARD_PATH } from "@/lib/home-path"
 import {
   canAccessDiagnostics,
   hasManagementAccess,
@@ -68,10 +69,6 @@ const navSections: { title: string; items: NavItem[] }[] = [
   {
     title: "Analítica",
     items: [
-      { href: "/margins", label: "Márgenes", icon: TrendingUp },
-      { href: "/politica-margenes", label: "Política de Márgenes", icon: Scale },
-      { href: "/costos", label: "Control de costos", icon: CircleDollarSign },
-      { href: "/promotions", label: "Promociones", icon: Percent },
       {
         href: "/analitica/comercial-vendedores",
         label: "Comercial Vendedores",
@@ -172,27 +169,57 @@ function buildNavSectionsForRole(role: string | null) {
   const management = hasManagementAccess(user)
   const marginViewer = hasMarginViewAccess(user)
   const promotionsViewer = hasPromotionsV2ViewAccess(user)
-  if (!diagnostics && !management && !marginViewer && !promotionsViewer) return navSections
-  return navSections.map((section) => {
-    if (section.title === "Analítica" && (management || marginViewer || promotionsViewer)) {
-      const v2: NavItem[] = []
-      if (marginViewer) v2.push({ href: "/analitica-v2/dashboard", label: "Dashboard V2", icon: LayoutDashboard })
-      if (management) v2.push({ href: "/analitica-v2/costos", label: "Control de costos V2", icon: CircleDollarSign })
-      if (marginViewer) v2.push({ href: "/analitica-v2/margenes", label: "Márgenes V2", icon: TrendingUp })
-      if (marginViewer) v2.push({ href: "/analitica-v2/packs", label: "Rentabilidad de packs", icon: Boxes })
-      if (promotionsViewer) v2.push({ href: "/analitica-v2/promociones", label: "Promociones V2", icon: Percent })
-      return { ...section, items: [...section.items, ...v2] }
+
+  // Analítica V2 solo se ofrece en empresas con BSALE RAW completo; en las
+  // demás se conserva el inicio y la navegación actuales. Sin sufijos "V2":
+  // las rutas antiguas siguen existiendo, pero ya no duplican el menú.
+  const storedCompany = typeof window !== "undefined" ? localStorage.getItem("company_id") : null
+  const companyId = storedCompany ? Number(storedCompany) : null
+  const v2Company = companyId != null && ANALYTICS_V2_COMPANY_IDS.has(companyId)
+
+  const home: NavItem =
+    v2Company && marginViewer
+      ? { href: ANALYTICS_V2_DASHBOARD_PATH, label: "Dashboard comercial", icon: LayoutDashboard }
+      : { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard }
+
+  const commercial: NavItem[] = []
+  if (v2Company) {
+    if (management) commercial.push({ href: "/analitica-v2/costos", label: "Control de costos", icon: CircleDollarSign })
+    if (marginViewer) commercial.push({ href: "/analitica-v2/margenes", label: "Análisis de márgenes", icon: TrendingUp })
+    if (marginViewer) commercial.push({ href: "/analitica-v2/packs", label: "Rentabilidad de packs", icon: Boxes })
+    if (promotionsViewer) commercial.push({ href: "/analitica-v2/promociones", label: "Promociones y ofertas", icon: Percent })
+  }
+
+  // Configuración comercial: la política sigue siendo el editor vigente de las
+  // reglas que lee Analítica V2; las promociones anteriores alimentan las
+  // etiquetas de sucursal, por eso se conservan claramente diferenciadas.
+  const configuration: NavItem[] = [
+    { href: "/politica-margenes", label: "Política de márgenes", icon: Scale },
+    { href: "/promotions", label: "Promociones anteriores · etiquetas", icon: Tag },
+  ]
+
+  return navSections.flatMap((section) => {
+    if (section.title === "Principal") {
+      return [{ ...section, items: [home] }]
+    }
+    if (section.title === "Analítica") {
+      const out: { title: string; items: NavItem[] }[] = []
+      if (commercial.length) out.push({ title: "Inteligencia comercial", items: commercial })
+      out.push(section, { title: "Configuración comercial", items: configuration })
+      return out
     }
     if (section.title === "Administración" && diagnostics) {
-      return {
-        ...section,
-        items: [
-          ...section.items,
-          { href: "/admin/diagnostico", label: "Diagnóstico ERP", icon: Stethoscope },
-        ],
-      }
+      return [
+        {
+          ...section,
+          items: [
+            ...section.items,
+            { href: "/admin/diagnostico", label: "Diagnóstico ERP", icon: Stethoscope },
+          ],
+        },
+      ]
     }
-    return section
+    return [section]
   })
 }
 

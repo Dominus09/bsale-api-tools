@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation"
 import { Building2, Loader2, ArrowRight } from "lucide-react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { getCompanies, isAuthenticated, type Company } from "@/lib/api"
+import { preferredHomePath } from "@/lib/home-path"
 
 export default function CompanySelectorPage() {
   const router = useRouter()
@@ -35,7 +36,8 @@ export default function CompanySelectorPage() {
   const handleSelectCompany = (company: Company) => {
     localStorage.setItem("company_id", company.company_id.toString())
     localStorage.setItem("company_name", company.name)
-    router.push("/dashboard")
+    const user = { role: localStorage.getItem("role"), email: localStorage.getItem("email") }
+    router.push(preferredHomePath(company.company_id, user))
   }
 
   if (isLoading) {

@@ -37,7 +37,10 @@ describe("control de costos route (/costos)", () => {
       path.join(root, "components/layout/sidebar.tsx"),
       "utf8",
     )
-    expect(sidebar).toContain('href: "/costos"')
+    // Consolidación de menú: el acceso principal es Analítica V2 sin sufijo;
+    // la ruta /costos se conserva funcional, pero ya no duplica el menú.
+    expect(sidebar).toContain('href: "/analitica-v2/costos"')
+    expect(sidebar).not.toContain('href: "/costos"')
     expect(sidebar).not.toContain("/costos-v2")
   })
 

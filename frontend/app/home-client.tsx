@@ -4,6 +4,7 @@ import { useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { Loader2 } from "lucide-react"
 import { isAuthenticated } from "@/lib/api"
+import { preferredHomePath } from "@/lib/home-path"
 
 export default function HomeClient() {
   const router = useRouter()
@@ -12,7 +13,8 @@ export default function HomeClient() {
     if (isAuthenticated()) {
       const companyId = localStorage.getItem("company_id")
       if (companyId) {
-        router.replace("/dashboard")
+        const user = { role: localStorage.getItem("role"), email: localStorage.getItem("email") }
+        router.replace(preferredHomePath(Number(companyId), user))
       } else {
         router.replace("/company-selector")
       }
