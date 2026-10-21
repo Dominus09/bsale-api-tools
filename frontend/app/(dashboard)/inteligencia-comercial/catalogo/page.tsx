@@ -19,7 +19,7 @@ import { Input } from "@/components/ui/input"
 import { getStoredCompanyId } from "@/lib/api"
 import { AnalyticsV2Error, downloadXlsx, getCatalogRows } from "@/lib/analytics-v2/api"
 import type { CatalogMeta, CatalogRow } from "@/lib/analytics-v2/catalog-types"
-import { formatDateTime, formatMoney } from "@/lib/analytics-v2/labels"
+import { formatDateTime, formatMoney, formatQty } from "@/lib/analytics-v2/labels"
 import { cn } from "@/lib/utils"
 
 const selectClass =
@@ -176,7 +176,8 @@ export default function CatalogoMaestroPage() {
           meta ? (
             <>
               {total.toLocaleString("es-CL")} variantes · Catálogo sincronizado: {formatDateTime(meta.freshness.products ?? null)} ·
-              Precios: {formatDateTime(meta.freshness.variant_prices ?? null)} · Costos: {formatDateTime(meta.freshness.variant_costs ?? null)}
+              Precios: {formatDateTime(meta.freshness.variant_prices ?? null)} · Costos: {formatDateTime(meta.freshness.variant_costs ?? null)} ·
+              Stock: {formatDateTime(meta.freshness.stocks ?? null)}
             </>
           ) : undefined
         }
@@ -331,6 +332,7 @@ export default function CatalogoMaestroPage() {
                       <th className="px-4 py-3 font-medium">SKU · Barras</th>
                       <th className="px-4 py-3 font-medium">Impuestos</th>
                       <th className="px-4 py-3 text-right font-medium">Costo neto prom.</th>
+                      <th className="px-4 py-3 text-right font-medium">Stock Total</th>
                       {visibleLists.map((id) => (
                         <th key={id} className="px-4 py-3 text-right font-medium">
                           {listName(id)} #{id}
@@ -363,6 +365,22 @@ export default function CatalogoMaestroPage() {
                         <td className="px-4 py-3 text-right tabular-nums text-lq-ink">
                           {r.average_cost_net != null ? formatMoney(r.average_cost_net) : <span className="text-lq-muted">Sin costo</span>}
                           {r.cost_state === "cero" ? <span className="block text-xs text-lq-warning">Costo cero</span> : null}
+                        </td>
+                        <td className="px-4 py-3 text-right tabular-nums text-lq-ink">
+                          {r.stock_total != null ? (
+                            <>
+                              {formatQty(r.stock_total)}
+                              {r.stock_offices != null ? (
+                                <span className="block text-xs font-normal text-lq-muted">
+                                  {r.stock_offices} {r.stock_offices === 1 ? "sucursal" : "sucursales"}
+                                </span>
+                              ) : null}
+                            </>
+                          ) : (
+                            <span className="text-lq-muted" title="Variante sin stock sincronizado: no equivale a cero">
+                              s/d
+                            </span>
+                          )}
                         </td>
                         {visibleLists.map((id) => {
                           const p = r.prices[String(id)]

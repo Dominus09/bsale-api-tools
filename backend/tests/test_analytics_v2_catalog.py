@@ -32,7 +32,7 @@ PRICE_LISTS = [
 ]
 
 
-def _variant(variant_id: int, state: int, code: str, name: str) -> dict:
+def _variant(variant_id: int, state: int, code: str, name: str, stock, offices) -> dict:
     return {
         "variant_id": variant_id,
         "product_id": 10,
@@ -48,6 +48,9 @@ def _variant(variant_id: int, state: int, code: str, name: str) -> dict:
         "tax_config_stale": False,
         "average_cost": Decimal("52000"),
         "cost_fetched_at": FETCHED,
+        "stock_total": stock,
+        "stock_fetched_at": FETCHED,
+        "stock_offices": offices,
         "price_12": Decimal("89990"),
         "price_net_12": Decimal("70000"),
         "price_fetched_12": FETCHED,
@@ -61,8 +64,10 @@ def _variant(variant_id: int, state: int, code: str, name: str) -> dict:
 
 
 VARIANTS = [
-    _variant(20, 0, "00789", "18 ANOS 750CC"),
-    _variant(21, 1, "00790", "15 ANOS 750CC"),
+    # Stock en múltiples sucursales (p. ej. 6 + 6): el total ya viene sumado
+    # por el subquery agrupado; aquí se verifica el pase fiel del dato.
+    _variant(20, 0, "00789", "18 ANOS 750CC", Decimal("12"), 2),
+    _variant(21, 1, "00790", "15 ANOS 750CC", Decimal("0"), 6),
 ]
 
 
@@ -176,3 +181,38 @@ def test_iter_rows_exports_everything():
     svc, _ = make_service()
     rows = list(svc.iter_rows({"price_list_ids": [12, 13, 16]}))
     assert [r["variant_id"] for r in rows] == [20, 21]
+
+
+def test_stock_total_multisucursal_y_cero_real():
+    svc, executor = make_service()
+    res = svc.list_rows({"price_list_ids": [12, 13, 16]}, page=1, page_size=50)
+    con_stock, en_cero = res["items"]
+    # Stock acumulado de varias sucursales, numérico y sin duplicar la fila.
+    assert con_stock["stock_total"] == "12"
+    assert con_stock["stock_state"] == "con_stock"
+    assert con_stock["stock_offices"] == 2
+    assert con_stock["stock_fetched_at"] == FETCHED.isoformat()
+    # Cero real sincronizado: se muestra 0, distinto de "sin sincronizar".
+    assert en_cero["stock_total"] == "0"
+    assert en_cero["stock_state"] == "cero"
+    # La consulta suma el stock físico (quantity) por variante, por empresa,
+    # sin tocar disponible ni reservado, y sobrevive al formateo psycopg2.
+    main_sql = next(s for s in executor.formatted_sql if "AS variant_name" in s)
+    assert "sum(quantity) AS stock_total" in main_sql
+    assert "FROM bsale_raw.stocks WHERE company_id = 3 GROUP BY variant_id" in main_sql
+    assert "quantity_available" not in main_sql
+    assert "quantity_reserved" not in main_sql
+
+
+def test_stock_sin_sincronizar_y_negativo():
+    svc, _ = make_service()
+    catalog = svc._tax_catalog()
+    base = dict(VARIANTS[0])
+
+    sin_stock = svc._public_row({**base, "stock_total": None, "stock_offices": None}, [12, 13, 16], catalog)
+    assert sin_stock["stock_total"] is None
+    assert sin_stock["stock_state"] == "sin_sincronizar"
+
+    negativo = svc._public_row({**base, "stock_total": Decimal("-3")}, [12, 13, 16], catalog)
+    assert negativo["stock_total"] == "-3"
+    assert negativo["stock_state"] == "negativo"

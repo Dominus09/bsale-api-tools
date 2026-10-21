@@ -85,6 +85,16 @@ Dashboard V2 lo expone por recurso (precios por lista, costos, catálogo, etc.).
   (los impuestos **no** multiplican filas; los filtros usan `EXISTS`).
 - **Alcance**: solo empresas con RAW completo (`RAW_READY_COMPANY_IDS = {3}`);
   otra empresa responde 409 y una empresa fuera del alcance del usuario, 403.
+- **Stock Total (columna del Catálogo)**: suma de `bsale_raw.stocks.quantity`
+  (stock **físico** actual de Bsale, `/v1/stocks.json`) por variante en todas
+  las sucursales de la empresa. La tabla tiene PK
+  `(company_id, variant_id, office_id)` — una fila por variante×sucursal, sin
+  saldos globales que dupliquen — y el cálculo usa un subquery agrupado por
+  variante (una fila por variante en el Catálogo). **No** es stock disponible
+  (`quantity_available`) ni reservado (`quantity_reserved`), y no suma
+  recepciones históricas. Sin filas sincronizadas → «s/d» (nunca cero
+  inventado); cero real → 0; negativos se conservan. Sincronización por
+  sucursal verificada en producción (6 oficinas en `SUCCESS`).
 - **Pendiente post-despliegue** (sin inventar resultados): la validación fila
   a fila contra PostgreSQL de producción quedó bloqueada por permisos del rol
   de consulta (`products`, `variant_costs`, `variant_prices`, `taxes` y

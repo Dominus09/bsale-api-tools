@@ -128,13 +128,13 @@ def catalog_xlsx(
         price_headers += [f"Precio bruto {list_names.get(lid, 'Lista ' + str(lid))} (#{lid})"]
     headers = [
         "Tipo de producto", "Producto", "Variante", "Código de barras", "SKU / código Bsale",
-        "IVA %", "ILA %", "Impuestos", "Costo neto promedio Bsale",
+        "IVA %", "ILA %", "Impuestos", "Costo neto promedio Bsale", "Stock Total",
         *price_headers,
         "Estado", "company_id", "product_id", "variant_id",
         "Costo: última sincronización", "Precios: última sincronización",
         "Integridad", "Observaciones de integridad",
     ]
-    widths = [22, 42, 30, 18, 18, 9, 9, 30, 18] + [18] * len(list_ids) + [10, 11, 11, 11, 20, 20, 14, 30]
+    widths = [22, 42, 30, 18, 18, 9, 9, 30, 18, 13] + [18] * len(list_ids) + [10, 11, 11, 11, 20, 20, 14, 30]
     ws = _sheet(wb, "Catálogo Maestro", headers, widths)
 
     from openpyxl.cell import WriteOnlyCell
@@ -160,6 +160,7 @@ def catalog_xlsx(
             (str(r["code"]) if r.get("code") else None),
             _num(r.get("iva_pct")), _num(r.get("ila_pct")), taxes_label,
             _num(r.get("average_cost_net")),
+            _num(r.get("stock_total")),
             *price_vals,
             "Activa" if r["active"] else "Inactiva",
             r["company_id"], r["product_id"], r["variant_id"],
@@ -169,13 +170,16 @@ def catalog_xlsx(
             ", ".join(r["integrity_issues"]) or None,
         ]
         cells: list[Any] = []
-        money_idx = set(range(10, 10 + len(list_ids))) | {9}
-        date_idx = {15 + len(list_ids)}
+        money_idx = set(range(11, 11 + len(list_ids))) | {9}
+        date_idx = {16 + len(list_ids)}
         text_idx = {4, 5}
         for i, v in enumerate(values, start=1):
             cell = WriteOnlyCell(ws, value=v)
             if i in money_idx:
                 cell.number_format = MONEY_FMT
+            elif i == 10:
+                # Stock Total: cantidad (no dinero); vacío = sin sincronizar.
+                cell.number_format = '#,##0.###'
             elif i in date_idx:
                 cell.number_format = DATETIME_FMT
             elif i in (6, 7):
@@ -221,6 +225,8 @@ def catalog_xlsx(
         ("Listas incluidas", ", ".join(f"#{lid} {list_names.get(lid, '')}" for lid in list_ids)),
         ("Filas exportadas", count),
         ("Costo: última sincronización", freshness.get("variant_costs")),
+        ("Stock: última sincronización", freshness.get("stocks")),
+        ("Definición Stock Total", "Suma del stock físico actual (campo quantity de Bsale, bsale_raw.stocks) de la variante en todas las sucursales de la empresa. No es stock disponible ni reservado. Celda vacía = variante sin stock sincronizado (no equivale a cero); un 0 explícito sí es stock real en cero."),
         ("Precios: última sincronización", freshness.get("variant_prices")),
         *per_list_entries,
         ("Catálogo: última sincronización", freshness.get("products")),

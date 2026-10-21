@@ -31,6 +31,11 @@ export type CatalogRow = {
   average_cost_net: string | null
   cost_state: "con_costo" | "cero" | "ausente" | "negativo"
   cost_fetched_at: string | null
+  /** Stock físico total (todas las sucursales). null = sin sincronizar, no cero. */
+  stock_total: string | null
+  stock_state: "con_stock" | "cero" | "negativo" | "sin_sincronizar"
+  stock_offices: number | null
+  stock_fetched_at: string | null
   prices: Record<string, CatalogPrice>
   missing_price_lists: number[]
   integrity_issues: string[]
