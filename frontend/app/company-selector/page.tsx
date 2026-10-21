@@ -65,7 +65,7 @@ export default function CompanySelectorPage() {
           alt="Quillotana"
           className="h-20 w-20 object-contain"
         />
-        <h1 className="text-2xl font-bold text-foreground">Selecciona una empresa</h1>
+        <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-foreground sm:text-[32px] sm:leading-9">Selecciona una empresa</h1>
         <p className="text-muted-foreground">Elige la empresa con la que deseas trabajar</p>
       </div>
 

@@ -64,10 +64,10 @@ export default function CuadraturasListPage() {
   return (
     <div className="space-y-6 p-6">
       <div>
-        <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           Distribuidora · Operaciones
         </p>
-        <h1 className="text-xl font-semibold tracking-tight">Cuadraturas</h1>
+        <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9 font-semibold">Cuadraturas</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Cuadratura documental sobre picking congelado — medios de pago, NC y no cargados por
           producto.

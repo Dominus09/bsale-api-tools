@@ -782,10 +782,10 @@ export default function PlanificacionDespachoPage() {
       <header className="shrink-0 border-b border-border/80 bg-card/95 px-4 py-3 backdrop-blur-sm md:px-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               Dispatch center · ORS 2.0
             </p>
-            <h1 className="text-lg font-semibold tracking-tight md:text-xl">
+            <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9 text-lg font-semibold md:text-xl">
               Planif. mapa ORS
             </h1>
           </div>
@@ -893,7 +893,7 @@ export default function PlanificacionDespachoPage() {
         <aside className="flex min-h-0 w-[min(100%,20rem)] shrink-0 flex-col overflow-hidden border-r border-border/80 md:w-80 lg:w-[22rem]">
           {pendingGeorefForTruck.length > 0 ? (
             <div className="border-b border-amber-500/30 bg-amber-50/60 px-3 py-2 dark:bg-amber-950/30">
-              <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-900 dark:text-amber-200">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-900 dark:text-amber-200">
                 Pendientes de georreferenciar ({pendingGeorefForTruck.length})
               </p>
               <ul className="mt-1 max-h-28 space-y-1 overflow-y-auto text-xs">

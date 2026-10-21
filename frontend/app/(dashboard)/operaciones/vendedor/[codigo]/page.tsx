@@ -87,7 +87,7 @@ export default function OperacionesVendedorDetallePage() {
       ) : data ? (
         <>
           <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-2xl font-bold">{data.nombre}</h1>
+            <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9">{data.nombre}</h1>
             <EstadoConexionBadge estado={data.estado_conexion} />
             <span className="text-sm text-muted-foreground">{data.codigo}</span>
           </div>

@@ -27,7 +27,7 @@ export function PurchaseAssociatedDocumentCell({
   const label = associatedDocumentLabel(row)
   return (
     <span
-      className={compact ? "text-[10px] tabular-nums" : "text-sm tabular-nums"}
+      className={compact ? "text-[11px] tabular-nums" : "text-sm tabular-nums"}
     >
       {label ?? "—"}
     </span>
@@ -46,7 +46,7 @@ export function PurchaseInvoiceScoreCell({
     <span
       className={
         compact
-          ? "text-[10px] tabular-nums text-muted-foreground"
+          ? "text-[11px] tabular-nums text-muted-foreground"
           : "text-sm tabular-nums text-muted-foreground"
       }
     >

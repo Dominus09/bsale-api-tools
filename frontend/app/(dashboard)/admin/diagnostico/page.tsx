@@ -188,7 +188,7 @@ export default function DiagnosticoErpPage() {
     return (
       <div className="mx-auto max-w-2xl space-y-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Panel de Diagnóstico ERP</h1>
+          <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9 font-semibold">Panel de Diagnóstico ERP</h1>
           <p className="text-muted-foreground text-sm">
             Vista interna para revisar estado del sistema, peticiones, endpoints y logs recientes.
           </p>
@@ -210,7 +210,7 @@ export default function DiagnosticoErpPage() {
     <div className="mx-auto max-w-7xl space-y-8">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Panel de Diagnóstico ERP</h1>
+          <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9 font-semibold">Panel de Diagnóstico ERP</h1>
           <p className="text-muted-foreground max-w-3xl text-sm">
             Vista interna para revisar estado del sistema, peticiones, endpoints y logs recientes.
             Los datos sensibles no se incluyen en las respuestas del API de diagnóstico.

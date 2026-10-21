@@ -17,7 +17,7 @@ const statusClass: Record<string, string> = {
   missing_taxes_in_gross:
     "bg-amber-100 text-amber-950 dark:bg-amber-950 dark:text-amber-100",
   incomplete_tax_context:
-    "bg-slate-200 text-slate-800 dark:bg-slate-800 dark:text-slate-100",
+    "bg-muted text-foreground dark:bg-slate-800 dark:text-slate-100",
   missing_cost: "bg-muted text-muted-foreground",
   gross_component_mismatch:
     "bg-orange-100 text-orange-950 dark:bg-orange-950 dark:text-orange-100",

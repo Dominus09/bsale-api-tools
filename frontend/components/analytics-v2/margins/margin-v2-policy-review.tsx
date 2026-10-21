@@ -36,7 +36,7 @@ export function MarginV2PolicyReview({ companyId }: { companyId: number }) {
 
   return (
     <div className="space-y-3">
-      <p className="rounded-md border border-violet-300 bg-violet-50 px-3 py-2 text-xs text-violet-900">
+      <p className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs text-foreground">
         Las {p?.rules_total ?? "—"} reglas actuales se conservan sin cambios y no son la política definitiva: se
         reemplazarán con el Excel de gerencia mediante una importación controlada. Hasta entonces todos los resultados de
         margen son provisionales. Las reglas de listas retiradas se mantienen como historia y no generan alertas.
@@ -110,7 +110,7 @@ export function MarginV2PolicyReview({ companyId }: { companyId: number }) {
                 <td className="px-3 py-1.5 font-mono text-xs">{r.rule_key ?? r.rule_id}</td>
                 <td className="px-3 py-1.5">
                   {r.price_list_name ?? r.price_list_id}
-                  <span className="block text-[10px]">{LIST_SCOPE_LABELS[r.price_list_scope]}</span>
+                  <span className="block text-[11px]">{LIST_SCOPE_LABELS[r.price_list_scope]}</span>
                 </td>
                 <td className="px-3 py-1.5">{r.product_type_name ?? r.product_type_id ?? "General"}</td>
                 <td className="px-3 py-1.5 text-right tabular-nums">{formatPct(r.min_markup_pct)}</td>
@@ -118,7 +118,7 @@ export function MarginV2PolicyReview({ companyId }: { companyId: number }) {
                 <td className="px-3 py-1.5 text-xs">{r.review_status === "validada" ? "Validada" : "Pendiente (Excel)"}</td>
                 <td className="px-3 py-1.5 text-xs">
                   {r.issues.length ? r.issues.map((i) => RULE_ISSUE_LABELS[i]).join(" · ") : "—"}
-                  {!r.alerts_enabled ? <span className="block text-[10px]">Sin alertas (fuera de alcance)</span> : null}
+                  {!r.alerts_enabled ? <span className="block text-[11px]">Sin alertas (fuera de alcance)</span> : null}
                 </td>
               </tr>
             ))}

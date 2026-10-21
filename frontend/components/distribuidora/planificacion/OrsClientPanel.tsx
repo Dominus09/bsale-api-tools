@@ -238,7 +238,7 @@ export function OrsClientPanel({
                   {formatClp(panelFuel)}
                 </dd>
                 {dieselPricePerLiter != null && panelKpl != null ? (
-                  <dd className="mt-0.5 text-[10px] text-muted-foreground">
+                  <dd className="mt-0.5 text-[11px] text-muted-foreground">
                     {panelKm.toFixed(1)} km ÷ {panelKpl.toFixed(1)} km/L ×{" "}
                     {Math.round(dieselPricePerLiter).toLocaleString("es-CL")} CLP/L
                   </dd>
@@ -253,7 +253,7 @@ export function OrsClientPanel({
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     <label className="space-y-1">
-                      <span className="text-[10px] text-muted-foreground">Choferes</span>
+                      <span className="text-[11px] text-muted-foreground">Choferes</span>
                       <Select
                         value={String(panelDriverCount)}
                         onValueChange={(v) =>
@@ -273,7 +273,7 @@ export function OrsClientPanel({
                       </Select>
                     </label>
                     <label className="space-y-1">
-                      <span className="text-[10px] text-muted-foreground">Peonetas</span>
+                      <span className="text-[11px] text-muted-foreground">Peonetas</span>
                       <Select
                         value={String(panelAssistantCount)}
                         onValueChange={(v) =>
@@ -294,7 +294,7 @@ export function OrsClientPanel({
                     </label>
                   </div>
                   {panelDriverRate != null && panelAssistantRate != null ? (
-                    <p className="text-[10px] leading-snug text-muted-foreground">
+                    <p className="text-[11px] leading-snug text-muted-foreground">
                       {panelDriverCount}×{formatClp(panelDriverRate)} + {panelAssistantCount}×
                       {formatClp(panelAssistantRate)}
                     </p>
@@ -313,7 +313,7 @@ export function OrsClientPanel({
                 <dd className="text-sm font-semibold tabular-nums text-foreground">
                   {formatClp(panelTotal)}
                 </dd>
-                <dd className="mt-0.5 text-[10px] text-muted-foreground">
+                <dd className="mt-0.5 text-[11px] text-muted-foreground">
                   Combustible + personal
                 </dd>
               </div>
@@ -323,7 +323,7 @@ export function OrsClientPanel({
       </div>
 
       <div className="max-h-56 overflow-y-auto p-3">
-        <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           Orden de visitas ({filtered.length})
         </p>
         {loading ? (

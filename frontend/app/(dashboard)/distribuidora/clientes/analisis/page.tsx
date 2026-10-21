@@ -228,7 +228,7 @@ export default function DistribuidoraClientesAnalisisPage() {
             <span>/</span>
             <span>Análisis</span>
           </div>
-          <h1 className="text-2xl font-semibold tracking-tight">Análisis de clientes</h1>
+          <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9 font-semibold">Análisis de clientes</h1>
           <p className="text-muted-foreground text-sm max-w-2xl">
             Comportamiento de compra, frecuencia mensual (año en curso), ventas recientes y nivel A–E. Ideal para
             priorizar visitas y rutas.

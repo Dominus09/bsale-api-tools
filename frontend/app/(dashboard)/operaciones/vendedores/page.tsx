@@ -18,7 +18,7 @@ export default function OperacionesVendedoresPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Vendedores</h1>
+          <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9">Vendedores</h1>
           <p className="text-sm text-muted-foreground">Estado operacional del día</p>
         </div>
         <Input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} className="w-[160px]" />

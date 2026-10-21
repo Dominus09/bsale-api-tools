@@ -35,7 +35,7 @@ export default function CargaDetallePage() {
     <div className="mx-auto max-w-lg space-y-4 p-4 pb-16">
       <div className="flex items-start justify-between gap-2">
         <div>
-          <h1 className="text-2xl font-bold">CARGA #{load.picking_number}</h1>
+          <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9">CARGA #{load.picking_number}</h1>
           <p className="text-sm text-muted-foreground">
             {load.destination || "—"} · {load.truck || "—"}
           </p>

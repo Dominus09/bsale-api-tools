@@ -26,7 +26,7 @@ export default function OperacionesDashboardPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Operaciones Quillotana</h1>
+          <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9">Operaciones Quillotana</h1>
           <p className="text-sm text-muted-foreground">Monitoreo en vivo de vendedores y rutas (app móvil)</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

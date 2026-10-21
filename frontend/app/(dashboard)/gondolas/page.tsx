@@ -54,7 +54,7 @@ import { cn } from "@/lib/utils"
 const PAGE_SIZE = 100
 
 const selectClass =
-  "min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35"
+  "min-h-11 w-full rounded-lg border border-border bg-card px-3 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35"
 
 function sessionTone(status: GondolaSession["status"]) {
   if (status === "en_curso") return "info" as const
@@ -246,7 +246,7 @@ export default function GondolasPage() {
       <SmartFilterBar>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <label className="space-y-1.5">
-            <span className="text-xs font-medium text-slate-600">Empresa</span>
+            <span className="text-xs font-medium text-muted-foreground">Empresa</span>
             <select
               className={selectClass}
               value={companyId ?? ""}
@@ -260,7 +260,7 @@ export default function GondolasPage() {
             </select>
           </label>
           <label className="space-y-1.5">
-            <span className="text-xs font-medium text-slate-600">Sucursal (oficina Bsale)</span>
+            <span className="text-xs font-medium text-muted-foreground">Sucursal (oficina Bsale)</span>
             <select
               className={selectClass}
               value={officeId ?? ""}
@@ -273,7 +273,7 @@ export default function GondolasPage() {
             </select>
           </label>
           <label className="space-y-1.5">
-            <span className="text-xs font-medium text-slate-600">Tipo de producto</span>
+            <span className="text-xs font-medium text-muted-foreground">Tipo de producto</span>
             <select
               className={selectClass}
               value={productTypeId ?? ""}
@@ -286,16 +286,16 @@ export default function GondolasPage() {
             </select>
           </label>
           <label className="space-y-1.5">
-            <span className="text-xs font-medium text-slate-600">Buscar producto, SKU o código</span>
+            <span className="text-xs font-medium text-muted-foreground">Buscar producto, SKU o código</span>
             <span className="relative block">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ej.: vino, 780…" className="min-h-11 pl-9" />
             </span>
           </label>
         </div>
         <div className="flex flex-wrap items-end gap-3">
           <label className="space-y-1.5">
-            <span className="text-xs font-medium text-slate-600">Stock</span>
+            <span className="text-xs font-medium text-muted-foreground">Stock</span>
             <select className={selectClass} value={stockFilter} onChange={(e) => setStockFilter(e.target.value)} aria-label="Filtro de stock">
               <option value="con_stock">Con stock positivo</option>
               <option value="todos">Todos los SKU</option>
@@ -303,7 +303,7 @@ export default function GondolasPage() {
             </select>
           </label>
           <label className="space-y-1.5">
-            <span className="text-xs font-medium text-slate-600">Ordenar por</span>
+            <span className="text-xs font-medium text-muted-foreground">Ordenar por</span>
             <select className={selectClass} value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Ordenamiento">
               <option value="producto">Nombre</option>
               <option value="stock_desc">Mayor stock</option>
@@ -312,8 +312,8 @@ export default function GondolasPage() {
             </select>
           </label>
           {catalog ? (
-            <p className="pb-2 text-sm text-slate-500">
-              <strong className="text-slate-900">{catalog.total}</strong> SKU distintos
+            <p className="pb-2 text-sm text-muted-foreground">
+              <strong className="text-foreground">{catalog.total}</strong> SKU distintos
               {officeName ? <> en {officeName}</> : null}
               {typeName ? <> · {typeName}</> : null}
             </p>
@@ -336,26 +336,26 @@ export default function GondolasPage() {
             <>
               <div className="grid gap-3 p-4 md:hidden">
                 {(catalog?.items ?? []).map((item) => (
-                  <article key={item.variant_id} className="rounded-xl border border-slate-200 bg-white p-4">
+                  <article key={item.variant_id} className="rounded-xl border border-border bg-card p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <h3 className="text-sm font-semibold leading-5 text-slate-950">{item.product_name}</h3>
-                        <p className="mt-0.5 text-xs text-slate-500">{item.variant_name || "Sin variante"}</p>
+                        <h3 className="text-sm font-semibold leading-5 text-foreground">{item.product_name}</h3>
+                        <p className="mt-0.5 text-xs text-muted-foreground">{item.variant_name || "Sin variante"}</p>
                       </div>
                       <ExhibitionBadge status={item.exhibition_status} />
                     </div>
-                    <dl className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">
-                      <div><dt className="text-slate-400">Código</dt><dd className="font-mono">{item.bar_code || item.sku_code || "—"}</dd></div>
-                      <div><dt className="text-slate-400">Stock</dt><dd className="font-semibold text-slate-900">{formatQty(item.stock)}</dd></div>
-                      <div><dt className="text-slate-400">Disponible</dt><dd>{formatQty(item.stock_available)}</dd></div>
-                      <div><dt className="text-slate-400">Última entrada</dt><dd>{formatDate(item.last_entry_at)}</dd></div>
+                    <dl className="mt-3 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                      <div><dt className="text-muted-foreground">Código</dt><dd className="font-mono">{item.bar_code || item.sku_code || "—"}</dd></div>
+                      <div><dt className="text-muted-foreground">Stock</dt><dd className="font-semibold text-foreground">{formatQty(item.stock)}</dd></div>
+                      <div><dt className="text-muted-foreground">Disponible</dt><dd>{formatQty(item.stock_available)}</dd></div>
+                      <div><dt className="text-muted-foreground">Última entrada</dt><dd>{formatDate(item.last_entry_at)}</dd></div>
                     </dl>
                   </article>
                 ))}
               </div>
               <ProfessionalDataTable loading={loadingCatalog} className="hidden rounded-none border-0 shadow-none md:block">
                 <table className="w-full min-w-[880px] text-left text-sm">
-                  <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                  <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
                     <tr>
                       <th className="px-4 py-3 font-medium">Producto</th>
                       <th className="px-4 py-3 font-medium">Código de barras</th>
@@ -365,26 +365,26 @@ export default function GondolasPage() {
                       <th className="px-4 py-3 font-medium">Exhibición</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-100">
+                  <tbody className="divide-y divide-border">
                     {(catalog?.items ?? []).map((item) => (
-                      <tr key={item.variant_id} className="transition hover:bg-slate-50/70">
+                      <tr key={item.variant_id} className="transition hover:bg-muted/40/70">
                         <td className="px-4 py-3">
-                          <span className="block font-medium leading-5 text-slate-950">{item.product_name}</span>
-                          <span className="mt-0.5 block text-xs text-slate-500">
+                          <span className="block font-medium leading-5 text-foreground">{item.product_name}</span>
+                          <span className="mt-0.5 block text-xs text-muted-foreground">
                             {item.variant_name || "Sin variante"}{item.sku_code ? <> · SKU {item.sku_code}</> : null}
                           </span>
                         </td>
-                        <td className="px-4 py-3 font-mono text-xs text-slate-600">{item.bar_code || "—"}</td>
-                        <td className="px-4 py-3 text-right font-semibold tabular-nums text-slate-950">{formatQty(item.stock)}</td>
-                        <td className="px-4 py-3 text-right tabular-nums text-slate-600">{formatQty(item.stock_available)}</td>
-                        <td className="px-4 py-3 text-slate-600">
+                        <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{item.bar_code || "—"}</td>
+                        <td className="px-4 py-3 text-right font-semibold tabular-nums text-foreground">{formatQty(item.stock)}</td>
+                        <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">{formatQty(item.stock_available)}</td>
+                        <td className="px-4 py-3 text-muted-foreground">
                           {item.last_entry_at ? (
                             <>
                               <span className="block">{formatDate(item.last_entry_at)}</span>
-                              <span className="mt-0.5 block text-xs text-slate-500">{movementLabel(item.last_entry_movement)}</span>
+                              <span className="mt-0.5 block text-xs text-muted-foreground">{movementLabel(item.last_entry_movement)}</span>
                             </>
                           ) : (
-                            <span className="text-slate-400">Sin ingreso registrado en RAW</span>
+                            <span className="text-muted-foreground">Sin ingreso registrado en RAW</span>
                           )}
                         </td>
                         <td className="px-4 py-3"><ExhibitionBadge status={item.exhibition_status} /></td>
@@ -399,37 +399,37 @@ export default function GondolasPage() {
 
         <SectionCard title="Recorridos" description="Continúe un recorrido guardado o revise los anteriores." contentClassName="p-3">
           {sessions.length === 0 ? (
-            <div className="flex gap-3 px-2 py-4 text-sm text-slate-500">
+            <div className="flex gap-3 px-2 py-4 text-sm text-muted-foreground">
               <History className="mt-0.5 h-4 w-4 shrink-0" />
               <p>Todavía no hay recorridos registrados para esta empresa.</p>
             </div>
           ) : (
-            <ul className="divide-y divide-slate-100">
+            <ul className="divide-y divide-border">
               {sessions.map((session) => (
                 <li key={session.id}>
                   <Link
                     href={`/gondolas/recorridos/${session.id}?company_id=${companyId}`}
-                    className="group flex items-center gap-3 rounded-lg px-2 py-3 transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
+                    className="group flex items-center gap-3 rounded-lg px-2 py-3 transition hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30"
                   >
                     <span className="min-w-0 flex-1">
                       <span className="flex flex-wrap items-center gap-2">
-                        <strong className="text-sm font-semibold text-slate-950">
+                        <strong className="text-sm font-semibold text-foreground">
                           {session.office_name || `Oficina ${session.office_id}`}
                         </strong>
                         <StatusBadge tone={sessionTone(session.status)}>{sessionLabel(session.status)}</StatusBadge>
                       </span>
-                      <span className="mt-1 block text-xs leading-5 text-slate-500">
+                      <span className="mt-1 block text-xs leading-5 text-muted-foreground">
                         {session.product_type_name || "Tipo"} · {session.found_count} de {session.total_sku} SKU ·{" "}
                         {session.coverage_pct.toFixed(1).replace(".", ",")} % · {formatDateTime(session.started_at)}
                       </span>
                     </span>
-                    <ArrowRight className="h-4 w-4 shrink-0 text-slate-400 transition group-hover:translate-x-0.5" />
+                    <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground transition group-hover:translate-x-0.5" />
                   </Link>
                 </li>
               ))}
             </ul>
           )}
-          <div className="mt-3 flex gap-2 rounded-lg bg-slate-50 px-3 py-3 text-xs leading-5 text-slate-500">
+          <div className="mt-3 flex gap-2 rounded-lg bg-muted/40 px-3 py-3 text-xs leading-5 text-muted-foreground">
             <PackageSearch className="mt-0.5 h-4 w-4 shrink-0" />
             <p>Al cerrar un recorrido, los SKU no detectados pasan a la lista de reposición para buscarlos en bodega.</p>
           </div>

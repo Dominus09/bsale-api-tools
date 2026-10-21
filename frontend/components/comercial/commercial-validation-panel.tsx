@@ -76,9 +76,9 @@ function formatDateTimeCL(iso: string): string {
 }
 
 function StatusDot({ status }: { status: "ok" | "error" | "warning" }) {
-  if (status === "ok") return <span className="text-emerald-600">✔</span>
+  if (status === "ok") return <span className="text-emerald-600 dark:text-emerald-300">✔</span>
   if (status === "warning") return <span className="text-amber-500">⚠</span>
-  return <span className="text-red-600">❌</span>
+  return <span className="text-red-600 dark:text-red-300">❌</span>
 }
 
 function ReconcileBadge({ status }: { status: "ok" | "error" }) {
@@ -215,8 +215,8 @@ export function CommercialValidationPanel({
           <Progress value={audit.progress_percent} className="h-3" />
           {audit.validated && (
             <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-4 text-center">
-              <p className="text-lg font-bold text-emerald-700">AUDITORÍA VALIDADA</p>
-              <p className="text-sm text-emerald-800">ERP CUADRADO CON BSALE</p>
+              <p className="text-lg font-bold text-emerald-700 dark:text-emerald-300">AUDITORÍA VALIDADA</p>
+              <p className="text-sm text-emerald-800 dark:text-emerald-300">ERP CUADRADO CON BSALE</p>
             </div>
           )}
         </CardContent>
@@ -387,9 +387,9 @@ export function CommercialValidationPanel({
             </CardHeader>
             <CardContent className="flex gap-3">
               {bsaleInterp.diagnosis.status === "ok" ? (
-                <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
+                <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600 dark:text-emerald-300" />
               ) : bsaleInterp.diagnosis.status === "warning" ? (
-                <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+                <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-300" />
               ) : (
                 <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
               )}
@@ -433,9 +433,9 @@ export function CommercialValidationPanel({
                         <TableCell>{nc.origin_document ?? "—"}</TableCell>
                         <TableCell className="text-center">
                           {nc.discounted_by_crm ? (
-                            <span className="text-emerald-600">✔</span>
+                            <span className="text-emerald-600 dark:text-emerald-300">✔</span>
                           ) : (
-                            <span className="text-red-600">❌</span>
+                            <span className="text-red-600 dark:text-red-300">❌</span>
                           )}
                         </TableCell>
                         <TableCell className="text-center text-xs">
@@ -531,7 +531,7 @@ export function CommercialValidationPanel({
                     {typeof row.bsale === "number" ? formatNum(row.bsale) : row.bsale ?? "—"}
                   </TableCell>
                   <TableCell className="text-center text-lg">
-                    {row.match ? <span className="text-emerald-600">✔</span> : <span className="text-red-600">❌</span>}
+                    {row.match ? <span className="text-emerald-600 dark:text-emerald-300">✔</span> : <span className="text-red-600 dark:text-red-300">❌</span>}
                   </TableCell>
                 </TableRow>
               ))}
@@ -576,7 +576,7 @@ export function CommercialValidationPanel({
                   <TableCell
                     className={cn(
                       "text-right tabular-nums font-medium",
-                      row.status === "ok" ? "text-emerald-600" : "text-red-600",
+                      row.status === "ok" ? "text-emerald-600 dark:text-emerald-300" : "text-red-600 dark:text-red-300",
                     )}
                   >
                     {row.concept.includes("únicos") || row.concept === "Unidades"
@@ -628,7 +628,7 @@ export function CommercialValidationPanel({
                   <TableCell
                     className={cn(
                       "text-right tabular-nums font-medium",
-                      row.status === "ok" ? "text-emerald-600" : "text-red-600",
+                      row.status === "ok" ? "text-emerald-600 dark:text-emerald-300" : "text-red-600 dark:text-red-300",
                     )}
                   >
                     {formatCLP(row.delta)}
@@ -683,7 +683,7 @@ export function CommercialValidationPanel({
                   <TableCell
                     className={cn(
                       "text-right tabular-nums",
-                      row.status === "ok" ? "text-emerald-600" : "text-red-600",
+                      row.status === "ok" ? "text-emerald-600 dark:text-emerald-300" : "text-red-600 dark:text-red-300",
                     )}
                   >
                     {formatCLP(row.delta)}
@@ -726,7 +726,7 @@ export function CommercialValidationPanel({
                     </TableCell>
                     <TableCell className="text-right tabular-nums">{formatCLP(row.erp)}</TableCell>
                     <TableCell className="text-right tabular-nums">{formatCLP(row.bsale)}</TableCell>
-                    <TableCell className="text-right tabular-nums text-red-600">{formatCLP(row.delta)}</TableCell>
+                    <TableCell className="text-right tabular-nums text-red-600 dark:text-red-300">{formatCLP(row.delta)}</TableCell>
                     <TableCell className="text-right tabular-nums">{formatNum(row.documentos)}</TableCell>
                     <TableCell className="text-right tabular-nums">{formatCLP(row.ticket)}</TableCell>
                     <TableCell>{row.ultima_compra ? formatDateCL(String(row.ultima_compra)) : "—"}</TableCell>
@@ -791,7 +791,7 @@ export function CommercialValidationPanel({
                     <TableCell className="text-right tabular-nums">{formatNum(row.qty_bsale)}</TableCell>
                     <TableCell className="text-right tabular-nums">{formatCLP(row.amount_erp)}</TableCell>
                     <TableCell className="text-right tabular-nums">{formatCLP(row.amount_bsale)}</TableCell>
-                    <TableCell className="text-right tabular-nums text-red-600">{formatCLP(row.delta)}</TableCell>
+                    <TableCell className="text-right tabular-nums text-red-600 dark:text-red-300">{formatCLP(row.delta)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -834,11 +834,11 @@ export function CommercialValidationPanel({
                 </AccordionTrigger>
                 <AccordionContent className="flex items-start gap-2 text-sm text-muted-foreground">
                   {rule.severity === "ok" ? (
-                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-300" />
                   ) : rule.severity === "warning" ? (
-                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-300" />
                   ) : (
-                    <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+                    <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-300" />
                   )}
                   {rule.message}
                 </AccordionContent>
@@ -885,7 +885,7 @@ export function CommercialValidationPanel({
                     <TableCell
                       className={cn(
                         "text-right tabular-nums",
-                        doc.status === "ok" ? "text-emerald-600" : "text-red-600",
+                        doc.status === "ok" ? "text-emerald-600 dark:text-emerald-300" : "text-red-600 dark:text-red-300",
                       )}
                     >
                       {formatCLP(doc.delta)}
@@ -959,7 +959,7 @@ export function CommercialValidationPanel({
                 <span
                   className={cn(
                     "text-lg font-bold tabular-nums",
-                    sellerDetail.status === "ok" ? "text-emerald-600" : "text-red-600",
+                    sellerDetail.status === "ok" ? "text-emerald-600 dark:text-emerald-300" : "text-red-600 dark:text-red-300",
                   )}
                 >
                   {formatCLP(sellerDetail.delta)}

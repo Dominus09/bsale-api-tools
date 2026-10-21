@@ -164,17 +164,23 @@ export default function RecepcionesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-foreground">Recepción de Mercadería</h1>
-          <p className="text-sm text-muted-foreground">
+      {/* Graphite Premium 6.0 · encabezado unificado */}
+      <div className="flex flex-col gap-4 border-b border-lq-line pb-5 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-xs font-medium uppercase tracking-[0.14em] text-lq-faint">
+            Sucursales · Recepciones
+          </p>
+          <h1 className="mt-1 text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9">
+            Recepción de Mercadería
+          </h1>
+          <p className="mt-1.5 text-sm leading-6 text-lq-muted">
             Registra los productos recibidos antes de cargarlos al sistema
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Dialog open={scanDialogOpen} onOpenChange={setScanDialogOpen}>
             <DialogTrigger asChild>
-              <Button variant="outline">
+              <Button variant="outline" className="h-11 sm:h-9">
                 <ScanLine className="mr-2 h-4 w-4" />
                 Escanear
               </Button>
@@ -230,7 +236,7 @@ export default function RecepcionesPage() {
         <Card>
           <CardContent className="flex items-center gap-4 p-4">
             <div className="rounded-lg bg-yellow-100 p-2">
-              <Clock className="h-5 w-5 text-yellow-600" />
+              <Clock className="h-5 w-5 text-yellow-600 dark:text-yellow-300" />
             </div>
             <div>
               <p className="text-2xl font-semibold">{stats.pendientes}</p>
@@ -241,7 +247,7 @@ export default function RecepcionesPage() {
         <Card>
           <CardContent className="flex items-center gap-4 p-4">
             <div className="rounded-lg bg-blue-100 p-2">
-              <CheckCircle className="h-5 w-5 text-blue-600" />
+              <CheckCircle className="h-5 w-5 text-blue-600 dark:text-blue-300" />
             </div>
             <div>
               <p className="text-2xl font-semibold">{stats.revisados}</p>
@@ -252,7 +258,7 @@ export default function RecepcionesPage() {
         <Card>
           <CardContent className="flex items-center gap-4 p-4">
             <div className="rounded-lg bg-green-100 p-2">
-              <FileSpreadsheet className="h-5 w-5 text-green-600" />
+              <FileSpreadsheet className="h-5 w-5 text-green-600 dark:text-green-300" />
             </div>
             <div>
               <p className="text-2xl font-semibold">{stats.exportados}</p>

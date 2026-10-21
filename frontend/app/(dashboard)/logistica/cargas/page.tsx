@@ -50,7 +50,7 @@ export default function CargasPage() {
     <div className="mx-auto max-w-3xl space-y-4 pb-10">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Cargas</h1>
+          <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9">Cargas</h1>
           <p className="text-sm text-muted-foreground">
             Certificación física de picking en camión
           </p>
@@ -115,8 +115,8 @@ export default function CargasPage() {
                   <Badge
                     variant="outline"
                     className={cn(
-                      row.status === "certified" && "border-emerald-500 text-emerald-700",
-                      row.status === "in_progress" && "border-amber-500 text-amber-800",
+                      row.status === "certified" && "border-emerald-500 text-emerald-700 dark:text-emerald-300",
+                      row.status === "in_progress" && "border-amber-500 text-amber-800 dark:text-amber-300",
                     )}
                   >
                     {STATUS_LABEL[row.status] || row.status}

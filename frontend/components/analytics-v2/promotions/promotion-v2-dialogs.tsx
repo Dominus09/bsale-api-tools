@@ -146,7 +146,7 @@ export function CampaignFormDialog({
             <Textarea value={notes} maxLength={1000} rows={3} onChange={(e) => setNotes(e.target.value)} />
           </label>
           {datesChange && campaign?.approval_status === "aprobada" ? (
-            <p className="text-xs text-amber-700">Cambiar fechas de una campaña aprobada la devuelve a “Pendiente de aprobación”.</p>
+            <p className="text-xs text-amber-700 dark:text-amber-300">Cambiar fechas de una campaña aprobada la devuelve a “Pendiente de aprobación”.</p>
           ) : null}
           {error ? (
             <Alert variant="destructive">
@@ -288,7 +288,7 @@ export function AddItemDialog({
                 >
                   <span className="block font-medium">
                     {r.product_name ?? `Variante ${r.variant_id}`}
-                    {!r.variant_active ? <span className="ml-1 text-[10px] text-red-700">(inactiva)</span> : null}
+                    {!r.variant_active ? <span className="ml-1 text-[11px] text-red-700 dark:text-red-300">(inactiva)</span> : null}
                   </span>
                   <span className="block text-[11px] text-muted-foreground">
                     {r.code ?? "—"} · {r.barcode ?? "—"}
@@ -349,7 +349,7 @@ export function AddItemDialog({
               <Textarea value={notes} maxLength={1000} rows={2} onChange={(e) => setNotes(e.target.value)} />
             </label>
             {campaign.approval_status === "aprobada" ? (
-              <p className="text-xs text-amber-700">Agregar productos devuelve la campaña a “Pendiente de aprobación”.</p>
+              <p className="text-xs text-amber-700 dark:text-amber-300">Agregar productos devuelve la campaña a “Pendiente de aprobación”.</p>
             ) : null}
             {error ? (
               <Alert variant="destructive">

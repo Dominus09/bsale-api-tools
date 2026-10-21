@@ -757,8 +757,8 @@ export default function GenerarOcPage() {
   return (
     <div className="mx-auto w-full max-w-[min(100%,1680px)] space-y-6 pb-16">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Generar orden de compra</h1>
-        <p className="text-sm text-slate-500">
+        <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9 font-semibold">Generar orden de compra</h1>
+        <p className="text-sm text-muted-foreground">
           Filtros y líneas de compra; la confirmación (fecha, pago, responsable) se hace en el paso final.
         </p>
       </div>
@@ -769,12 +769,12 @@ export default function GenerarOcPage() {
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
       ) : null}
 
-      <section className="rounded-xl border border-slate-200/80 bg-white p-5 shadow-sm">
+      <section className="rounded-xl border border-border/80 bg-card p-5 shadow-sm">
         <div className="grid gap-4 sm:grid-cols-3">
           <div className="space-y-2">
             <Label>Empresa</Label>
             <Select value={companyId} onValueChange={setCompanyId}>
-              <SelectTrigger className="bg-white">
+              <SelectTrigger className="bg-card">
                 <SelectValue placeholder="Elegir…" />
               </SelectTrigger>
               <SelectContent>
@@ -790,7 +790,7 @@ export default function GenerarOcPage() {
           <div className="space-y-2">
             <Label>Sucursal</Label>
             <Select value={officeId} onValueChange={setOfficeId} disabled={!Number.isFinite(cid)}>
-              <SelectTrigger className="bg-white">
+              <SelectTrigger className="bg-card">
                 <SelectValue placeholder="Elegir…" />
               </SelectTrigger>
               <SelectContent>
@@ -806,7 +806,7 @@ export default function GenerarOcPage() {
           <div className="space-y-2">
             <Label>Proveedor</Label>
             <Select value={supplierId} onValueChange={setSupplierId}>
-              <SelectTrigger className="bg-white">
+              <SelectTrigger className="bg-card">
                 <SelectValue placeholder="Elegir…" />
               </SelectTrigger>
               <SelectContent>
@@ -840,13 +840,13 @@ export default function GenerarOcPage() {
           Generar orden de compra
         </Button>
         <div className="flex min-w-[12rem] flex-1 flex-wrap items-center gap-2 sm:flex-initial">
-          <Label className="whitespace-nowrap text-xs text-slate-600">Filtrar estado</Label>
+          <Label className="whitespace-nowrap text-xs text-muted-foreground">Filtrar estado</Label>
           <Select
             value={statusFilter}
             onValueChange={(v) => setStatusFilter(v as StatusFilter)}
             disabled={!filtersReady}
           >
-            <SelectTrigger className="h-9 w-[11rem] bg-white">
+            <SelectTrigger className="h-9 w-[11rem] bg-card">
               <SelectValue placeholder="Estado" />
             </SelectTrigger>
             <SelectContent>
@@ -858,13 +858,13 @@ export default function GenerarOcPage() {
           </Select>
         </div>
         <div className="flex min-w-[12rem] flex-wrap items-center gap-2">
-          <Label className="whitespace-nowrap text-xs text-slate-600">Ordenar por</Label>
+          <Label className="whitespace-nowrap text-xs text-muted-foreground">Ordenar por</Label>
           <Select
             value={sortBy}
             onValueChange={(v) => setSortBy(v as SortByKey)}
             disabled={!filtersReady}
           >
-            <SelectTrigger className="h-9 w-[10.5rem] bg-white">
+            <SelectTrigger className="h-9 w-[10.5rem] bg-card">
               <SelectValue placeholder="Orden" />
             </SelectTrigger>
             <SelectContent>
@@ -876,68 +876,68 @@ export default function GenerarOcPage() {
           </Select>
         </div>
         {loadingAnalysis ? (
-          <span className="inline-flex items-center gap-2 text-sm text-slate-500">
+          <span className="inline-flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
             Cargando sugerencias…
           </span>
         ) : null}
       </div>
 
-      <section className="rounded-xl border border-slate-200/80 bg-white shadow-sm">
-        <div className="border-b border-slate-100 px-5 py-3">
-          <h2 className="text-sm font-medium text-slate-800">Líneas</h2>
-          <p className="text-xs text-slate-500">
-            El estado mostrado es el <span className="font-medium text-slate-600">estado_usuario</span> (recalculado
-            aquí). El backend sigue enviando <span className="font-medium text-slate-600">estado_sistema</span> en el
-            campo API <span className="font-mono text-slate-700">status</span> (no se muestra).{" "}
-            <span className="font-medium text-slate-600">
+      <section className="rounded-xl border border-border/80 bg-card shadow-sm">
+        <div className="border-b border-border px-5 py-3">
+          <h2 className="text-sm font-medium text-foreground">Líneas</h2>
+          <p className="text-xs text-muted-foreground">
+            El estado mostrado es el <span className="font-medium text-muted-foreground">estado_usuario</span> (recalculado
+            aquí). El backend sigue enviando <span className="font-medium text-muted-foreground">estado_sistema</span> en el
+            campo API <span className="font-mono text-muted-foreground">status</span> (no se muestra).{" "}
+            <span className="font-medium text-muted-foreground">
               Sugerir compra: cobertura 14 días y cajas completas. Edición manual: permite unidades fraccionadas respecto
               de CxC.
             </span>
           </p>
         </div>
-        <div className="grid gap-3 border-b border-slate-100 px-5 py-3 sm:grid-cols-3">
+        <div className="grid gap-3 border-b border-border px-5 py-3 sm:grid-cols-3">
           <div>
-            <p className="text-xs text-slate-500">Total compra (líneas con cantidad &gt; 0)</p>
-            <p className="text-lg font-semibold tabular-nums text-slate-900">
+            <p className="text-xs text-muted-foreground">Total compra (líneas con cantidad &gt; 0)</p>
+            <p className="text-lg font-semibold tabular-nums text-foreground">
               ${fmtNum(orderSummary.total, 0)}
             </p>
           </div>
           <div>
-            <p className="text-xs text-slate-500">Total cajas (equiv.)</p>
-            <p className="text-lg font-semibold tabular-nums text-slate-900">
+            <p className="text-xs text-muted-foreground">Total cajas (equiv.)</p>
+            <p className="text-lg font-semibold tabular-nums text-foreground">
               {fmtNum(orderSummary.cajas, 2)}
             </p>
           </div>
           <div>
-            <p className="text-xs text-slate-500">Productos en OC</p>
-            <p className="text-lg font-semibold tabular-nums text-slate-900">{orderSummary.productos}</p>
+            <p className="text-xs text-muted-foreground">Productos en OC</p>
+            <p className="text-lg font-semibold tabular-nums text-foreground">{orderSummary.productos}</p>
           </div>
         </div>
         <div className="max-h-[min(72vh,820px)] min-w-0 overflow-auto">
           <table className="w-full min-w-[1180px] border-collapse text-sm">
-            <TableHeader className="sticky top-0 z-30 border-b border-slate-200 bg-white shadow-[0_1px_0_0_rgb(226_232_240)] [&_tr]:border-slate-200 [&_tr]:hover:bg-transparent">
+            <TableHeader className="sticky top-0 z-30 border-b border-border bg-card shadow-[0_1px_0_0_rgb(226_232_240)] [&_tr]:border-border [&_tr]:hover:bg-transparent">
               <TableRow>
-                <TableHead className="bg-white">Estado</TableHead>
-                <TableHead className="min-w-[7rem] bg-white">Tipo</TableHead>
-                <TableHead className="min-w-[10rem] max-w-[min(320px,40vw)] bg-white">Producto</TableHead>
-                <TableHead className="min-w-[12rem] max-w-[min(480px,52vw)] bg-white">Variante</TableHead>
-                <TableHead className="bg-white text-right">Stock</TableHead>
-                <TableHead className="bg-white text-right whitespace-nowrap">7 días / 30 días</TableHead>
-                <TableHead className="bg-white text-right">Costo bruto</TableHead>
-                <TableHead className="bg-white text-right" title="Cantidad por caja (units_per_box)">
+                <TableHead className="bg-card">Estado</TableHead>
+                <TableHead className="min-w-[7rem] bg-card">Tipo</TableHead>
+                <TableHead className="min-w-[10rem] max-w-[min(320px,40vw)] bg-card">Producto</TableHead>
+                <TableHead className="min-w-[12rem] max-w-[min(480px,52vw)] bg-card">Variante</TableHead>
+                <TableHead className="bg-card text-right">Stock</TableHead>
+                <TableHead className="bg-card text-right whitespace-nowrap">7 días / 30 días</TableHead>
+                <TableHead className="bg-card text-right">Costo bruto</TableHead>
+                <TableHead className="bg-card text-right" title="Cantidad por caja (units_per_box)">
                   CxC
                 </TableHead>
-                <TableHead className="bg-white text-right">Unidades</TableHead>
-                <TableHead className="bg-white text-right">Cajas</TableHead>
-                <TableHead className="bg-white text-right tabular-nums">Total</TableHead>
-                <TableHead className="w-[4.5rem] bg-white" />
+                <TableHead className="bg-card text-right">Unidades</TableHead>
+                <TableHead className="bg-card text-right">Cajas</TableHead>
+                <TableHead className="bg-card text-right tabular-nums">Total</TableHead>
+                <TableHead className="w-[4.5rem] bg-card" />
               </TableRow>
             </TableHeader>
             <TableBody>
               {analysis.length === 0 && manualRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={TABLE_COLS} className="py-12 text-center text-slate-500">
+                  <TableCell colSpan={TABLE_COLS} className="py-12 text-center text-muted-foreground">
                     {filtersReady
                       ? "No hay filas para este contexto."
                       : "Elige empresa, sucursal y proveedor para ver sugerencias."}
@@ -948,7 +948,7 @@ export default function GenerarOcPage() {
               analysis.length + manualRows.length > 0 &&
               displayRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={TABLE_COLS} className="py-10 text-center text-slate-500">
+                  <TableCell colSpan={TABLE_COLS} className="py-10 text-center text-muted-foreground">
                     Ninguna fila coincide con el filtro de estado. Cambia el filtro o revisa cantidades.
                   </TableCell>
                 </TableRow>
@@ -965,7 +965,7 @@ export default function GenerarOcPage() {
                       key={item.key}
                       qtyEdited={qtyEdited}
                       className={cn(
-                        "border-slate-200 bg-sky-500/10",
+                        "border-border bg-sky-500/10",
                         statusRowClass(estado),
                         qtyEdited && "border-l-[3px] border-l-sky-600/80 bg-sky-500/[0.14]",
                       )}
@@ -976,23 +976,23 @@ export default function GenerarOcPage() {
                             <EstadoUsuarioBadge estado={estado} />
                             {qtyEdited ? (
                               <Pencil
-                                className="size-3.5 shrink-0 text-sky-800/85"
+                                className="size-3.5 shrink-0 text-sky-800/85 dark:text-sky-300"
                                 aria-hidden
                               />
                             ) : null}
                           </div>
-                          <span className="text-[10px] font-medium uppercase tracking-wide text-sky-800">
+                          <span className="text-[11px] font-medium uppercase tracking-wide text-sky-800 dark:text-sky-300">
                             Manual
                           </span>
                         </div>
                       </TableCell>
-                      <TableCell className="max-w-[min(280px,36vw)] whitespace-normal align-top text-slate-600">
+                      <TableCell className="max-w-[min(280px,36vw)] whitespace-normal align-top text-muted-foreground">
                         <NameCellWithTooltip raw={m.product_type_name} />
                       </TableCell>
                       <TableCell className="max-w-[min(320px,40vw)] whitespace-normal align-top">
-                        <NameCellWithTooltip raw={m.product_name} className="font-medium text-slate-900" />
+                        <NameCellWithTooltip raw={m.product_name} className="font-medium text-foreground" />
                       </TableCell>
-                      <TableCell className="max-w-[min(480px,52vw)] whitespace-normal align-top text-slate-600">
+                      <TableCell className="max-w-[min(480px,52vw)] whitespace-normal align-top text-muted-foreground">
                         <NameCellWithTooltip raw={m.variant_name} />
                       </TableCell>
                       <TableCell className="text-right">—</TableCell>
@@ -1037,7 +1037,7 @@ export default function GenerarOcPage() {
                           type="button"
                           variant="ghost"
                           size="sm"
-                          className="text-red-600"
+                          className="text-red-600 dark:text-red-300"
                           onClick={() => removeManual(m.key)}
                         >
                           Quitar
@@ -1059,30 +1059,30 @@ export default function GenerarOcPage() {
                     key={k}
                     qtyEdited={qtyEdited}
                     className={cn(
-                      "border-slate-200",
+                      "border-border",
                       statusRowClass(estado),
-                      qtyEdited && "border-l-[3px] border-l-sky-600/80 bg-slate-50/90",
+                      qtyEdited && "border-l-[3px] border-l-sky-600/80 bg-muted/40/90",
                     )}
                   >
                     <TableCell className="align-top">
                       <div className="flex flex-wrap items-center gap-1">
                         <EstadoUsuarioBadge estado={estado} />
                         {qtyEdited ? (
-                          <Pencil className="size-3.5 shrink-0 text-sky-800/85" aria-hidden />
+                          <Pencil className="size-3.5 shrink-0 text-sky-800/85 dark:text-sky-300" aria-hidden />
                         ) : null}
                       </div>
                     </TableCell>
-                    <TableCell className="min-w-[7rem] whitespace-normal align-top text-slate-600">
+                    <TableCell className="min-w-[7rem] whitespace-normal align-top text-muted-foreground">
                       <NameCellWithTooltip raw={r.product_type_name} />
                     </TableCell>
                     <TableCell className="max-w-[min(320px,40vw)] whitespace-normal align-top">
-                      <NameCellWithTooltip raw={r.product_name} className="font-medium text-slate-900" />
+                      <NameCellWithTooltip raw={r.product_name} className="font-medium text-foreground" />
                     </TableCell>
-                    <TableCell className="max-w-[min(480px,52vw)] whitespace-normal align-top text-slate-600">
+                    <TableCell className="max-w-[min(480px,52vw)] whitespace-normal align-top text-muted-foreground">
                       <NameCellWithTooltip raw={r.variant_name} />
                     </TableCell>
                     <TableCell className="text-right tabular-nums align-middle">{fmtNum(r.stock_actual, 0)}</TableCell>
-                    <TableCell className="text-right tabular-nums text-xs text-slate-600 align-middle">
+                    <TableCell className="text-right tabular-nums text-xs text-muted-foreground align-middle">
                       {fmtNum(r.ventas_7_dias, 0)} / {fmtNum(r.ventas_30_dias, 0)}
                     </TableCell>
                     <TableCell className="text-right align-middle">
@@ -1117,7 +1117,7 @@ export default function GenerarOcPage() {
                         onChange={(e) => updateCajasAnalysis(k, e.target.value)}
                       />
                     </TableCell>
-                    <TableCell className="text-right tabular-nums font-medium text-slate-900 align-middle">
+                    <TableCell className="text-right tabular-nums font-medium text-foreground align-middle">
                       {fmtNum(total, 0)}
                     </TableCell>
                     <TableCell />
@@ -1207,9 +1207,9 @@ export default function GenerarOcPage() {
             <DialogTitle>Confirmar orden de compra</DialogTitle>
           </DialogHeader>
           <div className="grid gap-3 py-2 text-sm">
-            <p className="text-slate-600">
+            <p className="text-muted-foreground">
               Proveedor:{" "}
-              <span className="font-medium text-slate-900">
+              <span className="font-medium text-foreground">
                 {suppliers.find((s) => s.id === sid)?.name ?? `#${sid}`}
               </span>
             </p>
@@ -1242,7 +1242,7 @@ export default function GenerarOcPage() {
                 onChange={(e) => setConfirmForm((f) => ({ ...f, observacion: e.target.value }))}
               />
             </div>
-            <p className="text-xs text-slate-500">{linesToSubmit.length} líneas en esta orden.</p>
+            <p className="text-xs text-muted-foreground">{linesToSubmit.length} líneas en esta orden.</p>
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setConfirmOpen(false)} disabled={saving}>
@@ -1263,7 +1263,7 @@ export default function GenerarOcPage() {
           {resultHeader ? (
             <div
               id={printHostId}
-              className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-auto sm:overflow-x-hidden rounded-md border border-slate-200/80 bg-slate-50/50 p-2 sm:p-3 print:overflow-visible print:border-0 print:bg-transparent print:p-0"
+              className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-auto sm:overflow-x-hidden rounded-md border border-border/80 bg-muted/40/50 p-2 sm:p-3 print:overflow-visible print:border-0 print:bg-transparent print:p-0"
             >
               <OcInvoicePrint header={resultHeader} details={resultDetails} />
             </div>

@@ -134,17 +134,23 @@ export default function TrazabilidadPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-foreground">Revisión de Góndola</h1>
-          <p className="text-sm text-muted-foreground">
+      {/* Graphite Premium 6.0 · encabezado unificado */}
+      <div className="flex flex-col gap-4 border-b border-lq-line pb-5 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-xs font-medium uppercase tracking-[0.14em] text-lq-faint">
+            Sucursales · Exhibición
+          </p>
+          <h1 className="mt-1 text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9">
+            Revisión de Góndola
+          </h1>
+          <p className="mt-1.5 text-sm leading-6 text-lq-muted">
             Escanea los productos exhibidos para comparar con el inventario
           </p>
         </div>
         {revisionComplete ? (
-          <Button onClick={handleNuevaRevision}>Nueva Revisión</Button>
+          <Button className="h-11 sm:h-9" onClick={handleNuevaRevision}>Nueva Revisión</Button>
         ) : (
-          <Button onClick={handleFinalizarRevision} disabled={scannedProducts.length === 0}>
+          <Button className="h-11 sm:h-9" onClick={handleFinalizarRevision} disabled={scannedProducts.length === 0}>
             <CheckCircle className="mr-2 h-4 w-4" />
             Finalizar Revisión
           </Button>
@@ -154,8 +160,8 @@ export default function TrazabilidadPage() {
       <div className="grid gap-4 md:grid-cols-4">
         <Card>
           <CardContent className="flex items-center gap-4 p-4">
-            <div className="rounded-lg bg-blue-100 p-2">
-              <ScanLine className="h-5 w-5 text-blue-600" />
+            <div className="rounded-lg bg-blue-100 p-2 dark:bg-blue-950/50">
+              <ScanLine className="h-5 w-5 text-blue-600 dark:text-blue-400" />
             </div>
             <div>
               <p className="text-2xl font-semibold">{scannedProducts.length}</p>
@@ -165,8 +171,8 @@ export default function TrazabilidadPage() {
         </Card>
         <Card>
           <CardContent className="flex items-center gap-4 p-4">
-            <div className="rounded-lg bg-green-100 p-2">
-              <Eye className="h-5 w-5 text-green-600" />
+            <div className="rounded-lg bg-green-100 p-2 dark:bg-green-950/50">
+              <Eye className="h-5 w-5 text-green-600 dark:text-green-400" />
             </div>
             <div>
               <p className="text-2xl font-semibold">{scannedProducts.length}</p>
@@ -176,8 +182,8 @@ export default function TrazabilidadPage() {
         </Card>
         <Card>
           <CardContent className="flex items-center gap-4 p-4">
-            <div className="rounded-lg bg-yellow-100 p-2">
-              <EyeOff className="h-5 w-5 text-yellow-600" />
+            <div className="rounded-lg bg-yellow-100 p-2 dark:bg-yellow-950/50">
+              <EyeOff className="h-5 w-5 text-yellow-600 dark:text-yellow-400" />
             </div>
             <div>
               <p className="text-2xl font-semibold">
@@ -189,9 +195,9 @@ export default function TrazabilidadPage() {
         </Card>
         <Card>
           <CardContent className="flex items-center gap-4 p-4">
-            <div className={`rounded-lg p-2 ${revisionComplete ? "bg-green-100" : "bg-gray-100"}`}>
+            <div className={`rounded-lg p-2 ${revisionComplete ? "bg-green-100 dark:bg-green-950/50" : "bg-muted"}`}>
               <CheckCircle
-                className={`h-5 w-5 ${revisionComplete ? "text-green-600" : "text-gray-400"}`}
+                className={`h-5 w-5 ${revisionComplete ? "text-green-600 dark:text-green-400" : "text-muted-foreground"}`}
               />
             </div>
             <div>
@@ -322,8 +328,8 @@ export default function TrazabilidadPage() {
         <Card className="border-yellow-200 bg-yellow-50">
           <CardHeader>
             <div className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-yellow-600" />
-              <CardTitle className="text-yellow-800">Productos en Stock No Exhibidos</CardTitle>
+              <AlertTriangle className="h-5 w-5 text-yellow-600 dark:text-yellow-300" />
+              <CardTitle className="text-yellow-800 dark:text-yellow-300">Productos en Stock No Exhibidos</CardTitle>
             </div>
           </CardHeader>
           <CardContent>
@@ -335,7 +341,7 @@ export default function TrazabilidadPage() {
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
-                    <tr className="border-b border-yellow-200 text-left text-sm font-medium text-yellow-800">
+                    <tr className="border-b border-yellow-200 text-left text-sm font-medium text-yellow-800 dark:text-yellow-300">
                       <th className="pb-3">Código de Barras</th>
                       <th className="pb-3">Producto</th>
                       <th className="pb-3 text-right">Stock Disponible</th>
@@ -350,7 +356,7 @@ export default function TrazabilidadPage() {
                       >
                         <td className="py-3 font-mono text-sm">{product.codigoBarras}</td>
                         <td className="py-3 font-medium">{product.producto}</td>
-                        <td className="py-3 text-right font-semibold text-yellow-700">
+                        <td className="py-3 text-right font-semibold text-yellow-700 dark:text-yellow-300">
                           {product.stockSistema}
                         </td>
                         <td className="py-3">

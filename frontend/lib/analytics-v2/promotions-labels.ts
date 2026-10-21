@@ -20,11 +20,11 @@ export const APPROVAL_LABELS: Record<CampaignApproval, string> = {
 }
 
 export const APPROVAL_TONES: Record<CampaignApproval, string> = {
-  borrador: "border-zinc-300 bg-zinc-100 text-zinc-700",
+  borrador: "border-border bg-muted text-muted-foreground",
   pendiente_aprobacion: "border-amber-300 bg-amber-50 text-amber-800",
   aprobada: "border-emerald-300 bg-emerald-50 text-emerald-800",
   rechazada: "border-red-300 bg-red-50 text-red-800",
-  cancelada: "border-zinc-300 bg-zinc-100 text-zinc-500 line-through",
+  cancelada: "border-border bg-muted text-muted-foreground line-through",
 }
 
 export const TIMELINE_LABELS: Record<CampaignTimeline, string> = {
@@ -37,8 +37,8 @@ export const TIMELINE_LABELS: Record<CampaignTimeline, string> = {
 export const TIMELINE_TONES: Record<CampaignTimeline, string> = {
   programada: "border-sky-300 bg-sky-50 text-sky-800",
   vigente: "border-fuchsia-300 bg-fuchsia-50 text-fuchsia-800",
-  finalizada: "border-zinc-300 bg-zinc-100 text-zinc-600",
-  cancelada: "border-zinc-300 bg-zinc-100 text-zinc-500",
+  finalizada: "border-border bg-muted text-muted-foreground",
+  cancelada: "border-border bg-muted text-muted-foreground",
 }
 
 export const CLEARANCE_LABELS: Record<ClearanceReason, string> = {
@@ -64,7 +64,7 @@ export const VERIFICATION_TONES: Record<PriceVerification, string> = {
   sin_precio_bsale: "border-amber-300 bg-amber-50 text-amber-800",
   precio_bsale_desactualizado: "border-amber-300 bg-amber-50 text-amber-800",
   vencida_sin_revertir: "border-orange-300 bg-orange-50 text-orange-800",
-  no_aplica: "border-zinc-300 bg-zinc-100 text-zinc-600",
+  no_aplica: "border-border bg-muted text-muted-foreground",
 }
 
 export const EXCEPTION_LABELS: Record<ItemExceptionCheck, string> = {

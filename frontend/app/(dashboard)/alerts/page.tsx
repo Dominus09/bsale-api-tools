@@ -59,7 +59,7 @@ export default function AlertsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Alertas de Márgenes</h1>
+        <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9">Alertas de Márgenes</h1>
         <p className="text-muted-foreground">
           Productos que requieren revisión de precios
         </p>
@@ -170,7 +170,7 @@ export default function AlertsPage() {
                             className={
                               alert.alert_type === "LOW_MARGIN"
                                 ? "font-medium text-red-500"
-                                : "font-medium text-yellow-600"
+                                : "font-medium text-yellow-600 dark:text-yellow-300"
                             }
                           >
                             {alert.current_margin != null ? `${currentMargin.toFixed(1)}%` : "—"}

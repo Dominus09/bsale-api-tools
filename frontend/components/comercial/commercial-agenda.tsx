@@ -19,16 +19,16 @@ const TIPO_STYLES: Record<string, string> = {
 }
 
 const SEGMENTO_COLORS: Record<string, string> = {
-  VIP: "bg-yellow-500/20 text-yellow-800",
+  VIP: "bg-yellow-500/20 text-yellow-800 dark:text-yellow-300",
   Premium: "bg-purple-500/20 text-purple-800",
-  Crecimiento: "bg-emerald-500/20 text-emerald-800",
-  Perdido: "bg-red-500/20 text-red-800",
-  "En Riesgo": "bg-amber-500/20 text-amber-800",
+  Crecimiento: "bg-emerald-500/20 text-emerald-800 dark:text-emerald-300",
+  Perdido: "bg-red-500/20 text-red-800 dark:text-red-300",
+  "En Riesgo": "bg-amber-500/20 text-amber-800 dark:text-amber-300",
 }
 
 function ProbBadge({ value, label }: { value?: number; label: string }) {
   if (value == null) return null
-  const color = value >= 70 ? "text-emerald-600" : value >= 40 ? "text-amber-600" : "text-muted-foreground"
+  const color = value >= 70 ? "text-emerald-600 dark:text-emerald-300" : value >= 40 ? "text-amber-600 dark:text-amber-300" : "text-muted-foreground"
   return (
     <span className={cn("text-xs font-medium", color)}>
       {label} {value}%
@@ -55,15 +55,15 @@ function AgendaTaskCard({
       onClick={() => task.client_id && onClientClick?.(task.client_id)}
     >
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <Badge variant="outline" className="text-[10px] font-bold uppercase">
+        <Badge variant="outline" className="text-[11px] font-bold uppercase">
           {task.tipo}
         </Badge>
         {task.segmento && (
-          <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-semibold", SEGMENTO_COLORS[task.segmento] ?? "bg-muted")}>
+          <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", SEGMENTO_COLORS[task.segmento] ?? "bg-muted")}>
             {task.segmento}
           </span>
         )}
-        <Badge variant={task.prioridad === "alta" ? "destructive" : "secondary"} className="ml-auto text-[10px]">
+        <Badge variant={task.prioridad === "alta" ? "destructive" : "secondary"} className="ml-auto text-[11px]">
           {task.prioridad}
         </Badge>
       </div>

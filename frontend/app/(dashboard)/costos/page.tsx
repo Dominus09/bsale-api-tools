@@ -256,7 +256,7 @@ export default function CostosPage() {
     <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-3 p-3 md:p-4">
       <header className="flex flex-col gap-2 border-b border-border/60 pb-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0 space-y-1">
-          <h1 className="text-xl font-semibold tracking-tight md:text-2xl">
+          <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9 font-semibold">
             Control de costos
           </h1>
           <p className="text-sm text-muted-foreground">

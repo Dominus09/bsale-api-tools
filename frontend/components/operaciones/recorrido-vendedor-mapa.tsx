@@ -184,7 +184,7 @@ export default function RecorridoVendedorMapa({
         <span>
           GPS: <strong>{data.km_gps}</strong> km · Planificado:{" "}
           <strong>{data.km_ruta_planificada}</strong> km · Desviación:{" "}
-          <strong className={data.desviacion_km > 5 ? "text-amber-700" : ""}>{desv}</strong> km
+          <strong className={data.desviacion_km > 5 ? "text-amber-700 dark:text-amber-300" : ""}>{desv}</strong> km
         </span>
         {data.promedio_minutos_entre_visitas != null ? (
           <span>

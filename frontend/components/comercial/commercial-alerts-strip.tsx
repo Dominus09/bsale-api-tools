@@ -31,7 +31,7 @@ export function CommercialAlertsStrip({
     <Card className="border-amber-500/30 bg-gradient-to-r from-amber-500/5 to-background">
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center gap-2 text-base">
-          <Bell className="h-4 w-4 text-amber-600" />
+          <Bell className="h-4 w-4 text-amber-600 dark:text-amber-300" />
           Alertas Inteligentes
           <Badge variant="destructive" className="ml-auto">
             {alerts.length}
@@ -51,13 +51,13 @@ export function CommercialAlertsStrip({
             <div className="mt-0.5 shrink-0">{ALERT_ICONS[a.tipo] ?? <Bell className="h-4 w-4" />}</div>
             <div className="min-w-0">
               <div className="mb-1 flex flex-wrap gap-1">
-                <Badge variant={a.prioridad === "alta" ? "destructive" : "secondary"} className="text-[10px]">
+                <Badge variant={a.prioridad === "alta" ? "destructive" : "secondary"} className="text-[11px]">
                   {a.prioridad}
                 </Badge>
                 {a.vendedor && (
                   <button
                     type="button"
-                    className="text-[10px] text-muted-foreground underline-offset-2 hover:underline"
+                    className="text-[11px] text-muted-foreground underline-offset-2 hover:underline"
                     onClick={(e) => {
                       e.stopPropagation()
                       onSellerClick?.(a.vendedor!)

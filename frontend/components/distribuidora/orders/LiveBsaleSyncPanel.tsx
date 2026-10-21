@@ -143,7 +143,7 @@ export function LiveBsaleSyncPanel({ onSyncComplete, className }: LiveBsaleSyncP
                 {formatRelativeTime(layer.last_success_at)}
               </p>
               {layer.status === "error" && layer.error_summary ? (
-                <p className="mt-0.5 truncate text-[10px] text-destructive" title={layer.error_summary}>
+                <p className="mt-0.5 truncate text-[11px] text-destructive" title={layer.error_summary}>
                   Error
                 </p>
               ) : null}

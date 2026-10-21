@@ -301,7 +301,7 @@ export default function DistribuidoraClientesDashboardPage() {
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             Distribuidora
           </p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight">Cartera de clientes</h1>
+          <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9 mt-1 font-semibold">Cartera de clientes</h1>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
             Operación comercial: montos en el período, frecuencia y vendedor de la última venta. Use columnas para
             ordenar.

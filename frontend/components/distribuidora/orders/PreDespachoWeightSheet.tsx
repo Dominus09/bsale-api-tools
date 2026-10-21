@@ -101,7 +101,7 @@ function WeightLineEditor({
         </p>
         {line.variante?.trim() ? (
           <div className="mt-1.5">
-            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
               Variante
             </p>
             <p className="text-xs leading-snug text-muted-foreground whitespace-normal break-words">
@@ -153,7 +153,7 @@ function WeightLineEditor({
               aria-label="Nuevo peso unitario en kg"
             />
             {estBox != null ? (
-              <p className="text-[10px] text-right text-muted-foreground tabular-nums">
+              <p className="text-[11px] text-right text-muted-foreground tabular-nums">
                 Caja est.: {estBox.toLocaleString("es-CL", { maximumFractionDigits: 2 })} kg
               </p>
             ) : null}
@@ -197,11 +197,11 @@ function HeaderKpi({
 }) {
   return (
     <div className="rounded-lg border border-border/70 bg-muted/25 px-3 py-2.5">
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         {label}
       </p>
       <p className="mt-0.5 text-base font-semibold tabular-nums text-foreground">{value}</p>
-      {sub ? <p className="text-[10px] text-muted-foreground">{sub}</p> : null}
+      {sub ? <p className="text-[11px] text-muted-foreground">{sub}</p> : null}
     </div>
   )
 }
@@ -493,7 +493,7 @@ export function PreDespachoWeightSheet({
                     type="button"
                     size="sm"
                     variant="outline"
-                    className="shrink-0 border-emerald-400 text-emerald-800"
+                    className="shrink-0 border-emerald-400 text-emerald-800 dark:text-emerald-300"
                     onClick={() => onOpenChange(false)}
                   >
                     Finalizar
@@ -511,7 +511,7 @@ export function PreDespachoWeightSheet({
                 ) : (
                   <div className="overflow-x-auto rounded-lg border border-border/80 shadow-sm">
                     <table className="w-full min-w-[800px] text-left">
-                      <thead className="sticky top-0 z-10 bg-muted/90 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur-sm">
+                      <thead className="sticky top-0 z-10 bg-muted/90 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur-sm">
                         <tr>
                           <th className="px-3 py-2.5 w-[5.5rem]">Código</th>
                           <th className="px-3 py-2.5 min-w-[16rem]">Producto</th>

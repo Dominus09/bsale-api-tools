@@ -289,7 +289,7 @@ export function CostIntelligencePanel({
           <div className="grid gap-4 lg:grid-cols-2">
             <div className="space-y-3">
               <h3 className="flex items-center gap-2 font-semibold">
-                <TrendingDown className="h-5 w-5 text-green-600" />
+                <TrendingDown className="h-5 w-5 text-green-600 dark:text-green-300" />
                 Oportunidades destacadas · Top 10
               </h3>
               <div className="grid gap-3 sm:grid-cols-2">
@@ -304,7 +304,7 @@ export function CostIntelligencePanel({
             </div>
             <div className="space-y-3">
               <h3 className="flex items-center gap-2 font-semibold">
-                <TrendingUp className="h-5 w-5 text-red-600" />
+                <TrendingUp className="h-5 w-5 text-red-600 dark:text-red-300" />
                 Riesgos destacados · Top 10
               </h3>
               <div className="grid gap-3 sm:grid-cols-2">

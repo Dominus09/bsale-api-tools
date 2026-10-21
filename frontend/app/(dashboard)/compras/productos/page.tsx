@@ -308,7 +308,7 @@ export default function Page() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-foreground">Productos por proveedor</h1>
+          <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9 font-semibold">Productos por proveedor</h1>
           <p className="text-sm text-muted-foreground">
             Productos del catálogo maestro y su proveedor asignado
           </p>

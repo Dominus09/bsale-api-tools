@@ -168,11 +168,11 @@ function OrderListCard({
         <span className="text-muted-foreground">Cobertura</span>
         <span className="text-right">{formatPct(row.porcentaje_cobertura)}</span>
         <span className="text-muted-foreground">Sin peso</span>
-        <span className={cn("text-right font-medium", (row.productos_sin_peso ?? 0) > 0 && "text-amber-700")}>
+        <span className={cn("text-right font-medium", (row.productos_sin_peso ?? 0) > 0 && "text-amber-700 dark:text-amber-300")}>
           {row.productos_sin_peso ?? "—"}
         </span>
       </div>
-      <p className="mt-2 text-[10px] text-muted-foreground">
+      <p className="mt-2 text-[11px] text-muted-foreground">
         Últ. cálculo: {formatDt(row.ultimo_calculo)}
       </p>
     </button>
@@ -343,7 +343,7 @@ export default function PesoOrdenesPage() {
     <div className="flex flex-col gap-6 p-6">
       <div>
         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Logística</p>
-        <h1 className="flex items-center gap-2 text-2xl font-semibold">
+        <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9 flex items-center gap-2 font-semibold">
           <PackageCheck className="size-7 text-primary" />
           Peso de Órdenes
         </h1>
@@ -548,7 +548,7 @@ export default function PesoOrdenesPage() {
                             <span>{ln.producto || "—"}</span>
                             {ln.weight_match?.status === "match_conflict" ||
                             ln.match_status === "match_conflict" ? (
-                              <span className="mt-1 block text-[11px] font-normal text-amber-800">
+                              <span className="mt-1 block text-[11px] font-normal text-amber-800 dark:text-amber-300">
                                 {ln.weight_match?.warning || "Asociación de peso pendiente"}
                               </span>
                             ) : ln.weight_match?.source === "barcode" ? (

@@ -11,7 +11,7 @@ const STATUS_CLASS: Record<PricePolicyStatus, string> = {
   below_minimum: "bg-red-500/15 text-red-800 dark:text-red-200 border-red-500/40",
   within_policy: "bg-emerald-500/15 text-emerald-800 dark:text-emerald-200 border-emerald-500/40",
   above_maximum: "bg-amber-500/15 text-amber-900 dark:text-amber-200 border-amber-500/40",
-  missing_rule: "bg-slate-500/15 text-slate-800 dark:text-slate-200 border-slate-500/40",
+  missing_rule: "bg-slate-500/15 text-foreground dark:text-slate-200 border-slate-500/40",
   missing_cost: "bg-orange-500/15 text-orange-900 dark:text-orange-200 border-orange-500/40",
   missing_price: "bg-muted text-muted-foreground border-border",
   stale_cost: "bg-yellow-500/15 text-yellow-900 dark:text-yellow-200 border-yellow-500/40",

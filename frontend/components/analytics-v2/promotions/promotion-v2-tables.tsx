@@ -73,7 +73,7 @@ export function PromotionItemsTable({
                 {i.variant_name ? ` · ${i.variant_name}` : ""}
               </span>
               {i.kind === "remate" ? (
-                <span className="block text-[11px] text-orange-800">
+                <span className="block text-[11px] text-orange-800 dark:text-orange-300">
                   {i.clearance_reason ? CLEARANCE_LABELS[i.clearance_reason] : "Sin motivo"} · stock ref. {formatQty(i.reference_stock)}
                 </span>
               ) : null}
@@ -81,7 +81,7 @@ export function PromotionItemsTable({
             <td className="px-3 py-2 text-xs">
               <span className="font-medium">{i.price_list.label ?? i.price_list.name ?? "—"}</span>
               <span className="block text-[11px] text-muted-foreground">#{i.price_list.id}</span>
-              {!i.price_list.in_scope ? <span className="block text-[10px] text-red-700">Fuera de alcance</span> : null}
+              {!i.price_list.in_scope ? <span className="block text-[11px] text-red-700 dark:text-red-300">Fuera de alcance</span> : null}
             </td>
             <td className="max-w-[220px] px-3 py-2">
               <button type="button" className="block truncate text-left font-medium text-primary hover:underline" onClick={() => onOpenCampaign(i.campaign_id)}>
@@ -100,15 +100,15 @@ export function PromotionItemsTable({
             </td>
             <td className="px-3 py-2 text-right tabular-nums">
               {formatMoney(i.normal_gross_price)}
-              <span className="block text-[10px] text-muted-foreground">{formatDate(i.normal_price_fetched_at)}</span>
+              <span className="block text-[11px] text-muted-foreground">{formatDate(i.normal_price_fetched_at)}</span>
             </td>
             <td className="px-3 py-2 text-right tabular-nums font-medium">
               {formatMoney(i.promo_gross_price)}
-              <span className="block text-[10px] text-muted-foreground">{i.discount_pct != null ? formatPct(i.discount_pct) : ""}</span>
+              <span className="block text-[11px] text-muted-foreground">{i.discount_pct != null ? formatPct(i.discount_pct) : ""}</span>
             </td>
             <td className="px-3 py-2 text-right tabular-nums">
               {formatMoney(i.bsale_current_gross)}
-              <span className="block text-[10px] text-muted-foreground">{formatDateTime(i.bsale_fetched_at)}</span>
+              <span className="block text-[11px] text-muted-foreground">{formatDateTime(i.bsale_fetched_at)}</span>
             </td>
             <td className="px-3 py-2">
               <VerificationBadge verification={i.verification} />
@@ -116,7 +116,7 @@ export function PromotionItemsTable({
             <td className="max-w-[220px] px-3 py-2">
               <ExceptionBadge check={i.exception_check} />
               {i.exception && i.exception.applies_to_this_item === false && i.exception.exception ? (
-                <span className="mt-1 block text-[10px] text-muted-foreground">
+                <span className="mt-1 block text-[11px] text-muted-foreground">
                   Aplica otra campaña: {i.exception.exception.campaign_name ?? i.exception.exception.reference ?? "—"}
                 </span>
               ) : null}
@@ -157,14 +157,14 @@ export function PromotionCampaignsTable({
               <span className="block truncate font-medium">{c.name}</span>
               <div className="mt-1 flex flex-wrap items-center gap-1">
                 <KindBadge kind={c.kind} />
-                {c.legacy_promotion_id ? <span className="text-[10px] text-muted-foreground">Importada de promoción #{c.legacy_promotion_id}</span> : null}
+                {c.legacy_promotion_id ? <span className="text-[11px] text-muted-foreground">Importada de promoción #{c.legacy_promotion_id}</span> : null}
               </div>
               {c.responsible ? <span className="block text-[11px] text-muted-foreground">Responsable: {c.responsible}</span> : null}
             </td>
             <td className="px-3 py-2 text-xs">
               {formatDate(c.starts_on)} → {formatDate(c.ends_on)}
               {c.effective_end_on !== c.ends_on ? (
-                <span className="block text-[10px] text-muted-foreground">Fin real {formatDate(c.effective_end_on)}</span>
+                <span className="block text-[11px] text-muted-foreground">Fin real {formatDate(c.effective_end_on)}</span>
               ) : null}
             </td>
             <td className="px-3 py-2">
@@ -175,7 +175,7 @@ export function PromotionCampaignsTable({
             </td>
             <td className="px-3 py-2 text-right tabular-nums">
               {c.products}
-              <span className="block text-[10px] text-muted-foreground">listas {c.price_list_ids.join(", ") || "—"}</span>
+              <span className="block text-[11px] text-muted-foreground">listas {c.price_list_ids.join(", ") || "—"}</span>
             </td>
             <td className="px-3 py-2 text-[11px]">
               {Object.entries(c.verification).length

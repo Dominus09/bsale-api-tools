@@ -16,7 +16,7 @@ import { cn } from "@/lib/utils"
 
 function CopyRow({ label, value }: { label: string; value: string | number | null | undefined }) {
   const [copied, setCopied] = useState(false); const text = value == null ? "" : String(value)
-  return <div className="flex justify-between gap-2 rounded border p-2"><div className="min-w-0"><p className="text-[10px] uppercase text-muted-foreground">{label}</p><p className="break-all font-mono text-xs">{text || "—"}</p></div>{text && <Button size="icon" variant="ghost" onClick={async () => { await navigator.clipboard?.writeText(text); setCopied(true) }} >{copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}</Button>}</div>
+  return <div className="flex justify-between gap-2 rounded border p-2"><div className="min-w-0"><p className="text-[11px] uppercase text-muted-foreground">{label}</p><p className="break-all font-mono text-xs">{text || "—"}</p></div>{text && <Button size="icon" variant="ghost" onClick={async () => { await navigator.clipboard?.writeText(text); setCopied(true) }} >{copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}</Button>}</div>
 }
 function History({ rows }: { rows: CompanyHistoryItem[] }) {
   const chart = rows.filter((r) => r.corrected_gross_cost != null).map((r) => ({ ...r, cost: Number(r.corrected_gross_cost), date: formatDateCL(r.admission_date) }))

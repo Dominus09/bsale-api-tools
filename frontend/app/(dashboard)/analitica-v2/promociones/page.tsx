@@ -197,7 +197,7 @@ export default function PromotionsV2Page() {
       <header className="flex flex-col gap-2 border-b border-border/60 pb-3 md:flex-row md:items-end md:justify-between">
         <div className="flex flex-col gap-1">
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-xl font-semibold tracking-tight md:text-2xl">Promociones y Remates V2</h1>
+            <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9 font-semibold">Promociones y Remates V2</h1>
             <span className="rounded-md border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800">
               En validación
             </span>
@@ -366,7 +366,7 @@ export default function PromotionsV2Page() {
               <TabsTrigger value="pendientes">
                 {SECTION_LABELS.pendientes}
                 {summary && summary.kpis.exceptions_pending + summary.kpis.campaigns_pending_approval > 0 ? (
-                  <span className="ml-1 rounded-full bg-orange-100 px-1.5 text-[10px] text-orange-800">
+                  <span className="ml-1 rounded-full bg-orange-100 px-1.5 text-[11px] text-orange-800 dark:bg-orange-950/60 dark:text-orange-300">
                     {summary.kpis.exceptions_pending + summary.kpis.campaigns_pending_approval}
                   </span>
                 ) : null}

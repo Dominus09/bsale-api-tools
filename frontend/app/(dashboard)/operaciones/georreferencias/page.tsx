@@ -170,7 +170,7 @@ export default function OperacionesGeorreferenciasPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Georreferencias</h1>
+          <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9">Georreferencias</h1>
           <p className="text-sm text-muted-foreground max-w-2xl">
             Flujo operacional: pendientes, capturadas y aplicadas. Volver a pendiente conserva
             coordenadas.
@@ -197,21 +197,21 @@ export default function OperacionesGeorreferenciasPage() {
           <KpiCard
             label="Pendientes"
             value={resumen.pendientes}
-            accent="text-amber-700"
+            accent="text-amber-700 dark:text-amber-300"
             active={filtroEstado === "pendiente"}
             onClick={() => kpiFiltro("pendiente")}
           />
           <KpiCard
             label="Capturadas"
             value={resumen.capturados}
-            accent="text-sky-700"
+            accent="text-sky-700 dark:text-sky-300"
             active={filtroEstado === "capturada"}
             onClick={() => kpiFiltro("capturada")}
           />
           <KpiCard
             label="Aplicadas"
             value={resumen.aplicados}
-            accent="text-emerald-700"
+            accent="text-emerald-700 dark:text-emerald-300"
             active={filtroEstado === "aplicada"}
             onClick={() => kpiFiltro("aplicada")}
           />

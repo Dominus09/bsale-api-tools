@@ -65,7 +65,7 @@ export function PromotionDetailSheet({
         </SheetHeader>
 
         <div className="mt-6 space-y-6">
-          <div className="relative mx-auto aspect-square w-full max-w-[260px] overflow-hidden rounded-xl border bg-white">
+          <div className="relative mx-auto aspect-square w-full max-w-[260px] overflow-hidden rounded-xl border bg-card">
             <PromotionProductImage
               key={`${row.codigo_barras}-${row.image_url ?? ""}`}
               imageUrl={row.image_url}
@@ -107,7 +107,7 @@ export function PromotionDetailSheet({
             </div>
             <div>
               <Label className="text-muted-foreground text-xs">AHORA (sale_price)</Label>
-              <p className="text-3xl font-bold text-emerald-700">
+              <p className="text-3xl font-bold text-emerald-700 dark:text-emerald-300">
                 {formatCurrency(row.sale_price)}
               </p>
             </div>

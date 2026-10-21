@@ -70,39 +70,39 @@ export function ComprasDataStatusCard({ companyId }: Props) {
 
   if (companyId == null || !Number.isFinite(companyId)) {
     return (
-      <div className="rounded-xl border border-slate-200/80 bg-slate-50/60 px-4 py-3 text-sm text-slate-600">
-        <p className="font-semibold text-slate-800">Estado de datos</p>
-        <p className="mt-1 text-slate-500">Elige una empresa para ver la frescura de stock y ventas.</p>
+      <div className="rounded-xl border border-border/80 bg-muted/40/60 px-4 py-3 text-sm text-muted-foreground">
+        <p className="font-semibold text-foreground">Estado de datos</p>
+        <p className="mt-1 text-muted-foreground">Elige una empresa para ver la frescura de stock y ventas.</p>
       </div>
     )
   }
 
   return (
-    <div className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-sm">
+    <div className="rounded-xl border border-border/80 bg-card p-4 shadow-sm">
       <div className="mb-3 flex items-center gap-2">
-        <h2 className="text-sm font-semibold tracking-tight text-slate-800">Estado de datos</h2>
-        {loading && !data ? <Loader2 className="size-4 animate-spin text-slate-400" aria-hidden /> : null}
+        <h2 className="text-sm font-semibold tracking-tight text-foreground">Estado de datos</h2>
+        {loading && !data ? <Loader2 className="size-4 animate-spin text-muted-foreground" aria-hidden /> : null}
       </div>
-      {err ? <p className="text-sm text-red-700">{err}</p> : null}
+      {err ? <p className="text-sm text-red-700 dark:text-red-300">{err}</p> : null}
       {data ? (
         <div className="grid gap-3 sm:grid-cols-2">
           <div
             className={`rounded-lg border px-3 py-2.5 ${stockCardClass(data.stock.status)}`}
           >
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-600">Stock</p>
-            <p className="mt-1 text-sm text-slate-900">{data.stock.message}</p>
-            <p className="mt-1 text-xs text-slate-500">Sincronización frecuente; umbrales 30 / 60 min.</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Stock</p>
+            <p className="mt-1 text-sm text-foreground">{data.stock.message}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Sincronización frecuente; umbrales 30 / 60 min.</p>
           </div>
           <div
             className={`rounded-lg border px-3 py-2.5 ${salesCardClass(data.sales.status)}`}
           >
-            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-600">Ventas</p>
-            <p className="mt-1 text-sm text-slate-900">{data.sales.message}</p>
-            <p className="mt-1 text-xs text-slate-500">Regla diaria con corte 05:00 (hora Chile).</p>
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Ventas</p>
+            <p className="mt-1 text-sm text-foreground">{data.sales.message}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Regla diaria con corte 05:00 (hora Chile).</p>
           </div>
         </div>
       ) : !err ? (
-        <p className="text-sm text-slate-500">Cargando…</p>
+        <p className="text-sm text-muted-foreground">Cargando…</p>
       ) : null}
     </div>
   )

@@ -48,7 +48,7 @@ export function DispatchPlanInvoicingDashboard({
           <p className="mt-0.5 text-sm font-medium tabular-nums">
             {formatClp(inv.total_oc_amount_clp)}
           </p>
-          <p className="mt-1 text-[10px] text-muted-foreground">
+          <p className="mt-1 text-[11px] text-muted-foreground">
             No descuenta costos de ruta ni mercadería
           </p>
         </div>
@@ -93,7 +93,7 @@ export function DispatchPlanInvoicingDashboard({
                 <p className="font-semibold tabular-nums">
                   {formatClp(margin.commercial_margin_clp ?? 0)}
                 </p>
-                <p className="text-[10px] text-muted-foreground">
+                <p className="text-[11px] text-muted-foreground">
                   Venta {formatClp(margin.invoiced_revenue_clp ?? 0)} − costo{" "}
                   {formatClp(margin.invoiced_cost_clp ?? 0)}
                 </p>
@@ -111,12 +111,12 @@ export function DispatchPlanInvoicingDashboard({
                     "text-lg font-semibold tabular-nums",
                     (margin.net_operational_clp ?? 0) >= 0
                       ? "text-emerald-700 dark:text-emerald-400"
-                      : "text-red-600",
+                      : "text-red-600 dark:text-red-300",
                   )}
                 >
                   {formatClp(margin.net_operational_clp ?? 0)}
                 </p>
-                <p className="text-[10px] text-muted-foreground">
+                <p className="text-[11px] text-muted-foreground">
                   Fuente: {margin.source ?? "variant_cost"} — solo documentos confirmados
                 </p>
               </div>

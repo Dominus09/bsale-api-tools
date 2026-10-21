@@ -397,7 +397,7 @@ export default function MaestroLogisticoPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold text-foreground">Maestro logístico productos</h1>
+        <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9 font-semibold">Maestro logístico productos</h1>
         <p className="text-sm text-muted-foreground">
           Datos de cubicación y proveedor por código de barras. Los nombres y CxC se actualizan
           desde Bsale; peso y dimensiones solo se editan aquí.
@@ -568,7 +568,7 @@ export default function MaestroLogisticoPage() {
                               </p>
                             ) : null}
                             {row.logistics_completed ? (
-                              <Badge variant="secondary" className="mt-1 text-[10px]">
+                              <Badge variant="secondary" className="mt-1 text-[11px]">
                                 Logística OK
                               </Badge>
                             ) : null}
@@ -658,7 +658,7 @@ export default function MaestroLogisticoPage() {
                               {pending ? (
                                 <Loader2 className="size-3.5 animate-spin text-muted-foreground" />
                               ) : showSaved ? (
-                                <Check className="size-3.5 text-emerald-600" strokeWidth={2.5} />
+                                <Check className="size-3.5 text-emerald-600 dark:text-emerald-300" strokeWidth={2.5} />
                               ) : null}
                             </span>
                           </div>

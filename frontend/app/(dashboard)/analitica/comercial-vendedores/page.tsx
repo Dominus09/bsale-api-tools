@@ -216,8 +216,8 @@ const STATUS_COLORS: Record<string, string> = {
 const PIE_COLORS = ["#22c55e", "#3b82f6", "#8b5cf6", "#ef4444", "#f59e0b"]
 
 function TrendIcon({ trend }: { trend: CommercialKpiCompare["trend"] }) {
-  if (trend === "up") return <ArrowUpRight className="h-4 w-4 text-emerald-600" />
-  if (trend === "down") return <ArrowDownRight className="h-4 w-4 text-red-600" />
+  if (trend === "up") return <ArrowUpRight className="h-4 w-4 text-emerald-600 dark:text-emerald-300" />
+  if (trend === "down") return <ArrowDownRight className="h-4 w-4 text-red-600 dark:text-red-300" />
   return <Minus className="h-4 w-4 text-muted-foreground" />
 }
 
@@ -257,7 +257,7 @@ function KpiCard({
         : "flat"
     : kpi.trend
   const trendColor =
-    trend === "up" ? "text-emerald-600" : trend === "down" ? "text-red-600" : "text-muted-foreground"
+    trend === "up" ? "text-emerald-600 dark:text-emerald-300" : trend === "down" ? "text-red-600 dark:text-red-300" : "text-muted-foreground"
 
   return (
     <Card>
@@ -569,7 +569,7 @@ export default function ComercialVendedoresPage() {
     <div className="flex flex-col gap-6 p-6">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">CRM Comercial</h1>
+          <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9">CRM Comercial</h1>
           <p className="text-sm text-muted-foreground">
             Director Comercial Digital — Facturas y boletas (Company 3 / Office 1)
           </p>
@@ -834,9 +834,9 @@ export default function ComercialVendedoresPage() {
                     <div className="flex justify-between"><span className="text-muted-foreground">Venta</span><span className="font-semibold">{formatCLP(s.venta_actual)}</span></div>
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Clientes únicos</span>
-                      <span>{s.clientes_unicos_actual}{s.clientes_unicos_variacion_pct != null && <span className={cn("ml-1", s.clientes_unicos_variacion_pct < 0 ? "text-red-600" : "text-emerald-600")}> ({formatPct(s.clientes_unicos_variacion_pct)})</span>}</span>
+                      <span>{s.clientes_unicos_actual}{s.clientes_unicos_variacion_pct != null && <span className={cn("ml-1", s.clientes_unicos_variacion_pct < 0 ? "text-red-600 dark:text-red-300" : "text-emerald-600 dark:text-emerald-300")}> ({formatPct(s.clientes_unicos_variacion_pct)})</span>}</span>
                     </div>
-                    <div className="flex justify-between"><span className="text-muted-foreground">Perdidos / Rec.</span><span><span className="text-red-600">{s.clientes_perdidos}</span> / <span className="text-emerald-600">{s.clientes_recuperados}</span></span></div>
+                    <div className="flex justify-between"><span className="text-muted-foreground">Perdidos / Rec.</span><span><span className="text-red-600 dark:text-red-300">{s.clientes_perdidos}</span> / <span className="text-emerald-600 dark:text-emerald-300">{s.clientes_recuperados}</span></span></div>
                     {s.accion_sugerida && <div className="mt-2 rounded-md bg-muted/60 p-2 text-xs"><span className="font-medium">Acción: </span>{s.accion_sugerida}</div>}
                   </CardContent>
                 </Card>
@@ -989,7 +989,7 @@ export default function ComercialVendedoresPage() {
                             <TableCell>{p.producto}</TableCell>
                             <TableCell className="text-right">{p.clientes_empresa}</TableCell>
                             <TableCell className="text-right">{p.clientes_vendedor}</TableCell>
-                            <TableCell className="text-right font-medium text-amber-600">{p.brecha}</TableCell>
+                            <TableCell className="text-right font-medium text-amber-600 dark:text-amber-300">{p.brecha}</TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -1212,7 +1212,7 @@ export default function ComercialVendedoresPage() {
                 <div className="rounded-lg border p-3">
                   <p className="text-muted-foreground">Venta período</p>
                   <p className="text-lg font-bold">{formatCLP(sellerProfile.seller.venta_actual)}</p>
-                  <p className={cn("text-xs", sellerProfile.seller.variacion_pct >= 0 ? "text-emerald-600" : "text-red-600")}>
+                  <p className={cn("text-xs", sellerProfile.seller.variacion_pct >= 0 ? "text-emerald-600 dark:text-emerald-300" : "text-red-600 dark:text-red-300")}>
                     {formatPct(sellerProfile.seller.variacion_pct)}
                   </p>
                 </div>
@@ -1230,12 +1230,12 @@ export default function ComercialVendedoresPage() {
                   <p className="mb-2 font-medium">Por qué este score</p>
                   <div className="flex flex-wrap gap-2">
                     {sellerProfile.seller.score_explanation.positives.map((p) => (
-                      <span key={p} className="text-emerald-600">
+                      <span key={p} className="text-emerald-600 dark:text-emerald-300">
                         ✔ {p}
                       </span>
                     ))}
                     {sellerProfile.seller.score_explanation.negatives.map((n) => (
-                      <span key={n} className="text-red-600">
+                      <span key={n} className="text-red-600 dark:text-red-300">
                         ✖ {n}
                       </span>
                     ))}

@@ -11,7 +11,7 @@ export default function OperacionesMapaPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Mapa operacional</h1>
+        <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9">Mapa operacional</h1>
         <p className="text-sm text-muted-foreground">
           Vista global de vendedores activos con última posición. Use{" "}
           <code className="text-xs">?ruta=ID</code> para una ruta puntual.

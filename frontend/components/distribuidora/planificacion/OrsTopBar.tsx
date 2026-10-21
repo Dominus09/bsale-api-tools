@@ -40,7 +40,7 @@ function MetricCard({
       )}
     >
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           {label}
         </span>
         <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
@@ -53,7 +53,7 @@ function MetricCard({
         </p>
       )}
       {sub && !loading ? (
-        <p className="text-[10px] text-muted-foreground">{sub}</p>
+        <p className="text-[11px] text-muted-foreground">{sub}</p>
       ) : null}
     </div>
   )

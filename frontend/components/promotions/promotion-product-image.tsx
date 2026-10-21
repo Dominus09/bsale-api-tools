@@ -55,7 +55,7 @@ export function PromotionProductImage({
           aria-hidden
           className="h-10 w-10 opacity-30"
         />
-        <span className="text-[10px] font-medium opacity-60">Sin imagen</span>
+        <span className="text-[11px] font-medium opacity-60">Sin imagen</span>
       </div>
     )
   }

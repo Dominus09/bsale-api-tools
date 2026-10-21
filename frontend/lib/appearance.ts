@@ -3,10 +3,11 @@
  *
  * Reglas de alcance (para nunca mostrar una interfaz mezclada o ilegible):
  * - La preferencia del usuario (claro/oscuro) se persiste en el navegador.
- * - El tema oscuro SOLO se aplica en las rutas adaptadas y verificadas de
- *   `DARK_THEME_ROUTE_PREFIXES`. En cualquier otra ruta la ERP se renderiza
- *   en claro aunque la preferencia sea oscura, y el selector luna/sol no se
- *   muestra.
+ * - El tema oscuro SOLO se aplica en las rutas listadas en
+ *   `DARK_THEME_ROUTE_PREFIXES` (desde Graphite Premium 6.0: todos los
+ *   módulos del dashboard, migrados a tokens). En cualquier otra ruta la
+ *   ERP se renderiza en claro aunque la preferencia sea oscura, y el
+ *   selector luna/sol no se muestra.
  * - La clase `.dark` se aplica únicamente al contenedor del dashboard
  *   (no a <html>), de modo que los módulos legacy jamás heredan el tema.
  * - Al volver a una ruta adaptada, la preferencia oscura se reaplica sola.
@@ -17,15 +18,36 @@ export const APPEARANCE_STORAGE_KEY = "lq-appearance"
 
 export const DEFAULT_THEME: AppearanceTheme = "light"
 
-/** Rutas con ambos temas terminados. El resto permanece en claro. */
+/**
+ * Rutas con ambos temas habilitados.
+ *
+ * Graphite Premium 6.0: tras migrar los patrones de color fijos (slate/gray
+ * sin variante) a tokens semánticos en todo el frontend, el tema oscuro se
+ * habilita para todos los segmentos reales del dashboard. Las superficies
+ * intencionalmente fijas (papel de etiquetas y documentos imprimibles,
+ * visor de cámara, sidebar grafito, paneles sobre mapas) se conservan.
+ * Cada ruta queda «implementada» en la matriz; su validación visual en
+ * claro/oscuro sigue siendo un paso posterior y explícito.
+ */
 export const DARK_THEME_ROUTE_PREFIXES = [
-  "/analitica-v2/dashboard",
-  "/analitica-v2/costos",
-  "/analitica-v2/margenes",
-  "/analitica-v2/packs",
-  "/inteligencia-comercial/catalogo",
-  // Graphite Premium 5.2 — Etapa B1: Pre-despacho OC renovado a tokens.
-  "/distribuidora/orders",
+  "/admin",
+  "/alerts",
+  "/analitica",
+  "/analitica-v2",
+  "/compras",
+  "/costos",
+  "/dashboard",
+  "/distribuidora",
+  "/gondolas",
+  "/inteligencia-comercial",
+  "/logistica",
+  "/margins",
+  "/operaciones",
+  "/orders",
+  "/politica-margenes",
+  "/products-without-cost",
+  "/promotions",
+  "/sucursales",
 ] as const
 
 export function isDarkThemeRoute(pathname: string | null | undefined): boolean {

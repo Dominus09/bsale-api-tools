@@ -89,7 +89,7 @@ function TrendBadge({ delta, pct }: { delta: number; pct: number }) {
       variant="outline"
       className={cn(
         "gap-1 font-normal tabular-nums",
-        up ? "border-red-300 text-red-700 dark:text-red-400" : "border-emerald-300 text-emerald-700",
+        up ? "border-red-300 text-red-700 dark:text-red-400" : "border-emerald-300 text-emerald-700 dark:text-emerald-300",
       )}
     >
       <Icon className="h-3 w-3" />
@@ -101,10 +101,10 @@ function TrendBadge({ delta, pct }: { delta: number; pct: number }) {
 function SeverityIcon({ severity }: { severity: string }) {
   const cls =
     severity === "high"
-      ? "text-red-600"
+      ? "text-red-600 dark:text-red-300"
       : severity === "medium"
-        ? "text-amber-600"
-        : "text-slate-500"
+        ? "text-amber-600 dark:text-amber-300"
+        : "text-muted-foreground"
   return <AlertTriangle className={cn("h-4 w-4 shrink-0", cls)} />
 }
 
@@ -212,7 +212,7 @@ export default function NotasCreditoPage() {
               <FileWarning className="h-5 w-5" />
               <span className="text-xs font-semibold uppercase tracking-widest">Auditoría de pérdidas</span>
             </div>
-            <h1 className="text-2xl font-bold tracking-tight md:text-3xl">Análisis de Notas de Crédito</h1>
+            <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9">Análisis de Notas de Crédito</h1>
             <p className="mt-2 max-w-2xl text-sm text-red-100/80">
               Devoluciones y NC — {scope?.company_name ?? "Company 3"} / {scope?.office_name ?? "Office 1"}.
               Módulo independiente del CRM Comercial.
@@ -247,7 +247,7 @@ export default function NotasCreditoPage() {
               variant="secondary"
               onClick={() => void loadAll()}
               disabled={loading}
-              className="bg-white/15 text-white hover:bg-white/25"
+              className="bg-card/15 text-white hover:bg-card/25"
             >
               {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
               Actualizar
@@ -456,7 +456,7 @@ export default function NotasCreditoPage() {
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
-                <MapPin className="h-4 w-4 text-red-700" />
+                <MapPin className="h-4 w-4 text-red-700 dark:text-red-300" />
                 NC por comuna
               </CardTitle>
             </CardHeader>
@@ -511,7 +511,7 @@ export default function NotasCreditoPage() {
           <Card className="border-red-900/20">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
-                <Brain className="h-5 w-5 text-red-700" />
+                <Brain className="h-5 w-5 text-red-700 dark:text-red-300" />
                 Detección automática
               </CardTitle>
               <CardDescription>Reglas v1 — sin LLM. Prioriza pérdidas y reincidencia.</CardDescription>

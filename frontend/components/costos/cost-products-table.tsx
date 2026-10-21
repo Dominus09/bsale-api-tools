@@ -85,7 +85,7 @@ export function CostProductsTable({
               </TableCell>
               <TableCell className="min-w-[180px]">
                 <div className="flex flex-wrap gap-1">
-                  {r.business_statuses.map((status) => <Badge key={status} variant="outline" className="text-[10px] font-normal">{BUSINESS_SITUATION_LABEL[status] ?? "Situación pendiente"}</Badge>)}
+                  {r.business_statuses.map((status) => <Badge key={status} variant="outline" className="text-[11px] font-normal">{BUSINESS_SITUATION_LABEL[status] ?? "Situación pendiente"}</Badge>)}
                 </div>
                 <p className="mt-1 text-[11px] text-muted-foreground">{r.coverage_label}</p>
               </TableCell>

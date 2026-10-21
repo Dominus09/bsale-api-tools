@@ -97,7 +97,7 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Dashboard</h1>
+        <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9">Dashboard</h1>
         <p className="text-muted-foreground">Resumen general del análisis de márgenes</p>
       </div>
 

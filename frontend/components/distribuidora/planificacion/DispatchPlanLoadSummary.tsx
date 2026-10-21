@@ -22,7 +22,7 @@ function KpiCell({ label, value, sub }: { label: string; value: string; sub?: st
     <div className="rounded-md border border-border/70 bg-card/80 px-3 py-2">
       <p className="text-[11px] text-muted-foreground">{label}</p>
       <p className="text-lg font-semibold tabular-nums leading-tight">{value}</p>
-      {sub ? <p className="text-[10px] text-muted-foreground">{sub}</p> : null}
+      {sub ? <p className="text-[11px] text-muted-foreground">{sub}</p> : null}
     </div>
   )
 }
@@ -114,7 +114,7 @@ export function DispatchPlanLoadSummaryBlock({ dashboard, className }: Props) {
               Carga logística
             </p>
             {w.frozen ? (
-              <Badge variant="secondary" className="text-[10px]">
+              <Badge variant="secondary" className="text-[11px]">
                 Snapshot congelado
               </Badge>
             ) : null}
@@ -209,15 +209,15 @@ export function DispatchPlanLoadSummaryBlock({ dashboard, className }: Props) {
             </p>
           )}
           {ls.picking.has_snapshot ? (
-            <p className="mt-2 text-[10px] text-muted-foreground">
+            <p className="mt-2 text-[11px] text-muted-foreground">
               Picking v{ls.picking.version ?? "?"} persistido
             </p>
           ) : ls.picking.ready_to_generate ? (
-            <p className="mt-2 text-[10px] text-emerald-700 dark:text-emerald-400">
+            <p className="mt-2 text-[11px] text-emerald-700 dark:text-emerald-400">
               Listo para generar picking (confirmados + auto)
             </p>
           ) : ls.picking.ready_reason ? (
-            <p className="mt-2 text-[10px] text-amber-700 dark:text-amber-400">
+            <p className="mt-2 text-[11px] text-amber-700 dark:text-amber-400">
               {ls.picking.ready_reason}
             </p>
           ) : null}

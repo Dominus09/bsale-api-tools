@@ -172,7 +172,7 @@ export default function OrdenesCompraPage() {
     <div className="mx-auto max-w-[1400px] space-y-6 p-4 md:p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
+          <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9 font-semibold">
             Órdenes de compra
           </h1>
           <p className="text-sm text-muted-foreground">

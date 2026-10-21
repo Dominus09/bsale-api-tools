@@ -57,7 +57,7 @@ export function PreDespachoStatusChips({
             {chip.label}
             <span
               className={cn(
-                "rounded px-1 py-0.5 text-[10px] tabular-nums",
+                "rounded px-1 py-0.5 text-[11px] tabular-nums",
                 active ? "bg-primary/15" : "bg-muted/80 text-muted-foreground",
               )}
             >

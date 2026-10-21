@@ -24,7 +24,7 @@ export function KindBadge({ kind }: { kind: CampaignKind }) {
     <span
       className={cn(
         chip,
-        kind === "remate" ? "border-orange-300 bg-orange-50 text-orange-800" : "border-fuchsia-300 bg-fuchsia-50 text-fuchsia-800",
+        kind === "remate" ? "border-orange-300 bg-orange-50 text-orange-800 dark:border-orange-800 dark:bg-orange-950/40 dark:text-orange-300" : "border-fuchsia-300 bg-fuchsia-50 text-fuchsia-800 dark:border-fuchsia-800 dark:bg-fuchsia-950/40 dark:text-fuchsia-300",
       )}
     >
       {KIND_LABELS[kind]}
@@ -49,7 +49,7 @@ export function ExceptionBadge({ check }: { check: ItemExceptionCheck }) {
     check === "excepcion_verificada"
       ? "border-emerald-300 bg-emerald-50 text-emerald-800"
       : check === "no_vigente" || check === "no_participa" || check === "sin_excepcion"
-        ? "border-zinc-300 bg-zinc-100 text-zinc-600"
-        : "border-orange-300 bg-orange-50 text-orange-800"
+        ? "border-border bg-muted text-muted-foreground"
+        : "border-orange-300 bg-orange-50 text-orange-800 dark:border-orange-800 dark:bg-orange-950/40 dark:text-orange-300"
   return <span className={cn(chip, "whitespace-normal", tone)}>{EXCEPTION_LABELS[check] ?? check}</span>
 }

@@ -314,7 +314,7 @@ export default function Page() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-foreground">Proveedores</h1>
+          <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9 font-semibold">Proveedores</h1>
           <p className="text-sm text-muted-foreground">Administra proveedores de compras</p>
         </div>
         <div className="flex items-center gap-2">

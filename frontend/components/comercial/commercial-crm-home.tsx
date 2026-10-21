@@ -92,7 +92,7 @@ const RADAR_KEYS: { key: keyof CommercialRadarStructured; label: string; color: 
 
 function TrendBadge({ trend, delta }: { trend: string; delta: number }) {
   const Icon = trend === "up" ? ArrowUpRight : trend === "down" ? ArrowDownRight : Minus
-  const color = trend === "up" ? "text-emerald-600" : trend === "down" ? "text-red-600" : "text-muted-foreground"
+  const color = trend === "up" ? "text-emerald-600 dark:text-emerald-300" : trend === "down" ? "text-red-600 dark:text-red-300" : "text-muted-foreground"
   return (
     <span className={cn("flex items-center gap-0.5 text-xs font-medium", color)}>
       <Icon className="h-3.5 w-3.5" />
@@ -168,7 +168,7 @@ function MissionCard({
       onClick={() => mission.client_id && onClientClick?.(mission.client_id)}
     >
       <div className="mb-2 flex items-center justify-between gap-2">
-        <Badge variant="outline" className="text-[10px] font-bold uppercase tracking-wider">
+        <Badge variant="outline" className="text-[11px] font-bold uppercase tracking-wider">
           {mission.mission_type.replace(/_/g, " ")}
         </Badge>
         {mission.probabilidad_label && (
@@ -342,15 +342,15 @@ export function CommercialCrmHome({
             </div>
             <div>
               <p className="text-muted-foreground">Recuperar</p>
-              <p className="text-2xl font-bold text-red-600">{crm.objetivos_diarios.recuperar_clientes}</p>
+              <p className="text-2xl font-bold text-red-600 dark:text-red-300">{crm.objetivos_diarios.recuperar_clientes}</p>
             </div>
             <div>
               <p className="text-muted-foreground">Cross-selling</p>
-              <p className="text-2xl font-bold text-blue-600">{crm.objetivos_diarios.cross_selling}</p>
+              <p className="text-2xl font-bold text-blue-600 dark:text-blue-300">{crm.objetivos_diarios.cross_selling}</p>
             </div>
             <div>
               <p className="text-muted-foreground">Potencial</p>
-              <p className="text-2xl font-bold text-emerald-600">{formatCLP(crm.objetivos_diarios.monto_potencial)}</p>
+              <p className="text-2xl font-bold text-emerald-600 dark:text-emerald-300">{formatCLP(crm.objetivos_diarios.monto_potencial)}</p>
             </div>
           </div>
         </CardContent>
@@ -447,7 +447,7 @@ export function CommercialCrmHome({
               <Progress value={Math.min(100, crm.forecast.cumplimiento_pct)} className="h-2" />
             </div>
             {crm.forecast.faltan > 0 && (
-              <p className="text-sm text-amber-600">
+              <p className="text-sm text-amber-600 dark:text-amber-300">
                 Faltan <strong>{formatCLP(crm.forecast.faltan)}</strong> para la meta
               </p>
             )}
@@ -494,7 +494,7 @@ export function CommercialCrmHome({
                     <p className="text-xs font-semibold uppercase tracking-wide opacity-80">{label}</p>
                     <p className="mt-1 text-3xl font-bold">{block.cantidad}</p>
                     <p className="text-sm font-medium">{formatCLP(block.monto)}</p>
-                    <Badge variant="outline" className="mt-2 text-[10px]">
+                    <Badge variant="outline" className="mt-2 text-[11px]">
                       {block.prioridad}
                     </Badge>
                   </button>
@@ -538,12 +538,12 @@ export function CommercialCrmHome({
                   </div>
                   <div className="mt-1 flex flex-wrap gap-3 text-xs text-muted-foreground">
                     {s.score_explanation?.positives?.map((p) => (
-                      <span key={p} className="text-emerald-600">
+                      <span key={p} className="text-emerald-600 dark:text-emerald-300">
                         ✔ {p}
                       </span>
                     ))}
                     {s.score_explanation?.negatives?.map((n) => (
-                      <span key={n} className="text-red-600">
+                      <span key={n} className="text-red-600 dark:text-red-300">
                         ✖ {n}
                       </span>
                     ))}
@@ -551,7 +551,7 @@ export function CommercialCrmHome({
                 </div>
                 <div className="shrink-0 text-right">
                   <p className="font-bold">{formatCLP(s.venta_actual)}</p>
-                  <p className={cn("text-xs", s.variacion_pct >= 0 ? "text-emerald-600" : "text-red-600")}>
+                  <p className={cn("text-xs", s.variacion_pct >= 0 ? "text-emerald-600 dark:text-emerald-300" : "text-red-600 dark:text-red-300")}>
                     {s.variacion_pct >= 0 ? "+" : ""}
                     {s.variacion_pct}%
                   </p>

@@ -35,10 +35,10 @@ export default function CuadraturaDetailPage({ params }: PageProps) {
           </Link>
         </Button>
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             Cuadratura operacional
           </p>
-          <h1 className="text-xl font-semibold tracking-tight">Plan #{planId}</h1>
+          <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9 font-semibold">Plan #{planId}</h1>
         </div>
       </div>
 

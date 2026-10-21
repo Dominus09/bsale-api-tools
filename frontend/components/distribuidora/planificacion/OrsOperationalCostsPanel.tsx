@@ -180,7 +180,7 @@ export function OrsOperationalCostsPanel({
   return (
     <div className="border-b border-border/80 px-3 py-3">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           <Ship className="size-3.5" aria-hidden />
           Costos operacionales
         </div>

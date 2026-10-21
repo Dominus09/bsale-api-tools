@@ -495,7 +495,7 @@ export default function CertificarCargaPage() {
 
       {isCompleteView ? (
         <div className="mx-3 mt-4 rounded-2xl border border-emerald-500/40 bg-emerald-50 p-4 dark:bg-emerald-950/30">
-          <p className="text-2xl font-black text-emerald-800">100%</p>
+          <p className="text-2xl font-black text-emerald-800 dark:text-emerald-300">100%</p>
           <ul className="mt-2 space-y-1 text-sm text-emerald-900">
             <li>
               Productos: {summary.items_complete}/{summary.total_items}
@@ -560,7 +560,7 @@ export default function CertificarCargaPage() {
               </p>
               <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
                 <div>
-                  <p className="text-[10px] uppercase text-muted-foreground">
+                  <p className="text-[11px] uppercase text-muted-foreground">
                     Solicitado
                   </p>
                   <p className="text-lg font-semibold tabular-nums">
@@ -569,7 +569,7 @@ export default function CertificarCargaPage() {
                   </p>
                 </div>
                 <div>
-                  <p className="text-[10px] uppercase text-muted-foreground">
+                  <p className="text-[11px] uppercase text-muted-foreground">
                     Cargado
                   </p>
                   <p className="text-lg font-semibold tabular-nums">
@@ -580,15 +580,15 @@ export default function CertificarCargaPage() {
                   </p>
                 </div>
                 <div className="col-span-2">
-                  <p className="text-[10px] uppercase text-muted-foreground">
+                  <p className="text-[11px] uppercase text-muted-foreground">
                     Faltan · {statusLabel(item.status)}
                   </p>
                   <p
                     className={cn(
                       "text-base font-bold",
                       item.status === "complete"
-                        ? "text-emerald-700"
-                        : "text-amber-800",
+                        ? "text-emerald-700 dark:text-emerald-300"
+                        : "text-amber-800 dark:text-amber-300",
                     )}
                   >
                     {faltanText(item)}
@@ -641,7 +641,7 @@ export default function CertificarCargaPage() {
 
               <div className="grid grid-cols-3 gap-2 rounded-xl bg-muted/60 p-3 text-center">
                 <div>
-                  <p className="text-[10px] font-semibold uppercase text-muted-foreground">
+                  <p className="text-[11px] font-semibold uppercase text-muted-foreground">
                     Solicitado
                   </p>
                   <p className="text-xl font-black tabular-nums">
@@ -654,7 +654,7 @@ export default function CertificarCargaPage() {
                   ) : null}
                 </div>
                 <div>
-                  <p className="text-[10px] font-semibold uppercase text-muted-foreground">
+                  <p className="text-[11px] font-semibold uppercase text-muted-foreground">
                     Cargado
                   </p>
                   <p className="text-xl font-black tabular-nums">
@@ -662,15 +662,15 @@ export default function CertificarCargaPage() {
                   </p>
                 </div>
                 <div>
-                  <p className="text-[10px] font-semibold uppercase text-muted-foreground">
+                  <p className="text-[11px] font-semibold uppercase text-muted-foreground">
                     Faltan
                   </p>
-                  <p className="text-xl font-black tabular-nums text-amber-800">
+                  <p className="text-xl font-black tabular-nums text-amber-800 dark:text-amber-300">
                     {Math.max(0, active.remaining_units ?? 0)}
                   </p>
                   {active.remaining_boxes != null &&
                   (active.remaining_units || 0) > 0 ? (
-                    <p className="text-[11px] text-amber-800">
+                    <p className="text-[11px] text-amber-800 dark:text-amber-300">
                       {active.remaining_boxes} cajas
                     </p>
                   ) : null}

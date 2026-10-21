@@ -38,7 +38,7 @@ export function OrsStopPopup({
         <p className="font-semibold leading-snug">{nombre}</p>
       </div>
       {isolated ? (
-        <p className="rounded border border-slate-500/30 bg-slate-500/10 px-1.5 py-0.5 text-[10px] font-medium text-slate-700 dark:text-slate-200">
+        <p className="rounded border border-slate-500/30 bg-slate-500/10 px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground dark:text-slate-200">
           Cliente aislado
           {isolatedDistanceKm != null
             ? ` · ~${isolatedDistanceKm.toFixed(1)} km del grupo`
@@ -48,7 +48,7 @@ export function OrsStopPopup({
       {semaphore ? (
         <span
           className={cn(
-            "inline-block rounded px-1.5 py-0.5 text-[10px] font-medium",
+            "inline-block rounded px-1.5 py-0.5 text-[11px] font-medium",
             SEMAPHORE_BORDER_CLASS[semaphore],
           )}
         >
@@ -105,7 +105,7 @@ export function OrsStopPopup({
       </dl>
       {obsText ? (
         <div className="border-t border-border/60 pt-2">
-          <p className="text-[10px] font-medium text-muted-foreground">Observación</p>
+          <p className="text-[11px] font-medium text-muted-foreground">Observación</p>
           <p className="mt-0.5 text-[11px] leading-snug text-foreground">{obsText}</p>
         </div>
       ) : null}

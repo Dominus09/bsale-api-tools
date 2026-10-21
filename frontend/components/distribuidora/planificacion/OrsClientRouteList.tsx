@@ -23,7 +23,7 @@ export function OrsClientRouteList({
 }: OrsClientRouteListProps) {
   return (
     <div className="border-b border-border/80 px-3 py-3">
-      <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+      <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
         Clientes de la ruta ({clients.length})
       </p>
       {loading ? (
@@ -62,7 +62,7 @@ export function OrsClientRouteList({
                   <span className="min-w-0 flex-1 truncate font-medium text-foreground">
                     {c.nombre}
                     {c.isolated ? (
-                      <span className="ml-1 text-[10px] font-normal text-muted-foreground">
+                      <span className="ml-1 text-[11px] font-normal text-muted-foreground">
                         aislado
                       </span>
                     ) : null}

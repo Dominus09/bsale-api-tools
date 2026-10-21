@@ -60,7 +60,7 @@ export default function NuevaCargaPage() {
   return (
     <div className="mx-auto max-w-3xl space-y-4 pb-16">
       <div>
-        <h1 className="text-2xl font-bold">Nueva carga</h1>
+        <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9">Nueva carga</h1>
         <p className="text-sm text-muted-foreground">
           Subir PDF o Excel de picking → preview → confirmar
         </p>
@@ -188,7 +188,7 @@ export default function NuevaCargaPage() {
               </ul>
             ) : null}
             {preview.warnings.length > 0 ? (
-              <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-amber-800">
+              <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-amber-800 dark:text-amber-300">
                 {preview.warnings.map((w) => (
                   <li key={w}>{w}</li>
                 ))}

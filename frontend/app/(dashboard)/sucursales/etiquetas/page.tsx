@@ -519,23 +519,30 @@ export default function EtiquetasPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-foreground">Generador de Etiquetas</h1>
-          <p className="text-sm text-muted-foreground">
+      {/* Graphite Premium 6.0 · encabezado unificado (sin tocar impresión) */}
+      <div className="flex flex-col gap-4 border-b border-lq-line pb-5 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-xs font-medium uppercase tracking-[0.14em] text-lq-faint">
+            Sucursales · Etiquetas
+          </p>
+          <h1 className="mt-1 text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9">
+            Generador de Etiquetas
+          </h1>
+          <p className="mt-1.5 text-sm leading-6 text-lq-muted">
             Etiquetas imprimibles en hoja carta para sucursales
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="outline"
+            className="h-11 sm:h-9"
             onClick={() => setPreviewOpen(true)}
             disabled={rows.length === 0}
           >
             <FileText className="mr-2 h-4 w-4" />
             Vista previa
           </Button>
-          <Button onClick={handleExportPdf} disabled={rows.length === 0 || pdfLoading}>
+          <Button className="h-11 sm:h-9" onClick={handleExportPdf} disabled={rows.length === 0 || pdfLoading}>
             {pdfLoading ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             ) : (
@@ -1098,7 +1105,7 @@ export default function EtiquetasPage() {
                                 </span>
                               ) : null}
                             </td>
-                            <td className="px-2 py-1.5 font-mono text-[10px] leading-relaxed text-muted-foreground">
+                            <td className="px-2 py-1.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
                               {nf.triedBarcodes.join(" · ")}
                             </td>
                             <td className="px-2 py-1.5">{nf.error}</td>

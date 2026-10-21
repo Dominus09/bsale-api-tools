@@ -236,7 +236,7 @@ export default function PoliticaMargenesPage() {
             <Scale className="size-4" aria-hidden />
             <span className="text-xs font-medium uppercase tracking-wide">Analítica</span>
           </div>
-          <h1 className="text-2xl font-bold text-foreground">Política de Márgenes</h1>
+          <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9">Política de Márgenes</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
             Reglas de <strong>recargo sobre costo</strong> (markup) en{" "}
             <code className="rounded bg-muted px-1 text-xs">bsale.margin_rules</code>.
@@ -447,7 +447,7 @@ export default function PoliticaMargenesPage() {
                           onChange={(e) => updateDraft(row.id, { notes: e.target.value })}
                         />
                         {localWarn ? (
-                          <p className="mt-1 text-[10px] text-amber-700 dark:text-amber-400">
+                          <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-400">
                             {localWarn}
                           </p>
                         ) : null}

@@ -538,7 +538,7 @@ export default function RuteroVistaClient() {
             <Badge variant="outline" className="border-sky-300 bg-sky-50 font-normal text-sky-950">
               Sábado {contadores.conSabado}
             </Badge>
-            <Badge variant="outline" className="border-slate-300 bg-slate-100 font-normal text-slate-800">
+            <Badge variant="outline" className="border-border bg-muted font-normal text-foreground">
               Telefónicos {contadores.telefonicos}
             </Badge>
             <Badge variant="outline" className="border-red-200 bg-red-50 font-normal text-red-900">
@@ -624,8 +624,8 @@ export default function RuteroVistaClient() {
                     key={row.id}
                     className={cn(
                       "border-b border-border/70 last:border-0",
-                      telVis && "text-slate-800 dark:text-slate-100",
-                      telVis && "bg-slate-100/80 dark:bg-slate-900/45",
+                      telVis && "text-foreground dark:text-slate-100",
+                      telVis && "bg-muted/80 dark:bg-slate-900/45",
                       !telVis && sinDia && "bg-amber-50/70 dark:bg-amber-950/25",
                       !telVis && !sinDia && sinGeoTerreno && "bg-red-50/60 dark:bg-red-950/20",
                       esDiaExtraSabado(row) && "bg-sky-50/50 dark:bg-sky-950/20",
@@ -638,7 +638,7 @@ export default function RuteroVistaClient() {
                     >
                       <div className="flex flex-col items-center gap-0.5">
                         {telVis ? (
-                          <span className="text-slate-600 dark:text-slate-300" aria-hidden>
+                          <span className="text-muted-foreground dark:text-muted-foreground" aria-hidden>
                             📞
                           </span>
                         ) : null}
@@ -666,7 +666,7 @@ export default function RuteroVistaClient() {
                     <td className="max-w-[260px] px-3 py-2">
                       <div className="flex items-start gap-1.5">
                         {alertas.length > 0 ? (
-                          <span className="mt-0.5 shrink-0 text-amber-600" title={alertas.join(" · ")}>
+                          <span className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-300" title={alertas.join(" · ")}>
                             <AlertTriangle className="h-4 w-4" aria-hidden />
                           </span>
                         ) : null}
@@ -736,7 +736,7 @@ export default function RuteroVistaClient() {
                           "inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-1",
                           tipoUi === "TERRENO"
                             ? "border-emerald-200 bg-emerald-50 text-emerald-950 dark:border-emerald-800/70 dark:bg-emerald-950/40 dark:text-emerald-50"
-                            : "border-slate-200 bg-slate-100 text-slate-700 dark:border-slate-600 dark:bg-slate-800/80 dark:text-slate-200",
+                            : "border-border bg-muted text-muted-foreground dark:border-slate-600 dark:bg-slate-800/80 dark:text-slate-200",
                         )}
                       >
                         <span className="select-none text-base leading-none" aria-hidden title="Tipo de atención">

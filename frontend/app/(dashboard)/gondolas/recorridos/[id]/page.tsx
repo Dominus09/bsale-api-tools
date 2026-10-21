@@ -233,7 +233,7 @@ export default function GondolaSessionPage() {
             <StatusBadge tone={session.status === "en_curso" ? "info" : closed ? "success" : "danger"}>
               {session.status === "en_curso" ? "En curso" : closed ? "Cerrado" : "Cancelado"}
             </StatusBadge>
-            <span className="text-sm text-slate-500">
+            <span className="text-sm text-muted-foreground">
               El avance se guarda en el servidor: puede continuar desde otro dispositivo autorizado.
             </span>
           </div>
@@ -251,7 +251,7 @@ export default function GondolaSessionPage() {
             />
           </div>
 
-          <div className="h-2.5 overflow-hidden rounded-full bg-slate-200" role="progressbar" aria-valuenow={Math.round(session.coverage_pct)} aria-valuemin={0} aria-valuemax={100} aria-label="Cobertura del recorrido">
+          <div className="h-2.5 overflow-hidden rounded-full bg-muted" role="progressbar" aria-valuenow={Math.round(session.coverage_pct)} aria-valuemin={0} aria-valuemax={100} aria-label="Cobertura del recorrido">
             <div className="h-full rounded-full bg-primary transition-all duration-500" style={{ width: `${Math.min(100, session.coverage_pct)}%` }} />
           </div>
 
@@ -278,7 +278,7 @@ export default function GondolaSessionPage() {
                   className="space-y-3"
                 >
                   <label className="space-y-1.5">
-                    <span className="flex items-center gap-2 text-xs font-medium text-slate-600">
+                    <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
                       <Keyboard className="h-4 w-4" /> Lector USB o código manual
                     </span>
                     <Input
@@ -299,7 +299,7 @@ export default function GondolaSessionPage() {
                   </Button>
                 </form>
 
-                <div className="mt-5 border-t border-slate-100 pt-5">
+                <div className="mt-5 border-t border-border pt-5">
                   <CameraScanner onCode={(scanned) => void submitScan(scanned, "camara")} />
                 </div>
 
@@ -309,17 +309,17 @@ export default function GondolaSessionPage() {
                       {SCAN_RESULT_LABELS[lastScan.result]}
                     </StatusBadge>
                     {lastScan.product ? (
-                      <p className="text-sm leading-6 text-slate-700">
-                        <strong className="text-slate-950">{lastScan.product.product_name}</strong>
+                      <p className="text-sm leading-6 text-muted-foreground">
+                        <strong className="text-foreground">{lastScan.product.product_name}</strong>
                         {lastScan.product.variant_name ? <> · {lastScan.product.variant_name}</> : null}
-                        <span className="block text-xs text-slate-500">
+                        <span className="block text-xs text-muted-foreground">
                           Código {lastScan.bar_code} · Cobertura {lastScan.progress.coverage_pct.toFixed(1).replace(".", ",")} %
                         </span>
                       </p>
                     ) : null}
                     {lastScan.result === "ambiguo" ? (
                       <div className="space-y-2">
-                        <p className="text-xs font-medium text-slate-600">Este código corresponde a más de una variante. Seleccione la que está físicamente en la góndola:</p>
+                        <p className="text-xs font-medium text-muted-foreground">Este código corresponde a más de una variante. Seleccione la que está físicamente en la góndola:</p>
                         {lastScan.candidates.map((candidate) => (
                           <Button
                             key={candidate.variant_id}
@@ -337,12 +337,12 @@ export default function GondolaSessionPage() {
                 ) : null}
 
                 {session.recent_scans.length > 0 ? (
-                  <div className="mt-5 border-t border-slate-100 pt-4">
-                    <h3 className="text-sm font-semibold text-slate-950">Escaneos recientes</h3>
-                    <ul className="mt-2 divide-y divide-slate-100">
+                  <div className="mt-5 border-t border-border pt-4">
+                    <h3 className="text-sm font-semibold text-foreground">Escaneos recientes</h3>
+                    <ul className="mt-2 divide-y divide-border">
                       {session.recent_scans.slice(0, 8).map((scan) => (
                         <li key={scan.id} className="flex items-center justify-between gap-3 py-2 text-xs">
-                          <span className="font-mono text-slate-600">{scan.bar_code_raw}</span>
+                          <span className="font-mono text-muted-foreground">{scan.bar_code_raw}</span>
                           <StatusBadge tone={SCAN_RESULT_TONES[scan.result]}>{SCAN_RESULT_LABELS[scan.result]}</StatusBadge>
                         </li>
                       ))}
@@ -372,7 +372,7 @@ export default function GondolaSessionPage() {
                   </div>
                 }
               >
-                <div className="border-b border-slate-100 p-4">
+                <div className="border-b border-border p-4">
                   <Input value={itemQuery} onChange={(e) => setItemQuery(e.target.value)} placeholder="Buscar dentro del recorrido…" className="min-h-11" aria-label="Buscar dentro del recorrido" />
                 </div>
                 <SessionItemsTable items={items} />
@@ -395,15 +395,15 @@ export default function GondolaSessionPage() {
                 <>
                   <div className="grid gap-3 p-4 md:hidden">
                     {(session.replenishment ?? []).map((item) => (
-                      <article key={item.variant_id} className="rounded-xl border border-slate-200 p-4">
-                        <h3 className="text-sm font-semibold text-slate-950">{item.product_name}</h3>
-                        <p className="mt-0.5 text-xs text-slate-500">{item.variant_name || "Sin variante"} · {item.bar_code || item.sku_code || ""}</p>
-                        <p className="mt-2 text-xs text-slate-600">
+                      <article key={item.variant_id} className="rounded-xl border border-border p-4">
+                        <h3 className="text-sm font-semibold text-foreground">{item.product_name}</h3>
+                        <p className="mt-0.5 text-xs text-muted-foreground">{item.variant_name || "Sin variante"} · {item.bar_code || item.sku_code || ""}</p>
+                        <p className="mt-2 text-xs text-muted-foreground">
                           Stock inicial {formatQty(item.stock_snapshot)} · actual {formatQty(item.stock_current)}
                           {item.stock_changed ? " · cambió durante el recorrido" : ""}
                         </p>
                         <select
-                          className="mt-3 min-h-11 w-full rounded-lg border border-slate-300 bg-white px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35"
+                          className="mt-3 min-h-11 w-full rounded-lg border border-border bg-card px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35"
                           value={item.status}
                           disabled={busyAction === `rep-${item.variant_id}`}
                           onChange={(e) => void changeReplenishment(item.variant_id, e.target.value as ReplenishmentStatus)}
@@ -418,7 +418,7 @@ export default function GondolaSessionPage() {
                   </div>
                   <ProfessionalDataTable className="hidden rounded-none border-0 shadow-none md:block">
                     <table className="w-full min-w-[920px] text-left text-sm">
-                      <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                      <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
                         <tr>
                           <th className="px-4 py-3 font-medium">Producto no detectado</th>
                           <th className="px-4 py-3 text-right font-medium">Stock inicial</th>
@@ -427,37 +427,37 @@ export default function GondolaSessionPage() {
                           <th className="px-4 py-3 font-medium">Estado de reposición</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-100">
+                      <tbody className="divide-y divide-border">
                         {(session.replenishment ?? []).map((item) => {
                           const full = session.items.find((i) => i.variant_id === item.variant_id)
                           return (
-                            <tr key={item.variant_id} className="transition hover:bg-slate-50/70">
+                            <tr key={item.variant_id} className="transition hover:bg-muted/40/70">
                               <td className="px-4 py-3">
-                                <span className="block font-medium text-slate-950">{item.product_name}</span>
-                                <span className="mt-0.5 block text-xs text-slate-500">
+                                <span className="block font-medium text-foreground">{item.product_name}</span>
+                                <span className="mt-0.5 block text-xs text-muted-foreground">
                                   {item.variant_name || "Sin variante"} · {item.bar_code || item.sku_code || "Sin código"}
                                 </span>
                               </td>
                               <td className="px-4 py-3 text-right tabular-nums">{formatQty(item.stock_snapshot)}</td>
-                              <td className={cn("px-4 py-3 text-right tabular-nums", item.stock_changed && "font-semibold text-amber-700")}>
+                              <td className={cn("px-4 py-3 text-right tabular-nums", item.stock_changed && "font-semibold text-amber-700 dark:text-amber-300")}>
                                 {formatQty(item.stock_current)}
                                 {item.stock_changed ? <span className="block text-[11px] font-medium">Cambió</span> : null}
                               </td>
-                              <td className="px-4 py-3 text-slate-600">
+                              <td className="px-4 py-3 text-muted-foreground">
                                 {full?.last_entry_at ? (
                                   <>
                                     <span className="block">{formatDate(full.last_entry_at)}</span>
-                                    <span className="mt-0.5 block text-xs text-slate-500">{movementLabel(full.last_entry_movement)}</span>
+                                    <span className="mt-0.5 block text-xs text-muted-foreground">{movementLabel(full.last_entry_movement)}</span>
                                   </>
                                 ) : (
-                                  <span className="text-slate-400">Sin ingreso registrado</span>
+                                  <span className="text-muted-foreground">Sin ingreso registrado</span>
                                 )}
                               </td>
                               <td className="px-4 py-3">
                                 <div className="flex items-center gap-2">
                                   <StatusBadge tone={REPLENISHMENT_TONES[item.status]}>{REPLENISHMENT_LABELS[item.status]}</StatusBadge>
                                   <select
-                                    className="min-h-10 rounded-lg border border-slate-300 bg-white px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35"
+                                    className="min-h-10 rounded-lg border border-border bg-card px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/35"
                                     value={item.status}
                                     disabled={busyAction === `rep-${item.variant_id}`}
                                     onChange={(e) => void changeReplenishment(item.variant_id, e.target.value as ReplenishmentStatus)}
@@ -469,7 +469,7 @@ export default function GondolaSessionPage() {
                                   </select>
                                 </div>
                                 {item.updated_by ? (
-                                  <span className="mt-1 block text-[11px] text-slate-400">
+                                  <span className="mt-1 block text-[11px] text-muted-foreground">
                                     {item.updated_by} · {formatDateTime(item.updated_at)}
                                   </span>
                                 ) : null}
@@ -482,8 +482,8 @@ export default function GondolaSessionPage() {
                   </ProfessionalDataTable>
                 </>
               )}
-              <div className="flex items-center gap-2 border-t border-slate-100 px-4 py-3 text-xs text-slate-500">
-                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
+              <div className="flex items-center gap-2 border-t border-border px-4 py-3 text-xs text-muted-foreground">
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-300" />
                 Marcar estados de reposición no modifica las existencias de Bsale.
               </div>
             </SectionCard>
@@ -513,29 +513,29 @@ function SessionItemsTable({ items }: { items: GondolaSessionDetail["items"] }) 
     <>
       <div className="grid gap-3 p-4 md:hidden">
         {items.map((item) => (
-          <article key={item.variant_id} className="rounded-xl border border-slate-200 p-4">
+          <article key={item.variant_id} className="rounded-xl border border-border p-4">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <h3 className="text-sm font-semibold leading-5 text-slate-950">{item.product_name}</h3>
-                <p className="mt-0.5 text-xs text-slate-500">{item.variant_name || "Sin variante"}</p>
+                <h3 className="text-sm font-semibold leading-5 text-foreground">{item.product_name}</h3>
+                <p className="mt-0.5 text-xs text-muted-foreground">{item.variant_name || "Sin variante"}</p>
               </div>
               <ExhibitionBadge status={item.exhibition_status} />
             </div>
-            <dl className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600">
-              <div><dt className="text-slate-400">Código</dt><dd className="font-mono">{item.bar_code || item.sku_code || "—"}</dd></div>
-              <div><dt className="text-slate-400">Stock actual</dt><dd className="font-semibold text-slate-900">{formatQty(item.stock_current)}</dd></div>
-              <div><dt className="text-slate-400">Stock al iniciar</dt><dd>{formatQty(item.stock_snapshot)}</dd></div>
-              <div><dt className="text-slate-400">Última entrada</dt><dd>{formatDate(item.last_entry_at)}</dd></div>
+            <dl className="mt-3 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+              <div><dt className="text-muted-foreground">Código</dt><dd className="font-mono">{item.bar_code || item.sku_code || "—"}</dd></div>
+              <div><dt className="text-muted-foreground">Stock actual</dt><dd className="font-semibold text-foreground">{formatQty(item.stock_current)}</dd></div>
+              <div><dt className="text-muted-foreground">Stock al iniciar</dt><dd>{formatQty(item.stock_snapshot)}</dd></div>
+              <div><dt className="text-muted-foreground">Última entrada</dt><dd>{formatDate(item.last_entry_at)}</dd></div>
             </dl>
             {item.found_at ? (
-              <p className="mt-2 text-xs text-slate-500">Escaneado {formatDateTime(item.found_at)}{item.found_by ? ` por ${item.found_by}` : ""}</p>
+              <p className="mt-2 text-xs text-muted-foreground">Escaneado {formatDateTime(item.found_at)}{item.found_by ? ` por ${item.found_by}` : ""}</p>
             ) : null}
           </article>
         ))}
       </div>
       <ProfessionalDataTable className="hidden rounded-none border-0 shadow-none md:block">
         <table className="w-full min-w-[860px] text-left text-sm">
-          <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+          <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
             <tr>
               <th className="px-4 py-3 font-medium">Producto</th>
               <th className="px-4 py-3 font-medium">Código</th>
@@ -545,25 +545,25 @@ function SessionItemsTable({ items }: { items: GondolaSessionDetail["items"] }) 
               <th className="px-4 py-3 font-medium">Exhibición</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody className="divide-y divide-border">
             {items.map((item) => (
-              <tr key={item.variant_id} className="transition hover:bg-slate-50/70">
+              <tr key={item.variant_id} className="transition hover:bg-muted/40/70">
                 <td className="px-4 py-3">
-                  <span className="block font-medium leading-5 text-slate-950">{item.product_name}</span>
-                  <span className="mt-0.5 block text-xs text-slate-500">{item.variant_name || "Sin variante"}</span>
+                  <span className="block font-medium leading-5 text-foreground">{item.product_name}</span>
+                  <span className="mt-0.5 block text-xs text-muted-foreground">{item.variant_name || "Sin variante"}</span>
                 </td>
-                <td className="px-4 py-3 font-mono text-xs text-slate-600">{item.bar_code || item.sku_code || "—"}</td>
-                <td className="px-4 py-3 text-right tabular-nums text-slate-600">{formatQty(item.stock_snapshot)}</td>
-                <td className={cn("px-4 py-3 text-right font-semibold tabular-nums text-slate-950", item.stock_changed && "text-amber-700")}>
+                <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{item.bar_code || item.sku_code || "—"}</td>
+                <td className="px-4 py-3 text-right tabular-nums text-muted-foreground">{formatQty(item.stock_snapshot)}</td>
+                <td className={cn("px-4 py-3 text-right font-semibold tabular-nums text-foreground", item.stock_changed && "text-amber-700 dark:text-amber-300")}>
                   {formatQty(item.stock_current)}
                 </td>
-                <td className="px-4 py-3 text-slate-600">
-                  {item.last_entry_at ? formatDate(item.last_entry_at) : <span className="text-slate-400">Sin ingreso registrado</span>}
+                <td className="px-4 py-3 text-muted-foreground">
+                  {item.last_entry_at ? formatDate(item.last_entry_at) : <span className="text-muted-foreground">Sin ingreso registrado</span>}
                 </td>
                 <td className="px-4 py-3">
                   <ExhibitionBadge status={item.exhibition_status} />
                   {item.found_at ? (
-                    <span className="mt-1 block text-[11px] text-slate-400">{formatDateTime(item.found_at)}</span>
+                    <span className="mt-1 block text-[11px] text-muted-foreground">{formatDateTime(item.found_at)}</span>
                   ) : null}
                 </td>
               </tr>

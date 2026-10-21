@@ -354,6 +354,7 @@ export function Sidebar({ compact = false, onToggleCompact, onCloseDrawer }: Sid
             const linkInner = (
               <Link
                 href={item.href}
+                title={item.label}
                 aria-current={isActive ? "page" : undefined}
                 className={cn(
                   "relative flex items-center rounded-md text-sm font-medium transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/70",
@@ -368,7 +369,10 @@ export function Sidebar({ compact = false, onToggleCompact, onCloseDrawer }: Sid
                 ) : null}
                 <item.icon className={cn("h-[1.125rem] w-[1.125rem] shrink-0", isActive ? "text-white" : "text-current opacity-70")} />
                 {!compact ? (
-                  <span className="min-w-0 flex-1 truncate leading-snug">{item.label}</span>
+                  // Sin truncate: las etiquetas largas se leen completas
+                  // (pueden ocupar dos líneas) y el `title` nativo las
+                  // refuerza; en modo compacto ya existe Tooltip.
+                  <span className="min-w-0 flex-1 leading-snug">{item.label}</span>
                 ) : null}
               </Link>
             )
@@ -409,7 +413,7 @@ export function Sidebar({ compact = false, onToggleCompact, onCloseDrawer }: Sid
                   "hover:bg-white/[0.05] hover:text-white/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/70",
                 )}
               >
-                <span className="truncate">{section.title}</span>
+                <span>{section.title}</span>
                 {isOpen ? (
                   <Minus className="h-3.5 w-3.5 shrink-0 opacity-70" aria-hidden />
                 ) : (

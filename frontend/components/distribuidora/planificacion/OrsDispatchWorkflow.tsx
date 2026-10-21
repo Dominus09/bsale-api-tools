@@ -56,14 +56,14 @@ export function OrsDispatchWorkflow({
 
   return (
     <div className="shrink-0 space-y-2 border-t border-border/70 bg-card/95 p-3 shadow-[0_-4px_12px_rgba(0,0,0,0.06)]">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
         Flujo operativo
       </p>
 
       {!isPlanned ? (
         <>
           <label className="block space-y-1">
-            <span className="text-[10px] text-muted-foreground">Nombre planificación</span>
+            <span className="text-[11px] text-muted-foreground">Nombre planificación</span>
             <input
               type="text"
               className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs"

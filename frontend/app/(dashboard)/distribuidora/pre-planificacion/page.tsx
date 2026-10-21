@@ -284,7 +284,7 @@ export default function PrePlanificacionDespachoPage() {
     <div className="mx-auto flex max-w-[1400px] flex-col gap-8 pb-16">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Pre‑planificación de despacho</h1>
+          <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9 font-semibold">Pre‑planificación de despacho</h1>
           <p className="text-sm text-muted-foreground">
             Selección manual de órdenes de compra (tipo 33) con filtro por día en observaciones.
           </p>
@@ -539,7 +539,7 @@ export default function PrePlanificacionDespachoPage() {
                         {capLabel && geo ? (
                           <Badge
                             variant="secondary"
-                            className="w-fit max-w-[16rem] truncate text-[10px] font-normal"
+                            className="w-fit max-w-[16rem] truncate text-[11px] font-normal"
                             title={capLabel}
                           >
                             {capLabel}

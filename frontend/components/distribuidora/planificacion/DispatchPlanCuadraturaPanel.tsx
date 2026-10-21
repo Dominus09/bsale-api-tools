@@ -430,7 +430,7 @@ export function DispatchPlanCuadraturaPanel({
                   }
                 />
                 {row.producto_variante && row.producto_variante !== row.producto ? (
-                  <p className="text-[10px] text-muted-foreground">{row.producto_variante}</p>
+                  <p className="text-[11px] text-muted-foreground">{row.producto_variante}</p>
                 ) : null}
               </div>
               <Input

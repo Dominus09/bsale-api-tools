@@ -1966,7 +1966,7 @@ export default function MapaRuteroClient() {
 
   return (
     <div className="p-4">
-      <div className="rounded-xl bg-white p-4 shadow dark:bg-card">
+      <div className="rounded-xl bg-card p-4 shadow dark:bg-card">
         <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-lg font-semibold tracking-tight text-foreground">Mapa Rutero</h1>
@@ -2114,7 +2114,7 @@ export default function MapaRuteroClient() {
         ) : null}
         {sinClientesTerrenoEnRuta ? (
           <p
-            className="-mt-2 mb-3 rounded-md border border-slate-200 bg-slate-100 px-3 py-2 text-sm text-slate-800 dark:border-slate-600 dark:bg-slate-800/60 dark:text-slate-100"
+            className="-mt-2 mb-3 rounded-md border border-border bg-muted px-3 py-2 text-sm text-foreground dark:border-slate-600 dark:bg-slate-800/60 dark:text-slate-100"
             role="status"
           >
             No hay clientes en terreno para este día
@@ -2204,7 +2204,7 @@ export default function MapaRuteroClient() {
               onSugerenciaAplicar={onSugerenciaAplicar}
             />
           ) : null}
-          <div className="mapa-rutero-wrapper relative h-[75vh] min-h-[320px] w-full min-w-0 flex-1 overflow-hidden rounded-lg bg-slate-200/80 shadow-inner ring-1 ring-black/5 dark:bg-slate-900/40 dark:ring-white/10">
+          <div className="mapa-rutero-wrapper relative h-[75vh] min-h-[320px] w-full min-w-0 flex-1 overflow-hidden rounded-lg bg-muted/80 shadow-inner ring-1 ring-black/5 dark:bg-slate-900/40 dark:ring-white/10">
             {loading ? (
               <div className="flex h-full items-center justify-center gap-2 text-muted-foreground">
                 <Loader2 className="h-6 w-6 animate-spin" />

@@ -202,7 +202,7 @@ export function PackV2DetailSheet({
                   </table>
                 </div>
                 {pack.warnings.length ? (
-                  <p className="text-[11px] text-amber-800">
+                  <p className="text-[11px] text-amber-800 dark:text-amber-300">
                     {pack.warnings.map((w) => PACK_PROBLEM_LABELS[w as keyof typeof PACK_PROBLEM_LABELS] ?? w.replaceAll("_", " ")).join(" · ")}
                   </p>
                 ) : null}

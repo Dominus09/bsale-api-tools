@@ -29,7 +29,7 @@ export function DispatchPlanOrdersWeightTable({
   return (
     <div className="overflow-x-auto rounded-md border border-border/70">
       <table className="w-full min-w-[720px] text-left text-xs">
-        <thead className="border-b bg-muted/40 text-[10px] uppercase tracking-wide text-muted-foreground">
+        <thead className="border-b bg-muted/40 text-[11px] uppercase tracking-wide text-muted-foreground">
           <tr>
             <th className="px-2 py-2">OC</th>
             <th className="px-2 py-2">Cliente</th>

@@ -203,7 +203,7 @@ export function PromotionCampaignSheet({
                               {i.sku_code ?? "—"} · {i.barcode ?? "—"}
                             </span>
                             {campaign.kind === "remate" ? (
-                              <span className="block text-[11px] text-orange-800">
+                              <span className="block text-[11px] text-orange-800 dark:text-orange-300">
                                 {i.clearance_reason ? CLEARANCE_LABELS[i.clearance_reason] : "Sin motivo"} · stock ref. {formatQty(i.reference_stock)} (
                                 {formatDate(i.reference_stock_fetched_at)})
                               </span>
@@ -216,11 +216,11 @@ export function PromotionCampaignSheet({
                           <td className="px-3 py-2 text-right tabular-nums">{formatMoney(i.normal_gross_price)}</td>
                           <td className="px-3 py-2 text-right tabular-nums font-medium">
                             {formatMoney(i.promo_gross_price)}
-                            <span className="block text-[10px] text-muted-foreground">{i.discount_pct != null ? formatPct(i.discount_pct) : ""}</span>
+                            <span className="block text-[11px] text-muted-foreground">{i.discount_pct != null ? formatPct(i.discount_pct) : ""}</span>
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums">
                             {formatMoney(i.bsale_current_gross)}
-                            <span className="block text-[10px] text-muted-foreground">{formatDateTime(i.bsale_fetched_at)}</span>
+                            <span className="block text-[11px] text-muted-foreground">{formatDateTime(i.bsale_fetched_at)}</span>
                           </td>
                           <td className="max-w-[240px] space-y-1 px-3 py-2">
                             <VerificationBadge verification={i.verification} />
@@ -232,7 +232,7 @@ export function PromotionCampaignSheet({
                                 <Button size="sm" variant="ghost" onClick={() => setItemAction({ kind: "price", item: i })}>
                                   Precio
                                 </Button>
-                                <Button size="sm" variant="ghost" className="text-red-700" onClick={() => setItemAction({ kind: "remove", item: i })}>
+                                <Button size="sm" variant="ghost" className="text-red-700 dark:text-red-300" onClick={() => setItemAction({ kind: "remove", item: i })}>
                                   Retirar
                                 </Button>
                               </>

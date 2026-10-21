@@ -241,7 +241,7 @@ export function DispatchPlanPickingClientePanel({
           </p>
           <div className="overflow-x-auto rounded-md border">
             <table className="w-full min-w-[960px] text-left text-xs">
-              <thead className="bg-muted/50 text-[10px] uppercase text-muted-foreground">
+              <thead className="bg-muted/50 text-[11px] uppercase text-muted-foreground">
                 <tr>
                   <th className="px-2 py-2">Ord</th>
                   <th className="px-2 py-2">Ciudad</th>
@@ -264,7 +264,7 @@ export function DispatchPlanPickingClientePanel({
                     <tr className="bg-muted/40">
                       <td
                         colSpan={13}
-                        className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
+                        className="px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
                       >
                         {group.cityLabel}
                       </td>
@@ -300,11 +300,11 @@ export function DispatchPlanPickingClientePanel({
                         <td className="px-2 py-1.5 text-right tabular-nums">
                           {formatClp(Number(row.document_total) || 0)}
                           {row.is_probable_included ? (
-                            <Badge variant="outline" className="ml-1 text-[9px]">
+                            <Badge variant="outline" className="ml-1 text-[11px]">
                               probable
                             </Badge>
                           ) : row.inclusion === "auto_match" ? (
-                            <Badge variant="outline" className="ml-1 border-sky-300 text-[9px]">
+                            <Badge variant="outline" className="ml-1 border-sky-300 text-[11px]">
                               auto
                             </Badge>
                           ) : null}
@@ -484,7 +484,7 @@ export function DispatchPlanPickingProductoPanel({
           </p>
           <div className="overflow-x-auto rounded-md border">
             <table className="w-full min-w-[720px] text-left text-xs">
-              <thead className="bg-muted/50 text-[10px] uppercase text-muted-foreground">
+              <thead className="bg-muted/50 text-[11px] uppercase text-muted-foreground">
                 <tr>
                   <th className="px-2 py-2">Bodega</th>
                   <th className="px-2 py-2">Tipo</th>
@@ -503,13 +503,13 @@ export function DispatchPlanPickingProductoPanel({
                     <td className="px-2 py-1.5 font-medium">
                       {row.display_name || row.producto_variante}
                     </td>
-                    <td className="px-2 py-1.5 font-mono text-[10px]">
+                    <td className="px-2 py-1.5 font-mono text-[11px]">
                       {row.codigo_barras || "—"}
                     </td>
                     <td className="px-2 py-1.5 text-right tabular-nums">{row.unidades}</td>
                     <td className="px-2 py-1.5 text-right tabular-nums">
                       {row.sin_unidad_caja ? (
-                        <Badge variant="outline" className="text-[9px]">
+                        <Badge variant="outline" className="text-[11px]">
                           sin unidad caja
                         </Badge>
                       ) : (

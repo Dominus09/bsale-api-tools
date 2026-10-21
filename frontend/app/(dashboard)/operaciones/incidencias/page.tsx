@@ -29,7 +29,7 @@ export default function OperacionesIncidenciasPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Incidencias</h1>
+        <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9">Incidencias</h1>
         <p className="text-sm text-muted-foreground">Visitas con estado incidencia del día</p>
       </div>
       <div className="flex flex-wrap gap-2">

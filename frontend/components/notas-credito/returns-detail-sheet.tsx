@@ -75,7 +75,7 @@ export function ReturnsDetailSheet({ returnId, open, onOpenChange }: Props) {
             Cargando ficha…
           </div>
         ) : error ? (
-          <p className="mt-6 text-sm text-red-600">{error}</p>
+          <p className="mt-6 text-sm text-red-600 dark:text-red-300">{error}</p>
         ) : data ? (
           <ScrollArea className="mt-4 h-[calc(100vh-8rem)] pr-4">
             <div className="space-y-6">

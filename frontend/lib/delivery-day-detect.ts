@@ -76,14 +76,20 @@ export function formatDeliveryDayLabel(
   return DAY_LABEL[k]
 }
 
+/**
+ * Badge semántico por día: cada valor define borde, fondo Y texto en claro
+ * y en oscuro (WCAG AA: texto claro 200 sobre fondo 950 en dark; texto
+ * 800/900 sobre fondo 50 en light). Nunca dejar el texto light (p. ej.
+ * violet-900) sobre el fondo dark: era el defecto «Viernes» ilegible.
+ */
 const DAY_BADGE_CLASS: Record<DeliveryDayToken, string> = {
-  lunes: "border-slate-300 bg-slate-50 text-slate-800 dark:bg-slate-900/40",
-  martes: "border-slate-300 bg-slate-50 text-slate-800 dark:bg-slate-900/40",
-  miercoles: "border-blue-200 bg-blue-50 text-blue-900 dark:bg-blue-950/40",
-  jueves: "border-indigo-200 bg-indigo-50 text-indigo-900 dark:bg-indigo-950/40",
-  viernes: "border-violet-200 bg-violet-50 text-violet-900 dark:bg-violet-950/40",
-  sabado: "border-amber-300 bg-amber-50 text-amber-950 dark:bg-amber-950/40",
-  domingo: "border-rose-200 bg-rose-50 text-rose-900 dark:bg-rose-950/40",
+  lunes: "border-slate-300 bg-slate-50 text-slate-800 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-200",
+  martes: "border-slate-300 bg-slate-50 text-slate-800 dark:border-slate-700 dark:bg-slate-900/50 dark:text-slate-200",
+  miercoles: "border-blue-200 bg-blue-50 text-blue-900 dark:border-blue-800 dark:bg-blue-950/50 dark:text-blue-200",
+  jueves: "border-indigo-200 bg-indigo-50 text-indigo-900 dark:border-indigo-800 dark:bg-indigo-950/50 dark:text-indigo-200",
+  viernes: "border-violet-200 bg-violet-50 text-violet-900 dark:border-violet-800 dark:bg-violet-950/50 dark:text-violet-200",
+  sabado: "border-amber-300 bg-amber-50 text-amber-950 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200",
+  domingo: "border-rose-200 bg-rose-50 text-rose-900 dark:border-rose-800 dark:bg-rose-950/50 dark:text-rose-200",
 }
 
 export function deliveryDayBadgeClass(token: string | null | undefined): string {

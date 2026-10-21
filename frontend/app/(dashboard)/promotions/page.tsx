@@ -486,7 +486,7 @@ export default function PromotionsPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Promociones</h1>
+          <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9 font-semibold">Promociones</h1>
           <p className="text-muted-foreground mt-1 text-sm">
             Ofertas, remates y promociones para sucursales · precios congelados listos para etiquetas
           </p>
@@ -1001,11 +1001,11 @@ export default function PromotionsPage() {
                       ) : null}
                       <p className="font-mono text-xs text-foreground/80">{it.barcode || "—"}</p>
                       {productType ? (
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                           {productType}
                         </p>
                       ) : null}
-                      <p className="text-sm font-semibold text-emerald-700">
+                      <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">
                         {it.current_price != null ? formatCurrency(it.current_price) : "Precio no disponible"}
                       </p>
                     </button>

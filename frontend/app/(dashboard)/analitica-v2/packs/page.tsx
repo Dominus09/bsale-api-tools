@@ -248,7 +248,7 @@ export default function PacksV2Page() {
                         <span className="block text-sm font-medium text-lq-ink">{PACK_STATUS_LABELS[s]}</span>
                         <span className="mt-1 block text-xs text-lq-muted">Ver packs afectados</span>
                       </span>
-                      <span className="text-2xl font-semibold tabular-nums text-amber-800">{n}</span>
+                      <span className="text-2xl font-semibold tabular-nums text-amber-800 dark:text-amber-300">{n}</span>
                     </button>
                   ))}
             </SectionCard>

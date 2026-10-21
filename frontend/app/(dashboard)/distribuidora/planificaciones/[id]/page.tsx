@@ -186,7 +186,7 @@ export default function PlanificacionDetallePage() {
               <p className="font-mono text-xs text-muted-foreground">
                 {displayPlan.planning_code ?? `PLAN-${displayPlan.id}`}
               </p>
-              <h1 className="text-xl font-semibold">
+              <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9 font-semibold">
                 {displayPlan.planning_name ?? displayPlan.route_name}
               </h1>
               <p className="text-sm text-muted-foreground">

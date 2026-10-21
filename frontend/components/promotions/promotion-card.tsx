@@ -57,7 +57,7 @@ export function PromotionCard({
           <PromotionTipoBadge tipo={row.tipo} />
         </div>
 
-        <div className="relative flex aspect-[4/3] items-center justify-center bg-white p-3">
+        <div className="relative flex aspect-[4/3] items-center justify-center bg-card p-3">
           <PromotionProductImage
             key={`${row.codigo_barras}-${row.image_url ?? ""}`}
             imageUrl={row.image_url}
@@ -69,7 +69,7 @@ export function PromotionCard({
 
         <div className="flex flex-1 flex-col gap-2.5 p-4">
           {category ? (
-            <p className="text-muted-foreground text-[10px] font-semibold uppercase tracking-wider">
+            <p className="text-muted-foreground text-[11px] font-semibold uppercase tracking-wider">
               {category}
             </p>
           ) : null}
@@ -92,8 +92,8 @@ export function PromotionCard({
               </span>
             </div>
             <div className="flex justify-between gap-2">
-              <span className="text-sm font-semibold text-emerald-800">AHORA</span>
-              <span className="text-xl font-bold text-emerald-700">
+              <span className="text-sm font-semibold text-emerald-800 dark:text-emerald-300">AHORA</span>
+              <span className="text-xl font-bold text-emerald-700 dark:text-emerald-300">
                 {formatCurrency(row.sale_price)}
               </span>
             </div>
@@ -104,7 +104,7 @@ export function PromotionCard({
               </div>
               <div className="text-right">
                 <p className="text-muted-foreground font-medium">DESCUENTO</p>
-                <p className="font-bold text-rose-700">
+                <p className="font-bold text-rose-700 dark:text-rose-300">
                   {discountPct != null ? `-${discountPct}%` : "—"}
                 </p>
               </div>

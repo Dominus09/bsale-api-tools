@@ -75,7 +75,7 @@ export function CommercialSimulator({
               Proyección base: <strong>{formatCLP(result.proyeccion_base)}</strong>
             </p>
             <p>
-              Incremento esperado: <strong className="text-emerald-600">+{formatCLP(result.incremento_esperado)}</strong>
+              Incremento esperado: <strong className="text-emerald-600 dark:text-emerald-300">+{formatCLP(result.incremento_esperado)}</strong>
             </p>
             <p>
               Venta proyectada: <strong>{formatCLP(result.venta_proyectada)}</strong>

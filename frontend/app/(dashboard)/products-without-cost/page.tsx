@@ -66,7 +66,7 @@ export default function ProductsWithoutCostPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-foreground">Productos sin Costo</h1>
+        <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9">Productos sin Costo</h1>
         <p className="text-muted-foreground">
           Productos que no tienen costo asignado en el sistema
         </p>
@@ -76,12 +76,12 @@ export default function ProductsWithoutCostPage() {
       {products.length > 0 && (
         <Card className="border-yellow-200 bg-yellow-50">
           <CardContent className="flex items-center gap-4 pt-6">
-            <AlertCircle className="h-6 w-6 text-yellow-600" />
+            <AlertCircle className="h-6 w-6 text-yellow-600 dark:text-yellow-300" />
             <div>
-              <p className="font-medium text-yellow-800">
+              <p className="font-medium text-yellow-800 dark:text-yellow-300">
                 {products.length} productos sin costo asignado
               </p>
-              <p className="text-sm text-yellow-700">
+              <p className="text-sm text-yellow-700 dark:text-yellow-300">
                 Estos productos no pueden ser incluidos en el análisis de márgenes
               </p>
             </div>

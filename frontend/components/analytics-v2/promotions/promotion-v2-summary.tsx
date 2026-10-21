@@ -42,7 +42,7 @@ export function PromotionV2Kpis({
       value: k?.exceptions_verified,
       hint: "Precio promo = precio Bsale",
       target: "vigentes",
-      tone: "text-emerald-700",
+      tone: "text-emerald-700 dark:text-emerald-300",
     },
     {
       key: "pen",
@@ -50,7 +50,7 @@ export function PromotionV2Kpis({
       value: k?.exceptions_pending,
       hint: "Sin aprobar, sin verificar o en conflicto",
       target: "pendientes",
-      tone: (k?.exceptions_pending ?? 0) > 0 ? "text-orange-700" : undefined,
+      tone: (k?.exceptions_pending ?? 0) > 0 ? "text-orange-700 dark:text-orange-300" : undefined,
     },
   ]
   return (

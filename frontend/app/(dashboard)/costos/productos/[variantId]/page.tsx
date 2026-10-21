@@ -136,7 +136,7 @@ export default function CostoProductoPage() {
           </Link>
         </Button>
         <div className="flex-1">
-          <h1 className="flex items-center gap-2 text-2xl font-semibold">
+          <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9 flex items-center gap-2 font-semibold">
             <CircleDollarSign className="h-7 w-7" />
             {data?.product_name ?? "Producto"}
           </h1>
@@ -278,7 +278,7 @@ export default function CostoProductoPage() {
                         className={cn(
                           "text-right",
                           r.variation_pct != null && Math.abs(r.variation_pct) >= 10
-                            ? "text-amber-600"
+                            ? "text-amber-600 dark:text-amber-300"
                             : "",
                         )}
                       >

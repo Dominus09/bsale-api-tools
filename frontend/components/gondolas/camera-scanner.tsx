@@ -129,7 +129,7 @@ export function CameraScanner({
       <div
         className={cn(
           "relative overflow-hidden rounded-xl border bg-slate-950",
-          active ? "border-slate-800" : "border-slate-200 bg-slate-100",
+          active ? "border-slate-800" : "border-border bg-muted",
         )}
       >
         <video
@@ -141,8 +141,8 @@ export function CameraScanner({
         />
         {!active ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-center">
-            <Camera className="h-8 w-8 text-slate-400" aria-hidden="true" />
-            <p className="text-sm text-slate-500">
+            <Camera className="h-8 w-8 text-muted-foreground" aria-hidden="true" />
+            <p className="text-sm text-muted-foreground">
               Cámara detenida. Ábrala para escanear productos en la góndola.
             </p>
           </div>

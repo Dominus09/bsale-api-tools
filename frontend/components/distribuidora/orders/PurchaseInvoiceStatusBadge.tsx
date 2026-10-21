@@ -47,7 +47,7 @@ export function PurchaseInvoiceStatusBadge({
             variant="outline"
             className={cn(
               className,
-              compact && "px-1 py-0 text-[9px] font-medium leading-4",
+              compact && "px-1 py-0 text-[11px] font-medium leading-4",
             )}
           >
             {label}

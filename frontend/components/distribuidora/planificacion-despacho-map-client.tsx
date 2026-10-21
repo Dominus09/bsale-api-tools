@@ -149,7 +149,7 @@ function RouteStopMarker({
       ) : null}
       <Tooltip direction="top" offset={[0, -10]} opacity={0.95}>
         <span className="text-xs font-semibold">{stop.label}</span>
-        <span className="block text-[10px] opacity-80">{camion}</span>
+        <span className="block text-[11px] opacity-80">{camion}</span>
       </Tooltip>
     </Marker>
   )
@@ -221,7 +221,7 @@ export function PlanificacionDespachoMapClient({
           <Marker position={[depot.lat, depot.lng]} icon={depotIcon()} zIndexOffset={2000}>
             <Tooltip direction="top" opacity={1}>
               <span className="text-xs font-semibold">Bodega</span>
-              <span className="block text-[10px] opacity-80">Inicio y fin de ruta</span>
+              <span className="block text-[11px] opacity-80">Inicio y fin de ruta</span>
             </Tooltip>
           </Marker>
         ) : null}

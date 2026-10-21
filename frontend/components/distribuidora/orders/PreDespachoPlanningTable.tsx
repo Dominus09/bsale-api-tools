@@ -227,14 +227,14 @@ function WeightCell({
       {weightStatus === "unavailable" || weightStatus === "error" ? (
         <Badge
           variant="outline"
-          className="max-w-full truncate border-destructive/40 bg-destructive/5 px-1 py-0 text-[8px] font-medium leading-4 text-destructive"
+          className="max-w-full truncate border-destructive/40 bg-destructive/5 px-1 py-0 text-[11px] font-medium leading-4 text-destructive"
         >
           ⚠ Sin peso
         </Badge>
       ) : weightStatus === "partial" ? (
         <Badge
           variant="outline"
-          className="max-w-full truncate border-amber-300 bg-amber-50 px-1 py-0 text-[8px] font-medium leading-4 text-amber-900"
+          className="max-w-full truncate border-amber-300 bg-amber-50 px-1 py-0 text-[11px] font-medium leading-4 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100"
         >
           ⚠ Peso parcial
         </Badge>
@@ -249,7 +249,7 @@ function WeightCell({
             <Badge
               variant="outline"
               className={cn(
-                "cursor-pointer truncate px-1 py-0 text-[8px] font-medium leading-4 transition-opacity hover:opacity-90",
+                "cursor-pointer truncate px-1 py-0 text-[11px] font-medium leading-4 transition-opacity hover:opacity-90",
                 weightBadgeClass(badge.kind),
               )}
             >
@@ -260,7 +260,7 @@ function WeightCell({
           <Badge
             variant="outline"
             className={cn(
-              "max-w-full truncate px-1 py-0 text-[8px] font-medium leading-4",
+              "max-w-full truncate px-1 py-0 text-[11px] font-medium leading-4",
               weightBadgeClass(badge.kind),
             )}
           >
@@ -268,7 +268,7 @@ function WeightCell({
           </Badge>
         )
       ) : coverage > 0 && coverage < 100 ? (
-        <span className="text-[8px] text-muted-foreground tabular-nums">
+        <span className="text-[11px] text-muted-foreground tabular-nums">
           {coverage.toFixed(0)}% cobertura
         </span>
       ) : null}
@@ -292,7 +292,7 @@ function MunicipalityCell({
       {showCluster ? (
         <Tooltip>
           <TooltipTrigger asChild>
-            <span className="block max-w-full truncate text-[9px] text-muted-foreground/80">
+            <span className="block max-w-full truncate text-[11px] text-muted-foreground/80">
               {cluster}
             </span>
           </TooltipTrigger>
@@ -321,7 +321,7 @@ function OperationalStatusCell({
         <Badge
           variant="outline"
           className={cn(
-            "max-w-full truncate px-1 py-0 text-[9px] font-medium leading-4",
+            "max-w-full truncate px-1 py-0 text-[11px] font-medium leading-4",
             operationalStatusBadgeClass(status.kind),
           )}
         >
@@ -348,7 +348,7 @@ function DeliveryDayCell({ row }: { row: DistribuidoraDispatchPrepPlanningRow })
         <Badge
           variant="outline"
           className={cn(
-            "max-w-full truncate px-1.5 py-0 text-[10px] font-medium leading-5",
+            "max-w-full truncate px-1.5 py-0 text-[11px] font-semibold leading-5",
             deliveryDayBadgeClass(token),
           )}
         >
@@ -382,7 +382,7 @@ function TruckSelectCell({
   const capLabel = truck ? distribuidoraTruckCapacityLabel(truck) : null
 
   if (trucks.length === 0) {
-    return <span className="text-[10px] text-muted-foreground">Sin camiones</span>
+    return <span className="text-[11px] text-muted-foreground">Sin camiones</span>
   }
 
   return (
@@ -469,7 +469,7 @@ function PlanningTableRow({
       <td className={cn(TD, "whitespace-nowrap text-right")}>
         <WeightCell row={r} onOpenWeight={onOpenWeight} />
       </td>
-      <td className={cn(TD, "whitespace-nowrap text-[10px] text-muted-foreground")}>
+      <td className={cn(TD, "whitespace-nowrap text-[11px] text-muted-foreground")}>
         {formatLastUpdate(r)}
       </td>
       <td className={cn(TD_STICKY_TRUCK, inPlan && "bg-primary/[0.06]")}>

@@ -34,7 +34,7 @@ export function DispatchPlanInvoicedStatusBadge({
             className={cn(
               className,
               isAuto && "border-sky-300 bg-sky-50 text-sky-900 dark:border-sky-800 dark:bg-sky-950/50 dark:text-sky-100",
-              compact && "px-1 py-0 text-[9px] font-medium leading-4",
+              compact && "px-1 py-0 text-[11px] font-medium leading-4",
             )}
           >
             {label}

@@ -68,10 +68,10 @@ export default function PlanificacionesHistorialPage() {
     <div className="space-y-6 p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             Logística 1.2
           </p>
-          <h1 className="text-xl font-semibold tracking-tight">Planificaciones recientes</h1>
+          <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9 font-semibold">Planificaciones recientes</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Historial persistente por camión — reabrir, auditar facturación y costos.
           </p>
@@ -117,7 +117,7 @@ export default function PlanificacionesHistorialPage() {
                     {p.planning_date?.slice(0, 10) ?? p.created_at?.slice(0, 10) ?? "—"}
                   </TableCell>
                   <TableCell>
-                    <Badge variant="secondary" className="text-[10px]">
+                    <Badge variant="secondary" className="text-[11px]">
                       {STATUS_LABEL[p.status] ?? p.status}
                     </Badge>
                   </TableCell>

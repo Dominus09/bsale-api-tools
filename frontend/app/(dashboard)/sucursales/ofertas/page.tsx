@@ -184,25 +184,31 @@ export default function OfertasPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold text-foreground">Ofertas y Remates</h1>
-          <p className="text-sm text-muted-foreground">
+      {/* Graphite Premium 6.0 · encabezado unificado */}
+      <div className="flex flex-col gap-4 border-b border-lq-line pb-5 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-xs font-medium uppercase tracking-[0.14em] text-lq-faint">
+            Sucursales · Promociones
+          </p>
+          <h1 className="mt-1 text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9">
+            Ofertas y Remates
+          </h1>
+          <p className="mt-1.5 text-sm leading-6 text-lq-muted">
             Gestiona las promociones y productos en liquidación
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" className="h-11 sm:h-9">
             <FileText className="mr-2 h-4 w-4" />
             Exportar PDF
           </Button>
-          <Button variant="outline">
+          <Button variant="outline" className="h-11 sm:h-9">
             <FileSpreadsheet className="mr-2 h-4 w-4" />
             Exportar Excel
           </Button>
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
-              <Button onClick={() => resetForm()}>
+              <Button className="h-11 sm:h-9" onClick={() => resetForm()}>
                 <Plus className="mr-2 h-4 w-4" />
                 Nueva Oferta
               </Button>
@@ -320,7 +326,7 @@ export default function OfertasPage() {
         <Card>
           <CardContent className="flex items-center gap-4 p-4">
             <div className="rounded-lg bg-blue-100 p-2">
-              <Tag className="h-5 w-5 text-blue-600" />
+              <Tag className="h-5 w-5 text-blue-600 dark:text-blue-300" />
             </div>
             <div>
               <p className="text-2xl font-semibold">{stats.totalOfertas}</p>
@@ -331,7 +337,7 @@ export default function OfertasPage() {
         <Card>
           <CardContent className="flex items-center gap-4 p-4">
             <div className="rounded-lg bg-red-100 p-2">
-              <Percent className="h-5 w-5 text-red-600" />
+              <Percent className="h-5 w-5 text-red-600 dark:text-red-300" />
             </div>
             <div>
               <p className="text-2xl font-semibold">{stats.totalRemates}</p>
@@ -342,7 +348,7 @@ export default function OfertasPage() {
         <Card>
           <CardContent className="flex items-center gap-4 p-4">
             <div className="rounded-lg bg-green-100 p-2">
-              <Calendar className="h-5 w-5 text-green-600" />
+              <Calendar className="h-5 w-5 text-green-600 dark:text-green-300" />
             </div>
             <div>
               <p className="text-2xl font-semibold">{stats.activas}</p>
@@ -409,7 +415,7 @@ export default function OfertasPage() {
                     <td className="py-3 text-right text-muted-foreground line-through">
                       {formatCurrency(offer.precioNormal)}
                     </td>
-                    <td className="py-3 text-right font-semibold text-green-600">
+                    <td className="py-3 text-right font-semibold text-green-600 dark:text-green-300">
                       {formatCurrency(offer.precioOferta)}
                     </td>
                     <td className="py-3 text-center">

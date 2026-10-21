@@ -232,7 +232,7 @@ export function PromotionHistorialTable({
                   <TableCell className="text-right text-muted-foreground line-through">
                     {formatCurrency(row.regular_price)}
                   </TableCell>
-                  <TableCell className="text-right font-semibold text-emerald-700">
+                  <TableCell className="text-right font-semibold text-emerald-700 dark:text-emerald-300">
                     {formatCurrency(row.sale_price)}
                   </TableCell>
                   <TableCell className="text-right font-medium">

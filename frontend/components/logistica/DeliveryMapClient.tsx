@@ -30,7 +30,7 @@ import { cn } from "@/lib/utils"
 const DeliveryLeafletMap = dynamic(() => import("./delivery-leaflet-map"), {
   ssr: false,
   loading: () => (
-    <div className="flex h-full items-center justify-center rounded-xl bg-slate-100 text-sm text-muted-foreground">
+    <div className="flex h-full items-center justify-center rounded-xl bg-muted text-sm text-muted-foreground">
       Cargando mapa…
     </div>
   ),
@@ -242,9 +242,9 @@ export function DeliveryMapClient({
         </div>
 
         {geoError ? (
-          <p className="text-xs text-amber-700">{geoError}</p>
+          <p className="text-xs text-amber-700 dark:text-amber-300">{geoError}</p>
         ) : myPos ? (
-          <p className="text-xs text-emerald-700">GPS activo</p>
+          <p className="text-xs text-emerald-700 dark:text-emerald-300">GPS activo</p>
         ) : null}
       </header>
 
@@ -287,8 +287,8 @@ export function DeliveryMapClient({
               className={cn(
                 "mt-1 text-xs font-medium",
                 selected.status === "delivered"
-                  ? "text-emerald-700"
-                  : "text-amber-700",
+                  ? "text-emerald-700 dark:text-emerald-300"
+                  : "text-amber-700 dark:text-amber-300",
               )}
             >
               {selected.status === "delivered" ? "Entregado" : "Pendiente"}
@@ -331,7 +331,7 @@ export function DeliveryMapClient({
               className={cn(
                 "h-12",
                 selected.status === "delivered" &&
-                  "border-emerald-600 text-emerald-800",
+                  "border-emerald-600 text-emerald-800 dark:text-emerald-300",
               )}
               disabled={busyKey === selected.customer_key}
               onClick={() => void toggleStatus(selected)}
@@ -410,8 +410,8 @@ function StopSection({
       <h2
         className={cn(
           "mb-2 text-xs font-semibold uppercase tracking-wide",
-          tone === "done" && "text-emerald-700",
-          tone === "warn" && "text-amber-700",
+          tone === "done" && "text-emerald-700 dark:text-emerald-300",
+          tone === "warn" && "text-amber-700 dark:text-amber-300",
           !tone && "text-muted-foreground",
         )}
       >
@@ -435,10 +435,10 @@ function StopSection({
                 className={cn(
                   "mt-0.5 size-5 shrink-0",
                   s.status === "delivered"
-                    ? "text-emerald-600"
+                    ? "text-emerald-600 dark:text-emerald-300"
                     : s.has_coordinates
-                      ? "text-blue-600"
-                      : "text-amber-600",
+                      ? "text-blue-600 dark:text-blue-300"
+                      : "text-amber-600 dark:text-amber-300",
                 )}
               />
               <div className="min-w-0 flex-1">
@@ -456,8 +456,8 @@ function StopSection({
                     className={cn(
                       "font-medium",
                       s.status === "delivered"
-                        ? "text-emerald-700"
-                        : "text-amber-700",
+                        ? "text-emerald-700 dark:text-emerald-300"
+                        : "text-amber-700 dark:text-amber-300",
                     )}
                   >
                     {s.status === "delivered" ? "Entregado" : "Pendiente"}

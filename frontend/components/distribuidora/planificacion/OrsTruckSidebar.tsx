@@ -51,7 +51,7 @@ export function OrsTruckSidebar({
           <Truck className="size-3.5 text-primary" aria-hidden />
           Camiones / rutas
         </p>
-        <p className="mt-0.5 text-[10px] text-muted-foreground">
+        <p className="mt-0.5 text-[11px] text-muted-foreground">
           Un camión a la vez en mapa y costos
         </p>
       </div>
@@ -74,12 +74,12 @@ export function OrsTruckSidebar({
                 )}
               >
                 <p className="truncate text-xs font-medium">{t.camion}</p>
-                <p className="mt-0.5 text-[10px] text-muted-foreground">
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
                   {t.stopCount} parada{t.stopCount === 1 ? "" : "s"}
                   {t.maxWeightKg != null ? ` · cap. ${t.maxWeightKg.toLocaleString("es-CL")} kg` : ""}
                 </p>
                 {t.estimatedAssignedKg != null && t.utilizationPct != null ? (
-                  <p className="mt-0.5 text-[10px] tabular-nums text-muted-foreground">
+                  <p className="mt-0.5 text-[11px] tabular-nums text-muted-foreground">
                     {t.weightIncomplete
                       ? `conocido ${Number(t.knownWeightKg ?? 0).toLocaleString("es-CL")} kg`
                       : `~${t.estimatedAssignedKg.toLocaleString("es-CL")} kg est.`}
@@ -88,22 +88,22 @@ export function OrsTruckSidebar({
                   </p>
                 ) : null}
                 {t.weightIncomplete && (t.unavailableWeightCount ?? 0) > 0 ? (
-                  <p className="mt-1 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                  <p className="mt-1 text-[11px] font-medium text-amber-700 dark:text-amber-300">
                     Peso incompleto · {t.unavailableWeightCount} sin peso
                   </p>
                 ) : null}
                 {t.overloaded ? (
-                  <p className="mt-1 flex items-center gap-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300">
+                  <p className="mt-1 flex items-center gap-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300">
                     <AlertTriangle className="size-3 shrink-0" aria-hidden />
                     Sobrecarga est.
                   </p>
                 ) : null}
                 {st ? (
-                  <Badge variant="secondary" className="mt-1.5 h-5 px-1.5 text-[9px]">
+                  <Badge variant="secondary" className="mt-1.5 h-5 px-1.5 text-[11px]">
                     {STATUS_LABEL[st] ?? st}
                   </Badge>
                 ) : (
-                  <Badge variant="outline" className="mt-1.5 h-5 px-1.5 text-[9px]">
+                  <Badge variant="outline" className="mt-1.5 h-5 px-1.5 text-[11px]">
                     Sin confirmar
                   </Badge>
                 )}
@@ -113,7 +113,7 @@ export function OrsTruckSidebar({
         })}
       </ul>
       {activeRow && activeRow.maxWeightKg != null ? (
-        <div className="shrink-0 border-t border-border/70 bg-card/60 px-3 py-2.5 text-[10px]">
+        <div className="shrink-0 border-t border-border/70 bg-card/60 px-3 py-2.5 text-[11px]">
           <p className="font-semibold text-foreground">Capacidad activa</p>
           <dl className="mt-1 space-y-0.5 text-muted-foreground">
             <div className="flex justify-between gap-2">

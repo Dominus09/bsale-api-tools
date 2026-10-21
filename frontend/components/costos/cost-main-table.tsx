@@ -373,8 +373,8 @@ export function CostMainTable({
                           <TableCell
                             className={cn(
                               "text-right tabular-nums",
-                              (r.variationAmount ?? 0) > 0 && "text-red-600",
-                              (r.variationAmount ?? 0) < 0 && "text-emerald-600",
+                              (r.variationAmount ?? 0) > 0 && "text-red-600 dark:text-red-300",
+                              (r.variationAmount ?? 0) < 0 && "text-emerald-600 dark:text-emerald-300",
                             )}
                           >
                             {formatMoneyCLP(r.variationAmount)}
@@ -384,8 +384,8 @@ export function CostMainTable({
                           <TableCell
                             className={cn(
                               "text-right tabular-nums",
-                              (r.variationPct ?? 0) > 0 && "text-red-600",
-                              (r.variationPct ?? 0) < 0 && "text-emerald-600",
+                              (r.variationPct ?? 0) > 0 && "text-red-600 dark:text-red-300",
+                              (r.variationPct ?? 0) < 0 && "text-emerald-600 dark:text-emerald-300",
                             )}
                           >
                             {formatPct(r.variationPct)}
@@ -413,7 +413,7 @@ export function CostMainTable({
                               {r.isOutlier ? (
                                 <Badge
                                   variant="outline"
-                                  className="w-fit border-red-500/40 text-[10px] text-red-700"
+                                  className="w-fit border-red-500/40 text-[11px] text-red-700 dark:text-red-300"
                                 >
                                   Extremo
                                 </Badge>

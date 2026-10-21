@@ -13,10 +13,10 @@ const ITEMS: {
   label: string
   accent: string
 }[] = [
-  { key: "activas", label: "Activas", accent: "text-emerald-700" },
-  { key: "proximas", label: "Próximas", accent: "text-sky-700" },
-  { key: "vencidas", label: "Vencidas", accent: "text-zinc-600" },
-  { key: "remates", label: "Remates", accent: "text-orange-700" },
+  { key: "activas", label: "Activas", accent: "text-emerald-700 dark:text-emerald-300" },
+  { key: "proximas", label: "Próximas", accent: "text-sky-700 dark:text-sky-300" },
+  { key: "vencidas", label: "Vencidas", accent: "text-muted-foreground" },
+  { key: "remates", label: "Remates", accent: "text-orange-700 dark:text-orange-300" },
   { key: "empresas", label: "Empresas", accent: "text-foreground" },
 ]
 

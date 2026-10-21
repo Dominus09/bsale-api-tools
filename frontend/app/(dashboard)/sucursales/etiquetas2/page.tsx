@@ -394,16 +394,19 @@ export default function Etiquetas2Page() {
   }
 
   return (
-    <div className="space-y-6 p-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-lq-line pb-5">
         <div>
-          <div className="flex items-center gap-2">
-            <Users className="h-6 w-6 text-[#005AA8]" />
-            <h1 className="text-2xl font-semibold text-foreground">
+          <p className="text-xs font-medium uppercase tracking-[0.14em] text-lq-faint">
+            Sucursales · Etiquetas
+          </p>
+          <div className="mt-1 flex items-center gap-2">
+            <Users className="h-6 w-6 text-primary" />
+            <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9">
               Etiquetas Socios (Beta)
             </h1>
           </div>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="mt-1.5 text-sm leading-6 text-lq-muted">
             Precio Normal + Precio Socio · el generador clásico sigue en{" "}
             <a href="/sucursales/etiquetas" className="underline">
               /sucursales/etiquetas
@@ -454,8 +457,8 @@ export default function Etiquetas2Page() {
               )}
             </div>
 
-            <div className="rounded-lg border border-[#005AA8]/40 bg-[#E6F2FF]/50 p-3 space-y-1">
-              <p className="text-xs font-semibold uppercase tracking-wide text-[#005AA8]">
+            <div className="rounded-lg border border-[#005AA8]/40 bg-[#E6F2FF]/50 p-3 space-y-1 dark:border-[#005AA8]/60 dark:bg-[#005AA8]/15">
+              <p className="text-xs font-semibold uppercase tracking-wide text-[#005AA8] dark:text-[#8FC3F0]">
                 Precio Socio
               </p>
               <p className="text-sm font-medium">
@@ -713,7 +716,7 @@ export default function Etiquetas2Page() {
                       <td className="py-2 pr-2 text-right tabular-nums">
                         {formatCurrency(r.normalPrice)}
                       </td>
-                      <td className="py-2 pr-2 text-right tabular-nums font-semibold text-[#005AA8]">
+                      <td className="py-2 pr-2 text-right tabular-nums font-semibold text-[#005AA8] dark:text-[#8FC3F0]">
                         {formatCurrency(r.socioPrice)}
                       </td>
                       <td className="py-2 pr-2 text-center">
@@ -782,7 +785,7 @@ export default function Etiquetas2Page() {
               return (
               <div
                 key={r.id}
-                className="overflow-hidden rounded-md border border-neutral-200/90 bg-white"
+                className="overflow-hidden rounded-md border border-neutral-200/90 bg-card"
                 style={{ aspectRatio: "10 / 4" }}
               >
                 <div className="flex h-full flex-col">

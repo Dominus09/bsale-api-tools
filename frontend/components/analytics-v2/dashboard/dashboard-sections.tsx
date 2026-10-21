@@ -654,7 +654,7 @@ export function TaxesOverview({ data, canSeeCosts }: { data: DashboardTaxes; can
           title="Impuestos sospechosos"
           value={data.skus_tax_review}
           hint="Requieren revisión tributaria"
-          tone={data.skus_tax_review ? "border-orange-300" : undefined}
+          tone={data.skus_tax_review ? "border-orange-300 dark:border-orange-800" : undefined}
         />
         <Kpi
           title="Sin configuración"

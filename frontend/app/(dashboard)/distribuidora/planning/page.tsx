@@ -177,7 +177,7 @@ export default function DistribuidoraPlanningPage() {
     return (
       <div className="mx-auto flex max-w-lg flex-col gap-6 py-8">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Planificación de rutas</h1>
+          <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9 font-semibold">Planificación de rutas</h1>
           <p className="mt-2 text-sm text-muted-foreground">
             No hay órdenes en la cola. Selecciónelas en{" "}
             <Link href="/distribuidora/orders" className="font-medium text-primary underline">
@@ -200,7 +200,7 @@ export default function DistribuidoraPlanningPage() {
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             Distribuidora
           </p>
-          <h1 className="text-2xl font-semibold tracking-tight">Planificación de rutas</h1>
+          <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9 font-semibold">Planificación de rutas</h1>
           <p className="mt-1 max-w-xl text-sm text-muted-foreground">
             Asigne cada OC a un camión. Los totales se agrupan por camión antes de
             confirmar.

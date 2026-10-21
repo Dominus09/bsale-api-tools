@@ -176,8 +176,8 @@ export default function RegistrosOcPage() {
   return (
     <div className="mx-auto max-w-[1100px] space-y-8 pb-16">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Registros de órdenes de compra</h1>
-        <p className="text-sm text-slate-500">Consulta, imprime y actualiza el estado de cada OC.</p>
+        <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9 font-semibold">Registros de órdenes de compra</h1>
+        <p className="text-sm text-muted-foreground">Consulta, imprime y actualiza el estado de cada OC.</p>
       </div>
 
       <ComprasDataStatusCard companyId={Number.isFinite(cid) ? cid : null} />
@@ -186,12 +186,12 @@ export default function RegistrosOcPage() {
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{error}</div>
       ) : null}
 
-      <section className="rounded-xl border border-slate-200/80 bg-white p-5 shadow-sm">
+      <section className="rounded-xl border border-border/80 bg-card p-5 shadow-sm">
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
             <Label>Empresa</Label>
             <Select value={companyId} onValueChange={setCompanyId}>
-              <SelectTrigger className="bg-white">
+              <SelectTrigger className="bg-card">
                 <SelectValue placeholder="Elegir…" />
               </SelectTrigger>
               <SelectContent>
@@ -207,7 +207,7 @@ export default function RegistrosOcPage() {
           <div className="space-y-2">
             <Label>Sucursal (opcional)</Label>
             <Select value={officeId} onValueChange={setOfficeId} disabled={!Number.isFinite(cid)}>
-              <SelectTrigger className="bg-white">
+              <SelectTrigger className="bg-card">
                 <SelectValue placeholder="Todas" />
               </SelectTrigger>
               <SelectContent>
@@ -223,11 +223,11 @@ export default function RegistrosOcPage() {
         </div>
       </section>
 
-      <section className="rounded-xl border border-slate-200/80 bg-white shadow-sm">
+      <section className="rounded-xl border border-border/80 bg-card shadow-sm">
         <div className="overflow-x-auto p-2">
           <Table>
             <TableHeader>
-              <TableRow className="border-slate-200 hover:bg-transparent">
+              <TableRow className="border-border hover:bg-transparent">
                 <TableHead>OC</TableHead>
                 <TableHead>Proveedor</TableHead>
                 <TableHead>Fecha</TableHead>
@@ -239,24 +239,24 @@ export default function RegistrosOcPage() {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="py-10 text-center text-slate-500">
+                  <TableCell colSpan={6} className="py-10 text-center text-muted-foreground">
                     <Loader2 className="mx-auto size-6 animate-spin" />
                   </TableCell>
                 </TableRow>
               ) : rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="py-10 text-center text-slate-500">
+                  <TableCell colSpan={6} className="py-10 text-center text-muted-foreground">
                     {Number.isFinite(cid) ? "No hay órdenes para mostrar." : "Selecciona una empresa."}
                   </TableCell>
                 </TableRow>
               ) : (
                 rows.map((o) => (
-                  <TableRow key={o.oc_id} className="border-slate-200">
+                  <TableRow key={o.oc_id} className="border-border">
                     <TableCell className="font-mono text-sm font-medium">#{o.oc_id}</TableCell>
                     <TableCell>{o.supplier_name ?? o.supplier_id}</TableCell>
-                    <TableCell className="text-slate-600">{fmtDate(o.fecha_emision)}</TableCell>
+                    <TableCell className="text-muted-foreground">{fmtDate(o.fecha_emision)}</TableCell>
                     <TableCell>
-                      <span className="rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-800">
+                      <span className="rounded-md bg-muted px-2 py-0.5 text-xs font-medium text-foreground">
                         {o.status}
                       </span>
                     </TableCell>
@@ -313,12 +313,12 @@ export default function RegistrosOcPage() {
           </DialogHeader>
           {detailLoading ? (
             <div className="flex min-h-[200px] flex-1 items-center justify-center">
-              <Loader2 className="size-8 animate-spin text-slate-400" />
+              <Loader2 className="size-8 animate-spin text-muted-foreground" />
             </div>
           ) : detailHeader ? (
             <div
               id={printHostId}
-              className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-auto sm:overflow-x-hidden rounded-md border border-slate-200/80 bg-slate-50/50 p-2 sm:p-3 print:overflow-visible print:border-0 print:bg-transparent print:p-0"
+              className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-auto sm:overflow-x-hidden rounded-md border border-border/80 bg-muted/40/50 p-2 sm:p-3 print:overflow-visible print:border-0 print:bg-transparent print:p-0"
             >
               <OcInvoicePrint header={detailHeader} details={detailLines} />
             </div>
