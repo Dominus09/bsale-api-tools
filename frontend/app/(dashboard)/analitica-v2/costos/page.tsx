@@ -235,7 +235,7 @@ export default function CostControlV2Page() {
         updatedAt={<>Última actualización: {formatDateTime(summary?.meta.generated_at)} · Fuente Bsale RAW de solo lectura</>}
         actions={
           <>
-            <Button variant="outline" size="sm" className="h-9" onClick={handleExport} disabled={exporting}>
+            <Button variant="outline" size="sm" className="h-10 sm:h-9" onClick={handleExport} disabled={exporting}>
               {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
               Exportar análisis Excel
             </Button>
@@ -247,9 +247,9 @@ export default function CostControlV2Page() {
                 min={1}
                 value={receptionSegment}
                 onChange={(e) => setReceptionSegment(Math.max(1, Number(e.target.value) || 1))}
-                className="h-9 w-16 rounded-md border bg-background px-2 text-sm"
+                className="h-10 w-16 rounded-md border bg-background px-2 text-sm sm:h-9"
               />
-              <Button variant="outline" size="sm" className="h-9" onClick={handleExportReceptions} disabled={exportingReceptions}>
+              <Button variant="outline" size="sm" className="h-10 sm:h-9" onClick={handleExportReceptions} disabled={exportingReceptions}>
                 {exportingReceptions ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
                 Historial de recepciones
               </Button>

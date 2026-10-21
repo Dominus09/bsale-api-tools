@@ -183,11 +183,11 @@ export default function CatalogoMaestroPage() {
         }
         actions={
           <>
-            <Button variant="outline" size="sm" className="h-9" onClick={() => handleDownload("filtered")} disabled={downloading != null || loading}>
+            <Button variant="outline" size="sm" className="h-10 sm:h-9" onClick={() => handleDownload("filtered")} disabled={downloading != null || loading}>
               {downloading === "filtered" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
               Descargar resultados filtrados
             </Button>
-            <Button size="sm" className="h-9" onClick={() => handleDownload("full")} disabled={downloading != null}>
+            <Button size="sm" className="h-10 sm:h-9" onClick={() => handleDownload("full")} disabled={downloading != null}>
               {downloading === "full" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
               Descargar catálogo completo
             </Button>

@@ -47,7 +47,7 @@ export function Header({ sidebarOpen, onToggleSidebar }: HeaderProps) {
             type="button"
             variant="ghost"
             size="icon"
-            className="h-10 w-10 shrink-0 text-lq-on-graphite-muted hover:bg-white/10 hover:text-white"
+            className="h-11 w-11 shrink-0 text-lq-on-graphite-muted hover:bg-white/10 hover:text-white sm:h-10 sm:w-10"
             onClick={onToggleSidebar}
             aria-label={sidebarOpen ? "Ocultar menú lateral" : "Mostrar menú lateral"}
           >
@@ -70,7 +70,7 @@ export function Header({ sidebarOpen, onToggleSidebar }: HeaderProps) {
           <DropdownMenuTrigger asChild>
             <Button
               variant="ghost"
-              className="flex h-10 max-w-[40vw] items-center gap-2 px-2 hover:bg-white/10 sm:max-w-none sm:px-3"
+              className="flex h-11 max-w-[40vw] items-center gap-2 px-2 hover:bg-white/10 sm:h-10 sm:max-w-none sm:px-3"
             >
               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
                 <User className="h-4 w-4" />

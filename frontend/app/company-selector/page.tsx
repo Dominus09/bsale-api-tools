@@ -42,7 +42,7 @@ export default function CompanySelectorPage() {
 
   if (isLoading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-background">
+      <div className="flex min-h-dvh items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-4">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
           <p className="text-muted-foreground">Cargando empresas...</p>
@@ -52,8 +52,14 @@ export default function CompanySelectorPage() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-background p-4">
-      <div className="mb-8 flex flex-col items-center gap-4">
+    <div
+      className="flex min-h-dvh flex-col items-center justify-center bg-background px-4 py-4"
+      style={{
+        paddingTop: "max(1rem, env(safe-area-inset-top))",
+        paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
+      }}
+    >
+      <div className="mb-8 flex flex-col items-center gap-4 text-center">
         <img
           src="https://hebbkx1anhila5yf.public.blob.vercel-storage.com/Emblema%20auxiliar%20sin%20sucursal-3muphOJR8q7mpoZPwKQhJb7RbLYvdu.png"
           alt="Quillotana"

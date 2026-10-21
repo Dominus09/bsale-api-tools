@@ -264,6 +264,7 @@ export function Pager({
           type="button"
           size="sm"
           variant="outline"
+          className="h-10 w-10 p-0 sm:h-8 sm:w-8"
           disabled={loading || page <= 1}
           onClick={() => onPage(page - 1)}
           aria-label="Página anterior"
@@ -274,6 +275,7 @@ export function Pager({
           type="button"
           size="sm"
           variant="outline"
+          className="h-10 w-10 p-0 sm:h-8 sm:w-8"
           disabled={loading || page >= totalPages}
           onClick={() => onPage(page + 1)}
           aria-label="Página siguiente"

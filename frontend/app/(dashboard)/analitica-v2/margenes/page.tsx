@@ -233,7 +233,7 @@ export default function MarginsV2Page() {
                   key={mode}
                   variant="outline"
                   size="sm"
-                  className="h-9"
+                  className="h-10 sm:h-9"
                   onClick={() => handleExport(mode)}
                   disabled={exportingMode != null}
                 >

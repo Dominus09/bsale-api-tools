@@ -407,3 +407,36 @@
   box-shadow: 0 2px 14px rgb(0 0 0 / 0.45);
 }
 
+/* ---------------------------------------------------------------------------
+   Responsive & PWA 5.1 — fundamentos compartidos (todas las rutas)
+   - Sin desplazamiento horizontal de página (los scrolls horizontales viven
+     dentro de contenedores de tabla, nunca en el body).
+   - Zonas seguras iPhone disponibles como utilidades.
+   - Sin flash gris al tocar en iOS/Android.
+--------------------------------------------------------------------------- */
+body {
+  overflow-x: clip;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+
+.px-safe {
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+/* Contenedor de tabla con desplazamiento horizontal controlado (móvil/tablet):
+   usar en vueltas de tablas anchas en vez de romper el layout de la página. */
+.table-scroll-x {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+
