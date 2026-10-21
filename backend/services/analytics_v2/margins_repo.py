@@ -20,6 +20,13 @@ WHERE vp.company_id = %s
   AND vp.price_list_id = ANY(%s)
 """
 
+STOCK_TOTALS_SQL = """
+SELECT variant_id, sum(quantity) AS stock_total, count(*) AS stock_offices
+FROM bsale_raw.stocks
+WHERE company_id = %s
+GROUP BY variant_id
+"""
+
 MARGIN_RULES_SQL = """
 SELECT mr.id, mr.price_list_id, mr.price_list_name, mr.product_type_id, mr.product_type_name,
        mr.min_margin, mr.max_margin, mr.active, mr.rule_key
@@ -43,3 +50,12 @@ class MarginsV2Repository:
 
     def margin_rules(self, *, company_id: int) -> list[dict[str, Any]]:
         return self._execute(MARGIN_RULES_SQL, (company_id,))
+
+    def stock_totals(self, *, company_id: int) -> list[dict[str, Any]]:
+        """Stock físico total por variante (sum(quantity), todas las sucursales).
+
+        Una fila por variante (GROUP BY sobre la PK de bsale_raw.stocks):
+        el join posterior es por variante y nunca multiplica existencias
+        cuando la variante aparece en varias listas de precios.
+        """
+        return self._execute(STOCK_TOTALS_SQL, (company_id,))

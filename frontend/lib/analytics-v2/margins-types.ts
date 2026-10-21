@@ -99,6 +99,18 @@ export type MarginRule = {
   issues: RuleIssue[]
 }
 
+/** Stock físico total de la variante (sum(quantity) en todas las sucursales). */
+export type StockState = "con_stock" | "cero" | "negativo" | "sin_sincronizar"
+
+export type MarginRowStock = {
+  /** String decimal o null = sin sincronizar (nunca equivale a cero). */
+  total: string | null
+  state: StockState
+  offices: number
+}
+
+export type StockFilter = "with" | "without"
+
 export type MarginRow = {
   variant_id: number
   product_id: number | null
@@ -111,6 +123,7 @@ export type MarginRow = {
   is_pack: boolean
   pack: PackCostCompact | null
   price_list: { id: number; name: string | null; label: string | null }
+  stock: MarginRowStock
   status: MarginStatus
   confirmation: "calculado" | "confirmado"
   qualifiers: MarginStatus[]
@@ -257,6 +270,7 @@ export type MarginRowsParams = {
   status?: MarginStatus | null
   qualifier?: MarginStatus | null
   reliability?: CostReliability | null
+  stock_filter?: StockFilter | null
   cost_basis?: CostBasis
   variant_state?: "active" | "inactive" | "all"
   sort?: string

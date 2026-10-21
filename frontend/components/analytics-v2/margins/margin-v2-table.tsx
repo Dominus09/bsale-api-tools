@@ -6,7 +6,7 @@ import { EmptyState, ProfessionalDataTable, SmartFilterBar } from "@/components/
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
-import { RELIABILITY_LABELS, formatMoney, formatPct } from "@/lib/analytics-v2/labels"
+import { RELIABILITY_LABELS, formatMoney, formatPct, formatQty } from "@/lib/analytics-v2/labels"
 import {
   COST_BASIS_LABELS,
   HIGHLIGHTED_RISKS,
@@ -17,7 +17,7 @@ import {
   PRIMARY_STATUSES,
   QUALIFIER_STATUSES,
 } from "@/lib/analytics-v2/margins-labels"
-import type { CostBasis, MarginRow, MarginStatus, MarginsFilters } from "@/lib/analytics-v2/margins-types"
+import type { CostBasis, MarginRow, MarginStatus, MarginsFilters, StockFilter } from "@/lib/analytics-v2/margins-types"
 import type { CostReliability } from "@/lib/analytics-v2/types"
 
 export type MarginFilterDraft = {
@@ -27,6 +27,7 @@ export type MarginFilterDraft = {
   status: MarginStatus | ""
   qualifier: MarginStatus | ""
   reliability: CostReliability | ""
+  stockFilter: StockFilter | ""
   costBasis: CostBasis
   sort: string
 }
@@ -38,6 +39,7 @@ export const EMPTY_MARGIN_FILTERS: MarginFilterDraft = {
   status: "",
   qualifier: "",
   reliability: "",
+  stockFilter: "",
   costBasis: "promedio_bsale",
   sort: "status",
 }
@@ -81,6 +83,14 @@ export function MarginV2Filters({
         <select className={selectClass} value={draft.reliability} onChange={(e) => onChange({ reliability: e.target.value as CostReliability | "" })}>
           <option value="">Todas</option>
           {(Object.keys(RELIABILITY_LABELS) as CostReliability[]).map((r) => <option key={r} value={r}>{RELIABILITY_LABELS[r]}</option>)}
+        </select>
+      </label>
+      <label className={labelClass}>
+        Existencias
+        <select className={selectClass} value={draft.stockFilter} onChange={(e) => onChange({ stockFilter: e.target.value as StockFilter | "" })}>
+          <option value="">Todos</option>
+          <option value="with">Con stock</option>
+          <option value="without">Sin stock (0 o negativo)</option>
         </select>
       </label>
       <label className={labelClass}>
@@ -137,6 +147,27 @@ export function MarginV2Filters({
   )
 }
 
+/** Stock físico total de la variante (todas las sucursales, sin desglose). */
+function StockCell({ row }: { row: MarginRow }) {
+  const stock = row.stock
+  if (!stock || stock.state === "sin_sincronizar") {
+    return (
+      <span className="text-lq-faint" title="Sin información de stock sincronizada (no equivale a cero)">
+        s/d
+      </span>
+    )
+  }
+  return (
+    <span
+      className={cn("font-medium tabular-nums", stock.state === "negativo" && "text-red-700 dark:text-red-300")}
+      title={`Stock físico total en ${stock.offices} sucursal(es) con registro`}
+    >
+      {formatQty(stock.total)}
+      {stock.state === "negativo" ? <span className="mt-0.5 block text-xs font-normal">negativo</span> : null}
+    </span>
+  )
+}
+
 function StatusCell({ row }: { row: MarginRow }) {
   const warnings = [
     ...row.qualifiers.map((q) => MARGIN_STATUS_LABELS[q]),
@@ -185,6 +216,7 @@ export function MarginV2Table({
             <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
               <div><dt className="text-xs text-lq-muted">Precio bruto</dt><dd className="mt-0.5 font-medium tabular-nums">{formatMoney(r.price.gross)}</dd></div>
               <div><dt className="text-xs text-lq-muted">Costo bruto</dt><dd className="mt-0.5 font-medium tabular-nums">{formatMoney(r.costs.reference.gross)}</dd></div>
+              <div><dt className="text-xs text-lq-muted">Stock Total</dt><dd className="mt-0.5"><StockCell row={r} /></dd></div>
               <div><dt className="text-xs text-lq-muted">Recargo actual</dt><dd className="mt-0.5 font-medium tabular-nums">{formatPct(r.markup_pct)}</dd></div>
               <div><dt className="text-xs text-lq-muted">Mínimo política</dt><dd className="mt-0.5 font-medium tabular-nums">{r.rule ? formatPct(r.rule.min_markup_pct) : "Sin regla"}</dd></div>
             </dl>
@@ -192,17 +224,18 @@ export function MarginV2Table({
           </article>
         ))}
       </div>
-      <table className="hidden w-full min-w-[1040px] table-fixed text-sm lg:table">
+      <table className="hidden w-full min-w-[1120px] table-fixed text-sm lg:table">
         <thead className="border-b border-lq-line-soft bg-lq-canvas text-left text-xs text-lq-muted">
           <tr>
-            <th className="w-[25%] px-5 py-3 font-medium">Producto</th>
-            <th className="w-[12%] px-3 py-3 font-medium">Lista</th>
-            <th className="w-[12%] px-3 py-3 text-right font-medium">Precio bruto</th>
-            <th className="w-[14%] px-3 py-3 text-right font-medium">Costo bruto</th>
-            <th className="w-[11%] px-3 py-3 text-right font-medium">Recargo</th>
-            <th className="w-[12%] px-3 py-3 text-right font-medium">Mín. política</th>
-            <th className="w-[14%] px-3 py-3 font-medium">Estado comercial</th>
-            <th className="w-[6%] px-4 py-3"><span className="sr-only">Acción</span></th>
+            <th className="w-[22%] px-5 py-3 font-medium">Producto</th>
+            <th className="w-[11%] px-3 py-3 font-medium">Lista</th>
+            <th className="w-[11%] px-3 py-3 text-right font-medium">Precio bruto</th>
+            <th className="w-[12%] px-3 py-3 text-right font-medium">Costo bruto</th>
+            <th className="w-[9%] px-3 py-3 text-right font-medium">Stock Total</th>
+            <th className="w-[10%] px-3 py-3 text-right font-medium">Recargo</th>
+            <th className="w-[11%] px-3 py-3 text-right font-medium">Mín. política</th>
+            <th className="w-[13%] px-3 py-3 font-medium">Estado comercial</th>
+            <th className="w-[5%] px-4 py-3"><span className="sr-only">Acción</span></th>
           </tr>
         </thead>
         <tbody className="divide-y divide-lq-line-soft">
@@ -224,6 +257,7 @@ export function MarginV2Table({
               </td>
               <td className="px-3 py-3.5 text-right font-medium tabular-nums">{formatMoney(r.price.gross)}</td>
               <td className="px-3 py-3.5 text-right font-medium tabular-nums">{formatMoney(r.costs.reference.gross)}</td>
+              <td className="px-3 py-3.5 text-right"><StockCell row={r} /></td>
               <td className="px-3 py-3.5 text-right tabular-nums">
                 <span className={cn(r.status === "bajo_politica" && "font-semibold text-red-700 dark:text-red-300")}>{formatPct(r.markup_pct)}</span>
                 <span className="mt-0.5 block text-xs text-lq-muted">margen {formatPct(r.margin_on_sale_pct)}</span>

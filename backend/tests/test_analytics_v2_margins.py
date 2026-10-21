@@ -339,7 +339,7 @@ def test_margin_sql_reads_raw_and_only_margin_rules_outside_raw():
 
 
 class FakeMarginsRepo(MarginsV2Repository):
-    def __init__(self, lists=None, prices=None, rules=None) -> None:
+    def __init__(self, lists=None, prices=None, rules=None, stocks=None) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self._lists = lists if lists is not None else [
             {"price_list_id": 12, "name": "SUPERMERCADO", "state": 0, "missing_since": None},
@@ -349,6 +349,7 @@ class FakeMarginsRepo(MarginsV2Repository):
         ]
         self._prices = prices or []
         self._rules = rules or []
+        self._stocks = stocks or []
 
     def price_lists(self, **kw):
         self.calls.append(("price_lists", kw))
@@ -362,6 +363,10 @@ class FakeMarginsRepo(MarginsV2Repository):
     def margin_rules(self, **kw):
         self.calls.append(("margin_rules", kw))
         return self._rules
+
+    def stock_totals(self, **kw):
+        self.calls.append(("stock_totals", kw))
+        return self._stocks
 
 
 def vp(list_id, variant_id, gross, missing=None):
@@ -392,10 +397,10 @@ def mr(rid, list_id, type_id, min_m, max_m, active=True):
 STD_RULES = [mr(1, 12, 1, "20", "30"), mr(2, 13, 1, "10", "16"), mr(3, 14, 1, "5", "0"), mr(4, 16, 1, "0", "0")]
 
 
-def make_service(facts, prices, rules=STD_RULES, lists=None) -> tuple[MarginsV2Service, FakeMarginsRepo, FakeRepo]:
+def make_service(facts, prices, rules=STD_RULES, lists=None, stocks=None) -> tuple[MarginsV2Service, FakeMarginsRepo, FakeRepo]:
     cost_repo = FakeRepo(facts=facts)
     costs = CostControlV2Service(cost_repo, SCOPE, today=TODAY, use_cache=False)
-    repo = FakeMarginsRepo(lists=lists, prices=prices, rules=rules)
+    repo = FakeMarginsRepo(lists=lists, prices=prices, rules=rules, stocks=stocks)
     return MarginsV2Service(repo, costs, SCOPE, today=TODAY, use_cache=False), repo, cost_repo
 
 
@@ -426,6 +431,66 @@ def test_service_status_per_list_and_rule_traceability():
     assert rows[13]["markup_pct"] == "9.24" and rows[13]["status"] == S.BAJO_POLITICA
     assert rows[16]["status"] == S.DENTRO_POLITICA
     assert rows[16]["rule"]["issues"] == [RuleIssue.MAXIMO_CERO]
+
+
+def test_service_stock_total_by_variant_and_existence_filters():
+    svc, _, _ = make_service(
+        [sku(10), sku(11), sku(12), sku(13)],
+        [vp(12, 10, "1500"), vp(13, 10, "1300"), vp(12, 11, "1500"), vp(12, 12, "1500"), vp(12, 13, "1500")],
+        stocks=[
+            {"variant_id": 10, "stock_total": D("12"), "stock_offices": 2},
+            {"variant_id": 11, "stock_total": D("0"), "stock_offices": 6},
+            {"variant_id": 12, "stock_total": D("-3"), "stock_offices": 6},
+            # variante 13: sin filas sincronizadas
+        ],
+    )
+    rows = svc.list_rows(cost_basis="ultimo_comparable", page_size=50)["items"]
+    by = {(r["variant_id"], r["price_list"]["id"]): r["stock"] for r in rows}
+    # El stock es de la variante: igual en sus dos listas, sin duplicar (12, no 24)
+    assert by[(10, 12)]["total"] == "12" and by[(10, 13)]["total"] == "12"
+    assert by[(10, 12)] == {"total": "12", "state": "con_stock", "offices": 2}
+    assert by[(11, 12)]["state"] == "cero" and by[(11, 12)]["total"] == "0"
+    assert by[(12, 12)]["state"] == "negativo" and by[(12, 12)]["total"] == "-3"
+    assert by[(13, 12)] == {"total": None, "state": "sin_sincronizar", "offices": 0}
+
+    con = svc.list_rows(cost_basis="ultimo_comparable", stock_filter="with", page_size=50)
+    assert {r["variant_id"] for r in con["items"]} == {10} and con["total"] == 3  # sus 3 listas evaluadas
+
+    sin = svc.list_rows(cost_basis="ultimo_comparable", stock_filter="without", page_size=50)
+    # Cero y negativo; «sin sincronizar» nunca cuenta como sin stock
+    assert {r["variant_id"] for r in sin["items"]} == {11, 12}
+
+    with pytest.raises(MarginsValidationError):
+        svc.list_rows(cost_basis="ultimo_comparable", stock_filter="poco")
+
+
+def test_margins_excel_includes_stock_total_column():
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    from backend.services.analytics_v2 import excel_export
+
+    svc, _, _ = make_service(
+        [sku(10), sku(13)],
+        [vp(12, 10, "1500"), vp(12, 13, "1500")],
+        stocks=[{"variant_id": 10, "stock_total": D("12"), "stock_offices": 2}],
+    )
+    items = svc.list_rows(cost_basis="ultimo_comparable", page_size=50)["items"]
+    blob = excel_export.margins_xlsx(
+        meta={"company_name": "LA QUILLOTANA", "company_id": 3},
+        sheets={"completo": items},
+        filters_label="prueba",
+    )
+    wb = load_workbook(BytesIO(blob), read_only=True)
+    ws = wb["Análisis completo"]
+    rows = list(ws.iter_rows(values_only=True))
+    headers = list(rows[0])
+    assert "Stock Total" in headers
+    col = headers.index("Stock Total")
+    values = {r[5]: r[col] for r in rows[1:] if r[5] in (10, 13)}  # col 6 = ID de variante
+    assert values[10] == 12
+    assert values[13] is None  # sin sincronizar: vacío, nunca cero
 
 
 def test_missing_price_and_missing_rule_are_reported():

@@ -440,11 +440,11 @@ def margins_xlsx(
     headers = [
         "Tipo de producto", "Producto", "Variante", "Código de barras", "SKU", "ID de variante",
         "Lista de precios", "Precio bruto actual", "Costo neto promedio", "IVA %", "ILA %",
-        "Costo bruto comercial", "Recargo actual %", "Margen sobre venta %",
+        "Costo bruto comercial", "Stock Total", "Recargo actual %", "Margen sobre venta %",
         "Recargo mínimo %", "Recargo máximo %", "Precio objetivo sugerido", "Diferencia vs actual",
         "Estado comercial", "Confiabilidad del costo", "Advertencia tributaria", "Estado de la política",
     ]
-    widths = [22, 40, 28, 18, 16, 12, 20, 17, 16, 9, 9, 17, 13, 14, 13, 13, 18, 15, 20, 18, 24, 20]
+    widths = [22, 40, 28, 18, 16, 12, 20, 17, 16, 9, 9, 17, 13, 13, 14, 13, 13, 18, 15, 20, 18, 24, 20]
 
     def row_cells(w: Any, r: dict[str, Any]) -> list[Any]:
         costs = r.get("costs") or {}
@@ -463,6 +463,8 @@ def margins_xlsx(
             r.get("variant_id"), (r.get("price_list") or {}).get("label") or (r.get("price_list") or {}).get("name"),
             _num(price), _num(ref.get("net")), _num(ref.get("iva_rate_pct") if "iva_rate_pct" in ref else None),
             _num(ref.get("ila_rate_pct") if "ila_rate_pct" in ref else None), _num(ref.get("gross")),
+            # Stock Total: cantidad física acumulada (vacío = sin sincronizar).
+            _num((r.get("stock") or {}).get("total")),
             _num(r.get("markup_pct")), _num(r.get("margin_on_sale_pct")),
             _num(rule.get("min_markup_pct")), _num(rule.get("max_markup_pct")),
             _num(target), _num(diff), r.get("status"), costs.get("reliability"),
@@ -471,9 +473,11 @@ def margins_xlsx(
         out: list[Any] = []
         for i, v in enumerate(vals, start=1):
             c = WriteOnlyCell(w, value=v)
-            if i in (8, 9, 12, 17, 18):
+            if i in (8, 9, 12, 18, 19):
                 c.number_format = MONEY_FMT
-            elif i in (10, 11, 13, 14, 15, 16):
+            elif i == 13:
+                c.number_format = '#,##0.###'
+            elif i in (10, 11, 14, 15, 16, 17):
                 c.number_format = PCT_FMT
             elif i in (4, 5):
                 c.number_format = "@"

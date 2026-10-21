@@ -321,6 +321,7 @@ def margins_rows(
     status: str | None = Query(None, max_length=60),
     qualifier: str | None = Query(None, max_length=60),
     reliability: str | None = Query(None, max_length=60),
+    stock_filter: str | None = Query(None, max_length=20),
     cost_basis: str = CostBasisQuery,
     variant_state: str = Query("active"),
     sort: str = Query("status"),
@@ -339,6 +340,7 @@ def margins_rows(
             status=status,
             qualifier=qualifier,
             reliability=reliability,
+            stock_filter=stock_filter,
             cost_basis=cost_basis,
             variant_state=variant_state,
             sort=sort,
@@ -714,6 +716,7 @@ def margins_export(
     status: str | None = Query(None, max_length=60),
     qualifier: str | None = Query(None, max_length=60),
     reliability: str | None = Query(None, max_length=60),
+    stock_filter: str | None = Query(None, max_length=20),
     cost_basis: str = CostBasisQuery,
     variant_state: str = Query("active"),
     user: dict = Depends(require_margins_v2),
@@ -729,6 +732,7 @@ def margins_export(
             status=status,
             qualifier=qualifier,
             reliability=reliability,
+            stock_filter=stock_filter,
             cost_basis=cost_basis,
             variant_state=variant_state,
             sort="status",
@@ -751,6 +755,7 @@ def margins_export(
             filters_label=_filters_label(
                 modalidad=mode, q=q, lista=price_list_id, tipo=product_type_id,
                 estado=status, confiabilidad=reliability, base_costo=cost_basis,
+                existencias=stock_filter,
             ),
         )
 

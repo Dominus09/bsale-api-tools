@@ -5,6 +5,7 @@ No escribe nada: ni precios, ni costos, ni reglas. Filtros, orden y paginación 
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
@@ -13,6 +14,8 @@ from decimal import Decimal
 from typing import Any, Callable
 
 from backend.db import get_connection
+
+logger = logging.getLogger(__name__)
 from backend.services.analytics.validate_distribuidora_source import (
     make_psycopg_executor,
     open_readonly_connection,
@@ -64,6 +67,7 @@ from backend.services.analytics_v2.promotions_repo import PromotionsV2Repository
 MARGINS_CACHE_TTL_SECONDS = 120
 MARGIN_SORTS = frozenset({"status", "markup_asc", "markup_desc", "gap_asc", "product"})
 VARIANT_STATES = frozenset({"active", "inactive", "all"})
+STOCK_FILTERS = frozenset({"with", "without"})
 
 _STATUS_ORDER = {
     MarginComplianceStatus.BAJO_POLITICA.value: 0,
@@ -88,12 +92,28 @@ class MarginsNotFound(LookupError):
     pass
 
 
+def _stock_public(stocks: dict[int, dict[str, Any]], variant_id: int) -> dict[str, Any]:
+    """Bloque `stock` de una fila: total físico acumulado de la variante.
+
+    Sin filas en bsale_raw.stocks → total None («sin sincronizar»): jamás se
+    presenta como cero. Un cero real y los negativos se conservan.
+    """
+    entry = stocks.get(variant_id)
+    if entry is None or entry.get("total") is None:
+        return {"total": None, "state": "sin_sincronizar", "offices": 0}
+    total = entry["total"]
+    state = "con_stock" if total > 0 else ("negativo" if total < 0 else "cero")
+    return {"total": str(total), "state": state, "offices": int(entry.get("offices") or 0)}
+
+
 @dataclass(slots=True)
 class MarginsContext:
     scope: PriceListScope
     prices: dict[tuple[int, int], PriceFact]
     rules: list[RuleFact]
     generated_at: datetime
+    # Stock físico total por variante: {variant_id: {"total": Decimal, "offices": int}}
+    stocks: dict[int, dict[str, Any]] = field(default_factory=dict)
     rows_cache: dict[tuple[str, str], tuple[list[dict[str, Any]], datetime]] = field(default_factory=dict)
 
 
@@ -170,11 +190,35 @@ class MarginsV2Service:
             )
             for r in self._repo.variant_prices(company_id=company_id, price_list_ids=evaluated)
         }
+        # Stock total por variante (solo lectura, misma definición que el
+        # Catálogo Maestro). Es un dato complementario: si su lectura falla,
+        # Márgenes no cae — el mapa queda vacío y todo se presenta «sin
+        # sincronizar», nunca como cero inventado. El fallo queda REGISTRADO
+        # en el log del backend para diagnóstico (empresa y causa).
+        stock_rows: list[dict[str, Any]] = []
+        try:
+            stock_rows = self._repo.stock_totals(company_id=company_id)
+        except Exception:
+            logger.warning(
+                "margins: no se pudo leer el stock total (bsale_raw.stocks) "
+                "para company_id=%s; se presenta como «sin sincronizar»",
+                company_id,
+                exc_info=True,
+            )
+            stock_rows = []
+        stocks = {
+            int(r["variant_id"]): {
+                "total": to_decimal(r.get("stock_total")),
+                "offices": int(r.get("stock_offices") or 0),
+            }
+            for r in stock_rows
+        }
         ctx = MarginsContext(
             scope=scope,
             prices=prices,
             rules=[_rule_fact(r) for r in self._repo.margin_rules(company_id=company_id)],
             generated_at=datetime.now().astimezone(),
+            stocks=stocks,
         )
         if self._use_cache:
             with _cache_lock:
@@ -272,6 +316,9 @@ class MarginsV2Service:
                             "name": entry.name,
                             "label": entry.commercial_label,
                         },
+                        # Stock por variante (no por fila): el mismo valor se
+                        # repite en cada lista sin multiplicar existencias.
+                        "stock": _stock_public(ctx.stocks, item["variant_id"]),
                         "_search": s["search"],
                     }
                 )
@@ -298,6 +345,7 @@ class MarginsV2Service:
         status: str | None = None,
         qualifier: str | None = None,
         reliability: str | None = None,
+        stock_filter: str | None = None,
         cost_basis: str = DEFAULT_COST_BASIS.value,
         variant_state: str = "active",
         sort: str = "status",
@@ -312,6 +360,8 @@ class MarginsV2Service:
             raise MarginsValidationError(f"qualifier inválido: {qualifier}")
         if reliability is not None and reliability not in {r.value for r in CostReliability}:
             raise MarginsValidationError(f"reliability inválido: {reliability}")
+        if stock_filter is not None and stock_filter not in STOCK_FILTERS:
+            raise MarginsValidationError(f"stock_filter inválido: {stock_filter}")
         if sort not in MARGIN_SORTS:
             raise MarginsValidationError(f"sort inválido: {sort}")
         ctx = self._load_context()
@@ -331,6 +381,15 @@ class MarginsV2Service:
                 return False
             if reliability is not None and r["costs"]["reliability"] != reliability:
                 return False
+            if stock_filter is not None:
+                # Filtro de existencias ANTES de paginar: afecta total,
+                # tabla, paginación y exportaciones (que usan list_rows).
+                # «sin_sincronizar» nunca cuenta como sin stock.
+                state = (r.get("stock") or {}).get("state")
+                if stock_filter == "with" and state != "con_stock":
+                    return False
+                if stock_filter == "without" and state not in ("cero", "negativo"):
+                    return False
             if needle and needle not in r["_search"]:
                 return False
             return True
