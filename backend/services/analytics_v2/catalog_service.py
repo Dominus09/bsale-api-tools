@@ -105,12 +105,15 @@ class CatalogService:
         return out
 
     def price_list_freshness(self) -> list[dict[str, Any]]:
+        # OJO psycopg2: todo % literal dentro de una consulta parametrizada debe
+        # ir escapado como %%; si no, el formateo cliente (sql % params) levanta
+        # TypeError antes de llegar a PostgreSQL (regresión del 500, 20-oct-2026).
         rows = self._ex(
             """
             SELECT scope, status, last_success_at, last_error_at, rows_received
             FROM bsale_raw.sync_state
             WHERE company_id = %s AND resource = 'variant_prices'
-              AND scope LIKE 'price_list:%'
+              AND scope LIKE 'price_list:%%'
             ORDER BY scope
             """,
             (self.company_id,),

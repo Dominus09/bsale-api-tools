@@ -90,6 +90,19 @@ Dashboard V2 lo expone por recurso (precios por lista, costos, catálogo, etc.).
   de consulta (`products`, `variant_costs`, `variant_prices`, `taxes` y
   `product_taxes` denegadas); se repetirá tras el despliegue con el Excel
   real contrastado en Bsale.
+- **Incidente HTTP 500 de `/analytics-v2/catalog/rows` (20-oct-2026,
+  resuelto)**: la estructura real de producción coincide con todas las
+  columnas consultadas (verificado vía `pg_catalog`), y la causa raíz fue de
+  código, no de datos ni de permisos: `price_list_freshness()` usaba
+  `scope LIKE 'price_list:%'` con un `%` literal dentro de una consulta
+  parametrizada de psycopg2, que formatea el SQL en el cliente
+  (`sql % params`) y levantaba `TypeError: not enough arguments for format
+  string` antes de llegar a PostgreSQL. Al ejecutarse dentro de `meta()`,
+  rompía `/catalog/rows`, `/catalog/meta` y la exportación del catálogo.
+  Corrección: escapar el literal como `%%`. Regresión cubierta por
+  `backend/tests/test_analytics_v2_catalog.py`, cuyo ejecutor de prueba
+  emula el formateo de psycopg2 (los ejecutores que no formatean no detectan
+  esta clase de error). Sin cambios de esquema, permisos ni datos.
 
 ### B. Conciliación contra Bsale
 | Criterio | Fuente | Prueba | Resultado | Evidencia | Responsable | Fecha | Estado |
