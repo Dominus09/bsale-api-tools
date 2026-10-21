@@ -66,6 +66,10 @@ export default function MarginsV2Page() {
   const [variantId, setVariantId] = useState<number | null>(null)
   const [costVariantId, setCostVariantId] = useState<number | null>(null)
   const [reception, setReception] = useState<{ id: number; detailId: number } | null>(null)
+  // Todos los Hooks deben ejecutarse antes de cualquier retorno anticipado:
+  // este useState estaba tras `if (companyId == null) return …` y provocaba
+  // el error React #310 al cargar la empresa (más hooks que el render previo).
+  const [exportingMode, setExportingMode] = useState<string | null>(null)
   const rowsAbort = useRef<AbortController | null>(null)
 
   useEffect(() => {
@@ -183,7 +187,6 @@ export default function MarginsV2Page() {
 
   const discrepancies = summary?.scope.discrepancies ?? []
 
-  const [exportingMode, setExportingMode] = useState<string | null>(null)
   const handleExport = async (mode: "bajo_costo" | "bajo_politica" | "completo") => {
     if (companyId == null) return
     setExportingMode(mode)
