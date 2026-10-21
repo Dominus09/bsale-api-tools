@@ -53,12 +53,12 @@ import { cn } from "@/lib/utils"
 const TRUCK_UNSET = "__unset__"
 
 const TH =
-  "h-8 px-1.5 text-left align-middle text-[10px] font-semibold uppercase tracking-wide text-muted-foreground"
-const TD = "px-1.5 py-1.5 align-middle text-xs"
+  "h-9 px-2 text-left align-middle text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
+const TD = "px-2 py-2 align-middle text-[13px]"
 const TH_STICKY_TRUCK =
-  "sticky right-0 z-20 h-8 bg-card/98 px-2 text-left align-middle text-[10px] font-semibold uppercase tracking-wide text-muted-foreground shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.12)] backdrop-blur-sm"
+  "sticky right-0 z-20 h-9 bg-card px-2 text-left align-middle text-[11px] font-semibold uppercase tracking-wide text-muted-foreground shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.12)]"
 const TD_STICKY_TRUCK =
-  "sticky right-0 z-10 bg-card px-2 py-1.5 align-middle text-xs shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)]"
+  "sticky right-0 z-10 bg-card px-2 py-2 align-middle text-[13px] shadow-[-4px_0_8px_-4px_rgba(0,0,0,0.08)]"
 
 const clp = new Intl.NumberFormat("es-CL", {
   style: "currency",
@@ -151,7 +151,7 @@ function GroupTruckAssignMenu({
           size="sm"
           variant="outline"
           disabled={disabled}
-          className="h-7 gap-0.5 px-2 text-[10px]"
+          className="h-11 gap-0.5 px-3 text-xs sm:h-8 sm:text-[11px]"
           aria-label={`Asignar camión en ${municipalityLabel}`}
         >
           Asignar grupo
@@ -219,7 +219,7 @@ function WeightCell({
       <button
         type="button"
         onClick={() => onOpenWeight(row, "full")}
-        className="text-[11px] tabular-nums text-foreground underline-offset-2 hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
+        className="-mx-2 inline-flex min-h-11 items-center rounded-sm px-2 text-[11px] tabular-nums text-foreground underline-offset-2 hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:min-h-6"
         title="Ver detalle de peso"
       >
         {label}
@@ -387,7 +387,7 @@ function TruckSelectCell({
 
   return (
     <select
-      className="h-8 w-full min-w-[9.5rem] max-w-[14rem] rounded-md border border-input bg-background px-2 text-xs font-medium shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+      className="h-11 w-full min-w-[9.5rem] max-w-[14rem] rounded-md border border-input bg-background px-2 text-[13px] font-medium shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 sm:h-9"
       value={
         tid != null && trucks.some((x) => x.id === tid) ? String(tid) : TRUCK_UNSET
       }
@@ -445,7 +445,7 @@ function PlanningTableRow({
           "bg-amber-50/25 dark:bg-amber-950/10",
         priority.primary === "stale_pending" &&
           !inPlan &&
-          "bg-slate-50/40 dark:bg-slate-900/25",
+          "bg-muted/30 hover:bg-muted/50",
       )}
     >
       <td className={cn(TD, "font-mono text-[11px] font-semibold tabular-nums")}>
@@ -560,7 +560,7 @@ export function PreDespachoPlanningTable({
   }
 
   return (
-    <div className="relative w-full max-h-[min(72vh,56rem)] overflow-x-auto overflow-y-auto rounded-md border border-border/70 bg-card shadow-sm">
+    <div className="relative w-full max-h-[min(72vh,56rem)] overflow-x-auto overflow-y-auto rounded-xl border border-lq-line bg-card shadow-lq-xs">
       <table className="w-full min-w-[1080px] border-collapse">
         <thead className="sticky top-0 z-30 bg-card/98 shadow-[0_1px_0_0_hsl(var(--border))] backdrop-blur-sm">
           <tr className="border-b border-border/80 hover:bg-transparent">

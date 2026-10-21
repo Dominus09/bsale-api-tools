@@ -35,7 +35,7 @@ export function PreDespachoLoadingOverlay({
     <div
       className={cn(
         "fixed inset-0 z-[100] flex items-center justify-center",
-        "bg-slate-950/40 backdrop-blur-[2px]",
+        "bg-black/50 backdrop-blur-[2px]",
         className,
       )}
       role="alertdialog"
@@ -45,7 +45,7 @@ export function PreDespachoLoadingOverlay({
       aria-label="Cargando órdenes de pre-despacho"
     >
       <div
-        className="pointer-events-auto mx-4 w-full max-w-md rounded-xl border border-slate-200/90 bg-white px-10 py-9 shadow-2xl dark:border-slate-700 dark:bg-slate-900"
+        className="pointer-events-auto mx-4 w-full max-w-md rounded-xl border border-border bg-card px-10 py-9 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex flex-col items-center gap-5 text-center">
@@ -58,25 +58,25 @@ export function PreDespachoLoadingOverlay({
             decoding="async"
           />
           <Loader2
-            className="size-9 animate-spin text-emerald-700 dark:text-emerald-500"
+            className="size-9 animate-spin text-primary"
             aria-hidden
           />
           <div className="space-y-1.5">
-            <p className="text-base font-semibold tracking-tight text-slate-900 dark:text-slate-50">
+            <p className="text-base font-semibold tracking-tight text-foreground">
               Cargando órdenes…
             </p>
             <p
               key={phase}
-              className="text-sm text-slate-600 animate-in fade-in duration-300 dark:text-slate-400"
+              className="text-sm text-muted-foreground animate-in fade-in duration-300"
             >
               {subtitle}
             </p>
           </div>
           <div
-            className="h-1 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800"
+            className="h-1 w-full overflow-hidden rounded-full bg-muted"
             aria-hidden
           >
-            <div className="h-full w-2/5 animate-pulse rounded-full bg-emerald-600/80" />
+            <div className="h-full w-2/5 animate-pulse rounded-full bg-primary/80" />
           </div>
         </div>
       </div>

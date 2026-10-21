@@ -24,6 +24,8 @@ export const DARK_THEME_ROUTE_PREFIXES = [
   "/analitica-v2/margenes",
   "/analitica-v2/packs",
   "/inteligencia-comercial/catalogo",
+  // Graphite Premium 5.2 — Etapa B1: Pre-despacho OC renovado a tokens.
+  "/distribuidora/orders",
 ] as const
 
 export function isDarkThemeRoute(pathname: string | null | undefined): boolean {

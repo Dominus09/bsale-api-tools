@@ -95,7 +95,8 @@ revisión fina en Etapa B · **M** = mapa/pantalla especial, revisión en Etapa 
 | `/distribuidora/dispatch-analysis` | Distribuidora | Base compartida | Media | B |
 | `/distribuidora/maestro-logistico` | Distribuidora | Base compartida | Media | B |
 | `/distribuidora/mapa` | Mapas | Pantalla de mapa (layout sin padding) | Media | M |
-| `/distribuidora/orders`, `/distribuidora/pendientes` | Distribuidora | Base compartida | Media | B |
+| `/distribuidora/orders` | Distribuidora | **Renovada Graphite 5.2 (B1)** | Alta | **Implementada, pendiente de validación visual** |
+| `/distribuidora/pendientes` | Distribuidora | Base compartida | Media | B |
 | `/distribuidora/planificacion`, `/pre-planificacion`, `/planning` | Planificación | Base compartida | Alta (Etapa B) | B |
 | `/distribuidora/planificaciones` (+`/[id]`, `/[id]/mapa`) | Planificación/Mapas | Base compartida / mapa | Media | B / M |
 | `/distribuidora/resumen-vendedor`, `/vendedores`, `/rutero`, `/sin-georef` | Distribuidora | Base compartida | Media | B |
@@ -111,6 +112,99 @@ revisión fina en Etapa B · **M** = mapa/pantalla especial, revisión en Etapa 
 | `/sucursales/ofertas` | Sucursales | Base compartida | Media | B |
 | `/sucursales/recepciones`, `/sucursales/trazabilidad` | Sucursales | Base compartida | Media | B |
 | `/gondolas/recorridos/[id]` | Góndolas | Operativa en terreno (iPhone) | Alta | B — sin tocar escaneo |
+
+## Graphite Premium 5.2 — Etapa B1: `/distribuidora/orders` (Pre‑despacho OC)
+
+Renovación visual sin cambios de lógica operativa (mismos handlers, estados
+draft/applied, selección de órdenes, asignación de camiones, sincronización y
+paso a planificación):
+
+- **Tema oscuro habilitado solo en esta ruta** de Distribuidora:
+  `/distribuidora/orders` se agregó a `DARK_THEME_ROUTE_PREFIXES`
+  (`frontend/lib/appearance.ts`), por lo que la preferencia claro/oscuro y el
+  botón luna/sol ahora aplican también aquí, igual que en Inteligencia
+  Comercial V2. Las demás rutas de Distribuidora siguen en claro hasta su
+  propia etapa (evita el conflicto de cascada CSS ya corregido en globals.css:
+  el bloque `.dark` de tokens `--lq-*` permanece después del `:root` claro).
+- **Encabezado unificado**: eyebrow, título 28/32 px y descripción con tokens
+  `--lq-*`; acciones «Recargar vista» y «Sync Bsale» a 44 px en móvil / 36 px
+  en escritorio. Se eliminó el hack `-m-6` de la raíz (la pantalla usa el
+  padding estándar del layout, como V2).
+- **KPI superiores** (`PreDespachoKpiStrip`): tarjetas `rounded-xl` con
+  tokens lq, altura mínima uniforme (104 px), etiqueta 12 px, valor 24 px,
+  grilla 2 columnas en móvil / 5 en escritorio; mismos acentos semánticos y
+  mismo comportamiento clicable (fijar estado resumen).
+- **FilterBar unificada**: fechas y buscador con controles de 44 px en móvil
+  (área táctil ≥ 44 × 44 px en los controles principales);
+  ayuda del buscador 10→12 px; fila secundaria con «Solo no facturadas»,
+  «Mostrar todo» y «Estado resumen» integrados en la misma tarjeta. En móvil
+  los filtros secundarios permanecen **visibles apilados** (no se ocultan en
+  un drawer) porque son controles operativos críticos y ocultar el estado del
+  filtro activo induciría errores; todos con altura táctil ≥ 44 px en móvil.
+- **Resumen por comuna**: mini-KPI con tokens lq y valores 22 px; tabla «Por
+  comuna» en tarjeta con scroll horizontal interno; chips de «Observaciones»
+  con altura táctil de 44 px en móvil.
+- **Tabla de planificación** (`PreDespachoPlanningTable`): encabezados
+  10→11 px, datos 12→13 px, selector de camión 44 px en móvil / 36 px en
+  escritorio, franja de grupo
+  migrada de slate fijo a token `muted`. Se conservan columna «Camión»
+  sticky, scroll interno vertical/horizontal, agrupación por comuna y todas
+  las acciones.
+- **Overlay de carga** (`PreDespachoLoadingOverlay`): migrado de colores
+  slate fijos a tokens semánticos (correcto en claro y oscuro).
+- **Chips de estado** (`PreDespachoStatusChips`): altura táctil 44 px en
+  móvil / 36 px en escritorio y texto 13 px.
+- **Revisión previa a publicación (5.2 B1)**: diff verificado como
+  exclusivamente visual/responsive (handlers, estados, selección de camiones
+  y sincronización intactos); controles principales con área táctil
+  ≥ 44 × 44 px en móvil; encabezado de la columna sticky «Camión» con fondo
+  opaco para evitar superposiciones al desplazar. Los enlaces densos dentro
+  de celdas de datos (detalle de peso) mantienen densidad de tabla con área
+  táctil ampliada en móvil; el input del drawer de pesos (40 px) queda como
+  observación menor para una etapa posterior.
+
+### Estado de la ruta (matriz 5.2)
+
+| Ruta | Pendiente | En implementación | Implementada | Validada escritorio | Validada tablet | Validada móvil | Validada claro/oscuro |
+|---|---|---|---|---|---|---|---|
+| `/distribuidora/orders` | — | — | **Sí (B1)** | Pendiente | Pendiente | Pendiente | Pendiente |
+
+La ruta está **implementada**, no «validada»: sin navegador automatizado ni
+dispositivos reales en este entorno, la validación visual (1366/1440/1920,
+768/1024, 360/390/430 px, temas claro y oscuro, tablas, filtros, modales y
+drawers) queda **pendiente** y debe ejecutarse tras el despliegue autorizado.
+TypeScript: 62 líneas (línea base, 0 errores nuevos). Build: correcto.
+
+### Componentes compartidos reutilizables para las siguientes pantallas
+
+Ya existen y deben reutilizarse (no crear paralelos), en
+`frontend/components/analytics-v2/shared/analytics-ui.tsx` y `tokens.ts`:
+
+- `AnalyticPageShell` / `AnalyticPageHeader`: contenedor y encabezado
+  estándar (eyebrow, título, descripción, acciones).
+- `MetricCard`: KPI estándar con tokens lq.
+- `SmartFilterBar`: filtros principales + avanzados (ojo: renderiza
+  `advanced` dos veces —móvil/escritorio—, no usar con controles con `id`
+  duplicado; en ese caso, patrón FilterBar de esta página).
+- `ProfessionalDataTable`: tabla con scroll interno y estados.
+- `SectionCard`, `StatusBadge`, `DataStatusBar`, `EmptyState`,
+  `AnalyticsLoading`, `AttentionRow`.
+- Tokens `--lq-*` y utilidades Tailwind (`border-lq-line`, `bg-lq-surface`,
+  `text-lq-ink/muted/faint`, `shadow-lq-xs/sm/md`): usar siempre en vez de
+  colores fijos para que claro/oscuro funcionen sin variantes manuales.
+- Patrón responsive de esta entrega: controles `h-11 sm:h-9` (44 px en
+  móvil), tarjetas
+  `rounded-xl border-lq-line bg-lq-surface shadow-lq-xs`, tipografía mínima
+  11 px en encabezados de tabla y 13 px en datos.
+
+### Siguiente grupo recomendado
+
+Resto de Distribuidora según esta matriz: `/distribuidora/dashboard`,
+`/distribuidora/planificacion` (+ `pre-planificacion`/`planning`),
+`/distribuidora/planificaciones`, `/distribuidora/cuadraturas`,
+`/distribuidora/rutero`/`vendedores`/`resumen-vendedor`, mapas
+(`/distribuidora/mapa`, `/logistica/mapa-entregas/[code]`) con revisión
+especial de controles táctiles, habilitando el tema oscuro ruta por ruta.
 
 ## Problemas detectados (resumen)
 

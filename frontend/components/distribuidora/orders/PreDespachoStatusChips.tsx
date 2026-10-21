@@ -46,7 +46,7 @@ export function PreDespachoStatusChips({
             disabled={disabled}
             onClick={() => onChange(chip.id)}
             className={cn(
-              "inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors duration-150",
+              "inline-flex min-h-11 items-center gap-1.5 rounded-lg border px-3.5 py-2 text-[13px] font-medium transition-colors duration-150 sm:min-h-9",
               "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
               active
                 ? "border-primary/40 bg-primary/10 text-primary"

@@ -1099,7 +1099,7 @@ export default function DistribuidoraOrdersPage() {
   }, [hasSearched, onBuscar, loadDispatchPrepFromServer])
 
   return (
-    <div className="-m-6 relative flex w-full max-w-none flex-col gap-4 px-3 pb-12 md:px-4">
+    <div className="relative flex w-full min-w-0 flex-col gap-5 pb-10">
       {loading || loadingSync || loadingMore ? (
         <PreDespachoLoadingOverlay
           phase={
@@ -1111,15 +1111,16 @@ export default function DistribuidoraOrdersPage() {
           }
         />
       ) : null}
-      <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border/60 pb-4">
-        <div className="space-y-1">
-          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+      {/* Graphite Premium 5.2 · encabezado unificado con Inteligencia Comercial V2 */}
+      <header className="flex flex-wrap items-start justify-between gap-4 border-b border-lq-line pb-5">
+        <div className="min-w-0">
+          <p className="text-xs font-medium uppercase tracking-[0.14em] text-lq-faint">
             Distribuidora · Operaciones
           </p>
-          <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">
+          <h1 className="mt-1 text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9">
             Pre‑despacho OC
           </h1>
-          <p className="max-w-2xl text-sm text-muted-foreground">
+          <p className="mt-1.5 max-w-2xl text-sm leading-6 text-lq-muted">
             Revisión de órdenes, asignación de camiones y validación antes del despacho.
           </p>
         </div>
@@ -1127,8 +1128,7 @@ export default function DistribuidoraOrdersPage() {
           <Button
             type="button"
             variant="outline"
-            size="sm"
-            className="gap-2"
+            className="h-11 gap-2 sm:h-9"
             disabled={loading}
             onClick={onRefreshData}
           >
@@ -1141,8 +1141,7 @@ export default function DistribuidoraOrdersPage() {
           </Button>
           <Button
             type="button"
-            size="sm"
-            className="gap-2"
+            className="h-11 gap-2 sm:h-9"
             disabled={loading || loadingSync}
             onClick={() => void onSyncOrdersFromBsale()}
           >
@@ -1211,7 +1210,8 @@ export default function DistribuidoraOrdersPage() {
         </Alert>
       ) : null}
 
-      <section className="rounded-lg border border-border/70 bg-card p-4 shadow-sm md:p-5">
+      {/* Graphite Premium 5.2 · FilterBar unificada (controles 44px en móvil) */}
+      <section className="rounded-xl border border-lq-line bg-lq-surface p-4 shadow-lq-xs md:p-5">
         {lastOrdersLoadAt ? (
           <p className="mb-3 text-xs text-muted-foreground">
             Datos cargados: {lastOrdersLoadAt}
@@ -1231,156 +1231,151 @@ export default function DistribuidoraOrdersPage() {
             <AlertDescription>{PRE_DESPACHO_WIDE_RANGE_HINT}</AlertDescription>
           </Alert>
         ) : null}
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
-            <div className="grid gap-5 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="prep-from">Fecha desde</Label>
-                <Input
-                  id="prep-from"
-                  type="date"
-                  value={draftDateFrom}
-                  onChange={(e) => setDraftDateFrom(e.target.value)}
-                  disabled={loading && !loadingMore}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="prep-to">Fecha hasta</Label>
-                <Input
-                  id="prep-to"
-                  type="date"
-                  value={draftDateTo}
-                  onChange={(e) => setDraftDateTo(e.target.value)}
-                  disabled={loading && !loadingMore}
-                />
-              </div>
-            </div>
-            <div className="space-y-2 min-w-[14rem] flex-1 sm:max-w-xs">
-              <Label htmlFor="prep-search">Buscar OC / cliente</Label>
-              <div className="flex gap-2">
-                <Input
-                  id="prep-search"
-                  value={draftSearch}
-                  onChange={(e) => setDraftSearch(e.target.value)}
-                  placeholder="Ej. 68513 o Callo"
-                  disabled={loading && !loadingMore}
-                  autoComplete="off"
-                />
-                {draftSearch.trim() || appliedSearch.trim() ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="default"
-                    className="shrink-0"
-                    disabled={loading && !loadingMore}
-                    onClick={() => clearBackendSearch()}
-                  >
-                    Limpiar
-                  </Button>
-                ) : null}
-              </div>
-              <p className="text-[10px] text-muted-foreground">
-                Folio exacto o nombre (todo el rango, no solo la página actual).
-              </p>
-            </div>
-            <Button
-              type="button"
-              size="default"
-              className="shrink-0 gap-2"
-              disabled={loading && !loadingMore}
-              onClick={() => onBuscar()}
-            >
-              <Search className="size-4" aria-hidden />
-              Buscar
-            </Button>
-          </div>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-6">
-            <div className="flex items-center gap-3">
-              <Switch
-                id="prep-only-open"
-                checked={draftOnlyNotInvoiced}
-                onCheckedChange={(v) => setDraftOnlyNotInvoiced(v === true)}
+        <div className="flex flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end">
+          <div className="grid flex-1 gap-4 sm:grid-cols-2 sm:gap-3 lg:max-w-md">
+            <div className="space-y-2">
+              <Label htmlFor="prep-from" className="text-[13px]">Fecha desde</Label>
+              <Input
+                id="prep-from"
+                type="date"
+                className="h-11 sm:h-9"
+                value={draftDateFrom}
+                onChange={(e) => setDraftDateFrom(e.target.value)}
                 disabled={loading && !loadingMore}
               />
-              <Label htmlFor="prep-only-open" className="text-sm font-medium">
-                Solo no facturadas{" "}
-                <span className="block text-xs font-normal text-muted-foreground">
-                  Sin enlace en <code className="text-xs">document_related</code> hacia
-                  boleta o factura (tipos 1/6)
-                </span>
-              </Label>
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="shrink-0 self-start"
-              disabled={(loading && !loadingMore) || !draftOnlyNotInvoiced}
-              onClick={() => setDraftOnlyNotInvoiced(false)}
+            <div className="space-y-2">
+              <Label htmlFor="prep-to" className="text-[13px]">Fecha hasta</Label>
+              <Input
+                id="prep-to"
+                type="date"
+                className="h-11 sm:h-9"
+                value={draftDateTo}
+                onChange={(e) => setDraftDateTo(e.target.value)}
+                disabled={loading && !loadingMore}
+              />
+            </div>
+          </div>
+          <div className="min-w-0 flex-1 space-y-2 sm:min-w-[14rem] sm:max-w-sm">
+            <Label htmlFor="prep-search" className="text-[13px]">Buscar OC / cliente</Label>
+            <div className="flex gap-2">
+              <Input
+                id="prep-search"
+                className="h-11 sm:h-9"
+                value={draftSearch}
+                onChange={(e) => setDraftSearch(e.target.value)}
+                placeholder="Ej. 68513 o Callo"
+                disabled={loading && !loadingMore}
+                autoComplete="off"
+              />
+              {draftSearch.trim() || appliedSearch.trim() ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-11 shrink-0 sm:h-9"
+                  disabled={loading && !loadingMore}
+                  onClick={() => clearBackendSearch()}
+                >
+                  Limpiar
+                </Button>
+              ) : null}
+            </div>
+            <p className="text-xs leading-5 text-muted-foreground">
+              Folio exacto o nombre (todo el rango, no solo la página actual).
+            </p>
+          </div>
+          <Button
+            type="button"
+            className="h-11 shrink-0 gap-2 sm:h-9"
+            disabled={loading && !loadingMore}
+            onClick={() => onBuscar()}
+          >
+            <Search className="size-4" aria-hidden />
+            Buscar
+          </Button>
+        </div>
+        <div className="mt-4 flex flex-col gap-4 border-t border-lq-line pt-4 sm:flex-row sm:flex-wrap sm:items-center sm:gap-6">
+          <div className="flex min-h-11 items-center gap-3">
+            <Switch
+              id="prep-only-open"
+              checked={draftOnlyNotInvoiced}
+              onCheckedChange={(v) => setDraftOnlyNotInvoiced(v === true)}
+              disabled={loading && !loadingMore}
+            />
+            <Label htmlFor="prep-only-open" className="text-sm font-medium">
+              Solo no facturadas{" "}
+              <span className="block text-xs font-normal leading-5 text-muted-foreground">
+                Sin enlace en <code className="text-xs">document_related</code> hacia
+                boleta o factura (tipos 1/6)
+              </span>
+            </Label>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            className="h-11 shrink-0 self-start sm:h-9 sm:self-center"
+            disabled={(loading && !loadingMore) || !draftOnlyNotInvoiced}
+            onClick={() => setDraftOnlyNotInvoiced(false)}
+          >
+            Mostrar todo
+          </Button>
+          <div className="space-y-2 sm:ml-auto">
+            <Label htmlFor="resumen-estado" className="text-[13px]">Estado resumen</Label>
+            <Select
+              value={draftEstadoResumen}
+              onValueChange={(v) =>
+                setDraftEstadoResumen(v as PurchaseInvoiceStatusFilter)
+              }
+              disabled={loading && !loadingMore}
             >
-              Mostrar todo
-            </Button>
+              <SelectTrigger id="resumen-estado" className="h-11 w-full sm:h-9 sm:w-[200px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {RESUMEN_ESTADO_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </div>
       </section>
 
-      <div className="flex flex-wrap items-end gap-4">
-        <div className="space-y-2">
-          <Label htmlFor="resumen-estado">Estado resumen</Label>
-          <Select
-            value={draftEstadoResumen}
-            onValueChange={(v) =>
-              setDraftEstadoResumen(v as PurchaseInvoiceStatusFilter)
-            }
-            disabled={loading && !loadingMore}
-          >
-            <SelectTrigger id="resumen-estado" className="h-9 w-[180px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {RESUMEN_ESTADO_OPTIONS.map((o) => (
-                <SelectItem key={o.value} value={o.value}>
-                  {o.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-
       <div className="grid gap-3 sm:grid-cols-3">
-        <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2.5 text-sm">
-          <span className="text-xs text-muted-foreground">Comunas</span>
-          <p className="flex items-center gap-2 font-semibold tabular-nums">
-            <MapPin className="size-4 text-muted-foreground" aria-hidden />
+        <div className="rounded-xl border border-lq-line bg-lq-surface px-4 py-3 shadow-lq-xs">
+          <span className="text-xs font-medium text-lq-muted">Comunas</span>
+          <p className="mt-0.5 flex items-center gap-2 text-[22px] font-semibold leading-7 tabular-nums text-lq-ink">
+            <MapPin className="size-4 text-lq-faint" aria-hidden />
             {loading ? "—" : (kpis?.comunas ?? 0)}
           </p>
         </div>
-        <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2.5 text-sm">
-          <span className="text-xs text-muted-foreground">Pedidos agregados</span>
-          <p className="flex items-center gap-2 font-semibold tabular-nums">
-            <Package className="size-4 text-muted-foreground" aria-hidden />
+        <div className="rounded-xl border border-lq-line bg-lq-surface px-4 py-3 shadow-lq-xs">
+          <span className="text-xs font-medium text-lq-muted">Pedidos agregados</span>
+          <p className="mt-0.5 flex items-center gap-2 text-[22px] font-semibold leading-7 tabular-nums text-lq-ink">
+            <Package className="size-4 text-lq-faint" aria-hidden />
             {loading ? "—" : (kpis?.pedidos ?? 0).toLocaleString("es-CL")}
           </p>
         </div>
-        <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2.5 text-sm">
-          <span className="text-xs text-muted-foreground">Venta por comuna</span>
-          <p className="flex items-center gap-2 text-sm font-semibold tabular-nums">
-            <Truck className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+        <div className="rounded-xl border border-lq-line bg-lq-surface px-4 py-3 shadow-lq-xs">
+          <span className="text-xs font-medium text-lq-muted">Venta por comuna</span>
+          <p className="mt-0.5 flex items-center gap-2 text-[22px] font-semibold leading-7 tabular-nums text-lq-ink">
+            <Truck className="size-4 shrink-0 text-lq-faint" aria-hidden />
             {loading ? "—" : formatClp(kpis?.ventas ?? 0)}
           </p>
         </div>
       </div>
 
-      <div className="grid w-full gap-3 xl:grid-cols-2">
-        <section className="min-w-0 space-y-2">
-          <h2 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+      <div className="grid w-full gap-4 xl:grid-cols-2">
+        <section className="min-w-0 space-y-2.5">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-lq-muted">
             Por comuna
           </h2>
-          <div className="overflow-x-auto rounded-md border border-border/60 bg-background/80">
+          <div className="overflow-x-auto rounded-xl border border-lq-line bg-lq-surface shadow-lq-xs">
             <table className="w-full min-w-[28rem] border-collapse text-sm">
               <thead>
-                <tr className="text-left text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                <tr className="border-b border-lq-line bg-lq-canvas/60 text-left text-xs font-medium uppercase tracking-wide text-lq-muted">
                   <th className="px-4 py-3">Comuna</th>
                   <th className="px-4 py-3 text-right">Clientes únicos</th>
                   <th className="px-4 py-3 text-right">Pedidos</th>
@@ -1411,7 +1406,7 @@ export default function DistribuidoraOrdersPage() {
                       <td className="px-4 py-2.5 font-medium">
                         <button
                           type="button"
-                          className="rounded text-left underline-offset-2 hover:underline"
+                          className="inline-flex min-h-11 items-center rounded text-left underline-offset-2 hover:underline sm:min-h-8"
                           onClick={() => openDetail(r)}
                         >
                           {r.municipality}
@@ -1434,11 +1429,11 @@ export default function DistribuidoraOrdersPage() {
           </div>
         </section>
 
-        <aside className="space-y-2 rounded-md border border-border/60 bg-muted/15 p-3">
-          <h2 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <aside className="space-y-2.5 rounded-xl border border-lq-line bg-lq-surface p-4 shadow-lq-xs">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-lq-muted">
             Observaciones
           </h2>
-          <p className="text-xs leading-relaxed text-muted-foreground">
+          <p className="text-[13px] leading-6 text-muted-foreground">
             Seleccione uno o más chips (OR) y pulse Buscar para filtrar observaciones y órdenes.
             {draftDayFilters.length > 0 ? (
               <span className="mt-1 flex flex-wrap items-center gap-2 font-medium text-foreground">
@@ -1479,7 +1474,7 @@ export default function DistribuidoraOrdersPage() {
                     disabled={!clickable || loading}
                     onClick={() => onChipClick(tag)}
                     className={cn(
-                      "inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium shadow-sm transition-colors",
+                      "inline-flex min-h-11 items-center rounded-full border px-3 py-1.5 text-xs font-medium shadow-sm transition-colors sm:min-h-9",
                       "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                       clickable && "cursor-pointer",
                       !clickable && "cursor-default opacity-80",
@@ -1507,21 +1502,22 @@ export default function DistribuidoraOrdersPage() {
 
       <TooltipProvider delayDuration={200}>
         <section
-          className="w-full min-w-0 space-y-3 rounded-md border border-border/70 bg-card p-3 shadow-sm"
+          className="w-full min-w-0 space-y-4 rounded-xl border border-lq-line bg-lq-surface p-4 shadow-lq-xs md:p-5"
           data-route-stubs={routeStubsPreview.length}
         >
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <h2 className="text-sm font-semibold tracking-tight text-foreground">
+              <h2 className="text-base font-semibold tracking-tight text-lq-ink">
                 Órdenes · pre‑despacho
               </h2>
-              <p className="text-xs text-muted-foreground">
+              <p className="mt-0.5 text-[13px] leading-5 text-lq-muted">
                 Filtre por estado, asigne camión y pase a planificación ORS.
               </p>
             </div>
             <Button
               type="button"
               variant="secondary"
+              className="h-11 sm:h-9"
               disabled={!canPassToPlanificacion}
               onClick={onPassToPlanificacion}
             >
@@ -1566,15 +1562,15 @@ export default function DistribuidoraOrdersPage() {
             disabled={loading}
           />
 
-          <div className="flex flex-col gap-3 rounded-md border border-border/60 bg-muted/20 p-3 sm:flex-row sm:flex-wrap sm:items-end">
+          <div className="flex flex-col gap-4 rounded-xl border border-lq-line bg-lq-canvas/50 p-3 sm:flex-row sm:flex-wrap sm:items-end">
             <div className="space-y-2">
-              <Label className="text-xs">Ordenar por</Label>
+              <Label className="text-[13px]">Ordenar por</Label>
               <Select
                 value={planningSortBy}
                 onValueChange={(v) => setPlanningSortBy(v as PlanningSortKey)}
                 disabled={loading}
               >
-                <SelectTrigger className="h-9 w-[200px] text-xs">
+                <SelectTrigger className="h-11 w-full text-sm sm:h-9 sm:w-[220px]">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1584,7 +1580,7 @@ export default function DistribuidoraOrdersPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex min-h-11 items-center gap-3 sm:min-h-9">
               <Switch
                 id="prep-group-muni"
                 checked={groupByMunicipality}
@@ -1596,22 +1592,22 @@ export default function DistribuidoraOrdersPage() {
               </Label>
             </div>
           </div>
-          <div className="grid gap-1.5 text-xs sm:grid-cols-2 lg:grid-cols-4">
-            <div className="flex justify-between rounded-md border border-border/50 bg-background/80 px-3 py-2">
-              <span className="text-muted-foreground">Camiones usados</span>
-              <strong className="tabular-nums">{logisticsKpis.trucksUsed}</strong>
+          <div className="grid gap-2 text-[13px] sm:grid-cols-2 lg:grid-cols-4">
+            <div className="flex items-center justify-between rounded-lg border border-lq-line bg-lq-canvas/50 px-3 py-2.5">
+              <span className="text-lq-muted">Camiones usados</span>
+              <strong className="tabular-nums text-lq-ink">{logisticsKpis.trucksUsed}</strong>
             </div>
-            <div className="flex justify-between rounded-md border border-border/50 bg-background/80 px-3 py-2">
-              <span className="text-muted-foreground">En plan</span>
-              <strong className="tabular-nums">{logisticsKpis.orders}</strong>
+            <div className="flex items-center justify-between rounded-lg border border-lq-line bg-lq-canvas/50 px-3 py-2.5">
+              <span className="text-lq-muted">En plan</span>
+              <strong className="tabular-nums text-lq-ink">{logisticsKpis.orders}</strong>
             </div>
-            <div className="flex justify-between rounded-md border border-border/50 bg-background/80 px-3 py-2">
-              <span className="text-muted-foreground">Monto en plan</span>
-              <strong className="tabular-nums">{formatClp(logisticsKpis.amount)}</strong>
+            <div className="flex items-center justify-between rounded-lg border border-lq-line bg-lq-canvas/50 px-3 py-2.5">
+              <span className="text-lq-muted">Monto en plan</span>
+              <strong className="tabular-nums text-lq-ink">{formatClp(logisticsKpis.amount)}</strong>
             </div>
-            <div className="flex justify-between rounded-md border border-border/50 bg-background/80 px-3 py-2">
-              <span className="text-muted-foreground">Comunas activas</span>
-              <strong className="tabular-nums">{logisticsKpis.comunas}</strong>
+            <div className="flex items-center justify-between rounded-lg border border-lq-line bg-lq-canvas/50 px-3 py-2.5">
+              <span className="text-lq-muted">Comunas activas</span>
+              <strong className="tabular-nums text-lq-ink">{logisticsKpis.comunas}</strong>
             </div>
           </div>
 
@@ -1632,14 +1628,14 @@ export default function DistribuidoraOrdersPage() {
           />
           {planningHasMore ? (
             <div className="flex flex-col items-center gap-2 border-t border-border/60 pt-4">
-              <p className="text-center text-xs text-muted-foreground">
+              <p className="text-center text-[13px] text-muted-foreground">
                 Hay más órdenes en este rango ({safePlanningRows.length} cargadas, máx.{" "}
                 {PRE_DESPACHO_PAGE_LIMIT} por página).
               </p>
               <Button
                 type="button"
                 variant="outline"
-                size="sm"
+                className="h-11 sm:h-9"
                 disabled={loading || loadingMore}
                 onClick={() => loadMorePlanning()}
               >
