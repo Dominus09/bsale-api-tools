@@ -489,6 +489,7 @@ def catalog_rows(
     product_type_id: int | None = Query(None, ge=1),
     state: str = Query("all"),
     cost: str = Query("all"),
+    stock: str = Query("all"),
     tax: str = Query("all"),
     price_list_id: int | None = Query(None, ge=1),
     price_presence: str | None = Query(None),
@@ -503,6 +504,7 @@ def catalog_rows(
         "product_type_id": product_type_id,
         "state": state,
         "cost": cost,
+        "stock": stock,
         "tax": tax,
         "price_list_id": price_list_id,
         "price_presence": price_presence,
@@ -522,6 +524,7 @@ def catalog_export(
     product_type_id: int | None = Query(None, ge=1),
     state: str = Query("all"),
     cost: str = Query("all"),
+    stock: str = Query("all"),
     tax: str = Query("all"),
     price_list_id: int | None = Query(None, ge=1),
     price_presence: str | None = Query(None),
@@ -542,6 +545,7 @@ def catalog_export(
                 "product_type_id": product_type_id,
                 "state": state,
                 "cost": cost,
+                "stock": stock,
                 "tax": tax,
                 "price_list_id": price_list_id,
                 "price_presence": price_presence,
@@ -562,7 +566,7 @@ def catalog_export(
             scope_label="Catálogo completo de la empresa" if scope == "full" else "Resultados filtrados",
             filters_label=_filters_label(
                 q=f.get("q"), tipo=f.get("product_type_id"), estado=f.get("state"),
-                costo=f.get("cost"), impuestos=f.get("tax"),
+                costo=f.get("cost"), existencias=f.get("stock"), impuestos=f.get("tax"),
             ),
         )
         return content, {"count": count}

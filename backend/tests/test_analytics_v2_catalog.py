@@ -71,6 +71,24 @@ VARIANTS = [
 ]
 
 
+def _filter_by_stock(formatted_sql: str) -> list[dict]:
+    """Aplica la cláusula de Existencias a las variantes: NULL fuera de ambos."""
+    if "st.stock_total > 0" in formatted_sql:
+        return [r for r in VARIANTS_STOCK if r["stock_total"] is not None and r["stock_total"] > 0]
+    if "st.stock_total <= 0" in formatted_sql:
+        return [r for r in VARIANTS_STOCK if r["stock_total"] is not None and r["stock_total"] <= 0]
+    return list(VARIANTS_STOCK)
+
+
+# Variantes para el filtro de Existencias: positivo, cero, negativo y s/d.
+VARIANTS_STOCK = [
+    _variant(30, 0, "S001", "CON STOCK", Decimal("7"), 2),
+    _variant(31, 0, "S002", "EN CERO", Decimal("0"), 6),
+    _variant(32, 0, "S003", "NEGATIVO", Decimal("-2"), 3),
+    _variant(33, 0, "S004", "SIN SINCRONIZAR", None, None),
+]
+
+
 class PsycopgFormattingExecutor:
     """Ejecutor simulado que reproduce el formateo cliente de psycopg2."""
 
@@ -82,6 +100,18 @@ class PsycopgFormattingExecutor:
         # sin escapar en el SQL rompe aquí, igual que en producción.
         formatted = sql % params if params else sql
         self.formatted_sql.append(formatted)
+        # Semántica del filtro de Existencias sobre el stock total ya sumado
+        # (el JOIN `st`): el executor filtra las filas como haría PostgreSQL
+        # — NULL (s/d) no cumple ni > 0 ni <= 0.
+        if "st.stock_total > 0" in formatted or "st.stock_total <= 0" in formatted:
+            if "count(*) AS n FROM (" in formatted or "count(*) AS n FROM bsale_raw.variants" in formatted:
+                rows = _filter_by_stock(formatted)
+                return [{"n": len(rows)}]
+            rows = _filter_by_stock(formatted)
+            if "LIMIT" in formatted:
+                limit, offset = int(params[-2]), int(params[-1])
+                return [dict(r) for r in rows[offset : offset + limit]]
+            return [dict(r) for r in rows]
         if "count(*) AS n FROM (" in formatted:
             return [{"n": len(VARIANTS)}]
         if "count(*) AS n FROM bsale_raw.variants" in formatted:
@@ -216,3 +246,49 @@ def test_stock_sin_sincronizar_y_negativo():
     negativo = svc._public_row({**base, "stock_total": Decimal("-3")}, [12, 13, 16], catalog)
     assert negativo["stock_total"] == "-3"
     assert negativo["stock_state"] == "negativo"
+
+
+def test_filtro_existencias_catalogo():
+    """Existencias en Catálogo Maestro: reutiliza el subquery `st` del total
+    físico. Positivo con `with`; cero y negativo con `without`; el s/d
+    (NULL) queda fuera de ambos y solo aparece con «Todos». El total
+    (paginación) y las filas coinciden; el SQL se aplica en WHERE, no en
+    Python, y no rompe el formateo psycopg2."""
+    from backend.services.analytics_v2.catalog_service import CatalogValidationError
+
+    svc, executor = make_service()
+
+    con = svc.list_rows({"stock": "with"}, page=1, page_size=50)
+    assert con["total"] == 1
+    assert [r["code"] for r in con["items"]] == ["S001"]
+    assert con["items"][0]["stock_total"] == "7"
+    assert con["items"][0]["stock_state"] == "con_stock"
+
+    sin = svc.list_rows({"stock": "without"}, page=1, page_size=50)
+    assert sin["total"] == 2
+    assert [r["code"] for r in sin["items"]] == ["S002", "S003"]
+    assert [r["stock_state"] for r in sin["items"]] == ["cero", "negativo"]
+
+    todos = svc.list_rows({"stock": "all"}, page=1, page_size=50)
+    # Sin cláusula de existencias el harness genérico cuenta VARIANTS (2):
+    # «Todos» no excluye a nadie (incluye el s/d, ver VARIANTS_STOCK abajo).
+    assert todos["total"] == 2
+    # Semántica pura del filtro sobre VARIANTS_STOCK: «Todos» incluye al
+    # s/d (S004, stock NULL); «con» y «sin» lo excluyen siempre.
+    assert [r["code"] for r in _filter_by_stock("")] == ["S001", "S002", "S003", "S004"]
+    assert [r["code"] for r in _filter_by_stock("... st.stock_total > 0 ...")] == ["S001"]
+    assert [r["code"] for r in _filter_by_stock("... st.stock_total <= 0 ...")] == ["S002", "S003"]
+
+    # El filtro vive en el SQL (antes de paginar y en la exportación):
+    sqls = [s for s in executor.formatted_sql if "AS variant_name" in s]
+    assert any("st.stock_total > 0" in s for s in sqls)
+    assert any("st.stock_total <= 0" in s for s in sqls)
+    # Exportación: iter_rows comparte _select_sql -> también filtra.
+    exportadas = list(svc.iter_rows({"stock": "with"}))
+    assert [r["code"] for r in exportadas] == ["S001"]
+
+    try:
+        svc.list_rows({"stock": "malo"})
+        raise AssertionError("stock inválido debe rechazarse")
+    except CatalogValidationError:
+        pass

@@ -160,7 +160,7 @@ function StockCell({ row }: { row: MarginRow }) {
   return (
     <span
       className={cn("font-medium tabular-nums", stock.state === "negativo" && "text-red-700 dark:text-red-300")}
-      title={`Stock físico total en ${stock.offices} sucursal(es) con registro`}
+      title="Stock físico total acumulado de la variante (todas las sucursales)"
     >
       {formatQty(stock.total)}
       {stock.state === "negativo" ? <span className="mt-0.5 block text-xs font-normal">negativo</span> : null}

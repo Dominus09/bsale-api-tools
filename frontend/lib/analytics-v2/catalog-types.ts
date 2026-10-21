@@ -68,6 +68,7 @@ export type CatalogParams = {
   product_type_id?: number | null
   state?: string
   cost?: string
+  stock?: string
   tax?: string
   price_list_id?: number | null
   price_presence?: string | null

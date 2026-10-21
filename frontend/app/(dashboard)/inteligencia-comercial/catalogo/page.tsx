@@ -59,6 +59,7 @@ export default function CatalogoMaestroPage() {
   const [productTypeId, setProductTypeId] = useState<string>("")
   const [state, setState] = useState("all")
   const [cost, setCost] = useState("all")
+  const [stock, setStock] = useState("all")
   const [tax, setTax] = useState("all")
   const [priceListId, setPriceListId] = useState<string>("")
   const [pricePresence, setPricePresence] = useState<string>("")
@@ -77,12 +78,13 @@ export default function CatalogoMaestroPage() {
       product_type_id: productTypeId ? Number(productTypeId) : null,
       state,
       cost,
+      stock,
       tax,
       price_list_id: priceListId ? Number(priceListId) : null,
       price_presence: pricePresence || null,
       sort,
     }),
-    [q, productTypeId, state, cost, tax, priceListId, pricePresence, sort],
+    [q, productTypeId, state, cost, stock, tax, priceListId, pricePresence, sort],
   )
 
   const load = useCallback(() => {
@@ -258,6 +260,17 @@ export default function CatalogoMaestroPage() {
                 </select>
               </label>
               <label className={labelClass}>
+                Existencias
+                <select className={selectClass} value={stock} onChange={(e) => setStock(e.target.value)}>
+                  <option value="all">Todas las variantes</option>
+                  <option value="with">Con stock positivo</option>
+                  <option value="without">Cero o negativo</option>
+                </select>
+                <span className="font-normal text-lq-muted">
+                  «Todas» incluye las variantes sin stock sincronizado (s/d); esas quedan fuera de los otros dos filtros.
+                </span>
+              </label>
+              <label className={labelClass}>
                 Impuestos
                 <select className={selectClass} value={tax} onChange={(e) => setTax(e.target.value)}>
                   {TAX_FILTERS.map((t) => (
@@ -367,15 +380,10 @@ export default function CatalogoMaestroPage() {
                           {r.cost_state === "cero" ? <span className="block text-xs text-lq-warning">Costo cero</span> : null}
                         </td>
                         <td className="px-4 py-3 text-right tabular-nums text-lq-ink">
+                          {/* Solo el Stock Total acumulado: sin desglose ni
+                              conteos por sucursal en esta vista. */}
                           {r.stock_total != null ? (
-                            <>
-                              {formatQty(r.stock_total)}
-                              {r.stock_offices != null ? (
-                                <span className="block text-xs font-normal text-lq-muted">
-                                  {r.stock_offices} {r.stock_offices === 1 ? "sucursal" : "sucursales"}
-                                </span>
-                              ) : null}
-                            </>
+                            formatQty(r.stock_total)
                           ) : (
                             <span className="text-lq-muted" title="Variante sin stock sincronizado: no equivale a cero">
                               s/d
