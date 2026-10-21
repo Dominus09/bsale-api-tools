@@ -6,7 +6,7 @@ import { isAuthenticated } from "@/lib/api"
 import { Sidebar } from "@/components/layout/sidebar"
 import { Header } from "@/components/layout/header"
 import { AppearanceScope } from "@/components/layout/appearance-context"
-import { Loader2 } from "lucide-react"
+import { Loader2, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const MOBILE_MQ = "(max-width: 767px)"
@@ -97,11 +97,16 @@ export default function DashboardLayout({
   )
 
   return (
-    <AppearanceScope className="flex h-[100dvh] max-h-[100dvh] overflow-hidden bg-background text-foreground transition-colors duration-200 pt-[env(safe-area-inset-top)]">
+    <AppearanceScope className="flex h-[100dvh] max-h-[100dvh] overflow-hidden bg-background text-foreground transition-colors duration-200 pt-safe">
       {/* Desktop: sidebar en flujo */}
       {!isMobile && sidebarOpen ? sidebarEl : null}
 
-      {/* Mobile: drawer overlay */}
+      {/* Mobile: drawer overlay.
+          El drawer es `fixed` (se ancla al viewport e ignora el padding
+          seguro del contenedor): por eso su contenido se envuelve con las
+          utilidades .pt-safe/.pb-safe, para que el menú nunca quede bajo
+          la Dynamic Island ni sobre el indicador de inicio, y se agrega un
+          botón de cierre propio de 44 px alineado con la cabecera. */}
       {isMobile && sidebarOpen ? (
         <>
           <button
@@ -111,7 +116,17 @@ export default function DashboardLayout({
             onClick={() => setSidebarOpen(false)}
           />
           <div className="fixed inset-y-0 left-0 z-50 max-w-[85vw] shadow-xl">
-            {sidebarEl}
+            <div className="h-full bg-sidebar pt-safe pb-safe">
+              {sidebarEl}
+            </div>
+            <button
+              type="button"
+              aria-label="Cerrar menú lateral"
+              onClick={() => setSidebarOpen(false)}
+              className="absolute right-2 top-[calc(env(safe-area-inset-top)+0.625rem)] z-10 flex size-11 items-center justify-center rounded-md text-white/70 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/70"
+            >
+              <X className="h-5 w-5" aria-hidden />
+            </button>
           </div>
         </>
       ) : null}

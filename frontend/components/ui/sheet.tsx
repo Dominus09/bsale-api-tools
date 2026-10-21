@@ -68,11 +68,19 @@ function SheetContent({
           side === 'bottom' &&
             'data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom inset-x-0 bottom-0 h-auto border-t',
           className,
+          // Zonas seguras iOS (después de `className` a propósito: ningún
+          // caller puede anularlas con p-0): los paneles nacen bajo la
+          // Dynamic Island y sobre el indicador de inicio. env() vale 0
+          // en escritorio: sin cambio visual.
+          (side === 'right' || side === 'left') &&
+            'pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]',
+          side === 'top' && 'pt-[env(safe-area-inset-top)]',
+          side === 'bottom' && 'pb-[env(safe-area-inset-bottom)]',
         )}
         {...props}
       >
         {children}
-        <SheetPrimitive.Close className="ring-offset-background focus:ring-ring data-[state=open]:bg-secondary absolute top-4 right-4 rounded-xs opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none">
+        <SheetPrimitive.Close className="ring-offset-background focus:ring-ring data-[state=open]:bg-secondary absolute top-[max(1rem,env(safe-area-inset-top))] right-4 rounded-xs p-3.5 opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none sm:p-2">
           <XIcon className="size-4" />
           <span className="sr-only">Close</span>
         </SheetPrimitive.Close>

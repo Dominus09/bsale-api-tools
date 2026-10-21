@@ -601,7 +601,7 @@ export default function CertificarCargaPage() {
       </div>
 
       {canCertify ? (
-        <div className="fixed inset-x-0 bottom-0 z-30 border-t bg-background/95 p-3 backdrop-blur">
+        <div className="fixed inset-x-0 bottom-0 z-30 border-t bg-background/95 px-3 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur">
           <div className="mx-auto max-w-lg">
             <Button
               className="h-14 w-full text-base font-bold"
