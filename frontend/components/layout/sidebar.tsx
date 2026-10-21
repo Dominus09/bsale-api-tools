@@ -42,6 +42,7 @@ import {
   UsersRound,
   FileWarning,
   BookOpen,
+  X,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { ANALYTICS_V2_COMPANY_IDS, ANALYTICS_V2_DASHBOARD_PATH } from "@/lib/home-path"
@@ -228,6 +229,12 @@ function buildNavSectionsForRole(role: string | null) {
 type SidebarProps = {
   compact?: boolean
   onToggleCompact?: () => void
+  /**
+   * Contexto drawer (móvil/tablet <1024 px): si se pasa, el encabezado
+   * muestra SOLO el botón X de cierre (44 px) y jamás la flecha de
+   * colapso de escritorio. Ambos controles son mutuamente excluyentes.
+   */
+  onCloseDrawer?: () => void
 }
 
 function sectionContainsPath(
@@ -240,7 +247,7 @@ function sectionContainsPath(
   })
 }
 
-export function Sidebar({ compact = false, onToggleCompact }: SidebarProps) {
+export function Sidebar({ compact = false, onToggleCompact, onCloseDrawer }: SidebarProps) {
   const pathname = usePathname()
   const [openSection, setOpenSection] = useState<string | null>("Distribuidora")
   const [staffRole, setStaffRole] = useState<string | null>(null)
@@ -283,7 +290,20 @@ export function Sidebar({ compact = false, onToggleCompact }: SidebarProps) {
             </span>
           ) : null}
         </div>
-        {onToggleCompact ? (
+        {onCloseDrawer ? (
+          // Drawer: único control del encabezado, dentro del flujo (sin
+          // superposición) y con área táctil de 44 px.
+          <button
+            type="button"
+            onClick={onCloseDrawer}
+            className="ml-auto flex size-11 shrink-0 items-center justify-center rounded-md text-white/70 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/70"
+            aria-label="Cerrar menú lateral"
+            title="Cerrar menú"
+          >
+            <X className="h-5 w-5" aria-hidden />
+          </button>
+        ) : onToggleCompact ? (
+          // Escritorio: único control, flecha de colapso/expansión.
           <button
             type="button"
             onClick={onToggleCompact}

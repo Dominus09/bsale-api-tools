@@ -7,7 +7,7 @@ import { Sidebar } from "@/components/layout/sidebar"
 import { Header } from "@/components/layout/header"
 import { AppearanceScope } from "@/components/layout/appearance-context"
 import { ViewportDiagnostics } from "@/components/layout/viewport-diagnostics"
-import { Loader2, X } from "lucide-react"
+import { Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const MOBILE_MQ = "(max-width: 767px)"
@@ -68,10 +68,14 @@ export default function DashboardLayout({
     }
   }, [isMobile, isChecking, desktopReady])
 
-  // Al navegar en mobile, cerrar drawer
+  // Al navegar bajo el breakpoint estructural (drawer, <1024 px), cerrar
+  // el menú. Se usa el mismo criterio CSS `lg` que decide su visibilidad,
+  // para que iPad (768–1023 px) también cierre al navegar.
   useEffect(() => {
-    if (isMobile) setSidebarOpen(false)
-  }, [pathname, isMobile])
+    if (window.matchMedia("(max-width: 1023px)").matches) {
+      setSidebarOpen(false)
+    }
+  }, [pathname])
 
   const isMapPage =
     pathname.includes("/mapa-entregas") ||
@@ -86,15 +90,20 @@ export default function DashboardLayout({
     )
   }
 
-  const sidebarEl = (
+  // Dos instancias según contexto CSS (mismo criterio `lg` que decide la
+  // visibilidad): la de escritorio conserva colapso/expansión; la del
+  // drawer jamás lo recibe y en su lugar muestra solo la X de cierre.
+  // Antes ambas compartían elemento y el control se decidía con el JS
+  // `useIsMobile` (≤767 px): entre 768–1023 px (iPad) el drawer recibía
+  // la flecha de escritorio superpuesta con la X.
+  const desktopSidebarEl = (
     <Sidebar
-      compact={!isMobile && sidebarCompact}
-      onToggleCompact={
-        isMobile
-          ? undefined
-          : () => setSidebarCompact((c) => !c)
-      }
+      compact={sidebarCompact}
+      onToggleCompact={() => setSidebarCompact((c) => !c)}
     />
+  )
+  const drawerSidebarEl = (
+    <Sidebar onCloseDrawer={() => setSidebarOpen(false)} />
   )
 
   return (
@@ -106,14 +115,15 @@ export default function DashboardLayout({
           hidratación tarde, un teléfono JAMÁS pinta el sidebar anclado
           comprimiendo el contenido. El estado solo controla abrir/cerrar. */}
       {sidebarOpen ? (
-        <div className="hidden shrink-0 lg:block">{sidebarEl}</div>
+        <div className="hidden shrink-0 lg:block">{desktopSidebarEl}</div>
       ) : null}
 
       {/* Drawer superpuesto (<1024 px por CSS). Es `fixed` (se ancla al
           viewport e ignora el padding seguro del contenedor): su contenido
           se envuelve con .pt-safe/.pb-safe para no quedar bajo la Dynamic
-          Island ni sobre el indicador de inicio, con botón de cierre
-          propio de 44 px alineado con la cabecera del menú. */}
+          Island ni sobre el indicador de inicio. La X de cierre vive en el
+          encabezado del propio Sidebar (instancia drawer), alineada con el
+          logo y sin superponerse a ningún otro control. */}
       {sidebarOpen ? (
         <div className="lg:hidden">
           <button
@@ -124,16 +134,8 @@ export default function DashboardLayout({
           />
           <div className="fixed inset-y-0 left-0 z-50 max-w-[85vw] shadow-xl">
             <div className="h-full bg-sidebar pt-safe pb-safe pl-[env(safe-area-inset-left)]">
-              {sidebarEl}
+              {drawerSidebarEl}
             </div>
-            <button
-              type="button"
-              aria-label="Cerrar menú lateral"
-              onClick={() => setSidebarOpen(false)}
-              className="absolute right-2 top-[calc(env(safe-area-inset-top)+0.625rem)] z-10 flex size-11 items-center justify-center rounded-md text-white/70 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/70"
-            >
-              <X className="h-5 w-5" aria-hidden />
-            </button>
           </div>
         </div>
       ) : null}
