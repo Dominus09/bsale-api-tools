@@ -6,6 +6,7 @@ import { isAuthenticated } from "@/lib/api"
 import { Sidebar } from "@/components/layout/sidebar"
 import { Header } from "@/components/layout/header"
 import { AppearanceScope } from "@/components/layout/appearance-context"
+import { ViewportDiagnostics } from "@/components/layout/viewport-diagnostics"
 import { Loader2, X } from "lucide-react"
 import { cn } from "@/lib/utils"
 
@@ -99,21 +100,22 @@ export default function DashboardLayout({
   return (
     <AppearanceScope className="flex h-[100dvh] max-h-[100dvh] overflow-hidden bg-background text-foreground transition-colors duration-200 pt-safe">
       {/* Estructura responsive por CSS, no por JS: el sidebar en flujo solo
-          existe ≥768 px y el drawer solo <768 px. Así, aunque la hidratación
-          tarde o el hook de matchMedia difiera, un teléfono JAMÁS pinta el
-          sidebar anclado comprimiendo el contenido (defecto visto en iPhone).
-          El estado `sidebarOpen` solo controla apertura/cierre. */}
+          existe ≥1024 px (lg) y el drawer por debajo. Así, teléfonos en
+          vertical Y en horizontal (hasta ~932 px CSS) y tablets angostas
+          usan navegación superpuesta a ancho completo, y aunque la
+          hidratación tarde, un teléfono JAMÁS pinta el sidebar anclado
+          comprimiendo el contenido. El estado solo controla abrir/cerrar. */}
       {sidebarOpen ? (
-        <div className="hidden shrink-0 md:block">{sidebarEl}</div>
+        <div className="hidden shrink-0 lg:block">{sidebarEl}</div>
       ) : null}
 
-      {/* Drawer móvil (<768 px por CSS). Es `fixed` (se ancla al viewport e
-          ignora el padding seguro del contenedor): su contenido se envuelve
-          con .pt-safe/.pb-safe para no quedar bajo la Dynamic Island ni
-          sobre el indicador de inicio, con botón de cierre propio de 44 px
-          alineado con la cabecera del menú. */}
+      {/* Drawer superpuesto (<1024 px por CSS). Es `fixed` (se ancla al
+          viewport e ignora el padding seguro del contenedor): su contenido
+          se envuelve con .pt-safe/.pb-safe para no quedar bajo la Dynamic
+          Island ni sobre el indicador de inicio, con botón de cierre
+          propio de 44 px alineado con la cabecera del menú. */}
       {sidebarOpen ? (
-        <div className="md:hidden">
+        <div className="lg:hidden">
           <button
             type="button"
             aria-label="Cerrar menú"
@@ -121,7 +123,7 @@ export default function DashboardLayout({
             onClick={() => setSidebarOpen(false)}
           />
           <div className="fixed inset-y-0 left-0 z-50 max-w-[85vw] shadow-xl">
-            <div className="h-full bg-sidebar pt-safe pb-safe">
+            <div className="h-full bg-sidebar pt-safe pb-safe pl-[env(safe-area-inset-left)]">
               {sidebarEl}
             </div>
             <button
@@ -150,6 +152,8 @@ export default function DashboardLayout({
           {children}
         </main>
       </div>
+      {/* Solo visible en modo de prueba con ?lqdiag=1 */}
+      <ViewportDiagnostics />
     </AppearanceScope>
   )
 }

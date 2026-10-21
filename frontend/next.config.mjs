@@ -18,6 +18,23 @@ const nextConfig = {
   experimental: {
     optimizePackageImports: ["lucide-react", "recharts"],
   },
+  // Caché acotada SOLO a los archivos de control de la PWA: el navegador
+  // debe revalidar sw.js y el manifest en cada carga para detectar nuevas
+  // versiones de inmediato. Los assets con hash de /_next/static conservan
+  // su caché inmutable de un año (correcto: su nombre cambia por build) y
+  // las páginas HTML no se tocan aquí.
+  async headers() {
+    return [
+      {
+        source: "/sw.js",
+        headers: [{ key: "Cache-Control", value: "public, max-age=0, must-revalidate" }],
+      },
+      {
+        source: "/manifest.webmanifest",
+        headers: [{ key: "Cache-Control", value: "public, max-age=0, must-revalidate" }],
+      },
+    ]
+  },
   // Evita 404 en /favicon.ico (no hay .ico en public/; el navegador lo pide siempre)
   // Proxy same-origin: el front hace fetch a /api-upstream/... y Next reenvía al API real
   // (evita CORS cuando el panel está en test.quillotana.cl y el API en api.quillotana.cl).

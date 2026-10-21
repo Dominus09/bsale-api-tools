@@ -19,7 +19,13 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     title: 'La Quillotana ERP',
-    statusBarStyle: 'black-translucent',
+    // Barra de estado OPACA: iOS reserva su zona y el contenido web parte
+    // debajo (hora/batería/señal jamás tapan controles). Con 'black',
+    // env(safe-area-inset-top) vale 0 en la PWA, así que las utilidades
+    // .pt-safe existentes se anulan solas: sin doble padding ni franjas.
+    // OJO: iOS puede requerir eliminar y reinstalar la PWA para aplicar
+    // el nuevo estilo de barra.
+    statusBarStyle: 'black',
   },
 }
 
