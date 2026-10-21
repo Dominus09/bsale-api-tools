@@ -98,17 +98,22 @@ export default function DashboardLayout({
 
   return (
     <AppearanceScope className="flex h-[100dvh] max-h-[100dvh] overflow-hidden bg-background text-foreground transition-colors duration-200 pt-safe">
-      {/* Desktop: sidebar en flujo */}
-      {!isMobile && sidebarOpen ? sidebarEl : null}
+      {/* Estructura responsive por CSS, no por JS: el sidebar en flujo solo
+          existe ≥768 px y el drawer solo <768 px. Así, aunque la hidratación
+          tarde o el hook de matchMedia difiera, un teléfono JAMÁS pinta el
+          sidebar anclado comprimiendo el contenido (defecto visto en iPhone).
+          El estado `sidebarOpen` solo controla apertura/cierre. */}
+      {sidebarOpen ? (
+        <div className="hidden shrink-0 md:block">{sidebarEl}</div>
+      ) : null}
 
-      {/* Mobile: drawer overlay.
-          El drawer es `fixed` (se ancla al viewport e ignora el padding
-          seguro del contenedor): por eso su contenido se envuelve con las
-          utilidades .pt-safe/.pb-safe, para que el menú nunca quede bajo
-          la Dynamic Island ni sobre el indicador de inicio, y se agrega un
-          botón de cierre propio de 44 px alineado con la cabecera. */}
-      {isMobile && sidebarOpen ? (
-        <>
+      {/* Drawer móvil (<768 px por CSS). Es `fixed` (se ancla al viewport e
+          ignora el padding seguro del contenedor): su contenido se envuelve
+          con .pt-safe/.pb-safe para no quedar bajo la Dynamic Island ni
+          sobre el indicador de inicio, con botón de cierre propio de 44 px
+          alineado con la cabecera del menú. */}
+      {sidebarOpen ? (
+        <div className="md:hidden">
           <button
             type="button"
             aria-label="Cerrar menú"
@@ -128,7 +133,7 @@ export default function DashboardLayout({
               <X className="h-5 w-5" aria-hidden />
             </button>
           </div>
-        </>
+        </div>
       ) : null}
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">

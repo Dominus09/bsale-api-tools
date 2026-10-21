@@ -1256,7 +1256,7 @@ export default function DistribuidoraOrdersPage() {
               />
             </div>
           </div>
-          <div className="min-w-0 flex-1 space-y-2 sm:min-w-[14rem] sm:max-w-sm">
+          <div className="min-w-0 flex-1 space-y-2 sm:min-w-[14rem] sm:max-w-sm xl:max-w-none">
             <Label htmlFor="prep-search" className="text-[13px]">Buscar OC / cliente</Label>
             <div className="flex gap-2">
               <Input
