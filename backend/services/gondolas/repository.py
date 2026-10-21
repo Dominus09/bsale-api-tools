@@ -257,13 +257,22 @@ VALUES (%s, %s, %s, %s, %s, %s, %s)
 RETURNING id, scanned_at
 """.strip()
 
+# El stock al cierre se resuelve con una subconsulta correlacionada: un
+# `LEFT JOIN` cuyo ON referencie la tabla destino del UPDATE (`i`) es
+# inválido en PostgreSQL ("invalid reference to FROM-clause entry for
+# table i") y hacía fallar TODOS los cierres con rollback (la sesión
+# quedaba en curso y la API devolvía 500). Sin fila en stocks => 0.
 CLOSE_ITEMS_SQL = """
 UPDATE app.gondola_session_items i
-SET stock_at_close = coalesce(s.quantity, 0)
+SET stock_at_close = coalesce((
+    SELECT st.quantity
+    FROM bsale_raw.stocks st
+    WHERE st.company_id = i.company_id
+      AND st.variant_id = i.variant_id
+      AND st.office_id = ses.office_id
+    LIMIT 1
+), 0)
 FROM app.gondola_sessions ses
-LEFT JOIN bsale_raw.stocks s
-  ON s.company_id = i.company_id AND s.variant_id = i.variant_id
- AND s.office_id = ses.office_id
 WHERE i.session_id = ses.id AND ses.id = %s AND i.company_id = %s
 RETURNING i.variant_id
 """.strip()
