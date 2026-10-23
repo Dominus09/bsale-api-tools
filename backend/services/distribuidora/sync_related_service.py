@@ -1,17 +1,19 @@
 """
 Sync incremental de relaciones **operacionales** OC → ventas/NC:
 
-- ``GET /v1/documents/{document_id}/details.json`` y por cada ``detail.id``:
-  ``GET /v1/documents.json?relateddetailid=``.
+1. **Sanación local (sin API)**: materializa OC→factura/boleta cuando
+   ``document_details.related_detail_id`` de un doc tipo 1/6 ya apunta a un
+   detalle de OC (mismo vínculo Bsale ``relatedDetailId`` sincronizado en details).
+2. **API Bsale**: ``GET /v1/documents/{document_id}/details.json`` y por cada
+   ``detail.id``: ``GET /v1/documents.json?relateddetailid=``.
 
 Si Bsale devuelve una OC intermedia (``document_type_id = 33``), se expande **solo** vía
 ``relateddetailid`` hasta ``RELATED_MAX_TYPE33_DEPTH`` (default 1) y se persisten únicamente
 aristas hacia documentos terminales **1 / 6 / 9** desde el ``detail_id`` de la OC original
 (no se guardan relaciones 33→33).
 
-**No** se usa ``references.json`` aquí: la fuente de verdad para ``document_related`` es solo
-``relateddetailid``. Las referencias tributarias/XML siguen en ``sync_service`` →
-``distribuidora.document_references``.
+**No** se usa ``references.json`` aquí para confirmar facturación. Las referencias
+tributarias/XML siguen en ``sync_service`` → ``distribuidora.document_references``.
 
 Escribe ``distribuidora.document_related`` con deduplicación (``ON CONFLICT``) y filtro por office.
 
@@ -1458,6 +1460,10 @@ def _live_related_stats_template() -> dict[str, Any]:
         "details_skipped_after_confirmation": 0,
         "fast_confirmations": 0,
         "full_edges_inserted": 0,
+        "local_related_detail_lookback_days": None,
+        "local_related_detail_links_found": 0,
+        "local_related_detail_triples_new": 0,
+        "local_related_detail_rows_inserted": 0,
         "stop_reason": STOP_REASON_COMPLETED,
         "skipped_already_running": False,
     }
@@ -1687,12 +1693,65 @@ def sync_distribuidora_related_documents(
         conn.commit()
 
         logger.info(
-            "sync related distribuidora: office_id=%s; por OC: details.json + "
-            "relateddetailid + resolución OC 33 (company_id=%s office_id=%s)",
+            "sync related distribuidora: office_id=%s; sanación local related_detail_id + "
+            "por OC: details.json + relateddetailid + resolución OC 33 "
+            "(company_id=%s office_id=%s)",
             OFFICE_ID,
             COMPANY_ID,
             OFFICE_ID,
         )
+
+        # Sanación local primero (sin API): factura.details.related_detail_id → OC.
+        # Commit propio antes del barrido API: si el runtime/API falla después,
+        # las aristas locales ya quedan persistidas.
+        try:
+            from backend.services.distribuidora.document_relation_sync_service import (
+                apply_oc_invoice_links_from_related_detail,
+                resolve_local_oc_invoice_heal_lookback_days,
+            )
+
+            heal_days = resolve_local_oc_invoice_heal_lookback_days(lb)
+            local_heal = apply_oc_invoice_links_from_related_detail(
+                cur,
+                company_id=COMPANY_ID,
+                office_id=OFFICE_ID,
+                recent_days=heal_days,
+                dry_run=False,
+            )
+            stats["local_related_detail_lookback_days"] = heal_days
+            stats["local_related_detail_links_found"] = int(
+                local_heal.get("links_found") or 0
+            )
+            stats["local_related_detail_triples_new"] = int(
+                local_heal.get("triples_new") or 0
+            )
+            stats["local_related_detail_rows_inserted"] = int(
+                local_heal.get("rows_inserted") or 0
+            )
+            stats["rows_inserted"] = int(stats.get("rows_inserted") or 0) + int(
+                local_heal.get("rows_inserted") or 0
+            )
+            if int(local_heal.get("rows_inserted") or 0) > 0:
+                new_ocs = local_heal.get("oc_document_ids_new") or []
+                stats["discovered"] = int(stats.get("discovered") or 0) + len(new_ocs)
+                stats["ocs_confirmed"] = int(stats.get("ocs_confirmed") or 0) + len(new_ocs)
+                logger.info(
+                    "sync related sanación local related_detail_id: "
+                    "lookback_factura=%sd links=%s nuevos=%s insertados=%s ocs_nuevas=%s",
+                    heal_days,
+                    local_heal.get("links_found"),
+                    local_heal.get("triples_new"),
+                    local_heal.get("rows_inserted"),
+                    new_ocs,
+                )
+            # Persistencia independiente del presupuesto/errores del barrido API.
+            conn.commit()
+        except Exception as heal_exc:
+            logger.warning("sync related sanación local related_detail_id: %s", heal_exc)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
 
         document_ids, pick_meta = _fetch_oc_document_ids_for_incremental(
             cur, lookback_days=lb, limit_documents=lim

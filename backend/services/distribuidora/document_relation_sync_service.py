@@ -2,7 +2,12 @@
 Descubrimiento / catchup de relaciones documentales (OC↔factura, factura↔NC).
 
 Fuente de verdad operacional:
-- OC → factura/boleta: Bsale ``GET /documents.json?relateddetailid=`` (vía sync_related).
+- OC → factura/boleta:
+  1. Bsale ``GET /documents.json?relateddetailid=`` (vía sync_related), y
+  2. **local** vía ``document_details.related_detail_id`` de la factura/boleta
+     apuntando a un detalle de OC (mismo campo Bsale ``relatedDetailId``).
+     Esto cubre facturación diferida cuando el sync API no alcanza la OC
+     (presupuesto de runtime / cola pending más recientes primero).
 - Factura/boleta → NC: **local** vía ``document_details.related_detail_id`` de la NC
   (campo Bsale ``relatedDetailId`` en details de tipo 9), NO ``references.json``
   (vacío en muestras) ni ``bsale.returns`` (0 filas company 3).
@@ -14,6 +19,7 @@ Este módulo NO inventa vínculos por cliente/monto.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -29,6 +35,35 @@ DOC_TYPE_FACTURA = 6
 DOC_TYPE_NC = 9
 INVOICE_TYPES = frozenset({DOC_TYPE_BOLETA, DOC_TYPE_FACTURA})
 PROBABLE_QUEUE_MIN_SCORE = 75.0
+
+# Ventana de sanación local OC←factura: se aplica a la **emisión de la factura/boleta**,
+# no a la OC. Así una OC de hace meses facturada recientemente sigue conciliándose.
+DEFAULT_LOCAL_OC_INVOICE_HEAL_LOOKBACK_DAYS = 120
+
+
+def resolve_local_oc_invoice_heal_lookback_days(
+    related_lookback_days: int | None = None,
+) -> int:
+    """
+    Días hacia atrás sobre ``invoice.emission_date`` para materializar desde
+    ``related_detail_id``. La edad de la OC **no** se filtra.
+
+    Precedencia:
+      1. ``RELATED_LOCAL_HEAL_LOOKBACK_DAYS``
+      2. ``max(related_lookback_days, DEFAULT_LOCAL_OC_INVOICE_HEAL_LOOKBACK_DAYS)``
+         si se pasa related_lookback
+      3. ``DEFAULT_LOCAL_OC_INVOICE_HEAL_LOOKBACK_DAYS`` (120)
+    """
+    raw = os.getenv("RELATED_LOCAL_HEAL_LOOKBACK_DAYS", "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    base = DEFAULT_LOCAL_OC_INVOICE_HEAL_LOOKBACK_DAYS
+    if related_lookback_days is not None:
+        return max(1, max(int(related_lookback_days), base))
+    return base
 
 
 def oc_has_confirmed_invoice_relation(related_types: Iterable[int]) -> bool:
@@ -281,6 +316,196 @@ def materialize_cn_related_rows(links: list[dict[str, Any]]) -> list[tuple[int, 
     return out
 
 
+def discover_oc_invoice_links_from_related_detail_sql(
+    *,
+    oc_document_id: int | None = None,
+) -> str:
+    """
+    OC (33) ← factura/boleta (1/6) vía ``related_detail_id`` ya persistido en details
+    de la factura (apunta al detalle de la OC). No llama Bsale.
+
+    La arista operacional en ``document_related`` es OC_detail → invoice_document.
+
+    Integridad: misma empresa/oficina en factura y OC; tipos 1/6 → 33; vínculo real
+    ``related_detail_id`` (no cliente/monto). La ventana temporal filtra solo
+    ``inv.emission_date`` — la OC puede ser de meses atrás.
+    """
+    oc_filter = ""
+    if oc_document_id is not None:
+        oc_filter = "AND oc.document_id = %s"
+    return f"""
+    SELECT DISTINCT
+        ocd.detail_id AS oc_detail_id,
+        oc.document_id AS oc_document_id,
+        oc.number AS oc_number,
+        COALESCE(oc.state, 0) AS oc_state,
+        inv.document_id AS invoice_document_id,
+        inv.number AS invoice_number,
+        inv.document_type_id AS invoice_document_type_id,
+        inv.total_amount AS invoice_total,
+        COALESCE(inv.state, 0) AS invoice_state,
+        EXISTS (
+            SELECT 1
+            FROM distribuidora.document_related dr
+            WHERE dr.detail_id = ocd.detail_id
+              AND dr.related_document_id = inv.document_id
+        ) AS already_in_document_related
+    FROM distribuidora.documents inv
+    INNER JOIN distribuidora.document_details invd
+        ON invd.document_id = inv.document_id
+       AND invd.related_detail_id IS NOT NULL
+       AND invd.related_detail_id <> 0
+    INNER JOIN distribuidora.v_document_detail_lineage ocd
+        ON ocd.detail_id = invd.related_detail_id
+    INNER JOIN distribuidora.documents oc
+        ON oc.document_id = ocd.document_id
+       AND oc.document_type_id = {DOC_TYPE_OC}
+       AND oc.company_id = inv.company_id
+       AND oc.office_id = inv.office_id
+    WHERE inv.company_id = %s
+      AND inv.office_id = %s
+      AND inv.document_type_id IN ({DOC_TYPE_BOLETA}, {DOC_TYPE_FACTURA})
+      AND inv.emission_date >= (NOW() AT TIME ZONE 'UTC' - (%s * interval '1 day'))
+      {oc_filter}
+    ORDER BY oc.number DESC NULLS LAST, inv.number DESC NULLS LAST
+    """
+
+
+def materialize_oc_invoice_related_rows(
+    links: list[dict[str, Any]],
+) -> list[tuple[int, int, int]]:
+    """
+    Triples (oc_detail_id, invoice_document_id, invoice_type 1|6) a insertar.
+
+    Solo filas aún no presentes; ignora facturas/OC anuladas; exige tipo 1/6.
+    No usa cliente/monto: el vínculo debe venir de ``related_detail_id``.
+    """
+    out: list[tuple[int, int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for row in links:
+        if int(row.get("invoice_state") or 0) != 0:
+            continue
+        if int(row.get("oc_state") or 0) != 0:
+            continue
+        if row.get("already_in_document_related"):
+            continue
+        inv_type = int(row.get("invoice_document_type_id") or 0)
+        if inv_type not in INVOICE_TYPES:
+            continue
+        oc_detail_id = int(row["oc_detail_id"])
+        inv_id = int(row["invoice_document_id"])
+        key = (oc_detail_id, inv_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((oc_detail_id, inv_id, inv_type))
+    return out
+
+
+def fetch_oc_invoice_links_from_related_detail(
+    cur,
+    *,
+    company_id: int = COMPANY_ID,
+    office_id: int = OFFICE_ID,
+    recent_days: int | None = None,
+    oc_document_id: int | None = None,
+) -> list[dict[str, Any]]:
+    """Descubre pares OC↔factura locales (solo lectura)."""
+    days = (
+        max(1, int(recent_days))
+        if recent_days is not None
+        else resolve_local_oc_invoice_heal_lookback_days()
+    )
+    sql = discover_oc_invoice_links_from_related_detail_sql(
+        oc_document_id=oc_document_id
+    )
+    params: list[Any] = [company_id, office_id, days]
+    if oc_document_id is not None:
+        params.append(int(oc_document_id))
+    cur.execute(sql, tuple(params))
+    cols = [d[0] for d in cur.description]
+    return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+
+def apply_oc_invoice_links_from_related_detail(
+    cur,
+    *,
+    company_id: int = COMPANY_ID,
+    office_id: int = OFFICE_ID,
+    recent_days: int | None = None,
+    oc_document_id: int | None = None,
+    dry_run: bool = True,
+) -> dict[str, Any]:
+    """
+    Materializa aristas OC→factura desde ``related_detail_id`` ya en PG.
+
+    Idempotente (``ON CONFLICT DO NOTHING``). Con ``dry_run=True`` no escribe.
+    Si ``oc_document_id`` se indica, limita el alcance a esa OC (sanación puntual).
+    ``recent_days`` acota emisión de la **factura**; la OC no tiene límite de edad.
+    """
+    days = (
+        max(1, int(recent_days))
+        if recent_days is not None
+        else resolve_local_oc_invoice_heal_lookback_days()
+    )
+    links = fetch_oc_invoice_links_from_related_detail(
+        cur,
+        company_id=company_id,
+        office_id=office_id,
+        recent_days=days,
+        oc_document_id=oc_document_id,
+    )
+    existing = sum(1 for r in links if r.get("already_in_document_related"))
+    triples = materialize_oc_invoice_related_rows(links)
+    oc_ids_with_new: set[int] = set()
+    inv_by_detail = {
+        (int(r["oc_detail_id"]), int(r["invoice_document_id"])): int(r["oc_document_id"])
+        for r in links
+        if r.get("oc_detail_id") is not None and r.get("invoice_document_id") is not None
+    }
+    for detail_id, inv_id, _tid in triples:
+        oc_id = inv_by_detail.get((detail_id, inv_id))
+        if oc_id is not None:
+            oc_ids_with_new.add(oc_id)
+    result: dict[str, Any] = {
+        "dry_run": dry_run,
+        "lookback_days": days,
+        "links_found": len(links),
+        "links_existing": existing,
+        "triples_new": len(triples),
+        "rows_inserted": 0,
+        "oc_document_ids": sorted({int(r["oc_document_id"]) for r in links}),
+        "oc_document_ids_new": sorted(oc_ids_with_new),
+        "sample": [
+            {
+                "oc_number": r.get("oc_number"),
+                "invoice_number": r.get("invoice_number"),
+                "invoice_type": r.get("invoice_document_type_id"),
+                "already_related": bool(r.get("already_in_document_related")),
+            }
+            for r in links[:8]
+        ],
+    }
+    if dry_run or not triples:
+        return result
+
+    inserted = 0
+    for detail_id, inv_id, tid in triples:
+        cur.execute(
+            """
+            INSERT INTO distribuidora.document_related (
+                detail_id, related_document_id, related_document_type
+            )
+            VALUES (%s, %s, %s)
+            ON CONFLICT (detail_id, related_document_id) DO NOTHING
+            """,
+            (detail_id, inv_id, tid),
+        )
+        inserted += int(cur.rowcount or 0)
+    result["rows_inserted"] = inserted
+    return result
+
+
 def run_relation_sync_audit(
     cur,
     *,
@@ -291,8 +516,10 @@ def run_relation_sync_audit(
 ) -> RelationSyncReport:
     """
     Auditoría + descubrimiento. Con ``dry_run=True`` (default) no escribe.
-    Apply de NC materializa aristas invoice_detail → NC en document_related.
-    OC→factura sigue delegado a sync_related (Bsale relateddetailid); aquí solo se reporta cola.
+    Apply materializa:
+      - NC: aristas invoice_detail → NC en document_related
+      - OC→factura: aristas OC_detail → factura/boleta desde related_detail_id local
+    El sync live también llama a la sanación OC local (sin depender solo de la API).
     """
     report = RelationSyncReport(
         company_id=company_id,
@@ -302,13 +529,53 @@ def run_relation_sync_audit(
     )
     report.notes.extend(
         [
-            "OC→factura: fuente Bsale relateddetailid (sync_related_service); "
-            f"lookback default job=10d vs ventana auditoría={recent_days}d.",
+            "OC→factura: Bsale relateddetailid (sync_related) + sanación local "
+            f"desde related_detail_id de factura/boleta (ventana={recent_days}d).",
             "Factura→NC: relatedDetailId en details de NC (ya en PG); "
             "references.json vacío en muestras; bsale.returns=0.",
             "Probable>=75 no se promociona a confirmed.",
         ]
     )
+
+    try:
+        oc_inv_links = fetch_oc_invoice_links_from_related_detail(
+            cur,
+            company_id=company_id,
+            office_id=office_id,
+            recent_days=recent_days,
+        )
+    except Exception as exc:
+        report.errors.append(f"oc_invoice_discover: {exc}")
+        oc_inv_links = []
+
+    oc_inv_existing = sum(1 for r in oc_inv_links if r.get("already_in_document_related"))
+    oc_inv_triples = materialize_oc_invoice_related_rows(oc_inv_links)
+    report.invoice_links_new = len(oc_inv_triples)
+    report.relations_discovered += len(oc_inv_triples)
+    report.relations_existing += oc_inv_existing
+    report.samples["oc_invoice_links"] = [
+        {
+            "oc_number": r.get("oc_number"),
+            "invoice_number": r.get("invoice_number"),
+            "invoice_type": r.get("invoice_document_type_id"),
+            "already_related": bool(r.get("already_in_document_related")),
+            "oc_state": r.get("oc_state"),
+            "invoice_state": r.get("invoice_state"),
+        }
+        for r in oc_inv_links[:8]
+    ]
+    report.samples["oc_invoice_links_missing_edge"] = [
+        {
+            "oc_number": r.get("oc_number"),
+            "oc_document_id": r.get("oc_document_id"),
+            "invoice_number": r.get("invoice_number"),
+            "invoice_document_id": r.get("invoice_document_id"),
+        }
+        for r in oc_inv_links
+        if not r.get("already_in_document_related")
+        and int(r.get("invoice_state") or 0) == 0
+        and int(r.get("oc_state") or 0) == 0
+    ][:10]
 
     try:
         cur.execute(
@@ -433,11 +700,11 @@ def run_relation_sync_audit(
         report.errors.append(f"plan_dry_run: {exc}")
 
     if dry_run:
-        report.unchanged = report.credit_note_links_existing
+        report.unchanged = report.credit_note_links_existing + oc_inv_existing
         report.notes.append("dry_run=True: no se insertó ninguna fila en document_related.")
         return report
 
-    # APPLY explícito: solo materializa NC (idempotente ON CONFLICT DO NOTHING).
+    # APPLY explícito: NC + OC→factura local (idempotente ON CONFLICT DO NOTHING).
     inserted = 0
     for detail_id, nc_id, tid in new_triples:
         try:
@@ -453,11 +720,29 @@ def run_relation_sync_audit(
             )
             inserted += int(cur.rowcount or 0)
         except Exception as exc:
-            report.errors.append(f"insert {detail_id}->{nc_id}: {exc}")
-    report.unchanged = report.credit_note_links_existing
+            report.errors.append(f"insert nc {detail_id}->{nc_id}: {exc}")
+
+    oc_inserted = 0
+    for detail_id, inv_id, tid in oc_inv_triples:
+        try:
+            cur.execute(
+                """
+                INSERT INTO distribuidora.document_related (
+                    detail_id, related_document_id, related_document_type
+                )
+                VALUES (%s, %s, %s)
+                ON CONFLICT (detail_id, related_document_id) DO NOTHING
+                """,
+                (detail_id, inv_id, tid),
+            )
+            oc_inserted += int(cur.rowcount or 0)
+        except Exception as exc:
+            report.errors.append(f"insert oc_inv {detail_id}->{inv_id}: {exc}")
+
+    report.unchanged = report.credit_note_links_existing + oc_inv_existing
     report.notes.append(
-        f"apply: insertados={inserted} de candidatos={len(new_triples)} "
-        "(OC→factura no se escribe aquí; usar sync_distribuidora_related)."
+        f"apply: nc_insertados={inserted}/{len(new_triples)} "
+        f"oc_factura_insertados={oc_inserted}/{len(oc_inv_triples)}."
     )
     return report
 
