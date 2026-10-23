@@ -1,26 +1,23 @@
 #!/usr/bin/env python3
 """
-Auditoría Comercial 8.0 — censo de costos (solo lectura).
+Auditoría Comercial 8.0 — censo + Fase 1.3 (solo lectura).
 
 Usa la misma conexión PostgreSQL que FastAPI (``backend.db.get_connection``).
 No escribe datos, no abre endpoints, no imprime credenciales.
+No ejecuta sync de Bsale (solo documenta el procedimiento).
 
-Uso (desde la raíz del repo, con env PG_* del backend):
-
-  python -m backend.scripts.audit_commercial_cost_census --company-id 3
-
-Coolify (terminal del contenedor backend; Dockerfile WORKDIR=/app, COPY . .):
+Coolify (WORKDIR=/app):
 
   cd /app
   python -m backend.scripts.audit_commercial_cost_census \\
-    --company-id 3 --timeout-sec 120 --top-critical 30 \\
-    --price-list-id 12 --json
+    --company-id 3 --timeout-sec 180 --top-critical 30 --extended --json
 
 Opciones:
-  --timeout-sec 120   statement_timeout por consulta (default 120)
-  --top-critical 30   listado administrativo (default 30)
-  --price-list-id 12  lista comercial para precio bruto (default 12)
-  --json              imprime el informe completo en JSON
+  --timeout-sec 180   statement_timeout (default 180 en análisis extendido)
+  --top-critical 30   ranking de anomalías / críticos
+  --extended          activos costo 0 + divergencias costo>0 (default: on)
+  --no-extended       sólo censo A–D / huérfanas
+  --json
 """
 
 from __future__ import annotations
@@ -37,13 +34,23 @@ from psycopg2.extensions import ISOLATION_LEVEL_REPEATABLE_READ
 
 from backend.db import get_connection
 from backend.services.analytics.validate_distribuidora_source import assert_sql_is_read_only
+from backend.services.analytics_v2.movement_classification import (
+    comparable_sql_list,
+    movement_class_sql,
+)
 
-DEFAULT_TIMEOUT_SEC = 120
+DEFAULT_TIMEOUT_SEC = 180
 DEFAULT_TOP = 30
 DEFAULT_PRICE_LIST = 12
 COMPANY_DEFAULT = 3
+PRICE_LISTS_COMMERCIAL = (12, 13, 16)
 
-# Tablas mínimas para Fase 1.1 (SELECT). GRANT sugerido al final del informe.
+# Umbrales de alerta (investigación; no reglas comerciales definitivas).
+DIFF_RELEVANT_PCT = Decimal("15")
+DIFF_IMPORTANT_PCT = Decimal("50")  # AVERAGE_DIVERGENCE_PCT del motor
+DIFF_EXTREME_UP_PCT = Decimal("100")
+DIFF_EXTREME_DOWN_PCT = Decimal("-60")
+
 REQUIRED_COST_TABLE = "bsale_raw.variant_costs"
 OPTIONAL_TABLES = (
     "bsale_raw.products",
@@ -52,6 +59,80 @@ OPTIONAL_TABLES = (
     "bsale_raw.stock_receptions",
     "bsale_raw.stock_reception_details",
 )
+
+ORPHAN_RESOLUTION_PROCEDURE = {
+    "summary": (
+        "Las huérfanas 31352–31366 (y 31358) aparecieron en stocks después del "
+        "último FULL de variants (max bsale_id=31351). Resolver con el sync de "
+        "catálogo existente; no inventar filas ni borrar stocks."
+    ),
+    "recommended_coolify_commands": [
+        "# 1) Dry-run catálogo diario (products → variants) — sin escritura",
+        "cd /app && python -m backend.jobs.bsale_raw sync-catalog --company 3 --dry-run",
+        "# 2) Aplicar (autorización explícita del operador)",
+        "cd /app && python -m backend.jobs.bsale_raw sync-catalog --company 3",
+        "# Alternativa mínima: sólo variants (exige products SUCCESS reciente)",
+        "cd /app && python -m backend.jobs.bsale_raw sync --company 3 --resource variants --mode full-reconcile --dry-run",
+        "cd /app && python -m backend.jobs.bsale_raw sync --company 3 --resource variants --mode full-reconcile",
+        "# 3) Tras aparecer en variants: refrescar costos de esos IDs (POINT)",
+        (
+            "cd /app && python -m backend.jobs.bsale_raw refresh-costs --company 3 "
+            "--variant 31352 --variant 31353 --variant 31354 --variant 31355 "
+            "--variant 31356 --variant 31357 --variant 31358 --variant 31359 "
+            "--variant 31360 --variant 31361 --variant 31362 --variant 31363 "
+            "--variant 31364 --variant 31365 --variant 31366 --dry-run"
+        ),
+        (
+            "cd /app && python -m backend.jobs.bsale_raw refresh-costs --company 3 "
+            "--variant 31352 --variant 31353 --variant 31354 --variant 31355 "
+            "--variant 31356 --variant 31357 --variant 31358 --variant 31359 "
+            "--variant 31360 --variant 31361 --variant 31362 --variant 31363 "
+            "--variant 31364 --variant 31365 --variant 31366"
+        ),
+        "# 4) Verificar: re-ejecutar esta auditoría y confirmar stock_pos_sin_variante=0",
+    ],
+    "notes": [
+        "sync-catalog / sync variants SÍ escriben bsale_raw (no es esta auditoría).",
+        "El scanner scan-costs solo itera filas ya presentes en bsale_raw.variants; "
+        "por eso hay que sincronizar catálogo antes de que el scanner las cubra.",
+        "No ejecutar sync automáticamente desde este script.",
+        "Cron habitual: sync-catalog / sync-nightly en Coolify (ver jobs/bsale_raw/README).",
+    ],
+}
+
+EXCEL_FIELD_MAP_1_3 = {
+    "hoja_1_resumen_ejecutivo": [
+        "census.*",
+        "answers.*",
+        "cost_classes",
+        "zero_cost_actives.summary",
+        "positive_cost_divergence.buckets",
+        "sync_state",
+        "cut_at_utc",
+    ],
+    "hoja_2_criticos_anomalias": [
+        "positive_cost_divergence.top_anomalies",
+        "top_critical",
+    ],
+    "hoja_3_activos_costo_cero": [
+        "zero_cost_actives.by_price_stock",
+        "zero_cost_actives.by_reception",
+        "zero_cost_actives.samples",
+    ],
+    "hoja_4_promedio_vs_recepciones": [
+        "positive_cost_divergence.buckets",
+        "positive_cost_divergence.top_anomalies",
+    ],
+    "hoja_5_huerfanas_sync": [
+        "orphan_stock_variants",
+        "orphan_resolution_procedure",
+        "census.stock_pos_sin_variante",
+    ],
+    "hoja_6_revision_administrativa": [
+        "plantilla vacía: variant_id, sku, producto, estado, responsable, fecha, observación, respaldo",
+        "alimentar desde top_anomalies + zero_cost samples + huérfanas",
+    ],
+}
 
 
 def _json_default(obj: Any) -> Any:
@@ -429,21 +510,422 @@ def critical_active_stock_no_valid_cost(
 
 
 def grant_instructions(role: str) -> list[str]:
+    """GRANT sugerido para rol de auditoría MCP — NUNCA hacia postgres/app."""
+    target = "ai_reader"
+    warn = []
+    if str(role).lower() in {"postgres", "root", "supabase_admin"}:
+        warn = [
+            f"-- ADVERTENCIA: current_user={role} es rol de aplicación/superusuario.",
+            "-- NO ejecutar GRANT hacia ese rol. Destino de auditoría = ai_reader (u otro RO).",
+            "-- En producción preferir ejecutar este script en el contenedor FastAPI (ya lee costos).",
+        ]
     return [
-        f"-- Ejecutar como propietario del esquema / DBA (NO como superusuario de auditoría).",
-        f"-- Rol de auditoría MCP actual: {role}",
-        f"-- Solo SELECT; sin GRANT OPTION; sin escritura.",
-        f"GRANT SELECT ON TABLE bsale_raw.variant_costs TO {role};",
-        f"GRANT SELECT ON TABLE bsale_raw.products TO {role};",
-        f"GRANT SELECT ON TABLE bsale_raw.product_types TO {role};",
-        f"GRANT SELECT ON TABLE bsale_raw.variant_prices TO {role};",
-        f"GRANT SELECT ON TABLE bsale_raw.stock_receptions TO {role};",
-        f"GRANT SELECT ON TABLE bsale_raw.stock_reception_details TO {role};",
-        f"-- Verificar:",
-        f"SELECT table_name, has_table_privilege('{role}', format('bsale_raw.%s', table_name), 'SELECT')",
-        f"FROM (VALUES ('variant_costs'),('products'),('variant_prices'),",
-        f"             ('stock_receptions'),('stock_reception_details')) t(table_name);",
+        *warn,
+        "-- Ejecutar como propietario del esquema / DBA.",
+        f"-- Destino SELECT mínimo: {target} (no {role}).",
+        "-- Solo SELECT; sin GRANT OPTION; sin escritura.",
+        f"GRANT SELECT ON TABLE bsale_raw.variant_costs TO {target};",
+        f"GRANT SELECT ON TABLE bsale_raw.products TO {target};",
+        f"GRANT SELECT ON TABLE bsale_raw.product_types TO {target};",
+        f"GRANT SELECT ON TABLE bsale_raw.variant_prices TO {target};",
+        f"GRANT SELECT ON TABLE bsale_raw.stock_receptions TO {target};",
+        f"GRANT SELECT ON TABLE bsale_raw.stock_reception_details TO {target};",
     ]
+
+
+def classify_divergence_bucket(
+    pct: Decimal | None,
+    *,
+    has_comparable: bool,
+    requires_verification: bool = False,
+) -> str:
+    """
+    Banda principal mutuamente excluyente (para sumatorias).
+
+    ``extrema`` NO es banda de cierre: usar ``is_extreme_divergence``.
+    """
+    if has_comparable and pct is not None:
+        ap = abs(pct)
+        if ap <= DIFF_RELEVANT_PCT:
+            return "hasta_15"
+        if ap <= DIFF_IMPORTANT_PCT:
+            return "entre_15_y_50"
+        return "sobre_50"
+    if requires_verification:
+        return "requiere_verificacion"
+    return "sin_recepcion_comparable"
+
+
+def is_extreme_divergence(pct: Decimal | None) -> bool:
+    """Indicador adicional (subconjunto de sobre_50): no entra a la suma de cierre."""
+    if pct is None:
+        return False
+    return pct >= DIFF_EXTREME_UP_PCT or pct <= DIFF_EXTREME_DOWN_PCT
+
+
+def _last_comparable_lateral_sql() -> str:
+    """
+    Última línea comparable al criterio del motor de costos:
+
+    - misma variante (``d.variant_id = v.bsale_id``)
+    - ``details_complete``, costo > 0, cantidad > 0
+    - movimiento FACTURA o GUÍA (no NC, ajuste, transferencia, sin documento)
+    - sin despacho interno
+
+    El costo de línea se toma tal cual Bsale (unitario); no se recalculan
+    impuestos ni descuentos aquí. Sin fila comparable → no hay Δ%.
+    """
+    mov = movement_class_sql("r.document", "r.internal_dispatch_id")
+    comp = comparable_sql_list()
+    return f"""
+          LEFT JOIN LATERAL (
+            SELECT d.cost AS lc_cost,
+                   r.admission_date AS lc_date,
+                   r.bsale_id AS lc_reception_id,
+                   r.document AS lc_document,
+                   r.document_number AS lc_document_number,
+                   r.office_id AS lc_office_id,
+                   ({mov}) AS lc_movement_class
+            FROM bsale_raw.stock_reception_details d
+            INNER JOIN bsale_raw.stock_receptions r
+              ON r.company_id = d.company_id AND r.bsale_id = d.reception_id
+            WHERE d.company_id = v.company_id
+              AND d.variant_id = v.bsale_id
+              AND d.missing_since IS NULL
+              AND r.missing_since IS NULL
+              AND r.details_complete IS TRUE
+              AND d.cost > 0 AND d.quantity > 0
+              AND ({mov}) IN ({comp})
+            ORDER BY r.admission_date DESC, r.bsale_id DESC, d.bsale_id DESC
+            LIMIT 1
+          ) lc ON TRUE
+    """
+
+
+def _any_reception_evidence_lateral_sql() -> str:
+    """Recepción con costo>0 que no califica como comparable (requiere verificación)."""
+    mov = movement_class_sql("r.document", "r.internal_dispatch_id")
+    comp = comparable_sql_list()
+    return f"""
+          LEFT JOIN LATERAL (
+            SELECT true AS has_noncomparable_evidence
+            FROM bsale_raw.stock_reception_details d
+            INNER JOIN bsale_raw.stock_receptions r
+              ON r.company_id = d.company_id AND r.bsale_id = d.reception_id
+            WHERE d.company_id = v.company_id
+              AND d.variant_id = v.bsale_id
+              AND d.missing_since IS NULL
+              AND r.missing_since IS NULL
+              AND d.cost > 0 AND d.quantity > 0
+              AND (
+                r.details_complete IS NOT TRUE
+                OR ({mov}) NOT IN ({comp})
+              )
+            LIMIT 1
+          ) ev ON TRUE
+    """
+
+
+def analyze_zero_cost_actives(
+    cur: Any,
+    company_id: int,
+    *,
+    can_prices: bool,
+    can_receptions: bool,
+    sample_limit: int = 20,
+) -> dict[str, Any]:
+    """2.xxx activas con average_cost = 0: cruce precio 12/13/16, stock, recepción."""
+    price_expr = "FALSE"
+    price_join = ""
+    if can_prices:
+        price_join = """
+          LEFT JOIN bsale_raw.variant_prices vp12
+            ON vp12.company_id = v.company_id AND vp12.variant_id = v.bsale_id
+           AND vp12.price_list_id = 12 AND vp12.missing_since IS NULL
+          LEFT JOIN bsale_raw.variant_prices vp13
+            ON vp13.company_id = v.company_id AND vp13.variant_id = v.bsale_id
+           AND vp13.price_list_id = 13 AND vp13.missing_since IS NULL
+          LEFT JOIN bsale_raw.variant_prices vp16
+            ON vp16.company_id = v.company_id AND vp16.variant_id = v.bsale_id
+           AND vp16.price_list_id = 16 AND vp16.missing_since IS NULL
+        """
+        price_expr = """
+          (COALESCE(vp12.variant_value_with_taxes, 0) > 0
+            OR COALESCE(vp13.variant_value_with_taxes, 0) > 0
+            OR COALESCE(vp16.variant_value_with_taxes, 0) > 0)
+        """
+
+    rec_join = _last_comparable_lateral_sql() if can_receptions else ""
+    has_rec = "lc.lc_cost IS NOT NULL" if can_receptions else "FALSE"
+
+    sql = f"""
+        WITH st AS (
+          SELECT variant_id, sum(quantity) AS stock_total
+          FROM bsale_raw.stocks WHERE company_id = %s GROUP BY variant_id
+        ),
+        base AS (
+          SELECT
+            v.bsale_id AS variant_id,
+            v.code AS sku,
+            COALESCE(v.state, 0) AS variant_state,
+            COALESCE(st.stock_total, 0) AS stock_total,
+            (st.variant_id IS NULL) AS sin_fila_stock,
+            ({price_expr}) AS has_price,
+            ({has_rec}) AS has_comparable_reception
+          FROM bsale_raw.variants v
+          INNER JOIN bsale_raw.variant_costs vc
+            ON vc.company_id = v.company_id AND vc.variant_id = v.bsale_id
+           AND vc.average_cost = 0
+          LEFT JOIN st ON st.variant_id = v.bsale_id
+          {price_join}
+          {rec_join}
+          WHERE v.company_id = %s
+            AND v.missing_since IS NULL
+            AND COALESCE(v.state, 0) = 0
+        )
+        SELECT
+          count(*)::bigint AS total_activas_costo_cero,
+          count(*) FILTER (WHERE stock_total > 0)::bigint AS con_stock_pos,
+          count(*) FILTER (WHERE stock_total = 0)::bigint AS stock_cero,
+          count(*) FILTER (WHERE sin_fila_stock)::bigint AS sin_fila_stock,
+          count(*) FILTER (
+            WHERE has_price AND NOT (stock_total > 0)
+          )::bigint AS grupo_A_precio_sin_stock_pos,
+          count(*) FILTER (
+            WHERE NOT has_price AND NOT (stock_total > 0)
+          )::bigint AS grupo_B_sin_precio_sin_stock_pos,
+          count(*) FILTER (WHERE has_comparable_reception)::bigint AS grupo_C_con_recepcion,
+          count(*) FILTER (WHERE NOT has_comparable_reception)::bigint AS grupo_D_sin_recepcion
+        FROM base
+    """
+    summary = _fetch_one(cur, sql, (company_id, company_id))
+
+    samples_sql = f"""
+        WITH st AS (
+          SELECT variant_id, sum(quantity) AS stock_total
+          FROM bsale_raw.stocks WHERE company_id = %s GROUP BY variant_id
+        )
+        SELECT
+          v.bsale_id AS variant_id,
+          v.code AS sku,
+          v.description AS variant_name,
+          COALESCE(st.stock_total, 0) AS stock_total,
+          ({price_expr}) AS has_price,
+          ({has_rec}) AS has_comparable_reception
+        FROM bsale_raw.variants v
+        INNER JOIN bsale_raw.variant_costs vc
+          ON vc.company_id = v.company_id AND vc.variant_id = v.bsale_id
+         AND vc.average_cost = 0
+        LEFT JOIN st ON st.variant_id = v.bsale_id
+        {price_join}
+        {rec_join}
+        WHERE v.company_id = %s
+          AND v.missing_since IS NULL
+          AND COALESCE(v.state, 0) = 0
+        ORDER BY
+          CASE WHEN ({has_rec}) THEN 0 ELSE 1 END,
+          CASE WHEN ({price_expr}) THEN 0 ELSE 1 END,
+          COALESCE(st.stock_total, 0) DESC,
+          v.bsale_id
+        LIMIT %s
+    """
+    samples = _fetch_dicts(cur, samples_sql, (company_id, company_id, sample_limit))
+    return {
+        "summary": summary,
+        "axes_note": (
+            "Ejes independientes: by_price_stock (A/B) y by_reception (C/D) "
+            "no son particiones excluyentes entre sí; una variante puede estar "
+            "en A y C a la vez."
+        ),
+        "by_price_stock": {
+            "A_con_precio_sin_stock_positivo": summary.get("grupo_A_precio_sin_stock_pos"),
+            "B_sin_precio_sin_stock_positivo": summary.get("grupo_B_sin_precio_sin_stock_pos"),
+            "con_stock_positivo": summary.get("con_stock_pos"),
+            "nota": "A+B cubren sin stock>0; con_stock_pos debería ser 0 según censo confirmado.",
+        },
+        "by_reception": {
+            "C_con_recepcion_comparable_promedio_cero": summary.get("grupo_C_con_recepcion"),
+            "D_sin_recepcion_comparable": summary.get("grupo_D_sin_recepcion"),
+            "nota": "C usa sólo FACTURA/GUÍA comparable (mismo criterio del motor).",
+        },
+        "prices_available": can_prices,
+        "receptions_available": can_receptions,
+        "samples": samples,
+        "sales_recent": None,
+        "sales_note": "Sin fuente confiable de ventas 90d; no se declara.",
+    }
+
+
+def analyze_positive_cost_divergence(
+    cur: Any,
+    company_id: int,
+    *,
+    can_receptions: bool,
+    top_n: int,
+) -> dict[str, Any]:
+    """Activas + stock>0 + average_cost>0 vs última recepción comparable."""
+    if not can_receptions:
+        return {
+            "blocked": True,
+            "reason": "sin SELECT a stock_receptions / details",
+            "buckets": {},
+            "top_anomalies": [],
+        }
+
+    rec_join = _last_comparable_lateral_sql()
+    ev_join = _any_reception_evidence_lateral_sql()
+    # Bandas principales (mutuamente excluyentes):
+    #   sin_recepcion | requiere_verificacion | hasta_15 | entre_15_y_50 | sobre_50
+    # Extrema = indicador adicional ⊆ sobre_50 (no suma al cierre).
+    sql_buckets = f"""
+        WITH st AS (
+          SELECT variant_id, sum(quantity) AS stock_total
+          FROM bsale_raw.stocks WHERE company_id = %s GROUP BY variant_id
+        ),
+        base AS (
+          SELECT
+            v.bsale_id AS variant_id,
+            vc.average_cost,
+            st.stock_total,
+            lc.lc_cost,
+            (ev.has_noncomparable_evidence IS TRUE) AS requires_verification,
+            CASE
+              WHEN lc.lc_cost IS NULL OR lc.lc_cost <= 0 OR vc.average_cost IS NULL
+                   OR vc.average_cost <= 0
+                THEN NULL
+              ELSE round(((lc.lc_cost - vc.average_cost) / vc.average_cost) * 100, 2)
+            END AS diff_pct
+          FROM bsale_raw.variants v
+          INNER JOIN st ON st.variant_id = v.bsale_id AND st.stock_total > 0
+          INNER JOIN bsale_raw.variant_costs vc
+            ON vc.company_id = v.company_id AND vc.variant_id = v.bsale_id
+           AND vc.average_cost > 0
+          {rec_join}
+          {ev_join}
+          WHERE v.company_id = %s
+            AND v.missing_since IS NULL
+            AND COALESCE(v.state, 0) = 0
+        )
+        SELECT
+          count(*)::bigint AS universo,
+          count(*) FILTER (
+            WHERE diff_pct IS NULL AND NOT requires_verification
+          )::bigint AS sin_recepcion_comparable,
+          count(*) FILTER (
+            WHERE diff_pct IS NULL AND requires_verification
+          )::bigint AS requiere_verificacion,
+          count(*) FILTER (
+            WHERE diff_pct IS NOT NULL AND abs(diff_pct) <= 15
+          )::bigint AS hasta_15,
+          count(*) FILTER (
+            WHERE diff_pct IS NOT NULL
+              AND abs(diff_pct) > 15 AND abs(diff_pct) <= 50
+          )::bigint AS entre_15_y_50,
+          count(*) FILTER (
+            WHERE diff_pct IS NOT NULL AND abs(diff_pct) > 50
+          )::bigint AS sobre_50,
+          count(*) FILTER (
+            WHERE diff_pct IS NOT NULL
+              AND (diff_pct >= 100 OR diff_pct <= -60)
+          )::bigint AS extrema_indicador
+        FROM base
+    """
+    buckets = _fetch_one(cur, sql_buckets, (company_id, company_id))
+
+    sql_top = f"""
+        WITH st AS (
+          SELECT variant_id, sum(quantity) AS stock_total
+          FROM bsale_raw.stocks WHERE company_id = %s GROUP BY variant_id
+        ),
+        base AS (
+          SELECT
+            v.bsale_id AS variant_id,
+            v.code AS sku,
+            v.description AS variant_name,
+            vc.average_cost,
+            st.stock_total,
+            lc.lc_cost AS last_comparable_cost,
+            lc.lc_date AS last_comparable_date,
+            lc.lc_reception_id,
+            lc.lc_document,
+            lc.lc_document_number,
+            lc.lc_office_id,
+            lc.lc_movement_class,
+            CASE
+              WHEN lc.lc_cost IS NULL OR vc.average_cost <= 0 THEN NULL
+              ELSE round(((lc.lc_cost - vc.average_cost) / vc.average_cost) * 100, 2)
+            END AS diff_pct
+          FROM bsale_raw.variants v
+          INNER JOIN st ON st.variant_id = v.bsale_id AND st.stock_total > 0
+          INNER JOIN bsale_raw.variant_costs vc
+            ON vc.company_id = v.company_id AND vc.variant_id = v.bsale_id
+           AND vc.average_cost > 0
+          {rec_join}
+          WHERE v.company_id = %s
+            AND v.missing_since IS NULL
+            AND COALESCE(v.state, 0) = 0
+            AND lc.lc_cost IS NOT NULL
+        )
+        SELECT *,
+          CASE
+            WHEN abs(diff_pct) <= 15 THEN 'hasta_15'
+            WHEN abs(diff_pct) <= 50 THEN 'entre_15_y_50'
+            ELSE 'sobre_50'
+          END AS banda_principal,
+          (diff_pct >= 100 OR diff_pct <= -60) AS extrema_indicador,
+          'alerta_investigacion_no_prueba_error' AS interpretacion
+        FROM base
+        WHERE abs(diff_pct) > 15
+        ORDER BY abs(diff_pct) DESC, stock_total DESC, variant_id
+        LIMIT %s
+    """
+    top = _fetch_dicts(cur, sql_top, (company_id, company_id, top_n))
+    u = int(buckets.get("universo") or 0)
+    primary_keys = (
+        "sin_recepcion_comparable",
+        "requiere_verificacion",
+        "hasta_15",
+        "entre_15_y_50",
+        "sobre_50",
+    )
+    s = sum(int(buckets.get(k) or 0) for k in primary_keys)
+    extrema = int(buckets.get("extrema_indicador") or 0)
+    sobre = int(buckets.get("sobre_50") or 0)
+    return {
+        "blocked": False,
+        "diff_definition": (
+            "diff_pct = (ultima_comparable - average_cost) / average_cost * 100. "
+            "Sólo FACTURA/GUÍA con details_complete, costo>0 y cantidad>0. "
+            "Umbrales = alertas de investigación, nunca error confirmado. "
+            "Impuestos/descuentos no se recalculan aquí (valores netos Bsale)."
+        ),
+        "thresholds": {
+            "hasta_15": float(DIFF_RELEVANT_PCT),
+            "importante_sobre": float(DIFF_IMPORTANT_PCT),
+            "extrema_alza_indicador": float(DIFF_EXTREME_UP_PCT),
+            "extrema_baja_indicador": float(DIFF_EXTREME_DOWN_PCT),
+        },
+        "buckets": buckets,
+        "buckets_identity": {
+            "formula": (
+                "universo = sin_recepcion_comparable + requiere_verificacion "
+                "+ hasta_15 + entre_15_y_50 + sobre_50"
+            ),
+            "universo": u,
+            "sum_buckets_principales": s,
+            "closes": u == s,
+            "extrema_indicador": extrema,
+            "extrema_es_subconjunto_de_sobre_50": extrema <= sobre,
+            "nota": (
+                "extrema_indicador no entra en la suma de cierre; es subconjunto de sobre_50."
+            ),
+        },
+        "top_anomalies": top,
+        "possible_admin_correction": (
+            "No auto-clasificado como error. Casos extremos / correcciones documentales "
+            "(referencia Glenfiddich §5.7) quedan para revisión administrativa manual."
+        ),
+    }
 
 
 def build_report(
@@ -452,25 +934,28 @@ def build_report(
     timeout_sec: int,
     top_n: int,
     price_list_id: int,
+    extended: bool = True,
 ) -> dict[str, Any]:
     cut = datetime.now(timezone.utc)
     report: dict[str, Any] = {
-        "audit": "comercial_8_0_fase_1_1_cost_census",
+        "audit": "comercial_8_0_fase_1_3_cost_integrity",
         "company_id": company_id,
         "cut_at_utc": cut.isoformat(),
         "readonly": True,
         "isolation": "REPEATABLE READ",
         "statement_timeout_sec": timeout_sec,
+        "extended": extended,
         "ok": False,
         "blocked_on_costs": True,
+        "orphan_resolution_procedure": ORPHAN_RESOLUTION_PROCEDURE,
+        "excel_field_map": EXCEL_FIELD_MAP_1_3,
         "notes": [],
         "excel_implications": [
-            "Separar en resumen A / B1 / B2 / C / D (nunca mezclar NULL con cero).",
-            "Marcar explícitamente 'stock>0 sin costo válido' como prioritario.",
-            "Documentar hora de corte y estado del scanner de variant_costs.",
-            "No valorizar inventario cuando el costo es B1/B2/C/D.",
-            "Incluir advertencia de variant_id con stock sin fila en variants (huérfanos).",
-            "No sustituir average_cost por última recepción en columnas de margen.",
+            "Separar A / C (cero ≠ desconocido).",
+            "No valorizar inventario con costo cero.",
+            "Huérfanas: hoja sync; no inventar catálogo.",
+            "Divergencias: alertas de investigación, no prueba de error.",
+            "No sustituir average_cost por última recepción.",
         ],
     }
 
@@ -492,7 +977,7 @@ def build_report(
         report["coolify_command"] = (
             "python -m backend.scripts.audit_commercial_cost_census "
             f"--company-id {company_id} --timeout-sec {timeout_sec} "
-            f"--top-critical {top_n} --price-list-id {price_list_id} --json"
+            f"--top-critical {top_n} --extended --json"
         )
         return report
 
@@ -661,9 +1146,33 @@ def build_report(
             "receptions": can_rec,
         }
 
+        if extended:
+            report["zero_cost_actives"] = analyze_zero_cost_actives(
+                cur,
+                company_id,
+                can_prices=can_prices,
+                can_receptions=can_rec,
+                sample_limit=min(30, top_n),
+            )
+            report["positive_cost_divergence"] = analyze_positive_cost_divergence(
+                cur,
+                company_id,
+                can_receptions=can_rec,
+                top_n=top_n,
+            )
+            div = report["positive_cost_divergence"]
+            if div.get("buckets_identity") and not div["buckets_identity"].get("closes"):
+                report["notes"].append(
+                    "Divergencias: suma de buckets no cierra con universo; revisar SQL."
+                )
+
         report["ok"] = bool(
             report["census_identity"]["closes"] and report["class_identity"]["closes"]
         )
+        if extended and report.get("positive_cost_divergence", {}).get("buckets_identity"):
+            report["ok"] = report["ok"] and bool(
+                report["positive_cost_divergence"]["buckets_identity"].get("closes")
+            )
         return report
     finally:
         try:
@@ -683,7 +1192,7 @@ def build_report(
 
 def _print_human(report: dict[str, Any]) -> None:
     print("=" * 72)
-    print("Auditoría Comercial 8.0 — Fase 1.1 (solo lectura)")
+    print("Auditoría Comercial 8.0 — Fase 1.3 (solo lectura)")
     print(f"company_id={report.get('company_id')}  corte UTC={report.get('cut_at_utc')}")
     print("=" * 72)
     if report.get("error"):
@@ -732,22 +1241,36 @@ def _print_human(report: dict[str, Any]) -> None:
             f"  vid={row.get('variant_id')} stock={row.get('stock_total')} "
             f"clase={row.get('clase_costo')} sku={row.get('sku')}"
         )
+    zc = report.get("zero_cost_actives") or {}
+    if zc:
+        print("\n--- Activos costo cero ---")
+        print(" ", zc.get("summary"))
+        print(" ", zc.get("by_price_stock"))
+        print(" ", zc.get("by_reception"))
+    div = report.get("positive_cost_divergence") or {}
+    if div and not div.get("blocked"):
+        print("\n--- Divergencias costo positivo ---")
+        print(" ", div.get("buckets"))
+        print(f"  top_anomalies={len(div.get('top_anomalies') or [])}")
 
 
 def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(description="Censo costos Comercial 8.0 (READ ONLY)")
+    p = argparse.ArgumentParser(description="Auditoría costos Comercial 8.0 (READ ONLY)")
     p.add_argument("--company-id", type=int, default=COMPANY_DEFAULT)
     p.add_argument("--timeout-sec", type=int, default=DEFAULT_TIMEOUT_SEC)
     p.add_argument("--top-critical", type=int, default=DEFAULT_TOP)
     p.add_argument("--price-list-id", type=int, default=DEFAULT_PRICE_LIST)
+    p.add_argument("--extended", dest="extended", action="store_true", default=True)
+    p.add_argument("--no-extended", dest="extended", action="store_false")
     p.add_argument("--json", action="store_true")
     args = p.parse_args(argv)
 
     report = build_report(
         company_id=int(args.company_id),
-        timeout_sec=max(5, min(int(args.timeout_sec), 300)),
+        timeout_sec=max(5, min(int(args.timeout_sec), 600)),
         top_n=max(1, min(int(args.top_critical), 200)),
         price_list_id=int(args.price_list_id),
+        extended=bool(args.extended),
     )
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2, default=_json_default))
