@@ -101,6 +101,40 @@ ORPHAN_RESOLUTION_PROCEDURE = {
 }
 
 EXCEL_FIELD_MAP_1_3 = {
+    "base_exportadores": (
+        "backend.services.analytics_v2.excel_export "
+        "(catalog_xlsx / costs_xlsx / margins_xlsx / receptions_xlsx) — "
+        "ampliar hojas, no crear exporter paralelo."
+    ),
+    "columnas_comunes": [
+        "company_id",
+        "product_id",
+        "product_name",
+        "product_type",
+        "variant_id",
+        "variant_name",
+        "sku",
+        "barcode",
+        "average_cost_net",
+        "last_comparable_cost",
+        "last_comparable_date",
+        "last_comparable_document",
+        "last_comparable_document_number",
+        "stock_total",
+        "price_list_12_gross",
+        "price_list_13_gross",
+        "price_list_16_gross",
+        "evidence_quality",
+        "review_priority / priority_band",
+        "priority_score",
+        "error_confidence",
+        "monetary_exposure_potential (orientativa; no valorización)",
+        "unit_presentation_verified",
+        "suggested_admin_action",
+        "admin_status",
+        "admin_owner",
+        "admin_notes",
+    ],
     "hoja_1_resumen_ejecutivo": [
         "census.*",
         "answers.*",
@@ -111,25 +145,30 @@ EXCEL_FIELD_MAP_1_3 = {
         "cut_at_utc",
     ],
     "hoja_2_criticos_anomalias": [
-        "positive_cost_divergence.top_anomalies",
+        "positive_cost_divergence.top_anomalies (+ admin_priority)",
         "top_critical",
+        "ordenar por priority_score DESC",
     ],
     "hoja_3_activos_costo_cero": [
-        "zero_cost_actives.by_price_stock",
-        "zero_cost_actives.by_reception",
+        "zero_cost_actives.by_price_stock (A/B)",
+        "zero_cost_actives.by_reception (C/D)",
+        "detalle: stock_cero_explicito vs sin_fila_stock",
         "zero_cost_actives.samples",
     ],
     "hoja_4_promedio_vs_recepciones": [
         "positive_cost_divergence.buckets",
-        "positive_cost_divergence.top_anomalies",
+        "bandas + extrema_indicador",
+        "top_anomalies con documento/fecha/oficina",
     ],
     "hoja_5_huerfanas_sync": [
         "orphan_stock_variants",
         "orphan_resolution_procedure",
         "census.stock_pos_sin_variante",
+        "sync_state variants/stocks/costs",
     ],
     "hoja_6_revision_administrativa": [
-        "plantilla vacía: variant_id, sku, producto, estado, responsable, fecha, observación, respaldo",
+        "plantilla: variant_id, sku, producto, prioridad, exposición_potencial, "
+        "estado, responsable, fecha, observación, respaldo, solución",
         "alimentar desde top_anomalies + zero_cost samples + huérfanas",
     ],
 }
@@ -146,6 +185,24 @@ def _json_default(obj: Any) -> Any:
     if isinstance(obj, (bytes, bytearray)):
         return None
     raise TypeError(type(obj).__name__)
+
+
+def _row_get(row: dict[str, Any], key: str, default: Any = None) -> Any:
+    """Lectura tolerante a case-folding de aliases PostgreSQL (sin comillas → minúsculas)."""
+    if key in row:
+        return row[key]
+    lk = key.lower()
+    for k, v in row.items():
+        if str(k).lower() == lk:
+            return v
+    return default
+
+
+def _row_int(row: dict[str, Any], key: str, default: int = 0) -> int:
+    val = _row_get(row, key)
+    if val is None:
+        return default
+    return int(val)
 
 
 def _open_readonly_tx(conn: Any, *, timeout_sec: int) -> Any:
@@ -566,6 +623,143 @@ def is_extreme_divergence(pct: Decimal | None) -> bool:
     return pct >= DIFF_EXTREME_UP_PCT or pct <= DIFF_EXTREME_DOWN_PCT
 
 
+def monetary_exposure_potential(
+    *,
+    average_cost: Decimal | None,
+    last_comparable_cost: Decimal | None,
+    stock_total: Decimal | None,
+) -> Decimal | None:
+    """
+    Exposición monetaria *potencial* = |última_comparable − promedio| × stock.
+
+    Métrica orientativa de cola de revisión. No es pérdida real ni valorización
+    contable definitiva (sobre todo si la unidad de la recepción no está comprobada).
+    """
+    if average_cost is None or last_comparable_cost is None or stock_total is None:
+        return None
+    if stock_total <= 0:
+        return Decimal("0")
+    return abs(last_comparable_cost - average_cost) * stock_total
+
+
+def score_admin_priority(
+    *,
+    diff_pct: Decimal | None,
+    stock_total: Decimal | None,
+    average_cost: Decimal | None,
+    last_comparable_cost: Decimal | None,
+    last_comparable_date: date | None,
+    cut_at: date | None = None,
+    has_document: bool = True,
+    possible_admin_correction: bool = False,
+    unit_presentation_verified: bool = False,
+    presentation_risk: bool = False,
+) -> dict[str, Any]:
+    """
+    Ranking administrativo (alerta, no veredicto).
+
+    Separan dos conceptos:
+    - ``review_priority`` / ``priority_score``: urgencia de revisar el caso.
+    - ``error_confidence``: confianza de que exista un error real de costo.
+
+    Una posible corrección administrativa **no reduce** la prioridad de revisión;
+    solo baja la confianza de error.
+    """
+    abs_pct = abs(diff_pct) if diff_pct is not None else Decimal("0")
+    stock = stock_total if stock_total is not None else Decimal("0")
+    exposure = monetary_exposure_potential(
+        average_cost=average_cost,
+        last_comparable_cost=last_comparable_cost,
+        stock_total=stock_total,
+    )
+    age_days: int | None = None
+    if last_comparable_date is not None:
+        ref = cut_at or date.today()
+        age_days = max(0, (ref - last_comparable_date).days)
+
+    # --- Prioridad de revisión (no se reduce por corrección admin) ---
+    # Volumen pesa más que un extremo de pocas unidades al ordenar la cola.
+    score = Decimal("0")
+    score += min(abs_pct, Decimal("200")) * Decimal("0.25")
+    score += min(stock, Decimal("5000")) / Decimal("8")
+    if exposure is not None and unit_presentation_verified:
+        score += min(exposure / Decimal("1000"), Decimal("40"))
+    elif exposure is not None:
+        # Unidad no comprobada: la exposición orienta poco; no valorizar.
+        score += min(exposure / Decimal("1000"), Decimal("15"))
+    if age_days is not None:
+        if age_days > 365:
+            score += Decimal("15")
+        elif age_days > 180:
+            score += Decimal("10")
+    if not has_document:
+        score += Decimal("5")
+    if presentation_risk:
+        score += Decimal("12")  # bidón vs recarga, pack vs unidad, etc.
+
+    if abs_pct >= 100 or stock >= 1000 or (
+        exposure is not None and unit_presentation_verified and exposure >= 500_000
+    ):
+        band = "P1_critico"
+    elif abs_pct > 50 or stock >= 500 or (
+        exposure is not None and unit_presentation_verified and exposure >= 100_000
+    ):
+        band = "P2_alto"
+    elif abs_pct > 15 or stock >= 100 or presentation_risk:
+        band = "P3_medio"
+    else:
+        band = "P4_bajo"
+
+    evidence_quality = "alta" if has_document and diff_pct is not None else "media"
+    if not has_document:
+        evidence_quality = "baja"
+    if presentation_risk:
+        evidence_quality = "riesgo_presentacion_unidad"
+
+    # --- Confianza de error real (independiente de la prioridad de revisión) ---
+    if possible_admin_correction or presentation_risk or not unit_presentation_verified:
+        error_confidence = "baja"
+    elif has_document and abs_pct > DIFF_IMPORTANT_PCT and unit_presentation_verified:
+        error_confidence = "media"
+    elif has_document and abs_pct > DIFF_RELEVANT_PCT:
+        error_confidence = "media_baja"
+    else:
+        error_confidence = "indeterminada"
+
+    exposure_disclaimer = (
+        "Exposición potencial orientativa: no es pérdida financiera ni valorización "
+        "contable definitiva."
+    )
+    if not unit_presentation_verified:
+        exposure_disclaimer += (
+            " No usar como valorización mientras la unidad/presentación de la "
+            "recepción no esté suficientemente comprobada."
+        )
+
+    return {
+        "review_priority": band,
+        "priority_band": band,  # alias estable para Excel / consumidores previos
+        "priority_score": round(float(score), 2),
+        "error_confidence": error_confidence,
+        "abs_diff_pct": float(abs_pct) if diff_pct is not None else None,
+        "stock_total": float(stock) if stock_total is not None else None,
+        "monetary_exposure_potential": (
+            str(exposure.quantize(Decimal("0.01"))) if exposure is not None else None
+        ),
+        "monetary_exposure_disclaimer": exposure_disclaimer,
+        "unit_presentation_verified": unit_presentation_verified,
+        "reception_age_days": age_days,
+        "evidence_quality": evidence_quality,
+        "possible_admin_correction": possible_admin_correction,
+        "presentation_risk": presentation_risk,
+        "suggested_action": (
+            "contrastar_factura_unidad_presentacion"
+            if abs_pct >= 50 or presentation_risk
+            else "revisar_recepcion_y_promedio"
+        ),
+    }
+
+
 def _last_comparable_lateral_sql() -> str:
     """
     Última línea comparable al criterio del motor de costos:
@@ -641,6 +835,8 @@ def analyze_zero_cost_actives(
     price_expr = "FALSE"
     price_join = ""
     if can_prices:
+        # Precio vigente = fila no missing + valor bruto con impuestos > 0.
+        # Una fila a 0 / NULL no cuenta como «con precio».
         price_join = """
           LEFT JOIN bsale_raw.variant_prices vp12
             ON vp12.company_id = v.company_id AND vp12.variant_id = v.bsale_id
@@ -671,6 +867,7 @@ def analyze_zero_cost_actives(
             v.bsale_id AS variant_id,
             v.code AS sku,
             COALESCE(v.state, 0) AS variant_state,
+            st.stock_total AS stock_total_raw,
             COALESCE(st.stock_total, 0) AS stock_total,
             (st.variant_id IS NULL) AS sin_fila_stock,
             ({price_expr}) AS has_price,
@@ -688,20 +885,62 @@ def analyze_zero_cost_actives(
         )
         SELECT
           count(*)::bigint AS total_activas_costo_cero,
-          count(*) FILTER (WHERE stock_total > 0)::bigint AS con_stock_pos,
-          count(*) FILTER (WHERE stock_total = 0)::bigint AS stock_cero,
+          count(*) FILTER (WHERE stock_total_raw IS NOT NULL AND stock_total_raw > 0)
+            ::bigint AS con_stock_pos,
+          count(*) FILTER (
+            WHERE stock_total_raw IS NOT NULL AND stock_total_raw = 0
+          )::bigint AS stock_cero_explicito,
           count(*) FILTER (WHERE sin_fila_stock)::bigint AS sin_fila_stock,
           count(*) FILTER (
-            WHERE has_price AND NOT (stock_total > 0)
-          )::bigint AS grupo_A_precio_sin_stock_pos,
+            WHERE sin_fila_stock OR COALESCE(stock_total_raw, 0) = 0
+          )::bigint AS sin_stock_positivo,
           count(*) FILTER (
-            WHERE NOT has_price AND NOT (stock_total > 0)
-          )::bigint AS grupo_B_sin_precio_sin_stock_pos,
-          count(*) FILTER (WHERE has_comparable_reception)::bigint AS grupo_C_con_recepcion,
-          count(*) FILTER (WHERE NOT has_comparable_reception)::bigint AS grupo_D_sin_recepcion
+            WHERE has_price AND NOT (COALESCE(stock_total_raw, 0) > 0)
+          )::bigint AS grupo_a_precio_sin_stock_pos,
+          count(*) FILTER (
+            WHERE NOT has_price AND NOT (COALESCE(stock_total_raw, 0) > 0)
+          )::bigint AS grupo_b_sin_precio_sin_stock_pos,
+          count(*) FILTER (WHERE has_comparable_reception)::bigint AS grupo_c_con_recepcion,
+          count(*) FILTER (WHERE NOT has_comparable_reception)::bigint AS grupo_d_sin_recepcion
         FROM base
     """
-    summary = _fetch_one(cur, sql, (company_id, company_id))
+    summary_raw = _fetch_one(cur, sql, (company_id, company_id))
+    total = _row_int(summary_raw, "total_activas_costo_cero")
+    con_stock = _row_int(summary_raw, "con_stock_pos")
+    stock_cero_exp = _row_int(summary_raw, "stock_cero_explicito")
+    sin_fila = _row_int(summary_raw, "sin_fila_stock")
+    sin_stock_pos = _row_int(summary_raw, "sin_stock_positivo")
+    grupo_a = _row_int(summary_raw, "grupo_a_precio_sin_stock_pos")
+    grupo_b = _row_int(summary_raw, "grupo_b_sin_precio_sin_stock_pos")
+    grupo_c = _row_int(summary_raw, "grupo_c_con_recepcion")
+    grupo_d = _row_int(summary_raw, "grupo_d_sin_recepcion")
+
+    summary = {
+        "total_activas_costo_cero": total,
+        "con_stock_pos": con_stock,
+        "stock_cero_explicito": stock_cero_exp,
+        "sin_fila_stock": sin_fila,
+        "sin_stock_positivo": sin_stock_pos,
+        # Compatibilidad: stock_cero ya NO mezcla sin_fila (era el bug de 2278).
+        "stock_cero": stock_cero_exp,
+        "grupo_a_precio_sin_stock_pos": grupo_a,
+        "grupo_b_sin_precio_sin_stock_pos": grupo_b,
+        "grupo_c_con_recepcion": grupo_c,
+        "grupo_d_sin_recepcion": grupo_d,
+        "stock_identity": {
+            "formula": "total = con_stock_pos + stock_cero_explicito + sin_fila_stock",
+            "closes": total == con_stock + stock_cero_exp + sin_fila,
+            "sin_stock_positivo_closes": sin_stock_pos == stock_cero_exp + sin_fila,
+        },
+        "price_stock_identity": {
+            "formula": "sin_stock_positivo = grupo_a + grupo_b",
+            "closes": sin_stock_pos == grupo_a + grupo_b,
+        },
+        "reception_identity": {
+            "formula": "total = grupo_c + grupo_d",
+            "closes": total == grupo_c + grupo_d,
+        },
+    }
 
     samples_sql = f"""
         WITH st AS (
@@ -712,7 +951,9 @@ def analyze_zero_cost_actives(
           v.bsale_id AS variant_id,
           v.code AS sku,
           v.description AS variant_name,
+          st.stock_total AS stock_total_raw,
           COALESCE(st.stock_total, 0) AS stock_total,
+          (st.variant_id IS NULL) AS sin_fila_stock,
           ({price_expr}) AS has_price,
           ({has_rec}) AS has_comparable_reception
         FROM bsale_raw.variants v
@@ -741,15 +982,20 @@ def analyze_zero_cost_actives(
             "en A y C a la vez."
         ),
         "by_price_stock": {
-            "A_con_precio_sin_stock_positivo": summary.get("grupo_A_precio_sin_stock_pos"),
-            "B_sin_precio_sin_stock_positivo": summary.get("grupo_B_sin_precio_sin_stock_pos"),
-            "con_stock_positivo": summary.get("con_stock_pos"),
-            "nota": "A+B cubren sin stock>0; con_stock_pos debería ser 0 según censo confirmado.",
+            "A_con_precio_sin_stock_positivo": grupo_a,
+            "B_sin_precio_sin_stock_positivo": grupo_b,
+            "con_stock_positivo": con_stock,
+            "nota": (
+                "A+B = sin_stock_positivo. has_price exige precio vigente "
+                "(missing_since IS NULL) y variant_value_with_taxes > 0 en listas 12/13/16."
+            ),
+            "closes": sin_stock_pos == grupo_a + grupo_b,
         },
         "by_reception": {
-            "C_con_recepcion_comparable_promedio_cero": summary.get("grupo_C_con_recepcion"),
-            "D_sin_recepcion_comparable": summary.get("grupo_D_sin_recepcion"),
+            "C_con_recepcion_comparable_promedio_cero": grupo_c,
+            "D_sin_recepcion_comparable": grupo_d,
             "nota": "C usa sólo FACTURA/GUÍA comparable (mismo criterio del motor).",
+            "closes": total == grupo_c + grupo_d,
         },
         "prices_available": can_prices,
         "receptions_available": can_receptions,
@@ -883,7 +1129,67 @@ def analyze_positive_cost_divergence(
         LIMIT %s
     """
     top = _fetch_dicts(cur, sql_top, (company_id, company_id, top_n))
-    u = int(buckets.get("universo") or 0)
+    cut_day = datetime.now(timezone.utc).date()
+    enriched: list[dict[str, Any]] = []
+    for row in top:
+        item = dict(row)
+        diff = _row_get(item, "diff_pct")
+        avg = _row_get(item, "average_cost")
+        lc = _row_get(item, "last_comparable_cost")
+        stock = _row_get(item, "stock_total")
+        lc_date = _row_get(item, "last_comparable_date")
+        if isinstance(diff, (int, float, str)):
+            diff = Decimal(str(diff))
+        if isinstance(avg, (int, float, str)):
+            avg = Decimal(str(avg))
+        if isinstance(lc, (int, float, str)):
+            lc = Decimal(str(lc))
+        if isinstance(stock, (int, float, str)):
+            stock = Decimal(str(stock))
+        if isinstance(lc_date, datetime):
+            lc_date = lc_date.date()
+        # Heurística suave: caídas ≥60 % o alzas ≥100 % pueden ser corrección admin
+        # (Glenfiddich §5.7); no se declara error. No reduce prioridad de revisión.
+        maybe_admin = bool(
+            diff is not None
+            and isinstance(diff, Decimal)
+            and (diff >= DIFF_EXTREME_UP_PCT or diff <= DIFF_EXTREME_DOWN_PCT)
+        )
+        name = str(_row_get(item, "variant_name") or "").upper()
+        presentation_risk = any(
+            token in name
+            for token in (
+                "BIDON RETORNABLE",
+                "RECARGA AGUA",
+                "10 UND",
+                "10 UNID",
+            )
+        )
+        prio = score_admin_priority(
+            diff_pct=diff if isinstance(diff, Decimal) else None,
+            stock_total=stock if isinstance(stock, Decimal) else None,
+            average_cost=avg if isinstance(avg, Decimal) else None,
+            last_comparable_cost=lc if isinstance(lc, Decimal) else None,
+            last_comparable_date=lc_date if isinstance(lc_date, date) else None,
+            cut_at=cut_day,
+            has_document=bool(
+                _row_get(item, "lc_document") or _row_get(item, "lc_document_number")
+            ),
+            possible_admin_correction=maybe_admin,
+            unit_presentation_verified=False,  # solo tras contraste documental
+            presentation_risk=presentation_risk,
+        )
+        item["admin_priority"] = prio
+        enriched.append(item)
+    enriched.sort(
+        key=lambda r: (
+            -float((r.get("admin_priority") or {}).get("priority_score") or 0),
+            -abs(float(r.get("diff_pct") or 0)),
+            -float(r.get("stock_total") or 0),
+        )
+    )
+
+    u = _row_int(buckets, "universo")
     primary_keys = (
         "sin_recepcion_comparable",
         "requiere_verificacion",
@@ -891,9 +1197,9 @@ def analyze_positive_cost_divergence(
         "entre_15_y_50",
         "sobre_50",
     )
-    s = sum(int(buckets.get(k) or 0) for k in primary_keys)
-    extrema = int(buckets.get("extrema_indicador") or 0)
-    sobre = int(buckets.get("sobre_50") or 0)
+    s = sum(_row_int(buckets, k) for k in primary_keys)
+    extrema = _row_int(buckets, "extrema_indicador")
+    sobre = _row_int(buckets, "sobre_50")
     return {
         "blocked": False,
         "diff_definition": (
@@ -923,7 +1229,11 @@ def analyze_positive_cost_divergence(
                 "extrema_indicador no entra en la suma de cierre; es subconjunto de sobre_50."
             ),
         },
-        "top_anomalies": top,
+        "top_anomalies": enriched,
+        "priority_note": (
+            "admin_priority ordena revisión; monetary_exposure_potential no es pérdida "
+            "ni valorización contable."
+        ),
         "possible_admin_correction": (
             "No auto-clasificado como error. Casos extremos / correcciones documentales "
             "(referencia Glenfiddich §5.7) quedan para revisión administrativa manual."

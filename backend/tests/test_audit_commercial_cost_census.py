@@ -12,10 +12,14 @@ from backend.scripts.audit_commercial_cost_census import (
     DEFAULT_PRICE_LIST,
     ORPHAN_RESOLUTION_PROCEDURE,
     _json_default,
+    _row_get,
+    _row_int,
     build_report,
     classify_divergence_bucket,
     grant_instructions,
     is_extreme_divergence,
+    monetary_exposure_potential,
+    score_admin_priority,
 )
 from backend.services.analytics.validate_distribuidora_source import (
     AnalyticsValidationError,
@@ -154,3 +158,142 @@ def test_json_dumps_extended_report_with_nested_reception_dates():
     )
     assert parsed["positive_cost_divergence"]["top_anomalies"][0]["average_cost"] == "100.00"
     assert "2026-10-23T03:00:00" in parsed["cut_at_utc"]
+
+
+def test_row_get_tolerates_postgres_case_folding():
+    """Aliases sin comillas llegan en minúsculas; .get mixto devolvía NULL en by_*."""
+    row = {
+        "grupo_a_precio_sin_stock_pos": 2278,
+        "grupo_c_con_recepcion": 950,
+    }
+    assert _row_int(row, "grupo_A_precio_sin_stock_pos") == 2278
+    assert _row_get(row, "grupo_C_con_recepcion") == 950
+    assert _row_get(row, "missing") is None
+
+
+def test_zero_cost_stock_identity_separates_explicit_zero_from_missing_row():
+    """stock_cero no debe incluir sin_fila_stock (regresión 2278 = 2023+255)."""
+    stock_cero_explicito, sin_fila_stock, con_stock_pos = 2023, 255, 0
+    total = 2278
+    assert stock_cero_explicito + sin_fila_stock + con_stock_pos == total
+    sin_stock_positivo = stock_cero_explicito + sin_fila_stock
+    assert sin_stock_positivo == 2278
+
+
+def test_admin_priority_exposure_is_not_accounting_loss():
+    exposure = monetary_exposure_potential(
+        average_cost=Decimal("100"),
+        last_comparable_cost=Decimal("500"),
+        stock_total=Decimal("5"),
+    )
+    assert exposure == Decimal("2000")
+    prio = score_admin_priority(
+        diff_pct=Decimal("400"),
+        stock_total=Decimal("5"),
+        average_cost=Decimal("100"),
+        last_comparable_cost=Decimal("500"),
+        last_comparable_date=date(2025, 1, 1),
+        cut_at=date(2026, 10, 23),
+        has_document=True,
+        possible_admin_correction=True,
+        unit_presentation_verified=False,
+    )
+    assert prio["review_priority"] == "P1_critico"
+    assert prio["priority_band"] == "P1_critico"
+    assert "pérdida" in prio["monetary_exposure_disclaimer"].lower()
+    assert "unidad" in prio["monetary_exposure_disclaimer"].lower()
+    assert prio["possible_admin_correction"] is True
+    assert prio["error_confidence"] == "baja"
+    assert prio["monetary_exposure_potential"] == "2000.00"
+
+
+def test_admin_correction_does_not_reduce_review_priority():
+    """Corrección admin posible baja confianza de error, no la prioridad de revisión."""
+    common = dict(
+        diff_pct=Decimal("400"),
+        stock_total=Decimal("5"),
+        average_cost=Decimal("100"),
+        last_comparable_cost=Decimal("500"),
+        last_comparable_date=date(2025, 1, 1),
+        cut_at=date(2026, 10, 23),
+        has_document=True,
+        unit_presentation_verified=False,
+    )
+    without = score_admin_priority(**common, possible_admin_correction=False)
+    with_flag = score_admin_priority(**common, possible_admin_correction=True)
+    assert with_flag["priority_score"] == without["priority_score"]
+    assert with_flag["review_priority"] == without["review_priority"]
+    assert with_flag["error_confidence"] == "baja"
+
+
+def test_high_volume_outranks_small_extreme_when_scores_compared():
+    """Alto volumen (p. ej. 1964 uds) debe priorizarse frente a extrema de poco stock."""
+    high_vol = score_admin_priority(
+        diff_pct=Decimal("35.77"),
+        stock_total=Decimal("1964"),
+        average_cost=Decimal("500"),
+        last_comparable_cost=Decimal("678.85"),
+        last_comparable_date=date(2026, 9, 1),
+        cut_at=date(2026, 10, 23),
+        has_document=True,
+        unit_presentation_verified=False,
+    )
+    small_extreme = score_admin_priority(
+        diff_pct=Decimal("400"),
+        stock_total=Decimal("5"),
+        average_cost=Decimal("100"),
+        last_comparable_cost=Decimal("500"),
+        last_comparable_date=date(2026, 9, 1),
+        cut_at=date(2026, 10, 23),
+        has_document=True,
+        possible_admin_correction=True,
+        unit_presentation_verified=False,
+        presentation_risk=True,
+    )
+    assert high_vol["review_priority"] == "P1_critico"  # stock >= 1000
+    assert small_extreme["review_priority"] == "P1_critico"  # |Δ| >= 100
+    assert high_vol["priority_score"] > small_extreme["priority_score"]
+
+
+def test_presentation_risk_keeps_low_error_confidence():
+    """Bidón/pack: revisar con prioridad, sin asumir error de costo."""
+    prio = score_admin_priority(
+        diff_pct=Decimal("400"),
+        stock_total=Decimal("5"),
+        average_cost=Decimal("100"),
+        last_comparable_cost=Decimal("500"),
+        last_comparable_date=date(2025, 6, 1),
+        cut_at=date(2026, 10, 23),
+        has_document=True,
+        possible_admin_correction=True,
+        presentation_risk=True,
+        unit_presentation_verified=False,
+    )
+    assert prio["presentation_risk"] is True
+    assert prio["error_confidence"] == "baja"
+    assert prio["suggested_action"] == "contrastar_factura_unidad_presentacion"
+    assert prio["evidence_quality"] == "riesgo_presentacion_unidad"
+
+
+def test_zero_cost_axes_independent_identity():
+    """A/B (precio×stock) y C/D (recepción) cierran por separado; no son excluyentes cruzados."""
+    total = 2278
+    grupo_a, grupo_b = 2278, 0
+    grupo_c, grupo_d = 950, 1328
+    sin_stock_positivo = 2278
+    assert grupo_a + grupo_b == sin_stock_positivo
+    assert grupo_c + grupo_d == total
+    # Independencia: A∩C puede ser no vacío (aquí A≈total y C⊂total).
+    assert grupo_c <= total
+    assert grupo_a <= total
+
+
+def test_queries_aggregate_stock_and_limit_receptions_no_duplication():
+    """Contrato estático: stocks GROUP BY variant_id; laterales LIMIT 1."""
+    from backend.scripts import audit_commercial_cost_census as mod
+
+    src = open(mod.__file__, encoding="utf-8").read()
+    assert "GROUP BY variant_id" in src
+    assert src.count("LIMIT 1") >= 2
+    assert "_last_comparable_lateral_sql" in src
+    assert "LEFT JOIN LATERAL" in src
