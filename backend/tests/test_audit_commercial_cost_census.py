@@ -3,18 +3,20 @@
 from __future__ import annotations
 
 import json
+from datetime import date, datetime, timezone
+from decimal import Decimal
 
 import pytest
 
 from backend.scripts.audit_commercial_cost_census import (
     DEFAULT_PRICE_LIST,
     ORPHAN_RESOLUTION_PROCEDURE,
+    _json_default,
     build_report,
     classify_divergence_bucket,
     grant_instructions,
     is_extreme_divergence,
 )
-from decimal import Decimal
 from backend.services.analytics.validate_distribuidora_source import (
     AnalyticsValidationError,
     assert_sql_is_read_only,
@@ -117,3 +119,38 @@ def test_orphan_procedure_does_not_auto_sync():
     assert "sync-catalog" in cmds
     assert "refresh-costs" in cmds
     assert any("No ejecutar sync automáticamente" in n for n in ORPHAN_RESOLUTION_PROCEDURE["notes"])
+
+
+def test_json_default_date_isoformat():
+    assert _json_default(date(2024, 3, 15)) == "2024-03-15"
+
+
+def test_json_default_datetime_and_decimal_unchanged():
+    dt = datetime(2024, 3, 15, 12, 30, 45, tzinfo=timezone.utc)
+    assert _json_default(dt) == dt.isoformat()
+    assert _json_default(Decimal("1234.56")) == "1234.56"
+
+
+def test_json_dumps_extended_report_with_nested_reception_dates():
+    """Regresión Coolify: TypeError: date al imprimir --extended --json."""
+    report = {
+        "cut_at_utc": datetime(2026, 10, 23, 3, 0, 0, tzinfo=timezone.utc),
+        "positive_cost_divergence": {
+            "top_anomalies": [
+                {
+                    "variant_id": 1,
+                    "average_cost": Decimal("100.00"),
+                    "last_comparable_cost": Decimal("250.50"),
+                    "last_comparable_date": date(2025, 11, 2),
+                    "diff_pct": Decimal("150.50"),
+                }
+            ]
+        },
+    }
+    blob = json.dumps(report, ensure_ascii=False, indent=2, default=_json_default)
+    parsed = json.loads(blob)
+    assert parsed["positive_cost_divergence"]["top_anomalies"][0]["last_comparable_date"] == (
+        "2025-11-02"
+    )
+    assert parsed["positive_cost_divergence"]["top_anomalies"][0]["average_cost"] == "100.00"
+    assert "2026-10-23T03:00:00" in parsed["cut_at_utc"]

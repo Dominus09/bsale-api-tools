@@ -26,7 +26,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -138,7 +138,10 @@ EXCEL_FIELD_MAP_1_3 = {
 def _json_default(obj: Any) -> Any:
     if isinstance(obj, Decimal):
         return str(obj)
+    # datetime antes que date: datetime es subclase de date.
     if isinstance(obj, datetime):
+        return obj.isoformat()
+    if isinstance(obj, date):
         return obj.isoformat()
     if isinstance(obj, (bytes, bytearray)):
         return None
