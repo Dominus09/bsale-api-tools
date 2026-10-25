@@ -310,8 +310,8 @@ def test_abnormal_increase_requires_review():
     assert item["reliability"]["status"] == "requiere_revision"
 
 
-def test_anticipated_with_iva_excludes_anticipo_from_commercial_gross():
-    """IVA + anticipo: bruto comercial = neto×1,19; anticipo no suma (no $1.240)."""
+def test_anticipated_with_iva_separates_payable_gross_and_margin_base():
+    """IVA + anticipo carne: pagadero 1.240 (1,24); base márgenes 1.190 (1,19)."""
     row = fact(5, tax_ids=[1, 7], average_cost=D("1000"), **purchase("lc_", 30, "1000", date(2026, 10, 1)))
     repo = FakeRepo([row])
     repo.tax_catalog = lambda **kw: [  # type: ignore[method-assign]
@@ -320,14 +320,16 @@ def test_anticipated_with_iva_excludes_anticipo_from_commercial_gross():
     ]
     item = service(repo).get_product(5)
     assert item["tax_profile"]["status"] == "iva_anticipado"
-    assert item["tax_profile"]["iva_anticipado_rate_pct"] == "5"
-    assert item["tax_profile"]["iva_rate_pct"] == "19"
-    assert D(item["commercial_gross_cost"]["gross"]) == D("1190")
-    assert D(item["commercial_gross_cost"]["factor"]) == D("1.19")
-    assert item["commercial_gross_cost"]["reason"] == "anticipo_excluido_del_factor_comercial"
-    assert item["commercial_gross_cost"]["status"] == "preliminar_no_verificado"
-    # No usar neto+IVA+anticipo como costo comercial.
-    assert item["commercial_gross_cost"]["gross"] != "1240"
+    assert item["tax_profile"]["total_rate_pct"] == "24"
+    assert item["tax_profile"]["margin_rate_pct"] == "19"
+    cgc = item["commercial_gross_cost"]
+    assert D(cgc["gross"]) == D("1240") and D(cgc["factor"]) == D("1.24")
+    assert D(cgc["margin_gross"]) == D("1190") and D(cgc["margin_factor"]) == D("1.19")
+    assert cgc["reason"] == "bruto_pagadero_incluye_anticipo_base_margen_sin_anticipo"
+    assert cgc["confirmed_by_document"] is False
+    bd = item["tax_breakdown"]
+    assert D(bd["payable_gross_total"]) == D("1240")
+    assert D(bd["margin_gross"]) == D("1190")
 
 
 def test_unknown_sku_is_not_found():

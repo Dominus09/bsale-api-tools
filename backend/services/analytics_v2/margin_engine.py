@@ -143,7 +143,8 @@ def evaluate(
     else:
         reference_net = cost.last_comparable_net if cost_basis is CostBasis.ULTIMO_COMPARABLE else cost.average_net
         gross = commercial_gross_cost(reference_net, cost.tax_profile)
-        gross_cost = gross.gross
+        # Base de márgenes vigente: sin anticipo (margin_gross). El bruto pagadero va aparte.
+        gross_cost = gross.margin_gross
         reference = _sku_reference(gross, cost, cost_basis, reference_net)
     net_verified = cost_basis is CostBasis.PROMEDIO_BSALE or net_cost_verified
     cost_verified = gross_cost is not None and tax_config_verified and net_verified
@@ -176,9 +177,9 @@ def evaluate(
         override = promotion.verified_status
         if override is not None and status is S.BAJO_POLITICA:
             status = override
-        # Anticipo presente: el bruto comercial ya excluye el anticipo; se deja rastro.
+        # Anticipo: visible en bruto pagadero; excluido de la base de márgenes vigente.
         if cost.tax_profile.status is TaxProfileStatus.IVA_ANTICIPADO:
-            reasons.append("impuesto_iva_anticipado_excluido_del_factor")
+            reasons.append("impuesto_iva_anticipado_excluido_de_base_margen")
 
     qualifiers: list[S] = []
     if status in COMPARATIVE or status is S.REQUIERE_REVISION_TRIBUTARIA:
@@ -264,22 +265,28 @@ def evaluate(
 
 
 def _sku_reference(gross: Any, cost: CostFacts, basis: CostBasis, net: Decimal | None) -> dict[str, Any]:
+    profile = cost.tax_profile
     return {
         "basis": basis.value,
         "net": money(net),
-        "gross": money(gross.gross),
+        # «gross» = base de márgenes (metodología vigente). Pagadero va en payable_*.
+        "gross": money(gross.margin_gross),
+        "payable_gross": money(gross.gross),
         "gross_status": gross.status.value,
         "gross_reason": gross.reason,
-        "tax_status": cost.tax_profile.status.value,
-        "tax_validation": cost.tax_profile.validation.value,
+        "tax_status": profile.status.value,
+        "tax_validation": profile.validation.value,
         "iva_rate_pct": money(gross.iva_rate_pct),
         "ila_rate_pct": money(gross.ila_rate_pct),
-        "tax_rate_pct": money(cost.tax_profile.total_rate_pct),
-        "tax_factor": money(gross.factor),
+        "iva_anticipado_rate_pct": money(gross.iva_anticipado_rate_pct),
+        "tax_rate_pct": money(profile.rate_for_margins),
+        "payable_rate_pct": money(profile.total_rate_pct),
+        "tax_factor": money(gross.margin_factor),
+        "payable_factor": money(gross.factor),
         "tax_ids": list(gross.tax_ids),
         "taxes_applied": [
             {"tax_id": t.tax_id, "code": t.code, "percentage": money(t.percentage), "kind": t.role}
-            for t in gross.applied
+            for t in gross.margin_applied
         ],
         "tax_source": TAX_DATA_SOURCE,
     }

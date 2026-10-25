@@ -63,7 +63,7 @@ export const TAX_LABELS: Record<TaxProfileStatus, string> = {
   exento_verificado: "Exento verificado",
   iva: "IVA",
   iva_ila: "IVA + ILA",
-  iva_anticipado: "IVA anticipado",
+  iva_anticipado: "IVA comercial + IVA anticipado",
   ila_combinado: "Más de un ILA",
   impuesto_no_reconocido: "Impuesto no reconocido",
   configuracion_inconsistente: "Configuración inconsistente",

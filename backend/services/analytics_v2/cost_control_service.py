@@ -78,6 +78,7 @@ from backend.services.analytics_v2.tax_profile import (
     build_tax_catalog,
     commercial_gross_cost,
     resolve_tax_profile,
+    tax_visual_breakdown,
 )
 
 FACTS_CACHE_TTL_SECONDS = 120
@@ -330,6 +331,7 @@ class CostControlV2Service:
             "change": {"amount": money(amount), "pct": money(pct)} if amount is not None else None,
             "tax_profile": profile.to_json(),
             "commercial_gross_cost": {**commercial.to_json(), "base": "promedio_bsale"},
+            "tax_breakdown": tax_visual_breakdown(average_cost, profile),
             "gross_cost_preliminary": {
                 "value": money(reception_gross.gross),
                 "status": reception_gross.status.value,
@@ -676,6 +678,10 @@ class CostControlV2Service:
                     "barcode": r.get("bar_code"),
                     "product_name": r.get("product_name"),
                     "variant_name": r.get("variant_name"),
+                    "product_type": {
+                        "id": r.get("product_type_id"),
+                        "name": r.get("product_type_name"),
+                    },
                     "reception_id": int(r["reception_id"]),
                     "detail_id": int(r["detail_id"]),
                     "admission_date": iso(r.get("admission_date")),
@@ -733,6 +739,10 @@ class CostControlV2Service:
                     "barcode": l.get("bar_code"),
                     "product_name": l.get("product_name"),
                     "variant_name": l.get("variant_name"),
+                    "product_type": {
+                        "id": l.get("product_type_id"),
+                        "name": l.get("product_type_name"),
+                    },
                     "quantity": money(to_decimal(l.get("quantity"))),
                     "cost": money(to_decimal(l.get("cost"))),
                     "missing_since": iso(l.get("missing_since")),
@@ -838,8 +848,10 @@ class CostControlV2Service:
                     {
                         "variant_id": i["variant_id"],
                         "code": i["code"],
+                        "barcode": i.get("barcode"),
                         "product_name": i["product_name"],
                         "variant_name": i["variant_name"],
+                        "product_type": i.get("product_type") or {"id": None, "name": None},
                         "change_pct": i["change"]["pct"] if i["change"] else None,
                         "last_comparable": i["last_comparable"],
                         "previous_comparable": i["previous_comparable"],

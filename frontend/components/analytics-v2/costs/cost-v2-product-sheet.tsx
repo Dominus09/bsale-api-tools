@@ -19,6 +19,11 @@ import {
   formatQty,
   toNumber,
 } from "@/lib/analytics-v2/labels"
+import {
+  formatBarcode,
+  formatProductPlusVariant,
+  formatProductType,
+} from "@/lib/analytics-v2/product-identity"
 import type { CostProductResponse, HistoryResponse, ReceptionLineRef } from "@/lib/analytics-v2/types"
 
 import { AnomalyChips, AnomalyList, MovementBadge, ReliabilityBadge } from "./badges"
@@ -152,12 +157,15 @@ export function CostV2ProductSheet({
       <SheetContent side="right" className="w-full overflow-y-auto border-l-lq-line bg-lq-canvas p-0 sm:max-w-[min(1050px,92vw)]">
         <SheetHeader className="sticky top-0 z-20 border-b border-lq-line bg-lq-surface/95 px-5 py-4 backdrop-blur md:px-6">
           <SheetTitle className="pr-8 text-xl tracking-[-0.015em]">
-            {product?.product_name ?? (loading ? "Cargando…" : "Producto")}
-            {product?.variant_name ? <span className="font-normal text-lq-body"> — {product.variant_name}</span> : null}
+            {product
+              ? formatProductPlusVariant(product.product_name, product.variant_name)
+              : loading
+                ? "Cargando…"
+                : "Producto"}
           </SheetTitle>
           <SheetDescription>
             {product
-              ? `SKU ${product.code ?? "—"}${product.barcode && product.barcode !== product.code ? ` · Barras ${product.barcode}` : ""} · ${product.product_type.name ?? "Sin tipo"} · Variante ${product.variant_state}`
+              ? `${formatProductType(product.product_type.name)} · ${formatBarcode(product.barcode)} · ${product.code ? `SKU ${product.code}` : "Sin SKU"} · ${product.variant_state}`
               : "Control de costos V2"}
           </SheetDescription>
         </SheetHeader>
@@ -230,60 +238,91 @@ export function CostV2ProductSheet({
                     <AnomalyList anomalies={product.anomalies} />
                   </div>
                 </SectionCard>
-                <SectionCard title="Impuestos y costo bruto" description="Desglose comercial calculado desde los impuestos Bsale.">
+                <SectionCard title="Impuestos y costo bruto total" description="Desglose Bsale: neto, gravámenes y bruto pagadero. Estimación ≠ factura.">
                   <div className="text-sm">
                   <p className="mt-2">
                     {TAX_LABELS[product.tax_profile.status]}
-                    {product.tax_profile.total_rate_pct ? ` · ${product.tax_profile.total_rate_pct}%` : ""}
-                  </p>
-                  <p className="text-[11px] text-muted-foreground">
-                    {product.tax_profile.taxes
-                      .map((t) => `${t.name}${t.code ? ` (SII ${t.code})` : ""}`)
-                      .join(", ") || product.tax_profile.reason}
+                    {product.tax_profile.total_rate_pct
+                      ? ` · factor bruto total ${product.commercial_gross_cost.factor ?? "—"} (${product.tax_profile.total_rate_pct} %)`
+                      : ""}
                   </p>
                   {product.tax_profile.issues.length ? (
                     <p className="text-[11px] text-orange-700 dark:text-orange-300">
                       {product.tax_profile.issues.map((i) => TAX_ISSUE_LABELS[i] ?? i).join(" · ")}
                     </p>
                   ) : null}
-                  <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[12px]">
-                    <dt className="text-muted-foreground">Costo neto promedio</dt>
-                    <dd className="text-right tabular-nums">{formatMoney(product.commercial_gross_cost.net)}</dd>
-                    <dt className="text-muted-foreground">IVA aplicado (comercial)</dt>
-                    <dd className="text-right tabular-nums">{product.commercial_gross_cost.iva_rate_pct ?? "—"}%</dd>
-                    <dt className="text-muted-foreground">ILA aplicado</dt>
-                    <dd className="text-right tabular-nums">{product.commercial_gross_cost.ila_rate_pct ?? "—"}%</dd>
-                    <dt className="text-muted-foreground">IVA anticipado (informativo)</dt>
-                    <dd className="text-right tabular-nums">
-                      {product.tax_profile.iva_anticipado_rate_pct != null
-                        ? `${product.tax_profile.iva_anticipado_rate_pct}%`
-                        : "—"}
-                    </dd>
-                    <dt className="text-muted-foreground">IDs Bsale en factor comercial</dt>
-                    <dd className="text-right tabular-nums">
-                      {product.commercial_gross_cost.taxes_applied?.length
-                        ? product.commercial_gross_cost.taxes_applied
-                            .map((t) => `#${t.tax_id} (${t.percentage ?? "—"}%)`)
-                            .join(" + ")
-                        : "—"}
-                    </dd>
-                    <dt className="text-muted-foreground">Factor comercial</dt>
-                    <dd className="text-right tabular-nums">{product.commercial_gross_cost.factor ?? "—"}</dd>
-                    <dt className="font-medium">Costo bruto comercial (márgenes)</dt>
-                    <dd className="text-right font-semibold tabular-nums">
-                      {formatMoney(product.commercial_gross_cost.gross)}
-                    </dd>
+                  <dl className="mt-2 space-y-1 text-[12px]">
+                    <div className="flex justify-between gap-3">
+                      <dt className="text-muted-foreground">1. Costo neto promedio Bsale</dt>
+                      <dd className="tabular-nums font-medium">{formatMoney(product.tax_breakdown?.net ?? product.commercial_gross_cost.net)}</dd>
+                    </div>
+                    {(product.tax_breakdown?.lines ?? []).map((line, idx) => (
+                      <div key={line.tax_id} className="flex justify-between gap-3 border-t border-lq-line-soft/60 pt-1">
+                        <dt className="min-w-0 text-muted-foreground">
+                          <span className="block truncate" title={line.label}>
+                            {idx + 2}. {line.label}
+                          </span>
+                          <span className="block text-[10px]">
+                            {line.increases_payable_total ? "En bruto pagadero" : "Fuera del bruto pagadero"}
+                            {line.in_margin_base || line.in_commercial_factor ? " · en base de márgenes" : " · fuera de base de márgenes"}
+                            {line.role === "iva_anticipado" ? " · no es ILA" : ""}
+                            {line.code ? ` · SII ${line.code}` : ""}
+                            {line.confirmed_by_document ? " · confirmado en documento" : " · estimación"}
+                          </span>
+                        </dt>
+                        <dd className="shrink-0 text-right tabular-nums">{formatMoney(line.amount_estimated)}</dd>
+                      </div>
+                    ))}
+                    {!product.tax_breakdown?.lines?.length ? (
+                      <p className="text-[11px] text-muted-foreground">{product.tax_profile.reason}</p>
+                    ) : null}
+                    <div className="flex justify-between gap-3 border-t border-lq-line-soft pt-1">
+                      <dt className="text-muted-foreground">Base de márgenes (neto + IVA/ILA)</dt>
+                      <dd className="tabular-nums text-muted-foreground">
+                        {formatMoney(
+                          product.tax_breakdown?.margin_gross ??
+                            product.commercial_gross_cost.margin_gross ??
+                            product.tax_breakdown?.net_plus_iva_gross,
+                        )}
+                        {(product.tax_breakdown?.margin_factor ?? product.commercial_gross_cost.margin_factor) != null ? (
+                          <span className="block text-[10px]">
+                            factor {product.tax_breakdown?.margin_factor ?? product.commercial_gross_cost.margin_factor}
+                          </span>
+                        ) : null}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-3 border-t border-lq-line pt-1.5">
+                      <dt className="font-medium">Factor bruto total pagadero</dt>
+                      <dd className="font-medium tabular-nums">
+                        {product.tax_breakdown?.payable_factor ?? product.commercial_gross_cost.factor ?? "—"}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <dt className="font-medium">Costo bruto total (pagadero estimado)</dt>
+                      <dd className="font-semibold tabular-nums">
+                        {formatMoney(
+                          product.tax_breakdown?.payable_gross_total ??
+                            product.tax_breakdown?.commercial_gross ??
+                            product.commercial_gross_cost.gross,
+                        )}
+                      </dd>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <dt className="text-muted-foreground">Total confirmado en factura</dt>
+                      <dd className="tabular-nums text-muted-foreground">
+                        {product.tax_breakdown?.documentary_total_confirmed != null
+                          ? formatMoney(product.tax_breakdown.documentary_total_confirmed)
+                          : "No confirmado"}
+                      </dd>
+                    </div>
                   </dl>
-                  {product.tax_profile.iva_anticipado_rate_pct != null ? (
-                    <p className="mt-1 text-[11px] text-muted-foreground">
-                      El anticipo no se suma al costo comercial ni al inventario. Un total documental
-                      (neto + IVA + anticipo) solo aplica si la factura lo respalda; no se inventa aquí.
-                    </p>
-                  ) : null}
-                  <p className="text-[11px] text-amber-700 dark:text-amber-300">
+                  {(product.tax_breakdown?.disclaimers ?? []).map((d) => (
+                    <p key={d} className="mt-1 text-[11px] text-muted-foreground">{d}</p>
+                  ))}
+                  <p className="mt-1 text-[11px] text-amber-700 dark:text-amber-300">
                     {GROSS_STATUS_LABELS[product.commercial_gross_cost.status]}
-                    {product.commercial_gross_cost.reason === "anticipo_excluido_del_factor_comercial"
-                      ? " · anticipo excluido del factor"
+                    {product.commercial_gross_cost.reason === "bruto_pagadero_incluye_anticipo_base_margen_sin_anticipo"
+                      ? " · anticipo en bruto pagadero; fuera de base de márgenes"
                       : ""}
                     {product.meta.tax_config_verified ? "" : " · configuración tributaria aún no contrastada"}
                   </p>

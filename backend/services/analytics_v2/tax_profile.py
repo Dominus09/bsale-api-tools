@@ -1,4 +1,4 @@
-"""Motor tributario de Analítica V2: perfil por producto y costo bruto comercial desde BSALE RAW.
+"""Motor tributario de Analítica V2: perfil por producto y costo bruto total desde BSALE RAW.
 
 Fuentes: ``bsale_raw.product_taxes.tax_ids`` (ids Bsale de los impuestos asignados al producto) y
 ``bsale_raw.taxes`` de la misma empresa (código SII, tasa, estado). Cada impuesto se identifica por
@@ -6,12 +6,18 @@ su id y se clasifica por su código SII o por una asignación por id confirmada 
 nunca por su nombre ni por la categoría o tipo del producto. La tasa usada siempre es la de RAW;
 la tasa legal solo sirve para detectar configuraciones inconsistentes.
 
-Costo bruto comercial = costo neto × (1 + (IVA + ILA) / 100). IVA e ILA se aplican sobre la
-misma base neta (régimen de impuestos adicionales a bebidas): nunca 1,19 × 1,205.
+Costo bruto total pagadero = costo neto × (1 + Σ tasas que incrementan el total / 100).
+Las tasas se aplican sobre la misma base neta (aditivo): nunca factor cascada (p. ej. 1,19 × 1,12).
 
-Solo IVA general e ILA entran a la comparación comercial. El IVA anticipado (harina, carne) es un
-anticipo recuperable contablemente: el producto queda en ``requiere_revision_tributaria`` hasta que
-contabilidad defina su tratamiento. Un producto sin impuestos en Bsale no se asume exento.
+Qué incrementa el total pagadero (cuando está configurado y activo en Bsale):
+- IVA general (SII 14).
+- Un ILA (bebidas/cervezas/vinos/licores).
+- IVA anticipado (harina SII 19, carne SII 17/18) **junto con IVA**: ejemplo oficial SII harina
+  neto + 19 % + 12 % = 131 % del neto. El anticipo NO es ILA.
+
+Qué no se inventa: productos sin impuestos en Bsale no se asumen exentos; un anticipo solo
+(sin IVA comercial) no define bruto de márgenes. El bruto calculado ≠ total confirmado en factura.
+No modifica ``average_cost`` ni otros costos originales de Bsale.
 """
 
 from __future__ import annotations
@@ -35,8 +41,11 @@ ROLE_IVA_ANTICIPADO = "iva_anticipado"
 ROLE_UNKNOWN = "desconocido"
 
 USE_COMMERCIAL = "comparacion_comercial"
+# Naturaleza contable del anticipo; cuando coexiste con IVA integra el bruto total pagadero.
 USE_ANTICIPATED = "anticipado_contable"
 USE_UNCLASSIFIED = "no_clasificado"
+# Roles cuya tasa, validada, suma al factor bruto total (misma base neta).
+PAYABLE_GROSS_ROLES = frozenset({ROLE_IVA, ROLE_ILA, ROLE_IVA_ANTICIPADO})
 
 CLASSIFIED_BY_CODE = "codigo_sii"
 CLASSIFIED_BY_CONFIRMED_ID = "id_confirmado"
@@ -135,12 +144,15 @@ class TaxProfile:
     status: TaxProfileStatus
     reason: str
     taxes: tuple[TaxEntry, ...] = field(default_factory=tuple)
+    # Bruto total pagadero: IVA + ILA + anticipo (cuando aplica).
     total_rate_pct: Decimal | None = None
     iva_rate_pct: Decimal | None = None
     ila_rate_pct: Decimal | None = None
     issues: tuple[str, ...] = ()
-    # Anticipo (harina/carne): informativo; NUNCA entra a total_rate_pct / factor comercial.
+    # Anticipo (harina/carne): integra total_rate_pct; NO entra a margin_rate_pct.
     iva_anticipado_rate_pct: Decimal | None = None
+    # Base de márgenes vigente: solo IVA + ILA (metodología comercial previa, hasta nueva aprobación).
+    margin_rate_pct: Decimal | None = None
 
     @property
     def validation(self) -> TaxValidation:
@@ -148,9 +160,14 @@ class TaxProfile:
             return TaxValidation.SIN_CONFIGURACION
         if self.total_rate_pct is None:
             return TaxValidation.REQUIERE_REVISION_TRIBUTARIA
-        # Con IVA comercial calculable + anticipo: el bruto comercial es usable,
-        # pero el estado sigue siendo iva_anticipado (revisión contable del anticipo).
+        # Con IVA + anticipo: bruto pagadero y base de margen (sin anticipo) calculables.
         return TaxValidation.CALCULABLE
+
+    @property
+    def rate_for_margins(self) -> Decimal | None:
+        if self.margin_rate_pct is not None:
+            return self.margin_rate_pct
+        return self.total_rate_pct
 
     @property
     def identified(self) -> bool:
@@ -170,6 +187,7 @@ class TaxProfile:
             "ila_rate_pct": money(self.ila_rate_pct),
             "iva_anticipado_rate_pct": money(self.iva_anticipado_rate_pct),
             "total_rate_pct": money(self.total_rate_pct),
+            "margin_rate_pct": money(self.rate_for_margins),
             "issues": list(self.issues),
             "taxes": [t.to_json() for t in self.taxes],
         }
@@ -328,22 +346,25 @@ def resolve_tax_profile(
                 issues=(*profile_issues, "iva_anticipado", code),
                 iva_anticipado_rate_pct=anticipado_rate,
             )
-        # IVA (+ ILA opcional) + anticipo: factor comercial = solo IVA/ILA.
-        # El anticipo se expone aparte y NUNCA se suma al costo comercial ni al inventario.
+        # IVA (+ ILA opcional) + anticipo:
+        # - Bruto pagadero = neto×(1+(IVA+ILA+anticipo)/100) — SII harina 131 %.
+        # - Base de márgenes = neto×(1+(IVA+ILA)/100) — metodología vigente hasta nueva aprobación.
         iva_rate = iva_a[0].percentage
         ila_rate = ila_a[0].percentage if ila_a else ZERO
         assert iva_rate is not None and ila_rate is not None
-        total = iva_rate + ila_rate
+        margin_rate = iva_rate + ila_rate
+        payable_rate = margin_rate + anticipado_rate
         return TaxProfile(
             S.IVA_ANTICIPADO,
-            "IVA anticipado excluido del costo comercial; el factor usa solo IVA/ILA. "
-            "Total documental (neto+IVA+anticipo) requiere respaldo de factura.",
+            "Bruto pagadero incluye IVA + anticipo (≠ ILA). "
+            "La base de márgenes conserva solo IVA/ILA hasta aprobación metodológica.",
             taxes,
-            total,
+            payable_rate,
             iva_rate,
             ila_rate,
             (*profile_issues, "iva_anticipado"),
             iva_anticipado_rate_pct=anticipado_rate,
+            margin_rate_pct=margin_rate,
         )
     ila = [t for t in taxes if t.role == ROLE_ILA]
     iva = [t for t in taxes if t.role == ROLE_IVA]
@@ -366,31 +387,43 @@ def resolve_tax_profile(
     assert iva_rate is not None and ila_rate is not None
     total = iva_rate + ila_rate
     if ila:
-        return TaxProfile(S.IVA_ILA, "IVA + un ILA", taxes, total, iva_rate, ila_rate, tuple(profile_issues))
-    return TaxProfile(S.IVA, "IVA", taxes, total, iva_rate, ZERO, tuple(profile_issues))
+        return TaxProfile(
+            S.IVA_ILA, "IVA + un ILA", taxes, total, iva_rate, ila_rate, tuple(profile_issues), margin_rate_pct=total
+        )
+    return TaxProfile(S.IVA, "IVA", taxes, total, iva_rate, ZERO, tuple(profile_issues), margin_rate_pct=total)
 
 
 @dataclass(frozen=True, slots=True)
 class GrossCost:
-    """Costo bruto comercial calculado sin redondeos intermedios; el neto original se conserva."""
+    """Bruto pagadero (gross) y base de márgenes (margin_gross). Neto Bsale intacto."""
 
     net: Decimal | None
-    gross: Decimal | None
+    gross: Decimal | None  # bruto total pagadero estimado
     status: GrossCostStatus
     reason: str | None
     iva_rate_pct: Decimal | None = None
     ila_rate_pct: Decimal | None = None
-    factor: Decimal | None = None
+    iva_anticipado_rate_pct: Decimal | None = None
+    factor: Decimal | None = None  # factor bruto pagadero
+    # Base márgenes = neto×(1+margin_rate); sin anticipo. Alias histórico net_plus_iva_gross.
+    margin_gross: Decimal | None = None
+    margin_factor: Decimal | None = None
+    net_plus_iva_gross: Decimal | None = None
     tax_ids: tuple[int, ...] = ()
-    applied: tuple[TaxEntry, ...] = ()
+    applied: tuple[TaxEntry, ...] = ()  # impuestos del bruto pagadero
+    margin_applied: tuple[TaxEntry, ...] = ()  # IVA/ILA de la base de márgenes
 
     def to_json(self) -> dict[str, Any]:
         return {
             "net": money(self.net),
             "iva_rate_pct": money(self.iva_rate_pct),
             "ila_rate_pct": money(self.ila_rate_pct),
+            "iva_anticipado_rate_pct": money(self.iva_anticipado_rate_pct),
             "factor": money(self.factor),
             "gross": money(self.gross),
+            "margin_factor": money(self.margin_factor),
+            "margin_gross": money(self.margin_gross),
+            "net_plus_iva_gross": money(self.net_plus_iva_gross if self.net_plus_iva_gross is not None else self.margin_gross),
             "status": self.status.value,
             "reason": self.reason,
             "tax_ids": list(self.tax_ids),
@@ -398,15 +431,21 @@ class GrossCost:
                 {"tax_id": t.tax_id, "code": t.code, "percentage": money(t.percentage), "kind": t.role}
                 for t in self.applied
             ],
+            "margin_taxes_applied": [
+                {"tax_id": t.tax_id, "code": t.code, "percentage": money(t.percentage), "kind": t.role}
+                for t in self.margin_applied
+            ],
+            "confirmed_by_document": False,
             "source": TAX_DATA_SOURCE,
         }
 
 
 def commercial_gross_cost(net_cost: Decimal | None, profile: TaxProfile) -> GrossCost:
-    """Solo suma los impuestos del producto que son IVA o un único ILA; si no, no hay bruto."""
+    """Calcula bruto pagadero y base de márgenes (separados cuando hay anticipo)."""
     ctx = {
         "iva_rate_pct": profile.iva_rate_pct,
         "ila_rate_pct": profile.ila_rate_pct,
+        "iva_anticipado_rate_pct": profile.iva_anticipado_rate_pct,
         "tax_ids": tuple(t.tax_id for t in profile.taxes),
     }
     if net_cost is None:
@@ -419,17 +458,101 @@ def commercial_gross_cost(net_cost: Decimal | None, profile: TaxProfile) -> Gros
         return GrossCost(net_cost, None, GrossCostStatus.SIN_CONFIGURACION_TRIBUTARIA, profile.status.value, **ctx)
     if validation is TaxValidation.REQUIERE_REVISION_TRIBUTARIA or profile.total_rate_pct is None:
         return GrossCost(net_cost, None, GrossCostStatus.REQUIERE_REVISION_TRIBUTARIA, profile.status.value, **ctx)
-    applied = tuple(t for t in profile.taxes if t.use == USE_COMMERCIAL)
-    factor = ONE + profile.total_rate_pct / HUNDRED
+
+    margin_rate = profile.rate_for_margins
+    assert margin_rate is not None
+    payable_factor = ONE + profile.total_rate_pct / HUNDRED
+    margin_factor = ONE + margin_rate / HUNDRED
+    payable_gross = net_cost * payable_factor
+    margin_gross = net_cost * margin_factor
+
+    applied = tuple(
+        t
+        for t in profile.taxes
+        if t.role in PAYABLE_GROSS_ROLES
+        and not t.blocking
+        and t.percentage is not None
+        and (t.role != ROLE_IVA_ANTICIPADO or profile.iva_anticipado_rate_pct is not None)
+    )
+    margin_applied = tuple(t for t in applied if t.use == USE_COMMERCIAL)
+
     reason = None
-    if profile.status is TaxProfileStatus.IVA_ANTICIPADO:
-        reason = "anticipo_excluido_del_factor_comercial"
+    if profile.status is TaxProfileStatus.IVA_ANTICIPADO and profile.iva_anticipado_rate_pct:
+        reason = "bruto_pagadero_incluye_anticipo_base_margen_sin_anticipo"
+
     return GrossCost(
         net_cost,
-        net_cost * factor,
+        payable_gross,
         GrossCostStatus.PRELIMINAR_NO_VERIFICADO,
         reason,
-        factor=factor,
+        factor=payable_factor,
+        margin_gross=margin_gross,
+        margin_factor=margin_factor,
+        net_plus_iva_gross=margin_gross,
         applied=applied,
+        margin_applied=margin_applied,
         **ctx,
     )
+
+
+_ROLE_LABEL = {
+    ROLE_IVA: "IVA",
+    ROLE_ILA: "ILA (impuesto adicional)",
+    ROLE_IVA_ANTICIPADO: "IVA anticipado (no es ILA)",
+    ROLE_UNKNOWN: "Impuesto sin clasificar",
+}
+
+
+def tax_visual_breakdown(net_cost: Decimal | None, profile: TaxProfile) -> dict[str, Any]:
+    """Desglose: neto, impuestos, bruto pagadero y base de márgenes (separados si hay anticipo)."""
+    gross = commercial_gross_cost(net_cost, profile)
+    lines: list[dict[str, Any]] = []
+    payable_ids = {t.tax_id for t in gross.applied}
+    margin_ids = {t.tax_id for t in gross.margin_applied}
+    for t in profile.taxes:
+        amount = None
+        if net_cost is not None and net_cost > 0 and t.percentage is not None:
+            amount = net_cost * t.percentage / HUNDRED
+        label = t.name
+        if t.percentage is not None:
+            label = f"{_ROLE_LABEL.get(t.role, t.role)} {money(t.percentage)}%"
+            if t.name:
+                label = f"{label} · {t.name}"
+        lines.append(
+            {
+                "tax_id": t.tax_id,
+                "name": t.name,
+                "label": label,
+                "code": t.code,
+                "role": t.role,
+                "percentage": money(t.percentage),
+                "amount_estimated": money(amount),
+                "increases_payable_total": t.tax_id in payable_ids,
+                "in_margin_base": t.tax_id in margin_ids,
+                "in_commercial_factor": t.tax_id in margin_ids,  # alias histórico = base márgenes
+                "use": t.use,
+                "source": "configuracion_bsale",
+                "confirmed_by_document": False,
+            }
+        )
+    return {
+        "net": money(net_cost),
+        "lines": lines,
+        "net_plus_iva_gross": money(gross.margin_gross),
+        "margin_gross": money(gross.margin_gross),
+        "margin_factor": money(gross.margin_factor),
+        "commercial_gross": money(gross.gross),
+        "payable_gross_total": money(gross.gross),
+        "commercial_factor": money(gross.factor),
+        "payable_factor": money(gross.factor),
+        "documentary_total_referential": money(gross.gross),
+        "documentary_total_confirmed": None,
+        "disclaimers": [
+            "Importes por impuesto: estimación sobre el costo neto Bsale según tasas configuradas.",
+            "Costo bruto total pagadero = neto + gravámenes del total (incl. anticipo harina cuando aplica).",
+            "Base de márgenes = neto + IVA/ILA; el anticipo no entra hasta nueva aprobación metodológica.",
+            "El IVA anticipado no es ILA.",
+            "El bruto total calculado no es el total confirmado de la factura.",
+            "No modifica el costo promedio neto original de Bsale.",
+        ],
+    }

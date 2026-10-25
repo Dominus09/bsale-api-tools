@@ -8,6 +8,8 @@ from typing import Any
 
 import pytest
 
+ONE = Decimal("1")
+
 from backend.services.analytics_v2 import cost_control_service as cost_service_mod
 from backend.services.analytics_v2.contracts import (
     GrossCostStatus,
@@ -31,6 +33,7 @@ from backend.services.analytics_v2.tax_profile import (
     classify_tax,
     commercial_gross_cost,
     resolve_tax_profile,
+    tax_visual_breakdown,
 )
 from backend.tests.test_analytics_v2_cost_control import FakeRepo, fact, service
 from backend.tests.test_analytics_v2_margins import make_service, sku, vp
@@ -255,21 +258,84 @@ def test_anticipated_vat_alone_blocks_commercial_gross(ids):
     "ids, anticipado_pct",
     [([1, 6], "12"), ([1, 7], "5")],
 )
-def test_anticipated_with_iva_computes_commercial_excluding_anticipo(ids, anticipado_pct):
-    """IVA + anticipo harina/carne: bruto comercial = neto×(1+IVA/100); anticipo no suma."""
+def test_anticipated_with_iva_separates_payable_and_margin_base(ids, anticipado_pct):
+    """IVA + anticipo: bruto pagadero incluye anticipo; base de márgenes solo IVA."""
     p = profile(ids)
     assert p.status is T.IVA_ANTICIPADO
-    assert p.total_rate_pct == D("19")
-    assert p.iva_rate_pct == D("19")
+    assert p.total_rate_pct == D("19") + D(anticipado_pct)
+    assert p.margin_rate_pct == D("19")
+    assert p.rate_for_margins == D("19")
     assert p.iva_anticipado_rate_pct == D(anticipado_pct)
-    assert "iva_anticipado" in p.issues
     g = gross("13000", ids)
-    assert g.gross == D("15470")  # 13000 × 1.19
-    assert g.factor == D("1.19")
-    assert g.reason == "anticipo_excluido_del_factor_comercial"
-    assert all(t.role != ROLE_IVA_ANTICIPADO for t in g.applied)
-    # No valorizar neto+IVA+anticipo como costo comercial (13000+2470+1560=17030).
-    assert g.gross != D("17030")
+    payable_factor = ONE + (D("19") + D(anticipado_pct)) / D("100")
+    assert g.factor == payable_factor
+    assert g.gross == D("13000") * payable_factor
+    assert g.margin_factor == D("1.19")
+    assert g.margin_gross == D("15470")
+    assert g.reason == "bruto_pagadero_incluye_anticipo_base_margen_sin_anticipo"
+    assert any(t.role == ROLE_IVA_ANTICIPADO for t in g.applied)
+    assert all(t.role != ROLE_IVA_ANTICIPADO for t in g.margin_applied)
+    assert g.gross != g.margin_gross
+
+
+def test_harina_sii_official_131_percent_payable_vs_margin_base():
+    """Harina 28216: bruto pagadero 17030 (1,31); base márgenes 15470 (1,19); doc no confirmado."""
+    p = profile([1, 6])
+    assert p.total_rate_pct == D("31") and p.margin_rate_pct == D("19")
+    g = gross("13000", [1, 6])
+    assert g.factor == D("1.31") and g.gross == D("17030")
+    assert g.margin_factor == D("1.19") and g.margin_gross == D("15470")
+    bd = tax_visual_breakdown(D("13000"), p)
+    assert D(bd["payable_gross_total"]) == D("17030")
+    assert D(bd["margin_gross"]) == D("15470")
+    assert bd["documentary_total_confirmed"] is None
+    roles = {line["role"]: line for line in bd["lines"]}
+    assert roles[ROLE_IVA]["increases_payable_total"] and roles[ROLE_IVA]["in_margin_base"]
+    assert roles[ROLE_IVA_ANTICIPADO]["increases_payable_total"]
+    assert roles[ROLE_IVA_ANTICIPADO]["in_margin_base"] is False
+    assert D(roles[ROLE_IVA_ANTICIPADO]["amount_estimated"]) == D("1560")
+
+
+def test_beer_ila_breakdown_keeps_ila_in_commercial_factor():
+    p = profile([1, 3])  # IVA + ILA cerveza
+    bd = tax_visual_breakdown(D("1000"), p)
+    roles = {line["role"] for line in bd["lines"]}
+    assert ROLE_ILA in roles and ROLE_IVA_ANTICIPADO not in roles
+    assert all(line["increases_payable_total"] for line in bd["lines"])
+    assert bd["commercial_gross"] is not None
+
+
+@pytest.mark.parametrize(
+    "ids, net, factor, gross",
+    [
+        ([1], "10000", "1.19", "11900"),  # solo IVA
+        ([1, 5], "10000", "1.29", "12900"),  # bebidas analcohólicas ILA 10
+        ([1, 4], "10000", "1.37", "13700"),  # bebidas alto azúcar ILA 18
+        ([1, 3], "10000", "1.395", "13950"),  # cerveza ILA 20.5
+        ([1, 2], "10000", "1.395", "13950"),  # vinos ILA 20.5
+        ([1, 8], "10000", "1.505", "15050"),  # licores ILA 31.5
+        ([1, 6], "13000", "1.31", "17030"),  # harina IVA+anticipo 12
+        ([1, 7], "1000", "1.24", "1240"),  # carne IVA+anticipo 5
+    ],
+)
+def test_payable_gross_regimes_additive_same_net_base(ids, net, factor, gross):
+    """Regímenes operativos: factor aditivo; nunca cascada; anticipo ≠ ILA."""
+    p = profile(ids)
+    g = commercial_gross_cost(D(net), p)
+    assert g.factor == D(factor)
+    assert g.gross == D(gross)
+    ila = p.ila_rate_pct or D("0")
+    if p.iva_rate_pct and ila > 0:
+        wrong = D(net) * (ONE + p.iva_rate_pct / 100) * (ONE + ila / 100)
+        assert g.gross != wrong
+    if p.iva_anticipado_rate_pct:
+        assert ROLE_IVA_ANTICIPADO in {t.role for t in g.applied}
+        assert g.margin_gross == D(net) * (ONE + (p.iva_rate_pct or D("0")) / 100)
+        assert g.gross != g.margin_gross
+        assert g.margin_factor == ONE + (p.rate_for_margins or D("0")) / 100
+    else:
+        assert ROLE_IVA_ANTICIPADO not in {t.role for t in g.applied}
+        assert g.margin_gross == g.gross and g.margin_factor == g.factor
 
 
 @pytest.mark.parametrize("ids, issue", [([2], "ila_sin_iva"), ([1, 9], "iva_duplicado")])
@@ -301,8 +367,12 @@ def test_gross_json_keeps_net_rates_and_factor():
         "net": "1000",
         "iva_rate_pct": "19",
         "ila_rate_pct": "31.5",
+        "iva_anticipado_rate_pct": None,
         "factor": "1.505",
         "gross": "1505.000",
+        "margin_factor": "1.505",
+        "margin_gross": "1505.000",
+        "net_plus_iva_gross": "1505.000",
         "status": "preliminar_no_verificado",
         "reason": None,
         "tax_ids": [1, 8],
@@ -310,6 +380,11 @@ def test_gross_json_keeps_net_rates_and_factor():
             {"tax_id": 1, "code": "14", "percentage": "19", "kind": "iva"},
             {"tax_id": 8, "code": "24", "percentage": "31.5", "kind": "ila"},
         ],
+        "margin_taxes_applied": [
+            {"tax_id": 1, "code": "14", "percentage": "19", "kind": "iva"},
+            {"tax_id": 8, "code": "24", "percentage": "31.5", "kind": "ila"},
+        ],
+        "confirmed_by_document": False,
         "source": TAX_DATA_SOURCE,
     }
 
@@ -453,7 +528,7 @@ def test_tax_coverage_counts_and_anomalies():
     assert codes["ila_multiple"]["examples"][0]["variant_id"] == 3
     combos = {tuple(c["tax_ids"]): c for c in out["combinations"]}
     assert combos[(1,)]["skus"] == 2 and combos[(1, 8)]["total_rate_pct"] == "50.5"
-    assert combos[(1, 6)]["total_rate_pct"] == "19"  # anticipo excluido del total comercial
+    assert combos[(1, 6)]["total_rate_pct"] == "31"  # IVA 19 + anticipo harina 12
     usage = {c["tax_id"]: c["skus_using"] for c in out["catalog"]}
     assert usage[1] == 5 and usage[6] == 1
     assert out["tax_config_verified"] is False
@@ -492,12 +567,15 @@ def test_margins_with_inconsistent_taxes_give_no_recommendation():
     assert rows[10]["status"] == S.REQUIERE_REVISION_TRIBUTARIA
     assert rows[10]["markup_pct"] is None and rows[10]["costs"]["reference"]["gross"] is None
     assert rows[10]["costs"]["reference"]["net"] == "900"
-    # IVA + anticipo harina: bruto comercial = neto×1,19; anticipo no suma.
+    # IVA + anticipo harina: base márgenes = neto×1,19 (900×1,19=1071); pagadero aparte 1179.
     assert rows[11]["costs"]["reference"]["net"] == "900"
     assert D(rows[11]["costs"]["reference"]["gross"]) == D("1071")
+    assert D(rows[11]["costs"]["reference"]["payable_gross"]) == D("1179")
+    assert rows[11]["costs"]["reference"]["tax_factor"] == "1.19"
+    assert rows[11]["costs"]["reference"]["payable_factor"] == "1.31"
     assert rows[11]["markup_pct"] is not None
     assert rows[11]["status"] != S.REQUIERE_REVISION_TRIBUTARIA
-    assert "impuesto_iva_anticipado_excluido_del_factor" in rows[11]["reasons"]
+    assert "impuesto_iva_anticipado_excluido_de_base_margen" in rows[11]["reasons"]
     full = next(r for r in svc.product(10)["rows"] if r["price_list"]["id"] == 12)
     assert full["target_price"]["min"] is None and full["target_price"]["max"] is None
 

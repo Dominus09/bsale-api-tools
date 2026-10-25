@@ -290,8 +290,12 @@ class PackLine:
             "subtotal_net": money(self.subtotal_net),
             "subtotal_gross": money(self.subtotal_gross),
             "tax_ids": list(self.gross_cost.tax_ids) if self.gross_cost else [],
-            "taxes_applied": self.gross_cost.to_json()["taxes_applied"] if self.gross_cost else [],
-            "tax_factor": money(self.gross_cost.factor) if self.gross_cost else None,
+            # Base de márgenes (sin anticipo); el bruto pagadero no alimenta markup/pack.
+            "taxes_applied": [
+                {"tax_id": t.tax_id, "code": t.code, "percentage": money(t.percentage), "kind": t.role}
+                for t in (self.gross_cost.margin_applied if self.gross_cost else ())
+            ],
+            "tax_factor": money(self.gross_cost.margin_factor) if self.gross_cost else None,
             "tax_status": f.tax_profile.status.value if f and not f.is_pack else None,
         }
         if self.nested is not None:
@@ -474,9 +478,10 @@ class PackCostEngine:
         gross = commercial_gross_cost(net, facts.tax_profile)
         if net is None or net <= 0:
             return PackLine(ref, C.SIN_COSTO, facts, net, None, gross), False, False
-        if gross.gross is None:
+        # Packs usan base de márgenes (sin anticipo) hasta aprobación metodológica.
+        if gross.margin_gross is None:
             return PackLine(ref, C.REQUIERE_REVISION_TRIBUTARIA, facts, net, None, gross), False, False
-        return PackLine(ref, C.CALCULADO, facts, net, gross.gross, gross), False, False
+        return PackLine(ref, C.CALCULADO, facts, net, gross.margin_gross, gross), False, False
 
     @staticmethod
     def _collect(line: PackLine, warnings: list[str], reliabilities: list[CostReliability]) -> None:
