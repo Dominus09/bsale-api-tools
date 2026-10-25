@@ -16,7 +16,12 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from backend.services.analytics_v2.commercial_premium_service import SHEET_NAMES
+from backend.services.analytics_v2.commercial_premium_service import REVIEW_SHEET_NAMES, SHEET_NAMES
+from backend.services.analytics_v2.product_identity import (
+    format_barcode,
+    format_product_plus_variant,
+    format_product_type,
+)
 
 # Estilo alineado a excel_export (sin import circular).
 HEADER_FILL = PatternFill("solid", fgColor="17191E")
@@ -658,6 +663,229 @@ def commercial_premium_xlsx(payload: dict[str, Any]) -> bytes:
     _write_admin_review(ws6, payload)
 
     assert list(wb.sheetnames) == list(SHEET_NAMES)
+
+    out = BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
+def _review_motivo(item: dict[str, Any]) -> str:
+    prio = item.get("admin_priority") or {}
+    action = prio.get("suggested_action") or item.get("recommended_action")
+    source = item.get("review_source") or ""
+    if source == "stock_positivo_sin_costo_valido":
+        band = "stock positivo sin costo válido"
+    elif source == "divergencia_y_stock_sin_costo":
+        band = "divergencia >15 % · stock positivo sin costo válido"
+    elif item.get("extrema_indicador"):
+        band = "divergencia extrema"
+    else:
+        band = "divergencia >15 %"
+    parts = [band]
+    if action:
+        parts.append(str(action))
+    doc = " ".join(
+        str(x)
+        for x in (
+            item.get("last_comparable_document") or item.get("lc_document"),
+            item.get("last_comparable_document_number") or item.get("lc_document_number"),
+        )
+        if x
+    ).strip()
+    if doc:
+        parts.append(f"Respaldo: {doc}")
+    return " · ".join(parts)
+
+
+def build_review_work_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Filas accionables: anomalías >15 % + stock positivo sin costo válido. Una por variant_id."""
+    by_vid: dict[Any, dict[str, Any]] = {}
+
+    for a in payload.get("anomalies") or []:
+        vid = a.get("variant_id")
+        if vid is None:
+            continue
+        row = dict(a)
+        row["review_source"] = "divergencia_gt_15"
+        by_vid[vid] = row
+
+    for z in payload.get("zero_cost_actives") or []:
+        if z.get("stock_status") != "stock_positivo":
+            continue
+        vid = z.get("variant_id")
+        if vid is None:
+            continue
+        if vid in by_vid:
+            # Ya hay divergencia >15 %: no duplicar; marcar fuente mixta.
+            existing = by_vid[vid]
+            existing["review_source"] = "divergencia_y_stock_sin_costo"
+            continue
+        row = dict(z)
+        row["review_source"] = "stock_positivo_sin_costo_valido"
+        row["stock_total"] = z.get("stock_total_raw") if z.get("stock_total_raw") is not None else z.get("stock_total")
+        row["average_cost"] = z.get("average_cost")
+        row["diff_pct"] = None
+        row["admin_priority"] = {
+            "review_priority": "P1_critico",
+            "priority_band": "P1_critico",
+            "priority_score": 95,
+            "suggested_action": z.get("recommended_action") or "revisar_costo_promedio_con_stock",
+        }
+        by_vid[vid] = row
+
+    rows = list(by_vid.values())
+    rows.sort(
+        key=lambda r: (
+            -float((r.get("admin_priority") or {}).get("priority_score") or 0),
+            -abs(float(r.get("diff_pct") or 0)),
+            int(r.get("variant_id") or 0),
+        )
+    )
+    return rows
+
+
+def _write_review_actionable(ws: Any, payload: dict[str, Any]) -> None:
+    """Hoja operativa: anomalías >15 % + críticos stock+sin costo. Sin dump masivo costo cero."""
+    headers = [
+        "Tipo de producto",
+        "Producto + variante",
+        "Código de barras",
+        "Stock",
+        "Costo promedio",
+        "Último costo comparable",
+        "Diferencia %",
+        "Prioridad",
+        "Motivo o acción de revisión",
+        "Estado administrativo",
+        "Observación",
+    ]
+    for col, title in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=col, value=title)
+        cell.fill = HEADER_FILL
+        cell.font = HEADER_FONT
+        cell.alignment = Alignment(vertical="center", wrap_text=True)
+        cell.border = THIN
+    # Identificación visible al desplazar (A–C) + encabezado fijo
+    ws.freeze_panes = "D2"
+    _set_widths(ws, [18, 42, 16, 10, 14, 16, 12, 12, 36, 20, 28])
+
+    rows = build_review_work_rows(payload)
+    for i, item in enumerate(rows, start=2):
+        prio = item.get("admin_priority") or {}
+        band = prio.get("review_priority") or prio.get("priority_band")
+        fill = _priority_fill(band)
+        diff = _num(item.get("diff_pct"))
+        diff_ratio = (float(diff) / 100.0) if diff is not None else None
+        values: list[Any] = [
+            format_product_type(item.get("product_type_name")),
+            format_product_plus_variant(item.get("product_name"), item.get("variant_name")),
+            format_barcode(item.get("barcode")),
+            _num(item.get("stock_total")),
+            _num(item.get("average_cost")),
+            _num(item.get("last_comparable_cost")),
+            diff_ratio,
+            band,
+            _review_motivo(item),
+            "Pendiente",
+            None,
+        ]
+        for col, val in enumerate(values, start=1):
+            cell = ws.cell(i, col, val)
+            _style_data_cell(
+                cell,
+                as_text=col == 3,
+                money=col in (5, 6),
+                pct_ratio=col == 7,
+                fill=fill if col == 8 else (FILL_PENDING if col >= 10 else None),
+            )
+
+    if rows:
+        dv = DataValidation(
+            type="list",
+            formula1='"' + ",".join(ADMIN_STATES) + '"',
+            allow_blank=True,
+            showErrorMessage=True,
+            errorTitle="Estado inválido",
+            error="Seleccione un estado de la lista.",
+        )
+        dv.add(f"J2:J{len(rows) + 1}")
+        ws.add_data_validation(dv)
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{len(rows) + 1}"
+
+    note_row = max(len(rows) + 3, 3)
+    ws.cell(
+        note_row,
+        1,
+        "Anomalías >15 % e incidentes críticos (stock positivo sin costo válido). "
+        "Costo cero sin stock positivo y diagnóstico técnico completo están en «Excel auditoría completa». "
+        "Editar aquí NO actualiza PostgreSQL ni Bsale.",
+    ).font = FONT_MUTED
+
+
+def _write_review_summary(ws: Any, payload: dict[str, Any]) -> None:
+    ws.sheet_view.showGridLines = False
+    _set_widths(ws, [48, 22])
+    title = ws.cell(1, 1, "Excel para revisión — Auditoría Comercial")
+    title.font = Font(bold=True, size=14, color="17191E")
+    ws.merge_cells("A1:B1")
+
+    census = payload.get("census") or {}
+    coverage = payload.get("cost_coverage") or {}
+    buckets = payload.get("divergence_buckets") or {}
+    anomalies = payload.get("anomalies") or []
+    work = build_review_work_rows(payload)
+    zc = payload.get("zero_cost_summary") or {}
+    stock_sin_costo = int(zc.get("stock_positivo") or 0)
+    critical = sum(
+        1
+        for a in work
+        if str((a.get("admin_priority") or {}).get("review_priority") or "").upper().startswith("P1")
+        or a.get("extrema_indicador")
+        or a.get("review_source") == "stock_positivo_sin_costo_valido"
+    )
+    cut = payload.get("cut_at_utc") or ""
+
+    rows = [
+        ("Empresa", f"{payload.get('company_name')} (#{payload.get('company_id')})"),
+        ("Fecha de actualización", cut),
+        ("Variantes con stock y costo válido", coverage.get("costs_average_pos") or census.get("activas_stock_pos")),
+        ("Alertas críticas (P1 / extrema / stock sin costo)", critical),
+        ("Diferencias superiores al 15 %", payload.get("anomalies_count", len(anomalies))),
+        ("Stock positivo sin costo válido", stock_sin_costo),
+        ("Filas en hoja Por revisar", len(work)),
+        ("Requieren verificación", buckets.get("requiere_verificacion")),
+        ("Sin recepción comparable", buckets.get("sin_recepcion_comparable")),
+    ]
+    r = 3
+    for label, value in rows:
+        ws.cell(r, 1, label).font = Font(bold=True, size=10)
+        ws.cell(r, 2, value)
+        r += 1
+
+    r += 1
+    legend = ws.cell(
+        r,
+        1,
+        "Leyenda: las alertas son señales de revisión operativa; no constituyen errores confirmados "
+        "ni órdenes de corrección automática. Use «Excel auditoría completa» para diagnóstico técnico.",
+    )
+    legend.font = FONT_MUTED
+    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=2)
+
+
+def commercial_premium_review_xlsx(payload: dict[str, Any]) -> bytes:
+    """Workbook operativo de 2 hojas (revisión diaria). Reutiliza el mismo payload."""
+    wb = Workbook()
+    default = wb.active
+    wb.remove(default)
+
+    ws1 = wb.create_sheet(REVIEW_SHEET_NAMES[0])
+    _write_review_actionable(ws1, payload)
+
+    ws2 = wb.create_sheet(REVIEW_SHEET_NAMES[1])
+    _write_review_summary(ws2, payload)
+
+    assert list(wb.sheetnames) == list(REVIEW_SHEET_NAMES)
 
     out = BytesIO()
     wb.save(out)

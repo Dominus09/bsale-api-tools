@@ -31,6 +31,7 @@ import type {
   DataClass,
   FreshnessStatus,
 } from "@/lib/analytics-v2/dashboard-types"
+import { ProductIdentityCell } from "@/components/analytics-v2/shared/product-identity-cell"
 import {
   ANOMALY_LABELS,
   RELIABILITY_LABELS,
@@ -439,7 +440,7 @@ export function MarginRowsTable({
           <table className="w-full min-w-[640px] text-sm">
             <thead className="bg-lq-canvas text-left text-[11px] uppercase tracking-wide text-lq-muted">
               <tr>
-                <th className="px-5 py-2.5 font-medium">Producto</th>
+                <th className="px-5 py-2.5 font-medium">Identificación</th>
                 <th className="px-4 py-2.5 font-medium">Lista</th>
                 <th className="px-4 py-2.5 text-right font-medium">Precio</th>
                 <th className="px-4 py-2.5 text-right font-medium">Costo ref.</th>
@@ -453,14 +454,19 @@ export function MarginRowsTable({
                   <td className="px-5 py-3">
                     <button
                       type="button"
-                      className="text-left font-medium hover:underline"
+                      className="block max-w-full text-left hover:underline"
                       onClick={() => onOpenProduct(r.variant_id)}
                     >
-                      {r.product_name ?? `SKU ${r.variant_id}`}
+                      <ProductIdentityCell
+                        compact
+                        productTypeName={r.product_type?.name}
+                        productName={r.product_name}
+                        variantName={r.variant_name}
+                        barcode={r.barcode}
+                      />
                     </button>
-                    <span className="block text-[11px] text-muted-foreground">
-                      {r.code ?? "—"}
-                      {r.variant_name ? ` · ${r.variant_name}` : ""}
+                    <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                      {r.code ? `SKU ${r.code}` : "Sin SKU"}
                       {r.campaign_name ? ` · ${r.campaign_name}` : ""}
                     </span>
                   </td>
@@ -570,9 +576,16 @@ export function CostsOverview({ data, onOpenProduct }: { data: DashboardCosts; o
               {data.relevant_increases.top.map((r) => (
                 <li key={r.variant_id} className="flex items-start justify-between gap-2 px-3 py-1.5">
                   <button type="button" className="text-left hover:underline" onClick={() => onOpenProduct(r.variant_id)}>
-                    <span className="font-medium">{r.product_name ?? `SKU ${r.variant_id}`}</span>
-                    <span className="block text-[11px] text-muted-foreground">
-                      {r.code ?? "—"} · {formatMoney(r.previous_comparable?.cost)} → {formatMoney(r.last_comparable?.cost)}
+                    <ProductIdentityCell
+                      compact
+                      productTypeName={r.product_type?.name}
+                      productName={r.product_name}
+                      variantName={r.variant_name}
+                      barcode={r.barcode}
+                    />
+                    <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                      {r.code ? `SKU ${r.code}` : "Sin SKU"} · {formatMoney(r.previous_comparable?.cost)} →{" "}
+                      {formatMoney(r.last_comparable?.cost)}
                     </span>
                   </button>
                   <span className="shrink-0 tabular-nums font-medium text-red-700 dark:text-red-300">{formatPct(r.change_pct)}</span>
@@ -599,13 +612,25 @@ export function CostsOverview({ data, onOpenProduct }: { data: DashboardCosts; o
               {data.high_alerts.top.map((a) => (
                 <li key={a.detail_id} className="px-3 py-1.5">
                   {a.variant_id != null ? (
-                    <button type="button" className="text-left font-medium hover:underline" onClick={() => onOpenProduct(a.variant_id as number)}>
-                      {a.product_name ?? `SKU ${a.variant_id}`}
+                    <button type="button" className="block max-w-full text-left hover:underline" onClick={() => onOpenProduct(a.variant_id as number)}>
+                      <ProductIdentityCell
+                        compact
+                        productTypeName={a.product_type?.name}
+                        productName={a.product_name}
+                        variantName={a.variant_name}
+                        barcode={a.barcode}
+                      />
                     </button>
                   ) : (
-                    <span className="font-medium">{a.product_name ?? "—"}</span>
+                    <ProductIdentityCell
+                      compact
+                      productTypeName={a.product_type?.name}
+                      productName={a.product_name}
+                      variantName={a.variant_name}
+                      barcode={a.barcode}
+                    />
                   )}
-                  <span className="block text-[11px] text-muted-foreground">
+                  <span className="mt-0.5 block text-[11px] text-muted-foreground">
                     {formatDate(a.admission_date)} · {a.document ?? "Recepción"} {a.document_number ?? `#${a.reception_id}`} ·{" "}
                     {a.anomalies
                       .filter((x) => x.severity === "alta")
@@ -630,7 +655,7 @@ export function TaxesOverview({ data, canSeeCosts }: { data: DashboardTaxes; can
   return (
     <section className="space-y-2">
       <div className="flex flex-wrap items-baseline gap-2">
-        <h2 className="text-base font-semibold">Impuestos y costo bruto comercial</h2>
+        <h2 className="text-base font-semibold">Impuestos y costo bruto total</h2>
         <span className="text-[11px] text-muted-foreground">
           {data.skus_active} SKUs activos · bruto = costo neto promedio × (1 + (IVA + ILA) / 100) · tasas desde BSALE RAW
         </span>

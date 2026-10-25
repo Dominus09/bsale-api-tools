@@ -150,8 +150,11 @@ class PacksV2Service:
             "variant_id": r["variant_id"],
             "product_id": r["product_id"],
             "code": r["code"],
+            # barcode de la variante del pack (bsale_raw.variants.bar_code vía márgenes); no usar SKU.
+            "barcode": r.get("barcode"),
             "product_name": r["product_name"],
             "variant_name": r["variant_name"],
+            "product_type": r.get("product_type") or {"id": None, "name": None},
             "pack_state": self._state(item),
             "pack_status": pack.get("status"),
             "components_count": pack.get("components_count", 0),
@@ -249,8 +252,10 @@ class PacksV2Service:
             "variant_id": variant_id,
             "product_id": item["product_id"],
             "code": item["code"],
+            "barcode": item.get("barcode"),
             "product_name": item["product_name"],
             "variant_name": item["variant_name"],
+            "product_type": item.get("product_type") or {"id": None, "name": None},
             "pack_state": self._state(item),
             "pack": pack_json,
             "pack_sku_own": {

@@ -3,6 +3,7 @@
 import { ArrowRight, ChevronDown, ChevronLeft, ChevronRight, Loader2, Search } from "lucide-react"
 
 import { EmptyState, ProfessionalDataTable, SmartFilterBar } from "@/components/analytics-v2/shared/analytics-ui"
+import { ProductIdentityCell } from "@/components/analytics-v2/shared/product-identity-cell"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
@@ -328,7 +329,14 @@ export function CostV2ProductsTable({
         {items.map((item) => (
           <article key={item.variant_id} className="p-4">
             <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0"><p className="truncate text-sm font-semibold text-lq-ink">{item.product_name ?? "Sin nombre"}</p><p className="mt-1 truncate text-xs text-lq-muted">{item.code ?? "Sin SKU"} · {item.product_type.name ?? "Sin tipo"}</p></div>
+              <ProductIdentityCell
+                compact
+                className="min-w-0 flex-1"
+                productTypeName={item.product_type.name}
+                productName={item.product_name}
+                variantName={item.variant_name}
+                barcode={item.barcode}
+              />
               <ReliabilityBadge status={item.reliability.status} />
             </div>
             <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
@@ -344,7 +352,7 @@ export function CostV2ProductsTable({
       <table className="hidden w-full min-w-[960px] table-fixed text-sm md:table">
         <thead className="border-b border-lq-line-soft bg-lq-canvas text-left text-xs text-lq-muted">
           <tr>
-            <th className="w-[29%] px-5 py-3 font-medium">Producto</th>
+            <th className="w-[29%] px-5 py-3 font-medium">Identificación</th>
             <th className="w-[14%] px-3 py-3 text-right font-medium">Promedio Bsale</th>
             <th className="w-[17%] px-3 py-3 text-right font-medium">Última compra</th>
             <th className="w-[12%] px-3 py-3 text-right font-medium">Variación</th>
@@ -361,14 +369,17 @@ export function CostV2ProductsTable({
               onClick={() => onOpen(item.variant_id)}
             >
               <td className="px-5 py-3.5">
-                <p className="truncate font-medium text-lq-ink group-hover:text-primary">{item.product_name ?? "Sin nombre"}</p>
-                <p className="mt-0.5 truncate text-xs text-lq-muted">
-                  {item.code ?? "—"}
-                  {item.barcode && item.barcode !== item.code ? ` · ${item.barcode}` : ""}
-                  {item.variant_name ? ` · ${item.variant_name}` : ""}
-                  {item.variant_state !== "activa" ? " · inactivo" : ""}
-                </p>
-                <p className="mt-0.5 truncate text-xs text-lq-muted">{item.product_type.name ?? "Sin tipo"}</p>
+                <ProductIdentityCell
+                  productTypeName={item.product_type.name}
+                  productName={item.product_name}
+                  variantName={item.variant_name}
+                  barcode={item.barcode}
+                />
+                {item.variant_state !== "activa" ? (
+                  <p className="mt-0.5 text-xs text-lq-muted">Inactivo{item.code ? ` · SKU ${item.code}` : ""}</p>
+                ) : item.code ? (
+                  <p className="mt-0.5 truncate text-xs text-lq-muted" title={`SKU ${item.code}`}>SKU {item.code}</p>
+                ) : null}
               </td>
               <td className="px-3 py-3.5 text-right font-medium tabular-nums">
                 {formatMoney(item.bsale_average_cost.value)}

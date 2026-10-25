@@ -646,15 +646,24 @@ def costs_export(
 @router.get("/audit/commercial-premium/export.xlsx")
 def commercial_premium_export(
     company_id: int = CompanyQuery,
+    mode: str = Query("review", pattern="^(review|full)$"),
     user: dict = Depends(require_cost_control_v2),
 ):
-    """Excel Premium Auditoría Comercial 8.0 — 6 hojas; universo completo (sin top 30)."""
+    """Excel Auditoría Comercial 8.0.
+
+    ``mode=review`` (default): 2 hojas operativas («Excel para revisión»).
+    ``mode=full``: 6 hojas de diagnóstico («Excel auditoría completa»).
+    Ambos reutilizan el mismo payload; no hay motor duplicado.
+    """
     from datetime import datetime, timezone
 
     from backend.services.analytics_v2.commercial_premium_service import (
         build_commercial_premium_payload,
     )
-    from backend.services.analytics_v2.excel_export import commercial_premium_xlsx
+    from backend.services.analytics_v2.excel_export import (
+        commercial_premium_review_xlsx,
+        commercial_premium_xlsx,
+    )
 
     def build() -> bytes:
         # ACL de empresa: mismo gate que el resto de Control de Costos V2.
@@ -669,14 +678,17 @@ def commercial_premium_export(
                 status_code=503,
                 detail="Auditoría Premium no disponible para esta empresa",
             )
-        return commercial_premium_xlsx(payload)
+        if mode == "full":
+            return commercial_premium_xlsx(payload)
+        return commercial_premium_review_xlsx(payload)
 
     content = _guard("commercial_premium_export", company_id, build)
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    return _xlsx(
-        content,
-        f"Auditoria_Comercial_Premium_Empresa_{company_id}_{stamp}.xlsx",
-    )
+    if mode == "full":
+        filename = f"Auditoria_Comercial_Completa_Empresa_{company_id}_{stamp}.xlsx"
+    else:
+        filename = f"Auditoria_Comercial_Revision_Empresa_{company_id}_{stamp}.xlsx"
+    return _xlsx(content, filename)
 
 
 @router.get("/costs/receptions/export.xlsx")

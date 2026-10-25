@@ -155,6 +155,7 @@ export default function CostControlV2Page() {
   const [exporting, setExporting] = useState(false)
   const [exportingReceptions, setExportingReceptions] = useState(false)
   const [exportingPremium, setExportingPremium] = useState(false)
+  const [exportingPremiumFull, setExportingPremiumFull] = useState(false)
   const [receptionSegment, setReceptionSegment] = useState(1)
 
   const exportParams = () => {
@@ -221,7 +222,7 @@ export default function CostControlV2Page() {
     }
   }
 
-  const handleExportPremium = async () => {
+  const handleExportPremiumReview = async () => {
     if (companyId == null) return
     setExportingPremium(true)
     setError(null)
@@ -229,17 +230,39 @@ export default function CostControlV2Page() {
     try {
       await downloadXlsx(
         "/analytics-v2/audit/commercial-premium/export.xlsx",
-        { company_id: companyId },
-        `Auditoria_Comercial_Premium_Empresa_${companyId}_${stamp}.xlsx`,
+        { company_id: companyId, mode: "review" },
+        `Auditoria_Comercial_Revision_Empresa_${companyId}_${stamp}.xlsx`,
       )
     } catch (e) {
       setError(
         e instanceof Error
           ? e.message
-          : "No se pudo generar el Excel Premium de auditoría. Verifique permisos y reintente.",
+          : "No se pudo generar el Excel para revisión. Verifique permisos y reintente.",
       )
     } finally {
       setExportingPremium(false)
+    }
+  }
+
+  const handleExportPremiumFull = async () => {
+    if (companyId == null) return
+    setExportingPremiumFull(true)
+    setError(null)
+    const stamp = new Date().toISOString().slice(0, 10)
+    try {
+      await downloadXlsx(
+        "/analytics-v2/audit/commercial-premium/export.xlsx",
+        { company_id: companyId, mode: "full" },
+        `Auditoria_Comercial_Completa_Empresa_${companyId}_${stamp}.xlsx`,
+      )
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "No se pudo generar el Excel de auditoría completa. Verifique permisos y reintente.",
+      )
+    } finally {
+      setExportingPremiumFull(false)
     }
   }
 
@@ -263,15 +286,25 @@ export default function CostControlV2Page() {
               Exportar análisis Excel
             </Button>
             <Button
+              size="sm"
+              className="h-10 sm:h-9"
+              onClick={handleExportPremiumReview}
+              disabled={exportingPremium || exportingPremiumFull}
+              title="Dos hojas operativas: anomalías accionables (>15 %) y resumen. Sin costo cero masivo."
+            >
+              {exportingPremium ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+              Excel para revisión
+            </Button>
+            <Button
               variant="outline"
               size="sm"
               className="h-10 sm:h-9"
-              onClick={handleExportPremium}
-              disabled={exportingPremium}
-              title="Auditoría Comercial 8.0: seis hojas con universo completo de divergencias (sin tope top 30)."
+              onClick={handleExportPremiumFull}
+              disabled={exportingPremium || exportingPremiumFull}
+              title="Auditoría completa: seis hojas con diagnóstico técnico (universo completo)."
             >
-              {exportingPremium ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-              Excel Premium auditoría
+              {exportingPremiumFull ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+              Excel auditoría completa
             </Button>
             <div className="flex items-center gap-1.5" title="Historial de recepciones por segmentos de 300 variantes, con los filtros aplicados. Cada archivo declara su segmento y cobertura.">
               <label htmlFor="reception-segment" className="text-xs text-muted-foreground">Segmento</label>

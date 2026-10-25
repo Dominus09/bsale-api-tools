@@ -98,7 +98,7 @@ export function DashboardProductDialog({
         {first ? (
           <div className="space-y-1 text-sm">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-muted-foreground">Costo bruto comercial:</span>
+              <span className="text-muted-foreground">Costo bruto total:</span>
               <span className="font-medium tabular-nums">{formatMoney(first.costs.reference.gross)}</span>
               <ReliabilityBadge status={first.costs.reliability} />
               <span className="text-[11px] text-muted-foreground">

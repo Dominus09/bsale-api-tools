@@ -88,8 +88,10 @@ export type PackRow = {
   variant_id: number
   product_id: number | null
   code: string | null
+  barcode?: string | null
   product_name: string | null
   variant_name: string | null
+  product_type?: { id: number | null; name: string | null }
   pack_state: "activo" | "inactivo"
   pack_status: PackCostStatus | null
   components_count: number

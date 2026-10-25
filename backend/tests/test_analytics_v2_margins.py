@@ -522,6 +522,10 @@ def test_summary_counts_by_list_and_reports_scope():
     assert lst12["rows"] == 2 and lst12["by_status"][S.DENTRO_POLITICA] == 1 and lst12["by_status"][S.SIN_COSTO] == 1
     assert out["meta"]["policies_reviewed"] is False and out["meta"]["promotions_integrated"] is False
     assert out["scope"]["evaluated_price_list_ids"] == [12, 13, 16]
+    # Compact rows del dashboard: tipo + barcode de la variante
+    if out.get("top_alerts"):
+        alert = out["top_alerts"][0]
+        assert "barcode" in alert and "product_type" in alert
 
 
 def test_reactivated_retired_list_is_reported_in_meta_and_not_evaluated():

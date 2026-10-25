@@ -42,6 +42,10 @@ SHEET_NAMES = (
     "Integridad y sincronización",
     "Revisión administrativa",
 )
+REVIEW_SHEET_NAMES = (
+    "Por revisar",
+    "Resumen",
+)
 
 
 def price_lists_for_company(company_id: int) -> dict[int, str]:

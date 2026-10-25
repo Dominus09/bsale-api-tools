@@ -9,8 +9,12 @@ from io import BytesIO
 import pytest
 from openpyxl import load_workbook
 
-from backend.services.analytics_v2.commercial_premium_excel import commercial_premium_xlsx
+from backend.services.analytics_v2.commercial_premium_excel import (
+    commercial_premium_review_xlsx,
+    commercial_premium_xlsx,
+)
 from backend.services.analytics_v2.commercial_premium_service import (
+    REVIEW_SHEET_NAMES,
     SHEET_NAMES,
     build_payload_from_controlled_data,
     enrich_review_row,
@@ -26,6 +30,7 @@ def _sample_anomaly(*, variant_id: int, diff_pct: str, stock: str, extreme: bool
     row = {
         "variant_id": variant_id,
         "product_id": 1000 + variant_id,
+        "product_type_name": "CERVEZA",
         "product_name": f"Producto {variant_id}",
         "variant_name": f"Variante {variant_id}",
         "sku": f"0{variant_id}",
@@ -109,6 +114,7 @@ def _controlled_payload() -> dict:
             "variant_name": "Sin stock fila",
             "sku": "09001",
             "barcode": "7809001",
+            "product_type_name": "ABARROTES",
             "average_cost": Decimal("0"),
             "stock_total_raw": None,
             "stock_total": 0,
@@ -127,6 +133,7 @@ def _controlled_payload() -> dict:
             "variant_name": "Stock cero explícito",
             "sku": "09002",
             "barcode": "7809002",
+            "product_type_name": "ABARROTES",
             "average_cost": Decimal("0"),
             "stock_total_raw": Decimal("0"),
             "stock_total": 0,
@@ -141,6 +148,25 @@ def _controlled_payload() -> dict:
             "last_comparable_document": "Guía",
             "last_comparable_date": date(2026, 1, 10),
             "last_comparable_office_id": 3,
+        },
+        {
+            "variant_id": 9003,
+            "product_name": "Cero C",
+            "variant_name": "Stock positivo crítico",
+            "sku": "09003",
+            "barcode": "7809003",
+            "product_type_name": "HARINA",
+            "average_cost": Decimal("0"),
+            "stock_total_raw": Decimal("44"),
+            "stock_total": Decimal("44"),
+            "sin_fila_stock": False,
+            "stock_cero_explicito": False,
+            "stock_status": "stock_positivo",
+            "has_comparable_reception": False,
+            "has_positive_price": True,
+            "price_12": Decimal("1500"),
+            "commercial_status": "activo_costo_cero_alerta",
+            "recommended_action": "verificar_alta_catalogo_y_primera_compra",
         },
     ]
 
@@ -292,11 +318,67 @@ def test_no_duplicate_variant_ids_in_anomalies_sheet():
 
 def test_excel_export_reexports_commercial_premium():
     assert hasattr(excel_export, "commercial_premium_xlsx")
+    assert hasattr(excel_export, "commercial_premium_review_xlsx")
     payload = _controlled_payload()
     a = commercial_premium_xlsx(payload)
     b = excel_export.commercial_premium_xlsx(payload)
     assert a[:2] == b[:2] == b"PK"
     assert load_workbook(BytesIO(b)).sheetnames == list(SHEET_NAMES)
+
+
+def test_review_xlsx_two_sheets_identity_and_no_zero_cost_dump():
+    payload = _controlled_payload()
+    content = commercial_premium_review_xlsx(payload)
+    assert content[:2] == b"PK"
+    wb = load_workbook(BytesIO(content))
+    assert wb.sheetnames == list(REVIEW_SHEET_NAMES)
+
+    ws = wb[REVIEW_SHEET_NAMES[0]]
+    assert [ws.cell(1, c).value for c in range(1, 12)] == [
+        "Tipo de producto",
+        "Producto + variante",
+        "Código de barras",
+        "Stock",
+        "Costo promedio",
+        "Último costo comparable",
+        "Diferencia %",
+        "Prioridad",
+        "Motivo o acción de revisión",
+        "Estado administrativo",
+        "Observación",
+    ]
+    assert ws.freeze_panes == "D2"
+    # 40 anomalías + 1 crítico stock+sin costo (9003); sin 9001/9002 (sin stock positivo)
+    data_rows = sum(1 for r in range(2, ws.max_row + 1) if ws.cell(r, 3).value)
+    assert data_rows == 41
+    barcodes = {str(ws.cell(r, 3).value) for r in range(2, ws.max_row + 1) if ws.cell(r, 3).value}
+    assert "7809003" in barcodes
+    assert "7809001" not in barcodes
+    assert "7809002" not in barcodes
+    motivos = " ".join(str(ws.cell(r, 9).value or "") for r in range(2, ws.max_row + 1))
+    assert "stock positivo sin costo" in motivos.lower()
+    assert ws["J2"].value == "Pendiente"
+    assert len(ws.data_validations.dataValidation) >= 1
+
+    summary = wb[REVIEW_SHEET_NAMES[1]]
+    blob = "\n".join(str(summary.cell(r, 1).value or "") for r in range(1, 20))
+    assert "alertas" in blob.lower() or "Alertas" in blob
+    assert "no constituyen errores" in blob.lower() or "no constituyen" in blob.lower()
+    assert "Activos costo cero" not in wb.sheetnames
+
+
+def test_full_six_sheets_intact_alongside_review():
+    payload = _controlled_payload()
+    full = load_workbook(BytesIO(commercial_premium_xlsx(payload)))
+    review = load_workbook(BytesIO(commercial_premium_review_xlsx(payload)))
+    assert full.sheetnames == list(SHEET_NAMES)
+    assert review.sheetnames == list(REVIEW_SHEET_NAMES)
+    full_anomaly_rows = sum(1 for r in range(2, full[SHEET_NAMES[1]].max_row + 1) if full[SHEET_NAMES[1]].cell(r, 5).value)
+    review_rows = sum(
+        1 for r in range(2, review[REVIEW_SHEET_NAMES[0]].max_row + 1) if review[REVIEW_SHEET_NAMES[0]].cell(r, 3).value
+    )
+    assert full_anomaly_rows == 40
+    assert review_rows == 41  # anomalías + stock positivo sin costo
 
 
 def test_existing_costs_xlsx_still_works():

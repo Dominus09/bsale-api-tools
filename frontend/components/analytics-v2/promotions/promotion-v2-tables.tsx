@@ -4,6 +4,7 @@ import { Loader2 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import { formatDate, formatDateTime, formatMoney, formatPct, formatQty } from "@/lib/analytics-v2/labels"
+import { ProductIdentityCell } from "@/components/analytics-v2/shared/product-identity-cell"
 import { CLEARANCE_LABELS, HISTORY_EVENT_LABELS } from "@/lib/analytics-v2/promotions-labels"
 import type { CampaignItem, CampaignSummaryRow, HistoryEvent } from "@/lib/analytics-v2/promotions-types"
 
@@ -67,10 +68,15 @@ export function PromotionItemsTable({
         {items.map((i) => (
           <tr key={i.item_id} className="align-top">
             <td className="max-w-[260px] px-3 py-2">
-              <span className="block truncate font-medium">{i.product_name ?? `Variante ${i.variant_id}`}</span>
-              <span className="block truncate text-[11px] text-muted-foreground">
-                {i.sku_code ?? "—"} · {i.barcode ?? "—"}
-                {i.variant_name ? ` · ${i.variant_name}` : ""}
+              <ProductIdentityCell
+                compact
+                productTypeName={i.product_type?.name}
+                productName={i.product_name}
+                variantName={i.variant_name}
+                barcode={i.barcode}
+              />
+              <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+                {i.sku_code ? `SKU ${i.sku_code}` : "Sin SKU"}
               </span>
               {i.kind === "remate" ? (
                 <span className="block text-[11px] text-orange-800 dark:text-orange-300">

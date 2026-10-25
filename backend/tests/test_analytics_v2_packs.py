@@ -419,7 +419,14 @@ def test_packs_rows_detail_and_list_filters():
     assert D(row["cost_net_total"]) == EXPECTED_NET and D(row["price_gross"]) == D("9590")
     assert row["updated_at"]["composition_fetched_at"] == FETCHED.isoformat()
     assert out["meta"]["historical_profitability"] == "no_implementada"
+    # Identificación: barcode y tipo desde la variante (no sustituir barcode por SKU).
+    assert "barcode" in row
+    assert row["barcode"] == PACK_5646["bar_code"]
+    assert row["code"] == PACK_5646["code"]
+    assert row["barcode"] != row["code"] or row["barcode"] is None
+    assert row.get("product_type", {}).get("name") == PACK_5646.get("product_type_name")
     det = svc.detail(56460)
+    assert det.get("barcode") == PACK_5646["bar_code"]
     assert [l["variant_id"] for l in det["pack"]["lines"]] == [9800, 10963, 11592]
     sprite = det["pack"]["lines"][1]
     assert sprite["tax_ids"] == [1, 5] and D(sprite["subtotal_gross"]) == D("1178.66") * D("1.29")

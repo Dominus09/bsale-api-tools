@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react"
 import { Loader2 } from "lucide-react"
 
+import { ProductIdentityCell } from "@/components/analytics-v2/shared/product-identity-cell"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { getReception } from "@/lib/analytics-v2/api"
 import { formatDate, formatDateTime, formatMoney, formatQty } from "@/lib/analytics-v2/labels"
@@ -104,7 +105,7 @@ export function CostV2ReceptionDialog({
                 <thead className="bg-muted/40 text-left text-[11px] uppercase text-muted-foreground">
                   <tr>
                     <th className="px-2 py-1.5 font-medium">Línea</th>
-                    <th className="px-2 py-1.5 font-medium">Producto</th>
+                    <th className="px-2 py-1.5 font-medium">Identificación</th>
                     <th className="px-2 py-1.5 text-right font-medium">Cantidad</th>
                     <th className="px-2 py-1.5 text-right font-medium">Costo unitario</th>
                   </tr>
@@ -117,14 +118,16 @@ export function CostV2ReceptionDialog({
                     >
                       <td className="px-2 py-1.5 tabular-nums">{l.detail_id}</td>
                       <td className="px-2 py-1.5">
-                        <p className="font-medium">
-                          {l.product_name ?? "—"}
-                          {l.variant_name ? <span className="font-normal"> — {l.variant_name}</span> : null}
-                        </p>
-                        <p className="text-[11px] text-muted-foreground">
-                          SKU {l.code ?? "—"}
-                          {l.barcode ? ` · Barras ${l.barcode}` : ""}
-                          {l.variant_id != null ? ` · Variante #${l.variant_id}` : ""}
+                        <ProductIdentityCell
+                          compact
+                          productTypeName={l.product_type?.name}
+                          productName={l.product_name}
+                          variantName={l.variant_name}
+                          barcode={l.barcode}
+                        />
+                        <p className="mt-0.5 text-[11px] text-muted-foreground">
+                          {l.code ? `SKU ${l.code}` : "Sin SKU"}
+                          {l.variant_id != null ? ` · #${l.variant_id}` : ""}
                           {l.missing_since ? " · línea ausente en Bsale" : ""}
                         </p>
                       </td>

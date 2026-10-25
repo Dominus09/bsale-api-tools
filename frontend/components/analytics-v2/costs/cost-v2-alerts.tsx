@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 import { Loader2 } from "lucide-react"
 
 import { ProfessionalDataTable, SectionCard, SmartFilterBar, StatusBadge } from "@/components/analytics-v2/shared/analytics-ui"
+import { ProductIdentityCell } from "@/components/analytics-v2/shared/product-identity-cell"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
@@ -215,19 +216,24 @@ export function CostV2Alerts({
                     {SEVERITY_LABELS[a.max_severity]}
                   </span>
                 </td>
-                <td className="max-w-[240px] px-3 py-2">
+                <td className="max-w-[280px] px-3 py-2">
                   {a.variant_id != null ? (
                     <button
                       type="button"
-                      className="truncate text-left font-medium hover:underline"
+                      className="block max-w-full text-left hover:underline"
                       onClick={() => onOpenProduct(a.variant_id as number)}
                     >
-                      {a.product_name ?? `Variante ${a.variant_id}`}
+                      <ProductIdentityCell
+                        compact
+                        productTypeName={a.product_type?.name}
+                        productName={a.product_name}
+                        variantName={a.variant_name}
+                        barcode={a.barcode}
+                      />
                     </button>
                   ) : (
                     <span>Variante desconocida</span>
                   )}
-                  <span className="block truncate text-[11px] text-muted-foreground">{a.code ?? "—"}</span>
                 </td>
                 <td className="px-3 py-2">
                   <button

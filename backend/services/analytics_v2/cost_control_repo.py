@@ -235,6 +235,8 @@ SELECT
     v.bar_code,
     v.description AS variant_name,
     p.name AS product_name,
+    p.product_type_id,
+    pt.name AS product_type_name,
     s.reception_id,
     s.detail_id,
     s.admission_date,
@@ -255,6 +257,8 @@ LEFT JOIN agg a ON a.variant_id = s.variant_id
 LEFT JOIN modified m ON m.reception_id = s.reception_id AND m.detail_id = s.detail_id
 LEFT JOIN bsale_raw.variants v ON v.company_id = %s AND v.bsale_id = s.variant_id
 LEFT JOIN bsale_raw.products p ON p.company_id = v.company_id AND p.bsale_id = v.product_id
+LEFT JOIN bsale_raw.product_types pt
+  ON pt.company_id = p.company_id AND pt.bsale_id = p.product_type_id
 WHERE s.admission_date BETWEEN %s AND %s
   AND (
         s.cost IS NULL
@@ -315,6 +319,8 @@ SELECT
     v.bar_code,
     v.description AS variant_name,
     p.name AS product_name,
+    p.product_type_id,
+    pt.name AS product_type_name,
     d.quantity,
     d.cost,
     d.missing_since,
@@ -322,6 +328,8 @@ SELECT
 FROM bsale_raw.stock_reception_details d
 LEFT JOIN bsale_raw.variants v ON v.company_id = d.company_id AND v.bsale_id = d.variant_id
 LEFT JOIN bsale_raw.products p ON p.company_id = v.company_id AND p.bsale_id = v.product_id
+LEFT JOIN bsale_raw.product_types pt
+  ON pt.company_id = p.company_id AND pt.bsale_id = p.product_type_id
 WHERE d.company_id = %s AND d.reception_id = %s
 ORDER BY d.bsale_id
 """.strip()

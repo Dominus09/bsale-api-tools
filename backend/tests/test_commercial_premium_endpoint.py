@@ -14,6 +14,7 @@ from openpyxl import load_workbook
 from backend.routers import analytics_v2 as router_mod
 from backend.services.analytics_v2.access import AnalyticsV2AccessError
 from backend.services.analytics_v2.commercial_premium_service import (
+    REVIEW_SHEET_NAMES,
     SHEET_NAMES,
     build_payload_from_controlled_data,
     enrich_review_row,
@@ -99,7 +100,7 @@ def test_premium_export_rejects_unauthorized_company(premium_client):
     assert res.status_code == 403
 
 
-def test_premium_export_downloads_valid_six_sheet_xlsx(premium_client):
+def test_premium_export_default_is_review_two_sheets(premium_client):
     res = premium_client.get(
         "/analytics-v2/audit/commercial-premium/export.xlsx?company_id=3",
         headers=_auth("adm"),
@@ -108,14 +109,27 @@ def test_premium_export_downloads_valid_six_sheet_xlsx(premium_client):
     assert res.body[:2] == b"PK"
     assert any(c[1] == 3 for c in premium_client.access_calls)  # type: ignore[attr-defined]
     wb = load_workbook(BytesIO(res.body))
+    assert wb.sheetnames == list(REVIEW_SHEET_NAMES)
+    # 35 anomalías (sin tope 30); max_row puede incluir nota al pie
+    ws = wb[REVIEW_SHEET_NAMES[0]]
+    data_rows = sum(1 for r in range(2, ws.max_row + 1) if ws.cell(r, 3).value)
+    assert data_rows == 35
+
+
+def test_premium_export_full_six_sheets(premium_client):
+    res = premium_client.get(
+        "/analytics-v2/audit/commercial-premium/export.xlsx?company_id=3&mode=full",
+        headers=_auth("adm"),
+    )
+    assert res.status_code == 200
+    wb = load_workbook(BytesIO(res.body))
     assert wb.sheetnames == list(SHEET_NAMES)
-    # 35 anomalías (sin tope 30)
     assert wb[SHEET_NAMES[1]].max_row == 36
 
 
 def test_premium_filename_contains_company_and_date(premium_client):
     res = premium_client.get(
-        "/analytics-v2/audit/commercial-premium/export.xlsx?company_id=3",
+        "/analytics-v2/audit/commercial-premium/export.xlsx?company_id=3&mode=review",
         headers=_auth("adm"),
     )
     # AsgiClient no expone headers fácilmente; validamos cuerpo XLSX.

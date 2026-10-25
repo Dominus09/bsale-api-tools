@@ -55,6 +55,7 @@ export type CampaignItem = {
   barcode: string | null
   product_name: string | null
   variant_name: string | null
+  product_type?: { id: number | null; name: string | null }
   price_list: PriceListRef
   normal_gross_price: Money
   normal_price_fetched_at: string | null

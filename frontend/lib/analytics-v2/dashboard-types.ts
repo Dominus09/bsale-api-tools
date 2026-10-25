@@ -27,8 +27,10 @@ export type Count = { combinations: number; skus: number }
 export type CompactMarginRow = {
   variant_id: number
   code: string | null
+  barcode?: string | null
   product_name: string | null
   variant_name: string | null
+  product_type?: { id: number | null; name: string | null }
   price_list: { id: number; name: string | null; label: string | null }
   status: MarginStatus
   data_class: DataClass
@@ -145,8 +147,10 @@ export type DashboardCosts = {
     top: {
       variant_id: number
       code: string | null
+      barcode?: string | null
       product_name: string | null
       variant_name: string | null
+      product_type?: { id: number | null; name: string | null }
       change_pct: Money
       last_comparable: { admission_date: string | null; cost: Money } | null
       previous_comparable: { admission_date: string | null; cost: Money } | null

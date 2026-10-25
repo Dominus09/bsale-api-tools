@@ -3,6 +3,7 @@
 import { ArrowRight, Loader2, Search } from "lucide-react"
 
 import { EmptyState, ProfessionalDataTable, SmartFilterBar } from "@/components/analytics-v2/shared/analytics-ui"
+import { ProductIdentityCell } from "@/components/analytics-v2/shared/product-identity-cell"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
@@ -207,12 +208,17 @@ export function MarginV2Table({
         {items.map((r) => (
           <article key={`${r.variant_id}-${r.price_list.id}`} className="p-4">
             <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-lq-ink">{r.product_name ?? `Variante ${r.variant_id}`}</p>
-                <p className="mt-1 text-xs text-lq-muted">{r.code ?? "Sin SKU"} · {r.price_list.label ?? r.price_list.name}</p>
-              </div>
+              <ProductIdentityCell
+                compact
+                className="min-w-0 flex-1"
+                productTypeName={r.product_type.name}
+                productName={r.product_name}
+                variantName={r.variant_name}
+                barcode={r.barcode}
+              />
               <StatusCell row={r} />
             </div>
+            <p className="mt-1 text-xs text-lq-muted">{r.price_list.label ?? r.price_list.name}</p>
             <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
               <div><dt className="text-xs text-lq-muted">Precio bruto</dt><dd className="mt-0.5 font-medium tabular-nums">{formatMoney(r.price.gross)}</dd></div>
               <div><dt className="text-xs text-lq-muted">Costo bruto</dt><dd className="mt-0.5 font-medium tabular-nums">{formatMoney(r.costs.reference.gross)}</dd></div>
@@ -227,7 +233,7 @@ export function MarginV2Table({
       <table className="hidden w-full min-w-[1120px] table-fixed text-sm lg:table">
         <thead className="border-b border-lq-line-soft bg-lq-canvas text-left text-xs text-lq-muted">
           <tr>
-            <th className="w-[22%] px-5 py-3 font-medium">Producto</th>
+            <th className="w-[22%] px-5 py-3 font-medium">Identificación</th>
             <th className="w-[11%] px-3 py-3 font-medium">Lista</th>
             <th className="w-[11%] px-3 py-3 text-right font-medium">Precio bruto</th>
             <th className="w-[12%] px-3 py-3 text-right font-medium">Costo bruto</th>
@@ -243,12 +249,17 @@ export function MarginV2Table({
             <tr key={`${r.variant_id}-${r.price_list.id}`} className="group hover:bg-lq-canvas">
               <td className="px-5 py-3.5">
                 <button type="button" className="block max-w-full text-left" onClick={() => onOpenProduct(r.variant_id)}>
-                <span className="block truncate font-medium text-lq-ink group-hover:text-primary">{r.product_name ?? `Variante ${r.variant_id}`}</span>
-                <span className="mt-0.5 block truncate text-xs text-lq-muted">
-                  {r.code ?? "—"} · {r.barcode ?? "—"}
-                  {r.variant_name ? ` · ${r.variant_name}` : ""}
-                </span>
-                <span className="mt-0.5 block truncate text-xs text-lq-muted">{r.is_pack ? `Pack · ${r.pack?.components_count ?? 0} componentes` : r.product_type.name ?? "Sin tipo"}</span>
+                  <ProductIdentityCell
+                    productTypeName={r.product_type.name}
+                    productName={r.product_name}
+                    variantName={r.variant_name}
+                    barcode={r.barcode}
+                  />
+                  {r.is_pack ? (
+                    <span className="mt-0.5 block text-xs text-lq-muted">
+                      Pack · {r.pack?.components_count ?? 0} componentes
+                    </span>
+                  ) : null}
                 </button>
               </td>
               <td className="px-3 py-3.5 text-xs">

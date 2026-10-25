@@ -365,9 +365,14 @@ class PromotionsV2Service:
             "variant_id": variant_id,
             "product_id": item.get("product_id"),
             "sku_code": item.get("sku_code"),
-            "barcode": item.get("barcode"),
+            # Preferir barcode RAW vigente; snapshot del ítem solo si Bsale no informa.
+            "barcode": item.get("raw_barcode") or item.get("barcode"),
             "product_name": item.get("product_name"),
             "variant_name": item.get("variant_name"),
+            "product_type": {
+                "id": item.get("product_type_id"),
+                "name": item.get("product_type_name"),
+            },
             "price_list": self._list_info(list_id),
             "normal_gross_price": money(normal),
             "normal_price_fetched_at": iso(item.get("normal_price_fetched_at")),
@@ -750,6 +755,10 @@ class PromotionsV2Service:
                     "barcode": r.get("bar_code"),
                     "product_name": r.get("product_name"),
                     "variant_name": r.get("description"),
+                    "product_type": {
+                        "id": r.get("product_type_id"),
+                        "name": r.get("product_type_name"),
+                    },
                     "variant_active": r.get("state") == 0,
                     "prices": sorted(by_variant.get(int(r["variant_id"]), []), key=lambda x: x["price_list"]["id"]),
                 }

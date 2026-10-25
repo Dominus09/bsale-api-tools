@@ -3,6 +3,7 @@
 import { ArrowRight, Loader2, PackageSearch, Search } from "lucide-react"
 
 import { EmptyState, ProfessionalDataTable, SmartFilterBar } from "@/components/analytics-v2/shared/analytics-ui"
+import { ProductIdentityCell } from "@/components/analytics-v2/shared/product-identity-cell"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
@@ -172,12 +173,19 @@ export function PackV2Table({
         {items.map((r) => (
           <article key={`${r.variant_id}-${r.price_list.id}`} className="p-4">
             <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-lq-ink">{r.product_name ?? `Variante ${r.variant_id}`}</p>
-                <p className="mt-1 truncate text-xs text-lq-muted">{r.code ?? "Sin SKU"} · {r.price_list.label ?? r.price_list.name}</p>
-              </div>
+              <ProductIdentityCell
+                compact
+                className="min-w-0 flex-1"
+                productTypeName={r.product_type?.name ?? "Pack"}
+                productName={r.product_name}
+                variantName={r.variant_name}
+                barcode={r.barcode}
+              />
               {state(r)}
             </div>
+            <p className="mt-1 truncate text-xs text-lq-muted">
+              {r.code ? `SKU ${r.code}` : "Sin SKU"} · {r.price_list.label ?? r.price_list.name}
+            </p>
             <dl className="mt-4 grid grid-cols-2 gap-x-5 gap-y-3">
               <div><dt className="text-xs text-lq-muted">Precio bruto</dt><dd className="mt-0.5 font-medium tabular-nums">{formatMoney(r.price_gross)}</dd></div>
               <div><dt className="text-xs text-lq-muted">Costo bruto</dt><dd className="mt-0.5 font-medium tabular-nums">{formatMoney(r.cost_gross_total)}</dd></div>
@@ -213,9 +221,15 @@ export function PackV2Table({
                 >
                   <span className="mt-0.5 rounded-md bg-lq-canvas p-1.5 text-lq-muted group-hover:bg-lq-surface"><PackageSearch className="h-4 w-4" /></span>
                   <span className="min-w-0">
-                    <span className="block truncate font-medium text-lq-ink group-hover:text-primary">{r.product_name ?? `Variante ${r.variant_id}`}</span>
-                    <span className="mt-0.5 block truncate text-xs font-normal text-lq-muted">
-                      {r.code ?? "Sin SKU"} · #{r.variant_id} · {r.components_count} componentes
+                    <ProductIdentityCell
+                      productTypeName={r.product_type?.name ?? `Pack · ${r.components_count} componentes`}
+                      productName={r.product_name}
+                      variantName={r.variant_name}
+                      barcode={r.barcode}
+                    />
+                    <span className="mt-0.5 block truncate text-xs text-lq-muted">
+                      {r.code ? `SKU ${r.code}` : "Sin SKU"}
+                      {r.components_count ? ` · ${r.components_count} componentes` : ""}
                     </span>
                   </span>
                 </button>

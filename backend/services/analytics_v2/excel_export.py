@@ -614,3 +614,12 @@ def commercial_premium_xlsx(payload: dict[str, Any]) -> bytes:
     )
 
     return _build(payload)
+
+
+def commercial_premium_review_xlsx(payload: dict[str, Any]) -> bytes:
+    """Excel operativo de revisión (2 hojas). Mismo payload; reexporta el generador dedicado."""
+    from backend.services.analytics_v2.commercial_premium_excel import (
+        commercial_premium_review_xlsx as _build,
+    )
+
+    return _build(payload)

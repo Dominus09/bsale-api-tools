@@ -19,6 +19,11 @@ import { Input } from "@/components/ui/input"
 import { getStoredCompanyId } from "@/lib/api"
 import { AnalyticsV2Error, downloadXlsx, getCatalogRows } from "@/lib/analytics-v2/api"
 import type { CatalogMeta, CatalogRow } from "@/lib/analytics-v2/catalog-types"
+import {
+  formatBarcode,
+  formatProductPlusVariant,
+  formatProductType,
+} from "@/lib/analytics-v2/product-identity"
 import { formatDateTime, formatMoney, formatQty } from "@/lib/analytics-v2/labels"
 import { cn } from "@/lib/utils"
 
@@ -358,14 +363,20 @@ export default function CatalogoMaestroPage() {
                   <tbody className="divide-y divide-lq-line-soft">
                     {rows.map((r) => (
                       <tr key={r.variant_id} className="align-top transition-colors hover:bg-lq-canvas">
-                        <td className="px-4 py-3 text-lq-body">{r.product_type ?? "—"}</td>
+                        <td className="px-4 py-3 text-lq-body">{formatProductType(r.product_type)}</td>
                         <td className="px-4 py-3">
-                          <span className="block font-medium text-lq-ink">{r.product_name ?? `Producto ${r.product_id ?? "—"}`}</span>
-                          <span className="mt-0.5 block text-xs text-lq-muted">{r.variant_name ?? "—"}</span>
+                          <span
+                            className="block font-medium text-lq-ink"
+                            title={formatProductPlusVariant(r.product_name, r.variant_name)}
+                          >
+                            {formatProductPlusVariant(r.product_name, r.variant_name)}
+                          </span>
                         </td>
                         <td className="px-4 py-3 text-xs text-lq-body">
                           <span className="block tabular-nums">{r.code ?? "Sin SKU"}</span>
-                          <span className="mt-0.5 block tabular-nums text-lq-muted">{r.barcode ?? "Sin código"}</span>
+                          <span className="mt-0.5 block font-mono tabular-nums text-lq-muted" title={formatBarcode(r.barcode)}>
+                            {formatBarcode(r.barcode)}
+                          </span>
                         </td>
                         <td className="px-4 py-3 text-xs text-lq-body">
                           <span className="block">{taxLabel(r)}</span>

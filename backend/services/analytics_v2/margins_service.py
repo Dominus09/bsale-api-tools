@@ -694,8 +694,10 @@ def _compact(r: dict[str, Any]) -> dict[str, Any]:
     return {
         "variant_id": r["variant_id"],
         "code": r["code"],
+        "barcode": r.get("barcode"),
         "product_name": r["product_name"],
         "variant_name": r["variant_name"],
+        "product_type": r.get("product_type") or {"id": None, "name": None},
         "price_list": r["price_list"],
         "status": r["status"],
         "data_class": data_class(r).value,

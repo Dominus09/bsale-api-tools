@@ -52,16 +52,32 @@ i.legacy_snapshot_id, i.created_by, i.created_at, i.updated_by, i.updated_at, i.
 i.version
 """
 
+# Enriquecimiento RAW (mismo company_id): tipo real + barcode vigente de la variante.
+_ITEM_RAW_JOINS = """
+LEFT JOIN bsale_raw.variants v
+  ON v.company_id = i.company_id AND v.bsale_id = i.variant_id
+LEFT JOIN bsale_raw.products p
+  ON p.company_id = v.company_id AND p.bsale_id = v.product_id
+LEFT JOIN bsale_raw.product_types pt
+  ON pt.company_id = p.company_id AND pt.bsale_id = p.product_type_id
+"""
+
 ITEMS_SQL = f"""
-SELECT {ITEM_COLUMNS}
+SELECT {ITEM_COLUMNS},
+       pt.name AS product_type_name,
+       NULLIF(btrim(v.bar_code), '') AS raw_barcode
 FROM app.commercial_campaign_items_v2 i
+{_ITEM_RAW_JOINS}
 WHERE i.company_id = %s AND i.campaign_id = ANY(%s)
 ORDER BY i.campaign_id, i.product_name NULLS LAST, i.id
 """
 
 ITEM_SQL = f"""
-SELECT {ITEM_COLUMNS}
+SELECT {ITEM_COLUMNS},
+       pt.name AS product_type_name,
+       NULLIF(btrim(v.bar_code), '') AS raw_barcode
 FROM app.commercial_campaign_items_v2 i
+{_ITEM_RAW_JOINS}
 WHERE i.company_id = %s AND i.campaign_id = %s AND i.id = %s
 """
 
@@ -111,9 +127,11 @@ WHERE vp.company_id = %s
 
 RAW_VARIANT_SQL = """
 SELECT v.bsale_id AS variant_id, v.product_id, v.code, v.bar_code, v.description, v.state, v.missing_since,
-       p.name AS product_name
+       p.name AS product_name, p.product_type_id, pt.name AS product_type_name
 FROM bsale_raw.variants v
 LEFT JOIN bsale_raw.products p ON p.company_id = v.company_id AND p.bsale_id = v.product_id
+LEFT JOIN bsale_raw.product_types pt
+  ON pt.company_id = p.company_id AND pt.bsale_id = p.product_type_id
 WHERE v.company_id = %s AND v.bsale_id = %s
 """
 
@@ -125,9 +143,11 @@ WHERE s.company_id = %s AND s.variant_id = %s
 
 PRODUCT_SEARCH_SQL = """
 SELECT v.bsale_id AS variant_id, v.product_id, v.code, v.bar_code, v.description, v.state,
-       p.name AS product_name
+       p.name AS product_name, p.product_type_id, pt.name AS product_type_name
 FROM bsale_raw.variants v
 LEFT JOIN bsale_raw.products p ON p.company_id = v.company_id AND p.bsale_id = v.product_id
+LEFT JOIN bsale_raw.product_types pt
+  ON pt.company_id = p.company_id AND pt.bsale_id = p.product_type_id
 WHERE v.company_id = %s
   AND v.missing_since IS NULL
   AND (v.code ILIKE %s OR v.bar_code ILIKE %s OR p.name ILIKE %s OR v.description ILIKE %s)

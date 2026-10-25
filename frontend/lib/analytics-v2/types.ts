@@ -106,9 +106,11 @@ export type TaxProfile = {
   reason: string
   iva_rate_pct: string | null
   ila_rate_pct: string | null
-  /** Anticipo harina/carne: informativo; no entra al factor comercial. */
+  /** Anticipo harina/carne: integra total_rate (pagadero); no entra a margin_rate. */
   iva_anticipado_rate_pct?: string | null
   total_rate_pct: string | null
+  /** Base de márgenes: solo IVA+ILA. */
+  margin_rate_pct?: string | null
   issues: string[]
   taxes: TaxEntry[]
 }
@@ -117,13 +119,23 @@ export type CommercialGrossCost = {
   net: Money
   iva_rate_pct: Money
   ila_rate_pct: Money
+  iva_anticipado_rate_pct?: Money
+  /** Factor bruto pagadero (p. ej. 1,31 harina). */
   factor: Money
+  /** Bruto total pagadero estimado. */
   gross: Money
+  /** Factor / bruto de base de márgenes (sin anticipo). */
+  margin_factor?: Money
+  margin_gross?: Money
+  /** Alias de margin_gross. */
+  net_plus_iva_gross?: Money
   status: GrossCostStatus
   reason: string | null
   base: "promedio_bsale" | "componentes_promedio_bsale"
   tax_ids: number[]
   taxes_applied: AppliedTax[]
+  margin_taxes_applied?: AppliedTax[]
+  confirmed_by_document?: boolean
   source: string
 }
 
@@ -132,6 +144,37 @@ export type AppliedTax = {
   code: string | null
   percentage: Money
   kind: TaxEntry["kind"]
+}
+
+export type TaxBreakdownLine = {
+  tax_id: number
+  name: string
+  label: string
+  code: string | null
+  role: TaxEntry["kind"]
+  percentage: Money
+  amount_estimated: Money
+  increases_payable_total?: boolean
+  in_margin_base?: boolean
+  in_commercial_factor: boolean
+  use: TaxEntry["use"]
+  source: string
+  confirmed_by_document: boolean
+}
+
+export type TaxBreakdown = {
+  net: Money
+  lines: TaxBreakdownLine[]
+  net_plus_iva_gross?: Money
+  margin_gross?: Money
+  margin_factor?: Money
+  commercial_gross: Money
+  payable_gross_total?: Money
+  commercial_factor: Money
+  payable_factor?: Money
+  documentary_total_referential: Money
+  documentary_total_confirmed: Money
+  disclaimers: string[]
 }
 
 export type CostProductItem = {
@@ -152,6 +195,7 @@ export type CostProductItem = {
   change: { amount: Money; pct: Money } | null
   tax_profile: TaxProfile
   commercial_gross_cost: CommercialGrossCost
+  tax_breakdown?: TaxBreakdown
   gross_cost_preliminary: { value: Money; status: GrossCostStatus; base: string }
   reliability: { status: CostReliability; reason: string }
   anomalies: Anomaly[]
@@ -197,6 +241,7 @@ export type AlertItem = {
   barcode: string | null
   product_name: string | null
   variant_name: string | null
+  product_type?: { id: number | null; name: string | null }
   reception_id: number
   detail_id: number
   admission_date: string | null
@@ -271,6 +316,7 @@ export type ReceptionDetail = {
     barcode: string | null
     product_name: string | null
     variant_name: string | null
+    product_type?: { id: number | null; name: string | null }
     quantity: Money
     cost: Money
     missing_since: string | null
