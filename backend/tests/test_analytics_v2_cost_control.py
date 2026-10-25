@@ -310,7 +310,8 @@ def test_abnormal_increase_requires_review():
     assert item["reliability"]["status"] == "requiere_revision"
 
 
-def test_pending_tax_profile_has_no_gross_cost():
+def test_anticipated_with_iva_excludes_anticipo_from_commercial_gross():
+    """IVA + anticipo: bruto comercial = neto×1,19; anticipo no suma (no $1.240)."""
     row = fact(5, tax_ids=[1, 7], average_cost=D("1000"), **purchase("lc_", 30, "1000", date(2026, 10, 1)))
     repo = FakeRepo([row])
     repo.tax_catalog = lambda **kw: [  # type: ignore[method-assign]
@@ -319,10 +320,14 @@ def test_pending_tax_profile_has_no_gross_cost():
     ]
     item = service(repo).get_product(5)
     assert item["tax_profile"]["status"] == "iva_anticipado"
-    assert item["gross_cost_preliminary"]["value"] is None
-    assert item["gross_cost_preliminary"]["status"] == "requiere_revision_tributaria"
-    assert item["commercial_gross_cost"]["gross"] is None
-    assert item["commercial_gross_cost"]["status"] == "requiere_revision_tributaria"
+    assert item["tax_profile"]["iva_anticipado_rate_pct"] == "5"
+    assert item["tax_profile"]["iva_rate_pct"] == "19"
+    assert D(item["commercial_gross_cost"]["gross"]) == D("1190")
+    assert D(item["commercial_gross_cost"]["factor"]) == D("1.19")
+    assert item["commercial_gross_cost"]["reason"] == "anticipo_excluido_del_factor_comercial"
+    assert item["commercial_gross_cost"]["status"] == "preliminar_no_verificado"
+    # No usar neto+IVA+anticipo como costo comercial.
+    assert item["commercial_gross_cost"]["gross"] != "1240"
 
 
 def test_unknown_sku_is_not_found():

@@ -31,6 +31,7 @@ from backend.services.analytics_v2.contracts import (
     PolicyReviewStatus,
     RuleIssue,
     StatusConfirmation,
+    TaxProfileStatus,
     iso,
     money,
 )
@@ -175,6 +176,9 @@ def evaluate(
         override = promotion.verified_status
         if override is not None and status is S.BAJO_POLITICA:
             status = override
+        # Anticipo presente: el bruto comercial ya excluye el anticipo; se deja rastro.
+        if cost.tax_profile.status is TaxProfileStatus.IVA_ANTICIPADO:
+            reasons.append("impuesto_iva_anticipado_excluido_del_factor")
 
     qualifiers: list[S] = []
     if status in COMPARATIVE or status is S.REQUIERE_REVISION_TRIBUTARIA:

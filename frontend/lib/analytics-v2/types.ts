@@ -106,6 +106,8 @@ export type TaxProfile = {
   reason: string
   iva_rate_pct: string | null
   ila_rate_pct: string | null
+  /** Anticipo harina/carne: informativo; no entra al factor comercial. */
+  iva_anticipado_rate_pct?: string | null
   total_rate_pct: string | null
   issues: string[]
   taxes: TaxEntry[]

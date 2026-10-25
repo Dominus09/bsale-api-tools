@@ -97,6 +97,7 @@ export const TAX_ISSUE_LABELS: Record<string, string> = {
   impuesto_inactivo: "Impuesto inactivo",
   impuesto_retirado_de_bsale: "Impuesto retirado de Bsale",
   iva_anticipado: "IVA anticipado",
+  anticipo_sin_iva_comercial: "Anticipo sin IVA comercial",
   ila_multiple: "Más de un ILA",
   iva_duplicado: "IVA duplicado",
   ila_sin_iva: "ILA sin IVA",

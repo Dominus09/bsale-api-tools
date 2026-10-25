@@ -139,6 +139,8 @@ class TaxProfile:
     iva_rate_pct: Decimal | None = None
     ila_rate_pct: Decimal | None = None
     issues: tuple[str, ...] = ()
+    # Anticipo (harina/carne): informativo; NUNCA entra a total_rate_pct / factor comercial.
+    iva_anticipado_rate_pct: Decimal | None = None
 
     @property
     def validation(self) -> TaxValidation:
@@ -146,6 +148,8 @@ class TaxProfile:
             return TaxValidation.SIN_CONFIGURACION
         if self.total_rate_pct is None:
             return TaxValidation.REQUIERE_REVISION_TRIBUTARIA
+        # Con IVA comercial calculable + anticipo: el bruto comercial es usable,
+        # pero el estado sigue siendo iva_anticipado (revisión contable del anticipo).
         return TaxValidation.CALCULABLE
 
     @property
@@ -164,6 +168,7 @@ class TaxProfile:
             "reason": self.reason,
             "iva_rate_pct": money(self.iva_rate_pct),
             "ila_rate_pct": money(self.ila_rate_pct),
+            "iva_anticipado_rate_pct": money(self.iva_anticipado_rate_pct),
             "total_rate_pct": money(self.total_rate_pct),
             "issues": list(self.issues),
             "taxes": [t.to_json() for t in self.taxes],
@@ -301,11 +306,44 @@ def resolve_tax_profile(
         )
     roles = [t.role for t in taxes]
     if ROLE_IVA_ANTICIPADO in roles:
+        anticipados = [t for t in taxes if t.role == ROLE_IVA_ANTICIPADO]
+        iva_a = [t for t in taxes if t.role == ROLE_IVA]
+        ila_a = [t for t in taxes if t.role == ROLE_ILA]
+        anticipado_rate = sum((t.percentage or ZERO) for t in anticipados)
+        # Solo anticipo (sin IVA comercial): no hay factor de comparación de márgenes.
+        if not iva_a:
+            return TaxProfile(
+                S.IVA_ANTICIPADO,
+                "Solo IVA anticipado: recuperable contablemente; sin IVA comercial no hay costo bruto de márgenes",
+                taxes,
+                issues=(*profile_issues, "iva_anticipado", "anticipo_sin_iva_comercial"),
+                iva_anticipado_rate_pct=anticipado_rate,
+            )
+        if len(iva_a) != 1 or len(ila_a) >= 2:
+            code = "iva_duplicado" if len(iva_a) > 1 else "ila_multiple"
+            return TaxProfile(
+                S.CONFIGURACION_INCONSISTENTE,
+                "IVA anticipado con configuración de IVA/ILA incompatible",
+                taxes,
+                issues=(*profile_issues, "iva_anticipado", code),
+                iva_anticipado_rate_pct=anticipado_rate,
+            )
+        # IVA (+ ILA opcional) + anticipo: factor comercial = solo IVA/ILA.
+        # El anticipo se expone aparte y NUNCA se suma al costo comercial ni al inventario.
+        iva_rate = iva_a[0].percentage
+        ila_rate = ila_a[0].percentage if ila_a else ZERO
+        assert iva_rate is not None and ila_rate is not None
+        total = iva_rate + ila_rate
         return TaxProfile(
             S.IVA_ANTICIPADO,
-            "IVA anticipado: es recuperable contablemente y no se suma al costo hasta definir su tratamiento",
+            "IVA anticipado excluido del costo comercial; el factor usa solo IVA/ILA. "
+            "Total documental (neto+IVA+anticipo) requiere respaldo de factura.",
             taxes,
-            issues=(*profile_issues, "iva_anticipado"),
+            total,
+            iva_rate,
+            ila_rate,
+            (*profile_issues, "iva_anticipado"),
+            iva_anticipado_rate_pct=anticipado_rate,
         )
     ila = [t for t in taxes if t.role == ROLE_ILA]
     iva = [t for t in taxes if t.role == ROLE_IVA]
@@ -383,6 +421,15 @@ def commercial_gross_cost(net_cost: Decimal | None, profile: TaxProfile) -> Gros
         return GrossCost(net_cost, None, GrossCostStatus.REQUIERE_REVISION_TRIBUTARIA, profile.status.value, **ctx)
     applied = tuple(t for t in profile.taxes if t.use == USE_COMMERCIAL)
     factor = ONE + profile.total_rate_pct / HUNDRED
+    reason = None
+    if profile.status is TaxProfileStatus.IVA_ANTICIPADO:
+        reason = "anticipo_excluido_del_factor_comercial"
     return GrossCost(
-        net_cost, net_cost * factor, GrossCostStatus.PRELIMINAR_NO_VERIFICADO, None, factor=factor, applied=applied, **ctx
+        net_cost,
+        net_cost * factor,
+        GrossCostStatus.PRELIMINAR_NO_VERIFICADO,
+        reason,
+        factor=factor,
+        applied=applied,
+        **ctx,
     )

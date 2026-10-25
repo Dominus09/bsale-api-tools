@@ -249,11 +249,17 @@ export function CostV2ProductSheet({
                   <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[12px]">
                     <dt className="text-muted-foreground">Costo neto promedio</dt>
                     <dd className="text-right tabular-nums">{formatMoney(product.commercial_gross_cost.net)}</dd>
-                    <dt className="text-muted-foreground">IVA aplicado</dt>
+                    <dt className="text-muted-foreground">IVA aplicado (comercial)</dt>
                     <dd className="text-right tabular-nums">{product.commercial_gross_cost.iva_rate_pct ?? "—"}%</dd>
                     <dt className="text-muted-foreground">ILA aplicado</dt>
                     <dd className="text-right tabular-nums">{product.commercial_gross_cost.ila_rate_pct ?? "—"}%</dd>
-                    <dt className="text-muted-foreground">IDs Bsale aplicados</dt>
+                    <dt className="text-muted-foreground">IVA anticipado (informativo)</dt>
+                    <dd className="text-right tabular-nums">
+                      {product.tax_profile.iva_anticipado_rate_pct != null
+                        ? `${product.tax_profile.iva_anticipado_rate_pct}%`
+                        : "—"}
+                    </dd>
+                    <dt className="text-muted-foreground">IDs Bsale en factor comercial</dt>
                     <dd className="text-right tabular-nums">
                       {product.commercial_gross_cost.taxes_applied?.length
                         ? product.commercial_gross_cost.taxes_applied
@@ -261,15 +267,24 @@ export function CostV2ProductSheet({
                             .join(" + ")
                         : "—"}
                     </dd>
-                    <dt className="text-muted-foreground">Factor</dt>
+                    <dt className="text-muted-foreground">Factor comercial</dt>
                     <dd className="text-right tabular-nums">{product.commercial_gross_cost.factor ?? "—"}</dd>
-                    <dt className="font-medium">Costo bruto comercial</dt>
+                    <dt className="font-medium">Costo bruto comercial (márgenes)</dt>
                     <dd className="text-right font-semibold tabular-nums">
                       {formatMoney(product.commercial_gross_cost.gross)}
                     </dd>
                   </dl>
+                  {product.tax_profile.iva_anticipado_rate_pct != null ? (
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      El anticipo no se suma al costo comercial ni al inventario. Un total documental
+                      (neto + IVA + anticipo) solo aplica si la factura lo respalda; no se inventa aquí.
+                    </p>
+                  ) : null}
                   <p className="text-[11px] text-amber-700 dark:text-amber-300">
                     {GROSS_STATUS_LABELS[product.commercial_gross_cost.status]}
+                    {product.commercial_gross_cost.reason === "anticipo_excluido_del_factor_comercial"
+                      ? " · anticipo excluido del factor"
+                      : ""}
                     {product.meta.tax_config_verified ? "" : " · configuración tributaria aún no contrastada"}
                   </p>
                   <p className="mt-2 text-[11px] text-muted-foreground">

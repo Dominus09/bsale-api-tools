@@ -242,11 +242,34 @@ def test_two_ila_are_incompatible():
     assert gross("1000", [1, 2, 8]).status is GrossCostStatus.REQUIERE_REVISION_TRIBUTARIA
 
 
-@pytest.mark.parametrize("ids", [[1, 6], [1, 7], [6], [7]])
-def test_anticipated_vat_requires_review(ids):
+@pytest.mark.parametrize("ids", [[6], [7]])
+def test_anticipated_vat_alone_blocks_commercial_gross(ids):
+    """Solo anticipo (sin IVA comercial): no hay factor de márgenes."""
     p = profile(ids)
     assert p.status is T.IVA_ANTICIPADO and p.total_rate_pct is None
+    assert p.iva_anticipado_rate_pct is not None
     assert gross("1000", ids).gross is None
+
+
+@pytest.mark.parametrize(
+    "ids, anticipado_pct",
+    [([1, 6], "12"), ([1, 7], "5")],
+)
+def test_anticipated_with_iva_computes_commercial_excluding_anticipo(ids, anticipado_pct):
+    """IVA + anticipo harina/carne: bruto comercial = neto×(1+IVA/100); anticipo no suma."""
+    p = profile(ids)
+    assert p.status is T.IVA_ANTICIPADO
+    assert p.total_rate_pct == D("19")
+    assert p.iva_rate_pct == D("19")
+    assert p.iva_anticipado_rate_pct == D(anticipado_pct)
+    assert "iva_anticipado" in p.issues
+    g = gross("13000", ids)
+    assert g.gross == D("15470")  # 13000 × 1.19
+    assert g.factor == D("1.19")
+    assert g.reason == "anticipo_excluido_del_factor_comercial"
+    assert all(t.role != ROLE_IVA_ANTICIPADO for t in g.applied)
+    # No valorizar neto+IVA+anticipo como costo comercial (13000+2470+1560=17030).
+    assert g.gross != D("17030")
 
 
 @pytest.mark.parametrize("ids, issue", [([2], "ila_sin_iva"), ([1, 9], "iva_duplicado")])
@@ -417,17 +440,20 @@ def test_tax_coverage_counts_and_anomalies():
     out = service(with_catalog(FakeRepo(coverage_facts()))).tax_coverage()
     assert out["skus_active"] == 6 and out["products_active"] == 6
     assert out["skus_taxes_identified"] == 5
-    assert out["skus_gross_calculable"] == 2
+    # IVA, IVA+ILA e IVA+anticipo (factor comercial sin anticipo) son calculables.
+    assert out["skus_gross_calculable"] == 3
     assert out["skus_without_cost"] == 1
-    assert out["skus_tax_review"] == 2
+    # Solo ILA combinado queda en revisión tributaria (anticipo+IVA ya es calculable).
+    assert out["skus_tax_review"] == 1
     assert out["skus_without_tax_config"] == 1
-    assert out["coverage_pct"] == {"taxes_identified": "83.3", "gross_calculable": "33.3"}
+    assert out["coverage_pct"] == {"taxes_identified": "83.3", "gross_calculable": "50.0"}
     assert out["by_tax_status"]["ila_combinado"] == 1 and out["by_tax_status"]["iva_anticipado"] == 1
     codes = {a["code"]: a for a in out["anomalies"]}
     assert set(codes) >= {"ila_multiple", "iva_anticipado", "sin_impuestos_configurados"}
     assert codes["ila_multiple"]["examples"][0]["variant_id"] == 3
     combos = {tuple(c["tax_ids"]): c for c in out["combinations"]}
     assert combos[(1,)]["skus"] == 2 and combos[(1, 8)]["total_rate_pct"] == "50.5"
+    assert combos[(1, 6)]["total_rate_pct"] == "19"  # anticipo excluido del total comercial
     usage = {c["tax_id"]: c["skus_using"] for c in out["catalog"]}
     assert usage[1] == 5 and usage[6] == 1
     assert out["tax_config_verified"] is False
@@ -462,10 +488,16 @@ def test_margins_use_commercial_gross_from_average_cost():
 def test_margins_with_inconsistent_taxes_give_no_recommendation():
     svc = margins_with_taxes([sku(10, tax_ids=[1, 2, 8]), sku(11, tax_ids=[1, 6])], [vp(12, 10, "1500"), vp(12, 11, "1500")])
     rows = {r["variant_id"]: r for r in svc.list_rows(price_list_id=12)["items"]}
-    for vid in (10, 11):
-        assert rows[vid]["status"] == S.REQUIERE_REVISION_TRIBUTARIA
-        assert rows[vid]["markup_pct"] is None and rows[vid]["costs"]["reference"]["gross"] is None
-        assert rows[vid]["costs"]["reference"]["net"] == "900"
+    # ILA múltiple: sin bruto comercial.
+    assert rows[10]["status"] == S.REQUIERE_REVISION_TRIBUTARIA
+    assert rows[10]["markup_pct"] is None and rows[10]["costs"]["reference"]["gross"] is None
+    assert rows[10]["costs"]["reference"]["net"] == "900"
+    # IVA + anticipo harina: bruto comercial = neto×1,19; anticipo no suma.
+    assert rows[11]["costs"]["reference"]["net"] == "900"
+    assert D(rows[11]["costs"]["reference"]["gross"]) == D("1071")
+    assert rows[11]["markup_pct"] is not None
+    assert rows[11]["status"] != S.REQUIERE_REVISION_TRIBUTARIA
+    assert "impuesto_iva_anticipado_excluido_del_factor" in rows[11]["reasons"]
     full = next(r for r in svc.product(10)["rows"] if r["price_list"]["id"] == 12)
     assert full["target_price"]["min"] is None and full["target_price"]["max"] is None
 
@@ -490,7 +522,8 @@ def test_dashboard_exposes_tax_block_and_warnings():
     out = dash.build(cost_basis="promedio_bsale")
     assert out["taxes"]["status"] == BLOCK_OK
     data = out["taxes"]["data"]
-    assert data["skus_active"] == 3 and data["skus_gross_calculable"] == 1 and data["skus_tax_review"] == 2
+    # SKU base + ILA múltiple (revisión) + IVA+anticipo (bruto comercial calculable).
+    assert data["skus_active"] == 3 and data["skus_gross_calculable"] == 2 and data["skus_tax_review"] == 1
     warnings = set(out["reliability"]["warnings"])
     assert {"configuracion_tributaria_no_contrastada", "productos_requieren_revision_tributaria"} <= warnings
     assert out["reliability"]["tax_config_verified"] is False
