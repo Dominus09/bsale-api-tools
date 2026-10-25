@@ -8,6 +8,8 @@ Convenciones para que administración pueda cruzar datos contra Bsale:
 - cada archivo incluye la hoja «Información del archivo» con empresa, fecha,
   fuentes, filtros aplicados y estado de sincronización.
 El modo write-only mantiene acotado el uso de memoria en exportaciones grandes.
+
+Excel Premium (Auditoría Comercial 8.0): ver ``commercial_premium_xlsx``.
 """
 
 from __future__ import annotations
@@ -603,3 +605,12 @@ def receptions_xlsx(
     out = BytesIO()
     wb.save(out)
     return out.getvalue()
+
+
+def commercial_premium_xlsx(payload: dict[str, Any]) -> bytes:
+    """Excel Premium Auditoría Comercial 8.0 (6 hojas). Reexporta el generador dedicado."""
+    from backend.services.analytics_v2.commercial_premium_excel import (
+        commercial_premium_xlsx as _build,
+    )
+
+    return _build(payload)

@@ -26,6 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 class AsgiResponse:
     def __init__(self, status_code: int, body: bytes) -> None:
         self.status_code = status_code
+        self.body = body
         self.text = body.decode("utf-8", errors="replace")
 
     def json(self) -> Any:

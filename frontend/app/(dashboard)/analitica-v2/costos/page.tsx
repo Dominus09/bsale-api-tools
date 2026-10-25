@@ -154,6 +154,7 @@ export default function CostControlV2Page() {
 
   const [exporting, setExporting] = useState(false)
   const [exportingReceptions, setExportingReceptions] = useState(false)
+  const [exportingPremium, setExportingPremium] = useState(false)
   const [receptionSegment, setReceptionSegment] = useState(1)
 
   const exportParams = () => {
@@ -220,6 +221,28 @@ export default function CostControlV2Page() {
     }
   }
 
+  const handleExportPremium = async () => {
+    if (companyId == null) return
+    setExportingPremium(true)
+    setError(null)
+    const stamp = new Date().toISOString().slice(0, 10)
+    try {
+      await downloadXlsx(
+        "/analytics-v2/audit/commercial-premium/export.xlsx",
+        { company_id: companyId },
+        `Auditoria_Comercial_Premium_Empresa_${companyId}_${stamp}.xlsx`,
+      )
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "No se pudo generar el Excel Premium de auditoría. Verifique permisos y reintente.",
+      )
+    } finally {
+      setExportingPremium(false)
+    }
+  }
+
   if (companyId == null) {
     return (
       <p className="p-6 text-sm text-muted-foreground">Seleccione una empresa para usar Control de Costos V2.</p>
@@ -238,6 +261,17 @@ export default function CostControlV2Page() {
             <Button variant="outline" size="sm" className="h-10 sm:h-9" onClick={handleExport} disabled={exporting}>
               {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
               Exportar análisis Excel
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-10 sm:h-9"
+              onClick={handleExportPremium}
+              disabled={exportingPremium}
+              title="Auditoría Comercial 8.0: seis hojas con universo completo de divergencias (sin tope top 30)."
+            >
+              {exportingPremium ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+              Excel Premium auditoría
             </Button>
             <div className="flex items-center gap-1.5" title="Historial de recepciones por segmentos de 300 variantes, con los filtros aplicados. Cada archivo declara su segmento y cobertura.">
               <label htmlFor="reception-segment" className="text-xs text-muted-foreground">Segmento</label>

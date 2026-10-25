@@ -14,7 +14,6 @@ from typing import Any, Callable
 
 import psycopg2
 from fastapi import APIRouter, Depends, HTTPException, Path, Query
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.services.analytics.validate_distribuidora_source import AnalyticsValidationError
@@ -459,13 +458,17 @@ def _reception_lines_for(
     return lines, coverage
 
 
-def _xlsx(content: bytes, filename: str) -> StreamingResponse:
-    from io import BytesIO
+def _xlsx(content: bytes, filename: str) -> Response:
+    """Descarga XLSX en memoria (Response, no stream): el cuerpo llega completo al cliente."""
+    from fastapi.responses import Response
 
-    return StreamingResponse(
-        BytesIO(content),
+    return Response(
+        content=content,
         media_type=_XLSX_MEDIA,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(content)),
+        },
     )
 
 
@@ -638,6 +641,42 @@ def costs_export(
 
     content = _run("costs_export", user, company_id, build)
     return _xlsx(content, f"control-costos-empresa-{company_id}.xlsx")
+
+
+@router.get("/audit/commercial-premium/export.xlsx")
+def commercial_premium_export(
+    company_id: int = CompanyQuery,
+    user: dict = Depends(require_cost_control_v2),
+):
+    """Excel Premium Auditoría Comercial 8.0 — 6 hojas; universo completo (sin top 30)."""
+    from datetime import datetime, timezone
+
+    from backend.services.analytics_v2.commercial_premium_service import (
+        build_commercial_premium_payload,
+    )
+    from backend.services.analytics_v2.excel_export import commercial_premium_xlsx
+
+    def build() -> bytes:
+        # ACL de empresa: mismo gate que el resto de Control de Costos V2.
+        run_cost_control(user, company_id, lambda _s: None)
+        payload = build_commercial_premium_payload(company_id)
+        if not payload.get("ok"):
+            logger.warning(
+                "commercial_premium_blocked company_id=%s",
+                company_id,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="Auditoría Premium no disponible para esta empresa",
+            )
+        return commercial_premium_xlsx(payload)
+
+    content = _guard("commercial_premium_export", company_id, build)
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return _xlsx(
+        content,
+        f"Auditoria_Comercial_Premium_Empresa_{company_id}_{stamp}.xlsx",
+    )
 
 
 @router.get("/costs/receptions/export.xlsx")
