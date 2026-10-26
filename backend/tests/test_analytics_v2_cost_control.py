@@ -143,7 +143,16 @@ class FakeRepo(CostControlV2Repository):
 
     def offices(self, **kw):
         self._rec("offices", **kw)
-        return [{"office_id": 1, "name": "Casa Matriz"}, {"office_id": 3, "name": "Sucursal 3"}]
+        # Maestro empresa 3: 1–6 activas (state 0); 7 inactiva. Operativas: 1,3,4,5.
+        return [
+            {"office_id": 1, "name": "BODEGA CENTRAL", "state": 0},
+            {"office_id": 2, "name": "BODEGA 1", "state": 0},
+            {"office_id": 3, "name": "SUPERMERCADO LA QUILLOTANA", "state": 0},
+            {"office_id": 4, "name": "QUILLOTANA I", "state": 0},
+            {"office_id": 5, "name": "QUILLOTANA II", "state": 0},
+            {"office_id": 6, "name": "BAJAS", "state": 0},
+            {"office_id": 7, "name": "Bodega adicional", "state": 1},
+        ]
 
     def product_types(self, **kw):
         self._rec("product_types", **kw)
@@ -684,3 +693,44 @@ def test_reception_analysis_compares_purchase_to_purchase():
     no_ref = next(i for i in out["items"] if i["reception_id"] == 100)
     assert no_ref["status"] == "sin_referencia_anterior"
     assert no_ref["change_pct"] is None
+
+
+def test_filters_offices_operational_only_company_3():
+    """Selectores: activas + COST_CONTROL_OFFICE_IDS; no altera stock global."""
+    repo = FakeRepo([fact(1)])
+    out = service(repo).filters()
+    ids = [o["id"] for o in out["offices"]]
+    assert ids == [1, 3, 4, 5]
+    names = {o["id"]: o["name"] for o in out["offices"]}
+    assert names[1] == "Bodega Central"
+    assert names[3] == "Supermercado"
+    assert names[4] == "Quillotana I"
+    assert names[5] == "Quillotana II"
+    assert all("Oficina" not in (o["name"] or "") for o in out["offices"])
+    assert 2 not in ids and 6 not in ids and 7 not in ids
+
+
+def test_summary_exposes_reliability_criteria_from_motor():
+    from backend.services.analytics_v2.contracts import STALE_COST_DAYS
+    from backend.services.analytics_v2.cost_signals import REVIEW_ANOMALY_CODES
+
+    repo = FakeRepo([fact(1, average_cost=D("1000"))])
+    out = service(repo).summary(stock_filter="with")
+    crit = out["reliability_criteria"]
+    assert crit["stale_cost_days"] == STALE_COST_DAYS
+    assert set(crit["review_anomaly_codes"]) == {c.value for c in REVIEW_ANOMALY_CODES}
+    assert crit["precedence"][0] == "sin_compra_comparable"
+    assert crit["precedence"][-1] == "consistente"
+
+
+def test_receptions_export_route_declared_before_dynamic_id():
+    """Evita que FastAPI parseé 'export.xlsx' como reception_id (422)."""
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parents[1] / "routers" / "analytics_v2.py").read_text(
+        encoding="utf-8"
+    )
+    export_at = text.index('@router.get("/costs/receptions/export.xlsx")')
+    dynamic_at = text.index('@router.get("/costs/receptions/{reception_id}")')
+    analysis_at = text.index('@router.get("/costs/receptions/analysis")')
+    assert analysis_at < export_at < dynamic_at

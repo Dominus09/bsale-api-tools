@@ -99,6 +99,45 @@ ADMIN_STATES = (
     "Corrección aplicada",
 )
 
+# Instrucciones operativas breves (sustituyen snake_case del motor en Excel de revisión).
+_SUGGESTED_ACTION_LABELS: dict[str, str] = {
+    "revisar_recepcion_y_promedio": "Comparar factura y costo promedio",
+    "contrastar_factura_unidad_presentacion": "Verificar unidad, presentación y factura",
+    "revisar_costo_promedio_con_stock": "Revisar costo promedio con stock positivo",
+    "revisar_por_que_promedio_sigue_en_cero": "Revisar por qué el promedio sigue en cero",
+    "sin_precio_ni_recepcion_revisar_vigencia_comercial": "Sin precio ni recepción: revisar vigencia comercial",
+}
+
+
+def _humanize_suggested_action(action: Any) -> str | None:
+    if action is None:
+        return None
+    text = str(action).strip()
+    if not text:
+        return None
+    return _SUGGESTED_ACTION_LABELS.get(text, text.replace("_", " ").capitalize())
+
+
+def _priority_band_rank(item: dict[str, Any]) -> int:
+    """Orden estricto P1 → P2 → P3 → P4 (stock sin costo válido cuenta como P1)."""
+    prio = item.get("admin_priority") or {}
+    band = str(prio.get("review_priority") or prio.get("priority_band") or "").upper()
+    if band.startswith("P1") or item.get("review_source") == "stock_positivo_sin_costo_valido":
+        return 0
+    if band.startswith("P2"):
+        return 1
+    if band.startswith("P3"):
+        return 2
+    if band.startswith("P4"):
+        return 3
+    return 9
+
+
+def _is_p1_row(item: dict[str, Any]) -> bool:
+    prio = item.get("admin_priority") or {}
+    band = str(prio.get("review_priority") or prio.get("priority_band") or "").upper()
+    return band.startswith("P1") or item.get("review_source") == "stock_positivo_sin_costo_valido"
+
 
 def _text(value: Any) -> str | None:
     if value is None:
@@ -270,19 +309,27 @@ def _write_summary(ws: Any, payload: dict[str, Any]) -> None:
     stock_filt = payload.get("stock_filter") or "with"
     stock_label = payload.get("stock_filter_label") or STOCK_FILTER_LABELS.get(stock_filt, stock_filt)
 
+    ops_ids = payload.get("operational_office_ids") or []
+    scope_banner = payload.get("stock_scope_banner") or "ALCANCE: STOCK OPERATIVO — OFICINAS HABILITADAS"
     rows: list[tuple[str, Any, str]] = [
+        ("ALCANCE STOCK", scope_banner, "No confundir con STOCK TOTAL BSALE"),
         ("FILTRO DE STOCK", stock_label, payload.get("stock_criterion") or STOCK_CRITERION),
+        (
+            "Oficinas STOCK OPERATIVO",
+            ", ".join(str(x) for x in ops_ids) if ops_ids else "Sin mapa (operativo = total Bsale)",
+            "Empresa configurada",
+        ),
         ("Empresa", f"{payload.get('company_name')} (company_id={payload.get('company_id')})", ""),
         ("Corte UTC", payload.get("cut_at_utc"), "Fotografía REPEATABLE READ"),
-        ("Indicadores globales", "census / cobertura / huérfanas", "Sin filtro de stock operativo"),
+        ("Indicadores globales", "census / cobertura / huérfanas", "STOCK TOTAL BSALE / GLOBAL"),
         ("Variantes totales", census.get("variantes"), "GLOBAL"),
         ("Activas / Inactivas", f"{census.get('activas')} / {census.get('inactivas')}", "GLOBAL"),
         ("Cobertura costos (filas)", costs.get("filas_variant_costs"), f"GLOBAL · de {costs.get('variantes')} variantes"),
         ("Costos promedio > 0", costs.get("costs_average_pos"), "GLOBAL · variant_costs.average_cost"),
         ("Costos promedio = 0", costs.get("costs_average_zero"), "GLOBAL · no es ausencia de fila"),
-        ("Activas stock>0", census.get("activas_stock_pos"), "GLOBAL"),
+        ("Activas stock total Bsale >0", census.get("activas_stock_pos"), "GLOBAL · todas las oficinas"),
         ("Huérfanas stock>0 sin variante", census.get("stock_pos_sin_variante"), "GLOBAL · integridad"),
-        ("Universo operativo (filtro stock)", buckets.get("universo"), f"Promedio vs recepciones · {stock_label}"),
+        ("Universo operativo (filtro stock)", buckets.get("universo"), f"STOCK OPERATIVO · {stock_label}"),
         ("Divergencias ≤15 %", buckets.get("hasta_15"), "Universo filtrado"),
         ("Divergencias 15–50 % (moderadas)", buckets.get("entre_15_y_50"), "Universo filtrado"),
         ("Divergencias >50 % (importantes)", buckets.get("sobre_50"), "Universo filtrado"),
@@ -359,7 +406,8 @@ def _write_anomalies(ws: Any, payload: dict[str, Any]) -> None:
         "PRODUCTO + VARIANTE",
         "BARCODE",
         "PRIORIDAD",
-        "STOCK",
+        "STOCK OPERATIVO",
+        "STOCK TOTAL BSALE",
         "COSTO PROM.",
         "ÚLT. COMPRA",
         "Δ vs PROM.",
@@ -383,17 +431,18 @@ def _write_anomalies(ws: Any, payload: dict[str, Any]) -> None:
             "NOTA METODOLÓGICA",
         ]
     )
-    n_base = 13
+    n_base = 14
     price_col0 = n_base + 1
     price_col_last = n_base + len(list_ids)
     tech_sku_col = price_col_last + 2
 
     rows = payload.get("anomalies") or []
-    stock_label = payload.get("stock_filter_label") or "CON STOCK"
+    stock_label = payload.get("stock_filter_label") or "CON STOCK OPERATIVO"
+    scope_banner = payload.get("stock_scope_banner") or "ALCANCE: STOCK OPERATIVO — OFICINAS HABILITADAS"
     cols = len(headers)
     _set_widths(
         ws,
-        [17, 54, 19, 16, 11, 16, 14, 13, 18, 34, 15, 14, 18]
+        [17, 54, 19, 16, 12, 12, 16, 14, 13, 18, 34, 15, 14, 18]
         + [15] * len(list_ids)
         + [14, 16, 11, 25, 14, 16, 14, 40],
     )
@@ -402,7 +451,7 @@ def _write_anomalies(ws: Any, payload: dict[str, Any]) -> None:
         title="ANOMALÍAS DE COSTO  /  AUDITORÍA COMPLETA",
         subtitle=(
             f"{len(rows)} diferencias superiores al 15 %  ·  {stock_label}  ·  "
-            "Alerta ≠ error confirmado"
+            f"{scope_banner}  ·  Alerta ≠ error confirmado"
         ),
         cols=cols,
     )
@@ -410,7 +459,7 @@ def _write_anomalies(ws: Any, payload: dict[str, Any]) -> None:
         ws,
         3,
         cols,
-        "PRIORIDAD  →  PRODUCTO + VARIANTE  →  COSTO / Δ %  →  FACTURA.  "
+        "PRIORIDAD  →  PRODUCTO + VARIANTE  →  STOCK OPERATIVO / STOCK TOTAL BSALE  →  COSTO / Δ %  →  FACTURA.  "
         "Columnas técnicas al final. «Sin precio» es solo presentación (no es cero).",
         fill=FILL_CHIP,
         font=MUTED_FONT,
@@ -429,12 +478,19 @@ def _write_anomalies(ws: Any, payload: dict[str, Any]) -> None:
         doc = item.get("last_comparable_document") or item.get("lc_document")
         doc_n = item.get("last_comparable_document_number") or item.get("lc_document_number")
         office_id = item.get("last_comparable_office_id") or item.get("lc_office_id")
+        stock_ops = _num(item.get("stock_total"))
+        stock_bsale = _num(
+            item.get("stock_total_bsale")
+            if item.get("stock_total_bsale") is not None
+            else item.get("stock_total")
+        )
         values: list[Any] = [
             format_product_type(item.get("product_type_name")),
             format_product_plus_variant(item.get("product_name"), item.get("variant_name")),
             format_barcode(item.get("barcode") or item.get("sku")),
             _priority_label(band),
-            _num(item.get("stock_total")),
+            stock_ops,
+            stock_bsale,
             _num(item.get("average_cost")),
             _num(item.get("last_comparable_cost")),
             diff_ratio,
@@ -445,7 +501,7 @@ def _write_anomalies(ws: Any, payload: dict[str, Any]) -> None:
             _office_label(payload, office_id),
         ]
         for lid in list_ids:
-            # Presentación: «Sin precio». La fórmula de exposición usa E/F/G, nunca estas columnas.
+            # Presentación: «Sin precio». Exposición usa STOCK OPERATIVO (E) × |H−G|.
             values.append(_price_or_missing(item.get(f"price_{lid}")))
         values.extend(
             [
@@ -465,21 +521,22 @@ def _write_anomalies(ws: Any, payload: dict[str, Any]) -> None:
             missing_price = is_price and val == "Sin precio"
             _style_data_cell(
                 cell,
-                money_dec=col in (6, 7) or (is_price and not missing_price),
-                pct_ratio=col == 8,
-                as_date=col == 12,
-                as_text=col in (3, 11) or missing_price or col == tech_sku_col,
-                fill=fill if col in (4, 8) else None,
+                money_dec=col in (7, 8) or (is_price and not missing_price),
+                pct_ratio=col == 9,
+                as_date=col == 13,
+                as_text=col in (3, 12) or missing_price or col == tech_sku_col,
+                fill=fill if col in (4, 9) else None,
                 zebra=zebra and fill is None,
             )
             if col == 4:
                 pf = _priority_font(band)
                 if pf:
                     cell.font = pf
-            if col == 5 and cell.value is not None:
+            if col in (5, 6) and cell.value is not None:
                 cell.number_format = QTY_FMT
-        formula = f'=IF(OR(E{i}="",F{i}="",G{i}=""),"",ABS(G{i}-F{i})*E{i})'
-        exp_cell = ws.cell(i, 9, formula)
+        # E=STOCK OPERATIVO, G=COSTO PROM., H=ÚLT. COMPRA
+        formula = f'=IF(OR(E{i}="",G{i}="",H{i}=""),"",ABS(H{i}-G{i})*E{i})'
+        exp_cell = ws.cell(i, 10, formula)
         _style_data_cell(exp_cell, money_dec=True, fill=FILL_PENDING, zebra=zebra)
 
     last = data_start + max(len(rows), 1) - 1 if rows else header_row
@@ -910,7 +967,9 @@ def commercial_premium_xlsx(payload: dict[str, Any]) -> bytes:
 
 def _review_motivo(item: dict[str, Any]) -> str:
     prio = item.get("admin_priority") or {}
-    action = prio.get("suggested_action") or item.get("recommended_action")
+    action = _humanize_suggested_action(
+        prio.get("suggested_action") or item.get("recommended_action")
+    )
     source = item.get("review_source") or ""
     if source == "stock_positivo_sin_costo_valido":
         band = "stock positivo sin costo válido"
@@ -922,17 +981,16 @@ def _review_motivo(item: dict[str, Any]) -> str:
         band = "divergencia >15 %"
     parts = [band]
     if action:
-        parts.append(str(action))
-    doc = " ".join(
-        str(x)
-        for x in (
-            item.get("last_comparable_document") or item.get("lc_document"),
-            item.get("last_comparable_document_number") or item.get("lc_document_number"),
-        )
-        if x
-    ).strip()
-    if doc:
-        parts.append(f"Respaldo: {doc}")
+        parts.append(action)
+    doc_type = item.get("last_comparable_document") or item.get("lc_document")
+    doc_num = item.get("last_comparable_document_number") or item.get("lc_document_number")
+    # Una sola referencia clara (evita repetir el N° de factura en la misma celda).
+    if doc_num and doc_type:
+        parts.append(f"{doc_type} {doc_num}")
+    elif doc_num:
+        parts.append(f"Factura {doc_num}")
+    elif doc_type:
+        parts.append(str(doc_type))
     return " · ".join(parts)
 
 
@@ -973,8 +1031,10 @@ def build_review_work_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
         by_vid[vid] = row
 
     rows = list(by_vid.values())
+    # P1 → P2 → P3; dentro de cada banda, score administrativo vigente (mayor primero).
     rows.sort(
         key=lambda r: (
+            _priority_band_rank(r),
             -float((r.get("admin_priority") or {}).get("priority_score") or 0),
             -abs(float(r.get("diff_pct") or 0)),
             int(r.get("variant_id") or 0),
@@ -991,7 +1051,7 @@ def _write_review_actionable(ws: Any, payload: dict[str, Any]) -> None:
         "TIPO DE PRODUCTO",
         "PRODUCTO + VARIANTE",
         "CÓDIGO DE BARRAS",
-        "STOCK GLOBAL",
+        "STOCK OPERATIVO",
         "COSTO PROM. NETO",
         "ÚLTIMA COMPRA NETA",
         "Δ VS PROMEDIO",
@@ -1003,12 +1063,7 @@ def _write_review_actionable(ws: Any, payload: dict[str, Any]) -> None:
     _set_widths(ws, [18, 52, 18, 11, 17, 18, 14, 16, 37, 23, 38])
     rows = build_review_work_rows(payload)
     n = len(rows)
-    p1 = sum(
-        1
-        for a in rows
-        if str((a.get("admin_priority") or {}).get("review_priority") or "").upper().startswith("P1")
-        or a.get("review_source") == "stock_positivo_sin_costo_valido"
-    )
+    p1 = sum(1 for a in rows if _is_p1_row(a))
     p2 = sum(
         1
         for a in rows
@@ -1016,16 +1071,17 @@ def _write_review_actionable(ws: Any, payload: dict[str, Any]) -> None:
     )
     p3 = max(0, n - p1 - p2)
     stock_label = payload.get("stock_filter_label") or STOCK_FILTER_LABELS.get(
-        payload.get("stock_filter") or "with", "CON STOCK"
+        payload.get("stock_filter") or "with", "CON STOCK OPERATIVO"
     )
     cut = (payload.get("cut_at_utc") or "")[:10]
     company = payload.get("company_name") or f"Empresa {payload.get('company_id')}"
+    scope_banner = payload.get("stock_scope_banner") or "ALCANCE: STOCK OPERATIVO — OFICINAS HABILITADAS"
 
     _banner_pair(
         ws,
         title="LA QUILLOTANA  /  CONTROL DE COSTOS",
         subtitle=(
-            f"HOJA DE TRABAJO  ·  {n} casos para revisar  ·  {company}  ·  Corte {cut}"
+            f"HOJA DE TRABAJO  ·  {n} casos  ·  {company}  ·  Corte {cut}  ·  {scope_banner}"
         ),
         cols=cols,
     )
@@ -1089,10 +1145,7 @@ def _write_review_actionable(ws: Any, payload: dict[str, Any]) -> None:
         zebra = (offset % 2 == 1)
         diff = _num(item.get("diff_pct"))
         diff_ratio = (float(diff) / 100.0) if diff is not None else None
-        doc = item.get("last_comparable_document_number") or item.get("lc_document_number")
         motivo = _review_motivo(item)
-        if doc:
-            motivo = f"{motivo}\nFactura {doc}" if motivo else f"Factura {doc}"
         values: list[Any] = [
             format_product_type(item.get("product_type_name")),
             format_product_plus_variant(item.get("product_name"), item.get("variant_name")),
@@ -1160,12 +1213,13 @@ def _write_review_summary(ws: Any, payload: dict[str, Any]) -> None:
     anomalies = payload.get("anomalies") or []
     zc = payload.get("zero_cost_summary") or {}
     stock_sin_costo = int(zc.get("stock_positivo") or 0)
-    critical = sum(
+    p1_count = sum(1 for a in work if _is_p1_row(a))
+    extrema_count = sum(1 for a in work if a.get("extrema_indicador"))
+    # Unión: filas P1 + extremos que no son P1 (p. ej. extremo clasificado P2/P3).
+    critical_union = sum(
         1
         for a in work
-        if str((a.get("admin_priority") or {}).get("review_priority") or "").upper().startswith("P1")
-        or a.get("extrema_indicador")
-        or a.get("review_source") == "stock_positivo_sin_costo_valido"
+        if _is_p1_row(a) or a.get("extrema_indicador")
     )
     cut = (payload.get("cut_at_utc") or "")[:10]
     company_id = payload.get("company_id")
@@ -1197,9 +1251,17 @@ def _write_review_summary(ws: Any, payload: dict[str, Any]) -> None:
             ws.cell(r_lab, cc).fill = fill
 
     _kpi(4, 5, 1, n, "ALERTAS POR REVISAR", FILL_CHIP, INK_BOLD)
-    _kpi(4, 5, 5, critical, "P1 CRÍTICOS", FILL_P1, FONT_P1)
-    _kpi(4, 5, 9, stock_pos, "VARIANTES CON STOCK¹", FILL_STOCK_OK, FONT_STOCK_OK)
-    _kpi(7, 8, 1, critical, "CRÍTICOS² (P1 O EXTREMOS)", FILL_P1, FONT_P1)
+    _kpi(4, 5, 5, p1_count, "PRIORIDAD P1", FILL_P1, FONT_P1)
+    _kpi(4, 5, 9, stock_pos, "VARIANTES CON STOCK OPERATIVO¹", FILL_STOCK_OK, FONT_STOCK_OK)
+    _kpi(
+        7,
+        8,
+        1,
+        critical_union,
+        f"P1 + EXTREMOS² ({p1_count} P1 · {extrema_count} extremos)",
+        FILL_P1,
+        FONT_P1,
+    )
     _kpi(
         7,
         8,
@@ -1266,8 +1328,8 @@ def _write_review_summary(ws: Any, payload: dict[str, Any]) -> None:
         "3. Cambie ESTADO y deje OBSERVACIÓN. Editar el Excel NO actualiza la ERP ni Bsale.",
         f"Diferencias >15 % en este corte: {payload.get('anomalies_count', len(anomalies))} · "
         f"Stock positivo sin costo válido: {stock_sin_costo}.",
-        "¹ Universo operativo CON STOCK (no mezclar con totales GLOBAL de catálogo).",
-        "² Críticos = prioridad P1, extremos o stock positivo sin costo válido.",
+        "¹ Universo CON STOCK OPERATIVO (oficinas habilitadas; no mezclar con STOCK TOTAL BSALE / GLOBAL).",
+        "² Unión de filas con prioridad P1 y filas con indicador extremo (un extremo puede ser P2/P3).",
         "Las alertas son señales de revisión; no son errores confirmados ni órdenes automáticas.",
         "ALERTA ≠ ERROR CONFIRMADO. Editar el Excel no constituye corrección en Bsale ni PostgreSQL.",
     ]

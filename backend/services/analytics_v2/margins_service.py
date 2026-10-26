@@ -197,19 +197,15 @@ class MarginsV2Service:
             stock_rows = self._repo.stock_totals(company_id=company_id)
         except Exception:
             logger.warning(
-                "margins: no se pudo leer el stock total (bsale_raw.stocks) "
+                "margins: no se pudo leer el stock operativo (bsale_raw.stocks) "
                 "para company_id=%s; se presenta como «sin sincronizar»",
                 company_id,
                 exc_info=True,
             )
             stock_rows = []
-        stocks = {
-            int(r["variant_id"]): {
-                "total": to_decimal(r.get("stock_total")),
-                "offices": int(r.get("stock_offices") or 0),
-            }
-            for r in stock_rows
-        }
+        from backend.services.analytics_v2.stock_scope import index_stock_totals
+
+        stocks = index_stock_totals(stock_rows, company_id=company_id)
         ctx = MarginsContext(
             scope=scope,
             prices=prices,

@@ -18,7 +18,7 @@ from backend.services.analytics_v2.movement_classification import (
     comparable_sql_list,
     movement_class_sql,
 )
-from backend.services.analytics_v2.stock_scope import STOCK_TOTALS_SQL
+from backend.services.analytics_v2.stock_scope import stock_totals_query
 
 QueryExecutor = Callable[[str, tuple[Any, ...]], list[dict[str, Any]]]
 logger = logging.getLogger(__name__)
@@ -583,5 +583,6 @@ class CostControlV2Repository:
         return self._run(SYNC_STATE_SQL, (company_id,))
 
     def stock_totals(self, *, company_id: int) -> list[dict[str, Any]]:
-        """Stock físico global por variante (SUM quantity, todas las oficinas)."""
-        return self._run(STOCK_TOTALS_SQL, (company_id,))
+        """Stock operativo + total Bsale por variante (solo lectura)."""
+        sql, params = stock_totals_query(company_id)
+        return self._run(sql, params)

@@ -26,6 +26,7 @@ from backend.services.analytics.validate_distribuidora_source import (
     open_readonly_connection,
 )
 from backend.services.analytics_v2.access import CompanyScope, resolve_company_scope
+from backend.schemas.cost_v2_company_read import COST_CONTROL_OFFICE_IDS_BY_COMPANY
 from backend.services.analytics_v2.contracts import (
     CONTRACT_VERSION,
     DASHBOARD_ALERT_DAYS,
@@ -38,6 +39,7 @@ from backend.services.analytics_v2.contracts import (
     INCREASE_ALERT_PCT,
     NET_COST_VERIFIED,
     PACK_CLASSIFICATION,
+    STALE_COST_DAYS,
     TAX_CONFIG_VERIFIED,
     CONFIRMED_TAX_ROLES,
     VERIFIED_EXEMPT_PRODUCT_IDS,
@@ -56,6 +58,7 @@ from backend.services.analytics_v2.contracts import (
 )
 from backend.services.analytics_v2.cost_control_repo import CostControlV2Repository
 from backend.services.analytics_v2.cost_signals import (
+    REVIEW_ANOMALY_CODES,
     Anomaly,
     LineFacts,
     average_divergence,
@@ -77,9 +80,12 @@ from backend.services.analytics_v2.display_labels import office_visible_name
 from backend.services.analytics_v2.stock_scope import (
     DEFAULT_STOCK_FILTER,
     STOCK_CRITERION,
+    STOCK_SCOPE_BANNER,
     index_stock_totals,
     matches_stock_filter,
     normalize_stock_filter,
+    operational_office_ids,
+    reconcile_stock_scopes,
     resolve_stock_entry,
 )
 from backend.services.analytics_v2.tax_profile import (
@@ -238,7 +244,10 @@ class CostControlV2Service:
                 int(r["product_id"]): (r.get("pack_details"), r.get("composition_fetched_at"))
                 for r in self._repo.pack_details(company_id=company_id)
             }
-        stocks = index_stock_totals(self._repo.stock_totals(company_id=company_id))
+        stocks = index_stock_totals(
+            self._repo.stock_totals(company_id=company_id),
+            company_id=company_id,
+        )
         ctx = CompanyContext(
             facts=facts,
             pack_details=pack_details,
@@ -279,6 +288,8 @@ class CostControlV2Service:
             "generated_at": iso(ctx.generated_at) if ctx else iso(datetime.now(timezone.utc)),
             "stock_filter_default": DEFAULT_STOCK_FILTER,
             "stock_criterion": STOCK_CRITERION,
+            "stock_scope_banner": STOCK_SCOPE_BANNER,
+            "operational_office_ids": list(operational_office_ids(self._scope.company_id) or []),
         }
         if stock_filter is not None:
             meta["stock_filter"] = stock_filter
@@ -1014,7 +1025,25 @@ class CostControlV2Service:
             "skus_active_by_reliability": reliability_counts,
             "skus_active_by_anomaly": anomaly_skus,
             "skus_active_by_tax_profile": tax_counts,
+            "reliability_criteria": {
+                "stale_cost_days": STALE_COST_DAYS,
+                "review_anomaly_codes": sorted(c.value for c in REVIEW_ANOMALY_CODES),
+                "precedence": [
+                    "sin_compra_comparable",
+                    "requiere_revision",
+                    "desactualizado",
+                    "consistente",
+                ],
+            },
             "packs_active": _pack_counts(active),
+            "stock_reconciliation": {
+                **reconcile_stock_scopes(ctx.stocks),
+                "operational_office_ids": list(
+                    operational_office_ids(self._scope.company_id) or []
+                ),
+                "skus_active_operational_universe": len(active),
+                "skus_active_global_reference": len(active_global),
+            },
             "movements": [
                 {
                     "movement_class": m.get("movement_class"),
@@ -1197,20 +1226,43 @@ class CostControlV2Service:
                 {"id": int(r["product_type_id"]), "name": r.get("name"), "state": r.get("state")}
                 for r in self._repo.product_types(company_id=company_id)
             ],
-            "offices": [
-                {
-                    "id": int(r["office_id"]),
-                    "name": r.get("name"),
-                    "state": r.get("state"),
-                    "is_virtual": r.get("is_virtual"),
-                }
-                for r in self._repo.offices(company_id=company_id)
-            ],
+            "offices": self._operational_office_filters(company_id),
             "movement_classes": [m.value for m in MovementClass],
             "reliability_statuses": [r.value for r in CostReliability],
             "anomaly_codes": [a.value for a in AnomalyCode],
             "meta": self._meta(),
         }
+
+    def _operational_office_filters(self, company_id: int) -> list[dict[str, Any]]:
+        """Selectores: oficinas activas en maestro y habilitadas para análisis operativo.
+
+        Reutiliza ``COST_CONTROL_OFFICE_IDS_BY_COMPANY`` (no hardcodea exclusiones sueltas).
+        No altera la fórmula de stock global (suma todas las oficinas de la empresa).
+        """
+        preferred = COST_CONTROL_OFFICE_IDS_BY_COMPANY.get(int(company_id))
+        out: list[dict[str, Any]] = []
+        for r in self._repo.offices(company_id=company_id):
+            oid = int(r["office_id"])
+            state = r.get("state")
+            # Bsale: state 0 = activa; state 1 = inactiva / histórica.
+            if state is not None and int(state) != 0:
+                continue
+            if preferred is not None and oid not in preferred:
+                continue
+            out.append(
+                {
+                    "id": oid,
+                    "name": office_visible_name(
+                        name=r.get("name"),
+                        office_id=oid,
+                        company_id=company_id,
+                    ),
+                    "state": state,
+                    "is_virtual": r.get("is_virtual"),
+                    "operational": True,
+                }
+            )
+        return out
 
     def freshness(self) -> dict[str, Any]:
         rows = self._repo.sync_state(company_id=self._scope.company_id)

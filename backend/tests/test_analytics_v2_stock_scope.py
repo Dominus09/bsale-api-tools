@@ -75,7 +75,7 @@ def test_pack_availability_from_components():
     assert out["state"] == "con_stock"
     assert out["available_units"] == "25"
     assert out["derived"] is True
-    assert out["scope"] == "global_componentes"
+    assert out["scope"] == "operativo_componentes"
     assert "sucursal" in (out.get("label") or "").lower()
 
     # Componente sin fila → 0 disponibles

@@ -307,10 +307,12 @@ def test_exposure_formula_present_on_anomalies():
     content = commercial_premium_xlsx(payload)
     wb = load_workbook(BytesIO(content))
     ws = wb[SHEET_NAMES[1]]
-    # Columna I = EXPOSICIÓN¹ (fórmula sobre E/F/G; no usa «Sin precio»)
-    assert isinstance(ws["I6"].value, str)
-    assert ws["I6"].value.startswith("=IF(")
-    assert "E6" in ws["I6"].value and "F6" in ws["I6"].value and "G6" in ws["I6"].value
+    # Columna J = EXPOSICIÓN¹ (STOCK OPERATIVO E × |H−G|; no usa «Sin precio»)
+    assert isinstance(ws["J6"].value, str)
+    assert ws["J6"].value.startswith("=IF(")
+    assert "E6" in ws["J6"].value and "G6" in ws["J6"].value and "H6" in ws["J6"].value
+    headers = [ws.cell(5, c).value for c in range(1, 20)]
+    assert "STOCK OPERATIVO" in headers and "STOCK TOTAL BSALE" in headers
 
 
 def test_no_duplicate_variant_ids_in_anomalies_sheet():
@@ -347,7 +349,7 @@ def test_review_xlsx_two_sheets_identity_and_no_zero_cost_dump():
         "TIPO DE PRODUCTO",
         "PRODUCTO + VARIANTE",
         "CÓDIGO DE BARRAS",
-        "STOCK GLOBAL",
+        "STOCK OPERATIVO",
         "COSTO PROM. NETO",
         "ÚLTIMA COMPRA NETA",
         "Δ VS PROMEDIO",
@@ -386,7 +388,7 @@ def test_full_six_sheets_intact_alongside_review():
     assert review.sheetnames == list(REVIEW_SHEET_NAMES)
     full_ws = full[SHEET_NAMES[1]]
     full_headers = [full_ws.cell(5, c).value for c in range(1, full_ws.max_column + 1)]
-    stock_col = full_headers.index("STOCK") + 1
+    stock_col = full_headers.index("STOCK OPERATIVO") + 1
     full_anomaly_rows = sum(
         1 for r in range(6, full_ws.max_row + 1) if full_ws.cell(r, stock_col).value is not None
     )
@@ -417,7 +419,7 @@ def test_missing_price_is_presentation_not_zero():
                 assert not isinstance(val, (int, float))
     assert found_sin
     # Fórmula de exposición no referencia columnas de precio
-    assert "Precio" not in str(ws["I6"].value)
+    assert "Precio" not in str(ws["J6"].value)
 
 
 def test_existing_costs_xlsx_still_works():
@@ -449,3 +451,59 @@ def test_enrich_keeps_review_priority_when_admin_correction_possible():
     assert prio["possible_admin_correction"] is True
     assert prio["error_confidence"] == "baja"
     assert prio["review_priority"].startswith("P1")
+
+
+def test_review_xlsx_humanizes_actions_sorts_p1_first_and_single_factura():
+    from backend.services.analytics_v2.commercial_premium_excel import (
+        _humanize_suggested_action,
+        build_review_work_rows,
+    )
+
+    assert (
+        _humanize_suggested_action("revisar_recepcion_y_promedio")
+        == "Comparar factura y costo promedio"
+    )
+    assert (
+        _humanize_suggested_action("contrastar_factura_unidad_presentacion")
+        == "Verificar unidad, presentación y factura"
+    )
+
+    payload = _controlled_payload()
+    rows = build_review_work_rows(payload)
+    bands = [
+        str((r.get("admin_priority") or {}).get("review_priority") or "")
+        for r in rows
+    ]
+    ranks = []
+    for b in bands:
+        u = b.upper()
+        if u.startswith("P1"):
+            ranks.append(0)
+        elif u.startswith("P2"):
+            ranks.append(1)
+        elif u.startswith("P3"):
+            ranks.append(2)
+        else:
+            ranks.append(3)
+    assert ranks == sorted(ranks)
+
+    content = commercial_premium_review_xlsx(payload)
+    wb = load_workbook(BytesIO(content))
+    ws = wb[REVIEW_SHEET_NAMES[0]]
+    motivos = [str(ws.cell(r, 9).value or "") for r in range(9, ws.max_row + 1) if ws.cell(r, 3).value]
+    blob = "\n".join(motivos)
+    assert "revisar_recepcion_y_promedio" not in blob
+    assert "contrastar_factura_unidad_presentacion" not in blob
+    assert "Comparar factura y costo promedio" in blob or "Verificar unidad, presentación y factura" in blob
+    for m in motivos:
+        # La referencia documental aparece una sola vez (no "Factura 123" duplicado).
+        assert m.count("123") <= 1
+
+    summary = wb[REVIEW_SHEET_NAMES[1]]
+    summary_blob = "\n".join(
+        str(summary.cell(r, c).value or "")
+        for r in range(1, 15)
+        for c in range(1, 13)
+    )
+    assert "P1 + EXTREMOS" in summary_blob or "PRIORIDAD P1" in summary_blob
+    assert "P1 O EXTREMOS" not in summary_blob

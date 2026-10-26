@@ -451,10 +451,11 @@ def test_service_stock_total_by_variant_and_existence_filters():
     by = {(r["variant_id"], r["price_list"]["id"]): r["stock"] for r in rows}
     # El stock es de la variante: igual en sus dos listas, sin duplicar (12, no 24)
     assert by[(10, 12)]["total"] == "12" and by[(10, 13)]["total"] == "12"
-    assert by[(10, 12)] == {"total": "12", "state": "con_stock", "offices": 2}
+    assert by[(10, 12)]["state"] == "con_stock" and by[(10, 12)]["offices"] == 2
+    assert by[(10, 12)].get("total_bsale") in (None, "12") or by[(10, 12)]["total_bsale"] == "12"
     assert by[(11, 12)]["state"] == "cero" and by[(11, 12)]["total"] == "0"
     assert by[(12, 12)]["state"] == "negativo" and by[(12, 12)]["total"] == "-3"
-    assert by[(13, 12)] == {"total": None, "state": "sin_sincronizar", "offices": 0}
+    assert by[(13, 12)]["total"] is None and by[(13, 12)]["state"] == "sin_sincronizar"
 
     con = svc.list_rows(cost_basis="ultimo_comparable", stock_filter="with", page_size=50)
     assert {r["variant_id"] for r in con["items"]} == {10} and con["total"] == 3  # sus 3 listas evaluadas

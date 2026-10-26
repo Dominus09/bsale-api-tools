@@ -43,8 +43,11 @@ from backend.services.analytics_v2.stock_scope import (
     DEFAULT_STOCK_FILTER,
     STOCK_CRITERION,
     STOCK_FILTER_LABELS,
+    STOCK_SCOPE_BANNER,
     matches_stock_filter,
     normalize_stock_filter,
+    operational_office_ids,
+    stock_cte_sql,
     stock_filter_sql_clause,
     stock_state_from_total,
 )
@@ -189,6 +192,7 @@ def _fetch_positive_cost_universe(
     stock_scope = normalize_stock_filter(stock_filter)
     stock_clause = stock_filter_sql_clause("st", stock_filter=stock_scope)
     stock_where = f"AND {stock_clause}" if stock_clause else ""
+    st_cte, st_params = stock_cte_sql(company_id, alias="st")
 
     product_join = ""
     product_cols = "NULL::text AS product_name, NULL::text AS product_type_name,"
@@ -222,12 +226,7 @@ def _fetch_positive_cost_universe(
         price_cols = ""
 
     sql = f"""
-        WITH st AS (
-          SELECT variant_id, sum(quantity) AS stock_total
-          FROM bsale_raw.stocks
-          WHERE company_id = %s
-          GROUP BY variant_id
-        )
+        WITH {st_cte}
         SELECT
           v.bsale_id AS variant_id,
           v.product_id,
@@ -237,6 +236,7 @@ def _fetch_positive_cost_universe(
           {product_cols}
           vc.average_cost,
           st.stock_total,
+          st.stock_total_bsale,
           {price_cols}
           lc.lc_cost AS last_comparable_cost,
           lc.lc_date AS last_comparable_date,
@@ -269,7 +269,7 @@ def _fetch_positive_cost_universe(
           {stock_where}
         ORDER BY v.bsale_id
     """
-    return _fetch_dicts(cur, sql, (company_id, company_id))
+    return _fetch_dicts(cur, sql, (*st_params, company_id))
 
 
 def _classify_universe_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -360,13 +360,9 @@ def _fetch_zero_cost_actives(
                    THEN {alias}.variant_value_with_taxes END AS price_{lid},
             """
 
+    st_cte, st_params = stock_cte_sql(company_id, alias="st")
     sql = f"""
-        WITH st AS (
-          SELECT variant_id, sum(quantity) AS stock_total
-          FROM bsale_raw.stocks
-          WHERE company_id = %s
-          GROUP BY variant_id
-        )
+        WITH {st_cte}
         SELECT
           v.bsale_id AS variant_id,
           v.product_id,
@@ -375,10 +371,11 @@ def _fetch_zero_cost_actives(
           v.description AS variant_name,
           {product_cols}
           vc.average_cost,
-          st.stock_total AS stock_total_raw,
+          st.stock_total_bsale AS stock_total_raw,
+          st.stock_total_bsale,
           COALESCE(st.stock_total, 0) AS stock_total,
           (st.variant_id IS NULL) AS sin_fila_stock,
-          (st.variant_id IS NOT NULL AND st.stock_total = 0) AS stock_cero_explicito,
+          (st.variant_id IS NOT NULL AND COALESCE(st.stock_total, 0) = 0) AS stock_cero_explicito,
           {price_cols}
           {rec_cols}
         FROM bsale_raw.variants v
@@ -394,7 +391,7 @@ def _fetch_zero_cost_actives(
           AND COALESCE(v.state, 0) = 0
         ORDER BY v.bsale_id
     """
-    return _fetch_dicts(cur, sql, (company_id, company_id))
+    return _fetch_dicts(cur, sql, (*st_params, company_id))
 
 
 def _sync_freshness_view(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -451,6 +448,8 @@ def build_commercial_premium_payload(
         "stock_filter": stock_scope,
         "stock_filter_label": STOCK_FILTER_LABELS[stock_scope],
         "stock_criterion": STOCK_CRITERION,
+        "stock_scope_banner": STOCK_SCOPE_BANNER,
+        "operational_office_ids": list(operational_office_ids(company_id) or []),
         "price_lists": {},
         "offices": {},
         "methodology": {

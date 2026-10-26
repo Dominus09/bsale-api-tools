@@ -22,10 +22,11 @@ from backend.schemas.cost_v2_read import (
 # company_id permitidos en consolidado (no confiar ciegamente en query string)
 ALLOWED_COMPANY_IDS_V2_COMPANY: frozenset[int] = frozenset({3})
 
-# Oficinas operativas de control de costos por empresa (excluye BAJAS / auxiliares).
-# No afirmar que siempre serán 4: si la empresa no está mapeada, se consultan activas.
+# Oficinas operativas por empresa (selectores + STOCK OPERATIVO Analítica V2).
+# Empresa 3: excluye Bodega 1 (2) y Bajas (6) del stock operativo; siguen en stock total Bsale.
+# Si la empresa no está mapeada, stock operativo = stock total (comportamiento previo).
 COST_CONTROL_OFFICE_IDS_BY_COMPANY: dict[int, tuple[int, ...]] = {
-    3: (1, 3, 4, 5),  # Bodega Central, Supermercado, Q1, Q2
+    3: (1, 3, 4, 5),  # Bodega Central, Supermercado, Quillotana I, Quillotana II
 }
 
 COMPANY_PRODUCT_SORTS: frozenset[str] = frozenset(

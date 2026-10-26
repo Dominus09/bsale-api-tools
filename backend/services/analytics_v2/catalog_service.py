@@ -33,6 +33,7 @@ from backend.services.analytics_v2.stock_scope import (
     DEFAULT_STOCK_FILTER,
     STOCK_FILTERS,
     stock_filter_sql_clause,
+    stock_join_subquery,
 )
 from backend.services.analytics_v2.tax_profile import build_tax_catalog, resolve_tax_profile
 
@@ -261,22 +262,9 @@ class CatalogService:
             price_cols.append(f"{a}.variant_value AS price_net_{lid}")
             price_cols.append(f"{a}.api_fetched_at AS price_fetched_{lid}")
         extra_join = f.get("_price_join", "")
-        # Stock Total: suma del stock FÍSICO actual (bsale_raw.stocks.quantity,
-        # campo `quantity` de Bsale) de la variante en TODAS las sucursales de
-        # la empresa. La tabla tiene PK (company_id, variant_id, office_id) —
-        # una fila por variante×sucursal, sin saldos globales que dupliquen —
-        # y el subquery agrupado por variant_id garantiza una fila por
-        # variante. No se suma quantity_available (disponible) ni
-        # quantity_reserved (reservado). Sin filas de stock → NULL (no
-        # sincronizado), jamás cero inventado; los negativos se conservan.
-        # El %s del subquery va textualmente ANTES del WHERE: por eso el
-        # company_id se antepone a los parámetros del WHERE.
-        stock_join = (
-            "LEFT JOIN (SELECT variant_id, sum(quantity) AS stock_total, "
-            "max(api_fetched_at) AS stock_fetched_at, count(*) AS stock_offices "
-            "FROM bsale_raw.stocks WHERE company_id = %s GROUP BY variant_id) st "
-            "ON st.variant_id = v.bsale_id"
-        )
+        # stock_total = operativo; stock_total_bsale = todas las oficinas.
+        # Params del JOIN van ANTES del WHERE (mismo orden textual).
+        stock_join, stock_params = stock_join_subquery(self.company_id, alias="st")
         sql = f"""
         SELECT
             v.bsale_id AS variant_id, v.product_id, v.code, v.bar_code,
@@ -285,7 +273,7 @@ class CatalogService:
             pt.name AS product_type_name,
             ptx.tax_ids, (ptx.missing_since IS NOT NULL) AS tax_config_stale,
             vc.average_cost, vc.api_fetched_at AS cost_fetched_at,
-            st.stock_total, st.stock_fetched_at, st.stock_offices
+            st.stock_total, st.stock_total_bsale, st.stock_fetched_at, st.stock_offices
             {("," + ", ".join(price_cols)) if price_cols else ""}
         FROM bsale_raw.variants v
         LEFT JOIN bsale_raw.products p ON p.company_id = v.company_id AND p.bsale_id = v.product_id
@@ -298,7 +286,7 @@ class CatalogService:
         WHERE {where}
         ORDER BY {self._ORDER[f.get("sort", "product")]}
         """
-        return sql, [self.company_id, *params]
+        return sql, [*stock_params, *params]
 
     def _tax_catalog(self) -> dict[int, Any]:
         rows = self._ex(
@@ -364,9 +352,11 @@ class CatalogService:
             ],
             "average_cost_net": (str(cost) if cost is not None else None),
             "cost_state": ("ausente" if cost is None else "cero" if cost == 0 else "negativo" if cost < 0 else "con_costo"),
-            # Stock físico total (todas las sucursales de la empresa). None =
-            # variante sin filas de stock sincronizadas: nunca se inventa cero.
+            # stock_total = operativo (filtro); stock_total_bsale = todas las oficinas.
             "stock_total": (str(_dec(r["stock_total"])) if r.get("stock_total") is not None else None),
+            "stock_total_bsale": (
+                str(_dec(r["stock_total_bsale"])) if r.get("stock_total_bsale") is not None else None
+            ),
             "stock_state": (
                 "sin_sincronizar"
                 if r.get("stock_total") is None

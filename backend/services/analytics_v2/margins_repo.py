@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Callable, Sequence
 
 from backend.services.analytics_v2.commercial_scope import PRICE_LISTS_SQL
-from backend.services.analytics_v2.stock_scope import STOCK_TOTALS_SQL
+from backend.services.analytics_v2.stock_scope import stock_totals_query
 
 QueryExecutor = Callable[[str, tuple[Any, ...]], list[dict[str, Any]]]
 
@@ -46,10 +46,6 @@ class MarginsV2Repository:
         return self._execute(MARGIN_RULES_SQL, (company_id,))
 
     def stock_totals(self, *, company_id: int) -> list[dict[str, Any]]:
-        """Stock físico total por variante (sum(quantity), todas las sucursales).
-
-        Una fila por variante (GROUP BY sobre la PK de bsale_raw.stocks):
-        el join posterior es por variante y nunca multiplica existencias
-        cuando la variante aparece en varias listas de precios.
-        """
-        return self._execute(STOCK_TOTALS_SQL, (company_id,))
+        """Stock operativo (+ total Bsale) por variante; una fila por variant_id."""
+        sql, params = stock_totals_query(company_id)
+        return self._execute(sql, params)

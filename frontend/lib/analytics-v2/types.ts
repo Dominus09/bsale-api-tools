@@ -265,6 +265,12 @@ export type AlertsResponse = Paginated<AlertItem> & {
   meta: V2Meta
 }
 
+export type CostReliabilityCriteria = {
+  stale_cost_days: number
+  review_anomaly_codes: AnomalyCode[]
+  precedence: string[]
+}
+
 export type CostSummary = {
   skus_total: number
   skus_active: number
@@ -277,6 +283,21 @@ export type CostSummary = {
   skus_active_by_reliability: Record<CostReliability, number>
   skus_active_by_anomaly: Partial<Record<AnomalyCode, number>>
   skus_active_by_tax_profile: Partial<Record<TaxProfileStatus, number>>
+  /** Criterios publicados por el motor (no inventar umbrales en UI). */
+  reliability_criteria?: CostReliabilityCriteria
+  /** Conciliación stock operativo vs total Bsale (no valorización). */
+  stock_reconciliation?: {
+    operational_office_ids?: number[]
+    variants_positive_operational?: number
+    variants_positive_total_bsale?: number
+    variants_auxiliary_only_positive?: number
+    units_operational?: string
+    units_total_bsale?: string
+    units_delta?: string
+    skus_active_operational_universe?: number
+    skus_active_global_reference?: number
+    note?: string
+  }
   movements: {
     movement_class: MovementClass
     lines: number

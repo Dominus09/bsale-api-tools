@@ -48,8 +48,9 @@ export function CostV2Kpis({
 }) {
   const value = (n: number | undefined) => (loading && !summary ? "…" : (n ?? "—"))
   const stockKey = summary?.stock_filter ?? "with"
-  const stockLabel = STOCK_FILTER_LABELS[stockKey] ?? "CON STOCK"
+  const stockLabel = STOCK_FILTER_LABELS[stockKey] ?? "CON STOCK OPERATIVO"
   const globalActive = summary?.skus_active_global
+  const recon = summary?.stock_reconciliation
   const cards: {
     key: string
     title: string
@@ -118,18 +119,37 @@ export function CostV2Kpis({
     },
   ]
   return (
-    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
-      {cards.map((c) => (
-        <MetricCard
-          key={c.key}
-          label={c.title}
-          value={c.value}
-          context={c.hint}
-          tone={c.tone}
-          icon={c.icon}
-          onClick={() => onSelectReliability(c.filter)}
-        />
-      ))}
+    <div className="space-y-3">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+        {cards.map((c) => (
+          <MetricCard
+            key={c.key}
+            label={c.title}
+            value={c.value}
+            context={c.hint}
+            tone={c.tone}
+            icon={c.icon}
+            onClick={() => onSelectReliability(c.filter)}
+          />
+        ))}
+      </div>
+      {recon?.variants_positive_total_bsale != null &&
+      recon.variants_positive_operational != null &&
+      recon.variants_positive_total_bsale !== recon.variants_positive_operational ? (
+        <p className="text-xs leading-5 text-lq-muted">
+          Alcance stock operativo
+          {recon.operational_office_ids?.length
+            ? ` (oficinas ${recon.operational_office_ids.join(", ")})`
+            : ""}
+          : {recon.variants_positive_operational} variantes con saldo operativo &gt; 0
+          {" · "}
+          Stock total Bsale (referencia): {recon.variants_positive_total_bsale} variantes
+          {recon.variants_auxiliary_only_positive
+            ? ` · ${recon.variants_auxiliary_only_positive} solo en bodegas auxiliares`
+            : ""}
+          . No mezclar denominadores operativos con GLOBAL.
+        </p>
+      ) : null}
     </div>
   )
 }
