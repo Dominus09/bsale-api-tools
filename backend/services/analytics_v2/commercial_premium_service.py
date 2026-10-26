@@ -31,7 +31,14 @@ from backend.scripts.audit_commercial_cost_census import (
     score_admin_priority,
     sync_freshness,
 )
+from backend.services.analytics_v2.commercial_scope import (
+    PRICE_LISTS_SQL,
+    CommercialScopeNotConfigured,
+    evaluated_price_list_names,
+    resolve_price_list_scope,
+)
 from backend.services.analytics_v2.contracts import COMMERCIAL_PRICE_LISTS
+from backend.services.analytics_v2.display_labels import office_map_from_rows, price_list_visible_name
 from backend.services.analytics_v2.stock_scope import (
     DEFAULT_STOCK_FILTER,
     STOCK_CRITERION,
@@ -41,6 +48,13 @@ from backend.services.analytics_v2.stock_scope import (
     stock_filter_sql_clause,
     stock_state_from_total,
 )
+
+_OFFICES_SQL = """
+SELECT bsale_id AS office_id, name, state, missing_since
+FROM bsale_raw.offices
+WHERE company_id = %s
+ORDER BY bsale_id
+"""
 
 DEFAULT_TIMEOUT_SEC = 180
 SHEET_NAMES = (
@@ -57,12 +71,28 @@ REVIEW_SHEET_NAMES = (
 )
 
 
-def price_lists_for_company(company_id: int) -> dict[int, str]:
+def price_lists_for_company(
+    company_id: int,
+    raw_rows: list[dict[str, Any]] | None = None,
+) -> dict[int, str]:
+    """Listas activas autorizadas → nombre comercial visible (sin IDs en la etiqueta).
+
+    Con filas RAW se excluyen inactivas, retiradas y de otras empresas.
+    Sin filas (tests / fallback): solo el mapa autorizado configurado.
+    """
+    if raw_rows is not None:
+        try:
+            scope = resolve_price_list_scope(int(company_id), raw_rows)
+        except CommercialScopeNotConfigured:
+            return {}
+        return evaluated_price_list_names(scope)
     configured = COMMERCIAL_PRICE_LISTS.get(int(company_id))
-    if configured:
-        return dict(configured)
-    # Multiempresa: sin mapa local → listas vacías (no inventar IDs de otra empresa).
-    return {}
+    if not configured:
+        return {}
+    return {
+        int(pid): price_list_visible_name(commercial_label=label, price_list_id=int(pid))
+        for pid, label in configured.items()
+    }
 
 
 def _to_decimal(value: Any) -> Decimal | None:
@@ -410,8 +440,6 @@ def build_commercial_premium_payload(
     """
     cut = datetime.now(timezone.utc)
     cut_day = cut.date()
-    price_map = price_lists_for_company(company_id)
-    price_list_ids = sorted(price_map.keys())
     stock_scope = normalize_stock_filter(stock_filter)
 
     own_conn = connection is None
@@ -423,7 +451,8 @@ def build_commercial_premium_payload(
         "stock_filter": stock_scope,
         "stock_filter_label": STOCK_FILTER_LABELS[stock_scope],
         "stock_criterion": STOCK_CRITERION,
-        "price_lists": price_map,
+        "price_lists": {},
+        "offices": {},
         "methodology": {
             "diff_pct": "(ultima_comparable - average_cost) / average_cost * 100",
             "exposure": "ABS(ultima_comparable - average_cost) * stock — orientativa, no pérdida",
@@ -467,6 +496,19 @@ def build_commercial_premium_payload(
                 "receptions": can_receptions,
                 "products": can_products,
             }
+            # Listas: solo autorizadas + vigentes en RAW de esta empresa.
+            try:
+                pl_rows = _fetch_dicts(cur, PRICE_LISTS_SQL, (company_id,))
+            except Exception:
+                pl_rows = []
+            price_map = price_lists_for_company(company_id, pl_rows)
+            payload["price_lists"] = price_map
+            price_list_ids = sorted(price_map.keys())
+            try:
+                office_rows = _fetch_dicts(cur, _OFFICES_SQL, (company_id,))
+            except Exception:
+                office_rows = []
+            payload["offices"] = office_map_from_rows(office_rows, company_id=company_id)
 
             if not can_receptions:
                 payload["warnings"].append(
@@ -661,7 +703,7 @@ def build_payload_from_controlled_data(
 ) -> dict[str, Any]:
     """Payload sintético para pruebas de XLSX (sin PostgreSQL)."""
     cut = datetime.now(timezone.utc)
-    price_lists = price_lists or {12: "Supermercado", 13: "Ruta/Web", 16: "Melinka"}
+    price_lists = price_lists or {12: "Supermercado", 13: "Ruta Facturas", 16: "Melinka"}
     anomalies = anomalies or []
     average_vs_receptions = average_vs_receptions or []
     zero_cost_actives = zero_cost_actives or []
@@ -701,6 +743,14 @@ def build_payload_from_controlled_data(
         "stock_filter_label": STOCK_FILTER_LABELS[DEFAULT_STOCK_FILTER],
         "stock_criterion": STOCK_CRITERION,
         "price_lists": price_lists,
+        "offices": {
+            1: "Bodega Central",
+            2: "Bodega 1",
+            3: "Supermercado",
+            4: "Quillotana I",
+            5: "Quillotana II",
+            6: "Bajas",
+        },
         "census": census
         or {
             "variantes": 100,

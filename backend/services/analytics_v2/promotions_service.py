@@ -252,7 +252,7 @@ class PromotionsV2Service:
         return {
             "id": int(price_list_id),
             "name": entry.name if entry else None,
-            "label": entry.commercial_label if entry else None,
+            "label": entry.visible_name if entry else None,
             "in_scope": bool(entry and entry.status is PriceListScopeStatus.EVALUADA),
         }
 
@@ -450,7 +450,7 @@ class PromotionsV2Service:
         lists = self._price_scope()
         return {
             "price_lists": [
-                {"id": e.price_list_id, "name": e.name, "label": e.commercial_label}
+                {"id": e.price_list_id, "name": e.name, "label": e.visible_name}
                 for e in lists.entries
                 if e.status is PriceListScopeStatus.EVALUADA
             ],

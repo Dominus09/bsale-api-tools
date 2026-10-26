@@ -370,7 +370,7 @@ SYMBOLIC_PRICE_MAX = Decimal("10")
 # RAW (state = 0, sin missing_since). Las retiradas conservan sus reglas pero nunca se evalúan;
 # si reaparecen vigentes en RAW se informa la discrepancia en vez de incorporarlas.
 COMMERCIAL_PRICE_LISTS: dict[int, dict[int, str]] = {
-    3: {12: "Supermercado", 13: "Ruta/Web", 16: "Melinka"},
+    3: {12: "Supermercado", 13: "Ruta Facturas", 16: "Melinka"},
 }
 RETIRED_PRICE_LISTS: dict[int, dict[int, str]] = {
     3: {14: "COMODITI ALCOHOLES"},

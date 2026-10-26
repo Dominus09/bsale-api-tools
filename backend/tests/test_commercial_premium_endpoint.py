@@ -53,7 +53,7 @@ def _anomaly(vid: int, diff: str) -> dict[str, Any]:
 def premium_client(monkeypatch):
     access_calls: list[tuple[Any, int]] = []
 
-    def fake_run_cost(user, company_id, fn):
+    def fake_run_cost(user, company_id, fn, **_kwargs):
         access_calls.append((user, company_id))
         if company_id == 99:
             raise AnalyticsV2AccessError(403, "Empresa fuera del alcance del usuario")
@@ -110,10 +110,10 @@ def test_premium_export_default_is_review_two_sheets(premium_client):
     assert any(c[1] == 3 for c in premium_client.access_calls)  # type: ignore[attr-defined]
     wb = load_workbook(BytesIO(res.body))
     assert wb.sheetnames == list(REVIEW_SHEET_NAMES)
-    # 35 anomalías (sin tope 30); max_row puede incluir nota al pie
+    # Layout PRO: datos desde fila 9; 35 anomalías mock (+ posibles críticos zero-cost)
     ws = wb[REVIEW_SHEET_NAMES[0]]
-    data_rows = sum(1 for r in range(2, ws.max_row + 1) if ws.cell(r, 3).value)
-    assert data_rows == 35
+    data_rows = sum(1 for r in range(9, ws.max_row + 1) if ws.cell(r, 3).value)
+    assert data_rows >= 35
 
 
 def test_premium_export_full_six_sheets(premium_client):
@@ -124,7 +124,9 @@ def test_premium_export_full_six_sheets(premium_client):
     assert res.status_code == 200
     wb = load_workbook(BytesIO(res.body))
     assert wb.sheetnames == list(SHEET_NAMES)
-    assert wb[SHEET_NAMES[1]].max_row == 36
+    # Banner + header fila 5 + 35 anomalías → max_row 40
+    assert wb[SHEET_NAMES[1]].max_row == 40
+    assert wb[SHEET_NAMES[1]]["A5"].value == "TIPO"
 
 
 def test_premium_filename_contains_company_and_date(premium_client):

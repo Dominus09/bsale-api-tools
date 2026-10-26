@@ -24,7 +24,7 @@ MARGIN_ENDPOINTS = [
 def client(monkeypatch):
     calls: list[tuple[dict, int]] = []
 
-    def fake_run(user, company_id, fn):
+    def fake_run(user, company_id, fn, **_kwargs):
         calls.append((user, company_id))
         if company_id == 1:
             raise AnalyticsV2AccessError(409, "La empresa aún no tiene BSALE RAW completo")

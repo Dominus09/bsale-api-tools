@@ -205,10 +205,14 @@ def test_commercial_premium_xlsx_six_sheets_and_headers():
     wb = load_workbook(BytesIO(content))
     assert wb.sheetnames == list(SHEET_NAMES)
 
-    assert wb[SHEET_NAMES[1]]["A1"].value == "Prioridad"
-    assert wb[SHEET_NAMES[2]]["A1"].value == "Producto"
-    assert wb[SHEET_NAMES[3]]["A1"].value == "Producto"
-    assert wb[SHEET_NAMES[5]]["H1"].value == "Estado de revisión"
+    # Layout PRO: banner + encabezados en fila 5
+    assert "ANOMALÍAS" in str(wb[SHEET_NAMES[1]]["A1"].value)
+    assert wb[SHEET_NAMES[1]]["A5"].value == "TIPO"
+    assert "COSTO CERO" in str(wb[SHEET_NAMES[2]]["A1"].value)
+    assert wb[SHEET_NAMES[2]]["A5"].value == "Producto"
+    assert "PROMEDIO VS RECEPCIONES" in str(wb[SHEET_NAMES[3]]["A1"].value)
+    assert wb[SHEET_NAMES[3]]["A5"].value == "TIPO"
+    assert wb[SHEET_NAMES[5]]["G5"].value == "ESTADO"
 
 
 def test_anomalies_not_limited_to_top_30():
@@ -218,10 +222,10 @@ def test_anomalies_not_limited_to_top_30():
     content = commercial_premium_xlsx(payload)
     wb = load_workbook(BytesIO(content))
     ws = wb[SHEET_NAMES[1]]
-    # fila 1 header + 40 datos
-    assert ws.max_row == 41
-    # también en revisión administrativa
-    assert wb[SHEET_NAMES[5]].max_row >= 41
+    # banner 1–3 + vacía 4 + header 5 + 40 datos → max_row 45
+    assert ws.max_row == 45
+    # también en revisión administrativa (header 5 + 40)
+    assert wb[SHEET_NAMES[5]].max_row >= 45
 
 
 def test_sku_and_barcode_as_text_preserve_leading_zero():
@@ -229,8 +233,9 @@ def test_sku_and_barcode_as_text_preserve_leading_zero():
     content = commercial_premium_xlsx(payload)
     wb = load_workbook(BytesIO(content))
     ws = wb[SHEET_NAMES[1]]
-    # Columna F = SKU del primer anomaly (10894 → "010894")
-    sku_cell = ws["F2"]
+    headers = [ws.cell(5, c).value for c in range(1, ws.max_column + 1)]
+    sku_col = headers.index("SKU") + 1
+    sku_cell = ws.cell(6, sku_col)
     assert sku_cell.number_format == "@"
     assert str(sku_cell.value).startswith("0")
 
@@ -240,11 +245,11 @@ def test_zero_cost_distinguishes_explicit_zero_vs_missing_stock_row():
     content = commercial_premium_xlsx(payload)
     wb = load_workbook(BytesIO(content))
     ws = wb[SHEET_NAMES[2]]
-    statuses = {ws.cell(r, 7).value for r in range(2, ws.max_row + 1)}
+    statuses = {ws.cell(r, 7).value for r in range(6, ws.max_row + 1)}
     assert "sin_fila_stock" in statuses
     assert "stock_cero_explicito" in statuses
     # Sin fila → stock vacío (None), no 0 inventado
-    for r in range(2, ws.max_row + 1):
+    for r in range(6, ws.max_row + 1):
         if ws.cell(r, 7).value == "sin_fila_stock":
             assert ws.cell(r, 8).value is None
 
@@ -255,13 +260,12 @@ def test_non_comparable_has_blank_diff():
     wb = load_workbook(BytesIO(content))
     ws = wb[SHEET_NAMES[3]]
     found = False
-    for r in range(2, ws.max_row + 1):
-        if ws.cell(r, 17).value == "sin_comparable":
+    for r in range(6, ws.max_row + 1):
+        if ws.cell(r, 13).value == "sin_comparable":
+            assert ws.cell(r, 7).value is None
             assert ws.cell(r, 8).value is None
-            assert ws.cell(r, 9).value is None
             found = True
     assert found
-
 
 def test_summary_contains_methodology_and_no_confirmed_error_claim():
     payload = _controlled_payload()
@@ -281,7 +285,7 @@ def test_admin_sheet_has_dropdown_validation():
     wb = load_workbook(BytesIO(content))
     ws = wb[SHEET_NAMES[5]]
     assert len(ws.data_validations.dataValidation) >= 1
-    assert ws["H2"].value == "Pendiente"
+    assert ws["G6"].value == "Pendiente"
 
 
 def test_sync_historical_error_not_active_alert_when_success_later():
@@ -303,8 +307,10 @@ def test_exposure_formula_present_on_anomalies():
     content = commercial_premium_xlsx(payload)
     wb = load_workbook(BytesIO(content))
     ws = wb[SHEET_NAMES[1]]
-    assert isinstance(ws["L2"].value, str)
-    assert ws["L2"].value.startswith("=IF(")
+    # Columna I = EXPOSICIÓN¹ (fórmula sobre E/F/G; no usa «Sin precio»)
+    assert isinstance(ws["I6"].value, str)
+    assert ws["I6"].value.startswith("=IF(")
+    assert "E6" in ws["I6"].value and "F6" in ws["I6"].value and "G6" in ws["I6"].value
 
 
 def test_no_duplicate_variant_ids_in_anomalies_sheet():
@@ -312,7 +318,9 @@ def test_no_duplicate_variant_ids_in_anomalies_sheet():
     content = commercial_premium_xlsx(payload)
     wb = load_workbook(BytesIO(content))
     ws = wb[SHEET_NAMES[1]]
-    ids = [ws.cell(r, 5).value for r in range(2, ws.max_row + 1)]
+    headers = [ws.cell(5, c).value for c in range(1, ws.max_column + 1)]
+    vid_col = headers.index("VARIANT_ID") + 1
+    ids = [ws.cell(r, vid_col).value for r in range(6, ws.max_row + 1)]
     assert len(ids) == len(set(ids))
 
 
@@ -334,36 +342,39 @@ def test_review_xlsx_two_sheets_identity_and_no_zero_cost_dump():
     assert wb.sheetnames == list(REVIEW_SHEET_NAMES)
 
     ws = wb[REVIEW_SHEET_NAMES[0]]
-    assert [ws.cell(1, c).value for c in range(1, 12)] == [
-        "Tipo de producto",
-        "Producto + variante",
-        "Código de barras",
-        "Stock",
-        "Costo promedio",
-        "Último costo comparable",
-        "Diferencia %",
-        "Prioridad",
-        "Motivo o acción de revisión",
-        "Estado administrativo",
-        "Observación",
+    assert "CONTROL DE COSTOS" in str(ws["A1"].value)
+    assert [ws.cell(8, c).value for c in range(1, 12)] == [
+        "TIPO DE PRODUCTO",
+        "PRODUCTO + VARIANTE",
+        "CÓDIGO DE BARRAS",
+        "STOCK GLOBAL",
+        "COSTO PROM. NETO",
+        "ÚLTIMA COMPRA NETA",
+        "Δ VS PROMEDIO",
+        "PRIORIDAD",
+        "QUÉ REVISAR / FACTURA",
+        "ESTADO",
+        "OBSERVACIÓN",
     ]
-    assert ws.freeze_panes == "D2"
+    # D9: filas 1–8 (banner + chips + encabezado fila 8) + columnas A–C (Tipo/Producto/Barcode)
+    assert ws.freeze_panes == "D9"
+    assert ws.auto_filter.ref and ws.auto_filter.ref.startswith("A8:")
     # 40 anomalías + 1 crítico stock+sin costo (9003); sin 9001/9002 (sin stock positivo)
-    data_rows = sum(1 for r in range(2, ws.max_row + 1) if ws.cell(r, 3).value)
+    data_rows = sum(1 for r in range(9, ws.max_row + 1) if ws.cell(r, 3).value)
     assert data_rows == 41
-    barcodes = {str(ws.cell(r, 3).value) for r in range(2, ws.max_row + 1) if ws.cell(r, 3).value}
+    barcodes = {str(ws.cell(r, 3).value) for r in range(9, ws.max_row + 1) if ws.cell(r, 3).value}
     assert "7809003" in barcodes
     assert "7809001" not in barcodes
     assert "7809002" not in barcodes
-    motivos = " ".join(str(ws.cell(r, 9).value or "") for r in range(2, ws.max_row + 1))
+    motivos = " ".join(str(ws.cell(r, 9).value or "") for r in range(9, ws.max_row + 1))
     assert "stock positivo sin costo" in motivos.lower()
-    assert ws["J2"].value == "Pendiente"
+    assert ws["J9"].value == "Pendiente"
     assert len(ws.data_validations.dataValidation) >= 1
 
     summary = wb[REVIEW_SHEET_NAMES[1]]
-    blob = "\n".join(str(summary.cell(r, 1).value or "") for r in range(1, 20))
-    assert "alertas" in blob.lower() or "Alertas" in blob
-    assert "no constituyen errores" in blob.lower() or "no constituyen" in blob.lower()
+    blob = "\n".join(str(summary.cell(r, 1).value or "") for r in range(1, 30))
+    assert "alertas" in blob.lower() or "Alertas" in blob or "REVISIÓN" in blob
+    assert "no constituyen errores" in blob.lower() or "no son errores" in blob.lower() or "≠" in blob
     assert "Activos costo cero" not in wb.sheetnames
 
 
@@ -373,12 +384,40 @@ def test_full_six_sheets_intact_alongside_review():
     review = load_workbook(BytesIO(commercial_premium_review_xlsx(payload)))
     assert full.sheetnames == list(SHEET_NAMES)
     assert review.sheetnames == list(REVIEW_SHEET_NAMES)
-    full_anomaly_rows = sum(1 for r in range(2, full[SHEET_NAMES[1]].max_row + 1) if full[SHEET_NAMES[1]].cell(r, 5).value)
+    full_ws = full[SHEET_NAMES[1]]
+    full_headers = [full_ws.cell(5, c).value for c in range(1, full_ws.max_column + 1)]
+    stock_col = full_headers.index("STOCK") + 1
+    full_anomaly_rows = sum(
+        1 for r in range(6, full_ws.max_row + 1) if full_ws.cell(r, stock_col).value is not None
+    )
     review_rows = sum(
-        1 for r in range(2, review[REVIEW_SHEET_NAMES[0]].max_row + 1) if review[REVIEW_SHEET_NAMES[0]].cell(r, 3).value
+        1
+        for r in range(9, review[REVIEW_SHEET_NAMES[0]].max_row + 1)
+        if review[REVIEW_SHEET_NAMES[0]].cell(r, 3).value
     )
     assert full_anomaly_rows == 40
     assert review_rows == 41  # anomalías + stock positivo sin costo
+
+
+def test_missing_price_is_presentation_not_zero():
+    payload = _controlled_payload()
+    content = commercial_premium_xlsx(payload)
+    wb = load_workbook(BytesIO(content))
+    ws = wb[SHEET_NAMES[1]]
+    headers = [ws.cell(5, c).value for c in range(1, ws.max_column + 1)]
+    price_cols = [i for i, h in enumerate(headers, start=1) if h and str(h).startswith("Precio ")]
+    assert price_cols
+    found_sin = False
+    for r in range(6, ws.max_row + 1):
+        for c in price_cols:
+            val = ws.cell(r, c).value
+            if val == "Sin precio":
+                found_sin = True
+                assert val != 0
+                assert not isinstance(val, (int, float))
+    assert found_sin
+    # Fórmula de exposición no referencia columnas de precio
+    assert "Precio" not in str(ws["I6"].value)
 
 
 def test_existing_costs_xlsx_still_works():

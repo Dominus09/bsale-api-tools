@@ -20,6 +20,7 @@ from backend.services.analytics_v2.contracts import (
     PriceListScopeStatus,
     ResultValidity,
 )
+from backend.services.analytics_v2.display_labels import price_list_visible_name
 
 PRICE_LISTS_SQL = """
 SELECT pl.bsale_id AS price_list_id, pl.name, pl.state, pl.missing_since
@@ -58,11 +59,21 @@ class PriceListEntry:
     def is_discrepancy(self) -> bool:
         return self.status in _DISCREPANCIES
 
+    @property
+    def visible_name(self) -> str:
+        """Etiqueta comercial para UI/Excel (sin ID técnico)."""
+        return price_list_visible_name(
+            name=self.name,
+            commercial_label=self.commercial_label,
+            price_list_id=self.price_list_id,
+        )
+
     def to_json(self) -> dict[str, Any]:
         return {
             "price_list_id": self.price_list_id,
             "name": self.name,
             "commercial_label": self.commercial_label,
+            "visible_name": self.visible_name,
             "raw_state": self.raw_state,
             "raw_missing": self.raw_missing,
             "in_raw": self.in_raw,
@@ -140,6 +151,15 @@ def resolve_price_list_scope(
 def rule_in_commercial_scope(price_list_id: int, scope: PriceListScope) -> bool:
     """Reglas de listas no evaluadas se conservan, pero no generan alertas ni entran en márgenes."""
     return int(price_list_id) in scope.evaluated_ids
+
+
+def evaluated_price_list_names(scope: PriceListScope) -> dict[int, str]:
+    """Solo listas autorizadas y vigentes (EVALUADA): id → nombre comercial visible."""
+    return {
+        e.price_list_id: e.visible_name
+        for e in scope.entries
+        if e.status is PriceListScopeStatus.EVALUADA
+    }
 
 
 def policy_review_status(reviewed: bool = POLICIES_REVIEWED) -> PolicyReviewStatus:

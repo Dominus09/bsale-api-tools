@@ -311,7 +311,7 @@ class MarginsV2Service:
                         "price_list": {
                             "id": list_id,
                             "name": entry.name,
-                            "label": entry.commercial_label,
+                            "label": entry.visible_name if entry else None,
                         },
                         # Stock por variante (no por fila): el mismo valor se
                         # repite en cada lista sin multiplicar existencias.
@@ -413,7 +413,7 @@ class MarginsV2Service:
             by_list[list_id] = {
                 "price_list_id": list_id,
                 "name": entry.name if entry else None,
-                "label": entry.commercial_label if entry else None,
+                "label": entry.visible_name if entry else None,
                 "rows": 0,
                 "by_status": {s: 0 for s in statuses},
                 "by_qualifier": {},
@@ -503,7 +503,7 @@ class MarginsV2Service:
             lists[list_id] = {
                 "price_list_id": list_id,
                 "name": entry.name if entry else None,
-                "label": entry.commercial_label if entry else None,
+                "label": entry.visible_name if entry else None,
                 "combinations": 0,
                 "priced": 0,
                 "alerts": 0,
@@ -570,7 +570,7 @@ class MarginsV2Service:
             "policy": self._policy_counts(ctx, rows),
             "scope": {
                 "evaluated": [
-                    {"price_list_id": e.price_list_id, "name": e.name, "label": e.commercial_label}
+                    {"price_list_id": e.price_list_id, "name": e.name, "label": e.visible_name}
                     for e in ctx.scope.entries
                     if e.status is PriceListScopeStatus.EVALUADA
                 ],
@@ -627,7 +627,7 @@ class MarginsV2Service:
         ctx = self._load_context()
         return {
             "price_lists": [
-                {"id": e.price_list_id, "name": e.name, "label": e.commercial_label}
+                {"id": e.price_list_id, "name": e.name, "label": e.visible_name}
                 for e in ctx.scope.entries
                 if e.status is PriceListScopeStatus.EVALUADA
             ],
@@ -648,7 +648,7 @@ class MarginsV2Service:
         ctx = self._load_context()
         rows, cost_generated_at = self._rows(ctx, basis, "all")
         lists = [
-            {"id": e.price_list_id, "name": e.name, "label": e.commercial_label}
+            {"id": e.price_list_id, "name": e.name, "label": e.visible_name}
             for e in ctx.scope.entries
             if e.status is PriceListScopeStatus.EVALUADA
         ]
