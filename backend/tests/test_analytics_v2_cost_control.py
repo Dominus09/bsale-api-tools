@@ -695,6 +695,16 @@ def test_reception_analysis_compares_purchase_to_purchase():
     assert no_ref["change_pct"] is None
 
 
+def test_reception_analysis_sql_keeps_previous_outside_period():
+    """El período filtra la recepción actual; lag() de comparable usa todo el historial."""
+    sql = repo_mod.RECEPTION_COST_CHANGES_SQL
+    assert "lag(f.cost)" in sql.lower() or "lag(f.cost)" in sql
+    assert "BETWEEN %s AND %s" in sql
+    # El filtro de fechas es sobre s.admission_date (actual), no sobre previous_admission_date.
+    assert "s.admission_date BETWEEN" in sql
+    assert "previous_admission_date BETWEEN" not in sql
+
+
 def test_filters_offices_operational_only_company_3():
     """Selectores: activas + COST_CONTROL_OFFICE_IDS; no altera stock global."""
     repo = FakeRepo([fact(1)])

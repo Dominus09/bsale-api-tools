@@ -20,17 +20,20 @@ import {
   formatProductPlusVariant,
   formatProductType,
 } from "@/lib/analytics-v2/product-identity"
+import {
+  RECEPTION_PERIOD_OPTIONS,
+  rangeForReceptionPreset,
+  type ReceptionPeriodPreset,
+} from "@/lib/analytics-v2/chile-dates"
 import type { CostFilters, ReceptionAnalysisItem, ReceptionAnalysisResponse } from "@/lib/analytics-v2/types"
 
 import { Pager } from "./cost-v2-products"
 
-function isoDaysAgo(days: number): string {
-  const d = new Date()
-  d.setDate(d.getDate() - days)
-  return d.toISOString().slice(0, 10)
-}
-
 const selectClass = "h-9 rounded-md border border-input bg-background px-2 text-sm"
+
+function initialReceptionDates() {
+  return rangeForReceptionPreset("current_month")
+}
 
 function statusTone(status: string): "neutral" | "success" | "warning" | "danger" | "info" {
   if (status === "alza") return "danger"
@@ -223,14 +226,18 @@ export function CostV2ReceptionAnalysis({
   onOpenProduct: (variantId: number) => void
   onOpenReception: (receptionId: number, detailId: number) => void
 }) {
-  const [draft, setDraft] = useState({
-    dateFrom: isoDaysAgo(90),
-    dateTo: isoDaysAgo(0),
-    productTypeId: "",
-    officeId: "",
-    direction: "all" as "all" | "up" | "down",
-    minChange: "",
-    q: "",
+  const [periodPreset, setPeriodPreset] = useState<ReceptionPeriodPreset>("current_month")
+  const [draft, setDraft] = useState(() => {
+    const range = initialReceptionDates()
+    return {
+      dateFrom: range.from,
+      dateTo: range.to,
+      productTypeId: "",
+      officeId: "",
+      direction: "all" as "all" | "up" | "down",
+      minChange: "",
+      q: "",
+    }
   })
   const [applied, setApplied] = useState(draft)
   const [page, setPage] = useState(1)
@@ -238,6 +245,16 @@ export function CostV2ReceptionAnalysis({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<ReceptionAnalysisItem | null>(null)
+
+  const applyPeriodPreset = (preset: ReceptionPeriodPreset) => {
+    setPeriodPreset(preset)
+    if (preset === "custom") return
+    const range = rangeForReceptionPreset(preset)
+    const next = { ...draft, dateFrom: range.from, dateTo: range.to }
+    setDraft(next)
+    setPage(1)
+    setApplied(next)
+  }
 
   useEffect(() => {
     const ac = new AbortController()
@@ -274,7 +291,7 @@ export function CostV2ReceptionAnalysis({
     <div className="space-y-3">
       <SectionCard
         title="Análisis de recepciones"
-        description="Variación de costo entre la compra comparable actual y la anterior. No se compara con el promedio Bsale (dato adicional en el panel)."
+        description="Variación compra actual vs compra anterior (no vs promedio Bsale). El período filtra solo la recepción actual; la comparable anterior puede ser de un mes previo."
       >
         {null}
       </SectionCard>
@@ -289,12 +306,29 @@ export function CostV2ReceptionAnalysis({
         <SmartFilterBar>
           <div className="flex flex-wrap items-end gap-3">
             <label className="flex flex-col gap-1 text-[11px] font-medium uppercase text-muted-foreground">
+              Período
+              <select
+                className={selectClass}
+                value={periodPreset}
+                onChange={(e) => applyPeriodPreset(e.target.value as ReceptionPeriodPreset)}
+              >
+                {RECEPTION_PERIOD_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-[11px] font-medium uppercase text-muted-foreground">
               Desde
               <Input
                 type="date"
                 min="2025-01-01"
                 value={draft.dateFrom}
-                onChange={(e) => setDraft((d) => ({ ...d, dateFrom: e.target.value }))}
+                onChange={(e) => {
+                  setPeriodPreset("custom")
+                  setDraft((d) => ({ ...d, dateFrom: e.target.value }))
+                }}
               />
             </label>
             <label className="flex flex-col gap-1 text-[11px] font-medium uppercase text-muted-foreground">
@@ -302,7 +336,10 @@ export function CostV2ReceptionAnalysis({
               <Input
                 type="date"
                 value={draft.dateTo}
-                onChange={(e) => setDraft((d) => ({ ...d, dateTo: e.target.value }))}
+                onChange={(e) => {
+                  setPeriodPreset("custom")
+                  setDraft((d) => ({ ...d, dateTo: e.target.value }))
+                }}
               />
             </label>
             <label className="flex flex-col gap-1 text-[11px] font-medium uppercase text-muted-foreground">

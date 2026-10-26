@@ -156,45 +156,8 @@ export default function CostControlV2Page() {
   const openReception = (id: number, detailId: number) => setReception({ id, detailId })
 
   const [exporting, setExporting] = useState(false)
-  const [exportingReceptions, setExportingReceptions] = useState(false)
   const [exportingPremium, setExportingPremium] = useState(false)
   const [exportingPremiumFull, setExportingPremiumFull] = useState(false)
-  const [receptionSegment, setReceptionSegment] = useState(1)
-
-  const exportParams = () => {
-    const minChange = applied.minChange ? Number(applied.minChange) : null
-    return {
-      company_id: companyId,
-      q: applied.q.trim() || null,
-      product_type_id: applied.productTypeId ? Number(applied.productTypeId) : null,
-      variant_state: applied.variantState,
-      reliability: applied.reliability || null,
-      tax_status: applied.taxStatus || null,
-      last_movement_class: applied.movement || null,
-      anomaly_code: applied.anomaly || null,
-      office_id: applied.officeId ? Number(applied.officeId) : null,
-      min_abs_change_pct: minChange !== null && Number.isFinite(minChange) ? minChange : null,
-      stock_filter: applied.stockFilter,
-      sort: applied.sort,
-    }
-  }
-
-  const handleExportReceptions = async () => {
-    if (companyId == null) return
-    setExportingReceptions(true)
-    setError(null)
-    try {
-      await downloadXlsx(
-        "/analytics-v2/costs/receptions/export.xlsx",
-        { ...exportParams(), segment: receptionSegment },
-        `recepciones-empresa-${companyId}-segmento-${receptionSegment}.xlsx`,
-      )
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "No se pudo generar el historial de recepciones")
-    } finally {
-      setExportingReceptions(false)
-    }
-  }
 
   const handleExport = async () => {
     if (companyId == null) return
@@ -311,30 +274,6 @@ export default function CostControlV2Page() {
               {exportingPremiumFull ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
               Excel auditoría completa
             </Button>
-            <div
-              className="flex flex-wrap items-center gap-1.5"
-              title="Historial por segmentos de hasta 300 variantes del universo filtrado (no es el histórico completo de la empresa en un solo archivo). Cada Excel declara segmento y cobertura."
-            >
-              <label htmlFor="reception-segment" className="text-xs text-muted-foreground">Segmento</label>
-              <input
-                id="reception-segment"
-                type="number"
-                min={1}
-                max={products?.total ? Math.max(1, Math.ceil(products.total / 300)) : undefined}
-                value={receptionSegment}
-                onChange={(e) => setReceptionSegment(Math.max(1, Number(e.target.value) || 1))}
-                className="h-10 w-16 rounded-md border bg-background px-2 text-sm sm:h-9"
-              />
-              {products?.total != null ? (
-                <span className="text-xs text-muted-foreground">
-                  de {Math.max(1, Math.ceil(products.total / 300))}
-                </span>
-              ) : null}
-              <Button variant="outline" size="sm" className="h-10 sm:h-9" onClick={handleExportReceptions} disabled={exportingReceptions}>
-                {exportingReceptions ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
-                Historial de recepciones
-              </Button>
-            </div>
             <StatusBadge tone="warning">Validación contable pendiente</StatusBadge>
           </>
         }
