@@ -229,7 +229,7 @@ export function PackV2DetailSheet({
                       {data.rows.map((r) => (
                         <tr key={r.price_list.id}>
                           <td className="px-5 py-3">
-                            {r.price_list.label ?? r.price_list.name} <span className="text-muted-foreground">#{r.price_list.id}</span>
+                            {r.price_list.label ?? r.price_list.name}
                           </td>
                           <td className="px-4 py-3 text-right font-medium tabular-nums">{formatMoney(r.price_gross)}</td>
                           <td className="px-4 py-3 text-right tabular-nums">{formatPct(r.markup_pct)}</td>

@@ -30,7 +30,7 @@ export function MarginV2Kpis({
       key: "rows",
       title: "Combinaciones evaluadas",
       value: value(summary?.rows_total),
-      hint: `SKU × lista · Listas ${summary?.meta.evaluated_price_list_ids.join(", ") ?? "—"}`,
+      hint: `SKU × lista · ${summary?.by_price_list?.map((l) => l.label ?? l.name).filter(Boolean).join(", ") || "listas evaluadas"}`,
       filter: null,
       tone: "info",
       icon: ListChecks,
@@ -167,7 +167,7 @@ export function MarginV2ListBreakdown({
               key={e.price_list_id}
               tone={e.discrepancy ? "danger" : e.status === "evaluada" ? "success" : "neutral"}
             >
-              #{e.price_list_id} {e.commercial_label ?? e.name ?? ""} · {LIST_SCOPE_LABELS[e.status]}
+              {e.commercial_label ?? e.name ?? "Lista sin nombre"} · {LIST_SCOPE_LABELS[e.status]}
             </StatusBadge>
           ))}
         </div>

@@ -316,7 +316,7 @@ export function AddItemDialog({
                     .filter((p) => evaluated.has(p.price_list.id))
                     .map((p) => (
                       <option key={p.price_list.id} value={p.price_list.id}>
-                        {p.price_list.label ?? p.price_list.name} (#{p.price_list.id}) · {formatMoney(p.gross)}
+                        {p.price_list.label ?? p.price_list.name} · {formatMoney(p.gross)}
                       </option>
                     ))}
                 </select>

@@ -6,6 +6,7 @@ import { EmptyState, ProfessionalDataTable, SmartFilterBar } from "@/components/
 import { ProductIdentityCell } from "@/components/analytics-v2/shared/product-identity-cell"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { formatOfficeLabel } from "@/lib/analytics-v2/display-labels"
 import { cn } from "@/lib/utils"
 import {
   ANOMALY_LABELS,
@@ -225,7 +226,7 @@ export function CostV2ProductFilters({
             <option value="">Todas</option>
             {(filters?.offices ?? []).map((o) => (
               <option key={o.id} value={o.id}>
-                {o.name ?? `Oficina ${o.id}`}
+                {formatOfficeLabel(o.name, o.id)}
               </option>
             ))}
           </select>

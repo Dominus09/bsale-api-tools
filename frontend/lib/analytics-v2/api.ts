@@ -41,9 +41,11 @@ import type {
   FreshnessResponse,
   HistoryResponse,
   ProductListParams,
+  ReceptionAnalysisResponse,
   ReceptionDetail,
   Severity,
 } from "./types"
+import { isStockFilter } from "./stock-filter"
 
 const API_URL = getApiBaseUrl()
 
@@ -56,10 +58,12 @@ export class AnalyticsV2Error extends Error {
   }
 }
 
-function authHeaders(): HeadersInit {
+function authHeaders(opts?: { jsonBody?: boolean }): HeadersInit {
   const token = typeof window !== "undefined" ? window.localStorage.getItem("token") : null
+  // No enviar Content-Type en GET/blob: algunos proxies/WAF responden 422
+  // al ver application/json sin cuerpo.
   return {
-    "Content-Type": "application/json",
+    ...(opts?.jsonBody ? { "Content-Type": "application/json" } : {}),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   }
 }
@@ -98,12 +102,34 @@ async function getJson<T>(path: string, params: Record<string, QueryValue>, sign
     logout()
     window.location.assign("/login")
   }
-  if (!res.ok) throw new AnalyticsV2Error(res.status, messageFor(res.status))
+  if (!res.ok) {
+    // Exponer el detail del backend en 422/503 para no ocultar la causa real
+    // detrás del mensaje genérico «Filtros inválidos».
+    const detail = [422, 503].includes(res.status) ? await detailFrom(res) : null
+    throw new AnalyticsV2Error(res.status, detail ?? messageFor(res.status))
+  }
   return (await res.json()) as T
 }
 
-export function getCostSummary(companyId: number, signal?: AbortSignal) {
-  return getJson<CostSummary>("/analytics-v2/costs/summary", { company_id: companyId }, signal)
+export function getCostSummary(
+  companyId: number,
+  signalOrStock?: AbortSignal | { stock_filter?: string | null },
+  maybeSignal?: AbortSignal,
+) {
+  const opts =
+    signalOrStock && typeof signalOrStock === "object" && !("aborted" in signalOrStock)
+      ? (signalOrStock as { stock_filter?: string | null })
+      : {}
+  const signal =
+    signalOrStock && typeof signalOrStock === "object" && "aborted" in signalOrStock
+      ? (signalOrStock as AbortSignal)
+      : maybeSignal
+  const stock = isStockFilter(opts.stock_filter) ? opts.stock_filter : "with"
+  return getJson<CostSummary>(
+    "/analytics-v2/costs/summary",
+    { company_id: companyId, stock_filter: stock },
+    signal,
+  )
 }
 
 export function getCostFilters(companyId: number, signal?: AbortSignal) {
@@ -115,7 +141,36 @@ export function getRawFreshness(companyId: number, signal?: AbortSignal) {
 }
 
 export function getCostProducts(params: ProductListParams, signal?: AbortSignal) {
-  return getJson<CostProductsResponse>("/analytics-v2/costs/products", { ...params }, signal)
+  const stock_filter = isStockFilter(params.stock_filter) ? params.stock_filter : "with"
+  return getJson<CostProductsResponse>(
+    "/analytics-v2/costs/products",
+    { ...params, stock_filter },
+    signal,
+  )
+}
+
+export function getReceptionAnalysis(
+  params: {
+    company_id: number
+    date_from: string
+    date_to: string
+    product_type_id?: number | null
+    office_id?: number | null
+    direction?: "all" | "up" | "down"
+    min_abs_change_pct?: number | null
+    q?: string | null
+    stock_filter?: string | null
+    page?: number
+    page_size?: number
+  },
+  signal?: AbortSignal,
+) {
+  const stock_filter = isStockFilter(params.stock_filter) ? params.stock_filter : "with"
+  return getJson<ReceptionAnalysisResponse>(
+    "/analytics-v2/costs/receptions/analysis",
+    { ...params, stock_filter },
+    signal,
+  )
 }
 
 export function getCostProduct(companyId: number, variantId: number, signal?: AbortSignal) {
@@ -186,7 +241,23 @@ export function getPolicyReview(companyId: number, onlyIssues: boolean, signal?:
 async function detailFrom(res: Response): Promise<string | null> {
   try {
     const body = (await res.json()) as { detail?: unknown }
-    return typeof body.detail === "string" && body.detail.length <= 500 ? body.detail : null
+    const detail = body.detail
+    if (typeof detail === "string" && detail.length > 0 && detail.length <= 500) return detail
+    // FastAPI RequestValidationError: detail es lista de {loc, msg, type}
+    if (Array.isArray(detail) && detail.length > 0) {
+      const parts = detail.slice(0, 3).map((item) => {
+        if (!item || typeof item !== "object") return String(item)
+        const row = item as { loc?: unknown[]; msg?: string }
+        const loc = Array.isArray(row.loc)
+          ? row.loc.filter((x) => x !== "query" && x !== "body").join(".")
+          : ""
+        const msg = typeof row.msg === "string" ? row.msg : "inválido"
+        return loc ? `${loc}: ${msg}` : msg
+      })
+      const text = parts.join("; ")
+      return text.length <= 500 ? text : text.slice(0, 497) + "…"
+    }
+    return null
   } catch {
     return null
   }
@@ -202,7 +273,7 @@ async function sendJson<T>(
   try {
     res = await fetch(`${API_URL}${path}?${buildQuery(params)}`, {
       method,
-      headers: authHeaders(),
+      headers: authHeaders({ jsonBody: true }),
       body: JSON.stringify(body ?? {}),
     })
   } catch {
@@ -421,8 +492,28 @@ export async function downloadXlsx(path: string, params: Record<string, QueryVal
     logout()
     window.location.assign("/login")
   }
-  if (!res.ok) throw new AnalyticsV2Error(res.status, messageFor(res.status))
+  if (!res.ok) {
+    const detail = [422, 503, 504].includes(res.status) ? await detailFrom(res) : null
+    throw new AnalyticsV2Error(res.status, detail ?? messageFor(res.status))
+  }
+  const contentType = (res.headers.get("content-type") || "").toLowerCase()
   const blob = await res.blob()
+  // Proxy puede devolver JSON de error con content-type incorrecto.
+  if (contentType.includes("json") || blob.type.includes("json")) {
+    const text = await blob.text()
+    try {
+      const parsed = JSON.parse(text) as { detail?: unknown }
+      if (typeof parsed.detail === "string") {
+        throw new AnalyticsV2Error(res.status || 500, parsed.detail)
+      }
+      if (Array.isArray(parsed.detail) && parsed.detail.length) {
+        throw new AnalyticsV2Error(res.status || 422, "Filtros inválidos en la descarga.")
+      }
+    } catch (e) {
+      if (e instanceof AnalyticsV2Error) throw e
+    }
+    throw new AnalyticsV2Error(res.status || 500, messageFor(res.status || 500))
+  }
   const url = URL.createObjectURL(blob)
   const a = document.createElement("a")
   a.href = url

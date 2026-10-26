@@ -12,6 +12,7 @@ import {
   Pager,
   type ProductFilterDraft,
 } from "@/components/analytics-v2/costs/cost-v2-products"
+import { CostV2ReceptionAnalysis } from "@/components/analytics-v2/costs/cost-v2-reception-analysis"
 import { CostV2ReceptionDialog } from "@/components/analytics-v2/costs/cost-v2-reception-dialog"
 import { CostV2Kpis, CostV2SummaryPanels } from "@/components/analytics-v2/costs/cost-v2-summary"
 import { AnalyticPageHeader, DataStatusBar, StatusBadge } from "@/components/analytics-v2/shared/analytics-ui"
@@ -83,7 +84,7 @@ export default function CostControlV2Page() {
     setLoadingSummary(true)
     setBlocking(null)
     Promise.all([
-      getCostSummary(companyId, ac.signal),
+      getCostSummary(companyId, { stock_filter: applied.stockFilter }, ac.signal),
       getCostFilters(companyId, ac.signal),
       getRawFreshness(companyId, ac.signal),
     ])
@@ -101,7 +102,7 @@ export default function CostControlV2Page() {
         if (!ac.signal.aborted) setLoadingSummary(false)
       })
     return () => ac.abort()
-  }, [companyId])
+  }, [companyId, applied.stockFilter])
 
   const loadProducts = useCallback(() => {
     if (companyId == null || blocking) return
@@ -309,16 +310,25 @@ export default function CostControlV2Page() {
               {exportingPremiumFull ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
               Excel auditoría completa
             </Button>
-            <div className="flex items-center gap-1.5" title="Historial de recepciones por segmentos de 300 variantes, con los filtros aplicados. Cada archivo declara su segmento y cobertura.">
+            <div
+              className="flex flex-wrap items-center gap-1.5"
+              title="Historial por segmentos de hasta 300 variantes del universo filtrado (no es el histórico completo de la empresa en un solo archivo). Cada Excel declara segmento y cobertura."
+            >
               <label htmlFor="reception-segment" className="text-xs text-muted-foreground">Segmento</label>
               <input
                 id="reception-segment"
                 type="number"
                 min={1}
+                max={products?.total ? Math.max(1, Math.ceil(products.total / 300)) : undefined}
                 value={receptionSegment}
                 onChange={(e) => setReceptionSegment(Math.max(1, Number(e.target.value) || 1))}
                 className="h-10 w-16 rounded-md border bg-background px-2 text-sm sm:h-9"
               />
+              {products?.total != null ? (
+                <span className="text-xs text-muted-foreground">
+                  de {Math.max(1, Math.ceil(products.total / 300))}
+                </span>
+              ) : null}
               <Button variant="outline" size="sm" className="h-10 sm:h-9" onClick={handleExportReceptions} disabled={exportingReceptions}>
                 {exportingReceptions ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
                 Historial de recepciones
@@ -359,13 +369,20 @@ export default function CostControlV2Page() {
           <CostV2Kpis
             summary={summary}
             loading={loadingSummary}
-            onSelectReliability={(status) => applyFilters({ ...EMPTY_PRODUCT_FILTERS, reliability: status ?? "" })}
+            onSelectReliability={(status) =>
+              applyFilters({
+                ...EMPTY_PRODUCT_FILTERS,
+                stockFilter: applied.stockFilter,
+                reliability: status ?? "",
+              })
+            }
           />
 
           <Tabs value={tab} onValueChange={setTab} className="gap-4">
             <TabsList className="h-11 rounded-xl border border-lq-line bg-lq-surface p-1 shadow-sm">
               <TabsTrigger value="resumen">Resumen</TabsTrigger>
               <TabsTrigger value="productos">Explorar productos</TabsTrigger>
+              <TabsTrigger value="analisis">Análisis de recepciones</TabsTrigger>
               <TabsTrigger value="alertas">Alertas de recepción</TabsTrigger>
             </TabsList>
 
@@ -373,9 +390,15 @@ export default function CostControlV2Page() {
               <CostV2SummaryPanels
                 summary={summary}
                 freshness={freshness}
-                onSelectReliability={(status) => applyFilters({ ...EMPTY_PRODUCT_FILTERS, reliability: status })}
-                onSelectAnomaly={(code) => applyFilters({ ...EMPTY_PRODUCT_FILTERS, anomaly: code })}
-                onSelectTax={(status) => applyFilters({ ...EMPTY_PRODUCT_FILTERS, taxStatus: status })}
+                onSelectReliability={(status) =>
+                  applyFilters({ ...EMPTY_PRODUCT_FILTERS, stockFilter: applied.stockFilter, reliability: status })
+                }
+                onSelectAnomaly={(code) =>
+                  applyFilters({ ...EMPTY_PRODUCT_FILTERS, stockFilter: applied.stockFilter, anomaly: code })
+                }
+                onSelectTax={(status) =>
+                  applyFilters({ ...EMPTY_PRODUCT_FILTERS, stockFilter: applied.stockFilter, taxStatus: status })
+                }
               />
             </TabsContent>
 
@@ -402,6 +425,16 @@ export default function CostControlV2Page() {
                   onPage={setPage}
                 />
               ) : null}
+            </TabsContent>
+
+            <TabsContent value="analisis">
+              <CostV2ReceptionAnalysis
+                companyId={companyId}
+                stockFilter={applied.stockFilter}
+                filters={filters}
+                onOpenProduct={setVariantId}
+                onOpenReception={openReception}
+              />
             </TabsContent>
 
             <TabsContent value="alertas">

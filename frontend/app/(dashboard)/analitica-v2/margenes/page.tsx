@@ -285,7 +285,7 @@ export default function MarginsV2Page() {
               <AlertTitle>Discrepancia de listas para revisión administrativa</AlertTitle>
               <AlertDescription>
                 {discrepancies
-                  .map((d) => `#${d.price_list_id} ${d.name ?? ""}: ${LIST_SCOPE_LABELS[d.status]}`)
+                  .map((d) => `${d.commercial_label ?? d.name ?? "Lista sin nombre"}: ${LIST_SCOPE_LABELS[d.status]}`)
                   .join(" · ")}
                 . No se incorporan ni se excluyen automáticamente.
               </AlertDescription>

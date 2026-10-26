@@ -298,7 +298,7 @@ export default function PromotionsV2Page() {
                 <option value="">Todas las evaluadas</option>
                 {(filters?.price_lists ?? []).map((l) => (
                   <option key={l.id} value={l.id}>
-                    {l.label ?? l.name} (#{l.id})
+                    {l.label ?? l.name}
                   </option>
                 ))}
               </select>

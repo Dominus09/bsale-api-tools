@@ -211,7 +211,7 @@ export function PromotionCampaignSheet({
                             {i.notes ? <span className="block text-[11px] text-muted-foreground">{i.notes}</span> : null}
                           </td>
                           <td className="px-3 py-2 text-xs">
-                            {i.price_list.label ?? i.price_list.name} <span className="text-muted-foreground">#{i.price_list.id}</span>
+                            {i.price_list.label ?? i.price_list.name}
                           </td>
                           <td className="px-3 py-2 text-right tabular-nums">{formatMoney(i.normal_gross_price)}</td>
                           <td className="px-3 py-2 text-right tabular-nums font-medium">

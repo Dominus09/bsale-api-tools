@@ -268,6 +268,10 @@ export type AlertsResponse = Paginated<AlertItem> & {
 export type CostSummary = {
   skus_total: number
   skus_active: number
+  /** Catálogo completo (sin filtro de stock); referencia GLOBAL en UI. */
+  skus_total_global?: number
+  skus_active_global?: number
+  stock_filter?: "with" | "without" | "all"
   skus_active_with_bsale_average: number
   skus_active_with_comparable_reception: number
   skus_active_by_reliability: Record<CostReliability, number>
@@ -283,6 +287,45 @@ export type CostSummary = {
     first_admission_date: string | null
     last_admission_date: string | null
   }[]
+  meta: V2Meta
+}
+
+export type ReceptionAnalysisItem = {
+  variant_id: number | null
+  code: string | null
+  barcode: string | null
+  product_name: string | null
+  variant_name: string | null
+  product_type: { id: number | null; name: string | null }
+  reception_id: number
+  detail_id: number
+  admission_date: string | null
+  office_id: number | null
+  office_name: string | null
+  document: string | null
+  document_number: string | null
+  movement_class: MovementClass
+  quantity: Money
+  cost: Money
+  previous_cost: Money
+  previous_reception_id: number | null
+  previous_detail_id: number | null
+  previous_admission_date: string | null
+  change_amount: Money
+  change_pct: Money
+  status: string
+  status_label: string
+  bsale_average_cost: Money
+  unit_note: string | null
+  comparison_basis: string
+  bsale_average_note: string
+}
+
+export type ReceptionAnalysisResponse = Paginated<ReceptionAnalysisItem> & {
+  date_from: string
+  date_to: string
+  direction: string
+  stock_filter: string
   meta: V2Meta
 }
 

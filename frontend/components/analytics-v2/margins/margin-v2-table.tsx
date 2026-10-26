@@ -131,7 +131,11 @@ export function MarginV2Filters({
             Lista
             <select className={selectClass} value={draft.priceListId} onChange={(e) => onChange({ priceListId: e.target.value })}>
               <option value="">Todas las evaluadas</option>
-              {(filters?.price_lists ?? []).map((l) => <option key={l.id} value={l.id}>{l.label ?? l.name} (#{l.id})</option>)}
+              {(filters?.price_lists ?? []).map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.label ?? l.name}
+                </option>
+              ))}
             </select>
           </label>
           <label className={cn(labelClass, "lg:min-w-48")}>

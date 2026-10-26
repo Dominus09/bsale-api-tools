@@ -24,6 +24,7 @@ import {
   SmartFilterBar,
   StatusBadge,
 } from "@/components/analytics-v2/shared/analytics-ui"
+import { formatOfficeLabel } from "@/lib/analytics-v2/display-labels"
 import {
   ExhibitionBadge,
   formatDate,
@@ -268,7 +269,7 @@ export default function GondolasPage() {
               aria-label="Sucursal"
             >
               {(options?.offices ?? []).map((o) => (
-                <option key={o.office_id} value={o.office_id}>{o.name} · Oficina {o.office_id}</option>
+                <option key={o.office_id} value={o.office_id}>{formatOfficeLabel(o.name, o.office_id)}</option>
               ))}
             </select>
           </label>

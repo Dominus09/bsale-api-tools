@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { cn } from "@/lib/utils"
 import { getCostAlerts } from "@/lib/analytics-v2/api"
+import { formatOfficeLabel } from "@/lib/analytics-v2/display-labels"
 import {
   ANOMALY_LABELS,
   SEVERITY_LABELS,
@@ -168,7 +169,7 @@ export function CostV2Alerts({
             <option value="">Todas</option>
             {(filters?.offices ?? []).map((o) => (
               <option key={o.id} value={o.id}>
-                {o.name ?? `Oficina ${o.id}`}
+                {formatOfficeLabel(o.name, o.id)}
               </option>
             ))}
           </select>

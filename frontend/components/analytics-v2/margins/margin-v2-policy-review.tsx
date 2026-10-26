@@ -70,7 +70,7 @@ export function MarginV2PolicyReview({ companyId }: { companyId: number }) {
             {data.missing_rules.map((m) => (
               <li key={`${m.price_list_id}-${m.product_type_id}`} className="flex justify-between px-3 py-1.5">
                 <span>
-                  {m.price_list_name ?? `Lista ${m.price_list_id}`} · {m.product_type_name ?? "Sin tipo de producto"}
+                  {m.price_list_name ?? "Lista sin nombre — requiere corrección"} · {m.product_type_name ?? "Sin tipo de producto"}
                 </span>
                 <span className="tabular-nums text-muted-foreground">{m.priced_active_skus} SKUs</span>
               </li>

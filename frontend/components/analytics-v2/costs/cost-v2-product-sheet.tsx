@@ -9,6 +9,7 @@ import { SectionCard, StatusBadge } from "@/components/analytics-v2/shared/analy
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { cn } from "@/lib/utils"
 import { getCostProduct, getCostProductHistory } from "@/lib/analytics-v2/api"
+import { formatOfficeLabel } from "@/lib/analytics-v2/display-labels"
 import {
   GROSS_STATUS_LABELS,
   TAX_ISSUE_LABELS,
@@ -55,7 +56,7 @@ function CostCard({
       {line ? (
         <div className="mt-1 space-y-0.5 text-[11px] text-muted-foreground">
           <p>
-            {formatDate(line.admission_date)} · {line.office_name ?? `Oficina ${line.office_id ?? "—"}`} ·{" "}
+            {formatDate(line.admission_date)} · {line.office_name?.trim() || (line.office_id != null ? `Sucursal sin nombre — requiere corrección (ref. ${line.office_id})` : "Sucursal sin nombre")} ·{" "}
             {formatQty(line.quantity)} un.
           </p>
           <p className="truncate">
@@ -381,7 +382,7 @@ export function CostV2ProductSheet({
                     <option value="">Todas las sucursales</option>
                     {offices.map((o) => (
                       <option key={o.id} value={o.id}>
-                        {o.name ?? `Oficina ${o.id}`}
+                        {formatOfficeLabel(o.name, o.id)}
                       </option>
                     ))}
                   </select>

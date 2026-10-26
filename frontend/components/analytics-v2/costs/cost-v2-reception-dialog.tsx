@@ -67,7 +67,12 @@ export function CostV2ReceptionDialog({
               </div>
               <div>
                 <dt className="text-[11px] uppercase text-muted-foreground">Sucursal</dt>
-                <dd>{data.office_name ?? data.office_id ?? "—"}</dd>
+                <dd>
+                  {data.office_name?.trim() ||
+                    (data.office_id != null
+                      ? `Sucursal sin nombre — requiere corrección (ref. ${data.office_id})`
+                      : "—")}
+                </dd>
               </div>
               <div>
                 <dt className="text-[11px] uppercase text-muted-foreground">Tipo</dt>

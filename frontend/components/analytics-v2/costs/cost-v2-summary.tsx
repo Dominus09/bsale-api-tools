@@ -11,6 +11,7 @@ import {
   formatDate,
   formatDateTime,
 } from "@/lib/analytics-v2/labels"
+import { STOCK_FILTER_LABELS } from "@/lib/analytics-v2/stock-filter"
 import type {
   AnomalyCode,
   CostReliability,
@@ -46,6 +47,9 @@ export function CostV2Kpis({
   onSelectReliability: (status: CostReliability | null) => void
 }) {
   const value = (n: number | undefined) => (loading && !summary ? "…" : (n ?? "—"))
+  const stockKey = summary?.stock_filter ?? "with"
+  const stockLabel = STOCK_FILTER_LABELS[stockKey] ?? "CON STOCK"
+  const globalActive = summary?.skus_active_global
   const cards: {
     key: string
     title: string
@@ -59,7 +63,10 @@ export function CostV2Kpis({
       key: "active",
       title: "SKUs activos",
       value: value(summary?.skus_active),
-      hint: `${summary?.skus_total ?? "—"} SKUs en RAW (incluye inactivos)`,
+      hint:
+        globalActive != null && globalActive !== summary?.skus_active
+          ? `${stockLabel} · GLOBAL ${globalActive} activas`
+          : `Universo ${stockLabel}`,
       filter: null,
       tone: "info",
       icon: Database,
@@ -68,7 +75,7 @@ export function CostV2Kpis({
       key: "avg",
       title: "Costos consistentes",
       value: value(summary?.skus_active_by_reliability.consistente),
-      hint: "Costo utilizable sin señales de revisión",
+      hint: `Costo utilizable · ${stockLabel}`,
       filter: "consistente",
       tone: "success",
       icon: CircleCheck,
@@ -77,7 +84,7 @@ export function CostV2Kpis({
       key: "cmp",
       title: "Solo promedio Bsale",
       value: value(summary?.skus_active_by_reliability.solo_promedio_bsale),
-      hint: "Sin compra comparable desde 2025",
+      hint: `Sin compra comparable · ${stockLabel}`,
       filter: "solo_promedio_bsale",
       tone: "neutral",
       icon: ReceiptText,
@@ -86,7 +93,7 @@ export function CostV2Kpis({
       key: "review",
       title: "Requieren revisión",
       value: value(summary?.skus_active_by_reliability.requiere_revision),
-      hint: "Anomalía en la última compra",
+      hint: `Anomalía en última compra · ${stockLabel}`,
       filter: "requiere_revision",
       tone: summary?.skus_active_by_reliability.requiere_revision ? "danger" : "success",
       icon: CircleAlert,
@@ -95,7 +102,7 @@ export function CostV2Kpis({
       key: "stale",
       title: "Costos desactualizados",
       value: value(summary?.skus_active_by_reliability.desactualizado),
-      hint: "Sin actualización reciente suficiente",
+      hint: `Sin actualización reciente · ${stockLabel}`,
       filter: "desactualizado",
       tone: summary?.skus_active_by_reliability.desactualizado ? "warning" : "success",
       icon: Clock3,
@@ -104,7 +111,7 @@ export function CostV2Kpis({
       key: "missing",
       title: "Sin costo",
       value: value(summary?.skus_active_by_reliability.sin_costo),
-      hint: "No existe un costo positivo utilizable",
+      hint: `Sin costo positivo · ${stockLabel}`,
       filter: "sin_costo",
       tone: summary?.skus_active_by_reliability.sin_costo ? "warning" : "success",
       icon: CircleAlert,

@@ -387,7 +387,7 @@ function PriceListTable({
                 <td className="px-5 py-3">
                   <span className="font-medium text-lq-ink">{l.label ?? l.name}</span>
                   <span className="mt-0.5 block text-xs text-lq-muted">
-                    #{l.price_list_id} · {l.name}
+                    {l.label ?? l.name}
                   </span>
                 </td>
                 <td className="px-4 py-3 text-right font-medium tabular-nums text-lq-body">{l.combinations}</td>
@@ -412,7 +412,7 @@ function PriceListTable({
         <p className="border-t border-lq-line-soft px-5 py-3 text-xs leading-5 text-lq-muted">
           Fuera del análisis:{" "}
           {data.scope.excluded
-            .map((e) => `#${e.price_list_id} ${e.name ?? ""} (${LIST_SCOPE_LABELS[e.status as PriceListScopeStatus] ?? e.status})`)
+            .map((e) => `${e.commercial_label ?? e.name ?? "Lista sin nombre"} (${LIST_SCOPE_LABELS[e.status as PriceListScopeStatus] ?? e.status})`)
             .join(" · ")}
           {data.scope.discrepancies ? ` · ${data.scope.discrepancies} discrepancias para revisión administrativa` : ""}
         </p>
