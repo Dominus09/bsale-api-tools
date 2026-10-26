@@ -29,6 +29,9 @@ import type {
 
 import { MovementBadge, ReliabilityBadge } from "./badges"
 
+import type { StockFilter } from "@/lib/analytics-v2/stock-filter"
+import { DEFAULT_STOCK_FILTER, STOCK_FILTER_OPTIONS } from "@/lib/analytics-v2/stock-filter"
+
 export type ProductFilterDraft = {
   q: string
   productTypeId: string
@@ -39,6 +42,7 @@ export type ProductFilterDraft = {
   anomaly: AnomalyCode | ""
   officeId: string
   minChange: string
+  stockFilter: StockFilter
   sort: string
 }
 
@@ -52,6 +56,7 @@ export const EMPTY_PRODUCT_FILTERS: ProductFilterDraft = {
   anomaly: "",
   officeId: "",
   minChange: "",
+  stockFilter: DEFAULT_STOCK_FILTER,
   sort: "reliability",
 }
 
@@ -140,6 +145,19 @@ export function CostV2ProductFilters({
             <option value="active">Activos</option>
             <option value="inactive">Inactivos</option>
             <option value="all">Todos</option>
+          </select>
+        </Field>
+        <Field label="Existencias (global)">
+          <select
+            className={selectClass}
+            value={draft.stockFilter}
+            onChange={(e) => onChange({ stockFilter: e.target.value as StockFilter })}
+          >
+            {STOCK_FILTER_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
           </select>
         </Field>
         <Field label="Confiabilidad">

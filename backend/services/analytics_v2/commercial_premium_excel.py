@@ -22,6 +22,7 @@ from backend.services.analytics_v2.product_identity import (
     format_product_plus_variant,
     format_product_type,
 )
+from backend.services.analytics_v2.stock_scope import STOCK_CRITERION, STOCK_FILTER_LABELS
 
 # Estilo alineado a excel_export (sin import circular).
 HEADER_FILL = PatternFill("solid", fgColor="17191E")
@@ -165,26 +166,30 @@ def _write_summary(ws: Any, payload: dict[str, Any]) -> None:
     buckets = payload.get("divergence_buckets") or {}
     zsum = payload.get("zero_cost_summary") or {}
     identity = payload.get("divergence_buckets_identity") or {}
+    stock_filt = payload.get("stock_filter") or "with"
+    stock_label = payload.get("stock_filter_label") or STOCK_FILTER_LABELS.get(stock_filt, stock_filt)
 
     rows: list[tuple[str, Any, str]] = [
+        ("FILTRO DE STOCK", stock_label, payload.get("stock_criterion") or STOCK_CRITERION),
         ("Empresa", f"{payload.get('company_name')} (company_id={payload.get('company_id')})", ""),
         ("Corte UTC", payload.get("cut_at_utc"), "Fotografía REPEATABLE READ"),
-        ("Variantes totales", census.get("variantes"), ""),
-        ("Activas / Inactivas", f"{census.get('activas')} / {census.get('inactivas')}", ""),
-        ("Cobertura costos (filas)", costs.get("filas_variant_costs"), f"de {costs.get('variantes')} variantes"),
-        ("Costos promedio > 0", costs.get("costs_average_pos"), "Fuente: variant_costs.average_cost"),
-        ("Costos promedio = 0", costs.get("costs_average_zero"), "No es ausencia de fila"),
-        ("Activas stock>0", census.get("activas_stock_pos"), ""),
-        ("Huérfanas stock>0 sin variante", census.get("stock_pos_sin_variante"), "Integridad catálogo"),
-        ("Universo stock+costo positivo", buckets.get("universo"), "Hoja Promedio vs recepciones"),
-        ("Divergencias ≤15 %", buckets.get("hasta_15"), "Sin alerta prioritaria"),
-        ("Divergencias 15–50 % (moderadas)", buckets.get("entre_15_y_50"), "Alerta investigación"),
-        ("Divergencias >50 % (importantes)", buckets.get("sobre_50"), "Incluye extremas"),
+        ("Indicadores globales", "census / cobertura / huérfanas", "Sin filtro de stock operativo"),
+        ("Variantes totales", census.get("variantes"), "GLOBAL"),
+        ("Activas / Inactivas", f"{census.get('activas')} / {census.get('inactivas')}", "GLOBAL"),
+        ("Cobertura costos (filas)", costs.get("filas_variant_costs"), f"GLOBAL · de {costs.get('variantes')} variantes"),
+        ("Costos promedio > 0", costs.get("costs_average_pos"), "GLOBAL · variant_costs.average_cost"),
+        ("Costos promedio = 0", costs.get("costs_average_zero"), "GLOBAL · no es ausencia de fila"),
+        ("Activas stock>0", census.get("activas_stock_pos"), "GLOBAL"),
+        ("Huérfanas stock>0 sin variante", census.get("stock_pos_sin_variante"), "GLOBAL · integridad"),
+        ("Universo operativo (filtro stock)", buckets.get("universo"), f"Promedio vs recepciones · {stock_label}"),
+        ("Divergencias ≤15 %", buckets.get("hasta_15"), "Universo filtrado"),
+        ("Divergencias 15–50 % (moderadas)", buckets.get("entre_15_y_50"), "Universo filtrado"),
+        ("Divergencias >50 % (importantes)", buckets.get("sobre_50"), "Universo filtrado"),
         ("Indicador extremas (≥100 % o ≤−60 %)", buckets.get("extrema_indicador"), "Subconjunto de >50 %; no error confirmado"),
-        ("Requieren verificación de evidencia", buckets.get("requiere_verificacion"), "Sin Δ% calculable"),
-        ("Sin recepción comparable", buckets.get("sin_recepcion_comparable"), "Sin Δ% calculable"),
+        ("Requieren verificación de evidencia", buckets.get("requiere_verificacion"), "Universo filtrado"),
+        ("Sin recepción comparable", buckets.get("sin_recepcion_comparable"), "Universo filtrado"),
         ("Anomalías exportadas (Δ>15 %)", payload.get("anomalies_count"), payload.get("anomalies_source")),
-        ("Activos costo cero", zsum.get("total"), ""),
+        ("Activos costo cero (filtrados)", zsum.get("total"), zsum.get("scope") or ""),
         ("  · stock cero explícito", zsum.get("stock_cero_explicito"), "Fila stock con quantity=0"),
         ("  · sin fila de stock", zsum.get("sin_fila_stock"), "Dato ausente ≠ cero"),
         ("Cierre buckets principales", "Sí" if identity.get("closes") else "NO", str(identity)),
@@ -845,13 +850,17 @@ def _write_review_summary(ws: Any, payload: dict[str, Any]) -> None:
     )
     cut = payload.get("cut_at_utc") or ""
 
+    stock_filt = payload.get("stock_filter") or "with"
+    stock_label = payload.get("stock_filter_label") or STOCK_FILTER_LABELS.get(stock_filt, stock_filt)
     rows = [
+        ("FILTRO DE STOCK", stock_label),
+        ("Criterio de stock", payload.get("stock_criterion") or STOCK_CRITERION),
         ("Empresa", f"{payload.get('company_name')} (#{payload.get('company_id')})"),
         ("Fecha de actualización", cut),
-        ("Variantes con stock y costo válido", coverage.get("costs_average_pos") or census.get("activas_stock_pos")),
+        ("Variantes con stock y costo válido (global)", coverage.get("costs_average_pos") or census.get("activas_stock_pos")),
         ("Alertas críticas (P1 / extrema / stock sin costo)", critical),
         ("Diferencias superiores al 15 %", payload.get("anomalies_count", len(anomalies))),
-        ("Stock positivo sin costo válido", stock_sin_costo),
+        ("Stock positivo sin costo válido (universo filtrado)", stock_sin_costo),
         ("Filas en hoja Por revisar", len(work)),
         ("Requieren verificación", buckets.get("requiere_verificacion")),
         ("Sin recepción comparable", buckets.get("sin_recepcion_comparable")),

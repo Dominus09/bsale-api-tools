@@ -44,11 +44,13 @@ const reviewAction: Partial<Record<AnomalyCode, string>> = {
 export function CostV2Alerts({
   companyId,
   filters,
+  stockFilter = "with",
   onOpenProduct,
   onOpenReception,
 }: {
   companyId: number
   filters: CostFilters | null
+  stockFilter?: "with" | "without" | "all"
   onOpenProduct: (variantId: number) => void
   onOpenReception: (receptionId: number, detailId: number) => void
 }) {
@@ -77,6 +79,7 @@ export function CostV2Alerts({
         anomaly_code: applied.code || null,
         severity: applied.severity || null,
         office_id: applied.officeId ? Number(applied.officeId) : null,
+        stock_filter: stockFilter,
         page,
         page_size: 50,
       },
@@ -90,7 +93,7 @@ export function CostV2Alerts({
         if (!ac.signal.aborted) setLoading(false)
       })
     return () => ac.abort()
-  }, [companyId, applied, page])
+  }, [companyId, applied, page, stockFilter])
 
   const counts = data?.counts_by_code ?? {}
   const countKeys = (Object.keys(counts) as AnomalyCode[]).filter((k) => (counts[k] ?? 0) > 0)

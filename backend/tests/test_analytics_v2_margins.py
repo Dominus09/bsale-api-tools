@@ -400,6 +400,9 @@ STD_RULES = [mr(1, 12, 1, "20", "30"), mr(2, 13, 1, "10", "16"), mr(3, 14, 1, "5
 def make_service(facts, prices, rules=STD_RULES, lists=None, stocks=None) -> tuple[MarginsV2Service, FakeMarginsRepo, FakeRepo]:
     cost_repo = FakeRepo(facts=facts)
     costs = CostControlV2Service(cost_repo, SCOPE, today=TODAY, use_cache=False)
+    if stocks is None:
+        vids = {int(f["variant_id"]) for f in facts} | {int(p["variant_id"]) for p in prices}
+        stocks = [{"variant_id": v, "stock_total": D("10"), "stock_offices": 1} for v in sorted(vids)]
     repo = FakeMarginsRepo(lists=lists, prices=prices, rules=rules, stocks=stocks)
     return MarginsV2Service(repo, costs, SCOPE, today=TODAY, use_cache=False), repo, cost_repo
 
@@ -444,7 +447,7 @@ def test_service_stock_total_by_variant_and_existence_filters():
             # variante 13: sin filas sincronizadas
         ],
     )
-    rows = svc.list_rows(cost_basis="ultimo_comparable", page_size=50)["items"]
+    rows = svc.list_rows(cost_basis="ultimo_comparable", stock_filter="all", page_size=50)["items"]
     by = {(r["variant_id"], r["price_list"]["id"]): r["stock"] for r in rows}
     # El stock es de la variante: igual en sus dos listas, sin duplicar (12, no 24)
     assert by[(10, 12)]["total"] == "12" and by[(10, 13)]["total"] == "12"
@@ -455,10 +458,15 @@ def test_service_stock_total_by_variant_and_existence_filters():
 
     con = svc.list_rows(cost_basis="ultimo_comparable", stock_filter="with", page_size=50)
     assert {r["variant_id"] for r in con["items"]} == {10} and con["total"] == 3  # sus 3 listas evaluadas
+    assert con["stock_filter"] == "with"
 
     sin = svc.list_rows(cost_basis="ultimo_comparable", stock_filter="without", page_size=50)
-    # Cero y negativo; «sin sincronizar» nunca cuenta como sin stock
-    assert {r["variant_id"] for r in sin["items"]} == {11, 12}
+    # Cero, negativo y sin fila (Fase 2.4: sin registro = SIN STOCK)
+    assert {r["variant_id"] for r in sin["items"]} == {11, 12, 13}
+
+    default = svc.list_rows(cost_basis="ultimo_comparable", page_size=50)
+    assert default["stock_filter"] == "with"
+    assert {r["variant_id"] for r in default["items"]} == {10}
 
     with pytest.raises(MarginsValidationError):
         svc.list_rows(cost_basis="ultimo_comparable", stock_filter="poco")
@@ -476,7 +484,7 @@ def test_margins_excel_includes_stock_total_column():
         [vp(12, 10, "1500"), vp(12, 13, "1500")],
         stocks=[{"variant_id": 10, "stock_total": D("12"), "stock_offices": 2}],
     )
-    items = svc.list_rows(cost_basis="ultimo_comparable", page_size=50)["items"]
+    items = svc.list_rows(cost_basis="ultimo_comparable", stock_filter="all", page_size=50)["items"]
     blob = excel_export.margins_xlsx(
         meta={"company_name": "LA QUILLOTANA", "company_id": 3},
         sheets={"completo": items},
@@ -581,10 +589,16 @@ def test_performance_full_company_scale():
     svc = MarginsV2Service(repo, costs, SCOPE, today=TODAY, use_cache=True)
     try:
         start = time.perf_counter()
-        first = svc.list_rows(cost_basis="ultimo_comparable", page_size=50)
+        first = svc.list_rows(cost_basis="ultimo_comparable", stock_filter="all", page_size=50)
         elapsed_first = time.perf_counter() - start
         start = time.perf_counter()
-        svc.list_rows(cost_basis="ultimo_comparable", page=3, page_size=50, status="dentro_politica")
+        svc.list_rows(
+            cost_basis="ultimo_comparable",
+            stock_filter="all",
+            page=3,
+            page_size=50,
+            status="dentro_politica",
+        )
         elapsed_cached = time.perf_counter() - start
     finally:
         margins_service_mod.clear_cache()

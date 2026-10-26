@@ -72,9 +72,15 @@ VARIANTS = [
 
 
 def _filter_by_stock(formatted_sql: str) -> list[dict]:
-    """Aplica la cláusula de Existencias a las variantes: NULL fuera de ambos."""
+    """Aplica la cláusula de Existencias a las variantes (Fase 2.4)."""
     if "st.stock_total > 0" in formatted_sql:
         return [r for r in VARIANTS_STOCK if r["stock_total"] is not None and r["stock_total"] > 0]
+    if "st.stock_total IS NULL OR st.stock_total <= 0" in formatted_sql:
+        return [
+            r
+            for r in VARIANTS_STOCK
+            if r["stock_total"] is None or r["stock_total"] <= 0
+        ]
     if "st.stock_total <= 0" in formatted_sql:
         return [r for r in VARIANTS_STOCK if r["stock_total"] is not None and r["stock_total"] <= 0]
     return list(VARIANTS_STOCK)
@@ -184,7 +190,7 @@ def test_meta_includes_per_list_freshness():
 
 def test_list_rows_one_row_per_variant_inactive_and_missing_price():
     svc, _ = make_service()
-    res = svc.list_rows({"price_list_ids": [12, 13, 16]}, page=1, page_size=50)
+    res = svc.list_rows({"price_list_ids": [12, 13, 16], "stock": "all"}, page=1, page_size=50)
     assert res["total"] == 2
     assert [i["variant_id"] for i in res["items"]] == [20, 21]
     active, inactive = res["items"]
@@ -200,8 +206,8 @@ def test_list_rows_one_row_per_variant_inactive_and_missing_price():
 
 def test_list_rows_pagination_does_not_lose_rows():
     svc, _ = make_service()
-    p1 = svc.list_rows({"price_list_ids": [12, 13, 16]}, page=1, page_size=1)
-    p2 = svc.list_rows({"price_list_ids": [12, 13, 16]}, page=2, page_size=1)
+    p1 = svc.list_rows({"price_list_ids": [12, 13, 16], "stock": "all"}, page=1, page_size=1)
+    p2 = svc.list_rows({"price_list_ids": [12, 13, 16], "stock": "all"}, page=2, page_size=1)
     assert p1["total"] == p2["total"] == 2
     assert [i["variant_id"] for i in p1["items"]] == [20]
     assert [i["variant_id"] for i in p2["items"]] == [21]
@@ -209,13 +215,13 @@ def test_list_rows_pagination_does_not_lose_rows():
 
 def test_iter_rows_exports_everything():
     svc, _ = make_service()
-    rows = list(svc.iter_rows({"price_list_ids": [12, 13, 16]}))
+    rows = list(svc.iter_rows({"price_list_ids": [12, 13, 16], "stock": "all"}))
     assert [r["variant_id"] for r in rows] == [20, 21]
 
 
 def test_stock_total_multisucursal_y_cero_real():
     svc, executor = make_service()
-    res = svc.list_rows({"price_list_ids": [12, 13, 16]}, page=1, page_size=50)
+    res = svc.list_rows({"price_list_ids": [12, 13, 16], "stock": "all"}, page=1, page_size=50)
     con_stock, en_cero = res["items"]
     # Stock acumulado de varias sucursales, numérico y sin duplicar la fila.
     assert con_stock["stock_total"] == "12"
@@ -249,43 +255,45 @@ def test_stock_sin_sincronizar_y_negativo():
 
 
 def test_filtro_existencias_catalogo():
-    """Existencias en Catálogo Maestro: reutiliza el subquery `st` del total
-    físico. Positivo con `with`; cero y negativo con `without`; el s/d
-    (NULL) queda fuera de ambos y solo aparece con «Todos». El total
-    (paginación) y las filas coinciden; el SQL se aplica en WHERE, no en
-    Python, y no rompe el formateo psycopg2."""
+    """Existencias globales: with = >0; without = NULL/0/negativo; all = todo.
+    Default operativo = with. SQL antes de paginar y en export.
+    """
     from backend.services.analytics_v2.catalog_service import CatalogValidationError
 
     svc, executor = make_service()
 
     con = svc.list_rows({"stock": "with"}, page=1, page_size=50)
     assert con["total"] == 1
+    assert con["stock_filter"] == "with"
     assert [r["code"] for r in con["items"]] == ["S001"]
     assert con["items"][0]["stock_total"] == "7"
     assert con["items"][0]["stock_state"] == "con_stock"
 
     sin = svc.list_rows({"stock": "without"}, page=1, page_size=50)
-    assert sin["total"] == 2
-    assert [r["code"] for r in sin["items"]] == ["S002", "S003"]
-    assert [r["stock_state"] for r in sin["items"]] == ["cero", "negativo"]
+    # Cero, negativo y sin sincronizar (Fase 2.4).
+    assert sin["total"] == 3
+    assert [r["code"] for r in sin["items"]] == ["S002", "S003", "S004"]
+    assert [r["stock_state"] for r in sin["items"]] == ["cero", "negativo", "sin_sincronizar"]
 
     todos = svc.list_rows({"stock": "all"}, page=1, page_size=50)
-    # Sin cláusula de existencias el harness genérico cuenta VARIANTS (2):
-    # «Todos» no excluye a nadie (incluye el s/d, ver VARIANTS_STOCK abajo).
     assert todos["total"] == 2
-    # Semántica pura del filtro sobre VARIANTS_STOCK: «Todos» incluye al
-    # s/d (S004, stock NULL); «con» y «sin» lo excluyen siempre.
     assert [r["code"] for r in _filter_by_stock("")] == ["S001", "S002", "S003", "S004"]
     assert [r["code"] for r in _filter_by_stock("... st.stock_total > 0 ...")] == ["S001"]
-    assert [r["code"] for r in _filter_by_stock("... st.stock_total <= 0 ...")] == ["S002", "S003"]
+    assert [r["code"] for r in _filter_by_stock("... st.stock_total IS NULL OR st.stock_total <= 0 ...")] == [
+        "S002",
+        "S003",
+        "S004",
+    ]
 
-    # El filtro vive en el SQL (antes de paginar y en la exportación):
     sqls = [s for s in executor.formatted_sql if "AS variant_name" in s]
     assert any("st.stock_total > 0" in s for s in sqls)
-    assert any("st.stock_total <= 0" in s for s in sqls)
-    # Exportación: iter_rows comparte _select_sql -> también filtra.
+    assert any("st.stock_total IS NULL OR st.stock_total <= 0" in s for s in sqls)
     exportadas = list(svc.iter_rows({"stock": "with"}))
     assert [r["code"] for r in exportadas] == ["S001"]
+
+    # Default CON STOCK si no se indica stock
+    default = svc.list_rows({}, page=1, page_size=50)
+    assert default["stock_filter"] == "with"
 
     try:
         svc.list_rows({"stock": "malo"})

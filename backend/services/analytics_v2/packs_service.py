@@ -35,6 +35,13 @@ from backend.services.analytics_v2.pack_engine import (
     WARN_INACTIVE_COMPONENT,
     WARN_REVIEW_COST,
     WARN_STALE_COST,
+    PackCost,
+)
+from backend.services.analytics_v2.stock_scope import (
+    DEFAULT_STOCK_FILTER,
+    matches_stock_filter,
+    normalize_stock_filter,
+    pack_availability_from_components,
 )
 
 PACK_SORTS = frozenset({"status", "markup_asc", "markup_desc", "product"})
@@ -127,6 +134,11 @@ class PacksV2Service:
         items, _ = self._costs.sku_items()
         packs = {i["variant_id"]: i for i in items if i["is_pack"]}
         rows, info = self._margins.evaluated_rows(cost_basis=cost_basis)
+        # Stock global de componentes (Costos V2); no usar fila del SKU pack virtual.
+        cctx = self._costs._load_context()  # noqa: SLF001 — mapa cacheado company+variant
+        stocks = cctx.stocks
+        basis = CostBasis(cost_basis) if cost_basis in {c.value for c in CostBasis} else DEFAULT_COST_BASIS
+        pack_costs = self._costs.pack_costs(basis)
         by_variant: dict[int, list[dict[str, Any]]] = {}
         for r in rows:
             if r["variant_id"] in packs:
@@ -135,17 +147,57 @@ class PacksV2Service:
         spreads: dict[int, dict[str, Any] | None] = {}
         for vid, pack_rows in by_variant.items():
             spread = spreads[vid] = list_price_spread(pack_rows)
+            pc = pack_costs.get(vid)
             for r in pack_rows:
-                out.append(self._row(r, packs[vid], bool(spread and spread["alert"])))
+                out.append(
+                    self._row(
+                        r,
+                        packs[vid],
+                        bool(spread and spread["alert"]),
+                        stocks=stocks,
+                        pack_cost=pc,
+                    )
+                )
         return out, packs, {**info, "spreads": spreads}
 
     @staticmethod
     def _state(item: dict[str, Any]) -> str:
         return "activo" if item["variant_state"] == "activa" and item["_sort"]["product_active"] else "inactivo"
 
-    def _row(self, r: dict[str, Any], item: dict[str, Any], spread_alert: bool) -> dict[str, Any]:
+    @staticmethod
+    def _component_qtys(pack: PackCost | None) -> dict[int, Decimal]:
+        """Cantidades hoja de componentes (packs anidados expandidos). No usa stock del SKU pack."""
+        if pack is None:
+            return {}
+        qtys: dict[int, Decimal] = {}
+
+        def walk(pc: PackCost, factor: Decimal) -> None:
+            for line in pc.lines:
+                vid = line.ref.variant_id
+                qty = line.ref.quantity
+                if qty is None or qty <= 0:
+                    continue
+                scaled = qty * factor
+                if line.nested is not None:
+                    walk(line.nested, scaled)
+                elif vid is not None:
+                    qtys[int(vid)] = qtys.get(int(vid), Decimal("0")) + scaled
+
+        walk(pack, Decimal("1"))
+        return qtys
+
+    def _row(
+        self,
+        r: dict[str, Any],
+        item: dict[str, Any],
+        spread_alert: bool,
+        *,
+        stocks: dict[int, dict[str, Any]],
+        pack_cost: PackCost | None,
+    ) -> dict[str, Any]:
         pack = r["pack"] or {}
         problems = _row_problems(r, pack, spread_alert)
+        stock = pack_availability_from_components(self._component_qtys(pack_cost), stocks)
         return {
             "variant_id": r["variant_id"],
             "product_id": r["product_id"],
@@ -158,6 +210,7 @@ class PacksV2Service:
             "pack_state": self._state(item),
             "pack_status": pack.get("status"),
             "components_count": pack.get("components_count", 0),
+            "stock": stock,
             "price_list": r["price_list"],
             "price_gross": r["price"]["gross"],
             "price_issue": r["price"]["issue"],
@@ -194,6 +247,7 @@ class PacksV2Service:
         margin_status: str | None = None,
         problem: str | None = None,
         pack_state: str = "active",
+        stock_filter: str | None = None,
         cost_basis: str = DEFAULT_COST_BASIS.value,
         sort: str = "status",
         page: int = 1,
@@ -209,6 +263,10 @@ class PacksV2Service:
             raise MarginsValidationError(f"problem inválido: {problem}")
         if sort not in PACK_SORTS:
             raise MarginsValidationError(f"sort inválido: {sort}")
+        try:
+            stock_scope = normalize_stock_filter(stock_filter)
+        except ValueError as exc:
+            raise MarginsValidationError(str(exc)) from exc
         rows, _, info = self._packs(cost_basis)
         if price_list_id is not None and price_list_id not in {l["id"] for l in info["price_lists"]}:
             raise MarginsValidationError("La lista no está en el alcance comercial evaluado")
@@ -226,6 +284,8 @@ class PacksV2Service:
                 return False
             if problem is not None and problem not in r["problems"]:
                 return False
+            if not matches_stock_filter(state=(r.get("stock") or {}).get("state"), stock_filter=stock_scope):
+                return False
             if needle and needle not in r["_search"]:
                 return False
             return True
@@ -235,8 +295,15 @@ class PacksV2Service:
         result["items"] = [_public(r) for r in result["items"]]
         result["sort"] = sort
         result["cost_basis"] = info["cost_basis"]
+        result["stock_filter"] = stock_scope
         result["price_lists"] = info["price_lists"]
-        result["meta"] = {**info["meta"], "historical_profitability": "no_implementada"}
+        result["meta"] = {
+            **info["meta"],
+            "historical_profitability": "no_implementada",
+            "stock_filter": stock_scope,
+            "stock_filter_default": DEFAULT_STOCK_FILTER,
+            "stock_note": "disponibilidad_derivada_de_componentes",
+        }
         return result
 
     def detail(self, variant_id: int, *, cost_basis: str = DEFAULT_COST_BASIS.value) -> dict[str, Any]:

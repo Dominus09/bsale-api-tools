@@ -180,6 +180,7 @@ def costs_products(
     office_id: int | None = Query(None, ge=1),
     min_abs_change_pct: Decimal | None = Query(None, ge=0, le=100000),
     kind: str = Query("all", max_length=20),
+    stock_filter: str | None = Query("with", max_length=20),
     sort: str = Query("reliability"),
     page: int = PageQuery,
     page_size: int = PageSizeQuery,
@@ -200,6 +201,7 @@ def costs_products(
             office_id=office_id,
             min_abs_change_pct=min_abs_change_pct,
             kind=kind,
+            stock_filter=stock_filter,
             sort=sort,
             page=page,
             page_size=page_size,
@@ -250,6 +252,7 @@ def costs_alerts(
     anomaly_code: str | None = Query(None),
     severity: str | None = Query(None),
     office_id: int | None = Query(None, ge=1),
+    stock_filter: str | None = Query("with", max_length=20),
     page: int = PageQuery,
     page_size: int = PageSizeQuery,
     user: dict = Depends(require_cost_control_v2),
@@ -266,6 +269,7 @@ def costs_alerts(
             anomaly_code=anomaly_code,
             severity=severity,
             office_id=office_id,
+            stock_filter=stock_filter,
             page=page,
             page_size=page_size,
         ),
@@ -320,7 +324,7 @@ def margins_rows(
     status: str | None = Query(None, max_length=60),
     qualifier: str | None = Query(None, max_length=60),
     reliability: str | None = Query(None, max_length=60),
-    stock_filter: str | None = Query(None, max_length=20),
+    stock_filter: str | None = Query("with", max_length=20),
     cost_basis: str = CostBasisQuery,
     variant_state: str = Query("active"),
     sort: str = Query("status"),
@@ -492,7 +496,7 @@ def catalog_rows(
     product_type_id: int | None = Query(None, ge=1),
     state: str = Query("all"),
     cost: str = Query("all"),
-    stock: str = Query("all"),
+    stock: str = Query("with"),
     tax: str = Query("all"),
     price_list_id: int | None = Query(None, ge=1),
     price_presence: str | None = Query(None),
@@ -527,7 +531,7 @@ def catalog_export(
     product_type_id: int | None = Query(None, ge=1),
     state: str = Query("all"),
     cost: str = Query("all"),
-    stock: str = Query("all"),
+    stock: str = Query("with"),
     tax: str = Query("all"),
     price_list_id: int | None = Query(None, ge=1),
     price_presence: str | None = Query(None),
@@ -591,6 +595,7 @@ def costs_export(
     office_id: int | None = Query(None, ge=1),
     min_abs_change_pct: Decimal | None = Query(None, ge=0, le=100000),
     kind: str = Query("all", max_length=20),
+    stock_filter: str | None = Query("with", max_length=20),
     sort: str = Query("reliability"),
     user: dict = Depends(require_cost_control_v2),
 ):
@@ -606,6 +611,7 @@ def costs_export(
             office_id=office_id,
             min_abs_change_pct=min_abs_change_pct,
             kind=kind,
+            stock_filter=stock_filter,
             sort=sort,
             page=1,
             page_size=_EXPORT_ALL,
@@ -647,6 +653,7 @@ def costs_export(
 def commercial_premium_export(
     company_id: int = CompanyQuery,
     mode: str = Query("review", pattern="^(review|full)$"),
+    stock_filter: str | None = Query("with", max_length=20),
     user: dict = Depends(require_cost_control_v2),
 ):
     """Excel Auditoría Comercial 8.0.
@@ -654,6 +661,7 @@ def commercial_premium_export(
     ``mode=review`` (default): 2 hojas operativas («Excel para revisión»).
     ``mode=full``: 6 hojas de diagnóstico («Excel auditoría completa»).
     Ambos reutilizan el mismo payload; no hay motor duplicado.
+    ``stock_filter`` acota el universo operativo (default CON STOCK).
     """
     from datetime import datetime, timezone
 
@@ -668,7 +676,7 @@ def commercial_premium_export(
     def build() -> bytes:
         # ACL de empresa: mismo gate que el resto de Control de Costos V2.
         run_cost_control(user, company_id, lambda _s: None)
-        payload = build_commercial_premium_payload(company_id)
+        payload = build_commercial_premium_payload(company_id, stock_filter=stock_filter)
         if not payload.get("ok"):
             logger.warning(
                 "commercial_premium_blocked company_id=%s",
@@ -706,6 +714,7 @@ def costs_receptions_export(
     office_id: int | None = Query(None, ge=1),
     min_abs_change_pct: Decimal | None = Query(None, ge=0, le=100000),
     kind: str = Query("all", max_length=20),
+    stock_filter: str | None = Query("with", max_length=20),
     sort: str = Query("reliability"),
     user: dict = Depends(require_cost_control_v2),
 ):
@@ -724,6 +733,7 @@ def costs_receptions_export(
             office_id=office_id,
             min_abs_change_pct=min_abs_change_pct,
             kind=kind,
+            stock_filter=stock_filter,
             sort=sort,
             page=1,
             page_size=_EXPORT_ALL,
@@ -771,7 +781,7 @@ def margins_export(
     status: str | None = Query(None, max_length=60),
     qualifier: str | None = Query(None, max_length=60),
     reliability: str | None = Query(None, max_length=60),
-    stock_filter: str | None = Query(None, max_length=20),
+    stock_filter: str | None = Query("with", max_length=20),
     cost_basis: str = CostBasisQuery,
     variant_state: str = Query("active"),
     user: dict = Depends(require_margins_v2),
@@ -843,6 +853,7 @@ def packs_rows(
     margin_status: str | None = Query(None, max_length=60),
     problem: str | None = Query(None, max_length=60),
     pack_state: str = Query("active", max_length=20),
+    stock_filter: str | None = Query("with", max_length=20),
     cost_basis: str = CostBasisQuery,
     sort: str = Query("status", max_length=20),
     page: int = PageQuery,
@@ -860,6 +871,7 @@ def packs_rows(
             margin_status=margin_status,
             problem=problem,
             pack_state=pack_state,
+            stock_filter=stock_filter,
             cost_basis=cost_basis,
             sort=sort,
             page=page,

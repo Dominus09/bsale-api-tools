@@ -1,5 +1,8 @@
+import type { StockFilter } from "./stock-filter"
 import type { PackCostCompact } from "./packs-types"
 import type { AppliedTax, CostReliability, GrossCostStatus, Money, TaxProfileStatus, TaxValidation } from "./types"
+
+export type { StockFilter }
 
 export type MarginStatus =
   | "bajo_politica"
@@ -108,8 +111,6 @@ export type MarginRowStock = {
   state: StockState
   offices: number
 }
-
-export type StockFilter = "with" | "without"
 
 export type MarginRow = {
   variant_id: number

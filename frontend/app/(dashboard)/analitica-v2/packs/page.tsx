@@ -107,6 +107,7 @@ export default function PacksV2Page() {
         margin_status: applied.marginStatus || null,
         problem: applied.problem || null,
         pack_state: applied.packState,
+        stock_filter: applied.stockFilter,
         cost_basis: applied.costBasis,
         sort: applied.sort,
         page,

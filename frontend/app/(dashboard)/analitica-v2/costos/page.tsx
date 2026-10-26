@@ -123,6 +123,7 @@ export default function CostControlV2Page() {
         anomaly_code: applied.anomaly || null,
         office_id: applied.officeId ? Number(applied.officeId) : null,
         min_abs_change_pct: minChange !== null && Number.isFinite(minChange) ? minChange : null,
+        stock_filter: applied.stockFilter,
         sort: applied.sort,
         page,
         page_size: PAGE_SIZE,
@@ -171,6 +172,7 @@ export default function CostControlV2Page() {
       anomaly_code: applied.anomaly || null,
       office_id: applied.officeId ? Number(applied.officeId) : null,
       min_abs_change_pct: minChange !== null && Number.isFinite(minChange) ? minChange : null,
+      stock_filter: applied.stockFilter,
       sort: applied.sort,
     }
   }
@@ -211,6 +213,7 @@ export default function CostControlV2Page() {
           anomaly_code: applied.anomaly || null,
           office_id: applied.officeId ? Number(applied.officeId) : null,
           min_abs_change_pct: minChange !== null && Number.isFinite(minChange) ? minChange : null,
+          stock_filter: applied.stockFilter,
           sort: applied.sort,
         },
         `control-costos-empresa-${companyId}.xlsx`,
@@ -230,7 +233,7 @@ export default function CostControlV2Page() {
     try {
       await downloadXlsx(
         "/analytics-v2/audit/commercial-premium/export.xlsx",
-        { company_id: companyId, mode: "review" },
+        { company_id: companyId, mode: "review", stock_filter: applied.stockFilter },
         `Auditoria_Comercial_Revision_Empresa_${companyId}_${stamp}.xlsx`,
       )
     } catch (e) {
@@ -252,7 +255,7 @@ export default function CostControlV2Page() {
     try {
       await downloadXlsx(
         "/analytics-v2/audit/commercial-premium/export.xlsx",
-        { company_id: companyId, mode: "full" },
+        { company_id: companyId, mode: "full", stock_filter: applied.stockFilter },
         `Auditoria_Comercial_Completa_Empresa_${companyId}_${stamp}.xlsx`,
       )
     } catch (e) {
@@ -404,6 +407,7 @@ export default function CostControlV2Page() {
             <TabsContent value="alertas">
               <CostV2Alerts
                 companyId={companyId}
+                stockFilter={applied.stockFilter}
                 filters={filters}
                 onOpenProduct={setVariantId}
                 onOpenReception={openReception}

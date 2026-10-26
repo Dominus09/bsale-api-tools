@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any, Callable, Sequence
 
 from backend.services.analytics_v2.commercial_scope import PRICE_LISTS_SQL
+from backend.services.analytics_v2.stock_scope import STOCK_TOTALS_SQL
 
 QueryExecutor = Callable[[str, tuple[Any, ...]], list[dict[str, Any]]]
 
@@ -18,13 +19,6 @@ SELECT vp.price_list_id, vp.variant_id, vp.variant_value, vp.variant_value_with_
 FROM bsale_raw.variant_prices vp
 WHERE vp.company_id = %s
   AND vp.price_list_id = ANY(%s)
-"""
-
-STOCK_TOTALS_SQL = """
-SELECT variant_id, sum(quantity) AS stock_total, count(*) AS stock_offices
-FROM bsale_raw.stocks
-WHERE company_id = %s
-GROUP BY variant_id
 """
 
 MARGIN_RULES_SQL = """

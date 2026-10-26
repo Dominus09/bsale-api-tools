@@ -63,11 +63,17 @@ from backend.services.analytics_v2.promotion_exceptions import (
 )
 from backend.services.analytics_v2.promotion_source import CampaignExceptionSource
 from backend.services.analytics_v2.promotions_repo import PromotionsV2Repository
+from backend.services.analytics_v2.stock_scope import (
+    DEFAULT_STOCK_FILTER,
+    STOCK_FILTERS,
+    matches_stock_filter,
+    normalize_stock_filter,
+    resolve_stock_entry,
+)
 
 MARGINS_CACHE_TTL_SECONDS = 120
 MARGIN_SORTS = frozenset({"status", "markup_asc", "markup_desc", "gap_asc", "product"})
 VARIANT_STATES = frozenset({"active", "inactive", "all"})
-STOCK_FILTERS = frozenset({"with", "without"})
 
 _STATUS_ORDER = {
     MarginComplianceStatus.BAJO_POLITICA.value: 0,
@@ -93,17 +99,8 @@ class MarginsNotFound(LookupError):
 
 
 def _stock_public(stocks: dict[int, dict[str, Any]], variant_id: int) -> dict[str, Any]:
-    """Bloque `stock` de una fila: total físico acumulado de la variante.
-
-    Sin filas en bsale_raw.stocks → total None («sin sincronizar»): jamás se
-    presenta como cero. Un cero real y los negativos se conservan.
-    """
-    entry = stocks.get(variant_id)
-    if entry is None or entry.get("total") is None:
-        return {"total": None, "state": "sin_sincronizar", "offices": 0}
-    total = entry["total"]
-    state = "con_stock" if total > 0 else ("negativo" if total < 0 else "cero")
-    return {"total": str(total), "state": state, "offices": int(entry.get("offices") or 0)}
+    """Bloque `stock`: SUM(quantity) global por variante; sin fila → sin sincronizar."""
+    return resolve_stock_entry(stocks, variant_id)
 
 
 @dataclass(slots=True)
@@ -360,8 +357,10 @@ class MarginsV2Service:
             raise MarginsValidationError(f"qualifier inválido: {qualifier}")
         if reliability is not None and reliability not in {r.value for r in CostReliability}:
             raise MarginsValidationError(f"reliability inválido: {reliability}")
-        if stock_filter is not None and stock_filter not in STOCK_FILTERS:
-            raise MarginsValidationError(f"stock_filter inválido: {stock_filter}")
+        try:
+            stock_scope = normalize_stock_filter(stock_filter)
+        except ValueError as exc:
+            raise MarginsValidationError(str(exc)) from exc
         if sort not in MARGIN_SORTS:
             raise MarginsValidationError(f"sort inválido: {sort}")
         ctx = self._load_context()
@@ -381,15 +380,9 @@ class MarginsV2Service:
                 return False
             if reliability is not None and r["costs"]["reliability"] != reliability:
                 return False
-            if stock_filter is not None:
-                # Filtro de existencias ANTES de paginar: afecta total,
-                # tabla, paginación y exportaciones (que usan list_rows).
-                # «sin_sincronizar» nunca cuenta como sin stock.
-                state = (r.get("stock") or {}).get("state")
-                if stock_filter == "with" and state != "con_stock":
-                    return False
-                if stock_filter == "without" and state not in ("cero", "negativo"):
-                    return False
+            # Filtro ANTES de paginar (total, tabla, exports). Sin fila = SIN STOCK.
+            if not matches_stock_filter(state=(r.get("stock") or {}).get("state"), stock_filter=stock_scope):
+                return False
             if needle and needle not in r["_search"]:
                 return False
             return True
@@ -400,7 +393,13 @@ class MarginsV2Service:
         result["items"] = [self._public(r) for r in result["items"]]
         result["sort"] = sort
         result["cost_basis"] = basis.value
-        result["meta"] = self._meta(ctx, cost_generated_at)
+        result["stock_filter"] = stock_scope
+        result["meta"] = {
+            **self._meta(ctx, cost_generated_at),
+            "stock_filter": stock_scope,
+            "stock_filter_default": DEFAULT_STOCK_FILTER,
+            "stock_criterion": "SUM(quantity) global por company_id+variant_id",
+        }
         return result
 
     def summary(self, *, cost_basis: str = DEFAULT_COST_BASIS.value) -> dict[str, Any]:

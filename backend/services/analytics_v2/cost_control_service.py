@@ -73,6 +73,14 @@ from backend.services.analytics_v2.pack_engine import (
     PackCostEngine,
     parse_pack_details,
 )
+from backend.services.analytics_v2.stock_scope import (
+    DEFAULT_STOCK_FILTER,
+    STOCK_CRITERION,
+    index_stock_totals,
+    matches_stock_filter,
+    normalize_stock_filter,
+    resolve_stock_entry,
+)
 from backend.services.analytics_v2.tax_profile import (
     TaxEntry,
     build_tax_catalog,
@@ -117,6 +125,8 @@ class CompanyContext:
     verified_exempt: frozenset[int] = frozenset()
     # Composición original de packs por product_id: (pack_details, api_fetched_at).
     pack_details: dict[int, tuple[Any, Any]] = field(default_factory=dict)
+    # Stock global por variante: {variant_id: {total, offices}}.
+    stocks: dict[int, dict[str, Any]] = field(default_factory=dict)
     # Ítems ya evaluados por fecha (la confiabilidad depende de "hoy"); solo lectura para los consumidores.
     items_cache: dict[date, list[dict[str, Any]]] = field(default_factory=dict)
     # Índice de componentes y costos de packs por base, derivados de items_cache.
@@ -227,9 +237,11 @@ class CostControlV2Service:
                 int(r["product_id"]): (r.get("pack_details"), r.get("composition_fetched_at"))
                 for r in self._repo.pack_details(company_id=company_id)
             }
+        stocks = index_stock_totals(self._repo.stock_totals(company_id=company_id))
         ctx = CompanyContext(
             facts=facts,
             pack_details=pack_details,
+            stocks=stocks,
             tax_catalog=build_tax_catalog(
                 self._repo.tax_catalog(company_id=company_id), CONFIRMED_TAX_ROLES.get(company_id)
             ),
@@ -245,8 +257,13 @@ class CostControlV2Service:
                 _cache[company_id] = (time.monotonic(), ctx)
         return ctx
 
-    def _meta(self, ctx: CompanyContext | None = None) -> dict[str, Any]:
-        return {
+    def _meta(
+        self,
+        ctx: CompanyContext | None = None,
+        *,
+        stock_filter: str | None = None,
+    ) -> dict[str, Any]:
+        meta = {
             "contract_version": CONTRACT_VERSION,
             "data_source": DATA_SOURCE,
             "company_id": self._scope.company_id,
@@ -255,7 +272,12 @@ class CostControlV2Service:
             "net_cost_verified": NET_COST_VERIFIED,
             "tax_config_verified": TAX_CONFIG_VERIFIED,
             "generated_at": iso(ctx.generated_at) if ctx else iso(datetime.now(timezone.utc)),
+            "stock_filter_default": DEFAULT_STOCK_FILTER,
+            "stock_criterion": STOCK_CRITERION,
         }
+        if stock_filter is not None:
+            meta["stock_filter"] = stock_filter
+        return meta
 
     # ---------- SKU ----------
 
@@ -345,6 +367,7 @@ class CostControlV2Service:
                 "receptions_total": int(row.get("receptions_total") or 0),
                 "first_admission_date": iso(row.get("first_admission_date")),
             },
+            "stock": resolve_stock_entry(ctx.stocks, int(row["variant_id"])),
             "_sort": {
                 "pct": pct,
                 "last_date": row.get("last_admission_date"),
@@ -454,6 +477,7 @@ class CostControlV2Service:
         office_id: int | None = None,
         min_abs_change_pct: Decimal | None = None,
         kind: str = "all",
+        stock_filter: str | None = None,
         sort: str = "reliability",
         page: int = 1,
         page_size: int = 50,
@@ -472,6 +496,10 @@ class CostControlV2Service:
             raise CostControlValidationError(f"anomaly_code inválido: {anomaly_code}")
         if tax_status is not None and tax_status not in {t.value for t in TaxProfileStatus}:
             raise CostControlValidationError(f"tax_status inválido: {tax_status}")
+        try:
+            stock_scope = normalize_stock_filter(stock_filter)
+        except ValueError as exc:
+            raise CostControlValidationError(str(exc)) from exc
 
         ctx = self._load_context()
         items = self._all_items(ctx)
@@ -501,13 +529,16 @@ class CostControlV2Service:
                 return False
             if min_abs_change_pct is not None and (s["pct"] is None or abs(s["pct"]) < min_abs_change_pct):
                 return False
+            if not matches_stock_filter(state=(item.get("stock") or {}).get("state"), stock_filter=stock_scope):
+                return False
             return True
 
         filtered = [i for i in items if keep(i)]
         filtered.sort(key=_sort_key(sort))
         result = paginate([self._public(i) for i in filtered], page=page, page_size=page_size)
         result["sort"] = sort
-        result["meta"] = self._meta(ctx)
+        result["stock_filter"] = stock_scope
+        result["meta"] = self._meta(ctx, stock_filter=stock_scope)
         return result
 
     def get_product(self, variant_id: int) -> dict[str, Any]:
@@ -620,6 +651,7 @@ class CostControlV2Service:
         anomaly_code: str | None = None,
         severity: str | None = None,
         office_id: int | None = None,
+        stock_filter: str | None = None,
         page: int = 1,
         page_size: int = 50,
     ) -> dict[str, Any]:
@@ -631,6 +663,10 @@ class CostControlV2Service:
             raise CostControlValidationError(f"anomaly_code inválido: {anomaly_code}")
         if severity is not None and severity not in {s.value for s in Severity}:
             raise CostControlValidationError(f"severity inválido: {severity}")
+        try:
+            stock_scope = normalize_stock_filter(stock_filter)
+        except ValueError as exc:
+            raise CostControlValidationError(str(exc)) from exc
         ctx = self._load_context()
         rows = self._repo.alert_candidates(
             company_id=self._scope.company_id,
@@ -645,6 +681,13 @@ class CostControlV2Service:
         counts: dict[str, int] = {}
         for r in rows:
             if office_id is not None and r.get("office_id") != office_id:
+                continue
+            vid = r.get("variant_id")
+            if vid is not None:
+                stock = resolve_stock_entry(ctx.stocks, int(vid))
+                if not matches_stock_filter(state=stock["state"], stock_filter=stock_scope):
+                    continue
+            elif not matches_stock_filter(state=None, stock_filter=stock_scope):
                 continue
             movement = MovementClass(r["movement_class"])
             cost = to_decimal(r.get("cost"))
@@ -671,6 +714,7 @@ class CostControlV2Service:
             if not found:
                 continue
             office = r.get("office_id")
+            stock = resolve_stock_entry(ctx.stocks, int(vid)) if vid is not None else resolve_stock_entry({}, 0)
             alerts.append(
                 {
                     "variant_id": r.get("variant_id"),
@@ -682,6 +726,7 @@ class CostControlV2Service:
                         "id": r.get("product_type_id"),
                         "name": r.get("product_type_name"),
                     },
+                    "stock": stock,
                     "reception_id": int(r["reception_id"]),
                     "detail_id": int(r["detail_id"]),
                     "admission_date": iso(r.get("admission_date")),
@@ -702,7 +747,8 @@ class CostControlV2Service:
         result["counts_by_code"] = counts
         result["date_from"] = date_from.isoformat()
         result["date_to"] = date_to.isoformat()
-        result["meta"] = self._meta(ctx)
+        result["stock_filter"] = stock_scope
+        result["meta"] = self._meta(ctx, stock_filter=stock_scope)
         return result
 
     # ---------- recepción ----------

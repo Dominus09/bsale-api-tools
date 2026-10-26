@@ -185,6 +185,7 @@ export type PackRowsParams = {
   margin_status?: MarginStatus | null
   problem?: PackProblem | null
   pack_state?: "active" | "inactive" | "all"
+  stock_filter?: "with" | "without" | "all" | null
   cost_basis?: CostBasis
   sort?: string
   page?: number

@@ -29,6 +29,11 @@ from backend.services.analytics.validate_distribuidora_source import (
     open_readonly_connection,
 )
 from backend.services.analytics_v2.access import CompanyScope, resolve_company_scope
+from backend.services.analytics_v2.stock_scope import (
+    DEFAULT_STOCK_FILTER,
+    STOCK_FILTERS,
+    stock_filter_sql_clause,
+)
 from backend.services.analytics_v2.tax_profile import build_tax_catalog, resolve_tax_profile
 
 Executor = Callable[[str, tuple[Any, ...]], list[dict[str, Any]]]
@@ -36,7 +41,6 @@ Executor = Callable[[str, tuple[Any, ...]], list[dict[str, Any]]]
 CATALOG_SORTS = frozenset({"product", "code", "type_product", "cost_desc", "cost_asc"})
 STATE_FILTERS = frozenset({"all", "active", "inactive"})
 COST_FILTERS = frozenset({"all", "with", "without"})
-STOCK_FILTERS = frozenset({"all", "with", "without"})
 TAX_FILTERS = frozenset({"all", "iva", "ila", "sin_identificar", "sin_configuracion", "revision"})
 
 _ILA_CODES = ("24", "25", "26", "27", "271")
@@ -186,17 +190,12 @@ class CatalogService:
             clauses.append("vc.average_cost > 0")
         elif cost == "without":
             clauses.append("(vc.average_cost IS NULL OR vc.average_cost <= 0)")
-        # Existencias sobre el subquery `st` (siempre presente en _select_sql):
-        # con stock = total físico > 0; sin stock = <= 0 (incluye negativos).
-        # El total NULL («sin sincronizar», s/d) no cumple ninguna de las dos:
-        # queda fuera de ambos filtros y solo aparece con «Todos», sin
-        # confundirse jamás con cero. Se aplica en el WHERE: antes de paginar
-        # y también en la exportación (iter_rows comparte _select_sql).
-        stock = f.get("stock", "all")
-        if stock == "with":
-            clauses.append("st.stock_total > 0")
-        elif stock == "without":
-            clauses.append("st.stock_total <= 0")
+        # Existencias globales (SUM quantity). Default operativo: CON STOCK.
+        # SIN STOCK incluye sin fila (NULL), cero y negativo.
+        stock = f.get("stock", DEFAULT_STOCK_FILTER)
+        clause = stock_filter_sql_clause("st", stock_filter=stock)
+        if clause:
+            clauses.append(clause)
         # Precio presente/ausente en una lista concreta.
         if f.get("price_list_id") is not None and f.get("price_presence") in ("with", "without"):
             alias = "vp_f"
@@ -391,7 +390,7 @@ class CatalogService:
             raise CatalogValidationError(f"state inválido: {f.get('state')}")
         if f.get("cost", "all") not in COST_FILTERS:
             raise CatalogValidationError(f"cost inválido: {f.get('cost')}")
-        if f.get("stock", "all") not in STOCK_FILTERS:
+        if f.get("stock", DEFAULT_STOCK_FILTER) not in STOCK_FILTERS:
             raise CatalogValidationError(f"stock inválido: {f.get('stock')}")
         if f.get("tax", "all") not in TAX_FILTERS:
             raise CatalogValidationError(f"tax inválido: {f.get('tax')}")
@@ -399,9 +398,11 @@ class CatalogService:
             raise CatalogValidationError(f"sort inválido: {f.get('sort')}")
 
     def list_rows(self, f: dict[str, Any], page: int = 1, page_size: int = 50) -> dict[str, Any]:
-        self.validate_filters(f)
-        list_ids = self._validated_list_ids(f.get("price_list_ids"))
-        sql, params = self._select_sql(list_ids, dict(f))
+        filters = dict(f)
+        filters.setdefault("stock", DEFAULT_STOCK_FILTER)
+        self.validate_filters(filters)
+        list_ids = self._validated_list_ids(filters.get("price_list_ids"))
+        sql, params = self._select_sql(list_ids, filters)
         count_rows = self._ex(
             f"SELECT count(*) AS n FROM ({sql}) c", tuple(params)
         )
@@ -410,6 +411,7 @@ class CatalogService:
             sql + " LIMIT %s OFFSET %s", tuple(params) + (page_size, (page - 1) * page_size)
         )
         catalog = self._tax_catalog()
+        stock_scope = filters.get("stock", DEFAULT_STOCK_FILTER)
         return {
             "items": [self._public_row(r, list_ids, catalog) for r in rows],
             "total": total,
@@ -417,7 +419,8 @@ class CatalogService:
             "page_size": page_size,
             "total_pages": max(1, -(-total // page_size)),
             "price_list_ids": list_ids,
-            "meta": self.meta(),
+            "stock_filter": stock_scope,
+            "meta": {**self.meta(), "stock_filter": stock_scope, "stock_filter_default": DEFAULT_STOCK_FILTER},
         }
 
     def iter_rows(self, f: dict[str, Any]) -> Iterator[dict[str, Any]]:

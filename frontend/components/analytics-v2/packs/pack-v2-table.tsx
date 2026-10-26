@@ -12,6 +12,8 @@ import { COST_BASIS_LABELS, MARGIN_STATUS_LABELS, MARGIN_STATUS_TONES, PRIMARY_S
 import type { CostBasis, MarginStatus } from "@/lib/analytics-v2/margins-types"
 import { PACK_PROBLEM_LABELS, PACK_SORT_LABELS, PACK_STATUS_LABELS, PACK_STATUS_TONES } from "@/lib/analytics-v2/packs-labels"
 import type { PackCostStatus, PackProblem, PackRow } from "@/lib/analytics-v2/packs-types"
+import type { StockFilter } from "@/lib/analytics-v2/stock-filter"
+import { DEFAULT_STOCK_FILTER, STOCK_FILTER_OPTIONS } from "@/lib/analytics-v2/stock-filter"
 
 export type PackFilterDraft = {
   q: string
@@ -20,6 +22,7 @@ export type PackFilterDraft = {
   marginStatus: MarginStatus | ""
   problem: PackProblem | ""
   packState: "active" | "inactive" | "all"
+  stockFilter: StockFilter
   costBasis: CostBasis
   sort: string
 }
@@ -31,6 +34,7 @@ export const EMPTY_PACK_FILTERS: PackFilterDraft = {
   marginStatus: "",
   problem: "",
   packState: "active",
+  stockFilter: DEFAULT_STOCK_FILTER,
   costBasis: "promedio_bsale",
   sort: "status",
 }
@@ -82,6 +86,16 @@ export function PackV2Filters({
           <option value="active">Activos</option>
           <option value="inactive">Inactivos / históricos</option>
           <option value="all">Todos</option>
+        </select>
+      </label>
+      <label className={labelClass}>
+        Disponibilidad (componentes)
+        <select className={selectClass} value={draft.stockFilter} onChange={(e) => onChange({ stockFilter: e.target.value as StockFilter })}>
+          {STOCK_FILTER_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
         </select>
       </label>
       <label className={labelClass}>

@@ -19,6 +19,7 @@ import {
   QUALIFIER_STATUSES,
 } from "@/lib/analytics-v2/margins-labels"
 import type { CostBasis, MarginRow, MarginStatus, MarginsFilters, StockFilter } from "@/lib/analytics-v2/margins-types"
+import { DEFAULT_STOCK_FILTER, STOCK_FILTER_OPTIONS } from "@/lib/analytics-v2/stock-filter"
 import type { CostReliability } from "@/lib/analytics-v2/types"
 
 export type MarginFilterDraft = {
@@ -28,7 +29,7 @@ export type MarginFilterDraft = {
   status: MarginStatus | ""
   qualifier: MarginStatus | ""
   reliability: CostReliability | ""
-  stockFilter: StockFilter | ""
+  stockFilter: StockFilter
   costBasis: CostBasis
   sort: string
 }
@@ -40,7 +41,7 @@ export const EMPTY_MARGIN_FILTERS: MarginFilterDraft = {
   status: "",
   qualifier: "",
   reliability: "",
-  stockFilter: "",
+  stockFilter: DEFAULT_STOCK_FILTER,
   costBasis: "promedio_bsale",
   sort: "status",
 }
@@ -87,11 +88,13 @@ export function MarginV2Filters({
         </select>
       </label>
       <label className={labelClass}>
-        Existencias
-        <select className={selectClass} value={draft.stockFilter} onChange={(e) => onChange({ stockFilter: e.target.value as StockFilter | "" })}>
-          <option value="">Todos</option>
-          <option value="with">Con stock</option>
-          <option value="without">Sin stock (0 o negativo)</option>
+        Existencias (global)
+        <select className={selectClass} value={draft.stockFilter} onChange={(e) => onChange({ stockFilter: e.target.value as StockFilter })}>
+          {STOCK_FILTER_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
         </select>
       </label>
       <label className={labelClass}>

@@ -150,6 +150,7 @@ export function getCostAlerts(
     anomaly_code?: AnomalyCode | null
     severity?: Severity | null
     office_id?: number | null
+    stock_filter?: "with" | "without" | "all" | null
     page?: number
     page_size?: number
   },

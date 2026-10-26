@@ -32,6 +32,15 @@ from backend.scripts.audit_commercial_cost_census import (
     sync_freshness,
 )
 from backend.services.analytics_v2.contracts import COMMERCIAL_PRICE_LISTS
+from backend.services.analytics_v2.stock_scope import (
+    DEFAULT_STOCK_FILTER,
+    STOCK_CRITERION,
+    STOCK_FILTER_LABELS,
+    matches_stock_filter,
+    normalize_stock_filter,
+    stock_filter_sql_clause,
+    stock_state_from_total,
+)
 
 DEFAULT_TIMEOUT_SEC = 180
 SHEET_NAMES = (
@@ -142,10 +151,14 @@ def _fetch_positive_cost_universe(
     can_products: bool,
     can_prices: bool,
     price_list_ids: list[int],
+    stock_filter: str = DEFAULT_STOCK_FILTER,
 ) -> list[dict[str, Any]]:
-    """Universo completo: activas + stock>0 + average_cost>0 (hoja 4). Sin LIMIT."""
+    """Universo: activas + average_cost>0 + filtro de stock global. Sin LIMIT."""
     rec_join = _last_comparable_lateral_sql()
     ev_join = _any_reception_evidence_lateral_sql()
+    stock_scope = normalize_stock_filter(stock_filter)
+    stock_clause = stock_filter_sql_clause("st", stock_filter=stock_scope)
+    stock_where = f"AND {stock_clause}" if stock_clause else ""
 
     product_join = ""
     product_cols = "NULL::text AS product_name, NULL::text AS product_type_name,"
@@ -212,7 +225,7 @@ def _fetch_positive_cost_universe(
             ELSE round(lc.lc_cost - vc.average_cost, 4)
           END AS diff_abs
         FROM bsale_raw.variants v
-        INNER JOIN st ON st.variant_id = v.bsale_id AND st.stock_total > 0
+        LEFT JOIN st ON st.variant_id = v.bsale_id
         INNER JOIN bsale_raw.variant_costs vc
           ON vc.company_id = v.company_id AND vc.variant_id = v.bsale_id
          AND vc.average_cost > 0
@@ -223,6 +236,7 @@ def _fetch_positive_cost_universe(
         WHERE v.company_id = %s
           AND v.missing_since IS NULL
           AND COALESCE(v.state, 0) = 0
+          {stock_where}
         ORDER BY v.bsale_id
     """
     return _fetch_dicts(cur, sql, (company_id, company_id))
@@ -385,16 +399,20 @@ def build_commercial_premium_payload(
     *,
     timeout_sec: int = DEFAULT_TIMEOUT_SEC,
     connection: Any | None = None,
+    stock_filter: str | None = None,
 ) -> dict[str, Any]:
     """
     Fotografía READ ONLY + REPEATABLE READ para Excel Premium.
 
     Incluye el universo completo de divergencias (>15 %), no el top_n del CLI.
+    ``stock_filter`` acota el universo operativo; census/cobertura globales se
+    etiquetan aparte para no mezclar denominadores.
     """
     cut = datetime.now(timezone.utc)
     cut_day = cut.date()
     price_map = price_lists_for_company(company_id)
     price_list_ids = sorted(price_map.keys())
+    stock_scope = normalize_stock_filter(stock_filter)
 
     own_conn = connection is None
     conn = connection or get_connection()
@@ -402,6 +420,9 @@ def build_commercial_premium_payload(
         "ok": False,
         "company_id": int(company_id),
         "cut_at_utc": cut.isoformat(),
+        "stock_filter": stock_scope,
+        "stock_filter_label": STOCK_FILTER_LABELS[stock_scope],
+        "stock_criterion": STOCK_CRITERION,
         "price_lists": price_map,
         "methodology": {
             "diff_pct": "(ultima_comparable - average_cost) / average_cost * 100",
@@ -409,6 +430,7 @@ def build_commercial_premium_payload(
             "average_cost_source": "bsale_raw.variant_costs.average_cost (no se recalcula)",
             "comparable": "FACTURA/GUÍA, details_complete, cost>0, quantity>0",
             "alerts_are_not_confirmed_errors": True,
+            "stock_filter": stock_scope,
             "thresholds": {
                 "hasta_15": float(DIFF_RELEVANT_PCT),
                 "importante_sobre": float(DIFF_IMPORTANT_PCT),
@@ -460,6 +482,7 @@ def build_commercial_premium_payload(
                         can_products=can_products,
                         can_prices=can_prices,
                         price_list_ids=price_list_ids,
+                        stock_filter=stock_scope,
                     )
                 ]
 
@@ -527,7 +550,7 @@ def build_commercial_premium_payload(
                     avg_vs_rec.append(r)
             payload["average_vs_receptions"] = avg_vs_rec
 
-            zero_rows = _fetch_zero_cost_actives(
+            zero_rows_all = _fetch_zero_cost_actives(
                 cur,
                 company_id,
                 can_products=can_products,
@@ -535,7 +558,7 @@ def build_commercial_premium_payload(
                 can_receptions=can_receptions,
                 price_list_ids=price_list_ids,
             )
-            for z in zero_rows:
+            for z in zero_rows_all:
                 has_price = any(
                     _to_decimal(z.get(f"price_{lid}")) is not None
                     and (_to_decimal(z.get(f"price_{lid}")) or Decimal("0")) > 0
@@ -565,9 +588,26 @@ def build_commercial_premium_payload(
                     if z["stock_status"] == "stock_positivo"
                     else "activo_costo_cero_sin_stock_pos"
                 )
+
+            def _zero_in_scope(z: dict[str, Any]) -> bool:
+                if z.get("sin_fila_stock"):
+                    state = "sin_sincronizar"
+                else:
+                    state = stock_state_from_total(_to_decimal(z.get("stock_total_raw")))
+                return matches_stock_filter(state=state, stock_filter=stock_scope)
+
+            zero_rows = [z for z in zero_rows_all if _zero_in_scope(z)]
             payload["zero_cost_actives"] = zero_rows
+            payload["zero_cost_summary_global"] = {
+                "total": len(zero_rows_all),
+                "scope": "global_sin_filtro_stock",
+                "stock_positivo": sum(
+                    1 for z in zero_rows_all if z.get("stock_status") == "stock_positivo"
+                ),
+            }
             payload["zero_cost_summary"] = {
                 "total": len(zero_rows),
+                "scope": f"filtrado_{stock_scope}",
                 "stock_cero_explicito": sum(
                     1 for z in zero_rows if z.get("stock_status") == "stock_cero_explicito"
                 ),
@@ -657,6 +697,9 @@ def build_payload_from_controlled_data(
         "company_id": company_id,
         "company_name": company_name,
         "cut_at_utc": cut.isoformat(),
+        "stock_filter": DEFAULT_STOCK_FILTER,
+        "stock_filter_label": STOCK_FILTER_LABELS[DEFAULT_STOCK_FILTER],
+        "stock_criterion": STOCK_CRITERION,
         "price_lists": price_lists,
         "census": census
         or {

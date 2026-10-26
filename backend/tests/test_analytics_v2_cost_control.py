@@ -153,9 +153,55 @@ class FakeRepo(CostControlV2Repository):
         self._rec("sync_state", **kw)
         return []
 
+    def stock_totals(self, **kw):
+        self._rec("stock_totals", **kw)
+        # Default: stock global positivo para no vaciar el universo CON STOCK.
+        return [
+            {"variant_id": int(r["variant_id"]), "stock_total": D("10"), "stock_offices": 1}
+            for r in self._facts
+            if r.get("variant_id") is not None
+        ]
+
 
 def service(repo: FakeRepo) -> CostControlV2Service:
     return CostControlV2Service(repo, SCOPE, today=TODAY, use_cache=False)
+
+
+def test_stock_filter_default_con_stock_and_counts():
+    """Universo filtrado antes de paginar; default CON STOCK; sin fila = SIN STOCK."""
+    rows = [
+        fact(1, average_cost=D("1000")),
+        fact(2, average_cost=D("2000")),
+        fact(3, average_cost=D("3000")),
+    ]
+    repo = FakeRepo(rows)
+
+    def stock_totals(**kw):
+        return [
+            {"variant_id": 1, "stock_total": D("50"), "stock_offices": 2},
+            {"variant_id": 2, "stock_total": D("0"), "stock_offices": 1},
+            # 3: sin fila
+        ]
+
+    repo.stock_totals = stock_totals  # type: ignore[method-assign]
+    svc = service(repo)
+
+    con = svc.list_products(stock_filter="with", page_size=50)
+    assert con["stock_filter"] == "with"
+    assert {i["variant_id"] for i in con["items"]} == {1}
+    assert con["total"] == 1
+    assert con["items"][0]["stock"]["state"] == "con_stock"
+
+    sin = svc.list_products(stock_filter="without", page_size=50)
+    assert {i["variant_id"] for i in sin["items"]} == {2, 3}
+    assert {i["stock"]["state"] for i in sin["items"]} == {"cero", "sin_sincronizar"}
+
+    todos = svc.list_products(stock_filter="all", page_size=50)
+    assert todos["total"] == 3
+
+    default = svc.list_products(page_size=50)
+    assert default["stock_filter"] == "with" and default["total"] == 1
+
 
 
 # ---------------------------------------------------------------- SQL sobre RAW

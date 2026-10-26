@@ -360,6 +360,7 @@ export type ProductListParams = {
   office_id?: number | null
   min_abs_change_pct?: number | null
   kind?: "all" | "individual" | "pack"
+  stock_filter?: "with" | "without" | "all" | null
   sort?: string
   page?: number
   page_size?: number

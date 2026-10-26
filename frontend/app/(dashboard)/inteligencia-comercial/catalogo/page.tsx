@@ -64,7 +64,7 @@ export default function CatalogoMaestroPage() {
   const [productTypeId, setProductTypeId] = useState<string>("")
   const [state, setState] = useState("all")
   const [cost, setCost] = useState("all")
-  const [stock, setStock] = useState("all")
+  const [stock, setStock] = useState("with")
   const [tax, setTax] = useState("all")
   const [priceListId, setPriceListId] = useState<string>("")
   const [pricePresence, setPricePresence] = useState<string>("")
@@ -265,14 +265,14 @@ export default function CatalogoMaestroPage() {
                 </select>
               </label>
               <label className={labelClass}>
-                Existencias
+                Existencias (global)
                 <select className={selectClass} value={stock} onChange={(e) => setStock(e.target.value)}>
-                  <option value="all">Todas las variantes</option>
-                  <option value="with">Con stock positivo</option>
-                  <option value="without">Cero o negativo</option>
+                  <option value="with">Con stock</option>
+                  <option value="without">Sin stock</option>
+                  <option value="all">Todos</option>
                 </select>
                 <span className="font-normal text-lq-muted">
-                  «Todas» incluye las variantes sin stock sincronizado (s/d); esas quedan fuera de los otros dos filtros.
+                  Stock global = suma de todas las oficinas. Sin stock incluye cero, negativo y sin sincronizar.
                 </span>
               </label>
               <label className={labelClass}>
