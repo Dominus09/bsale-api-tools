@@ -27,6 +27,9 @@ def test_normalize_default_is_con_stock():
     assert normalize_stock_filter(None) == DEFAULT_STOCK_FILTER == STOCK_FILTER_WITH
     assert normalize_stock_filter("") == STOCK_FILTER_WITH
     assert normalize_stock_filter("all") == STOCK_FILTER_ALL
+    assert normalize_stock_filter("con_stock") == STOCK_FILTER_WITH
+    assert normalize_stock_filter("sin_stock") == STOCK_FILTER_WITHOUT
+    assert normalize_stock_filter("todos") == STOCK_FILTER_ALL
     with pytest.raises(ValueError):
         normalize_stock_filter("poco")
 

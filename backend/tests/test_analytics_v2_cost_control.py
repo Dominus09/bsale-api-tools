@@ -300,7 +300,7 @@ def test_average_vs_last_cost_are_distinct_fields():
     assert item["last_comparable"]["cost"] == "1100"
     assert item["previous_comparable"]["cost"] == "1000"
     assert item["change"] == {"amount": "100", "pct": "10.00"}
-    assert item["last_comparable"]["office_name"] == "Casa Matriz"
+    assert item["last_comparable"]["office_name"] == "Bodega Central"
     assert item["reliability"]["status"] == "consistente"
     assert item["gross_cost_preliminary"] == {
         "value": "1309.00",
@@ -575,3 +575,112 @@ def test_summary_counts_active_skus_only():
     assert s["skus_active_by_reliability"]["sin_costo"] == 1
     assert s["skus_active_by_reliability"]["solo_promedio_bsale"] == 1
     assert s["movements"][0]["movement_class"] == "factura"
+    assert s["stock_filter"] == "with"
+    assert s["skus_active_global"] == 2
+
+
+def test_summary_respects_stock_filter_universe():
+    rows = [
+        fact(1, average_cost=D("1000")),
+        fact(2, average_cost=D("2000")),
+        fact(3, average_cost=D("3000")),
+    ]
+    repo = FakeRepo(rows)
+
+    def stock_totals(**kw):
+        return [
+            {"variant_id": 1, "stock_total": D("50"), "stock_offices": 1},
+            {"variant_id": 2, "stock_total": D("0"), "stock_offices": 1},
+        ]
+
+    repo.stock_totals = stock_totals  # type: ignore[method-assign]
+    svc = service(repo)
+    con = svc.summary(stock_filter="with")
+    assert con["skus_active"] == 1 and con["stock_filter"] == "with"
+    assert con["skus_active_global"] == 3
+    sin = svc.summary(stock_filter="without")
+    assert sin["skus_active"] == 2
+    todos = svc.summary(stock_filter="all")
+    assert todos["skus_active"] == 3
+    # Aliases UI no deben 422
+    assert svc.summary(stock_filter="con_stock")["skus_active"] == 1
+
+
+def test_reception_analysis_compares_purchase_to_purchase():
+    """Variación = compra actual vs anterior comparable; sin referencia no inventa 0 %."""
+    from datetime import date as d
+
+    repo = FakeRepo([fact(1, average_cost=D("700"))])
+
+    def reception_cost_changes(**kw):
+        return [
+            {
+                "variant_id": 1,
+                "code": "BENE",
+                "bar_code": "780123",
+                "variant_name": "SEC 6",
+                "product_name": "BENEDICTINO S/G 3.0 LT",
+                "product_type_id": 10,
+                "product_type_name": "Licores",
+                "bsale_average_cost": D("720"),
+                "reception_id": 200,
+                "detail_id": 2,
+                "admission_date": d(2026, 10, 24),
+                "office_id": 1,
+                "document": "Factura",
+                "document_number": "99",
+                "movement_class": "factura",
+                "cost": D("655"),
+                "quantity": D("6"),
+                "details_complete": True,
+                "comparable": True,
+                "previous_comparable_cost": D("809"),
+                "previous_comparable_quantity": D("6"),
+                "previous_reception_id": 100,
+                "previous_detail_id": 1,
+                "previous_admission_date": d(2026, 9, 1),
+            },
+            {
+                "variant_id": 1,
+                "code": "BENE",
+                "bar_code": "780123",
+                "variant_name": "SEC 6",
+                "product_name": "BENEDICTINO S/G 3.0 LT",
+                "product_type_id": 10,
+                "product_type_name": "Licores",
+                "bsale_average_cost": D("720"),
+                "reception_id": 100,
+                "detail_id": 1,
+                "admission_date": d(2026, 9, 1),
+                "office_id": 1,
+                "document": "Factura",
+                "document_number": "50",
+                "movement_class": "factura",
+                "cost": D("809"),
+                "quantity": D("6"),
+                "details_complete": True,
+                "comparable": True,
+                "previous_comparable_cost": None,
+                "previous_comparable_quantity": None,
+                "previous_reception_id": None,
+                "previous_detail_id": None,
+                "previous_admission_date": None,
+            },
+        ]
+
+    repo.reception_cost_changes = reception_cost_changes  # type: ignore[method-assign]
+    out = service(repo).list_reception_analysis(
+        date_from=d(2026, 9, 1),
+        date_to=d(2026, 10, 31),
+        stock_filter="all",
+        page_size=50,
+    )
+    assert out["total"] == 2
+    first = next(i for i in out["items"] if i["reception_id"] == 200)
+    assert first["status"] == "baja"
+    assert first["change_pct"] == "-19.04" or float(first["change_pct"]) == pytest.approx(-19.04, abs=0.1)
+    assert first["comparison_basis"] == "compra_comparable_anterior"
+    assert first["bsale_average_cost"] == "720"
+    no_ref = next(i for i in out["items"] if i["reception_id"] == 100)
+    assert no_ref["status"] == "sin_referencia_anterior"
+    assert no_ref["change_pct"] is None

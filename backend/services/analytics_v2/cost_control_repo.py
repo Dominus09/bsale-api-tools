@@ -210,6 +210,98 @@ LEFT JOIN modified m ON m.reception_id = f.reception_id AND m.detail_id = f.deta
 ORDER BY f.admission_date ASC, f.reception_id ASC, f.detail_id ASC
 """.strip()
 
+# Lotes de variantes para exportadores (evita N+1 y timeouts de 25s).
+VARIANT_LINES_BATCH_SQL = f"""
+WITH {_LINES_CTE.replace("{variant_filter}", "AND d.variant_id = ANY(%s)")},
+{_MODIFIED_CTE.strip()}
+SELECT
+    f.variant_id,
+    f.reception_id,
+    f.detail_id,
+    f.admission_date,
+    f.office_id,
+    f.document,
+    f.document_number,
+    f.internal_dispatch_id,
+    f.movement_class,
+    f.cost,
+    f.quantity,
+    f.details_complete,
+    f.comparable,
+    coalesce(m.cost_modified, false) AS cost_modified,
+    coalesce(m.quantity_modified, false) AS quantity_modified,
+    coalesce(m.variant_modified, false) AS variant_modified
+FROM flagged f
+LEFT JOIN modified m ON m.reception_id = f.reception_id AND m.detail_id = f.detail_id
+ORDER BY f.variant_id ASC, f.admission_date ASC, f.reception_id ASC, f.detail_id ASC
+LIMIT %s
+""".strip()
+
+# Análisis operativo: compra comparable actual vs anterior (no vs promedio Bsale).
+RECEPTION_COST_CHANGES_SQL = f"""
+WITH {_LINES_CTE.replace("{variant_filter}", "")},
+sequenced AS (
+    SELECT
+        f.*,
+        CASE WHEN f.comparable THEN lag(f.cost) OVER (
+            PARTITION BY f.variant_id, f.comparable
+            ORDER BY f.admission_date, f.reception_id, f.detail_id
+        ) END AS previous_comparable_cost,
+        CASE WHEN f.comparable THEN lag(f.quantity) OVER (
+            PARTITION BY f.variant_id, f.comparable
+            ORDER BY f.admission_date, f.reception_id, f.detail_id
+        ) END AS previous_comparable_quantity,
+        CASE WHEN f.comparable THEN lag(f.reception_id) OVER (
+            PARTITION BY f.variant_id, f.comparable
+            ORDER BY f.admission_date, f.reception_id, f.detail_id
+        ) END AS previous_reception_id,
+        CASE WHEN f.comparable THEN lag(f.detail_id) OVER (
+            PARTITION BY f.variant_id, f.comparable
+            ORDER BY f.admission_date, f.reception_id, f.detail_id
+        ) END AS previous_detail_id,
+        CASE WHEN f.comparable THEN lag(f.admission_date) OVER (
+            PARTITION BY f.variant_id, f.comparable
+            ORDER BY f.admission_date, f.reception_id, f.detail_id
+        ) END AS previous_admission_date
+    FROM flagged f
+)
+SELECT
+    s.variant_id,
+    v.code,
+    v.bar_code,
+    v.description AS variant_name,
+    p.name AS product_name,
+    p.product_type_id,
+    pt.name AS product_type_name,
+    vc.average_cost AS bsale_average_cost,
+    s.reception_id,
+    s.detail_id,
+    s.admission_date,
+    s.office_id,
+    s.document,
+    s.document_number,
+    s.movement_class,
+    s.cost,
+    s.quantity,
+    s.details_complete,
+    s.comparable,
+    s.previous_comparable_cost,
+    s.previous_comparable_quantity,
+    s.previous_reception_id,
+    s.previous_detail_id,
+    s.previous_admission_date
+FROM sequenced s
+LEFT JOIN bsale_raw.variants v ON v.company_id = %s AND v.bsale_id = s.variant_id
+LEFT JOIN bsale_raw.products p ON p.company_id = v.company_id AND p.bsale_id = v.product_id
+LEFT JOIN bsale_raw.product_types pt
+  ON pt.company_id = p.company_id AND pt.bsale_id = p.product_type_id
+LEFT JOIN bsale_raw.variant_costs vc
+  ON vc.company_id = %s AND vc.variant_id = s.variant_id
+WHERE s.comparable IS TRUE
+  AND s.admission_date BETWEEN %s AND %s
+ORDER BY s.admission_date DESC, s.reception_id DESC, s.detail_id DESC
+""".strip()
+
 ALERT_CANDIDATES_SQL = f"""
 WITH {_LINES_CTE.replace("{variant_filter}", "")},
 sequenced AS (
@@ -406,6 +498,35 @@ class CostControlV2Repository:
         self, *, company_id: int, variant_id: int, history_start: date
     ) -> list[dict[str, Any]]:
         return self._run(VARIANT_LINES_SQL, (company_id, history_start, variant_id, company_id))
+
+    def variant_lines_batch(
+        self,
+        *,
+        company_id: int,
+        variant_ids: list[int],
+        history_start: date,
+        line_limit: int,
+    ) -> list[dict[str, Any]]:
+        """Líneas de recepción para un lote de variantes (una sola consulta)."""
+        if not variant_ids:
+            return []
+        return self._run(
+            VARIANT_LINES_BATCH_SQL,
+            (company_id, history_start, list(variant_ids), company_id, int(line_limit)),
+        )
+
+    def reception_cost_changes(
+        self,
+        *,
+        company_id: int,
+        history_start: date,
+        date_from: date,
+        date_to: date,
+    ) -> list[dict[str, Any]]:
+        return self._run(
+            RECEPTION_COST_CHANGES_SQL,
+            (company_id, history_start, company_id, company_id, date_from, date_to),
+        )
 
     def alert_candidates(
         self,

@@ -73,6 +73,7 @@ from backend.services.analytics_v2.pack_engine import (
     PackCostEngine,
     parse_pack_details,
 )
+from backend.services.analytics_v2.display_labels import office_visible_name
 from backend.services.analytics_v2.stock_scope import (
     DEFAULT_STOCK_FILTER,
     STOCK_CRITERION,
@@ -246,7 +247,11 @@ class CostControlV2Service:
                 self._repo.tax_catalog(company_id=company_id), CONFIRMED_TAX_ROLES.get(company_id)
             ),
             offices={
-                int(r["office_id"]): str(r.get("name") or f"Oficina {r['office_id']}")
+                int(r["office_id"]): office_visible_name(
+                    name=r.get("name"),
+                    office_id=int(r["office_id"]),
+                    company_id=company_id,
+                )
                 for r in self._repo.offices(company_id=company_id)
             },
             generated_at=datetime.now(timezone.utc),
@@ -751,6 +756,148 @@ class CostControlV2Service:
         result["meta"] = self._meta(ctx, stock_filter=stock_scope)
         return result
 
+    # ---------- análisis operativo de recepciones (compra vs compra) ----------
+
+    def list_reception_analysis(
+        self,
+        *,
+        date_from: date,
+        date_to: date,
+        product_type_id: int | None = None,
+        office_id: int | None = None,
+        direction: str = "all",
+        min_abs_change_pct: Decimal | None = None,
+        q: str | None = None,
+        stock_filter: str | None = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> dict[str, Any]:
+        """Comparación costo recepción actual vs comparable anterior (no vs promedio Bsale)."""
+        if date_from > date_to:
+            raise CostControlValidationError("date_from posterior a date_to")
+        if date_from < HISTORY_START:
+            raise CostControlValidationError(f"date_from anterior al historial ({HISTORY_START})")
+        if direction not in {"all", "up", "down"}:
+            raise CostControlValidationError("direction debe ser all|up|down")
+        try:
+            stock_scope = normalize_stock_filter(stock_filter)
+        except ValueError as exc:
+            raise CostControlValidationError(str(exc)) from exc
+
+        ctx = self._load_context()
+        rows = self._repo.reception_cost_changes(
+            company_id=self._scope.company_id,
+            history_start=HISTORY_START,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        needle = normalize_label(q) if q else ""
+        items: list[dict[str, Any]] = []
+        for r in rows:
+            if office_id is not None and r.get("office_id") != office_id:
+                continue
+            if product_type_id is not None and r.get("product_type_id") != product_type_id:
+                continue
+            vid = r.get("variant_id")
+            stock = resolve_stock_entry(ctx.stocks, int(vid)) if vid is not None else resolve_stock_entry({}, 0)
+            if not matches_stock_filter(state=stock["state"], stock_filter=stock_scope):
+                continue
+            if needle:
+                hay = normalize_label(
+                    " ".join(
+                        str(x or "")
+                        for x in (r.get("code"), r.get("bar_code"), r.get("product_name"), r.get("variant_name"))
+                    )
+                )
+                if needle not in hay:
+                    continue
+            cost = to_decimal(r.get("cost"))
+            previous = to_decimal(r.get("previous_comparable_cost"))
+            pct = change_pct(cost, previous)
+            if previous is None:
+                status = "sin_referencia_anterior"
+                if direction in {"up", "down"}:
+                    continue
+            elif pct is None:
+                status = "sin_variacion_calculable"
+                if direction in {"up", "down"}:
+                    continue
+            elif pct > 0:
+                status = "alza"
+                if direction == "down":
+                    continue
+            elif pct < 0:
+                status = "baja"
+                if direction == "up":
+                    continue
+            else:
+                status = "sin_cambio"
+                if direction in {"up", "down"}:
+                    continue
+            if min_abs_change_pct is not None:
+                if pct is None or abs(pct) < min_abs_change_pct:
+                    continue
+            amount = (cost - previous) if cost is not None and previous is not None else None
+            prev_qty = to_decimal(r.get("previous_comparable_quantity"))
+            qty = to_decimal(r.get("quantity"))
+            unit_note = None
+            if prev_qty is not None and qty is not None and prev_qty > 0 and qty > 0 and prev_qty != qty:
+                unit_note = "cantidad distinta respecto de la compra comparable anterior (revisar presentación/SEC)"
+            office = r.get("office_id")
+            items.append(
+                {
+                    "variant_id": vid,
+                    "code": r.get("code"),
+                    "barcode": r.get("bar_code"),
+                    "product_name": r.get("product_name"),
+                    "variant_name": r.get("variant_name"),
+                    "product_type": {
+                        "id": r.get("product_type_id"),
+                        "name": r.get("product_type_name"),
+                    },
+                    "stock": stock,
+                    "reception_id": int(r["reception_id"]),
+                    "detail_id": int(r["detail_id"]),
+                    "admission_date": iso(r.get("admission_date")),
+                    "office_id": office,
+                    "office_name": ctx.offices.get(int(office)) if office is not None else None,
+                    "document": r.get("document"),
+                    "document_number": r.get("document_number"),
+                    "movement_class": r.get("movement_class"),
+                    "quantity": money(qty),
+                    "cost": money(cost),
+                    "previous_cost": money(previous),
+                    "previous_reception_id": (
+                        int(r["previous_reception_id"]) if r.get("previous_reception_id") is not None else None
+                    ),
+                    "previous_detail_id": (
+                        int(r["previous_detail_id"]) if r.get("previous_detail_id") is not None else None
+                    ),
+                    "previous_admission_date": iso(r.get("previous_admission_date")),
+                    "change_amount": money(amount),
+                    "change_pct": money(pct),
+                    "status": status,
+                    "status_label": {
+                        "alza": "Alza de costo",
+                        "baja": "Baja de costo",
+                        "sin_cambio": "Sin cambio",
+                        "sin_referencia_anterior": "Sin referencia anterior",
+                        "sin_variacion_calculable": "Sin variación calculable",
+                    }.get(status, status),
+                    "bsale_average_cost": money(to_decimal(r.get("bsale_average_cost"))),
+                    "unit_note": unit_note,
+                    "comparison_basis": "compra_comparable_anterior",
+                    "bsale_average_note": "Dato adicional; no es la base de la variación %",
+                }
+            )
+        result = paginate(items, page=page, page_size=page_size)
+        result["date_from"] = date_from.isoformat()
+        result["date_to"] = date_to.isoformat()
+        result["direction"] = direction
+        result["stock_filter"] = stock_scope
+        result["meta"] = self._meta(ctx, stock_filter=stock_scope)
+        return result
+
     # ---------- recepción ----------
 
     def get_reception(self, reception_id: int) -> dict[str, Any]:
@@ -816,10 +963,28 @@ class CostControlV2Service:
 
     # ---------- resumen y metadatos ----------
 
-    def summary(self) -> dict[str, Any]:
+    def summary(self, *, stock_filter: str | None = None) -> dict[str, Any]:
+        """KPI del dashboard sobre el mismo universo operativo que Explorar productos.
+
+        Default CON STOCK (stock global > 0). ``skus_total_global`` / ``skus_active_global``
+        quedan como referencia del catálogo completo (etiqueta GLOBAL en UI).
+        """
+        try:
+            stock_scope = normalize_stock_filter(stock_filter)
+        except ValueError as exc:
+            raise CostControlValidationError(str(exc)) from exc
         ctx = self._load_context()
         items = self._all_items(ctx)
-        active = [i for i in items if i["variant_state"] == "activa"]
+        active_global = [i for i in items if i["variant_state"] == "activa"]
+
+        def in_scope(item: dict[str, Any]) -> bool:
+            return matches_stock_filter(
+                state=(item.get("stock") or {}).get("state"),
+                stock_filter=stock_scope,
+            )
+
+        scoped = [i for i in items if in_scope(i)]
+        active = [i for i in active_global if in_scope(i)]
         reliability_counts = {r.value: 0 for r in CostReliability}
         anomaly_skus: dict[str, int] = {}
         tax_counts: dict[str, int] = {}
@@ -835,8 +1000,11 @@ class CostControlV2Service:
             company_id=self._scope.company_id, history_start=HISTORY_START
         )
         return {
-            "skus_total": len(items),
+            "skus_total": len(scoped),
             "skus_active": len(active),
+            "skus_total_global": len(items),
+            "skus_active_global": len(active_global),
+            "stock_filter": stock_scope,
             "skus_active_with_bsale_average": sum(
                 1
                 for i in active
@@ -860,7 +1028,7 @@ class CostControlV2Service:
                 }
                 for m in movements
             ],
-            "meta": self._meta(ctx),
+            "meta": self._meta(ctx, stock_filter=stock_scope),
         }
 
     def overview(self, *, top: int = DASHBOARD_TOP_N, alert_days: int = DASHBOARD_ALERT_DAYS) -> dict[str, Any]:
@@ -1112,11 +1280,16 @@ def run_cost_control(
     fn: Callable[[CostControlV2Service], Any],
     *,
     get_conn: Callable[[], Any] = get_connection,
+    statement_timeout_seconds: int = 25,
 ) -> Any:
     """Abre una sesión read-only, valida la empresa del usuario y ejecuta ``fn``."""
     conn = open_readonly_connection(get_conn)
     try:
-        executor = make_psycopg_executor(conn, statement_timeout_seconds=25, lock_timeout="3s")
+        executor = make_psycopg_executor(
+            conn,
+            statement_timeout_seconds=statement_timeout_seconds,
+            lock_timeout="3s",
+        )
         scope = resolve_company_scope(user, company_id, executor)
         service = CostControlV2Service(CostControlV2Repository(executor), scope)
         return fn(service)

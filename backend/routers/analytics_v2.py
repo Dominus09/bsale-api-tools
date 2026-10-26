@@ -47,6 +47,7 @@ from backend.services.analytics_v2.contracts import (
     HISTORY_START,
     MAX_PAGE_SIZE,
 )
+from backend.services.analytics_v2.display_labels import office_visible_name
 from backend.services.analytics_v2.cost_control_service import (
     CostControlNotFound,
     CostControlV2Service,
@@ -76,8 +77,19 @@ def _run(
     user: dict[str, Any],
     company_id: int,
     fn: Callable[[CostControlV2Service], Any],
+    *,
+    statement_timeout_seconds: int = 25,
 ) -> Any:
-    return _guard(endpoint, company_id, lambda: run_cost_control(user, company_id, fn))
+    return _guard(
+        endpoint,
+        company_id,
+        lambda: run_cost_control(
+            user,
+            company_id,
+            fn,
+            statement_timeout_seconds=statement_timeout_seconds,
+        ),
+    )
 
 
 def _run_margins(
@@ -145,9 +157,16 @@ def raw_freshness(
 @router.get("/costs/summary")
 def costs_summary(
     company_id: int = CompanyQuery,
+    stock_filter: str | None = Query("with", max_length=20),
     user: dict = Depends(require_cost_control_v2),
 ):
-    return _run("costs_summary", user, company_id, lambda s: s.summary())
+    """KPI operativos del mismo universo que Explorar productos (default CON STOCK)."""
+    return _run(
+        "costs_summary",
+        user,
+        company_id,
+        lambda s: s.summary(stock_filter=stock_filter),
+    )
 
 
 @router.get("/costs/tax-coverage")
@@ -269,6 +288,43 @@ def costs_alerts(
             anomaly_code=anomaly_code,
             severity=severity,
             office_id=office_id,
+            stock_filter=stock_filter,
+            page=page,
+            page_size=page_size,
+        ),
+    )
+
+
+@router.get("/costs/receptions/analysis")
+def costs_reception_analysis(
+    company_id: int = CompanyQuery,
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
+    product_type_id: int | None = Query(None, ge=1),
+    office_id: int | None = Query(None, ge=1),
+    direction: str = Query("all", max_length=10),
+    min_abs_change_pct: Decimal | None = Query(None, ge=0, le=100000),
+    q: str | None = Query(None, max_length=100),
+    stock_filter: str | None = Query("with", max_length=20),
+    page: int = PageQuery,
+    page_size: int = PageSizeQuery,
+    user: dict = Depends(require_cost_control_v2),
+):
+    """Análisis operativo: costo de compra actual vs comparable anterior (no vs promedio Bsale)."""
+    end = date_to or date.today()
+    start = date_from or (end - timedelta(days=90))
+    return _run(
+        "costs_reception_analysis",
+        user,
+        company_id,
+        lambda s: s.list_reception_analysis(
+            date_from=start,
+            date_to=end,
+            product_type_id=product_type_id,
+            office_id=office_id,
+            direction=direction,
+            min_abs_change_pct=min_abs_change_pct,
+            q=q.strip() if q else None,
             stock_filter=stock_filter,
             page=page,
             page_size=page_size,
@@ -407,35 +463,45 @@ def _reception_lines_for(
     by_id = {int(it["variant_id"]): it for it in tramo}
     lines: list[dict[str, Any]] = []
     truncated_lines = False
-    for vid in by_id:
-        if len(lines) >= line_limit:
-            truncated_lines = True
-            break
-        for raw in s._repo.variant_lines(
-            company_id=company_id, variant_id=vid, history_start=HISTORY_START
-        ):
-            if len(lines) >= line_limit:
-                truncated_lines = True
-                break
-            it = by_id[vid]
-            lines.append(
-                {
-                    "variant_id": vid,
-                    "code": it.get("code"),
-                    "product_name": it.get("product_name"),
-                    "variant_name": it.get("variant_name") or it.get("description"),
-                    "reception_id": raw.get("reception_id"),
-                    "detail_id": raw.get("detail_id"),
-                    "admission_date": raw.get("admission_date"),
-                    "office_id": raw.get("office_id"),
-                    "movement_class": str(raw.get("movement_class")),
-                    "document": raw.get("document"),
-                    "document_number": raw.get("document_number"),
-                    "quantity": raw.get("quantity"),
-                    "cost": raw.get("cost"),
-                    "comparable": bool(raw.get("comparable")),
-                }
-            )
+    # Una sola consulta por segmento (evita N+1 → timeout 25s / descarga rota).
+    raw_rows = s._repo.variant_lines_batch(
+        company_id=company_id,
+        variant_ids=list(by_id.keys()),
+        history_start=HISTORY_START,
+        line_limit=line_limit + 1,  # +1 para detectar truncado
+    )
+    if len(raw_rows) > line_limit:
+        truncated_lines = True
+        raw_rows = raw_rows[:line_limit]
+    for raw in raw_rows:
+        vid = int(raw["variant_id"])
+        it = by_id.get(vid) or {}
+        office_id = raw.get("office_id")
+        lines.append(
+            {
+                "variant_id": vid,
+                "code": it.get("code"),
+                "barcode": it.get("barcode"),
+                "product_name": it.get("product_name"),
+                "variant_name": it.get("variant_name") or it.get("description"),
+                "reception_id": raw.get("reception_id"),
+                "detail_id": raw.get("detail_id"),
+                "admission_date": raw.get("admission_date"),
+                "office_id": office_id,
+                "office_name": office_visible_name(
+                    office_id=int(office_id) if office_id is not None else None,
+                    company_id=company_id,
+                )
+                if office_id is not None
+                else None,
+                "movement_class": str(raw.get("movement_class")),
+                "document": raw.get("document"),
+                "document_number": raw.get("document_number"),
+                "quantity": raw.get("quantity"),
+                "cost": raw.get("cost"),
+                "comparable": bool(raw.get("comparable")),
+            }
+        )
     variants_covered = variant_offset + len(tramo) >= total
     complete = variants_covered and not truncated_lines
     reasons: list[str] = []
@@ -758,6 +824,7 @@ def costs_receptions_export(
                 segmento=segment, q=q, tipo=product_type_id, estado=variant_state,
                 confiabilidad=reliability, impuestos=tax_status, movimiento=last_movement_class,
                 anomalia=anomaly_code, oficina=office_id, tipo_sku=kind,
+                existencias=stock_filter,
             ),
             segment=segment,
             segment_size=segment_size,
@@ -767,7 +834,13 @@ def costs_receptions_export(
             lines_truncated=bool(coverage["lines_truncated"]),
         )
 
-    content = _run("costs_receptions_export", user, company_id, build)
+    content = _run(
+        "costs_receptions_export",
+        user,
+        company_id,
+        build,
+        statement_timeout_seconds=90,
+    )
     return _xlsx(content, f"recepciones-empresa-{company_id}-segmento-{segment}.xlsx")
 
 

@@ -51,13 +51,40 @@ STOCK_CRITERION = (
 )
 
 
+_STOCK_FILTER_ALIASES = {
+    "with": STOCK_FILTER_WITH,
+    "con": STOCK_FILTER_WITH,
+    "con_stock": STOCK_FILTER_WITH,
+    "con-stock": STOCK_FILTER_WITH,
+    "positivo": STOCK_FILTER_WITH,
+    "without": STOCK_FILTER_WITHOUT,
+    "sin": STOCK_FILTER_WITHOUT,
+    "sin_stock": STOCK_FILTER_WITHOUT,
+    "sin-stock": STOCK_FILTER_WITHOUT,
+    "all": STOCK_FILTER_ALL,
+    "todos": STOCK_FILTER_ALL,
+    "todas": STOCK_FILTER_ALL,
+}
+
+
 def normalize_stock_filter(value: str | None, *, default: str = DEFAULT_STOCK_FILTER) -> str:
-    """Normaliza el filtro; None o vacío → default operativo (CON STOCK)."""
+    """Normaliza el filtro; None o vacío → default operativo (CON STOCK).
+
+    Acepta alias comunes (con_stock, sin_stock, todos) para no devolver 422
+    ante diferencias menores entre UI y API.
+    """
     if value is None or value == "":
         return default
-    if value not in STOCK_FILTERS:
-        raise ValueError(f"stock_filter inválido: {value}")
-    return value
+    key = str(value).strip().lower().replace(" ", "_")
+    mapped = _STOCK_FILTER_ALIASES.get(key)
+    if mapped is not None:
+        return mapped
+    if value in STOCK_FILTERS:
+        return value
+    raise ValueError(
+        f"stock_filter inválido: {value!r}. Use with|without|all "
+        f"(o con_stock|sin_stock|todos)."
+    )
 
 
 def stock_state_from_total(total: Decimal | None) -> str:

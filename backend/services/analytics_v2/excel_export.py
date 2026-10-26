@@ -316,7 +316,9 @@ def costs_xlsx(
         change = it.get("change") or {}
         vals: list[Any] = [
             (it.get("product_type") or {}).get("name"), it.get("product_name"), it.get("variant_name") or it.get("description"),
-            (str(it["code"]) if it.get("code") else None), (str(it["bar_code"]) if it.get("bar_code") else None),
+            (str(it["code"]) if it.get("code") else None),
+            # Identidad pública usa ``barcode`` (desde bsale_raw.variants.bar_code); no inventar desde SKU.
+            (str(it["barcode"]) if it.get("barcode") else None),
             money_cell(ws, (it.get("bsale_average_cost") or {}).get("value")),
             money_cell(ws, lc.get("cost")), money_cell(ws, pc.get("cost")),
             _num(change.get("pct")), _date(lc.get("admission_date")),
@@ -353,14 +355,15 @@ def costs_xlsx(
     _finish(ws3, len(items), len(product_headers))
 
     rec_headers = [
-        "variant_id", "reception_id", "detail_id", "Fecha", "Sucursal (office_id)",
+        "variant_id", "reception_id", "detail_id", "Fecha", "Sucursal",
         "Movimiento", "Documento", "N° documento", "Cantidad", "Costo línea", "Comparable",
     ]
-    ws4 = _sheet(wb, "Recepciones relevantes", rec_headers, [12, 13, 11, 13, 16, 18, 20, 14, 11, 14, 12])
+    ws4 = _sheet(wb, "Recepciones relevantes", rec_headers, [12, 13, 11, 13, 18, 18, 20, 14, 11, 14, 12])
     for l in reception_lines:
         ws4.append([
             l.get("variant_id"), l.get("reception_id"), l.get("detail_id"), _date(l.get("admission_date")),
-            l.get("office_id"), l.get("movement_class"),
+            l.get("office_name") or l.get("office_id"),
+            l.get("movement_class"),
             l.get("document"), l.get("document_number"), _num(l.get("quantity")), _num(l.get("cost")),
             "Sí" if l.get("comparable") else "No",
         ])
@@ -563,17 +566,18 @@ def receptions_xlsx(
     wb = Workbook(write_only=True)
     headers = [
         "variant_id", "SKU", "Producto", "Variante", "reception_id", "detail_id",
-        "Fecha", "Sucursal (office_id)", "Movimiento", "Documento", "N° documento",
+        "Fecha", "Sucursal", "Movimiento", "Documento", "N° documento",
         "Cantidad", "Costo línea", "Comparable",
     ]
-    ws = _sheet(wb, "Recepciones", headers, [12, 16, 40, 28, 13, 11, 13, 16, 18, 20, 14, 11, 14, 12])
+    ws = _sheet(wb, "Recepciones", headers, [12, 16, 40, 28, 13, 11, 13, 18, 18, 20, 14, 11, 14, 12])
     for l in reception_lines:
         ws.append([
             l.get("variant_id"),
             (str(l["code"]) if l.get("code") else None),
             l.get("product_name"), l.get("variant_name"),
             l.get("reception_id"), l.get("detail_id"), _date(l.get("admission_date")),
-            l.get("office_id"), l.get("movement_class"),
+            l.get("office_name") or l.get("office_id"),
+            l.get("movement_class"),
             l.get("document"), l.get("document_number"), _num(l.get("quantity")), _num(l.get("cost")),
             "Sí" if l.get("comparable") else "No",
         ])
