@@ -14,6 +14,7 @@ import {
 } from "@/components/analytics-v2/costs/cost-v2-products"
 import { CostV2ReceptionAnalysis } from "@/components/analytics-v2/costs/cost-v2-reception-analysis"
 import { CostV2ReceptionDialog } from "@/components/analytics-v2/costs/cost-v2-reception-dialog"
+import { CostV2ReliabilityGlossary } from "@/components/analytics-v2/costs/cost-v2-reliability-glossary"
 import { CostV2Kpis, CostV2SummaryPanels } from "@/components/analytics-v2/costs/cost-v2-summary"
 import { AnalyticPageHeader, DataStatusBar, StatusBadge } from "@/components/analytics-v2/shared/analytics-ui"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -377,6 +378,7 @@ export default function CostControlV2Page() {
               })
             }
           />
+          <CostV2ReliabilityGlossary summary={summary} />
 
           <Tabs value={tab} onValueChange={setTab} className="gap-4">
             <TabsList className="h-11 rounded-xl border border-lq-line bg-lq-surface p-1 shadow-sm">

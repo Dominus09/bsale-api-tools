@@ -71,6 +71,12 @@ CompanyQuery = Query(..., ge=1, description="Empresa; se verifica contra el usua
 PageQuery = Query(1, ge=1)
 PageSizeQuery = Query(DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE)
 
+# Constantes de exportadores: deben existir antes de rutas que las usan en Query().
+_XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_EXPORT_ALL = 1_000_000
+_RECEPTION_VARIANT_LIMIT = 300
+_RECEPTION_LINE_LIMIT = 20_000
+
 
 def _run(
     endpoint: str,
@@ -332,6 +338,86 @@ def costs_reception_analysis(
     )
 
 
+@router.get("/costs/receptions/export.xlsx")
+def costs_receptions_export(
+    company_id: int = CompanyQuery,
+    segment: int = Query(1, ge=1),
+    segment_size: int = Query(_RECEPTION_VARIANT_LIMIT, ge=1, le=_RECEPTION_VARIANT_LIMIT),
+    q: str | None = Query(None, max_length=100),
+    product_type_id: int | None = Query(None, ge=1),
+    variant_state: str = Query("active"),
+    reliability: str | None = Query(None),
+    tax_status: str | None = Query(None),
+    last_movement_class: str | None = Query(None),
+    anomaly_code: str | None = Query(None),
+    office_id: int | None = Query(None, ge=1),
+    min_abs_change_pct: Decimal | None = Query(None, ge=0, le=100000),
+    kind: str = Query("all", max_length=20),
+    stock_filter: str | None = Query("with", max_length=20),
+    sort: str = Query("reliability"),
+    user: dict = Depends(require_cost_control_v2),
+):
+    """Historial de recepciones por segmentos de variantes (mismos filtros que
+    el exportador de costos). Cada archivo declara su segmento y cobertura."""
+
+    def build(s: Any) -> bytes:
+        result = s.list_products(
+            q=q.strip() if q else None,
+            product_type_id=product_type_id,
+            variant_state=variant_state,
+            reliability=reliability,
+            tax_status=tax_status,
+            last_movement_class=last_movement_class,
+            anomaly_code=anomaly_code,
+            office_id=office_id,
+            min_abs_change_pct=min_abs_change_pct,
+            kind=kind,
+            stock_filter=stock_filter,
+            sort=sort,
+            page=1,
+            page_size=_EXPORT_ALL,
+        )
+        items = result["items"]
+        meta = dict(result.get("meta") or {})
+        meta.setdefault("company_id", company_id)
+        total = len(items)
+        segments_total = max(1, -(-total // segment_size)) if total else 1
+        offset = (segment - 1) * segment_size
+        lines, coverage = _reception_lines_for(
+            s,
+            company_id=company_id,
+            items=items,
+            variant_offset=offset,
+            variant_limit=segment_size,
+        )
+        return excel_export.receptions_xlsx(
+            meta=meta,
+            reception_lines=lines,
+            filters_label=_filters_label(
+                segmento=segment, q=q, tipo=product_type_id, estado=variant_state,
+                confiabilidad=reliability, impuestos=tax_status, movimiento=last_movement_class,
+                anomalia=anomaly_code, oficina=office_id, tipo_sku=kind,
+                existencias=stock_filter,
+            ),
+            segment=segment,
+            segment_size=segment_size,
+            variants_total=total,
+            variants_included=coverage["variants_included"],
+            segments_total=segments_total,
+            lines_truncated=bool(coverage["lines_truncated"]),
+        )
+
+    content = _run(
+        "costs_receptions_export",
+        user,
+        company_id,
+        build,
+        statement_timeout_seconds=90,
+    )
+    return _xlsx(content, f"recepciones-empresa-{company_id}-segmento-{segment}.xlsx")
+
+
+
 @router.get("/costs/receptions/{reception_id}")
 def costs_reception(
     reception_id: int,
@@ -434,14 +520,7 @@ def margins_policy_review(
 # acota por empresa validada en backend. Las exportaciones devuelven TODAS las
 # filas que cumplen los filtros, no solo la página visible.
 
-_XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-_EXPORT_ALL = 1_000_000
-# Topes de la hoja de recepciones dentro del Excel de costos. Superarlos NUNCA
-# produce una exportación silenciosamente incompleta: la cobertura queda
-# declarada en el archivo y el historial completo se descarga por segmentos
-# con /costs/receptions/export.xlsx (mismos filtros).
-_RECEPTION_VARIANT_LIMIT = 300
-_RECEPTION_LINE_LIMIT = 20_000
+# Topes de recepciones en Excel de costos: ver constantes al inicio del módulo.
 
 
 def _reception_lines_for(
@@ -763,85 +842,6 @@ def commercial_premium_export(
     else:
         filename = f"Auditoria_Comercial_Revision_Empresa_{company_id}_{stamp}.xlsx"
     return _xlsx(content, filename)
-
-
-@router.get("/costs/receptions/export.xlsx")
-def costs_receptions_export(
-    company_id: int = CompanyQuery,
-    segment: int = Query(1, ge=1),
-    segment_size: int = Query(_RECEPTION_VARIANT_LIMIT, ge=1, le=_RECEPTION_VARIANT_LIMIT),
-    q: str | None = Query(None, max_length=100),
-    product_type_id: int | None = Query(None, ge=1),
-    variant_state: str = Query("active"),
-    reliability: str | None = Query(None),
-    tax_status: str | None = Query(None),
-    last_movement_class: str | None = Query(None),
-    anomaly_code: str | None = Query(None),
-    office_id: int | None = Query(None, ge=1),
-    min_abs_change_pct: Decimal | None = Query(None, ge=0, le=100000),
-    kind: str = Query("all", max_length=20),
-    stock_filter: str | None = Query("with", max_length=20),
-    sort: str = Query("reliability"),
-    user: dict = Depends(require_cost_control_v2),
-):
-    """Historial de recepciones por segmentos de variantes (mismos filtros que
-    el exportador de costos). Cada archivo declara su segmento y cobertura."""
-
-    def build(s: Any) -> bytes:
-        result = s.list_products(
-            q=q.strip() if q else None,
-            product_type_id=product_type_id,
-            variant_state=variant_state,
-            reliability=reliability,
-            tax_status=tax_status,
-            last_movement_class=last_movement_class,
-            anomaly_code=anomaly_code,
-            office_id=office_id,
-            min_abs_change_pct=min_abs_change_pct,
-            kind=kind,
-            stock_filter=stock_filter,
-            sort=sort,
-            page=1,
-            page_size=_EXPORT_ALL,
-        )
-        items = result["items"]
-        meta = dict(result.get("meta") or {})
-        meta.setdefault("company_id", company_id)
-        total = len(items)
-        segments_total = max(1, -(-total // segment_size)) if total else 1
-        offset = (segment - 1) * segment_size
-        lines, coverage = _reception_lines_for(
-            s,
-            company_id=company_id,
-            items=items,
-            variant_offset=offset,
-            variant_limit=segment_size,
-        )
-        return excel_export.receptions_xlsx(
-            meta=meta,
-            reception_lines=lines,
-            filters_label=_filters_label(
-                segmento=segment, q=q, tipo=product_type_id, estado=variant_state,
-                confiabilidad=reliability, impuestos=tax_status, movimiento=last_movement_class,
-                anomalia=anomaly_code, oficina=office_id, tipo_sku=kind,
-                existencias=stock_filter,
-            ),
-            segment=segment,
-            segment_size=segment_size,
-            variants_total=total,
-            variants_included=coverage["variants_included"],
-            segments_total=segments_total,
-            lines_truncated=bool(coverage["lines_truncated"]),
-        )
-
-    content = _run(
-        "costs_receptions_export",
-        user,
-        company_id,
-        build,
-        statement_timeout_seconds=90,
-    )
-    return _xlsx(content, f"recepciones-empresa-{company_id}-segmento-{segment}.xlsx")
 
 
 @router.get("/margins/export.xlsx")

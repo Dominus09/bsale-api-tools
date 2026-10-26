@@ -26,7 +26,9 @@ from backend.services.analytics_v2.contracts import (
     Severity,
 )
 
-_REVIEW_CODES = frozenset(
+# Anomalías de la última compra comparable que elevan el SKU a «requiere_revision».
+# Preceden a «desactualizado» y a «consistente» (ver sku_reliability).
+REVIEW_ANOMALY_CODES = frozenset(
     {
         AnomalyCode.ALZA_ANORMAL,
         AnomalyCode.BAJA_SOSPECHOSA,
@@ -37,6 +39,7 @@ _REVIEW_CODES = frozenset(
         AnomalyCode.DIFERENCIA_PROMEDIO_BSALE,
     }
 )
+_REVIEW_CODES = REVIEW_ANOMALY_CODES
 
 
 @dataclass(frozen=True, slots=True)

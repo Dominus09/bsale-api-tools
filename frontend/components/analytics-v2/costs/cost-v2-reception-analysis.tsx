@@ -7,6 +7,7 @@ import { ProfessionalDataTable, SectionCard, SmartFilterBar, StatusBadge } from 
 import { ProductIdentityCell } from "@/components/analytics-v2/shared/product-identity-cell"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet"
 import { getReceptionAnalysis } from "@/lib/analytics-v2/api"
 import { formatOfficeLabel } from "@/lib/analytics-v2/display-labels"
 import {
@@ -14,6 +15,11 @@ import {
   formatMoney,
   formatPct,
 } from "@/lib/analytics-v2/labels"
+import {
+  formatBarcode,
+  formatProductPlusVariant,
+  formatProductType,
+} from "@/lib/analytics-v2/product-identity"
 import type { CostFilters, ReceptionAnalysisItem, ReceptionAnalysisResponse } from "@/lib/analytics-v2/types"
 
 import { Pager } from "./cost-v2-products"
@@ -31,6 +37,177 @@ function statusTone(status: string): "neutral" | "success" | "warning" | "danger
   if (status === "baja") return "success"
   if (status === "sin_referencia_anterior") return "warning"
   return "neutral"
+}
+
+function moneyDiff(current: string | number | null | undefined, previous: string | number | null | undefined): string {
+  if (current == null || previous == null) return "—"
+  const a = Number(current)
+  const b = Number(previous)
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return "—"
+  return formatMoney(a - b)
+}
+
+function ReceptionDetailSheet({
+  item,
+  open,
+  onOpenChange,
+  onOpenProduct,
+  onOpenReception,
+}: {
+  item: ReceptionAnalysisItem | null
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onOpenProduct: (variantId: number) => void
+  onOpenReception: (receptionId: number, detailId: number) => void
+}) {
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        side="right"
+        className="w-full overflow-y-auto border-l-lq-line bg-lq-canvas p-0 sm:max-w-[min(560px,92vw)]"
+      >
+        <SheetHeader className="sticky top-0 z-20 border-b border-lq-line bg-lq-surface/95 px-5 py-4 backdrop-blur md:px-6">
+          <SheetTitle className="pr-8 text-xl tracking-[-0.015em]">
+            {item
+              ? formatProductPlusVariant(item.product_name, item.variant_name)
+              : "Detalle de recepción"}
+          </SheetTitle>
+          <SheetDescription>
+            {item
+              ? `${formatProductType(item.product_type?.name)} · ${formatBarcode(item.barcode)}`
+              : "Comparación compra actual vs compra anterior"}
+          </SheetDescription>
+        </SheetHeader>
+
+        {item ? (
+          <div className="space-y-5 px-4 pb-8 pt-4 md:px-6">
+            <section className="space-y-2">
+              <h3 className="text-[11px] font-semibold uppercase tracking-wide text-lq-muted">
+                Compra actual vs compra anterior
+              </h3>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-xl border border-lq-line bg-lq-surface p-4">
+                  <p className="text-[13px] font-medium text-lq-body">Costo neto compra actual</p>
+                  <p className="mt-2 text-2xl font-semibold tabular-nums text-lq-ink">
+                    {formatMoney(item.cost)}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-lq-line bg-lq-surface p-4">
+                  <p className="text-[13px] font-medium text-lq-body">Costo neto compra anterior</p>
+                  <p className="mt-2 text-2xl font-semibold tabular-nums text-lq-ink">
+                    {item.previous_cost != null ? formatMoney(item.previous_cost) : "Sin referencia"}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-lq-line bg-lq-surface p-4">
+                  <p className="text-[13px] font-medium text-lq-body">Diferencia monetaria</p>
+                  <p className="mt-2 text-xl font-semibold tabular-nums text-lq-ink">
+                    {item.change_amount != null
+                      ? formatMoney(item.change_amount)
+                      : moneyDiff(item.cost, item.previous_cost)}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-lq-line bg-lq-surface p-4">
+                  <p className="text-[13px] font-medium text-lq-body">Diferencia porcentual</p>
+                  <p className="mt-2 text-xl font-semibold tabular-nums text-lq-ink">
+                    {item.change_pct != null ? formatPct(item.change_pct) : "—"}
+                  </p>
+                  <div className="mt-2">
+                    <StatusBadge tone={statusTone(item.status)}>{item.status_label}</StatusBadge>
+                  </div>
+                </div>
+              </div>
+              <p className="text-xs text-lq-muted">
+                La comparación usa costo neto unitario entre compras comparables (factura/guía). Distinta
+                cantidad no invalida la comparación si la presentación es la misma.
+              </p>
+            </section>
+
+            <section className="space-y-2">
+              <h3 className="text-[11px] font-semibold uppercase tracking-wide text-lq-muted">Respaldo</h3>
+              <dl className="grid gap-2 rounded-xl border border-lq-line bg-lq-surface p-4 text-sm sm:grid-cols-2">
+                <div>
+                  <dt className="text-xs uppercase text-lq-muted">Fecha</dt>
+                  <dd>{formatDate(item.admission_date)}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase text-lq-muted">Documento / factura</dt>
+                  <dd>{[item.document, item.document_number].filter(Boolean).join(" ") || "—"}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase text-lq-muted">Oficina</dt>
+                  <dd>
+                    {item.office_name?.trim() ||
+                      (item.office_id != null
+                        ? `Sucursal sin nombre — requiere corrección (ref. ${item.office_id})`
+                        : "—")}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs uppercase text-lq-muted">Cantidad</dt>
+                  <dd className="tabular-nums">{item.quantity ?? "—"}</dd>
+                </div>
+                <div className="sm:col-span-2">
+                  <dt className="text-xs uppercase text-lq-muted">Identificador de recepción</dt>
+                  <dd>
+                    <button
+                      type="button"
+                      className="text-primary underline-offset-2 hover:underline"
+                      onClick={() => onOpenReception(item.reception_id, item.detail_id)}
+                    >
+                      Recepción #{item.reception_id} · detalle {item.detail_id}
+                    </button>
+                  </dd>
+                </div>
+                {item.previous_reception_id != null ? (
+                  <div className="sm:col-span-2">
+                    <dt className="text-xs uppercase text-lq-muted">Compra anterior</dt>
+                    <dd>
+                      Recepción #{item.previous_reception_id}
+                      {item.previous_admission_date ? ` · ${formatDate(item.previous_admission_date)}` : ""}
+                    </dd>
+                  </div>
+                ) : null}
+              </dl>
+            </section>
+
+            <section className="space-y-2">
+              <h3 className="text-[11px] font-semibold uppercase tracking-wide text-lq-muted">
+                Compra actual vs promedio Bsale
+              </h3>
+              <div className="rounded-xl border border-lq-line bg-lq-surface p-4">
+                <p className="text-[13px] font-medium text-lq-body">Costo promedio Bsale (referencia)</p>
+                <p className="mt-2 text-xl font-semibold tabular-nums text-lq-ink">
+                  {formatMoney(item.bsale_average_cost)}
+                </p>
+                <p className="mt-1 text-xs text-lq-muted">
+                  Dato adicional del maestro; no sustituye la comparación compra vs compra.
+                </p>
+              </div>
+              {item.unit_note ? (
+                <div className="rounded-xl border border-amber-200/80 bg-amber-50/50 p-4 text-sm">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
+                    Advertencia de unidad / presentación
+                  </p>
+                  <p className="mt-1 text-lq-body">{item.unit_note}</p>
+                </div>
+              ) : null}
+            </section>
+
+            {item.variant_id != null ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => onOpenProduct(item.variant_id!)}
+              >
+                Abrir ficha del producto
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+      </SheetContent>
+    </Sheet>
+  )
 }
 
 export function CostV2ReceptionAnalysis({
@@ -60,7 +237,7 @@ export function CostV2ReceptionAnalysis({
   const [data, setData] = useState<ReceptionAnalysisResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [expanded, setExpanded] = useState<ReceptionAnalysisItem | null>(null)
+  const [selected, setSelected] = useState<ReceptionAnalysisItem | null>(null)
 
   useEffect(() => {
     const ac = new AbortController()
@@ -97,8 +274,10 @@ export function CostV2ReceptionAnalysis({
     <div className="space-y-3">
       <SectionCard
         title="Análisis de recepciones"
-        description="Variación de costo entre la compra comparable actual y la anterior. No se compara con el promedio Bsale (dato adicional en el detalle)."
-      />
+        description="Variación de costo entre la compra comparable actual y la anterior. No se compara con el promedio Bsale (dato adicional en el panel)."
+      >
+        {null}
+      </SectionCard>
 
       <form
         onSubmit={(e) => {
@@ -151,7 +330,7 @@ export function CostV2ReceptionAnalysis({
                 <option value="">Todas</option>
                 {(filters?.offices ?? []).map((o) => (
                   <option key={o.id} value={o.id}>
-                    {formatOfficeLabel(o.name, o.id)}
+                    {formatOfficeLabel(o.name, o.id, companyId)}
                   </option>
                 ))}
               </select>
@@ -218,7 +397,7 @@ export function CostV2ReceptionAnalysis({
                 <tr
                   key={`${row.reception_id}-${row.detail_id}`}
                   className="cursor-pointer border-b border-border/50 hover:bg-muted/40"
-                  onClick={() => setExpanded(row)}
+                  onClick={() => setSelected(row)}
                 >
                   <td className="px-3 py-2 text-muted-foreground">{row.product_type?.name ?? "—"}</td>
                   <td className="px-3 py-2">
@@ -285,81 +464,15 @@ export function CostV2ReceptionAnalysis({
         />
       ) : null}
 
-      {expanded ? (
-        <SectionCard title="Detalle de la compra" description="Comparación compra vs compra; el promedio Bsale es solo referencia.">
-          <dl className="mt-2 grid gap-2 text-sm sm:grid-cols-2">
-            <div>
-              <dt className="text-xs uppercase text-muted-foreground">Recepción</dt>
-              <dd>
-                <button
-                  type="button"
-                  className="text-primary underline-offset-2 hover:underline"
-                  onClick={() => onOpenReception(expanded.reception_id, expanded.detail_id)}
-                >
-                  #{expanded.reception_id} · detalle {expanded.detail_id}
-                </button>
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase text-muted-foreground">Documento</dt>
-              <dd>
-                {[expanded.document, expanded.document_number].filter(Boolean).join(" ") || "—"}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase text-muted-foreground">Sucursal</dt>
-              <dd>
-                {expanded.office_name?.trim() ||
-                  (expanded.office_id != null
-                    ? `Sucursal sin nombre — requiere corrección (ref. ${expanded.office_id})`
-                    : "—")}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase text-muted-foreground">Cantidad</dt>
-              <dd className="tabular-nums">{expanded.quantity ?? "—"}</dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase text-muted-foreground">Costo neto recepción</dt>
-              <dd className="tabular-nums">{formatMoney(expanded.cost)}</dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase text-muted-foreground">Costo comparable anterior</dt>
-              <dd className="tabular-nums">
-                {expanded.previous_cost != null ? formatMoney(expanded.previous_cost) : "Sin referencia anterior"}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase text-muted-foreground">Diferencia monetaria</dt>
-              <dd className="tabular-nums">
-                {expanded.change_amount != null ? formatMoney(expanded.change_amount) : "—"}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs uppercase text-muted-foreground">Promedio Bsale (adicional)</dt>
-              <dd className="tabular-nums">{formatMoney(expanded.bsale_average_cost)}</dd>
-            </div>
-            {expanded.unit_note ? (
-              <div className="sm:col-span-2">
-                <dt className="text-xs uppercase text-muted-foreground">Presentación / unidad</dt>
-                <dd>{expanded.unit_note}</dd>
-              </div>
-            ) : null}
-            {expanded.previous_reception_id != null ? (
-              <div className="sm:col-span-2">
-                <dt className="text-xs uppercase text-muted-foreground">Compra anterior</dt>
-                <dd>
-                  Recepción #{expanded.previous_reception_id}
-                  {expanded.previous_admission_date ? ` · ${formatDate(expanded.previous_admission_date)}` : ""}
-                </dd>
-              </div>
-            ) : null}
-          </dl>
-          <Button type="button" variant="outline" size="sm" className="mt-3" onClick={() => setExpanded(null)}>
-            Cerrar detalle
-          </Button>
-        </SectionCard>
-      ) : null}
+      <ReceptionDetailSheet
+        item={selected}
+        open={selected != null}
+        onOpenChange={(open) => {
+          if (!open) setSelected(null)
+        }}
+        onOpenProduct={onOpenProduct}
+        onOpenReception={onOpenReception}
+      />
     </div>
   )
 }
