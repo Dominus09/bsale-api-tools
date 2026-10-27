@@ -53,7 +53,9 @@ import {
   hasMarginViewAccess,
   hasPromotionsV2ViewAccess,
   staffUserFromLocalStorage,
+  type StaffUserLike,
 } from "@/lib/permissions"
+import { useAuthMe } from "@/lib/use-auth-me"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
 type NavItem = {
@@ -164,11 +166,16 @@ const navSections: { title: string; items: NavItem[] }[] = [
   },
 ]
 
-function buildNavSectionsForRole(role: string | null) {
+function buildNavSectionsForRole(
+  role: string | null,
+  /** Permisos reales de /auth/me; sin esto no se muestra Usuarios y accesos. */
+  authMeStaff: StaffUserLike | null,
+) {
   const user = staffUserFromLocalStorage()
   if (role) user.role = role
   const diagnostics = canAccessDiagnostics(user)
-  const userAdmin = canViewUserAdmin(user)
+  // Solo flags de GET /auth/me — nunca localStorage.role.
+  const userAdmin = canViewUserAdmin(authMeStaff)
   const management = hasManagementAccess(user)
   const marginViewer = hasMarginViewAccess(user)
   const promotionsViewer = hasPromotionsV2ViewAccess(user)
@@ -261,13 +268,17 @@ export function Sidebar({ compact = false, onToggleCompact, onCloseDrawer }: Sid
   const pathname = usePathname()
   const [openSection, setOpenSection] = useState<string | null>("Distribuidora")
   const [staffRole, setStaffRole] = useState<string | null>(null)
+  const { meState, staff: authMeStaff } = useAuthMe()
 
   useEffect(() => {
     if (typeof window === "undefined") return
     setStaffRole(localStorage.getItem("role"))
   }, [])
 
-  const sections = useMemo(() => buildNavSectionsForRole(staffRole), [staffRole])
+  const sections = useMemo(
+    () => buildNavSectionsForRole(staffRole, meState === "ok" ? authMeStaff : null),
+    [staffRole, meState, authMeStaff],
+  )
 
   useEffect(() => {
     const active = sections.find((s) => sectionContainsPath(s, pathname))

@@ -132,28 +132,32 @@ export function canAccessDiagnostics(
   return resolveErpPermissions(user).diagnostics
 }
 
-/** Lectura del módulo Usuarios y accesos (gerencia + administración). */
+/**
+ * Lectura del módulo Usuarios y accesos.
+ * Solo confía en flags de GET /auth/me — nunca en localStorage.role.
+ */
 export function canViewUserAdmin(
   user: StaffUserLike | string | null | undefined,
 ): boolean {
-  if (user && typeof user !== "string" && user.permissions?.user_admin_view === true) {
-    return true
-  }
-  return hasManagementAccess(user) || hasAdminAccess(user)
+  if (!user || typeof user === "string") return false
+  return user.permissions?.user_admin_view === true
 }
 
 /**
- * Mutaciones: preferir flag de /auth/me (`user_admin`).
- * Fallback UI: ADMIN_ROLES — el backend es la fuente de verdad (allowlist).
+ * Mutaciones (crear/editar/activar/reset).
+ * Solo flag `user_admin` de /auth/me — sin fallback por rol en localStorage.
  */
 export function canMutateUserAdmin(
   user: StaffUserLike | string | null | undefined,
 ): boolean {
-  if (user && typeof user !== "string" && user.permissions?.user_admin === true) {
-    return true
-  }
-  if (user && typeof user !== "string" && user.permissions?.user_admin === false) {
-    return false
-  }
-  return hasAdminAccess(user)
+  if (!user || typeof user === "string") return false
+  return user.permissions?.user_admin === true
+}
+
+/** Asignar rol adm: solo `user_admin_assign_adm` de /auth/me. */
+export function canAssignAdmRole(
+  user: StaffUserLike | string | null | undefined,
+): boolean {
+  if (!user || typeof user === "string") return false
+  return user.permissions?.user_admin_assign_adm === true
 }

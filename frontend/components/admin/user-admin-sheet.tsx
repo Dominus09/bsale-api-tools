@@ -34,6 +34,7 @@ export function UserAdminSheet({
   mode,
   user,
   canMutate,
+  canAssignAdm = false,
   assignableRoles,
   companiesCatalog,
   onSaved,
@@ -43,6 +44,8 @@ export function UserAdminSheet({
   mode: Mode
   user: AdminUserRow | null
   canMutate: boolean
+  /** Solo si /auth/me indica user_admin_assign_adm. */
+  canAssignAdm?: boolean
   assignableRoles: string[]
   companiesCatalog: AdminCompanyRef[]
   onSaved: () => void
@@ -96,6 +99,10 @@ export function UserAdminSheet({
 
   async function handleSave() {
     if (!canMutate) return
+    if (role === "adm" && !canAssignAdm) {
+      setError("No está autorizado a asignar el rol de administración")
+      return
+    }
     setBusy(true)
     setError(null)
     try {

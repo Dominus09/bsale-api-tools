@@ -397,11 +397,21 @@ export async function login(email: string, password: string): Promise<LoginRespo
 }
 
 export async function getAuthMe(): Promise<AuthMeResponse> {
-  const res = await fetch(`${API_URL}/auth/me`, {
-    headers: getAuthHeaders(),
-  })
+  let res: Response
+  try {
+    // Bearer: localStorage.token vía getAuthHeaders — sin fallback de rol.
+    res = await fetch(`${API_URL}/auth/me`, {
+      headers: getAuthHeaders(),
+    })
+  } catch (error) {
+    const mapped = toNetworkAwareError(error)
+    throw mapped instanceof Error ? mapped : new Error(NETWORK_ERROR_MESSAGE)
+  }
   if (!res.ok) {
-    throw new Error("No se pudo cargar el perfil de permisos")
+    if (res.status === 401) {
+      throw new Error("Sesión no válida o autenticación requerida (401)")
+    }
+    throw new Error(`No se pudo cargar el perfil de permisos (${res.status})`)
   }
   return res.json()
 }

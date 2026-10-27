@@ -27,14 +27,14 @@ import {
 } from "@/lib/admin-users-api"
 import { formatChileDateTime, roleLabel } from "@/lib/admin-users-format"
 import {
+  canAssignAdmRole,
   canMutateUserAdmin,
   canViewUserAdmin,
-  staffUserFromLocalStorage,
 } from "@/lib/permissions"
+import { useAuthMe } from "@/lib/use-auth-me"
 
 export default function UsuariosAccesosPage() {
-  const [hydrated, setHydrated] = useState(false)
-  const [role, setRole] = useState<string | null>(null)
+  const { meState, staff, reload: loadMe } = useAuthMe()
   const [tab, setTab] = useState("usuarios")
   const [q, setQ] = useState("")
   const [loading, setLoading] = useState(false)
@@ -51,17 +51,16 @@ export default function UsuariosAccesosPage() {
   const [sheetMode, setSheetMode] = useState<"view" | "create">("view")
   const [selected, setSelected] = useState<AdminUserRow | null>(null)
 
-  useEffect(() => {
-    setRole(typeof window !== "undefined" ? localStorage.getItem("role") : null)
-    setHydrated(true)
-  }, [])
+  const canView = meState === "ok" && canViewUserAdmin(staff)
+  // Acciones sensibles: solo con /auth/me OK y flags explícitos (nunca durante carga/fallo).
+  const canMutate = meState === "ok" && canMutateUserAdmin(staff)
+  const canAssignAdm = meState === "ok" && canAssignAdmRole(staff)
 
-  const staff = useMemo(
-    () => ({ ...staffUserFromLocalStorage(), role }),
-    [role],
-  )
-  const canView = canViewUserAdmin(staff)
-  const canMutate = canMutateUserAdmin(staff)
+  const assignableRoles = useMemo(() => {
+    const base = rolesCatalog?.assignable_roles || ["operativo", "gerencia", "adm"]
+    if (canAssignAdm) return base
+    return base.filter((r) => r !== "adm")
+  }, [rolesCatalog, canAssignAdm])
 
   const loadUsers = useCallback(async () => {
     if (!canView) return
@@ -100,16 +99,46 @@ export default function UsuariosAccesosPage() {
   }, [canView])
 
   useEffect(() => {
-    if (!hydrated || !canView) return
+    if (!canView) return
     if (tab === "usuarios" || tab === "permisos") void loadUsers()
     if (tab === "historial") void loadEvents()
-  }, [hydrated, canView, tab, loadUsers, loadEvents])
+  }, [canView, tab, loadUsers, loadEvents])
 
-  if (!hydrated) {
+  if (meState === "loading") {
     return (
-      <div className="flex min-h-[40vh] items-center justify-center text-lq-muted">
+      <div className="flex min-h-[40vh] flex-col items-center justify-center gap-2 text-lq-muted">
         <Loader2 className="h-5 w-5 animate-spin" />
+        <p className="text-sm">Verificando permisos…</p>
       </div>
+    )
+  }
+
+  if (meState === "unauthorized") {
+    return (
+      <AnalyticPageShell>
+        <AnalyticPageHeader
+          eyebrow="Administración"
+          title="Usuarios y accesos"
+          description="Sesión no válida o expirada. Vuelva a iniciar sesión."
+        />
+      </AnalyticPageShell>
+    )
+  }
+
+  if (meState === "unavailable" || !staff) {
+    return (
+      <AnalyticPageShell>
+        <AnalyticPageHeader
+          eyebrow="Administración"
+          title="Usuarios y accesos"
+          description="No se pudieron obtener los permisos del servidor. Las acciones administrativas permanecen ocultas."
+          actions={
+            <Button type="button" variant="outline" size="sm" onClick={() => void loadMe()}>
+              Reintentar
+            </Button>
+          }
+        />
+      </AnalyticPageShell>
     )
   }
 
@@ -119,7 +148,7 @@ export default function UsuariosAccesosPage() {
         <AnalyticPageHeader
           eyebrow="Administración"
           title="Usuarios y accesos"
-          description="No tiene permiso para ver este módulo."
+          description="No tiene permiso para consultar este módulo (user_admin_view)."
         />
       </AnalyticPageShell>
     )
@@ -306,7 +335,7 @@ export default function UsuariosAccesosPage() {
             >
               <p className="text-sm text-lq-muted">
                 {eventsMeta.message ||
-                  "Aplique la migración 062 y active AUTH_AUDIT_EVENTS=1 en un despliegue controlado para registrar eventos futuros."}
+                  "Active AUTH_AUDIT_EVENTS=1 en un despliegue controlado para registrar eventos futuros."}
               </p>
             </SectionCard>
           ) : (
@@ -355,7 +384,8 @@ export default function UsuariosAccesosPage() {
         mode={sheetMode}
         user={selected}
         canMutate={canMutate}
-        assignableRoles={rolesCatalog?.assignable_roles || ["operativo", "gerencia", "adm"]}
+        canAssignAdm={canAssignAdm}
+        assignableRoles={assignableRoles}
         companiesCatalog={companies}
         onSaved={() => {
           void loadUsers()
