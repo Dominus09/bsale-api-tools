@@ -48,6 +48,7 @@ import { cn } from "@/lib/utils"
 import { ANALYTICS_V2_COMPANY_IDS, ANALYTICS_V2_DASHBOARD_PATH } from "@/lib/home-path"
 import {
   canAccessDiagnostics,
+  canViewUserAdmin,
   hasManagementAccess,
   hasMarginViewAccess,
   hasPromotionsV2ViewAccess,
@@ -157,7 +158,6 @@ const navSections: { title: string; items: NavItem[] }[] = [
   {
     title: "Administración",
     items: [
-      { href: "#", label: "Usuarios", icon: Users, disabled: true },
       { href: "#", label: "Empresas", icon: Building2, disabled: true },
       { href: "#", label: "Configuración", icon: Settings, disabled: true },
     ],
@@ -168,6 +168,7 @@ function buildNavSectionsForRole(role: string | null) {
   const user = staffUserFromLocalStorage()
   if (role) user.role = role
   const diagnostics = canAccessDiagnostics(user)
+  const userAdmin = canViewUserAdmin(user)
   const management = hasManagementAccess(user)
   const marginViewer = hasMarginViewAccess(user)
   const promotionsViewer = hasPromotionsV2ViewAccess(user)
@@ -211,16 +212,25 @@ function buildNavSectionsForRole(role: string | null) {
       out.push(section, { title: "Configuración comercial", items: configuration })
       return out
     }
-    if (section.title === "Administración" && diagnostics) {
-      return [
-        {
-          ...section,
-          items: [
-            ...section.items,
-            { href: "/admin/diagnostico", label: "Diagnóstico ERP", icon: Stethoscope },
-          ],
-        },
-      ]
+    if (section.title === "Administración") {
+      const adminItems: NavItem[] = []
+      if (userAdmin) {
+        adminItems.push({
+          href: "/admin/usuarios-accesos",
+          label: "Usuarios y accesos",
+          icon: Users,
+        })
+      }
+      adminItems.push(...section.items)
+      if (diagnostics) {
+        adminItems.push({
+          href: "/admin/diagnostico",
+          label: "Diagnóstico ERP",
+          icon: Stethoscope,
+        })
+      }
+      if (!adminItems.length) return []
+      return [{ ...section, items: adminItems }]
     }
     return [section]
   })

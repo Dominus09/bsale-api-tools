@@ -12,6 +12,7 @@ from backend.middleware.distribuidora_request_log import DistribuidoraRequestLog
 from backend.diagnostics.middleware import DiagnosticsRequestLogMiddleware
 from backend.utils.request_audit import RequestAuditMiddleware
 from backend.routers import auth
+from backend.routers import admin_users
 from backend.routers import orders
 from backend.routers.catalog import router as catalog_router
 from backend.routers.catalog_admin import router as catalog_admin_router
@@ -109,6 +110,8 @@ app.add_middleware(RequestAuditMiddleware)
 # --- Auth (login staff + login-client) ---
 app.include_router(auth.router)
 app.include_router(auth.auth_router)
+app.include_router(admin_users.router)
+app.include_router(admin_users.public_router)
 
 # --- Pedidos (app.orders) ---
 app.include_router(orders.router)

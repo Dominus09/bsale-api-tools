@@ -25,6 +25,9 @@ export type ErpPermissions = {
   diagnostics: boolean
   costs: boolean
   margins: boolean
+  user_admin_view?: boolean
+  user_admin?: boolean
+  user_admin_assign_adm?: boolean
 }
 
 export function normalizedRole(role: string | null | undefined): string {
@@ -127,4 +130,30 @@ export function canAccessDiagnostics(
   user: StaffUserLike | string | null | undefined,
 ): boolean {
   return resolveErpPermissions(user).diagnostics
+}
+
+/** Lectura del módulo Usuarios y accesos (gerencia + administración). */
+export function canViewUserAdmin(
+  user: StaffUserLike | string | null | undefined,
+): boolean {
+  if (user && typeof user !== "string" && user.permissions?.user_admin_view === true) {
+    return true
+  }
+  return hasManagementAccess(user) || hasAdminAccess(user)
+}
+
+/**
+ * Mutaciones: preferir flag de /auth/me (`user_admin`).
+ * Fallback UI: ADMIN_ROLES — el backend es la fuente de verdad (allowlist).
+ */
+export function canMutateUserAdmin(
+  user: StaffUserLike | string | null | undefined,
+): boolean {
+  if (user && typeof user !== "string" && user.permissions?.user_admin === true) {
+    return true
+  }
+  if (user && typeof user !== "string" && user.permissions?.user_admin === false) {
+    return false
+  }
+  return hasAdminAccess(user)
 }
