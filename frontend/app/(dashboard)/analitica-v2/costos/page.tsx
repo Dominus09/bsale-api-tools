@@ -15,6 +15,7 @@ import {
 import { CostV2ReceptionAnalysis } from "@/components/analytics-v2/costs/cost-v2-reception-analysis"
 import { CostV2ReceptionDialog } from "@/components/analytics-v2/costs/cost-v2-reception-dialog"
 import { CostV2ReliabilityGlossary } from "@/components/analytics-v2/costs/cost-v2-reliability-glossary"
+import { CostV2Reviews } from "@/components/analytics-v2/costs/cost-v2-reviews"
 import { CostV2Kpis, CostV2SummaryPanels } from "@/components/analytics-v2/costs/cost-v2-summary"
 import { AnalyticPageHeader, DataStatusBar, StatusBadge } from "@/components/analytics-v2/shared/analytics-ui"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -74,6 +75,8 @@ export default function CostControlV2Page() {
       setTab("productos")
     } else if (qs.get("tab") === "alertas") {
       setTab("alertas")
+    } else if (qs.get("tab") === "revisiones") {
+      setTab("revisiones")
     }
     const variant = queryInt(qs, "variant_id")
     if (variant) setVariantId(variant)
@@ -325,6 +328,7 @@ export default function CostControlV2Page() {
               <TabsTrigger value="productos">Explorar productos</TabsTrigger>
               <TabsTrigger value="analisis">Análisis de recepciones</TabsTrigger>
               <TabsTrigger value="alertas">Alertas de recepción</TabsTrigger>
+              <TabsTrigger value="revisiones">Gestión de revisiones</TabsTrigger>
             </TabsList>
 
             <TabsContent value="resumen">
@@ -386,6 +390,10 @@ export default function CostControlV2Page() {
                 onOpenProduct={setVariantId}
                 onOpenReception={openReception}
               />
+            </TabsContent>
+
+            <TabsContent value="revisiones">
+              <CostV2Reviews companyId={companyId} onOpenProduct={setVariantId} />
             </TabsContent>
           </Tabs>
         </>

@@ -358,6 +358,99 @@ export type CostFilters = {
   anomaly_codes: AnomalyCode[]
 }
 
+/** Revisión humana de costos (distinta de alerta automática Costos V2). */
+export type CostReviewStatus = "pendiente" | "en_revision" | "resuelto" | "descartado"
+export type CostReviewPriority = "alta" | "media" | "baja"
+export type CostReviewSource =
+  | "dashboard_alert"
+  | "reception_analysis"
+  | "reviews_grid"
+  | "product_sheet"
+
+export type CostReviewItem = {
+  id: number
+  company_id: number
+  company_name: string
+  variant_id: number
+  anomaly_code: string
+  reason_label: string
+  priority: CostReviewPriority
+  status: CostReviewStatus
+  product_name: string | null
+  sku_code: string | null
+  barcode: string | null
+  current_cost_ref: number | null
+  previous_cost_ref: number | null
+  change_pct_ref: number | null
+  assignee_user_id: number | null
+  assignee_email: string | null
+  started_at: string | null
+  resolved_at: string | null
+  observations: string | null
+  conclusion: string | null
+  source: CostReviewSource | string
+  source_ref: Record<string, unknown>
+  created_by_user_id: number | null
+  created_at: string | null
+  updated_at: string | null
+  is_human_review: true
+  is_auto_detection: false
+  costs_are_snapshot: true
+  bsale_costs_editable: false
+}
+
+export type CostReviewEvent = {
+  id: number
+  review_id: number
+  actor_user_id: number | null
+  actor_email: string | null
+  action: string
+  status_from: string | null
+  status_to: string | null
+  note: string | null
+  detail: Record<string, unknown>
+  created_at: string | null
+}
+
+export type CostReviewsListResponse = {
+  items: CostReviewItem[]
+  total: number
+  page: number
+  page_size: number
+  sort?: string
+  company?: { id: number; name: string }
+  meta: {
+    note: string
+    statuses: CostReviewStatus[]
+    open_statuses: CostReviewStatus[]
+    sorts?: string[]
+    costs_are_snapshot?: boolean
+  }
+}
+
+export type CostReviewDetailResponse = CostReviewItem & {
+  events: CostReviewEvent[]
+  company?: { id: number; name: string }
+}
+
+export type CostReviewCreateBody = {
+  variant_id: number
+  anomaly_code: string
+  reason_label?: string | null
+  priority?: CostReviewPriority
+  source?: CostReviewSource
+  source_ref?: Record<string, unknown> | null
+}
+
+export type CostReviewCreateResponse = {
+  item: CostReviewItem
+  created: boolean
+}
+
+export type CostReviewCloseBody = {
+  conclusion: string
+}
+
 export type ReceptionDetail = {
   reception_id: number
   admission_date: string | null

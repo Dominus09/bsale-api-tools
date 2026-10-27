@@ -23,6 +23,7 @@ import type { AlertsResponse, AnomalyCode, CostFilters, Severity } from "@/lib/a
 
 import { AnomalyChips, MovementBadge } from "./badges"
 import { Pager } from "./cost-v2-products"
+import { CostV2StartReviewButton } from "./cost-v2-start-review-button"
 
 function isoDaysAgo(days: number): string {
   const d = new Date()
@@ -210,6 +211,7 @@ export function CostV2Alerts({
               <th className="px-3 py-2 text-right font-medium">Anterior</th>
               <th className="px-3 py-2 text-right font-medium">Var.</th>
               <th className="px-3 py-2 font-medium">Motivo</th>
+              <th className="px-3 py-2 font-medium">Revisión</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border/60">
@@ -267,11 +269,32 @@ export function CostV2Alerts({
                     {a.anomalies[0] ? reviewAction[a.anomalies[0].code] ?? a.anomalies[0].message : "Revisar la recepción original."}
                   </p>
                 </td>
+                <td className="px-3 py-2">
+                  {a.variant_id != null && a.anomalies[0] ? (
+                    <CostV2StartReviewButton
+                      companyId={companyId}
+                      payload={{
+                        variant_id: a.variant_id,
+                        anomaly_code: a.anomalies[0].code,
+                        reason_label: ANOMALY_LABELS[a.anomalies[0].code] ?? a.anomalies[0].message,
+                        priority: a.max_severity === "alta" ? "alta" : a.max_severity === "baja" ? "baja" : "media",
+                        source: "dashboard_alert",
+                        source_ref: {
+                          reception_id: a.reception_id,
+                          detail_id: a.detail_id,
+                          severity: a.max_severity,
+                        },
+                      }}
+                    />
+                  ) : (
+                    <span className="text-[11px] text-muted-foreground">—</span>
+                  )}
+                </td>
               </tr>
             ))}
             {data && data.items.length === 0 ? (
               <tr>
-                <td colSpan={9} className="px-3 py-8 text-center text-muted-foreground">
+                <td colSpan={10} className="px-3 py-8 text-center text-muted-foreground">
                   Sin alertas en el período.
                 </td>
               </tr>

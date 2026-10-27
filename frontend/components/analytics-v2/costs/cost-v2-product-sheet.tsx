@@ -29,6 +29,7 @@ import type { CostProductResponse, HistoryResponse, ReceptionLineRef } from "@/l
 
 import { AnomalyChips, AnomalyList, MovementBadge, ReliabilityBadge } from "./badges"
 import { Pager } from "./cost-v2-products"
+import { CostV2StartReviewButton } from "./cost-v2-start-review-button"
 
 const chartConfig = {
   cost: { label: "Costo compra", theme: { light: "hsl(215 70% 40%)", dark: "hsl(210 90% 72%)" } },
@@ -185,6 +186,27 @@ export function CostV2ProductSheet({
                 <ReliabilityBadge status={product.reliability.status} />
                 <span className="text-sm text-lq-body">{product.reliability.reason}</span>
                 <StatusBadge tone="warning">Validación contable pendiente</StatusBadge>
+              </div>
+              <div className="rounded-xl border border-dashed border-lq-line bg-lq-surface/60 p-3">
+                <p className="mb-2 text-xs text-muted-foreground">
+                  Abrir esta ficha no asigna responsable. Use el botón solo para crear/iniciar un caso
+                  humano de revisión.
+                </p>
+                <CostV2StartReviewButton
+                  companyId={companyId}
+                  variant="outline"
+                  payload={{
+                    variant_id: product.variant_id,
+                    anomaly_code: product.anomalies?.[0]?.code ?? "revision_manual",
+                    reason_label:
+                      product.anomalies?.[0]?.message ??
+                      product.reliability.reason ??
+                      "Revisión desde ficha de producto",
+                    priority: "media",
+                    source: "product_sheet",
+                    source_ref: { reliability: product.reliability.status },
+                  }}
+                />
               </div>
 
               <section className="grid gap-2 sm:grid-cols-3">

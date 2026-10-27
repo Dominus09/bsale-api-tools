@@ -28,6 +28,7 @@ import {
 import type { CostFilters, ReceptionAnalysisItem, ReceptionAnalysisResponse } from "@/lib/analytics-v2/types"
 
 import { Pager } from "./cost-v2-products"
+import { CostV2StartReviewButton } from "./cost-v2-start-review-button"
 
 const selectClass = "h-9 rounded-md border border-input bg-background px-2 text-sm"
 
@@ -51,12 +52,14 @@ function moneyDiff(current: string | number | null | undefined, previous: string
 }
 
 function ReceptionDetailSheet({
+  companyId,
   item,
   open,
   onOpenChange,
   onOpenProduct,
   onOpenReception,
 }: {
+  companyId: number
   item: ReceptionAnalysisItem | null
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -197,14 +200,36 @@ function ReceptionDetailSheet({
             </section>
 
             {item.variant_id != null ? (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => onOpenProduct(item.variant_id!)}
-              >
-                Abrir ficha del producto
-              </Button>
+              <div className="flex flex-wrap items-start gap-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => onOpenProduct(item.variant_id!)}
+                >
+                  Abrir ficha del producto
+                </Button>
+                <CostV2StartReviewButton
+                  companyId={companyId}
+                  payload={{
+                    variant_id: item.variant_id,
+                    anomaly_code:
+                      item.status === "alza"
+                        ? "alza_anormal"
+                        : item.status === "baja"
+                          ? "baja_sospechosa"
+                          : "movimiento_no_determinado",
+                    reason_label: item.status_label || "Análisis de recepción",
+                    priority: item.status === "alza" ? "alta" : "media",
+                    source: "reception_analysis",
+                    source_ref: {
+                      reception_id: item.reception_id,
+                      detail_id: item.detail_id,
+                      status: item.status,
+                    },
+                  }}
+                />
+              </div>
             ) : null}
           </div>
         ) : null}
@@ -502,6 +527,7 @@ export function CostV2ReceptionAnalysis({
       ) : null}
 
       <ReceptionDetailSheet
+        companyId={companyId}
         item={selected}
         open={selected != null}
         onOpenChange={(open) => {

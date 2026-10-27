@@ -54,6 +54,7 @@ from backend.services.analytics_v2.cost_control_service import (
     CostControlValidationError,
     run_cost_control,
 )
+from backend.services.analytics_v2.cost_reviews_service import CostReviewsService, run_cost_reviews
 from backend.services.analytics_v2.dashboard_service import run_dashboard
 from backend.services.analytics_v2.packs_service import PacksV2Service, run_packs
 from backend.services.analytics_v2.margins_service import (
@@ -298,6 +299,173 @@ def costs_alerts(
             page=page,
             page_size=page_size,
         ),
+    )
+
+
+class CostReviewCreateBody(BaseModel):
+    """Solo metadatos de caso. Instantánea de producto/costos la genera el backend (Costos V2)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    variant_id: int = Field(..., ge=1)
+    anomaly_code: str = Field(..., min_length=1, max_length=80)
+    reason_label: str | None = Field(None, max_length=200)
+    priority: str = Field("media", max_length=20)
+    source: str = Field("reviews_grid", max_length=40)
+    source_ref: dict[str, Any] | None = None
+
+
+class CostReviewObservationsBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    observations: str = Field("", max_length=4000)
+
+
+class CostReviewPriorityBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    priority: str = Field(..., max_length=20)
+
+
+class CostReviewCloseBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    conclusion: str = Field(..., min_length=5, max_length=4000)
+
+
+def _run_reviews(
+    endpoint: str,
+    user: dict[str, Any],
+    company_id: int,
+    fn: Callable[[CostReviewsService], Any],
+) -> Any:
+    return _guard(endpoint, company_id, lambda: run_cost_reviews(user, company_id, fn))
+
+
+@router.get("/costs/reviews")
+def costs_reviews_list(
+    company_id: int = CompanyQuery,
+    status: str | None = Query(None, max_length=20),
+    q: str | None = Query(None, max_length=100),
+    assignee_user_id: int | None = Query(None, ge=1),
+    priority: str | None = Query(None, max_length=20),
+    sort: str = Query("status", max_length=40),
+    page: int = PageQuery,
+    page_size: int = PageSizeQuery,
+    user: dict = Depends(require_cost_control_v2),
+):
+    """Casos de revisión humana (no alertas automáticas)."""
+    return _run_reviews(
+        "costs_reviews_list",
+        user,
+        company_id,
+        lambda s: s.list(
+            status=status,
+            q=q,
+            assignee_user_id=assignee_user_id,
+            priority=priority,
+            sort=sort,
+            page=page,
+            page_size=page_size,
+        ),
+    )
+
+
+@router.get("/costs/reviews/{review_id}")
+def costs_reviews_get(
+    review_id: int = Path(..., ge=1),
+    company_id: int = CompanyQuery,
+    user: dict = Depends(require_cost_control_v2),
+):
+    return _run_reviews("costs_reviews_get", user, company_id, lambda s: s.get(review_id))
+
+
+@router.post("/costs/reviews")
+def costs_reviews_create(
+    body: CostReviewCreateBody,
+    company_id: int = CompanyQuery,
+    user: dict = Depends(require_cost_control_v2),
+):
+    """Crea caso PENDIENTE o reutiliza el abierto (idempotente). No asigna responsable."""
+    payload = body.model_dump()
+    # Nunca aceptar actor/assignee desde el cliente.
+    payload.pop("assignee_user_id", None)
+    payload.pop("actor_user_id", None)
+    return _run_reviews(
+        "costs_reviews_create",
+        user,
+        company_id,
+        lambda s: s.create_or_get(**payload),
+    )
+
+
+@router.post("/costs/reviews/{review_id}/start")
+def costs_reviews_start(
+    review_id: int = Path(..., ge=1),
+    company_id: int = CompanyQuery,
+    user: dict = Depends(require_cost_control_v2),
+):
+    """Inicia revisión: assignee = usuario autenticado (JWT). Body vacío; sin actor_user_id."""
+    return _run_reviews("costs_reviews_start", user, company_id, lambda s: s.start(review_id))
+
+
+@router.patch("/costs/reviews/{review_id}/observations")
+def costs_reviews_observations(
+    body: CostReviewObservationsBody,
+    review_id: int = Path(..., ge=1),
+    company_id: int = CompanyQuery,
+    user: dict = Depends(require_cost_control_v2),
+):
+    return _run_reviews(
+        "costs_reviews_observations",
+        user,
+        company_id,
+        lambda s: s.update_observations(review_id, body.observations),
+    )
+
+
+@router.patch("/costs/reviews/{review_id}/priority")
+def costs_reviews_priority(
+    body: CostReviewPriorityBody,
+    review_id: int = Path(..., ge=1),
+    company_id: int = CompanyQuery,
+    user: dict = Depends(require_cost_control_v2),
+):
+    return _run_reviews(
+        "costs_reviews_priority",
+        user,
+        company_id,
+        lambda s: s.update_priority(review_id, body.priority),
+    )
+
+
+@router.post("/costs/reviews/{review_id}/resolve")
+def costs_reviews_resolve(
+    body: CostReviewCloseBody,
+    review_id: int = Path(..., ge=1),
+    company_id: int = CompanyQuery,
+    user: dict = Depends(require_cost_control_v2),
+):
+    return _run_reviews(
+        "costs_reviews_resolve",
+        user,
+        company_id,
+        lambda s: s.resolve(review_id, conclusion=body.conclusion),
+    )
+
+
+@router.post("/costs/reviews/{review_id}/discard")
+def costs_reviews_discard(
+    body: CostReviewCloseBody,
+    review_id: int = Path(..., ge=1),
+    company_id: int = CompanyQuery,
+    user: dict = Depends(require_cost_control_v2),
+):
+    return _run_reviews(
+        "costs_reviews_discard",
+        user,
+        company_id,
+        lambda s: s.discard(review_id, conclusion=body.conclusion),
     )
 
 

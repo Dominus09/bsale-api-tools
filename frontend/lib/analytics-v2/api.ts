@@ -37,6 +37,12 @@ import type {
   CostFilters,
   CostProductResponse,
   CostProductsResponse,
+  CostReviewCloseBody,
+  CostReviewCreateBody,
+  CostReviewCreateResponse,
+  CostReviewDetailResponse,
+  CostReviewItem,
+  CostReviewsListResponse,
   CostSummary,
   FreshnessResponse,
   HistoryResponse,
@@ -212,6 +218,74 @@ export function getCostAlerts(
   signal?: AbortSignal,
 ) {
   return getJson<AlertsResponse>("/analytics-v2/costs/alerts", params, signal)
+}
+
+export function getCostReviews(
+  params: {
+    company_id: number
+    status?: string | null
+    q?: string | null
+    assignee_user_id?: number | null
+    priority?: string | null
+    sort?: string | null
+    page?: number
+    page_size?: number
+  },
+  signal?: AbortSignal,
+) {
+  return getJson<CostReviewsListResponse>("/analytics-v2/costs/reviews", params, signal)
+}
+
+export function getCostReview(companyId: number, reviewId: number, signal?: AbortSignal) {
+  return getJson<CostReviewDetailResponse>(
+    `/analytics-v2/costs/reviews/${reviewId}`,
+    { company_id: companyId },
+    signal,
+  )
+}
+
+export function createCostReview(companyId: number, body: CostReviewCreateBody) {
+  return sendJson<CostReviewCreateResponse>("POST", "/analytics-v2/costs/reviews", { company_id: companyId }, body)
+}
+
+export function startCostReview(companyId: number, reviewId: number) {
+  return sendJson<CostReviewItem>("POST", `/analytics-v2/costs/reviews/${reviewId}/start`, { company_id: companyId }, {})
+}
+
+export function updateCostReviewObservations(companyId: number, reviewId: number, observations: string) {
+  return sendJson<CostReviewItem>(
+    "PATCH",
+    `/analytics-v2/costs/reviews/${reviewId}/observations`,
+    { company_id: companyId },
+    { observations },
+  )
+}
+
+export function updateCostReviewPriority(companyId: number, reviewId: number, priority: string) {
+  return sendJson<CostReviewItem>(
+    "PATCH",
+    `/analytics-v2/costs/reviews/${reviewId}/priority`,
+    { company_id: companyId },
+    { priority },
+  )
+}
+
+export function resolveCostReview(companyId: number, reviewId: number, body: CostReviewCloseBody) {
+  return sendJson<CostReviewItem>(
+    "POST",
+    `/analytics-v2/costs/reviews/${reviewId}/resolve`,
+    { company_id: companyId },
+    body,
+  )
+}
+
+export function discardCostReview(companyId: number, reviewId: number, body: CostReviewCloseBody) {
+  return sendJson<CostReviewItem>(
+    "POST",
+    `/analytics-v2/costs/reviews/${reviewId}/discard`,
+    { company_id: companyId },
+    body,
+  )
 }
 
 export function getMarginsSummary(companyId: number, costBasis: string, signal?: AbortSignal) {
