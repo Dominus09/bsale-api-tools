@@ -21,8 +21,9 @@ from backend.auth.audit import (
     record_auth_event,
 )
 from backend.auth.passwords import hash_password
+from backend.auth.hierarchy import is_owner_id
 from backend.auth.permissions import ADMIN_ROLES, normalized_role
-from backend.auth.user_admin_access import ASSIGNABLE_ROLES, can_assign_role
+from backend.auth.user_admin_access import ASSIGNABLE_ROLES, assert_panel_action_allowed
 from backend.db import get_connection
 
 logger = logging.getLogger(__name__)
@@ -217,6 +218,7 @@ def list_users(*, q: str | None = None, active: bool | None = None) -> list[dict
                 "last_login_at": last_logins.get(int(r[0])).isoformat()
                 if last_logins.get(int(r[0]))
                 else None,
+                "is_owner": is_owner_id(int(r[0])),
             }
             for r in rows
         ]
@@ -268,12 +270,15 @@ def list_companies_catalog() -> list[dict[str, Any]]:
 def roles_catalog() -> dict[str, Any]:
     return {
         "assignable_roles": sorted(ASSIGNABLE_ROLES),
+        "hierarchy": ["OWNER", "GERENCIA", "ADM", "OPERATIVO"],
         "module_matrix": [
             {
-                "role": "adm",
-                "label": "Administración técnica",
+                "role": "owner",
+                "label": "Propietario (OWNER)",
                 "modules": {
                     "user_admin": True,
+                    "user_admin_view": True,
+                    "user_admin_assign_adm": True,
                     "diagnostics": True,
                     "costs": True,
                     "margins": True,
@@ -285,6 +290,20 @@ def roles_catalog() -> dict[str, Any]:
             {
                 "role": "gerencia",
                 "label": "Gerencia",
+                "modules": {
+                    "user_admin": False,
+                    "user_admin_view": True,
+                    "diagnostics": True,
+                    "costs": True,
+                    "margins": True,
+                    "promotions_approve": True,
+                    "gondolas_operate": True,
+                    "gondolas_cancel": True,
+                },
+            },
+            {
+                "role": "adm",
+                "label": "Administración",
                 "modules": {
                     "user_admin": False,
                     "user_admin_view": True,
@@ -311,10 +330,13 @@ def roles_catalog() -> dict[str, Any]:
             },
         ],
         "notes": [
-            "Los permisos se resuelven en backend; esta matriz es informativa.",
-            "Mutar usuarios exige permiso «Administrar usuarios» (AUTH_USER_ADMIN_EMAILS o fallback adm).",
-            "Asignar rol adm exige AUTH_ASSIGN_ADM_EMAILS o ser adm autorizado.",
-            "No se crean roles nuevos desde esta pantalla.",
+            "OWNER se configura con AUTH_OWNER_USER_IDS (ID de bsale.users); no es un rol asignable.",
+            "Jerarquía: OWNER > GERENCIA > ADM > OPERATIVO.",
+            "Mutar usuarios: OWNER o correo en AUTH_USER_ADMIN_EMAILS.",
+            "Asignar ADM: OWNER o GERENCIA en AUTH_ASSIGN_ADM_EMAILS.",
+            "Solo OWNER puede crear o promover a GERENCIA.",
+            "ADM autorizado solo administra OPERATIVO.",
+            "Las cuentas OWNER no se gestionan desde este panel.",
         ],
     }
 
@@ -362,12 +384,16 @@ def create_user(
     password: str | None,
     invite: bool,
 ) -> dict[str, Any]:
-    if not can_assign_role(actor, role):
-        raise HTTPException(status_code=403, detail="No autorizado a asignar este rol")
     email_key = email.strip().lower()
     if not email_key or "@" not in email_key:
         raise HTTPException(status_code=400, detail="Correo inválido")
     role_n = role.strip().lower()
+    assert_panel_action_allowed(
+        actor,
+        target_id=None,
+        current_role=role_n,
+        new_role=role_n,
+    )
     if invite and password:
         raise HTTPException(
             status_code=400,
@@ -461,10 +487,16 @@ def update_user(
         prev_email, prev_role, prev_active, prev_name = prev
 
         if role is not None:
-            if not can_assign_role(actor, role):
-                raise HTTPException(status_code=403, detail="No autorizado a asignar este rol")
             role = role.strip().lower()
 
+        assert_panel_action_allowed(
+            actor,
+            target_id=user_id,
+            current_role=prev_role,
+            new_role=role,
+            changing_active=active,
+            changing_companies=company_ids is not None,
+        )
         _guard_self_privilege_change(actor=actor, user_id=user_id, role=role, active=active)
 
         _ensure_not_last_admin(
@@ -619,13 +651,19 @@ def issue_password_reset(*, actor: dict[str, Any], user_id: int) -> dict[str, An
     try:
         cur = conn.cursor()
         cur.execute(
-            "SELECT email, active FROM bsale.users WHERE id = %s",
+            "SELECT email, active, role FROM bsale.users WHERE id = %s",
             (user_id,),
         )
         row = cur.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="Usuario no encontrado")
-        email, active = row[0], row[1]
+        email, active, target_role = row[0], row[1], row[2]
+        assert_panel_action_allowed(
+            actor,
+            target_id=user_id,
+            current_role=target_role,
+            password_reset=True,
+        )
         if not active:
             raise HTTPException(
                 status_code=409,

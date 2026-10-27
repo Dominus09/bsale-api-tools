@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { Loader2, Plus, RefreshCw, Search } from "lucide-react"
 
+import { OwnerBadge } from "@/components/admin/owner-badge"
 import { UserAdminSheet } from "@/components/admin/user-admin-sheet"
 import {
   AnalyticPageHeader,
@@ -25,11 +26,12 @@ import {
   type AdminUserRow,
   type RolesCatalog,
 } from "@/lib/admin-users-api"
-import { formatChileDateTime, roleLabel } from "@/lib/admin-users-format"
+import { formatChileDateTime, staffRoleDisplay } from "@/lib/admin-users-format"
 import {
   canAssignAdmRole,
   canMutateUserAdmin,
   canViewUserAdmin,
+  isOwnerUser,
 } from "@/lib/permissions"
 import { useAuthMe } from "@/lib/use-auth-me"
 
@@ -55,12 +57,15 @@ export default function UsuariosAccesosPage() {
   // Acciones sensibles: solo con /auth/me OK y flags explícitos (nunca durante carga/fallo).
   const canMutate = meState === "ok" && canMutateUserAdmin(staff)
   const canAssignAdm = meState === "ok" && canAssignAdmRole(staff)
+  const actorIsOwner = meState === "ok" && isOwnerUser(staff)
 
   const assignableRoles = useMemo(() => {
-    const base = rolesCatalog?.assignable_roles || ["operativo", "gerencia", "adm"]
-    if (canAssignAdm) return base
-    return base.filter((r) => r !== "adm")
-  }, [rolesCatalog, canAssignAdm])
+    let base = rolesCatalog?.assignable_roles || ["operativo", "gerencia", "adm"]
+    base = base.filter((r) => r !== "owner")
+    if (!actorIsOwner) base = base.filter((r) => r !== "gerencia")
+    if (!canAssignAdm) base = base.filter((r) => r !== "adm")
+    return base
+  }, [rolesCatalog, canAssignAdm, actorIsOwner])
 
   const loadUsers = useCallback(async () => {
     if (!canView) return
@@ -251,10 +256,13 @@ export default function UsuariosAccesosPage() {
                       }}
                     >
                       <td className="px-4 py-3 font-medium text-lq-ink">
-                        {u.nombre_usuario || "—"}
+                        <span className="inline-flex items-center gap-2">
+                          {u.nombre_usuario || "—"}
+                          {u.is_owner ? <OwnerBadge compact /> : null}
+                        </span>
                       </td>
                       <td className="px-4 py-3 text-lq-body">{u.email}</td>
-                      <td className="px-4 py-3">{roleLabel(u.role)}</td>
+                      <td className="px-4 py-3">{staffRoleDisplay(u.role, u.is_owner)}</td>
                       <td className="px-4 py-3">
                         <StatusBadge tone={u.active ? "success" : "neutral"}>
                           {u.active ? "Activa" : "Inactiva"}
@@ -383,10 +391,11 @@ export default function UsuariosAccesosPage() {
         onOpenChange={setSheetOpen}
         mode={sheetMode}
         user={selected}
-        canMutate={canMutate}
+        canMutate={canMutate && !(selected?.is_owner && sheetMode === "view")}
         canAssignAdm={canAssignAdm}
         assignableRoles={assignableRoles}
         companiesCatalog={companies}
+        targetIsOwner={Boolean(selected?.is_owner)}
         onSaved={() => {
           void loadUsers()
         }}

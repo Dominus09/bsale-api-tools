@@ -10,7 +10,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { OwnerBadge } from "@/components/admin/owner-badge"
 import { logout, getStoredEmail, getStoredCompanyName } from "@/lib/api"
+import { isOwnerUser } from "@/lib/permissions"
+import { useAuthMe } from "@/lib/use-auth-me"
 import { AppearanceSelector } from "@/components/layout/appearance-selector"
 
 type HeaderProps = {
@@ -22,6 +25,8 @@ type HeaderProps = {
 export function Header({ sidebarOpen, onToggleSidebar }: HeaderProps) {
   const [email, setEmail] = useState<string | null>(null)
   const [companyName, setCompanyName] = useState<string | null>(null)
+  const { meState, staff } = useAuthMe()
+  const showOwner = meState === "ok" && isOwnerUser(staff)
 
   useEffect(() => {
     setEmail(getStoredEmail())
@@ -75,15 +80,22 @@ export function Header({ sidebarOpen, onToggleSidebar }: HeaderProps) {
               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground">
                 <User className="h-4 w-4" />
               </div>
-              <span className="hidden truncate text-sm text-lq-on-graphite-muted md:inline">
-                {email}
+              <span className="hidden min-w-0 items-center gap-2 md:inline-flex">
+                <span className="truncate text-sm text-lq-on-graphite-muted">{email}</span>
+                {showOwner ? <OwnerBadge compact className="shrink-0 border-white/20 bg-white/10 text-lq-on-graphite" /> : null}
               </span>
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-56">
             <div className="px-2 py-1.5">
-              <p className="truncate text-sm font-medium">{email}</p>
-              <p className="truncate text-xs text-muted-foreground">{companyName}</p>
+              <div className="flex items-center gap-2">
+                <p className="truncate text-sm font-medium">{email}</p>
+                {showOwner ? <OwnerBadge compact /> : null}
+              </div>
+              <p className="truncate text-xs text-muted-foreground">
+                {showOwner ? "Propietario · " : ""}
+                {companyName}
+              </p>
             </div>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={handleChangeCompany}>

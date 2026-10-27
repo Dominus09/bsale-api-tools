@@ -15,6 +15,8 @@ const MARGIN_VIEW_EXTRA_ROLES = new Set(["finanzas", "finance"])
 export type StaffUserLike = {
   role?: string | null
   email?: string | null
+  id?: number | null
+  is_owner?: boolean | null
   management_access?: boolean | null
   admin_access?: boolean | null
   permissions?: Partial<ErpPermissions> | null
@@ -160,4 +162,12 @@ export function canAssignAdmRole(
 ): boolean {
   if (!user || typeof user === "string") return false
   return user.permissions?.user_admin_assign_adm === true
+}
+
+/** Identidad OWNER reportada por GET /auth/me (nunca inventada en cliente). */
+export function isOwnerUser(
+  user: StaffUserLike | string | null | undefined,
+): boolean {
+  if (!user || typeof user === "string") return false
+  return user.is_owner === true
 }

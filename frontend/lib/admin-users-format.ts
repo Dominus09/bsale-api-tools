@@ -18,5 +18,15 @@ export function roleLabel(role: string | null | undefined): string {
   if (r === "adm" || r === "admin") return "Administración"
   if (r === "gerencia") return "Gerencia"
   if (r === "operativo") return "Operativo"
+  if (r === "owner") return "Propietario"
   return role || "—"
+}
+
+/** Etiqueta de listado/ficha: OWNER prevalece sobre el rol almacenado. */
+export function staffRoleDisplay(
+  role: string | null | undefined,
+  isOwner?: boolean | null,
+): string {
+  if (isOwner) return "Propietario"
+  return roleLabel(role)
 }

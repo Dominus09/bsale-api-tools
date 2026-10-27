@@ -18,6 +18,8 @@ export type AdminUserRow = {
   nombre_usuario: string | null
   companies: AdminCompanyRef[]
   last_login_at: string | null
+  /** Marcado por backend si el id está en AUTH_OWNER_USER_IDS. */
+  is_owner?: boolean
   delivery?: AdminDeliveryPayload
 }
 

@@ -61,15 +61,20 @@ def test_assign_adm_requires_explicit_grant(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("AUTH_USER_ADMIN_EMAILS", "dueno@x.cl")
     monkeypatch.delenv("AUTH_ASSIGN_ADM_EMAILS", raising=False)
-    assert ua.can_assign_role({"role": "gerencia", "email": "dueno@x.cl"}, "operativo")
-    assert not ua.can_assign_role({"role": "gerencia", "email": "dueno@x.cl"}, "adm")
+    monkeypatch.delenv("AUTH_OWNER_USER_IDS", raising=False)
+    actor = {"id": 3, "role": "gerencia", "email": "dueno@x.cl"}
+    assert ua.can_assign_role(actor, "operativo")
+    assert not ua.can_assign_role(actor, "adm")
+    assert not ua.can_assign_role(actor, "gerencia")
     monkeypatch.setenv("AUTH_ASSIGN_ADM_EMAILS", "dueno@x.cl")
-    assert ua.can_assign_adm_role({"role": "gerencia", "email": "dueno@x.cl"})
+    assert ua.can_assign_adm_role(actor)
 
 
 def test_cannot_assign_superadmin(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("AUTH_USER_ADMIN_EMAILS", "a@x.cl")
     monkeypatch.setenv("AUTH_ASSIGN_ADM_EMAILS", "a@x.cl")
-    actor = {"role": "adm", "email": "a@x.cl"}
+    monkeypatch.delenv("AUTH_OWNER_USER_IDS", raising=False)
+    actor = {"id": 2, "role": "adm", "email": "a@x.cl"}
     assert not ua.can_assign_role(actor, "superadmin")
+    assert not ua.can_assign_adm_role(actor)

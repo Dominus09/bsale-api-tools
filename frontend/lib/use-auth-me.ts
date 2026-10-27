@@ -9,8 +9,10 @@ export type AuthMeLoadState = "loading" | "ok" | "unauthorized" | "unavailable"
 
 export function staffFromAuthMe(me: AuthMeResponse): StaffUserLike {
   return {
+    id: me.id,
     role: me.role,
     email: me.email,
+    is_owner: me.is_owner === true,
     management_access: me.management_access,
     admin_access: me.admin_access,
     permissions: me.permissions,

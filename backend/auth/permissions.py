@@ -57,6 +57,10 @@ def normalized_role(user: dict[str, Any] | None) -> str:
 
 def has_management_access(user: dict[str, Any] | None) -> bool:
     """Acceso gerencial / ejecutivo (gerencia, adm, admin y roles admin legacy)."""
+    from backend.auth.hierarchy import is_owner
+
+    if is_owner(user):
+        return True
     role = normalized_role(user)
     if role in MANAGEMENT_ROLES:
         return True
@@ -64,7 +68,15 @@ def has_management_access(user: dict[str, Any] | None) -> bool:
 
 
 def has_admin_access(user: dict[str, Any] | None) -> bool:
-    """Acceso técnico de administración."""
+    """Acceso técnico de administración (rol adm) o OWNER configurado.
+
+    OWNER hereda módulos que hoy exigen ``require_admin_access`` (p. ej. sync
+    histórico de NC). No implica privilegios de infraestructura/PostgreSQL.
+    """
+    from backend.auth.hierarchy import is_owner
+
+    if is_owner(user):
+        return True
     return normalized_role(user) in ADMIN_ROLES
 
 
@@ -137,18 +149,22 @@ def _fetch_staff_user_id(email: str) -> int | None:
 
 
 def build_auth_me_response(user: dict[str, Any]) -> dict[str, Any]:
+    from backend.auth.hierarchy import is_owner
     from backend.auth.user_admin_access import permission_flags
 
     email = str(user.get("email") or "")
-    user_id = user.get("id") or _fetch_staff_user_id(email)
-    permissions = resolve_executive_permissions(user)
-    permissions.update(permission_flags({**user, "email": email, "id": user_id}))
+    user_id = user.get("id") or user.get("uid") or _fetch_staff_user_id(email)
+    enriched = {**user, "email": email, "id": user_id}
+    permissions = resolve_executive_permissions(enriched)
+    permissions.update(permission_flags(enriched))
+    owner = is_owner(enriched)
     return {
         "id": user_id,
         "email": email,
         "role": user.get("role"),
-        "management_access": has_management_access(user),
-        "admin_access": has_admin_access(user),
+        "is_owner": owner,
+        "management_access": has_management_access(enriched) or owner,
+        "admin_access": has_admin_access(enriched),
         "permissions": permissions,
     }
 

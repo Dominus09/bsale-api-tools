@@ -95,6 +95,8 @@ def test_roles_catalog_has_assignable_only():
     cat = svc.roles_catalog()
     assert set(cat["assignable_roles"]) == {"adm", "gerencia", "operativo"}
     assert "superadmin" not in cat["assignable_roles"]
+    assert "owner" not in cat["assignable_roles"]
+    assert cat.get("hierarchy") == ["OWNER", "GERENCIA", "ADM", "OPERATIVO"]
 
 
 def test_consume_password_token_rejects_reuse(monkeypatch):

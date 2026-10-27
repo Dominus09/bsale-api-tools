@@ -11,7 +11,8 @@ import {
   type AdminDeliveryPayload,
   type AdminUserRow,
 } from "@/lib/admin-users-api"
-import { formatChileDateTime, roleLabel } from "@/lib/admin-users-format"
+import { OwnerBadge } from "@/components/admin/owner-badge"
+import { formatChileDateTime, roleLabel, staffRoleDisplay } from "@/lib/admin-users-format"
 import { SectionCard, StatusBadge } from "@/components/analytics-v2/shared/analytics-ui"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -37,6 +38,7 @@ export function UserAdminSheet({
   canAssignAdm = false,
   assignableRoles,
   companiesCatalog,
+  targetIsOwner = false,
   onSaved,
 }: {
   open: boolean
@@ -48,8 +50,12 @@ export function UserAdminSheet({
   canAssignAdm?: boolean
   assignableRoles: string[]
   companiesCatalog: AdminCompanyRef[]
+  /** Cuenta OWNER: solo lectura en el panel. */
+  targetIsOwner?: boolean
   onSaved: () => void
 }) {
+  const lockedOwner = mode === "view" && (targetIsOwner || Boolean(user?.is_owner))
+  const allowMutate = canMutate && !lockedOwner
   const [nombre, setNombre] = useState("")
   const [email, setEmail] = useState("")
   const [role, setRole] = useState("operativo")
@@ -98,9 +104,13 @@ export function UserAdminSheet({
   }
 
   async function handleSave() {
-    if (!canMutate) return
+    if (!allowMutate) return
     if (role === "adm" && !canAssignAdm) {
       setError("No está autorizado a asignar el rol de administración")
+      return
+    }
+    if (role === "gerencia" && !assignableRoles.includes("gerencia")) {
+      setError("Solo el propietario puede asignar el rol de gerencia")
       return
     }
     setBusy(true)
@@ -136,7 +146,7 @@ export function UserAdminSheet({
   }
 
   async function handleReset() {
-    if (!canMutate || !user) return
+    if (!allowMutate || !user || lockedOwner) return
     setBusy(true)
     setError(null)
     try {
@@ -154,11 +164,16 @@ export function UserAdminSheet({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="w-full overflow-y-auto border-l-lq-line bg-lq-canvas p-0 sm:max-w-[min(560px,94vw)]">
         <SheetHeader className="sticky top-0 z-20 border-b border-lq-line bg-lq-surface/95 px-5 py-4 backdrop-blur md:px-6">
-          <SheetTitle className="pr-8 text-xl tracking-[-0.015em]">{title}</SheetTitle>
+          <SheetTitle className="flex flex-wrap items-center gap-2 pr-8 text-xl tracking-[-0.015em]">
+            {title}
+            {lockedOwner ? <OwnerBadge /> : null}
+          </SheetTitle>
           <SheetDescription>
             {mode === "create"
               ? "Alta de cuenta staff ERP. La contraseña actual nunca se muestra."
-              : `Rol actual: ${roleLabel(user?.role)} · Último ingreso: ${formatChileDateTime(user?.last_login_at)}`}
+              : lockedOwner
+                ? "Cuenta OWNER: no se modifica desde este panel."
+                : `Rol actual: ${staffRoleDisplay(user?.role, user?.is_owner)} · Último ingreso: ${formatChileDateTime(user?.last_login_at)}`}
           </SheetDescription>
         </SheetHeader>
 
@@ -201,7 +216,7 @@ export function UserAdminSheet({
                   id="ua-nombre"
                   value={nombre}
                   onChange={(e) => setNombre(e.target.value)}
-                  disabled={!canMutate || busy}
+                  disabled={!allowMutate || busy}
                 />
               </div>
               <div className="space-y-1.5">
@@ -211,12 +226,12 @@ export function UserAdminSheet({
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  disabled={!canMutate || busy}
+                  disabled={!allowMutate || busy}
                 />
               </div>
               <div className="space-y-1.5">
                 <Label>Rol</Label>
-                <Select value={role} onValueChange={setRole} disabled={!canMutate || busy}>
+                <Select value={role} onValueChange={setRole} disabled={!allowMutate || busy}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -235,7 +250,7 @@ export function UserAdminSheet({
                     id="ua-active"
                     checked={active}
                     onCheckedChange={(v) => setActive(v === true)}
-                    disabled={!canMutate || busy}
+                    disabled={!allowMutate || busy}
                   />
                   <Label htmlFor="ua-active">Cuenta activa</Label>
                   <StatusBadge tone={active ? "success" : "neutral"}>{active ? "Activa" : "Inactiva"}</StatusBadge>
@@ -254,7 +269,7 @@ export function UserAdminSheet({
                     <Checkbox
                       checked={companyIds.includes(c.company_id)}
                       onCheckedChange={() => toggleCompany(c.company_id)}
-                      disabled={!canMutate || busy}
+                      disabled={!allowMutate || busy}
                     />
                     <span>
                       {c.name || `Empresa ${c.company_id}`}{" "}
@@ -276,7 +291,7 @@ export function UserAdminSheet({
                   id="ua-invite"
                   checked={invite}
                   onCheckedChange={(v) => setInvite(v === true)}
-                  disabled={!canMutate || busy}
+                  disabled={!allowMutate || busy}
                 />
                 <Label htmlFor="ua-invite">Invitación segura (token de un solo uso)</Label>
               </div>
@@ -289,14 +304,14 @@ export function UserAdminSheet({
                     autoComplete="new-password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    disabled={!canMutate || busy}
+                    disabled={!allowMutate || busy}
                   />
                 </div>
               ) : null}
             </SectionCard>
           ) : null}
 
-          {canMutate ? (
+          {allowMutate ? (
             <div className="flex flex-wrap gap-2 border-t border-lq-line pt-4">
               <Button type="button" onClick={handleSave} disabled={busy}>
                 {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
@@ -309,7 +324,11 @@ export function UserAdminSheet({
               ) : null}
             </div>
           ) : (
-            <p className="text-sm text-lq-muted">Solo lectura: las mutaciones requieren rol de administración.</p>
+            <p className="text-sm text-lq-muted">
+              {lockedOwner
+                ? "Cuenta OWNER protegida: use el procedimiento de recuperación documentado."
+                : "Solo lectura: las mutaciones requieren autorización explícita."}
+            </p>
           )}
         </div>
       </SheetContent>

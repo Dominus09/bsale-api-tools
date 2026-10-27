@@ -103,6 +103,7 @@ def test_prod_view_allowed_for_gerencia(client, prod_env, monkeypatch):
 
 
 def test_missing_password_tokens_table_controlled_409(monkeypatch, prod_env):
+    monkeypatch.setenv("AUTH_USER_ADMIN_EMAILS", "a@x.cl")
     monkeypatch.setattr(svc, "_table_exists", lambda cur, s, t: False)
 
     class _Conn:
@@ -113,7 +114,7 @@ def test_missing_password_tokens_table_controlled_409(monkeypatch, prod_env):
             return None
 
         def fetchone(self):
-            return ("u@test.local", True)
+            return ("u@test.local", True, "operativo")
 
         def commit(self):
             return None
@@ -126,7 +127,10 @@ def test_missing_password_tokens_table_controlled_409(monkeypatch, prod_env):
 
     monkeypatch.setattr(svc, "get_connection", lambda: _Conn())
     with pytest.raises(HTTPException) as err:
-        svc.issue_password_reset(actor={"id": 1, "role": "adm", "email": "a@x.cl"}, user_id=1)
+        svc.issue_password_reset(
+            actor={"id": 1, "role": "adm", "email": "a@x.cl"},
+            user_id=99,
+        )
     assert err.value.status_code == 409
 
 

@@ -29,6 +29,8 @@ export interface AuthMeResponse {
   id: number | null
   email: string
   role: string | null
+  /** Propietario ERP: solo backend vía AUTH_OWNER_USER_IDS. */
+  is_owner?: boolean
   management_access: boolean
   admin_access: boolean
   permissions: {

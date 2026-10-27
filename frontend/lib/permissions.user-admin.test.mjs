@@ -89,4 +89,14 @@ describe("user admin UI permissions from /auth/me", () => {
     assert.equal(canMutateUserAdmin(u), false)
     assert.equal(canAssignAdmRole(u), false)
   })
+
+  it("is_owner solo desde flag de /auth/me", () => {
+    function isOwnerUser(user) {
+      if (!user || typeof user === "string") return false
+      return user.is_owner === true
+    }
+    assert.equal(isOwnerUser({ role: "gerencia", is_owner: true }), true)
+    assert.equal(isOwnerUser({ role: "gerencia" }), false)
+    assert.equal(isOwnerUser("gerencia"), false)
+  })
 })
