@@ -21,6 +21,8 @@ export interface LoginResponse {
   token: string
   email: string
   role: string
+  /** id de bsale.users cuando el backend lo emite (etapa 1 auth). */
+  id?: number
 }
 
 export interface AuthMeResponse {
@@ -34,6 +36,9 @@ export interface AuthMeResponse {
     diagnostics: boolean
     costs: boolean
     margins: boolean
+    user_admin_view?: boolean
+    user_admin?: boolean
+    user_admin_assign_adm?: boolean
   }
 }
 
@@ -4328,9 +4333,25 @@ export function logout() {
     localStorage.removeItem("token")
     localStorage.removeItem("email")
     localStorage.removeItem("role")
+    localStorage.removeItem("user_id")
     localStorage.removeItem("company_id")
     localStorage.removeItem("company_name")
     sessionStorage.removeItem("demo_mode")
+  }
+}
+
+/** Lee claim ``exp`` del JWT sin verificar firma (solo UX; el backend valida). */
+function jwtExpSeconds(token: string): number | null {
+  try {
+    const parts = token.split(".")
+    if (parts.length < 2) return null
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/")
+    const pad = b64.length % 4 === 0 ? "" : "=".repeat(4 - (b64.length % 4))
+    const json = atob(b64 + pad)
+    const payload = JSON.parse(json) as { exp?: unknown }
+    return typeof payload.exp === "number" ? payload.exp : null
+  } catch {
+    return null
   }
 }
 
@@ -4339,6 +4360,11 @@ export function isAuthenticated(): boolean {
   const token = localStorage.getItem("token")
   if (!token) return false
   if (token === LEGACY_DEMO_TOKEN) {
+    logout()
+    return false
+  }
+  const exp = jwtExpSeconds(token)
+  if (exp != null && exp * 1000 <= Date.now()) {
     logout()
     return false
   }

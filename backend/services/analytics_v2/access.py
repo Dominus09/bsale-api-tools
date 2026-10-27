@@ -21,6 +21,7 @@ from backend.auth.permissions import (
     normalized_role,
     resolve_executive_permissions,
 )
+from backend.auth.staff_session import enrich_staff_payload
 from backend.services.analytics_v2.contracts import RAW_READY_COMPANY_IDS
 
 logger = logging.getLogger(__name__)
@@ -56,7 +57,7 @@ def _deny(user: dict[str, Any], path: str, permission: str, reason: str) -> None
 
 
 def _require_permission(request: Request, authorization: str | None, permission: str, label: str) -> dict[str, Any]:
-    user = decode_staff_token(authorization)
+    user = enrich_staff_payload(decode_staff_token(authorization))
     if not resolve_executive_permissions(user).get(permission):
         _deny(user, request.url.path, permission, f"Rol sin permiso de {label}")
         raise HTTPException(status_code=403, detail=f"Acceso restringido: requiere permiso de {label}")
@@ -94,7 +95,7 @@ def promotion_capabilities(user: dict[str, Any] | None) -> dict[str, bool]:
 
 
 def _require_promotion_action(request: Request, authorization: str | None, action: str) -> dict[str, Any]:
-    user = decode_staff_token(authorization)
+    user = enrich_staff_payload(decode_staff_token(authorization))
     if not promotion_capabilities(user).get(action):
         _deny(user, request.url.path, f"promotions_{action}", f"Rol sin permiso promotions_{action}")
         raise HTTPException(status_code=403, detail="Acceso restringido: su rol no permite esta acción en Promociones V2")

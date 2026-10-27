@@ -10,6 +10,7 @@ from fastapi import Header, HTTPException, Request
 
 from backend.db import get_connection
 from backend.auth.jwt import decode_staff_token
+from backend.auth.staff_session import enrich_staff_payload
 
 logger = logging.getLogger(__name__)
 
@@ -136,9 +137,12 @@ def _fetch_staff_user_id(email: str) -> int | None:
 
 
 def build_auth_me_response(user: dict[str, Any]) -> dict[str, Any]:
+    from backend.auth.user_admin_access import permission_flags
+
     email = str(user.get("email") or "")
     user_id = user.get("id") or _fetch_staff_user_id(email)
     permissions = resolve_executive_permissions(user)
+    permissions.update(permission_flags({**user, "email": email, "id": user_id}))
     return {
         "id": user_id,
         "email": email,
@@ -150,17 +154,17 @@ def build_auth_me_response(user: dict[str, Any]) -> dict[str, Any]:
 
 
 def require_management_access(
-    authorization: BearerDep,
-    request: Request,
+    authorization: BearerDep = None,
+    request: Request = None,
     *,
     required_permission: str = "management_access",
 ) -> dict[str, Any]:
     """Dependencia FastAPI: exige acceso gerencial/ejecutivo."""
-    user = decode_staff_token(authorization)
+    user = enrich_staff_payload(decode_staff_token(authorization))
     if not has_management_access(user):
         _log_auth_denial(
             user=user,
-            endpoint=request.url.path,
+            endpoint=(request.url.path if request is not None else "-"),
             required_permission=required_permission,
             reason="Rol sin acceso gerencial",
         )
@@ -172,17 +176,17 @@ def require_management_access(
 
 
 def require_admin_access(
-    authorization: BearerDep,
-    request: Request,
+    authorization: BearerDep = None,
+    request: Request = None,
     *,
     required_permission: str = "admin_access",
 ) -> dict[str, Any]:
     """Dependencia FastAPI: exige rol de administración técnica."""
-    user = decode_staff_token(authorization)
+    user = enrich_staff_payload(decode_staff_token(authorization))
     if not has_admin_access(user):
         _log_auth_denial(
             user=user,
-            endpoint=request.url.path,
+            endpoint=(request.url.path if request is not None else "-"),
             required_permission=required_permission,
             reason="Rol sin acceso de administración",
         )

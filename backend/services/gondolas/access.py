@@ -15,6 +15,7 @@ from fastapi import HTTPException, Request
 
 from backend.auth.jwt import decode_staff_token
 from backend.auth.permissions import BearerDep, has_management_access, normalized_role
+from backend.auth.staff_session import enrich_staff_payload
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ def gondola_capabilities(user: dict[str, Any] | None) -> dict[str, bool]:
 
 
 def _require(request: Request, authorization: str | None, capability: str, label: str) -> dict[str, Any]:
-    user = decode_staff_token(authorization)
+    user = enrich_staff_payload(decode_staff_token(authorization))
     if not gondola_capabilities(user).get(capability):
         logger.warning(
             "[AUTH] gondolas user_id=%s role=%s endpoint=%s required_permission=%s timestamp=%s reason=%s",

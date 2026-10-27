@@ -64,3 +64,13 @@ def test_staff_email_helper_returns_none_for_expired_token():
     past = datetime.now(timezone.utc) - timedelta(minutes=1)
     token = pyjwt.encode({"email": "a@test.local", "exp": past}, staff_jwt.SECRET, algorithm="HS256")
     assert staff_jwt.staff_email_from_authorization(_bearer(token)) is None
+
+
+def test_new_claims_do_not_break_default_decode():
+    token = staff_jwt.create_staff_token(
+        email="a@test.local", role="gerencia", user_id=99, token_version=0
+    )
+    payload = staff_jwt.decode_staff_token(_bearer(token))
+    assert payload["uid"] == 99
+    assert "exp" not in payload
+

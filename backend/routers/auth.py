@@ -1,16 +1,31 @@
 from __future__ import annotations
 
-import hmac
 import logging
 import os
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
-from passlib.context import CryptContext
 from pydantic import BaseModel
 
+from backend.auth.audit import (
+    EVENT_LEGACY_PASSWORD_UPGRADED,
+    EVENT_LOGIN_FAILURE,
+    EVENT_LOGIN_SUCCESS,
+    record_auth_event,
+)
 from backend.auth.jwt import create_staff_token
+from backend.auth.passwords import (
+    allow_legacy_plaintext,
+    hash_password,
+    should_upgrade_legacy_on_login,
+    verify_password,
+)
 from backend.auth.permissions import build_auth_me_response
+from backend.auth.staff_session import (
+    load_staff_login_row,
+    load_user_company_ids,
+    upgrade_legacy_password,
+)
 from backend.client_rut import require_valid_rut, city_is_melinka
 from backend.db import get_connection
 from backend.utils.auth_staff import require_staff_user
@@ -22,30 +37,18 @@ auth_router = APIRouter(prefix="/auth")
 
 logger = logging.getLogger(__name__)
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 _LOGIN_DEBUG = os.getenv("AUTH_LOGIN_DEBUG", "").strip().lower() in ("1", "true", "yes")
 
 
-def _looks_like_bcrypt_hash(value: str) -> bool:
-    return value.startswith(("$2a$", "$2b$", "$2y$"))
-
-
-def _password_matches(plain: str, stored: str | None) -> bool:
-    if not stored or not stored.strip():
-        return False
-    s = stored.strip()
-    if _looks_like_bcrypt_hash(s):
-        try:
-            return pwd_context.verify(plain, s)
-        except Exception:
-            if _LOGIN_DEBUG:
-                logger.exception("bcrypt verify raised for stored hash")
-            return False
-    pe, se = plain.encode("utf-8"), s.encode("utf-8")
-    if len(pe) != len(se):
-        return False
-    return hmac.compare_digest(pe, se)
+def _client_meta(request: Request | None) -> tuple[str | None, str | None]:
+    if request is None:
+        return None, None
+    ip = request.client.host if request.client else None
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        ip = forwarded.split(",")[0].strip() or ip
+    ua = request.headers.get("user-agent")
+    return ip, ua
 
 
 class LoginRequest(BaseModel):
@@ -87,52 +90,107 @@ def login_client(body: LoginClientRequest):
 
 
 @router.post("/login")
-def login(data: LoginRequest):
+def login(data: LoginRequest, request: Request):
     email_key = data.email.strip().lower()
+    ip, ua = _client_meta(request)
 
-    conn = get_connection()
-    cur = conn.cursor()
-
-    cur.execute(
-        """
-        SELECT password_hash, role
-        FROM bsale.users
-        WHERE lower(trim(email)) = %s AND active = true
-        """,
-        (email_key,),
-    )
-
-    user = cur.fetchone()
-    cur.close()
-    conn.close()
+    row = load_staff_login_row(email_key)
 
     if _LOGIN_DEBUG:
         logger.info(
             "login attempt email_norm=%s user_found=%s",
             email_key,
-            user is not None,
+            row is not None,
         )
 
-    if not user:
+    if not row or not row.get("active"):
+        record_auth_event(
+            event_type=EVENT_LOGIN_FAILURE,
+            email=email_key,
+            user_id=(row or {}).get("id"),
+            success=False,
+            ip=ip,
+            user_agent=ua,
+            detail={"reason": "not_found_or_inactive"},
+        )
         raise HTTPException(status_code=401, detail="Credenciales inválidas")
 
-    password_hash, role = user
-    stored = password_hash
-    ok = _password_matches(data.password, stored)
+    stored = row["password_hash"]
+    ok, kind = verify_password(data.password, stored)
+
+    if kind == "legacy_plain" and not allow_legacy_plaintext():
+        ok = False
 
     if _LOGIN_DEBUG:
-        kind = "bcrypt" if stored and _looks_like_bcrypt_hash(stored.strip()) else "legacy_plain"
         logger.info("login password check ok=%s storage_kind=%s", ok, kind)
 
     if not ok:
+        record_auth_event(
+            event_type=EVENT_LOGIN_FAILURE,
+            email=email_key,
+            user_id=row["id"],
+            success=False,
+            ip=ip,
+            user_agent=ua,
+            detail={"reason": "bad_password"},
+        )
         raise HTTPException(status_code=401, detail="Password incorrecta")
 
-    token = create_staff_token(email=data.email, role=role)
+    if kind == "legacy_plain" and should_upgrade_legacy_on_login():
+        # Nunca loguear la contraseña; solo el resultado de la actualización.
+        new_hash = hash_password(data.password)
+        if upgrade_legacy_password(
+            user_id=row["id"], new_hash=new_hash, previous_stored=stored
+        ):
+            record_auth_event(
+                event_type=EVENT_LEGACY_PASSWORD_UPGRADED,
+                email=email_key,
+                user_id=row["id"],
+                success=True,
+                ip=ip,
+                user_agent=ua,
+            )
+
+    company_ids = load_user_company_ids(row["id"])
+    if company_ids is not None and len(company_ids) == 0:
+        record_auth_event(
+            event_type=EVENT_LOGIN_FAILURE,
+            email=email_key,
+            user_id=row["id"],
+            success=False,
+            ip=ip,
+            user_agent=ua,
+            detail={"reason": "no_companies"},
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="Usuario sin empresas autorizadas; contacte a administración",
+        )
+
+    role = row["role"]
+    token = create_staff_token(
+        email=data.email.strip(),
+        role=role,
+        user_id=row["id"],
+        token_version=int(row.get("token_version") or 0),
+        company_ids=company_ids,
+    )
+
+    record_auth_event(
+        event_type=EVENT_LOGIN_SUCCESS,
+        email=email_key,
+        user_id=row["id"],
+        success=True,
+        ip=ip,
+        user_agent=ua,
+        detail={"storage_kind": kind},
+    )
 
     return {
         "token": token,
-        "email": data.email,
-        "role": role
+        "email": data.email.strip(),
+        "role": role,
+        "id": row["id"],
     }
 
 

@@ -74,9 +74,23 @@ def create_staff_token(
     *,
     email: str,
     role: str,
+    user_id: int | None = None,
+    token_version: int | None = None,
+    company_ids: list[int] | None = None,
     extra: dict[str, Any] | None = None,
 ) -> str:
+    """Emite JWT staff. ``user_id`` / ``token_version`` / ``company_ids`` son opcionales
+    (compatibles con tokens antiguos). La expiración sigue gobernada por ``JWT_EXPIRE_MINUTES``.
+    """
     payload: dict[str, Any] = {"email": email, "role": role}
+    if user_id is not None:
+        uid = int(user_id)
+        payload["uid"] = uid
+        payload["id"] = uid
+    if token_version is not None:
+        payload["tv"] = int(token_version)
+    if company_ids is not None:
+        payload["company_ids"] = [int(c) for c in company_ids]
     if extra:
         payload.update(extra)
     minutes = token_lifetime_minutes()

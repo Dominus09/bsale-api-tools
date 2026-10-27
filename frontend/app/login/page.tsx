@@ -25,6 +25,9 @@ export default function LoginPage() {
       localStorage.setItem("token", response.token)
       localStorage.setItem("email", response.email)
       localStorage.setItem("role", response.role)
+      if (typeof response.id === "number" && Number.isFinite(response.id)) {
+        localStorage.setItem("user_id", String(response.id))
+      }
       window.location.href = "/company-selector"
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error al iniciar sesión")
