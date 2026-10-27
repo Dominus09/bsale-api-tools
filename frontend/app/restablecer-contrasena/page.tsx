@@ -1,7 +1,8 @@
 "use client"
 
-import { useState } from "react"
+import { Suspense, useEffect, useState } from "react"
 import Link from "next/link"
+import { useSearchParams } from "next/navigation"
 import { Loader2 } from "lucide-react"
 
 import { consumePasswordReset } from "@/lib/admin-users-api"
@@ -10,13 +11,19 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
-export default function RestablecerContrasenaPage() {
+function RestablecerForm() {
+  const searchParams = useSearchParams()
   const [token, setToken] = useState("")
   const [password, setPassword] = useState("")
   const [confirm, setConfirm] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [doneEmail, setDoneEmail] = useState<string | null>(null)
+
+  useEffect(() => {
+    const fromQuery = searchParams.get("token")
+    if (fromQuery) setToken(fromQuery)
+  }, [searchParams])
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -29,10 +36,21 @@ export default function RestablecerContrasenaPage() {
       setError("La contraseña debe tener al menos 10 caracteres")
       return
     }
+    if (!token.trim()) {
+      setError("Falta el token de un solo uso")
+      return
+    }
     setBusy(true)
     try {
       const res = await consumePasswordReset(token.trim(), password)
       setDoneEmail(res.email)
+      setToken("")
+      setPassword("")
+      setConfirm("")
+      // Limpiar token de la barra de dirección sin recargar.
+      if (typeof window !== "undefined" && window.history.replaceState) {
+        window.history.replaceState({}, "", "/restablecer-contrasena")
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "No se pudo restablecer")
     } finally {
@@ -41,72 +59,89 @@ export default function RestablecerContrasenaPage() {
   }
 
   return (
-    <div className="flex min-h-dvh flex-col items-center justify-center bg-background px-4 py-8">
-      <Card className="w-full max-w-md">
-        <CardHeader className="text-center">
-          <CardTitle className="text-2xl font-bold">Restablecer contraseña</CardTitle>
-          <CardDescription>
-            Use el token de un solo uso entregado por administración. No comparta este valor.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {doneEmail ? (
-            <div className="space-y-4 text-center text-sm">
-              <p className="text-lq-ink">
-                Contraseña actualizada para <strong>{doneEmail}</strong>.
-              </p>
-              <Button asChild className="w-full">
-                <Link href="/login">Ir a iniciar sesión</Link>
-              </Button>
+    <Card className="w-full max-w-md border-lq-line bg-lq-surface shadow-none">
+      <CardHeader className="text-center">
+        <CardTitle className="text-2xl font-bold tracking-[-0.02em]">Restablecer contraseña</CardTitle>
+        <CardDescription>
+          Defina una contraseña nueva con el enlace o token entregado por administración.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {doneEmail ? (
+          <div className="space-y-4 text-center text-sm">
+            <p className="text-lq-ink">
+              Contraseña actualizada para <strong>{doneEmail}</strong>.
+            </p>
+            <Button asChild className="w-full">
+              <Link href="/login">Ir a iniciar sesión</Link>
+            </Button>
+          </div>
+        ) : (
+          <form onSubmit={onSubmit} className="space-y-4">
+            {error ? (
+              <div role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
+                {error}
+              </div>
+            ) : null}
+            <div className="space-y-2">
+              <Label htmlFor="token">Token</Label>
+              <Input
+                id="token"
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                required
+                disabled={busy}
+                autoComplete="off"
+              />
             </div>
-          ) : (
-            <form onSubmit={onSubmit} className="space-y-4">
-              {error ? (
-                <div className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{error}</div>
-              ) : null}
-              <div className="space-y-2">
-                <Label htmlFor="token">Token</Label>
-                <Input
-                  id="token"
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  required
-                  disabled={busy}
-                  autoComplete="off"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="np">Nueva contraseña</Label>
-                <Input
-                  id="np"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  disabled={busy}
-                  autoComplete="new-password"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="cp">Confirmar</Label>
-                <Input
-                  id="cp"
-                  type="password"
-                  value={confirm}
-                  onChange={(e) => setConfirm(e.target.value)}
-                  required
-                  disabled={busy}
-                  autoComplete="new-password"
-                />
-              </div>
-              <Button type="submit" className="w-full" disabled={busy}>
-                {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                Guardar contraseña
-              </Button>
-            </form>
-          )}
-        </CardContent>
-      </Card>
+            <div className="space-y-2">
+              <Label htmlFor="np">Nueva contraseña</Label>
+              <Input
+                id="np"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                disabled={busy}
+                autoComplete="new-password"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="cp">Confirmar</Label>
+              <Input
+                id="cp"
+                type="password"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                required
+                disabled={busy}
+                autoComplete="new-password"
+              />
+            </div>
+            <Button type="submit" className="w-full" disabled={busy}>
+              {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              Guardar contraseña
+            </Button>
+          </form>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+export default function RestablecerContrasenaPage() {
+  return (
+    <div className="flex min-h-dvh flex-col items-center justify-center bg-lq-canvas px-4 py-8">
+      <Suspense
+        fallback={
+          <div className="flex items-center gap-2 text-sm text-lq-muted">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Cargando…
+          </div>
+        }
+      >
+        <RestablecerForm />
+      </Suspense>
     </div>
   )
 }

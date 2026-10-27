@@ -99,6 +99,28 @@ def test_roles_catalog_has_assignable_only():
     assert cat.get("hierarchy") == ["OWNER", "GERENCIA", "ADM", "OPERATIVO"]
 
 
+def test_create_password_token_includes_one_time_path(monkeypatch):
+    from urllib.parse import unquote
+
+    expires = datetime.now(timezone.utc) + timedelta(hours=24)
+    cur = _Cur(
+        [
+            ("rowcount", 1),  # invalidate previous
+            ("one", (11, expires)),  # insert returning
+        ]
+    )
+    monkeypatch.setattr(svc, "_table_exists", lambda *_a, **_k: True)
+    out = svc._create_password_token(cur, user_id=5, purpose="reset", created_by=1)
+    assert out["token_id"] == 11
+    assert out["purpose"] == "reset"
+    assert out["one_time_token"]
+    # SQL recibe hash, no el token en claro como texto de consulta
+    assert all(out["one_time_token"] not in (sql or "") for sql, _ in cur.executed)
+    assert out["one_time_path"].startswith("/restablecer-contrasena?token=")
+    q = out["one_time_path"].split("token=", 1)[1]
+    assert unquote(q) == out["one_time_token"]
+
+
 def test_consume_password_token_rejects_reuse(monkeypatch):
     past_used = datetime.now(timezone.utc)
     conn, cur = _conn(

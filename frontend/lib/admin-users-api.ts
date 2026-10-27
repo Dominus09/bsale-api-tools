@@ -28,6 +28,8 @@ export type AdminDeliveryPayload = {
   purpose: string
   expires_at: string
   one_time_token: string
+  /** Ruta relativa con token; el cliente antepone origin. */
+  one_time_path?: string
   delivery_hint: string
 }
 
@@ -177,11 +179,34 @@ export async function fetchAdminAuthEvents(params?: {
   return parseJson(res)
 }
 
-export async function consumePasswordReset(token: string, newPassword: string): Promise<{ ok: boolean; email: string }> {
-  const res = await fetch(`${API_URL}/auth/password-reset/consume`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token, new_password: newPassword }),
-  })
-  return parseJson(res)
+/** Consumo público: no forzar logout ante 401 (el titular aún no tiene sesión). */
+export async function consumePasswordReset(
+  token: string,
+  newPassword: string,
+): Promise<{ ok: boolean; email: string }> {
+  let res: Response
+  try {
+    res = await fetch(`${API_URL}/auth/password-reset/consume`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, new_password: newPassword }),
+    })
+  } catch {
+    throw new AdminUsersApiError(0, "No se pudo conectar con el servidor. Intente nuevamente.")
+  }
+  const text = await res.text()
+  let data: unknown = null
+  try {
+    data = text ? JSON.parse(text) : null
+  } catch {
+    data = null
+  }
+  if (!res.ok) {
+    const detail =
+      data && typeof data === "object" && data !== null && "detail" in data
+        ? String((data as { detail: unknown }).detail)
+        : text || `Error HTTP ${res.status}`
+    throw new AdminUsersApiError(res.status, detail)
+  }
+  return data as { ok: boolean; email: string }
 }

@@ -12,6 +12,7 @@ import {
   type AdminUserRow,
 } from "@/lib/admin-users-api"
 import { OwnerBadge } from "@/components/admin/owner-badge"
+import { PasswordDeliveryDialog } from "@/components/admin/password-delivery-dialog"
 import { formatChileDateTime, roleLabel, staffRoleDisplay } from "@/lib/admin-users-format"
 import { SectionCard, StatusBadge } from "@/components/analytics-v2/shared/analytics-ui"
 import { Button } from "@/components/ui/button"
@@ -66,11 +67,14 @@ export function UserAdminSheet({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [delivery, setDelivery] = useState<AdminDeliveryPayload | null>(null)
+  const [deliveryOpen, setDeliveryOpen] = useState(false)
+  const [deliveryEmail, setDeliveryEmail] = useState<string | null>(null)
+  const [deliveryTitle, setDeliveryTitle] = useState("Enlace de acceso (una sola vez)")
 
+  // Solo reinicia el formulario al abrir o cambiar de usuario — no al refrescar catálogos.
   useEffect(() => {
     if (!open) return
     setError(null)
-    setDelivery(null)
     setPassword("")
     if (mode === "create") {
       setNombre("")
@@ -88,7 +92,8 @@ export function UserAdminSheet({
       setActive(user.active)
       setCompanyIds(user.companies.map((c) => c.company_id))
     }
-  }, [open, mode, user, assignableRoles])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- no resetear por assignableRoles (borraba el delivery)
+  }, [open, mode, user?.id])
 
   const title = mode === "create" ? "Nuevo usuario" : user?.nombre_usuario || user?.email || "Usuario"
 
@@ -101,6 +106,13 @@ export function UserAdminSheet({
 
   function toggleCompany(id: number) {
     setCompanyIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+  }
+
+  function showDelivery(payload: AdminDeliveryPayload, forEmail: string, titleText: string) {
+    setDelivery(payload)
+    setDeliveryEmail(forEmail)
+    setDeliveryTitle(titleText)
+    setDeliveryOpen(true)
   }
 
   async function handleSave() {
@@ -125,8 +137,16 @@ export function UserAdminSheet({
           invite,
           password: invite ? null : password,
         })
-        if (created.delivery) setDelivery(created.delivery)
         onSaved()
+        if (created.delivery) {
+          showDelivery(
+            created.delivery,
+            created.email || email,
+            "Invitación segura (una sola vez)",
+          )
+        } else {
+          onOpenChange(false)
+        }
       } else if (user) {
         await updateAdminUser(user.id, {
           email,
@@ -151,7 +171,11 @@ export function UserAdminSheet({
     setError(null)
     try {
       const res = await resetAdminUserPassword(user.id)
-      setDelivery(res.delivery)
+      if (!res.delivery?.one_time_token) {
+        setError("El servidor no devolvió un enlace de restablecimiento")
+        return
+      }
+      showDelivery(res.delivery, res.email || user.email, "Restablecer contraseña (una sola vez)")
       onSaved()
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo emitir el restablecimiento")
@@ -161,177 +185,184 @@ export function UserAdminSheet({
   }
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-full overflow-y-auto border-l-lq-line bg-lq-canvas p-0 sm:max-w-[min(560px,94vw)]">
-        <SheetHeader className="sticky top-0 z-20 border-b border-lq-line bg-lq-surface/95 px-5 py-4 backdrop-blur md:px-6">
-          <SheetTitle className="flex flex-wrap items-center gap-2 pr-8 text-xl tracking-[-0.015em]">
-            {title}
-            {lockedOwner ? <OwnerBadge /> : null}
-          </SheetTitle>
-          <SheetDescription>
-            {mode === "create"
-              ? "Alta de cuenta staff ERP. La contraseña actual nunca se muestra."
-              : lockedOwner
-                ? "Cuenta OWNER: no se modifica desde este panel."
-                : `Rol actual: ${staffRoleDisplay(user?.role, user?.is_owner)} · Último ingreso: ${formatChileDateTime(user?.last_login_at)}`}
-          </SheetDescription>
-        </SheetHeader>
+    <>
+      <Sheet
+        open={open}
+        onOpenChange={(next) => {
+          // No cerrar la ficha mientras el diálogo de entrega está abierto.
+          if (!next && deliveryOpen) return
+          onOpenChange(next)
+        }}
+      >
+        <SheetContent side="right" className="w-full overflow-y-auto border-l-lq-line bg-lq-canvas p-0 sm:max-w-[min(560px,94vw)]">
+          <SheetHeader className="sticky top-0 z-20 border-b border-lq-line bg-lq-surface/95 px-5 py-4 backdrop-blur md:px-6">
+            <SheetTitle className="flex flex-wrap items-center gap-2 pr-8 text-xl tracking-[-0.015em]">
+              {title}
+              {lockedOwner ? <OwnerBadge /> : null}
+            </SheetTitle>
+            <SheetDescription>
+              {mode === "create"
+                ? "Alta de cuenta staff ERP. La contraseña actual nunca se muestra."
+                : lockedOwner
+                  ? "Cuenta OWNER: no se modifica desde este panel."
+                  : `Rol actual: ${staffRoleDisplay(user?.role, user?.is_owner)} · Último ingreso: ${formatChileDateTime(user?.last_login_at)}`}
+            </SheetDescription>
+          </SheetHeader>
 
-        <div className="space-y-4 px-5 py-5 md:px-6">
-          {error ? (
-            <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              {error}
-            </div>
-          ) : null}
-
-          {delivery ? (
-            <SectionCard
-              title="Entrega segura (una sola vez)"
-              description={delivery.delivery_hint}
-            >
-              <p className="text-xs text-lq-muted">Caduca: {formatChileDateTime(delivery.expires_at)}</p>
-              <p className="mt-2 break-all rounded-md border border-lq-line bg-lq-canvas px-3 py-2 font-mono text-xs text-lq-ink">
-                {delivery.one_time_token}
-              </p>
-              <p className="mt-2 text-xs text-lq-faint">
-                Enlace sugerido: /restablecer-contrasena (el titular pega el token allí). No registre este valor en tickets ni logs.
-              </p>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="mt-3"
-                onClick={() => navigator.clipboard?.writeText(delivery.one_time_token)}
+          <div className="space-y-4 px-5 py-5 md:px-6">
+            {error ? (
+              <div
+                role="alert"
+                className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
               >
-                Copiar token
-              </Button>
-            </SectionCard>
-          ) : null}
+                {error}
+              </div>
+            ) : null}
 
-          <SectionCard title="Datos" description="Nombre y correo de acceso al ERP.">
-            <div className="space-y-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="ua-nombre">Nombre</Label>
-                <Input
-                  id="ua-nombre"
-                  value={nombre}
-                  onChange={(e) => setNombre(e.target.value)}
-                  disabled={!allowMutate || busy}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="ua-email">Correo</Label>
-                <Input
-                  id="ua-email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  disabled={!allowMutate || busy}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Rol</Label>
-                <Select value={role} onValueChange={setRole} disabled={!allowMutate || busy}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {assignableRoles.map((r) => (
-                      <SelectItem key={r} value={r}>
-                        {roleLabel(r)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              {mode === "view" ? (
-                <div className="flex items-center gap-2 pt-1">
-                  <Checkbox
-                    id="ua-active"
-                    checked={active}
-                    onCheckedChange={(v) => setActive(v === true)}
+            <SectionCard title="Datos" description="Nombre y correo de acceso al ERP.">
+              <div className="space-y-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="ua-nombre">Nombre</Label>
+                  <Input
+                    id="ua-nombre"
+                    value={nombre}
+                    onChange={(e) => setNombre(e.target.value)}
                     disabled={!allowMutate || busy}
                   />
-                  <Label htmlFor="ua-active">Cuenta activa</Label>
-                  <StatusBadge tone={active ? "success" : "neutral"}>{active ? "Activa" : "Inactiva"}</StatusBadge>
                 </div>
-              ) : null}
-            </div>
-          </SectionCard>
-
-          <SectionCard title="Empresas autorizadas" description={companiesLabel}>
-            <div className="max-h-48 space-y-2 overflow-y-auto">
-              {companiesCatalog.length === 0 ? (
-                <p className="text-sm text-lq-muted">No hay empresas en catálogo.</p>
-              ) : (
-                companiesCatalog.map((c) => (
-                  <label key={c.company_id} className="flex items-center gap-2 text-sm text-lq-ink">
+                <div className="space-y-1.5">
+                  <Label htmlFor="ua-email">Correo</Label>
+                  <Input
+                    id="ua-email"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    disabled={!allowMutate || busy}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Rol</Label>
+                  <Select value={role} onValueChange={setRole} disabled={!allowMutate || busy}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {assignableRoles.map((r) => (
+                        <SelectItem key={r} value={r}>
+                          {roleLabel(r)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {mode === "view" ? (
+                  <div className="flex items-center gap-2 pt-1">
                     <Checkbox
-                      checked={companyIds.includes(c.company_id)}
-                      onCheckedChange={() => toggleCompany(c.company_id)}
+                      id="ua-active"
+                      checked={active}
+                      onCheckedChange={(v) => setActive(v === true)}
                       disabled={!allowMutate || busy}
                     />
-                    <span>
-                      {c.name || `Empresa ${c.company_id}`}{" "}
-                      <span className="text-lq-faint">#{c.company_id}</span>
-                    </span>
-                  </label>
-                ))
-              )}
-            </div>
-            <p className="mt-2 text-xs text-lq-faint">
-              Requiere migración 061. AUTH_REQUIRE_USER_COMPANIES permanece desactivado hasta validar todas las cuentas.
-            </p>
-          </SectionCard>
-
-          {mode === "create" ? (
-            <SectionCard title="Credenciales" description="Nunca se muestra una contraseña existente.">
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  id="ua-invite"
-                  checked={invite}
-                  onCheckedChange={(v) => setInvite(v === true)}
-                  disabled={!allowMutate || busy}
-                />
-                <Label htmlFor="ua-invite">Invitación segura (token de un solo uso)</Label>
+                    <Label htmlFor="ua-active">Cuenta activa</Label>
+                    <StatusBadge tone={active ? "success" : "neutral"}>{active ? "Activa" : "Inactiva"}</StatusBadge>
+                  </div>
+                ) : null}
               </div>
-              {!invite ? (
-                <div className="mt-3 space-y-1.5">
-                  <Label htmlFor="ua-pass">Contraseña inicial (mín. 10)</Label>
-                  <Input
-                    id="ua-pass"
-                    type="password"
-                    autoComplete="new-password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
+            </SectionCard>
+
+            <SectionCard title="Empresas autorizadas" description={companiesLabel}>
+              <div className="max-h-48 space-y-2 overflow-y-auto">
+                {companiesCatalog.length === 0 ? (
+                  <p className="text-sm text-lq-muted">No hay empresas en catálogo.</p>
+                ) : (
+                  companiesCatalog.map((c) => (
+                    <label key={c.company_id} className="flex items-center gap-2 text-sm text-lq-ink">
+                      <Checkbox
+                        checked={companyIds.includes(c.company_id)}
+                        onCheckedChange={() => toggleCompany(c.company_id)}
+                        disabled={!allowMutate || busy}
+                      />
+                      <span>
+                        {c.name || `Empresa ${c.company_id}`}{" "}
+                        <span className="text-lq-faint">#{c.company_id}</span>
+                      </span>
+                    </label>
+                  ))
+                )}
+              </div>
+              <p className="mt-2 text-xs text-lq-faint">
+                Requiere migración 061. AUTH_REQUIRE_USER_COMPANIES permanece desactivado hasta validar todas las cuentas.
+              </p>
+            </SectionCard>
+
+            {mode === "create" ? (
+              <SectionCard title="Credenciales" description="Nunca se muestra una contraseña existente.">
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="ua-invite"
+                    checked={invite}
+                    onCheckedChange={(v) => setInvite(v === true)}
                     disabled={!allowMutate || busy}
                   />
+                  <Label htmlFor="ua-invite">Invitación segura (enlace de un solo uso)</Label>
                 </div>
-              ) : null}
-            </SectionCard>
-          ) : null}
+                {!invite ? (
+                  <div className="mt-3 space-y-1.5">
+                    <Label htmlFor="ua-pass">Contraseña inicial (mín. 10)</Label>
+                    <Input
+                      id="ua-pass"
+                      type="password"
+                      autoComplete="new-password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      disabled={!allowMutate || busy}
+                    />
+                  </div>
+                ) : null}
+              </SectionCard>
+            ) : null}
 
-          {allowMutate ? (
-            <div className="flex flex-wrap gap-2 border-t border-lq-line pt-4">
-              <Button type="button" onClick={handleSave} disabled={busy}>
-                {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                {mode === "create" ? "Crear usuario" : "Guardar cambios"}
-              </Button>
-              {mode === "view" && user ? (
-                <Button type="button" variant="outline" onClick={handleReset} disabled={busy || !user.active}>
-                  Restablecer contraseña
+            {allowMutate ? (
+              <div className="flex flex-wrap gap-2 border-t border-lq-line pt-4">
+                <Button type="button" onClick={() => void handleSave()} disabled={busy}>
+                  {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  {mode === "create" ? "Crear usuario" : "Guardar cambios"}
                 </Button>
-              ) : null}
-            </div>
-          ) : (
-            <p className="text-sm text-lq-muted">
-              {lockedOwner
-                ? "Cuenta OWNER protegida: use el procedimiento de recuperación documentado."
-                : "Solo lectura: las mutaciones requieren autorización explícita."}
-            </p>
-          )}
-        </div>
-      </SheetContent>
-    </Sheet>
+                {mode === "view" && user ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void handleReset()}
+                    disabled={busy || !user.active}
+                  >
+                    Restablecer contraseña
+                  </Button>
+                ) : null}
+              </div>
+            ) : (
+              <p className="text-sm text-lq-muted">
+                {lockedOwner
+                  ? "Cuenta OWNER protegida: use el procedimiento de recuperación documentado."
+                  : "Solo lectura: las mutaciones requieren autorización explícita."}
+              </p>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      <PasswordDeliveryDialog
+        open={deliveryOpen}
+        onOpenChange={(next) => {
+          setDeliveryOpen(next)
+          if (!next) {
+            setDelivery(null)
+            setDeliveryEmail(null)
+          }
+        }}
+        delivery={delivery}
+        title={deliveryTitle}
+        email={deliveryEmail}
+      />
+    </>
   )
 }

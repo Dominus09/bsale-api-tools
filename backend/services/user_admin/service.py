@@ -7,6 +7,7 @@ import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import HTTPException
 
@@ -634,13 +635,15 @@ def _create_password_token(
     )
     tid, exp = cur.fetchone()
     # El valor en claro SOLO sale aquí; no se audita ni se lista.
+    path = f"/restablecer-contrasena?token={quote(raw, safe='')}"
     return {
         "token_id": int(tid),
         "purpose": purpose,
         "expires_at": exp.isoformat() if hasattr(exp, "isoformat") else str(exp),
         "one_time_token": raw,
+        "one_time_path": path,
         "delivery_hint": (
-            "Entregue este token al titular por un canal seguro. "
+            "Entregue el enlace de un solo uso al titular por un canal seguro. "
             "No se volverá a mostrar. Caduca en 24 horas."
         ),
     }
