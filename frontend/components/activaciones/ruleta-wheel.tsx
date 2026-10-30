@@ -16,10 +16,10 @@ const R_RIM_MID = 486
 const R_RIM_INNER = 472
 const R_DISK = 468
 const R_INNER = 168
-/** Plato blanco fijo: cubre el hueco interior + solape anti-bleed. */
-const R_HUB_COVER = R_INNER + 20
-/** Logo ocupa casi todo el plato (PNG ya incluye su aro rojo propio). */
-const R_HUB_LOGO = R_HUB_COVER - 2
+/** Único plato blanco fijo: tapa uniones de sectores. */
+const R_HUB_COVER = R_INNER + 22
+/** Emblema original (rojo/transparente) inset dentro del plato blanco. */
+const R_HUB_LOGO = Math.round(R_HUB_COVER * 0.78)
 const R_LABEL = 312
 const R_ICON = 405
 /** Separación vertical entre líneas cuando el % es grande (evita solape 5%/3%/10%). */
@@ -345,11 +345,10 @@ export function RuletaWheel({
           ))}
         </g>
 
-        {/* Centro fijo: un solo plato blanco + un solo logo original */}
+        {/* Centro fijo: 1 círculo blanco opaco + 1 PNG original (no gira) */}
         <circle cx={CX} cy={CY} r={R_HUB_COVER} fill="#ffffff" />
         <image
           href={RULETA_HUB_LOGO_SRC}
-          xlinkHref={RULETA_HUB_LOGO_SRC}
           x={CX - R_HUB_LOGO}
           y={CY - R_HUB_LOGO}
           width={R_HUB_LOGO * 2}
