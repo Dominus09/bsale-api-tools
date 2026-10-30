@@ -35,7 +35,7 @@ function randomSpinDurationMs(): number {
 }
 
 /**
- * Alinea el centro del sector (midDeg) con el indicador fijo inferior (180°).
+ * Alinea el centro del sector (midDeg en coordenadas de la foto) con el indicador fijo inferior (180°).
  * midDeg + rotación ≡ 180 (mod 360). Siempre avanza en sentido horario.
  */
 function targetRotationForMid(midDeg: number, currentRotation: number): number {
@@ -47,28 +47,52 @@ function targetRotationForMid(midDeg: number, currentRotation: number): number {
   return currentRotation + delta + extraTurns * 360
 }
 
-function computeWheelSize(stage: HTMLElement | null, fullscreen: boolean): number {
-  if (typeof window === "undefined") return 640
-  const vw = window.innerWidth
-  const vh = window.innerHeight
-  const rect = stage?.getBoundingClientRect()
-  const availW = rect?.width ? rect.width - 24 : vw - 32
-  const headerReserve = fullscreen ? vh * 0.12 : vh * 0.22
-  const availH = Math.max(280, (rect?.height || vh) - headerReserve)
-  if (fullscreen) {
-    return Math.floor(Math.min(availW * 0.94, availH * 0.9, Math.min(vw, vh) * 0.9))
+/**
+ * Diámetro máximo 1:1 sin cortes.
+ * `wheelCol` ya está bajo el header: solo reservamos puntero + botón + gaps dentro de esa columna.
+ */
+function computeWheelSize(opts: {
+  stage: HTMLElement | null
+  wheelCol: HTMLElement | null
+  fullscreen: boolean
+  adminOpen: boolean
+}): number {
+  if (typeof window === "undefined") return 560
+  const { stage, wheelCol, fullscreen, adminOpen } = opts
+  const vv = window.visualViewport
+  const vw = vv?.width ?? window.innerWidth
+  const vh = vv?.height ?? window.innerHeight
+  const stageRect = stage?.getBoundingClientRect()
+  const colRect = wheelCol?.getBoundingClientRect()
+
+  const stageW = stageRect?.width || vw
+  const stageH = stageRect?.height || vh
+
+  const buttonH = fullscreen ? 72 : 90
+  const pointerReserve = 42
+  const gap = fullscreen ? 10 : 14
+  const padX = fullscreen ? 12 : 20
+  const legendReserve = !fullscreen && !adminOpen ? 12 : 0
+
+  let availW = (colRect?.width && colRect.width > 40 ? colRect.width : stageW) - padX
+
+  let availH: number
+  if (colRect && colRect.height > 120) {
+    availH = colRect.height - buttonH - pointerReserve - gap * 2 - legendReserve
+  } else {
+    const headerH = fullscreen ? 56 : 92
+    availH = stageH - headerH - buttonH - pointerReserve - gap * 3 - legendReserve
   }
-  if (vw >= 1100) {
-    return Math.floor(Math.min(availW * 0.88, availH * 0.88, 900))
-  }
-  if (vw >= 768) {
-    return Math.floor(Math.min(availW * 0.94, availH * 0.82, 760))
-  }
-  return Math.floor(Math.min(availW * 0.96, availH * 0.68, 480))
+
+  const side = Math.floor(Math.min(availW, Math.max(availH, 200), Math.min(vw, vh) * 0.94))
+  const minSide = 220
+  const maxSide = fullscreen ? 1040 : 860
+  return Math.max(minSide, Math.min(side, maxSide))
 }
 
 export default function RuletaQuillotanaPage() {
   const stageRef = useRef<HTMLDivElement>(null)
+  const wheelColRef = useRef<HTMLDivElement>(null)
   const [config, setConfig] = useState<RuletaLocalConfig>(() => defaultConfig())
   const [hydrated, setHydrated] = useState(false)
   const [rotation, setRotation] = useState(0)
@@ -78,7 +102,7 @@ export default function RuletaQuillotanaPage() {
   const [showResult, setShowResult] = useState(false)
   const [spinCount, setSpinCount] = useState(0)
   const [isFullscreen, setIsFullscreen] = useState(false)
-  const [wheelSize, setWheelSize] = useState(720)
+  const [wheelSize, setWheelSize] = useState(560)
   const [adminOpen, setAdminOpen] = useState(false)
   const pendingWinner = useRef<ActiveSlot | null>(null)
   const rotationRef = useRef(0)
@@ -100,21 +124,32 @@ export default function RuletaQuillotanaPage() {
   }, [rotation])
 
   const refreshSize = useCallback(() => {
-    setWheelSize(computeWheelSize(stageRef.current, isFullscreen))
-  }, [isFullscreen])
+    setWheelSize(
+      computeWheelSize({
+        stage: stageRef.current,
+        wheelCol: wheelColRef.current,
+        fullscreen: isFullscreen,
+        adminOpen,
+      }),
+    )
+  }, [isFullscreen, adminOpen])
 
   useEffect(() => {
     refreshSize()
     const el = stageRef.current
+    const col = wheelColRef.current
     const ro =
-      typeof ResizeObserver !== "undefined" && el ? new ResizeObserver(() => refreshSize()) : null
+      typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => refreshSize()) : null
     if (el && ro) ro.observe(el)
+    if (col && ro) ro.observe(col)
     window.addEventListener("resize", refreshSize)
     window.addEventListener("orientationchange", refreshSize)
+    window.visualViewport?.addEventListener("resize", refreshSize)
     return () => {
       ro?.disconnect()
       window.removeEventListener("resize", refreshSize)
       window.removeEventListener("orientationchange", refreshSize)
+      window.visualViewport?.removeEventListener("resize", refreshSize)
     }
   }, [refreshSize])
 
@@ -141,7 +176,8 @@ export default function RuletaQuillotanaPage() {
 
   const spin = useCallback(() => {
     if (spinning) return
-    const index = pickUniformSlotIndex()
+    // Sorteo uniforme 1/9 por sector (CSPRNG). Sustituciones no alteran la probabilidad.
+    const index = pickUniformSlotIndex(RULETA_SEGMENTS.length)
     const segment = slots[index]
     if (!segment) return
     pendingWinner.current = segment
@@ -181,7 +217,7 @@ export default function RuletaQuillotanaPage() {
         !window.confirm(
           override === "original"
             ? `¿Restaurar casilla "${base.label}" a su premio original?`
-            : `¿Sustituir "${base.label}" por "${label}"?\nEl tamaño de la casilla (40°) no cambia.`,
+            : `¿Sustituir "${base.label}" por "${label}"?\nEl tamaño de la casilla (40° · 1/9) no cambia.`,
         )
       ) {
         return
@@ -216,9 +252,15 @@ export default function RuletaQuillotanaPage() {
     <div
       ref={stageRef}
       className={cn(
-        "relative overflow-hidden bg-[#0b0612] text-amber-50",
-        isFullscreen ? "min-h-dvh rounded-none" : "min-h-[calc(100dvh-4rem)] rounded-xl",
+        "relative bg-[#0b0612] text-amber-50",
+        isFullscreen
+          ? "flex h-dvh max-h-dvh flex-col overflow-hidden rounded-none"
+          : "min-h-[calc(100dvh-4rem)] overflow-x-hidden rounded-xl",
       )}
+      style={{
+        paddingBottom: "env(safe-area-inset-bottom, 0px)",
+        paddingTop: isFullscreen ? "env(safe-area-inset-top, 0px)" : undefined,
+      }}
     >
       <div
         aria-hidden
@@ -235,13 +277,13 @@ export default function RuletaQuillotanaPage() {
 
       <div
         className={cn(
-          "relative z-10 mx-auto flex w-full flex-col",
-          isFullscreen ? "max-w-none gap-3 px-3 py-3" : "max-w-7xl gap-4 px-3 py-4 sm:px-5 lg:px-6",
+          "relative z-10 mx-auto flex w-full min-h-0 flex-1 flex-col",
+          isFullscreen ? "max-w-none gap-2 px-3 py-2" : "max-w-7xl gap-4 px-3 py-4 sm:px-5 lg:px-6",
         )}
       >
         <header
           className={cn(
-            "flex flex-wrap items-center justify-between gap-3",
+            "flex shrink-0 flex-wrap items-center justify-between gap-3",
             isFullscreen && "justify-center",
           )}
         >
@@ -251,7 +293,7 @@ export default function RuletaQuillotanaPage() {
               alt="Grupo Quillotana"
               className={cn(
                 "w-auto object-contain",
-                isFullscreen ? "h-10 sm:h-12" : "h-12 sm:h-14",
+                isFullscreen ? "h-9 sm:h-11" : "h-12 sm:h-14",
               )}
               draggable={false}
             />
@@ -312,13 +354,16 @@ export default function RuletaQuillotanaPage() {
 
         <div
           className={cn(
-            "grid items-start gap-4",
+            "grid min-h-0 flex-1 items-stretch gap-4",
             showChrome && adminOpen
-              ? "lg:grid-cols-[minmax(0,1fr)_minmax(300px,380px)]"
+              ? "lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]"
               : "grid-cols-1",
           )}
         >
-          <div className="flex min-w-0 flex-col items-center gap-4">
+          <div
+            ref={wheelColRef}
+            className="flex min-h-0 min-w-0 flex-col items-center justify-center gap-3 overflow-hidden"
+          >
             <RuletaWheel
               slots={slots}
               rotationDeg={rotation}
@@ -334,7 +379,7 @@ export default function RuletaQuillotanaPage() {
               disabled={spinning}
               onClick={spin}
               className={cn(
-                "h-16 min-w-[260px] rounded-full px-12 text-lg font-bold tracking-wide shadow-lg sm:min-w-[300px]",
+                "h-14 shrink-0 min-w-[240px] rounded-full px-10 text-lg font-bold tracking-wide shadow-lg sm:h-16 sm:min-w-[300px]",
                 "bg-gradient-to-b from-amber-400 to-orange-600 text-[#1a0a08]",
                 "hover:from-amber-300 hover:to-orange-500",
                 "disabled:cursor-not-allowed disabled:opacity-60",
@@ -345,14 +390,14 @@ export default function RuletaQuillotanaPage() {
               {spinning ? "Girando…" : "GIRAR RULETA"}
             </Button>
             {showChrome ? (
-              <p className="text-xs text-amber-100/50">
-                Giros en esta sesión: {spinCount} · cada casilla 40° (1/9)
+              <p className="shrink-0 text-xs text-amber-100/50">
+                Giros en esta sesión: {spinCount} · cada casilla 40° (probabilidad 1/9)
                 {spinning ? " · espera a que se detenga" : ""}
               </p>
             ) : null}
 
-            {showChrome ? (
-              <div className="w-full max-w-3xl rounded-2xl border border-white/10 bg-black/25 p-3">
+            {showChrome && !adminOpen ? (
+              <div className="w-full max-w-3xl shrink-0 rounded-2xl border border-white/10 bg-black/25 p-3">
                 <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-amber-400/70">
                   Leyenda
                 </p>
@@ -377,16 +422,16 @@ export default function RuletaQuillotanaPage() {
           </div>
 
           {showChrome && adminOpen ? (
-            <aside className="rounded-2xl border border-amber-500/25 bg-black/45 p-4 backdrop-blur-sm">
-              <h2 className="text-sm font-bold uppercase tracking-[0.16em] text-amber-300">
+            <aside className="flex max-h-[min(70dvh,720px)] min-h-0 flex-col overflow-hidden rounded-2xl border border-amber-500/25 bg-black/45 p-4 backdrop-blur-sm lg:max-h-[calc(100dvh-10rem)]">
+              <h2 className="shrink-0 text-sm font-bold uppercase tracking-[0.16em] text-amber-300">
                 Administración
               </h2>
-              <p className="mt-1 text-xs text-amber-100/60">
-                Sustituye premios agotados. Las 9 casillas siguen midiendo 40° cada una. Cambios
-                locales (localStorage).
+              <p className="mt-1 shrink-0 text-xs text-amber-100/60">
+                Sustituye premios agotados. Las 9 casillas siguen midiendo 40° y 1/9 cada una.
+                Cambios locales (localStorage).
               </p>
 
-              <div className="mt-4 space-y-3">
+              <div className="mt-4 min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain pr-1">
                 {slots.map((slot) => (
                   <div
                     key={slot.index}
@@ -428,7 +473,7 @@ export default function RuletaQuillotanaPage() {
                 variant="destructive"
                 disabled={spinning}
                 onClick={restoreOriginalRuleta}
-                className="mt-4 w-full"
+                className="mt-4 w-full shrink-0"
               >
                 Restaurar ruleta original
               </Button>

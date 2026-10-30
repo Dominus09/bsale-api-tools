@@ -46,6 +46,14 @@ const LEGACY_STORAGE_KEY = "quillotana.ruleta.q1.config.v1"
 
 export const RULETA_SLICE_DEG = 40
 
+/**
+ * Geometría relativa al radio del disco en la foto física (fracción de radius = size/2).
+ * Calibrada sobre ruleta-fisica-q1.jpg para no tapar emblema ni borde metálico.
+ */
+export const RULETA_HUB_DIAMETER_FRAC = 0.295
+export const RULETA_R_INNER_FRAC = 0.31
+export const RULETA_R_OUTER_FRAC = 0.875
+
 export const RULETA_SEGMENTS: readonly RuletaSegmentBase[] = [
   {
     index: 0,
@@ -220,15 +228,19 @@ export function clearConfigStorage(): void {
   window.localStorage.removeItem(LEGACY_STORAGE_KEY)
 }
 
-/** Nueve sectores fijos de 40°. La sustitución solo cambia texto, no el ángulo. */
+/**
+ * Nueve sectores fijos de 40° en coordenadas de la foto (antes de girar).
+ * La sustitución solo cambia el texto visible; el ángulo y la probabilidad (1/9) no cambian.
+ */
 export function buildActiveSlots(config: RuletaLocalConfig): ActiveSlot[] {
   const cfg = normalizeConfig(config)
   return RULETA_SEGMENTS.map((base, i) => {
     const override = cfg.overrides[i] ?? "original"
     const midDeg = slotVisualMidDeg(i)
     const half = RULETA_SLICE_DEG / 2
-    const startDeg = (midDeg - half + 360) % 360
-    const endDeg = (midDeg + half) % 360
+    // Ángulos en espacio de la foto; se permiten valores fuera de [0,360) para arcos contiguos.
+    const startDeg = midDeg - half
+    const endDeg = midDeg + half
     const display = resolveDisplay(base, override)
     return {
       ...base,

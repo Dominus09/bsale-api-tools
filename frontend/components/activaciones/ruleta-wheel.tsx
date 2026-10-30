@@ -3,10 +3,17 @@
 import { useMemo } from "react"
 
 import type { ActiveSlot } from "./ruleta-q1-segments"
-import { RULETA_SLICE_DEG } from "./ruleta-q1-segments"
+import {
+  RULETA_HUB_DIAMETER_FRAC,
+  RULETA_SLICE_DEG,
+  RULETA_R_INNER_FRAC,
+  RULETA_R_OUTER_FRAC,
+} from "./ruleta-q1-segments"
 
 /** Foto oficial de la ruleta física (textura que gira). Recorte cuadrado del disco. */
 export const RULETA_FISICA_SRC = "/activaciones/ruleta/ruleta-fisica-q1.jpg"
+/** Emblema circular original extraído del centro de la foto (capa fija). */
+export const RULETA_HUB_LOGO_SRC = "/activaciones/ruleta/quillotana-hub-logo.png"
 
 type RuletaWheelProps = {
   slots: ActiveSlot[]
@@ -22,18 +29,17 @@ function polar(cx: number, cy: number, r: number, angleDeg: number) {
   return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) }
 }
 
+/** Arco de sector en coordenadas de la foto (0° = arriba, horario). */
 function slicePath(
   cx: number,
   cy: number,
   rOuter: number,
   rInner: number,
   startDeg: number,
-  endDeg: number,
+  spanDeg: number,
 ) {
-  let span = endDeg - startDeg
-  if (span <= 0) span += 360
-  const absoluteEnd = startDeg + span
-  const large = span > 180 ? 1 : 0
+  const absoluteEnd = startDeg + spanDeg
+  const large = spanDeg > 180 ? 1 : 0
   const o0 = polar(cx, cy, rOuter, startDeg)
   const o1 = polar(cx, cy, rOuter, absoluteEnd)
   const i1 = polar(cx, cy, rInner, absoluteEnd)
@@ -57,20 +63,30 @@ export function RuletaWheel({
 }: RuletaWheelProps) {
   const cx = size / 2
   const cy = size / 2
-  const rOuter = size * 0.495
-  const rInner = size * 0.175
+  const radius = size / 2
+  const rOuter = radius * RULETA_R_OUTER_FRAC
+  const rInner = radius * RULETA_R_INNER_FRAC
   const labelR = (rOuter + rInner) / 2
-  const pointerW = Math.max(14, size * 0.04)
-  const pointerH = Math.max(24, size * 0.058)
+  const hubPx = size * RULETA_HUB_DIAMETER_FRAC
+  const pointerW = Math.max(14, size * 0.038)
+  const pointerH = Math.max(22, size * 0.055)
+  /** Inset angular para no tapar las divisiones blancas (~1° por lado). */
+  const edgeInset = 1.1
 
   const overlays = useMemo(
     () =>
       slots
         .filter((s) => s.override !== "original")
-        .map((slot) => ({
-          slot,
-          labelPos: polar(cx, cy, labelR, slot.midDeg),
-        })),
+        .map((slot) => {
+          const span = Math.max(1, slot.spanDeg - edgeInset * 2)
+          const start = slot.midDeg - span / 2
+          return {
+            slot,
+            startDeg: start,
+            spanDeg: span,
+            labelPos: polar(cx, cy, labelR, slot.midDeg),
+          }
+        }),
     [slots, cx, cy, labelR],
   )
 
@@ -80,13 +96,16 @@ export function RuletaWheel({
       style={{
         width: size,
         height: size,
-        maxWidth: "100%",
         position: "relative",
+        flexShrink: 0,
+        /* reserva visual del puntero sin cortarlo */
+        marginBottom: pointerH + 8,
         filter: spinning
           ? "drop-shadow(0 0 36px rgba(255,80,40,0.4))"
           : "drop-shadow(0 22px 50px rgba(0,0,0,0.55))",
       }}
     >
+      {/* Disco + overlays: única transformación de rotación */}
       <div
         style={{
           width: size,
@@ -124,31 +143,32 @@ export function RuletaWheel({
             style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
             aria-hidden
           >
-            {overlays.map(({ slot, labelPos }) => {
+            {overlays.map(({ slot, startDeg, spanDeg, labelPos }) => {
               const words = slot.displayShortLabel.toUpperCase().split(/\s+/)
-              const lineH = Math.max(12, size * 0.028)
-              const fontSize = Math.max(10, size * 0.026)
+              const lineH = Math.max(11, size * 0.026)
+              const fontSize = Math.max(9, size * 0.024)
               return (
                 <g key={`ov-${slot.index}-${slot.displayCode}`}>
                   <path
-                    d={slicePath(cx, cy, rOuter, rInner, slot.startDeg, slot.endDeg)}
+                    d={slicePath(cx, cy, rOuter, rInner, startDeg, spanDeg)}
                     fill={slot.displayColor}
-                    fillOpacity={0.94}
+                    fillOpacity={1}
                     stroke="#ffffff"
-                    strokeWidth={Math.max(2, size * 0.004)}
+                    strokeWidth={Math.max(1.5, size * 0.003)}
+                    strokeLinejoin="round"
                   />
                   <text
                     x={labelPos.x}
                     y={labelPos.y - ((words.length - 1) * lineH) / 2}
                     fill="#ffffff"
                     stroke="#000000"
-                    strokeWidth={Math.max(1.2, size * 0.0035)}
-                    paintOrder="stroke"
+                    strokeWidth={Math.max(1.1, size * 0.003)}
+                    paintOrder="stroke fill"
                     fontSize={fontSize}
                     fontWeight={800}
                     textAnchor="middle"
                     dominantBaseline="middle"
-                    transform={`rotate(${slot.midDeg}, ${labelPos.x}, ${labelPos.y})`}
+                    transform={`rotate(${slot.midDeg} ${labelPos.x} ${labelPos.y})`}
                     style={{
                       fontFamily: "Impact, Haettenschweiler, Arial Black, sans-serif",
                       letterSpacing: "0.02em",
@@ -167,11 +187,43 @@ export function RuletaWheel({
         ) : null}
       </div>
 
-      {/* Triángulo rojo fijo inferior (igual a la ruleta física); no gira */}
+      {/* Emblema central FIJO: máscara opaca + logo original (fuera del rotate) */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2"
+        style={{ width: hubPx, height: hubPx }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            borderRadius: "50%",
+            background: "#F5F3EE",
+            boxShadow: "0 0 0 2px rgba(255,255,255,0.85), 0 4px 14px rgba(0,0,0,0.35)",
+          }}
+        />
+        <img
+          src={RULETA_HUB_LOGO_SRC}
+          alt=""
+          draggable={false}
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            borderRadius: "50%",
+            objectFit: "cover",
+            display: "block",
+            userSelect: "none",
+          }}
+        />
+      </div>
+
+      {/* Triángulo rojo fijo inferior */}
       <div
         aria-hidden
         className="pointer-events-none absolute left-1/2 z-20 -translate-x-1/2"
-        style={{ bottom: -4 }}
+        style={{ bottom: -(pointerH + 2) }}
       >
         <div
           style={{
@@ -197,7 +249,8 @@ export function RuletaWheel({
       </div>
 
       <span className="sr-only">
-        Ruleta física Quillotana, {360 / RULETA_SLICE_DEG} sectores de {RULETA_SLICE_DEG}°
+        Ruleta física Quillotana, {360 / RULETA_SLICE_DEG} sectores de {RULETA_SLICE_DEG}°,
+        probabilidad uniforme 1/{360 / RULETA_SLICE_DEG}
       </span>
     </div>
   )
