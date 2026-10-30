@@ -109,7 +109,7 @@ export function RuletaResultModal({ slot, open, onContinue }: Props) {
           "bg-gradient-to-b from-[#1a1028] to-[#0d0814]",
         )}
         style={{
-          borderColor: slot.color,
+          borderColor: slot.displayColor,
           animation: "ruleta-modal-in 0.45s cubic-bezier(0.2, 0.9, 0.2, 1)",
         }}
       >
@@ -127,7 +127,7 @@ export function RuletaResultModal({ slot, open, onContinue }: Props) {
         </p>
         <div
           className="mx-auto mt-5 inline-flex max-w-full items-center justify-center rounded-full px-5 py-2 text-sm font-bold uppercase tracking-wide sm:text-base"
-          style={{ backgroundColor: slot.color, color: slot.textColor }}
+          style={{ backgroundColor: slot.displayColor, color: slot.displayTextColor }}
         >
           {slot.displayLabel}
         </div>

@@ -1,4 +1,4 @@
-/** Casillas oficiales Ruleta Quillotana Q1 — probabilidades y sustituciones locales. */
+/** Casillas oficiales Ruleta Quillotana Q1 — 9 sectores iguales (40°) y sustituciones locales. */
 
 export type RuletaCode =
   | "SORPRESA"
@@ -8,8 +8,8 @@ export type RuletaCode =
   | "PROMO"
   | "NONE"
   | "RETRY"
-  | "P05"
   | "P03"
+  | "P05"
 
 export type SlotOverride = "original" | "RETRY" | "RANDOM"
 
@@ -20,16 +20,15 @@ export type RuletaSegmentBase = {
   shortLabel: string
   color: string
   textColor: string
-  defaultProbability: number
 }
 
 export type ActiveSlot = RuletaSegmentBase & {
-  /** Código visual/resultado tras override. */
   displayCode: string
   displayLabel: string
   displayShortLabel: string
+  displayColor: string
+  displayTextColor: string
   override: SlotOverride
-  probability: number
   startDeg: number
   endDeg: number
   midDeg: number
@@ -37,12 +36,15 @@ export type ActiveSlot = RuletaSegmentBase & {
 }
 
 export type RuletaLocalConfig = {
-  version: 1
-  probabilities: number[]
+  version: 2
   overrides: SlotOverride[]
 }
 
-export const STORAGE_KEY = "quillotana.ruleta.q1.config.v1"
+export const STORAGE_KEY = "quillotana.ruleta.q1.config.v2"
+/** Clave anterior (probabilidades); se limpia al migrar. */
+const LEGACY_STORAGE_KEY = "quillotana.ruleta.q1.config.v1"
+
+export const RULETA_SLICE_DEG = 40
 
 export const RULETA_SEGMENTS: readonly RuletaSegmentBase[] = [
   {
@@ -52,7 +54,6 @@ export const RULETA_SEGMENTS: readonly RuletaSegmentBase[] = [
     shortLabel: "Sorpresa",
     color: "#E53935",
     textColor: "#FFFFFF",
-    defaultProbability: 8,
   },
   {
     index: 1,
@@ -61,7 +62,6 @@ export const RULETA_SEGMENTS: readonly RuletaSegmentBase[] = [
     shortLabel: "Vasos",
     color: "#7B1FA2",
     textColor: "#FFFFFF",
-    defaultProbability: 11,
   },
   {
     index: 2,
@@ -70,7 +70,6 @@ export const RULETA_SEGMENTS: readonly RuletaSegmentBase[] = [
     shortLabel: "10%",
     color: "#FB8C00",
     textColor: "#1A1208",
-    defaultProbability: 3,
   },
   {
     index: 3,
@@ -79,7 +78,6 @@ export const RULETA_SEGMENTS: readonly RuletaSegmentBase[] = [
     shortLabel: "Bebida",
     color: "#43A047",
     textColor: "#FFFFFF",
-    defaultProbability: 12,
   },
   {
     index: 4,
@@ -88,7 +86,6 @@ export const RULETA_SEGMENTS: readonly RuletaSegmentBase[] = [
     shortLabel: "Promo",
     color: "#D81B60",
     textColor: "#FFFFFF",
-    defaultProbability: 7,
   },
   {
     index: 5,
@@ -97,7 +94,6 @@ export const RULETA_SEGMENTS: readonly RuletaSegmentBase[] = [
     shortLabel: "Sin premio",
     color: "#78909C",
     textColor: "#FFFFFF",
-    defaultProbability: 25,
   },
   {
     index: 6,
@@ -106,7 +102,6 @@ export const RULETA_SEGMENTS: readonly RuletaSegmentBase[] = [
     shortLabel: "Otra vez",
     color: "#00897B",
     textColor: "#FFFFFF",
-    defaultProbability: 16,
   },
   {
     index: 7,
@@ -115,7 +110,6 @@ export const RULETA_SEGMENTS: readonly RuletaSegmentBase[] = [
     shortLabel: "3%",
     color: "#1E88E5",
     textColor: "#FFFFFF",
-    defaultProbability: 10,
   },
   {
     index: 8,
@@ -124,7 +118,6 @@ export const RULETA_SEGMENTS: readonly RuletaSegmentBase[] = [
     shortLabel: "5%",
     color: "#FDD835",
     textColor: "#1A1208",
-    defaultProbability: 8,
   },
 ] as const
 
@@ -132,62 +125,63 @@ const RETRY_META = {
   displayCode: "RETRY",
   displayLabel: "¡Vuelve a girar!",
   displayShortLabel: "Otra vez",
-  color: "#00897B",
-  textColor: "#FFFFFF",
+  displayColor: "#00897B",
+  displayTextColor: "#FFFFFF",
 } as const
 
 const RANDOM_META = {
   displayCode: "RANDOM",
   displayLabel: "¡Premio random!",
   displayShortLabel: "Random",
-  color: "#6D28D9",
-  textColor: "#FFFFFF",
+  displayColor: "#6D28D9",
+  displayTextColor: "#FFFFFF",
 } as const
 
 export function defaultConfig(): RuletaLocalConfig {
   return {
-    version: 1,
-    probabilities: RULETA_SEGMENTS.map((s) => s.defaultProbability),
+    version: 2,
     overrides: RULETA_SEGMENTS.map(() => "original" as SlotOverride),
   }
 }
 
-export function sumProbabilities(probs: number[]): number {
-  return probs.reduce((a, b) => a + (Number.isFinite(b) ? b : 0), 0)
-}
-
-export function probabilitiesAreValid(probs: number[]): boolean {
-  if (probs.length !== RULETA_SEGMENTS.length) return false
-  if (probs.some((p) => !Number.isFinite(p) || p < 0)) return false
-  return Math.abs(sumProbabilities(probs) - 100) < 0.001
+function resolveDisplay(base: RuletaSegmentBase, override: SlotOverride) {
+  if (override === "RETRY") return { ...RETRY_META }
+  if (override === "RANDOM") return { ...RANDOM_META }
+  return {
+    displayCode: base.code,
+    displayLabel: base.label,
+    displayShortLabel: base.shortLabel,
+    displayColor: base.color,
+    displayTextColor: base.textColor,
+  }
 }
 
 export function normalizeConfig(raw: unknown): RuletaLocalConfig {
   const base = defaultConfig()
   if (!raw || typeof raw !== "object") return base
-  const obj = raw as Partial<RuletaLocalConfig>
-  const probs = Array.isArray(obj.probabilities)
-    ? obj.probabilities.map((p) => Number(p))
-    : base.probabilities
-  const overs = Array.isArray(obj.overrides)
-    ? obj.overrides.map((o) =>
-        o === "RETRY" || o === "RANDOM" || o === "original" ? o : "original",
-      )
-    : base.overrides
-  while (probs.length < RULETA_SEGMENTS.length) probs.push(0)
+  const obj = raw as { overrides?: unknown }
+  if (!Array.isArray(obj.overrides)) return base
+  const overs = obj.overrides.map((o) =>
+    o === "RETRY" || o === "RANDOM" || o === "original" ? o : "original",
+  )
   while (overs.length < RULETA_SEGMENTS.length) overs.push("original")
-  const clippedP = probs.slice(0, RULETA_SEGMENTS.length)
-  const clippedO = overs.slice(0, RULETA_SEGMENTS.length)
-  if (!probabilitiesAreValid(clippedP)) return base
-  return { version: 1, probabilities: clippedP, overrides: clippedO }
+  return { version: 2, overrides: overs.slice(0, RULETA_SEGMENTS.length) }
 }
 
 export function loadConfigFromStorage(): RuletaLocalConfig {
   if (typeof window === "undefined") return defaultConfig()
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
+    // Migrar desde v1 (probabilidades): conservar solo overrides si existen.
+    const legacy = window.localStorage.getItem(LEGACY_STORAGE_KEY)
+    const raw = window.localStorage.getItem(STORAGE_KEY) ?? legacy
     if (!raw) return defaultConfig()
-    return normalizeConfig(JSON.parse(raw))
+    const parsed = JSON.parse(raw) as { overrides?: unknown }
+    const cfg = normalizeConfig(parsed)
+    if (legacy) {
+      window.localStorage.removeItem(LEGACY_STORAGE_KEY)
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg))
+    }
+    return cfg
   } catch {
     return defaultConfig()
   }
@@ -201,93 +195,45 @@ export function saveConfigToStorage(config: RuletaLocalConfig): void {
 export function clearConfigStorage(): void {
   if (typeof window === "undefined") return
   window.localStorage.removeItem(STORAGE_KEY)
+  window.localStorage.removeItem(LEGACY_STORAGE_KEY)
 }
 
-function resolveDisplay(base: RuletaSegmentBase, override: SlotOverride) {
-  if (override === "RETRY") {
-    return {
-      displayCode: RETRY_META.displayCode,
-      displayLabel: RETRY_META.displayLabel,
-      displayShortLabel: RETRY_META.displayShortLabel,
-      color: RETRY_META.color,
-      textColor: RETRY_META.textColor,
-    }
-  }
-  if (override === "RANDOM") {
-    return {
-      displayCode: RANDOM_META.displayCode,
-      displayLabel: RANDOM_META.displayLabel,
-      displayShortLabel: RANDOM_META.displayShortLabel,
-      color: RANDOM_META.color,
-      textColor: RANDOM_META.textColor,
-    }
-  }
-  return {
-    displayCode: base.code,
-    displayLabel: base.label,
-    displayShortLabel: base.shortLabel,
-    color: base.color,
-    textColor: base.textColor,
-  }
-}
-
-/** Construye sectores con ángulos proporcionales a la probabilidad. */
+/** Nueve sectores fijos de 40°. La sustitución solo cambia texto/color, no el ángulo. */
 export function buildActiveSlots(config: RuletaLocalConfig): ActiveSlot[] {
   const cfg = normalizeConfig(config)
-  const total = sumProbabilities(cfg.probabilities)
-  let cursor = 0
   return RULETA_SEGMENTS.map((base, i) => {
-    const probability = cfg.probabilities[i] ?? 0
     const override = cfg.overrides[i] ?? "original"
-    const spanDeg = total > 0 ? (probability / total) * 360 : 0
-    const startDeg = cursor
-    const endDeg = cursor + spanDeg
-    const midDeg = startDeg + spanDeg / 2
-    cursor = endDeg
+    const startDeg = i * RULETA_SLICE_DEG
+    const endDeg = startDeg + RULETA_SLICE_DEG
+    const midDeg = startDeg + RULETA_SLICE_DEG / 2
     const display = resolveDisplay(base, override)
     return {
       ...base,
       ...display,
       override,
-      probability,
       startDeg,
       endDeg,
       midDeg,
-      spanDeg,
+      spanDeg: RULETA_SLICE_DEG,
     }
   })
 }
 
-/** Selección ponderada con CSPRNG (rechazo para evitar sesgo). */
-export function pickWeightedSlotIndex(probabilities: number[]): number {
-  if (probabilities.length === 0) throw new Error("sin casillas")
-  const weights = probabilities.map((p) => Math.max(0, Number(p) || 0))
-  const total = weights.reduce((a, b) => a + b, 0)
-  if (total <= 0) throw new Error("probabilidades inválidas")
-
-  const buf = new Uint32Array(1)
-  const max = 0x100000000
-  // Escala a entero: pesos * 1000 para centésimas de %
-  const scaled = weights.map((w) => Math.round(w * 1000))
-  const scaledTotal = scaled.reduce((a, b) => a + b, 0)
-  if (scaledTotal <= 0) throw new Error("probabilidades inválidas")
-  const limit = max - (max % scaledTotal)
-  let x = 0
+/** Índice uniforme 0..8 con CSPRNG (rechazo para evitar sesgo de módulo). */
+export function pickUniformSlotIndex(count = RULETA_SEGMENTS.length): number {
+  if (count <= 0) throw new Error("count inválido")
   if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    const buf = new Uint32Array(1)
+    const max = 0x100000000
+    const limit = max - (max % count)
+    let x = 0
     do {
       crypto.getRandomValues(buf)
       x = buf[0]!
     } while (x >= limit)
-    x = x % scaledTotal
-  } else {
-    x = Math.floor(Math.random() * scaledTotal)
+    return x % count
   }
-  let acc = 0
-  for (let i = 0; i < scaled.length; i++) {
-    acc += scaled[i]!
-    if (x < acc) return i
-  }
-  return scaled.length - 1
+  return Math.floor(Math.random() * count)
 }
 
 export function winnerTone(slot: ActiveSlot): "win" | "none" | "retry" | "random" {

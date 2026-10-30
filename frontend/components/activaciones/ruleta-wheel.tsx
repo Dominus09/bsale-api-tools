@@ -44,13 +44,8 @@ export function RuletaWheel({
         .filter((s) => s.spanDeg > 0.05)
         .map((slot) => {
           const labelPos = polar(cx, cy, labelR, slot.midDeg)
-          const useShort = slot.spanDeg < 28 || size < 380
-          const fontSize =
-            slot.spanDeg < 18
-              ? Math.max(9, size * 0.022)
-              : slot.spanDeg < 32
-                ? Math.max(10, size * 0.026)
-                : Math.max(11, size * 0.03)
+          const useShort = size < 400
+          const fontSize = Math.max(11, size * 0.028)
           return { slot, labelPos, useShort, fontSize }
         }),
     [slots, cx, cy, labelR, size],
@@ -109,31 +104,29 @@ export function RuletaWheel({
             <g key={`${slot.index}-${slot.displayCode}`}>
               <path
                 d={slicePath(cx, cy, outer, slot.startDeg, slot.endDeg)}
-                fill={slot.color}
+                fill={slot.displayColor}
                 stroke="#0f0a14"
                 strokeWidth={1.25}
               />
-              {slot.spanDeg >= 10 ? (
-                <text
-                  x={labelPos.x}
-                  y={labelPos.y}
-                  fill={slot.textColor}
-                  fontSize={fontSize}
-                  fontWeight={700}
-                  textAnchor="middle"
-                  dominantBaseline="middle"
-                  transform={`rotate(${slot.midDeg}, ${labelPos.x}, ${labelPos.y})`}
-                  style={{
-                    fontFamily: "ui-sans-serif, system-ui, Segoe UI, sans-serif",
-                    letterSpacing: "0.01em",
-                    paintOrder: "stroke",
-                    stroke: "rgba(0,0,0,0.25)",
-                    strokeWidth: 0.6,
-                  }}
-                >
-                  {useShort ? slot.displayShortLabel : slot.displayLabel}
-                </text>
-              ) : null}
+              <text
+                x={labelPos.x}
+                y={labelPos.y}
+                fill={slot.displayTextColor}
+                fontSize={fontSize}
+                fontWeight={700}
+                textAnchor="middle"
+                dominantBaseline="middle"
+                transform={`rotate(${slot.midDeg}, ${labelPos.x}, ${labelPos.y})`}
+                style={{
+                  fontFamily: "ui-sans-serif, system-ui, Segoe UI, sans-serif",
+                  letterSpacing: "0.01em",
+                  paintOrder: "stroke",
+                  stroke: "rgba(0,0,0,0.25)",
+                  strokeWidth: 0.6,
+                }}
+              >
+                {useShort ? slot.displayShortLabel : slot.displayLabel}
+              </text>
             </g>
           ))}
         </g>

@@ -10,10 +10,8 @@ import {
   clearConfigStorage,
   defaultConfig,
   loadConfigFromStorage,
-  pickWeightedSlotIndex,
-  probabilitiesAreValid,
+  pickUniformSlotIndex,
   saveConfigToStorage,
-  sumProbabilities,
   type ActiveSlot,
   type RuletaLocalConfig,
   type SlotOverride,
@@ -36,7 +34,7 @@ function randomSpinDurationMs(): number {
   return 6200
 }
 
-/** Lleva el midDeg del sector bajo el puntero superior, siempre avanzando. */
+/** Centro del sector (40°) bajo el puntero superior; siempre avanza. */
 function targetRotationForMid(midDeg: number, currentRotation: number): number {
   const normalized = ((currentRotation % 360) + 360) % 360
   const desiredMod = (360 - midDeg) % 360
@@ -61,7 +59,6 @@ function computeWheelSize(stage: HTMLElement | null, fullscreen: boolean): numbe
     return Math.floor(Math.min(availW * 0.78, availH * 0.82, 720))
   }
   if (vw >= 768) {
-    // iPad / tablet
     return Math.floor(Math.min(availW * 0.9, availH * 0.72, 640))
   }
   return Math.floor(Math.min(availW * 0.96, availH * 0.62, 420))
@@ -80,16 +77,13 @@ export default function RuletaQuillotanaPage() {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [wheelSize, setWheelSize] = useState(560)
   const [adminOpen, setAdminOpen] = useState(false)
-  const [draftProbs, setDraftProbs] = useState<number[]>(() => defaultConfig().probabilities)
   const pendingWinner = useRef<ActiveSlot | null>(null)
   const rotationRef = useRef(0)
 
   const slots = useMemo(() => buildActiveSlots(config), [config])
 
   useEffect(() => {
-    const loaded = loadConfigFromStorage()
-    setConfig(loaded)
-    setDraftProbs(loaded.probabilities)
+    setConfig(loadConfigFromStorage())
     setHydrated(true)
   }, [])
 
@@ -109,8 +103,9 @@ export default function RuletaQuillotanaPage() {
   useEffect(() => {
     refreshSize()
     const el = stageRef.current
-    const ro = typeof ResizeObserver !== "undefined" && el ? new ResizeObserver(() => refreshSize()) : null
-    ro?.observe(el!)
+    const ro =
+      typeof ResizeObserver !== "undefined" && el ? new ResizeObserver(() => refreshSize()) : null
+    if (el && ro) ro.observe(el)
     window.addEventListener("resize", refreshSize)
     window.addEventListener("orientationchange", refreshSize)
     return () => {
@@ -137,31 +132,29 @@ export default function RuletaQuillotanaPage() {
       if (!document.fullscreenElement) await el.requestFullscreen()
       else await document.exitFullscreen()
     } catch {
-      /* Safari iPad puede restringir; la UI sigue usable */
+      /* Safari iPad */
     }
   }, [])
 
   const spin = useCallback(() => {
     if (spinning) return
-    if (!probabilitiesAreValid(config.probabilities)) return
-    const index = pickWeightedSlotIndex(config.probabilities)
+    const index = pickUniformSlotIndex()
     const segment = slots[index]
-    if (!segment || segment.spanDeg <= 0) return
+    if (!segment) return
     pendingWinner.current = segment
     setWinner(null)
     setShowResult(false)
     const ms = randomSpinDurationMs()
     setDurationMs(ms)
     setSpinning(true)
-    const next = targetRotationForMid(segment.midDeg, rotationRef.current)
-    setRotation(next)
+    setRotation(targetRotationForMid(segment.midDeg, rotationRef.current))
     window.setTimeout(() => {
       setSpinning(false)
       setWinner(pendingWinner.current)
       setShowResult(true)
       setSpinCount((n) => n + 1)
     }, ms + 50)
-  }, [spinning, config.probabilities, slots])
+  }, [spinning, slots])
 
   const clearResult = useCallback(() => {
     if (spinning) return
@@ -185,7 +178,7 @@ export default function RuletaQuillotanaPage() {
         !window.confirm(
           override === "original"
             ? `¿Restaurar casilla "${base.label}" a su premio original?`
-            : `¿Sustituir "${base.label}" por "${label}"?`,
+            : `¿Sustituir "${base.label}" por "${label}"?\nEl tamaño de la casilla (40°) no cambia.`,
         )
       ) {
         return
@@ -199,33 +192,21 @@ export default function RuletaQuillotanaPage() {
     [spinning],
   )
 
-  const applyProbabilities = useCallback(() => {
-    if (spinning) return
-    if (!probabilitiesAreValid(draftProbs)) {
-      window.alert("Las probabilidades deben ser ≥ 0 y sumar exactamente 100%.")
-      return
-    }
-    setConfig((prev) => ({ ...prev, probabilities: [...draftProbs] }))
-  }, [draftProbs, spinning])
-
   const restoreOriginalRuleta = useCallback(() => {
     if (spinning) return
     if (
       !window.confirm(
-        "¿Restaurar TODA la ruleta original (premios y probabilidades)? Esta acción no se puede deshacer.",
+        "¿Restaurar TODA la ruleta original (todas las casillas)? Esta acción no se puede deshacer.",
       )
     ) {
       return
     }
-    const fresh = defaultConfig()
     clearConfigStorage()
-    setConfig(fresh)
-    setDraftProbs(fresh.probabilities)
+    setConfig(defaultConfig())
     setShowResult(false)
     setWinner(null)
   }, [spinning])
 
-  const probSum = sumProbabilities(draftProbs)
   const showChrome = !isFullscreen
 
   return (
@@ -265,7 +246,10 @@ export default function RuletaQuillotanaPage() {
             <img
               src={QUILLOTANA_LOGO_GRUPO_URL}
               alt="Grupo Quillotana"
-              className={cn("w-auto object-contain", isFullscreen ? "h-10 sm:h-12" : "h-12 sm:h-14")}
+              className={cn(
+                "w-auto object-contain",
+                isFullscreen ? "h-10 sm:h-12" : "h-12 sm:h-14",
+              )}
               draggable={false}
             />
             {showChrome ? (
@@ -344,7 +328,7 @@ export default function RuletaQuillotanaPage() {
             <Button
               type="button"
               size="lg"
-              disabled={spinning || !probabilitiesAreValid(config.probabilities)}
+              disabled={spinning}
               onClick={spin}
               className={cn(
                 "h-16 min-w-[260px] rounded-full px-12 text-lg font-bold tracking-wide shadow-lg sm:min-w-[300px]",
@@ -359,7 +343,7 @@ export default function RuletaQuillotanaPage() {
             </Button>
             {showChrome ? (
               <p className="text-xs text-amber-100/50">
-                Giros en esta sesión: {spinCount}
+                Giros en esta sesión: {spinCount} · cada casilla 40° (1/9)
                 {spinning ? " · espera a que se detenga" : ""}
               </p>
             ) : null}
@@ -377,12 +361,11 @@ export default function RuletaQuillotanaPage() {
                     >
                       <span
                         className="h-3 w-3 shrink-0 rounded-full"
-                        style={{ backgroundColor: s.color }}
+                        style={{ backgroundColor: s.displayColor }}
                       />
                       <span className="min-w-0 flex-1 truncate text-amber-50/90">
                         {s.displayLabel}
                       </span>
-                      <span className="shrink-0 text-xs text-amber-100/50">{s.probability}%</span>
                     </li>
                   ))}
                 </ul>
@@ -396,67 +379,21 @@ export default function RuletaQuillotanaPage() {
                 Administración
               </h2>
               <p className="mt-1 text-xs text-amber-100/60">
-                Cambios locales a este navegador (localStorage). No afectan otros equipos.
+                Sustituye premios agotados. Las 9 casillas siguen midiendo 40° cada una. Cambios
+                locales (localStorage).
               </p>
 
               <div className="mt-4 space-y-3">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-400/80">
-                  Probabilidades (deben sumar 100%)
-                </p>
-                {RULETA_SEGMENTS.map((base, i) => (
-                  <label
-                    key={base.code}
-                    className="flex items-center justify-between gap-2 text-sm"
-                  >
-                    <span className="truncate text-amber-50/85">{base.label}</span>
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      step={1}
-                      disabled={spinning}
-                      value={draftProbs[i] ?? 0}
-                      onChange={(e) => {
-                        const next = [...draftProbs]
-                        next[i] = Number(e.target.value)
-                        setDraftProbs(next)
-                      }}
-                      className="h-10 w-20 rounded-lg border border-amber-500/30 bg-black/40 px-2 text-right text-amber-50"
-                    />
-                  </label>
-                ))}
-                <p
-                  className={cn(
-                    "text-xs font-semibold",
-                    Math.abs(probSum - 100) < 0.001 ? "text-emerald-400" : "text-rose-400",
-                  )}
-                >
-                  Suma actual: {probSum}%
-                </p>
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={spinning || !probabilitiesAreValid(draftProbs)}
-                  onClick={applyProbabilities}
-                  className="w-full bg-amber-500/90 text-[#1a0a08] hover:bg-amber-400"
-                >
-                  Aplicar probabilidades
-                </Button>
-              </div>
-
-              <div className="mt-6 space-y-3 border-t border-white/10 pt-4">
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-400/80">
-                  Sustituir casillas
-                </p>
                 {slots.map((slot) => (
                   <div
                     key={slot.index}
                     className="rounded-xl border border-white/10 bg-white/5 p-3 text-sm"
                   >
-                    <p className="font-semibold text-amber-50">{slot.label}</p>
+                    <p className="font-semibold text-amber-50">
+                      Casilla {slot.index + 1}: {slot.label}
+                    </p>
                     <p className="text-xs text-amber-100/55">
-                      Actual: <strong className="text-amber-100">{slot.displayLabel}</strong> ·{" "}
-                      {slot.probability}%
+                      Actual: <strong className="text-amber-100">{slot.displayLabel}</strong>
                     </p>
                     <div className="mt-2 flex flex-col gap-1.5">
                       {(
@@ -498,11 +435,7 @@ export default function RuletaQuillotanaPage() {
       </div>
 
       {winner && showResult ? (
-        <RuletaResultModal
-          slot={winner}
-          open={showResult}
-          onContinue={clearResult}
-        />
+        <RuletaResultModal slot={winner} open={showResult} onContinue={clearResult} />
       ) : null}
     </div>
   )
