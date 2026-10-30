@@ -2,12 +2,12 @@
 
 import { useMemo } from "react"
 
-import { RULETA_SEGMENTS, RULETA_SLICE_DEG } from "./ruleta-q1-segments"
+import type { ActiveSlot } from "./ruleta-q1-segments"
 
 type RuletaWheelProps = {
+  slots: ActiveSlot[]
   rotationDeg: number
   spinning: boolean
-  /** Duración del ease-out en ms (rango típico 5200–7000). */
   transitionMs?: number
   size?: number
   className?: string
@@ -26,6 +26,7 @@ function slicePath(cx: number, cy: number, r: number, startDeg: number, endDeg: 
 }
 
 export function RuletaWheel({
+  slots,
   rotationDeg,
   spinning,
   transitionMs = 6200,
@@ -34,20 +35,28 @@ export function RuletaWheel({
 }: RuletaWheelProps) {
   const cx = size / 2
   const cy = size / 2
-  const outer = size * 0.48
-  const labelR = size * 0.33
+  const outer = size * 0.485
+  const labelR = size * 0.34
 
   const slices = useMemo(
     () =>
-      RULETA_SEGMENTS.map((seg, i) => {
-        const start = i * RULETA_SLICE_DEG
-        const end = start + RULETA_SLICE_DEG
-        const mid = start + RULETA_SLICE_DEG / 2
-        const labelPos = polar(cx, cy, labelR, mid)
-        return { seg, start, end, mid, labelPos }
-      }),
-    [cx, cy, labelR],
+      slots
+        .filter((s) => s.spanDeg > 0.05)
+        .map((slot) => {
+          const labelPos = polar(cx, cy, labelR, slot.midDeg)
+          const useShort = slot.spanDeg < 28 || size < 380
+          const fontSize =
+            slot.spanDeg < 18
+              ? Math.max(9, size * 0.022)
+              : slot.spanDeg < 32
+                ? Math.max(10, size * 0.026)
+                : Math.max(11, size * 0.03)
+          return { slot, labelPos, useShort, fontSize }
+        }),
+    [slots, cx, cy, labelR, size],
   )
+
+  const pointer = Math.max(12, size * 0.032)
 
   return (
     <div
@@ -55,23 +64,22 @@ export function RuletaWheel({
       style={{
         width: size,
         height: size,
+        maxWidth: "100%",
         position: "relative",
         filter: spinning
-          ? "drop-shadow(0 0 28px rgba(255,140,40,0.45))"
-          : "drop-shadow(0 18px 40px rgba(0,0,0,0.55))",
+          ? "drop-shadow(0 0 32px rgba(255,140,40,0.5))"
+          : "drop-shadow(0 20px 48px rgba(0,0,0,0.55))",
       }}
     >
-      {/* Marco Halloween */}
       <div
         aria-hidden
         className="pointer-events-none absolute inset-0 rounded-full"
         style={{
           background:
             "conic-gradient(from 0deg, #ff6b00, #7c3aed, #111827, #f59e0b, #ff6b00)",
-          padding: 8,
           WebkitMask:
-            "radial-gradient(farthest-side, transparent calc(100% - 10px), #000 calc(100% - 9px))",
-          mask: "radial-gradient(farthest-side, transparent calc(100% - 10px), #000 calc(100% - 9px))",
+            "radial-gradient(farthest-side, transparent calc(100% - 11px), #000 calc(100% - 10px))",
+          mask: "radial-gradient(farthest-side, transparent calc(100% - 11px), #000 calc(100% - 10px))",
         }}
       />
 
@@ -80,13 +88,14 @@ export function RuletaWheel({
         height={size}
         viewBox={`0 0 ${size} ${size}`}
         role="img"
-        aria-label="Ruleta Quillotana de nueve casillas"
+        aria-label="Ruleta Quillotana"
         style={{
           transform: `rotate(${rotationDeg}deg)`,
           transition: spinning
             ? `transform ${transitionMs}ms cubic-bezier(0.12, 0.75, 0.08, 1)`
             : "none",
           borderRadius: "50%",
+          willChange: spinning ? "transform" : "auto",
         }}
       >
         <defs>
@@ -94,52 +103,63 @@ export function RuletaWheel({
             <feDropShadow dx="0" dy="2" stdDeviation="3" floodOpacity="0.35" />
           </filter>
         </defs>
-        <circle cx={cx} cy={cy} r={outer + 4} fill="#1a1025" />
+        <circle cx={cx} cy={cy} r={outer + 3} fill="#1a1025" />
         <g filter="url(#ruleta-inner-shadow)">
-          {slices.map(({ seg, start, end, labelPos }) => (
-            <g key={seg.code}>
+          {slices.map(({ slot, labelPos, useShort, fontSize }) => (
+            <g key={`${slot.index}-${slot.displayCode}`}>
               <path
-                d={slicePath(cx, cy, outer, start, end)}
-                fill={seg.color}
+                d={slicePath(cx, cy, outer, slot.startDeg, slot.endDeg)}
+                fill={slot.color}
                 stroke="#0f0a14"
-                strokeWidth={1.5}
+                strokeWidth={1.25}
               />
-              <text
-                x={labelPos.x}
-                y={labelPos.y}
-                fill={seg.textColor}
-                fontSize={size < 360 ? 9.5 : 11}
-                fontWeight={700}
-                textAnchor="middle"
-                dominantBaseline="middle"
-                transform={`rotate(${start + RULETA_SLICE_DEG / 2}, ${labelPos.x}, ${labelPos.y})`}
-                style={{
-                  fontFamily: "ui-sans-serif, system-ui, Segoe UI, sans-serif",
-                  letterSpacing: "0.02em",
-                }}
-              >
-                {seg.label.length > 16 ? seg.label.slice(0, 14) + "…" : seg.label}
-              </text>
+              {slot.spanDeg >= 10 ? (
+                <text
+                  x={labelPos.x}
+                  y={labelPos.y}
+                  fill={slot.textColor}
+                  fontSize={fontSize}
+                  fontWeight={700}
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                  transform={`rotate(${slot.midDeg}, ${labelPos.x}, ${labelPos.y})`}
+                  style={{
+                    fontFamily: "ui-sans-serif, system-ui, Segoe UI, sans-serif",
+                    letterSpacing: "0.01em",
+                    paintOrder: "stroke",
+                    stroke: "rgba(0,0,0,0.25)",
+                    strokeWidth: 0.6,
+                  }}
+                >
+                  {useShort ? slot.displayShortLabel : slot.displayLabel}
+                </text>
+              ) : null}
             </g>
           ))}
         </g>
-        <circle cx={cx} cy={cy} r={size * 0.09} fill="#120a1a" stroke="#f59e0b" strokeWidth={3} />
-        <circle cx={cx} cy={cy} r={size * 0.035} fill="#fbbf24" />
+        <circle
+          cx={cx}
+          cy={cy}
+          r={size * 0.08}
+          fill="#120a1a"
+          stroke="#f59e0b"
+          strokeWidth={Math.max(2, size * 0.006)}
+        />
+        <circle cx={cx} cy={cy} r={size * 0.03} fill="#fbbf24" />
       </svg>
 
-      {/* Puntero superior fijo */}
       <div
         aria-hidden
         className="absolute left-1/2 top-0 z-10 -translate-x-1/2"
-        style={{ marginTop: -4 }}
+        style={{ marginTop: -2 }}
       >
         <div
           style={{
             width: 0,
             height: 0,
-            borderLeft: "14px solid transparent",
-            borderRight: "14px solid transparent",
-            borderTop: "28px solid #fbbf24",
+            borderLeft: `${pointer}px solid transparent`,
+            borderRight: `${pointer}px solid transparent`,
+            borderTop: `${pointer * 1.9}px solid #fbbf24`,
             filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))",
           }}
         />
