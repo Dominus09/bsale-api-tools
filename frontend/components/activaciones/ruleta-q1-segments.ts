@@ -67,8 +67,8 @@ const LEGACY_STORAGE_KEYS = [
 export const RULETA_SLICE_DEG = 40
 export const RULETA_SLOT_COUNT = 9
 
-/** Logo circular original (único asset raster; capa fija). */
-export const RULETA_HUB_LOGO_SRC = "/activaciones/ruleta/quillotana-hub-logo.png"
+/** Única pieza central fija: círculo blanco + emblema (PNG compuesto limpio). */
+export const RULETA_CENTRO_LOGO_SRC = "/activaciones/ruleta/centro-logo-limpio.png"
 
 export const RULETA_SEGMENTS: readonly RuletaSegmentBase[] = [
   {

@@ -2,7 +2,7 @@
 
 import type { ActiveSlot, RuletaIconKind } from "./ruleta-q1-segments"
 import {
-  RULETA_HUB_LOGO_SRC,
+  RULETA_CENTRO_LOGO_SRC,
   RULETA_SLICE_DEG,
   RULETA_SLOT_COUNT,
 } from "./ruleta-q1-segments"
@@ -16,10 +16,8 @@ const R_RIM_MID = 486
 const R_RIM_INNER = 472
 const R_DISK = 468
 const R_INNER = 168
-/** Único plato blanco fijo: tapa uniones de sectores. */
-const R_HUB_COVER = R_INNER + 22
-/** Emblema original (rojo/transparente) inset dentro del plato blanco. */
-const R_HUB_LOGO = Math.round(R_HUB_COVER * 0.78)
+/** Radio de la única imagen central fija (cubre uniones de sectores). */
+const R_CENTRO = R_INNER + 22
 const R_LABEL = 312
 const R_ICON = 405
 /** Separación vertical entre líneas cuando el % es grande (evita solape 5%/3%/10%). */
@@ -275,17 +273,10 @@ export function RuletaWheel({
           <filter id="ruleta-soft" x="-20%" y="-20%" width="140%" height="140%">
             <feDropShadow dx="0" dy="3" stdDeviation="4" floodOpacity="0.28" />
           </filter>
-          {/* El disco giratorio no pinta bajo el hub: evita fragmentos de color. */}
-          <mask id="ruleta-disk-mask">
-            <rect x="0" y="0" width={VB} height={VB} fill="#ffffff" />
-            {/* Agujero un poco menor que el plato blanco para cubrir el anti-alias del borde */}
-            <circle cx={CX} cy={CY} r={R_HUB_COVER - 4} fill="#000000" />
-          </mask>
         </defs>
 
         {/* Grupo único giratorio: sectores + aro + remaches + textos */}
         <g
-          mask="url(#ruleta-disk-mask)"
           style={{
             transformBox: "view-box",
             transformOrigin: "50% 50%",
@@ -345,14 +336,13 @@ export function RuletaWheel({
           ))}
         </g>
 
-        {/* Centro fijo: 1 círculo blanco opaco + 1 PNG original (no gira) */}
-        <circle cx={CX} cy={CY} r={R_HUB_COVER} fill="#ffffff" />
+        {/* Única pieza central fija (PNG ya trae círculo blanco + logo). Fuera del rotate. */}
         <image
-          href={RULETA_HUB_LOGO_SRC}
-          x={CX - R_HUB_LOGO}
-          y={CY - R_HUB_LOGO}
-          width={R_HUB_LOGO * 2}
-          height={R_HUB_LOGO * 2}
+          href={RULETA_CENTRO_LOGO_SRC}
+          x={CX - R_CENTRO}
+          y={CY - R_CENTRO}
+          width={R_CENTRO * 2}
+          height={R_CENTRO * 2}
           preserveAspectRatio="xMidYMid meet"
         />
       </svg>
