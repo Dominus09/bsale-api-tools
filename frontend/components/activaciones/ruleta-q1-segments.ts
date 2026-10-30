@@ -167,7 +167,7 @@ export const RULETA_SEGMENTS: readonly RuletaSegmentBase[] = [
     lines: ["5%", "DESCUENTO"],
     emphasizeFirstLine: true,
     color: "#FDD835",
-    textColor: "#1A1208",
+    textColor: "#FFFFFF",
     icon: "percent",
   },
 ] as const

@@ -16,8 +16,15 @@ const R_RIM_MID = 486
 const R_RIM_INNER = 472
 const R_DISK = 468
 const R_INNER = 168
-const R_LABEL = 318
-const R_ICON = 400
+/** Plato blanco fijo: cubre el hueco interior + solape anti-bleed. */
+const R_HUB_COVER = R_INNER + 20
+/** Logo ocupa casi todo el plato (PNG ya incluye su aro rojo propio). */
+const R_HUB_LOGO = R_HUB_COVER - 2
+const R_LABEL = 312
+const R_ICON = 405
+/** Separación vertical entre líneas cuando el % es grande (evita solape 5%/3%/10%). */
+const BIG_LINE_H = 56
+const NORMAL_LINE_H = 28
 const R_DIVIDER_OUTER = R_DISK - 2
 const R_DIVIDER_INNER = R_INNER + 2
 const RIVET_R = 7
@@ -155,45 +162,52 @@ function DecorDots({ midDeg, color }: { midDeg: number; color: string }) {
 
 function SectorContent({ slot }: { slot: ActiveSlot }) {
   const labelPos = polar(R_LABEL, slot.midDeg)
-  const iconPos = polar(R_ICON, slot.midDeg)
   const lines = slot.displayLines
   const big = slot.displayEmphasizeFirstLine
-  const fill = slot.displayTextColor
-  const stroke = fill === "#1A1208" ? "#111" : "#000"
-  const lineH = big ? 34 : 28
+  // Texto promocional: blanco + borde negro (mismo estilo 3%, 5% y 10%).
+  const fill = "#FFFFFF"
+  const stroke = "#000000"
+  const lineH = big ? BIG_LINE_H : NORMAL_LINE_H
   const startY = -((lines.length - 1) * lineH) / 2
+  // Ícono un poco más afuera en sectores con % grande para no chocar con el texto.
+  const iconR = big ? R_ICON + 8 : R_ICON
+  const iconAt = polar(iconR, slot.midDeg)
 
   return (
     <g>
       <DecorDots midDeg={slot.midDeg} color={slot.displayColor} />
-      <g transform={`translate(${iconPos.x} ${iconPos.y}) rotate(${slot.midDeg})`}>
+      <g transform={`translate(${iconAt.x} ${iconAt.y}) rotate(${slot.midDeg})`}>
         <SectorIcon kind={slot.displayIcon} fill={fill} />
       </g>
       <g transform={`translate(${labelPos.x} ${labelPos.y}) rotate(${slot.midDeg})`}>
-        <text
-          textAnchor="middle"
-          dominantBaseline="middle"
-          fill={fill}
-          stroke={stroke}
-          strokeWidth={big ? 5 : 4}
-          paintOrder="stroke fill"
-          style={{
-            fontFamily: "Impact, Haettenschweiler, 'Arial Black', sans-serif",
-            letterSpacing: "0.02em",
-          }}
-        >
-          {lines.map((line, i) => (
-            <tspan
-              key={`${slot.index}-${i}`}
-              x={0}
-              y={startY + i * lineH}
-              fontSize={big && i === 0 ? 52 : big ? 22 : 24}
-              fontWeight={800}
-            >
-              {line}
-            </tspan>
-          ))}
-        </text>
+        {lines.map((line, i) => {
+          const fontSize = big && i === 0 ? 46 : big ? 19 : 24
+          const y = startY + i * lineH
+          const common = {
+            x: 0 as const,
+            y,
+            textAnchor: "middle" as const,
+            dominantBaseline: "central" as const,
+            fontSize,
+            fontWeight: 800 as const,
+            strokeLinejoin: "round" as const,
+            style: {
+              fontFamily: "Impact, Haettenschweiler, 'Arial Black', sans-serif",
+              letterSpacing: "0.02em",
+            },
+          }
+          // Dos pasadas (borde luego relleno): evita ghosting de paint-order en ángulos extremos (p.ej. 5%).
+          return (
+            <g key={`${slot.index}-${i}`}>
+              <text {...common} fill="none" stroke={stroke} strokeWidth={big ? 7 : 6}>
+                {line}
+              </text>
+              <text {...common} fill={fill} stroke="none">
+                {line}
+              </text>
+            </g>
+          )
+        })}
       </g>
     </g>
   )
@@ -209,7 +223,6 @@ export function RuletaWheel({
 }: RuletaWheelProps) {
   const pointerW = Math.max(16, size * 0.038)
   const pointerH = Math.max(26, size * 0.055)
-  const hubPx = Math.round(size * ((R_INNER * 2) / VB) * 0.98)
 
   const rivets = Array.from({ length: RULETA_SLOT_COUNT * 2 }, (_, i) => {
     const ang = (i * 360) / (RULETA_SLOT_COUNT * 2)
@@ -262,10 +275,17 @@ export function RuletaWheel({
           <filter id="ruleta-soft" x="-20%" y="-20%" width="140%" height="140%">
             <feDropShadow dx="0" dy="3" stdDeviation="4" floodOpacity="0.28" />
           </filter>
+          {/* El disco giratorio no pinta bajo el hub: evita fragmentos de color. */}
+          <mask id="ruleta-disk-mask">
+            <rect x="0" y="0" width={VB} height={VB} fill="#ffffff" />
+            {/* Agujero un poco menor que el plato blanco para cubrir el anti-alias del borde */}
+            <circle cx={CX} cy={CY} r={R_HUB_COVER - 4} fill="#000000" />
+          </mask>
         </defs>
 
         {/* Grupo único giratorio: sectores + aro + remaches + textos */}
         <g
+          mask="url(#ruleta-disk-mask)"
           style={{
             transformBox: "view-box",
             transformOrigin: "50% 50%",
@@ -323,42 +343,20 @@ export function RuletaWheel({
               <circle cx={p.x - 1.5} cy={p.y - 1.5} r={2} fill="#fff" opacity={0.7} />
             </g>
           ))}
-
-          {/* Anillo interior del disco (bajo el hub fijo) */}
-          <circle cx={CX} cy={CY} r={R_INNER} fill="#f2f0ea" />
-          <circle cx={CX} cy={CY} r={R_INNER - 4} fill="none" stroke="#ddd9d0" strokeWidth={3} />
         </g>
 
-        {/* Hub fijo: plato blanco + logo original (fuera del grupo rotatorio) */}
-        <circle cx={CX} cy={CY} r={R_INNER - 2} fill="#ffffff" />
-        <circle cx={CX} cy={CY} r={R_INNER - 2} fill="none" stroke="#e6e2da" strokeWidth={3} />
-      </svg>
-
-      {/* Logo raster fijo centrado — no gira */}
-      <div
-        className="pointer-events-none absolute left-1/2 top-1/2 z-10"
-        style={{
-          width: hubPx,
-          height: hubPx,
-          transform: "translate(-50%, -50%)",
-        }}
-      >
-        <img
-          src={RULETA_HUB_LOGO_SRC}
-          alt="Quillotana"
-          width={hubPx}
-          height={hubPx}
-          draggable={false}
-          style={{
-            width: hubPx,
-            height: hubPx,
-            display: "block",
-            borderRadius: "50%",
-            objectFit: "cover",
-            userSelect: "none",
-          }}
+        {/* Centro fijo: un solo plato blanco + un solo logo original */}
+        <circle cx={CX} cy={CY} r={R_HUB_COVER} fill="#ffffff" />
+        <image
+          href={RULETA_HUB_LOGO_SRC}
+          xlinkHref={RULETA_HUB_LOGO_SRC}
+          x={CX - R_HUB_LOGO}
+          y={CY - R_HUB_LOGO}
+          width={R_HUB_LOGO * 2}
+          height={R_HUB_LOGO * 2}
+          preserveAspectRatio="xMidYMid meet"
         />
-      </div>
+      </svg>
 
       {/* Puntero rojo fijo inferior */}
       <div
