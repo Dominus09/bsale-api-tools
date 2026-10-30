@@ -35,8 +35,8 @@ function randomSpinDurationMs(): number {
 }
 
 /**
- * Alinea el centro del sector (midDeg en coordenadas de la foto) con el indicador fijo inferior (180°).
- * midDeg + rotación ≡ 180 (mod 360). Siempre avanza en sentido horario.
+ * Alinea el centro del sector (0°=arriba, horario) con el puntero fijo inferior (180°).
+ * midDeg + rotación ≡ 180 (mod 360). Siempre avanza (varias vueltas).
  */
 function targetRotationForMid(midDeg: number, currentRotation: number): number {
   const normalized = ((currentRotation % 360) + 360) % 360

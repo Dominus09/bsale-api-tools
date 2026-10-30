@@ -1,4 +1,4 @@
-/** Casillas oficiales Ruleta Quillotana Q1 — 9 sectores iguales (40°) y sustituciones locales. */
+/** Ruleta Quillotana Q1 — 9 sectores SVG iguales (40°) y sustituciones locales. */
 
 export type RuletaCode =
   | "SORPRESA"
@@ -13,21 +13,39 @@ export type RuletaCode =
 
 export type SlotOverride = "original" | "RETRY" | "RANDOM"
 
+export type RuletaIconKind =
+  | "gift"
+  | "cups"
+  | "percent"
+  | "can"
+  | "sad"
+  | "retry"
+  | "random"
+  | "stars"
+
 export type RuletaSegmentBase = {
   index: number
   code: RuletaCode
   label: string
   shortLabel: string
+  /** Líneas de texto en el sector (mayúsculas). */
+  lines: readonly string[]
+  /** Si true, la primera línea se dibuja mucho más grande (%, etc.). */
+  emphasizeFirstLine: boolean
   color: string
   textColor: string
+  icon: RuletaIconKind
 }
 
 export type ActiveSlot = RuletaSegmentBase & {
   displayCode: string
   displayLabel: string
   displayShortLabel: string
+  displayLines: readonly string[]
+  displayEmphasizeFirstLine: boolean
   displayColor: string
   displayTextColor: string
+  displayIcon: RuletaIconKind
   override: SlotOverride
   startDeg: number
   endDeg: number
@@ -36,24 +54,21 @@ export type ActiveSlot = RuletaSegmentBase & {
 }
 
 export type RuletaLocalConfig = {
-  version: 2
+  version: 3
   overrides: SlotOverride[]
 }
 
-export const STORAGE_KEY = "quillotana.ruleta.q1.config.v2"
-/** Clave anterior (probabilidades); se limpia al migrar. */
-const LEGACY_STORAGE_KEY = "quillotana.ruleta.q1.config.v1"
+export const STORAGE_KEY = "quillotana.ruleta.q1.config.v3"
+const LEGACY_STORAGE_KEYS = [
+  "quillotana.ruleta.q1.config.v2",
+  "quillotana.ruleta.q1.config.v1",
+] as const
 
 export const RULETA_SLICE_DEG = 40
+export const RULETA_SLOT_COUNT = 9
 
-/**
- * Geometría calibrada sobre el disco circular exportado (800×800, radio útil = size/2).
- * - HUB_DIAMETER_FRAC: diámetro del emblema / tamaño del disco
- * - R_*_FRAC: radios de overlay como fracción del radio del disco
- */
-export const RULETA_HUB_DIAMETER_FRAC = 0.31818
-export const RULETA_R_INNER_FRAC = 0.328
-export const RULETA_R_OUTER_FRAC = 0.91
+/** Logo circular original (único asset raster; capa fija). */
+export const RULETA_HUB_LOGO_SRC = "/activaciones/ruleta/quillotana-hub-logo.png"
 
 export const RULETA_SEGMENTS: readonly RuletaSegmentBase[] = [
   {
@@ -61,127 +76,158 @@ export const RULETA_SEGMENTS: readonly RuletaSegmentBase[] = [
     code: "SORPRESA",
     label: "Premio sorpresa",
     shortLabel: "Sorpresa",
+    lines: ["PREMIO", "SORPRESA"],
+    emphasizeFirstLine: false,
     color: "#E53935",
     textColor: "#FFFFFF",
+    icon: "gift",
   },
   {
     index: 1,
     code: "VASOS",
     label: "Vasos Quillotana",
     shortLabel: "Vasos",
+    lines: ["VASOS", "QUILLOTANA"],
+    emphasizeFirstLine: false,
     color: "#7B1FA2",
     textColor: "#FFFFFF",
+    icon: "cups",
   },
   {
     index: 2,
     code: "P10",
     label: "10% descuento",
     shortLabel: "10%",
+    lines: ["10%", "DESCUENTO"],
+    emphasizeFirstLine: true,
     color: "#FB8C00",
-    textColor: "#1A1208",
+    textColor: "#FFFFFF",
+    icon: "percent",
   },
   {
     index: 3,
     code: "BEBIDA",
     label: "Bebida gratis",
     shortLabel: "Bebida",
+    lines: ["BEBIDA", "GRATIS"],
+    emphasizeFirstLine: false,
     color: "#43A047",
     textColor: "#FFFFFF",
+    icon: "can",
   },
   {
     index: 4,
     code: "PROMO",
     label: "Promoción gratis",
     shortLabel: "Promo",
+    lines: ["PROMOCIÓN", "GRATIS"],
+    emphasizeFirstLine: false,
     color: "#D81B60",
     textColor: "#FFFFFF",
+    icon: "gift",
   },
   {
     index: 5,
     code: "NONE",
     label: "¡Esta vez no ganaste!",
     shortLabel: "Sin premio",
+    lines: ["¡ESTA VEZ", "NO GANASTE!"],
+    emphasizeFirstLine: false,
     color: "#78909C",
     textColor: "#FFFFFF",
+    icon: "sad",
   },
   {
     index: 6,
     code: "RETRY",
     label: "¡Vuelve a girar!",
     shortLabel: "Otra vez",
+    lines: ["¡VUELVE", "A GIRAR!"],
+    emphasizeFirstLine: false,
     color: "#00897B",
     textColor: "#FFFFFF",
+    icon: "retry",
   },
   {
     index: 7,
     code: "P03",
     label: "3% descuento",
     shortLabel: "3%",
+    lines: ["3%", "DESCUENTO"],
+    emphasizeFirstLine: true,
     color: "#1E88E5",
     textColor: "#FFFFFF",
+    icon: "percent",
   },
   {
     index: 8,
     code: "P05",
     label: "5% descuento",
     shortLabel: "5%",
+    lines: ["5%", "DESCUENTO"],
+    emphasizeFirstLine: true,
     color: "#FDD835",
     textColor: "#1A1208",
+    icon: "percent",
   },
 ] as const
 
-const RETRY_META = {
+const RETRY_DISPLAY = {
   displayCode: "RETRY",
   displayLabel: "¡Vuelve a girar!",
   displayShortLabel: "¡VUELVE A GIRAR!",
-  displayColor: "#00897B",
-  displayTextColor: "#FFFFFF",
-} as const
+  displayLines: ["¡VUELVE", "A GIRAR!"] as const,
+  displayEmphasizeFirstLine: false,
+  displayIcon: "retry" as const,
+}
 
-const RANDOM_META = {
+const RANDOM_DISPLAY = {
   displayCode: "RANDOM",
   displayLabel: "¡Premio random!",
   displayShortLabel: "¡PREMIO RANDOM!",
-  displayColor: "#6D28D9",
-  displayTextColor: "#FFFFFF",
-} as const
+  displayLines: ["¡PREMIO", "RANDOM!"] as const,
+  displayEmphasizeFirstLine: false,
+  displayIcon: "random" as const,
+}
 
 export function defaultConfig(): RuletaLocalConfig {
   return {
-    version: 2,
+    version: 3,
     overrides: RULETA_SEGMENTS.map(() => "original" as SlotOverride),
   }
 }
 
 function resolveDisplay(base: RuletaSegmentBase, override: SlotOverride) {
-  // Sustitución: solo cambia el texto; conserva color original del sector.
   if (override === "RETRY") {
     return {
-      ...RETRY_META,
+      ...RETRY_DISPLAY,
       displayColor: base.color,
-      displayTextColor: base.textColor,
+      displayTextColor: "#FFFFFF",
     }
   }
   if (override === "RANDOM") {
     return {
-      ...RANDOM_META,
+      ...RANDOM_DISPLAY,
       displayColor: base.color,
-      displayTextColor: base.textColor,
+      displayTextColor: "#FFFFFF",
     }
   }
   return {
     displayCode: base.code,
     displayLabel: base.label,
     displayShortLabel: base.shortLabel,
+    displayLines: base.lines,
+    displayEmphasizeFirstLine: base.emphasizeFirstLine,
     displayColor: base.color,
     displayTextColor: base.textColor,
+    displayIcon: base.icon,
   }
 }
 
 /**
- * Ángulo visual del centro del sector i en la foto física (sin espejo).
- * Índice 0 (Sorpresa/rojo) centrado arriba (0°). Sentido horario CSS.
- * El indicador fijo apunta desde abajo (180°).
+ * Centro angular del sector i.
+ * 0° = arriba, sentido horario (mismo sistema que `rotate()` SVG/CSS).
+ * Puntero fijo inferior = 180°.
  */
 export function slotVisualMidDeg(index: number): number {
   return ((index * RULETA_SLICE_DEG) % 360 + 360) % 360
@@ -196,20 +242,29 @@ export function normalizeConfig(raw: unknown): RuletaLocalConfig {
     o === "RETRY" || o === "RANDOM" || o === "original" ? o : "original",
   )
   while (overs.length < RULETA_SEGMENTS.length) overs.push("original")
-  return { version: 2, overrides: overs.slice(0, RULETA_SEGMENTS.length) }
+  return { version: 3, overrides: overs.slice(0, RULETA_SEGMENTS.length) }
 }
 
 export function loadConfigFromStorage(): RuletaLocalConfig {
   if (typeof window === "undefined") return defaultConfig()
   try {
-    // Migrar desde v1 (probabilidades): conservar solo overrides si existen.
-    const legacy = window.localStorage.getItem(LEGACY_STORAGE_KEY)
-    const raw = window.localStorage.getItem(STORAGE_KEY) ?? legacy
+    let raw = window.localStorage.getItem(STORAGE_KEY)
+    let fromLegacy = false
+    if (!raw) {
+      for (const key of LEGACY_STORAGE_KEYS) {
+        const legacy = window.localStorage.getItem(key)
+        if (legacy) {
+          raw = legacy
+          fromLegacy = true
+          break
+        }
+      }
+    }
     if (!raw) return defaultConfig()
     const parsed = JSON.parse(raw) as { overrides?: unknown }
     const cfg = normalizeConfig(parsed)
-    if (legacy) {
-      window.localStorage.removeItem(LEGACY_STORAGE_KEY)
+    if (fromLegacy) {
+      for (const key of LEGACY_STORAGE_KEYS) window.localStorage.removeItem(key)
       window.localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg))
     }
     return cfg
@@ -226,36 +281,30 @@ export function saveConfigToStorage(config: RuletaLocalConfig): void {
 export function clearConfigStorage(): void {
   if (typeof window === "undefined") return
   window.localStorage.removeItem(STORAGE_KEY)
-  window.localStorage.removeItem(LEGACY_STORAGE_KEY)
+  for (const key of LEGACY_STORAGE_KEYS) window.localStorage.removeItem(key)
 }
 
-/**
- * Nueve sectores fijos de 40° en coordenadas de la foto (antes de girar).
- * La sustitución solo cambia el texto visible; el ángulo y la probabilidad (1/9) no cambian.
- */
+/** Nueve sectores fijos de 40°. La sustitución cambia contenido SVG, no el ángulo. */
 export function buildActiveSlots(config: RuletaLocalConfig): ActiveSlot[] {
   const cfg = normalizeConfig(config)
   return RULETA_SEGMENTS.map((base, i) => {
     const override = cfg.overrides[i] ?? "original"
     const midDeg = slotVisualMidDeg(i)
     const half = RULETA_SLICE_DEG / 2
-    // Ángulos en espacio de la foto; se permiten valores fuera de [0,360) para arcos contiguos.
-    const startDeg = midDeg - half
-    const endDeg = midDeg + half
     const display = resolveDisplay(base, override)
     return {
       ...base,
       ...display,
       override,
-      startDeg,
-      endDeg,
+      startDeg: midDeg - half,
+      endDeg: midDeg + half,
       midDeg,
       spanDeg: RULETA_SLICE_DEG,
     }
   })
 }
 
-/** Índice uniforme 0..8 con CSPRNG (rechazo para evitar sesgo de módulo). */
+/** Índice uniforme 0..n-1 con CSPRNG (rechazo para evitar sesgo de módulo). */
 export function pickUniformSlotIndex(count = RULETA_SEGMENTS.length): number {
   if (count <= 0) throw new Error("count inválido")
   if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
