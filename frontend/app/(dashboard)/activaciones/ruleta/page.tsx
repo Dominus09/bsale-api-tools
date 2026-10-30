@@ -34,10 +34,13 @@ function randomSpinDurationMs(): number {
   return 6200
 }
 
-/** Centro del sector (40°) bajo el puntero superior; siempre avanza. */
+/**
+ * Alinea el centro del sector (midDeg) con el indicador fijo inferior (180°).
+ * midDeg + rotación ≡ 180 (mod 360). Siempre avanza en sentido horario.
+ */
 function targetRotationForMid(midDeg: number, currentRotation: number): number {
   const normalized = ((currentRotation % 360) + 360) % 360
-  const desiredMod = (360 - midDeg) % 360
+  const desiredMod = (180 - midDeg + 360) % 360
   let delta = desiredMod - normalized
   if (delta <= 0) delta += 360
   const extraTurns = 5 + Math.floor(midDeg / 120)
@@ -45,23 +48,23 @@ function targetRotationForMid(midDeg: number, currentRotation: number): number {
 }
 
 function computeWheelSize(stage: HTMLElement | null, fullscreen: boolean): number {
-  if (typeof window === "undefined") return 520
+  if (typeof window === "undefined") return 640
   const vw = window.innerWidth
   const vh = window.innerHeight
   const rect = stage?.getBoundingClientRect()
   const availW = rect?.width ? rect.width - 24 : vw - 32
-  const headerReserve = fullscreen ? vh * 0.14 : vh * 0.28
+  const headerReserve = fullscreen ? vh * 0.12 : vh * 0.22
   const availH = Math.max(280, (rect?.height || vh) - headerReserve)
   if (fullscreen) {
-    return Math.floor(Math.min(availW * 0.92, availH * 0.88, Math.min(vw, vh) * 0.86))
+    return Math.floor(Math.min(availW * 0.94, availH * 0.9, Math.min(vw, vh) * 0.9))
   }
   if (vw >= 1100) {
-    return Math.floor(Math.min(availW * 0.78, availH * 0.82, 720))
+    return Math.floor(Math.min(availW * 0.88, availH * 0.88, 900))
   }
   if (vw >= 768) {
-    return Math.floor(Math.min(availW * 0.9, availH * 0.72, 640))
+    return Math.floor(Math.min(availW * 0.94, availH * 0.82, 760))
   }
-  return Math.floor(Math.min(availW * 0.96, availH * 0.62, 420))
+  return Math.floor(Math.min(availW * 0.96, availH * 0.68, 480))
 }
 
 export default function RuletaQuillotanaPage() {
@@ -75,7 +78,7 @@ export default function RuletaQuillotanaPage() {
   const [showResult, setShowResult] = useState(false)
   const [spinCount, setSpinCount] = useState(0)
   const [isFullscreen, setIsFullscreen] = useState(false)
-  const [wheelSize, setWheelSize] = useState(560)
+  const [wheelSize, setWheelSize] = useState(720)
   const [adminOpen, setAdminOpen] = useState(false)
   const pendingWinner = useRef<ActiveSlot | null>(null)
   const rotationRef = useRef(0)

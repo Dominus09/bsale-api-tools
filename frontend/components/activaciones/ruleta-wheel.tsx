@@ -3,6 +3,10 @@
 import { useMemo } from "react"
 
 import type { ActiveSlot } from "./ruleta-q1-segments"
+import { RULETA_SLICE_DEG } from "./ruleta-q1-segments"
+
+/** Foto oficial de la ruleta física (textura que gira). Recorte cuadrado del disco. */
+export const RULETA_FISICA_SRC = "/activaciones/ruleta/ruleta-fisica-q1.jpg"
 
 type RuletaWheelProps = {
   slots: ActiveSlot[]
@@ -18,11 +22,29 @@ function polar(cx: number, cy: number, r: number, angleDeg: number) {
   return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) }
 }
 
-function slicePath(cx: number, cy: number, r: number, startDeg: number, endDeg: number) {
-  const start = polar(cx, cy, r, startDeg)
-  const end = polar(cx, cy, r, endDeg)
-  const large = endDeg - startDeg > 180 ? 1 : 0
-  return `M ${cx} ${cy} L ${start.x} ${start.y} A ${r} ${r} 0 ${large} 1 ${end.x} ${end.y} Z`
+function slicePath(
+  cx: number,
+  cy: number,
+  rOuter: number,
+  rInner: number,
+  startDeg: number,
+  endDeg: number,
+) {
+  let span = endDeg - startDeg
+  if (span <= 0) span += 360
+  const absoluteEnd = startDeg + span
+  const large = span > 180 ? 1 : 0
+  const o0 = polar(cx, cy, rOuter, startDeg)
+  const o1 = polar(cx, cy, rOuter, absoluteEnd)
+  const i1 = polar(cx, cy, rInner, absoluteEnd)
+  const i0 = polar(cx, cy, rInner, startDeg)
+  return [
+    `M ${o0.x} ${o0.y}`,
+    `A ${rOuter} ${rOuter} 0 ${large} 1 ${o1.x} ${o1.y}`,
+    `L ${i1.x} ${i1.y}`,
+    `A ${rInner} ${rInner} 0 ${large} 0 ${i0.x} ${i0.y}`,
+    "Z",
+  ].join(" ")
 }
 
 export function RuletaWheel({
@@ -35,23 +57,22 @@ export function RuletaWheel({
 }: RuletaWheelProps) {
   const cx = size / 2
   const cy = size / 2
-  const outer = size * 0.485
-  const labelR = size * 0.34
+  const rOuter = size * 0.495
+  const rInner = size * 0.175
+  const labelR = (rOuter + rInner) / 2
+  const pointerW = Math.max(14, size * 0.04)
+  const pointerH = Math.max(24, size * 0.058)
 
-  const slices = useMemo(
+  const overlays = useMemo(
     () =>
       slots
-        .filter((s) => s.spanDeg > 0.05)
-        .map((slot) => {
-          const labelPos = polar(cx, cy, labelR, slot.midDeg)
-          const useShort = size < 400
-          const fontSize = Math.max(11, size * 0.028)
-          return { slot, labelPos, useShort, fontSize }
-        }),
-    [slots, cx, cy, labelR, size],
+        .filter((s) => s.override !== "original")
+        .map((slot) => ({
+          slot,
+          labelPos: polar(cx, cy, labelR, slot.midDeg),
+        })),
+    [slots, cx, cy, labelR],
   )
-
-  const pointer = Math.max(12, size * 0.032)
 
   return (
     <div
@@ -62,101 +83,122 @@ export function RuletaWheel({
         maxWidth: "100%",
         position: "relative",
         filter: spinning
-          ? "drop-shadow(0 0 32px rgba(255,140,40,0.5))"
-          : "drop-shadow(0 20px 48px rgba(0,0,0,0.55))",
+          ? "drop-shadow(0 0 36px rgba(255,80,40,0.4))"
+          : "drop-shadow(0 22px 50px rgba(0,0,0,0.55))",
       }}
     >
       <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0 rounded-full"
         style={{
-          background:
-            "conic-gradient(from 0deg, #ff6b00, #7c3aed, #111827, #f59e0b, #ff6b00)",
-          WebkitMask:
-            "radial-gradient(farthest-side, transparent calc(100% - 11px), #000 calc(100% - 10px))",
-          mask: "radial-gradient(farthest-side, transparent calc(100% - 11px), #000 calc(100% - 10px))",
-        }}
-      />
-
-      <svg
-        width={size}
-        height={size}
-        viewBox={`0 0 ${size} ${size}`}
-        role="img"
-        aria-label="Ruleta Quillotana"
-        style={{
+          width: size,
+          height: size,
+          borderRadius: "50%",
+          overflow: "hidden",
           transform: `rotate(${rotationDeg}deg)`,
           transition: spinning
             ? `transform ${transitionMs}ms cubic-bezier(0.12, 0.75, 0.08, 1)`
             : "none",
-          borderRadius: "50%",
           willChange: spinning ? "transform" : "auto",
+          position: "relative",
         }}
       >
-        <defs>
-          <filter id="ruleta-inner-shadow" x="-20%" y="-20%" width="140%" height="140%">
-            <feDropShadow dx="0" dy="2" stdDeviation="3" floodOpacity="0.35" />
-          </filter>
-        </defs>
-        <circle cx={cx} cy={cy} r={outer + 3} fill="#1a1025" />
-        <g filter="url(#ruleta-inner-shadow)">
-          {slices.map(({ slot, labelPos, useShort, fontSize }) => (
-            <g key={`${slot.index}-${slot.displayCode}`}>
-              <path
-                d={slicePath(cx, cy, outer, slot.startDeg, slot.endDeg)}
-                fill={slot.displayColor}
-                stroke="#0f0a14"
-                strokeWidth={1.25}
-              />
-              <text
-                x={labelPos.x}
-                y={labelPos.y}
-                fill={slot.displayTextColor}
-                fontSize={fontSize}
-                fontWeight={700}
-                textAnchor="middle"
-                dominantBaseline="middle"
-                transform={`rotate(${slot.midDeg}, ${labelPos.x}, ${labelPos.y})`}
-                style={{
-                  fontFamily: "ui-sans-serif, system-ui, Segoe UI, sans-serif",
-                  letterSpacing: "0.01em",
-                  paintOrder: "stroke",
-                  stroke: "rgba(0,0,0,0.25)",
-                  strokeWidth: 0.6,
-                }}
-              >
-                {useShort ? slot.displayShortLabel : slot.displayLabel}
-              </text>
-            </g>
-          ))}
-        </g>
-        <circle
-          cx={cx}
-          cy={cy}
-          r={size * 0.08}
-          fill="#120a1a"
-          stroke="#f59e0b"
-          strokeWidth={Math.max(2, size * 0.006)}
+        <img
+          src={RULETA_FISICA_SRC}
+          alt="Ruleta física Quillotana"
+          draggable={false}
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            objectPosition: "center center",
+            display: "block",
+            userSelect: "none",
+            pointerEvents: "none",
+          }}
         />
-        <circle cx={cx} cy={cy} r={size * 0.03} fill="#fbbf24" />
-      </svg>
 
+        {overlays.length > 0 ? (
+          <svg
+            width={size}
+            height={size}
+            viewBox={`0 0 ${size} ${size}`}
+            style={{ position: "absolute", inset: 0, pointerEvents: "none" }}
+            aria-hidden
+          >
+            {overlays.map(({ slot, labelPos }) => {
+              const words = slot.displayShortLabel.toUpperCase().split(/\s+/)
+              const lineH = Math.max(12, size * 0.028)
+              const fontSize = Math.max(10, size * 0.026)
+              return (
+                <g key={`ov-${slot.index}-${slot.displayCode}`}>
+                  <path
+                    d={slicePath(cx, cy, rOuter, rInner, slot.startDeg, slot.endDeg)}
+                    fill={slot.displayColor}
+                    fillOpacity={0.94}
+                    stroke="#ffffff"
+                    strokeWidth={Math.max(2, size * 0.004)}
+                  />
+                  <text
+                    x={labelPos.x}
+                    y={labelPos.y - ((words.length - 1) * lineH) / 2}
+                    fill="#ffffff"
+                    stroke="#000000"
+                    strokeWidth={Math.max(1.2, size * 0.0035)}
+                    paintOrder="stroke"
+                    fontSize={fontSize}
+                    fontWeight={800}
+                    textAnchor="middle"
+                    dominantBaseline="middle"
+                    transform={`rotate(${slot.midDeg}, ${labelPos.x}, ${labelPos.y})`}
+                    style={{
+                      fontFamily: "Impact, Haettenschweiler, Arial Black, sans-serif",
+                      letterSpacing: "0.02em",
+                    }}
+                  >
+                    {words.map((w, wi) => (
+                      <tspan key={`${slot.index}-${wi}`} x={labelPos.x} dy={wi === 0 ? 0 : lineH}>
+                        {w}
+                      </tspan>
+                    ))}
+                  </text>
+                </g>
+              )
+            })}
+          </svg>
+        ) : null}
+      </div>
+
+      {/* Triángulo rojo fijo inferior (igual a la ruleta física); no gira */}
       <div
         aria-hidden
-        className="absolute left-1/2 top-0 z-10 -translate-x-1/2"
-        style={{ marginTop: -2 }}
+        className="pointer-events-none absolute left-1/2 z-20 -translate-x-1/2"
+        style={{ bottom: -4 }}
       >
         <div
           style={{
             width: 0,
             height: 0,
-            borderLeft: `${pointer}px solid transparent`,
-            borderRight: `${pointer}px solid transparent`,
-            borderTop: `${pointer * 1.9}px solid #fbbf24`,
-            filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.5))",
+            borderLeft: `${pointerW}px solid transparent`,
+            borderRight: `${pointerW}px solid transparent`,
+            borderBottom: `${pointerH}px solid #E53935`,
+            filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.55))",
+          }}
+        />
+        <div
+          style={{
+            width: pointerW * 0.5,
+            height: pointerW * 0.5,
+            margin: `${-pointerH * 0.12}px auto 0`,
+            borderRadius: "50%",
+            background: "#B71C1C",
+            border: "2px solid #fff",
+            boxShadow: "0 1px 3px rgba(0,0,0,0.45)",
           }}
         />
       </div>
+
+      <span className="sr-only">
+        Ruleta física Quillotana, {360 / RULETA_SLICE_DEG} sectores de {RULETA_SLICE_DEG}°
+      </span>
     </div>
   )
 }

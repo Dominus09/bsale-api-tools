@@ -124,7 +124,7 @@ export const RULETA_SEGMENTS: readonly RuletaSegmentBase[] = [
 const RETRY_META = {
   displayCode: "RETRY",
   displayLabel: "¡Vuelve a girar!",
-  displayShortLabel: "Otra vez",
+  displayShortLabel: "¡VUELVE A GIRAR!",
   displayColor: "#00897B",
   displayTextColor: "#FFFFFF",
 } as const
@@ -132,7 +132,7 @@ const RETRY_META = {
 const RANDOM_META = {
   displayCode: "RANDOM",
   displayLabel: "¡Premio random!",
-  displayShortLabel: "Random",
+  displayShortLabel: "¡PREMIO RANDOM!",
   displayColor: "#6D28D9",
   displayTextColor: "#FFFFFF",
 } as const
@@ -145,8 +145,21 @@ export function defaultConfig(): RuletaLocalConfig {
 }
 
 function resolveDisplay(base: RuletaSegmentBase, override: SlotOverride) {
-  if (override === "RETRY") return { ...RETRY_META }
-  if (override === "RANDOM") return { ...RANDOM_META }
+  // Sustitución: solo cambia el texto; conserva color original del sector.
+  if (override === "RETRY") {
+    return {
+      ...RETRY_META,
+      displayColor: base.color,
+      displayTextColor: base.textColor,
+    }
+  }
+  if (override === "RANDOM") {
+    return {
+      ...RANDOM_META,
+      displayColor: base.color,
+      displayTextColor: base.textColor,
+    }
+  }
   return {
     displayCode: base.code,
     displayLabel: base.label,
@@ -154,6 +167,15 @@ function resolveDisplay(base: RuletaSegmentBase, override: SlotOverride) {
     displayColor: base.color,
     displayTextColor: base.textColor,
   }
+}
+
+/**
+ * Ángulo visual del centro del sector i en la foto física (sin espejo).
+ * Índice 0 (Sorpresa/rojo) centrado arriba (0°). Sentido horario CSS.
+ * El indicador fijo apunta desde abajo (180°).
+ */
+export function slotVisualMidDeg(index: number): number {
+  return ((index * RULETA_SLICE_DEG) % 360 + 360) % 360
 }
 
 export function normalizeConfig(raw: unknown): RuletaLocalConfig {
@@ -198,14 +220,15 @@ export function clearConfigStorage(): void {
   window.localStorage.removeItem(LEGACY_STORAGE_KEY)
 }
 
-/** Nueve sectores fijos de 40°. La sustitución solo cambia texto/color, no el ángulo. */
+/** Nueve sectores fijos de 40°. La sustitución solo cambia texto, no el ángulo. */
 export function buildActiveSlots(config: RuletaLocalConfig): ActiveSlot[] {
   const cfg = normalizeConfig(config)
   return RULETA_SEGMENTS.map((base, i) => {
     const override = cfg.overrides[i] ?? "original"
-    const startDeg = i * RULETA_SLICE_DEG
-    const endDeg = startDeg + RULETA_SLICE_DEG
-    const midDeg = startDeg + RULETA_SLICE_DEG / 2
+    const midDeg = slotVisualMidDeg(i)
+    const half = RULETA_SLICE_DEG / 2
+    const startDeg = (midDeg - half + 360) % 360
+    const endDeg = (midDeg + half) % 360
     const display = resolveDisplay(base, override)
     return {
       ...base,
