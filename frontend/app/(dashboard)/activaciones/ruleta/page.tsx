@@ -68,25 +68,26 @@ function computeWheelSize(opts: {
   const stageW = stageRect?.width || vw
   const stageH = stageRect?.height || vh
 
-  const buttonH = fullscreen ? 72 : 90
-  const pointerReserve = 42
-  const gap = fullscreen ? 10 : 14
-  const padX = fullscreen ? 12 : 20
-  const legendReserve = !fullscreen && !adminOpen ? 12 : 0
+  const buttonH = fullscreen ? 68 : 84
+  const pointerReserve = 40
+  const gap = fullscreen ? 8 : 12
+  const padX = fullscreen ? 10 : 16
+  // Leyenda solo reserva si hay mucho alto; priorizamos ruleta grande
+  const legendReserve = !fullscreen && !adminOpen && vh > 900 ? 8 : 0
 
-  let availW = (colRect?.width && colRect.width > 40 ? colRect.width : stageW) - padX
+  const availW = (colRect?.width && colRect.width > 40 ? colRect.width : stageW) - padX
 
   let availH: number
   if (colRect && colRect.height > 120) {
     availH = colRect.height - buttonH - pointerReserve - gap * 2 - legendReserve
   } else {
-    const headerH = fullscreen ? 56 : 92
+    const headerH = fullscreen ? 52 : 88
     availH = stageH - headerH - buttonH - pointerReserve - gap * 3 - legendReserve
   }
 
-  const side = Math.floor(Math.min(availW, Math.max(availH, 200), Math.min(vw, vh) * 0.94))
-  const minSide = 220
-  const maxSide = fullscreen ? 1040 : 860
+  const side = Math.floor(Math.min(availW, Math.max(availH, 220), Math.min(vw, vh) * 0.96))
+  const minSide = 260
+  const maxSide = fullscreen ? 1200 : 980
   return Math.max(minSide, Math.min(side, maxSide))
 }
 
@@ -102,7 +103,7 @@ export default function RuletaQuillotanaPage() {
   const [showResult, setShowResult] = useState(false)
   const [spinCount, setSpinCount] = useState(0)
   const [isFullscreen, setIsFullscreen] = useState(false)
-  const [wheelSize, setWheelSize] = useState(560)
+  const [wheelSize, setWheelSize] = useState(640)
   const [adminOpen, setAdminOpen] = useState(false)
   const pendingWinner = useRef<ActiveSlot | null>(null)
   const rotationRef = useRef(0)
@@ -356,13 +357,13 @@ export default function RuletaQuillotanaPage() {
           className={cn(
             "grid min-h-0 flex-1 items-stretch gap-4",
             showChrome && adminOpen
-              ? "lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]"
+              ? "lg:grid-cols-[minmax(0,1.35fr)_minmax(260px,300px)]"
               : "grid-cols-1",
           )}
         >
           <div
             ref={wheelColRef}
-            className="flex min-h-0 min-w-0 flex-col items-center justify-center gap-3 overflow-hidden"
+            className="flex min-h-0 min-w-0 flex-col items-center justify-center gap-3 overflow-visible"
           >
             <RuletaWheel
               slots={slots}

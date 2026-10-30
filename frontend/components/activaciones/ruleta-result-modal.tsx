@@ -17,7 +17,7 @@ type Props = {
 function ConfettiBurst() {
   const pieces = useMemo(
     () =>
-      Array.from({ length: 48 }, (_, i) => ({
+      Array.from({ length: 56 }, (_, i) => ({
         id: i,
         left: `${(i * 17 + 7) % 100}%`,
         delay: `${(i % 12) * 0.05}s`,
@@ -47,7 +47,7 @@ function ConfettiBurst() {
           100% { transform: translateY(110vh) rotate(720deg); opacity: 0; }
         }
         @keyframes ruleta-modal-in {
-          0% { opacity: 0; transform: scale(0.86) translateY(12px); }
+          0% { opacity: 0; transform: scale(0.88) translateY(14px); }
           100% { opacity: 1; transform: scale(1) translateY(0); }
         }
       `}</style>
@@ -73,39 +73,47 @@ export function RuletaResultModal({ slot, open, onContinue }: Props) {
     tone === "none"
       ? "¡Casi!"
       : tone === "retry"
-        ? "¡Sigue participando!"
-        : tone === "random"
-          ? "🎉 ¡FELICIDADES!"
-          : "🎉 ¡FELICIDADES!"
+        ? "¡Otra oportunidad!"
+        : "🎉 ¡FELICIDADES!"
 
-  const subtitle =
+  const headline =
     tone === "none"
-      ? "Esta vez no ganaste, ¡gracias por jugar!"
+      ? "¡Esta vez no ganaste!"
       : tone === "retry"
-        ? "¡Vuelve a girar! Tienes otra oportunidad."
+        ? "¡Vuelve a girar!"
         : tone === "random"
-          ? "¡GANASTE UN PREMIO RANDOM!"
-          : `¡GANASTE ${slot.displayLabel.toUpperCase()}!`
+          ? "¡Premio random!"
+          : slot.displayLabel
+
+  const support =
+    tone === "none"
+      ? "Gracias por participar. ¡Suerte la próxima!"
+      : tone === "retry"
+        ? "Puedes girar de nuevo ahora mismo."
+        : tone === "random"
+          ? "El encargado entregará el regalo según el stock disponible."
+          : "¡Disfruta tu premio Quillotana!"
 
   const showConfetti = tone === "win" || tone === "random"
+  const continueLabel = tone === "retry" ? "GIRAR DE NUEVO" : "CONTINUAR"
 
   return (
     <div
-      className="absolute inset-0 z-40 flex items-center justify-center p-4"
+      className="absolute inset-0 z-40 flex items-center justify-center p-4 sm:p-6"
       role="dialog"
       aria-modal="true"
       aria-labelledby="ruleta-result-title"
     >
       <button
         type="button"
-        className="absolute inset-0 bg-black/65 backdrop-blur-[2px]"
+        className="absolute inset-0 bg-black/70 backdrop-blur-[2px]"
         aria-label="Cerrar resultado"
         onClick={onContinue}
       />
       {showConfetti ? <ConfettiBurst /> : null}
       <div
         className={cn(
-          "relative z-10 w-full max-w-xl rounded-3xl border-2 p-6 text-center shadow-2xl sm:p-10",
+          "relative z-10 w-full max-w-2xl rounded-[2rem] border-2 p-7 text-center shadow-2xl sm:p-12",
           "bg-gradient-to-b from-[#1a1028] to-[#0d0814]",
         )}
         style={{
@@ -115,38 +123,34 @@ export function RuletaResultModal({ slot, open, onContinue }: Props) {
       >
         <p
           id="ruleta-result-title"
-          className="text-sm font-bold uppercase tracking-[0.25em] text-amber-300/90 sm:text-base"
+          className="text-sm font-bold uppercase tracking-[0.28em] text-amber-300/90 sm:text-base"
         >
           {title}
         </p>
         <p
-          className="mt-4 font-serif text-3xl font-black leading-tight text-amber-50 sm:text-5xl"
-          style={{ textShadow: "0 2px 24px rgba(0,0,0,0.45)" }}
+          className="mt-5 font-serif text-4xl font-black leading-[1.05] text-amber-50 sm:text-6xl"
+          style={{ textShadow: "0 2px 28px rgba(0,0,0,0.45)" }}
         >
-          {subtitle}
+          {headline}
         </p>
         <div
-          className="mx-auto mt-5 inline-flex max-w-full items-center justify-center rounded-full px-5 py-2 text-sm font-bold uppercase tracking-wide sm:text-base"
+          className="mx-auto mt-6 inline-flex max-w-full items-center justify-center rounded-full px-6 py-2.5 text-sm font-bold uppercase tracking-wide sm:text-base"
           style={{ backgroundColor: slot.displayColor, color: slot.displayTextColor }}
         >
           {slot.displayLabel}
         </div>
-        {tone === "random" ? (
-          <p className="mt-4 text-sm text-amber-100/70">
-            El encargado entregará el regalo físico según el stock disponible.
-          </p>
-        ) : null}
+        <p className="mx-auto mt-5 max-w-md text-base text-amber-100/75 sm:text-lg">{support}</p>
         <Button
           type="button"
           size="lg"
           onClick={onContinue}
           className={cn(
-            "mt-8 h-14 min-w-[200px] rounded-full px-10 text-base font-bold",
+            "mt-9 h-14 min-w-[220px] rounded-full px-12 text-base font-bold sm:h-16 sm:text-lg",
             "bg-gradient-to-b from-amber-400 to-orange-600 text-[#1a0a08]",
             "hover:from-amber-300 hover:to-orange-500",
           )}
         >
-          CONTINUAR
+          {continueLabel}
         </Button>
       </div>
     </div>

@@ -47,12 +47,13 @@ const LEGACY_STORAGE_KEY = "quillotana.ruleta.q1.config.v1"
 export const RULETA_SLICE_DEG = 40
 
 /**
- * Geometría relativa al radio del disco en la foto física (fracción de radius = size/2).
- * Calibrada sobre ruleta-fisica-q1.jpg para no tapar emblema ni borde metálico.
+ * Geometría calibrada sobre el disco circular exportado (800×800, radio útil = size/2).
+ * - HUB_DIAMETER_FRAC: diámetro del emblema / tamaño del disco
+ * - R_*_FRAC: radios de overlay como fracción del radio del disco
  */
-export const RULETA_HUB_DIAMETER_FRAC = 0.295
-export const RULETA_R_INNER_FRAC = 0.31
-export const RULETA_R_OUTER_FRAC = 0.875
+export const RULETA_HUB_DIAMETER_FRAC = 0.31818
+export const RULETA_R_INNER_FRAC = 0.328
+export const RULETA_R_OUTER_FRAC = 0.91
 
 export const RULETA_SEGMENTS: readonly RuletaSegmentBase[] = [
   {
