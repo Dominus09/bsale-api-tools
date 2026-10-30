@@ -31,6 +31,7 @@ export const DEFAULT_THEME: AppearanceTheme = "light"
  */
 export const DARK_THEME_ROUTE_PREFIXES = [
   "/admin",
+  "/activaciones",
   "/alerts",
   "/analitica",
   "/analitica-v2",

@@ -42,6 +42,7 @@ import {
   UsersRound,
   FileWarning,
   BookOpen,
+  Sparkles,
   X,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -107,6 +108,11 @@ const navSections: { title: string; items: NavItem[] }[] = [
       { href: "/gondolas", label: "Control de Góndolas", icon: ScanBarcode },
       { href: "/sucursales/etiquetas", label: "Generador de Etiquetas", icon: Printer },
       { href: "/sucursales/etiquetas2", label: "Etiquetas Socios (Beta)", icon: Users },
+      {
+        href: "/activaciones/ruleta",
+        label: "Ruleta Quillotana",
+        icon: Sparkles,
+      },
     ],
   },
   {
