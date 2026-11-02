@@ -65,6 +65,25 @@ def test_static_meta_routes_before_dynamic_id(app_client, monkeypatch):
         "backend.services.user_admin.service.list_auth_events",
         lambda **kwargs: {"items": [], "total": 0, "meta": {"available": False}},
     )
+    monkeypatch.setattr(
+        "backend.services.user_admin.service.multiapp_status",
+        lambda: {
+            "tables": {
+                "user_apps": True,
+                "user_operational_profiles": True,
+                "user_offices": True,
+            },
+            "ready": True,
+            "apps": [{"code": "erp", "label": "ERP"}, {"code": "pwa", "label": "PWA"}],
+            "profiles": [{"code": "chofer", "label": "Chofer"}],
+        },
+    )
+    monkeypatch.setattr(
+        "backend.services.user_admin.service.list_offices_catalog",
+        lambda **kwargs: [
+            {"company_id": 1, "office_id": 10, "name": "Central"},
+        ],
+    )
 
     r1 = app_client.get("/admin/users/meta/roles", headers=_auth("gerencia"))
     assert r1.status_code == 200
@@ -73,6 +92,21 @@ def test_static_meta_routes_before_dynamic_id(app_client, monkeypatch):
     r2 = app_client.get("/admin/users/meta/companies", headers=_auth("gerencia"))
     assert r2.status_code == 200
     assert r2.json()["items"][0]["company_id"] == 1
+
+    r_apps = app_client.get("/admin/users/meta/apps", headers=_auth("gerencia"))
+    assert r_apps.status_code == 200
+    assert r_apps.json()["ready"] is True
+    assert {a["code"] for a in r_apps.json()["items"]} == {"erp", "pwa"}
+
+    r_prof = app_client.get("/admin/users/meta/profiles", headers=_auth("gerencia"))
+    assert r_prof.status_code == 200
+    assert r_prof.json()["items"][0]["code"] == "chofer"
+
+    r_off = app_client.get(
+        "/admin/users/meta/offices?company_id=1", headers=_auth("gerencia")
+    )
+    assert r_off.status_code == 200
+    assert r_off.json()["items"][0]["office_id"] == 10
 
     r3 = app_client.get("/admin/users/auth-events", headers=_auth("adm"))
     assert r3.status_code == 200
@@ -218,3 +252,42 @@ def test_get_user_id_route_still_works(app_client, monkeypatch):
 
 def test_unauthenticated_401(app_client):
     assert app_client.get("/admin/users").status_code == 401
+
+
+def test_create_accepts_multiapp_fields(app_client, monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("AUTH_USER_ADMIN_EMAILS", "dueno@test.local")
+
+    captured = {}
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        return {
+            "id": 55,
+            "email": kwargs["email"],
+            "role": kwargs["role"],
+            "apps": kwargs.get("apps") or [],
+            "profiles": kwargs.get("profiles") or [],
+            "has_erp_access": "erp" in (kwargs.get("apps") or []),
+            "has_pwa_access": "pwa" in (kwargs.get("apps") or []),
+        }
+
+    monkeypatch.setattr("backend.services.user_admin.service.create_user", fake_create)
+    res = app_client.post(
+        "/admin/users",
+        headers=_auth("gerencia", "dueno@test.local", 5),
+        json={
+            "email": "chofer@test.local",
+            "role": "operativo",
+            "invite": True,
+            "company_ids": [3],
+            "apps": ["pwa"],
+            "profiles": ["chofer"],
+            "office_scopes": [{"company_id": 3, "office_id": 1}],
+        },
+    )
+    assert res.status_code == 200
+    assert captured["apps"] == ["pwa"]
+    assert captured["profiles"] == ["chofer"]
+    assert captured["office_scopes"] == [{"company_id": 3, "office_id": 1}]
+    assert res.json()["has_erp_access"] is False

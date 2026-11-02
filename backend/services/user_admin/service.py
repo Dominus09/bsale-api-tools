@@ -12,9 +12,12 @@ from urllib.parse import quote
 from fastapi import HTTPException
 
 from backend.auth.audit import (
+    EVENT_APPS_CHANGE,
     EVENT_COMPANIES_CHANGE,
+    EVENT_OFFICES_CHANGE,
     EVENT_PASSWORD_RESET,
     EVENT_PASSWORD_SET_VIA_TOKEN,
+    EVENT_PROFILES_CHANGE,
     EVENT_ROLE_CHANGE,
     EVENT_USER_ACTIVATED,
     EVENT_USER_CREATED,
@@ -26,6 +29,7 @@ from backend.auth.hierarchy import is_owner_id
 from backend.auth.permissions import ADMIN_ROLES, normalized_role
 from backend.auth.user_admin_access import ASSIGNABLE_ROLES, assert_panel_action_allowed
 from backend.db import get_connection
+from backend.services.user_admin import multiapp_admin as ma
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +181,25 @@ def _load_last_logins(cur, user_ids: list[int]) -> dict[int, datetime | None]:
     return out
 
 
-def list_users(*, q: str | None = None, active: bool | None = None) -> list[dict[str, Any]]:
+def list_users(
+    *,
+    q: str | None = None,
+    active: bool | None = None,
+    app: str | None = None,
+    profile: str | None = None,
+) -> list[dict[str, Any]]:
+    app_f = (app or "").strip().lower() or None
+    profile_f = (profile or "").strip().lower() or None
+    if profile_f == "supervisor":
+        profile_f = "jefe_sucursal"
+    if app_f and app_f not in ("erp", "pwa", "legacy"):
+        raise HTTPException(
+            status_code=400,
+            detail="Filtro app inválido: use erp, pwa o legacy",
+        )
+    if profile_f and profile_f not in ma.OPERATIONAL_PROFILES:
+        raise HTTPException(status_code=400, detail="Filtro de perfil inválido")
+
     conn = get_connection()
     try:
         cur = conn.cursor()
@@ -206,23 +228,53 @@ def list_users(*, q: str | None = None, active: bool | None = None) -> list[dict
         ids = [int(r[0]) for r in rows]
         companies = _load_companies_map(cur, ids)
         last_logins = _load_last_logins(cur, ids)
+        apps_ready, apps_map = ma._load_apps_map(cur, ids)
+        profiles_ready, profiles_map = ma._load_profiles_map(cur, ids)
+        offices_ready, offices_map = ma._load_offices_map(cur, ids)
+        tables_ready = apps_ready  # mínimo 064
         cur.close()
-        return [
-            {
-                "id": int(r[0]),
+
+        items: list[dict[str, Any]] = []
+        for r in rows:
+            uid = int(r[0])
+            apps = apps_map.get(uid, [])
+            profiles = profiles_map.get(uid, [])
+            offices = offices_map.get(uid, [])
+            if app_f == "legacy":
+                if tables_ready and apps:
+                    continue
+            elif app_f == "erp":
+                if tables_ready and apps and "erp" not in apps:
+                    continue
+                # sin tablas o sin filas = legacy ERP incluido
+            elif app_f == "pwa":
+                if "pwa" not in apps:
+                    continue
+            if profile_f and profile_f not in profiles:
+                continue
+            base = {
+                "id": uid,
                 "email": r[1],
                 "role": r[2],
                 "active": bool(r[3]) if r[3] is not None else False,
                 "created_at": r[4].isoformat() if r[4] else None,
                 "nombre_usuario": r[5],
-                "companies": companies.get(int(r[0]), []),
-                "last_login_at": last_logins.get(int(r[0])).isoformat()
-                if last_logins.get(int(r[0]))
+                "companies": companies.get(uid, []),
+                "last_login_at": last_logins.get(uid).isoformat()
+                if last_logins.get(uid)
                 else None,
-                "is_owner": is_owner_id(int(r[0])),
+                "is_owner": is_owner_id(uid),
             }
-            for r in rows
-        ]
+            items.append(
+                ma.enrich_user_row(
+                    base,
+                    apps=apps,
+                    profiles=profiles,
+                    offices=offices,
+                    tables_ready=tables_ready,
+                )
+            )
+        return items
     finally:
         conn.close()
 
@@ -233,6 +285,28 @@ def get_user(user_id: int) -> dict[str, Any]:
         if it["id"] == user_id:
             return it
     raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+
+def multiapp_status() -> dict[str, Any]:
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        ready = ma.multiapp_tables_ready(cur)
+        cur.close()
+        return {
+            "tables": ready,
+            "ready": bool(ready["user_apps"]),
+            "apps": ma.apps_catalog()["items"],
+            "profiles": ma.profiles_catalog()["items"],
+        }
+    finally:
+        conn.close()
+
+
+def list_offices_catalog(
+    *, company_id: int | None = None, company_ids: list[int] | None = None
+) -> list[dict[str, Any]]:
+    return ma.list_offices_catalog(company_id=company_id, company_ids=company_ids)
 
 
 def list_companies_catalog() -> list[dict[str, Any]]:
@@ -384,6 +458,9 @@ def create_user(
     company_ids: list[int] | None,
     password: str | None,
     invite: bool,
+    apps: list[str] | None = None,
+    profiles: list[str] | None = None,
+    office_scopes: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     email_key = email.strip().lower()
     if not email_key or "@" not in email_key:
@@ -395,6 +472,17 @@ def create_user(
         current_role=role_n,
         new_role=role_n,
     )
+    apps_n = ma.normalize_apps(apps)
+    profiles_n = ma.normalize_profiles(profiles)
+    offices_n = ma.normalize_office_scopes(office_scopes)
+    if apps_n is not None and profiles_n is not None:
+        ma.validate_apps_profiles_consistency(apps_n, profiles_n)
+    elif profiles_n:
+        # Perfiles en alta sin apps explícitas: exigir PWA en el payload.
+        raise HTTPException(
+            status_code=400,
+            detail="Indique apps incluyendo pwa al asignar perfiles operativos",
+        )
     if invite and password:
         raise HTTPException(
             status_code=400,
@@ -413,6 +501,7 @@ def create_user(
 
     conn = get_connection()
     delivery: dict[str, Any] | None = None
+    multi_written: dict[str, Any] = {}
     try:
         cur = conn.cursor()
         cur.execute(
@@ -431,7 +520,16 @@ def create_user(
         )
         row = cur.fetchone()
         user_id = int(row[0])
-        _set_user_companies(cur, user_id, company_ids or [])
+        companies = list(company_ids or [])
+        _set_user_companies(cur, user_id, companies)
+        multi_written = ma.apply_multiapp_writes(
+            cur,
+            user_id=user_id,
+            apps=apps_n,
+            profiles=profiles_n,
+            office_scopes=offices_n,
+            company_ids_for_offices=companies if offices_n is not None else None,
+        )
         if invite:
             delivery = _create_password_token(
                 cur,
@@ -457,7 +555,12 @@ def create_user(
         user_id=user_id,
         success=True,
         actor_user_id=_actor_id(actor),
-        detail={"role": role_n, "invite": invite},
+        detail={
+            "role": role_n,
+            "invite": invite,
+            **({"apps": multi_written["apps"]} if "apps" in multi_written else {}),
+            **({"profiles": multi_written["profiles"]} if "profiles" in multi_written else {}),
+        },
     )
     out = get_user(user_id)
     if delivery:
@@ -474,8 +577,16 @@ def update_user(
     role: str | None = None,
     active: bool | None = None,
     company_ids: list[int] | None = None,
+    apps: list[str] | None = None,
+    profiles: list[str] | None = None,
+    office_scopes: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    apps_n = ma.normalize_apps(apps)
+    profiles_n = ma.normalize_profiles(profiles)
+    offices_n = ma.normalize_office_scopes(office_scopes)
+
     conn = get_connection()
+    multi_written: dict[str, Any] = {}
     try:
         cur = conn.cursor()
         cur.execute(
@@ -546,6 +657,25 @@ def update_user(
         if company_ids is not None:
             _set_user_companies(cur, user_id, company_ids)
 
+        # Empresas efectivas para validar oficinas en esta transacción.
+        if offices_n is not None:
+            if company_ids is not None:
+                companies_for_offices = list(company_ids)
+            else:
+                cmap = _load_companies_map(cur, [user_id])
+                companies_for_offices = [c["company_id"] for c in cmap.get(user_id, [])]
+        else:
+            companies_for_offices = None
+
+        multi_written = ma.apply_multiapp_writes(
+            cur,
+            user_id=user_id,
+            apps=apps_n,
+            profiles=profiles_n,
+            office_scopes=offices_n,
+            company_ids_for_offices=companies_for_offices,
+        )
+
         # Invalidar sesiones si se desactiva (cuando exista token_version).
         if active is False and bool(prev_active):
             if _column_exists(cur, "bsale", "users", "token_version"):
@@ -571,10 +701,11 @@ def update_user(
         conn.close()
 
     actor_id = _actor_id(actor)
+    audit_email = new_email if email else prev_email
     if role is not None and role != prev_role:
         record_auth_event(
             event_type=EVENT_ROLE_CHANGE,
-            email=new_email if email else prev_email,
+            email=audit_email,
             user_id=user_id,
             success=True,
             actor_user_id=actor_id,
@@ -583,7 +714,7 @@ def update_user(
     if active is not None and bool(active) != bool(prev_active):
         record_auth_event(
             event_type=EVENT_USER_ACTIVATED if active else EVENT_USER_DEACTIVATED,
-            email=new_email if email else prev_email,
+            email=audit_email,
             user_id=user_id,
             success=True,
             actor_user_id=actor_id,
@@ -591,11 +722,38 @@ def update_user(
     if company_ids is not None:
         record_auth_event(
             event_type=EVENT_COMPANIES_CHANGE,
-            email=new_email if email else prev_email,
+            email=audit_email,
             user_id=user_id,
             success=True,
             actor_user_id=actor_id,
             detail={"company_ids": company_ids},
+        )
+    if "apps" in multi_written:
+        record_auth_event(
+            event_type=EVENT_APPS_CHANGE,
+            email=audit_email,
+            user_id=user_id,
+            success=True,
+            actor_user_id=actor_id,
+            detail={"apps": multi_written["apps"]},
+        )
+    if "profiles" in multi_written:
+        record_auth_event(
+            event_type=EVENT_PROFILES_CHANGE,
+            email=audit_email,
+            user_id=user_id,
+            success=True,
+            actor_user_id=actor_id,
+            detail={"profiles": multi_written["profiles"]},
+        )
+    if "offices" in multi_written:
+        record_auth_event(
+            event_type=EVENT_OFFICES_CHANGE,
+            email=audit_email,
+            user_id=user_id,
+            success=True,
+            actor_user_id=actor_id,
+            detail={"offices": multi_written["offices"]},
         )
     return get_user(user_id)
 

@@ -87,26 +87,6 @@ Consumidor: **ERP** = frontend staff; **MOB** = app móvil vendedores; **CRON** 
 3. Al desactivar usuario o rotar `token_version`, invalidación inmediata solo con flags ON.
 4. No activar global sin inventario de sesiones ERP activas.
 
-## F. Fase 1B — cambios exactos necesarios (sin implementar)
+## F. Fase 1B — estado
 
-### Backend
-
-| Superficie | Cambio |
-|---|---|
-| `GET /admin/users`, `GET /admin/users/{id}` | Incluir `apps[]`, `profiles[]`, `offices[{company_id,office_id}]` además de `companies` |
-| `POST /admin/users` | Aceptar `apps`, `profiles`, `office_scopes`; default apps=`["erp"]` para trabajadores ERP; PWA-only sin `erp` |
-| `PATCH /admin/users/{id}` | Upsert/delete en `user_apps`, `user_operational_profiles`, `user_offices`; validar office∈company |
-| `GET /admin/users/meta/offices?company_id=` | Nuevo catálogo oficinas (`bsale.offices`) filtrado por empresas del actor |
-| `GET /admin/users/meta/companies` | Ya existe; reutilizar |
-| Servicio `user_admin` | Transacciones atómicas; no escribir apps si tablas ausentes → 503 claro |
-| `/auth/me` | Ya expone multiapp (1A); UI usará flags |
-
-### Frontend
-
-| Archivo | Cambio |
-|---|---|
-| `usuarios-accesos/page.tsx` | Columnas Apps / Perfiles; pasar catálogo oficinas al sheet |
-| `user-admin-sheet.tsx` | Checks ERP/PWA; multi-select oficinas filtradas por empresas marcadas; perfiles solo si PWA; create/update payloads |
-| `lib/admin-users-api.ts` | Tipos + fetch meta offices |
-
-Regla UX: trabajador puede ser ERP, PWA o ambos; OPERATIVO no recibe ERP automático al marcar solo PWA.
+Implementada en el mismo worktree (admin multiapp + UI). Escrituras a 064–066 → 503 si tablas ausentes; sin backfill ni cutover.

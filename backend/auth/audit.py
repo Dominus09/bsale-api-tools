@@ -25,6 +25,9 @@ EVENT_COMPANIES_CHANGE = "companies_change"
 EVENT_LEGACY_PASSWORD_UPGRADED = "legacy_password_upgraded"
 EVENT_USER_CREATED = "user_created"
 EVENT_PASSWORD_SET_VIA_TOKEN = "password_set_via_token"
+EVENT_APPS_CHANGE = "apps_change"
+EVENT_PROFILES_CHANGE = "profiles_change"
+EVENT_OFFICES_CHANGE = "offices_change"
 
 # Retención recomendada (documentación): 180 días login; 365 días admin.
 DEFAULT_RETENTION_DAYS_LOGIN = 180

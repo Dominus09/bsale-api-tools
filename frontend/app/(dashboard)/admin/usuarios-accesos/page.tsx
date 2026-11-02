@@ -17,12 +17,16 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
+  fetchAdminAppsCatalog,
   fetchAdminAuthEvents,
   fetchAdminCompaniesCatalog,
+  fetchAdminProfilesCatalog,
   fetchAdminRolesCatalog,
   fetchAdminUsers,
+  type AdminAppRef,
   type AdminAuthEvent,
   type AdminCompanyRef,
+  type AdminProfileRef,
   type AdminUserRow,
   type RolesCatalog,
 } from "@/lib/admin-users-api"
@@ -34,16 +38,49 @@ import {
   isOwnerUser,
 } from "@/lib/permissions"
 import { useAuthMe } from "@/lib/use-auth-me"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+
+function formatAppsCell(u: AdminUserRow): string {
+  if (u.apps && u.apps.length) {
+    return u.apps.map((a) => a.toUpperCase()).join(" · ")
+  }
+  if (u.apps_legacy_erp || u.has_erp_access) return "ERP (legacy)"
+  return "—"
+}
+
+function formatProfilesCell(u: AdminUserRow): string {
+  if (!u.profiles?.length) return "—"
+  return u.profiles.join(", ")
+}
+
+function formatOfficesCell(u: AdminUserRow): string {
+  if (!u.offices?.length) return "—"
+  return u.offices
+    .map((o) => o.name || `${o.company_id}/${o.office_id}`)
+    .join(", ")
+}
 
 export default function UsuariosAccesosPage() {
   const { meState, staff, reload: loadMe } = useAuthMe()
   const [tab, setTab] = useState("usuarios")
   const [q, setQ] = useState("")
+  const [filterApp, setFilterApp] = useState<string>("all")
+  const [filterProfile, setFilterProfile] = useState<string>("all")
+  const [filterActive, setFilterActive] = useState<string>("all")
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [users, setUsers] = useState<AdminUserRow[]>([])
   const [rolesCatalog, setRolesCatalog] = useState<RolesCatalog | null>(null)
   const [companies, setCompanies] = useState<AdminCompanyRef[]>([])
+  const [appsCatalog, setAppsCatalog] = useState<AdminAppRef[]>([])
+  const [profilesCatalog, setProfilesCatalog] = useState<AdminProfileRef[]>([])
+  const [multiappReady, setMultiappReady] = useState(false)
   const [events, setEvents] = useState<AdminAuthEvent[]>([])
   const [eventsMeta, setEventsMeta] = useState<{ available: boolean; message?: string }>({
     available: false,
@@ -72,20 +109,40 @@ export default function UsuariosAccesosPage() {
     setLoading(true)
     setError(null)
     try {
-      const [u, r, c] = await Promise.all([
-        fetchAdminUsers({ q: q || undefined }),
+      const activeFilter =
+        filterActive === "active" ? true : filterActive === "inactive" ? false : null
+      const [u, r, c, appsMeta, profilesMeta] = await Promise.all([
+        fetchAdminUsers({
+          q: q || undefined,
+          active: activeFilter,
+          app: filterApp === "all" ? null : filterApp,
+          profile: filterProfile === "all" ? null : filterProfile,
+        }),
         fetchAdminRolesCatalog(),
         fetchAdminCompaniesCatalog(),
+        fetchAdminAppsCatalog().catch(() => ({
+          items: [] as AdminAppRef[],
+          ready: false,
+          tables: {},
+        })),
+        fetchAdminProfilesCatalog().catch(() => ({
+          items: [] as AdminProfileRef[],
+          ready: false,
+          tables: {},
+        })),
       ])
       setUsers(u.items)
       setRolesCatalog(r)
       setCompanies(c.items)
+      setAppsCatalog(appsMeta.items || [])
+      setProfilesCatalog(profilesMeta.items || [])
+      setMultiappReady(Boolean(appsMeta.ready))
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo cargar usuarios")
     } finally {
       setLoading(false)
     }
-  }, [canView, q])
+  }, [canView, q, filterApp, filterProfile, filterActive])
 
   const loadEvents = useCallback(async () => {
     if (!canView) return
@@ -164,7 +221,7 @@ export default function UsuariosAccesosPage() {
       <AnalyticPageHeader
         eyebrow="Administración"
         title="Usuarios y accesos"
-        description="Gestione cuentas staff del ERP, roles existentes y el historial de accesos. Las contraseñas nunca se muestran."
+        description="Gestione trabajadores ERP y/o PWA: roles, aplicaciones, perfiles, empresas y oficinas. Las contraseñas nunca se muestran."
         actions={
           <div className="flex gap-2">
             <Button
@@ -209,35 +266,77 @@ export default function UsuariosAccesosPage() {
         </TabsList>
 
         <TabsContent value="usuarios" className="mt-4 space-y-4">
-          <div className="relative max-w-md">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-lq-faint" />
-            <Input
-              className="pl-9"
-              placeholder="Buscar por nombre o correo"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void loadUsers()
-              }}
-            />
+          <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap lg:items-center">
+            <div className="relative min-w-[220px] max-w-md flex-1">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-lq-faint" />
+              <Input
+                className="pl-9"
+                placeholder="Buscar por nombre o correo"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void loadUsers()
+                }}
+              />
+            </div>
+            <Select value={filterApp} onValueChange={setFilterApp}>
+              <SelectTrigger className="w-[160px]">
+                <SelectValue placeholder="App" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todas las apps</SelectItem>
+                <SelectItem value="erp">ERP</SelectItem>
+                <SelectItem value="pwa">PWA</SelectItem>
+                <SelectItem value="legacy">ERP legacy</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={filterProfile} onValueChange={setFilterProfile}>
+              <SelectTrigger className="w-[180px]">
+                <SelectValue placeholder="Perfil" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos los perfiles</SelectItem>
+                {profilesCatalog.map((p) => (
+                  <SelectItem key={p.code} value={p.code}>
+                    {p.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={filterActive} onValueChange={setFilterActive}>
+              <SelectTrigger className="w-[150px]">
+                <SelectValue placeholder="Estado" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos</SelectItem>
+                <SelectItem value="active">Activos</SelectItem>
+                <SelectItem value="inactive">Inactivos</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button type="button" variant="secondary" size="sm" onClick={() => void loadUsers()}>
+              Filtrar
+            </Button>
           </div>
 
           <ProfessionalDataTable loading={loading}>
-            <table className="w-full min-w-[860px] text-left text-sm">
+            <table className="w-full min-w-[1100px] text-left text-sm">
               <thead className="border-b border-lq-line bg-lq-canvas/80 text-[11px] uppercase tracking-[0.08em] text-lq-faint">
                 <tr>
                   <th className="px-4 py-3 font-medium">Nombre</th>
                   <th className="px-4 py-3 font-medium">Correo</th>
                   <th className="px-4 py-3 font-medium">Rol</th>
                   <th className="px-4 py-3 font-medium">Estado</th>
+                  <th className="px-4 py-3 font-medium">Apps</th>
+                  <th className="px-4 py-3 font-medium">Perfiles</th>
                   <th className="px-4 py-3 font-medium">Empresas</th>
+                  <th className="px-4 py-3 font-medium">Oficinas</th>
                   <th className="px-4 py-3 font-medium">Último ingreso</th>
                 </tr>
               </thead>
               <tbody>
                 {users.length === 0 && !loading ? (
                   <tr>
-                    <td colSpan={6} className="p-0">
+                    <td colSpan={9} className="p-0">
                       <EmptyState
                         title="Sin usuarios"
                         description="No hay resultados para la búsqueda actual."
@@ -268,10 +367,15 @@ export default function UsuariosAccesosPage() {
                           {u.active ? "Activa" : "Inactiva"}
                         </StatusBadge>
                       </td>
+                      <td className="px-4 py-3 text-lq-muted">{formatAppsCell(u)}</td>
+                      <td className="px-4 py-3 text-lq-muted">{formatProfilesCell(u)}</td>
                       <td className="px-4 py-3 text-lq-muted">
                         {u.companies.length
                           ? u.companies.map((c) => c.name || c.company_id).join(", ")
                           : "Sin restringir"}
+                      </td>
+                      <td className="max-w-[180px] truncate px-4 py-3 text-lq-muted" title={formatOfficesCell(u)}>
+                        {formatOfficesCell(u)}
                       </td>
                       <td className="px-4 py-3 tabular-nums text-lq-muted">
                         {formatChileDateTime(u.last_login_at)}
@@ -395,6 +499,9 @@ export default function UsuariosAccesosPage() {
         canAssignAdm={canAssignAdm}
         assignableRoles={assignableRoles}
         companiesCatalog={companies}
+        appsCatalog={appsCatalog}
+        profilesCatalog={profilesCatalog}
+        multiappReady={multiappReady}
         targetIsOwner={Boolean(selected?.is_owner)}
         onSaved={() => {
           void loadUsers()

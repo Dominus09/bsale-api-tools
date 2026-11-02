@@ -1,6 +1,6 @@
 # Diseño — Administración centralizada ERP + app.quillotana.cl
 
-Estado: **diseño aprobado**. Fase 1A fundación + **1A.1 hardening** en rama
+Estado: **diseño aprobado**. Fases 1A / 1A.1 / **1B admin multiapp** en rama
 `auth-multiapp-foundation`; migraciones 064–066 **no** aplicadas automáticamente. Ver
 `backend/sql/RUNBOOK_auth_multiapp_064_066.md` y `docs/auth/PHASE_1A1_SECURITY_MATRIX.md`.
 

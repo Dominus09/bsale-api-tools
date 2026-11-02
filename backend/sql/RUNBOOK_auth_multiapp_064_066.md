@@ -60,12 +60,17 @@ el código trata cuentas legacy como ERP (compatibilidad).
 - `AUTH_REQUIRE_USER_COMPANIES` — cutover empresas
 - `AUTH_ENFORCE_TOKEN_VERSION` / `AUTH_CHECK_ACTIVE_ON_REQUEST` — no activar globalmente en esta fase
 
-## Orden seguro con hardening 1A.1
+## Orden seguro con hardening 1A.1 + admin 1B
 
-1. **Desplegar backend** con guards `require_staff_user` / fail-closed multiapp (flags OFF).
-   - Sin tablas 064–066: ERP legacy OK; PWA deny; error BD → 503 (nunca allow).
-2. **Aplicar SQL** `064` → `065` → `066` (vacías). Cuentas sin filas siguen ERP.
-3. **No** poblar `user_apps` ni activar cutover hasta Fase 1B + inventario.
-4. Revocación JWT (`active` / `token_version`): activar flags solo en staging piloto primero.
+`test.quillotana.cl` y `api.quillotana.cl` comparten **la misma** BD `analytics`.
 
-Matriz y excepciones: `docs/auth/PHASE_1A1_SECURITY_MATRIX.md`.
+1. **Desplegar backend** 1A.1 + 1B (flags OFF).
+   - Sin tablas 064–066: ERP legacy OK; PWA deny; escritura multiapp → **503** claro (UI muestra aviso).
+   - Admin CRUD sin campos `apps`/`profiles`/`office_scopes` sigue compatible.
+2. **Aplicar SQL** `064` → `065` → `066` (vacías) en ventana controlada.
+3. Verificar `GET /admin/users/meta/apps` → `ready: true`.
+4. Probar en UI Usuarios y Accesos: crear ERP, PWA-only, ambas; editar oficinas.
+5. **No** backfill masivo de `user_apps(erp)` ni activar `AUTH_REQUIRE_USER_APPS` en esta fase.
+6. Revocación JWT (`active` / `token_version`): flags solo en piloto.
+
+Matriz: `docs/auth/PHASE_1A1_SECURITY_MATRIX.md`.

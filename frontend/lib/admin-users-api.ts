@@ -9,6 +9,15 @@ export type AdminCompanyRef = {
   active?: boolean
 }
 
+export type AdminOfficeRef = {
+  company_id: number
+  office_id: number
+  name: string | null
+}
+
+export type AdminAppRef = { code: string; label: string }
+export type AdminProfileRef = { code: string; label: string }
+
 export type AdminUserRow = {
   id: number
   email: string
@@ -21,6 +30,13 @@ export type AdminUserRow = {
   /** Marcado por backend si el id está en AUTH_OWNER_USER_IDS. */
   is_owner?: boolean
   delivery?: AdminDeliveryPayload
+  apps?: string[]
+  profiles?: string[]
+  offices?: AdminOfficeRef[]
+  multiapp_ready?: boolean
+  apps_legacy_erp?: boolean
+  has_erp_access?: boolean
+  has_pwa_access?: boolean
 }
 
 export type AdminDeliveryPayload = {
@@ -89,10 +105,14 @@ async function parseJson<T>(res: Response): Promise<T> {
 export async function fetchAdminUsers(params?: {
   q?: string
   active?: boolean | null
+  app?: string | null
+  profile?: string | null
 }): Promise<{ items: AdminUserRow[]; total: number }> {
   const qs = new URLSearchParams()
   if (params?.q?.trim()) qs.set("q", params.q.trim())
   if (params?.active === true || params?.active === false) qs.set("active", String(params.active))
+  if (params?.app?.trim()) qs.set("app", params.app.trim())
+  if (params?.profile?.trim()) qs.set("profile", params.profile.trim())
   const res = await fetch(`${API_URL}/admin/users?${qs}`, { headers: getAuthHeaders() })
   return parseJson(res)
 }
@@ -112,6 +132,41 @@ export async function fetchAdminCompaniesCatalog(): Promise<{ items: AdminCompan
   return parseJson(res)
 }
 
+export async function fetchAdminAppsCatalog(): Promise<{
+  items: AdminAppRef[]
+  ready: boolean
+  tables: Record<string, boolean>
+}> {
+  const res = await fetch(`${API_URL}/admin/users/meta/apps`, { headers: getAuthHeaders() })
+  return parseJson(res)
+}
+
+export async function fetchAdminProfilesCatalog(): Promise<{
+  items: AdminProfileRef[]
+  ready: boolean
+  tables: Record<string, boolean>
+}> {
+  const res = await fetch(`${API_URL}/admin/users/meta/profiles`, { headers: getAuthHeaders() })
+  return parseJson(res)
+}
+
+export async function fetchAdminOfficesCatalog(params: {
+  companyIds: number[]
+}): Promise<{ items: AdminOfficeRef[] }> {
+  const qs = new URLSearchParams()
+  if (params.companyIds.length === 1) {
+    qs.set("company_id", String(params.companyIds[0]))
+  } else if (params.companyIds.length > 1) {
+    qs.set("company_ids", params.companyIds.join(","))
+  } else {
+    return { items: [] }
+  }
+  const res = await fetch(`${API_URL}/admin/users/meta/offices?${qs}`, {
+    headers: getAuthHeaders(),
+  })
+  return parseJson(res)
+}
+
 export async function createAdminUser(body: {
   email: string
   nombre_usuario?: string | null
@@ -119,6 +174,9 @@ export async function createAdminUser(body: {
   company_ids: number[]
   password?: string | null
   invite: boolean
+  apps?: string[]
+  profiles?: string[]
+  office_scopes?: Array<{ company_id: number; office_id: number }>
 }): Promise<AdminUserRow> {
   const res = await fetch(`${API_URL}/admin/users`, {
     method: "POST",
@@ -136,6 +194,9 @@ export async function updateAdminUser(
     role?: string
     active?: boolean
     company_ids?: number[]
+    apps?: string[]
+    profiles?: string[]
+    office_scopes?: Array<{ company_id: number; office_id: number }>
   },
 ): Promise<AdminUserRow> {
   const res = await fetch(`${API_URL}/admin/users/${id}`, {

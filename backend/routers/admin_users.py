@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from backend.auth.rate_limit import check_rate_limit
@@ -17,6 +17,11 @@ from backend.services.user_admin import service as svc
 router = APIRouter(prefix="/admin/users", tags=["admin-users"])
 
 
+class OfficeScopeIn(BaseModel):
+    company_id: int = Field(..., ge=1)
+    office_id: int = Field(..., ge=1)
+
+
 class CreateUserBody(BaseModel):
     email: str
     nombre_usuario: str | None = None
@@ -24,6 +29,10 @@ class CreateUserBody(BaseModel):
     company_ids: list[int] = Field(default_factory=list)
     password: str | None = None
     invite: bool = True
+    # None = omitir (compat clientes legacy); lista = asignar explícito (PWA-only = ["pwa"]).
+    apps: list[str] | None = None
+    profiles: list[str] | None = None
+    office_scopes: list[OfficeScopeIn] | None = None
 
 
 class UpdateUserBody(BaseModel):
@@ -32,6 +41,9 @@ class UpdateUserBody(BaseModel):
     role: str | None = None
     active: bool | None = None
     company_ids: list[int] | None = None
+    apps: list[str] | None = None
+    profiles: list[str] | None = None
+    office_scopes: list[OfficeScopeIn] | None = None
 
 
 class ConsumeResetBody(BaseModel):
@@ -43,9 +55,11 @@ class ConsumeResetBody(BaseModel):
 def admin_list_users(
     q: str | None = Query(None, max_length=120),
     active: bool | None = Query(None),
+    app: str | None = Query(None, max_length=16, description="erp|pwa|legacy"),
+    profile: str | None = Query(None, max_length=32),
     _actor: dict = Depends(require_user_admin_view),
 ) -> dict[str, Any]:
-    items = svc.list_users(q=q, active=active)
+    items = svc.list_users(q=q, active=active, app=app, profile=profile)
     return {"items": items, "total": len(items)}
 
 
@@ -59,6 +73,60 @@ def admin_companies_catalog(
     _actor: dict = Depends(require_user_admin_view),
 ) -> dict[str, Any]:
     return {"items": svc.list_companies_catalog()}
+
+
+@router.get("/meta/apps")
+def admin_apps_catalog(_actor: dict = Depends(require_user_admin_view)) -> dict[str, Any]:
+    status = svc.multiapp_status()
+    return {
+        "items": status["apps"],
+        "tables": status["tables"],
+        "ready": status["ready"],
+    }
+
+
+@router.get("/meta/profiles")
+def admin_profiles_catalog(
+    _actor: dict = Depends(require_user_admin_view),
+) -> dict[str, Any]:
+    status = svc.multiapp_status()
+    return {
+        "items": status["profiles"],
+        "tables": status["tables"],
+        "ready": bool(status["tables"].get("user_operational_profiles")),
+    }
+
+
+@router.get("/meta/offices")
+def admin_offices_catalog(
+    company_id: int | None = Query(None, ge=1),
+    company_ids: str | None = Query(
+        None,
+        description="Lista CSV de company_id (alternativa a company_id único)",
+        max_length=200,
+    ),
+    _actor: dict = Depends(require_user_admin_view),
+) -> dict[str, Any]:
+    parsed: list[int] | None = None
+    if company_ids and company_ids.strip():
+        parsed = []
+        for part in company_ids.split(","):
+            p = part.strip()
+            if not p:
+                continue
+            try:
+                parsed.append(int(p))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail="company_ids inválido") from exc
+    items = svc.list_offices_catalog(company_id=company_id, company_ids=parsed)
+    return {"items": items}
+
+
+@router.get("/meta/multiapp")
+def admin_multiapp_status(
+    _actor: dict = Depends(require_user_admin_view),
+) -> dict[str, Any]:
+    return svc.multiapp_status()
 
 
 @router.get("/auth-events")
@@ -95,6 +163,13 @@ def admin_create_user(
         company_ids=body.company_ids,
         password=body.password,
         invite=body.invite,
+        apps=body.apps,
+        profiles=body.profiles,
+        office_scopes=(
+            [s.model_dump() for s in body.office_scopes]
+            if body.office_scopes is not None
+            else None
+        ),
     )
 
 
@@ -112,6 +187,13 @@ def admin_update_user(
         role=body.role,
         active=body.active,
         company_ids=body.company_ids,
+        apps=body.apps,
+        profiles=body.profiles,
+        office_scopes=(
+            [s.model_dump() for s in body.office_scopes]
+            if body.office_scopes is not None
+            else None
+        ),
     )
 
 
