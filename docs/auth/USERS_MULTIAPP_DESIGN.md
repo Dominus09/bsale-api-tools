@@ -1,6 +1,8 @@
 # Diseño — Administración centralizada ERP + app.quillotana.cl
 
-Estado: **diseño aprobado para implementación futura**. Sin migraciones aplicadas en esta fase.
+Estado: **diseño aprobado**. Fase 1A (código + SQL 064–066) implementada en rama
+`auth-multiapp-foundation`; migraciones **no** aplicadas automáticamente. Ver
+`backend/sql/RUNBOOK_auth_multiapp_064_066.md`.
 
 ## Objetivo
 

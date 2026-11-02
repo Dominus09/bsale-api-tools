@@ -269,7 +269,9 @@ def require_user_admin_view(
     authorization: BearerDep = None,
     request: Request = None,
 ) -> dict[str, Any]:
-    user = enrich_staff_payload(decode_staff_token(authorization))
+    from backend.auth.multiapp import require_erp_app
+
+    user = require_erp_app(authorization, request)
     if not can_view_user_admin(user):
         raise HTTPException(
             status_code=403,
@@ -282,7 +284,9 @@ def require_user_admin_mutate(
     authorization: BearerDep = None,
     request: Request = None,
 ) -> dict[str, Any]:
-    user = enrich_staff_payload(decode_staff_token(authorization))
+    from backend.auth.multiapp import require_erp_app
+
+    user = require_erp_app(authorization, request)
     if not can_mutate_user_admin(user):
         raise HTTPException(
             status_code=403,

@@ -15,5 +15,11 @@ __all__ = ["BearerDep", "decode_staff_token", "require_staff_user"]
 
 
 def require_staff_user(authorization: BearerDep = None) -> dict:
-    """JWT válido + enriquecimiento (uid) y validaciones opt-in (active / token_version)."""
-    return enrich_staff_payload(decode_staff_token(authorization))
+    """JWT staff + acceso ERP.
+
+    Cuentas legacy sin filas en ``app.user_apps`` conservan ERP.
+    Cuentas con apps asignadas sin ``erp`` activo (p. ej. PWA-only) → 403.
+    """
+    from backend.auth.multiapp import require_erp_app
+
+    return require_erp_app(authorization)

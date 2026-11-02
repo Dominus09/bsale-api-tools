@@ -150,6 +150,7 @@ def _fetch_staff_user_id(email: str) -> int | None:
 
 def build_auth_me_response(user: dict[str, Any]) -> dict[str, Any]:
     from backend.auth.hierarchy import is_owner
+    from backend.auth.multiapp import scope_public_dict
     from backend.auth.user_admin_access import permission_flags
 
     email = str(user.get("email") or "")
@@ -158,6 +159,7 @@ def build_auth_me_response(user: dict[str, Any]) -> dict[str, Any]:
     permissions = resolve_executive_permissions(enriched)
     permissions.update(permission_flags(enriched))
     owner = is_owner(enriched)
+    multi = scope_public_dict(enriched)
     return {
         "id": user_id,
         "email": email,
@@ -166,6 +168,7 @@ def build_auth_me_response(user: dict[str, Any]) -> dict[str, Any]:
         "management_access": has_management_access(enriched) or owner,
         "admin_access": has_admin_access(enriched),
         "permissions": permissions,
+        **multi,
     }
 
 
@@ -175,8 +178,10 @@ def require_management_access(
     *,
     required_permission: str = "management_access",
 ) -> dict[str, Any]:
-    """Dependencia FastAPI: exige acceso gerencial/ejecutivo."""
-    user = enrich_staff_payload(decode_staff_token(authorization))
+    """Dependencia FastAPI: exige acceso gerencial/ejecutivo (+ app ERP)."""
+    from backend.auth.multiapp import require_erp_app
+
+    user = require_erp_app(authorization, request)
     if not has_management_access(user):
         _log_auth_denial(
             user=user,
@@ -197,8 +202,10 @@ def require_admin_access(
     *,
     required_permission: str = "admin_access",
 ) -> dict[str, Any]:
-    """Dependencia FastAPI: exige rol de administración técnica."""
-    user = enrich_staff_payload(decode_staff_token(authorization))
+    """Dependencia FastAPI: exige rol de administración técnica (+ app ERP)."""
+    from backend.auth.multiapp import require_erp_app
+
+    user = require_erp_app(authorization, request)
     if not has_admin_access(user):
         _log_auth_denial(
             user=user,
