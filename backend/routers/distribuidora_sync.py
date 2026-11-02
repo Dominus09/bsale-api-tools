@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, BackgroundTasks, Body, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.services.distribuidora.orders_service import get_sync_status_payload
@@ -19,9 +19,20 @@ from backend.services.distribuidora.sync_service import (
     run_resync_distribuidora_background,
     sync_bsale_distribuidora_sales_incremental,
 )
+from backend.utils.auth_staff import require_staff_user
 
-router = APIRouter(prefix="/erp", tags=["ERP Distribuidora"])
-sync_router = APIRouter(prefix="/sync", tags=["Manual Sync"])
+# Sync HTTP es disparado desde el ERP (botones). Los crons llaman servicios Python
+# directamente — no dependen de estos endpoints abiertos.
+router = APIRouter(
+    prefix="/erp",
+    tags=["ERP Distribuidora"],
+    dependencies=[Depends(require_staff_user)],
+)
+sync_router = APIRouter(
+    prefix="/sync",
+    tags=["Manual Sync"],
+    dependencies=[Depends(require_staff_user)],
+)
 logger = logging.getLogger(__name__)
 
 

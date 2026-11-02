@@ -1,11 +1,12 @@
 import io
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from psycopg2.extras import execute_values
 
 from backend.db import get_connection
+from backend.utils.auth_staff import require_staff_user
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_staff_user)])
 
 
 @router.post("/upload/suppliers")

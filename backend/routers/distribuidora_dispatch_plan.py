@@ -20,7 +20,11 @@ from backend.utils.dashboard_stage import DashboardStageRun, log_picking_count_s
 from backend.utils.ors_stability import log_error
 from backend.utils.plan_debug import PLAN_DEBUG_RERAISE, log_plan_debug_context, plan_debug_on_error
 
-router = APIRouter(prefix="/distribuidora/dispatch-plans", tags=["Distribuidora dispatch plan"])
+router = APIRouter(
+    prefix="/distribuidora/dispatch-plans",
+    tags=["Distribuidora dispatch plan"],
+    dependencies=[Depends(require_staff_user)],
+)
 
 
 class DispatchPlanOrderInput(BaseModel):

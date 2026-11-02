@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from backend.db import get_connection
+from backend.utils.auth_staff import require_staff_user
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/distribuidora", tags=["Distribuidora camiones"])
+router = APIRouter(
+    prefix="/distribuidora",
+    tags=["Distribuidora camiones"],
+    dependencies=[Depends(require_staff_user)],
+)
 
 
 @router.get("/trucks")

@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from backend.auth import user_admin_access as ua
 from backend.auth.jwt import create_staff_token
+from backend.auth.multiapp import MultiAppScope
 from backend.routers import admin_users
 from backend.services.user_admin import service as svc
 
@@ -34,8 +35,18 @@ def client(prod_env, monkeypatch):
     app.include_router(admin_users.router)
     app.include_router(admin_users.public_router)
     monkeypatch.setattr(
-        "backend.auth.user_admin_access.enrich_staff_payload",
-        lambda p: {**p, "id": p.get("uid") or 1, "email": p.get("email")},
+        "backend.auth.multiapp.enrich_staff_payload",
+        lambda p: {
+            **p,
+            "id": p.get("uid") or 1,
+            "uid": p.get("uid") or 1,
+            "email": p.get("email"),
+            "role": p.get("role"),
+        },
+    )
+    monkeypatch.setattr(
+        "backend.auth.multiapp.load_multiapp_scope",
+        lambda _uid: MultiAppScope(tables_ready=True, apps_rows_present=False),
     )
     return TestClient(app)
 

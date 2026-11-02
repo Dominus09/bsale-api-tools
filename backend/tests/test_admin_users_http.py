@@ -7,7 +7,31 @@ from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from backend.auth.jwt import create_staff_token
+from backend.auth.multiapp import MultiAppScope
 from backend.routers import admin_users
+
+
+def _legacy_erp_scope() -> MultiAppScope:
+    return MultiAppScope(tables_ready=True, apps_rows_present=False)
+
+
+def _stub_erp_session(monkeypatch):
+    """Evita BD: JWT → usuario + alcance ERP legacy."""
+
+    def _enrich(p):
+        return {
+            **p,
+            "id": p.get("uid") or 1,
+            "uid": p.get("uid") or 1,
+            "email": p.get("email"),
+            "role": p.get("role"),
+        }
+
+    monkeypatch.setattr("backend.auth.multiapp.enrich_staff_payload", _enrich)
+    monkeypatch.setattr(
+        "backend.auth.multiapp.load_multiapp_scope",
+        lambda _uid: _legacy_erp_scope(),
+    )
 
 
 @pytest.fixture()
@@ -16,6 +40,7 @@ def app_client(monkeypatch):
     monkeypatch.delenv("AUTH_USER_ADMIN_EMAILS", raising=False)
     monkeypatch.delenv("AUTH_ASSIGN_ADM_EMAILS", raising=False)
     monkeypatch.delenv("AUTH_USER_ADMIN_DEV_FALLBACK", raising=False)
+    _stub_erp_session(monkeypatch)
     app = FastAPI()
     app.include_router(admin_users.router)
     app.include_router(admin_users.public_router)
@@ -40,10 +65,6 @@ def test_static_meta_routes_before_dynamic_id(app_client, monkeypatch):
         "backend.services.user_admin.service.list_auth_events",
         lambda **kwargs: {"items": [], "total": 0, "meta": {"available": False}},
     )
-    monkeypatch.setattr(
-        "backend.auth.user_admin_access.enrich_staff_payload",
-        lambda p: {**p, "id": p.get("uid") or 1, "email": p.get("email")},
-    )
 
     r1 = app_client.get("/admin/users/meta/roles", headers=_auth("gerencia"))
     assert r1.status_code == 200
@@ -58,20 +79,12 @@ def test_static_meta_routes_before_dynamic_id(app_client, monkeypatch):
     assert r3.json()["meta"]["available"] is False
 
 
-def test_operativo_forbidden_list(app_client, monkeypatch):
-    monkeypatch.setattr(
-        "backend.auth.user_admin_access.enrich_staff_payload",
-        lambda p: {**p, "id": 9, "email": p.get("email")},
-    )
+def test_operativo_forbidden_list(app_client):
     res = app_client.get("/admin/users", headers=_auth("operativo", "op@test.local", 9))
     assert res.status_code == 403
 
 
 def test_gerencia_can_list_but_not_mutate_without_allowlist(app_client, monkeypatch):
-    monkeypatch.setattr(
-        "backend.auth.user_admin_access.enrich_staff_payload",
-        lambda p: {**p, "id": 2, "email": p.get("email")},
-    )
     monkeypatch.setattr(
         "backend.services.user_admin.service.list_users",
         lambda **kwargs: [],
@@ -95,10 +108,6 @@ def test_gerencia_can_list_but_not_mutate_without_allowlist(app_client, monkeypa
 def test_production_adm_denied_without_allowlist(app_client, monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.delenv("AUTH_USER_ADMIN_EMAILS", raising=False)
-    monkeypatch.setattr(
-        "backend.auth.user_admin_access.enrich_staff_payload",
-        lambda p: {**p, "id": 4, "email": p.get("email")},
-    )
     import backend.auth.user_admin_access as ua
 
     ua._warned_empty_allowlist = False
@@ -118,10 +127,6 @@ def test_production_adm_denied_without_allowlist(app_client, monkeypatch):
 def test_allowlist_grants_gerencia_mutate(app_client, monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("AUTH_USER_ADMIN_EMAILS", "dueno@test.local")
-    monkeypatch.setattr(
-        "backend.auth.user_admin_access.enrich_staff_payload",
-        lambda p: {**p, "id": 5, "email": p.get("email")},
-    )
 
     def fake_create(**kwargs):
         return {"id": 99, "email": kwargs["email"], "role": kwargs["role"], "active": True}
@@ -144,10 +149,6 @@ def test_allowlist_grants_gerencia_mutate(app_client, monkeypatch):
 def test_allowlist_blocks_adm_not_listed(app_client, monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("AUTH_USER_ADMIN_EMAILS", "dueno@test.local")
-    monkeypatch.setattr(
-        "backend.auth.user_admin_access.enrich_staff_payload",
-        lambda p: {**p, "id": 4, "email": p.get("email")},
-    )
     res = app_client.post(
         "/admin/users",
         headers=_auth("adm", "otro-adm@test.local", 4),
@@ -165,10 +166,6 @@ def test_assign_adm_requires_grant_list(app_client, monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("AUTH_USER_ADMIN_EMAILS", "dueno@test.local")
     monkeypatch.delenv("AUTH_ASSIGN_ADM_EMAILS", raising=False)
-    monkeypatch.setattr(
-        "backend.auth.user_admin_access.enrich_staff_payload",
-        lambda p: {**p, "id": 5, "email": p.get("email")},
-    )
 
     def refuse(**kwargs):
         from backend.auth.user_admin_access import can_assign_role
@@ -210,10 +207,6 @@ def test_consume_rate_limit(app_client, monkeypatch):
 
 
 def test_get_user_id_route_still_works(app_client, monkeypatch):
-    monkeypatch.setattr(
-        "backend.auth.user_admin_access.enrich_staff_payload",
-        lambda p: {**p, "id": 1, "email": p.get("email")},
-    )
     monkeypatch.setattr(
         "backend.services.user_admin.service.get_user",
         lambda uid: {"id": uid, "email": "u@test.local", "role": "operativo", "active": True},

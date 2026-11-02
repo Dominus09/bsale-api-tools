@@ -6,8 +6,10 @@ import logging
 from datetime import date
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+
+from backend.utils.auth_staff import require_staff_user
 
 from backend.services.distribuidora.dispatch_planning_list_service import (
     list_dispatch_planning_orders,
@@ -38,7 +40,11 @@ from backend.utils.ors_stability import log_error
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/distribuidora/planificacion", tags=["Distribuidora planificación despacho"])
+router = APIRouter(
+    prefix="/distribuidora/planificacion",
+    tags=["Distribuidora planificación despacho"],
+    dependencies=[Depends(require_staff_user)],
+)
 
 
 @router.get("/orders")

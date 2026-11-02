@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from datetime import date
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
+
+from backend.utils.auth_staff import require_staff_user
 
 from backend.services.distribuidora.route_planning_service import (
     AlreadyPlannedError,
@@ -20,7 +22,11 @@ from backend.services.distribuidora.route_planning_service import (
     patch_route_planning_summary,
 )
 
-router = APIRouter(prefix="/distribuidora", tags=["Distribuidora planificación rutas"])
+router = APIRouter(
+    prefix="/distribuidora",
+    tags=["Distribuidora planificación rutas"],
+    dependencies=[Depends(require_staff_user)],
+)
 
 
 class PlanningAssignmentItem(BaseModel):

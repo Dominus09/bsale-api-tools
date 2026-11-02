@@ -70,6 +70,8 @@ class MultiAppScope:
     # True si existía tabla user_apps y se leyeron filas (aunque active=false)
     apps_rows_present: bool = False
     tables_ready: bool = False
+    # True si falló la lectura de alcance (BD caída / error). Nunca autorizar en positivo.
+    load_failed: bool = False
 
 
 def _user_id(user: dict[str, Any] | None) -> int | None:
@@ -150,8 +152,8 @@ def load_multiapp_scope(user_id: int | None) -> MultiAppScope:
         )
     except Exception:
         logger.exception("load_multiapp_scope failed user_id=%s", user_id)
-        # Sin BD / tablas: scope vacío ⇒ ERP legacy vía has_app_access.
-        return MultiAppScope()
+        # Fail-closed: un error de BD no concede ERP ni PWA.
+        return MultiAppScope(load_failed=True)
     finally:
         if conn is not None:
             conn.close()
@@ -160,6 +162,8 @@ def load_multiapp_scope(user_id: int | None) -> MultiAppScope:
 def has_app_access(scope: MultiAppScope, app_code: str) -> bool:
     app = str(app_code or "").strip().lower()
     if app not in KNOWN_APPS:
+        return False
+    if scope.load_failed:
         return False
     if app == APP_PWA:
         # Default deny: solo fila explícita activa.
@@ -295,6 +299,11 @@ def require_erp_app(
     """Staff con acceso ERP. Rechaza cuentas PWA-only (con filas apps sin erp)."""
     user = require_authenticated_staff(authorization)
     scope = get_scope(user)
+    if scope.load_failed:
+        raise HTTPException(
+            status_code=503,
+            detail="No se pudo verificar autorización multiaplicación",
+        )
     if not has_app_access(scope, APP_ERP):
         path = request.url.path if request is not None else "-"
         logger.warning(
@@ -317,6 +326,11 @@ def require_pwa_app(
     """Staff con acceso PWA explícito (default deny)."""
     user = require_authenticated_staff(authorization)
     scope = get_scope(user)
+    if scope.load_failed:
+        raise HTTPException(
+            status_code=503,
+            detail="No se pudo verificar autorización multiaplicación",
+        )
     if not has_app_access(scope, APP_PWA):
         path = request.url.path if request is not None else "-"
         logger.warning(

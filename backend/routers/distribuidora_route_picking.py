@@ -4,11 +4,16 @@ from __future__ import annotations
 
 from datetime import date
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.services.distribuidora.route_picking_service import get_route_picking
+from backend.utils.auth_staff import require_staff_user
 
-router = APIRouter(prefix="/distribuidora", tags=["Distribuidora picking"])
+router = APIRouter(
+    prefix="/distribuidora",
+    tags=["Distribuidora picking"],
+    dependencies=[Depends(require_staff_user)],
+)
 
 
 @router.get("/route-picking")

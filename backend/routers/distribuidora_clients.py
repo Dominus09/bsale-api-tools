@@ -5,14 +5,19 @@ from __future__ import annotations
 from datetime import date
 from io import BytesIO
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from backend.services.distribuidora import clientes_analisis_completo_service as cac
 from backend.services.distribuidora import clients_analytics_service as cas
+from backend.utils.auth_staff import require_staff_user
 
-router = APIRouter(prefix="/distribuidora", tags=["Distribuidora clientes"])
+router = APIRouter(
+    prefix="/distribuidora",
+    tags=["Distribuidora clientes"],
+    dependencies=[Depends(require_staff_user)],
+)
 
 
 def _parse_seller_ids_csv(raw: str | None, *, max_items: int = 24) -> list[int] | None:

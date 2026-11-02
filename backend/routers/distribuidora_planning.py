@@ -4,12 +4,17 @@ from __future__ import annotations
 
 from datetime import date
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from starlette.concurrency import run_in_threadpool
 
 from backend.services.distribuidora import planning_views_service as pvs
+from backend.utils.auth_staff import require_staff_user
 
-router = APIRouter(prefix="/distribuidora", tags=["Distribuidora planificación"])
+router = APIRouter(
+    prefix="/distribuidora",
+    tags=["Distribuidora planificación"],
+    dependencies=[Depends(require_staff_user)],
+)
 
 
 def _validate_date_range(start_date: date | None, end_date: date | None) -> None:
