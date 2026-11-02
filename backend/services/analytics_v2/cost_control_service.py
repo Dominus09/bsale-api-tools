@@ -57,6 +57,16 @@ from backend.services.analytics_v2.contracts import (
     paginate,
 )
 from backend.services.analytics_v2.cost_control_repo import CostControlV2Repository
+from backend.services.analytics_v2.cost_office_compare import (
+    OFFICE_LINE_LOOKBACK,
+    OFFICE_SPREAD_ALERT_PCT,
+    OfficeAlertCode,
+    OfficeCellBuild,
+    OfficeInfoTag,
+    build_office_cell,
+    enrich_timeline_line,
+    office_supplier_spread,
+)
 from backend.services.analytics_v2.cost_signals import (
     REVIEW_ANOMALY_CODES,
     Anomaly,
@@ -1219,6 +1229,356 @@ class CostControlV2Service:
             "meta": self._meta(ctx),
         }
 
+    # ---------- comparativo por oficina (RAW) ----------
+
+    def _operational_office_map(self, ctx: CompanyContext) -> dict[int, str]:
+        preferred = operational_office_ids(self._scope.company_id)
+        if preferred is None:
+            return dict(ctx.offices)
+        return {oid: ctx.offices.get(oid, f"Oficina {oid}") for oid in preferred}
+
+    def _office_cells_for_variants(
+        self,
+        ctx: CompanyContext,
+        variant_ids: list[int],
+    ) -> dict[int, list[dict[str, Any]]]:
+        office_map = self._operational_office_map(ctx)
+        office_ids = list(office_map.keys())
+        if not variant_ids or not office_ids:
+            return {vid: [] for vid in variant_ids}
+
+        stocks_rows = self._repo.stocks_by_office(
+            company_id=self._scope.company_id,
+            variant_ids=variant_ids,
+            office_ids=office_ids,
+        )
+        stock_idx: dict[tuple[int, int], Decimal | None] = {}
+        for r in stocks_rows:
+            stock_idx[(int(r["variant_id"]), int(r["office_id"]))] = to_decimal(r.get("quantity"))
+
+        lines = self._repo.office_compare_lines_batch(
+            company_id=self._scope.company_id,
+            variant_ids=variant_ids,
+            office_ids=office_ids,
+            history_start=HISTORY_START,
+            per_office_limit=OFFICE_LINE_LOOKBACK,
+        )
+        by_vo: dict[tuple[int, int], list[dict[str, Any]]] = {}
+        for row in lines:
+            key = (int(row["variant_id"]), int(row["office_id"]))
+            by_vo.setdefault(key, []).append(row)
+
+        out: dict[int, list[dict[str, Any]]] = {}
+        for vid in variant_ids:
+            cells: list[dict[str, Any]] = []
+            for oid, oname in office_map.items():
+                cells.append(
+                    build_office_cell(
+                        OfficeCellBuild(
+                            office_id=oid,
+                            office_name=oname,
+                            stock_qty=stock_idx.get((vid, oid)),
+                            lines_newest_first=by_vo.get((vid, oid), []),
+                        ),
+                        today=self._today,
+                        offices=office_map,
+                    )
+                )
+            out[vid] = cells
+        return out
+
+    def list_office_compare(
+        self,
+        *,
+        q: str | None = None,
+        reliability: str | None = None,
+        info_tag: str | None = None,
+        office_id: int | None = None,
+        anomaly_code: str | None = None,
+        min_office_spread_pct: Decimal | None = None,
+        stock_filter: str | None = None,
+        sort: str = "spread",
+        page: int = 1,
+        page_size: int = 50,
+    ) -> dict[str, Any]:
+        """Matriz producto × oficinas operativas (paginada; batch RAW, sin N+1)."""
+        allowed_sorts = frozenset({"spread", "reliability", "product", "stale", "stock"})
+        if sort not in allowed_sorts:
+            raise CostControlValidationError(f"sort inválido: {sort}")
+        if reliability is not None and reliability not in {r.value for r in CostReliability}:
+            raise CostControlValidationError(f"reliability inválido: {reliability}")
+        if info_tag is not None and info_tag not in {t.value for t in OfficeInfoTag}:
+            raise CostControlValidationError(f"info_tag inválido: {info_tag}")
+        if anomaly_code is not None and anomaly_code not in {
+            *{a.value for a in AnomalyCode},
+            *{a.value for a in OfficeAlertCode},
+        }:
+            raise CostControlValidationError(f"anomaly_code inválido: {anomaly_code}")
+        try:
+            stock_scope = normalize_stock_filter(stock_filter)
+        except ValueError as exc:
+            raise CostControlValidationError(str(exc)) from exc
+
+        ctx = self._load_context()
+        office_map = self._operational_office_map(ctx)
+        if office_id is not None and office_id not in office_map:
+            raise CostControlValidationError(
+                "office_id fuera del alcance operativo de la empresa"
+            )
+
+        items = self._all_items(ctx)
+        needle = normalize_label(q) if q else ""
+        candidates: list[dict[str, Any]] = []
+        for item in items:
+            s = item["_sort"]
+            if item["variant_state"] != "activa":
+                continue
+            if needle and needle not in s["search"]:
+                continue
+            if reliability is not None and item["reliability"]["status"] != reliability:
+                continue
+            if anomaly_code is not None and anomaly_code in {a.value for a in AnomalyCode}:
+                if not any(a["code"] == anomaly_code for a in item.get("anomalies") or []):
+                    continue
+            if not matches_stock_filter(
+                state=(item.get("stock") or {}).get("state"), stock_filter=stock_scope
+            ):
+                continue
+            candidates.append(item)
+
+        needs_office_scan = (
+            sort in {"spread", "stale"}
+            or office_id is not None
+            or info_tag is not None
+            or min_office_spread_pct is not None
+            or (
+                anomaly_code is not None
+                and anomaly_code in {a.value for a in OfficeAlertCode}
+            )
+        )
+
+        def build_row(item: dict[str, Any], cells: list[dict[str, Any]]) -> dict[str, Any]:
+            vid = int(item["variant_id"])
+            pub = self._public(item)
+            spread = office_supplier_spread(cells)
+            return {
+                "variant_id": vid,
+                "code": pub.get("code"),
+                "barcode": pub.get("barcode"),
+                "product_name": pub.get("product_name"),
+                "variant_name": pub.get("variant_name"),
+                "product_type": pub.get("product_type"),
+                "bsale_average_cost": pub.get("bsale_average_cost"),
+                "reliability": pub.get("reliability"),
+                "stock": pub.get("stock"),
+                "offices": cells,
+                "office_spread": spread,
+                "has_relevant_difference": bool(spread and spread.get("alert")),
+                "review_hint": {
+                    "can_start_review": True,
+                    "office_scope_supported": False,
+                    "note": (
+                        "La revisión se registra a nivel de variante (SQL 067); "
+                        "sin alcance por oficina hasta migración futura."
+                    ),
+                },
+            }
+
+        def passes_office_filters(item: dict[str, Any], cells: list[dict[str, Any]]) -> bool:
+            if office_id is not None:
+                cell = next((c for c in cells if c["office_id"] == office_id), None)
+                if cell is None:
+                    return False
+                if info_tag is not None and cell.get("info_tag") != info_tag:
+                    return False
+                if anomaly_code is not None:
+                    cell_codes = {a["code"] for a in cell.get("alerts") or []}
+                    item_codes = {a["code"] for a in item.get("anomalies") or []}
+                    if anomaly_code not in cell_codes and anomaly_code not in item_codes:
+                        return False
+            else:
+                if info_tag is not None and not any(c.get("info_tag") == info_tag for c in cells):
+                    return False
+                if anomaly_code is not None:
+                    cell_codes = {a["code"] for c in cells for a in (c.get("alerts") or [])}
+                    item_codes = {a["code"] for a in item.get("anomalies") or []}
+                    if anomaly_code not in cell_codes and anomaly_code not in item_codes:
+                        return False
+            if min_office_spread_pct is not None:
+                spread = office_supplier_spread(cells)
+                pct = to_decimal(spread.get("spread_pct")) if spread else None
+                if pct is None or pct < min_office_spread_pct:
+                    return False
+            return True
+
+        def sort_key_row(r: dict[str, Any]) -> Any:
+            spread = r.get("office_spread") or {}
+            spread_pct = to_decimal(spread.get("spread_pct")) or Decimal("-1")
+            if sort == "spread":
+                return (-spread_pct, normalize_label(r.get("product_name") or ""), r["variant_id"])
+            if sort == "reliability":
+                rel = r.get("reliability") or {}
+                order = {
+                    CostReliability.REQUIERE_REVISION.value: 0,
+                    CostReliability.SIN_COSTO.value: 1,
+                    CostReliability.SOLO_PROMEDIO_BSALE.value: 2,
+                    CostReliability.DESACTUALIZADO.value: 3,
+                    CostReliability.CONSISTENTE.value: 4,
+                }
+                return (
+                    order.get(rel.get("status"), 9),
+                    -spread_pct,
+                    normalize_label(r.get("product_name") or ""),
+                    r["variant_id"],
+                )
+            if sort == "stale":
+                max_age = max((c.get("age_days") or -1) for c in r["offices"]) if r["offices"] else -1
+                return (-max_age, -spread_pct, r["variant_id"])
+            if sort == "stock":
+                total = to_decimal((r.get("stock") or {}).get("total")) or Decimal("0")
+                return (-total, normalize_label(r.get("product_name") or ""), r["variant_id"])
+            return (normalize_label(r.get("product_name") or ""), r["variant_id"])
+
+        if needs_office_scan:
+            # Ranking/filtros de oficina: un batch para el universo ya reducido (stock/q).
+            cells_by_variant = self._office_cells_for_variants(
+                ctx, [int(i["variant_id"]) for i in candidates]
+            )
+            rows = []
+            for item in candidates:
+                cells = cells_by_variant.get(int(item["variant_id"]), [])
+                if not passes_office_filters(item, cells):
+                    continue
+                rows.append(build_row(item, cells))
+            rows.sort(key=sort_key_row)
+            result = paginate(rows, page=page, page_size=page_size)
+        else:
+            # Camino rápido: ordenar/paginar SKUs y enriquecer solo la página.
+            def pre_key(item: dict[str, Any]) -> Any:
+                s = item["_sort"]
+                if sort == "reliability":
+                    return (
+                        {
+                            CostReliability.REQUIERE_REVISION: 0,
+                            CostReliability.SIN_COSTO: 1,
+                            CostReliability.SOLO_PROMEDIO_BSALE: 2,
+                            CostReliability.DESACTUALIZADO: 3,
+                            CostReliability.CONSISTENTE: 4,
+                        }.get(s["reliability"], 9),
+                        normalize_label(item.get("product_name") or ""),
+                        item["variant_id"],
+                    )
+                if sort == "stock":
+                    total = to_decimal((item.get("stock") or {}).get("total")) or Decimal("0")
+                    return (-total, normalize_label(item.get("product_name") or ""), item["variant_id"])
+                return (normalize_label(item.get("product_name") or ""), item["variant_id"])
+
+            candidates.sort(key=pre_key)
+            page_slice = paginate(candidates, page=page, page_size=page_size)
+            page_ids = [int(i["variant_id"]) for i in page_slice["items"]]
+            cells_by_variant = self._office_cells_for_variants(ctx, page_ids)
+            result = {
+                **page_slice,
+                "items": [
+                    build_row(item, cells_by_variant.get(int(item["variant_id"]), []))
+                    for item in page_slice["items"]
+                ],
+            }
+
+        result["sort"] = sort
+        result["stock_filter"] = stock_scope
+        result["operational_offices"] = [
+            {"id": oid, "name": name} for oid, name in office_map.items()
+        ]
+        result["thresholds"] = {
+            "office_spread_alert_pct": money(OFFICE_SPREAD_ALERT_PCT),
+            "increase_alert_pct": money(INCREASE_ALERT_PCT),
+            "decrease_alert_pct": money(DECREASE_ALERT_PCT),
+            "stale_cost_days": STALE_COST_DAYS,
+            "net_cost_verified": NET_COST_VERIFIED,
+        }
+        result["meta"] = self._meta(ctx, stock_filter=stock_scope)
+        return result
+
+    def get_office_compare_product(self, variant_id: int) -> dict[str, Any]:
+        ctx = self._load_context()
+        found = None
+        for item in self._all_items(ctx):
+            if int(item["variant_id"]) == variant_id:
+                found = item
+                break
+        if found is None:
+            raise CostControlNotFound("SKU inexistente en la empresa")
+        cells = self._office_cells_for_variants(ctx, [variant_id]).get(variant_id, [])
+        spread = office_supplier_spread(cells)
+        pub = self._public(found)
+        return {
+            "variant_id": variant_id,
+            "code": pub.get("code"),
+            "barcode": pub.get("barcode"),
+            "product_name": pub.get("product_name"),
+            "variant_name": pub.get("variant_name"),
+            "product_type": pub.get("product_type"),
+            "bsale_average_cost": pub.get("bsale_average_cost"),
+            "reliability": pub.get("reliability"),
+            "anomalies": pub.get("anomalies"),
+            "stock": pub.get("stock"),
+            "last_comparable": pub.get("last_comparable"),
+            "offices": cells,
+            "office_spread": spread,
+            "has_relevant_difference": bool(spread and spread.get("alert")),
+            "review_hint": {
+                "can_start_review": True,
+                "office_scope_supported": False,
+                "note": (
+                    "Integración con Gestión de revisiones a nivel variante; "
+                    "no se registra office_id hasta que el modelo lo soporte."
+                ),
+            },
+            "labels": {
+                "last_reception_unit_cost": (
+                    "Último costo unitario de recepción documentado (no es promedio de oficina)"
+                ),
+                "bsale_average_cost": "Promedio global Bsale (referencia, no por oficina)",
+                "last_supplier_purchase": "Última compra a proveedor (factura)",
+                "last_guide": "Última guía de despacho (no es compra a proveedor)",
+            },
+            "meta": self._meta(ctx),
+        }
+
+    def office_compare_timeline(
+        self,
+        variant_id: int,
+        *,
+        office_id: int | None = None,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> dict[str, Any]:
+        """Timeline de recepciones por oficina (reusa historial RAW + etiquetas)."""
+        office_map = self._operational_office_map(self._load_context())
+        if office_id is not None and office_id not in office_map:
+            raise CostControlValidationError(
+                "office_id fuera del alcance operativo de la empresa"
+            )
+        history = self.product_history(
+            variant_id,
+            office_id=office_id,
+            date_from=date_from,
+            date_to=date_to,
+            page=page,
+            page_size=page_size,
+        )
+        history["items"] = [
+            enrich_timeline_line(line, office_map) for line in history.get("items") or []
+        ]
+        history["operational_offices"] = [
+            {"id": oid, "name": name} for oid, name in office_map.items()
+        ]
+        history["view"] = "office_compare_timeline"
+        return history
+
     def filters(self) -> dict[str, Any]:
         company_id = self._scope.company_id
         return {
@@ -1230,6 +1590,8 @@ class CostControlV2Service:
             "movement_classes": [m.value for m in MovementClass],
             "reliability_statuses": [r.value for r in CostReliability],
             "anomaly_codes": [a.value for a in AnomalyCode],
+            "office_info_tags": [t.value for t in OfficeInfoTag],
+            "office_alert_codes": [a.value for a in OfficeAlertCode],
             "meta": self._meta(),
         }
 

@@ -270,6 +270,81 @@ def costs_product_history(
     )
 
 
+@router.get("/costs/office-compare")
+def costs_office_compare(
+    company_id: int = CompanyQuery,
+    q: str | None = Query(None, max_length=100),
+    reliability: str | None = Query(None),
+    info_tag: str | None = Query(None, max_length=40),
+    office_id: int | None = Query(None, ge=1),
+    anomaly_code: str | None = Query(None),
+    min_office_spread_pct: Decimal | None = Query(None, ge=0, le=100000),
+    stock_filter: str | None = Query("with", max_length=20),
+    sort: str = Query("product"),
+    page: int = PageQuery,
+    page_size: int = PageSizeQuery,
+    user: dict = Depends(require_cost_control_v2),
+):
+    """Comparativo producto × oficinas operativas (fuente bsale_raw; sin promedio por oficina)."""
+    return _run(
+        "costs_office_compare",
+        user,
+        company_id,
+        lambda s: s.list_office_compare(
+            q=q.strip() if q else None,
+            reliability=reliability,
+            info_tag=info_tag,
+            office_id=office_id,
+            anomaly_code=anomaly_code,
+            min_office_spread_pct=min_office_spread_pct,
+            stock_filter=stock_filter,
+            sort=sort,
+            page=page,
+            page_size=page_size,
+        ),
+    )
+
+
+@router.get("/costs/office-compare/{variant_id}")
+def costs_office_compare_product(
+    variant_id: int,
+    company_id: int = CompanyQuery,
+    user: dict = Depends(require_cost_control_v2),
+):
+    return _run(
+        "costs_office_compare_product",
+        user,
+        company_id,
+        lambda s: s.get_office_compare_product(variant_id),
+    )
+
+
+@router.get("/costs/office-compare/{variant_id}/timeline")
+def costs_office_compare_timeline(
+    variant_id: int,
+    company_id: int = CompanyQuery,
+    office_id: int | None = Query(None, ge=1),
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
+    page: int = PageQuery,
+    page_size: int = PageSizeQuery,
+    user: dict = Depends(require_cost_control_v2),
+):
+    return _run(
+        "costs_office_compare_timeline",
+        user,
+        company_id,
+        lambda s: s.office_compare_timeline(
+            variant_id,
+            office_id=office_id,
+            date_from=date_from,
+            date_to=date_to,
+            page=page,
+            page_size=page_size,
+        ),
+    )
+
+
 @router.get("/costs/alerts")
 def costs_alerts(
     company_id: int = CompanyQuery,

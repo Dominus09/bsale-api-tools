@@ -46,10 +46,15 @@ import type {
   CostSummary,
   FreshnessResponse,
   HistoryResponse,
+  OfficeCompareListResponse,
+  OfficeCompareProductResponse,
+  OfficeCompareTimelineResponse,
+  OfficeInfoTag,
   ProductListParams,
   ReceptionAnalysisResponse,
   ReceptionDetail,
   Severity,
+  CostReliability,
 } from "./types"
 import { isStockFilter } from "./stock-filter"
 
@@ -201,6 +206,62 @@ export function getCostProductHistory(
 ) {
   const { variant_id, ...rest } = params
   return getJson<HistoryResponse>(`/analytics-v2/costs/products/${variant_id}/history`, rest, signal)
+}
+
+export function getOfficeCompare(
+  params: {
+    company_id: number
+    q?: string | null
+    reliability?: CostReliability | null
+    info_tag?: OfficeInfoTag | null
+    office_id?: number | null
+    anomaly_code?: string | null
+    min_office_spread_pct?: number | null
+    stock_filter?: "with" | "without" | "all" | null
+    sort?: string
+    page?: number
+    page_size?: number
+  },
+  signal?: AbortSignal,
+) {
+  const stock_filter = isStockFilter(params.stock_filter) ? params.stock_filter : "with"
+  return getJson<OfficeCompareListResponse>(
+    "/analytics-v2/costs/office-compare",
+    { ...params, stock_filter },
+    signal,
+  )
+}
+
+export function getOfficeCompareProduct(
+  companyId: number,
+  variantId: number,
+  signal?: AbortSignal,
+) {
+  return getJson<OfficeCompareProductResponse>(
+    `/analytics-v2/costs/office-compare/${variantId}`,
+    { company_id: companyId },
+    signal,
+  )
+}
+
+export function getOfficeCompareTimeline(
+  params: {
+    company_id: number
+    variant_id: number
+    office_id?: number | null
+    date_from?: string | null
+    date_to?: string | null
+    page?: number
+    page_size?: number
+  },
+  signal?: AbortSignal,
+) {
+  const { variant_id, ...rest } = params
+  return getJson<OfficeCompareTimelineResponse>(
+    `/analytics-v2/costs/office-compare/${variant_id}/timeline`,
+    rest,
+    signal,
+  )
 }
 
 export function getCostAlerts(

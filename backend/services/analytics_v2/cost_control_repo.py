@@ -482,6 +482,54 @@ WHERE company_id = %s
 ORDER BY resource, scope
 """.strip()
 
+STOCKS_BY_OFFICE_SQL = """
+SELECT
+    variant_id,
+    office_id,
+    quantity,
+    quantity_available,
+    quantity_reserved,
+    api_fetched_at
+FROM bsale_raw.stocks
+WHERE company_id = %s
+  AND variant_id = ANY(%s)
+  AND office_id = ANY(%s)
+""".strip()
+
+OFFICE_COMPARE_LINES_SQL = f"""
+WITH {_LINES_CTE.replace("{variant_filter}", "AND d.variant_id = ANY(%s) AND r.office_id = ANY(%s)")},
+{_MODIFIED_CTE.strip()},
+ranked AS (
+    SELECT
+        f.variant_id,
+        f.reception_id,
+        f.detail_id,
+        f.admission_date,
+        f.office_id,
+        f.document,
+        f.document_number,
+        f.internal_dispatch_id,
+        f.movement_class,
+        f.cost,
+        f.quantity,
+        f.details_complete,
+        f.comparable,
+        coalesce(m.cost_modified, false) AS cost_modified,
+        coalesce(m.quantity_modified, false) AS quantity_modified,
+        coalesce(m.variant_modified, false) AS variant_modified,
+        row_number() OVER (
+            PARTITION BY f.variant_id, f.office_id
+            ORDER BY f.admission_date DESC, f.reception_id DESC, f.detail_id DESC
+        ) AS rn_office
+    FROM flagged f
+    LEFT JOIN modified m ON m.reception_id = f.reception_id AND m.detail_id = f.detail_id
+)
+SELECT *
+FROM ranked
+WHERE rn_office <= %s
+ORDER BY variant_id ASC, office_id ASC, admission_date DESC, reception_id DESC, detail_id DESC
+""".strip()
+
 
 class CostControlV2Repository:
     def __init__(self, executor: QueryExecutor) -> None:
@@ -586,3 +634,42 @@ class CostControlV2Repository:
         """Stock operativo + total Bsale por variante (solo lectura)."""
         sql, params = stock_totals_query(company_id)
         return self._run(sql, params)
+
+    def stocks_by_office(
+        self,
+        *,
+        company_id: int,
+        variant_ids: list[int],
+        office_ids: list[int],
+    ) -> list[dict[str, Any]]:
+        """Stock por variante × oficina (solo lectura)."""
+        if not variant_ids or not office_ids:
+            return []
+        return self._run(
+            STOCKS_BY_OFFICE_SQL,
+            (company_id, list(variant_ids), list(office_ids)),
+        )
+
+    def office_compare_lines_batch(
+        self,
+        *,
+        company_id: int,
+        variant_ids: list[int],
+        office_ids: list[int],
+        history_start: date,
+        per_office_limit: int,
+    ) -> list[dict[str, Any]]:
+        """Líneas recientes por variante×oficina operativa (para snapshot, sin N+1)."""
+        if not variant_ids or not office_ids:
+            return []
+        return self._run(
+            OFFICE_COMPARE_LINES_SQL,
+            (
+                company_id,
+                history_start,
+                list(variant_ids),
+                list(office_ids),
+                company_id,
+                int(per_office_limit),
+            ),
+        )

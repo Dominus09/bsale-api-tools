@@ -356,6 +356,8 @@ export type CostFilters = {
   movement_classes: MovementClass[]
   reliability_statuses: CostReliability[]
   anomaly_codes: AnomalyCode[]
+  office_info_tags?: OfficeInfoTag[]
+  office_alert_codes?: string[]
 }
 
 /** Revisión humana de costos (distinta de alerta automática Costos V2). */
@@ -366,6 +368,7 @@ export type CostReviewSource =
   | "reception_analysis"
   | "reviews_grid"
   | "product_sheet"
+  | "office_compare"
 
 export type CostReviewItem = {
   id: number
@@ -521,4 +524,98 @@ export type ProductListParams = {
   sort?: string
   page?: number
   page_size?: number
+}
+
+/** Comparativo por oficina (Costos V2 / RAW). */
+export type OfficeInfoTag = "actualizado" | "antiguo" | "solo_guia" | "sin_informacion"
+
+export type OfficeCompareLine = {
+  reception_id: number
+  detail_id: number
+  admission_date: string | null
+  office_id: number | null
+  office_name: string | null
+  document: string | null
+  document_number: string | number | null
+  movement_class: MovementClass
+  movement_label: string
+  cost: Money
+  quantity: Money
+  comparable_supplier?: boolean
+  details_complete?: boolean
+  comparable?: boolean
+  anomalies?: Anomaly[]
+  change_pct?: Money
+  previous_comparable_cost?: Money
+  internal_dispatch_id?: number | null
+}
+
+export type OfficeCompareCell = {
+  office_id: number
+  office_name: string
+  stock: { quantity: Money; state: string }
+  last_reception_unit_cost: OfficeCompareLine | null
+  last_supplier_purchase: OfficeCompareLine | null
+  previous_supplier_purchase: OfficeCompareLine | null
+  last_guide: OfficeCompareLine | null
+  supplier_cost_change_pct: Money
+  info_tag: OfficeInfoTag
+  age_days: number | null
+  alerts: { code: string; severity: string; message: string }[]
+}
+
+export type OfficeCompareRow = {
+  variant_id: number
+  code: string | null
+  barcode: string | null
+  product_name: string | null
+  variant_name: string | null
+  product_type: { id: number | null; name: string | null }
+  bsale_average_cost: { value: Money; fetched_at: string | null; source: string }
+  reliability: { status: CostReliability; reason: string }
+  stock: { total: Money; state: string }
+  offices: OfficeCompareCell[]
+  office_spread: {
+    min_office_id: number
+    max_office_id: number
+    min_cost: Money
+    max_cost: Money
+    spread_pct: Money
+    alert: boolean
+  } | null
+  has_relevant_difference: boolean
+  review_hint: {
+    can_start_review: boolean
+    office_scope_supported: boolean
+    note: string
+  }
+}
+
+export type OfficeCompareListResponse = Paginated<OfficeCompareRow> & {
+  sort: string
+  stock_filter: string
+  operational_offices: { id: number; name: string }[]
+  thresholds: {
+    office_spread_alert_pct: Money
+    increase_alert_pct: Money
+    decrease_alert_pct: Money
+    stale_cost_days: number
+    net_cost_verified: boolean
+  }
+  meta: V2Meta
+}
+
+export type OfficeCompareProductResponse = OfficeCompareRow & {
+  anomalies?: Anomaly[]
+  last_comparable?: ReceptionLineRef | null
+  labels: Record<string, string>
+  meta: V2Meta
+}
+
+export type OfficeCompareTimelineResponse = Paginated<OfficeCompareLine> & {
+  series?: { date: string | null; cost: Money; office_id: number | null; reception_id: number }[]
+  variant_id: number
+  operational_offices: { id: number; name: string }[]
+  view: string
+  meta: V2Meta
 }

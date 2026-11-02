@@ -38,7 +38,13 @@ logger = logging.getLogger(__name__)
 STATUSES = frozenset({"pendiente", "en_revision", "resuelto", "descartado"})
 PRIORITIES = frozenset({"alta", "media", "baja"})
 SOURCES = frozenset(
-    {"dashboard_alert", "reception_analysis", "reviews_grid", "product_sheet"}
+    {
+        "dashboard_alert",
+        "reception_analysis",
+        "reviews_grid",
+        "product_sheet",
+        "office_compare",
+    }
 )
 SnapshotFn = Callable[[int], dict[str, Any]]
 

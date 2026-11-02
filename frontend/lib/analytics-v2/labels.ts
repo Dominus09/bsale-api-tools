@@ -35,6 +35,29 @@ export const RELIABILITY_TONES: Record<CostReliability, string> = {
   sin_costo: "border-lq-line bg-lq-canvas text-lq-body",
 }
 
+export const OFFICE_INFO_TAG_LABELS: Record<
+  "actualizado" | "antiguo" | "solo_guia" | "sin_informacion",
+  string
+> = {
+  actualizado: "Actualizado",
+  antiguo: "Antiguo",
+  solo_guia: "Solo guía",
+  sin_informacion: "Sin información",
+}
+
+export const OFFICE_INFO_TAG_TONES: Record<
+  "actualizado" | "antiguo" | "solo_guia" | "sin_informacion",
+  string
+> = {
+  actualizado:
+    "border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-400/25 dark:bg-emerald-400/10 dark:text-emerald-200",
+  antiguo:
+    "border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-400/25 dark:bg-amber-400/10 dark:text-amber-200",
+  solo_guia:
+    "border-sky-300 bg-sky-50 text-sky-800 dark:border-sky-400/25 dark:bg-sky-400/10 dark:text-sky-200",
+  sin_informacion: "border-lq-line bg-lq-canvas text-lq-body",
+}
+
 export const ANOMALY_LABELS: Record<AnomalyCode, string> = {
   alza_anormal: "Alza anormal",
   baja_sospechosa: "Baja sospechosa",

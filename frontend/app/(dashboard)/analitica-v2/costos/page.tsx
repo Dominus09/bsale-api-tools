@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { AlertTriangle, Download, Info, Loader2 } from "lucide-react"
 
 import { CostV2Alerts } from "@/components/analytics-v2/costs/cost-v2-alerts"
+import { CostV2OfficeCompare } from "@/components/analytics-v2/costs/cost-v2-office-compare"
 import { CostV2ProductSheet } from "@/components/analytics-v2/costs/cost-v2-product-sheet"
 import {
   CostV2ProductFilters,
@@ -73,6 +74,8 @@ export default function CostControlV2Page() {
       setDraft(next)
       setApplied(next)
       setTab("productos")
+    } else if (qs.get("tab") === "comparativo") {
+      setTab("comparativo")
     } else if (qs.get("tab") === "alertas") {
       setTab("alertas")
     } else if (qs.get("tab") === "revisiones") {
@@ -326,6 +329,7 @@ export default function CostControlV2Page() {
             <TabsList className="h-11 rounded-xl border border-lq-line bg-lq-surface p-1 shadow-sm">
               <TabsTrigger value="resumen">Resumen</TabsTrigger>
               <TabsTrigger value="productos">Explorar productos</TabsTrigger>
+              <TabsTrigger value="comparativo">Comparativo por oficina</TabsTrigger>
               <TabsTrigger value="analisis">Análisis de recepciones</TabsTrigger>
               <TabsTrigger value="alertas">Alertas de recepción</TabsTrigger>
               <TabsTrigger value="revisiones">Gestión de revisiones</TabsTrigger>
@@ -370,6 +374,15 @@ export default function CostControlV2Page() {
                   onPage={setPage}
                 />
               ) : null}
+            </TabsContent>
+
+            <TabsContent value="comparativo">
+              <CostV2OfficeCompare
+                companyId={companyId}
+                stockFilter={applied.stockFilter}
+                filters={filters}
+                onOpenReception={openReception}
+              />
             </TabsContent>
 
             <TabsContent value="analisis">

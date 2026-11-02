@@ -171,6 +171,14 @@ class FakeRepo(CostControlV2Repository):
             if r.get("variant_id") is not None
         ]
 
+    def stocks_by_office(self, **kw):
+        self._rec("stocks_by_office", **kw)
+        return []
+
+    def office_compare_lines_batch(self, **kw):
+        self._rec("office_compare_lines_batch", **kw)
+        return []
+
 
 def service(repo: FakeRepo) -> CostControlV2Service:
     return CostControlV2Service(repo, SCOPE, today=TODAY, use_cache=False)
