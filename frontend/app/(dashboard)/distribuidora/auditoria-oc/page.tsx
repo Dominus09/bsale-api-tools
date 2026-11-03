@@ -536,17 +536,24 @@ export default function AuditoriaOcPage() {
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-lg border border-lq-line/80 px-3 py-2">
-              <div className="text-xs text-lq-faint">Último folio PG</div>
+              <div className="text-xs text-lq-faint">Máximo PostgreSQL</div>
               <div className="text-xl font-semibold text-lq-ink">
                 {compare.pg_max_folio != null ? `#${compare.pg_max_folio}` : "—"}
               </div>
             </div>
             <div className="rounded-lg border border-lq-line/80 px-3 py-2">
-              <div className="text-xs text-lq-faint">Último folio Bsale</div>
+              <div className="text-xs text-lq-faint">
+                Máximo Bsale verificado
+                {compare.bsale_max_is_absolute === false ? " (no absoluto)" : ""}
+              </div>
               <div className="text-xl font-semibold text-lq-ink">
-                {compare.bsale_max_folio != null
-                  ? `#${compare.bsale_max_folio}`
-                  : "No verificado"}
+                {compare.verification_status === "unverified" ||
+                compare.verification_status === "no_local_folio"
+                  ? "No concluyente"
+                  : compare.bsale_verified_max_folio != null ||
+                      compare.bsale_max_folio != null
+                    ? `#${compare.bsale_verified_max_folio ?? compare.bsale_max_folio}`
+                    : "No concluyente"}
               </div>
             </div>
             <div className="rounded-lg border border-lq-line/80 px-3 py-2">

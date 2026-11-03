@@ -37,6 +37,10 @@ def client(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "development")
     monkeypatch.delenv("AUTH_OWNER_USER_IDS", raising=False)
     _stub_erp(monkeypatch)
+    monkeypatch.setattr(
+        "backend.routers.distribuidora_oc_audit._company_office_exist_in_catalog",
+        lambda *_a, **_k: None,
+    )
     app = FastAPI()
     app.include_router(distribuidora_oc_audit.router)
     return TestClient(app)
@@ -297,3 +301,67 @@ def test_recover_simulate_maps_429(client, monkeypatch):
         json={"company_id": 3, "office_id": 1, "folio": 12},
     )
     assert res.status_code == 429
+
+
+def test_user_cannot_access_other_company_scope(client, monkeypatch):
+    monkeypatch.setattr(
+        "backend.auth.multiapp.load_multiapp_scope",
+        lambda _uid: MultiAppScope(
+            tables_ready=True,
+            apps_rows_present=False,
+            company_ids=(3,),
+            offices=frozenset({(3, 1)}),
+        ),
+    )
+    res = client.post(
+        "/distribuidora/oc-audit/local",
+        headers=_auth("gerencia", user_id=42),
+        json={"company_id": 1, "office_id": 1, "from_folio": 1, "to_folio": 5},
+    )
+    assert res.status_code == 403
+    assert "Empresa" in res.json()["detail"]
+
+
+def test_user_cannot_access_other_office_scope(client, monkeypatch):
+    monkeypatch.setattr(
+        "backend.auth.multiapp.load_multiapp_scope",
+        lambda _uid: MultiAppScope(
+            tables_ready=True,
+            apps_rows_present=False,
+            company_ids=(3,),
+            offices=frozenset({(3, 1)}),
+        ),
+    )
+    res = client.post(
+        "/distribuidora/oc-audit/recover/confirm",
+        headers=_auth("adm", user_id=42),
+        json={
+            "company_id": 3,
+            "office_id": 2,
+            "folio": 99,
+            "simulation_token": "a" * 40,
+        },
+    )
+    assert res.status_code == 403
+    assert "Oficina" in res.json()["detail"]
+
+
+def test_catalog_rejects_unknown_office(client, monkeypatch):
+    from fastapi import HTTPException
+
+    def _missing(*_a, **_k):
+        raise HTTPException(
+            status_code=400,
+            detail="Oficina inexistente o no pertenece a la empresa indicada",
+        )
+
+    monkeypatch.setattr(
+        "backend.routers.distribuidora_oc_audit._company_office_exist_in_catalog",
+        _missing,
+    )
+    res = client.get(
+        "/distribuidora/oc-audit/meta",
+        params={"company_id": 3, "office_id": 1},
+        headers=_auth("gerencia"),
+    )
+    assert res.status_code == 400

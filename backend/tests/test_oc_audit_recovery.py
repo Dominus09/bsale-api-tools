@@ -315,3 +315,56 @@ def test_assert_recoverable_statuses():
             {"status": STATUS_NOT_FOUND_IN_BSALE, "recoverable": False},
             folio=1,
         )
+
+
+def test_confirm_rejects_cross_company_token_reuse():
+    folio = 90001
+    source_id = 91001
+    sim = recover.simulate_oc_recovery(
+        MagicMock(),
+        folio=folio,
+        company_id=3,
+        office_id=1,
+        user_id=5,
+        search_fn=lambda *_a, **_k: [_active(source_id, folio)],
+        local_loader=lambda **_k: {"by_folio": {}},
+        reconcile_fn=lambda *_a, **_k: _dry_report(folio, source_id),
+    )
+    with pytest.raises(recover.RecoveryValidationError, match="otra empresa"):
+        recover.confirm_oc_recovery(
+            MagicMock(),
+            folio=folio,
+            simulation_token=sim["simulation_token"],
+            company_id=1,  # manipulado
+            office_id=1,
+            user_id=5,
+            search_fn=lambda *_a, **_k: [_active(source_id, folio)],
+            local_loader=lambda **_k: {"by_folio": {}},
+            reconcile_fn=lambda *_a, **_k: (_ for _ in ()).throw(AssertionError()),
+        )
+
+
+def test_confirm_rejects_non_oc_document_type_in_token():
+    folio = 90002
+    source_id = 91002
+    sim = recover.simulate_oc_recovery(
+        MagicMock(),
+        folio=folio,
+        user_id=5,
+        search_fn=lambda *_a, **_k: [_active(source_id, folio)],
+        local_loader=lambda **_k: {"by_folio": {}},
+        reconcile_fn=lambda *_a, **_k: _dry_report(folio, source_id),
+    )
+    claims = recover._verify_simulation(sim["simulation_token"])
+    claims["document_type_id"] = 1
+    bad = recover._sign_simulation(claims)
+    with pytest.raises(recover.RecoveryValidationError, match="tipo 33"):
+        recover.confirm_oc_recovery(
+            MagicMock(),
+            folio=folio,
+            simulation_token=bad,
+            user_id=5,
+            search_fn=lambda *_a, **_k: [_active(source_id, folio)],
+            local_loader=lambda **_k: {"by_folio": {}},
+            reconcile_fn=lambda *_a, **_k: (_ for _ in ()).throw(AssertionError()),
+        )

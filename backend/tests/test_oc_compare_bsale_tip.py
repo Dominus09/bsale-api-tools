@@ -171,3 +171,52 @@ def test_rejects_non_oc_document_type():
             bounds_loader=lambda **_k: {"max_folio": 1},
             search_fn=lambda *_a, **_k: [],
         )
+
+
+def test_gap_between_folios_does_not_stop_probe():
+    """Huecos (1–2 not_found) no cierran la sonda; solo N consecutivos."""
+
+    def search(_client, *, folio, **_k):
+        if folio in (50, 53, 54):
+            return [_oc(9000 + folio, number=folio)]
+        return []
+
+    report = audit.compare_bsale_pg_folio_tip(
+        MagicMock(),
+        company_id=3,
+        office_id=1,
+        max_tail_probe=10,
+        stop_after_not_found=3,
+        bounds_loader=lambda **_k: {"min_folio": 1, "max_folio": 50},
+        search_fn=search,
+    )
+    assert report["bsale_max_folio"] == 54
+    assert report["bsale_max_is_absolute"] is False
+    assert report["bsale_tip_kind"] == "verified_within_probe"
+    assert report["verification_status"] == audit.COMPARE_BSALE_AHEAD
+    # Incluye huecos 51–52 como pendientes de investigar, no como “fin”.
+    assert 51 in report["pending_investigate_folios"]
+    assert 54 in report["pending_investigate_folios"]
+
+
+def test_ceiling_never_claimed_as_absolute_max():
+    def search(_client, *, folio, **_k):
+        # Toda la sonda encuentra documentos → techo.
+        return [_oc(8000 + folio, number=folio)]
+
+    report = audit.compare_bsale_pg_folio_tip(
+        MagicMock(),
+        company_id=3,
+        office_id=1,
+        max_tail_probe=5,
+        stop_after_not_found=3,
+        bounds_loader=lambda **_k: {"min_folio": 1, "max_folio": 10},
+        search_fn=search,
+    )
+    assert report["ceiling_reached"] is True
+    assert report["bsale_max_is_absolute"] is False
+    assert report["verification_status"] == audit.COMPARE_PARTIAL
+    assert report["bsale_tip_kind"] == "ceiling_reached"
+    assert "absoluto" in (report.get("detail") or "").lower() or "techo" in (
+        report.get("detail") or ""
+    ).lower()

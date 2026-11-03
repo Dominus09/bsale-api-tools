@@ -390,9 +390,21 @@ def confirm_oc_recovery(
     if int(claims.get("folio") or 0) != folio_n:
         raise RecoveryValidationError("El folio no coincide con la simulación")
     if int(claims.get("company_id") or 0) != int(company_id):
-        raise RecoveryValidationError("company_id no coincide con la simulación")
+        raise RecoveryValidationError(
+            "company_id no coincide con la simulación "
+            "(no se recupera OC de otra empresa)"
+        )
     if int(claims.get("office_id") or 0) != int(office_id):
         raise RecoveryValidationError("office_id no coincide con la simulación")
+    claim_type = _int(claims.get("document_type_id"))
+    if claim_type is None or int(claim_type) != int(OC_DOCUMENT_TYPE_ID):
+        raise RecoveryValidationError(
+            f"La simulación no es de OC tipo {OC_DOCUMENT_TYPE_ID}"
+        )
+    if int(document_type_id) != int(OC_DOCUMENT_TYPE_ID):
+        raise RecoveryValidationError(
+            f"Solo se recupera OC tipo {OC_DOCUMENT_TYPE_ID}"
+        )
     claim_user = _int(claims.get("user_id"))
     if claim_user is not None and _int(user_id) is not None and claim_user != _int(user_id):
         raise RecoveryValidationError(

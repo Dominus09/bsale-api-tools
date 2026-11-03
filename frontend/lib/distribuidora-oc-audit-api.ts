@@ -90,6 +90,9 @@ export type OcCompareReport = {
   pg_max_folio: number | null
   pg_min_folio?: number | null
   bsale_max_folio: number | null
+  bsale_verified_max_folio?: number | null
+  bsale_max_is_absolute?: boolean
+  bsale_tip_kind?: string
   bsale_max_source_document_id?: number | null
   verification_status:
     | "equal"

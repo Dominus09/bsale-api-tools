@@ -1051,7 +1051,11 @@ def compare_bsale_pg_folio_tip(
         "document_type_id": int(document_type_id),
         "pg_max_folio": pg_max,
         "pg_min_folio": pg_min,
+        # Tip verificable por sonda; NUNCA se presenta como máximo absoluto de Bsale.
         "bsale_max_folio": None,
+        "bsale_verified_max_folio": None,
+        "bsale_max_is_absolute": False,
+        "bsale_tip_kind": "none",
         "bsale_max_source_document_id": None,
         "verification_status": COMPARE_UNVERIFIED,
         "anchor_status": None,
@@ -1073,6 +1077,14 @@ def compare_bsale_pg_folio_tip(
             ),
             "no_invention": (
                 "Si Bsale no permite un máximo confiable, bsale_max_folio queda nulo."
+            ),
+            "not_absolute": (
+                "bsale_max_folio es el tip verificado dentro de la sonda acotada; "
+                "bsale_max_is_absolute siempre es false."
+            ),
+            "gaps": (
+                "Un hueco (not_found) no detiene la sonda; solo N not_found "
+                "consecutivos cierran el tip."
             ),
         },
         "queried_at": started_at.isoformat(),
@@ -1178,39 +1190,59 @@ def compare_bsale_pg_folio_tip(
     base["probes_run"] = len(probe_findings)
     base["probe_findings"] = probe_findings
     base["bsale_max_folio"] = bsale_tip
+    base["bsale_verified_max_folio"] = bsale_tip
+    base["bsale_max_is_absolute"] = False
     base["bsale_max_source_document_id"] = tip_source_id
     base["ceiling_reached"] = ceiling_reached
 
     if inconclusive and bsale_tip is None:
         base["verification_status"] = COMPARE_UNVERIFIED
+        base["bsale_tip_kind"] = "inconclusive"
         base["detail"] = "Consulta remota inconclusa; tip Bsale no verificado"
     elif bsale_tip is None:
         if anchor_status in (STATUS_OK, STATUS_VERSION_DIFF, STATUS_MISSING_IN_PG):
-            # Ancla activa y cola vacía → tip = pg_max, sistemas alineados.
+            # Ancla activa y cola vacía → tip = pg_max, alineados dentro de la sonda.
             base["bsale_max_folio"] = int(pg_max)
+            base["bsale_verified_max_folio"] = int(pg_max)
             base["bsale_max_source_document_id"] = tip_source_id or _int(
                 anchor.get("bsale_source_document_id")
             )
             base["verification_status"] = COMPARE_EQUAL
-            base["detail"] = "Último folio Bsale verificable coincide con PostgreSQL"
+            base["bsale_tip_kind"] = "verified_within_probe"
+            base["detail"] = (
+                "Máximo Bsale verificado (sonda) coincide con PostgreSQL; "
+                "no es un máximo absoluto de Bsale"
+            )
         else:
             base["verification_status"] = COMPARE_UNVERIFIED
+            base["bsale_tip_kind"] = "inconclusive"
             base["detail"] = (
-                "No se estableció un máximo Bsale confiable "
+                "No se estableció un tip Bsale confiable "
                 f"(ancla={anchor_status})"
             )
     elif int(bsale_tip) == int(pg_max):
-        base["verification_status"] = (
-            COMPARE_PARTIAL if ceiling_reached or inconclusive else COMPARE_EQUAL
-        )
+        if ceiling_reached or inconclusive:
+            base["verification_status"] = COMPARE_PARTIAL
+            base["bsale_tip_kind"] = (
+                "ceiling_reached" if ceiling_reached else "inconclusive"
+            )
+        else:
+            base["verification_status"] = COMPARE_EQUAL
+            base["bsale_tip_kind"] = "verified_within_probe"
         base["detail"] = (
-            "Tip Bsale igual al máximo PG"
-            + (" (sonda alcanzó techo o hubo errores)" if ceiling_reached or inconclusive else "")
+            "Tip Bsale verificado igual al máximo PG"
+            + (" (sonda parcial / no concluyente)" if ceiling_reached or inconclusive else "")
+            + "; no es máximo absoluto"
         )
     elif int(bsale_tip) > int(pg_max):
-        base["verification_status"] = (
-            COMPARE_PARTIAL if ceiling_reached or inconclusive else COMPARE_BSALE_AHEAD
-        )
+        if ceiling_reached or inconclusive:
+            base["verification_status"] = COMPARE_PARTIAL
+            base["bsale_tip_kind"] = (
+                "ceiling_reached" if ceiling_reached else "inconclusive"
+            )
+        else:
+            base["verification_status"] = COMPARE_BSALE_AHEAD
+            base["bsale_tip_kind"] = "verified_within_probe"
         start = int(pg_max) + 1
         end = int(bsale_tip)
         pending = list(range(start, end + 1))
@@ -1220,20 +1252,24 @@ def compare_bsale_pg_folio_tip(
         base["pending_investigate_count"] = len(pending)
         base["pending_truncated"] = truncated
         base["detail"] = (
-            f"Bsale verificable hasta #{bsale_tip}; PG hasta #{pg_max}. "
+            f"Tip Bsale verificado #{bsale_tip} (no absoluto); PG #{pg_max}. "
             f"{len(pending)} correlativo(s) por investigar"
             + (" (lista truncada)" if truncated else "")
-            + (" · techo de sonda alcanzado" if ceiling_reached else "")
+            + (" · techo de sonda: tip puede ser mayor" if ceiling_reached else "")
         )
     else:
         # Tip < pg_max no debería ocurrir con la lógica actual.
         base["verification_status"] = COMPARE_UNVERIFIED
+        base["bsale_tip_kind"] = "inconclusive"
         base["detail"] = "Tip Bsale inconsistente respecto al máximo local"
 
-    if ceiling_reached and base["verification_status"] == COMPARE_BSALE_AHEAD:
+    if ceiling_reached:
         base["verification_status"] = COMPARE_PARTIAL
+        if base.get("bsale_tip_kind") == "verified_within_probe":
+            base["bsale_tip_kind"] = "ceiling_reached"
         base["notes"]["ceiling"] = (
-            f"La sonda alcanzó el techo ({probe_limit}); el tip puede ser mayor."
+            f"La sonda alcanzó el techo ({probe_limit}); el tip verificado "
+            "NO es el máximo absoluto de Bsale."
         )
 
     base["finished_at"] = datetime.now(timezone.utc).isoformat()

@@ -8,7 +8,9 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from backend.auth.multiapp import assert_company, assert_office, get_scope
 from backend.auth.permissions import has_admin_access, has_management_access
+from backend.db import get_connection
 from backend.services.distribuidora.bsale_client import BsaleClient
 from backend.services.distribuidora.oc_audit_recovery_service import (
     RecoveryConflictError,
@@ -63,11 +65,65 @@ def require_oc_audit_access(
     return user
 
 
-def _validate_scope(company_id: int, office_id: int) -> None:
+def _company_office_exist_in_catalog(company_id: int, office_id: int) -> None:
+    """Valida empresa/oficina reales en ``bsale.companies`` / ``bsale.offices``."""
+    conn = None
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM bsale.companies WHERE company_id = %s LIMIT 1",
+            (int(company_id),),
+        )
+        if not cur.fetchone():
+            raise HTTPException(status_code=400, detail="Empresa inexistente en catálogo")
+        cur.execute(
+            """
+            SELECT 1 FROM bsale.offices
+            WHERE company_id = %s AND bsale_id = %s
+            LIMIT 1
+            """,
+            (int(company_id), int(office_id)),
+        )
+        if not cur.fetchone():
+            raise HTTPException(
+                status_code=400,
+                detail="Oficina inexistente o no pertenece a la empresa indicada",
+            )
+        cur.close()
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception(
+            "oc_audit_catalog_scope_failed company=%s office=%s",
+            company_id,
+            office_id,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="No se pudo validar empresa/oficina en catálogo",
+        ) from None
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _validate_scope(user: dict[str, Any], company_id: int, office_id: int) -> None:
+    """Allowlist + permisos multiapp del usuario + existencia real en catálogo."""
     if int(company_id) not in ALLOWED_COMPANY_IDS:
         raise HTTPException(status_code=400, detail="company_id no autorizado")
     if int(office_id) not in ALLOWED_OFFICE_IDS:
         raise HTTPException(status_code=400, detail="office_id no autorizado")
+    scope = get_scope(user)
+    assert_company(scope, int(company_id))
+    # Si el usuario tiene oficinas asignadas, restringir; si no, no bloquear gerencia legacy.
+    assert_office(
+        scope,
+        company_id=int(company_id),
+        office_id=int(office_id),
+        require_assignment=False,
+    )
+    _company_office_exist_in_catalog(int(company_id), int(office_id))
 
 
 def _bsale_client() -> BsaleClient:
@@ -128,10 +184,10 @@ def get_oc_audit_meta(
     company_id: int = COMPANY_ID,
     office_id: int = OFFICE_ID,
     window: int = DEFAULT_SUGGEST_WINDOW,
-    _user: dict = Depends(require_oc_audit_access),
+    user: dict = Depends(require_oc_audit_access),
 ):
     """Límites locales y rango reciente sugerido."""
-    _validate_scope(company_id, office_id)
+    _validate_scope(user, company_id, office_id)
     try:
         bounds = get_local_oc_folio_bounds(
             company_id=int(company_id),
@@ -173,10 +229,10 @@ def get_oc_audit_meta(
 @router.post("/local")
 def post_oc_audit_local(
     body: LocalAuditBody,
-    _user: dict = Depends(require_oc_audit_access),
+    user: dict = Depends(require_oc_audit_access),
 ):
     """Auditoría local de correlativos: sin llamadas masivas a Bsale."""
-    _validate_scope(body.company_id, body.office_id)
+    _validate_scope(user, body.company_id, body.office_id)
     try:
         report = audit_oc_correlatives(
             None,
@@ -203,10 +259,10 @@ def post_oc_audit_local(
 @router.post("/investigate")
 def post_oc_audit_investigate(
     body: InvestigateBody,
-    _user: dict = Depends(require_oc_audit_access),
+    user: dict = Depends(require_oc_audit_access),
 ):
     """Investiga en Bsale un lote explícito de folios (solo lectura)."""
-    _validate_scope(body.company_id, body.office_id)
+    _validate_scope(user, body.company_id, body.office_id)
     if len(body.folios) > MAX_INVESTIGATE_BATCH:
         raise HTTPException(
             status_code=400,
@@ -238,10 +294,10 @@ def post_oc_audit_investigate(
 @router.post("/compare")
 def post_oc_audit_compare(
     body: CompareBody,
-    _user: dict = Depends(require_oc_audit_access),
+    user: dict = Depends(require_oc_audit_access),
 ):
     """Compara máximo PG vs tip verificable en Bsale (acción manual, solo lectura)."""
-    _validate_scope(body.company_id, body.office_id)
+    _validate_scope(user, body.company_id, body.office_id)
     client = _bsale_client()
     try:
         report = compare_bsale_pg_folio_tip(
@@ -272,7 +328,7 @@ def post_oc_audit_recover_simulate(
     user: dict = Depends(require_oc_audit_access),
 ):
     """Simula recuperación de una OC (sin escrituras)."""
-    _validate_scope(body.company_id, body.office_id)
+    _validate_scope(user, body.company_id, body.office_id)
     client = _bsale_client()
     user_id, email = _user_ids(user)
     try:
@@ -309,7 +365,7 @@ def post_oc_audit_recover_confirm(
     user: dict = Depends(require_oc_audit_access),
 ):
     """Confirma recuperación de una OC tras simulación válida (una por solicitud)."""
-    _validate_scope(body.company_id, body.office_id)
+    _validate_scope(user, body.company_id, body.office_id)
     client = _bsale_client()
     user_id, email = _user_ids(user)
     try:
