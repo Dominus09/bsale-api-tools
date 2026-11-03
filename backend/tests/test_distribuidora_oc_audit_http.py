@@ -79,8 +79,11 @@ def test_gerencia_meta_ok(client, monkeypatch):
     )
     assert res.status_code == 200
     body = res.json()
-    assert body["writes_enabled"] is False
-    assert body["recovery_enabled"] is False
+    assert body["writes_enabled"] is True
+    assert body["recovery_enabled"] is True
+    assert body["recovery_requires_simulation"] is True
+    assert body["recovery_bulk_enabled"] is False
+    assert body["compare_requires_manual_action"] is True
     assert body["document_type_id"] == 33
 
 
@@ -158,3 +161,139 @@ def test_investigate_maps_bsale_failure_to_502(client, monkeypatch):
 def test_unauthenticated_rejected(client):
     res = client.get("/distribuidora/oc-audit/meta")
     assert res.status_code in (401, 403)
+
+
+def test_operativo_forbidden_on_compare_and_recover(client, monkeypatch):
+    monkeypatch.setattr(
+        "backend.routers.distribuidora_oc_audit._bsale_token",
+        lambda: "token",
+    )
+    headers = _auth("operativo")
+    assert (
+        client.post(
+            "/distribuidora/oc-audit/compare",
+            headers=headers,
+            json={"company_id": 3, "office_id": 1},
+        ).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            "/distribuidora/oc-audit/recover/simulate",
+            headers=headers,
+            json={"company_id": 3, "office_id": 1, "folio": 1},
+        ).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            "/distribuidora/oc-audit/recover/confirm",
+            headers=headers,
+            json={
+                "company_id": 3,
+                "office_id": 1,
+                "folio": 1,
+                "simulation_token": "x" * 20,
+            },
+        ).status_code
+        == 403
+    )
+
+
+def test_compare_ok_readonly(client, monkeypatch):
+    monkeypatch.setattr(
+        "backend.routers.distribuidora_oc_audit._bsale_token",
+        lambda: "token",
+    )
+    monkeypatch.setattr(
+        "backend.routers.distribuidora_oc_audit.BsaleClient",
+        lambda *_a, **_k: object(),
+    )
+    monkeypatch.setattr(
+        "backend.routers.distribuidora_oc_audit.compare_bsale_pg_folio_tip",
+        lambda *_a, **_k: {
+            "status": "completed",
+            "wrote": False,
+            "verification_status": "equal",
+            "pg_max_folio": 10,
+            "bsale_max_folio": 10,
+            "pending_investigate_count": 0,
+            "pending_investigate_folios": [],
+        },
+    )
+    res = client.post(
+        "/distribuidora/oc-audit/compare",
+        headers=_auth("gerencia"),
+        json={"company_id": 3, "office_id": 1},
+    )
+    assert res.status_code == 200
+    assert res.json()["wrote"] is False
+
+
+def test_recover_simulate_forbidden_without_auth(client):
+    res = client.post(
+        "/distribuidora/oc-audit/recover/simulate",
+        json={"company_id": 3, "office_id": 1, "folio": 1},
+    )
+    assert res.status_code in (401, 403)
+
+
+def test_recover_confirm_maps_conflict(client, monkeypatch):
+    from backend.services.distribuidora.oc_audit_recovery_service import (
+        RecoveryConflictError,
+    )
+
+    monkeypatch.setattr(
+        "backend.routers.distribuidora_oc_audit._bsale_token",
+        lambda: "token",
+    )
+    monkeypatch.setattr(
+        "backend.routers.distribuidora_oc_audit.BsaleClient",
+        lambda *_a, **_k: object(),
+    )
+
+    def _boom(*_a, **_k):
+        raise RecoveryConflictError("documento cambió")
+
+    monkeypatch.setattr(
+        "backend.routers.distribuidora_oc_audit.confirm_oc_recovery",
+        _boom,
+    )
+    res = client.post(
+        "/distribuidora/oc-audit/recover/confirm",
+        headers=_auth("adm"),
+        json={
+            "company_id": 3,
+            "office_id": 1,
+            "folio": 99,
+            "simulation_token": "a" * 40,
+        },
+    )
+    assert res.status_code == 409
+
+
+def test_recover_simulate_maps_429(client, monkeypatch):
+    from backend.services.distribuidora.oc_audit_recovery_service import (
+        RecoveryTransientError,
+    )
+
+    monkeypatch.setattr(
+        "backend.routers.distribuidora_oc_audit._bsale_token",
+        lambda: "token",
+    )
+    monkeypatch.setattr(
+        "backend.routers.distribuidora_oc_audit.BsaleClient",
+        lambda *_a, **_k: object(),
+    )
+    monkeypatch.setattr(
+        "backend.routers.distribuidora_oc_audit.simulate_oc_recovery",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            RecoveryTransientError("Bsale HTTP 429: rate limit")
+        ),
+    )
+    res = client.post(
+        "/distribuidora/oc-audit/recover/simulate",
+        headers=_auth("gerencia"),
+        json={"company_id": 3, "office_id": 1, "folio": 12},
+    )
+    assert res.status_code == 429

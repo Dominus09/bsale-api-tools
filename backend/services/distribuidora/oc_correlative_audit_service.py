@@ -48,6 +48,15 @@ DEFAULT_MAX_INVESTIGATE = 50
 DEFAULT_SUGGEST_WINDOW = 100
 MAX_INVESTIGATE_BATCH = 25
 MAX_TAIL_PROBE = 50
+DEFAULT_TAIL_STOP_AFTER_NOT_FOUND = 3
+# Tope de folios listados como "por investigar" tras comparación (no implica pérdida).
+MAX_COMPARE_PENDING = 100
+
+COMPARE_EQUAL = "equal"
+COMPARE_BSALE_AHEAD = "bsale_ahead"
+COMPARE_UNVERIFIED = "unverified"
+COMPARE_PARTIAL = "partial"
+COMPARE_NO_LOCAL = "no_local_folio"
 
 
 class CorrelativeRangeError(ValueError):
@@ -988,3 +997,245 @@ def investigate_selected_folios(
         "finished_at": datetime.now(timezone.utc).isoformat(),
         "duration_seconds": round(time.perf_counter() - started, 3),
     }
+
+
+def compare_bsale_pg_folio_tip(
+    client: BsaleClient,
+    *,
+    company_id: int = COMPANY_ID,
+    office_id: int = OFFICE_ID,
+    document_type_id: int = OC_DOCUMENT_TYPE_ID,
+    max_tail_probe: int = MAX_TAIL_PROBE,
+    stop_after_not_found: int = DEFAULT_TAIL_STOP_AFTER_NOT_FOUND,
+    max_pending: int = MAX_COMPARE_PENDING,
+    bounds_loader: Callable[..., dict[str, Any]] | None = None,
+    search_fn: Callable[..., list[dict[str, Any]]] | None = None,
+) -> dict[str, Any]:
+    """Compara el máximo correlativo local con el tip verificable en Bsale.
+
+    Estrategia (sin API de máximo en Bsale):
+    1. Anclar en ``MAX(number)`` de PostgreSQL para empresa+oficina+tipo 33.
+    2. Verificar el folio local máximo en Bsale (confianza del ancla).
+    3. Sondear hacia arriba con ``number=`` acotado (``max_tail_probe``).
+    4. Detener tras N ``not_found`` consecutivos (errores HTTP no cuentan como fin).
+    5. Nunca inventar un máximo Bsale: si no se verifica, ``bsale_max_folio=None``.
+
+    Los números del tramo PG→Bsale se listan como pendientes de investigar;
+    **no** se clasifican automáticamente como OC perdidas.
+    """
+    if int(document_type_id) != int(OC_DOCUMENT_TYPE_ID):
+        raise CorrelativeRangeError(
+            f"Solo se auditan OC tipo {OC_DOCUMENT_TYPE_ID}; recibido={document_type_id}"
+        )
+    started = time.perf_counter()
+    started_at = datetime.now(timezone.utc)
+    probe_limit = max(1, min(int(max_tail_probe), MAX_TAIL_PROBE))
+    stop_n = max(1, int(stop_after_not_found))
+    pending_cap = max(1, min(int(max_pending), MAX_COMPARE_PENDING))
+
+    loader = bounds_loader or get_local_oc_folio_bounds
+    bounds = loader(
+        company_id=int(company_id),
+        office_id=int(office_id),
+        document_type_id=int(document_type_id),
+    )
+    pg_max = _int((bounds or {}).get("max_folio"))
+    pg_min = _int((bounds or {}).get("min_folio"))
+
+    base: dict[str, Any] = {
+        "status": "completed",
+        "mode": "compare_bsale_pg_folio_tip_readonly",
+        "wrote": False,
+        "company_id": int(company_id),
+        "office_id": int(office_id),
+        "document_type_id": int(document_type_id),
+        "pg_max_folio": pg_max,
+        "pg_min_folio": pg_min,
+        "bsale_max_folio": None,
+        "bsale_max_source_document_id": None,
+        "verification_status": COMPARE_UNVERIFIED,
+        "anchor_status": None,
+        "probes_run": 0,
+        "consecutive_not_found_stop": stop_n,
+        "max_tail_probe": probe_limit,
+        "ceiling_reached": False,
+        "pending_investigate_count": 0,
+        "pending_investigate_folios": [],
+        "pending_truncated": False,
+        "probe_findings": [],
+        "notes": {
+            "document_id_vs_number": (
+                "Se sondea por number= (folio), nunca por document_id / source id."
+            ),
+            "classification": (
+                "Los correlativos del tramo solo quedan pendientes de investigar; "
+                "no se marcan como perdidos automáticamente."
+            ),
+            "no_invention": (
+                "Si Bsale no permite un máximo confiable, bsale_max_folio queda nulo."
+            ),
+        },
+        "queried_at": started_at.isoformat(),
+        "started_at": started_at.isoformat(),
+    }
+
+    if pg_max is None or pg_max <= 0:
+        base["verification_status"] = COMPARE_NO_LOCAL
+        base["detail"] = "Sin folio positivo local; no se inventa tip Bsale"
+        base["finished_at"] = datetime.now(timezone.utc).isoformat()
+        base["duration_seconds"] = round(time.perf_counter() - started, 3)
+        return base
+
+    # Confirmar ancla local en Bsale (sin fila local: active → missing_in_pg = tip existe).
+    anchor = investigate_folio_in_bsale(
+        client,
+        folio=int(pg_max),
+        company_id=int(company_id),
+        office_id=int(office_id),
+        document_type_id=int(document_type_id),
+        local_row=None,
+        search_fn=search_fn,
+    )
+    anchor_status = str(anchor.get("status") or "")
+    base["anchor_status"] = anchor_status
+    base["anchor_finding"] = _annotate_finding(anchor)
+
+    if anchor_status == STATUS_VERIFICATION_ERROR:
+        base["verification_status"] = COMPARE_UNVERIFIED
+        base["detail"] = "No se pudo verificar el máximo local en Bsale"
+        base["error"] = anchor.get("error")
+        base["finished_at"] = datetime.now(timezone.utc).isoformat()
+        base["duration_seconds"] = round(time.perf_counter() - started, 3)
+        return base
+
+    bsale_tip: int | None = None
+    tip_source_id: int | None = None
+    if anchor_status in (STATUS_OK, STATUS_VERSION_DIFF, STATUS_MISSING_IN_PG):
+        # Activo en Bsale: el tip arranca al menos en pg_max.
+        bsale_tip = int(pg_max)
+        tip_source_id = _int(anchor.get("bsale_source_document_id"))
+    elif anchor_status == STATUS_CANCELLED:
+        # Ancla anulada: no fijamos tip inventado; se sondea cola por si hay reemisión posterior.
+        bsale_tip = None
+    elif anchor_status == STATUS_NOT_FOUND_IN_BSALE:
+        # Máximo local no visible en Bsale: no inventar tip; sondear cola igualmente.
+        bsale_tip = None
+
+    probe_findings: list[dict[str, Any]] = []
+    consecutive_not_found = 0
+    ceiling_reached = False
+    inconclusive = False
+
+    for offset in range(1, probe_limit + 1):
+        folio = int(pg_max) + offset
+        result = investigate_folio_in_bsale(
+            client,
+            folio=folio,
+            company_id=int(company_id),
+            office_id=int(office_id),
+            document_type_id=int(document_type_id),
+            local_row=None,
+            search_fn=search_fn,
+        )
+        annotated = _annotate_finding(result)
+        annotated["beyond_local_max"] = True
+        probe_findings.append(annotated)
+        status = str(annotated.get("status") or "")
+
+        if status == STATUS_MISSING_IN_PG:
+            bsale_tip = folio
+            tip_source_id = _int(annotated.get("bsale_source_document_id"))
+            consecutive_not_found = 0
+            if offset == probe_limit:
+                ceiling_reached = True
+            continue
+
+        if status == STATUS_CANCELLED:
+            # Evidencia cancelada no avanza el tip correlativo activo.
+            consecutive_not_found = 0
+            continue
+
+        if status == STATUS_NOT_FOUND_IN_BSALE:
+            consecutive_not_found += 1
+            if consecutive_not_found >= stop_n:
+                break
+            continue
+
+        if status == STATUS_VERIFICATION_ERROR:
+            inconclusive = True
+            consecutive_not_found = 0
+            # No tratar error como fin de secuencia.
+            continue
+
+        # Estados inesperados (ok/version_diff sin local): tratar como presencia.
+        if status in (STATUS_OK, STATUS_VERSION_DIFF):
+            bsale_tip = folio
+            tip_source_id = _int(annotated.get("bsale_source_document_id"))
+            consecutive_not_found = 0
+            if offset == probe_limit:
+                ceiling_reached = True
+
+    base["probes_run"] = len(probe_findings)
+    base["probe_findings"] = probe_findings
+    base["bsale_max_folio"] = bsale_tip
+    base["bsale_max_source_document_id"] = tip_source_id
+    base["ceiling_reached"] = ceiling_reached
+
+    if inconclusive and bsale_tip is None:
+        base["verification_status"] = COMPARE_UNVERIFIED
+        base["detail"] = "Consulta remota inconclusa; tip Bsale no verificado"
+    elif bsale_tip is None:
+        if anchor_status in (STATUS_OK, STATUS_VERSION_DIFF, STATUS_MISSING_IN_PG):
+            # Ancla activa y cola vacía → tip = pg_max, sistemas alineados.
+            base["bsale_max_folio"] = int(pg_max)
+            base["bsale_max_source_document_id"] = tip_source_id or _int(
+                anchor.get("bsale_source_document_id")
+            )
+            base["verification_status"] = COMPARE_EQUAL
+            base["detail"] = "Último folio Bsale verificable coincide con PostgreSQL"
+        else:
+            base["verification_status"] = COMPARE_UNVERIFIED
+            base["detail"] = (
+                "No se estableció un máximo Bsale confiable "
+                f"(ancla={anchor_status})"
+            )
+    elif int(bsale_tip) == int(pg_max):
+        base["verification_status"] = (
+            COMPARE_PARTIAL if ceiling_reached or inconclusive else COMPARE_EQUAL
+        )
+        base["detail"] = (
+            "Tip Bsale igual al máximo PG"
+            + (" (sonda alcanzó techo o hubo errores)" if ceiling_reached or inconclusive else "")
+        )
+    elif int(bsale_tip) > int(pg_max):
+        base["verification_status"] = (
+            COMPARE_PARTIAL if ceiling_reached or inconclusive else COMPARE_BSALE_AHEAD
+        )
+        start = int(pg_max) + 1
+        end = int(bsale_tip)
+        pending = list(range(start, end + 1))
+        truncated = len(pending) > pending_cap
+        pending = pending[:pending_cap]
+        base["pending_investigate_folios"] = pending
+        base["pending_investigate_count"] = len(pending)
+        base["pending_truncated"] = truncated
+        base["detail"] = (
+            f"Bsale verificable hasta #{bsale_tip}; PG hasta #{pg_max}. "
+            f"{len(pending)} correlativo(s) por investigar"
+            + (" (lista truncada)" if truncated else "")
+            + (" · techo de sonda alcanzado" if ceiling_reached else "")
+        )
+    else:
+        # Tip < pg_max no debería ocurrir con la lógica actual.
+        base["verification_status"] = COMPARE_UNVERIFIED
+        base["detail"] = "Tip Bsale inconsistente respecto al máximo local"
+
+    if ceiling_reached and base["verification_status"] == COMPARE_BSALE_AHEAD:
+        base["verification_status"] = COMPARE_PARTIAL
+        base["notes"]["ceiling"] = (
+            f"La sonda alcanzó el techo ({probe_limit}); el tip puede ser mayor."
+        )
+
+    base["finished_at"] = datetime.now(timezone.utc).isoformat()
+    base["duration_seconds"] = round(time.perf_counter() - started, 3)
+    return base

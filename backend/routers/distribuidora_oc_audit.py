@@ -1,4 +1,4 @@
-"""API read-only: auditoría de correlativos de OC (tipo 33)."""
+"""API: auditoría de correlativos de OC (tipo 33) + comparación/recuperación manual."""
 
 from __future__ import annotations
 
@@ -10,14 +10,23 @@ from pydantic import BaseModel, Field
 
 from backend.auth.permissions import has_admin_access, has_management_access
 from backend.services.distribuidora.bsale_client import BsaleClient
+from backend.services.distribuidora.oc_audit_recovery_service import (
+    RecoveryConflictError,
+    RecoveryTransientError,
+    RecoveryValidationError,
+    confirm_oc_recovery,
+    simulate_oc_recovery,
+)
 from backend.services.distribuidora.oc_correlative_audit_service import (
     DEFAULT_MAX_GAPS,
     DEFAULT_MAX_INVESTIGATE,
     DEFAULT_MAX_RANGE_SPAN,
     DEFAULT_SUGGEST_WINDOW,
     MAX_INVESTIGATE_BATCH,
+    MAX_TAIL_PROBE,
     CorrelativeRangeError,
     audit_oc_correlatives,
+    compare_bsale_pg_folio_tip,
     get_local_oc_folio_bounds,
     investigate_selected_folios,
     suggest_recent_folio_range,
@@ -44,7 +53,7 @@ ALLOWED_OFFICE_IDS = frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9})
 def require_oc_audit_access(
     authorization: BearerDep = None,
 ) -> dict[str, Any]:
-    """ERP + gerencia/adm/OWNER. Sin mutaciones en esta fase."""
+    """ERP + gerencia/adm/OWNER."""
     user = require_staff_user(authorization)
     if not (has_management_access(user) or has_admin_access(user)):
         raise HTTPException(
@@ -59,6 +68,24 @@ def _validate_scope(company_id: int, office_id: int) -> None:
         raise HTTPException(status_code=400, detail="company_id no autorizado")
     if int(office_id) not in ALLOWED_OFFICE_IDS:
         raise HTTPException(status_code=400, detail="office_id no autorizado")
+
+
+def _bsale_client() -> BsaleClient:
+    token = _bsale_token()
+    if not token:
+        raise HTTPException(status_code=503, detail="Token Bsale no configurado")
+    # Tope de reintentos 429 para fallar seguro hacia el ERP (no colgar).
+    return BsaleClient(token, max_429_retries=2)
+
+
+def _user_ids(user: dict[str, Any]) -> tuple[int | None, str | None]:
+    uid = user.get("id") or user.get("uid")
+    try:
+        user_id = int(uid) if uid is not None else None
+    except (TypeError, ValueError):
+        user_id = None
+    email = str(user.get("email") or "").strip() or None
+    return user_id, email
 
 
 class LocalAuditBody(BaseModel):
@@ -77,6 +104,25 @@ class InvestigateBody(BaseModel):
     max_folios: int = Field(default=MAX_INVESTIGATE_BATCH, ge=1, le=MAX_INVESTIGATE_BATCH)
 
 
+class CompareBody(BaseModel):
+    company_id: int = Field(default=COMPANY_ID, ge=1)
+    office_id: int = Field(default=OFFICE_ID, ge=1)
+    max_tail_probe: int = Field(default=MAX_TAIL_PROBE, ge=1, le=MAX_TAIL_PROBE)
+
+
+class RecoverSimulateBody(BaseModel):
+    company_id: int = Field(default=COMPANY_ID, ge=1)
+    office_id: int = Field(default=OFFICE_ID, ge=1)
+    folio: int = Field(..., ge=1)
+
+
+class RecoverConfirmBody(BaseModel):
+    company_id: int = Field(default=COMPANY_ID, ge=1)
+    office_id: int = Field(default=OFFICE_ID, ge=1)
+    folio: int = Field(..., ge=1)
+    simulation_token: str = Field(..., min_length=16)
+
+
 @router.get("/meta")
 def get_oc_audit_meta(
     company_id: int = COMPANY_ID,
@@ -84,7 +130,7 @@ def get_oc_audit_meta(
     window: int = DEFAULT_SUGGEST_WINDOW,
     _user: dict = Depends(require_oc_audit_access),
 ):
-    """Límites locales y rango reciente sugerido (solo lectura)."""
+    """Límites locales y rango reciente sugerido."""
     _validate_scope(company_id, office_id)
     try:
         bounds = get_local_oc_folio_bounds(
@@ -114,9 +160,13 @@ def get_oc_audit_meta(
             "max_gaps": DEFAULT_MAX_GAPS,
             "max_investigate_batch": MAX_INVESTIGATE_BATCH,
             "max_investigate": DEFAULT_MAX_INVESTIGATE,
+            "max_tail_probe": MAX_TAIL_PROBE,
         },
-        "writes_enabled": False,
-        "recovery_enabled": False,
+        "writes_enabled": True,
+        "recovery_enabled": True,
+        "recovery_requires_simulation": True,
+        "recovery_bulk_enabled": False,
+        "compare_requires_manual_action": True,
     }
 
 
@@ -162,10 +212,7 @@ def post_oc_audit_investigate(
             status_code=400,
             detail=f"Máximo {MAX_INVESTIGATE_BATCH} folios por solicitud",
         )
-    token = _bsale_token()
-    if not token:
-        raise HTTPException(status_code=503, detail="Token Bsale no configurado")
-    client = BsaleClient(token)
+    client = _bsale_client()
     try:
         report = investigate_selected_folios(
             client,
@@ -179,7 +226,6 @@ def post_oc_audit_investigate(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("oc_audit_investigate_failed")
-        # No clasificar como inexistente: error de verificación.
         raise HTTPException(
             status_code=502,
             detail=f"Error consultando Bsale: {type(exc).__name__}",
@@ -187,3 +233,109 @@ def post_oc_audit_investigate(
     if report.get("wrote"):
         raise HTTPException(status_code=500, detail="investigación no debe escribir")
     return report
+
+
+@router.post("/compare")
+def post_oc_audit_compare(
+    body: CompareBody,
+    _user: dict = Depends(require_oc_audit_access),
+):
+    """Compara máximo PG vs tip verificable en Bsale (acción manual, solo lectura)."""
+    _validate_scope(body.company_id, body.office_id)
+    client = _bsale_client()
+    try:
+        report = compare_bsale_pg_folio_tip(
+            client,
+            company_id=int(body.company_id),
+            office_id=int(body.office_id),
+            document_type_id=OC_DOCUMENT_TYPE_ID,
+            max_tail_probe=int(body.max_tail_probe),
+        )
+    except CorrelativeRangeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("oc_audit_compare_failed")
+        msg = str(exc)
+        code = 429 if "429" in msg else 502
+        raise HTTPException(
+            status_code=code,
+            detail=f"Error consultando Bsale: {type(exc).__name__}",
+        ) from None
+    if report.get("wrote"):
+        raise HTTPException(status_code=500, detail="comparación no debe escribir")
+    return report
+
+
+@router.post("/recover/simulate")
+def post_oc_audit_recover_simulate(
+    body: RecoverSimulateBody,
+    user: dict = Depends(require_oc_audit_access),
+):
+    """Simula recuperación de una OC (sin escrituras)."""
+    _validate_scope(body.company_id, body.office_id)
+    client = _bsale_client()
+    user_id, email = _user_ids(user)
+    try:
+        return simulate_oc_recovery(
+            client,
+            folio=int(body.folio),
+            company_id=int(body.company_id),
+            office_id=int(body.office_id),
+            document_type_id=OC_DOCUMENT_TYPE_ID,
+            user_id=user_id,
+            user_email=email,
+        )
+    except RecoveryValidationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RecoveryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RecoveryTransientError as exc:
+        msg = str(exc)
+        code = 429 if "429" in msg or "rate limit" in msg.lower() else 502
+        raise HTTPException(status_code=code, detail=msg) from exc
+    except CorrelativeRangeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        logger.exception("oc_audit_recover_simulate_failed folio=%s", body.folio)
+        raise HTTPException(
+            status_code=502,
+            detail="No se pudo simular la recuperación",
+        ) from None
+
+
+@router.post("/recover/confirm")
+def post_oc_audit_recover_confirm(
+    body: RecoverConfirmBody,
+    user: dict = Depends(require_oc_audit_access),
+):
+    """Confirma recuperación de una OC tras simulación válida (una por solicitud)."""
+    _validate_scope(body.company_id, body.office_id)
+    client = _bsale_client()
+    user_id, email = _user_ids(user)
+    try:
+        return confirm_oc_recovery(
+            client,
+            folio=int(body.folio),
+            simulation_token=str(body.simulation_token),
+            company_id=int(body.company_id),
+            office_id=int(body.office_id),
+            document_type_id=OC_DOCUMENT_TYPE_ID,
+            user_id=user_id,
+            user_email=email,
+        )
+    except RecoveryValidationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RecoveryConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except RecoveryTransientError as exc:
+        msg = str(exc)
+        code = 429 if "429" in msg or "rate limit" in msg.lower() else 502
+        raise HTTPException(status_code=code, detail=msg) from exc
+    except CorrelativeRangeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        logger.exception("oc_audit_recover_confirm_failed folio=%s", body.folio)
+        raise HTTPException(
+            status_code=502,
+            detail="No se pudo confirmar la recuperación",
+        ) from None
