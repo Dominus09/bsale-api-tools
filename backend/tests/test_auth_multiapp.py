@@ -87,6 +87,33 @@ def test_chofer_not_supervisor_profile():
     with pytest.raises(HTTPException) as err:
         assert_profiles(scope, ["jefe_sucursal"])
     assert err.value.status_code == 403
+    with pytest.raises(HTTPException):
+        assert_profiles(scope, ["supervisor"])
+
+
+def test_supervisor_pwa_profile_independent_of_erp_roles():
+    """supervisor es perfil PWA; no equivale a gerencia/adm ERP."""
+    from backend.auth.multiapp import OPERATIONAL_PROFILES, has_profile
+
+    assert "supervisor" in OPERATIONAL_PROFILES
+    scope = _scope(
+        tables_ready=True,
+        apps_rows_present=True,
+        apps=frozenset({APP_PWA}),
+        profiles=frozenset({"supervisor", "chofer"}),
+    )
+    assert has_profile(scope, "supervisor") is True
+    assert_profiles(scope, ["supervisor"])
+    assert_profiles(scope, ["supervisor", "jefe_sucursal"])  # any-of
+    # Sin perfil jefe_sucursal exclusivo:
+    scope_only_sup = _scope(
+        tables_ready=True,
+        apps_rows_present=True,
+        apps=frozenset({APP_PWA}),
+        profiles=frozenset({"supervisor"}),
+    )
+    with pytest.raises(HTTPException):
+        assert_profiles(scope_only_sup, ["jefe_sucursal"])
 
 
 def test_company_and_office_scope():

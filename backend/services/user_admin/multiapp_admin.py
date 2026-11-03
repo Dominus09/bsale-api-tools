@@ -19,6 +19,7 @@ PROFILE_LABELS: dict[str, str] = {
     "cajero": "Cajero",
     "reponedor": "Reponedor",
     "jefe_sucursal": "Jefe de sucursal",
+    "supervisor": "Supervisor",
 }
 
 APP_LABELS: dict[str, str] = {
@@ -84,9 +85,6 @@ def normalize_profiles(raw: list[str] | None) -> list[str] | None:
     seen: set[str] = set()
     for item in raw:
         code = str(item or "").strip().lower()
-        # Alias UX: "supervisor" → jefe_sucursal
-        if code == "supervisor":
-            code = "jefe_sucursal"
         if not code:
             continue
         if code not in OPERATIONAL_PROFILES:

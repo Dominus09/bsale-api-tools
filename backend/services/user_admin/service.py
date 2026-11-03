@@ -190,8 +190,6 @@ def list_users(
 ) -> list[dict[str, Any]]:
     app_f = (app or "").strip().lower() or None
     profile_f = (profile or "").strip().lower() or None
-    if profile_f == "supervisor":
-        profile_f = "jefe_sucursal"
     if app_f and app_f not in ("erp", "pwa", "legacy"):
         raise HTTPException(
             status_code=400,

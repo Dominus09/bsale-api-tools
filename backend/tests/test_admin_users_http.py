@@ -75,7 +75,10 @@ def test_static_meta_routes_before_dynamic_id(app_client, monkeypatch):
             },
             "ready": True,
             "apps": [{"code": "erp", "label": "ERP"}, {"code": "pwa", "label": "PWA"}],
-            "profiles": [{"code": "chofer", "label": "Chofer"}],
+            "profiles": [
+                {"code": "chofer", "label": "Chofer"},
+                {"code": "supervisor", "label": "Supervisor"},
+            ],
         },
     )
     monkeypatch.setattr(
@@ -100,7 +103,9 @@ def test_static_meta_routes_before_dynamic_id(app_client, monkeypatch):
 
     r_prof = app_client.get("/admin/users/meta/profiles", headers=_auth("gerencia"))
     assert r_prof.status_code == 200
-    assert r_prof.json()["items"][0]["code"] == "chofer"
+    prof_codes = {p["code"] for p in r_prof.json()["items"]}
+    assert "chofer" in prof_codes
+    assert "supervisor" in prof_codes
 
     r_off = app_client.get(
         "/admin/users/meta/offices?company_id=1", headers=_auth("gerencia")

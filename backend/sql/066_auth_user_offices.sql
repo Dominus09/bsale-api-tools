@@ -38,8 +38,13 @@ BEGIN
       AND pg_get_constraintdef(c.oid) ILIKE '%company_id%'
       AND pg_get_constraintdef(c.oid) ILIKE '%bsale_id%'
   ) AND NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conname = 'fk_user_offices_office'
+    SELECT 1
+    FROM pg_constraint c
+    JOIN pg_class t ON t.oid = c.conrelid
+    JOIN pg_namespace n ON n.oid = t.relnamespace
+    WHERE n.nspname = 'app'
+      AND t.relname = 'user_offices'
+      AND c.conname = 'fk_user_offices_office'
   ) THEN
     ALTER TABLE app.user_offices
       ADD CONSTRAINT fk_user_offices_office

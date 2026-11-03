@@ -43,6 +43,7 @@ OPERATIONAL_PROFILES = frozenset(
         "cajero",
         "reponedor",
         "jefe_sucursal",
+        "supervisor",
     }
 )
 

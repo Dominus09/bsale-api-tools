@@ -49,11 +49,14 @@ class _Cur:
 
 def test_normalize_apps_and_profiles():
     assert ma.normalize_apps(["ERP", "pwa"]) == ["erp", "pwa"]
-    assert ma.normalize_profiles(["Chofer", "supervisor"]) == ["chofer", "jefe_sucursal"]
+    assert ma.normalize_profiles(["Chofer", "supervisor"]) == ["chofer", "supervisor"]
+    assert ma.normalize_profiles(["jefe_sucursal"]) == ["jefe_sucursal"]
     with pytest.raises(HTTPException):
         ma.normalize_apps(["mobile"])
     with pytest.raises(HTTPException):
         ma.normalize_profiles(["admin"])
+    with pytest.raises(HTTPException):
+        ma.normalize_profiles(["gerencia"])  # rol ERP ≠ perfil PWA
 
 
 def test_pwa_profiles_require_pwa_app():
@@ -62,6 +65,7 @@ def test_pwa_profiles_require_pwa_app():
     assert err.value.status_code == 400
     ma.validate_apps_profiles_consistency(["pwa"], ["chofer"])
     ma.validate_apps_profiles_consistency(["erp", "pwa"], ["bodega", "chofer"])
+    ma.validate_apps_profiles_consistency(["pwa"], ["supervisor"])
 
 
 def test_office_rejects_other_company(monkeypatch):
@@ -317,4 +321,6 @@ def test_catalogs_static():
     profiles = ma.profiles_catalog()["items"]
     codes = {p["code"] for p in profiles}
     assert "chofer" in codes and "jefe_sucursal" in codes
-    assert "supervisor" not in codes
+    assert "supervisor" in codes
+    labels = {p["code"]: p["label"] for p in profiles}
+    assert labels["supervisor"] == "Supervisor"

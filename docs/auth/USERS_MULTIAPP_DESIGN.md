@@ -19,7 +19,7 @@ Un único directorio de cuentas en `analytics` (`bsale.users` + tablas `app.*`) 
 2. **Aplicaciones autorizadas**: `erp`, `pwa` (extensible).
 3. **Empresas**: reutilizar `app.user_companies (user_id, company_id)`.
 4. **Oficinas**: siempre `company_id + office_id` (= `bsale.offices.bsale_id`).
-5. **Perfil operativo**: vendedor | chofer | bodega | cajero | reponedor | jefe_sucursal.
+5. **Perfil operativo**: vendedor | chofer | bodega | cajero | reponedor | jefe_sucursal | supervisor (PWA; no es rol ERP).
 6. **Alcances extra** (fases posteriores): clientes, rutas, planificaciones.
 
 Regla: **OPERATIVO no recibe app `erp` automáticamente**.
@@ -38,7 +38,7 @@ Regla: **OPERATIVO no recibe app `erp` automáticamente**.
 | Columna | Tipo | Notas |
 |---|---|---|
 | user_id | bigint | |
-| profile_code | text | vendedor, chofer, bodega, cajero, reponedor, jefe_sucursal |
+| profile_code | text | vendedor, chofer, bodega, cajero, reponedor, jefe_sucursal, supervisor |
 | active | boolean | |
 | PK | (user_id, profile_code) | Un usuario puede tener varios perfiles |
 
