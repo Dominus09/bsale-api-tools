@@ -5,13 +5,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.services.distribuidora import dispatch_plan_cuadratura_service as svc
-from backend.utils.auth_staff import require_staff_user
+from backend.auth.permissions import require_erp_ops_staff
 from backend.utils.ors_stability import log_error
 
 router = APIRouter(
     prefix="/distribuidora/cuadraturas",
     tags=["Distribuidora cuadraturas"],
-    dependencies=[Depends(require_staff_user)],
+    dependencies=[Depends(require_erp_ops_staff)],
 )
 
 

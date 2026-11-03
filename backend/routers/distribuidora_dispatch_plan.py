@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from backend.services.distribuidora import dispatch_plan_service as svc
 from backend.services.distribuidora import dispatch_plan_cuadratura_service as cuad_svc
 from backend.services.distribuidora import dispatch_plan_load_batch_service as batch_svc
+from backend.auth.permissions import require_erp_ops_staff
 from backend.utils.auth_staff import BearerDep, decode_staff_token, require_staff_user
 from backend.utils.dashboard_debug import log_dashboard_debug
 from backend.utils.dashboard_stage import DashboardStageRun, log_picking_count_sql_reference
@@ -184,7 +185,11 @@ def list_my_driver_plans(
 
 
 @router.post("/confirm")
-def confirm_plan(body: ConfirmDispatchPlanBody):
+def confirm_plan(
+    body: ConfirmDispatchPlanBody,
+    _ops: dict = Depends(require_erp_ops_staff),
+):
+    """Confirmación ORS (mapa). Planificadores Excel capability-only → 403."""
     from backend.services.distribuidora.dispatch_plan_oc_guard import (
         OcConfirmConflictError,
         OcDocumentStateError,
@@ -404,7 +409,11 @@ def get_plan_dashboard(
 
 
 @router.patch("/{plan_id}/status")
-def patch_plan_status(plan_id: int, body: StatusBody):
+def patch_plan_status(
+    plan_id: int,
+    body: StatusBody,
+    _ops: dict = Depends(require_erp_ops_staff),
+):
     try:
         return svc.update_dispatch_plan_status(plan_id, body.status)
     except ValueError as e:
@@ -534,7 +543,7 @@ def post_picking_generate(
     validate: bool = Query(True),
     include_probable: bool = Query(False),
     body: PickingGenerateBody | None = None,
-    user: dict = Depends(require_staff_user),
+    user: dict = Depends(require_erp_ops_staff),
 ):
     """Calcula y persiste picking (nueva versión; reemplaza la versión actual)."""
     try:
@@ -689,7 +698,11 @@ def get_load_batches(plan_id: int):
 
 
 @router.post("/{plan_id}/load-batches")
-def post_load_batch(plan_id: int, body: LoadBatchBody):
+def post_load_batch(
+    plan_id: int,
+    body: LoadBatchBody,
+    _ops: dict = Depends(require_erp_ops_staff),
+):
     try:
         return batch_svc.create_load_batch(
             plan_id, name=body.name, description=body.description
@@ -699,7 +712,12 @@ def post_load_batch(plan_id: int, body: LoadBatchBody):
 
 
 @router.put("/{plan_id}/load-batches/{batch_id}")
-def put_load_batch(plan_id: int, batch_id: int, body: LoadBatchUpdateBody):
+def put_load_batch(
+    plan_id: int,
+    batch_id: int,
+    body: LoadBatchUpdateBody,
+    _ops: dict = Depends(require_erp_ops_staff),
+):
     try:
         return batch_svc.update_load_batch(
             plan_id,
@@ -713,7 +731,11 @@ def put_load_batch(plan_id: int, batch_id: int, body: LoadBatchUpdateBody):
 
 
 @router.delete("/{plan_id}/load-batches/{batch_id}")
-def delete_load_batch(plan_id: int, batch_id: int):
+def delete_load_batch(
+    plan_id: int,
+    batch_id: int,
+    _ops: dict = Depends(require_erp_ops_staff),
+):
     try:
         return batch_svc.delete_load_batch(plan_id, batch_id)
     except ValueError as e:
@@ -729,7 +751,11 @@ def get_picking_assignments(plan_id: int):
 
 
 @router.put("/{plan_id}/picking-assignments")
-def put_picking_assignments(plan_id: int, body: PickingAssignmentsBody):
+def put_picking_assignments(
+    plan_id: int,
+    body: PickingAssignmentsBody,
+    _ops: dict = Depends(require_erp_ops_staff),
+):
     try:
         return batch_svc.save_picking_assignments(
             plan_id, [a.model_dump() for a in body.assignments]
@@ -762,7 +788,7 @@ def preview_add_order(plan_id: int):
 def add_order_to_plan(
     plan_id: int,
     body: AddOrderToPlanBody,
-    user: dict = Depends(require_staff_user),
+    user: dict = Depends(require_erp_ops_staff),
 ):
     try:
         return batch_svc.add_order_to_plan(
@@ -782,7 +808,7 @@ def get_picking_regeneration_log(plan_id: int, limit: int = Query(50, ge=1, le=2
 
 
 @router.post("/{plan_id}/repair-snapshot")
-def repair_snapshot(plan_id: int, _user: dict = Depends(require_staff_user)):
+def repair_snapshot(plan_id: int, _user: dict = Depends(require_erp_ops_staff)):
     """Solo rellena campos vacíos del snapshot (planes históricos)."""
     try:
         return svc.repair_order_snapshots(plan_id)
@@ -791,7 +817,10 @@ def repair_snapshot(plan_id: int, _user: dict = Depends(require_staff_user)):
 
 
 @router.post("/{plan_id}/picking-generated")
-def post_picking_generated(plan_id: int):
+def post_picking_generated(
+    plan_id: int,
+    _ops: dict = Depends(require_erp_ops_staff),
+):
     try:
         return svc.mark_picking_generated(plan_id)
     except ValueError as e:
@@ -878,7 +907,11 @@ def get_cuadratura(plan_id: int):
 
 
 @router.put("/{plan_id}/cuadratura")
-def put_cuadratura(plan_id: int, body: CuadraturaSaveBody):
+def put_cuadratura(
+    plan_id: int,
+    body: CuadraturaSaveBody,
+    _ops: dict = Depends(require_erp_ops_staff),
+):
     try:
         payload = body.model_dump(exclude_none=True)
         if body.documents is not None:
@@ -903,7 +936,11 @@ def put_cuadratura(plan_id: int, body: CuadraturaSaveBody):
 
 
 @router.post("/{plan_id}/cuadratura/close")
-def close_cuadratura(plan_id: int, body: CuadraturaCloseBody | None = None):
+def close_cuadratura(
+    plan_id: int,
+    body: CuadraturaCloseBody | None = None,
+    _ops: dict = Depends(require_erp_ops_staff),
+):
     try:
         data = body.model_dump() if body else {}
         return cuad_svc.close_dispatch_plan_cuadratura(

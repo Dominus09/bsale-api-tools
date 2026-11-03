@@ -7,7 +7,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from backend.db import get_connection
-from backend.utils.auth_staff import require_staff_user
+from backend.auth.permissions import require_erp_ops_staff
 from backend.utils.ruta_optimizador_local import (
     log_resumen_optimizacion,
     optimizar_cola_desde_ancla,
@@ -128,7 +128,7 @@ class OptimizarRutaDesdeBody(BaseModel):
 router = APIRouter(
     prefix="/distribuidora",
     tags=["Distribuidora"],
-    dependencies=[Depends(require_staff_user)],
+    dependencies=[Depends(require_erp_ops_staff)],
 )
 
 # Rutas / ORS / mapa: excluye telefónicos por `dia_atencion` (valor Bsale "telefonico") y por `tipo_atencion`.

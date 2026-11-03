@@ -19,19 +19,19 @@ from backend.services.distribuidora.sync_service import (
     run_resync_distribuidora_background,
     sync_bsale_distribuidora_sales_incremental,
 )
-from backend.utils.auth_staff import require_staff_user
+from backend.auth.permissions import require_erp_ops_staff
 
 # Sync HTTP es disparado desde el ERP (botones). Los crons llaman servicios Python
 # directamente — no dependen de estos endpoints abiertos.
 router = APIRouter(
     prefix="/erp",
     tags=["ERP Distribuidora"],
-    dependencies=[Depends(require_staff_user)],
+    dependencies=[Depends(require_erp_ops_staff)],
 )
 sync_router = APIRouter(
     prefix="/sync",
     tags=["Manual Sync"],
-    dependencies=[Depends(require_staff_user)],
+    dependencies=[Depends(require_erp_ops_staff)],
 )
 logger = logging.getLogger(__name__)
 

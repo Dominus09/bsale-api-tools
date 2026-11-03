@@ -45,12 +45,13 @@ from backend.services.distribuidora.sync_service import (
 )
 from backend.utils.request_audit import get_request_id, rss_mb
 from backend.utils.bsale_token_env import read_bsale_token_from_env
+from backend.auth.permissions import require_erp_ops_staff
 from backend.utils.auth_staff import require_staff_user
 
 router = APIRouter(
     prefix="/distribuidora",
     tags=["Distribuidora órdenes"],
-    dependencies=[Depends(require_staff_user)],
+    dependencies=[Depends(require_erp_ops_staff)],
 )
 logger = logging.getLogger(__name__)
 audit_logger = logging.getLogger("request_audit")

@@ -7,7 +7,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.utils.auth_staff import require_staff_user
+from backend.auth.permissions import require_erp_ops_staff
 
 from backend.services.distribuidora.route_planning_service import (
     AlreadyPlannedError,
@@ -25,7 +25,7 @@ from backend.services.distribuidora.route_planning_service import (
 router = APIRouter(
     prefix="/distribuidora",
     tags=["Distribuidora planificación rutas"],
-    dependencies=[Depends(require_staff_user)],
+    dependencies=[Depends(require_erp_ops_staff)],
 )
 
 

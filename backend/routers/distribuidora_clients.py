@@ -11,12 +11,12 @@ from starlette.concurrency import run_in_threadpool
 
 from backend.services.distribuidora import clientes_analisis_completo_service as cac
 from backend.services.distribuidora import clients_analytics_service as cas
-from backend.utils.auth_staff import require_staff_user
+from backend.auth.permissions import require_erp_ops_staff
 
 router = APIRouter(
     prefix="/distribuidora",
     tags=["Distribuidora clientes"],
-    dependencies=[Depends(require_staff_user)],
+    dependencies=[Depends(require_erp_ops_staff)],
 )
 
 

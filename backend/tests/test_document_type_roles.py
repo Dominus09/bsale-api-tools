@@ -154,10 +154,12 @@ def _rows(conn) -> set[tuple]:
 # ------------------------------------------------------------- migración
 
 
-def test_049_registered_after_048_and_last():
+def test_049_registered_after_048():
     files = sync_repo.DISTRIBUIDORA_SCHEMA_FILES
-    assert files[-1] == ROLES_FILE
-    assert files.index("048_document_reissue_lineage.sql") == len(files) - 2
+    assert files.index("048_document_reissue_lineage.sql") < files.index(ROLES_FILE)
+    # 050–052 (simple planning / chofer) van después de 049; 049 ya no es el último.
+    assert files.index(ROLES_FILE) < files.index("050_dispatch_plan_planning_origin.sql")
+    assert files[-1] == "052_dispatch_plan_driver_user.sql"
 
 
 def test_049_does_not_touch_bsale_metadata():

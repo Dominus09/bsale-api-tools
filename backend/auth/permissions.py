@@ -135,6 +135,45 @@ def has_simple_planning_access(user: dict[str, Any] | None) -> bool:
         return False
 
 
+def is_simple_planning_capability_only(user: dict[str, Any] | None) -> bool:
+    """True si el acceso a simple_planning viene solo de capability (sin rol ERP pleno).
+
+    Esos usuarios deben poder usar preview/assign/confirm simplificado, camiones y
+    detalle/chofer de despacho, pero no el blast radius de ``require_staff_user``
+    (sync, ORS, predespacho, cuadraturas, etc.).
+    """
+    from backend.auth.hierarchy import is_owner
+
+    if not user or is_owner(user):
+        return False
+    role = normalized_role(user)
+    if role in SIMPLE_PLANNING_ROLES or role in MANAGEMENT_ROLES or role in ADMIN_ROLES:
+        return False
+    return has_simple_planning_access(user)
+
+
+def require_erp_ops_staff(authorization: BearerDep = None) -> dict[str, Any]:
+    """Staff ERP con rol operativo pleno; niega planificador Excel capability-only."""
+    from backend.utils.auth_staff import require_staff_user
+
+    user = require_staff_user(authorization)
+    if is_simple_planning_capability_only(user):
+        _log_auth_denial(
+            user=user,
+            endpoint=None,
+            required_permission="erp_ops_staff",
+            reason="simple_planning_capability_only",
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Usuario con capability simple_planning limitada: "
+                "sin acceso a este módulo operativo"
+            ),
+        )
+    return user
+
+
 def has_sales_access(user: dict[str, Any] | None) -> bool:
     """Futuro: módulos comerciales de venta."""
     return has_operational_access(user)
