@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -30,6 +31,7 @@ from backend.services.distribuidora.oc_source_resolver import (
     discover_oc_sources,
     fetch_all_document_details,
     find_cancelled_source_evidence,
+    is_active_oc_candidate,
     select_active_oc_source,
     source_updated_at,
     summarize_bsale_document,
@@ -63,6 +65,36 @@ SOURCE_METADATA_COLUMNS = frozenset(
 
 class ActiveSyncConflict(RuntimeError):
     """Conflicto temporal: otro writer de documentos/detalles está activo."""
+
+
+def _lock_retry_attempts() -> int:
+    """Reintentos adicionales ante ActiveSyncConflict (0 = solo un intento)."""
+    raw = (os.getenv("OC_RECONCILE_LOCK_RETRIES") or "2").strip()
+    try:
+        return max(0, min(10, int(raw)))
+    except ValueError:
+        return 2
+
+
+def _lock_retry_sleep_sec() -> float:
+    raw = (os.getenv("OC_RECONCILE_LOCK_RETRY_SLEEP_SEC") or "1").strip()
+    try:
+        return max(0.0, min(30.0, float(raw)))
+    except ValueError:
+        return 1.0
+
+
+def _max_consecutive_lock_deferrals() -> int:
+    """Tras N OC seguidas diferidas por lock, cortar el resto del lote (parcial)."""
+    raw = (os.getenv("OC_RECONCILE_MAX_CONSECUTIVE_LOCK_DEFER") or "3").strip()
+    try:
+        return max(1, min(50, int(raw)))
+    except ValueError:
+        return 3
+
+
+class IncompleteBsaleListingError(RuntimeError):
+    """Listado Bsale incompleto o inválido; no se permiten escrituras."""
 
 
 def _is_global_reconciliation_error(exc: Exception) -> bool:
@@ -903,9 +935,8 @@ def _handle_cancelled_oc(
     )
 
 
-@contextmanager
-def _oc_writer_locks() -> Iterator[None]:
-    """Adquiere en una sesión los locks de todos los writers de OCs."""
+def _try_acquire_oc_writer_locks() -> tuple[Any, list[int]]:
+    """Intento único: retorna ``(conn, acquired)`` o lanza ``ActiveSyncConflict``."""
     conn = get_connection()
     acquired: list[int] = []
     try:
@@ -919,16 +950,80 @@ def _oc_writer_locks() -> Iterator[None]:
             acquired.append(lock_key)
         conn.commit()
         cur.close()
-        yield
-    finally:
+        return conn, acquired
+    except ActiveSyncConflict:
         for lock_key in reversed(acquired):
             try:
-                cur = conn.cursor()
-                cur.execute("SELECT pg_advisory_unlock(%s)", (lock_key,))
-                cur.close()
+                cur_u = conn.cursor()
+                cur_u.execute("SELECT pg_advisory_unlock(%s)", (lock_key,))
+                cur_u.close()
             except Exception:
-                logger.exception("No se pudo liberar advisory lock %s", lock_key)
+                logger.exception(
+                    "No se pudo liberar advisory lock %s tras conflicto", lock_key
+                )
+        try:
+            conn.close()
+        except Exception:
+            pass
+        raise
+
+
+def _release_oc_writer_locks(conn: Any, acquired: list[int]) -> None:
+    for lock_key in reversed(acquired):
+        try:
+            cur_u = conn.cursor()
+            cur_u.execute("SELECT pg_advisory_unlock(%s)", (lock_key,))
+            cur_u.close()
+        except Exception:
+            logger.exception("No se pudo liberar advisory lock %s", lock_key)
+    try:
         conn.close()
+    except Exception:
+        pass
+
+
+@contextmanager
+def _oc_writer_locks() -> Iterator[None]:
+    """
+    Adquiere en una sesión los locks de todos los writers de OCs.
+
+    Ante ``ActiveSyncConflict`` en la *adquisición* reintenta de forma acotada
+    **sin** mantener locks ni transacciones abiertas entre esperas.
+    """
+    attempts = _lock_retry_attempts()
+    sleep_base = _lock_retry_sleep_sec()
+    last_conflict: ActiveSyncConflict | None = None
+    conn: Any | None = None
+    acquired: list[int] = []
+
+    for attempt in range(attempts + 1):
+        try:
+            conn, acquired = _try_acquire_oc_writer_locks()
+            break
+        except ActiveSyncConflict as exc:
+            last_conflict = exc
+            if attempt >= attempts:
+                raise
+            wait = sleep_base * float(attempt + 1)
+            logger.warning(
+                "oc_writer_lock_retry attempt=%s/%s sleep_sec=%.2f error=%s",
+                attempt + 1,
+                attempts,
+                wait,
+                exc,
+            )
+            if wait > 0:
+                time.sleep(wait)
+    else:
+        raise last_conflict or ActiveSyncConflict(
+            "Otro sync de documentos/detalles está ejecutándose; reintente"
+        )
+
+    assert conn is not None
+    try:
+        yield
+    finally:
+        _release_oc_writer_locks(conn, acquired)
 
 
 def _reconcile_one_oc(
@@ -1755,15 +1850,49 @@ def _fetch_recent_oc_documents(
     *,
     window_days: int,
     office_id: int = OFFICE_ID,
+    document_type_id: int = OC_DOCUMENT_TYPE_ID,
+    min_window_days: int | None = 30,
+    strict: bool = False,
 ) -> list[dict[str, Any]]:
+    """
+    Lista OC Bsale por ``emissiondaterange`` (paginado).
+
+    ``min_window_days=30`` preserva el comportamiento histórico del carril rápido.
+    Con ``strict=True`` un payload inválido aborta (no silencia páginas rotas).
+    """
+    result = _fetch_recent_oc_documents_with_meta(
+        client,
+        window_days=window_days,
+        office_id=office_id,
+        document_type_id=document_type_id,
+        min_window_days=min_window_days,
+        strict=strict,
+    )
+    return result["items"]
+
+
+def _fetch_recent_oc_documents_with_meta(
+    client: BsaleClient,
+    *,
+    window_days: int,
+    office_id: int = OFFICE_ID,
+    document_type_id: int = OC_DOCUMENT_TYPE_ID,
+    min_window_days: int | None = None,
+    strict: bool = True,
+) -> dict[str, Any]:
+    days = max(1, int(window_days))
+    if min_window_days is not None:
+        days = max(int(min_window_days), days)
     now = datetime.now(timezone.utc)
-    start = now - timedelta(days=max(30, int(window_days)))
+    start = now - timedelta(days=days)
     offset = 0
     output: list[dict[str, Any]] = []
+    pages = 0
+    api_calls = 0
     while True:
         params = merge_bsale_office_query(
             {
-                "documenttypeid": OC_DOCUMENT_TYPE_ID,
+                "documenttypeid": int(document_type_id),
                 "emissiondaterange": f"[{int(start.timestamp())},{int(now.timestamp())}]",
                 "limit": PAGE_LIMIT,
                 "offset": offset,
@@ -1771,15 +1900,84 @@ def _fetch_recent_oc_documents(
             int(office_id),
             context="reconcile_recent_ocs",
         )
-        payload = client.get("/documents.json", params)
+        try:
+            payload = client.get("/documents.json", params)
+        except Exception as exc:
+            raise IncompleteBsaleListingError(
+                f"Fallo Bsale al listar OC offset={offset}: {exc}"
+            ) from exc
+        api_calls += 1
+        pages += 1
         items = payload.get("items") if isinstance(payload, dict) else None
         if not isinstance(items, list):
+            if strict or pages > 1 or output:
+                raise IncompleteBsaleListingError(
+                    f"Respuesta Bsale inválida en página {pages} offset={offset}"
+                )
             break
         output.extend(item for item in items if isinstance(item, dict))
         if len(items) < PAGE_LIMIT:
             break
         offset += len(items)
-    return output
+    return {
+        "items": output,
+        "pages": pages,
+        "api_calls": api_calls,
+        "window_days": days,
+        "emission_start_ts": int(start.timestamp()),
+        "emission_end_ts": int(now.timestamp()),
+        "listing_complete": True,
+    }
+
+
+def _lookup_local_ocs_by_folios(
+    folios: list[int],
+    *,
+    company_id: int = COMPANY_ID,
+    office_id: int = OFFICE_ID,
+) -> dict[int, dict[str, Any]]:
+    """Mapa folio → fila local (document_id, source_document_id, state)."""
+    unique = sorted({int(f) for f in folios if int(f) > 0})
+    if not unique:
+        return {}
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                d.number,
+                d.document_id,
+                d.state,
+                NULLIF(to_jsonb(d)->>'source_document_id', '')::bigint
+                    AS source_document_id
+            FROM distribuidora.documents d
+            WHERE d.company_id = %s
+              AND d.office_id = %s
+              AND d.document_type_id = %s
+              AND d.number = ANY(%s)
+            """,
+            (int(company_id), int(office_id), OC_DOCUMENT_TYPE_ID, unique),
+        )
+        rows = cur.fetchall()
+        cur.close()
+    finally:
+        conn.close()
+    out: dict[int, dict[str, Any]] = {}
+    for number, document_id, state, source_document_id in rows:
+        folio = int(number)
+        # Si hay varias filas del mismo folio, conservar la de state=0 preferente.
+        prev = out.get(folio)
+        if prev is not None and int(prev.get("state") or 0) == 0 and int(state or 0) != 0:
+            continue
+        out[folio] = {
+            "document_id": int(document_id),
+            "state": int(state) if state is not None else None,
+            "source_document_id": (
+                int(source_document_id) if source_document_id is not None else None
+            ),
+        }
+    return out
 
 
 def _batch_summary_counts(results: list[dict[str, Any]]) -> dict[str, int]:
@@ -1788,6 +1986,11 @@ def _batch_summary_counts(results: list[dict[str, Any]]) -> dict[str, int]:
         for item in results
         if item.get("status") == "oc_skipped"
         and item.get("reason") == "invalid_or_missing_folio"
+    )
+    deferred_lock = sum(
+        1
+        for item in results
+        if item.get("status") == "deferred_due_to_active_sync"
     )
     cancelled = sum(
         1
@@ -1806,18 +2009,37 @@ def _batch_summary_counts(results: list[dict[str, Any]]) -> dict[str, int]:
         if item.get("status")
         in {"already_in_sync", "dry_run_in_sync", "already_cancelled"}
     )
+    # reviewed = candidatas con folio válido realmente reconciliadas (no diferidas).
+    folio_attempts = len(results) - skipped
+    reviewed = folio_attempts - deferred_lock
     return {
         "checked": len(results),
+        "reviewed": reviewed,
         "updated": updated,
         "unchanged": unchanged,
         "skipped": skipped,
+        "deferred_due_to_lock": deferred_lock,
         "cancelled": cancelled,
         "errors": errors,
         "invalid_folios": skipped,
         "ocs_checked": len(results),
+        "ocs_reviewed": reviewed,
         "ocs_updated": updated,
         "ocs_unchanged": unchanged,
+        "ocs_pending_lock": deferred_lock,
     }
+
+
+def _batch_cycle_status(results: list[dict[str, Any]]) -> str:
+    """Clasifica el ciclo: completed | partial | skipped_due_to_active_sync."""
+    counts = _batch_summary_counts(results)
+    deferred = counts["deferred_due_to_lock"]
+    reviewed = counts["reviewed"]
+    if deferred > 0 and reviewed == 0:
+        return "skipped_due_to_active_sync"
+    if deferred > 0 and reviewed > 0:
+        return "partial"
+    return "completed"
 
 
 def reconcile_open_purchase_orders_batch(
@@ -1878,9 +2100,13 @@ def reconcile_open_purchase_orders_batch(
             company_id=company_id,
             office_id=office_id,
         )
+        candidates_loaded = len(candidates)
         recent_checked = 0
         historical_checked = 0
-        for candidate in candidates:
+        consecutive_lock_deferrals = 0
+        max_consecutive_defer = _max_consecutive_lock_deferrals()
+        stopped_early_due_to_locks = False
+        for candidate_idx, candidate in enumerate(candidates):
             local_id = int(candidate["document_id"])
             raw_number = candidate.get("number")
             folio = _parse_candidate_folio(raw_number)
@@ -1928,6 +2154,7 @@ def reconcile_open_purchase_orders_batch(
                     company_id=company_id,
                     office_id=office_id,
                 )
+                consecutive_lock_deferrals = 0
                 result["candidate_lane"] = candidate_lane
                 if result.get("source_changed"):
                     logger.info(
@@ -1989,42 +2216,43 @@ def reconcile_open_purchase_orders_batch(
                         candidate_lane,
                     )
             except ActiveSyncConflict as exc:
+                # No marcar last_reconciliation_at: permanece pendiente en el cursor.
+                consecutive_lock_deferrals += 1
                 logger.warning(
-                    "reconciliation_cycle_skipped_due_to_active_sync "
-                    "folio=%s local_document_id=%s candidate_lane=%s error=%s",
+                    "oc_deferred_due_to_active_sync folio=%s local_document_id=%s "
+                    "candidate_lane=%s consecutive_deferrals=%s/%s error=%s",
                     folio,
                     local_id,
                     candidate_lane,
+                    consecutive_lock_deferrals,
+                    max_consecutive_defer,
                     exc,
                 )
-                counts = _batch_summary_counts(results)
                 result = {
-                    "status": "skipped_due_to_active_sync",
-                    "execute": execute,
-                    "limit": batch_limit,
-                    "recent_days": recent_days,
-                    "company_id": int(company_id),
-                    "office_id": int(office_id),
-                    "duration_seconds": round(time.perf_counter() - started, 3),
-                    "results": results,
-                    "recent_slots": lane_meta.get("recent_slots"),
-                    "historical_slots": lane_meta.get("historical_slots"),
-                    "recent_candidates_loaded": lane_meta.get(
-                        "recent_candidates_loaded"
-                    ),
-                    "historical_candidates_loaded": lane_meta.get(
-                        "historical_candidates_loaded"
-                    ),
-                    "recent_checked": recent_checked,
-                    "historical_checked": historical_checked,
-                    **counts,
+                    "folio": folio,
+                    "local_document_id": local_id,
+                    "status": "deferred_due_to_active_sync",
+                    "reason": "active_sync_conflict",
+                    "error": str(exc),
+                    "candidate_lane": candidate_lane,
+                    "wrote": False,
                 }
-                cycle_finished = True
-                finished_summary = result
-                return result
+                results.append(result)
+                if consecutive_lock_deferrals >= max_consecutive_defer:
+                    remaining = len(candidates) - (candidate_idx + 1)
+                    stopped_early_due_to_locks = True
+                    logger.warning(
+                        "reconciliation_batch_stopped_after_consecutive_lock_deferrals "
+                        "consecutive=%s remaining_candidates=%s",
+                        consecutive_lock_deferrals,
+                        remaining,
+                    )
+                    break
+                continue
             except Exception as exc:
                 if _is_global_reconciliation_error(exc):
                     raise
+                consecutive_lock_deferrals = 0
                 if execute:
                     try:
                         _mark_reconciliation_attempt(local_id, successful=False)
@@ -2052,13 +2280,16 @@ def reconcile_open_purchase_orders_batch(
             results.append(result)
 
         counts = _batch_summary_counts(results)
+        cycle_status = _batch_cycle_status(results)
         result = {
-            "status": "completed",
+            "status": cycle_status,
             "execute": execute,
             "limit": batch_limit,
             "recent_days": recent_days,
             "company_id": int(company_id),
             "office_id": int(office_id),
+            "candidates_loaded": candidates_loaded,
+            "stopped_early_due_to_locks": stopped_early_due_to_locks,
             "new_versions_detected": sum(
                 1 for item in results if item.get("source_changed")
             ),
@@ -2094,26 +2325,458 @@ def reconcile_open_purchase_orders_batch(
         # excepción no controlada aborta antes de terminar los candidatos.
         if cycle_finished and finished_summary is not None:
             logger.info(
-                "reconciliation_cycle_finished execute=%s checked=%s updated=%s "
-                "unchanged=%s skipped=%s errors=%s invalid_folios=%s "
-                "recent_checked=%s historical_checked=%s "
-                "recent_slots=%s historical_slots=%s duration_seconds=%.3f",
+                "reconciliation_cycle_finished status=%s execute=%s "
+                "candidates_loaded=%s checked=%s reviewed=%s updated=%s "
+                "unchanged=%s skipped=%s deferred_due_to_lock=%s errors=%s "
+                "invalid_folios=%s recent_checked=%s historical_checked=%s "
+                "recent_slots=%s historical_slots=%s "
+                "stopped_early_due_to_locks=%s duration_seconds=%.3f "
+                "max_unreviewed_age_seconds=%s",
+                finished_summary.get("status"),
                 execute,
+                finished_summary.get("candidates_loaded", 0),
                 finished_summary.get("checked", 0),
+                finished_summary.get("reviewed", 0),
                 finished_summary.get("updated", 0),
                 finished_summary.get("unchanged", 0),
                 finished_summary.get("skipped", 0),
+                finished_summary.get("deferred_due_to_lock", 0),
                 finished_summary.get("errors", 0),
                 finished_summary.get("invalid_folios", 0),
                 finished_summary.get("recent_checked", 0),
                 finished_summary.get("historical_checked", 0),
                 finished_summary.get("recent_slots", 0),
                 finished_summary.get("historical_slots", 0),
+                finished_summary.get("stopped_early_due_to_locks", False),
                 finished_summary.get(
                     "duration_seconds",
                     time.perf_counter() - started,
                 ),
+                finished_summary.get("max_unreviewed_age_seconds"),
             )
+
+
+def recover_missing_purchase_orders(
+    client: BsaleClient,
+    *,
+    window_days: int = 7,
+    dry_run: bool = True,
+    max_repairs: int = 10,
+    company_id: int = COMPANY_ID,
+    office_id: int = OFFICE_ID,
+    document_type_id: int = OC_DOCUMENT_TYPE_ID,
+) -> dict[str, Any]:
+    """
+    Escanea Bsale (tipo 33) y recupera solo OC vigentes ausentes en PostgreSQL.
+
+    - Listado y comparación **sin** retener advisory locks de escritura.
+    - ``reconcile_one_oc`` solo para ausentes (hasta ``max_repairs``).
+    - En dry-run no escribe ni avanza cursores.
+    """
+    started_at = datetime.now(timezone.utc)
+    started = time.perf_counter()
+    days = max(1, int(window_days))
+    repair_limit = max(0, int(max_repairs))
+    logger.info(
+        "missing_oc_scan_started dry_run=%s window_days=%s max_repairs=%s "
+        "company_id=%s office_id=%s",
+        dry_run,
+        days,
+        repair_limit,
+        company_id,
+        office_id,
+    )
+
+    try:
+        listing = _fetch_recent_oc_documents_with_meta(
+            client,
+            window_days=days,
+            office_id=office_id,
+            document_type_id=document_type_id,
+            min_window_days=None,
+            strict=True,
+        )
+    except IncompleteBsaleListingError as exc:
+        logger.error("missing_oc_scan_failed incomplete_listing error=%s", exc)
+        return {
+            "status": "failed",
+            "mode": "missing_only",
+            "dry_run": dry_run,
+            "execute": not dry_run,
+            "window_days": days,
+            "started_at": started_at.isoformat(),
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "duration_seconds": round(time.perf_counter() - started, 3),
+            "error": str(exc),
+            "errors": 1,
+            "wrote": False,
+            "results": [],
+        }
+
+    items: list[dict[str, Any]] = listing["items"]
+    by_folio: dict[int, list[dict[str, Any]]] = {}
+    discarded_ghost = 0
+    discarded_invalid = 0
+    for item in items:
+        summary = summarize_bsale_document(item, expected_company_id=company_id)
+        number = summary.get("number")
+        state = summary.get("state")
+        if number is None or int(number) <= 0:
+            discarded_ghost += 1
+            discarded_invalid += 1
+            continue
+        if state is not None and int(state) != 0:
+            discarded_ghost += 1
+            by_folio.setdefault(int(number), []).append(item)
+            continue
+        by_folio.setdefault(int(number), []).append(item)
+
+    active_by_folio: dict[int, dict[str, Any]] = {}
+    no_active_version = 0
+    for folio, candidates in by_folio.items():
+        active, _evaluated = select_active_oc_source(
+            candidates,
+            folio=folio,
+            company_id=company_id,
+            office_id=office_id,
+            document_type_id=document_type_id,
+        )
+        if active is None:
+            no_active_version += 1
+            continue
+        # Defensa: revalidar tipo/oficina/estado del activo seleccionado.
+        ok, reasons = is_active_oc_candidate(
+            active,
+            folio=folio,
+            company_id=company_id,
+            office_id=office_id,
+            document_type_id=document_type_id,
+        )
+        if not ok:
+            discarded_invalid += 1
+            logger.info(
+                "missing_oc_discarded folio=%s reasons=%s", folio, reasons
+            )
+            continue
+        active_by_folio[folio] = active
+
+    local_map = _lookup_local_ocs_by_folios(
+        list(active_by_folio.keys()),
+        company_id=company_id,
+        office_id=office_id,
+    )
+
+    existing_ok: list[dict[str, Any]] = []
+    version_diff: list[dict[str, Any]] = []
+    missing: list[dict[str, Any]] = []
+    for folio, active in sorted(active_by_folio.items()):
+        active_summary = summarize_bsale_document(
+            active, expected_company_id=company_id
+        )
+        active_id = int(active_summary["id"])
+        local = local_map.get(folio)
+        if local is None:
+            missing.append(
+                {
+                    "folio": folio,
+                    "bsale_source_document_id": active_id,
+                    "bsale_state": active_summary.get("state"),
+                    "bsale_total_amount": active_summary.get("totalAmount"),
+                    "action": "missing_in_postgresql",
+                    "active_document": active,
+                }
+            )
+            continue
+        local_source = local.get("source_document_id")
+        if local_source is not None and int(local_source) != active_id:
+            version_diff.append(
+                {
+                    "folio": folio,
+                    "local_document_id": local["document_id"],
+                    "postgresql_source_document_id": int(local_source),
+                    "bsale_source_document_id": active_id,
+                    "action": "version_diff_defer_to_open_reconciler",
+                    "exists_in_postgresql": True,
+                }
+            )
+            continue
+        # También detectar PK=source legacy sin source_document_id poblado.
+        if local_source is None and int(local["document_id"]) != active_id:
+            version_diff.append(
+                {
+                    "folio": folio,
+                    "local_document_id": local["document_id"],
+                    "postgresql_source_document_id": None,
+                    "bsale_source_document_id": active_id,
+                    "action": "version_diff_defer_to_open_reconciler",
+                    "exists_in_postgresql": True,
+                }
+            )
+            continue
+        existing_ok.append(
+            {
+                "folio": folio,
+                "local_document_id": local["document_id"],
+                "bsale_source_document_id": active_id,
+                "action": "exists_ok",
+                "exists_in_postgresql": True,
+            }
+        )
+
+    repair_targets = missing[:repair_limit]
+    pending_max = missing[repair_limit:]
+    results: list[dict[str, Any]] = []
+    recovered = 0
+    deferred_lock = 0
+    api_ambiguous = 0
+    repair_errors = 0
+    writes = 0
+
+    # Dry-run: no necesita lock 013. Execute: lock solo durante reparaciones.
+    got_repair_lock = False
+    lock_conn = None
+    if repair_targets and not dry_run:
+        lock_conn = get_connection()
+        lock_cur = lock_conn.cursor()
+        lock_cur.execute(
+            "SELECT pg_try_advisory_lock(%s)",
+            (ADVISORY_LOCK_OC_RECONCILIATION,),
+        )
+        got_repair_lock = bool(lock_cur.fetchone()[0])
+        lock_conn.commit()
+        lock_cur.close()
+        if not got_repair_lock:
+            for item in repair_targets:
+                results.append(
+                    {
+                        "folio": item["folio"],
+                        "status": "deferred_due_to_active_sync",
+                        "action": "missing_in_postgresql",
+                        "bsale_source_document_id": item["bsale_source_document_id"],
+                        "wrote": False,
+                        "reason": "reconciliation_lock_busy",
+                    }
+                )
+                deferred_lock += 1
+            repair_targets = []
+
+    try:
+        for item in repair_targets:
+            folio = int(item["folio"])
+            active = item["active_document"]
+            try:
+                report = reconcile_one_oc(
+                    client,
+                    folio=folio,
+                    dry_run=dry_run,
+                    active_document=active,
+                    company_id=company_id,
+                    office_id=office_id,
+                )
+            except ActiveSyncConflict as exc:
+                deferred_lock += 1
+                results.append(
+                    {
+                        "folio": folio,
+                        "status": "deferred_due_to_active_sync",
+                        "action": "missing_in_postgresql",
+                        "bsale_source_document_id": item["bsale_source_document_id"],
+                        "error": str(exc),
+                        "wrote": False,
+                    }
+                )
+                continue
+            except Exception as exc:
+                if _is_global_reconciliation_error(exc):
+                    raise
+                repair_errors += 1
+                logger.exception("missing_oc_repair_failed folio=%s", folio)
+                results.append(
+                    {
+                        "folio": folio,
+                        "status": "error",
+                        "action": "missing_in_postgresql",
+                        "bsale_source_document_id": item["bsale_source_document_id"],
+                        "error": str(exc),
+                        "wrote": False,
+                    }
+                )
+                continue
+
+            reconcile_status = str(report.get("status") or "")
+            if reconcile_status == "source_not_found":
+                api_ambiguous += 1
+                results.append(
+                    {
+                        "folio": folio,
+                        "status": "api_ambiguous",
+                        "action": "api_ambiguous",
+                        "bsale_source_document_id": item["bsale_source_document_id"],
+                        "reconcile_status": reconcile_status,
+                        "wrote": False,
+                    }
+                )
+                continue
+
+            # Detalles vacíos con total > 0: no dar por recuperada de forma completa.
+            details_count = int(report.get("bsale_details_count") or 0)
+            total_amount = summarize_bsale_document(
+                active, expected_company_id=company_id
+            ).get("totalAmount")
+            try:
+                total_num = float(total_amount) if total_amount is not None else 0.0
+            except (TypeError, ValueError):
+                total_num = 0.0
+            if details_count == 0 and total_num > 0:
+                api_ambiguous += 1
+                results.append(
+                    {
+                        "folio": folio,
+                        "status": "api_ambiguous",
+                        "action": "api_ambiguous",
+                        "reason": "empty_bsale_details_with_total",
+                        "bsale_source_document_id": item["bsale_source_document_id"],
+                        "reconcile_status": reconcile_status,
+                        "wrote": bool(report.get("wrote")),
+                    }
+                )
+                if report.get("wrote"):
+                    writes += 1
+                continue
+
+            wrote = bool(report.get("wrote"))
+            if wrote:
+                writes += 1
+                recovered += 1
+                status = "recovered"
+            elif dry_run:
+                status = "missing_in_postgresql"
+            else:
+                status = reconcile_status or "processed"
+
+            results.append(
+                {
+                    "folio": folio,
+                    "status": status,
+                    "action": "missing_in_postgresql",
+                    "bsale_source_document_id": item["bsale_source_document_id"],
+                    "local_document_id": report.get("local_document_id"),
+                    "reconcile_status": reconcile_status,
+                    "bsale_details_count": details_count,
+                    "wrote": wrote,
+                    "dry_run": dry_run,
+                }
+            )
+    finally:
+        if lock_conn is not None:
+            if got_repair_lock:
+                try:
+                    unlock_cur = lock_conn.cursor()
+                    unlock_cur.execute(
+                        "SELECT pg_advisory_unlock(%s)",
+                        (ADVISORY_LOCK_OC_RECONCILIATION,),
+                    )
+                    unlock_cur.close()
+                except Exception:
+                    logger.exception("No se pudo liberar lock de reconciliación OC")
+            lock_conn.close()
+
+    for item in pending_max:
+        results.append(
+            {
+                "folio": item["folio"],
+                "status": "pending_max_repairs",
+                "action": "missing_in_postgresql",
+                "bsale_source_document_id": item["bsale_source_document_id"],
+                "wrote": False,
+            }
+        )
+
+    missing_detected = len(missing)
+    attempted = min(missing_detected, repair_limit)
+    all_repairs_blocked_by_lock = (
+        not dry_run
+        and missing_detected > 0
+        and attempted > 0
+        and writes == 0
+        and recovered == 0
+        and deferred_lock >= attempted
+        and repair_errors == 0
+    )
+
+    if dry_run:
+        cycle_status = (
+            "completed" if not repair_errors and not api_ambiguous else "partial"
+        )
+    elif all_repairs_blocked_by_lock:
+        cycle_status = "skipped_due_to_active_sync"
+    elif repair_errors or pending_max or deferred_lock or api_ambiguous:
+        cycle_status = "partial" if (writes > 0 or existing_ok or missing_detected) else "failed"
+    else:
+        cycle_status = "completed"
+
+    finished_at = datetime.now(timezone.utc)
+    summary = {
+        "status": cycle_status,
+        "mode": "missing_only",
+        "dry_run": dry_run,
+        "execute": not dry_run,
+        "window_days": days,
+        "started_at": started_at.isoformat(),
+        "finished_at": finished_at.isoformat(),
+        "duration_seconds": round(time.perf_counter() - started, 3),
+        "bsale_documents_listed": len(items),
+        "bsale_folios_grouped": len(by_folio),
+        "bsale_active_folios": len(active_by_folio),
+        "ocs_existing_ok": len(existing_ok),
+        "ocs_missing": missing_detected,
+        "ocs_version_diff": len(version_diff),
+        "ocs_discarded_ghost_or_invalid": discarded_ghost + discarded_invalid,
+        "ocs_no_active_version": no_active_version,
+        "ocs_recovered": writes,
+        "ocs_repair_attempted": attempted,
+        "ocs_deferred_due_to_lock": deferred_lock,
+        "ocs_pending_max_repairs": len(pending_max),
+        "ocs_api_ambiguous": api_ambiguous,
+        "max_repairs": repair_limit,
+        "api_pages": listing.get("pages"),
+        "api_list_calls": listing.get("api_calls"),
+        "listing_complete": listing.get("listing_complete"),
+        "errors": repair_errors,
+        "wrote": writes > 0,
+        "version_diffs": version_diff,
+        "missing_folios": [
+            {
+                "folio": m["folio"],
+                "bsale_source_document_id": m["bsale_source_document_id"],
+                "bsale_state": m["bsale_state"],
+                "bsale_total_amount": m["bsale_total_amount"],
+            }
+            for m in missing
+        ],
+        "results": results,
+        # Compatibilidad ligera con job anterior.
+        "synced": writes,
+        "unchanged": len(existing_ok),
+        "omitido_concurrencia": cycle_status == "skipped_due_to_active_sync",
+    }
+    logger.info(
+        "missing_oc_scan_finished status=%s dry_run=%s listed=%s active=%s "
+        "existing=%s missing=%s recovered=%s deferred=%s pending=%s "
+        "errors=%s duration_seconds=%.3f",
+        cycle_status,
+        dry_run,
+        len(items),
+        len(active_by_folio),
+        len(existing_ok),
+        missing_detected,
+        writes,
+        deferred_lock,
+        len(pending_max),
+        repair_errors,
+        summary["duration_seconds"],
+    )
+    return summary
 
 
 def reconcile_recent_ocs(
@@ -2124,8 +2787,21 @@ def reconcile_recent_ocs(
     dry_run: bool = False,
     company_id: int = COMPANY_ID,
     office_id: int = OFFICE_ID,
+    fast_lane_only: bool = False,
+    missing_only: bool = False,
+    max_repairs: int = 10,
 ) -> dict[str, Any]:
     """Carril rápido reciente + lote rotativo de OCs abiertas sin factura."""
+    if missing_only:
+        return recover_missing_purchase_orders(
+            client,
+            window_days=window_days,
+            dry_run=dry_run,
+            max_repairs=max_repairs,
+            company_id=company_id,
+            office_id=office_id,
+        )
+
     started = time.perf_counter()
     lock_conn = get_connection()
     got_lock = False
@@ -2140,17 +2816,21 @@ def reconcile_recent_ocs(
         lock_cur.close()
         if not got_lock:
             return {
+                "status": "skipped_due_to_active_sync",
                 "window_days": max(30, int(window_days)),
                 "full_coverage_limit": max(1, int(full_coverage_limit)),
                 "omitido_concurrencia": True,
                 "duration_seconds": round(time.perf_counter() - started, 3),
                 "results": [],
+                "errors": 0,
             }
 
         items = _fetch_recent_oc_documents(
             client,
             window_days=max(30, window_days),
             office_id=office_id,
+            min_window_days=30,
+            strict=False,
         )
         by_folio: dict[int, list[dict[str, Any]]] = {}
         for item in items:
@@ -2182,6 +2862,21 @@ def reconcile_recent_ocs(
                     company_id=company_id,
                     office_id=office_id,
                 )
+            except ActiveSyncConflict as exc:
+                logger.warning(
+                    "oc_deferred_due_to_active_sync folio=%s lane=fast_recent error=%s",
+                    folio,
+                    exc,
+                )
+                results.append(
+                    {
+                        "folio": folio,
+                        "status": "deferred_due_to_active_sync",
+                        "error": str(exc),
+                        "wrote": False,
+                        "lane": "fast_recent",
+                    }
+                )
             except Exception as exc:
                 logger.exception("Reconcile OC folio=%s falló", folio)
                 results.append(
@@ -2199,94 +2894,128 @@ def reconcile_recent_ocs(
                 if result.get("local_document_id") is not None:
                     reviewed_local_ids.add(int(result["local_document_id"]))
 
-        full_candidates, max_unreviewed_age, _lane_meta = _load_full_coverage_batch(
-            limit=max(1, int(full_coverage_limit)),
-            recent_days=max(30, int(window_days)),
-            company_id=company_id,
-            office_id=office_id,
-            exclude_document_ids=reviewed_local_ids,
-        )
+        full_candidates: list[dict[str, Any]] = []
+        max_unreviewed_age: float | None = None
         full_results: list[dict[str, Any]] = []
-        for candidate in full_candidates:
-            local_id = int(candidate["document_id"])
-            raw_number = candidate.get("number")
-            folio = _parse_candidate_folio(raw_number)
-            if folio is None:
-                logger.info(
-                    "oc_skipped local_document_id=%s reason=invalid_or_missing_folio "
-                    "raw_number=%r",
-                    local_id,
-                    raw_number,
-                )
-                full_results.append(
-                    {
-                        "folio": None,
-                        "local_document_id": local_id,
-                        "status": "oc_skipped",
-                        "reason": "invalid_or_missing_folio",
-                        "raw_number": raw_number,
-                        "wrote": False,
-                        "lane": "full_open_uninvoiced",
-                    }
-                )
-                continue
-            try:
-                result = reconcile_one_oc(
-                    client,
-                    folio=folio,
-                    local_document_id=local_id,
-                    dry_run=dry_run,
-                    company_id=company_id,
-                    office_id=office_id,
-                )
-                if result.get("status") == "source_not_found" and not dry_run:
-                    _mark_reconciliation_attempt(local_id, successful=False)
-            except Exception as exc:
-                logger.exception(
-                    "Reconcile cobertura completa OC folio=%s document_id=%s falló",
-                    folio,
-                    local_id,
-                )
-                if not dry_run:
-                    try:
-                        _mark_reconciliation_attempt(local_id, successful=False)
-                    except Exception:
-                        logger.exception(
-                            "No se pudo avanzar cursor fallido document_id=%s",
-                            local_id,
-                        )
-                result = {
-                    "folio": folio,
-                    "local_document_id": local_id,
-                    "status": "error",
-                    "error": str(exc),
-                    "wrote": False,
-                }
-            result["lane"] = "full_open_uninvoiced"
-            result["seconds_since_previous_review"] = _num(
-                candidate.get("seconds_since_review")
+        if not fast_lane_only:
+            full_candidates, max_unreviewed_age, _lane_meta = _load_full_coverage_batch(
+                limit=max(1, int(full_coverage_limit)),
+                recent_days=max(30, int(window_days)),
+                company_id=company_id,
+                office_id=office_id,
+                exclude_document_ids=reviewed_local_ids,
             )
-            results.append(result)
-            full_results.append(result)
+            for candidate in full_candidates:
+                local_id = int(candidate["document_id"])
+                raw_number = candidate.get("number")
+                folio = _parse_candidate_folio(raw_number)
+                if folio is None:
+                    logger.info(
+                        "oc_skipped local_document_id=%s reason=invalid_or_missing_folio "
+                        "raw_number=%r",
+                        local_id,
+                        raw_number,
+                    )
+                    full_results.append(
+                        {
+                            "folio": None,
+                            "local_document_id": local_id,
+                            "status": "oc_skipped",
+                            "reason": "invalid_or_missing_folio",
+                            "raw_number": raw_number,
+                            "wrote": False,
+                            "lane": "full_open_uninvoiced",
+                        }
+                    )
+                    continue
+                try:
+                    result = reconcile_one_oc(
+                        client,
+                        folio=folio,
+                        local_document_id=local_id,
+                        dry_run=dry_run,
+                        company_id=company_id,
+                        office_id=office_id,
+                    )
+                    if result.get("status") == "source_not_found" and not dry_run:
+                        _mark_reconciliation_attempt(local_id, successful=False)
+                except ActiveSyncConflict as exc:
+                    logger.warning(
+                        "oc_deferred_due_to_active_sync folio=%s "
+                        "local_document_id=%s lane=full_open_uninvoiced error=%s",
+                        folio,
+                        local_id,
+                        exc,
+                    )
+                    result = {
+                        "folio": folio,
+                        "local_document_id": local_id,
+                        "status": "deferred_due_to_active_sync",
+                        "error": str(exc),
+                        "wrote": False,
+                    }
+                except Exception as exc:
+                    logger.exception(
+                        "Reconcile cobertura completa OC folio=%s document_id=%s falló",
+                        folio,
+                        local_id,
+                    )
+                    # No avanzar cursor ante fallo genérico de lock/red ya cubierto;
+                    # errores de datos sí mueven el cursor para no bloquear el lote.
+                    if not dry_run:
+                        try:
+                            _mark_reconciliation_attempt(local_id, successful=False)
+                        except Exception:
+                            logger.exception(
+                                "No se pudo avanzar cursor fallido document_id=%s",
+                                local_id,
+                            )
+                    result = {
+                        "folio": folio,
+                        "local_document_id": local_id,
+                        "status": "error",
+                        "error": str(exc),
+                        "wrote": False,
+                    }
+                result["lane"] = "full_open_uninvoiced"
+                result["seconds_since_previous_review"] = _num(
+                    candidate.get("seconds_since_review")
+                )
+                results.append(result)
+                full_results.append(result)
 
         errors = sum(
             1
             for item in results
             if item.get("status") in {"error", "source_not_found"}
         )
+        deferred = sum(
+            1
+            for item in results
+            if item.get("status") == "deferred_due_to_active_sync"
+        )
         modified = sum(1 for item in results if item.get("wrote"))
         new_versions = sum(1 for item in results if item.get("source_changed"))
         unchanged = sum(
             1 for item in results if item.get("status") == "already_in_sync"
         )
+        if deferred and modified == 0 and len(results) == deferred:
+            status = "skipped_due_to_active_sync"
+        elif deferred or errors:
+            status = "partial"
+        else:
+            status = "completed"
         return {
+            "status": status,
             "window_days": max(30, int(window_days)),
             "full_coverage_limit": max(1, int(full_coverage_limit)),
+            "fast_lane_only": fast_lane_only,
             "api_documents": len(items),
             "folios": len(by_folio),
             "ocs_reviewed": len(results),
             "new_versions_detected": new_versions,
             "ocs_modified": modified,
+            "ocs_deferred_due_to_lock": deferred,
             "bsale_errors": errors,
             "duration_seconds": round(time.perf_counter() - started, 3),
             "max_unreviewed_age_seconds": max_unreviewed_age,
@@ -2304,7 +3033,7 @@ def reconcile_recent_ocs(
             "synced": modified,
             "unchanged": unchanged,
             "errors": errors,
-            "omitido_concurrencia": False,
+            "omitido_concurrencia": status == "skipped_due_to_active_sync",
             "results": results,
         }
     finally:

@@ -232,7 +232,9 @@ def test_source_hash_normalizes_numeric_representations_and_line_order():
     )
 
 
-def test_writer_lock_conflict_aborts_and_releases_acquired_locks():
+def test_writer_lock_conflict_aborts_and_releases_acquired_locks(monkeypatch):
+    monkeypatch.setenv("OC_RECONCILE_LOCK_RETRIES", "0")
+    monkeypatch.setenv("OC_RECONCILE_LOCK_RETRY_SLEEP_SEC", "0")
     with patch.object(reconciliation, "get_connection") as get_connection:
         conn = get_connection.return_value
         cur = conn.cursor.return_value
@@ -244,6 +246,33 @@ def test_writer_lock_conflict_aborts_and_releases_acquired_locks():
     calls = [call.args[0] for call in cur.execute.call_args_list]
     assert "SELECT pg_advisory_unlock(%s)" in calls
     conn.close.assert_called_once()
+
+
+def test_writer_lock_retries_then_succeeds(monkeypatch):
+    monkeypatch.setenv("OC_RECONCILE_LOCK_RETRIES", "2")
+    monkeypatch.setenv("OC_RECONCILE_LOCK_RETRY_SLEEP_SEC", "0")
+    with patch.object(reconciliation, "get_connection") as get_connection:
+        conn = get_connection.return_value
+        cur = conn.cursor.return_value
+        # Intento 1: 2.º lock falla. Intento 2: los 3 OK.
+        cur.fetchone.side_effect = [
+            (True,),
+            (False,),
+            (True,),
+            (True,),
+            (True,),
+        ]
+        entered = False
+        with reconciliation._oc_writer_locks():
+            entered = True
+        assert entered is True
+        assert get_connection.call_count == 2
+        unlock_calls = [
+            call.args[0]
+            for call in cur.execute.call_args_list
+            if call.args and "pg_advisory_unlock" in str(call.args[0])
+        ]
+        assert len(unlock_calls) == 4  # 1 parcial + 3 finales
 
 
 def test_changed_oc_invalidates_only_non_dispatched_plans():
@@ -1019,11 +1048,14 @@ def test_unexpected_batch_abort_does_not_emit_finished(caplog):
     assert "reconciliation_cycle_finished" not in caplog.text
 
 
-def test_batch_skips_whole_cycle_on_active_writer_lock():
+def test_batch_skips_whole_cycle_on_active_writer_lock(monkeypatch):
+    """Si todas las OC se difieren por lock → ciclo omitido; no avanza cursor."""
+    monkeypatch.setenv("OC_RECONCILE_MAX_CONSECUTIVE_LOCK_DEFER", "5")
     candidate = {
         "document_id": LOCAL_ID,
         "number": FOLIO,
         "last_reconciliation_at": None,
+        "candidate_lane": "recent",
     }
     with patch.object(reconciliation, "get_connection") as get_connection:
         get_connection.return_value.cursor.return_value.fetchone.return_value = (True,)
@@ -1048,6 +1080,105 @@ def test_batch_skips_whole_cycle_on_active_writer_lock():
 
     assert result["status"] == "skipped_due_to_active_sync"
     assert result["errors"] == 0
+    assert result["deferred_due_to_lock"] == 1
+    assert result["reviewed"] == 0
+    assert result["results"][0]["status"] == "deferred_due_to_active_sync"
+    mark.assert_not_called()
+
+
+def test_batch_continues_after_transient_lock_and_marks_partial(monkeypatch):
+    """Una OC diferida no descarta el resto del lote."""
+    monkeypatch.setenv("OC_RECONCILE_MAX_CONSECUTIVE_LOCK_DEFER", "5")
+    candidates = [
+        {
+            "document_id": LOCAL_ID,
+            "number": FOLIO,
+            "last_reconciliation_at": None,
+            "candidate_lane": "recent",
+        },
+        {
+            "document_id": LOCAL_ID + 1,
+            "number": FOLIO + 1,
+            "last_reconciliation_at": None,
+            "candidate_lane": "recent",
+        },
+    ]
+
+    def _side_effect(_client, **kwargs):
+        if kwargs.get("local_document_id") == LOCAL_ID:
+            raise reconciliation.ActiveSyncConflict("documents_live")
+        return {
+            "folio": kwargs["folio"],
+            "local_document_id": kwargs["local_document_id"],
+            "status": "already_in_sync",
+            "wrote": False,
+        }
+
+    with patch.object(reconciliation, "get_connection") as get_connection:
+        get_connection.return_value.cursor.return_value.fetchone.return_value = (True,)
+        with (
+            patch.object(
+                reconciliation,
+                "_load_full_coverage_batch",
+                return_value=(candidates, 50, {"recent_slots": 2}),
+            ),
+            patch.object(
+                reconciliation,
+                "reconcile_one_oc",
+                side_effect=_side_effect,
+            ),
+            patch.object(reconciliation, "_mark_reconciliation_attempt") as mark,
+        ):
+            result = reconciliation.reconcile_open_purchase_orders_batch(
+                FakeBsaleClient(),
+                execute=True,
+                limit=10,
+            )
+
+    assert result["status"] == "partial"
+    assert result["deferred_due_to_lock"] == 1
+    assert result["reviewed"] == 1
+    assert result["unchanged"] == 1
+    assert result["errors"] == 0
+    mark.assert_not_called()
+
+
+def test_batch_stops_after_consecutive_lock_deferrals(monkeypatch):
+    monkeypatch.setenv("OC_RECONCILE_MAX_CONSECUTIVE_LOCK_DEFER", "2")
+    candidates = [
+        {
+            "document_id": LOCAL_ID + i,
+            "number": FOLIO + i,
+            "last_reconciliation_at": None,
+            "candidate_lane": "historical",
+        }
+        for i in range(4)
+    ]
+    with patch.object(reconciliation, "get_connection") as get_connection:
+        get_connection.return_value.cursor.return_value.fetchone.return_value = (True,)
+        with (
+            patch.object(
+                reconciliation,
+                "_load_full_coverage_batch",
+                return_value=(candidates, 200, {}),
+            ),
+            patch.object(
+                reconciliation,
+                "reconcile_one_oc",
+                side_effect=reconciliation.ActiveSyncConflict("details_live"),
+            ),
+            patch.object(reconciliation, "_mark_reconciliation_attempt") as mark,
+        ):
+            result = reconciliation.reconcile_open_purchase_orders_batch(
+                FakeBsaleClient(),
+                execute=True,
+                limit=10,
+            )
+
+    assert result["status"] == "skipped_due_to_active_sync"
+    assert result["deferred_due_to_lock"] == 2
+    assert result["stopped_early_due_to_locks"] is True
+    assert len(result["results"]) == 2
     mark.assert_not_called()
 
 
