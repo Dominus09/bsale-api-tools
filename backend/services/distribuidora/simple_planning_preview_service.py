@@ -1,0 +1,622 @@
+"""Preview de listado de OC para planificación simplificada (solo lectura).
+
+Normaliza folios pegados desde Excel, resuelve la versión vigente en PostgreSQL
+y arma una previsualización reutilizando cadena documental, pesos y planes.
+
+No escribe ni confirma planes. No inventa relaciones documentales.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+import time
+from datetime import datetime, timezone
+from typing import Any, Callable
+
+from backend.db import get_connection
+from backend.services.distribuidora.oc_document_chain_resolver import (
+    resolve_oc_document_chains_batch,
+)
+from backend.services.distribuidora.oc_operational_status import (
+    BILLING_CANCELLED,
+    BILLING_INVOICED_PARTIAL_CN,
+    BILLING_LABELS_ES,
+    BILLING_PENDING,
+    BILLING_PROBABLE,
+    build_operational_status,
+)
+from backend.services.distribuidora.oc_source_resolver import (
+    COMPANY_ID,
+    OC_DOCUMENT_TYPE_ID,
+    OFFICE_ID,
+)
+from backend.services.order_weight_service import get_order_weight_summaries_batch
+
+logger = logging.getLogger(__name__)
+
+MAX_FOLIOS = 200
+# Cobertura mínima para considerar el peso usable en preview.
+MIN_WEIGHT_COVERAGE_PCT = 50.0
+
+STATUS_FOUND_AVAILABLE = "found_available"
+STATUS_NOT_FOUND = "not_found"
+STATUS_CANCELLED_OR_REPLACED = "cancelled_or_replaced"
+STATUS_ALREADY_PLANNED = "already_planned"
+STATUS_PENDING_INVOICE = "pending_invoice"
+STATUS_PARTIAL_INVOICE = "partial_invoice"
+STATUS_INSUFFICIENT_WEIGHT = "insufficient_weight"
+STATUS_DUPLICATE_IN_LIST = "duplicate_in_list"
+STATUS_INVALID_FOLIO = "invalid_folio"
+
+# En esta fase, ya_planificada es informativa (no bloquea).
+BLOCKING_STATUSES = frozenset(
+    {
+        STATUS_NOT_FOUND,
+        STATUS_CANCELLED_OR_REPLACED,
+        STATUS_DUPLICATE_IN_LIST,
+        STATUS_INVALID_FOLIO,
+    }
+)
+
+ACTIVE_PLAN_STATUSES = frozenset(
+    {
+        "draft",
+        "planned",
+        "invoicing",
+        "ready_for_picking",
+        "picking_generated",
+        "dispatched",
+        "delivered",
+    }
+)
+
+_FOLIO_CLEAN_RE = re.compile(r"[^\d]")
+
+
+class SimplePlanningPreviewError(ValueError):
+    """Entrada inválida o fuera de límites."""
+
+
+def _int(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def normalize_folio_inputs(raw_folios: list[Any]) -> dict[str, Any]:
+    """Normaliza entradas pegadas (Excel / líneas): limpia, valida y detecta duplicados."""
+    if not isinstance(raw_folios, list):
+        raise SimplePlanningPreviewError("folios debe ser una lista")
+
+    entries: list[dict[str, Any]] = []
+    seen: dict[int, int] = {}
+    invalid: list[dict[str, Any]] = []
+    duplicates: list[int] = []
+
+    for idx, raw in enumerate(raw_folios):
+        original = "" if raw is None else str(raw).strip()
+        if not original:
+            continue
+        # Permitir "70625.0" típico de Excel.
+        cleaned = original.replace("\u00a0", " ").strip()
+        if cleaned.endswith(".0") and cleaned[:-2].isdigit():
+            cleaned = cleaned[:-2]
+        digits = _FOLIO_CLEAN_RE.sub("", cleaned)
+        if not digits or not digits.isdigit():
+            invalid.append(
+                {
+                    "index": idx,
+                    "input": original,
+                    "status": STATUS_INVALID_FOLIO,
+                    "blocking": True,
+                    "detail": "Folio inválido (se esperan dígitos)",
+                }
+            )
+            continue
+        folio = int(digits)
+        if folio <= 0:
+            invalid.append(
+                {
+                    "index": idx,
+                    "input": original,
+                    "status": STATUS_INVALID_FOLIO,
+                    "blocking": True,
+                    "detail": "Folio debe ser > 0",
+                }
+            )
+            continue
+        is_dup = folio in seen
+        if is_dup:
+            duplicates.append(folio)
+        else:
+            seen[folio] = idx
+        entries.append(
+            {
+                "index": idx,
+                "input": original,
+                "folio": folio,
+                "duplicate_in_list": is_dup,
+            }
+        )
+
+    unique_folios = list(seen.keys())
+    if len(unique_folios) > MAX_FOLIOS:
+        raise SimplePlanningPreviewError(
+            f"Máximo {MAX_FOLIOS} folios únicos por solicitud "
+            f"(recibidos {len(unique_folios)})"
+        )
+    if not entries and not invalid:
+        raise SimplePlanningPreviewError("Indique al menos un folio de OC")
+
+    return {
+        "entries": entries,
+        "unique_folios": unique_folios,
+        "invalid": invalid,
+        "duplicate_folios": sorted(set(duplicates)),
+        "empty_lines_skipped": len(raw_folios) - len(entries) - len(invalid),
+    }
+
+
+def _load_ocs_by_folios(
+    *,
+    company_id: int,
+    office_id: int,
+    folios: list[int],
+    document_type_id: int = OC_DOCUMENT_TYPE_ID,
+) -> dict[int, dict[str, Any]]:
+    """Versión vigente por número: preferir state=0, luego más reciente."""
+    if not folios:
+        return {}
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT DISTINCT ON (d.number)
+                d.document_id,
+                d.number AS folio,
+                d.state,
+                d.client_id,
+                d.total_amount,
+                d.emission_date,
+                d.company_id,
+                d.office_id,
+                d.document_type_id,
+                d.source_document_id,
+                COALESCE(
+                    NULLIF(BTRIM(d.municipality), ''),
+                    NULLIF(BTRIM(c.municipality), ''),
+                    NULLIF(BTRIM(d.city), ''),
+                    NULLIF(BTRIM(c.city), '')
+                ) AS municipality,
+                COALESCE(
+                    NULLIF(BTRIM(d.address), ''),
+                    NULLIF(BTRIM(c.address), '')
+                ) AS address,
+                COALESCE(
+                    NULLIF(BTRIM(c.nombre_fantasia), ''),
+                    NULLIF(BTRIM(c.company), ''),
+                    CONCAT_WS(
+                        ' ',
+                        NULLIF(BTRIM(c.first_name), ''),
+                        NULLIF(BTRIM(c.last_name), '')
+                    )
+                ) AS client_name
+            FROM distribuidora.documents d
+            LEFT JOIN bsale.clients c
+                ON c.company_id = d.company_id
+               AND c.bsale_id = d.client_id
+            WHERE d.company_id = %s
+              AND d.office_id = %s
+              AND d.document_type_id = %s
+              AND d.number = ANY(%s)
+            ORDER BY
+                d.number,
+                CASE WHEN COALESCE(d.state, 0) = 0 THEN 0 ELSE 1 END,
+                COALESCE(d.source_updated_at, d.updated_at, d.emission_date) DESC NULLS LAST,
+                d.document_id DESC
+            """,
+            (int(company_id), int(office_id), int(document_type_id), list(folios)),
+        )
+        cols = [d[0] for d in cur.description]
+        out: dict[int, dict[str, Any]] = {}
+        for row in cur.fetchall():
+            item = dict(zip(cols, row))
+            folio = _int(item.get("folio"))
+            if folio is None:
+                continue
+            out[folio] = item
+        cur.close()
+        return out
+    finally:
+        conn.close()
+
+
+def _load_products_by_document_ids(document_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
+    """Líneas de la OC (no de facturas) para no duplicar cantidades."""
+    if not document_ids:
+        return {}
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                document_id,
+                detail_id,
+                variant_id,
+                variant_description,
+                variant_code,
+                quantity,
+                total_amount
+            FROM distribuidora.document_details
+            WHERE document_id = ANY(%s)
+            ORDER BY document_id, detail_id
+            """,
+            (list(document_ids),),
+        )
+        cols = [d[0] for d in cur.description]
+        out: dict[int, list[dict[str, Any]]] = {}
+        for row in cur.fetchall():
+            item = dict(zip(cols, row))
+            doc_id = int(item["document_id"])
+            out.setdefault(doc_id, []).append(
+                {
+                    "detail_id": _int(item.get("detail_id")),
+                    "variant_id": _int(item.get("variant_id")),
+                    "description": item.get("variant_description"),
+                    "code": item.get("variant_code"),
+                    "quantity": float(item["quantity"])
+                    if item.get("quantity") is not None
+                    else None,
+                    "total_amount": float(item["total_amount"])
+                    if item.get("total_amount") is not None
+                    else None,
+                }
+            )
+        cur.close()
+        return out
+    finally:
+        conn.close()
+
+
+def _load_plan_assignments(document_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
+    if not document_ids:
+        return {}
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                dpo.oc_document_id,
+                p.id AS dispatch_plan_id,
+                p.planning_code,
+                p.status,
+                p.planning_date,
+                p.truck_name,
+                p.route_name,
+                p.planning_name
+            FROM distribuidora.dispatch_plan_orders dpo
+            INNER JOIN distribuidora.dispatch_plan p
+                ON p.id = dpo.dispatch_plan_id
+            WHERE dpo.oc_document_id = ANY(%s)
+            ORDER BY p.confirmed_at DESC NULLS LAST, p.id DESC
+            """,
+            (list(document_ids),),
+        )
+        cols = [d[0] for d in cur.description]
+        out: dict[int, list[dict[str, Any]]] = {}
+        for row in cur.fetchall():
+            item = dict(zip(cols, row))
+            oid = int(item["oc_document_id"])
+            status = str(item.get("status") or "")
+            out.setdefault(oid, []).append(
+                {
+                    "dispatch_plan_id": int(item["dispatch_plan_id"]),
+                    "planning_code": item.get("planning_code"),
+                    "status": status,
+                    "planning_date": item["planning_date"].isoformat()
+                    if item.get("planning_date") is not None
+                    else None,
+                    "truck_name": item.get("truck_name"),
+                    "route_name": item.get("route_name"),
+                    "planning_name": item.get("planning_name"),
+                    "active": status in ACTIVE_PLAN_STATUSES,
+                }
+            )
+        cur.close()
+        return out
+    finally:
+        conn.close()
+
+
+def _load_chains_and_status(
+    document_ids: list[int],
+    *,
+    company_id: int,
+) -> tuple[dict[int, Any], dict[int, Any]]:
+    if not document_ids:
+        return {}, {}
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        chains = resolve_oc_document_chains_batch(
+            cur, document_ids, company_id=int(company_id)
+        )
+        statuses = {
+            oid: build_operational_status(chain, in_plan=False)
+            for oid, chain in chains.items()
+        }
+        cur.close()
+        return chains, statuses
+    finally:
+        conn.close()
+
+
+def _serialize_invoices(chain: Any) -> list[dict[str, Any]]:
+    if chain is None:
+        return []
+    docs = []
+    for inv in list(getattr(chain, "confirmed_invoices", None) or []):
+        docs.append({**inv.as_dict(), "relation": "confirmed"})
+    for inv in list(getattr(chain, "probable_invoices", None) or []):
+        docs.append({**inv.as_dict(), "relation": "probable"})
+    return docs
+
+
+def _weight_insufficient(weight: dict[str, Any] | None) -> bool:
+    if not weight:
+        return True
+    coverage = float(weight.get("coverage_percent") or 0)
+    peso = weight.get("peso_total_kg")
+    missing = int(weight.get("missing_products") or 0)
+    return peso is None or coverage < MIN_WEIGHT_COVERAGE_PCT or missing > 0
+
+
+def _classify_item(
+    *,
+    entry: dict[str, Any],
+    oc_row: dict[str, Any] | None,
+    billing_status: str | None,
+    active_plans: list[dict[str, Any]],
+    weight: dict[str, Any] | None,
+) -> tuple[str, bool, list[str]]:
+    """Devuelve (status_principal, blocking, warnings_secundarias)."""
+    warnings: list[str] = []
+    if entry.get("duplicate_in_list"):
+        return STATUS_DUPLICATE_IN_LIST, True, warnings
+    if oc_row is None:
+        return STATUS_NOT_FOUND, True, warnings
+
+    state = int(oc_row.get("state") or 0)
+    if state != 0 or billing_status == BILLING_CANCELLED:
+        return STATUS_CANCELLED_OR_REPLACED, True, warnings
+
+    if active_plans:
+        warnings.append(STATUS_ALREADY_PLANNED)
+    if billing_status == BILLING_INVOICED_PARTIAL_CN:
+        warnings.append(STATUS_PARTIAL_INVOICE)
+    elif billing_status in (BILLING_PENDING, BILLING_PROBABLE):
+        warnings.append(STATUS_PENDING_INVOICE)
+    if _weight_insufficient(weight):
+        warnings.append(STATUS_INSUFFICIENT_WEIGHT)
+
+    # Prioridad del status principal (informativos; no bloquean en esta fase).
+    if active_plans:
+        return STATUS_ALREADY_PLANNED, False, [w for w in warnings if w != STATUS_ALREADY_PLANNED]
+    if billing_status == BILLING_INVOICED_PARTIAL_CN:
+        return STATUS_PARTIAL_INVOICE, False, [w for w in warnings if w != STATUS_PARTIAL_INVOICE]
+    if billing_status in (BILLING_PENDING, BILLING_PROBABLE):
+        return STATUS_PENDING_INVOICE, False, [w for w in warnings if w != STATUS_PENDING_INVOICE]
+    if STATUS_INSUFFICIENT_WEIGHT in warnings:
+        return (
+            STATUS_INSUFFICIENT_WEIGHT,
+            False,
+            [w for w in warnings if w != STATUS_INSUFFICIENT_WEIGHT],
+        )
+    return STATUS_FOUND_AVAILABLE, False, warnings
+
+
+def preview_ocs_from_folios(
+    *,
+    company_id: int = COMPANY_ID,
+    office_id: int = OFFICE_ID,
+    folios: list[Any],
+    document_type_id: int = OC_DOCUMENT_TYPE_ID,
+    oc_loader: Callable[..., dict[int, dict[str, Any]]] | None = None,
+    products_loader: Callable[..., dict[int, list[dict[str, Any]]]] | None = None,
+    plans_loader: Callable[..., dict[int, list[dict[str, Any]]]] | None = None,
+    chains_loader: Callable[..., tuple[dict[int, Any], dict[int, Any]]] | None = None,
+    weight_loader: Callable[..., dict[int, dict[str, Any]]] | None = None,
+) -> dict[str, Any]:
+    """Resuelve y previsualiza un listado de OC. Solo lectura."""
+    if int(document_type_id) != int(OC_DOCUMENT_TYPE_ID):
+        raise SimplePlanningPreviewError(
+            f"Solo se admiten OC tipo {OC_DOCUMENT_TYPE_ID}; recibido={document_type_id}"
+        )
+
+    started = time.perf_counter()
+    started_at = datetime.now(timezone.utc)
+    normalized = normalize_folio_inputs(list(folios))
+    entries = normalized["entries"]
+    unique_folios = normalized["unique_folios"]
+
+    load_ocs = oc_loader or _load_ocs_by_folios
+    load_products = products_loader or _load_products_by_document_ids
+    load_plans = plans_loader or _load_plan_assignments
+    load_chains = chains_loader or _load_chains_and_status
+    load_weights = weight_loader or (
+        lambda ids, **kw: get_order_weight_summaries_batch(
+            ids,
+            company_id=int(company_id),
+            office_id=int(office_id),
+            persist_cache=False,
+            log_planning=False,
+        )
+    )
+
+    by_folio = load_ocs(
+        company_id=int(company_id),
+        office_id=int(office_id),
+        folios=unique_folios,
+        document_type_id=int(document_type_id),
+    )
+    doc_ids = [
+        int(row["document_id"])
+        for row in by_folio.values()
+        if row.get("document_id") is not None
+    ]
+
+    products_by_doc = load_products(doc_ids) if doc_ids else {}
+    plans_by_doc = load_plans(doc_ids) if doc_ids else {}
+    chains, op_statuses = (
+        load_chains(doc_ids, company_id=int(company_id)) if doc_ids else ({}, {})
+    )
+    weights = load_weights(doc_ids) if doc_ids else {}
+
+    items: list[dict[str, Any]] = []
+    counts: dict[str, int] = {}
+    blocking_count = 0
+    warning_count = 0
+
+    for bad in normalized["invalid"]:
+        items.append(
+            {
+                **bad,
+                "folio": None,
+                "warnings": [],
+                "wrote": False,
+                "audit_oc": {
+                    "suggested": False,
+                    "path": "/distribuidora/auditoria-oc",
+                    "hint": None,
+                },
+            }
+        )
+        counts[STATUS_INVALID_FOLIO] = counts.get(STATUS_INVALID_FOLIO, 0) + 1
+        blocking_count += 1
+
+    for entry in entries:
+        folio = int(entry["folio"])
+        oc_row = by_folio.get(folio)
+        doc_id = int(oc_row["document_id"]) if oc_row and oc_row.get("document_id") else None
+        chain = chains.get(doc_id) if doc_id is not None else None
+        op = op_statuses.get(doc_id) if doc_id is not None else None
+        billing = op.billing_status if op is not None else None
+        weight = weights.get(doc_id) if doc_id is not None else None
+        plans = plans_by_doc.get(doc_id, []) if doc_id is not None else []
+        active_plans = [p for p in plans if p.get("active")]
+
+        status, blocking, warnings = _classify_item(
+            entry=entry,
+            oc_row=oc_row,
+            billing_status=billing,
+            active_plans=active_plans,
+            weight=weight,
+        )
+        if blocking:
+            blocking_count += 1
+        if warnings:
+            warning_count += 1
+        counts[status] = counts.get(status, 0) + 1
+
+        emission = oc_row.get("emission_date") if oc_row else None
+        item: dict[str, Any] = {
+            "index": entry["index"],
+            "input": entry["input"],
+            "folio": folio,
+            "status": status,
+            "blocking": blocking,
+            "warnings": warnings,
+            "wrote": False,
+            "document_id": doc_id,
+            "source_document_id": _int((oc_row or {}).get("source_document_id")),
+            "state": _int((oc_row or {}).get("state")),
+            "client": {
+                "client_id": _int((oc_row or {}).get("client_id")),
+                "client_name": (oc_row or {}).get("client_name"),
+                "municipality": (oc_row or {}).get("municipality"),
+                "address": (oc_row or {}).get("address"),
+            }
+            if oc_row
+            else None,
+            "emission_date": emission.isoformat()
+            if hasattr(emission, "isoformat")
+            else (str(emission) if emission else None),
+            "total_amount": float(oc_row["total_amount"])
+            if oc_row and oc_row.get("total_amount") is not None
+            else None,
+            "products": products_by_doc.get(doc_id, []) if doc_id is not None else [],
+            "products_source": "oc_document_details",
+            "weight": {
+                "peso_total_kg": (weight or {}).get("peso_total_kg"),
+                "coverage_percent": (weight or {}).get("coverage_percent"),
+                "missing_products": (weight or {}).get("missing_products"),
+                "productos_totales": (weight or {}).get("productos_totales"),
+                "cantidad_cajas": (weight or {}).get("cantidad_cajas"),
+                "cantidad_unidades": (weight or {}).get("cantidad_unidades"),
+            }
+            if weight
+            else None,
+            "billing_status": billing,
+            "billing_label": BILLING_LABELS_ES.get(billing or "", billing),
+            "planning_eligible": bool(op.planning_eligible) if op else None,
+            "invoices": _serialize_invoices(chain),
+            "invoice_count": len(_serialize_invoices(chain)),
+            "plans": plans,
+            "assigned_to_plan": bool(active_plans),
+            "audit_oc": {
+                "suggested": status == STATUS_NOT_FOUND,
+                "path": "/distribuidora/auditoria-oc",
+                "hint": (
+                    "Investigue el folio en Auditoría OC (sin recuperación automática)."
+                    if status == STATUS_NOT_FOUND
+                    else None
+                ),
+            },
+        }
+        items.append(item)
+
+    items.sort(key=lambda x: (x.get("index") is None, x.get("index") or 0))
+
+    return {
+        "status": "completed",
+        "mode": "simple_planning_preview_readonly",
+        "wrote": False,
+        "company_id": int(company_id),
+        "office_id": int(office_id),
+        "document_type_id": int(document_type_id),
+        "limits": {"max_folios": MAX_FOLIOS},
+        "requested_raw": len(folios),
+        "parsed_entries": len(entries),
+        "unique_folios": len(unique_folios),
+        "duplicate_folios": normalized["duplicate_folios"],
+        "blocking_count": blocking_count,
+        "warning_count": warning_count,
+        "counts": counts,
+        "items": items,
+        "notes": {
+            "products_from_oc_only": (
+                "Las cantidades vienen de document_details de la OC; "
+                "las facturas se listan aparte para no duplicar."
+            ),
+            "already_planned_informative": (
+                "La asignación a otros planes es informativa en esta fase; "
+                "el bloqueo transaccional llega antes de confirmar."
+            ),
+            "no_auto_recovery": (
+                "OC no halladas remiten a Auditoría OC; no se recupera automáticamente."
+            ),
+            "document_id_vs_source": (
+                "document_id es PK local; source_document_id es el id Bsale vigente."
+            ),
+        },
+        "started_at": started_at.isoformat(),
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "duration_seconds": round(time.perf_counter() - started, 3),
+    }

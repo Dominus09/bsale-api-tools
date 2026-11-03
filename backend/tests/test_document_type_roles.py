@@ -440,6 +440,7 @@ MAGIC_NUMBER_BASELINE = {
     "backend/services/distribuidora/dispatch_planning_list_service.py": 3,
     "backend/services/distribuidora/document_relation_sync_service.py": 12,
     "backend/services/distribuidora/live_sync_service.py": 2,
+    "backend/services/distribuidora/oc_correlative_audit_service.py": 1,
     "backend/services/distribuidora/oc_document_chain_resolver.py": 3,
     "backend/services/distribuidora/oc_operational_status.py": 3,
     "backend/services/distribuidora/oc_reconciliation_service.py": 3,
