@@ -13,7 +13,11 @@ from typing import Any, Callable
 
 from backend.db import get_connection
 from backend.repositories.distribuidora import simple_planning_session_repo as session_repo
-from backend.services.distribuidora.dispatch_plan_oc_guard import OcConfirmConflictError
+from backend.services.distribuidora.dispatch_plan_oc_guard import (
+    OcConfirmConflictError,
+    OcDocumentStateError,
+    REPLAN_MODEL_GAP,
+)
 from backend.services.distribuidora.dispatch_plan_service import (
     confirm_dispatch_plan,
     get_dispatch_plan,
@@ -483,7 +487,7 @@ def confirm_simple_planning_session(
                 code="fingerprint_drift",
                 http_status=409,
             )
-        if report.get("active_plan_conflicts"):
+        if report.get("active_plan_conflicts") or report.get("blocking_count"):
             session_repo.mark_session_status(
                 cur,
                 session["id"],
@@ -493,7 +497,8 @@ def confirm_simple_planning_session(
             )
             conn.commit()
             raise SimplePlanningConfirmError(
-                "OC ya asignada a un despacho activo o entregado",
+                "OC no disponible (plan previo, bloqueo o sin saldo de reprogramación). "
+                + REPLAN_MODEL_GAP,
                 code="active_plan_conflict",
                 http_status=409,
             )
@@ -567,11 +572,16 @@ def confirm_simple_planning_session(
                 run_auto_picking=False,
             )
             plan_id = int((confirmed.get("plan") or {}).get("id"))
-        except (OcConfirmConflictError, ValueError, SimplePlanningPreviewError) as exc:
+        except (
+            OcConfirmConflictError,
+            OcDocumentStateError,
+            ValueError,
+            SimplePlanningPreviewError,
+        ) as exc:
             # Nunca confirmar parcial: rollback de inserts + marcar sesión en TX nueva.
-            err_code = (
+            err_code = getattr(exc, "code", None) or (
                 "oc_conflict"
-                if isinstance(exc, OcConfirmConflictError)
+                if isinstance(exc, (OcConfirmConflictError, OcDocumentStateError))
                 else "confirm_rejected"
             )
             try:

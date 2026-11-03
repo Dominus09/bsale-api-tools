@@ -30,6 +30,45 @@ def _operational_status(
     return "FACTURACION_PENDIENTE"
 
 
+def _ors_metrics_calculated(plan: dict[str, Any]) -> bool:
+    raw = plan.get("ors_metrics_calculated")
+    if raw is None:
+        # Planes previos a 050: asumir ORS calculó.
+        return True
+    return bool(raw)
+
+
+def _cost_block(plan: dict[str, Any]) -> dict[str, Any]:
+    """Costos de ruta: si ORS no calculó, exponer null (no cero real)."""
+    calculated = _ors_metrics_calculated(plan)
+    if not calculated:
+        return {
+            "fuel_clp": None,
+            "crew_clp": None,
+            "tolls_clp": None,
+            "ferry_clp": None,
+            "extras_clp": None,
+            "route_total_clp": None,
+            "km_total": None,
+            "duration_min": None,
+            "liters_estimated": None,
+            "ors_metrics_calculated": False,
+            "note": "Métricas ORS no calculadas (planificación simple_list)",
+        }
+    return {
+        "fuel_clp": int(plan.get("fuel_cost_clp") or 0),
+        "crew_clp": int(plan.get("crew_cost_clp") or 0),
+        "tolls_clp": int(plan.get("toll_cost_clp") or 0),
+        "ferry_clp": int(plan.get("ferry_cost_clp") or 0),
+        "extras_clp": int(plan.get("extras_cost_clp") or 0),
+        "route_total_clp": int(plan.get("total_route_cost_clp") or 0),
+        "km_total": plan.get("km_total"),
+        "duration_min": plan.get("duration_min"),
+        "liters_estimated": plan.get("liters_estimated"),
+        "ors_metrics_calculated": True,
+    }
+
+
 def build_load_summary(
     *,
     plan: dict[str, Any],
@@ -117,14 +156,13 @@ def build_load_summary(
             "probable_amount_clp": int(probable.get("amount_clp") or 0),
             "pending_amount_clp": int(pending.get("amount_clp") or 0),
         },
-        "costs": {
-            "fuel_clp": int(plan.get("fuel_cost_clp") or 0),
-            "crew_clp": int(plan.get("crew_cost_clp") or 0),
-            "tolls_clp": int(plan.get("toll_cost_clp") or 0),
-            "ferry_clp": int(plan.get("ferry_cost_clp") or 0),
-            "extras_clp": int(plan.get("extras_cost_clp") or 0),
-            "route_total_clp": int(plan.get("total_route_cost_clp") or 0),
-        },
+        "planning_origin": plan.get("planning_origin") or "ors",
+        "ors_metrics_calculated": bool(
+            plan["ors_metrics_calculated"]
+            if plan.get("ors_metrics_calculated") is not None
+            else True
+        ),
+        "costs": _cost_block(plan),
         "results": {
             "commercial_margin_clp": (
                 margin_block.get("commercial_margin_clp") if margin_block else None
@@ -142,6 +180,8 @@ def build_load_summary(
             "generated_at": (picking_meta or {}).get("generated_at"),
             "ready_to_generate": readiness["ready"],
             "ready_reason": readiness.get("reason"),
+            "pending_invoices": not readiness["ready"],
+            "not_load_ready": not has_picking,
         },
     }
     out["operational_status"] = _operational_status(

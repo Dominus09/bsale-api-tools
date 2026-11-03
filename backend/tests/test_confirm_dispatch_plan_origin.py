@@ -64,7 +64,8 @@ def test_simple_list_persists_null_ors_metrics(monkeypatch):
 
     import backend.services.distribuidora.dispatch_plan_oc_guard as guard
 
-    monkeypatch.setattr(guard, "acquire_oc_confirm_locks", lambda *_a, **_k: None)
+    monkeypatch.setattr(guard, "acquire_oc_confirm_locks", lambda *_a, **_k: [1])
+    monkeypatch.setattr(guard, "assert_documents_active_for_confirm", lambda *_a, **_k: None)
     monkeypatch.setattr(guard, "assert_ocs_available_for_confirm", lambda *_a, **_k: None)
 
     monkeypatch.setattr(

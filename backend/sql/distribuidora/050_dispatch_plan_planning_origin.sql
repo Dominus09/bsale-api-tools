@@ -1,5 +1,8 @@
--- PROPUESTA — NO EJECUTAR automáticamente.
--- BD objetivo: analytics. Aditivo. No recalcula planes ORS existentes.
+-- Aditivo 3B.3 — aplicar SOLO vía:
+--   python -m backend.jobs.apply_distribuidora_schema
+-- o psql manual tras revisión. No ejecutar desde syncs/HTTP.
+-- BD objetivo: analytics. No recalcula planes ORS existentes.
+-- Nota: el número 050 en esta carpeta NO colisiona con backend/sql/050_bsale_sync_runs.sql.
 --
 -- Distingue origen de planificación y métricas ORS realmente calculadas.
 -- Costos INTEGER NOT NULL se mantienen en 0 por compatibilidad legacy;

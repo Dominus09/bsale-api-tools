@@ -288,6 +288,8 @@ def _history_schema_caps(cur) -> dict[str, bool]:
         "final_margin_clp": "final_margin_clp" in dp_cols,
         "commercial_margin_clp": "commercial_margin_clp" in dp_cols,
         "net_operational_clp": "net_operational_clp" in dp_cols,
+        "planning_origin": "planning_origin" in dp_cols,
+        "ors_metrics_calculated": "ors_metrics_calculated" in dp_cols,
         "invoiced_view": has_invoiced_view,
     }
     _HISTORY_SCHEMA_CAPS = caps
@@ -324,6 +326,22 @@ def _build_list_recent_plans_sql(caps: dict[str, bool]) -> str:
         "dp.net_operational_clp"
         if caps["net_operational_clp"]
         else "NULL::integer AS net_operational_clp"
+    )
+    planning_origin = (
+        "MAX(dp.planning_origin) AS planning_origin"
+        if caps.get("planning_origin")
+        else "'ors'::text AS planning_origin"
+    )
+    ors_metrics = (
+        "BOOL_OR(dp.ors_metrics_calculated) AS ors_metrics_calculated"
+        if caps.get("ors_metrics_calculated")
+        else "TRUE AS ors_metrics_calculated"
+    )
+    # Si ORS no calculó, no coercionar NULL→0 (el flag lo aclara en API).
+    route_cost = (
+        "dp.total_route_cost_clp AS total_route_cost_clp"
+        if caps.get("ors_metrics_calculated")
+        else "COALESCE(dp.total_route_cost_clp, 0) AS total_route_cost_clp"
     )
 
     orders_join = ""
@@ -373,7 +391,9 @@ def _build_list_recent_plans_sql(caps: dict[str, bool]) -> str:
             dp.status,
             dp.created_at,
             dp.confirmed_at,
-            COALESCE(dp.total_route_cost_clp, 0) AS total_route_cost_clp,
+            {route_cost},
+            {planning_origin},
+            {ors_metrics},
             {final_margin},
             {net_operational},
             {order_count},

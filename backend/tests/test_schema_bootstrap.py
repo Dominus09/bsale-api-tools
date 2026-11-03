@@ -41,6 +41,8 @@ RECREATED_COMMERCIAL_VIEWS = {
 }
 REISSUE_FILE = "048_document_reissue_lineage.sql"
 ROLES_FILE = "049_document_type_roles.sql"
+PLANNING_ORIGIN_FILE = "050_dispatch_plan_planning_origin.sql"
+SIMPLE_SESSIONS_FILE = "051_simple_planning_sessions.sql"
 
 
 # --------------------------------------------------------------------- lexer
@@ -277,7 +279,12 @@ def test_every_sql_file_is_registered_or_explicitly_excluded():
     assert sorted(on_disk - registered) == sorted(NOT_IN_RUNNER)
     assert list(DISTRIBUIDORA_SCHEMA_FILES) == sorted(DISTRIBUIDORA_SCHEMA_FILES)
     assert len(set(DISTRIBUIDORA_SCHEMA_FILES)) == len(DISTRIBUIDORA_SCHEMA_FILES)
-    assert DISTRIBUIDORA_SCHEMA_FILES[-2:] == (REISSUE_FILE, ROLES_FILE)
+    assert DISTRIBUIDORA_SCHEMA_FILES[-4:] == (
+        REISSUE_FILE,
+        ROLES_FILE,
+        PLANNING_ORIGIN_FILE,
+        SIMPLE_SESSIONS_FILE,
+    )
 
 
 def test_bootstrap_from_empty_database_has_no_forward_references(runs):

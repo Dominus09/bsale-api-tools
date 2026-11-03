@@ -1,4 +1,4 @@
--- PROPUESTA — NO EJECUTAR automáticamente.
+-- Aditivo auth 3B.3 — aplicar MANUALMENTE con psql (como 064–068). No es runner distribuidora.
 -- BD objetivo: analytics (única). Aditivo.
 -- Capacidades ERP acotadas (p. ej. planificación simplificada) sin roles admin globales
 -- y sin mezclar con perfiles operativos PWA (065).

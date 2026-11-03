@@ -478,7 +478,9 @@ def confirm_dispatch_plan(
     """
     from backend.services.distribuidora.dispatch_plan_oc_guard import (
         OcConfirmConflictError,
+        OcDocumentStateError,
         acquire_oc_confirm_locks,
+        assert_documents_active_for_confirm,
         assert_ocs_available_for_confirm,
     )
 
@@ -508,8 +510,9 @@ def confirm_dispatch_plan(
     plan_id: int | None = None
     try:
         cur = conn.cursor()
-        acquire_oc_confirm_locks(cur, doc_ids)
-        assert_ocs_available_for_confirm(cur, doc_ids)
+        locked_ids = acquire_oc_confirm_locks(cur, doc_ids)
+        assert_documents_active_for_confirm(cur, locked_ids or doc_ids)
+        assert_ocs_available_for_confirm(cur, locked_ids or doc_ids)
 
         cur.execute(
             "SELECT name, max_weight_kg, active FROM distribuidora.trucks WHERE id = %s",
@@ -607,7 +610,7 @@ def confirm_dispatch_plan(
         if owns_conn:
             conn.commit()
         cur.close()
-    except OcConfirmConflictError:
+    except (OcConfirmConflictError, OcDocumentStateError):
         if owns_conn:
             conn.rollback()
         raise
@@ -622,6 +625,7 @@ def confirm_dispatch_plan(
     if plan_id is None:
         raise ValueError("No se pudo confirmar el plan")
     if run_auto_picking and owns_conn:
+        # Solo genera si hay facturas confirmadas; sin facturas permanece pendiente.
         _try_auto_generate_picking_snapshot(plan_id)
     if owns_conn:
         return get_dispatch_plan(plan_id) or {"plan": {"id": plan_id}}

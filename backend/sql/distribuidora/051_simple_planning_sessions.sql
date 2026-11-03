@@ -1,6 +1,6 @@
--- PROPUESTA — NO EJECUTAR automáticamente.
--- BD objetivo: analytics. Aditivo.
--- Sesiones de confirmación para planificación simplificada (anti-suplantación + idempotencia).
+-- Aditivo 3B.3 — aplicar SOLO vía apply_distribuidora_schema o psql manual.
+-- BD objetivo: analytics. Sesiones de confirmación simple_list.
+-- Nota: 051 aquí ≠ backend/sql/051_product_master_variants_sync_columns.sql.
 
 CREATE TABLE IF NOT EXISTS distribuidora.simple_planning_sessions (
     id UUID PRIMARY KEY,

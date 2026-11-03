@@ -124,6 +124,9 @@ DISTRIBUIDORA_SCHEMA_FILES: tuple[str, ...] = (
     "047_cargas_hardening.sql",
     "048_document_reissue_lineage.sql",
     "049_document_type_roles.sql",
+    # 3B.3 — origen simple_list + sesiones (aplicar solo vía runner explícito).
+    "050_dispatch_plan_planning_origin.sql",
+    "051_simple_planning_sessions.sql",
 )
 
 _ENSURE_SCHEMA_NOOP_WARNED = False
