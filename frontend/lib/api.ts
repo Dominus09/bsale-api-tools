@@ -2183,19 +2183,55 @@ export type SimplePlanningAssignPreview = {
   }[]
 }
 
+export class SimplePlanningApiError extends Error {
+  code?: string
+  drifts?: unknown[]
+  sessionObsolete?: boolean
+  folios?: number[]
+
+  constructor(
+    message: string,
+    opts?: {
+      code?: string
+      drifts?: unknown[]
+      sessionObsolete?: boolean
+      folios?: number[]
+    },
+  ) {
+    super(message)
+    this.name = "SimplePlanningApiError"
+    this.code = opts?.code
+    this.drifts = opts?.drifts
+    this.sessionObsolete = opts?.sessionObsolete
+    this.folios = opts?.folios
+  }
+}
+
 async function _simplePlanningError(res: Response, fallback: string): Promise<never> {
   const text = await res.text().catch(() => "")
   try {
     const j = JSON.parse(text) as { detail?: unknown }
     const d = j.detail
-    if (typeof d === "string") throw new Error(d)
+    if (typeof d === "string") throw new SimplePlanningApiError(d)
     if (d && typeof d === "object" && "message" in (d as object)) {
-      throw new Error(String((d as { message: string }).message))
+      const obj = d as {
+        message: string
+        code?: string
+        drifts?: unknown[]
+        session_obsolete?: boolean
+        folios?: number[]
+      }
+      throw new SimplePlanningApiError(String(obj.message), {
+        code: obj.code,
+        drifts: obj.drifts,
+        sessionObsolete: Boolean(obj.session_obsolete),
+        folios: obj.folios,
+      })
     }
   } catch (e) {
     if (e instanceof Error && e.message && e.message !== text) throw e
   }
-  throw new Error(text || fallback)
+  throw new SimplePlanningApiError(text || fallback)
 }
 
 export async function postSimplePlanningPreview(body: {

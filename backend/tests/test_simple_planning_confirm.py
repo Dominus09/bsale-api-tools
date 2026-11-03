@@ -18,7 +18,10 @@ def _fp(folio: int) -> str:
         document_id=folio,
         source_document_id=9000 + folio,
         state=0,
-        updated_at="t1",
+        client_id=1,
+        total_amount=100,
+        emission_date=date(2026, 11, 1),
+        products=[],
     )
 
 
@@ -343,7 +346,16 @@ def test_confirm_fingerprint_drift(monkeypatch):
         "expires_at": datetime.now(timezone.utc) + timedelta(hours=1),
         "payload": {
             "orders": [
-                {"folio": 50, "document_id": 50, "identity_fingerprint": fp}
+                {
+                    "folio": 50,
+                    "document_id": 50,
+                    "identity_fingerprint": fp,
+                    "fingerprint_parts": {
+                        "identity": "a",
+                        "header": "b",
+                        "lines": "c",
+                    },
+                }
             ]
         },
         "truck_id": 2,
@@ -360,10 +372,24 @@ def test_confirm_fingerprint_drift(monkeypatch):
         "get_session_by_id_for_update",
         lambda cur, s: conn.sessions.get(str(s)),
     )
-    monkeypatch.setattr(svc.session_repo, "mark_session_status", lambda *_a, **_k: None)
 
-    drifted = _assign_report([_order(50, fingerprint="other")])
-    drifted["fingerprint_drifts"] = [{"folio": 50}]
+    marks = []
+
+    def _mark(cur, sid_, **kw):
+        marks.append(kw)
+        row_s = conn.sessions[str(sid_)]
+        row_s["status"] = kw["status"]
+
+    monkeypatch.setattr(svc.session_repo, "mark_session_status", _mark)
+
+    drifted_order = _order(50, fingerprint="other")
+    drifted_order["fingerprint_parts"] = {
+        "identity": "a",
+        "header": "CHANGED",
+        "lines": "c",
+    }
+    drifted = _assign_report([drifted_order])
+    drifted["fingerprint_drifts"] = []
     monkeypatch.setattr(svc, "preview_truck_assignments", lambda **_k: drifted)
 
     with pytest.raises(svc.SimplePlanningConfirmError) as ei:
@@ -373,6 +399,74 @@ def test_confirm_fingerprint_drift(monkeypatch):
             conn_factory=lambda: conn,
         )
     assert ei.value.code == "fingerprint_drift"
+    assert "OC 50:" in str(ei.value)
+    assert ei.value.details.get("session_obsolete") is True
+    assert any(m.get("status") == "failed" for m in marks)
+
+
+def test_prepare_fingerprint_drift_message_includes_folio(monkeypatch):
+    orders = [_order(70625, fingerprint="fresh")]
+    report = _assign_report(orders)
+    report["fingerprint_drifts"] = [
+        {
+            "folio": 70625,
+            "changed_parts": ["cabecera_comercial"],
+            "detail": "OC 70625: sus datos cambiaron después de la previsualización",
+        }
+    ]
+    monkeypatch.setattr(svc, "preview_truck_assignments", lambda **_k: report)
+    with pytest.raises(svc.SimplePlanningConfirmError) as ei:
+        svc.prepare_confirm_session(
+            user_id=1,
+            company_id=3,
+            office_id=1,
+            planning_date=date.today(),
+            truck_id=2,
+            dispatch_name=None,
+            driver_name=None,
+            assignments=[
+                {
+                    "folio": 70625,
+                    "truck_id": 2,
+                    "expected_fingerprint": "stale",
+                }
+            ],
+            conn_factory=lambda: (_ for _ in ()).throw(RuntimeError("no db")),
+        )
+    assert ei.value.code == "fingerprint_drift"
+    assert "OC 70625:" in str(ei.value)
+    assert ei.value.details.get("stage") == "prepare-confirm"
+
+
+def test_confirm_rejects_expired_session(monkeypatch):
+    sid = str(uuid4())
+    row = {
+        "id": sid,
+        "user_id": 1,
+        "status": "open",
+        "expires_at": datetime.now(timezone.utc) - timedelta(minutes=5),
+        "payload": {"orders": [{"folio": 1, "document_id": 1, "identity_fingerprint": "x"}]},
+        "truck_id": 2,
+        "company_id": 3,
+        "office_id": 1,
+        "plan_session_id": "simple-exp",
+    }
+    conn = _FakeConn(sessions={sid: row})
+    monkeypatch.setattr(
+        svc.session_repo,
+        "get_session_by_id_for_update",
+        lambda cur, s: conn.sessions.get(str(s)),
+    )
+    monkeypatch.setattr(svc.session_repo, "mark_session_status", lambda *_a, **_k: None)
+    with pytest.raises(svc.SimplePlanningConfirmError) as ei:
+        svc.confirm_simple_planning_session(
+            session_id=sid,
+            user_id=1,
+            conn_factory=lambda: conn,
+        )
+    assert ei.value.code in ("session_expired", "session_obsolete", "confirm_rejected") or "expir" in str(
+        ei.value
+    ).lower()
 
 
 def test_confirm_idempotent_replay(monkeypatch):

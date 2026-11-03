@@ -18,6 +18,7 @@ import {
   postSimplePlanningConfirm,
   postSimplePlanningPrepareConfirm,
   postSimplePlanningPreview,
+  SimplePlanningApiError,
   type DistribuidoraTruck,
   type SimplePlanningAssignPreview,
   type SimplePlanningPreviewItem,
@@ -235,6 +236,32 @@ export function SimplePlanningClient() {
     })
   }
 
+  /** Prefiere huellas del assign-preview (más frescas) sobre el preview inicial. */
+  const fingerprintByFolio = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const item of previewItems) {
+      const folio = Number(item.folio)
+      if (Number.isFinite(folio) && item.identity_fingerprint) {
+        map.set(folio, item.identity_fingerprint)
+      }
+    }
+    for (const a of assignPreview?.assignments || []) {
+      const folio = Number(a.folio)
+      if (Number.isFinite(folio) && a.identity_fingerprint) {
+        map.set(folio, a.identity_fingerprint)
+      }
+    }
+    for (const tr of assignPreview?.trucks || []) {
+      for (const o of tr.orders || []) {
+        const folio = Number(o.folio)
+        if (Number.isFinite(folio) && o.identity_fingerprint) {
+          map.set(folio, o.identity_fingerprint)
+        }
+      }
+    }
+    return map
+  }, [previewItems, assignPreview])
+
   const buildAssignments = () => {
     const rows: {
       folio: number
@@ -251,10 +278,21 @@ export function SimplePlanningClient() {
       rows.push({
         folio,
         truck_id: truckId,
-        expected_fingerprint: item.identity_fingerprint ?? null,
+        expected_fingerprint:
+          fingerprintByFolio.get(folio) ?? item.identity_fingerprint ?? null,
       })
     }
     return rows
+  }
+
+  const invalidateConfirmSession = (message: string) => {
+    setAssignPreview(null)
+    setConfirmOpen(false)
+    setConfirmAck(false)
+    setConfirmTruckId(null)
+    setTruckConfirm({})
+    setError(message)
+    setStep("preview")
   }
 
   const runAssignPreview = async () => {
@@ -364,11 +402,28 @@ export function SimplePlanningClient() {
       setStep("done")
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Error al confirmar"
+      const isDrift =
+        e instanceof SimplePlanningApiError && e.code === "fingerprint_drift"
+      const isWeight =
+        e instanceof SimplePlanningApiError && e.code === "weight_unavailable"
+      const sessionObsolete =
+        e instanceof SimplePlanningApiError && Boolean(e.sessionObsolete)
       setTruckConfirm((prev) => ({
         ...prev,
         [truckId]: { status: "error", message: msg },
       }))
-      setError(msg)
+      if (isDrift || sessionObsolete) {
+        invalidateConfirmSession(
+          msg +
+            " La sesión de confirmación quedó obsoleta: vuelve a previsualizar la asignación.",
+        )
+      } else if (isWeight) {
+        setConfirmOpen(false)
+        setConfirmAck(false)
+        setError(msg)
+      } else {
+        setError(msg)
+      }
     } finally {
       confirmingRef.current = false
     }
@@ -759,13 +814,33 @@ export function SimplePlanningClient() {
               </AlertDescription>
             </Alert>
           ) : null}
+          {(assignPreview.fingerprint_drifts || []).length ? (
+            <Alert variant="destructive">
+              <AlertTitle>OC modificadas después del preview</AlertTitle>
+              <AlertDescription>
+                {(assignPreview.fingerprint_drifts as { folio?: number; detail?: string }[])
+                  .map((d) => d.detail || (d.folio != null ? `OC ${d.folio}` : null))
+                  .filter(Boolean)
+                  .join(" · ")}
+                {" "}
+                Actualiza el listado (preview) y vuelve a previsualizar la asignación.
+              </AlertDescription>
+            </Alert>
+          ) : null}
           <div className="grid gap-4 lg:grid-cols-2">
             {assignPreview.trucks.map((tr) => {
               const cap = tr.capacity
               const clients = uniqueClientCount(tr.orders || [])
               const st = truckConfirm[tr.truck_id]
+              const weightBlocked = (cap?.unavailable_order_count ?? 0) > 0
+              const driftBlocked = (assignPreview.fingerprint_drifts || []).length > 0
               const blocked =
-                Boolean(tr.blocking) || Boolean(cap?.blocking) || Boolean(tr.truck_missing)
+                Boolean(tr.blocking) ||
+                Boolean(cap?.blocking) ||
+                Boolean(tr.truck_missing) ||
+                weightBlocked ||
+                driftBlocked ||
+                !cap?.capacity_known
               return (
                 <div
                   key={tr.truck_id}
@@ -797,9 +872,25 @@ export function SimplePlanningClient() {
                     <dt className="text-muted-foreground">Utilización</dt>
                     <dd>{fmtPct(cap?.utilization_pct)}</dd>
                   </dl>
+                  {weightBlocked ? (
+                    <p className="text-xs text-destructive">
+                      Hay OC con peso insuficiente / sin cobertura confiable. No se puede
+                      confirmar hasta completar pesos o quitar esas OC.
+                    </p>
+                  ) : null}
                   {(tr.warnings || []).length || (cap?.warnings || []).length ? (
                     <p className="text-xs text-amber-800 dark:text-amber-200">
-                      {[...(tr.warnings || []), ...(cap?.warnings || [])].join(" · ")}
+                      {[...(tr.warnings || []), ...(cap?.warnings || [])]
+                        .map((w) =>
+                          w === "orders_with_unavailable_weight"
+                            ? "OC con peso no confiable"
+                            : w === "truck_overloaded"
+                              ? "Camión sobrecargado"
+                              : w === "truck_capacity_unknown"
+                                ? "Capacidad del camión desconocida"
+                                : w,
+                        )
+                        .join(" · ")}
                     </p>
                   ) : null}
                   {tr.picking_preview?.products_consolidated?.length ? (
@@ -849,7 +940,12 @@ export function SimplePlanningClient() {
         </section>
       ) : null}
 
-      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+      <Dialog
+        open={confirmOpen}
+        onOpenChange={(open) => {
+          if (!confirmBusy) setConfirmOpen(open)
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Confirmar despacho del camión</DialogTitle>
@@ -860,31 +956,56 @@ export function SimplePlanningClient() {
           </DialogHeader>
           {confirmTruckBlock ? (
             <div className="space-y-2 text-sm">
-              <p>
-                <span className="font-medium">
-                  {confirmTruckBlock.truck?.name || `Camión ${confirmTruckId}`}
-                </span>
-                {" · "}
-                {confirmTruckBlock.order_count ?? 0} OC · fecha {planningDate || "—"}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                Utilización {fmtPct(confirmTruckBlock.capacity?.utilization_pct)} · peso
-                asignado {fmtKg(confirmTruckBlock.capacity?.assigned_weight_kg)}
-              </p>
-              <label className="flex items-start gap-2 text-sm">
-                <Checkbox
-                  checked={confirmAck}
-                  onCheckedChange={(v) => setConfirmAck(v === true)}
-                  disabled={confirmBusy}
-                />
-                <span>
-                  Confirmo expresamente este despacho. Entiendo que no debo reintentar si la
-                  página se recarga a mitad de proceso sin revisar el listado de planificaciones.
-                </span>
-              </label>
-              {confirmState?.message && confirmState.status !== "ok" ? (
-                <p className="text-xs text-muted-foreground">{confirmState.message}</p>
-              ) : null}
+              {(() => {
+                const cap = confirmTruckBlock.capacity
+                const dialogBlocked =
+                  Boolean(confirmTruckBlock.blocking) ||
+                  Boolean(cap?.blocking) ||
+                  (cap?.unavailable_order_count ?? 0) > 0 ||
+                  !cap?.capacity_known ||
+                  (assignPreview?.fingerprint_drifts || []).length > 0
+                return (
+                  <>
+                    <p>
+                      <span className="font-medium">
+                        {confirmTruckBlock.truck?.name || `Camión ${confirmTruckId}`}
+                      </span>
+                      {" · "}
+                      {confirmTruckBlock.order_count ?? 0} OC · fecha {planningDate || "—"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Utilización {fmtPct(cap?.utilization_pct)} · peso asignado{" "}
+                      {fmtKg(cap?.assigned_weight_kg)}
+                    </p>
+                    {dialogBlocked ? (
+                      <Alert variant="destructive">
+                        <AlertTriangle className="h-4 w-4" />
+                        <AlertTitle>Confirmación bloqueada</AlertTitle>
+                        <AlertDescription>
+                          Hay bloqueos de capacidad, peso o fingerprint. Cierra este diálogo,
+                          corrige el preview y vuelve a previsualizar la asignación.
+                        </AlertDescription>
+                      </Alert>
+                    ) : (
+                      <label className="flex items-start gap-2 text-sm">
+                        <Checkbox
+                          checked={confirmAck}
+                          onCheckedChange={(v) => setConfirmAck(v === true)}
+                          disabled={confirmBusy}
+                        />
+                        <span>
+                          Confirmo expresamente este despacho. Entiendo que no debo reintentar
+                          si la página se recarga a mitad de proceso sin revisar el listado de
+                          planificaciones.
+                        </span>
+                      </label>
+                    )}
+                    {confirmState?.message && confirmState.status !== "ok" ? (
+                      <p className="text-xs text-destructive">{confirmState.message}</p>
+                    ) : null}
+                  </>
+                )
+              })()}
             </div>
           ) : null}
           <DialogFooter>
@@ -893,7 +1014,15 @@ export function SimplePlanningClient() {
             </Button>
             <Button
               onClick={() => void runConfirmTruck()}
-              disabled={!confirmAck || confirmBusy}
+              disabled={
+                !confirmAck ||
+                confirmBusy ||
+                Boolean(confirmTruckBlock?.blocking) ||
+                Boolean(confirmTruckBlock?.capacity?.blocking) ||
+                (confirmTruckBlock?.capacity?.unavailable_order_count ?? 0) > 0 ||
+                !confirmTruckBlock?.capacity?.capacity_known ||
+                (assignPreview?.fingerprint_drifts || []).length > 0
+              }
             >
               {confirmBusy ? (
                 <>

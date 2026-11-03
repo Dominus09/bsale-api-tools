@@ -23,7 +23,13 @@ def _item(
     fingerprint: str | None = None,
 ):
     fp = fingerprint or oc_identity_fingerprint(
-        document_id=folio, source_document_id=9000 + folio, state=0, updated_at="t1"
+        document_id=folio,
+        source_document_id=9000 + folio,
+        state=0,
+        client_id=folio,
+        total_amount=100,
+        emission_date=None,
+        products=[{"variant_id": 1, "quantity": 2}],
     )
     return {
         "folio": folio,

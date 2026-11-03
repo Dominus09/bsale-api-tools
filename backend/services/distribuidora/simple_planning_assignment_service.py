@@ -120,32 +120,70 @@ def detect_active_plan_conflicts(
     return out
 
 
+_PART_LABELS = {
+    "identity": "identidad_documental",
+    "header": "cabecera_comercial",
+    "lines": "lineas_producto",
+}
+
+
 def detect_fingerprint_drift(
     *,
     expected_by_folio: dict[int, str],
     items: list[dict[str, Any]],
+    expected_parts_by_folio: dict[int, dict[str, str]] | None = None,
+    stage: str | None = None,
 ) -> list[dict[str, Any]]:
-    """OC cuyo identity_fingerprint cambió respecto al preview previo."""
+    """OC cuyo identity_fingerprint cambió respecto al preview previo.
+
+    No expone huellas completas (solo prefijos) para logs/API seguros.
+    Si hay ``fingerprint_parts`` esperadas y actuales, categoriza el cambio.
+    """
     drifts: list[dict[str, Any]] = []
     if not expected_by_folio:
         return drifts
+    parts_map = expected_parts_by_folio or {}
     for item in items:
         folio = _int(item.get("folio"))
         if folio is None or folio not in expected_by_folio:
             continue
         current = item.get("identity_fingerprint")
         expected = expected_by_folio[folio]
-        if current and expected and current != expected:
-            drifts.append(
-                {
-                    "folio": folio,
-                    "document_id": item.get("document_id"),
-                    "expected_fingerprint": expected,
-                    "current_fingerprint": current,
-                    "blocking": True,
-                    "detail": "La OC cambió después de la previsualización",
-                }
-            )
+        if not (current and expected and current != expected):
+            continue
+        current_parts = item.get("fingerprint_parts") or {}
+        expected_parts = parts_map.get(folio) or {}
+        changed_parts: list[str] = []
+        if expected_parts and current_parts:
+            for key in ("identity", "header", "lines"):
+                if expected_parts.get(key) != current_parts.get(key):
+                    changed_parts.append(_PART_LABELS.get(key, key))
+        if not changed_parts:
+            # Sin partes previas (p.ej. FE solo envió hash): no inventar categoría.
+            changed_parts = ["desconocido"]
+        entry = {
+            "folio": folio,
+            "document_id": item.get("document_id"),
+            "changed_parts": changed_parts,
+            "blocking": True,
+            "detail": (
+                f"OC {folio}: sus datos cambiaron después de la previsualización"
+            ),
+            "expected_fingerprint_prefix": str(expected)[:8],
+            "current_fingerprint_prefix": str(current)[:8],
+        }
+        if stage:
+            entry["stage"] = stage
+        drifts.append(entry)
+        logger.info(
+            "fingerprint_drift folio=%s stage=%s changed_parts=%s "
+            "expected_prefix=%s current_prefix=%s",
+            folio,
+            stage or "unspecified",
+            ",".join(changed_parts),
+            entry["expected_fingerprint_prefix"],
+            entry["current_fingerprint_prefix"],
+        )
     return drifts
 
 
@@ -346,6 +384,7 @@ def preview_truck_assignments(
     drifts = detect_fingerprint_drift(
         expected_by_folio=expected_map,
         items=list(items_by_folio.values()),
+        stage="assign-preview",
     )
     drift_folios = {int(d["folio"]) for d in drifts if d.get("folio") is not None}
 
@@ -470,6 +509,7 @@ def preview_truck_assignments(
                         "blocking": o.get("blocking"),
                         "warnings": o.get("warnings"),
                         "identity_fingerprint": o.get("identity_fingerprint"),
+                        "fingerprint_parts": o.get("fingerprint_parts"),
                         "products": o.get("products"),
                     }
                     for o in truck_orders

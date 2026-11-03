@@ -33,6 +33,7 @@ from backend.services.distribuidora.simple_planning_preview_service import (
     STATUS_FOUND_AVAILABLE,
     STATUS_NOT_FOUND,
     _int,
+    format_fingerprint_drift_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -46,10 +47,18 @@ WEIGHT_UNAVAILABLE = "unavailable"
 class SimplePlanningConfirmError(ValueError):
     """Error de negocio en prepare/confirm (mapeable a 400/409)."""
 
-    def __init__(self, message: str, *, code: str = "confirm_rejected", http_status: int = 400):
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "confirm_rejected",
+        http_status: int = 400,
+        details: dict[str, Any] | None = None,
+    ):
         super().__init__(message)
         self.code = code
         self.http_status = http_status
+        self.details = details or {}
 
 
 def _mark_session_failed_new_conn(
@@ -145,7 +154,11 @@ def _capacity_from_orders(orders: list[dict[str, Any]], truck_max: int | None) -
     )
 
 
-def _assert_confirmable_capacity(capacity: dict[str, Any]) -> None:
+def _assert_confirmable_capacity(
+    capacity: dict[str, Any],
+    *,
+    orders: list[dict[str, Any]] | None = None,
+) -> None:
     """Sin override administrativo en esta fase: bloquear si no es seguro."""
     if not capacity.get("capacity_known"):
         raise SimplePlanningConfirmError(
@@ -154,10 +167,35 @@ def _assert_confirmable_capacity(capacity: dict[str, Any]) -> None:
             http_status=409,
         )
     if capacity.get("unavailable_order_count"):
+        bad_folios = sorted(
+            {
+                f
+                for f in (
+                    _int(o.get("folio"))
+                    for o in (orders or [])
+                    if ((o.get("weight") or {}).get("quality") or WEIGHT_UNAVAILABLE)
+                    == WEIGHT_UNAVAILABLE
+                    or (o.get("weight") or {}).get("peso_total_kg") is None
+                )
+                if f is not None
+            }
+        )
+        if bad_folios:
+            listed = ", ".join(str(f) for f in bad_folios[:8])
+            more = f" (+{len(bad_folios) - 8} más)" if len(bad_folios) > 8 else ""
+            msg = (
+                f"OC {listed}{more}: peso insuficiente o sin cobertura confiable. "
+                "Completa pesos de productos o quita esas OC antes de confirmar"
+            )
+        else:
+            msg = (
+                "Hay OC con peso no confiable: no se confirma sin datos de peso seguros"
+            )
         raise SimplePlanningConfirmError(
-            "Hay OC con peso no confiable: no se confirma sin datos de peso seguros",
+            msg,
             code="weight_unavailable",
             http_status=409,
+            details={"folios": bad_folios, "stage": "prepare-confirm"},
         )
     if capacity.get("overloaded") or capacity.get("blocking"):
         raise SimplePlanningConfirmError(
@@ -212,10 +250,15 @@ def prepare_confirm_session(
             http_status=409,
         )
     if report.get("fingerprint_drifts"):
+        drifts = list(report.get("fingerprint_drifts") or [])
+        for d in drifts:
+            if isinstance(d, dict) and not d.get("stage"):
+                d["stage"] = "prepare-confirm"
         raise SimplePlanningConfirmError(
-            "Una o más OC cambiaron respecto al fingerprint esperado",
+            format_fingerprint_drift_message(drifts),
             code="fingerprint_drift",
             http_status=409,
+            details={"drifts": drifts, "stage": "prepare-confirm"},
         )
     if report.get("active_plan_conflicts"):
         raise SimplePlanningConfirmError(
@@ -241,10 +284,11 @@ def prepare_confirm_session(
             http_status=409,
         )
     capacity = truck_block.get("capacity") or {}
-    _assert_confirmable_capacity(capacity)
+    truck_orders = list(truck_block.get("orders") or [])
+    _assert_confirmable_capacity(capacity, orders=truck_orders)
 
     orders_payload: list[dict[str, Any]] = []
-    for order in truck_block.get("orders") or []:
+    for order in truck_orders:
         folio = _int(order.get("folio"))
         doc_id = _int(order.get("document_id"))
         fp = order.get("identity_fingerprint")
@@ -264,6 +308,7 @@ def prepare_confirm_session(
                 "folio": folio,
                 "document_id": doc_id,
                 "identity_fingerprint": str(fp),
+                "fingerprint_parts": order.get("fingerprint_parts"),
                 "client": order.get("client"),
                 "weight": order.get("weight"),
             }
@@ -438,6 +483,12 @@ def confirm_simple_planning_session(
             for o in orders_meta
             if o.get("folio") is not None and o.get("identity_fingerprint")
         }
+        expected_parts = {
+            int(o["folio"]): dict(o["fingerprint_parts"])
+            for o in orders_meta
+            if o.get("folio") is not None
+            and isinstance(o.get("fingerprint_parts"), dict)
+        }
         assignments = [
             {
                 "folio": o["folio"],
@@ -460,20 +511,27 @@ def confirm_simple_planning_session(
             preview_fn=preview_fn,
             trucks_loader=trucks_loader,
         )
+        order_items = [
+            o
+            for t in (report.get("trucks") or [])
+            for o in (t.get("orders") or [])
+        ] or [
+            a.get("order")
+            for a in (report.get("assignments") or [])
+            if a.get("order")
+        ]
         drifts = detect_fingerprint_drift(
             expected_by_folio=expected_fp,
-            items=[
-                o
-                for t in (report.get("trucks") or [])
-                for o in (t.get("orders") or [])
-            ]
-            or [
-                a.get("order")
-                for a in (report.get("assignments") or [])
-                if a.get("order")
-            ],
+            items=order_items,
+            expected_parts_by_folio=expected_parts,
+            stage="confirm",
         )
-        if drifts or report.get("fingerprint_drifts"):
+        if not drifts and report.get("fingerprint_drifts"):
+            drifts = list(report.get("fingerprint_drifts") or [])
+            for d in drifts:
+                if isinstance(d, dict) and not d.get("stage"):
+                    d["stage"] = "confirm"
+        if drifts:
             session_repo.mark_session_status(
                 cur,
                 session["id"],
@@ -483,9 +541,10 @@ def confirm_simple_planning_session(
             )
             conn.commit()
             raise SimplePlanningConfirmError(
-                "OC modificada después del preview/sesión",
+                format_fingerprint_drift_message(drifts),
                 code="fingerprint_drift",
                 http_status=409,
+                details={"drifts": drifts, "stage": "confirm", "session_obsolete": True},
             )
         if report.get("active_plan_conflicts") or report.get("blocking_count"):
             session_repo.mark_session_status(
@@ -512,7 +571,9 @@ def confirm_simple_planning_session(
             )
         capacity = truck_block.get("capacity") or {}
         try:
-            _assert_confirmable_capacity(capacity)
+            _assert_confirmable_capacity(
+                capacity, orders=list(truck_block.get("orders") or [])
+            )
         except SimplePlanningConfirmError as exc:
             session_repo.mark_session_status(
                 cur, session["id"], status="failed", last_error=exc.code, now=now

@@ -12,7 +12,8 @@ import hashlib
 import logging
 import re
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Callable
 
 from backend.db import get_connection
@@ -104,25 +105,132 @@ def _int(value: Any) -> int | None:
         return None
 
 
+def _canon_decimal(value: Any, *, places: int = 2) -> str:
+    """Representación decimal canónica (evita 10 vs 10.0 vs '10.00')."""
+    if value is None or value == "":
+        return ""
+    try:
+        quant = Decimal("1").scaleb(-places) if places >= 0 else Decimal("1")
+        d = Decimal(str(value)).quantize(quant, rounding=ROUND_HALF_UP)
+    except (InvalidOperation, ValueError, TypeError):
+        return str(value).strip()
+    return format(d, "f")
+
+
+def _canon_emission_date(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = str(value).strip()
+    return text[:10] if text else ""
+
+
+def _hash_part(raw: str) -> str:
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def oc_lines_fingerprint_raw(products: list[dict[str, Any]] | None) -> str:
+    """Líneas comerciales ordenadas (variant_id + qty). Independiente del orden SQL."""
+    lines: list[str] = []
+    for prod in products or []:
+        if not isinstance(prod, dict):
+            continue
+        vid = _int(prod.get("variant_id"))
+        qty = _canon_decimal(prod.get("quantity"), places=3)
+        # Sin description/code/detail_id: no deben alterar la huella comercial.
+        lines.append(f"{vid if vid is not None else ''}:{qty}")
+    lines.sort()
+    return "|".join(lines)
+
+
+def oc_fingerprint_parts(
+    *,
+    document_id: int | None,
+    source_document_id: int | None = None,
+    state: int | None = None,
+    client_id: int | None = None,
+    total_amount: Any = None,
+    emission_date: Any = None,
+    products: list[dict[str, Any]] | None = None,
+) -> dict[str, str] | None:
+    """Partes canónicas para categorizar drift (identity / header / lines)."""
+    if document_id is None:
+        return None
+    identity_raw = (
+        f"{int(document_id)}|"
+        f"{'' if source_document_id is None else int(source_document_id)}|"
+        f"{'' if state is None else int(state)}"
+    )
+    header_raw = (
+        f"{'' if client_id is None else int(client_id)}|"
+        f"{_canon_decimal(total_amount, places=2)}|"
+        f"{_canon_emission_date(emission_date)}"
+    )
+    lines_raw = oc_lines_fingerprint_raw(products)
+    return {
+        "identity": _hash_part(identity_raw),
+        "header": _hash_part(header_raw),
+        "lines": _hash_part(lines_raw),
+    }
+
+
 def oc_identity_fingerprint(
     *,
     document_id: int | None,
-    source_document_id: int | None,
-    state: int | None,
+    source_document_id: int | None = None,
+    state: int | None = None,
+    client_id: int | None = None,
+    total_amount: Any = None,
+    emission_date: Any = None,
+    products: list[dict[str, Any]] | None = None,
     updated_at: Any = None,
 ) -> str | None:
-    """Huella estable para detectar cambios entre preview y confirmación futura."""
-    if document_id is None:
+    """Huella comercial estable entre preview y confirmación.
+
+    Incluye identidad documental, cabecera comercial y líneas (variant+qty).
+    ``updated_at`` se ignora a propósito: la sincronización Bsale lo toca sin
+    cambio comercial y generaba falsos positivos de fingerprint_drift.
+    """
+    del updated_at  # ruido de sync; no forma parte de la huella comercial
+    parts = oc_fingerprint_parts(
+        document_id=document_id,
+        source_document_id=source_document_id,
+        state=state,
+        client_id=client_id,
+        total_amount=total_amount,
+        emission_date=emission_date,
+        products=products,
+    )
+    if not parts:
         return None
-    updated = ""
-    if updated_at is not None:
-        updated = (
-            updated_at.isoformat()
-            if hasattr(updated_at, "isoformat")
-            else str(updated_at)
-        )
-    raw = f"{int(document_id)}|{source_document_id}|{state}|{updated}"
+    raw = f"{parts['identity']}#{parts['header']}#{parts['lines']}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def format_fingerprint_drift_message(drifts: list[dict[str, Any]]) -> str:
+    """Mensaje accionable por folio para prepare/confirm."""
+    folios = sorted(
+        {f for f in (_int(d.get("folio")) for d in drifts) if f is not None}
+    )
+    if len(folios) == 1:
+        return (
+            f"OC {folios[0]}: sus datos cambiaron después de la previsualización. "
+            "Actualiza las órdenes y vuelve a preparar la confirmación"
+        )
+    if folios:
+        listed = ", ".join(str(f) for f in folios[:8])
+        more = f" (+{len(folios) - 8} más)" if len(folios) > 8 else ""
+        return (
+            f"OC {listed}{more}: sus datos cambiaron después de la previsualización. "
+            "Actualiza las órdenes y vuelve a preparar la confirmación"
+        )
+    return (
+        "Una o más OC cambiaron después de la previsualización. "
+        "Actualiza las órdenes y vuelve a preparar la confirmación"
+    )
 
 
 def normalize_folio_inputs(raw_folios: list[Any]) -> dict[str, Any]:
@@ -577,6 +685,26 @@ def preview_ocs_from_folios(
         updated_at = (oc_row or {}).get("updated_at")
         source_id = _int((oc_row or {}).get("source_document_id"))
         state_n = _int((oc_row or {}).get("state"))
+        client_id_n = _int((oc_row or {}).get("client_id"))
+        total_amount = (
+            oc_row.get("total_amount")
+            if oc_row and oc_row.get("total_amount") is not None
+            else None
+        )
+        products = products_by_doc.get(doc_id, []) if doc_id is not None else []
+        fp_parts = (
+            oc_fingerprint_parts(
+                document_id=doc_id,
+                source_document_id=source_id,
+                state=state_n,
+                client_id=client_id_n,
+                total_amount=total_amount,
+                emission_date=emission,
+                products=products,
+            )
+            if doc_id is not None
+            else None
+        )
         conflicting_plans = [
             p
             for p in plans
@@ -600,10 +728,14 @@ def preview_ocs_from_folios(
                 document_id=doc_id,
                 source_document_id=source_id,
                 state=state_n,
-                updated_at=updated_at,
+                client_id=client_id_n,
+                total_amount=total_amount,
+                emission_date=emission,
+                products=products,
             ),
+            "fingerprint_parts": fp_parts,
             "client": {
-                "client_id": _int((oc_row or {}).get("client_id")),
+                "client_id": client_id_n,
                 "client_name": (oc_row or {}).get("client_name"),
                 "municipality": (oc_row or {}).get("municipality"),
                 "address": (oc_row or {}).get("address"),
@@ -613,10 +745,8 @@ def preview_ocs_from_folios(
             "emission_date": emission.isoformat()
             if hasattr(emission, "isoformat")
             else (str(emission) if emission else None),
-            "total_amount": float(oc_row["total_amount"])
-            if oc_row and oc_row.get("total_amount") is not None
-            else None,
-            "products": products_by_doc.get(doc_id, []) if doc_id is not None else [],
+            "total_amount": float(total_amount) if total_amount is not None else None,
+            "products": products,
             "products_source": "oc_document_details",
             "weight": {
                 "peso_total_kg": (weight or {}).get("peso_total_kg"),

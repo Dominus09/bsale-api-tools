@@ -236,7 +236,11 @@ def post_simple_planning_prepare_confirm(
     except SimplePlanningConfirmError as exc:
         raise HTTPException(
             status_code=exc.http_status,
-            detail={"message": str(exc), "code": exc.code},
+            detail={
+                "message": str(exc),
+                "code": exc.code,
+                **(exc.details or {}),
+            },
         ) from exc
     except SimplePlanningPreviewError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -262,7 +266,11 @@ def post_simple_planning_confirm(
     except SimplePlanningConfirmError as exc:
         raise HTTPException(
             status_code=exc.http_status,
-            detail={"message": str(exc), "code": exc.code},
+            detail={
+                "message": str(exc),
+                "code": exc.code,
+                **(exc.details or {}),
+            },
         ) from exc
     except Exception:
         logger.exception("simple_planning_confirm_failed")
