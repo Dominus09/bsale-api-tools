@@ -300,7 +300,11 @@ def assign_driver_to_plan(
             "Motivo obligatorio (mínimo 3 caracteres)",
             code="reason_required",
         )
-    if not can_assign_dispatch_driver(actor):
+    from backend.services.distribuidora.dispatch_plan_access import (
+        user_can_assign_driver_on_plan,
+    )
+
+    if not user_can_assign_driver_on_plan(actor, int(plan_id)):
         raise DriverAssignError(
             "Sin permiso para asignar choferes",
             code="forbidden",

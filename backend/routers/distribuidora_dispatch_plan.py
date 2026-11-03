@@ -14,7 +14,15 @@ from pydantic import BaseModel, Field
 from backend.services.distribuidora import dispatch_plan_service as svc
 from backend.services.distribuidora import dispatch_plan_cuadratura_service as cuad_svc
 from backend.services.distribuidora import dispatch_plan_load_batch_service as batch_svc
-from backend.auth.permissions import require_erp_ops_staff
+from backend.auth.permissions import (
+    is_simple_planning_capability_only,
+    require_erp_ops_staff,
+)
+from backend.services.distribuidora.dispatch_plan_access import (
+    filter_plans_for_user,
+    user_can_assign_driver_on_plan,
+    user_can_read_dispatch_plan,
+)
 from backend.utils.auth_staff import BearerDep, decode_staff_token, require_staff_user
 from backend.utils.dashboard_debug import log_dashboard_debug
 from backend.utils.dashboard_stage import DashboardStageRun, log_picking_count_sql_reference
@@ -110,26 +118,39 @@ class AddOrderToPlanBody(BaseModel):
     reason: str | None = Field(None, max_length=500)
 
 
+def _deny_plan_if_out_of_scope(user: dict, plan_id: int) -> None:
+    """Capability-only: 404 (sin filtrar existencia) si no hay vínculo explícito."""
+    if not user_can_read_dispatch_plan(user, plan_id):
+        raise HTTPException(status_code=404, detail="Plan no encontrado")
+
+
 @router.get("")
-def list_recent_plans(limit: int = Query(50, ge=1, le=200)):
+def list_recent_plans(
+    limit: int = Query(50, ge=1, le=200),
+    user: dict = Depends(require_staff_user),
+):
     try:
         items = svc.list_recent_plans(limit=limit)
-        return {"items": items}
+        return {"items": filter_plans_for_user(user, items)}
     except Exception as exc:
         log_error("GET /dispatch-plans", exc)
         return {"items": []}
 
 
 @router.get("/margin-audit")
-def margin_audit():
+def margin_audit(_ops: dict = Depends(require_erp_ops_staff)):
     """Auditoría: campos margen/costo en raw_data Bsale (documentos y líneas)."""
     return svc.get_margin_audit()
 
 
 @router.get("/by-session/{plan_session_id}")
-def list_plans_by_session(plan_session_id: str):
+def list_plans_by_session(
+    plan_session_id: str,
+    user: dict = Depends(require_staff_user),
+):
     try:
-        return {"items": svc.list_session_plans(plan_session_id)}
+        items = svc.list_session_plans(plan_session_id)
+        return {"items": filter_plans_for_user(user, items)}
     except Exception as exc:
         log_error("GET /dispatch-plans/by-session", exc)
         return {"items": []}
@@ -150,7 +171,11 @@ def list_available_drivers(
 ):
     from backend.services.distribuidora import dispatch_plan_driver_service as driver_svc
 
-    if not driver_svc.can_assign_dispatch_driver(user):
+    # Capability-only puede listar choferes para asignar en planes propios.
+    if not (
+        driver_svc.can_assign_dispatch_driver(user)
+        or is_simple_planning_capability_only(user)
+    ):
         raise HTTPException(status_code=403, detail="Sin permiso para listar choferes")
     try:
         items = driver_svc.list_available_drivers(
@@ -230,7 +255,8 @@ def confirm_plan(
 
 
 @router.get("/{plan_id}")
-def get_plan(plan_id: int):
+def get_plan(plan_id: int, user: dict = Depends(require_staff_user)):
+    _deny_plan_if_out_of_scope(user, plan_id)
     data = svc.get_dispatch_plan(plan_id)
     if not data:
         raise HTTPException(status_code=404, detail="Plan no encontrado")
@@ -238,8 +264,9 @@ def get_plan(plan_id: int):
 
 
 @router.get("/{plan_id}/header")
-def get_plan_header(plan_id: int):
+def get_plan_header(plan_id: int, user: dict = Depends(require_staff_user)):
     """Cabecera liviana (sin geometry, sin órdenes)."""
+    _deny_plan_if_out_of_scope(user, plan_id)
     try:
         plan = svc.get_plan_header(plan_id)
     except Exception as exc:
@@ -254,6 +281,7 @@ def get_plan_header(plan_id: int):
 def get_plan_driver(plan_id: int, user: dict = Depends(require_staff_user)):
     from backend.services.distribuidora import dispatch_plan_driver_service as driver_svc
 
+    _deny_plan_if_out_of_scope(user, plan_id)
     try:
         return driver_svc.get_plan_driver(plan_id)
     except driver_svc.DriverAssignError as exc:
@@ -271,6 +299,8 @@ def assign_plan_driver(
 ):
     from backend.services.distribuidora import dispatch_plan_driver_service as driver_svc
 
+    if not user_can_assign_driver_on_plan(user, plan_id):
+        raise HTTPException(status_code=403, detail="Sin permiso para asignar chofer")
     try:
         return driver_svc.assign_driver_to_plan(
             plan_id=plan_id,
@@ -303,8 +333,12 @@ def check_driver_plan_access(
     """
     from backend.services.distribuidora import dispatch_plan_driver_service as driver_svc
 
+    _deny_plan_if_out_of_scope(user, plan_id)
     uid = user.get("id") or user.get("uid")
-    is_assigner = driver_svc.can_assign_dispatch_driver(user)
+    is_assigner = driver_svc.can_assign_dispatch_driver(user) or (
+        is_simple_planning_capability_only(user)
+        and user_can_assign_driver_on_plan(user, plan_id)
+    )
     if not is_assigner:
         if uid is None or int(uid) != int(driver_user_id):
             raise HTTPException(
@@ -321,6 +355,7 @@ def check_driver_plan_access(
 @router.get("/{plan_id}/dashboard")
 def get_plan_dashboard(
     plan_id: int,
+    user: dict = Depends(require_staff_user),
     authorization: BearerDep = None,
     include_items: bool = Query(False, description="Incluir filas invoiced_items (más pesado)"),
     include_margin: bool = Query(
@@ -329,6 +364,7 @@ def get_plan_dashboard(
     ),
 ):
     """Solo facturación y métricas; pickings en /picking-cliente y /picking-producto."""
+    _deny_plan_if_out_of_scope(user, plan_id)
     stage_run = DashboardStageRun(plan_id)
     stage_run.log_stage(1, "start_endpoint")
     log_picking_count_sql_reference(plan_id)
@@ -421,8 +457,9 @@ def patch_plan_status(
 
 
 @router.get("/{plan_id}/invoiced-documents")
-def get_invoiced_documents(plan_id: int):
+def get_invoiced_documents(plan_id: int, user: dict = Depends(require_staff_user)):
     """Facturación vinculada (equivalente operacional a /facturacion)."""
+    _deny_plan_if_out_of_scope(user, plan_id)
     try:
         return svc.get_invoiced_documents(plan_id)
     except ValueError as e:
@@ -435,7 +472,8 @@ def get_invoiced_documents(plan_id: int):
 
 
 @router.get("/{plan_id}/billing-export")
-def export_billing_excel(plan_id: int):
+def export_billing_excel(plan_id: int, user: dict = Depends(require_staff_user)):
+    _deny_plan_if_out_of_scope(user, plan_id)
     try:
         data, fname = svc.build_billing_excel_bytes(plan_id)
     except ValueError as e:
@@ -562,7 +600,12 @@ def post_picking_generate(
 
 
 @router.get("/{plan_id}/pickings")
-def list_pickings(plan_id: int, limit: int = Query(30, ge=1, le=100)):
+def list_pickings(
+    plan_id: int,
+    limit: int = Query(30, ge=1, le=100),
+    user: dict = Depends(require_staff_user),
+):
+    _deny_plan_if_out_of_scope(user, plan_id)
     try:
         return svc.list_plan_pickings(plan_id, limit=limit)
     except ValueError as e:
@@ -577,7 +620,9 @@ def picking_cliente(
     version: int | None = Query(None, ge=1),
     picking_id: int | None = Query(None, ge=1),
     load_batch_id: int | None = Query(None, ge=1),
+    user: dict = Depends(require_staff_user),
 ):
+    _deny_plan_if_out_of_scope(user, plan_id)
     return _picking_by_client_handler(
         plan_id,
         validate,
@@ -596,7 +641,9 @@ def picking_producto(
     version: int | None = Query(None, ge=1),
     picking_id: int | None = Query(None, ge=1),
     load_batch_id: int | None = Query(None, ge=1),
+    user: dict = Depends(require_staff_user),
 ):
+    _deny_plan_if_out_of_scope(user, plan_id)
     return _picking_by_product_handler(
         plan_id,
         validate,
@@ -612,7 +659,9 @@ def export_picking_cliente(
     plan_id: int,
     version: int | None = Query(None, ge=1),
     picking_id: int | None = Query(None, ge=1),
+    user: dict = Depends(require_staff_user),
 ):
+    _deny_plan_if_out_of_scope(user, plan_id)
     try:
         data, fname = svc.build_picking_client_excel_bytes(
             plan_id,
@@ -633,7 +682,9 @@ def export_picking_producto(
     plan_id: int,
     version: int | None = Query(None, ge=1),
     picking_id: int | None = Query(None, ge=1),
+    user: dict = Depends(require_staff_user),
 ):
+    _deny_plan_if_out_of_scope(user, plan_id)
     try:
         data, fname = svc.build_picking_product_excel_bytes(
             plan_id,
@@ -657,8 +708,10 @@ def picking_by_client(
     version: int | None = Query(None, ge=1),
     picking_id: int | None = Query(None, ge=1),
     load_batch_id: int | None = Query(None, ge=1),
+    user: dict = Depends(require_staff_user),
 ):
     """Retrocompatible: alias de /picking-cliente."""
+    _deny_plan_if_out_of_scope(user, plan_id)
     return _picking_by_client_handler(
         plan_id,
         validate,
@@ -677,8 +730,10 @@ def picking_by_product(
     version: int | None = Query(None, ge=1),
     picking_id: int | None = Query(None, ge=1),
     load_batch_id: int | None = Query(None, ge=1),
+    user: dict = Depends(require_staff_user),
 ):
     """Retrocompatible: alias de /picking-producto."""
+    _deny_plan_if_out_of_scope(user, plan_id)
     return _picking_by_product_handler(
         plan_id,
         validate,
@@ -690,7 +745,8 @@ def picking_by_product(
 
 
 @router.get("/{plan_id}/load-batches")
-def get_load_batches(plan_id: int):
+def get_load_batches(plan_id: int, user: dict = Depends(require_staff_user)):
+    _deny_plan_if_out_of_scope(user, plan_id)
     try:
         return batch_svc.list_load_batches(plan_id)
     except ValueError as e:
@@ -743,7 +799,8 @@ def delete_load_batch(
 
 
 @router.get("/{plan_id}/picking-assignments")
-def get_picking_assignments(plan_id: int):
+def get_picking_assignments(plan_id: int, user: dict = Depends(require_staff_user)):
+    _deny_plan_if_out_of_scope(user, plan_id)
     try:
         return batch_svc.get_picking_assignments(plan_id)
     except ValueError as e:
@@ -769,7 +826,9 @@ def search_orders_for_plan(
     plan_id: int,
     q: str = Query(..., min_length=2, max_length=80),
     limit: int = Query(20, ge=1, le=50),
+    user: dict = Depends(require_staff_user),
 ):
+    _deny_plan_if_out_of_scope(user, plan_id)
     try:
         return batch_svc.search_orders_for_plan(plan_id, q=q, limit=limit)
     except ValueError as e:
@@ -777,7 +836,8 @@ def search_orders_for_plan(
 
 
 @router.get("/{plan_id}/orders/add-preview")
-def preview_add_order(plan_id: int):
+def preview_add_order(plan_id: int, user: dict = Depends(require_staff_user)):
+    _deny_plan_if_out_of_scope(user, plan_id)
     try:
         return batch_svc.preview_add_order(plan_id)
     except ValueError as e:
@@ -803,7 +863,12 @@ def add_order_to_plan(
 
 
 @router.get("/{plan_id}/picking-regeneration-log")
-def get_picking_regeneration_log(plan_id: int, limit: int = Query(50, ge=1, le=200)):
+def get_picking_regeneration_log(
+    plan_id: int,
+    limit: int = Query(50, ge=1, le=200),
+    user: dict = Depends(require_staff_user),
+):
+    _deny_plan_if_out_of_scope(user, plan_id)
     return batch_svc.list_picking_regeneration_log(plan_id, limit=limit)
 
 
@@ -896,7 +961,8 @@ class CuadraturaCloseBody(BaseModel):
 
 
 @router.get("/{plan_id}/cuadratura")
-def get_cuadratura(plan_id: int):
+def get_cuadratura(plan_id: int, user: dict = Depends(require_staff_user)):
+    _deny_plan_if_out_of_scope(user, plan_id)
     try:
         return cuad_svc.get_dispatch_plan_cuadratura(plan_id)
     except ValueError as e:
@@ -965,13 +1031,13 @@ def delivery_map_by_code(
     user: dict = Depends(require_staff_user),
 ):
     """Mapa de entregas por código PLAN-xxxxx (uso en terreno)."""
-    _ = user
     from backend.services.distribuidora import delivery_map_service as dmap
 
     try:
         plan_id = dmap.resolve_plan_id_from_picking_number(planning_code)
         if plan_id is None:
             raise LookupError(f"Plan '{planning_code}' no encontrado")
+        _deny_plan_if_out_of_scope(user, int(plan_id))
         return dmap.get_delivery_map(plan_id)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -986,7 +1052,7 @@ def delivery_map(
     user: dict = Depends(require_staff_user),
 ):
     """Clientes/destinos del plan agrupados (1 marcador por cliente) + GPS."""
-    _ = user
+    _deny_plan_if_out_of_scope(user, plan_id)
     from backend.services.distribuidora import delivery_map_service as dmap
 
     try:
