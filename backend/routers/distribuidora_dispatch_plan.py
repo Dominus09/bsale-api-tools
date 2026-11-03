@@ -134,6 +134,55 @@ def list_plans_by_session(plan_session_id: str):
         return {"items": []}
 
 
+class AssignDriverBody(BaseModel):
+    driver_user_id: int = Field(..., ge=1)
+    reason: str = Field(..., min_length=3, max_length=500)
+    company_id: int | None = Field(None, ge=1)
+    office_id: int | None = Field(None, ge=1)
+
+
+@router.get("/available-drivers")
+def list_available_drivers(
+    company_id: int | None = Query(None, ge=1),
+    office_id: int | None = Query(None, ge=1),
+    user: dict = Depends(require_staff_user),
+):
+    from backend.services.distribuidora import dispatch_plan_driver_service as driver_svc
+
+    if not driver_svc.can_assign_dispatch_driver(user):
+        raise HTTPException(status_code=403, detail="Sin permiso para listar choferes")
+    try:
+        items = driver_svc.list_available_drivers(
+            company_id=company_id, office_id=office_id
+        )
+        return {"items": items}
+    except Exception as exc:
+        log_error("GET /dispatch-plans/available-drivers", exc)
+        raise HTTPException(status_code=503, detail="No se pudieron listar choferes") from exc
+
+
+@router.get("/mine-as-driver")
+def list_my_driver_plans(
+    limit: int = Query(50, ge=1, le=200),
+    user: dict = Depends(require_staff_user),
+):
+    """Prep PWA: despachos del chofer autenticado (requiere perfil chofer + PWA)."""
+    from backend.auth.multiapp import APP_PWA, assert_profiles, get_scope, has_app_access
+    from backend.services.distribuidora import dispatch_plan_driver_service as driver_svc
+
+    scope = get_scope(user)
+    if not has_app_access(scope, APP_PWA):
+        raise HTTPException(status_code=403, detail="Acceso PWA requerido")
+    assert_profiles(scope, ("chofer",), detail="Perfil chofer requerido")
+    uid = user.get("id") or user.get("uid")
+    if uid is None:
+        raise HTTPException(status_code=401, detail="Usuario sin id")
+    return {
+        "items": driver_svc.list_plans_for_driver_user(int(uid), limit=limit),
+        "driver_user_id": int(uid),
+    }
+
+
 @router.post("/confirm")
 def confirm_plan(body: ConfirmDispatchPlanBody):
     from backend.services.distribuidora.dispatch_plan_oc_guard import (
@@ -194,6 +243,64 @@ def get_plan_header(plan_id: int):
     if not plan:
         raise HTTPException(status_code=404, detail="Plan no encontrado")
     return {"plan": plan}
+
+
+@router.get("/{plan_id}/driver")
+def get_plan_driver(plan_id: int, user: dict = Depends(require_staff_user)):
+    from backend.services.distribuidora import dispatch_plan_driver_service as driver_svc
+
+    try:
+        return driver_svc.get_plan_driver(plan_id)
+    except driver_svc.DriverAssignError as exc:
+        raise HTTPException(
+            status_code=exc.http_status,
+            detail={"message": str(exc), "code": exc.code},
+        ) from exc
+
+
+@router.post("/{plan_id}/assign-driver")
+def assign_plan_driver(
+    plan_id: int,
+    body: AssignDriverBody,
+    user: dict = Depends(require_staff_user),
+):
+    from backend.services.distribuidora import dispatch_plan_driver_service as driver_svc
+
+    try:
+        return driver_svc.assign_driver_to_plan(
+            plan_id=plan_id,
+            driver_user_id=int(body.driver_user_id),
+            reason=body.reason,
+            actor=user,
+            company_id=body.company_id,
+            office_id=body.office_id,
+        )
+    except driver_svc.DriverAssignError as exc:
+        raise HTTPException(
+            status_code=exc.http_status,
+            detail={"message": str(exc), "code": exc.code},
+        ) from exc
+    except Exception as exc:
+        log_error("POST /dispatch-plans/assign-driver", exc, planning_id=plan_id)
+        raise HTTPException(status_code=503, detail="No se pudo asignar chofer") from exc
+
+
+@router.get("/{plan_id}/driver-access/{driver_user_id}")
+def check_driver_plan_access(
+    plan_id: int,
+    driver_user_id: int,
+    user: dict = Depends(require_staff_user),
+):
+    """Utilidad de prueba/ops: ¿el chofer tiene acceso operativo al plan?"""
+    from backend.services.distribuidora import dispatch_plan_driver_service as driver_svc
+
+    if not driver_svc.can_assign_dispatch_driver(user):
+        raise HTTPException(status_code=403, detail="Sin permiso")
+    return {
+        "plan_id": plan_id,
+        "driver_user_id": driver_user_id,
+        "has_access": driver_svc.driver_has_access_to_plan(driver_user_id, plan_id),
+    }
 
 
 @router.get("/{plan_id}/dashboard")

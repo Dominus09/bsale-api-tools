@@ -100,6 +100,14 @@ def get_plan_header(cur, plan_id: int) -> dict[str, Any] | None:
         if caps["has_orders_table"]
         else "0::int AS order_count, 0::numeric AS total_oc_amount"
     )
+    driver_name_sel = (
+        "dp.driver_name," if caps.get("driver_name") else "NULL::text AS driver_name,"
+    )
+    driver_user_sel = (
+        "dp.driver_user_id,"
+        if caps.get("driver_user_id")
+        else "NULL::integer AS driver_user_id,"
+    )
     cur.execute(
         f"""
         SELECT
@@ -123,6 +131,8 @@ def get_plan_header(cur, plan_id: int) -> dict[str, Any] | None:
             dp.assistant_cost_clp,
             dp.fuel_cost_clp,
             dp.crew_cost_clp,
+            {driver_name_sel}
+            {driver_user_sel}
             {margin_select}
             {order_sub}
         FROM distribuidora.dispatch_plan dp
@@ -290,6 +300,8 @@ def _history_schema_caps(cur) -> dict[str, bool]:
         "net_operational_clp": "net_operational_clp" in dp_cols,
         "planning_origin": "planning_origin" in dp_cols,
         "ors_metrics_calculated": "ors_metrics_calculated" in dp_cols,
+        "driver_user_id": "driver_user_id" in dp_cols,
+        "driver_name": "driver_name" in dp_cols,
         "invoiced_view": has_invoiced_view,
     }
     _HISTORY_SCHEMA_CAPS = caps
