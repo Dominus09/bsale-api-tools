@@ -291,11 +291,21 @@ def check_driver_plan_access(
     driver_user_id: int,
     user: dict = Depends(require_staff_user),
 ):
-    """Utilidad de prueba/ops: ¿el chofer tiene acceso operativo al plan?"""
+    """¿El chofer tiene acceso operativo al plan?
+
+    - Asignadores (gerencia/operativo/adm): pueden consultar cualquier chofer.
+    - Otros: solo pueden consultar su propio ``driver_user_id`` (no sondear ajenos).
+    """
     from backend.services.distribuidora import dispatch_plan_driver_service as driver_svc
 
-    if not driver_svc.can_assign_dispatch_driver(user):
-        raise HTTPException(status_code=403, detail="Sin permiso")
+    uid = user.get("id") or user.get("uid")
+    is_assigner = driver_svc.can_assign_dispatch_driver(user)
+    if not is_assigner:
+        if uid is None or int(uid) != int(driver_user_id):
+            raise HTTPException(
+                status_code=403,
+                detail="Solo puede consultar su propio acceso de chofer",
+            )
     return {
         "plan_id": plan_id,
         "driver_user_id": driver_user_id,
