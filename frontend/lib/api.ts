@@ -33,6 +33,9 @@ export interface AuthMeResponse {
   is_owner?: boolean
   management_access: boolean
   admin_access: boolean
+  apps?: string[]
+  profiles?: string[]
+  erp_capabilities?: string[]
   permissions: {
     commercial_validation: boolean
     diagnostics: boolean
@@ -2087,6 +2090,198 @@ export async function assignDispatchPlanDriver(
     const msg = await res.text().catch(() => "")
     throw new Error(msg || "Error al asignar chofer")
   }
+  return res.json()
+}
+
+/** Planificación simplificada (lista/Excel) — backend es autoridad. */
+export type SimplePlanningPreviewItem = {
+  folio?: number | null
+  input?: string
+  status: string
+  blocking?: boolean
+  warnings?: string[]
+  document_id?: number | null
+  identity_fingerprint?: string | null
+  client?: {
+    client_id?: number | null
+    client_name?: string | null
+    municipality?: string | null
+    address?: string | null
+  } | null
+  products?: {
+    variant_id?: number | null
+    description?: string | null
+    code?: string | null
+    quantity?: number | null
+  }[]
+  weight?: {
+    peso_total_kg?: number | null
+    coverage_percent?: number | null
+    quality?: string | null
+    missing_products?: number | null
+  }
+  billing_status?: string | null
+  billing_label?: string | null
+  invoices?: unknown[]
+  invoice_count?: number
+  plans?: unknown[]
+  conflicting_active_plans?: unknown[]
+  audit_oc?: { suggested?: boolean; path?: string; hint?: string | null }
+}
+
+export type SimplePlanningAssignPreview = {
+  wrote?: boolean
+  planning_origin?: string
+  planning_date?: string
+  dispatch_name?: string | null
+  blocking_count?: number
+  request_duplicate_folios?: number[]
+  fingerprint_drifts?: unknown[]
+  active_plan_conflicts?: unknown[]
+  trucks?: {
+    truck_id: number
+    truck?: { name?: string; max_weight_kg?: number | null; active?: boolean } | null
+    truck_missing?: boolean
+    order_count?: number
+    capacity?: {
+      assigned_weight_kg?: number
+      known_weight_kg?: number
+      estimated_weight_kg?: number
+      unavailable_order_count?: number
+      truck_max_weight_kg?: number | null
+      utilization_pct?: number | null
+      overloaded?: boolean
+      capacity_known?: boolean
+      warnings?: string[]
+      blocking?: boolean
+    }
+    blocking?: boolean
+    warnings?: string[]
+    orders?: SimplePlanningPreviewItem[]
+    picking_preview?: {
+      kind?: string
+      not_final_invoiced_picking?: boolean
+      products_consolidated?: {
+        description?: string | null
+        code?: string | null
+        quantity?: number
+        oc_folios?: number[]
+      }[]
+      clients?: { folio?: number; client?: unknown; product_lines?: number }[]
+    }
+  }[]
+  assignments?: {
+    folio: number
+    truck_id: number
+    status?: string
+    blocking?: boolean
+    warnings?: string[]
+    identity_fingerprint?: string | null
+  }[]
+}
+
+async function _simplePlanningError(res: Response, fallback: string): Promise<never> {
+  const text = await res.text().catch(() => "")
+  try {
+    const j = JSON.parse(text) as { detail?: unknown }
+    const d = j.detail
+    if (typeof d === "string") throw new Error(d)
+    if (d && typeof d === "object" && "message" in (d as object)) {
+      throw new Error(String((d as { message: string }).message))
+    }
+  } catch (e) {
+    if (e instanceof Error && e.message && e.message !== text) throw e
+  }
+  throw new Error(text || fallback)
+}
+
+export async function postSimplePlanningPreview(body: {
+  company_id?: number
+  office_id?: number
+  folios: (string | number)[]
+}): Promise<{
+  wrote: boolean
+  items: SimplePlanningPreviewItem[]
+  blocking_count?: number
+  unique_folios?: number
+  counts?: Record<string, number>
+}> {
+  const res = await fetch(`${API_URL}/distribuidora/simple-planning/preview`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) await _simplePlanningError(res, "Error al previsualizar OC")
+  return res.json()
+}
+
+export async function postSimplePlanningAssignPreview(body: {
+  company_id?: number
+  office_id?: number
+  planning_date?: string | null
+  dispatch_name?: string | null
+  assignments: {
+    folio: string | number
+    truck_id: number
+    driver_name?: string | null
+    expected_fingerprint?: string | null
+  }[]
+}): Promise<SimplePlanningAssignPreview> {
+  const res = await fetch(`${API_URL}/distribuidora/simple-planning/assign-preview`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) await _simplePlanningError(res, "Error al previsualizar asignación")
+  return res.json()
+}
+
+export async function postSimplePlanningPrepareConfirm(body: {
+  company_id?: number
+  office_id?: number
+  planning_date?: string | null
+  truck_id: number
+  dispatch_name?: string | null
+  driver_name?: string | null
+  idempotency_key?: string | null
+  assignments: {
+    folio: string | number
+    truck_id: number
+    driver_name?: string | null
+    expected_fingerprint?: string | null
+  }[]
+}): Promise<{
+  status: string
+  idempotent?: boolean
+  session?: { session_id: string; plan_session_id?: string; truck_id?: number }
+  confirmed_plan_id?: number
+}> {
+  const res = await fetch(`${API_URL}/distribuidora/simple-planning/prepare-confirm`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) await _simplePlanningError(res, "Error al preparar confirmación")
+  return res.json()
+}
+
+export async function postSimplePlanningConfirm(body: {
+  session_id: string
+}): Promise<{
+  status: string
+  wrote?: boolean
+  idempotent?: boolean
+  plan_id?: number
+  planning_origin?: string
+  ors_metrics_calculated?: boolean
+  result?: { plan?: { id?: number; planning_code?: string; status?: string } }
+}> {
+  const res = await fetch(`${API_URL}/distribuidora/simple-planning/confirm`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) await _simplePlanningError(res, "Error al confirmar planificación")
   return res.json()
 }
 

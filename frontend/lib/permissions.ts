@@ -19,7 +19,24 @@ export type StaffUserLike = {
   is_owner?: boolean | null
   management_access?: boolean | null
   admin_access?: boolean | null
+  erp_capabilities?: string[] | null
   permissions?: Partial<ErpPermissions> | null
+}
+
+const SIMPLE_PLANNING_ROLES = new Set(["gerencia", "operativo", "adm", "admin"])
+
+/** Visibilidad UI: el backend sigue siendo la autoridad (has_simple_planning_access). */
+export function hasSimplePlanningAccess(
+  user: StaffUserLike | string | null | undefined,
+): boolean {
+  if (user == null) return false
+  if (typeof user === "string") {
+    return SIMPLE_PLANNING_ROLES.has(normalizedRole(user))
+  }
+  if (user.is_owner === true) return true
+  if (SIMPLE_PLANNING_ROLES.has(roleFromUser(user))) return true
+  const caps = user.erp_capabilities || []
+  return caps.map((c) => String(c).toLowerCase()).includes("simple_planning")
 }
 
 export type ErpPermissions = {

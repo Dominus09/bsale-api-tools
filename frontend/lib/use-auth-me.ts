@@ -15,6 +15,7 @@ export function staffFromAuthMe(me: AuthMeResponse): StaffUserLike {
     is_owner: me.is_owner === true,
     management_access: me.management_access,
     admin_access: me.admin_access,
+    erp_capabilities: me.erp_capabilities ?? [],
     permissions: me.permissions,
   }
 }
