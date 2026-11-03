@@ -129,6 +129,7 @@ const navSections: { title: string; items: NavItem[] }[] = [
     items: [
       { href: "/distribuidora/dashboard", label: "Dashboard comercial", icon: BarChart3 },
       { href: "/distribuidora/ordenes-compra", label: "Órdenes de compra", icon: ShoppingCart },
+      { href: "/distribuidora/auditoria-oc", label: "Auditoría OC", icon: FileWarning },
       { href: "/distribuidora/orders", label: "Pre‑despacho OC", icon: PackageCheck },
       { href: "/distribuidora/planificacion", label: "Planif. mapa ORS", icon: MapPin },
       { href: "/distribuidora/planificaciones", label: "Planificaciones", icon: History },
