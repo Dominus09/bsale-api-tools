@@ -22,7 +22,10 @@ import {
   type SimplePlanningAssignPreview,
   type SimplePlanningPreviewItem,
 } from "@/lib/api"
-import { hasSimplePlanningAccess } from "@/lib/permissions"
+import {
+  hasManagementAccess,
+  hasSimplePlanningAccess,
+} from "@/lib/permissions"
 import {
   parseFoliosFromText,
   parseFoliosFromXlsxFile,
@@ -103,6 +106,7 @@ function fmtPct(n: number | null | undefined): string {
 export function SimplePlanningClient() {
   const { meState, staff } = useAuthMe()
   const allowed = hasSimplePlanningAccess(staff)
+  const canOpenOcAudit = hasManagementAccess(staff)
 
   const [step, setStep] = useState<Step>("input")
   const [officeId, setOfficeId] = useState(1)
@@ -604,13 +608,20 @@ export function SimplePlanningClient() {
                       <td className="px-2 py-2 font-mono">
                         {folio ?? item.input ?? "—"}
                         {item.audit_oc?.suggested ? (
-                          <div>
-                            <Link
-                              className="text-xs text-primary underline"
-                              href={`/distribuidora/auditoria-oc?folio=${encodeURIComponent(String(folio ?? item.input ?? ""))}`}
-                            >
-                              Auditoría OC
-                            </Link>
+                          <div className="text-xs">
+                            {canOpenOcAudit ? (
+                              <Link
+                                className="text-primary underline"
+                                href={`/distribuidora/auditoria-oc?folio=${encodeURIComponent(String(folio ?? item.input ?? ""))}`}
+                              >
+                                Auditoría OC
+                              </Link>
+                            ) : (
+                              <span className="text-muted-foreground">
+                                OC no hallada — pedir a gerencia/adm revisar en
+                                Auditoría OC
+                              </span>
+                            )}
                           </div>
                         ) : null}
                       </td>
