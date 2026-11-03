@@ -108,6 +108,16 @@ def get_plan_header(cur, plan_id: int) -> dict[str, Any] | None:
         if caps.get("driver_user_id")
         else "NULL::integer AS driver_user_id,"
     )
+    planning_origin_sel = (
+        "dp.planning_origin,"
+        if caps.get("planning_origin")
+        else "'ors'::text AS planning_origin,"
+    )
+    ors_metrics_sel = (
+        "dp.ors_metrics_calculated,"
+        if caps.get("ors_metrics_calculated")
+        else "TRUE AS ors_metrics_calculated,"
+    )
     cur.execute(
         f"""
         SELECT
@@ -133,6 +143,8 @@ def get_plan_header(cur, plan_id: int) -> dict[str, Any] | None:
             dp.crew_cost_clp,
             {driver_name_sel}
             {driver_user_sel}
+            {planning_origin_sel}
+            {ors_metrics_sel}
             {margin_select}
             {order_sub}
         FROM distribuidora.dispatch_plan dp
