@@ -72,9 +72,82 @@ export type OcAuditMeta = {
     max_range_span: number
     max_gaps: number
     max_investigate_batch: number
+    max_tail_probe?: number
   }
   writes_enabled: boolean
   recovery_enabled: boolean
+  recovery_requires_simulation?: boolean
+  recovery_bulk_enabled?: boolean
+  compare_requires_manual_action?: boolean
+}
+
+export type OcCompareReport = {
+  status: string
+  mode: string
+  wrote: boolean
+  company_id: number
+  office_id: number
+  pg_max_folio: number | null
+  pg_min_folio?: number | null
+  bsale_max_folio: number | null
+  bsale_max_source_document_id?: number | null
+  verification_status:
+    | "equal"
+    | "bsale_ahead"
+    | "unverified"
+    | "partial"
+    | "no_local_folio"
+    | string
+  detail?: string
+  pending_investigate_count: number
+  pending_investigate_folios: number[]
+  pending_truncated?: boolean
+  ceiling_reached?: boolean
+  probes_run?: number
+  queried_at?: string
+  finished_at?: string
+  duration_seconds?: number
+  probe_findings?: OcAuditFinding[]
+  notes?: Record<string, string>
+  [key: string]: unknown
+}
+
+export type OcRecoverSimulation = {
+  status: string
+  wrote: boolean
+  dry_run: boolean
+  folio: number
+  company_id: number
+  office_id: number
+  client?: { client_id?: number | null; client_name?: string | null }
+  bsale_source_document_id?: number | null
+  bsale_document?: Record<string, unknown> | null
+  total_amount?: number | string | null
+  details_count?: number | null
+  origin?: Record<string, unknown>
+  predicted_reconciliation?: Record<string, unknown>
+  warnings?: string[]
+  simulation_token: string
+  simulation_expires_at?: string
+  simulated_at?: string
+  simulated_by?: { user_id?: number | null; email?: string | null }
+  [key: string]: unknown
+}
+
+export type OcRecoverConfirm = {
+  status: string
+  wrote: boolean
+  folio: number
+  company_id: number
+  office_id: number
+  local_document_id?: number | null
+  bsale_source_document_id?: number | null
+  reconciliation?: Record<string, unknown>
+  finding?: OcAuditFinding
+  detail?: string
+  confirmed_at?: string
+  confirmed_by?: { user_id?: number | null; email?: string | null }
+  [key: string]: unknown
 }
 
 async function parseError(res: Response): Promise<string> {
@@ -125,6 +198,49 @@ export async function postOcAuditInvestigate(body: {
   folios: number[]
 }): Promise<OcAuditReport> {
   const res = await fetch(`${API_URL}/distribuidora/oc-audit/investigate`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  return res.json()
+}
+
+export async function postOcAuditCompare(body: {
+  company_id: number
+  office_id: number
+  max_tail_probe?: number
+}): Promise<OcCompareReport> {
+  const res = await fetch(`${API_URL}/distribuidora/oc-audit/compare`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  return res.json()
+}
+
+export async function postOcRecoverSimulate(body: {
+  company_id: number
+  office_id: number
+  folio: number
+}): Promise<OcRecoverSimulation> {
+  const res = await fetch(`${API_URL}/distribuidora/oc-audit/recover/simulate`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+  return res.json()
+}
+
+export async function postOcRecoverConfirm(body: {
+  company_id: number
+  office_id: number
+  folio: number
+  simulation_token: string
+}): Promise<OcRecoverConfirm> {
+  const res = await fetch(`${API_URL}/distribuidora/oc-audit/recover/confirm`, {
     method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify(body),

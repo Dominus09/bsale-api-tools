@@ -1,21 +1,40 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { ClipboardList, Loader2, Search, ShieldAlert } from "lucide-react"
+import {
+  ClipboardList,
+  GitCompareArrows,
+  Loader2,
+  Search,
+  ShieldAlert,
+} from "lucide-react"
 
 import { getStoredCompanyId } from "@/lib/api"
 import {
   fetchOcAuditMeta,
+  postOcAuditCompare,
   postOcAuditInvestigate,
   postOcAuditLocal,
+  postOcRecoverConfirm,
+  postOcRecoverSimulate,
   type OcAuditFinding,
   type OcAuditMeta,
   type OcAuditReport,
   type OcAuditStatus,
+  type OcCompareReport,
+  type OcRecoverSimulation,
 } from "@/lib/distribuidora-oc-audit-api"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
@@ -43,6 +62,14 @@ const STATUS_LABEL: Record<string, string> = {
   verification_error: "Error verificación",
 }
 
+const COMPARE_LABEL: Record<string, string> = {
+  equal: "Alineados",
+  bsale_ahead: "Bsale adelantado",
+  unverified: "No verificado",
+  partial: "Parcial",
+  no_local_folio: "Sin folio local",
+}
+
 function statusTone(
   status: string,
 ): "success" | "warning" | "danger" | "neutral" | "info" {
@@ -66,6 +93,33 @@ function statusTone(
   }
 }
 
+function compareTone(
+  status: string,
+): "success" | "warning" | "danger" | "neutral" | "info" {
+  switch (status) {
+    case "equal":
+      return "success"
+    case "bsale_ahead":
+      return "warning"
+    case "partial":
+      return "info"
+    case "unverified":
+    case "no_local_folio":
+      return "danger"
+    default:
+      return "neutral"
+  }
+}
+
+function formatWhen(iso?: string | null): string {
+  if (!iso) return "—"
+  try {
+    return new Date(iso).toLocaleString("es-CL")
+  } catch {
+    return iso
+  }
+}
+
 export default function AuditoriaOcPage() {
   const [companyId, setCompanyId] = useState(3)
   const [officeId, setOfficeId] = useState(1)
@@ -73,11 +127,18 @@ export default function AuditoriaOcPage() {
   const [toFolio, setToFolio] = useState("")
   const [meta, setMeta] = useState<OcAuditMeta | null>(null)
   const [report, setReport] = useState<OcAuditReport | null>(null)
+  const [compare, setCompare] = useState<OcCompareReport | null>(null)
   const [selected, setSelected] = useState<Set<number>>(() => new Set())
   const [loadingMeta, setLoadingMeta] = useState(false)
   const [loadingLocal, setLoadingLocal] = useState(false)
   const [loadingInvestigate, setLoadingInvestigate] = useState(false)
+  const [loadingCompare, setLoadingCompare] = useState(false)
+  const [loadingSimulate, setLoadingSimulate] = useState(false)
+  const [loadingConfirm, setLoadingConfirm] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [simulation, setSimulation] = useState<OcRecoverSimulation | null>(null)
+  const [recoverOpen, setRecoverOpen] = useState(false)
+  const [recoverResult, setRecoverResult] = useState<string | null>(null)
 
   useEffect(() => {
     const stored = getStoredCompanyId()
@@ -132,6 +193,34 @@ export default function AuditoriaOcPage() {
     }
   }
 
+  const runCompare = async () => {
+    setLoadingCompare(true)
+    setError(null)
+    try {
+      const data = await postOcAuditCompare({
+        company_id: companyId,
+        office_id: officeId,
+      })
+      setCompare(data)
+      if (
+        data.pending_investigate_folios?.length &&
+        data.verification_status !== "unverified"
+      ) {
+        setSelected(
+          new Set(data.pending_investigate_folios.slice(0, 25)),
+        )
+      }
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "Error al comparar con Bsale (no se inventa un máximo)",
+      )
+    } finally {
+      setLoadingCompare(false)
+    }
+  }
+
   const pendingGaps = useMemo(
     () =>
       (report?.findings || []).filter(
@@ -151,6 +240,47 @@ export default function AuditoriaOcPage() {
 
   const selectPending = () => {
     setSelected(new Set(pendingGaps.map((f) => f.folio).slice(0, 25)))
+  }
+
+  const mergeFindings = (incoming: OcAuditFinding[]) => {
+    setReport((prev) => {
+      if (!prev) {
+        const counts: Record<string, number> = {}
+        let recoverable = 0
+        for (const f of incoming) {
+          counts[f.status] = (counts[f.status] || 0) + 1
+          if (f.recoverable) recoverable += 1
+        }
+        return {
+          status: "completed",
+          mode: "merged",
+          wrote: false,
+          company_id: companyId,
+          office_id: officeId,
+          findings: [...incoming].sort((a, b) => a.folio - b.folio),
+          counts,
+          recoverable_count: recoverable,
+        }
+      }
+      const byFolio = new Map(incoming.map((f) => [f.folio, f]))
+      const merged = prev.findings.map((f) => byFolio.get(f.folio) || f)
+      for (const f of incoming) {
+        if (!merged.some((x) => x.folio === f.folio)) merged.push(f)
+      }
+      const counts: Record<string, number> = {}
+      let recoverable = 0
+      for (const f of merged) {
+        counts[f.status] = (counts[f.status] || 0) + 1
+        if (f.recoverable) recoverable += 1
+      }
+      return {
+        ...prev,
+        findings: merged.sort((a, b) => a.folio - b.folio),
+        counts,
+        recoverable_count: recoverable,
+        wrote: false,
+      }
+    })
   }
 
   const runInvestigate = async () => {
@@ -200,6 +330,71 @@ export default function AuditoriaOcPage() {
     }
   }
 
+  const openSimulate = async (folio: number) => {
+    setLoadingSimulate(true)
+    setError(null)
+    setRecoverResult(null)
+    try {
+      const data = await postOcRecoverSimulate({
+        company_id: companyId,
+        office_id: officeId,
+        folio,
+      })
+      setSimulation(data)
+      setRecoverOpen(true)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo simular la recuperación")
+    } finally {
+      setLoadingSimulate(false)
+    }
+  }
+
+  const confirmRecover = async () => {
+    if (!simulation?.simulation_token) return
+    setLoadingConfirm(true)
+    setError(null)
+    setRecoverResult(null)
+    try {
+      const data = await postOcRecoverConfirm({
+        company_id: companyId,
+        office_id: officeId,
+        folio: simulation.folio,
+        simulation_token: simulation.simulation_token,
+      })
+      setRecoverResult(
+        data.wrote
+          ? `OC #${data.folio} recuperada (doc local ${data.local_document_id ?? "—"}).`
+          : data.detail ||
+              `Resultado: ${data.status} (sin escritura duplicada).`,
+      )
+      if (data.finding) {
+        mergeFindings([data.finding])
+      } else if (data.wrote || data.status === "already_present") {
+        mergeFindings([
+          {
+            folio: data.folio,
+            status: "ok",
+            local_document_id: data.local_document_id,
+            bsale_source_document_id: data.bsale_source_document_id,
+            recoverable: false,
+            detail: data.detail || data.status,
+          },
+        ])
+      }
+      void loadMeta()
+    } catch (e) {
+      setError(
+        e instanceof Error
+          ? e.message
+          : "No se pudo confirmar la recuperación",
+      )
+      setRecoverOpen(false)
+      setSimulation(null)
+    } finally {
+      setLoadingConfirm(false)
+    }
+  }
+
   const summaryCards = [
     { label: "Analizados", value: report?.findings?.length ?? 0 },
     { label: "Saltos", value: report?.counts?.gap_pending ?? 0 },
@@ -220,9 +415,9 @@ export default function AuditoriaOcPage() {
             Auditoría OC
           </h1>
           <p className="mt-1 max-w-2xl text-sm text-lq-muted">
-            Detección de correlativos faltantes (tipo 33). El escaneo inicial es
-            local; la consulta a Bsale es manual y acotada. Esta fase no recupera
-            documentos.
+            Detección de correlativos faltantes (tipo 33). El escaneo local no
+            llama a Bsale. La comparación remota y la recuperación son acciones
+            manuales: simular primero, confirmar después (una OC por vez).
           </p>
         </div>
       </div>
@@ -300,6 +495,19 @@ export default function AuditoriaOcPage() {
             {loadingLocal ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
             Auditar local
           </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => void runCompare()}
+            disabled={loadingCompare}
+          >
+            {loadingCompare ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <GitCompareArrows className="h-4 w-4" />
+            )}
+            Comparar con Bsale
+          </Button>
         </div>
 
         {meta?.suggested_range?.tail_guidance ? (
@@ -310,10 +518,64 @@ export default function AuditoriaOcPage() {
             Máximo local PG: #{meta.bounds.max_folio}
             {meta.bounds.min_folio != null ? ` · Mínimo: #${meta.bounds.min_folio}` : ""}
             {" · "}
-            Tipo documental 33 · Escritura deshabilitada
+            Tipo documental 33 · Recuperación manual con simulación previa
           </p>
         ) : null}
       </section>
+
+      {compare ? (
+        <section className="space-y-3 rounded-xl border border-lq-line bg-lq-surface p-4 md:p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-lq-faint">
+              Comparación Bsale / PostgreSQL
+            </h2>
+            <StatusBadge tone={compareTone(compare.verification_status)}>
+              {COMPARE_LABEL[compare.verification_status] ||
+                compare.verification_status}
+            </StatusBadge>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-lg border border-lq-line/80 px-3 py-2">
+              <div className="text-xs text-lq-faint">Último folio PG</div>
+              <div className="text-xl font-semibold text-lq-ink">
+                {compare.pg_max_folio != null ? `#${compare.pg_max_folio}` : "—"}
+              </div>
+            </div>
+            <div className="rounded-lg border border-lq-line/80 px-3 py-2">
+              <div className="text-xs text-lq-faint">Último folio Bsale</div>
+              <div className="text-xl font-semibold text-lq-ink">
+                {compare.bsale_max_folio != null
+                  ? `#${compare.bsale_max_folio}`
+                  : "No verificado"}
+              </div>
+            </div>
+            <div className="rounded-lg border border-lq-line/80 px-3 py-2">
+              <div className="text-xs text-lq-faint">Por investigar</div>
+              <div className="text-xl font-semibold text-lq-ink">
+                {compare.pending_investigate_count}
+              </div>
+            </div>
+            <div className="rounded-lg border border-lq-line/80 px-3 py-2">
+              <div className="text-xs text-lq-faint">Última consulta remota</div>
+              <div className="text-sm font-medium text-lq-ink">
+                {formatWhen(compare.queried_at || compare.finished_at)}
+              </div>
+            </div>
+          </div>
+          {compare.detail ? (
+            <p className="text-sm text-lq-muted">{compare.detail}</p>
+          ) : null}
+          {compare.ceiling_reached ? (
+            <Alert>
+              <AlertTitle>Techo de sonda alcanzado</AlertTitle>
+              <AlertDescription>
+                El tip Bsale puede ser mayor al verificado. No se inventa un
+                máximo; vuelva a comparar más adelante o investigue el tramo.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+        </section>
+      ) : null}
 
       {report ? (
         <>
@@ -381,6 +643,7 @@ export default function AuditoriaOcPage() {
                     <th className="px-2 py-2">source_id</th>
                     <th className="px-2 py-2">Bsale id</th>
                     <th className="px-2 py-2">Detalle</th>
+                    <th className="px-2 py-2">Acción</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -418,6 +681,24 @@ export default function AuditoriaOcPage() {
                       <td className="max-w-xs px-2 py-2 text-xs text-lq-muted">
                         {f.error || f.detail || f.emission_date || "—"}
                       </td>
+                      <td className="px-2 py-2">
+                        {f.recoverable ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={loadingSimulate}
+                            onClick={() => void openSimulate(f.folio)}
+                          >
+                            {loadingSimulate ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : null}
+                            Simular recuperación
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-lq-faint">—</span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -426,6 +707,129 @@ export default function AuditoriaOcPage() {
           </section>
         </>
       ) : null}
+
+      <Dialog
+        open={recoverOpen}
+        onOpenChange={(open) => {
+          setRecoverOpen(open)
+          if (!open) {
+            setSimulation(null)
+            setRecoverResult(null)
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>
+              {recoverResult
+                ? "Resultado de recuperación"
+                : `Simulación OC #${simulation?.folio ?? ""}`}
+            </DialogTitle>
+            <DialogDescription>
+              {recoverResult
+                ? "La operación terminó. El listado se actualiza con el nuevo estado."
+                : "Revise el detalle. Confirmar revalida en Bsale y escribe una sola OC."}
+            </DialogDescription>
+          </DialogHeader>
+
+          {recoverResult ? (
+            <p className="text-sm text-lq-body">{recoverResult}</p>
+          ) : simulation ? (
+            <div className="space-y-2 text-sm text-lq-body">
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <div className="text-xs text-lq-faint">Empresa / oficina</div>
+                  <div>
+                    {simulation.company_id} / {simulation.office_id}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-lq-faint">Documento Bsale</div>
+                  <div>{simulation.bsale_source_document_id ?? "—"}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-lq-faint">Cliente</div>
+                  <div>
+                    {simulation.client?.client_name ||
+                      (simulation.client?.client_id != null
+                        ? `#${simulation.client.client_id}`
+                        : "—")}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs text-lq-faint">Total</div>
+                  <div>{simulation.total_amount ?? "—"}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-lq-faint">Líneas</div>
+                  <div>{simulation.details_count ?? "—"}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-lq-faint">Resultado previsto</div>
+                  <div>
+                    {String(
+                      simulation.predicted_reconciliation?.status ?? "—",
+                    )}
+                  </div>
+                </div>
+              </div>
+              {simulation.warnings && simulation.warnings.length > 0 ? (
+                <Alert>
+                  <AlertTitle>Advertencias</AlertTitle>
+                  <AlertDescription>
+                    <ul className="list-disc pl-4">
+                      {simulation.warnings.map((w) => (
+                        <li key={w}>{w}</li>
+                      ))}
+                    </ul>
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+              <p className="text-xs text-lq-faint">
+                Expira: {formatWhen(simulation.simulation_expires_at)}
+              </p>
+            </div>
+          ) : null}
+
+          <DialogFooter>
+            {recoverResult ? (
+              <Button
+                type="button"
+                onClick={() => {
+                  setRecoverOpen(false)
+                  setSimulation(null)
+                  setRecoverResult(null)
+                }}
+              >
+                Cerrar
+              </Button>
+            ) : (
+              <>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    setRecoverOpen(false)
+                    setSimulation(null)
+                  }}
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  type="button"
+                  onClick={() => void confirmRecover()}
+                  disabled={loadingConfirm || !simulation?.simulation_token}
+                >
+                  {loadingConfirm ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : null}
+                  Confirmar recuperación
+                </Button>
+              </>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
