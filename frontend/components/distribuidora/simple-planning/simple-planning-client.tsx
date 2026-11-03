@@ -1,0 +1,900 @@
+"use client"
+
+import Link from "next/link"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  AlertTriangle,
+  CheckCircle2,
+  FileSpreadsheet,
+  Loader2,
+  Truck,
+  Upload,
+} from "lucide-react"
+
+import {
+  getDistribuidoraTrucks,
+  getStoredCompanyId,
+  postSimplePlanningAssignPreview,
+  postSimplePlanningConfirm,
+  postSimplePlanningPrepareConfirm,
+  postSimplePlanningPreview,
+  type DistribuidoraTruck,
+  type SimplePlanningAssignPreview,
+  type SimplePlanningPreviewItem,
+} from "@/lib/api"
+import { hasSimplePlanningAccess } from "@/lib/permissions"
+import {
+  parseFoliosFromText,
+  parseFoliosFromXlsxFile,
+  uniqueClientCount,
+  type FolioParseResult,
+} from "@/lib/simple-planning-folios"
+import { useAuthMe } from "@/lib/use-auth-me"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { Textarea } from "@/components/ui/textarea"
+import { cn } from "@/lib/utils"
+
+const OFFICE_OPTIONS = [
+  { id: 1, label: "Oficina 1" },
+  { id: 2, label: "Oficina 2" },
+  { id: 3, label: "Oficina 3" },
+]
+
+const STATUS_LABEL: Record<string, string> = {
+  found_available: "Disponible",
+  not_found: "No encontrada",
+  cancelled_or_replaced: "Anulada/reemplazada",
+  already_planned: "Ya planificada",
+  pending_invoice: "Facturación pendiente",
+  partial_invoice: "Facturación parcial",
+  insufficient_weight: "Peso insuficiente",
+  duplicate_in_list: "Duplicada",
+  invalid_folio: "Folio inválido",
+}
+
+type Step = "input" | "preview" | "assign" | "confirm" | "done"
+
+type TruckConfirmState = {
+  status: "idle" | "preparing" | "confirming" | "ok" | "error"
+  message?: string
+  planId?: number
+  planningCode?: string
+  sessionId?: string
+}
+
+function tomorrowISO(): string {
+  const d = new Date()
+  d.setDate(d.getDate() + 1)
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, "0")
+  const day = String(d.getDate()).padStart(2, "0")
+  return `${y}-${m}-${day}`
+}
+
+function fmtKg(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return "—"
+  return `${Number(n).toLocaleString("es-CL", { maximumFractionDigits: 1 })} kg`
+}
+
+function fmtPct(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(n)) return "—"
+  return `${Number(n).toLocaleString("es-CL", { maximumFractionDigits: 1 })}%`
+}
+
+export function SimplePlanningClient() {
+  const { meState, staff } = useAuthMe()
+  const allowed = hasSimplePlanningAccess(staff)
+
+  const [step, setStep] = useState<Step>("input")
+  const [officeId, setOfficeId] = useState(1)
+  const [pasteText, setPasteText] = useState("")
+  const [parseInfo, setParseInfo] = useState<FolioParseResult | null>(null)
+  const [fileName, setFileName] = useState<string | null>(null)
+  const [parseBusy, setParseBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const [previewItems, setPreviewItems] = useState<SimplePlanningPreviewItem[]>([])
+  const [previewBusy, setPreviewBusy] = useState(false)
+
+  const [trucks, setTrucks] = useState<DistribuidoraTruck[]>([])
+  const [selectedTruckIds, setSelectedTruckIds] = useState<number[]>([])
+  const [assignmentByFolio, setAssignmentByFolio] = useState<Record<string, number>>({})
+  const [planningDate, setPlanningDate] = useState(tomorrowISO)
+  const [dispatchName, setDispatchName] = useState("")
+  const [assignPreview, setAssignPreview] = useState<SimplePlanningAssignPreview | null>(null)
+  const [assignBusy, setAssignBusy] = useState(false)
+
+  const [confirmOpen, setConfirmOpen] = useState(false)
+  const [confirmTruckId, setConfirmTruckId] = useState<number | null>(null)
+  const [confirmAck, setConfirmAck] = useState(false)
+  const [truckConfirm, setTruckConfirm] = useState<Record<number, TruckConfirmState>>({})
+  const confirmingRef = useRef(false)
+
+  const companyId = getStoredCompanyId() ?? 1
+
+  useEffect(() => {
+    let cancelled = false
+    getDistribuidoraTrucks()
+      .then((r) => {
+        if (!cancelled) setTrucks(r.items || [])
+      })
+      .catch(() => {
+        if (!cancelled) setTrucks([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const assignableItems = useMemo(
+    () =>
+      previewItems.filter(
+        (i) =>
+          i.folio != null &&
+          !i.blocking &&
+          i.status !== "not_found" &&
+          i.status !== "invalid_folio" &&
+          i.status !== "duplicate_in_list" &&
+          i.status !== "cancelled_or_replaced",
+      ),
+    [previewItems],
+  )
+
+  const applyParse = useCallback((result: FolioParseResult, sourceLabel?: string) => {
+    setParseInfo(result)
+    setFileName(sourceLabel ?? null)
+    setError(null)
+    setPreviewItems([])
+    setAssignPreview(null)
+    setAssignmentByFolio({})
+    setStep("input")
+  }, [])
+
+  const onPasteChange = (text: string) => {
+    setPasteText(text)
+    applyParse(parseFoliosFromText(text))
+  }
+
+  const onFile = async (file: File | null) => {
+    if (!file) return
+    setParseBusy(true)
+    setError(null)
+    try {
+      const result = await parseFoliosFromXlsxFile(file)
+      applyParse(result, file.name)
+      if (result.folios.length) {
+        setPasteText(result.folios.join("\n"))
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo leer el Excel")
+    } finally {
+      setParseBusy(false)
+    }
+  }
+
+  const runPreview = async () => {
+    if (!parseInfo?.folios.length) {
+      setError("Ingresa al menos un número de OC válido")
+      return
+    }
+    setPreviewBusy(true)
+    setError(null)
+    try {
+      const report = await postSimplePlanningPreview({
+        company_id: companyId,
+        office_id: officeId,
+        folios: parseInfo.folios,
+      })
+      setPreviewItems(report.items || [])
+      setStep("preview")
+      setAssignPreview(null)
+      setAssignmentByFolio({})
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error al consultar OC")
+    } finally {
+      setPreviewBusy(false)
+    }
+  }
+
+  const toggleTruck = (id: number) => {
+    setSelectedTruckIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    )
+  }
+
+  const setOcTruck = (folio: number, truckId: number | null) => {
+    setAssignmentByFolio((prev) => {
+      const next = { ...prev }
+      const key = String(folio)
+      if (truckId == null) delete next[key]
+      else next[key] = truckId
+      return next
+    })
+  }
+
+  const buildAssignments = () => {
+    const rows: {
+      folio: number
+      truck_id: number
+      expected_fingerprint?: string | null
+    }[] = []
+    const seen = new Set<number>()
+    for (const item of assignableItems) {
+      const folio = Number(item.folio)
+      if (!Number.isFinite(folio) || seen.has(folio)) continue
+      const truckId = assignmentByFolio[String(folio)]
+      if (!truckId) continue
+      seen.add(folio)
+      rows.push({
+        folio,
+        truck_id: truckId,
+        expected_fingerprint: item.identity_fingerprint ?? null,
+      })
+    }
+    return rows
+  }
+
+  const runAssignPreview = async () => {
+    const assignments = buildAssignments()
+    if (!assignments.length) {
+      setError("Asigna al menos una OC a un camión")
+      return
+    }
+    if (selectedTruckIds.length < 1) {
+      setError("Selecciona al menos un camión del catálogo")
+      return
+    }
+    setAssignBusy(true)
+    setError(null)
+    try {
+      const report = await postSimplePlanningAssignPreview({
+        company_id: companyId,
+        office_id: officeId,
+        planning_date: planningDate || null,
+        dispatch_name: dispatchName.trim() || null,
+        assignments,
+      })
+      setAssignPreview(report)
+      setStep("assign")
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error en assign-preview")
+    } finally {
+      setAssignBusy(false)
+    }
+  }
+
+  const openConfirm = (truckId: number) => {
+    setConfirmTruckId(truckId)
+    setConfirmAck(false)
+    setConfirmOpen(true)
+  }
+
+  const runConfirmTruck = async () => {
+    if (!confirmTruckId || !confirmAck || confirmingRef.current) return
+    confirmingRef.current = true
+    const truckId = confirmTruckId
+    setTruckConfirm((prev) => ({
+      ...prev,
+      [truckId]: { status: "preparing", message: "Preparando sesión…" },
+    }))
+    setError(null)
+    try {
+      const all = buildAssignments().filter((a) => a.truck_id === truckId)
+      if (!all.length) throw new Error("Sin OC asignadas a este camión")
+      const idempotencyKey =
+        typeof crypto !== "undefined" && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `sp-${truckId}-${Date.now()}`
+      const prepared = await postSimplePlanningPrepareConfirm({
+        company_id: companyId,
+        office_id: officeId,
+        planning_date: planningDate || null,
+        truck_id: truckId,
+        dispatch_name: dispatchName.trim() || null,
+        driver_name: null,
+        idempotency_key: idempotencyKey,
+        assignments: all,
+      })
+      if (prepared.status === "already_confirmed" && prepared.confirmed_plan_id) {
+        setTruckConfirm((prev) => ({
+          ...prev,
+          [truckId]: {
+            status: "ok",
+            planId: prepared.confirmed_plan_id,
+            message: "Ya confirmado (idempotente)",
+            sessionId: prepared.session?.session_id,
+          },
+        }))
+        setConfirmOpen(false)
+        setStep("done")
+        return
+      }
+      const sessionId = prepared.session?.session_id
+      if (!sessionId) throw new Error("Sesión de confirmación no recibida")
+      setTruckConfirm((prev) => ({
+        ...prev,
+        [truckId]: {
+          status: "confirming",
+          message: "Confirmando despacho…",
+          sessionId,
+        },
+      }))
+      const confirmed = await postSimplePlanningConfirm({ session_id: sessionId })
+      const planId =
+        confirmed.plan_id ??
+        confirmed.result?.plan?.id ??
+        undefined
+      const code = confirmed.result?.plan?.planning_code
+      setTruckConfirm((prev) => ({
+        ...prev,
+        [truckId]: {
+          status: "ok",
+          planId,
+          planningCode: code,
+          message: confirmed.idempotent
+            ? "Confirmado (reintento seguro)"
+            : "Despacho confirmado",
+          sessionId,
+        },
+      }))
+      setConfirmOpen(false)
+      setStep("done")
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Error al confirmar"
+      setTruckConfirm((prev) => ({
+        ...prev,
+        [truckId]: { status: "error", message: msg },
+      }))
+      setError(msg)
+    } finally {
+      confirmingRef.current = false
+    }
+  }
+
+  if (meState === "loading") {
+    return (
+      <div className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" /> Cargando permisos…
+      </div>
+    )
+  }
+
+  if (!allowed) {
+    return (
+      <Alert variant="destructive" className="m-6 max-w-xl">
+        <AlertTitle>Sin acceso</AlertTitle>
+        <AlertDescription>
+          Se requiere rol gerencia/operativo/adm o la capability{" "}
+          <code>simple_planning</code>. El backend valida cada acción.
+        </AlertDescription>
+      </Alert>
+    )
+  }
+
+  const confirmTruckBlock = assignPreview?.trucks?.find((t) => t.truck_id === confirmTruckId)
+  const confirmState = confirmTruckId != null ? truckConfirm[confirmTruckId] : undefined
+  const confirmBusy =
+    confirmState?.status === "preparing" || confirmState?.status === "confirming"
+
+  return (
+    <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 p-4 md:p-6">
+      <header className="space-y-1">
+        <h1 className="text-2xl font-semibold tracking-tight">Planificación simplificada</h1>
+        <p className="text-sm text-muted-foreground">
+          Ingreso por lista de OC o Excel → preview → asignación a camiones → confirmación
+          por vehículo. Sin optimizador ORS. El chofer se asigna después desde el detalle del
+          despacho.
+        </p>
+        <div className="flex flex-wrap gap-2 pt-2 text-xs text-muted-foreground">
+          <span
+            className={cn(
+              "rounded px-2 py-0.5",
+              step === "input" ? "bg-primary/10 text-primary" : "bg-muted",
+            )}
+          >
+            1. OC
+          </span>
+          <span
+            className={cn(
+              "rounded px-2 py-0.5",
+              step === "preview" ? "bg-primary/10 text-primary" : "bg-muted",
+            )}
+          >
+            2. Preview
+          </span>
+          <span
+            className={cn(
+              "rounded px-2 py-0.5",
+              step === "assign" ? "bg-primary/10 text-primary" : "bg-muted",
+            )}
+          >
+            3. Camiones
+          </span>
+          <span
+            className={cn(
+              "rounded px-2 py-0.5",
+              step === "done" || step === "confirm" ? "bg-primary/10 text-primary" : "bg-muted",
+            )}
+          >
+            4. Confirmar
+          </span>
+        </div>
+      </header>
+
+      {error ? (
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>Error</AlertTitle>
+          <AlertDescription className="whitespace-pre-wrap">{error}</AlertDescription>
+        </Alert>
+      ) : null}
+
+      <section className="grid gap-4 rounded-lg border bg-card p-4 md:grid-cols-3">
+        <div className="space-y-2">
+          <Label>Oficina</Label>
+          <Select value={String(officeId)} onValueChange={(v) => setOfficeId(Number(v))}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {OFFICE_OPTIONS.map((o) => (
+                <SelectItem key={o.id} value={String(o.id)}>
+                  {o.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
+          <Label>Fecha de planificación</Label>
+          <Input
+            type="date"
+            value={planningDate}
+            onChange={(e) => setPlanningDate(e.target.value)}
+          />
+        </div>
+        <div className="space-y-2">
+          <Label>Nombre despacho (opcional)</Label>
+          <Input
+            value={dispatchName}
+            onChange={(e) => setDispatchName(e.target.value)}
+            placeholder="Ej. Ruta norte Excel"
+            maxLength={128}
+          />
+        </div>
+      </section>
+
+      <section className="grid gap-4 md:grid-cols-2">
+        <div className="space-y-2 rounded-lg border p-4">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <FileSpreadsheet className="h-4 w-4" /> Pegar números de OC
+          </div>
+          <p className="text-xs text-muted-foreground">Una OC por fila (como en Excel).</p>
+          <Textarea
+            value={pasteText}
+            onChange={(e) => onPasteChange(e.target.value)}
+            rows={10}
+            placeholder={"70625\n70626\n70630"}
+            className="font-mono text-sm"
+          />
+        </div>
+        <div className="space-y-2 rounded-lg border p-4">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <Upload className="h-4 w-4" /> Importar .xlsx
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Solo lectura local: no se sube el archivo. Columna OC/folio o primera columna.
+            Máx. 2 MB / 200 filas útiles.
+          </p>
+          <Input
+            type="file"
+            accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            disabled={parseBusy}
+            onChange={(e) => void onFile(e.target.files?.[0] ?? null)}
+          />
+          {fileName ? (
+            <p className="text-xs text-muted-foreground">Archivo: {fileName}</p>
+          ) : null}
+          {parseBusy ? (
+            <p className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" /> Leyendo…
+            </p>
+          ) : null}
+        </div>
+      </section>
+
+      {parseInfo ? (
+        <div className="rounded-lg border bg-muted/30 px-4 py-3 text-sm">
+          <span className="font-medium">{parseInfo.folios.length}</span> OC únicas listas
+          {parseInfo.skippedEmpty ? (
+            <span className="text-muted-foreground">
+              {" "}
+              · {parseInfo.skippedEmpty} filas vacías omitidas
+            </span>
+          ) : null}
+          {parseInfo.issues.length ? (
+            <ul className="mt-2 max-h-28 list-disc overflow-auto pl-5 text-xs text-amber-800 dark:text-amber-200">
+              {parseInfo.issues.slice(0, 12).map((iss, i) => (
+                <li key={`${iss.kind}-${i}`}>{iss.message}</li>
+              ))}
+              {parseInfo.issues.length > 12 ? (
+                <li>… y {parseInfo.issues.length - 12} más</li>
+              ) : null}
+            </ul>
+          ) : null}
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button onClick={() => void runPreview()} disabled={previewBusy || !parseInfo.folios.length}>
+              {previewBusy ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Consultando…
+                </>
+              ) : (
+                "Consultar OC (preview)"
+              )}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {previewItems.length > 0 ? (
+        <section className="space-y-3">
+          <h2 className="text-lg font-medium">Resultado preview</h2>
+          <div className="overflow-x-auto rounded-lg border">
+            <table className="w-full min-w-[1100px] text-left text-sm">
+              <thead className="border-b bg-muted/50 text-xs uppercase text-muted-foreground">
+                <tr>
+                  <th className="px-2 py-2">OC</th>
+                  <th className="px-2 py-2">Cliente</th>
+                  <th className="px-2 py-2">Comuna / dirección</th>
+                  <th className="px-2 py-2">Productos</th>
+                  <th className="px-2 py-2">Peso / cobertura</th>
+                  <th className="px-2 py-2">Docs</th>
+                  <th className="px-2 py-2">Facturación</th>
+                  <th className="px-2 py-2">Planificación</th>
+                  <th className="px-2 py-2">Camión</th>
+                  <th className="px-2 py-2">Avisos</th>
+                </tr>
+              </thead>
+              <tbody>
+                {previewItems.map((item, idx) => {
+                  const folio = item.folio
+                  const canAssign =
+                    folio != null &&
+                    !item.blocking &&
+                    item.status !== "not_found" &&
+                    item.status !== "duplicate_in_list"
+                  const products = (item.products || [])
+                    .slice(0, 4)
+                    .map(
+                      (p) =>
+                        `${p.quantity ?? "?"}× ${p.description || p.code || "producto"}`,
+                    )
+                    .join("; ")
+                  const more =
+                    (item.products || []).length > 4
+                      ? ` (+${(item.products || []).length - 4})`
+                      : ""
+                  return (
+                    <tr
+                      key={`${item.folio ?? item.input}-${idx}`}
+                      className={cn(
+                        "border-b align-top",
+                        item.blocking && "bg-destructive/5",
+                      )}
+                    >
+                      <td className="px-2 py-2 font-mono">
+                        {folio ?? item.input ?? "—"}
+                        {item.audit_oc?.suggested ? (
+                          <div>
+                            <Link
+                              className="text-xs text-primary underline"
+                              href={`/distribuidora/auditoria-oc?folio=${encodeURIComponent(String(folio ?? item.input ?? ""))}`}
+                            >
+                              Auditoría OC
+                            </Link>
+                          </div>
+                        ) : null}
+                      </td>
+                      <td className="px-2 py-2">{item.client?.client_name || "—"}</td>
+                      <td className="px-2 py-2">
+                        <div>{item.client?.municipality || "—"}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {item.client?.address || ""}
+                        </div>
+                      </td>
+                      <td className="max-w-[220px] px-2 py-2 text-xs">
+                        {products || "—"}
+                        {more}
+                      </td>
+                      <td className="px-2 py-2 text-xs">
+                        <div>{fmtKg(item.weight?.peso_total_kg)}</div>
+                        <div className="text-muted-foreground">
+                          {fmtPct(item.weight?.coverage_percent)} ·{" "}
+                          {item.weight?.quality || "—"}
+                        </div>
+                      </td>
+                      <td className="px-2 py-2 text-xs">
+                        {item.invoice_count != null
+                          ? item.invoice_count
+                          : Array.isArray(item.invoices)
+                            ? item.invoices.length
+                            : "—"}
+                      </td>
+                      <td className="px-2 py-2 text-xs">
+                        {item.billing_label || item.billing_status || "—"}
+                      </td>
+                      <td className="px-2 py-2 text-xs">
+                        {STATUS_LABEL[item.status] || item.status}
+                      </td>
+                      <td className="px-2 py-2">
+                        {canAssign ? (
+                          <Select
+                            value={
+                              assignmentByFolio[String(folio)] != null
+                                ? String(assignmentByFolio[String(folio)])
+                                : "__none__"
+                            }
+                            onValueChange={(v) =>
+                              setOcTruck(Number(folio), v === "__none__" ? null : Number(v))
+                            }
+                          >
+                            <SelectTrigger className="h-8 w-[140px]">
+                              <SelectValue placeholder="—" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__none__">Sin asignar</SelectItem>
+                              {selectedTruckIds.map((tid) => {
+                                const t = trucks.find((x) => x.id === tid)
+                                return (
+                                  <SelectItem key={tid} value={String(tid)}>
+                                    {t?.name || `Camión ${tid}`}
+                                  </SelectItem>
+                                )
+                              })}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </td>
+                      <td className="px-2 py-2 text-xs text-amber-800 dark:text-amber-200">
+                        {(item.warnings || []).join(", ") ||
+                          (item.blocking ? "bloqueante" : "")}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="space-y-3 rounded-lg border p-4">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <Truck className="h-4 w-4" /> Camiones del catálogo
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Selecciona vehículos reales; luego asigna OC en la tabla. Una OC no puede ir a
+              dos camiones en la misma operación.
+            </p>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {trucks.map((t) => {
+                const checked = selectedTruckIds.includes(t.id)
+                return (
+                  <label
+                    key={t.id}
+                    className={cn(
+                      "flex cursor-pointer items-start gap-2 rounded border px-3 py-2 text-sm",
+                      checked && "border-primary bg-primary/5",
+                    )}
+                  >
+                    <Checkbox
+                      checked={checked}
+                      onCheckedChange={() => toggleTruck(t.id)}
+                    />
+                    <span>
+                      <span className="font-medium">{t.name}</span>
+                      <span className="block text-xs text-muted-foreground">
+                        Cap. {fmtKg(t.max_weight_kg)}
+                        {t.plate ? ` · ${t.plate}` : ""}
+                      </span>
+                    </span>
+                  </label>
+                )
+              })}
+            </div>
+            <Button
+              onClick={() => void runAssignPreview()}
+              disabled={assignBusy || selectedTruckIds.length === 0}
+            >
+              {assignBusy ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Calculando asignación…
+                </>
+              ) : (
+                "Previsualizar asignación (assign-preview)"
+              )}
+            </Button>
+          </div>
+        </section>
+      ) : null}
+
+      {assignPreview?.trucks?.length ? (
+        <section className="space-y-3">
+          <h2 className="text-lg font-medium">Resumen por camión</h2>
+          {(assignPreview.request_duplicate_folios || []).length ? (
+            <Alert variant="destructive">
+              <AlertTitle>OC duplicadas en la solicitud</AlertTitle>
+              <AlertDescription>
+                {(assignPreview.request_duplicate_folios || []).join(", ")}
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          <div className="grid gap-4 lg:grid-cols-2">
+            {assignPreview.trucks.map((tr) => {
+              const cap = tr.capacity
+              const clients = uniqueClientCount(tr.orders || [])
+              const st = truckConfirm[tr.truck_id]
+              const blocked =
+                Boolean(tr.blocking) || Boolean(cap?.blocking) || Boolean(tr.truck_missing)
+              return (
+                <div
+                  key={tr.truck_id}
+                  className={cn(
+                    "space-y-2 rounded-lg border p-4",
+                    blocked && "border-destructive/40",
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <div className="font-medium">
+                        {tr.truck?.name || `Camión ${tr.truck_id}`}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {tr.order_count ?? 0} OC · {clients} clientes
+                      </div>
+                    </div>
+                    {st?.status === "ok" ? (
+                      <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+                    ) : null}
+                  </div>
+                  <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                    <dt className="text-muted-foreground">Peso conocido</dt>
+                    <dd>{fmtKg(cap?.known_weight_kg)}</dd>
+                    <dt className="text-muted-foreground">Peso estimado</dt>
+                    <dd>{fmtKg(cap?.estimated_weight_kg)}</dd>
+                    <dt className="text-muted-foreground">Capacidad máx.</dt>
+                    <dd>{fmtKg(cap?.truck_max_weight_kg)}</dd>
+                    <dt className="text-muted-foreground">Utilización</dt>
+                    <dd>{fmtPct(cap?.utilization_pct)}</dd>
+                  </dl>
+                  {(tr.warnings || []).length || (cap?.warnings || []).length ? (
+                    <p className="text-xs text-amber-800 dark:text-amber-200">
+                      {[...(tr.warnings || []), ...(cap?.warnings || [])].join(" · ")}
+                    </p>
+                  ) : null}
+                  {tr.picking_preview?.products_consolidated?.length ? (
+                    <details className="text-xs">
+                      <summary className="cursor-pointer font-medium">
+                        Picking preliminar (desde OC, no definitivo)
+                      </summary>
+                      <ul className="mt-1 max-h-32 list-disc overflow-auto pl-4">
+                        {tr.picking_preview.products_consolidated.slice(0, 40).map((p, i) => (
+                          <li key={i}>
+                            {p.quantity}× {p.description || p.code || "ítem"}
+                          </li>
+                        ))}
+                      </ul>
+                      <p className="mt-1 text-muted-foreground">
+                        El picking definitivo depende de boletas/facturas tras confirmar.
+                      </p>
+                    </details>
+                  ) : null}
+                  {st?.status === "ok" && st.planId ? (
+                    <Button asChild variant="secondary" size="sm">
+                      <Link href={`/distribuidora/planificaciones/${st.planId}`}>
+                        Abrir despacho
+                        {st.planningCode ? ` ${st.planningCode}` : ""}
+                      </Link>
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      disabled={blocked || st?.status === "preparing" || st?.status === "confirming"}
+                      onClick={() => openConfirm(tr.truck_id)}
+                    >
+                      Preparar confirmación
+                    </Button>
+                  )}
+                  {st?.status === "error" ? (
+                    <p className="text-xs text-destructive">{st.message}</p>
+                  ) : null}
+                </div>
+              )
+            })}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Tras confirmar: revisa facturación y picking en el detalle del plan. Asigna chofer
+            ahí (módulo 3B.3.2). No se crean cargas ni se certifica mercadería automáticamente.
+          </p>
+        </section>
+      ) : null}
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirmar despacho del camión</DialogTitle>
+            <DialogDescription>
+              Flujo prepare-confirm → confirm. El backend valida disponibilidad, fingerprints,
+              capacidad y permisos. Evita doble clic; la sesión es idempotente.
+            </DialogDescription>
+          </DialogHeader>
+          {confirmTruckBlock ? (
+            <div className="space-y-2 text-sm">
+              <p>
+                <span className="font-medium">
+                  {confirmTruckBlock.truck?.name || `Camión ${confirmTruckId}`}
+                </span>
+                {" · "}
+                {confirmTruckBlock.order_count ?? 0} OC · fecha {planningDate || "—"}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Utilización {fmtPct(confirmTruckBlock.capacity?.utilization_pct)} · peso
+                asignado {fmtKg(confirmTruckBlock.capacity?.assigned_weight_kg)}
+              </p>
+              <label className="flex items-start gap-2 text-sm">
+                <Checkbox
+                  checked={confirmAck}
+                  onCheckedChange={(v) => setConfirmAck(v === true)}
+                  disabled={confirmBusy}
+                />
+                <span>
+                  Confirmo expresamente este despacho. Entiendo que no debo reintentar si la
+                  página se recarga a mitad de proceso sin revisar el listado de planificaciones.
+                </span>
+              </label>
+              {confirmState?.message && confirmState.status !== "ok" ? (
+                <p className="text-xs text-muted-foreground">{confirmState.message}</p>
+              ) : null}
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmOpen(false)} disabled={confirmBusy}>
+              Cancelar
+            </Button>
+            <Button
+              onClick={() => void runConfirmTruck()}
+              disabled={!confirmAck || confirmBusy}
+            >
+              {confirmBusy ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Procesando…
+                </>
+              ) : (
+                "Confirmar despacho"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}

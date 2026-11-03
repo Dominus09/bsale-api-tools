@@ -53,6 +53,7 @@ import {
   hasManagementAccess,
   hasMarginViewAccess,
   hasPromotionsV2ViewAccess,
+  hasSimplePlanningAccess,
   staffUserFromLocalStorage,
   type StaffUserLike,
 } from "@/lib/permissions"
@@ -132,6 +133,11 @@ const navSections: { title: string; items: NavItem[] }[] = [
       { href: "/distribuidora/auditoria-oc", label: "Auditoría OC", icon: FileWarning },
       { href: "/distribuidora/orders", label: "Pre‑despacho OC", icon: PackageCheck },
       { href: "/distribuidora/planificacion", label: "Planif. mapa ORS", icon: MapPin },
+      {
+        href: "/distribuidora/planificacion-simplificada",
+        label: "Planificación simplificada",
+        icon: FileSpreadsheet,
+      },
       { href: "/distribuidora/planificaciones", label: "Planificaciones", icon: History },
       { href: "/distribuidora/cuadraturas", label: "Cuadraturas", icon: Scale },
       { href: "/distribuidora/rutero", label: "Rutero vendedores", icon: Route },
@@ -180,12 +186,19 @@ function buildNavSectionsForRole(
 ) {
   const user = staffUserFromLocalStorage()
   if (role) user.role = role
+  // Capabilities / owner: preferir /auth/me cuando esté disponible.
+  if (authMeStaff) {
+    if (authMeStaff.is_owner != null) user.is_owner = authMeStaff.is_owner
+    if (authMeStaff.erp_capabilities) user.erp_capabilities = authMeStaff.erp_capabilities
+    if (authMeStaff.role) user.role = authMeStaff.role
+  }
   const diagnostics = canAccessDiagnostics(user)
   // Solo flags de GET /auth/me — nunca localStorage.role.
   const userAdmin = canViewUserAdmin(authMeStaff)
   const management = hasManagementAccess(user)
   const marginViewer = hasMarginViewAccess(user)
   const promotionsViewer = hasPromotionsV2ViewAccess(user)
+  const simplePlanning = hasSimplePlanningAccess(user)
 
   // Analítica V2 solo se ofrece en empresas con BSALE RAW completo; en las
   // demás se conserva el inicio y la navegación actuales. Sin sufijos "V2":
@@ -245,6 +258,15 @@ function buildNavSectionsForRole(
       }
       if (!adminItems.length) return []
       return [{ ...section, items: adminItems }]
+    }
+    if (section.title === "Distribuidora") {
+      const items = section.items.filter((item) => {
+        if (item.href === "/distribuidora/planificacion-simplificada") {
+          return simplePlanning
+        }
+        return true
+      })
+      return [{ ...section, items }]
     }
     return [section]
   })
