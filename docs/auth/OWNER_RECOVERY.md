@@ -13,6 +13,13 @@ Las cuentas identificadas por `AUTH_OWNER_USER_IDS` **no** se desactivan, no cam
 4. No eliminar ni vaciar `AUTH_OWNER_USER_IDS` salvo emergencia controlada (quedaría sin propietario en el panel).
 5. Tras recuperar acceso, el OWNER inicia sesión normalmente; el rol en PostgreSQL puede seguir siendo `gerencia`.
 
+## Acceso completo al ecosistema (ERP + PWA)
+
+El panel **no** muta al OWNER. Para otorgar apps/perfiles/empresas/oficinas use el SQL
+revisado `backend/sql/068_owner_full_ecosystem_access.sql` (solo `bsale.users.id`
+configurado en `AUTH_OWNER_USER_IDS`, con pre/post chequeos e inserción en
+`app.auth_events`). Los guards multiapp leen esas filas; no hay bypass de autenticación.
+
 ## Emergencia: revocar OWNER en la aplicación
 
 - Quitar o cambiar `AUTH_OWNER_USER_IDS` en Coolify y reiniciar el API.

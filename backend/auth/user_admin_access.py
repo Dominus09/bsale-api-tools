@@ -207,8 +207,8 @@ def assert_panel_action_allowed(
             status_code=403,
             detail=(
                 "Las cuentas OWNER no se desactivan, no cambian de rol, "
-                "empresas ni contraseña desde este panel. "
-                "Use el procedimiento de recuperación documentado."
+                "empresas, apps, perfiles, oficinas ni contraseña desde este panel. "
+                "Use el procedimiento de recuperación / SQL documentado."
             ),
         )
 

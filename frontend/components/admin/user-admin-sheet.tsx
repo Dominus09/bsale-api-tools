@@ -351,7 +351,7 @@ export function UserAdminSheet({
               {mode === "create"
                 ? "Alta de trabajador ERP y/o PWA. La contraseña nunca se muestra."
                 : lockedOwner
-                  ? "Cuenta OWNER: no se modifica desde este panel."
+                  ? "Cuenta OWNER: identidad, rol y estado protegidos. Apps, perfiles y alcance se muestran en solo lectura."
                   : `Rol: ${staffRoleDisplay(user?.role, user?.is_owner)} · Último ingreso: ${formatChileDateTime(user?.last_login_at)}`}
             </SheetDescription>
           </SheetHeader>
