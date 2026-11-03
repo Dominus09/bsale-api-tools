@@ -1,10 +1,11 @@
-"""API: preview y asignación preliminar de OC (planificación simplificada, solo lectura)."""
+"""API: preview, asignación y confirmación de planificación simplificada."""
 
 from __future__ import annotations
 
 import logging
 from datetime import date
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -19,6 +20,11 @@ from backend.services.distribuidora.oc_source_resolver import (
 )
 from backend.services.distribuidora.simple_planning_assignment_service import (
     preview_truck_assignments,
+)
+from backend.services.distribuidora.simple_planning_confirm_service import (
+    SimplePlanningConfirmError,
+    confirm_simple_planning_session,
+    prepare_confirm_session,
 )
 from backend.services.distribuidora.simple_planning_preview_service import (
     MAX_FOLIOS,
@@ -41,14 +47,22 @@ ALLOWED_OFFICE_IDS = frozenset({1, 2, 3, 4, 5, 6, 7, 8, 9})
 def require_simple_planning_access(
     authorization: BearerDep = None,
 ) -> dict[str, Any]:
-    """JWT + ERP + rol/perfil de planificación (sin admin global obligatorio)."""
+    """JWT + ERP + rol/capability de planificación (sin admin global obligatorio)."""
     user = require_staff_user(authorization)
     if not has_simple_planning_access(user):
         raise HTTPException(
             status_code=403,
-            detail="Acceso restringido a gerencia u operativo de planificación",
+            detail="Acceso restringido a gerencia, operativo o capability simple_planning",
         )
     return user
+
+
+def _user_id(user: dict[str, Any]) -> int:
+    raw = user.get("id") if user.get("id") is not None else user.get("uid")
+    try:
+        return int(raw)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=401, detail="Usuario sin id") from exc
 
 
 def _company_office_exist_in_catalog(company_id: int, office_id: int) -> None:
@@ -130,6 +144,21 @@ class AssignPreviewBody(BaseModel):
     assignments: list[AssignmentRow] = Field(..., min_length=1, max_length=MAX_FOLIOS)
 
 
+class PrepareConfirmBody(BaseModel):
+    company_id: int = Field(default=COMPANY_ID, ge=1)
+    office_id: int = Field(default=OFFICE_ID, ge=1)
+    planning_date: date | None = None
+    truck_id: int = Field(..., ge=1)
+    dispatch_name: str | None = Field(None, max_length=128)
+    driver_name: str | None = Field(None, max_length=128)
+    assignments: list[AssignmentRow] = Field(..., min_length=1, max_length=MAX_FOLIOS)
+    idempotency_key: str | None = Field(None, min_length=8, max_length=128)
+
+
+class ConfirmSessionBody(BaseModel):
+    session_id: UUID
+
+
 @router.post("/preview")
 def post_simple_planning_preview(
     body: PreviewBody,
@@ -183,3 +212,61 @@ def post_simple_planning_assign_preview(
     if report.get("wrote"):
         raise HTTPException(status_code=500, detail="assign-preview no debe escribir")
     return report
+
+
+@router.post("/prepare-confirm")
+def post_simple_planning_prepare_confirm(
+    body: PrepareConfirmBody,
+    user: dict = Depends(require_simple_planning_access),
+):
+    """Crea sesión segura server-side para un camión (aún no confirma)."""
+    _validate_scope(user, body.company_id, body.office_id)
+    try:
+        return prepare_confirm_session(
+            user_id=_user_id(user),
+            company_id=int(body.company_id),
+            office_id=int(body.office_id),
+            planning_date=body.planning_date,
+            truck_id=int(body.truck_id),
+            dispatch_name=body.dispatch_name,
+            driver_name=body.driver_name,
+            assignments=[a.model_dump() for a in body.assignments],
+            idempotency_key=body.idempotency_key,
+        )
+    except SimplePlanningConfirmError as exc:
+        raise HTTPException(
+            status_code=exc.http_status,
+            detail={"message": str(exc), "code": exc.code},
+        ) from exc
+    except SimplePlanningPreviewError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        logger.exception("simple_planning_prepare_confirm_failed")
+        raise HTTPException(
+            status_code=503,
+            detail="No se pudo preparar la sesión de confirmación",
+        ) from None
+
+
+@router.post("/confirm")
+def post_simple_planning_confirm(
+    body: ConfirmSessionBody,
+    user: dict = Depends(require_simple_planning_access),
+):
+    """Confirma un camión vía sesión (motor dispatch_plan, origen simple_list)."""
+    try:
+        return confirm_simple_planning_session(
+            session_id=str(body.session_id),
+            user_id=_user_id(user),
+        )
+    except SimplePlanningConfirmError as exc:
+        raise HTTPException(
+            status_code=exc.http_status,
+            detail={"message": str(exc), "code": exc.code},
+        ) from exc
+    except Exception:
+        logger.exception("simple_planning_confirm_failed")
+        raise HTTPException(
+            status_code=503,
+            detail="No se pudo confirmar la planificación simplificada",
+        ) from None

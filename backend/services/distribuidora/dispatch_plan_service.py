@@ -452,10 +452,10 @@ def confirm_dispatch_plan(
     assistant_count: int,
     driver_cost_clp: int,
     assistant_cost_clp: int,
-    diesel_price_per_liter: float,
-    km_total: float,
-    duration_min: float,
-    liters_estimated: float,
+    diesel_price_per_liter: float | None,
+    km_total: float | None,
+    duration_min: float | None,
+    liters_estimated: float | None,
     fuel_cost_clp: int,
     ferry_cost_clp: int,
     toll_cost_clp: int,
@@ -465,21 +465,61 @@ def confirm_dispatch_plan(
     route_geometry: dict[str, Any] | None,
     orders: list[dict[str, Any]],
     planning_date: date | None = None,
+    planning_origin: str = "ors",
+    ors_metrics_calculated: bool = True,
+    conn: Any | None = None,
+    run_auto_picking: bool = True,
 ) -> dict[str, Any]:
+    """Confirma un plan por camión (motor único ORS / simple_list).
+
+    Si ``conn`` se provee, no hace commit/close (el caller controla la TX).
+    Con ``ors_metrics_calculated=False`` persiste métricas ORS como NULL y
+    costos CLP en 0 legacy, sin interpretarlos como costo real.
+    """
+    from backend.services.distribuidora.dispatch_plan_oc_guard import (
+        OcConfirmConflictError,
+        acquire_oc_confirm_locks,
+        assert_ocs_available_for_confirm,
+    )
+
     if not orders:
         raise ValueError("Se requiere al menos una OC para confirmar el plan.")
+    origin = str(planning_origin or "ors").strip().lower()
+    if origin not in ("ors", "simple_list"):
+        raise ValueError(f"planning_origin inválido: {planning_origin!r}")
+    metrics_ok = bool(ors_metrics_calculated)
+    if origin == "ors" and not metrics_ok:
+        # ORS tradicional siempre calcula; evitar inconsistencias accidentales.
+        metrics_ok = True
+    if metrics_ok:
+        if diesel_price_per_liter is None:
+            raise ValueError("diesel_price_per_liter es obligatorio cuando ORS calculó métricas")
+        if km_total is None or duration_min is None or liters_estimated is None:
+            raise ValueError("km/duración/litros son obligatorios cuando ORS calculó métricas")
+
     pname = (planning_name or route_name or "").strip() or f"Camión {truck_id}"
     now = datetime.now(timezone.utc)
     pdate = planning_date or date.today()
+    doc_ids = [int(o["oc_document_id"]) for o in orders if o.get("oc_document_id")]
 
-    conn = get_connection()
+    owns_conn = conn is None
+    if owns_conn:
+        conn = get_connection()
+    plan_id: int | None = None
     try:
         cur = conn.cursor()
+        acquire_oc_confirm_locks(cur, doc_ids)
+        assert_ocs_available_for_confirm(cur, doc_ids)
+
         cur.execute(
-            "SELECT name, max_weight_kg FROM distribuidora.trucks WHERE id = %s",
+            "SELECT name, max_weight_kg, active FROM distribuidora.trucks WHERE id = %s",
             (truck_id,),
         )
         truck_row = cur.fetchone()
+        if not truck_row:
+            raise ValueError(f"Camión {truck_id} no existe")
+        if truck_row[2] is False:
+            raise ValueError(f"Camión {truck_id} está inactivo")
         frozen_truck_name = (
             str(truck_row[0]).strip() if truck_row and truck_row[0] else route_name
         )
@@ -507,6 +547,12 @@ def confirm_dispatch_plan(
             planning_date=pdate,
             truck_key=frozen_truck_name or (route_name or "").strip(),
         )
+
+        def _metric_or_none(value: float | None, ndigits: int) -> float | None:
+            if not metrics_ok or value is None:
+                return None
+            return round(float(value), ndigits)
+
         fields = {
             "plan_session_id": plan_session_id.strip(),
             "planning_date": pdate,
@@ -519,20 +565,26 @@ def confirm_dispatch_plan(
             "status": "planned",
             "driver_count": max(0, int(driver_count)),
             "assistant_count": max(0, int(assistant_count)),
-            "driver_cost_clp": int(driver_cost_clp),
-            "assistant_cost_clp": int(assistant_cost_clp),
-            "diesel_price_per_liter": round(float(diesel_price_per_liter), 2),
-            "km_total": round(float(km_total), 3),
-            "duration_min": round(float(duration_min), 2),
-            "liters_estimated": round(float(liters_estimated), 3),
-            "fuel_cost_clp": int(fuel_cost_clp),
-            "ferry_cost_clp": int(ferry_cost_clp),
-            "toll_cost_clp": int(toll_cost_clp),
-            "extras_cost_clp": int(extras_cost_clp),
-            "crew_cost_clp": int(crew_cost_clp),
-            "total_route_cost_clp": int(total_route_cost_clp),
+            "driver_cost_clp": int(driver_cost_clp) if metrics_ok else 0,
+            "assistant_cost_clp": int(assistant_cost_clp) if metrics_ok else 0,
+            "diesel_price_per_liter": (
+                round(float(diesel_price_per_liter), 2)
+                if metrics_ok and diesel_price_per_liter is not None
+                else None
+            ),
+            "km_total": _metric_or_none(km_total, 3),
+            "duration_min": _metric_or_none(duration_min, 2),
+            "liters_estimated": _metric_or_none(liters_estimated, 3),
+            "fuel_cost_clp": int(fuel_cost_clp) if metrics_ok else 0,
+            "ferry_cost_clp": int(ferry_cost_clp) if metrics_ok else 0,
+            "toll_cost_clp": int(toll_cost_clp) if metrics_ok else 0,
+            "extras_cost_clp": int(extras_cost_clp) if metrics_ok else 0,
+            "crew_cost_clp": int(crew_cost_clp) if metrics_ok else 0,
+            "total_route_cost_clp": int(total_route_cost_clp) if metrics_ok else 0,
             "route_geometry": json.dumps(route_geometry) if route_geometry else None,
             "confirmed_at": now,
+            "planning_origin": origin,
+            "ors_metrics_calculated": metrics_ok,
         }
         enriched = _enrich_orders_snapshot(cur, orders)
         frozen_orders = freeze_orders_weight(cur, enriched, calculated_at=now)
@@ -545,19 +597,35 @@ def confirm_dispatch_plan(
         plan_id, planning_code = repo.insert_dispatch_plan(cur, fields)
         repo.update_plan_weight_snapshot(cur, plan_id, weight_fields)
         logger.info(
-            "[PLANNING_CODE_DEBUG] confirm_dispatch_plan plan_id=%s planning_code=%s",
+            "[PLANNING_CODE_DEBUG] confirm_dispatch_plan plan_id=%s planning_code=%s origin=%s",
             plan_id,
             planning_code,
+            origin,
         )
         repo.insert_plan_orders(cur, plan_id, frozen_orders)
         repo.insert_plan_stop_snapshots(cur, plan_id, stops)
-        conn.commit()
+        if owns_conn:
+            conn.commit()
         cur.close()
+    except OcConfirmConflictError:
+        if owns_conn:
+            conn.rollback()
+        raise
+    except Exception:
+        if owns_conn:
+            conn.rollback()
+        raise
     finally:
-        conn.close()
+        if owns_conn:
+            conn.close()
 
-    _try_auto_generate_picking_snapshot(plan_id)
-    return get_dispatch_plan(plan_id) or {"plan": {"id": plan_id}}
+    if plan_id is None:
+        raise ValueError("No se pudo confirmar el plan")
+    if run_auto_picking and owns_conn:
+        _try_auto_generate_picking_snapshot(plan_id)
+    if owns_conn:
+        return get_dispatch_plan(plan_id) or {"plan": {"id": plan_id}}
+    return {"plan": {"id": plan_id}, "planning_origin": origin}
 
 
 def update_dispatch_plan_status(plan_id: int, status: str) -> dict[str, Any]:

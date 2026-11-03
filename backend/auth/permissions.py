@@ -102,13 +102,21 @@ SIMPLE_PLANNING_ROLES = frozenset(
 
 
 def has_simple_planning_access(user: dict[str, Any] | None) -> bool:
-    """Planificación simplificada (lista/Excel): gerencia u operativo ERP.
+    """Planificación simplificada (lista/Excel): gerencia/operativo o capability ERP.
 
     No exige privilegios de administración global del panel Usuarios.
-    OWNER y roles de gerencia/adm heredan acceso. Perfil multiapp
-    ``planificador_despacho`` (futuro) podrá sumarse sin ampliar admin.
+    OWNER y roles de gerencia/adm/operativo heredan acceso.
+
+    La segunda persona (Excel) debe recibir ``app.user_erp_capabilities.simple_planning``
+    **y** app ERP activa. La capability sola no concede ERP ni PWA ni admin.
+    No usar perfiles PWA (065) para esta pantalla.
     """
     from backend.auth.hierarchy import is_owner
+    from backend.auth.multiapp import (
+        CAP_SIMPLE_PLANNING,
+        get_scope,
+        has_erp_capability,
+    )
 
     if not user:
         return False
@@ -117,12 +125,14 @@ def has_simple_planning_access(user: dict[str, Any] | None) -> bool:
     role = normalized_role(user)
     if role in SIMPLE_PLANNING_ROLES:
         return True
-    # Perfil operativo dedicado (cuando exista en user_operational_profiles).
-    profiles = user.get("profiles") or []
-    if isinstance(profiles, (list, tuple, set, frozenset)):
-        if "planificador_despacho" in {str(p).strip().lower() for p in profiles}:
+    caps = user.get("erp_capabilities") or []
+    if isinstance(caps, (list, tuple, set, frozenset)):
+        if CAP_SIMPLE_PLANNING in {str(c).strip().lower() for c in caps}:
             return True
-    return False
+    try:
+        return has_erp_capability(get_scope(user), CAP_SIMPLE_PLANNING)
+    except Exception:
+        return False
 
 
 def has_sales_access(user: dict[str, Any] | None) -> bool:

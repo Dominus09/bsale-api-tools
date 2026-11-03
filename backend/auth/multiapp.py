@@ -47,6 +47,10 @@ OPERATIONAL_PROFILES = frozenset(
     }
 )
 
+# Capacidades ERP acotadas (069). Independientes de perfiles PWA.
+ERP_CAPABILITIES = frozenset({"simple_planning"})
+CAP_SIMPLE_PLANNING = "simple_planning"
+
 
 def _env_flag(name: str, *, default: bool = False) -> bool:
     raw = (os.getenv(name) or "").strip().lower()
@@ -66,6 +70,7 @@ class MultiAppScope:
 
     apps: frozenset[str] = field(default_factory=frozenset)
     profiles: frozenset[str] = field(default_factory=frozenset)
+    erp_capabilities: frozenset[str] = field(default_factory=frozenset)
     company_ids: tuple[int, ...] | None = None  # None = no restringir empresas
     offices: frozenset[tuple[int, int]] = field(default_factory=frozenset)
     # True si existía tabla user_apps y se leyeron filas (aunque active=false)
@@ -98,6 +103,7 @@ def load_multiapp_scope(user_id: int | None) -> MultiAppScope:
         has_apps = _table_exists(cur, "app", "user_apps")
         has_profiles = _table_exists(cur, "app", "user_operational_profiles")
         has_offices = _table_exists(cur, "app", "user_offices")
+        has_caps = _table_exists(cur, "app", "user_erp_capabilities")
         tables_ready = has_apps  # mínimo para multiapp
         apps: set[str] = set()
         apps_rows_present = False
@@ -129,6 +135,20 @@ def load_multiapp_scope(user_id: int | None) -> MultiAppScope:
                 c = str(code)
                 if c in OPERATIONAL_PROFILES:
                     profiles.add(c)
+        erp_capabilities: set[str] = set()
+        if has_caps:
+            cur.execute(
+                """
+                SELECT capability_code
+                FROM app.user_erp_capabilities
+                WHERE user_id = %s AND active IS TRUE
+                """,
+                (int(user_id),),
+            )
+            for (code,) in cur.fetchall():
+                c = str(code).strip().lower()
+                if c in ERP_CAPABILITIES:
+                    erp_capabilities.add(c)
         offices: set[tuple[int, int]] = set()
         if has_offices:
             cur.execute(
@@ -146,6 +166,7 @@ def load_multiapp_scope(user_id: int | None) -> MultiAppScope:
         return MultiAppScope(
             apps=frozenset(apps),
             profiles=frozenset(profiles),
+            erp_capabilities=frozenset(erp_capabilities),
             company_ids=tuple(company_ids) if company_ids is not None else None,
             offices=frozenset(offices),
             apps_rows_present=apps_rows_present,
@@ -187,6 +208,11 @@ def has_profile(scope: MultiAppScope, profile_code: str) -> bool:
 def has_any_profile(scope: MultiAppScope, allowed: Collection[str]) -> bool:
     wanted = {str(p).strip().lower() for p in allowed}
     return bool(scope.profiles & wanted)
+
+
+def has_erp_capability(scope: MultiAppScope, capability_code: str) -> bool:
+    code = str(capability_code or "").strip().lower()
+    return code in scope.erp_capabilities
 
 
 def company_allowed(scope: MultiAppScope, company_id: int | None) -> bool:
@@ -271,6 +297,7 @@ def attach_multiapp_scope(user: dict[str, Any]) -> dict[str, Any]:
         [APP_ERP] if has_app_access(scope, APP_ERP) else []
     )
     out["profiles"] = sorted(scope.profiles)
+    out["erp_capabilities"] = sorted(scope.erp_capabilities)
     out["company_ids"] = list(scope.company_ids) if scope.company_ids is not None else None
     out["office_scopes"] = [
         {"company_id": c, "office_id": o} for c, o in sorted(scope.offices)
@@ -365,6 +392,7 @@ def scope_public_dict(user: dict[str, Any]) -> dict[str, Any]:
     return {
         "apps": list(enriched.get("apps") or []),
         "profiles": list(enriched.get("profiles") or []),
+        "erp_capabilities": list(enriched.get("erp_capabilities") or []),
         "company_ids": enriched.get("company_ids"),
         "office_scopes": list(enriched.get("office_scopes") or []),
         "has_erp_access": bool(enriched.get("has_erp_access")),

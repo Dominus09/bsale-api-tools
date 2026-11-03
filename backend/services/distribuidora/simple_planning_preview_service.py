@@ -73,7 +73,8 @@ ACTIVE_PLAN_STATUSES = frozenset(
     }
 )
 
-# Conflictos duros para el futuro confirmador (excluye closed/squared).
+# Conflictos duros para el confirmador (excluye closed/squared = reprogramables).
+# Incluye delivered: una OC entregada no vuelve a despacharse solo por cerrar el plan.
 CONFLICTING_PLAN_STATUSES = frozenset(
     {
         "planned",
@@ -81,6 +82,7 @@ CONFLICTING_PLAN_STATUSES = frozenset(
         "ready_for_picking",
         "picking_generated",
         "dispatched",
+        "delivered",
     }
 )
 

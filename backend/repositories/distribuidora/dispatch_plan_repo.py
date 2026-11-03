@@ -176,6 +176,9 @@ def insert_dispatch_plan(cur, fields: dict[str, Any]) -> tuple[int, str]:
     payload.setdefault("driver_name", None)
     payload.setdefault("assistant_names", None)
 
+    payload.setdefault("planning_origin", "ors")
+    payload.setdefault("ors_metrics_calculated", True)
+
     cur.execute(
         """
         INSERT INTO distribuidora.dispatch_plan (
@@ -185,7 +188,8 @@ def insert_dispatch_plan(cur, fields: dict[str, Any]) -> tuple[int, str]:
             driver_count, assistant_count, driver_cost_clp, assistant_cost_clp,
             diesel_price_per_liter, km_total, duration_min, liters_estimated,
             fuel_cost_clp, ferry_cost_clp, toll_cost_clp, extras_cost_clp,
-            crew_cost_clp, total_route_cost_clp, route_geometry, confirmed_at
+            crew_cost_clp, total_route_cost_clp, route_geometry, confirmed_at,
+            planning_origin, ors_metrics_calculated
         )
         VALUES (
             %(plan_session_id)s, %(planning_date)s, %(truck_id)s, %(route_name)s,
@@ -196,7 +200,8 @@ def insert_dispatch_plan(cur, fields: dict[str, Any]) -> tuple[int, str]:
             %(diesel_price_per_liter)s, %(km_total)s, %(duration_min)s,
             %(liters_estimated)s, %(fuel_cost_clp)s, %(ferry_cost_clp)s,
             %(toll_cost_clp)s, %(extras_cost_clp)s, %(crew_cost_clp)s,
-            %(total_route_cost_clp)s, %(route_geometry)s::jsonb, %(confirmed_at)s
+            %(total_route_cost_clp)s, %(route_geometry)s::jsonb, %(confirmed_at)s,
+            %(planning_origin)s, %(ors_metrics_calculated)s
         )
         RETURNING id
         """,

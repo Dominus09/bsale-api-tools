@@ -136,6 +136,8 @@ def list_plans_by_session(plan_session_id: str):
 
 @router.post("/confirm")
 def confirm_plan(body: ConfirmDispatchPlanBody):
+    from backend.services.distribuidora.dispatch_plan_oc_guard import OcConfirmConflictError
+
     try:
         return svc.confirm_dispatch_plan(
             plan_session_id=body.plan_session_id,
@@ -159,7 +161,11 @@ def confirm_plan(body: ConfirmDispatchPlanBody):
             route_geometry=body.route_geometry,
             orders=[o.model_dump() for o in body.orders],
             planning_date=body.planning_date,
+            planning_origin="ors",
+            ors_metrics_calculated=True,
         )
+    except OcConfirmConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
