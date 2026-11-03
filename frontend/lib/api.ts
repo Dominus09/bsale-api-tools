@@ -1958,6 +1958,9 @@ export type DispatchPlanSummary = {
   driver_user_id?: number | null
   km_total?: number
   total_route_cost_clp?: number
+  planning_origin?: string | null
+  /** false = no interpretar km/costos 0 como métricas ORS reales */
+  ors_metrics_calculated?: boolean | null
   final_margin_clp?: number | null
   net_operational_clp?: number | null
   order_count?: number
@@ -2326,13 +2329,17 @@ export type DispatchPlanLoadSummary = {
     pending_amount_clp: number
   }
   costs: {
-    fuel_clp: number
-    crew_clp: number
-    tolls_clp: number
-    ferry_clp: number
-    extras_clp: number
-    route_total_clp: number
+    fuel_clp: number | null
+    crew_clp: number | null
+    tolls_clp: number | null
+    ferry_clp: number | null
+    extras_clp: number | null
+    route_total_clp: number | null
+    km_total?: number | null
+    ors_metrics_calculated?: boolean
+    note?: string | null
   }
+  ors_metrics_calculated?: boolean
   results: {
     commercial_margin_clp?: number | null
     net_operational_clp?: number | null

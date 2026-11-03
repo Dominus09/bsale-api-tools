@@ -174,15 +174,23 @@ export function DispatchPlanLoadSummaryBlock({ dashboard, className }: Props) {
         </div>
         <div className="rounded-lg border border-border/60 px-3 py-2 text-sm">
           <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">Costos ruta</p>
-          <ul className="space-y-1 text-xs tabular-nums">
-            <li>Combustible: {formatClp(costs.fuel_clp)}</li>
-            <li>Tripulación: {formatClp(costs.crew_clp)}</li>
-            <li>Peajes: {formatClp(costs.tolls_clp)}</li>
-            <li>Ferry: {formatClp(costs.ferry_clp)}</li>
-            <li className="font-semibold pt-1 border-t border-border/50">
-              Total: {formatClp(costs.route_total_clp)}
-            </li>
-          </ul>
+          {costs.ors_metrics_calculated === false ||
+          ls.ors_metrics_calculated === false ||
+          costs.route_total_clp == null ? (
+            <p className="text-xs text-muted-foreground">
+              {costs.note || "Métricas ORS no disponibles (no son costos reales en 0)."}
+            </p>
+          ) : (
+            <ul className="space-y-1 text-xs tabular-nums">
+              <li>Combustible: {formatClp(costs.fuel_clp ?? 0)}</li>
+              <li>Tripulación: {formatClp(costs.crew_clp ?? 0)}</li>
+              <li>Peajes: {formatClp(costs.tolls_clp ?? 0)}</li>
+              <li>Ferry: {formatClp(costs.ferry_clp ?? 0)}</li>
+              <li className="font-semibold pt-1 border-t border-border/50">
+                Total: {formatClp(costs.route_total_clp ?? 0)}
+              </li>
+            </ul>
+          )}
         </div>
         <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 px-3 py-2 text-sm">
           <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">

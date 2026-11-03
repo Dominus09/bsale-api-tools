@@ -274,13 +274,17 @@ export default function PlanificacionDetallePage() {
             <div className="rounded-md border px-3 py-2">
               <span className="text-muted-foreground">Km ORS</span>
               <p className="font-semibold tabular-nums">
-                {Number(displayPlan.km_total ?? 0).toFixed(1)}
+                {displayPlan.ors_metrics_calculated === false
+                  ? "No disponible"
+                  : Number(displayPlan.km_total ?? 0).toFixed(1)}
               </p>
             </div>
             <div className="rounded-md border px-3 py-2">
               <span className="text-muted-foreground">Costo ruta</span>
               <p className="font-semibold tabular-nums">
-                {formatClp(displayPlan.total_route_cost_clp ?? 0)}
+                {displayPlan.ors_metrics_calculated === false
+                  ? "No disponible"
+                  : formatClp(displayPlan.total_route_cost_clp ?? 0)}
               </p>
             </div>
             <div className="rounded-md border px-3 py-2">
