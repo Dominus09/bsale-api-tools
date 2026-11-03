@@ -127,6 +127,7 @@ DISTRIBUIDORA_SCHEMA_FILES: tuple[str, ...] = (
     # 3B.3 — origen simple_list + sesiones (aplicar solo vía runner explícito).
     "050_dispatch_plan_planning_origin.sql",
     "051_simple_planning_sessions.sql",
+    "052_dispatch_plan_driver_user.sql",
 )
 
 _ENSURE_SCHEMA_NOOP_WARNED = False

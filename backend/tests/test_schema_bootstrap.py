@@ -43,6 +43,7 @@ REISSUE_FILE = "048_document_reissue_lineage.sql"
 ROLES_FILE = "049_document_type_roles.sql"
 PLANNING_ORIGIN_FILE = "050_dispatch_plan_planning_origin.sql"
 SIMPLE_SESSIONS_FILE = "051_simple_planning_sessions.sql"
+DRIVER_USER_FILE = "052_dispatch_plan_driver_user.sql"
 
 
 # --------------------------------------------------------------------- lexer
@@ -279,11 +280,12 @@ def test_every_sql_file_is_registered_or_explicitly_excluded():
     assert sorted(on_disk - registered) == sorted(NOT_IN_RUNNER)
     assert list(DISTRIBUIDORA_SCHEMA_FILES) == sorted(DISTRIBUIDORA_SCHEMA_FILES)
     assert len(set(DISTRIBUIDORA_SCHEMA_FILES)) == len(DISTRIBUIDORA_SCHEMA_FILES)
-    assert DISTRIBUIDORA_SCHEMA_FILES[-4:] == (
+    assert DISTRIBUIDORA_SCHEMA_FILES[-5:] == (
         REISSUE_FILE,
         ROLES_FILE,
         PLANNING_ORIGIN_FILE,
         SIMPLE_SESSIONS_FILE,
+        DRIVER_USER_FILE,
     )
 
 
