@@ -12,6 +12,7 @@ import {
   type DispatchPlanSummary,
 } from "@/lib/api"
 import { DispatchPlanDetailTabs } from "@/components/distribuidora/planificacion/DispatchPlanDetailTabs"
+import { DispatchPlanDriverAssign } from "@/components/distribuidora/planificacion/DispatchPlanDriverAssign"
 import { DispatchPlanLoadSummaryBlock } from "@/components/distribuidora/planificacion/DispatchPlanLoadSummary"
 import { DispatchPlanOrdersWeightTable } from "@/components/distribuidora/planificacion/DispatchPlanOrdersWeightTable"
 import {
@@ -285,11 +286,21 @@ export default function PlanificacionDetallePage() {
             <div className="rounded-md border px-3 py-2">
               <span className="text-muted-foreground">Tripulación</span>
               <p className="font-semibold">
-                {displayPlan.driver_count ?? 1} chofer / {displayPlan.assistant_count ?? 0}{" "}
-                peoneta(s)
+                {displayPlan.driver_name ||
+                  (displayPlan.driver_user_id
+                    ? `Usuario #${displayPlan.driver_user_id}`
+                    : "Chofer pendiente")}{" "}
+                / {displayPlan.assistant_count ?? 0} peoneta(s)
               </p>
             </div>
           </div>
+
+          <DispatchPlanDriverAssign
+            planId={planId}
+            onAssigned={() => {
+              void reloadDashboard()
+            }}
+          />
 
           {dashboard?.degraded ? (
             <Alert variant="default" className="border-amber-200 bg-amber-50/80 dark:border-amber-900 dark:bg-amber-950/30">

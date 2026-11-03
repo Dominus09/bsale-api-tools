@@ -1951,6 +1951,8 @@ export type DispatchPlanSummary = {
   status: DispatchPlanStatus
   driver_count?: number
   assistant_count?: number
+  driver_name?: string | null
+  driver_user_id?: number | null
   km_total?: number
   total_route_cost_clp?: number
   final_margin_clp?: number | null
@@ -1962,6 +1964,34 @@ export type DispatchPlanSummary = {
   invoiced_pending?: number
   confirmed_at?: string | null
   created_at?: string
+}
+
+export type DispatchPlanDriverOption = {
+  user_id: number
+  email?: string | null
+  nombre_usuario?: string | null
+  display_name: string
+}
+
+export type DispatchPlanDriverInfo = {
+  plan_id: number
+  planning_date?: string
+  status?: string
+  driver_user_id?: number | null
+  driver_name?: string | null
+  assistant_count?: number | null
+  driver_pending?: boolean
+  driver?: (DispatchPlanDriverOption & { active?: boolean }) | null
+  history?: {
+    id: number
+    created_at?: string
+    actor_name?: string | null
+    reason?: string | null
+    previous_driver_user_id?: number | null
+    previous_driver_name?: string | null
+    new_driver_user_id?: number | null
+    new_driver_name?: string | null
+  }[]
 }
 
 export async function listDispatchPlansRecent(params?: {
@@ -1996,6 +2026,68 @@ export async function getDispatchPlanHeader(
     throw new Error(msg || "Error al cargar cabecera del plan")
   }
   return res.json() as Promise<{ plan: DispatchPlanSummary }>
+}
+
+export async function listAvailableDispatchDrivers(params?: {
+  company_id?: number
+  office_id?: number
+}): Promise<{ items: DispatchPlanDriverOption[] }> {
+  const qs = new URLSearchParams()
+  if (params?.company_id) qs.set("company_id", String(params.company_id))
+  if (params?.office_id) qs.set("office_id", String(params.office_id))
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/available-drivers${qs.toString() ? `?${qs}` : ""}`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al listar choferes")
+  }
+  return res.json()
+}
+
+export async function getDispatchPlanDriver(
+  planId: number,
+): Promise<DispatchPlanDriverInfo> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/driver`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al cargar chofer del plan")
+  }
+  return res.json()
+}
+
+export async function assignDispatchPlanDriver(
+  planId: number,
+  body: {
+    driver_user_id: number
+    reason: string
+    company_id?: number
+    office_id?: number
+  },
+): Promise<{
+  status: string
+  plan_id: number
+  driver_user_id: number
+  driver_name?: string
+  same_day_conflicts?: unknown[]
+}> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/assign-driver`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: JSON.stringify(body),
+    },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al asignar chofer")
+  }
+  return res.json()
 }
 
 export type DispatchPlanLoadSummary = {
