@@ -8,6 +8,7 @@ No escribe ni confirma planes. No inventa relaciones documentales.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import time
@@ -59,6 +60,7 @@ BLOCKING_STATUSES = frozenset(
     }
 )
 
+# Planes que bloquean reasignación futura (no closed/squared: permiten reprogramar).
 ACTIVE_PLAN_STATUSES = frozenset(
     {
         "draft",
@@ -68,6 +70,17 @@ ACTIVE_PLAN_STATUSES = frozenset(
         "picking_generated",
         "dispatched",
         "delivered",
+    }
+)
+
+# Conflictos duros para el futuro confirmador (excluye closed/squared).
+CONFLICTING_PLAN_STATUSES = frozenset(
+    {
+        "planned",
+        "invoicing",
+        "ready_for_picking",
+        "picking_generated",
+        "dispatched",
     }
 )
 
@@ -85,6 +98,27 @@ def _int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def oc_identity_fingerprint(
+    *,
+    document_id: int | None,
+    source_document_id: int | None,
+    state: int | None,
+    updated_at: Any = None,
+) -> str | None:
+    """Huella estable para detectar cambios entre preview y confirmación futura."""
+    if document_id is None:
+        return None
+    updated = ""
+    if updated_at is not None:
+        updated = (
+            updated_at.isoformat()
+            if hasattr(updated_at, "isoformat")
+            else str(updated_at)
+        )
+    raw = f"{int(document_id)}|{source_document_id}|{state}|{updated}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
 
 def normalize_folio_inputs(raw_folios: list[Any]) -> dict[str, Any]:
@@ -187,6 +221,7 @@ def _load_ocs_by_folios(
                 d.office_id,
                 d.document_type_id,
                 d.source_document_id,
+                d.updated_at,
                 COALESCE(
                     NULLIF(BTRIM(d.municipality), ''),
                     NULLIF(BTRIM(c.municipality), ''),
@@ -369,13 +404,22 @@ def _serialize_invoices(chain: Any) -> list[dict[str, Any]]:
     return docs
 
 
-def _weight_insufficient(weight: dict[str, Any] | None) -> bool:
-    if not weight:
-        return True
+def classify_weight_quality(weight: dict[str, Any] | None) -> str:
+    """known | estimated | unavailable — alineado al modelo de order_weight_service."""
+    if not weight or weight.get("peso_total_kg") is None:
+        return "unavailable"
     coverage = float(weight.get("coverage_percent") or 0)
-    peso = weight.get("peso_total_kg")
     missing = int(weight.get("missing_products") or 0)
-    return peso is None or coverage < MIN_WEIGHT_COVERAGE_PCT or missing > 0
+    estimated = int(weight.get("estimated_products") or 0)
+    if missing > 0 or coverage < MIN_WEIGHT_COVERAGE_PCT:
+        return "unavailable"
+    if estimated > 0 or coverage < 99.9:
+        return "estimated"
+    return "known"
+
+
+def _weight_insufficient(weight: dict[str, Any] | None) -> bool:
+    return classify_weight_quality(weight) == "unavailable"
 
 
 def _classify_item(
@@ -526,6 +570,14 @@ def preview_ocs_from_folios(
         counts[status] = counts.get(status, 0) + 1
 
         emission = oc_row.get("emission_date") if oc_row else None
+        updated_at = (oc_row or {}).get("updated_at")
+        source_id = _int((oc_row or {}).get("source_document_id"))
+        state_n = _int((oc_row or {}).get("state"))
+        conflicting_plans = [
+            p
+            for p in plans
+            if str(p.get("status") or "") in CONFLICTING_PLAN_STATUSES
+        ]
         item: dict[str, Any] = {
             "index": entry["index"],
             "input": entry["input"],
@@ -535,8 +587,17 @@ def preview_ocs_from_folios(
             "warnings": warnings,
             "wrote": False,
             "document_id": doc_id,
-            "source_document_id": _int((oc_row or {}).get("source_document_id")),
-            "state": _int((oc_row or {}).get("state")),
+            "source_document_id": source_id,
+            "state": state_n,
+            "updated_at": updated_at.isoformat()
+            if hasattr(updated_at, "isoformat")
+            else (str(updated_at) if updated_at else None),
+            "identity_fingerprint": oc_identity_fingerprint(
+                document_id=doc_id,
+                source_document_id=source_id,
+                state=state_n,
+                updated_at=updated_at,
+            ),
             "client": {
                 "client_id": _int((oc_row or {}).get("client_id")),
                 "client_name": (oc_row or {}).get("client_name"),
@@ -560,9 +621,11 @@ def preview_ocs_from_folios(
                 "productos_totales": (weight or {}).get("productos_totales"),
                 "cantidad_cajas": (weight or {}).get("cantidad_cajas"),
                 "cantidad_unidades": (weight or {}).get("cantidad_unidades"),
+                "estimated_products": (weight or {}).get("estimated_products"),
+                "quality": classify_weight_quality(weight),
             }
             if weight
-            else None,
+            else {"peso_total_kg": None, "quality": "unavailable"},
             "billing_status": billing,
             "billing_label": BILLING_LABELS_ES.get(billing or "", billing),
             "planning_eligible": bool(op.planning_eligible) if op else None,
@@ -570,6 +633,7 @@ def preview_ocs_from_folios(
             "invoice_count": len(_serialize_invoices(chain)),
             "plans": plans,
             "assigned_to_plan": bool(active_plans),
+            "conflicting_active_plans": conflicting_plans,
             "audit_oc": {
                 "suggested": status == STATUS_NOT_FOUND,
                 "path": "/distribuidora/auditoria-oc",

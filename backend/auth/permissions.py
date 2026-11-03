@@ -91,6 +91,40 @@ def has_operational_access(user: dict[str, Any] | None) -> bool:
     return bool(normalized_role(user) or user and user.get("email"))
 
 
+SIMPLE_PLANNING_ROLES = frozenset(
+    {
+        "gerencia",
+        "operativo",
+        "adm",
+        "admin",
+    }
+)
+
+
+def has_simple_planning_access(user: dict[str, Any] | None) -> bool:
+    """Planificación simplificada (lista/Excel): gerencia u operativo ERP.
+
+    No exige privilegios de administración global del panel Usuarios.
+    OWNER y roles de gerencia/adm heredan acceso. Perfil multiapp
+    ``planificador_despacho`` (futuro) podrá sumarse sin ampliar admin.
+    """
+    from backend.auth.hierarchy import is_owner
+
+    if not user:
+        return False
+    if is_owner(user):
+        return True
+    role = normalized_role(user)
+    if role in SIMPLE_PLANNING_ROLES:
+        return True
+    # Perfil operativo dedicado (cuando exista en user_operational_profiles).
+    profiles = user.get("profiles") or []
+    if isinstance(profiles, (list, tuple, set, frozenset)):
+        if "planificador_despacho" in {str(p).strip().lower() for p in profiles}:
+            return True
+    return False
+
+
 def has_sales_access(user: dict[str, Any] | None) -> bool:
     """Futuro: módulos comerciales de venta."""
     return has_operational_access(user)
