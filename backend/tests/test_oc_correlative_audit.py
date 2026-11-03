@@ -320,6 +320,7 @@ def test_synthetic_audit_output_example():
     assert by_folio[102] == audit.STATUS_MISSING_IN_PG
     assert by_folio[103] == audit.STATUS_CANCELLED
     assert by_folio[104] == audit.STATUS_OK
+    assert report["recoverable_count"] == 1
     # Forma estable para revisión humana
     assert "bsale_filters_documented" in report
     assert report["bsale_filters_documented"]["params"] == [
@@ -329,3 +330,70 @@ def test_synthetic_audit_output_example():
         "limit",
         "offset",
     ]
+
+
+def test_tail_beyond_local_max_marked_as_gap_pending():
+    """Si to_folio > máximo PG, los huecos finales quedan gap_pending/beyond_local_max."""
+
+    def loader(**_k):
+        return _local(200, 201)
+
+    report = audit.audit_oc_correlatives(
+        None,
+        company_id=3,
+        office_id=1,
+        from_folio=200,
+        to_folio=205,
+        investigate=False,
+        local_loader=loader,
+        bounds_loader=lambda **_k: {"min_folio": 200, "max_folio": 201, "positive_count": 2},
+    )
+    assert report["to_folio_beyond_local_max"] is True
+    assert report["gaps_beyond_local_max"] >= 1
+    beyond = [f for f in report["findings"] if f.get("beyond_local_max")]
+    assert {f["folio"] for f in beyond} == {202, 203, 204, 205}
+    assert all(f["status"] == audit.STATUS_GAP_PENDING for f in beyond)
+    assert report["wrote"] is False
+
+
+def test_suggest_recent_range_anchors_to_local_max():
+    suggested = audit.suggest_recent_folio_range(
+        company_id=3,
+        office_id=1,
+        window=10,
+        bounds_loader=lambda **_k: {
+            "min_folio": 100,
+            "max_folio": 70627,
+            "positive_count": 1000,
+            "company_id": 3,
+            "office_id": 1,
+            "document_type_id": 33,
+        },
+    )
+    assert suggested["to_folio"] == 70627
+    assert suggested["from_folio"] == 70618
+
+
+def test_investigate_selected_respects_batch_cap_and_429():
+    calls = []
+
+    def search(*_a, folio, **_k):
+        calls.append(folio)
+        if folio == 2:
+            raise RuntimeError("Bsale HTTP 429 Too Many Requests")
+        return [_oc(folio, number=folio)]
+
+    report = audit.investigate_selected_folios(
+        MagicMock(),
+        folios=[1, 2, 3, 4, 5],
+        max_folios=3,
+        local_loader=lambda **_k: _local(),
+        search_fn=search,
+    )
+    assert report["investigated"] == 3
+    assert report["truncated"] is True
+    assert report["wrote"] is False
+    statuses = {f["folio"]: f["status"] for f in report["findings"]}
+    assert statuses[1] == audit.STATUS_MISSING_IN_PG
+    assert statuses[2] == audit.STATUS_VERIFICATION_ERROR
+    assert "429" in report["findings"][1]["error"]
