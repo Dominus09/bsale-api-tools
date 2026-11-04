@@ -315,6 +315,35 @@ def normalize_folio_inputs(raw_folios: list[Any]) -> dict[str, Any]:
     }
 
 
+def _serialize_client_geo(oc_row: dict[str, Any]) -> dict[str, Any]:
+    """Cliente + georref desde bsale.clients (lat/lon). Sin inventar coordenadas."""
+    lat = oc_row.get("lat")
+    lng = oc_row.get("lng")
+    has_geo = bool(oc_row.get("has_georef"))
+    if lat is None or lng is None:
+        has_geo = False
+        lat_f = None
+        lng_f = None
+    else:
+        try:
+            lat_f = float(lat)
+            lng_f = float(lng)
+            has_geo = True
+        except (TypeError, ValueError):
+            has_geo = False
+            lat_f = None
+            lng_f = None
+    return {
+        "client_id": _int(oc_row.get("client_id")),
+        "client_name": oc_row.get("client_name"),
+        "municipality": oc_row.get("municipality"),
+        "address": oc_row.get("address"),
+        "has_georef": has_geo,
+        "lat": lat_f,
+        "lng": lng_f,
+    }
+
+
 def _load_ocs_by_folios(
     *,
     company_id: int,
@@ -360,7 +389,10 @@ def _load_ocs_by_folios(
                         NULLIF(BTRIM(c.first_name), ''),
                         NULLIF(BTRIM(c.last_name), '')
                     )
-                ) AS client_name
+                ) AS client_name,
+                (c.lat IS NOT NULL AND c.lon IS NOT NULL) AS has_georef,
+                c.lat::double precision AS lat,
+                c.lon::double precision AS lng
             FROM distribuidora.documents d
             LEFT JOIN bsale.clients c
                 ON c.company_id = d.company_id
@@ -846,14 +878,7 @@ def preview_ocs_from_folios(
                 products=products,
             ),
             "fingerprint_parts": fp_parts,
-            "client": {
-                "client_id": client_id_n,
-                "client_name": (oc_row or {}).get("client_name"),
-                "municipality": (oc_row or {}).get("municipality"),
-                "address": (oc_row or {}).get("address"),
-            }
-            if oc_row
-            else None,
+            "client": _serialize_client_geo(oc_row) if oc_row else None,
             "emission_date": emission.isoformat()
             if hasattr(emission, "isoformat")
             else (str(emission) if emission else None),
