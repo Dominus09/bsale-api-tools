@@ -9,6 +9,7 @@ import pytest
 from backend.services.distribuidora.simple_planning_ors_service import (
     SimplePlanningOrsError,
     calculate_simple_planning_route,
+    recompute_ors_snapshot_for_session,
     route_input_fingerprint,
     validate_ors_snapshot_for_orders,
 )
@@ -131,8 +132,12 @@ def test_calculate_route_ok_preserve_order_and_snapshot():
         )
         assert out["ok"] is True
         assert out["ors_metrics_calculated"] is True
+        assert out["route_coverage"] == "full"
         assert out["distance_km"] == 22.5
         assert out["ors_snapshot"]["route_geometry"]["type"] == "LineString"
+        assert out["ors_snapshot"]["route_geometry"]["quillotana_route_meta"][
+            "route_coverage"
+        ] == "full"
         assert compute.call_args.kwargs["preserve_order"] is True
         assert [s["document_id"] for s in compute.call_args.kwargs["stops"]] == [10, 20]
 
@@ -163,3 +168,149 @@ def test_validate_ors_snapshot_rejects_truck_change():
             )
             is None
         )
+
+
+def test_partial_route_labels_coverage_and_excludes_pending():
+    stops_geo = [
+        {
+            "document_id": 10,
+            "folio": 100,
+            "client_id": 1,
+            "client_name": "A",
+            "address": "Calle 1",
+            "municipality": "X",
+            "has_georef": True,
+            "lat": -43.12,
+            "lng": -73.64,
+            "oc_document_ids": [10],
+            "folios": [100],
+        },
+    ]
+    pending = [
+        {
+            "document_id": 20,
+            "folio": 200,
+            "client_id": 2,
+            "client_name": "B",
+            "address": "Calle 2",
+            "municipality": "Y",
+            "has_georef": False,
+            "lat": None,
+            "lng": None,
+            "missing_georef_reason": "client_lat_lon_null",
+        },
+        {
+            "document_id": 21,
+            "folio": 201,
+            "client_id": 2,
+            "client_name": "B",
+            "address": "Calle 2",
+            "municipality": "Y",
+            "has_georef": False,
+            "lat": None,
+            "lng": None,
+            "missing_georef_reason": "client_lat_lon_null",
+        },
+    ]
+    ors_row = {
+        "distance_km": 8.0,
+        "duration_min": 20.0,
+        "geometry": {"type": "LineString", "coordinates": [[1, 2], [3, 4]]},
+        "stops_ordered": [{"document_id": 10, "stop_index": 1}],
+        "liters_estimated": 1.0,
+        "fuel_cost_clp": 1000,
+        "crew_cost_clp": 5000,
+        "cost_breakdown": {"total_clp": 6000},
+        "depot": {"lat": -43.13, "lng": -73.63},
+    }
+    with (
+        patch(
+            "backend.services.distribuidora.simple_planning_ors_service._check_rate_limit"
+        ),
+        patch(
+            "backend.services.distribuidora.simple_planning_ors_service._load_stops_from_db",
+            return_value=(stops_geo, pending, stops_geo),
+        ),
+        patch(
+            "backend.services.distribuidora.simple_planning_ors_service.get_connection",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "backend.services.distribuidora.simple_planning_ors_service.get_diesel_price_per_liter",
+            return_value=900.0,
+        ),
+        patch(
+            "backend.services.distribuidora.simple_planning_ors_service.load_active_trucks",
+            return_value=({2: {"id": 2, "name": "T"}}, {"T": {"id": 2}}),
+        ),
+        patch(
+            "backend.services.distribuidora.simple_planning_ors_service.get_logistics_cost_settings",
+            return_value=object(),
+        ),
+        patch(
+            "backend.services.distribuidora.simple_planning_ors_service.compute_ors_route_for_truck",
+            return_value=ors_row,
+        ),
+    ):
+        out = calculate_simple_planning_route(
+            user_id=1,
+            company_id=3,
+            office_id=1,
+            truck_id=2,
+            document_ids=[10, 20, 21],
+        )
+    assert out["ok"] is True
+    assert out["route_coverage"] == "partial"
+    assert out["clients_georef"] == 1
+    assert out["clients_pending"] == 1  # consolidado cliente 2
+    assert out["km_scope"] == "georeferenced_stops_only"
+    assert out["ors_snapshot"]["route_coverage"] == "partial"
+    assert "parcial" in (out.get("message") or "").lower()
+
+
+def test_recompute_ors_ignores_forged_frontend_metrics():
+    """Seguridad: km/costos del payload FE no se confían; se recalcula en servidor."""
+    real_snap = {
+        "route_fingerprint": "fp-real",
+        "truck_id": 2,
+        "document_ids": [10],
+        "distance_km": 12.0,
+        "total_route_cost_clp": 8000,
+        "route_coverage": "full",
+        "route_geometry": {"type": "LineString", "coordinates": []},
+    }
+    with patch(
+        "backend.services.distribuidora.simple_planning_ors_service.calculate_simple_planning_route",
+        return_value={"ok": True, "ors_snapshot": real_snap},
+    ) as calc:
+        snap = recompute_ors_snapshot_for_session(
+            user_id=1,
+            company_id=3,
+            office_id=1,
+            truck_id=2,
+            document_ids=[10],
+            client_hint_fingerprint="fp-real",
+        )
+    assert snap["distance_km"] == 12.0
+    assert snap["total_route_cost_clp"] == 8000
+    calc.assert_called_once()
+
+
+def test_recompute_ors_rejects_stale_fingerprint():
+    with patch(
+        "backend.services.distribuidora.simple_planning_ors_service.calculate_simple_planning_route",
+        return_value={
+            "ok": True,
+            "ors_snapshot": {"route_fingerprint": "fp-new", "distance_km": 1},
+        },
+    ):
+        with pytest.raises(SimplePlanningOrsError) as ei:
+            recompute_ors_snapshot_for_session(
+                user_id=1,
+                company_id=3,
+                office_id=1,
+                truck_id=2,
+                document_ids=[10],
+                client_hint_fingerprint="fp-old-forged",
+            )
+        assert ei.value.code == "ors_snapshot_stale"

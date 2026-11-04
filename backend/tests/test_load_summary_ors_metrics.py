@@ -58,3 +58,29 @@ def test_ors_zeros_remain_numeric():
     )
     assert out["costs"]["route_total_clp"] == 0
     assert out["costs"]["ors_metrics_calculated"] is True
+
+
+def test_partial_route_coverage_note_not_full_dispatch():
+    geom = {
+        "type": "LineString",
+        "coordinates": [[-73.6, -43.1], [-73.5, -43.2]],
+        "quillotana_route_meta": {
+            "route_coverage": "partial",
+            "clients_total": 12,
+            "clients_georef": 9,
+            "clients_pending": 3,
+            "km_scope": "georeferenced_stops_only",
+        },
+    }
+    out = _base(
+        planning_origin="simple_list",
+        ors_metrics_calculated=True,
+        km_total=18.5,
+        total_route_cost_clp=12000,
+        route_geometry=geom,
+    )
+    assert out["costs"]["route_coverage"] == "partial"
+    assert out["costs"]["clients_pending"] == 3
+    assert out["costs"]["route_total_clp"] == 12000
+    assert out["costs"]["note"]
+    assert "parcial" in out["costs"]["note"].lower()
