@@ -108,6 +108,10 @@ export function DispatchPlanDetailShell({
     DISPATCH_PLAN_PICKING_WAIT_MESSAGE
 
   const [tab, setTab] = useState("resumen")
+  /** Montaje diferido: evita API/carga pesada hasta la 1ª visita; luego se conserva el estado. */
+  const [visitedTabs, setVisitedTabs] = useState<Record<string, boolean>>({
+    resumen: true,
+  })
   const [busy, setBusy] = useState<string | null>(null)
   const [pickingClient, setPickingClient] = useState<DispatchPlanPickingClientResponse | null>(
     null,
@@ -172,10 +176,14 @@ export function DispatchPlanDetailShell({
 
   const onTabChange = (value: string) => {
     setTab(value)
+    setVisitedTabs((prev) => (prev[value] ? prev : { ...prev, [value]: true }))
     if ((value === "picking" || value === "picking-cliente") && !pickingClientLoaded) {
       void refreshPickingFromDb().catch(() => undefined)
     }
   }
+
+  const tabPanelClass =
+    "mt-4 space-y-4 focus-visible:outline-none data-[state=inactive]:hidden"
 
   const routeCalculated = plan.ors_metrics_calculated !== false
   const routeCoverage = costs?.route_coverage
@@ -305,11 +313,7 @@ export function DispatchPlanDetailShell({
         </div>
 
         {/* ——— RESUMEN ——— */}
-        <TabsContent
-          value="resumen"
-          forceMount
-          className="mt-4 space-y-4 focus-visible:outline-none data-[state=inactive]:hidden"
-        >
+        <TabsContent value="resumen" forceMount className={tabPanelClass}>
           {dashboardLoading ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" /> Actualizando…
@@ -512,168 +516,186 @@ export function DispatchPlanDetailShell({
         {/* ——— RUTA ——— */}
         <TabsContent
           value="ruta"
-          forceMount
-          className="mt-4 space-y-4 focus-visible:outline-none data-[state=inactive]:hidden"
+          forceMount={Boolean(visitedTabs.ruta)}
+          className={tabPanelClass}
         >
-          <h2 className="text-base font-semibold sm:text-lg">Ruta y costos</h2>
-          <p className="text-xs text-muted-foreground">
-            {truckLabel} · {planDate} · {driverLabel}
-          </p>
+          {visitedTabs.ruta ? (
+            <>
+              <h2 className="text-base font-semibold sm:text-lg">Ruta y costos</h2>
+              <p className="text-xs text-muted-foreground">
+                {truckLabel} · {planDate} · {driverLabel}
+              </p>
 
-          <section className="space-y-3 rounded-lg border border-border/70 bg-card/50 p-4">
-            <h3 className="text-sm font-semibold">Mapa y cobertura</h3>
-            <div className="flex flex-wrap items-center gap-3">
-              <Button asChild variant="secondary" size="sm">
-                <Link href={`/distribuidora/planificaciones/${planId}/mapa`}>
-                  Abrir mapa de entregas
-                </Link>
-              </Button>
-              {costs?.clients_pending != null && Number(costs.clients_pending) > 0 ? (
-                <p className="text-sm text-amber-800 dark:text-amber-200">
-                  Clientes sin georreferencia: {costs.clients_pending}
-                  {costs.clients_total != null ? ` de ${costs.clients_total}` : ""}
-                </p>
-              ) : (
-                <p className="text-sm text-muted-foreground">Cobertura geo disponible según ORS.</p>
-              )}
-            </div>
-          </section>
+              <section className="space-y-3 rounded-lg border border-border/70 bg-card/50 p-4">
+                <h3 className="text-sm font-semibold">Mapa y cobertura</h3>
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button asChild variant="secondary" size="sm">
+                    <Link href={`/distribuidora/planificaciones/${planId}/mapa`}>
+                      Abrir mapa de entregas
+                    </Link>
+                  </Button>
+                  {costs?.clients_pending != null && Number(costs.clients_pending) > 0 ? (
+                    <p className="text-sm text-amber-800 dark:text-amber-200">
+                      Clientes sin georreferencia: {costs.clients_pending}
+                      {costs.clients_total != null ? ` de ${costs.clients_total}` : ""}
+                    </p>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      Cobertura geo disponible según ORS.
+                    </p>
+                  )}
+                </div>
+              </section>
 
-          <section className="space-y-3">
-            <h3 className="text-sm font-semibold">Métricas de ruta</h3>
-            {!routeCalculated ? (
-              <Alert className="border-amber-500/30 bg-amber-500/5">
-                <AlertTitle className="text-sm">Ruta no calculada</AlertTitle>
-                <AlertDescription className="text-sm">
-                  Este despacho no tiene métricas ORS. No se inventan km, duración ni costo de
-                  transporte.
-                </AlertDescription>
-              </Alert>
-            ) : null}
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <KpiCard
-                label="Kilómetros"
-                value={
-                  !routeCalculated ? "Ruta no calculada" : Number(plan.km_total ?? 0).toFixed(1)
-                }
-                sub={
-                  routeCoverage === "partial" ? "Solo paradas con geo" : undefined
-                }
-              />
-              <KpiCard
-                label="Duración"
-                value={
-                  !routeCalculated || plan.duration_min == null
-                    ? "Ruta no calculada"
-                    : `${Math.round(Number(plan.duration_min))} min`
-                }
-              />
-              <KpiCard
-                label="Costo de transporte"
-                value={
-                  !routeCalculated
-                    ? "Ruta no calculada"
-                    : formatClp(plan.total_route_cost_clp ?? 0)
-                }
-              />
-              <KpiCard
-                label="Después del transporte"
-                value={
-                  margin?.net_operational_clp == null
-                    ? "No disponible"
-                    : formatClp(margin.net_operational_clp)
-                }
-                sub="Requiere margen comercial y ruta ORS completa"
-              />
-            </div>
-          </section>
+              <section className="space-y-3">
+                <h3 className="text-sm font-semibold">Métricas de ruta</h3>
+                {!routeCalculated ? (
+                  <Alert className="border-amber-500/30 bg-amber-500/5">
+                    <AlertTitle className="text-sm">Ruta no calculada</AlertTitle>
+                    <AlertDescription className="text-sm">
+                      Este despacho no tiene métricas ORS. No se inventan km, duración ni costo de
+                      transporte.
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <KpiCard
+                    label="Kilómetros"
+                    value={
+                      !routeCalculated
+                        ? "Ruta no calculada"
+                        : Number(plan.km_total ?? 0).toFixed(1)
+                    }
+                    sub={
+                      routeCoverage === "partial" ? "Solo paradas con geo" : undefined
+                    }
+                  />
+                  <KpiCard
+                    label="Duración"
+                    value={
+                      !routeCalculated || plan.duration_min == null
+                        ? "Ruta no calculada"
+                        : `${Math.round(Number(plan.duration_min))} min`
+                    }
+                  />
+                  <KpiCard
+                    label="Costo de transporte"
+                    value={
+                      !routeCalculated
+                        ? "Ruta no calculada"
+                        : formatClp(plan.total_route_cost_clp ?? 0)
+                    }
+                  />
+                  <KpiCard
+                    label="Después del transporte"
+                    value={
+                      margin?.net_operational_clp == null
+                        ? "No disponible"
+                        : formatClp(margin.net_operational_clp)
+                    }
+                    sub="Requiere margen comercial y ruta ORS completa"
+                  />
+                </div>
+              </section>
+            </>
+          ) : null}
         </TabsContent>
 
         {/* ——— PICKING ——— */}
         <TabsContent
           value="picking"
-          forceMount
-          className="mt-4 space-y-5 focus-visible:outline-none data-[state=inactive]:hidden"
+          forceMount={Boolean(visitedTabs.picking)}
+          className={cn(tabPanelClass, "space-y-5")}
         >
-          <h2 className="text-base font-semibold sm:text-lg">Picking y carga</h2>
-          <p className="text-xs text-muted-foreground">
-            {truckLabel} · {pickingStatusLabel}
-          </p>
+          {visitedTabs.picking ? (
+            <>
+              <h2 className="text-base font-semibold sm:text-lg">Picking y carga</h2>
+              <p className="text-xs text-muted-foreground">
+                {truckLabel} · {pickingStatusLabel}
+              </p>
 
-          <div className="grid gap-4 lg:grid-cols-2">
-            <section className="space-y-2 rounded-lg border border-border/70 bg-card/50 p-4">
-              <h3 className="text-sm font-semibold">Picking clientes</h3>
-              <DispatchPlanPickingClientePanel
-                planId={planId}
-                pickingReady={pickingReady}
-                blockedMessage={pickingBlockedMessage}
-                data={pickingClient}
-                loading={pickingClientLoading}
-                onGenerate={(opts) => void generatePicking(opts)}
-                onRefresh={() => void refreshPickingFromDb()}
-                onMessage={onMessage}
-              />
-            </section>
-            <section className="space-y-2 rounded-lg border border-border/70 bg-card/50 p-4">
-              <h3 className="text-sm font-semibold">Picking productos</h3>
-              <DispatchPlanPickingProductoPanel
-                planId={planId}
-                pickingReady={pickingReady}
-                blockedMessage={pickingBlockedMessage}
-                data={pickingProduct}
-                loading={pickingProductLoading}
-                onRefresh={() => void refreshPickingFromDb()}
-                onMessage={onMessage}
-              />
-            </section>
-          </div>
+              <div className="grid gap-4 lg:grid-cols-2">
+                <section className="space-y-2 rounded-lg border border-border/70 bg-card/50 p-4">
+                  <h3 className="text-sm font-semibold">Picking clientes</h3>
+                  <DispatchPlanPickingClientePanel
+                    planId={planId}
+                    pickingReady={pickingReady}
+                    blockedMessage={pickingBlockedMessage}
+                    data={pickingClient}
+                    loading={pickingClientLoading}
+                    onGenerate={(opts) => void generatePicking(opts)}
+                    onRefresh={() => void refreshPickingFromDb()}
+                    onMessage={onMessage}
+                  />
+                </section>
+                <section className="space-y-2 rounded-lg border border-border/70 bg-card/50 p-4">
+                  <h3 className="text-sm font-semibold">Picking productos</h3>
+                  <DispatchPlanPickingProductoPanel
+                    planId={planId}
+                    pickingReady={pickingReady}
+                    blockedMessage={pickingBlockedMessage}
+                    data={pickingProduct}
+                    loading={pickingProductLoading}
+                    onRefresh={() => void refreshPickingFromDb()}
+                    onMessage={onMessage}
+                  />
+                </section>
+              </div>
 
-          <section className="space-y-2 rounded-lg border border-border/70 bg-card/40 p-4">
-            <h3 className="text-sm font-semibold">Asignación y carga</h3>
-            <DispatchPlanPickingAssignmentPanel
-              planId={planId}
-              planStatus={dashboard.plan.status}
-              planningCode={dashboard.plan.planning_code}
-              onMessage={onMessage}
-              onReloadDashboard={onReloadDashboard}
-            />
-          </section>
+              <section className="space-y-2 rounded-lg border border-border/70 bg-card/40 p-4">
+                <h3 className="text-sm font-semibold">Asignación y carga</h3>
+                <DispatchPlanPickingAssignmentPanel
+                  planId={planId}
+                  planStatus={dashboard.plan.status}
+                  planningCode={dashboard.plan.planning_code}
+                  onMessage={onMessage}
+                  onReloadDashboard={onReloadDashboard}
+                />
+              </section>
+            </>
+          ) : null}
         </TabsContent>
 
         {/* ——— CHOFER ——— */}
         <TabsContent
           value="chofer"
-          forceMount
-          className="mt-4 space-y-4 focus-visible:outline-none data-[state=inactive]:hidden"
+          forceMount={Boolean(visitedTabs.chofer)}
+          className={tabPanelClass}
         >
-          <h2 className="text-base font-semibold sm:text-lg">Chofer y auditoría</h2>
-          <p className="text-xs text-muted-foreground">
-            {planCode} · {truckLabel} · {planDate}
-          </p>
-          <DispatchPlanDriverAssign
-            planId={planId}
-            planningOrigin={plan.planning_origin}
-            onAssigned={() => {
-              void onReloadDashboard()
-            }}
-          />
+          {visitedTabs.chofer ? (
+            <>
+              <h2 className="text-base font-semibold sm:text-lg">Chofer y auditoría</h2>
+              <p className="text-xs text-muted-foreground">
+                {planCode} · {truckLabel} · {planDate}
+              </p>
+              <DispatchPlanDriverAssign
+                planId={planId}
+                planningOrigin={plan.planning_origin}
+                onAssigned={() => {
+                  void onReloadDashboard()
+                }}
+              />
+            </>
+          ) : null}
         </TabsContent>
 
         {/* ——— CIERRE ——— */}
         <TabsContent
           value="cierre"
-          forceMount
-          className="mt-4 space-y-4 focus-visible:outline-none data-[state=inactive]:hidden"
+          forceMount={Boolean(visitedTabs.cierre)}
+          className={tabPanelClass}
         >
-          <DispatchPlanCuadraturaPanel
-            planId={planId}
-            onMessage={onMessage}
-            contextLine={{
-              driver: driverLabel,
-              truck: truckLabel,
-              planCode,
-            }}
-          />
+          {visitedTabs.cierre ? (
+            <DispatchPlanCuadraturaPanel
+              planId={planId}
+              onMessage={onMessage}
+              contextLine={{
+                driver: driverLabel,
+                truck: truckLabel,
+                planCode,
+              }}
+            />
+          ) : null}
         </TabsContent>
       </Tabs>
     </div>
