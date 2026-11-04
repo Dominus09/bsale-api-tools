@@ -285,24 +285,26 @@ def build_picking_client_excel(
 
     presented = enrich_client_presentation(clients)
     # Hoja legible (bodega/chofer). Conserva orden de entrega.
+    # Hoja legible alineada al formato operativo de chofer (sin campos E3/E4 de ruta).
     present_rows = [
         {
             "Parada": c.get("stop_number"),
-            "orden_ruta": c.get("route_order"),
-            "Comuna": c.get("display_commune") or c.get("city"),
-            "Sector": c.get("display_sector") or "",
+            "Ciudad": (
+                f"{c.get('display_commune')} · {c.get('display_sector')}"
+                if c.get("display_sector")
+                else (c.get("display_commune") or c.get("city") or "")
+            ),
             "Cliente": c.get("client_name"),
-            "Nombre fantasía": c.get("fantasy_name"),
             "Dirección": c.get("address"),
-            "Teléfono": c.get("phone"),
-            "Nº documento": (
+            "Celular cliente": c.get("phone"),
+            "Número documento": (
                 str(c.get("document_number")) if c.get("document_number") is not None else ""
             ),
-            "Tipo documento": c.get("document_type"),
-            "Forma de pago (documento)": c.get("payment_method"),
+            "Formato de pago": c.get("payment_method"),
+            "Nombre de fantasía": c.get("fantasy_name"),
+            "OBS": c.get("observations"),
             "Vendedor": c.get("seller_name"),
-            "Observaciones": c.get("observations"),
-            "Total documento": c.get("document_total"),
+            "Total": c.get("document_total"),
         }
         for c in presented
     ]
@@ -336,8 +338,8 @@ def build_picking_client_excel(
         pd.DataFrame(present_rows).to_excel(writer, sheet_name="Picking cliente", index=False)
         _style_sheet(
             writer.sheets["Picking cliente"],
-            money_cols={"Total documento"},
-            text_cols={"Nº documento", "Teléfono"},
+            money_cols={"Total"},
+            text_cols={"Número documento", "Celular cliente"},
         )
         pd.DataFrame(tech_rows).to_excel(writer, sheet_name="Datos técnicos", index=False)
         _style_sheet(
@@ -379,22 +381,23 @@ def build_picking_product_excel(
         )
         present_rows.append(
             {
+                "Sucursal origen": i.get("sucursal_bodega"),
                 "Categoría": i.get("tipo_producto"),
                 "Producto": i.get("display_name") or i.get("producto_variante"),
                 "Código de barras": (
                     str(i.get("codigo_barras")) if i.get("codigo_barras") is not None else ""
                 ),
-                "Cantidad solicitada": i.get("unidades"),
-                "Presentación comercial": pack or "",
-                "Cajas (ref. units_per_box)": i.get("cajas") if not i.get("sin_unidad_caja") else "",
+                "Cantidad": i.get("unidades"),
+                "Equiv. cajas (SEC)": pack or "",
+                "Cajas ref. units_per_box": i.get("cajas") if not i.get("sin_unidad_caja") else "",
                 "Sin unidad caja": "Sí" if i.get("sin_unidad_caja") else "",
-                "Cantidad preparada": "",
-                "Cantidad cargada": "",
+                "Cantidad preparada (física)": "",
+                "Cantidad cargada (física)": "",
                 "Diferencia / faltante": "",
-                "Bodega": i.get("sucursal_bodega"),
                 "Total": i.get("total_monto"),
                 "Camión": header.get("truck_name"),
-                "Planificación": header.get("planning_number"),
+                "Nº picking": header.get("planning_number"),
+                "Sello": header.get("sello") or "",
             }
         )
         tech_rows.append(

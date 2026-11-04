@@ -16,6 +16,31 @@ export function formatOperativeBoxes(value: number): string {
   return value.toFixed(2)
 }
 
+/** Cantidades operativas: conserva fracciones; no redondea a entero arbitrario. */
+export function formatPickingQuantity(value: number | null | undefined): string {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return "—"
+  const rounded = Math.round(n * 100) / 100
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2)
+}
+
+/** Equivalencia comercial de cajas (SEC), distinta de cajas físicas preparadas/cargadas. */
+export function commercialBoxEquivLabel(row: {
+  units_per_box?: number | null
+  units_per_box_efectivo?: number | null
+  unidades?: number | null
+  sin_unidad_caja?: boolean | null
+}): string {
+  const upb = Number(row.units_per_box_efectivo ?? row.units_per_box) || 0
+  const units = Number(row.unidades) || 0
+  if (upb <= 0) return row.sin_unidad_caja ? "s/caja" : "—"
+  const packs = units > 0 ? Math.round((units / upb) * 100) / 100 : null
+  const sec = Number.isInteger(upb) ? String(upb) : String(upb)
+  if (packs == null) return `SEC${sec}`
+  const packsLabel = Number.isInteger(packs) ? String(packs) : packs.toFixed(2)
+  return `${packsLabel} × SEC${sec}`
+}
+
 export function effectiveBoxes(row: DispatchPlanPickingProductRow): number {
   if (row.cajas_efectivas != null) return roundBoxes(Number(row.cajas_efectivas) || 0)
   const u = Number(row.unidades) || 0
@@ -48,7 +73,7 @@ export function categoryStatsFromItems(
   const lineCount = items.filter((i) => normalizePickingCategory(i.tipo_producto) === cat).length
   return {
     skus: barcodes.size || lineCount,
-    units: Math.round(units),
+    units: Math.round(units * 100) / 100,
     boxes: roundBoxes(boxes),
     monto: Math.round(monto),
   }
@@ -164,15 +189,19 @@ export type CityGroupedRow<T> = {
   rows: T[]
 }
 
-/** Agrupa filas por ciudad normalizada; conserva la primera etiqueta vista. */
+/**
+ * Agrupa por comuna canónica (sin sector), para no dividir Quellón/Quellon.
+ * El sector queda en la etiqueta de fila; no reordena la ruta.
+ */
 export function groupRowsByCity<T extends { city?: string | null }>(
   rows: T[],
 ): CityGroupedRow<T>[] {
   const map = new Map<string, CityGroupedRow<T>>()
   const order: string[] = []
   for (const row of rows) {
-    const key = normalizeCityKey(row.city) || "__sin_ciudad__"
-    const label = displayCityLabel(row.city) || "Sin ciudad"
+    const geo = parseCommuneSector(row.city)
+    const key = geo.communeKey || normalizeCityKey(row.city) || "__sin_ciudad__"
+    const label = geo.displayCommune || displayCityLabel(row.city) || "Sin ciudad"
     let group = map.get(key)
     if (!group) {
       group = { cityKey: key, cityLabel: label, rows: [] }

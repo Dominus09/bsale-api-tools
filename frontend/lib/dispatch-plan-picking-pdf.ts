@@ -3,11 +3,12 @@ import {
   categoryStatsFromItems,
   clientDeliveryNotes,
   clientPhone,
+  commercialBoxEquivLabel,
   countDistinctClients,
   displayCityLabel,
   effectiveBoxes,
   formatOperativeBoxes,
-  normalizeCityKey,
+  formatPickingQuantity,
   normalizePickingCategory,
   parseCommuneSector,
   productLineLabel,
@@ -83,59 +84,9 @@ function sellerLine(client: DispatchPlanPickingClientRow): string {
   return phone ? `${name} · ${phone}` : name
 }
 
-function drawOperativePlanBlock(
-  doc: import("jspdf").jsPDF,
-  header: DispatchPlanPickingHeader,
-  y: number,
-): number {
-  const pageW = doc.internal.pageSize.getWidth()
-  const w = contentWidth(pageW)
-  const rows = [
-    ["Planificación", planLabel(header)],
-    ["Vehículo", header.truck_name || "—"],
-    ["Chofer", crewLabel(header)],
-    ["Peoneta(s)", assistantLabel(header)],
-  ]
-  const blockH = rows.length * 4.2 + 3
-  doc.setFillColor(248, 250, 252)
-  doc.rect(MARGIN.left, y, w, blockH, "F")
-  doc.setDrawColor(210, 214, 220)
-  doc.setLineWidth(0.15)
-  doc.rect(MARGIN.left, y, w, blockH, "S")
-  doc.setFontSize(6.8)
-  let ty = y + 3.5
-  for (const [label, value] of rows) {
-    doc.setFont("helvetica", "bold")
-    doc.text(`${label}:`, MARGIN.left + 2, ty)
-    doc.setFont("helvetica", "normal")
-    doc.text(value, MARGIN.left + 28, ty, { maxWidth: w - 30 })
-    ty += 4.2
-  }
-  return y + blockH + 2
-}
-
-function drawClientOperativeBand(
-  doc: import("jspdf").jsPDF,
-  header: DispatchPlanPickingHeader,
-  client: DispatchPlanPickingClientRow,
-  y: number,
-  pageW: number,
-): number {
-  const w = contentWidth(pageW)
-  const bandH = 8.5
-  doc.setFillColor(241, 245, 249)
-  doc.rect(MARGIN.left, y, w, bandH, "F")
-  doc.setDrawColor(203, 213, 225)
-  doc.setLineWidth(0.15)
-  doc.rect(MARGIN.left, y, w, bandH, "S")
-  doc.setFontSize(6.5)
-  const clientName = client.fantasy_name || client.client_name || "—"
-  const monto = formatClp(Number(client.document_total) || 0)
-  const line = `Cliente: ${clientName}  ·  Vendedor: ${sellerLine(client)}  ·  Chofer: ${crewLabel(header)}  ·  Peoneta: ${assistantLabel(header)}  ·  Monto: ${monto}`
-  doc.setFont("helvetica", "bold")
-  doc.text(line, MARGIN.left + 1.5, y + 5.2, { maxWidth: w - 3 })
-  doc.setFont("helvetica", "normal")
-  return y + bandH + 1.5
+function sealLabel(header: DispatchPlanPickingHeader): string {
+  const s = (header.sello || "").trim()
+  return s || "—"
 }
 
 function contentWidth(pageW: number): number {
@@ -281,12 +232,12 @@ function drawBrandedHeader(
     HEADER_TEXT_TOP + 9,
   )
   doc.text(
-    `Chofer: ${crewLabel(header)} · Peonetas: ${assistantLabel(header)}`,
+    `Chofer: ${crewLabel(header)} · Peonetas: ${assistantLabel(header)} · Sello: ${sealLabel(header)}`,
     textX,
     HEADER_TEXT_TOP + 13,
   )
   doc.text(
-    `${header.route_name}${header.communes ? ` · ${header.communes}` : ""}`,
+    `${header.route_name || ""}${header.communes ? ` · ${header.communes}` : ""}`,
     textX,
     HEADER_TEXT_TOP + 17,
   )
@@ -316,13 +267,14 @@ function fitColumns(cols: PdfCol[], targetWidth: number): PdfCol[] {
   return cols.map((c) => ({ ...c, w: Math.round(c.w * scale * 10) / 10 }))
 }
 
-export async function exportDispatchPlanPickingClientePdf(params: {
+/** Construye PDF picking cliente (tabla compacta operativa). Exportable para muestras. */
+export async function buildDispatchPlanPickingClientePdf(params: {
   header: DispatchPlanPickingHeader
   clients: DispatchPlanPickingClientRow[]
   warnings?: string[]
   version?: number | null
   generatedAt?: string | null
-}): Promise<void> {
+}): Promise<import("jspdf").jsPDF> {
   const { jsPDF } = await import("jspdf")
   const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "letter" })
   const pageW = doc.internal.pageSize.getWidth()
@@ -335,23 +287,25 @@ export async function exportDispatchPlanPickingClientePdf(params: {
     planningNumber: planLabel(params.header),
   }
   const mode = layoutForRowCount(params.clients.length)
-  const fontSize = mode === "comfortable" ? 6.8 : mode === "compact" ? 5.3 : 6.2
-  const lineH = fontSize * 0.42
+  const fontSize = mode === "comfortable" ? 6.5 : mode === "compact" ? 5.1 : 5.8
+  const lineH = fontSize * 0.4
   const bottomY = pageH - MARGIN.bottom - 5
   const x0 = MARGIN.left
 
+  // Tabla compacta alineada al formato operativo (Excel chofer / PDF impreso).
   const cols = fitColumns(
     [
       { key: "Orden", w: 7 },
-      { key: "Ciudad", w: 14 },
+      { key: "Ciudad / sector", w: 16 },
       { key: "Cliente", w: 22 },
-      { key: "Fantasía", w: 18 },
-      { key: "Teléfono", w: 17 },
-      { key: "Dirección", w: 52 },
-      { key: "Documento", w: 13 },
-      { key: "Pago", w: 10 },
-      { key: "Observaciones", w: 44 },
-      { key: "Total", w: 18, align: "right" },
+      { key: "Fantasía", w: 16 },
+      { key: "Teléfono", w: 14 },
+      { key: "Dirección", w: 36 },
+      { key: "Documento", w: 12 },
+      { key: "Pago", w: 12 },
+      { key: "Obs", w: 22 },
+      { key: "Vendedor", w: 16 },
+      { key: "Total", w: 15, align: "right" },
     ],
     contentWidth(pageW),
   )
@@ -379,7 +333,7 @@ export async function exportDispatchPlanPickingClientePdf(params: {
     y += 1
   }
 
-  const headH = mode === "compact" ? 4.5 : 5.5
+  const headH = mode === "compact" ? 4.2 : 5
   const drawHead = () => {
     doc.setFontSize(fontSize)
     y = drawTableHeader(doc, cols, x0, y + headH, fontSize, headH)
@@ -387,7 +341,6 @@ export async function exportDispatchPlanPickingClientePdf(params: {
 
   drawHead()
 
-  let lastCityKey = ""
   let total = 0
   let rowIdx = 0
   const minRouteOrder = params.clients.reduce((min, c) => {
@@ -397,36 +350,10 @@ export async function exportDispatchPlanPickingClientePdf(params: {
 
   for (const c of params.clients) {
     const geo = parseCommuneSector(c.city)
-    const cityKey = geo.communeKey || normalizeCityKey(c.city)
-    const cityLabel = geo.headerLabel || displayCityLabel(c.city)
-    if (cityKey && cityKey !== lastCityKey) {
-      if (y > bottomY - 8) {
-        doc.addPage()
-        y = drawBrandedHeader(
-          doc,
-          MARGIN.top,
-          params.header,
-          "Picking Cliente (cont.)",
-          kpiLine,
-          logo,
-          logoState,
-        )
-        drawHead()
-      }
-      doc.setFont("helvetica", "bold")
-      doc.setFontSize(fontSize + 0.3)
-      doc.text(geo.displayCommune || cityLabel, x0, y + 2.5)
-      if (geo.displaySector) {
-        doc.setFont("helvetica", "normal")
-        doc.setFontSize(fontSize)
-        doc.text(`Sector: ${geo.displaySector}`, x0 + 40, y + 2.5)
-      }
-      doc.setFont("helvetica", "normal")
-      doc.setFontSize(fontSize)
-      y += 4
-      lastCityKey = cityKey
-    }
-
+    const cityLabel =
+      geo.displaySector
+        ? `${geo.displayCommune} · ${geo.displaySector}`
+        : geo.displayCommune || displayCityLabel(c.city)
     const notes = clientDeliveryNotes(c)
     const tel = clientPhone(c)
     const amt = Number(c.document_total) || 0
@@ -434,9 +361,7 @@ export async function exportDispatchPlanPickingClientePdf(params: {
     const stopNo = visibleStopNumber(c.route_order, minRouteOrder)
     const cellTexts = [
       String(stopNo),
-      geo.displaySector
-        ? `${geo.displayCommune} (${geo.displaySector})`
-        : geo.displayCommune || cityLabel,
+      cityLabel,
       c.client_name || "",
       c.fantasy_name || "",
       tel,
@@ -444,17 +369,17 @@ export async function exportDispatchPlanPickingClientePdf(params: {
       String(c.document_number ?? ""),
       c.payment_method || "",
       notes,
+      sellerLine(c),
       formatClp(amt),
     ]
 
-    let maxRowH = lineH + 2.5
+    let maxRowH = lineH + 2.2
     for (let i = 0; i < cols.length; i++) {
       const lines = doc.splitTextToSize(cellTexts[i], cols[i].w - 2.5) as string[]
-      maxRowH = Math.max(maxRowH, lineH * lines.length + 2.5)
+      maxRowH = Math.max(maxRowH, lineH * lines.length + 2.2)
     }
 
-    const bandH = 10
-    if (y + maxRowH + bandH > bottomY) {
+    if (y + maxRowH > bottomY) {
       doc.addPage()
       y = drawBrandedHeader(
         doc,
@@ -467,7 +392,6 @@ export async function exportDispatchPlanPickingClientePdf(params: {
       )
       drawHead()
     }
-    y = drawClientOperativeBand(doc, params.header, c, y, pageW)
 
     drawRowGrid(doc, cols, x0, y, maxRowH, rowIdx % 2 === 1)
     doc.setFontSize(fontSize)
@@ -483,22 +407,34 @@ export async function exportDispatchPlanPickingClientePdf(params: {
   doc.setFont("helvetica", "bold")
   doc.setFontSize(7.5)
   doc.text(
-    `Total: ${formatClp(total)} · ${countDistinctClients(params.clients)} clientes · ${params.clients.length} documentos`,
+    `Total general: ${formatClp(total)} · ${countDistinctClients(params.clients)} clientes · ${params.clients.length} documentos`,
     MARGIN.left,
     Math.min(y + 4, bottomY),
   )
 
   applyFooters(doc, meta)
+  return doc
+}
+
+export async function exportDispatchPlanPickingClientePdf(params: {
+  header: DispatchPlanPickingHeader
+  clients: DispatchPlanPickingClientRow[]
+  warnings?: string[]
+  version?: number | null
+  generatedAt?: string | null
+}): Promise<void> {
+  const doc = await buildDispatchPlanPickingClientePdf(params)
   const slug = slugFile(params.header.truck_name)
   doc.save(`picking_cliente_${slug}_${params.header.delivery_date?.slice(0, 10) || "plan"}.pdf`)
 }
 
-export async function exportDispatchPlanPickingProductoPdf(params: {
+/** Construye PDF picking producto (tabla bodega operativa). */
+export async function buildDispatchPlanPickingProductoPdf(params: {
   header: DispatchPlanPickingHeader
   items: DispatchPlanPickingProductRow[]
   version?: number | null
   generatedAt?: string | null
-}): Promise<void> {
+}): Promise<import("jspdf").jsPDF> {
   const { jsPDF } = await import("jspdf")
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "letter" })
   const pageW = doc.internal.pageSize.getWidth()
@@ -511,21 +447,22 @@ export async function exportDispatchPlanPickingProductoPdf(params: {
     planningNumber: planLabel(params.header),
   }
   const mode = layoutForRowCount(params.items.length)
-  const fontSize = mode === "comfortable" ? 7 : mode === "compact" ? 5.5 : 6.4
-  const lineH = fontSize * 0.42
+  const fontSize = mode === "comfortable" ? 6.8 : mode === "compact" ? 5.4 : 6.2
+  const lineH = fontSize * 0.4
   const bottomY = pageH - MARGIN.bottom - 5
   const x0 = MARGIN.left
 
+  // Formato bodega: sucursal, cantidad, equivalencia comercial SEC, espacios prep/carga físicas.
   const cols = fitColumns(
     [
-      { key: "Producto", w: 70 },
-      { key: "Código barra", w: 28 },
-      { key: "Solic.", w: 14, align: "center" },
-      { key: "Pres. com.", w: 18, align: "center" },
-      { key: "Prep.", w: 14, align: "center" },
-      { key: "Carg.", w: 14, align: "center" },
-      { key: "Dif.", w: 12, align: "center" },
-      { key: "Monto", w: 18, align: "right" },
+      { key: "Sucursal", w: 22 },
+      { key: "Producto", w: 48 },
+      { key: "Código", w: 24 },
+      { key: "Cantidad", w: 14, align: "center" },
+      { key: "Equiv. cajas", w: 18, align: "center" },
+      { key: "Prep.", w: 12, align: "center" },
+      { key: "Carg.", w: 12, align: "center" },
+      { key: "Monto", w: 16, align: "right" },
     ],
     contentWidth(pageW),
   )
@@ -541,9 +478,19 @@ export async function exportDispatchPlanPickingProductoPdf(params: {
     logo,
     logoState,
   )
-  y = drawOperativePlanBlock(doc, params.header, y)
 
-  const headH = mode === "compact" ? 4.5 : 5.5
+  doc.setFontSize(6.2)
+  doc.setTextColor(70, 70, 70)
+  doc.text(
+    "Equiv. cajas = presentación comercial SEC (no implica cajas físicas cargadas). Prep./Carg. = control físico en bodega.",
+    MARGIN.left,
+    y,
+    { maxWidth: contentWidth(pageW) },
+  )
+  doc.setTextColor(0, 0, 0)
+  y += 4
+
+  const headH = mode === "compact" ? 4.2 : 5
   const drawHead = () => {
     doc.setFontSize(fontSize)
     y = drawTableHeader(doc, cols, x0, y + headH, fontSize, headH)
@@ -576,21 +523,21 @@ export async function exportDispatchPlanPickingProductoPdf(params: {
       currentType = tipo
       const stats = categoryStatsFromItems(params.items, tipo)
       doc.setFillColor(226, 232, 240)
-      doc.rect(x0, y, contentWidth(pageW), 9, "F")
+      doc.rect(x0, y, contentWidth(pageW), 8, "F")
       doc.setDrawColor(180, 190, 200)
       doc.setLineWidth(0.2)
-      doc.rect(x0, y, contentWidth(pageW), 9, "S")
+      doc.rect(x0, y, contentWidth(pageW), 8, "S")
       doc.setFont("helvetica", "bold")
-      doc.setFontSize(fontSize + 0.8)
-      doc.text(tipo.toUpperCase(), x0 + 1.5, y + 3.5)
+      doc.setFontSize(fontSize + 0.6)
+      doc.text(tipo.toUpperCase(), x0 + 1.5, y + 3.2)
       doc.setFont("helvetica", "normal")
       doc.setFontSize(fontSize)
       doc.text(
-        `${stats.skus} SKU · ${stats.units} u · ${formatOperativeBoxes(stats.boxes)} cajas · ${formatClp(stats.monto)}`,
+        `${stats.skus} SKU · ${formatPickingQuantity(stats.units)} u · equiv. ${formatOperativeBoxes(stats.boxes)} cajas · ${formatClp(stats.monto)}`,
         x0 + 1.5,
-        y + 7,
+        y + 6.4,
       )
-      y += 9.5
+      y += 8.5
     }
 
     const u = Number(item.unidades) || 0
@@ -600,29 +547,21 @@ export async function exportDispatchPlanPickingProductoPdf(params: {
     totalBoxes += boxes
     totalMonto += m
 
-    const label = productLineLabel(item)
-    const upb = Number(item.units_per_box_efectivo ?? item.units_per_box) || 0
-    const packLabel =
-      upb > 0
-        ? `${u > 0 ? Math.round((u / upb) * 100) / 100 : "—"}×SEC${Number.isInteger(upb) ? upb : upb}`
-        : item.sin_unidad_caja
-          ? "s/caja"
-          : "—"
     const cellTexts = [
-      label,
+      item.sucursal_bodega || "Centro de despacho",
+      productLineLabel(item),
       item.codigo_barras || "—",
-      String(Math.round(u)),
-      packLabel,
-      "",
-      "",
-      "",
+      formatPickingQuantity(u),
+      commercialBoxEquivLabel(item),
+      "", // preparación física — no inventar
+      "", // carga física — no inventar
       formatClp(m),
     ]
 
-    let maxRowH = lineH + 2.5
+    let maxRowH = lineH + 2.2
     for (let i = 0; i < cols.length; i++) {
       const lines = doc.splitTextToSize(cellTexts[i], cols[i].w - 2.5) as string[]
-      maxRowH = Math.max(maxRowH, lineH * lines.length + 2.5)
+      maxRowH = Math.max(maxRowH, lineH * lines.length + 2.2)
     }
 
     if (y + maxRowH > bottomY) {
@@ -657,12 +596,22 @@ export async function exportDispatchPlanPickingProductoPdf(params: {
   doc.setFont("helvetica", "bold")
   doc.setFontSize(7.5)
   doc.text(
-    `Totales: ${Math.round(totalUnits)} unidades · ${formatOperativeBoxes(totalBoxes)} cajas · ${formatClp(totalMonto)}`,
+    `Totales: ${formatPickingQuantity(totalUnits)} unidades · equiv. ${formatOperativeBoxes(totalBoxes)} cajas · ${formatClp(totalMonto)}`,
     MARGIN.left,
     Math.min(y + 4, bottomY),
   )
 
   applyFooters(doc, meta)
+  return doc
+}
+
+export async function exportDispatchPlanPickingProductoPdf(params: {
+  header: DispatchPlanPickingHeader
+  items: DispatchPlanPickingProductRow[]
+  version?: number | null
+  generatedAt?: string | null
+}): Promise<void> {
+  const doc = await buildDispatchPlanPickingProductoPdf(params)
   const slug = slugFile(params.header.truck_name)
   doc.save(`picking_producto_${slug}_${params.header.delivery_date?.slice(0, 10) || "plan"}.pdf`)
 }

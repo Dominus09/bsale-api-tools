@@ -24,6 +24,7 @@ export type DriverDeliveryCardData = {
   documentTotalClp?: number | null
   /** Forma de pago declarada en el documento (≠ cobro en ruta). */
   declaredPaymentMethod?: string | null
+  sellerName?: string | null
   observations?: string | null
   products?: DriverDeliveryProductLine[]
   deliveryStatus?: "pending" | "in_progress" | "delivered" | "partial" | "failed"
@@ -76,6 +77,8 @@ export function DriverDeliveryCard({ stop, onOpen, className }: Props) {
         </dd>
         <dt className="text-muted-foreground">Pago declarado</dt>
         <dd>{stop.declaredPaymentMethod || "—"}</dd>
+        <dt className="text-muted-foreground">Vendedor</dt>
+        <dd>{stop.sellerName || "—"}</dd>
       </dl>
       {stop.observations ? (
         <p className="text-xs text-amber-800 dark:text-amber-200">{stop.observations}</p>
