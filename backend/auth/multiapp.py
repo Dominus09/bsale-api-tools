@@ -121,18 +121,26 @@ def load_multiapp_scope(
     """Carga apps/perfiles/oficinas. Seguro si faltan tablas o no hay BD local.
 
     ``cur``: reutilizar cursor abierto (evita conexión anidada en listados).
+    Si se reutiliza, se abre ``SAVEPOINT`` para no dejar la TX padre abortada
+    cuando falle un SELECT (p. ej. permiso denegado en ``user_companies``).
+
     ``always_load_companies``: leer ``user_companies`` aunque AUTH_EMIT_* esté off
-    (necesario para elegibilidad de choferes).
+    (necesario para elegibilidad de choferes). Un fallo al leer empresas no
+    invalida apps/perfiles/oficinas ya cargados.
     """
     if user_id is None:
         return MultiAppScope()
     owns_conn = cur is None
     conn = None
     local_cur = cur
+    savepoint = "multiapp_scope_load" if not owns_conn else None
     try:
         if local_cur is None:
             conn = get_connection()
             local_cur = conn.cursor()
+        assert local_cur is not None
+        if savepoint:
+            local_cur.execute(f"SAVEPOINT {savepoint}")
         has_apps = _table_exists(local_cur, "app", "user_apps")
         has_profiles = _table_exists(local_cur, "app", "user_operational_profiles")
         has_offices = _table_exists(local_cur, "app", "user_offices")
@@ -194,11 +202,28 @@ def load_multiapp_scope(
             )
             for company_id, office_id in local_cur.fetchall():
                 offices.add((int(company_id), int(office_id)))
-        if always_load_companies:
-            company_ids = _load_user_company_ids_on_cur(local_cur, int(user_id))
-        else:
-            company_ids = load_user_company_ids(int(user_id))
-        if owns_conn and local_cur is not None:
+        company_ids: list[int] | None
+        try:
+            if always_load_companies:
+                company_ids = _load_user_company_ids_on_cur(local_cur, int(user_id))
+            else:
+                company_ids = load_user_company_ids(int(user_id))
+        except Exception:
+            # Permiso/tabla de empresas no debe tumbar todo el alcance ni
+            # abortar la transacción del caller (cursor compartido).
+            logger.warning(
+                "load_multiapp_scope company_ids degraded user_id=%s",
+                user_id,
+                exc_info=True,
+            )
+            if savepoint:
+                local_cur.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                local_cur.execute(f"SAVEPOINT {savepoint}")
+            company_ids = None
+        if savepoint:
+            local_cur.execute(f"RELEASE SAVEPOINT {savepoint}")
+            savepoint = None
+        if owns_conn:
             local_cur.close()
         return MultiAppScope(
             apps=frozenset(apps),
@@ -211,6 +236,15 @@ def load_multiapp_scope(
         )
     except Exception:
         logger.exception("load_multiapp_scope failed user_id=%s", user_id)
+        if savepoint and local_cur is not None:
+            try:
+                local_cur.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                local_cur.execute(f"RELEASE SAVEPOINT {savepoint}")
+            except Exception:
+                logger.exception(
+                    "load_multiapp_scope savepoint rollback failed user_id=%s",
+                    user_id,
+                )
         # Fail-closed: un error de BD no concede ERP ni PWA.
         return MultiAppScope(load_failed=True)
     finally:

@@ -2066,8 +2066,8 @@ export async function listAvailableDispatchDrivers(params?: {
     { headers: getAuthHeaders() },
   )
   if (!res.ok) {
-    const msg = await res.text().catch(() => "")
-    throw new Error(msg || "Error al listar choferes")
+    // No exponer JSON crudo de FastAPI en la UI operativa.
+    throw new Error("No se pudo cargar la lista de choferes. Reintentar.")
   }
   return res.json()
 }

@@ -462,7 +462,7 @@ export function SimplePlanningClient() {
       .catch(() => {
         setAvailableDrivers([])
         setDriverNearMisses([])
-        setDriversNote("No se pudieron cargar choferes elegibles.")
+        setDriversNote("No se pudo cargar la lista de choferes. Reintentar.")
       })
   }
 
@@ -1335,10 +1335,24 @@ export function SimplePlanningClient() {
                           </option>
                         ))}
                       </select>
-                      {!availableDrivers.length ? (
+                      {driversNote?.includes("Reintentar") ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-[11px] text-destructive">{driversNote}</p>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-[11px]"
+                            onClick={() => openConfirm(confirmTruckId!)}
+                            disabled={confirmBusy || !confirmTruckId}
+                          >
+                            Reintentar
+                          </Button>
+                        </div>
+                      ) : !availableDrivers.length ? (
                         <p className="text-[11px] text-amber-800 dark:text-amber-200">
                           {driversNote ||
-                            "Sin choferes elegibles (activo + PWA + perfil chofer + empresa/oficina del despacho)."}
+                            "No hay choferes habilitados para esta empresa y oficina."}
                         </p>
                       ) : null}
                       {driverNearMisses.length ? (

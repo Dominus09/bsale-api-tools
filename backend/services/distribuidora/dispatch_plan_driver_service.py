@@ -126,11 +126,14 @@ def _eligibility_from_scope(
     return (len(missing) == 0), missing
 
 
-def _driver_scope(cur, user_id: int):
-    """Alcance multiapp en el mismo cursor (sin conexión anidada) + empresas siempre."""
-    return load_multiapp_scope(
-        int(user_id), cur=cur, always_load_companies=True
-    )
+def _driver_scope(_cur, user_id: int):
+    """Alcance multiapp para elegibilidad de chofer.
+
+    Usa conexión propia (no el cursor del listado): un SELECT fallido sobre
+    ``user_companies``/tablas multiapp no debe abortar la TX del caller ni
+    convertir el listado en HTTP 503 genérico.
+    """
+    return load_multiapp_scope(int(user_id), always_load_companies=True)
 
 
 def diagnose_driver_eligibility(
@@ -285,58 +288,77 @@ def list_available_drivers(
                 "El rol ERP (p. ej. operativo) no habilita el selector por sí solo."
             ),
             "eligible_count": len(out),
+            "filter_company_id": company_id,
+            "filter_office_id": office_id,
         }
         if include_diagnostics:
-            cur.execute(
-                """
-                SELECT DISTINCT u.id, u.email, u.nombre_usuario, u.active
-                FROM bsale.users u
-                WHERE u.active IS TRUE
-                  AND (
-                    EXISTS (
-                      SELECT 1 FROM app.user_apps ua
-                      WHERE ua.user_id = u.id AND ua.app_code = 'pwa'
-                    )
-                    OR EXISTS (
-                      SELECT 1 FROM app.user_operational_profiles up
-                      WHERE up.user_id = u.id AND up.profile_code = 'chofer'
-                    )
-                  )
-                ORDER BY lower(COALESCE(u.nombre_usuario, u.email))
-                LIMIT 100
-                """
-            )
-            dcols = [d[0] for d in cur.description]
-            near: list[dict[str, Any]] = []
-            eligible_ids = {int(x["user_id"]) for x in out}
-            for r in cur.fetchall():
-                drow = dict(zip(dcols, r))
-                uid = int(drow["id"])
-                if uid in eligible_ids:
-                    continue
-                scope = _driver_scope(cur, uid)
-                _ok, missing = _eligibility_from_scope(
-                    drow, scope, company_id=company_id, office_id=office_id
+            try:
+                cur.execute(
+                    """
+                    SELECT DISTINCT u.id, u.email, u.nombre_usuario, u.active
+                    FROM bsale.users u
+                    WHERE u.active IS TRUE
+                      AND (
+                        EXISTS (
+                          SELECT 1 FROM app.user_apps ua
+                          WHERE ua.user_id = u.id AND ua.app_code = 'pwa'
+                        )
+                        OR EXISTS (
+                          SELECT 1 FROM app.user_operational_profiles up
+                          WHERE up.user_id = u.id AND up.profile_code = 'chofer'
+                        )
+                      )
+                    ORDER BY lower(COALESCE(u.nombre_usuario, u.email))
+                    LIMIT 100
+                    """
                 )
-                if not missing:
-                    continue
-                near.append(
-                    {
-                        "user_id": uid,
-                        "display_name": _display_name(drow),
-                        "missing": missing,
-                        "missing_labels": [
-                            DRIVER_REQUIREMENT_LABELS_ES.get(m, m) for m in missing
-                        ],
-                    }
+                dcols = [d[0] for d in cur.description]
+                near: list[dict[str, Any]] = []
+                eligible_ids = {int(x["user_id"]) for x in out}
+                for r in cur.fetchall():
+                    drow = dict(zip(dcols, r))
+                    uid = int(drow["id"])
+                    if uid in eligible_ids:
+                        continue
+                    scope = _driver_scope(cur, uid)
+                    _ok, missing = _eligibility_from_scope(
+                        drow, scope, company_id=company_id, office_id=office_id
+                    )
+                    if not missing:
+                        continue
+                    near.append(
+                        {
+                            "user_id": uid,
+                            "display_name": _display_name(drow),
+                            "missing": missing,
+                            "missing_labels": [
+                                DRIVER_REQUIREMENT_LABELS_ES.get(m, m) for m in missing
+                            ],
+                        }
+                    )
+                diagnostics["ineligible_near_misses"] = near
+                diagnostics["note_es"] = (
+                    "Si creó un chofer y no aparece, revise en Admin → Usuarios que tenga "
+                    "PWA + perfil chofer (no solo rol operativo ERP)."
                 )
-            diagnostics["ineligible_near_misses"] = near
-            diagnostics["note_es"] = (
-                "Si creó un chofer y no aparece, revise en Admin → Usuarios que tenga "
-                "PWA + perfil chofer (no solo rol operativo ERP)."
-            )
+            except Exception:
+                logger.exception("available-drivers diagnostics failed")
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                diagnostics["diagnostics_error"] = True
+                diagnostics["note_es"] = (
+                    "Listado OK; el diagnóstico auxiliar falló y se omitió."
+                )
         cur.close()
         return {"items": out, "diagnostics": diagnostics}
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         conn.close()
 

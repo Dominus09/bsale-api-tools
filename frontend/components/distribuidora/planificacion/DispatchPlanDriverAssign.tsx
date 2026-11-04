@@ -15,15 +15,25 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
+/** Bodega Central / La Quillotana SPA — mismo alcance que planificación simplificada. */
+const DEFAULT_COMPANY_ID = 3
+const DEFAULT_OFFICE_ID = 1
+
 type Props = {
   planId: number
   canAssign?: boolean
+  /** Empresa del despacho (preferir la del plan; default SPA). */
+  companyId?: number
+  /** Oficina del despacho (preferir la del plan; default Bodega Central). */
+  officeId?: number
   onAssigned?: () => void
 }
 
 export function DispatchPlanDriverAssign({
   planId,
   canAssign = true,
+  companyId = DEFAULT_COMPANY_ID,
+  officeId = DEFAULT_OFFICE_ID,
   onAssigned,
 }: Props) {
   const [info, setInfo] = useState<DispatchPlanDriverInfo | null>(null)
@@ -32,6 +42,7 @@ export function DispatchPlanDriverAssign({
   const [reason, setReason] = useState("")
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
+  const [listError, setListError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
   const [diagNote, setDiagNote] = useState<string | null>(null)
@@ -42,19 +53,42 @@ export function DispatchPlanDriverAssign({
   async function reload() {
     setLoading(true)
     setError(null)
+    setListError(null)
     try {
-      const [driverInfo, available] = await Promise.all([
-        getDispatchPlanDriver(planId),
-        canAssign
-          ? listAvailableDispatchDrivers({ diagnostics: true })
-          : Promise.resolve({ items: [] as DispatchPlanDriverOption[] }),
-      ])
+      const driverInfo = await getDispatchPlanDriver(planId)
       setInfo(driverInfo)
-      setDrivers(available.items)
-      setDiagNote(available.diagnostics?.note_es || available.diagnostics?.requirements_summary_es || null)
-      setNearMisses(available.diagnostics?.ineligible_near_misses || [])
       if (driverInfo.driver_user_id) {
         setDriverUserId(String(driverInfo.driver_user_id))
+      } else {
+        setDriverUserId("")
+      }
+
+      if (!canAssign) {
+        setDrivers([])
+        setNearMisses([])
+        setDiagNote(null)
+        return
+      }
+
+      try {
+        const available = await listAvailableDispatchDrivers({
+          company_id: companyId,
+          office_id: officeId,
+          diagnostics: true,
+        })
+        setDrivers(available.items || [])
+        setDiagNote(
+          available.diagnostics?.note_es ||
+            available.diagnostics?.requirements_summary_es ||
+            null,
+        )
+        setNearMisses(available.diagnostics?.ineligible_near_misses || [])
+        setListError(null)
+      } catch {
+        setDrivers([])
+        setNearMisses([])
+        setDiagNote(null)
+        setListError("No se pudo cargar la lista de choferes. Reintentar.")
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al cargar chofer")
@@ -67,7 +101,7 @@ export function DispatchPlanDriverAssign({
     if (!Number.isFinite(planId) || planId <= 0) return
     void reload()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [planId])
+  }, [planId, companyId, officeId, canAssign])
 
   async function onSubmit() {
     const uid = Number(driverUserId)
@@ -86,6 +120,8 @@ export function DispatchPlanDriverAssign({
       const res = await assignDispatchPlanDriver(planId, {
         driver_user_id: uid,
         reason: reason.trim(),
+        company_id: companyId,
+        office_id: officeId,
       })
       const conflictN = res.same_day_conflicts?.length ?? 0
       setMsg(
@@ -112,11 +148,16 @@ export function DispatchPlanDriverAssign({
     )
   }
 
+  const hasLinkedDriver = Boolean(
+    info?.driver_user_id || info?.driver?.user_id || (info?.driver_name || "").trim(),
+  )
+  const isPending = info == null || info.driver_pending === true || !hasLinkedDriver
+
   return (
     <div className="space-y-3 rounded-md border p-3">
       <div className="flex flex-wrap items-center gap-2">
         <p className="text-sm font-medium">Chofer del despacho</p>
-        {info?.driver_pending ? (
+        {isPending ? (
           <Badge variant="outline">Pendiente</Badge>
         ) : (
           <Badge>Asignado</Badge>
@@ -142,7 +183,7 @@ export function DispatchPlanDriverAssign({
               className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
               value={driverUserId}
               onChange={(e) => setDriverUserId(e.target.value)}
-              disabled={busy}
+              disabled={busy || Boolean(listError)}
             >
               <option value="">Seleccionar…</option>
               {drivers.map((d) => (
@@ -151,12 +192,28 @@ export function DispatchPlanDriverAssign({
                 </option>
               ))}
             </select>
-            {!drivers.length ? (
+            {listError ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-[11px] text-destructive">{listError}</p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-[11px]"
+                  onClick={() => void reload()}
+                  disabled={busy}
+                >
+                  Reintentar
+                </Button>
+              </div>
+            ) : !drivers.length ? (
               <p className="text-[11px] text-amber-800 dark:text-amber-200">
-                Sin choferes elegibles. Se requiere usuario activo + PWA + perfil chofer
-                (el rol ERP operativo no basta).
+                No hay choferes habilitados para esta empresa y oficina.
               </p>
             ) : null}
+            <p className="text-[10px] text-muted-foreground">
+              Filtro: empresa {companyId} · oficina {officeId}
+            </p>
           </div>
           <div className="space-y-1">
             <Label htmlFor={`reason-${planId}`}>Motivo</Label>
@@ -168,7 +225,7 @@ export function DispatchPlanDriverAssign({
               disabled={busy}
             />
           </div>
-          <Button type="button" onClick={() => void onSubmit()} disabled={busy}>
+          <Button type="button" onClick={() => void onSubmit()} disabled={busy || Boolean(listError)}>
             {busy ? <Loader2 className="size-4 animate-spin" /> : "Guardar"}
           </Button>
         </div>
