@@ -40,22 +40,21 @@ export function commercialBoxesValue(row: {
   cajas_efectivas?: number | null
   cajas?: number | null
 }): number | null {
+  if (row.sin_unidad_caja) return null
+  const upb = Number(row.units_per_box_efectivo ?? row.units_per_box) || 0
+  const units = Number(row.unidades) || 0
+  // Solo equivalencia con units_per_box confiable; no inventar cajas desde SEC1 ni cajas crudas.
+  if (upb <= 0 || units <= 0) return null
   if (row.cajas_efectivas != null && Number.isFinite(Number(row.cajas_efectivas))) {
     return roundBoxes(Number(row.cajas_efectivas))
   }
-  const upb = Number(row.units_per_box_efectivo ?? row.units_per_box) || 0
-  const units = Number(row.unidades) || 0
-  if (upb > 0 && units > 0) return roundBoxes(units / upb)
-  if (row.sin_unidad_caja) return null
-  const raw = Number(row.cajas)
-  if (Number.isFinite(raw) && raw > 0) return roundBoxes(raw)
-  return null
+  return roundBoxes(units / upb)
 }
 
-/** Celda «Cajas»: número o «n/d» si no hay equivalencia verificable. */
+/** Celda «Cajas»: número, o vacío si no hay equivalencia verificable. */
 export function formatCommercialBoxesCell(row: Parameters<typeof commercialBoxesValue>[0]): string {
   const v = commercialBoxesValue(row)
-  if (v == null) return "n/d"
+  if (v == null) return ""
   return formatPickingQuantity(v)
 }
 

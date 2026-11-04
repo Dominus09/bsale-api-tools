@@ -240,12 +240,21 @@ def picking_warnings_from_stops(stops: list[dict[str, Any]]) -> list[str]:
     return warnings
 
 
-def _style_sheet(ws, *, money_cols: set[str] | None = None, text_cols: set[str] | None = None) -> None:
+def _style_sheet(
+    ws,
+    *,
+    money_cols: set[str] | None = None,
+    text_cols: set[str] | None = None,
+    number_cols: set[str] | None = None,
+    min_widths: dict[str, float] | None = None,
+) -> None:
     from openpyxl.styles import Alignment, Font, numbers
     from openpyxl.utils import get_column_letter
 
     money_cols = money_cols or set()
     text_cols = text_cols or set()
+    number_cols = number_cols or set()
+    min_widths = min_widths or {}
     if ws.max_row < 1:
         return
     headers = {cell.value: cell.column for cell in ws[1] if cell.value}
@@ -265,10 +274,14 @@ def _style_sheet(ws, *, money_cols: set[str] | None = None, text_cols: set[str] 
             max_len = max(max_len, min(len(str(val)), 48))
             if name in money_cols and isinstance(val, (int, float)):
                 row[0].number_format = '#,##0'
+            if name in number_cols and isinstance(val, (int, float)):
+                row[0].number_format = '#,##0.##'
+                row[0].alignment = Alignment(horizontal="right", vertical="center")
             if name in text_cols:
                 row[0].number_format = numbers.FORMAT_TEXT
                 row[0].value = str(val)
-        ws.column_dimensions[letter].width = max(12, min(max_len + 2, 42))
+        base_w = max(12, min(max_len + 2, 42))
+        ws.column_dimensions[letter].width = max(base_w, float(min_widths.get(str(name), 0) or 0))
     ws.print_title_rows = "1:1"
     ws.page_setup.orientation = "landscape"
     ws.page_setup.fitToPage = True
@@ -379,22 +392,18 @@ def build_picking_product_excel(
             units_per_box=i.get("units_per_box_efectivo") or i.get("units_per_box"),
             unidades=i.get("unidades"),
         )
-        # Cajas = número de equivalencia comercial; Control vacío para anotación manual.
-        cajas_val = ""
-        if pack:
-            # pack es "N × SECk" o None — para Excel usar solo el número de cajas.
+        # Cajas = número de equivalencia comercial verificada; vacío si no hay conversión.
+        # Control permanece vacío para anotación manual.
+        cajas_val: int | float | str = ""
+        if not i.get("sin_unidad_caja"):
             try:
                 upb = float(i.get("units_per_box_efectivo") or i.get("units_per_box") or 0)
                 u = float(i.get("unidades") or 0)
                 if upb > 0 and u > 0:
                     boxes = round(u / upb, 2)
                     cajas_val = int(boxes) if float(boxes).is_integer() else boxes
-                else:
-                    cajas_val = "n/d"
             except (TypeError, ValueError):
-                cajas_val = "n/d"
-        elif i.get("sin_unidad_caja"):
-            cajas_val = "n/d"
+                cajas_val = ""
         present_rows.append(
             {
                 "Sucursal origen": i.get("sucursal_bodega"),
@@ -405,7 +414,7 @@ def build_picking_product_excel(
                 ),
                 "Unidades": i.get("unidades"),
                 "Cajas": cajas_val,
-                "Control": "",
+                "CONTROL": "",
                 "Total": i.get("total_monto"),
                 "Camión": header.get("truck_name"),
                 "Nº picking": header.get("planning_number"),
@@ -433,6 +442,8 @@ def build_picking_product_excel(
             writer.sheets["Picking producto"],
             money_cols={"Total"},
             text_cols={"Código de barras"},
+            number_cols={"Unidades", "Cajas"},
+            min_widths={"CONTROL": 14, "Control": 14, "Código de barras": 18, "Producto": 36},
         )
         pd.DataFrame(tech_rows).to_excel(writer, sheet_name="Datos técnicos", index=False)
         _style_sheet(

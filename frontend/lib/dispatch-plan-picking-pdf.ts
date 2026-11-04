@@ -207,10 +207,14 @@ function drawBrandedHeader(
   kpiLine: string,
   logo: PdfLogoPayload | null,
   logoState: PdfLogoDocState,
+  opts?: { compact?: boolean },
 ): number {
   const pageW = doc.internal.pageSize.getWidth()
+  const compact = Boolean(opts?.compact)
+  const textTop = compact ? 10 : HEADER_TEXT_TOP
+  const textBottom = compact ? 24 : HEADER_TEXT_BOTTOM
   const textX = MARGIN.left + (logo ? PDF_LOGO_WIDTH_MM + 3 : 0)
-  const textBlockCenter = (HEADER_TEXT_TOP + HEADER_TEXT_BOTTOM) / 2
+  const textBlockCenter = (textTop + textBottom) / 2
 
   if (logo) {
     const logoH = PDF_LOGO_WIDTH_MM / logo.aspectRatio
@@ -218,49 +222,56 @@ function drawBrandedHeader(
     drawQuillotanaLogoOnPdf(doc, logo, logoState, MARGIN.left, logoY, PDF_LOGO_WIDTH_MM)
   } else {
     doc.setFont("helvetica", "bold")
-    doc.setFontSize(10)
+    doc.setFontSize(compact ? 9 : 10)
     doc.setTextColor(30, 64, 120)
-    doc.text("GRUPO QUILLOTANA", textX, HEADER_TEXT_TOP)
+    doc.text("GRUPO QUILLOTANA", textX, textTop)
   }
 
   doc.setFont("helvetica", "bold")
-  doc.setFontSize(12)
+  doc.setFontSize(compact ? 11 : 12)
   doc.setTextColor(30, 64, 120)
-  doc.text(title, textX, HEADER_TEXT_TOP + 4)
+  doc.text(title, textX, textTop + 3.5)
   doc.setTextColor(0, 0, 0)
   doc.setFont("helvetica", "normal")
-  doc.setFontSize(7.5)
+  doc.setFontSize(compact ? 7 : 7.5)
   doc.text(
     `${header.planning_number} · ${header.delivery_date} · ${header.truck_name}`,
     textX,
-    HEADER_TEXT_TOP + 9,
+    textTop + 8,
   )
   doc.text(
     `Chofer: ${crewLabel(header)} · Peonetas: ${assistantLabel(header)} · Sello: ${sealLabel(header)}`,
     textX,
-    HEADER_TEXT_TOP + 13,
+    textTop + 11.5,
   )
   doc.text(
     `${header.route_name || ""}${header.communes ? ` · ${header.communes}` : ""}`,
     textX,
-    HEADER_TEXT_TOP + 17,
+    textTop + 15,
   )
 
-  const ruleY = HEADER_TEXT_BOTTOM + 2
+  const ruleY = textBottom + 1.5
   doc.setDrawColor(30, 64, 120)
   doc.setLineWidth(0.3)
   doc.line(MARGIN.left, ruleY, pageW - MARGIN.right, ruleY)
 
-  y = Math.max(y, ruleY + 3)
-  const kpiH = 7.5
+  y = Math.max(y, ruleY + 2)
+  const kpiH = compact ? 5.5 : 7.5
   doc.setFillColor(241, 245, 249)
   doc.rect(MARGIN.left, y, contentWidth(pageW), kpiH, "F")
   doc.setFont("helvetica", "bold")
-  doc.setFontSize(7)
-  doc.text("Resumen de carga", MARGIN.left + 2, y + 3)
+  doc.setFontSize(compact ? 6.5 : 7)
+  if (compact) {
+    doc.text(`Resumen · ${kpiLine}`, MARGIN.left + 2, y + 3.6, {
+      maxWidth: contentWidth(pageW) - 4,
+    })
+  } else {
+    doc.text("Resumen de carga", MARGIN.left + 2, y + 3)
+    doc.setFont("helvetica", "normal")
+    doc.text(kpiLine, MARGIN.left + 2, y + 6.2, { maxWidth: contentWidth(pageW) - 4 })
+  }
   doc.setFont("helvetica", "normal")
-  doc.text(kpiLine, MARGIN.left + 2, y + 6.2, { maxWidth: contentWidth(pageW) - 4 })
-  return y + kpiH + 2
+  return y + kpiH + (compact ? 1.5 : 2)
 }
 
 /** Escala columnas para ocupar el ancho útil de la página. */
@@ -432,7 +443,7 @@ export async function exportDispatchPlanPickingClientePdf(params: {
   doc.save(`picking_cliente_${slug}_${params.header.delivery_date?.slice(0, 10) || "plan"}.pdf`)
 }
 
-/** Construye PDF picking producto (tabla bodega operativa). */
+/** Construye PDF picking producto (tabla bodega operativa, A4 horizontal en cargas grandes). */
 export async function buildDispatchPlanPickingProductoPdf(params: {
   header: DispatchPlanPickingHeader
   items: DispatchPlanPickingProductRow[]
@@ -440,7 +451,12 @@ export async function buildDispatchPlanPickingProductoPdf(params: {
   generatedAt?: string | null
 }): Promise<import("jspdf").jsPDF> {
   const { jsPDF } = await import("jspdf")
-  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" })
+  const largeLoad = params.items.length >= 25
+  const doc = new jsPDF({
+    orientation: largeLoad ? "landscape" : "portrait",
+    unit: "mm",
+    format: "a4",
+  })
   const pageW = doc.internal.pageSize.getWidth()
   const pageH = doc.internal.pageSize.getHeight()
   const logo = await loadQuillotanaLogoForPdf()
@@ -450,97 +466,98 @@ export async function buildDispatchPlanPickingProductoPdf(params: {
     generatedAt: params.generatedAt,
     planningNumber: planLabel(params.header),
   }
-  const mode = layoutForRowCount(params.items.length)
-  const fontSize = mode === "comfortable" ? 7.2 : mode === "compact" ? 5.8 : 6.6
-  const lineH = fontSize * 0.42
+  // Legibilidad primero: no bajar de ~6.5 pt; densidad vía landscape + filas compactas.
+  const fontSize = largeLoad ? 6.6 : params.items.length <= 30 ? 7.2 : 6.8
+  const lineH = fontSize * 0.4
   const bottomY = pageH - MARGIN.bottom - 5
   const x0 = MARGIN.left
+  const catH = 4.2
+  const controlMinH = 5.2
+  const minRowsAfterCat = 2
+  const maxProductLines = 2
 
-  // Unidades + Cajas (número) + una sola columna Control vacía para anotación manual.
+  // Unidades + Cajas (número) + Control vacío para anotación manual.
   const cols = fitColumns(
     [
-      { key: "Sucursal", w: 22 },
-      { key: "Producto", w: 52 },
-      { key: "Código", w: 26 },
+      { key: "Sucursal", w: largeLoad ? 28 : 22 },
+      { key: "Producto", w: largeLoad ? 78 : 52 },
+      { key: "Código", w: largeLoad ? 36 : 28 },
       { key: "Unidades", w: 16, align: "center" },
       { key: "Cajas", w: 14, align: "center" },
-      { key: "Control", w: 22, align: "center" },
-      { key: "Monto", w: 18, align: "right" },
+      { key: "CONTROL", w: largeLoad ? 24 : 20, align: "center" },
+      { key: "Monto", w: 20, align: "right" },
     ],
     contentWidth(pageW),
   )
 
   const kpiLine = stablePickingKpiLine(params.header, [], params.items, formatClp)
+  const headerOpts = { compact: true }
 
-  let y = drawBrandedHeader(
-    doc,
-    MARGIN.top,
-    params.header,
-    pickingTitle("Picking Producto", params.header),
-    kpiLine,
-    logo,
-    logoState,
-  )
-
-  doc.setFontSize(6.4)
-  doc.setTextColor(70, 70, 70)
-  doc.text(
-    "Cajas = equivalencia comercial (units_per_box). No implica bulto físico. Control = espacio en blanco para anotar a mano.",
-    MARGIN.left,
-    y,
-    { maxWidth: contentWidth(pageW) },
-  )
-  doc.setTextColor(0, 0, 0)
-  y += 4.5
-
-  const headH = mode === "compact" ? 4.5 : 5.5
-  const drawHead = () => {
+  const startPageBody = (continued: boolean, categoryCont?: string) => {
+    y = drawBrandedHeader(
+      doc,
+      MARGIN.top,
+      params.header,
+      continued
+        ? pickingTitle("Picking Producto (cont.)", params.header)
+        : pickingTitle("Picking Producto", params.header),
+      kpiLine,
+      logo,
+      logoState,
+      headerOpts,
+    )
     doc.setFontSize(fontSize)
-    y = drawTableHeader(doc, cols, x0, y + headH, fontSize, headH)
+    y = drawTableHeader(doc, cols, x0, y + 4.8, fontSize, 4.8)
+    if (categoryCont) {
+      doc.setFillColor(226, 232, 240)
+      doc.rect(x0, y, contentWidth(pageW), catH, "F")
+      doc.setFont("helvetica", "bold")
+      doc.setFontSize(fontSize)
+      doc.text(`${categoryCont} (cont.)`, x0 + 1.5, y + 2.9)
+      doc.setFont("helvetica", "normal")
+      y += catH
+    }
   }
 
-  drawHead()
+  let y = 0
+  startPageBody(false)
 
   let currentType = ""
+  let lastSucursal = ""
   let totalUnits = 0
   let totalBoxes = 0
   let totalMonto = 0
   let rowIdx = 0
 
+  const ensureSpace = (need: number, categoryCont?: string) => {
+    if (y + need <= bottomY) return
+    doc.addPage()
+    startPageBody(true, categoryCont)
+  }
+
   for (const item of params.items) {
     const tipo = normalizePickingCategory(item.tipo_producto)
     if (tipo !== currentType) {
-      if (y > bottomY - 12) {
-        doc.addPage()
-        y = drawBrandedHeader(
-          doc,
-          MARGIN.top,
-          params.header,
-          "Picking Producto (cont.)",
-          kpiLine,
-          logo,
-          logoState,
-        )
-        drawHead()
-      }
+      // Evitar encabezado de categoría huérfano al pie de página.
+      ensureSpace(catH + controlMinH * minRowsAfterCat)
       currentType = tipo
+      lastSucursal = ""
       const stats = categoryStatsFromItems(params.items, tipo)
       doc.setFillColor(226, 232, 240)
-      doc.rect(x0, y, contentWidth(pageW), 8, "F")
+      doc.rect(x0, y, contentWidth(pageW), catH, "F")
       doc.setDrawColor(180, 190, 200)
-      doc.setLineWidth(0.2)
-      doc.rect(x0, y, contentWidth(pageW), 8, "S")
+      doc.setLineWidth(0.15)
+      doc.rect(x0, y, contentWidth(pageW), catH, "S")
       doc.setFont("helvetica", "bold")
-      doc.setFontSize(fontSize + 0.6)
-      doc.text(tipo.toUpperCase(), x0 + 1.5, y + 3.2)
-      doc.setFont("helvetica", "normal")
       doc.setFontSize(fontSize)
       doc.text(
-        `${stats.skus} SKU · ${formatPickingQuantity(stats.units)} u · ${formatOperativeBoxes(stats.boxes)} cajas · ${formatClp(stats.monto)}`,
+        `${tipo.toUpperCase()}  ·  ${stats.skus} SKU · ${formatPickingQuantity(stats.units)} u · ${formatOperativeBoxes(stats.boxes)} cj · ${formatClp(stats.monto)}`,
         x0 + 1.5,
-        y + 6.4,
+        y + 2.9,
+        { maxWidth: contentWidth(pageW) - 3 },
       )
-      y += 8.5
+      doc.setFont("helvetica", "normal")
+      y += catH
     }
 
     const u = Number(item.unidades) || 0
@@ -550,11 +567,20 @@ export async function buildDispatchPlanPickingProductoPdf(params: {
     if (boxes != null) totalBoxes += boxes
     totalMonto += m
 
-    // Altura mínima generosa en Control para escritura a mano.
-    const controlMinH = 7.5
+    const sucursal = (item.sucursal_bodega || "BODEGA CENTRAL").trim()
+    const showSucursal = sucursal !== lastSucursal
+    if (showSucursal) lastSucursal = sucursal
+
+    const productRaw = productLineLabel(item)
+    const productWrapped = doc.splitTextToSize(productRaw, cols[1].w - 2.2) as string[]
+    const productCell =
+      productWrapped.length <= maxProductLines
+        ? productRaw
+        : `${productWrapped.slice(0, maxProductLines - 1).join(" ")} ${String(productWrapped[maxProductLines - 1] || "").replace(/…$/, "")}…`
+
     const cellTexts = [
-      item.sucursal_bodega || "Centro de despacho",
-      productLineLabel(item),
+      showSucursal ? sucursal : "",
+      productCell,
       item.codigo_barras || "—",
       formatPickingQuantity(u),
       formatCommercialBoxesCell(item),
@@ -562,29 +588,14 @@ export async function buildDispatchPlanPickingProductoPdf(params: {
       formatClp(m),
     ]
 
-    let maxRowH = Math.max(lineH + 2.5, controlMinH)
+    let maxRowH = Math.max(lineH + 2.0, controlMinH)
     for (let i = 0; i < cols.length; i++) {
-      const lines = doc.splitTextToSize(cellTexts[i], cols[i].w - 2.5) as string[]
-      maxRowH = Math.max(maxRowH, lineH * lines.length + 2.5)
+      const lines = doc.splitTextToSize(cellTexts[i], cols[i].w - 2.2) as string[]
+      const capped = i === 1 ? lines.slice(0, maxProductLines) : lines
+      maxRowH = Math.max(maxRowH, lineH * Math.max(capped.length, 1) + 2.0)
     }
 
-    if (y + maxRowH > bottomY) {
-      doc.addPage()
-      y = drawBrandedHeader(
-        doc,
-        MARGIN.top,
-        params.header,
-        "Picking Producto (cont.)",
-        kpiLine,
-        logo,
-        logoState,
-      )
-      drawHead()
-      doc.setFont("helvetica", "bold")
-      doc.setFontSize(fontSize + 0.3)
-      doc.text(`${tipo} (cont.)`, x0, y + 2.5)
-      y += 4
-    }
+    ensureSpace(maxRowH, currentType)
 
     drawRowGrid(doc, cols, x0, y, maxRowH, rowIdx % 2 === 1)
     doc.setFontSize(fontSize)
@@ -597,13 +608,24 @@ export async function buildDispatchPlanPickingProductoPdf(params: {
     rowIdx += 1
   }
 
+  const totalsLine = `Totales: ${formatPickingQuantity(totalUnits)} unidades · ${formatOperativeBoxes(totalBoxes)} cajas · ${formatClp(totalMonto)}`
+  if (y + 6 > bottomY) {
+    // Evitar página casi vacía con cabecera de tabla: solo encabezado compacto + totales.
+    doc.addPage()
+    y = drawBrandedHeader(
+      doc,
+      MARGIN.top,
+      params.header,
+      pickingTitle("Picking Producto (cont.)", params.header),
+      kpiLine,
+      logo,
+      logoState,
+      headerOpts,
+    )
+  }
   doc.setFont("helvetica", "bold")
-  doc.setFontSize(7.5)
-  doc.text(
-    `Totales: ${formatPickingQuantity(totalUnits)} unidades · ${formatOperativeBoxes(totalBoxes)} cajas · ${formatClp(totalMonto)}`,
-    MARGIN.left,
-    Math.min(y + 4, bottomY),
-  )
+  doc.setFontSize(7.2)
+  doc.text(totalsLine, MARGIN.left, y + 4)
 
   applyFooters(doc, meta)
   return doc
