@@ -288,7 +288,6 @@ export function DispatchPlanDetailShell({
       <Tabs value={tab} onValueChange={onTabChange} className="w-full">
         <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1">
           <TabsTrigger value="resumen">Resumen</TabsTrigger>
-          <TabsTrigger value="facturacion">Órdenes y facturación</TabsTrigger>
           <TabsTrigger value="ruta">Ruta y costos</TabsTrigger>
           <TabsTrigger value="picking">Picking y carga</TabsTrigger>
           <TabsTrigger value="chofer">Chofer y auditoría</TabsTrigger>
@@ -301,26 +300,6 @@ export function DispatchPlanDetailShell({
               <Loader2 className="size-4 animate-spin" /> Actualizando…
             </div>
           ) : null}
-          <DispatchPlanInvoicingDashboard data={dashboard} />
-          {margin?.visible && margin.calculated_at ? (
-            <p className="text-[11px] text-muted-foreground">
-              Margen comercial vivo · calculado {margin.calculated_at}
-              {margin.cost_basis ? ` · base costo: ${margin.cost_basis}` : ""}
-              {margin.cost_coverage
-                ? ` · costos ${margin.cost_coverage.lines_with_cost ?? "—"}/${margin.cost_coverage.lines_total ?? "—"} líneas`
-                : ""}
-              {" · "}no es margen neto definitivo (NC no descontadas automáticamente).
-            </p>
-          ) : null}
-          {dashboard.plan_orders?.length ? (
-            <div className="space-y-2">
-              <p className="text-sm font-medium">Órdenes / peso congelado</p>
-              <DispatchPlanOrdersWeightTable orders={dashboard.plan_orders} />
-            </div>
-          ) : null}
-        </TabsContent>
-
-        <TabsContent value="facturacion" className="mt-4 space-y-4">
           <div className="flex flex-wrap gap-2">
             <Button
               type="button"
@@ -356,11 +335,29 @@ export function DispatchPlanDetailShell({
               Revisar facturación
             </Button>
           </div>
+          <DispatchPlanInvoicingDashboard data={dashboard} />
           {reviewItems?.length ? (
-            <DispatchPlanInvoicedItemsTable items={reviewItems} />
-          ) : (
-            <DispatchPlanInvoicingDashboard data={dashboard} />
-          )}
+            <div className="space-y-2">
+              <p className="text-sm font-medium">Detalle documental</p>
+              <DispatchPlanInvoicedItemsTable items={reviewItems} />
+            </div>
+          ) : null}
+          {margin?.visible && margin.calculated_at ? (
+            <p className="text-[11px] text-muted-foreground">
+              Margen comercial vivo · calculado {margin.calculated_at}
+              {margin.cost_basis ? ` · base costo: ${margin.cost_basis}` : ""}
+              {margin.cost_coverage
+                ? ` · costos ${margin.cost_coverage.lines_with_cost ?? "—"}/${margin.cost_coverage.lines_total ?? "—"} líneas`
+                : ""}
+              {" · "}no es margen neto definitivo (NC no descontadas automáticamente).
+            </p>
+          ) : null}
+          {dashboard.plan_orders?.length ? (
+            <div className="space-y-2">
+              <p className="text-sm font-medium">Órdenes / peso congelado</p>
+              <DispatchPlanOrdersWeightTable orders={dashboard.plan_orders} />
+            </div>
+          ) : null}
         </TabsContent>
 
         <TabsContent value="ruta" className="mt-4 space-y-3">
