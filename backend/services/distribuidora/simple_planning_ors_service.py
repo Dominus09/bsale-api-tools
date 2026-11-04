@@ -536,7 +536,7 @@ def validate_ors_snapshot_for_orders(
 ) -> dict[str, Any] | None:
     """
     Revalida snapshot contra OC actuales (orden + coords DB).
-    Si no coincide, retorna None (confirmación sin ORS).
+    Si no coincide, retorna None — el confirm debe fallar (no degradar a sin ORS).
     """
     if not snapshot or not snapshot.get("ors_metrics_calculated", True):
         # snapshots store metrics implicitly when present

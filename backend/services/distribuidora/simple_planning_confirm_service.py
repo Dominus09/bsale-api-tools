@@ -743,13 +743,26 @@ def confirm_simple_planning_session(
         ordered_doc_ids = [
             int(o["oc_document_id"]) for o in confirm_orders if o.get("oc_document_id")
         ]
-        ors_snap = validate_ors_snapshot_for_orders(
-            (payload or {}).get("ors_snapshot"),
-            truck_id=int(session["truck_id"]),
-            ordered_document_ids=ordered_doc_ids,
-            company_id=int(session["company_id"]),
-            office_id=int(session["office_id"]),
-        )
+        # Si la sesión guardó ORS en prepare, no degradar silenciosamente a "sin ORS".
+        raw_ors = (payload or {}).get("ors_snapshot")
+        if raw_ors:
+            ors_snap = validate_ors_snapshot_for_orders(
+                raw_ors,
+                truck_id=int(session["truck_id"]),
+                ordered_document_ids=ordered_doc_ids,
+                company_id=int(session["company_id"]),
+                office_id=int(session["office_id"]),
+            )
+            if not ors_snap or ors_snap.get("route_geometry") is None:
+                raise SimplePlanningConfirmError(
+                    "La ruta ORS de la sesión ya no es válida (camión, OC, "
+                    "coordenadas u orden). Recalcule la ruta antes de confirmar; "
+                    "no se confirman métricas inconsistentes.",
+                    code="ors_snapshot_invalid",
+                    http_status=409,
+                )
+        else:
+            ors_snap = None
         ors_ok = bool(ors_snap and ors_snap.get("route_geometry") is not None)
 
         dispatch_name = (

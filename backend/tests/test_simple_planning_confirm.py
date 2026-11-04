@@ -485,6 +485,76 @@ def test_prepare_fingerprint_drift_message_includes_folio(monkeypatch):
     assert ei.value.details.get("stage") == "prepare-confirm"
 
 
+def test_confirm_rejects_stale_ors_instead_of_silent_degrade(monkeypatch):
+    """Si la sesión tenía ORS y la validación falla, no confirmar sin métricas."""
+    sid = str(uuid4())
+    orders = [_order(10)]
+    report = _assign_report(orders)
+    monkeypatch.setattr(svc, "preview_truck_assignments", lambda **_k: report)
+    monkeypatch.setattr(
+        svc,
+        "validate_ors_snapshot_for_orders",
+        lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(svc, "detect_fingerprint_drift", lambda **_k: [])
+
+    row = {
+        "id": sid,
+        "user_id": 1,
+        "status": "open",
+        "expires_at": datetime.now(timezone.utc) + timedelta(hours=1),
+        "payload": {
+            "orders": [
+                {
+                    "folio": 10,
+                    "document_id": 10,
+                    "identity_fingerprint": _fp(10),
+                    "client": {"client_id": 1, "client_name": "C10"},
+                    "total_amount": 100,
+                    "weight": {"peso_total_kg": 10, "quality": "known"},
+                }
+            ],
+            "capacity_snapshot": report["trucks"][0]["capacity"],
+            "weight_acknowledgement": {},
+            "ors_snapshot": {
+                "truck_id": 2,
+                "document_ids": [10],
+                "route_fingerprint": "stale-fp",
+                "distance_km": 99.0,
+                "route_geometry": {"type": "LineString", "coordinates": []},
+                "total_route_cost_clp": 99999,
+            },
+        },
+        "truck_id": 2,
+        "company_id": 3,
+        "office_id": 1,
+        "plan_session_id": "simple-ors-stale",
+        "planning_date": date(2026, 12, 1),
+        "dispatch_name": "Test",
+        "driver_name": "Ana",
+    }
+    conn = _FakeConn(sessions={sid: row})
+    monkeypatch.setattr(
+        svc.session_repo,
+        "get_session_by_id_for_update",
+        lambda cur, s: conn.sessions.get(str(s)),
+    )
+    monkeypatch.setattr(svc.session_repo, "mark_session_status", lambda *_a, **_k: None)
+
+    def _confirm_should_not_run(**_kwargs):
+        raise AssertionError("confirm_dispatch_plan no debe ejecutarse con ORS inválido")
+
+    with pytest.raises(svc.SimplePlanningConfirmError) as ei:
+        svc.confirm_simple_planning_session(
+            session_id=sid,
+            user_id=1,
+            confirm_fn=_confirm_should_not_run,
+            conn_factory=lambda: conn,
+        )
+    assert ei.value.code == "ors_snapshot_invalid"
+    assert ei.value.http_status == 409
+
+
 def test_confirm_rejects_expired_session(monkeypatch):
     sid = str(uuid4())
     row = {

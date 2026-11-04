@@ -747,10 +747,19 @@ def compute_plan_margin(
     out["persisted"] = bool(persist)
     out["historical_commercial_margin_clp"] = plan.get("commercial_margin_clp")
     out["cost_basis"] = (
-        "variant_cost_average_net_x_tax_factor"
+        "variant_cost_vigente_average_net_x_tax_factor"
         if out.get("source") in ("variant_cost", "variant_cost_partial")
         else out.get("source")
     )
+    # No es costo histórico de la venta: catalogo Bsale vigente al momento del cálculo.
+    if out.get("source") in ("variant_cost", "variant_cost_partial"):
+        note = (out.get("message") or "").strip()
+        vigente = (
+            "Criterio de costo: variant_cost vigente (promedio neto × tax_factor), "
+            "no costo histórico de la factura."
+        )
+        if vigente not in note:
+            out["message"] = f"{note} {vigente}".strip() if note else vigente
     out["cost_coverage"] = {
         "lines_with_cost": out.get("lines_with_cost"),
         "lines_total": out.get("lines_total"),
