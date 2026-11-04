@@ -55,14 +55,24 @@ def _default_row() -> dict[str, Any]:
 
 
 def _venta_facturada_clp(plan_id: int) -> int:
+    """Σ total_amount de facturas/boletas confirmadas vigentes (dedup por documento)."""
     try:
         inv = get_invoiced_documents(plan_id)
     except Exception:
         return 0
     total = 0
+    seen: set[int] = set()
     for item in inv.get("items") or []:
         if item.get("status") != "confirmed":
             continue
+        try:
+            doc_id = int(item.get("related_document_id") or 0)
+        except (TypeError, ValueError):
+            doc_id = 0
+        if doc_id:
+            if doc_id in seen:
+                continue
+            seen.add(doc_id)
         try:
             total += int(round(float(item.get("document_total") or 0)))
         except (TypeError, ValueError):
@@ -166,7 +176,9 @@ def get_dispatch_plan_cuadratura(plan_id: int) -> dict[str, Any]:
             (plan_id,),
         )
         venta_oc = int(round(float((cur.fetchone() or [0])[0] or 0)))
-        saved = cuad_repo.get_cuadratura_row(cur, plan_id) or _default_row()
+        saved_row = cuad_repo.get_cuadratura_row(cur, plan_id)
+        cuadratura_started = saved_row is not None
+        saved = saved_row or _default_row()
         history = cuad_repo.list_cuadratura_history(cur, plan_id)
         cur.close()
     finally:
@@ -185,9 +197,16 @@ def get_dispatch_plan_cuadratura(plan_id: int) -> dict[str, Any]:
             picking=picking,
         )
         resultado = v2["resultado"]
+        op_status = v2["operational_status"]
+        op_label = v2["operational_status_label"]
+        if not cuadratura_started:
+            op_status = "not_started"
+            op_label = "Cuadratura no iniciada"
         return {
             "dispatch_plan_id": plan_id,
             "schema_version": 2,
+            "cuadratura_started": cuadratura_started,
+            "persisted": cuadratura_started,
             "picking_ready": picking["ready"],
             "picking_id": v2["picking_id"],
             "picking_version": v2["picking_version"],
@@ -196,6 +215,7 @@ def get_dispatch_plan_cuadratura(plan_id: int) -> dict[str, Any]:
                 "venta_oc_clp": venta_oc,
                 "venta_facturada_clp": venta_facturada,
                 "venta_picking_clp": venta_picking,
+                "amounts_basis_label_es": "Total documento (con IVA)",
             },
             "documents": v2["documents"],
             "resumen_pagos": resultado["resumen_pagos"],
@@ -206,10 +226,10 @@ def get_dispatch_plan_cuadratura(plan_id: int) -> dict[str, Any]:
             "cash_count": v2["cash_count"],
             "product_catalog": v2["product_catalog"],
             "observacion": saved.get("observacion"),
-            "operational_status": v2["operational_status"],
-            "operational_status_label": v2["operational_status_label"],
-            "closed_at": saved.get("closed_at"),
-            "closed_by": saved.get("closed_by"),
+            "operational_status": op_status,
+            "operational_status_label": op_label,
+            "closed_at": saved.get("closed_at") if cuadratura_started else None,
+            "closed_by": saved.get("closed_by") if cuadratura_started else None,
             "resultado": resultado,
             "observacion_required": observacion_required(resultado),
             "history": history,
@@ -217,7 +237,13 @@ def get_dispatch_plan_cuadratura(plan_id: int) -> dict[str, Any]:
             "legacy": _legacy_block(saved, venta_picking),
         }
 
-    return _legacy_response(plan_id, venta_oc, venta_facturada, venta_picking, saved)
+    legacy = _legacy_response(plan_id, venta_oc, venta_facturada, venta_picking, saved)
+    legacy["cuadratura_started"] = cuadratura_started
+    legacy["persisted"] = cuadratura_started
+    if not cuadratura_started:
+        legacy["operational_status"] = "not_started"
+        legacy["operational_status_label"] = "Cuadratura no iniciada"
+    return legacy
 
 
 def _legacy_block(saved: dict[str, Any], venta_picking: int) -> dict[str, Any]:

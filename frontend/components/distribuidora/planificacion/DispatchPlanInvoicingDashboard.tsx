@@ -43,38 +43,42 @@ export function DispatchPlanInvoicingDashboard({
     <div className={cn("space-y-6", className)}>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div className="rounded-lg border border-border/70 bg-muted/20 px-4 py-3 lg:col-span-1">
-          <p className="text-xs text-muted-foreground">Venta OC total (plan)</p>
+          <p className="text-xs text-muted-foreground">Venta OC (plan)</p>
           <p className="mt-1 text-2xl font-semibold tabular-nums">{inv.total_orders}</p>
           <p className="mt-0.5 text-sm font-medium tabular-nums">
             {formatClp(inv.total_oc_amount_clp)}
           </p>
           <p className="mt-1 text-[11px] text-muted-foreground">
-            No descuenta costos de ruta ni mercadería
+            Monto original de órdenes · {inv.amounts_basis_label_es || "total con IVA"}
           </p>
         </div>
         <StatCard
           label={
             inv.confirmed.auto_confirmed_count
-              ? `Confirmadas (${inv.confirmed.auto_confirmed_count} auto ≥75)`
-              : "Confirmadas (Bsale + auto ≥75)"
+              ? `Venta facturada (${inv.confirmed.auto_confirmed_count} auto ≥75)`
+              : "Venta facturada (docs vigentes)"
           }
           count={inv.confirmed.count}
           amount={inv.confirmed.amount_clp}
           dotClass="bg-emerald-500"
         />
         <StatCard
-          label="Probables (heurística)"
+          label="Probables (heurística · ref. OC)"
           count={inv.probable.count}
           amount={inv.probable.amount_clp}
           dotClass="bg-amber-400"
         />
         <StatCard
-          label="Pendientes"
+          label="Pendientes (ref. OC)"
           count={inv.pending.count}
           amount={inv.pending.amount_clp}
           dotClass="bg-red-500"
         />
       </div>
+      <p className="text-[11px] text-muted-foreground -mt-3">
+        Venta facturada = importe real de boletas/facturas vigentes (no usa monto OC). Las
+        diferencias pequeñas OC↔factura se muestran.
+      </p>
 
       {margin?.visible ? (
         <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-4 py-3">
@@ -100,11 +104,13 @@ export function DispatchPlanInvoicingDashboard({
                 </div>
               ) : null}
               <div>
-                <span className="text-muted-foreground">Venta facturada neta</span>
+                <span className="text-muted-foreground">Venta facturada</span>
                 <p className="font-semibold tabular-nums">
                   {formatClp(margin.invoiced_revenue_clp ?? 0)}
                 </p>
-                <p className="text-[11px] text-muted-foreground">Docs vigentes</p>
+                <p className="text-[11px] text-muted-foreground">
+                  Docs vigentes · total documento (con IVA)
+                </p>
               </div>
               <div>
                 <span className="text-muted-foreground">Costo mercadería</span>
@@ -128,9 +134,12 @@ export function DispatchPlanInvoicingDashboard({
                 </p>
                 {margin.commercial_margin_pct != null ? (
                   <p className="text-[11px] text-muted-foreground">
-                    {margin.commercial_margin_pct}% sobre venta neta
+                    {margin.commercial_margin_pct}% sobre venta facturada
                   </p>
                 ) : null}
+                <p className="text-[11px] text-muted-foreground">
+                  No descuenta NC automáticamente
+                </p>
               </div>
               <div>
                 <span className="text-muted-foreground">Costo transporte</span>

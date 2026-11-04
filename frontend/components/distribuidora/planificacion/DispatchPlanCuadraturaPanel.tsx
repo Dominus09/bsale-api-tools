@@ -101,6 +101,7 @@ export function DispatchPlanCuadraturaPanel({
   const [observacion, setObservacion] = useState("")
 
   const isClosed = Boolean(data?.closed_at)
+  const cuadraturaStarted = Boolean(data?.cuadratura_started ?? data?.persisted)
   const ventaPicking = data?.ventas.venta_picking_clp ?? 0
 
   const load = useCallback(async () => {
@@ -138,7 +139,11 @@ export function DispatchPlanCuadraturaPanel({
   )
 
   const obsRequired = observacionRequired(resultado)
-  const statusBadge = operationalStatusBadge(data?.operational_status || "pending")
+  const statusBadge = operationalStatusBadge(
+    !cuadraturaStarted
+      ? "not_started"
+      : data?.operational_status || "pending",
+  )
   const cashDiff = resultado.diferencia_efectivo_clp ?? 0
 
   const persistPayload = () => ({
@@ -233,11 +238,35 @@ export function DispatchPlanCuadraturaPanel({
         </div>
       </div>
 
+      {!cuadraturaStarted ? (
+        <Alert className="border-amber-500/40 bg-amber-500/10">
+          <AlertTriangle className="size-4" />
+          <AlertTitle>Cuadratura no iniciada</AlertTitle>
+          <AlertDescription className="text-xs">
+            Aún no hay registro de cierre de ruta para este despacho. Los montos
+            comerciales abajo son referencia del despacho (no un cobro registrado).
+            Guardar la cuadratura inicia el cierre; no se crea automáticamente al abrir
+            esta página.
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
       <section className="space-y-2">
-        <h3 className="text-sm font-semibold">Ventas (snapshot congelado)</h3>
+        <h3 className="text-sm font-semibold">
+          {cuadraturaStarted
+            ? "Ventas (referencia comercial del despacho)"
+            : "Datos comerciales del despacho (referencia)"}
+        </h3>
+        <p className="text-[11px] text-muted-foreground">
+          {data.ventas.amounts_basis_label_es || "Total documento (con IVA)"} · distintos de
+          cobros del cierre
+        </p>
         <div className="grid gap-2 sm:grid-cols-3">
           <ReadOnlyAmount label="Venta OC" value={data.ventas.venta_oc_clp} />
-          <ReadOnlyAmount label="Venta facturada" value={data.ventas.venta_facturada_clp} />
+          <ReadOnlyAmount
+            label="Venta facturada (docs vigentes)"
+            value={data.ventas.venta_facturada_clp}
+          />
           <ReadOnlyAmount label="Venta picking" value={ventaPicking} />
         </div>
       </section>

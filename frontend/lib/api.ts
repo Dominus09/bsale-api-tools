@@ -2566,13 +2566,16 @@ export type DispatchPlanDashboard = {
   invoicing: {
     total_orders: number
     total_oc_amount_clp: number
+    amounts_basis?: string
+    amounts_basis_label_es?: string
     confirmed: {
       count: number
       amount_clp: number
       auto_confirmed_count?: number
+      amount_source?: string
     }
-    probable: { count: number; amount_clp: number }
-    pending: { count: number; amount_clp: number }
+    probable: { count: number; amount_clp: number; amount_source?: string }
+    pending: { count: number; amount_clp: number; amount_source?: string }
   }
   invoiced_items: DispatchPlanInvoicedRow[]
   warnings: {
@@ -2616,6 +2619,12 @@ export type DispatchPlanDashboard = {
     product_endpoint: string
     ready: boolean
     reason?: string | null
+  }
+  cuadratura?: {
+    started: boolean
+    status?: string | null
+    label?: string | null
+    closed_at?: string | null
   }
   invoicing_source?: string
   /** true si el backend degradó la respuesta por error interno */
@@ -3396,6 +3405,9 @@ export type DispatchPlanCuadraturaCashCountRow = {
 export type DispatchPlanCuadraturaResponse = {
   dispatch_plan_id: number
   schema_version?: number
+  /** false cuando aún no hay fila en dispatch_plan_cuadratura */
+  cuadratura_started?: boolean
+  persisted?: boolean
   picking_ready?: boolean
   picking_id?: number | null
   picking_version?: number | null
@@ -3403,6 +3415,7 @@ export type DispatchPlanCuadraturaResponse = {
     venta_oc_clp: number
     venta_facturada_clp: number
     venta_picking_clp: number
+    amounts_basis_label_es?: string
   }
   documents?: DispatchPlanCuadraturaDocumentRow[]
   resumen_pagos?: Record<string, number>

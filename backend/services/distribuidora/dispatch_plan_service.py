@@ -1088,20 +1088,40 @@ def _build_plan_dashboard(
             continue
         if oc_id:
             by_oc[oc_id] = o
+    # Venta facturada = Σ documents.total_amount (Bsale, total con IVA) de docs
+    # confirmados vigentes; no usar oc_total_amount. Dedup por related_document_id.
+    seen_confirmed_docs: set[int] = set()
     for item in inv_items:
         try:
             oc_id = int(item.get("oc_document_id") or 0)
         except (TypeError, ValueError):
             continue
         oc = by_oc.get(oc_id) or {}
-        amt = float(oc.get("oc_total_amount") or 0)
+        oc_amt = float(oc.get("oc_total_amount") or 0)
         st = item.get("status")
         if st == "confirmed":
-            confirmed_amount += amt
-        elif st == "probable":
-            probable_amount += amt
+            try:
+                doc_id = int(item.get("related_document_id") or 0)
+            except (TypeError, ValueError):
+                doc_id = 0
+            if doc_id:
+                if doc_id in seen_confirmed_docs:
+                    continue
+                seen_confirmed_docs.add(doc_id)
+            doc_total = item.get("document_total")
+            if doc_total is not None:
+                try:
+                    confirmed_amount += float(doc_total)
+                    continue
+                except (TypeError, ValueError):
+                    pass
+            # Sin total de factura no inventar con OC (evita ocultar deltas OC↔doc).
+            continue
+        if st == "probable":
+            # Probable: aún no es factura confirmada; monto referencial = OC.
+            probable_amount += oc_amt
         else:
-            pending_amount += amt
+            pending_amount += oc_amt
 
     inv_auto_confirmed = int(inv_summary.get("auto_confirmed") or 0)
 
@@ -1239,18 +1259,24 @@ def _build_plan_dashboard(
     invoicing_payload = {
         "total_orders": len(orders),
         "total_oc_amount_clp": int(round(total_oc_amount)),
+        # Bases tributarias: OC y docs Bsale usan total_amount (con IVA).
+        "amounts_basis": "document_total_with_tax",
+        "amounts_basis_label_es": "Total documento (con IVA)",
         "confirmed": {
             "count": inv_summary["confirmed"],
             "amount_clp": int(round(confirmed_amount)),
             "auto_confirmed_count": inv_auto_confirmed,
+            "amount_source": "related_document_total",
         },
         "probable": {
             "count": inv_summary["probable"],
             "amount_clp": int(round(probable_amount)),
+            "amount_source": "oc_total_amount",
         },
         "pending": {
             "count": inv_summary["missing"],
             "amount_clp": int(round(pending_amount)),
+            "amount_source": "oc_total_amount",
         },
     }
 
@@ -1289,10 +1315,49 @@ def _build_plan_dashboard(
         "probable_notes": probable_notes,
         "margin": margin_block,
         "picking": picking_block_from_invoicing(plan_id, inv),
+        "cuadratura": _cuadratura_status_light(plan_id),
         "degraded": bool(inv.get("invoicing_degraded")),
         "invoicing_source": inv.get("invoicing_source"),
     }
     return serialize_value(payload)
+
+
+def _cuadratura_status_light(plan_id: int) -> dict[str, Any]:
+    """Estado de cierre sin crear fila ni mutar documentos/pagos."""
+    try:
+        from backend.repositories.distribuidora import (
+            dispatch_plan_cuadratura_repo as cuad_repo,
+        )
+        from backend.utils.dispatch_plan_cuadratura_v2 import operational_status_label
+
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+            row = cuad_repo.get_cuadratura_row(cur, plan_id)
+            cur.close()
+        finally:
+            conn.close()
+        if not row:
+            return {
+                "started": False,
+                "status": "not_started",
+                "label": "Cuadratura no iniciada",
+                "closed_at": None,
+            }
+        status = str(row.get("status") or "pending")
+        return {
+            "started": True,
+            "status": status,
+            "label": operational_status_label(status),
+            "closed_at": row.get("closed_at"),
+        }
+    except Exception:
+        return {
+            "started": False,
+            "status": "not_started",
+            "label": "Cuadratura no iniciada",
+            "closed_at": None,
+        }
 
 
 def get_plan_dashboard(

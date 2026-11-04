@@ -132,7 +132,14 @@ def test_dashboard_include_margin_with_operative_ocs():
     ]
     inv = {
         "items": [
-            {"oc_document_id": 1001, "oc_number": 50001, "status": "confirmed"},
+            {
+                "oc_document_id": 1001,
+                "oc_number": 50001,
+                "status": "confirmed",
+                "related_document_id": 9001,
+                # Factura real distinta de OC ($100.000) — delta $2 como PLAN-00078.
+                "document_total": 99_998,
+            },
             {"oc_document_id": 1002, "oc_number": 50002, "status": "probable"},
             {"oc_document_id": 1003, "oc_number": 50003, "status": "missing"},
         ],
@@ -171,18 +178,22 @@ def test_dashboard_include_margin_with_operative_ocs():
     assert result["invoicing"]["total_orders"] == 3
     assert result["invoicing"]["total_oc_amount_clp"] == 175_000
     assert result["invoicing"]["confirmed"]["count"] == 1
-    assert result["invoicing"]["confirmed"]["amount_clp"] == 100_000
+    # Venta facturada = document_total, no oc_total_amount.
+    assert result["invoicing"]["confirmed"]["amount_clp"] == 99_998
+    assert result["invoicing"]["confirmed"]["amount_source"] == "related_document_total"
     assert result["invoicing"]["probable"]["count"] == 1
     assert result["invoicing"]["probable"]["amount_clp"] == 50_000
     assert result["invoicing"]["pending"]["count"] == 1
     assert result["invoicing"]["pending"]["amount_clp"] == 25_000
+    assert result["cuadratura"]["started"] is False
+    assert result["cuadratura"]["label"] == "Cuadratura no iniciada"
 
     ls = result["load_summary"]
     assert ls["kpis"]["oc_total_amount_clp"] == 175_000
     assert ls["invoicing"]["confirmed_total"] == 1
     assert ls["invoicing"]["probable"] == 1
     assert ls["invoicing"]["pending"] == 1
-    assert ls["invoicing"]["confirmed_amount_clp"] == 100_000
+    assert ls["invoicing"]["confirmed_amount_clp"] == 99_998
 
     assert len(result["plan_orders"]) == 3
     assert sum(float(o["peso_total_kg"] or 0) for o in result["plan_orders"]) == pytest.approx(

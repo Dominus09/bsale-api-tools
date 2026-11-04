@@ -266,6 +266,12 @@ export function operationalStatusBadge(status: CuadraturaOperationalStatus | str
         emoji: "📝",
         className: "bg-slate-500/15 text-slate-700 dark:text-slate-300",
       }
+    case "not_started":
+      return {
+        label: "Cuadratura no iniciada",
+        emoji: "○",
+        className: "bg-muted text-muted-foreground",
+      }
     default:
       return {
         label: "Pendiente",
