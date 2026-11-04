@@ -97,19 +97,27 @@ def compute_ors_route_for_truck(
     assistant_count: int = 0,
     driver_cost_clp_per_trip: int | None = None,
     assistant_cost_clp_per_trip: int | None = None,
+    preserve_order: bool = False,
 ) -> dict[str, Any] | None:
     """
-    Optimiza orden de visitas (cerrado desde bodega) y calcula geometría ORS bodega→clientes→bodega.
+    Calcula geometría ORS bodega→clientes→bodega.
+
+    Por defecto optimiza el orden (TSP local cerrado). Con ``preserve_order=True``
+    respeta el orden de ``stops`` (planificación simple_list); no altera el
+    optimizador tradicional cuando el flag queda en False.
     """
     if len(stops) < 1:
         return None
 
     clientes = _stops_to_clientes(stops)
-    _, optimizado = optimizar_secuencia_cerrado(depot_base(), clientes)
+    if preserve_order:
+        secuencia = clientes
+    else:
+        _, secuencia = optimizar_secuencia_cerrado(depot_base(), clientes)
 
     coords: list[list[float]] = [[BODEGA_LNG, BODEGA_LAT]]
     stops_ordered: list[dict[str, Any]] = []
-    for i, c in enumerate(optimizado, start=1):
+    for i, c in enumerate(secuencia, start=1):
         lon, lat = float(c["lon"]), float(c["lat"])
         coords.append([lon, lat])
         stops_ordered.append(
@@ -151,6 +159,7 @@ def compute_ors_route_for_truck(
         "coordinates": coords,
         "stops_ordered": stops_ordered,
         "includes_depot_return": True,
+        "preserve_order": bool(preserve_order),
         "depot": {"lat": BODEGA_LAT, "lng": BODEGA_LNG},
         **costs.as_dict(),
     }
@@ -162,11 +171,18 @@ def compute_planificacion_ors_routes(
     plan_session_id: str | None = None,
     persist_crew: bool = True,
     diesel_price_per_liter: float | None = None,
+    preserve_order: bool = False,
 ) -> dict[str, Any]:
     """
     ``legs``: { camion, truck_id?, stops, driver_count?, assistant_count? }
+
+    ``preserve_order`` (default False): si True, no ejecuta el TSP local.
+    Compatible con el flujo ORS tradicional (sigue optimizando por defecto).
     """
-    log_debug("POST /planificacion/ors-routes", extra={"legs": len(legs or [])})
+    log_debug(
+        "POST /planificacion/ors-routes",
+        extra={"legs": len(legs or []), "preserve_order": bool(preserve_order)},
+    )
     if not legs:
         depot = depot_base()
         return {
@@ -252,6 +268,9 @@ def compute_planificacion_ors_routes(
                 leg, saved, default_d, default_a
             )
 
+            leg_preserve = bool(leg.get("preserve_order")) if "preserve_order" in leg else bool(
+                preserve_order
+            )
             row = compute_ors_route_for_truck(
                 camion=camion,
                 stops=stops,
@@ -264,6 +283,7 @@ def compute_planificacion_ors_routes(
                 assistant_count=a_count,
                 driver_cost_clp_per_trip=d_rate,
                 assistant_cost_clp_per_trip=a_rate,
+                preserve_order=leg_preserve,
             )
             if row is None:
                 return {

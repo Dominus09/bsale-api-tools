@@ -162,6 +162,14 @@ class OrsRoutesRequestBody(BaseModel):
         gt=0,
         description="Override CLP/L para recalcular combustible en esta petición.",
     )
+    preserve_order: bool = Field(
+        False,
+        description=(
+            "Si True, no reordena paradas (TSP local). Default False: optimiza "
+            "como siempre. Usado por simple_planning; el planner tradicional "
+            "debe dejarlo en False."
+        ),
+    )
 
 
 def _leg_to_service_dict(leg: OrsRouteInput) -> dict[str, Any]:
@@ -183,7 +191,7 @@ def _leg_to_service_dict(leg: OrsRouteInput) -> dict[str, Any]:
 @router.post("/ors-routes")
 def post_planificacion_ors_routes(body: OrsRoutesRequestBody):
     """
-    Ruta cerrada BODEGA → clientes (orden optimizado) → BODEGA.
+    Ruta cerrada BODEGA → clientes (orden optimizado por defecto) → BODEGA.
     Métricas ORS reales + litros/costo según ``trucks.km_per_liter``, diesel y personal.
     """
     try:
@@ -193,6 +201,7 @@ def post_planificacion_ors_routes(body: OrsRoutesRequestBody):
             plan_session_id=body.plan_session_id,
             persist_crew=bool(body.plan_session_id),
             diesel_price_per_liter=body.diesel_price_per_liter,
+            preserve_order=bool(body.preserve_order),
         )
     except Exception as exc:
         log_error("POST /planificacion/ors-routes", exc)
