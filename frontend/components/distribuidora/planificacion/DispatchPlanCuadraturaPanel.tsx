@@ -16,6 +16,7 @@ import {
   computeCuadraturaV2Result,
   defaultCashCount,
   diffStatusClass,
+  documentCollectionPresentation,
   emptyCreditNoteV2Row,
   emptyNotLoadedV2Row,
   normalizeCashCount,
@@ -207,8 +208,18 @@ export function DispatchPlanCuadraturaPanel({
     )
   }
 
+  const hdr = (data.header || {}) as Record<string, unknown>
+  const docsEntregados = documents.filter((d) => (d.medio_pago || "pendiente") !== "pendiente").length
+  const docsPendientes = documents.filter((d) => (d.medio_pago || "pendiente") === "pendiente").length
+  const ncTotal = creditNotes.reduce((a, r) => a + Math.round(Number(r.monto) || 0), 0)
+  const saldoPendiente =
+    (resultado.resumen_pagos?.pendiente ?? 0) ||
+    documents
+      .filter((d) => (d.medio_pago || "pendiente") === "pendiente")
+      .reduce((a, d) => a + Math.round(Number(d.monto_clp) || 0), 0)
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
           <div className="flex flex-wrap items-center gap-2">
@@ -243,102 +254,159 @@ export function DispatchPlanCuadraturaPanel({
           <AlertTriangle className="size-4" />
           <AlertTitle>Cuadratura no iniciada</AlertTitle>
           <AlertDescription className="text-xs">
-            Aún no hay registro de cierre de ruta para este despacho. Los montos
-            comerciales abajo son referencia del despacho (no un cobro registrado).
-            Guardar la cuadratura inicia el cierre; no se crea automáticamente al abrir
-            esta página.
+            Aún no hay registro de cierre de ruta. Los montos comerciales son referencia del
+            despacho (no cobro registrado). Guardar inicia el cierre; no se crea al abrir esta
+            página.
           </AlertDescription>
         </Alert>
       ) : null}
 
-      <section className="space-y-2">
-        <h3 className="text-sm font-semibold">
-          {cuadraturaStarted
-            ? "Ventas (referencia comercial del despacho)"
-            : "Datos comerciales del despacho (referencia)"}
-        </h3>
-        <p className="text-[11px] text-muted-foreground">
-          {data.ventas.amounts_basis_label_es || "Total documento (con IVA)"} · distintos de
-          cobros del cierre
-        </p>
+      {/* A. Resumen del despacho */}
+      <section className="space-y-3 rounded-lg border bg-muted/10 p-4">
+        <h3 className="text-sm font-semibold tracking-tight">A. Resumen del despacho</h3>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
+          <MetaField
+            label="Planificación"
+            value={String(hdr.planning_number || hdr.planning_name || `Plan ${planId}`)}
+          />
+          <MetaField label="Camión" value={String(hdr.truck_name || "—")} />
+          <MetaField
+            label="Chofer"
+            value={String(hdr.driver_name || hdr.driver_label || "—")}
+          />
+          <MetaField label="Fecha" value={String(hdr.delivery_date || "—")} />
+          <MetaField label="Documentos" value={String(documents.length)} />
+          <MetaField label="Venta documentada" value={formatClp(ventaPicking)} />
+          <MetaField label="Estado de cierre" value={statusBadge.label} />
+          <MetaField
+            label="Base montos"
+            value={data.ventas.amounts_basis_label_es || "Total documento (con IVA)"}
+          />
+        </div>
         <div className="grid gap-2 sm:grid-cols-3">
-          <ReadOnlyAmount label="Venta OC" value={data.ventas.venta_oc_clp} />
+          <ReadOnlyAmount label="Venta OC (referencia)" value={data.ventas.venta_oc_clp} />
           <ReadOnlyAmount
-            label="Venta facturada (docs vigentes)"
+            label="Venta facturada (referencia)"
             value={data.ventas.venta_facturada_clp}
           />
-          <ReadOnlyAmount label="Venta picking" value={ventaPicking} />
+          <ReadOnlyAmount label="Venta picking (documentada)" value={ventaPicking} />
         </div>
+        <p className="text-[11px] text-muted-foreground">
+          Venta facturada ≠ dinero recibido. No se mezclan en el cierre.
+        </p>
       </section>
 
+      {/* B. Control documental */}
+      <section className="space-y-3">
+        <h3 className="text-sm font-semibold tracking-tight">B. Control documental</h3>
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+          <StatCard label="Documentos en ruta" value={String(documents.length)} />
+          <StatCard label="Con medio registrado" value={String(docsEntregados)} />
+          <StatCard label="Pendientes de cobro" value={String(docsPendientes)} />
+          <ReadOnlyAmount label="Notas de crédito (monto)" value={ncTotal} />
+          <ReadOnlyAmount label="Saldo pendiente" value={saldoPendiente} />
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          Devueltos / no entregados se registran vía NC y «No cargados». Sin ceros engañosos:
+          pendiente muestra el monto real aún no asignado a un medio.
+        </p>
+      </section>
+
+      {/* C. Registro de cobranzas */}
       <section className="space-y-2">
-        <h3 className="text-sm font-semibold">Documentos despachados</h3>
+        <div>
+          <h3 className="text-sm font-semibold tracking-tight">C. Registro de cobranzas</h3>
+          <p className="text-xs text-muted-foreground">
+            Modelo actual: un medio por documento. La UI ya reserva columnas para pago mixto
+            (E4); la persistencia multi-medio no está activa.
+          </p>
+        </div>
         <div className="overflow-x-auto rounded-lg border">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Documento</TableHead>
                 <TableHead>Cliente</TableHead>
-                <TableHead className="text-right">Monto</TableHead>
-                <TableHead>Medio de pago</TableHead>
-                <TableHead>Observación</TableHead>
+                <TableHead>Documento</TableHead>
+                <TableHead className="text-right">Por cobrar</TableHead>
+                <TableHead>Medio</TableHead>
+                <TableHead className="text-right">Recibido</TableHead>
+                <TableHead className="text-right">Diferencia</TableHead>
+                <TableHead>Observaciones</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {documents.map((doc, idx) => (
-                <TableRow key={`${doc.related_document_id ?? doc.document_number}-${idx}`}>
-                  <TableCell className="font-mono text-xs">
-                    {doc.document_number ?? doc.related_document_id ?? "—"}
-                  </TableCell>
-                  <TableCell>{doc.client_name || "—"}</TableCell>
-                  <TableCell className="text-right font-mono text-xs">
-                    {formatClp(doc.monto_clp)}
-                  </TableCell>
-                  <TableCell>
-                    <Select
-                      disabled={isClosed}
-                      value={doc.medio_pago || "pendiente"}
-                      onValueChange={(v) =>
-                        setDocuments((rows) =>
-                          rows.map((r, i) => (i === idx ? { ...r, medio_pago: v } : r)),
-                        )
-                      }
+              {documents.map((doc, idx) => {
+                const coll = documentCollectionPresentation(doc)
+                return (
+                  <TableRow key={`${doc.related_document_id ?? doc.document_number}-${idx}`}>
+                    <TableCell className="text-xs">{doc.client_name || "—"}</TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {doc.document_number ?? doc.related_document_id ?? "—"}
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-xs">
+                      {formatClp(coll.monto_por_cobrar)}
+                    </TableCell>
+                    <TableCell>
+                      <Select
+                        disabled={isClosed}
+                        value={doc.medio_pago || "pendiente"}
+                        onValueChange={(v) =>
+                          setDocuments((rows) =>
+                            rows.map((r, i) => (i === idx ? { ...r, medio_pago: v } : r)),
+                          )
+                        }
+                      >
+                        <SelectTrigger className="h-8 w-[140px]">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {MEDIOS_PAGO.map((m) => (
+                            <SelectItem key={m} value={m}>
+                              {MEDIO_PAGO_LABELS[m]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="mt-0.5 text-[10px] text-muted-foreground">
+                        Mixto E4: deshabilitado
+                      </p>
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-xs">
+                      {formatClp(coll.monto_recibido)}
+                    </TableCell>
+                    <TableCell
+                      className={cn(
+                        "text-right font-mono text-xs",
+                        coll.diferencia !== 0 && "text-amber-700 dark:text-amber-300",
+                      )}
                     >
-                      <SelectTrigger className="h-8 w-[140px]">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {MEDIOS_PAGO.map((m) => (
-                          <SelectItem key={m} value={m}>
-                            {MEDIO_PAGO_LABELS[m]}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </TableCell>
-                  <TableCell>
-                    <Input
-                      disabled={isClosed}
-                      value={doc.observacion || ""}
-                      onChange={(e) =>
-                        setDocuments((rows) =>
-                          rows.map((r, i) =>
-                            i === idx ? { ...r, observacion: e.target.value } : r,
-                          ),
-                        )
-                      }
-                      className="h-8"
-                    />
-                  </TableCell>
-                </TableRow>
-              ))}
+                      {formatClp(coll.diferencia)}
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        disabled={isClosed}
+                        value={doc.observacion || ""}
+                        onChange={(e) =>
+                          setDocuments((rows) =>
+                            rows.map((r, i) =>
+                              i === idx ? { ...r, observacion: e.target.value } : r,
+                            ),
+                          )
+                        }
+                        className="h-8"
+                      />
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
             </TableBody>
           </Table>
         </div>
       </section>
 
+      {/* D. Resumen de dinero */}
       <section className="space-y-2">
-        <h3 className="text-sm font-semibold">Resumen por medio de pago</h3>
+        <h3 className="text-sm font-semibold tracking-tight">D. Resumen de dinero</h3>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {MEDIOS_PAGO.filter((m) => m !== "pendiente").map((m) => (
             <ReadOnlyAmount
@@ -347,6 +415,11 @@ export function DispatchPlanCuadraturaPanel({
               value={resultado.resumen_pagos?.[m] ?? 0}
             />
           ))}
+          <ReadOnlyAmount
+            label="Total cobrado (medios)"
+            value={resultado.total_recaudado_documental_clp ?? resultado.total_recaudado_clp}
+          />
+          <ReadOnlyAmount label="Saldo pendiente" value={saldoPendiente} />
         </div>
       </section>
 
@@ -519,11 +592,24 @@ export function DispatchPlanCuadraturaPanel({
         </datalist>
       </EditableSection>
 
+      {/* E. Arqueo de efectivo */}
       <section className="space-y-2">
-        <h3 className="text-sm font-semibold">Conteo de efectivo</h3>
+        <h3 className="text-sm font-semibold tracking-tight">E. Arqueo de efectivo</h3>
         <p className="text-xs text-muted-foreground">
-          Compare contra documentos marcados como Efectivo.
+          Compare el contado solo contra documentos marcados como Efectivo (no contra venta
+          facturada).
         </p>
+        <div className="grid gap-2 sm:grid-cols-3">
+          <ReadOnlyAmount
+            label="Efectivo esperado (documental)"
+            value={resultado.total_efectivo_documental_clp ?? 0}
+          />
+          <ReadOnlyAmount
+            label="Efectivo contado"
+            value={resultado.total_efectivo_contado_clp ?? 0}
+          />
+          <ReadOnlyAmount label="Diferencia efectivo" value={cashDiff} />
+        </div>
         <div className="overflow-x-auto rounded-lg border">
           <Table>
             <TableHeader>
@@ -587,24 +673,21 @@ export function DispatchPlanCuadraturaPanel({
         </Alert>
       ) : null}
 
-      <section className="space-y-2">
-        <h3 className="text-sm font-semibold">Resultado</h3>
+      {/* F. Cierre */}
+      <section className="space-y-4 rounded-lg border-2 border-primary/30 bg-primary/5 p-4">
+        <h3 className="text-sm font-semibold tracking-tight">F. Cierre</h3>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           <ReadOnlyAmount label="Venta picking" value={ventaPicking} />
           <ReadOnlyAmount label="(−) Notas crédito" value={-resultado.notas_credito_clp} />
           <ReadOnlyAmount label="Venta ajustada" value={resultado.venta_ajustada_clp} />
           <ReadOnlyAmount
-            label="Total recaudado documental"
+            label="Total cobrado (documental)"
             value={resultado.total_recaudado_documental_clp ?? resultado.total_recaudado_clp}
-          />
-          <ReadOnlyAmount
-            label="Total efectivo contado"
-            value={resultado.total_efectivo_contado_clp ?? 0}
           />
           <ReadOnlyAmount label="Diferencia efectivo" value={cashDiff} />
           <div
             className={cn(
-              "rounded-md border p-3 sm:col-span-2 lg:col-span-1",
+              "rounded-md border p-3",
               diffStatusClass(resultado.diferencia_status),
             )}
           >
@@ -614,24 +697,62 @@ export function DispatchPlanCuadraturaPanel({
             </p>
           </div>
         </div>
-      </section>
 
-      <section className="space-y-2">
-        <Label className="text-sm font-semibold">
-          Observación
-          {obsRequired ? <span className="text-destructive"> *</span> : null}
-        </Label>
-        <Textarea
-          disabled={isClosed}
-          value={observacion}
-          onChange={(e) => setObservacion(e.target.value)}
-          placeholder={
-            obsRequired
-              ? "Obligatorio: explique diferencia general y/o de efectivo"
-              : "Opcional"
-          }
-          rows={3}
-        />
+        <div className="space-y-2">
+          <Label className="text-sm font-semibold">
+            Observaciones
+            {obsRequired ? <span className="text-destructive"> *</span> : null}
+          </Label>
+          <Textarea
+            disabled={isClosed}
+            value={observacion}
+            onChange={(e) => setObservacion(e.target.value)}
+            placeholder={
+              obsRequired
+                ? "Obligatorio: explique diferencia general y/o de efectivo"
+                : "Opcional"
+            }
+            rows={3}
+          />
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+          <span>
+            Estado: <strong className="text-foreground">{statusBadge.label}</strong>
+          </span>
+          {data.closed_by ? (
+            <span>
+              Responsable cierre: <strong className="text-foreground">{data.closed_by}</strong>
+            </span>
+          ) : null}
+          {data.closed_at ? (
+            <span>
+              Cerrada: <strong className="text-foreground">{data.closed_at.slice(0, 16)}</strong>
+            </span>
+          ) : null}
+        </div>
+
+        {!isClosed ? (
+          <div className="flex flex-wrap gap-2 pt-2">
+            <Button type="button" variant="secondary" onClick={() => void save()} disabled={saving || closing}>
+              {saving ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Save className="mr-2 size-4" />}
+              Guardar borrador
+            </Button>
+            <Button
+              type="button"
+              size="lg"
+              className="min-w-[200px] font-semibold shadow-md"
+              onClick={() => void closeCuadratura()}
+              disabled={saving || closing}
+            >
+              {closing ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Lock className="mr-2 size-4" />}
+              Cerrar cuadratura
+            </Button>
+            <Button type="button" variant="outline" disabled={saving || closing} onClick={() => void load()}>
+              Recargar
+            </Button>
+          </div>
+        ) : null}
       </section>
 
       {data.history && data.history.length > 0 ? (
@@ -654,27 +775,24 @@ export function DispatchPlanCuadraturaPanel({
           </div>
         </section>
       ) : null}
+    </div>
+  )
+}
 
-      {!isClosed ? (
-        <div className="flex flex-wrap gap-2 border-t pt-4">
-          <Button type="button" onClick={() => void save()} disabled={saving || closing}>
-            {saving ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Save className="mr-2 size-4" />}
-            Guardar borrador
-          </Button>
-          <Button
-            type="button"
-            variant="default"
-            onClick={() => void closeCuadratura()}
-            disabled={saving || closing}
-          >
-            {closing ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Lock className="mr-2 size-4" />}
-            Cerrar cuadratura
-          </Button>
-          <Button type="button" variant="outline" disabled={saving || closing} onClick={() => void load()}>
-            Recargar
-          </Button>
-        </div>
-      ) : null}
+function MetaField({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="truncate text-sm font-medium">{value}</p>
+    </div>
+  )
+}
+
+function StatCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-border/60 bg-muted/20 p-3">
+      <p className="text-[11px] text-muted-foreground">{label}</p>
+      <p className="font-mono text-sm font-semibold tabular-nums">{value}</p>
     </div>
   )
 }

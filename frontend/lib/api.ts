@@ -3458,6 +3458,8 @@ export type DispatchPlanCuadraturaResponse = {
   picking_ready?: boolean
   picking_id?: number | null
   picking_version?: number | null
+  /** Cabecera del picking (plan, camión, chofer, fecha, sello). */
+  header?: DispatchPlanPickingHeader | Record<string, unknown>
   ventas: {
     venta_oc_clp: number
     venta_facturada_clp: number

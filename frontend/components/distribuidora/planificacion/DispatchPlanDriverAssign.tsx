@@ -36,7 +36,7 @@ export function DispatchPlanDriverAssign({
   const [msg, setMsg] = useState<string | null>(null)
   const [diagNote, setDiagNote] = useState<string | null>(null)
   const [nearMisses, setNearMisses] = useState<
-    { display_name?: string; missing_labels?: string[] }[]
+    { user_id?: number; display_name?: string; email?: string; missing_labels?: string[] }[]
   >([])
 
   async function reload() {
@@ -183,10 +183,16 @@ export function DispatchPlanDriverAssign({
           <ul className="mt-1 list-inside list-disc">
             {nearMisses.slice(0, 6).map((n, i) => (
               <li key={i}>
-                {n.display_name || "Usuario"}: {(n.missing_labels || []).join("; ") || "requisito pendiente"}
+                {n.display_name || n.email || "Usuario"}
+                {n.user_id != null ? ` (#${n.user_id})` : ""}:{" "}
+                {(n.missing_labels || []).join("; ") || "requisito pendiente"}
               </li>
             ))}
           </ul>
+          <p className="mt-1.5 text-[10px]">
+            Corregir en Admin → Usuarios y Accesos: activar app PWA + perfil operacional
+            «chofer» (+ empresa/oficina del despacho). El rol ERP «operativo» no alcanza.
+          </p>
         </div>
       ) : null}
 

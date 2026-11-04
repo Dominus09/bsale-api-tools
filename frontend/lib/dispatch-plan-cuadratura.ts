@@ -58,6 +58,38 @@ export type CuadraturaDocumentRow = {
   route_order?: number | null
 }
 
+/**
+ * Línea de cobro mixto (E4). Solo presentación/contrato por ahora —
+ * no se persiste en schema_version 2.
+ */
+export type CuadraturaPaymentSplitLine = {
+  medio_pago: MedioPago | string
+  monto_clp: number
+}
+
+/** Presentación de cobranza por documento (compatible con modelo v2 actual). */
+export function documentCollectionPresentation(doc: CuadraturaDocumentRow): {
+  monto_por_cobrar: number
+  monto_recibido: number
+  diferencia: number
+  pending: boolean
+  splits_preview: CuadraturaPaymentSplitLine[]
+} {
+  const due = Math.round(Number(doc.monto_clp) || 0)
+  const pending = (doc.medio_pago || "pendiente") === "pendiente"
+  const received = pending ? 0 : due
+  return {
+    monto_por_cobrar: due,
+    monto_recibido: received,
+    diferencia: due - received,
+    pending,
+    // E4: aquí entrarán N medios; hoy un solo medio cubre el total.
+    splits_preview: pending
+      ? []
+      : [{ medio_pago: doc.medio_pago || "pendiente", monto_clp: received }],
+  }
+}
+
 export type CuadraturaCreditNoteV2Row = {
   documento: string
   nota_credito: string
