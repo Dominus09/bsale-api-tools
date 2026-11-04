@@ -185,6 +185,20 @@ export function DispatchPlanDetailShell({
   const tabPanelClass =
     "mt-4 space-y-4 focus-visible:outline-none data-[state=inactive]:hidden"
 
+  const navCardClass = cn(
+    "h-[68px] min-w-[120px] flex-1 flex-col gap-1 rounded-xl border px-2 py-2",
+    "bg-card text-muted-foreground shadow-none",
+    "border-border/70 hover:border-border hover:bg-muted/40",
+    "transition-[background-color,border-color,color] duration-150",
+    "focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none",
+    "data-[state=active]:border-primary data-[state=active]:bg-primary/15",
+    "data-[state=active]:text-white data-[state=active]:shadow-none",
+    "dark:data-[state=active]:border-primary dark:data-[state=active]:bg-primary/20",
+    "dark:data-[state=active]:text-white",
+    "[&_svg]:size-5 [&_svg]:text-muted-foreground",
+    "data-[state=active]:[&_svg]:text-red-300",
+  )
+
   const routeCalculated = plan.ors_metrics_calculated !== false
   const routeCoverage = costs?.route_coverage
   const ocCount = inv.total_orders
@@ -245,69 +259,29 @@ export function DispatchPlanDetailShell({
         <div className="overflow-x-auto overscroll-x-contain [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <TabsList
             className={cn(
-              "flex h-auto min-h-[50px] w-full min-w-[640px] gap-1 rounded-lg border border-border/70",
-              "bg-card/80 p-1 text-muted-foreground",
+              "flex h-auto w-full min-w-max gap-2.5 bg-transparent p-0",
+              "rounded-none border-0 shadow-none sm:min-w-0 sm:gap-3",
             )}
           >
-            <TabsTrigger
-              value="resumen"
-              className={cn(
-                "h-11 flex-1 gap-2 rounded-md px-3 text-sm font-medium",
-                "data-[state=active]:bg-primary data-[state=active]:text-primary-foreground",
-                "data-[state=active]:shadow-none dark:data-[state=active]:bg-primary",
-                "dark:data-[state=active]:text-primary-foreground",
-              )}
-            >
-              <LayoutDashboard className="size-4 shrink-0" aria-hidden />
-              Resumen
+            <TabsTrigger value="resumen" className={navCardClass}>
+              <LayoutDashboard aria-hidden />
+              <span className="text-sm font-medium leading-tight">Resumen</span>
             </TabsTrigger>
-            <TabsTrigger
-              value="ruta"
-              className={cn(
-                "h-11 flex-1 gap-2 rounded-md px-3 text-sm font-medium",
-                "data-[state=active]:bg-primary data-[state=active]:text-primary-foreground",
-                "data-[state=active]:shadow-none dark:data-[state=active]:bg-primary",
-                "dark:data-[state=active]:text-primary-foreground",
-              )}
-            >
-              <Map className="size-4 shrink-0" aria-hidden />
-              Ruta y costos
+            <TabsTrigger value="ruta" className={navCardClass}>
+              <Map aria-hidden />
+              <span className="text-sm font-medium leading-tight">Ruta</span>
             </TabsTrigger>
-            <TabsTrigger
-              value="picking"
-              className={cn(
-                "h-11 flex-1 gap-2 rounded-md px-3 text-sm font-medium",
-                "data-[state=active]:bg-primary data-[state=active]:text-primary-foreground",
-                "data-[state=active]:shadow-none dark:data-[state=active]:bg-primary",
-                "dark:data-[state=active]:text-primary-foreground",
-              )}
-            >
-              <PackageCheck className="size-4 shrink-0" aria-hidden />
-              Picking y carga
+            <TabsTrigger value="picking" className={navCardClass}>
+              <PackageCheck aria-hidden />
+              <span className="text-sm font-medium leading-tight">Picking</span>
             </TabsTrigger>
-            <TabsTrigger
-              value="chofer"
-              className={cn(
-                "h-11 flex-1 gap-2 rounded-md px-3 text-sm font-medium",
-                "data-[state=active]:bg-primary data-[state=active]:text-primary-foreground",
-                "data-[state=active]:shadow-none dark:data-[state=active]:bg-primary",
-                "dark:data-[state=active]:text-primary-foreground",
-              )}
-            >
-              <Truck className="size-4 shrink-0" aria-hidden />
-              Chofer y auditoría
+            <TabsTrigger value="chofer" className={navCardClass}>
+              <Truck aria-hidden />
+              <span className="text-sm font-medium leading-tight">Chofer</span>
             </TabsTrigger>
-            <TabsTrigger
-              value="cierre"
-              className={cn(
-                "h-11 flex-1 gap-2 rounded-md px-3 text-sm font-medium",
-                "data-[state=active]:bg-primary data-[state=active]:text-primary-foreground",
-                "data-[state=active]:shadow-none dark:data-[state=active]:bg-primary",
-                "dark:data-[state=active]:text-primary-foreground",
-              )}
-            >
-              <Wallet className="size-4 shrink-0" aria-hidden />
-              Cierre de ruta y cuadratura
+            <TabsTrigger value="cierre" className={navCardClass}>
+              <Wallet aria-hidden />
+              <span className="text-sm font-medium leading-tight">Cuadratura</span>
             </TabsTrigger>
           </TabsList>
         </div>
