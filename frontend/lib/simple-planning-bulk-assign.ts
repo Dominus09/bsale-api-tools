@@ -2,6 +2,47 @@
 
 export type FolioKey = string
 
+export type TruckSelectOption = {
+  id: number
+  name?: string | null
+  plate?: string | null
+}
+
+/**
+ * Etiqueta de selector: nombre · patente · #id cuando hay homónimos.
+ * El valor del Select sigue siendo siempre ``truck_id``.
+ */
+export function formatTruckSelectLabel(
+  truck: TruckSelectOption,
+  allTrucks: TruckSelectOption[] = [],
+): string {
+  const name = (truck.name || `Camión ${truck.id}`).trim()
+  const plate = (truck.plate || "").trim()
+  const nameKey = name.toLowerCase()
+  const sameNameCount = allTrucks.filter(
+    (t) => (t.name || "").trim().toLowerCase() === nameKey,
+  ).length
+  const parts = [name]
+  if (plate) parts.push(plate)
+  if (sameNameCount > 1 || !plate) parts.push(`#${truck.id}`)
+  return parts.join(" · ")
+}
+
+/** Camiones con al menos una OC asignada (orden de primera aparición). */
+export function truckIdsFromAssignments(
+  assignmentByFolio: Record<string, number>,
+): number[] {
+  const seen = new Set<number>()
+  const out: number[] = []
+  for (const raw of Object.values(assignmentByFolio)) {
+    const tid = Number(raw)
+    if (!Number.isFinite(tid) || tid <= 0 || seen.has(tid)) continue
+    seen.add(tid)
+    out.push(tid)
+  }
+  return out
+}
+
 export function folioKey(folio: number | string): FolioKey {
   return String(folio)
 }

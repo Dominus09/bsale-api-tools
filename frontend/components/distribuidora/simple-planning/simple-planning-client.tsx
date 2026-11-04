@@ -33,7 +33,9 @@ import {
   applyBulkTruckAssignment,
   clearFolioSelection,
   filterByMunicipality,
+  formatTruckSelectLabel,
   toggleFolioInSelection,
+  truckIdsFromAssignments,
   uniqueMunicipalities,
   visibleAssignableFolios,
 } from "@/lib/simple-planning-bulk-assign"
@@ -133,7 +135,6 @@ export function SimplePlanningClient() {
   const [previewBusy, setPreviewBusy] = useState(false)
 
   const [trucks, setTrucks] = useState<DistribuidoraTruck[]>([])
-  const [selectedTruckIds, setSelectedTruckIds] = useState<number[]>([])
   const [assignmentByFolio, setAssignmentByFolio] = useState<Record<string, number>>({})
   const [selectedFolios, setSelectedFolios] = useState<Set<string>>(() => clearFolioSelection())
   const [municipalityFilter, setMunicipalityFilter] = useState<string>("__all__")
@@ -272,11 +273,19 @@ export function SimplePlanningClient() {
     }
   }
 
-  const toggleTruck = (id: number) => {
-    setSelectedTruckIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
-    )
-  }
+  const truckLabel = useCallback(
+    (truckId: number, truck?: DistribuidoraTruck | null) => {
+      const t = truck || trucks.find((x) => x.id === truckId)
+      if (!t) return `Camión #${truckId}`
+      return formatTruckSelectLabel(t, trucks)
+    },
+    [trucks],
+  )
+
+  const assignedTruckIds = useMemo(
+    () => truckIdsFromAssignments(assignmentByFolio),
+    [assignmentByFolio],
+  )
 
   const setOcTruck = (folio: number, truckId: number | null) => {
     setAssignmentByFolio((prev) => {
@@ -286,6 +295,7 @@ export function SimplePlanningClient() {
       else next[key] = truckId
       return next
     })
+    // Invalida assign-preview, ORS y sesiones prepare de todos los camiones afectados.
     invalidateAssignAndConfirm()
   }
 
@@ -298,13 +308,9 @@ export function SimplePlanningClient() {
       setError("Elige un camión para la asignación masiva")
       return
     }
-    if (selectedTruckIds.length < 1) {
-      setError("Selecciona camiones del catálogo antes de asignar")
-      return
-    }
     const truckId = Number(bulkTruckId)
-    if (!selectedTruckIds.includes(truckId)) {
-      setError("El camión elegido no está en la selección del catálogo")
+    if (!Number.isFinite(truckId) || !trucks.some((t) => t.id === truckId)) {
+      setError("Camión no válido del catálogo")
       return
     }
     const assignableSet = new Set(visibleAssignable.map(String))
@@ -392,10 +398,6 @@ export function SimplePlanningClient() {
       setError("Asigna al menos una OC a un camión")
       return
     }
-    if (selectedTruckIds.length < 1) {
-      setError("Selecciona al menos un camión del catálogo")
-      return
-    }
     setAssignBusy(true)
     setError(null)
     try {
@@ -408,6 +410,7 @@ export function SimplePlanningClient() {
       })
       setAssignPreview(report)
       setOrsByTruck({})
+      setTruckConfirm({})
       setStep("assign")
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error en assign-preview")
@@ -742,25 +745,22 @@ export function SimplePlanningClient() {
             <div className="space-y-1">
               <Label className="text-xs">Camión masivo</Label>
               <Select value={bulkTruckId || undefined} onValueChange={setBulkTruckId}>
-                <SelectTrigger className="h-8 w-[160px]">
+                <SelectTrigger className="h-8 w-[220px]">
                   <SelectValue placeholder="Elegir camión" />
                 </SelectTrigger>
                 <SelectContent>
-                  {selectedTruckIds.map((tid) => {
-                    const t = trucks.find((x) => x.id === tid)
-                    return (
-                      <SelectItem key={tid} value={String(tid)}>
-                        {t?.name || `Camión ${tid}`}
-                      </SelectItem>
-                    )
-                  })}
+                  {trucks.map((t) => (
+                    <SelectItem key={t.id} value={String(t.id)}>
+                      {formatTruckSelectLabel(t, trucks)}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
             <Button
               size="sm"
               onClick={applyBulkAssign}
-              disabled={!selectedFolios.size || !bulkTruckId || !selectedTruckIds.length}
+              disabled={!selectedFolios.size || !bulkTruckId || trucks.length === 0}
             >
               Asignar seleccionadas
             </Button>
@@ -936,19 +936,16 @@ export function SimplePlanningClient() {
                               setOcTruck(Number(folio), v === "__none__" ? null : Number(v))
                             }
                           >
-                            <SelectTrigger className="h-8 w-[140px]">
+                            <SelectTrigger className="h-8 w-[200px]">
                               <SelectValue placeholder="—" />
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value="__none__">Sin asignar</SelectItem>
-                              {selectedTruckIds.map((tid) => {
-                                const t = trucks.find((x) => x.id === tid)
-                                return (
-                                  <SelectItem key={tid} value={String(tid)}>
-                                    {t?.name || `Camión ${tid}`}
-                                  </SelectItem>
-                                )
-                              })}
+                              {trucks.map((t) => (
+                                <SelectItem key={t.id} value={String(t.id)}>
+                                  {formatTruckSelectLabel(t, trucks)}
+                                </SelectItem>
+                              ))}
                             </SelectContent>
                           </Select>
                         ) : (
@@ -969,41 +966,26 @@ export function SimplePlanningClient() {
 
           <div className="space-y-3 rounded-lg border p-4">
             <div className="flex items-center gap-2 text-sm font-medium">
-              <Truck className="h-4 w-4" /> Camiones del catálogo
+              <Truck className="h-4 w-4" /> Asignación
             </div>
             <p className="text-xs text-muted-foreground">
-              Selecciona vehículos reales; luego asigna OC en la tabla. Una OC no puede ir a
+              Elige el camión directamente en cada OC o con asignación masiva. El resumen por
+              camión se arma solo con los vehículos que tengan órdenes. Una OC no puede ir a
               dos camiones en la misma operación.
             </p>
-            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-              {trucks.map((t) => {
-                const checked = selectedTruckIds.includes(t.id)
-                return (
-                  <label
-                    key={t.id}
-                    className={cn(
-                      "flex cursor-pointer items-start gap-2 rounded border px-3 py-2 text-sm",
-                      checked && "border-primary bg-primary/5",
-                    )}
-                  >
-                    <Checkbox
-                      checked={checked}
-                      onCheckedChange={() => toggleTruck(t.id)}
-                    />
-                    <span>
-                      <span className="font-medium">{t.name}</span>
-                      <span className="block text-xs text-muted-foreground">
-                        Cap. {fmtKg(t.max_weight_kg)}
-                        {t.plate ? ` · ${t.plate}` : ""}
-                      </span>
-                    </span>
-                  </label>
-                )
-              })}
-            </div>
+            {assignedTruckIds.length ? (
+              <p className="text-xs text-muted-foreground">
+                Camiones con OC:{" "}
+                {assignedTruckIds.map((tid) => truckLabel(tid)).join(" · ")}
+              </p>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Aún no hay OC asignadas a un camión.
+              </p>
+            )}
             <Button
               onClick={() => void runAssignPreview()}
-              disabled={assignBusy || selectedTruckIds.length === 0}
+              disabled={assignBusy || assignedTruckIds.length === 0}
             >
               {assignBusy ? (
                 <>
@@ -1042,7 +1024,9 @@ export function SimplePlanningClient() {
             </Alert>
           ) : null}
           <div className="grid gap-4 lg:grid-cols-2">
-            {assignPreview.trucks.map((tr) => {
+            {assignPreview.trucks
+              .filter((tr) => (tr.order_count ?? tr.orders?.length ?? 0) > 0)
+              .map((tr) => {
               const cap = tr.capacity
               const clients = uniqueClientCount(tr.orders || [])
               const st = truckConfirm[tr.truck_id]
@@ -1055,6 +1039,8 @@ export function SimplePlanningClient() {
                 Boolean(tr.truck_missing) ||
                 driftBlocked ||
                 !cap?.capacity_known
+              const catalogTruck = trucks.find((t) => t.id === tr.truck_id)
+              const title = truckLabel(tr.truck_id, catalogTruck || (tr.truck as DistribuidoraTruck))
               return (
                 <div
                   key={tr.truck_id}
@@ -1065,9 +1051,7 @@ export function SimplePlanningClient() {
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <div className="font-medium">
-                        {tr.truck?.name || `Camión ${tr.truck_id}`}
-                      </div>
+                      <div className="font-medium">{title}</div>
                       <div className="text-xs text-muted-foreground">
                         {tr.order_count ?? 0} OC · {clients} clientes
                       </div>
@@ -1124,17 +1108,25 @@ export function SimplePlanningClient() {
                         .join(" · ")}
                     </p>
                   ) : null}
-                  <SimplePlanningTruckMap
-                    companyId={companyId}
-                    officeId={officeId}
-                    truckId={tr.truck_id}
-                    truckName={tr.truck?.name || `Camión ${tr.truck_id}`}
-                    orders={tr.orders || []}
-                    orsSnapshot={orsByTruck[tr.truck_id] || null}
-                    onOrsSnapshot={(snap) =>
-                      setOrsByTruck((prev) => ({ ...prev, [tr.truck_id]: snap }))
-                    }
-                  />
+                  <div
+                    className={cn(
+                      confirmOpen && "pointer-events-none select-none opacity-60",
+                    )}
+                    aria-hidden={confirmOpen || undefined}
+                  >
+                    <SimplePlanningTruckMap
+                      companyId={companyId}
+                      officeId={officeId}
+                      truckId={tr.truck_id}
+                      truckName={title}
+                      orders={tr.orders || []}
+                      orsSnapshot={orsByTruck[tr.truck_id] || null}
+                      onOrsSnapshot={(snap) => {
+                        if (confirmOpen) return
+                        setOrsByTruck((prev) => ({ ...prev, [tr.truck_id]: snap }))
+                      }}
+                    />
+                  </div>
                   {tr.picking_preview?.products_consolidated?.length ? (
                     <details className="text-xs">
                       <summary className="cursor-pointer font-medium">
@@ -1188,7 +1180,7 @@ export function SimplePlanningClient() {
           if (!confirmBusy) setConfirmOpen(open)
         }}
       >
-        <DialogContent>
+        <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>Confirmar despacho del camión</DialogTitle>
             <DialogDescription>
@@ -1210,12 +1202,18 @@ export function SimplePlanningClient() {
                 const weightAckOk =
                   (!needsIncomplete || ackIncompleteWeight) &&
                   (!needsUnevaluable || ackUnevaluableWeight)
+                const confirmTitle =
+                  confirmTruckId != null
+                    ? truckLabel(
+                        confirmTruckId,
+                        trucks.find((t) => t.id === confirmTruckId) ||
+                          (confirmTruckBlock.truck as DistribuidoraTruck),
+                      )
+                    : "Camión"
                 return (
                   <>
                     <p>
-                      <span className="font-medium">
-                        {confirmTruckBlock.truck?.name || `Camión ${confirmTruckId}`}
-                      </span>
+                      <span className="font-medium">{confirmTitle}</span>
                       {" · "}
                       {confirmTruckBlock.order_count ?? 0} OC · fecha {planningDate || "—"}
                     </p>

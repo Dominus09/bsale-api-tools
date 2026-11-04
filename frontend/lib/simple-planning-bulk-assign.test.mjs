@@ -36,6 +36,31 @@ function applyBulkTruckAssignment(assignmentByFolio, selectedFolios, truckId) {
   return next
 }
 
+function formatTruckSelectLabel(truck, allTrucks = []) {
+  const name = (truck.name || `Camión ${truck.id}`).trim()
+  const plate = (truck.plate || "").trim()
+  const nameKey = name.toLowerCase()
+  const sameNameCount = allTrucks.filter(
+    (t) => (t.name || "").trim().toLowerCase() === nameKey,
+  ).length
+  const parts = [name]
+  if (plate) parts.push(plate)
+  if (sameNameCount > 1 || !plate) parts.push(`#${truck.id}`)
+  return parts.join(" · ")
+}
+
+function truckIdsFromAssignments(assignmentByFolio) {
+  const seen = new Set()
+  const out = []
+  for (const raw of Object.values(assignmentByFolio)) {
+    const tid = Number(raw)
+    if (!Number.isFinite(tid) || tid <= 0 || seen.has(tid)) continue
+    seen.add(tid)
+    out.push(tid)
+  }
+  return out
+}
+
 function uniqueMunicipalities(items) {
   const set = new Set()
   for (const item of items) {
@@ -119,5 +144,30 @@ describe("simple-planning bulk assign", () => {
     map = applyBulkTruckAssignment(map, [2], 9)
     assert.equal(map["1"], 3)
     assert.equal(map["2"], 9)
+  })
+
+  it("truck summaries follow assignments without prior catalog selection", () => {
+    const map = applyBulkTruckAssignment({}, [10, 11, 12], 4)
+    const remapped = applyBulkTruckAssignment(map, [12], 8)
+    assert.deepEqual(truckIdsFromAssignments(remapped), [4, 8])
+    const onlyHyundai8 = applyBulkTruckAssignment(remapped, [10, 11], 8)
+    assert.deepEqual(truckIdsFromAssignments(onlyHyundai8), [8])
+  })
+
+  it("differentiates duplicate Hyundai names by plate and id", () => {
+    const catalog = [
+      { id: 4, name: "Hyundai", plate: "SRJK-79" },
+      { id: 8, name: "Hyundai", plate: "SRJK79" },
+      { id: 2, name: "Hino 2", plate: "PZPD-64" },
+    ]
+    assert.equal(
+      formatTruckSelectLabel(catalog[0], catalog),
+      "Hyundai · SRJK-79 · #4",
+    )
+    assert.equal(
+      formatTruckSelectLabel(catalog[1], catalog),
+      "Hyundai · SRJK79 · #8",
+    )
+    assert.equal(formatTruckSelectLabel(catalog[2], catalog), "Hino 2 · PZPD-64")
   })
 })
