@@ -2110,6 +2110,9 @@ export type SimplePlanningPreviewItem = {
     client_name?: string | null
     municipality?: string | null
     address?: string | null
+    has_georef?: boolean
+    lat?: number | null
+    lng?: number | null
   } | null
   products?: {
     variant_id?: number | null
@@ -2288,6 +2291,83 @@ export async function postSimplePlanningAssignPreview(body: {
   return res.json()
 }
 
+export type SimplePlanningOrsSnapshot = {
+  route_fingerprint: string
+  truck_id: number
+  document_ids: number[]
+  all_document_ids?: number[]
+  distance_km?: number | null
+  duration_min?: number | null
+  liters_estimated?: number | null
+  diesel_price_per_liter?: number | null
+  fuel_cost_clp?: number
+  crew_cost_clp?: number
+  ferry_cost_clp?: number
+  toll_cost_clp?: number
+  extras_cost_clp?: number
+  total_route_cost_clp?: number
+  route_geometry?: { type?: string; coordinates?: [number, number][] } | null
+  preserve_order?: boolean
+  calculated_at?: string
+  depot?: { lat: number; lng: number } | null
+  stop_coords?: { document_id: number; lat: number; lng: number }[]
+}
+
+export type SimplePlanningCalculateRouteResult = {
+  ok: boolean
+  ors_metrics_calculated: boolean
+  preserve_order?: boolean
+  truck_id: number
+  route_fingerprint?: string
+  stops_georef_count?: number
+  stops_pending_count?: number
+  stops_pending_georef?: {
+    document_id: number
+    folio?: number | null
+    client_name?: string | null
+    address?: string | null
+    municipality?: string | null
+  }[]
+  stops?: {
+    document_id: number
+    folio?: number | null
+    client_id?: number | null
+    client_name?: string | null
+    address?: string | null
+    municipality?: string | null
+    lat: number
+    lng: number
+    oc_document_ids?: number[]
+    folios?: (number | null)[]
+  }[]
+  depot?: { lat: number; lng: number } | null
+  distance_km?: number | null
+  duration_min?: number | null
+  geometry?: { type?: string; coordinates?: [number, number][] } | null
+  liters_estimated?: number | null
+  fuel_cost_clp?: number | null
+  crew_cost_clp?: number | null
+  total_route_cost_clp?: number | null
+  message?: string | null
+  ors_snapshot?: SimplePlanningOrsSnapshot | null
+}
+
+export async function postSimplePlanningCalculateRoute(body: {
+  company_id?: number
+  office_id?: number
+  truck_id: number
+  document_ids: number[]
+  camion?: string | null
+}): Promise<SimplePlanningCalculateRouteResult> {
+  const res = await fetch(`${API_URL}/distribuidora/simple-planning/calculate-route`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) await _simplePlanningError(res, "Error al calcular ruta ORS")
+  return res.json()
+}
+
 export async function postSimplePlanningPrepareConfirm(body: {
   company_id?: number
   office_id?: number
@@ -2298,6 +2378,7 @@ export async function postSimplePlanningPrepareConfirm(body: {
   idempotency_key?: string | null
   acknowledge_incomplete_weight?: boolean
   acknowledge_unevaluable_weight?: boolean
+  ors_snapshot?: SimplePlanningOrsSnapshot | null
   assignments: {
     folio: string | number
     truck_id: number

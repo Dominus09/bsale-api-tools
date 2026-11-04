@@ -21,8 +21,10 @@ import {
   SimplePlanningApiError,
   type DistribuidoraTruck,
   type SimplePlanningAssignPreview,
+  type SimplePlanningOrsSnapshot,
   type SimplePlanningPreviewItem,
 } from "@/lib/api"
+import { SimplePlanningTruckMap } from "@/components/distribuidora/simple-planning/SimplePlanningTruckMap"
 import {
   hasManagementAccess,
   hasSimplePlanningAccess,
@@ -147,11 +149,15 @@ export function SimplePlanningClient() {
   const [ackIncompleteWeight, setAckIncompleteWeight] = useState(false)
   const [ackUnevaluableWeight, setAckUnevaluableWeight] = useState(false)
   const [truckConfirm, setTruckConfirm] = useState<Record<number, TruckConfirmState>>({})
+  const [orsByTruck, setOrsByTruck] = useState<Record<number, SimplePlanningOrsSnapshot | null>>(
+    {},
+  )
   const confirmingRef = useRef(false)
 
   const invalidateAssignAndConfirm = useCallback(() => {
     setAssignPreview(null)
     setTruckConfirm({})
+    setOrsByTruck({})
     setConfirmOpen(false)
     setConfirmAck(false)
     setAckIncompleteWeight(false)
@@ -401,6 +407,7 @@ export function SimplePlanningClient() {
         assignments,
       })
       setAssignPreview(report)
+      setOrsByTruck({})
       setStep("assign")
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error en assign-preview")
@@ -443,6 +450,7 @@ export function SimplePlanningClient() {
         idempotency_key: idempotencyKey,
         acknowledge_incomplete_weight: ackIncompleteWeight,
         acknowledge_unevaluable_weight: ackUnevaluableWeight,
+        ors_snapshot: orsByTruck[truckId] || null,
         assignments: all,
       })
       if (prepared.status === "already_confirmed" && prepared.confirmed_plan_id) {
@@ -1116,6 +1124,17 @@ export function SimplePlanningClient() {
                         .join(" · ")}
                     </p>
                   ) : null}
+                  <SimplePlanningTruckMap
+                    companyId={companyId}
+                    officeId={officeId}
+                    truckId={tr.truck_id}
+                    truckName={tr.truck?.name || `Camión ${tr.truck_id}`}
+                    orders={tr.orders || []}
+                    orsSnapshot={orsByTruck[tr.truck_id] || null}
+                    onOrsSnapshot={(snap) =>
+                      setOrsByTruck((prev) => ({ ...prev, [tr.truck_id]: snap }))
+                    }
+                  />
                   {tr.picking_preview?.products_consolidated?.length ? (
                     <details className="text-xs">
                       <summary className="cursor-pointer font-medium">
