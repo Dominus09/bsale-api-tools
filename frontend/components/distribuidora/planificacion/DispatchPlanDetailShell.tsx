@@ -151,6 +151,7 @@ export function DispatchPlanDetailShell({
   const originLabel =
     plan.planning_origin === "simple_list" ? "Lista / Excel" : "ORS tradicional"
   const routeCoverage = costs?.route_coverage
+  const routeCalculated = plan.ors_metrics_calculated !== false
   const routeLabel =
     plan.ors_metrics_calculated === false
       ? "Ruta no calculada"
@@ -164,10 +165,18 @@ export function DispatchPlanDetailShell({
   const clients = ls?.kpis?.clients_from_oc ?? ls?.kpis?.clients ?? "—"
   const weightKg = ls?.weight?.weight_total_kg ?? plan.weight_total_kg
   const cobertura = ls?.weight?.cobertura_pct ?? plan.weight_cobertura_pct
+  const pickingSales = ls?.kpis?.picking_sales_clp
+  const pickingStatus = ls?.picking?.has_snapshot
+    ? `Picking generado${ls.picking.version != null ? ` v${ls.picking.version}` : ""}`
+    : "Picking pendiente"
+  const cuadraturaLabel =
+    dashboard.cuadratura?.label ||
+    (dashboard.cuadratura?.started ? "Cuadratura iniciada" : "Cuadratura no iniciada")
+  const amountsBasis =
+    inv.amounts_basis_label_es || "Total documento (con IVA)"
 
   return (
     <div className="space-y-4">
-      {/* Cabecera compacta */}
       <section className="rounded-xl border border-border/80 bg-card/60 p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -187,6 +196,9 @@ export function DispatchPlanDetailShell({
               {ls?.operational_status_label ? (
                 <Badge variant="outline">{ls.operational_status_label}</Badge>
               ) : null}
+              <Badge variant={dashboard.cuadratura?.started ? "outline" : "secondary"}>
+                {cuadraturaLabel}
+              </Badge>
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -210,35 +222,58 @@ export function DispatchPlanDetailShell({
           </div>
         </div>
 
-        <div className="mt-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-6 border-t border-border/50 pt-3">
-          <Meta label="OC" value={String(ocCount)} />
-          <Meta label="Clientes" value={String(clients)} />
-          <Meta label="Venta OC" value={formatClp(inv.total_oc_amount_clp)} />
+        <div className="mt-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 border-t border-border/50 pt-3">
+          <Meta label="OC / clientes" value={`${ocCount} · ${clients}`} sub={originLabel} />
+          <Meta
+            label="Venta OC"
+            value={formatClp(inv.total_oc_amount_clp)}
+            sub="Órdenes del plan"
+          />
           <Meta
             label="Venta facturada"
             value={formatClp(inv.confirmed.amount_clp)}
-            sub={`${inv.confirmed.count} docs confirmados`}
+            sub={`${inv.confirmed.count} docs · ${amountsBasis}`}
           />
           <Meta
-            label="Peso conocido"
+            label="Venta picking"
+            value={pickingSales != null ? formatClp(pickingSales) : "—"}
+            sub={pickingStatus}
+          />
+          <Meta
+            label="Margen comercial"
+            value={
+              margin?.visible && margin.commercial_margin_clp != null
+                ? formatClp(margin.commercial_margin_clp)
+                : margin?.restricted
+                  ? "Restringido"
+                  : "—"
+            }
+            sub={
+              margin?.cost_basis
+                ? `variant_cost · ${margin.cost_basis}`
+                : margin?.partial
+                  ? "Parcial / incompleto"
+                  : "No descuenta NC autom."
+            }
+          />
+          <Meta
+            label="Peso / chofer"
             value={
               weightKg != null
                 ? `${Number(weightKg).toLocaleString("es-CL", { maximumFractionDigits: 1 })} kg`
                 : "—"
             }
-            sub={
+            sub={[
               cobertura != null
-                ? `Cobertura ${Number(cobertura).toLocaleString("es-CL", { maximumFractionDigits: 0 })}%`
-                : undefined
-            }
-          />
-          <Meta
-            label="Chofer"
-            value={
+                ? `Cobertura ${Number(cobertura).toLocaleString("es-CL", {
+                    maximumFractionDigits: 0,
+                  })}%`
+                : null,
               plan.driver_name ||
-              (plan.driver_user_id ? `#${plan.driver_user_id}` : "Pendiente")
-            }
-            sub={ls?.picking?.has_snapshot ? "Picking generado" : "Picking pendiente"}
+                (plan.driver_user_id ? `Chofer #${plan.driver_user_id}` : "Chofer pendiente"),
+            ]
+              .filter(Boolean)
+              .join(" · ")}
           />
         </div>
 
@@ -251,12 +286,13 @@ export function DispatchPlanDetailShell({
       </section>
 
       <Tabs value={tab} onValueChange={onTabChange} className="w-full">
-        <TabsList className="flex h-auto flex-wrap gap-1">
+        <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1">
           <TabsTrigger value="resumen">Resumen</TabsTrigger>
           <TabsTrigger value="facturacion">Órdenes y facturación</TabsTrigger>
           <TabsTrigger value="ruta">Ruta y costos</TabsTrigger>
           <TabsTrigger value="picking">Picking y carga</TabsTrigger>
           <TabsTrigger value="chofer">Chofer y auditoría</TabsTrigger>
+          <TabsTrigger value="cierre">Cierre de ruta y cuadratura</TabsTrigger>
         </TabsList>
 
         <TabsContent value="resumen" className="mt-4 space-y-4">
@@ -273,6 +309,7 @@ export function DispatchPlanDetailShell({
               {margin.cost_coverage
                 ? ` · costos ${margin.cost_coverage.lines_with_cost ?? "—"}/${margin.cost_coverage.lines_total ?? "—"} líneas`
                 : ""}
+              {" · "}no es margen neto definitivo (NC no descontadas automáticamente).
             </p>
           ) : null}
           {dashboard.plan_orders?.length ? (
@@ -327,13 +364,20 @@ export function DispatchPlanDetailShell({
         </TabsContent>
 
         <TabsContent value="ruta" className="mt-4 space-y-3">
+          {!routeCalculated ? (
+            <Alert className="border-amber-500/30 bg-amber-500/5">
+              <AlertTitle className="text-sm">Ruta no calculada</AlertTitle>
+              <AlertDescription className="text-xs">
+                Este despacho no tiene métricas ORS. No se inventan km, duración ni costo de
+                transporte. Las rutas históricas no se alteran.
+              </AlertDescription>
+            </Alert>
+          ) : null}
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 text-sm">
             <div className="rounded-md border px-3 py-2">
               <p className="text-[11px] text-muted-foreground">Km</p>
               <p className="font-semibold tabular-nums">
-                {plan.ors_metrics_calculated === false
-                  ? "No disponible"
-                  : Number(plan.km_total ?? 0).toFixed(1)}
+                {!routeCalculated ? "Ruta no calculada" : Number(plan.km_total ?? 0).toFixed(1)}
               </p>
               {routeCoverage === "partial" ? (
                 <p className="text-[11px] text-amber-700 dark:text-amber-300">Solo paradas con geo</p>
@@ -342,31 +386,38 @@ export function DispatchPlanDetailShell({
             <div className="rounded-md border px-3 py-2">
               <p className="text-[11px] text-muted-foreground">Duración</p>
               <p className="font-semibold tabular-nums">
-                {plan.ors_metrics_calculated === false || plan.duration_min == null
-                  ? "No disponible"
+                {!routeCalculated || plan.duration_min == null
+                  ? "Ruta no calculada"
                   : `${Math.round(Number(plan.duration_min))} min`}
               </p>
             </div>
             <div className="rounded-md border px-3 py-2">
               <p className="text-[11px] text-muted-foreground">Costo ruta</p>
               <p className="font-semibold tabular-nums">
-                {plan.ors_metrics_calculated === false
-                  ? "No disponible"
+                {!routeCalculated
+                  ? "Ruta no calculada"
                   : formatClp(plan.total_route_cost_clp ?? 0)}
               </p>
             </div>
             <div className="rounded-md border px-3 py-2">
-              <p className="text-[11px] text-muted-foreground">Post-transporte</p>
+              <p className="text-[11px] text-muted-foreground">Después del transporte</p>
               <p className="font-semibold tabular-nums">
                 {margin?.net_operational_clp == null
                   ? "No disponible"
                   : formatClp(margin.net_operational_clp)}
               </p>
+              <p className="text-[11px] text-muted-foreground">
+                Requiere margen comercial y ruta ORS completa
+              </p>
             </div>
           </div>
-          <Button asChild variant="secondary" size="sm">
-            <Link href={`/distribuidora/planificaciones/${planId}/mapa`}>Abrir mapa de entregas</Link>
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button asChild variant="secondary" size="sm">
+              <Link href={`/distribuidora/planificaciones/${planId}/mapa`}>
+                Abrir mapa de entregas
+              </Link>
+            </Button>
+          </div>
           {costs?.clients_pending != null && Number(costs.clients_pending) > 0 ? (
             <p className="text-xs text-amber-800 dark:text-amber-200">
               Clientes sin georreferencia: {costs.clients_pending}
@@ -411,10 +462,20 @@ export function DispatchPlanDetailShell({
               void onReloadDashboard()
             }}
           />
-          <div className="rounded-md border border-border/60 p-3">
-            <p className="mb-2 text-sm font-medium">Cuadratura documental</p>
-            <DispatchPlanCuadraturaPanel planId={planId} onMessage={onMessage} />
+          <p className="text-xs text-muted-foreground">
+            La cuadratura y el cierre de ruta están en la pestaña «Cierre de ruta y cuadratura».
+          </p>
+        </TabsContent>
+
+        <TabsContent value="cierre" className="mt-4 space-y-4">
+          <div className="space-y-1">
+            <h3 className="text-sm font-semibold">Cierre de ruta y cuadratura</h3>
+            <p className="text-xs text-muted-foreground">
+              Datos del cierre de ruta. No sustituyen la venta OC ni la venta facturada del
+              resumen comercial.
+            </p>
           </div>
+          <DispatchPlanCuadraturaPanel planId={planId} onMessage={onMessage} />
         </TabsContent>
       </Tabs>
     </div>

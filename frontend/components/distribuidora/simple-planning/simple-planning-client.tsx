@@ -1145,24 +1145,56 @@ export function SimplePlanningClient() {
                     </details>
                   ) : null}
                   {st?.status === "ok" && st.planId ? (
-                    <Button asChild variant="secondary" size="sm">
-                      <Link href={`/distribuidora/planificaciones/${st.planId}`}>
-                        Abrir despacho
-                        {st.planningCode ? ` ${st.planningCode}` : ""}
-                      </Link>
-                    </Button>
+                    <div className="space-y-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-4">
+                      <div className="space-y-1">
+                        <p className="text-base font-semibold text-emerald-800 dark:text-emerald-200">
+                          ¡Despacho confirmado!
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {st.planningCode || `PLAN-${st.planId}`}
+                          {st.message ? ` · ${st.message}` : ""}
+                        </p>
+                      </div>
+                      <Button
+                        asChild
+                        size="lg"
+                        className="h-12 w-full bg-[var(--lq-brand)] text-base font-semibold text-white hover:bg-[var(--lq-brand-strong)]"
+                      >
+                        <Link href={`/distribuidora/planificaciones/${st.planId}`}>
+                          Abrir despacho{" "}
+                          {st.planningCode || `PLAN-${String(st.planId).padStart(5, "0")}`}
+                        </Link>
+                      </Button>
+                    </div>
+                  ) : st?.status === "error" ? (
+                    <div className="space-y-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3">
+                      <p className="text-sm font-medium text-destructive">Confirmación fallida</p>
+                      <p className="text-xs text-destructive">{st.message}</p>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={blocked}
+                        onClick={() => openConfirm(tr.truck_id)}
+                      >
+                        Reintentar confirmación
+                      </Button>
+                    </div>
                   ) : (
-                    <Button
-                      size="sm"
-                      disabled={blocked || st?.status === "preparing" || st?.status === "confirming"}
-                      onClick={() => openConfirm(tr.truck_id)}
-                    >
-                      Preparar confirmación
-                    </Button>
+                    <div className="space-y-2">
+                      {st?.status === "preparing" || st?.status === "confirming" ? (
+                        <p className="text-xs text-muted-foreground">{st.message || "Procesando…"}</p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">Pendiente de confirmación</p>
+                      )}
+                      <Button
+                        size="sm"
+                        disabled={blocked || st?.status === "preparing" || st?.status === "confirming"}
+                        onClick={() => openConfirm(tr.truck_id)}
+                      >
+                        Preparar confirmación
+                      </Button>
+                    </div>
                   )}
-                  {st?.status === "error" ? (
-                    <p className="text-xs text-destructive">{st.message}</p>
-                  ) : null}
                 </div>
               )
             })}

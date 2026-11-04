@@ -320,10 +320,12 @@ export function DispatchPlanPickingAssignmentPanel({
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 className="text-sm font-semibold">Asignación pickings</h2>
+          <h2 className="text-sm font-semibold">Lotes físicos de carga</h2>
           <p className="text-xs text-muted-foreground">
             {dispatchPlanVersionLabel(planningCode ?? null, planId, pickingVersion)}
-            {hasPicking ? " · pickings generados" : " · sin picking persistido"}
+            {hasPicking
+              ? " · picking generado · asocie documentos a un lote físico si corresponde"
+              : " · sin picking persistido"}
           </p>
         </div>
         <Button type="button" variant="outline" size="sm" onClick={() => void loadAll()}>
@@ -410,7 +412,7 @@ export function DispatchPlanPickingAssignmentPanel({
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Documentos
+            Documentos del picking
           </h3>
           {dirty ? (
             <Button
@@ -426,60 +428,66 @@ export function DispatchPlanPickingAssignmentPanel({
         </div>
         {!assignments.length ? (
           <p className="text-sm text-muted-foreground">
-            Genere el picking para ver documentos facturados asignables.
+            Genere el picking para ver documentos facturados asignables a lotes.
           </p>
         ) : (
-          <div className="overflow-x-auto rounded-md border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Documento</TableHead>
-                  <TableHead>Cliente</TableHead>
-                  <TableHead className="text-right">Monto</TableHead>
-                  <TableHead>Picking asignado</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {assignments.map((a) => (
-                  <TableRow key={a.related_document_id}>
-                    <TableCell className="font-mono text-xs">
-                      {a.document_number ?? a.related_document_id}
-                    </TableCell>
-                    <TableCell className="text-xs">{a.client_name ?? "—"}</TableCell>
-                    <TableCell className="text-right text-xs tabular-nums">
-                      {formatClp(Number(a.document_total ?? 0))}
-                    </TableCell>
-                    <TableCell>
-                      <Select
-                        value={
-                          draftAssignments[a.related_document_id] != null
-                            ? String(draftAssignments[a.related_document_id])
-                            : "none"
-                        }
-                        onValueChange={(v) =>
-                          setDraftAssignments((prev) => ({
-                            ...prev,
-                            [a.related_document_id]: v === "none" ? null : Number(v),
-                          }))
-                        }
-                      >
-                        <SelectTrigger className="h-8 text-xs">
-                          <SelectValue placeholder="Sin asignar" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">Sin asignar</SelectItem>
-                          {batches.map((b) => (
-                            <SelectItem key={b.id} value={String(b.id)}>
-                              {b.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </TableCell>
+          <div className="space-y-2">
+            <p className="text-[11px] text-muted-foreground">
+              «Pendiente de lote» = documento en el picking generado, aún sin lote físico de
+              carga (<code className="text-[10px]">load_batch_id</code> vacío). No implica
+              falta de picking.
+            </p>
+            <div className="overflow-x-auto rounded-md border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Documento</TableHead>
+                    <TableHead>Cliente</TableHead>
+                    <TableHead className="text-right">Monto</TableHead>
+                    <TableHead>Lote físico</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {assignments.map((a) => {
+                    const batchId = draftAssignments[a.related_document_id] ?? null
+                    return (
+                      <TableRow key={a.related_document_id}>
+                        <TableCell className="font-mono text-xs">
+                          {a.document_number ?? a.related_document_id}
+                        </TableCell>
+                        <TableCell className="text-xs">{a.client_name ?? "—"}</TableCell>
+                        <TableCell className="text-right text-xs tabular-nums">
+                          {formatClp(Number(a.document_total ?? 0))}
+                        </TableCell>
+                        <TableCell>
+                          <Select
+                            value={batchId != null ? String(batchId) : "none"}
+                            onValueChange={(v) =>
+                              setDraftAssignments((prev) => ({
+                                ...prev,
+                                [a.related_document_id]: v === "none" ? null : Number(v),
+                              }))
+                            }
+                          >
+                            <SelectTrigger className="h-8 text-xs">
+                              <SelectValue placeholder="Pendiente de lote" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none">Pendiente de lote físico</SelectItem>
+                              {batches.map((b) => (
+                                <SelectItem key={b.id} value={String(b.id)}>
+                                  {b.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            </div>
           </div>
         )}
       </section>
