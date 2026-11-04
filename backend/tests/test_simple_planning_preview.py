@@ -36,7 +36,16 @@ def _oc_row(folio: int, *, doc_id: int | None = None, state: int = 0, **extra):
     }
 
 
-def _run(folios, *, by_folio=None, products=None, plans=None, chains=None, weights=None):
+def _run(
+    folios,
+    *,
+    by_folio=None,
+    products=None,
+    plans=None,
+    chains=None,
+    weights=None,
+    missing_weight_loader=None,
+):
     by_folio = by_folio or {}
     products = products or {}
     plans = plans or {}
@@ -60,6 +69,7 @@ def _run(folios, *, by_folio=None, products=None, plans=None, chains=None, weigh
             {i: chains[1].get(i) for i in ids if i in chains[1]},
         ),
         weight_loader=lambda ids, **kw: {i: weights[i] for i in ids if i in weights},
+        missing_weight_loader=missing_weight_loader or (lambda ids: {}),
     )
 
 
@@ -308,16 +318,15 @@ def test_multiple_invoices_do_not_duplicate_products():
     assert item["products_source"] == "oc_document_details"
 
 
-def test_insufficient_weight():
-    folio = 90
-    report = _run(
-        [folio],
-        by_folio={folio: _oc_row(folio)},
+def test_incomplete_and_unevaluable_weight_statuses():
+    partial = _run(
+        [90],
+        by_folio={90: _oc_row(90)},
         chains=(
-            {folio: OcDocumentChain(oc_document_id=folio, oc_number=folio, oc_state=0)},
+            {90: OcDocumentChain(oc_document_id=90, oc_number=90, oc_state=0)},
             {
-                folio: OcOperationalStatus(
-                    oc_document_id=folio,
+                90: OcOperationalStatus(
+                    oc_document_id=90,
                     billing_status=BILLING_INVOICED,
                     dispatch_status="closed",
                     planning_eligible=False,
@@ -325,10 +334,50 @@ def test_insufficient_weight():
                 )
             },
         ),
-        weights={folio: {"peso_total_kg": None, "coverage_percent": 0, "missing_products": 4}},
+        weights={
+            90: {
+                "peso_total_kg": 12.5,
+                "coverage_percent": 80,
+                "missing_products": 1,
+                "productos_totales": 5,
+            }
+        },
+        missing_weight_loader=lambda ids: {
+            90: [{"variant_id": 1, "code": "X", "description": "Sin peso"}]
+        },
     )
-    assert report["items"][0]["status"] == preview.STATUS_INSUFFICIENT_WEIGHT
-    assert report["items"][0]["blocking"] is False
+    assert partial["items"][0]["status"] == preview.STATUS_INCOMPLETE_WEIGHT
+    assert partial["items"][0]["blocking"] is False
+    assert partial["items"][0]["weight"]["quality"] == "partial"
+    assert partial["items"][0]["weight"]["label"] == "Cobertura de peso incompleta"
+    assert partial["items"][0]["weight"]["products_without_weight"]
+
+    none = _run(
+        [91],
+        by_folio={91: _oc_row(91)},
+        chains=(
+            {91: OcDocumentChain(oc_document_id=91, oc_number=91, oc_state=0)},
+            {
+                91: OcOperationalStatus(
+                    oc_document_id=91,
+                    billing_status=BILLING_INVOICED,
+                    dispatch_status="closed",
+                    planning_eligible=False,
+                    dispatch_closed=True,
+                )
+            },
+        ),
+        weights={
+            91: {
+                "peso_total_kg": None,
+                "coverage_percent": 0,
+                "missing_products": 4,
+                "productos_totales": 4,
+            }
+        },
+    )
+    assert none["items"][0]["status"] == preview.STATUS_WEIGHT_UNEVALUABLE
+    assert none["items"][0]["weight"]["quality"] == "unevaluable"
 
 
 def test_rejects_oversized_unique_list():

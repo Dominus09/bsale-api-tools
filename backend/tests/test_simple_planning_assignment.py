@@ -202,8 +202,8 @@ def test_truck_without_capacity():
     assert "truck_capacity_unknown" in cap["warnings"]
 
 
-def test_unreliable_weight():
-    items = [_item(3, peso=None, quality="unavailable")]
+def test_partial_weight_counts_known_mass_and_warns():
+    items = [_item(3, peso=40.0, quality="partial")]
     report = assign.preview_truck_assignments(
         assignments=[{"folio": 3, "truck_id": 1}],
         preview_fn=_preview_stub(items),
@@ -211,7 +211,46 @@ def test_unreliable_weight():
             1: {"truck_id": 1, "name": "T", "max_weight_kg": 500, "active": True}
         },
     )
-    assert report["trucks"][0]["capacity"]["unavailable_order_count"] == 1
+    cap = report["trucks"][0]["capacity"]
+    assert cap["known_weight_kg"] == 40.0
+    assert cap["incomplete_order_count"] == 1
+    assert cap["requires_incomplete_weight_ack"] is True
+    assert cap["blocking"] is False
+    assert "incomplete_weight_coverage" in cap["warnings"]
+
+
+def test_unevaluable_weight_does_not_invent_zero_mass():
+    items = [_item(3, peso=None, quality="unevaluable")]
+    report = assign.preview_truck_assignments(
+        assignments=[{"folio": 3, "truck_id": 1}],
+        preview_fn=_preview_stub(items),
+        trucks_loader=lambda ids: {
+            1: {"truck_id": 1, "name": "T", "max_weight_kg": 500, "active": True}
+        },
+    )
+    cap = report["trucks"][0]["capacity"]
+    assert cap["known_weight_kg"] == 0.0
+    assert cap["unevaluable_order_count"] == 1
+    assert cap["requires_unevaluable_weight_ack"] is True
+    assert cap["blocking"] is False
+
+
+def test_known_weight_overload_still_blocks():
+    items = [_item(1, peso=600, quality="known"), _item(2, peso=600, quality="partial")]
+    report = assign.preview_truck_assignments(
+        assignments=[
+            {"folio": 1, "truck_id": 1},
+            {"folio": 2, "truck_id": 1},
+        ],
+        preview_fn=_preview_stub(items),
+        trucks_loader=lambda ids: {
+            1: {"truck_id": 1, "name": "T", "max_weight_kg": 1000, "active": True}
+        },
+    )
+    cap = report["trucks"][0]["capacity"]
+    assert cap["known_weight_kg"] == 1200.0
+    assert cap["overloaded"] is True
+    assert cap["blocking"] is True
 
 
 def test_fingerprint_drift_blocks():

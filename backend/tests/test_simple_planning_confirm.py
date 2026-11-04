@@ -49,17 +49,27 @@ def _assign_report(orders, *, truck_id=2, max_kg=2000, capacity_known=True):
         validate_truck_capacity,
     )
 
-    known = sum(
-        float(o["weight"]["peso_total_kg"])
-        for o in orders
-        if o["weight"]["quality"] == "known"
-    )
-    unavailable = sum(1 for o in orders if o["weight"]["quality"] == "unavailable")
+    known = 0.0
+    estimated = 0.0
+    incomplete = 0
+    unevaluable = 0
+    for o in orders:
+        q = o["weight"]["quality"]
+        peso = o["weight"].get("peso_total_kg")
+        if q == "known" and peso is not None:
+            known += float(peso)
+        elif q == "estimated" and peso is not None:
+            estimated += float(peso)
+        elif q == "partial" and peso is not None and float(peso) > 0:
+            known += float(peso)
+            incomplete += 1
+        else:
+            unevaluable += 1
     capacity = validate_truck_capacity(
-        assigned_weight_kg=known,
         known_weight_kg=known,
-        estimated_weight_kg=0,
-        unavailable_orders=unavailable,
+        estimated_weight_kg=estimated,
+        incomplete_orders=incomplete,
+        unevaluable_orders=unevaluable,
         truck_max_weight_kg=max_kg if capacity_known else None,
     )
     return {
@@ -180,8 +190,8 @@ def test_prepare_blocks_overload(monkeypatch):
     assert ei.value.code == "truck_overloaded"
 
 
-def test_prepare_blocks_unavailable_weight(monkeypatch):
-    orders = [_order(3, peso=None, quality="unavailable")]
+def test_prepare_requires_ack_for_unevaluable_weight(monkeypatch):
+    orders = [_order(3, peso=None, quality="unevaluable")]
     monkeypatch.setattr(
         svc,
         "preview_truck_assignments",
@@ -199,7 +209,44 @@ def test_prepare_blocks_unavailable_weight(monkeypatch):
             assignments=[{"folio": 3, "truck_id": 2}],
             conn_factory=lambda: (_ for _ in ()).throw(RuntimeError("no db")),
         )
-    assert ei.value.code == "weight_unavailable"
+    assert ei.value.code == "weight_unevaluable_ack_required"
+
+
+def test_prepare_allows_partial_weight_with_ack(monkeypatch):
+    orders = [_order(4, peso=12.5, quality="partial")]
+    report = _assign_report(orders)
+    monkeypatch.setattr(svc, "preview_truck_assignments", lambda **_k: report)
+
+    inserted = {}
+
+    def _insert(cur, fields):
+        row = {**fields, "id": str(fields["id"]), "confirmed_plan_id": None}
+        inserted["row"] = row
+        return row
+
+    monkeypatch.setattr(svc.session_repo, "insert_session", _insert)
+    monkeypatch.setattr(
+        svc.session_repo, "get_session_by_idempotency", lambda *_a, **_k: None
+    )
+
+    out = svc.prepare_confirm_session(
+        user_id=9,
+        company_id=3,
+        office_id=1,
+        planning_date=date.today(),
+        truck_id=2,
+        dispatch_name=None,
+        driver_name=None,
+        assignments=[{"folio": 4, "truck_id": 2}],
+        acknowledge_incomplete_weight=True,
+        conn_factory=lambda: _FakeConn(),
+    )
+    assert out["status"] == "created"
+    ack = out["weight_acknowledgement"]
+    assert ack["incomplete_weight"] is True
+    assert ack["does_not_authorize_route_departure"] is True
+    assert ack["acknowledged_by_user_id"] == 9
+    assert inserted["row"]["payload"]["weight_acknowledgement"]["incomplete_weight"]
 
 
 def test_prepare_and_confirm_happy_path(monkeypatch):

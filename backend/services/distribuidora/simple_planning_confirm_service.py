@@ -41,7 +41,15 @@ logger = logging.getLogger(__name__)
 SESSION_TTL_MINUTES = 30
 WEIGHT_KNOWN = "known"
 WEIGHT_ESTIMATED = "estimated"
-WEIGHT_UNAVAILABLE = "unavailable"
+WEIGHT_PARTIAL = "partial"
+WEIGHT_UNEVALUABLE = "unevaluable"
+WEIGHT_UNAVAILABLE = WEIGHT_UNEVALUABLE  # legacy alias
+
+ROUTE_DEPARTURE_DISCLAIMER = (
+    "La confirmación de planificación con cobertura de peso incompleta "
+    "NO autoriza salida a ruta; el control de despacho físico queda para "
+    "la futura PWA de bodega/chofer."
+)
 
 
 class SimplePlanningConfirmError(ValueError):
@@ -134,75 +142,133 @@ def _public_session(row: dict[str, Any]) -> dict[str, Any]:
 def _capacity_from_orders(orders: list[dict[str, Any]], truck_max: int | None) -> dict[str, Any]:
     known = 0.0
     estimated = 0.0
-    unavailable = 0
+    incomplete = 0
+    unevaluable = 0
     for order in orders:
         weight = order.get("weight") or {}
-        quality = weight.get("quality") or WEIGHT_UNAVAILABLE
-        peso = weight.get("peso_total_kg")
+        quality = weight.get("quality") or WEIGHT_UNEVALUABLE
+        if quality == "unavailable":
+            quality = WEIGHT_UNEVALUABLE
+        peso = weight.get("known_weight_kg")
+        if peso is None:
+            peso = weight.get("peso_total_kg")
         if quality == WEIGHT_KNOWN and peso is not None:
             known += float(peso)
         elif quality == WEIGHT_ESTIMATED and peso is not None:
             estimated += float(peso)
+        elif quality == WEIGHT_PARTIAL and peso is not None and float(peso) > 0:
+            known += float(peso)
+            incomplete += 1
         else:
-            unavailable += 1
+            unevaluable += 1
     return validate_truck_capacity(
-        assigned_weight_kg=known + estimated,
         known_weight_kg=known,
         estimated_weight_kg=estimated,
-        unavailable_orders=unavailable,
+        incomplete_orders=incomplete,
+        unevaluable_orders=unevaluable,
         truck_max_weight_kg=truck_max,
     )
+
+
+def _folios_by_weight_quality(
+    orders: list[dict[str, Any]], qualities: set[str]
+) -> list[int]:
+    out: list[int] = []
+    for o in orders:
+        q = ((o.get("weight") or {}).get("quality") or WEIGHT_UNEVALUABLE)
+        if q == "unavailable":
+            q = WEIGHT_UNEVALUABLE
+        if q in qualities:
+            f = _int(o.get("folio"))
+            if f is not None:
+                out.append(f)
+    return sorted(set(out))
 
 
 def _assert_confirmable_capacity(
     capacity: dict[str, Any],
     *,
     orders: list[dict[str, Any]] | None = None,
-) -> None:
-    """Sin override administrativo en esta fase: bloquear si no es seguro."""
+    acknowledge_incomplete_weight: bool = False,
+    acknowledge_unevaluable_weight: bool = False,
+) -> dict[str, Any]:
+    """Bloquea sobrecarga y capacidad desconocida; cobertura incompleta requiere ack."""
     if not capacity.get("capacity_known"):
         raise SimplePlanningConfirmError(
             "Capacidad del camión desconocida: no se confirma sin max_weight_kg registrado",
             code="truck_capacity_unknown",
             http_status=409,
         )
-    if capacity.get("unavailable_order_count"):
-        bad_folios = sorted(
-            {
-                f
-                for f in (
-                    _int(o.get("folio"))
-                    for o in (orders or [])
-                    if ((o.get("weight") or {}).get("quality") or WEIGHT_UNAVAILABLE)
-                    == WEIGHT_UNAVAILABLE
-                    or (o.get("weight") or {}).get("peso_total_kg") is None
-                )
-                if f is not None
-            }
-        )
-        if bad_folios:
-            listed = ", ".join(str(f) for f in bad_folios[:8])
-            more = f" (+{len(bad_folios) - 8} más)" if len(bad_folios) > 8 else ""
-            msg = (
-                f"OC {listed}{more}: peso insuficiente o sin cobertura confiable. "
-                "Completa pesos de productos o quita esas OC antes de confirmar"
-            )
-        else:
-            msg = (
-                "Hay OC con peso no confiable: no se confirma sin datos de peso seguros"
-            )
-        raise SimplePlanningConfirmError(
-            msg,
-            code="weight_unavailable",
-            http_status=409,
-            details={"folios": bad_folios, "stage": "prepare-confirm"},
-        )
     if capacity.get("overloaded") or capacity.get("blocking"):
         raise SimplePlanningConfirmError(
-            "Camión sobrecargado: confirmación bloqueada",
+            "Camión sobrecargado: el peso conocido supera la capacidad máxima",
             code="truck_overloaded",
             http_status=409,
         )
+
+    incomplete_n = int(capacity.get("incomplete_order_count") or 0)
+    unevaluable_n = int(capacity.get("unevaluable_order_count") or 0)
+    # Compat: si solo viene unavailable_order_count legacy sin desglose
+    if (
+        incomplete_n == 0
+        and unevaluable_n == 0
+        and int(capacity.get("unavailable_order_count") or 0) > 0
+        and not capacity.get("requires_incomplete_weight_ack")
+        and not capacity.get("requires_unevaluable_weight_ack")
+    ):
+        unevaluable_n = int(capacity["unavailable_order_count"])
+
+    ack_audit: dict[str, Any] = {
+        "incomplete_weight": False,
+        "unevaluable_weight": False,
+        "does_not_authorize_route_departure": True,
+        "note": ROUTE_DEPARTURE_DISCLAIMER,
+    }
+
+    if unevaluable_n:
+        folios = _folios_by_weight_quality(
+            orders or [], {WEIGHT_UNEVALUABLE, "unavailable"}
+        )
+        if not acknowledge_unevaluable_weight:
+            listed = ", ".join(str(f) for f in folios[:8]) or "varias"
+            more = f" (+{len(folios) - 8} más)" if len(folios) > 8 else ""
+            raise SimplePlanningConfirmError(
+                f"OC {listed}{more}: capacidad total aún no verificable "
+                "(ningún peso usable). Marca la revisión manual expresa para continuar. "
+                + ROUTE_DEPARTURE_DISCLAIMER,
+                code="weight_unevaluable_ack_required",
+                http_status=409,
+                details={
+                    "folios": folios,
+                    "stage": "prepare-confirm",
+                    "requires_unevaluable_weight_ack": True,
+                },
+            )
+        ack_audit["unevaluable_weight"] = True
+        ack_audit["folios_unevaluable"] = folios
+
+    if incomplete_n:
+        folios = _folios_by_weight_quality(orders or [], {WEIGHT_PARTIAL})
+        if not acknowledge_incomplete_weight:
+            listed = ", ".join(str(f) for f in folios[:8]) or "varias"
+            more = f" (+{len(folios) - 8} más)" if len(folios) > 8 else ""
+            raise SimplePlanningConfirmError(
+                f"OC {listed}{more}: cobertura de peso incompleta "
+                "(productos sin peso registrado). Acepta explícitamente para planificar. "
+                + ROUTE_DEPARTURE_DISCLAIMER,
+                code="weight_incomplete_ack_required",
+                http_status=409,
+                details={
+                    "folios": folios,
+                    "stage": "prepare-confirm",
+                    "requires_incomplete_weight_ack": True,
+                    "known_weight_kg": capacity.get("known_weight_kg"),
+                },
+            )
+        ack_audit["incomplete_weight"] = True
+        ack_audit["folios_incomplete"] = folios
+
+    return ack_audit
 
 
 def prepare_confirm_session(
@@ -216,6 +282,8 @@ def prepare_confirm_session(
     driver_name: str | None,
     assignments: list[dict[str, Any]],
     idempotency_key: str | None = None,
+    acknowledge_incomplete_weight: bool = False,
+    acknowledge_unevaluable_weight: bool = False,
     preview_fn: Callable[..., dict[str, Any]] | None = None,
     trucks_loader: Callable[[list[int]], dict[int, dict[str, Any]]] | None = None,
     conn_factory: Callable[[], Any] | None = None,
@@ -285,7 +353,12 @@ def prepare_confirm_session(
         )
     capacity = truck_block.get("capacity") or {}
     truck_orders = list(truck_block.get("orders") or [])
-    _assert_confirmable_capacity(capacity, orders=truck_orders)
+    weight_ack = _assert_confirmable_capacity(
+        capacity,
+        orders=truck_orders,
+        acknowledge_incomplete_weight=bool(acknowledge_incomplete_weight),
+        acknowledge_unevaluable_weight=bool(acknowledge_unevaluable_weight),
+    )
 
     orders_payload: list[dict[str, Any]] = []
     for order in truck_orders:
@@ -350,6 +423,11 @@ def prepare_confirm_session(
         session_uuid = uuid.uuid4()
         plan_session_id = f"simple-{session_uuid}"
         now = datetime.now(timezone.utc)
+        weight_ack_payload = {
+            **weight_ack,
+            "acknowledged_by_user_id": int(user_id),
+            "acknowledged_at": now.isoformat(),
+        }
         row = session_repo.insert_session(
             cur,
             {
@@ -366,6 +444,7 @@ def prepare_confirm_session(
                     "orders": orders_payload,
                     "capacity_snapshot": capacity,
                     "truck": truck_block.get("truck"),
+                    "weight_acknowledgement": weight_ack_payload,
                 },
                 "status": "open",
                 "expires_at": now + timedelta(minutes=SESSION_TTL_MINUTES),
@@ -374,21 +453,36 @@ def prepare_confirm_session(
                 else None,
             },
         )
+        if weight_ack_payload.get("incomplete_weight") or weight_ack_payload.get(
+            "unevaluable_weight"
+        ):
+            logger.info(
+                "simple_planning_weight_ack user_id=%s incomplete=%s unevaluable=%s "
+                "known_kg=%s truck_id=%s",
+                user_id,
+                weight_ack_payload.get("incomplete_weight"),
+                weight_ack_payload.get("unevaluable_weight"),
+                capacity.get("known_weight_kg"),
+                truck_id,
+            )
         conn.commit()
         return {
             "status": "created",
             "idempotent": False,
             "session": _public_session(row),
             "capacity": capacity,
+            "weight_acknowledgement": weight_ack_payload,
             "notes": {
                 "ttl_minutes": SESSION_TTL_MINUTES,
                 "confirm_blocks": [
                     "overload",
                     "unknown_capacity",
-                    "unavailable_weight",
                     "fingerprint_drift",
                     "active_or_delivered_plans",
+                    "incomplete_weight_without_ack",
+                    "unevaluable_weight_without_ack",
                 ],
+                "route_departure_not_authorized": True,
                 "admin_override": False,
             },
         }
@@ -570,9 +664,17 @@ def confirm_simple_planning_session(
                 http_status=409,
             )
         capacity = truck_block.get("capacity") or {}
+        session_weight_ack = (payload or {}).get("weight_acknowledgement") or {}
         try:
             _assert_confirmable_capacity(
-                capacity, orders=list(truck_block.get("orders") or [])
+                capacity,
+                orders=list(truck_block.get("orders") or []),
+                acknowledge_incomplete_weight=bool(
+                    session_weight_ack.get("incomplete_weight")
+                ),
+                acknowledge_unevaluable_weight=bool(
+                    session_weight_ack.get("unevaluable_weight")
+                ),
             )
         except SimplePlanningConfirmError as exc:
             session_repo.mark_session_status(

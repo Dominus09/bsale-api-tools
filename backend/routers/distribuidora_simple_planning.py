@@ -153,6 +153,8 @@ class PrepareConfirmBody(BaseModel):
     driver_name: str | None = Field(None, max_length=128)
     assignments: list[AssignmentRow] = Field(..., min_length=1, max_length=MAX_FOLIOS)
     idempotency_key: str | None = Field(None, min_length=8, max_length=128)
+    acknowledge_incomplete_weight: bool = False
+    acknowledge_unevaluable_weight: bool = False
 
 
 class ConfirmSessionBody(BaseModel):
@@ -232,6 +234,8 @@ def post_simple_planning_prepare_confirm(
             driver_name=body.driver_name,
             assignments=[a.model_dump() for a in body.assignments],
             idempotency_key=body.idempotency_key,
+            acknowledge_incomplete_weight=bool(body.acknowledge_incomplete_weight),
+            acknowledge_unevaluable_weight=bool(body.acknowledge_unevaluable_weight),
         )
     except SimplePlanningConfirmError as exc:
         raise HTTPException(

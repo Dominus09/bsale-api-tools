@@ -47,9 +47,17 @@ STATUS_CANCELLED_OR_REPLACED = "cancelled_or_replaced"
 STATUS_ALREADY_PLANNED = "already_planned"
 STATUS_PENDING_INVOICE = "pending_invoice"
 STATUS_PARTIAL_INVOICE = "partial_invoice"
-STATUS_INSUFFICIENT_WEIGHT = "insufficient_weight"
+# Compat: insufficient_weight se mantiene como alias de cobertura incompleta.
+STATUS_INCOMPLETE_WEIGHT = "incomplete_weight_coverage"
+STATUS_WEIGHT_UNEVALUABLE = "weight_unevaluable"
+STATUS_INSUFFICIENT_WEIGHT = STATUS_INCOMPLETE_WEIGHT  # legacy alias
 STATUS_DUPLICATE_IN_LIST = "duplicate_in_list"
 STATUS_INVALID_FOLIO = "invalid_folio"
+
+WEIGHT_KNOWN = "known"
+WEIGHT_ESTIMATED = "estimated"
+WEIGHT_PARTIAL = "partial"
+WEIGHT_UNEVALUABLE = "unevaluable"
 
 # En esta fase, ya_planificada es informativa (no bloquea).
 BLOCKING_STATUSES = frozenset(
@@ -516,22 +524,114 @@ def _serialize_invoices(chain: Any) -> list[dict[str, Any]]:
     return docs
 
 
+def _serialize_weight(
+    weight: dict[str, Any] | None,
+    *,
+    products_without_weight: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    quality = classify_weight_quality(weight)
+    peso = (weight or {}).get("peso_total_kg")
+    known = None
+    if peso is not None and float(peso) > 0:
+        known = float(peso)
+    return {
+        "peso_total_kg": peso,
+        "known_weight_kg": known,
+        "coverage_percent": (weight or {}).get("coverage_percent"),
+        "missing_products": (weight or {}).get("missing_products"),
+        "productos_totales": (weight or {}).get("productos_totales"),
+        "cantidad_cajas": (weight or {}).get("cantidad_cajas"),
+        "cantidad_unidades": (weight or {}).get("cantidad_unidades"),
+        "estimated_products": (weight or {}).get("estimated_products"),
+        "quality": quality,
+        "weight_total_determined": quality in (WEIGHT_KNOWN, WEIGHT_ESTIMATED),
+        "products_without_weight": list(products_without_weight or []),
+        "label": (
+            "Cobertura completa"
+            if quality == WEIGHT_KNOWN
+            else "Cobertura estimada"
+            if quality == WEIGHT_ESTIMATED
+            else "Cobertura de peso incompleta"
+            if quality == WEIGHT_PARTIAL
+            else "Capacidad total aún no verificable"
+        ),
+    }
+
+
 def classify_weight_quality(weight: dict[str, Any] | None) -> str:
-    """known | estimated | unavailable — alineado al modelo de order_weight_service."""
-    if not weight or weight.get("peso_total_kg") is None:
-        return "unavailable"
-    coverage = float(weight.get("coverage_percent") or 0)
+    """known | estimated | partial | unevaluable.
+
+    - known: todos los productos con peso.
+    - estimated: cobertura completa con estimaciones.
+    - partial: hay kg conocidos pero faltan productos (cobertura incompleta).
+    - unevaluable: ningún peso usable (no inventar ceros).
+
+    Compat: el valor legacy ``unavailable`` se mapea a unevaluable en consumidores.
+    """
+    if not weight:
+        return WEIGHT_UNEVALUABLE
     missing = int(weight.get("missing_products") or 0)
+    coverage = float(weight.get("coverage_percent") or 0)
     estimated = int(weight.get("estimated_products") or 0)
-    if missing > 0 or coverage < MIN_WEIGHT_COVERAGE_PCT:
-        return "unavailable"
+    peso = weight.get("peso_total_kg")
+    has_known_mass = peso is not None and float(peso) > 0
+
+    if missing > 0:
+        return WEIGHT_PARTIAL if has_known_mass else WEIGHT_UNEVALUABLE
+    if not has_known_mass:
+        # Snapshot ausente o 0 kg sin líneas con peso.
+        return WEIGHT_UNEVALUABLE
     if estimated > 0 or coverage < 99.9:
-        return "estimated"
-    return "known"
+        return WEIGHT_ESTIMATED
+    return WEIGHT_KNOWN
 
 
-def _weight_insufficient(weight: dict[str, Any] | None) -> bool:
-    return classify_weight_quality(weight) == "unavailable"
+def _weight_coverage_warning(weight: dict[str, Any] | None) -> bool:
+    return classify_weight_quality(weight) in (WEIGHT_PARTIAL, WEIGHT_UNEVALUABLE)
+
+
+def _load_products_without_weight(
+    document_ids: list[int],
+) -> dict[int, list[dict[str, Any]]]:
+    """Productos sin peso en snapshot (solo lectura). Vacío si no hay líneas."""
+    if not document_ids:
+        return {}
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                ows.document_id,
+                l.variant_id,
+                l.codigo,
+                COALESCE(NULLIF(BTRIM(l.producto), ''), NULLIF(BTRIM(l.variante), ''), l.codigo)
+                    AS description
+            FROM distribuidora.order_weight_snapshots ows
+            INNER JOIN distribuidora.order_weight_snapshot_lines l
+                ON l.snapshot_id = ows.id
+            WHERE ows.document_id = ANY(%s)
+              AND l.estado_linea = 'sin_peso'
+            ORDER BY ows.document_id, l.line_number NULLS LAST, l.id
+            """,
+            (list(document_ids),),
+        )
+        out: dict[int, list[dict[str, Any]]] = {}
+        for doc_id, variant_id, code, description in cur.fetchall():
+            out.setdefault(int(doc_id), []).append(
+                {
+                    "variant_id": _int(variant_id),
+                    "code": code,
+                    "description": description,
+                }
+            )
+        cur.close()
+        return out
+    except Exception:
+        logger.exception("simple_planning_missing_weight_products_failed")
+        return {}
+    finally:
+        conn.close()
 
 
 def _classify_item(
@@ -559,8 +659,11 @@ def _classify_item(
         warnings.append(STATUS_PARTIAL_INVOICE)
     elif billing_status in (BILLING_PENDING, BILLING_PROBABLE):
         warnings.append(STATUS_PENDING_INVOICE)
-    if _weight_insufficient(weight):
-        warnings.append(STATUS_INSUFFICIENT_WEIGHT)
+    wq = classify_weight_quality(weight)
+    if wq == WEIGHT_UNEVALUABLE:
+        warnings.append(STATUS_WEIGHT_UNEVALUABLE)
+    elif wq == WEIGHT_PARTIAL:
+        warnings.append(STATUS_INCOMPLETE_WEIGHT)
 
     # Prioridad del status principal (informativos; no bloquean en esta fase).
     if active_plans:
@@ -569,11 +672,17 @@ def _classify_item(
         return STATUS_PARTIAL_INVOICE, False, [w for w in warnings if w != STATUS_PARTIAL_INVOICE]
     if billing_status in (BILLING_PENDING, BILLING_PROBABLE):
         return STATUS_PENDING_INVOICE, False, [w for w in warnings if w != STATUS_PENDING_INVOICE]
-    if STATUS_INSUFFICIENT_WEIGHT in warnings:
+    if STATUS_WEIGHT_UNEVALUABLE in warnings:
         return (
-            STATUS_INSUFFICIENT_WEIGHT,
+            STATUS_WEIGHT_UNEVALUABLE,
             False,
-            [w for w in warnings if w != STATUS_INSUFFICIENT_WEIGHT],
+            [w for w in warnings if w != STATUS_WEIGHT_UNEVALUABLE],
+        )
+    if STATUS_INCOMPLETE_WEIGHT in warnings:
+        return (
+            STATUS_INCOMPLETE_WEIGHT,
+            False,
+            [w for w in warnings if w != STATUS_INCOMPLETE_WEIGHT],
         )
     return STATUS_FOUND_AVAILABLE, False, warnings
 
@@ -589,6 +698,7 @@ def preview_ocs_from_folios(
     plans_loader: Callable[..., dict[int, list[dict[str, Any]]]] | None = None,
     chains_loader: Callable[..., tuple[dict[int, Any], dict[int, Any]]] | None = None,
     weight_loader: Callable[..., dict[int, dict[str, Any]]] | None = None,
+    missing_weight_loader: Callable[..., dict[int, list[dict[str, Any]]]] | None = None,
 ) -> dict[str, Any]:
     """Resuelve y previsualiza un listado de OC. Solo lectura."""
     if int(document_type_id) != int(OC_DOCUMENT_TYPE_ID):
@@ -615,6 +725,7 @@ def preview_ocs_from_folios(
             log_planning=False,
         )
     )
+    load_missing_weight = missing_weight_loader or _load_products_without_weight
 
     by_folio = load_ocs(
         company_id=int(company_id),
@@ -634,6 +745,7 @@ def preview_ocs_from_folios(
         load_chains(doc_ids, company_id=int(company_id)) if doc_ids else ({}, {})
     )
     weights = load_weights(doc_ids) if doc_ids else {}
+    missing_weight_by_doc = load_missing_weight(doc_ids) if doc_ids else {}
 
     items: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
@@ -748,18 +860,14 @@ def preview_ocs_from_folios(
             "total_amount": float(total_amount) if total_amount is not None else None,
             "products": products,
             "products_source": "oc_document_details",
-            "weight": {
-                "peso_total_kg": (weight or {}).get("peso_total_kg"),
-                "coverage_percent": (weight or {}).get("coverage_percent"),
-                "missing_products": (weight or {}).get("missing_products"),
-                "productos_totales": (weight or {}).get("productos_totales"),
-                "cantidad_cajas": (weight or {}).get("cantidad_cajas"),
-                "cantidad_unidades": (weight or {}).get("cantidad_unidades"),
-                "estimated_products": (weight or {}).get("estimated_products"),
-                "quality": classify_weight_quality(weight),
-            }
-            if weight
-            else {"peso_total_kg": None, "quality": "unavailable"},
+            "weight": _serialize_weight(
+                weight,
+                products_without_weight=(
+                    missing_weight_by_doc.get(doc_id, [])
+                    if doc_id is not None
+                    else []
+                ),
+            ),
             "billing_status": billing,
             "billing_label": BILLING_LABELS_ES.get(billing or "", billing),
             "planning_eligible": bool(op.planning_eligible) if op else None,

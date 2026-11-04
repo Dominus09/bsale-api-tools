@@ -19,6 +19,10 @@ from backend.services.distribuidora.simple_planning_preview_service import (
     SimplePlanningPreviewError,
     STATUS_DUPLICATE_IN_LIST,
     STATUS_NOT_FOUND,
+    WEIGHT_ESTIMATED,
+    WEIGHT_KNOWN,
+    WEIGHT_PARTIAL,
+    WEIGHT_UNEVALUABLE,
     _int,
     classify_weight_quality,
     normalize_folio_inputs,
@@ -31,45 +35,96 @@ logger = logging.getLogger(__name__)
 PLANNING_ORIGIN_SIMPLE = "simple_list"
 PLANNING_ORIGIN_ORS = "ors"
 
-WEIGHT_KNOWN = "known"
-WEIGHT_ESTIMATED = "estimated"
-WEIGHT_UNAVAILABLE = "unavailable"
+# Compat aliases
+WEIGHT_UNAVAILABLE = WEIGHT_UNEVALUABLE
 
 
 def validate_truck_capacity(
     *,
-    assigned_weight_kg: float | None,
+    assigned_weight_kg: float | None = None,
     known_weight_kg: float | None,
-    estimated_weight_kg: float | None,
-    unavailable_orders: int,
+    estimated_weight_kg: float | None = 0,
+    unavailable_orders: int = 0,
+    incomplete_orders: int | None = None,
+    unevaluable_orders: int | None = None,
     truck_max_weight_kg: int | None,
 ) -> dict[str, Any]:
-    """Validación reutilizable (preview y futuro confirm). No inventa capacidad."""
+    """Validación reutilizable (preview y confirm). No inventa pesos ni capacidad.
+
+    La utilización y la sobrecarga usan solo peso conocido (+estimado).
+    Los productos/OC sin peso no se cuentan como 0 kg.
+    """
     cap = int(truck_max_weight_kg) if truck_max_weight_kg is not None else None
-    assigned = float(assigned_weight_kg or 0)
     known = float(known_weight_kg or 0)
     estimated = float(estimated_weight_kg or 0)
+    # Preferir known+estimated; assigned_weight_kg legacy se ignora si diverge a 0 inventado.
+    assigned = known + estimated
+    if assigned_weight_kg is not None and float(assigned_weight_kg) > assigned:
+        # No subir con masa inventada; solo aceptar si caller ya sumó known+estimated.
+        assigned = float(assigned_weight_kg)
+
+    incomplete = (
+        int(incomplete_orders)
+        if incomplete_orders is not None
+        else 0
+    )
+    unevaluable = (
+        int(unevaluable_orders)
+        if unevaluable_orders is not None
+        else 0
+    )
+    # Compat: callers antiguos solo pasan unavailable_orders.
+    if incomplete_orders is None and unevaluable_orders is None and unavailable_orders:
+        unevaluable = int(unavailable_orders)
+
     util_pct = None
     overloaded = False
     capacity_known = cap is not None and cap > 0
     if capacity_known:
         util_pct = round((assigned / cap) * 100, 2)
+        # Solo peso conocido/estimado puede saturar el camión.
         overloaded = assigned > float(cap)
+
+    weight_total_determined = incomplete == 0 and unevaluable == 0
+    warnings: list[str] = []
+    if overloaded:
+        warnings.append("truck_overloaded")
+    if not capacity_known:
+        warnings.append("truck_capacity_unknown")
+    if incomplete:
+        warnings.append("incomplete_weight_coverage")
+    if unevaluable:
+        warnings.append("weight_capacity_unevaluable")
+    # Compat UI antigua
+    if incomplete or unevaluable:
+        warnings.append("orders_with_unavailable_weight")
+
     return {
         "truck_max_weight_kg": cap,
         "capacity_known": capacity_known,
         "assigned_weight_kg": round(assigned, 3),
         "known_weight_kg": round(known, 3),
         "estimated_weight_kg": round(estimated, 3),
-        "unavailable_order_count": int(unavailable_orders),
+        "incomplete_order_count": incomplete,
+        "unevaluable_order_count": unevaluable,
+        "unavailable_order_count": incomplete + unevaluable,
+        "weight_total_determined": weight_total_determined,
+        "requires_incomplete_weight_ack": incomplete > 0,
+        "requires_unevaluable_weight_ack": unevaluable > 0,
         "utilization_pct": util_pct,
         "overloaded": overloaded,
         "blocking": overloaded,
-        "warnings": (
-            (["truck_overloaded"] if overloaded else [])
-            + (["truck_capacity_unknown"] if not capacity_known else [])
-            + (["orders_with_unavailable_weight"] if unavailable_orders else [])
-        ),
+        "warnings": warnings,
+        "notes": {
+            "known_vs_total": (
+                "known_weight_kg es masa verificada; el total real puede ser mayor "
+                "si hay productos sin peso (no se inventa el faltante)."
+            ),
+            "route_departure": (
+                "Confirmar planificación con cobertura incompleta no autoriza "
+                "salida a ruta; control futuro en PWA bodega/chofer."
+            ),
+        },
     }
 
 
@@ -405,7 +460,8 @@ def preview_truck_assignments(
         truck_orders: list[dict[str, Any]] = []
         known_kg = 0.0
         estimated_kg = 0.0
-        unavailable_n = 0
+        incomplete_n = 0
+        unevaluable_n = 0
         driver_names: list[str] = []
 
         for row in normalized_rows:
@@ -440,17 +496,26 @@ def preview_truck_assignments(
                 row_blocking = True
                 row_warnings.append("truck_inactive")
 
-            # Pesos: solo contar la primera aparición no duplicada
+            # Pesos: solo contar la primera aparición no duplicada.
+            # Masa conocida de OC parcial SÍ suma; no se inventa el faltante.
             if not row.get("duplicate_in_request"):
                 weight = (item or {}).get("weight") or {}
                 quality = weight.get("quality") or classify_weight_quality(weight)
-                peso = weight.get("peso_total_kg")
+                # Compat legacy quality
+                if quality == "unavailable":
+                    quality = WEIGHT_UNEVALUABLE
+                peso = weight.get("known_weight_kg")
+                if peso is None:
+                    peso = weight.get("peso_total_kg")
                 if quality == WEIGHT_KNOWN and peso is not None:
                     known_kg += float(peso)
                 elif quality == WEIGHT_ESTIMATED and peso is not None:
                     estimated_kg += float(peso)
+                elif quality == WEIGHT_PARTIAL and peso is not None and float(peso) > 0:
+                    known_kg += float(peso)
+                    incomplete_n += 1
                 else:
-                    unavailable_n += 1
+                    unevaluable_n += 1
                 if item is not None:
                     truck_orders.append(item)
 
@@ -474,12 +539,11 @@ def preview_truck_assignments(
             elif row_warnings:
                 warning_count += 1
 
-        assigned_kg = known_kg + estimated_kg
         capacity = validate_truck_capacity(
-            assigned_weight_kg=assigned_kg,
             known_weight_kg=known_kg,
             estimated_weight_kg=estimated_kg,
-            unavailable_orders=unavailable_n,
+            incomplete_orders=incomplete_n,
+            unevaluable_orders=unevaluable_n,
             truck_max_weight_kg=(truck or {}).get("max_weight_kg"),
         )
         if capacity["blocking"]:
