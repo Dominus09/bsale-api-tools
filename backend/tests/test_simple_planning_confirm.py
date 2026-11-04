@@ -13,6 +13,17 @@ from backend.services.distribuidora.simple_planning_preview_service import (
 )
 
 
+def _patch_eligible_driver(monkeypatch):
+    monkeypatch.setattr(
+        "backend.services.distribuidora.dispatch_plan_driver_service.assert_user_is_eligible_driver",
+        lambda *_a, **_k: {
+            "id": 55,
+            "display_name": "Chofer Test",
+            "email": "c@x.cl",
+        },
+    )
+
+
 def _fp(folio: int) -> str:
     return oc_identity_fingerprint(
         document_id=folio,
@@ -158,6 +169,7 @@ def test_prepare_blocks_unknown_capacity(monkeypatch):
             planning_date="2026-11-10",
             truck_id=2,
             dispatch_name="Sur",
+            driver_user_id=55,
             driver_name=None,
             assignments=[{"folio": 1, "truck_id": 2}],
             conn_factory=lambda: (_ for _ in ()).throw(RuntimeError("no db")),
@@ -180,6 +192,7 @@ def test_prepare_blocks_overload(monkeypatch):
             planning_date=date(2026, 11, 10),
             truck_id=2,
             dispatch_name="Sur",
+            driver_user_id=55,
             driver_name="Juan",
             assignments=[
                 {"folio": 1, "truck_id": 2},
@@ -205,6 +218,7 @@ def test_prepare_requires_ack_for_unevaluable_weight(monkeypatch):
             planning_date=date.today(),
             truck_id=2,
             dispatch_name=None,
+            driver_user_id=55,
             driver_name=None,
             assignments=[{"folio": 3, "truck_id": 2}],
             conn_factory=lambda: (_ for _ in ()).throw(RuntimeError("no db")),
@@ -216,6 +230,7 @@ def test_prepare_allows_partial_weight_with_ack(monkeypatch):
     orders = [_order(4, peso=12.5, quality="partial")]
     report = _assign_report(orders)
     monkeypatch.setattr(svc, "preview_truck_assignments", lambda **_k: report)
+    _patch_eligible_driver(monkeypatch)
 
     inserted = {}
 
@@ -236,7 +251,8 @@ def test_prepare_allows_partial_weight_with_ack(monkeypatch):
         planning_date=date.today(),
         truck_id=2,
         dispatch_name=None,
-        driver_name=None,
+        driver_user_id=55,
+            driver_name=None,
         assignments=[{"folio": 4, "truck_id": 2}],
         acknowledge_incomplete_weight=True,
         conn_factory=lambda: _FakeConn(),
@@ -253,6 +269,15 @@ def test_prepare_and_confirm_happy_path(monkeypatch):
     orders = [_order(10), _order(11)]
     report = _assign_report(orders)
     monkeypatch.setattr(svc, "preview_truck_assignments", lambda **_k: report)
+    _patch_eligible_driver(monkeypatch)
+    monkeypatch.setattr(
+        "backend.services.distribuidora.dispatch_plan_driver_service.find_same_day_driver_conflicts",
+        lambda *_a, **_k: [],
+    )
+    monkeypatch.setattr(
+        "backend.repositories.distribuidora.dispatch_plan_load_batch_repo.insert_order_event",
+        lambda *_a, **_k: 1,
+    )
 
     inserted = {}
 
@@ -283,6 +308,7 @@ def test_prepare_and_confirm_happy_path(monkeypatch):
         planning_date="2026-12-01",
         truck_id=2,
         dispatch_name="Norte",
+        driver_user_id=55,
         driver_name="Ana",
         assignments=[
             {"folio": 10, "truck_id": 2, "expected_fingerprint": _fp(10)},
@@ -470,6 +496,7 @@ def test_prepare_fingerprint_drift_message_includes_folio(monkeypatch):
             planning_date=date.today(),
             truck_id=2,
             dispatch_name=None,
+            driver_user_id=55,
             driver_name=None,
             assignments=[
                 {

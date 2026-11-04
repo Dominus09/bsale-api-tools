@@ -155,6 +155,7 @@ class PrepareConfirmBody(BaseModel):
     truck_id: int = Field(..., ge=1)
     dispatch_name: str | None = Field(None, max_length=128)
     driver_name: str | None = Field(None, max_length=128)
+    driver_user_id: int = Field(..., ge=1)
     assignments: list[AssignmentRow] = Field(..., min_length=1, max_length=MAX_FOLIOS)
     idempotency_key: str | None = Field(None, min_length=8, max_length=128)
     acknowledge_incomplete_weight: bool = False
@@ -283,6 +284,7 @@ def post_simple_planning_prepare_confirm(
             truck_id=int(body.truck_id),
             dispatch_name=body.dispatch_name,
             driver_name=body.driver_name,
+            driver_user_id=int(body.driver_user_id),
             assignments=[a.model_dump() for a in body.assignments],
             idempotency_key=body.idempotency_key,
             acknowledge_incomplete_weight=bool(body.acknowledge_incomplete_weight),

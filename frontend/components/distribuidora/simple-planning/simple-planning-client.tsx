@@ -14,11 +14,13 @@ import {
 import {
   getDistribuidoraTrucks,
   getStoredCompanyId,
+  listAvailableDispatchDrivers,
   postSimplePlanningAssignPreview,
   postSimplePlanningConfirm,
   postSimplePlanningPrepareConfirm,
   postSimplePlanningPreview,
   SimplePlanningApiError,
+  type DispatchPlanDriverOption,
   type DistribuidoraTruck,
   type SimplePlanningAssignPreview,
   type SimplePlanningOrsSnapshot,
@@ -149,6 +151,10 @@ export function SimplePlanningClient() {
   const [confirmAck, setConfirmAck] = useState(false)
   const [ackIncompleteWeight, setAckIncompleteWeight] = useState(false)
   const [ackUnevaluableWeight, setAckUnevaluableWeight] = useState(false)
+  const [confirmDispatchName, setConfirmDispatchName] = useState("")
+  const [confirmDriverUserId, setConfirmDriverUserId] = useState("")
+  const [availableDrivers, setAvailableDrivers] = useState<DispatchPlanDriverOption[]>([])
+  const [driversNote, setDriversNote] = useState<string | null>(null)
   const [truckConfirm, setTruckConfirm] = useState<Record<number, TruckConfirmState>>({})
   const [orsByTruck, setOrsByTruck] = useState<Record<number, SimplePlanningOrsSnapshot | null>>(
     {},
@@ -424,11 +430,35 @@ export function SimplePlanningClient() {
     setConfirmAck(false)
     setAckIncompleteWeight(false)
     setAckUnevaluableWeight(false)
+    setConfirmDispatchName(dispatchName.trim())
+    setConfirmDriverUserId("")
     setConfirmOpen(true)
+    void listAvailableDispatchDrivers({
+      company_id: companyId,
+      office_id: officeId,
+      diagnostics: true,
+    })
+      .then((r) => {
+        setAvailableDrivers(r.items)
+        setDriversNote(
+          r.diagnostics?.note_es ||
+            r.diagnostics?.requirements_summary_es ||
+            null,
+        )
+      })
+      .catch(() => {
+        setAvailableDrivers([])
+        setDriversNote("No se pudieron cargar choferes elegibles.")
+      })
   }
 
   const runConfirmTruck = async () => {
     if (!confirmTruckId || !confirmAck || confirmingRef.current) return
+    const driverUid = Number(confirmDriverUserId)
+    if (!Number.isFinite(driverUid) || driverUid <= 0) {
+      setError("Seleccione un chofer responsable antes de confirmar")
+      return
+    }
     confirmingRef.current = true
     const truckId = confirmTruckId
     setTruckConfirm((prev) => ({
@@ -443,13 +473,15 @@ export function SimplePlanningClient() {
         typeof crypto !== "undefined" && crypto.randomUUID
           ? crypto.randomUUID()
           : `sp-${truckId}-${Date.now()}`
+      const driverOpt = availableDrivers.find((d) => d.user_id === driverUid)
       const prepared = await postSimplePlanningPrepareConfirm({
         company_id: companyId,
         office_id: officeId,
         planning_date: planningDate || null,
         truck_id: truckId,
-        dispatch_name: dispatchName.trim() || null,
-        driver_name: null,
+        dispatch_name: confirmDispatchName.trim() || dispatchName.trim() || null,
+        driver_name: driverOpt?.display_name || null,
+        driver_user_id: driverUid,
         idempotency_key: idempotencyKey,
         acknowledge_incomplete_weight: ackIncompleteWeight,
         acknowledge_unevaluable_weight: ackUnevaluableWeight,
@@ -1244,8 +1276,25 @@ export function SimplePlanningClient() {
                     : "Camión"
                 return (
                   <>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="confirm-dispatch-name">Nombre del despacho</Label>
+                      <Input
+                        id="confirm-dispatch-name"
+                        value={confirmDispatchName}
+                        onChange={(e) => setConfirmDispatchName(e.target.value)}
+                        placeholder="Ej. Ruta sur Hyundai"
+                        disabled={confirmBusy}
+                      />
+                    </div>
                     <p>
                       <span className="font-medium">{confirmTitle}</span>
+                      {(
+                        trucks.find((t) => t.id === confirmTruckId) as
+                          | (DistribuidoraTruck & { plate?: string })
+                          | undefined
+                      )?.plate
+                        ? ` · patente ${(trucks.find((t) => t.id === confirmTruckId) as DistribuidoraTruck & { plate?: string }).plate}`
+                        : ""}
                       {" · "}
                       {confirmTruckBlock.order_count ?? 0} OC · fecha {planningDate || "—"}
                     </p>
@@ -1256,6 +1305,29 @@ export function SimplePlanningClient() {
                         ? " (total real no determinado)"
                         : ""}
                     </p>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="confirm-driver">Chofer responsable</Label>
+                      <select
+                        id="confirm-driver"
+                        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+                        value={confirmDriverUserId}
+                        onChange={(e) => setConfirmDriverUserId(e.target.value)}
+                        disabled={confirmBusy}
+                      >
+                        <option value="">Seleccionar chofer…</option>
+                        {availableDrivers.map((d) => (
+                          <option key={d.user_id} value={d.user_id}>
+                            {d.display_name}
+                          </option>
+                        ))}
+                      </select>
+                      {!availableDrivers.length ? (
+                        <p className="text-[11px] text-amber-800 dark:text-amber-200">
+                          {driversNote ||
+                            "Sin choferes elegibles (activo + PWA + perfil chofer)."}
+                        </p>
+                      ) : null}
+                    </div>
                     {dialogBlocked ? (
                       <Alert variant="destructive">
                         <AlertTriangle className="h-4 w-4" />
@@ -1323,6 +1395,7 @@ export function SimplePlanningClient() {
               onClick={() => void runConfirmTruck()}
               disabled={
                 !confirmAck ||
+                !confirmDriverUserId ||
                 confirmBusy ||
                 Boolean(confirmTruckBlock?.blocking) ||
                 Boolean(confirmTruckBlock?.capacity?.blocking) ||

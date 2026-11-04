@@ -80,6 +80,7 @@ def test_prepare_confirm_ok(client, monkeypatch):
             "office_id": 1,
             "truck_id": 2,
             "planning_date": "2026-11-10",
+            "driver_user_id": 55,
             "assignments": [{"folio": 1, "truck_id": 2}],
         },
     )
@@ -137,6 +138,7 @@ def test_capability_user_allowed(client, monkeypatch):
             "company_id": 3,
             "office_id": 1,
             "truck_id": 1,
+            "driver_user_id": 55,
             "assignments": [{"folio": 1, "truck_id": 1}],
         },
     )
@@ -174,6 +176,7 @@ def test_other_company_forbidden(client, monkeypatch):
             "company_id": 1,
             "office_id": 1,
             "truck_id": 1,
+            "driver_user_id": 55,
             "assignments": [{"folio": 1, "truck_id": 1}],
         },
     )

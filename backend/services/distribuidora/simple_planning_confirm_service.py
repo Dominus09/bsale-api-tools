@@ -285,6 +285,7 @@ def prepare_confirm_session(
     truck_id: int,
     dispatch_name: str | None,
     driver_name: str | None,
+    driver_user_id: int | None = None,
     assignments: list[dict[str, Any]],
     idempotency_key: str | None = None,
     acknowledge_incomplete_weight: bool = False,
@@ -294,11 +295,21 @@ def prepare_confirm_session(
     trucks_loader: Callable[[list[int]], dict[int, dict[str, Any]]] | None = None,
     conn_factory: Callable[[], Any] | None = None,
 ) -> dict[str, Any]:
-    """Valida un camión + OC y crea sesión server-side (no confirma)."""
+    """Valida un camión + OC y crea sesión server-side (no confirma).
+
+    Para planificación simplificada se exige ``driver_user_id`` elegible (PWA+chofer).
+    No equivale a autorización de salida a ruta.
+    """
     if int(truck_id) <= 0:
         raise SimplePlanningConfirmError("truck_id inválido")
     if not assignments:
         raise SimplePlanningConfirmError("Indique asignaciones folio→camión")
+    if driver_user_id is None or int(driver_user_id) <= 0:
+        raise SimplePlanningConfirmError(
+            "Seleccione un chofer responsable antes de confirmar",
+            code="driver_required",
+            http_status=400,
+        )
 
     for row in assignments:
         if _int((row or {}).get("truck_id")) != int(truck_id):
@@ -425,6 +436,29 @@ def prepare_confirm_session(
     conn = get_conn()
     try:
         cur = conn.cursor()
+        from backend.services.distribuidora.dispatch_plan_driver_service import (
+            DriverAssignError,
+            assert_user_is_eligible_driver,
+        )
+
+        try:
+            eligible_driver = assert_user_is_eligible_driver(
+                cur,
+                int(driver_user_id),
+                company_id=int(company_id),
+                office_id=int(office_id),
+            )
+        except DriverAssignError as exc:
+            raise SimplePlanningConfirmError(
+                str(exc),
+                code=exc.code,
+                http_status=exc.http_status,
+            ) from exc
+        resolved_driver_name = (
+            (driver_name or "").strip()
+            or eligible_driver.get("display_name")
+            or None
+        )
         if idempotency_key:
             existing = session_repo.get_session_by_idempotency(
                 cur, user_id=int(user_id), idempotency_key=str(idempotency_key)
@@ -470,7 +504,7 @@ def prepare_confirm_session(
                 "planning_date": pdate,
                 "truck_id": int(truck_id),
                 "dispatch_name": (dispatch_name or "").strip() or None,
-                "driver_name": (driver_name or "").strip() or None,
+                "driver_name": resolved_driver_name,
                 "plan_session_id": plan_session_id,
                 "payload": {
                     "orders": orders_payload,
@@ -478,6 +512,8 @@ def prepare_confirm_session(
                     "truck": truck_block.get("truck"),
                     "weight_acknowledgement": weight_ack_payload,
                     "ors_snapshot": validated_ors,
+                    "driver_user_id": int(driver_user_id),
+                    "driver_name": resolved_driver_name,
                 },
                 "status": "open",
                 "expires_at": now + timedelta(minutes=SESSION_TTL_MINUTES),
@@ -855,6 +891,76 @@ def confirm_simple_planning_session(
             )
         # Reabrir cursor tras confirm (cerró el suyo) sobre la misma TX.
         cur = conn.cursor()
+        # Vincular chofer en la misma TX: si falla, no queda plan “completo” sin chofer.
+        payload_driver_id = _int((payload or {}).get("driver_user_id"))
+        if payload_driver_id is None:
+            conn.rollback()
+            raise SimplePlanningConfirmError(
+                "Sesión sin chofer: prepare-confirm debe incluir driver_user_id",
+                code="driver_required",
+                http_status=409,
+            )
+        from backend.services.distribuidora.dispatch_plan_driver_service import (
+            ACTION_ASSIGN_DRIVER,
+            DriverAssignError,
+            assert_user_is_eligible_driver,
+            find_same_day_driver_conflicts,
+        )
+        from backend.repositories.distribuidora import (
+            dispatch_plan_load_batch_repo as events_repo,
+        )
+
+        try:
+            eligible = assert_user_is_eligible_driver(
+                cur,
+                int(payload_driver_id),
+                company_id=int(session["company_id"]),
+                office_id=int(session["office_id"]),
+            )
+        except DriverAssignError as exc:
+            conn.rollback()
+            raise SimplePlanningConfirmError(
+                str(exc),
+                code=exc.code,
+                http_status=exc.http_status,
+            ) from exc
+        driver_display = eligible.get("display_name") or (session.get("driver_name") or "")
+        pdate = session.get("planning_date")
+        conflicts = []
+        if isinstance(pdate, date):
+            conflicts = find_same_day_driver_conflicts(
+                cur,
+                driver_user_id=int(payload_driver_id),
+                planning_date=pdate,
+                exclude_plan_id=int(plan_id),
+            )
+        cur.execute(
+            """
+            UPDATE distribuidora.dispatch_plan
+            SET driver_user_id = %s,
+                driver_name = %s,
+                updated_at = NOW()
+            WHERE id = %s
+            """,
+            (int(payload_driver_id), driver_display, int(plan_id)),
+        )
+        events_repo.insert_order_event(
+            cur,
+            plan_id=int(plan_id),
+            action=ACTION_ASSIGN_DRIVER,
+            user_name=str(session.get("user_id") or "simple_planning"),
+            reason="Asignación al confirmar planificación simplificada",
+            payload={
+                "previous_driver_user_id": None,
+                "previous_driver_name": None,
+                "new_driver_user_id": int(payload_driver_id),
+                "new_driver_name": driver_display,
+                "source": "simple_planning_confirm",
+                "same_day_conflicts": [
+                    {"id": c.get("id"), "status": c.get("status")} for c in conflicts
+                ],
+            },
+        )
         session_repo.mark_session_status(
             cur,
             session["id"],
