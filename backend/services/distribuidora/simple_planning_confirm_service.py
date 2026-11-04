@@ -28,6 +28,9 @@ from backend.services.distribuidora.simple_planning_assignment_service import (
     preview_truck_assignments,
     validate_truck_capacity,
 )
+from backend.services.distribuidora.simple_planning_ors_service import (
+    validate_ors_snapshot_for_orders,
+)
 from backend.services.distribuidora.simple_planning_preview_service import (
     SimplePlanningPreviewError,
     STATUS_FOUND_AVAILABLE,
@@ -284,6 +287,7 @@ def prepare_confirm_session(
     idempotency_key: str | None = None,
     acknowledge_incomplete_weight: bool = False,
     acknowledge_unevaluable_weight: bool = False,
+    ors_snapshot: dict[str, Any] | None = None,
     preview_fn: Callable[..., dict[str, Any]] | None = None,
     trucks_loader: Callable[[list[int]], dict[int, dict[str, Any]]] | None = None,
     conn_factory: Callable[[], Any] | None = None,
@@ -389,6 +393,24 @@ def prepare_confirm_session(
     if not orders_payload:
         raise SimplePlanningConfirmError("No hay OC válidas para la sesión")
 
+    ordered_doc_ids = [int(o["document_id"]) for o in orders_payload]
+    validated_ors = None
+    if ors_snapshot:
+        validated_ors = validate_ors_snapshot_for_orders(
+            ors_snapshot,
+            truck_id=int(truck_id),
+            ordered_document_ids=ordered_doc_ids,
+            company_id=int(company_id),
+            office_id=int(office_id),
+        )
+        if validated_ors is None:
+            raise SimplePlanningConfirmError(
+                "La ruta ORS ya no coincide con las OC/coordenadas actuales; "
+                "recalcule la ruta antes de confirmar.",
+                code="ors_snapshot_stale",
+                http_status=409,
+            )
+
     get_conn = conn_factory or get_connection
     conn = get_conn()
     try:
@@ -445,6 +467,7 @@ def prepare_confirm_session(
                     "capacity_snapshot": capacity,
                     "truck": truck_block.get("truck"),
                     "weight_acknowledgement": weight_ack_payload,
+                    "ors_snapshot": validated_ors,
                 },
                 "status": "open",
                 "expires_at": now + timedelta(minutes=SESSION_TTL_MINUTES),
@@ -507,6 +530,7 @@ def confirm_simple_planning_session(
     confirm = confirm_fn or confirm_dispatch_plan
     conn = get_conn()
     plan_id: int | None = None
+    ors_ok = False
     try:
         cur = conn.cursor()
         session = session_repo.get_session_by_id_for_update(cur, session_id)
@@ -689,6 +713,8 @@ def confirm_simple_planning_session(
             if doc_id is None:
                 raise SimplePlanningConfirmError("document_id ausente al confirmar")
             client = order.get("client") or {}
+            lat = client.get("lat")
+            lng = client.get("lng")
             confirm_orders.append(
                 {
                     "oc_document_id": doc_id,
@@ -699,8 +725,22 @@ def confirm_simple_planning_session(
                     "address": client.get("address"),
                     "city": client.get("municipality"),
                     "oc_total_amount": order.get("total_amount"),
+                    "lat": float(lat) if lat is not None else None,
+                    "lng": float(lng) if lng is not None else None,
                 }
             )
+
+        ordered_doc_ids = [
+            int(o["oc_document_id"]) for o in confirm_orders if o.get("oc_document_id")
+        ]
+        ors_snap = validate_ors_snapshot_for_orders(
+            (payload or {}).get("ors_snapshot"),
+            truck_id=int(session["truck_id"]),
+            ordered_document_ids=ordered_doc_ids,
+            company_id=int(session["company_id"]),
+            office_id=int(session["office_id"]),
+        )
+        ors_ok = bool(ors_snap and ors_snap.get("route_geometry") is not None)
 
         dispatch_name = (
             (session.get("dispatch_name") or "").strip()
@@ -714,23 +754,33 @@ def confirm_simple_planning_session(
                 planning_name=dispatch_name,
                 driver_count=1,
                 assistant_count=0,
-                driver_cost_clp=0,
+                driver_cost_clp=int(ors_snap.get("crew_cost_clp") or 0) if ors_ok else 0,
                 assistant_cost_clp=0,
-                diesel_price_per_liter=None,
-                km_total=None,
-                duration_min=None,
-                liters_estimated=None,
-                fuel_cost_clp=0,
-                ferry_cost_clp=0,
-                toll_cost_clp=0,
-                extras_cost_clp=0,
-                crew_cost_clp=0,
-                total_route_cost_clp=0,
-                route_geometry=None,
+                diesel_price_per_liter=(
+                    float(ors_snap["diesel_price_per_liter"])
+                    if ors_ok and ors_snap.get("diesel_price_per_liter") is not None
+                    else None
+                ),
+                km_total=float(ors_snap["distance_km"]) if ors_ok else None,
+                duration_min=float(ors_snap["duration_min"]) if ors_ok else None,
+                liters_estimated=(
+                    float(ors_snap["liters_estimated"])
+                    if ors_ok and ors_snap.get("liters_estimated") is not None
+                    else None
+                ),
+                fuel_cost_clp=int(ors_snap.get("fuel_cost_clp") or 0) if ors_ok else 0,
+                ferry_cost_clp=int(ors_snap.get("ferry_cost_clp") or 0) if ors_ok else 0,
+                toll_cost_clp=int(ors_snap.get("toll_cost_clp") or 0) if ors_ok else 0,
+                extras_cost_clp=int(ors_snap.get("extras_cost_clp") or 0) if ors_ok else 0,
+                crew_cost_clp=int(ors_snap.get("crew_cost_clp") or 0) if ors_ok else 0,
+                total_route_cost_clp=(
+                    int(ors_snap.get("total_route_cost_clp") or 0) if ors_ok else 0
+                ),
+                route_geometry=ors_snap.get("route_geometry") if ors_ok else None,
                 orders=confirm_orders,
                 planning_date=session.get("planning_date"),
                 planning_origin=PLANNING_ORIGIN_SIMPLE,
-                ors_metrics_calculated=False,
+                ors_metrics_calculated=ors_ok,
                 conn=conn,
                 run_auto_picking=False,
             )
@@ -814,12 +864,16 @@ def confirm_simple_planning_session(
         "idempotent": False,
         "wrote": True,
         "planning_origin": PLANNING_ORIGIN_SIMPLE,
-        "ors_metrics_calculated": False,
+        "ors_metrics_calculated": bool(ors_ok),
         "session_id": str(session_id),
         "plan_id": plan_id,
         "result": data,
         "notes": {
-            "ors_metrics": "NULL / costos 0 legacy; ors_metrics_calculated=false",
+            "ors_metrics": (
+                "ORS preservado (preserve_order) vinculado a sesión"
+                if ors_ok
+                else "NULL / costos 0; ors_metrics_calculated=false (sin Calcular ruta)"
+            ),
             "picking": "Picking definitivo solo tras facturar (generate_plan_picking)",
             "loads": "No se crean loads automáticamente",
         },

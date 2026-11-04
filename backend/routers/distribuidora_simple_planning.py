@@ -26,6 +26,10 @@ from backend.services.distribuidora.simple_planning_confirm_service import (
     confirm_simple_planning_session,
     prepare_confirm_session,
 )
+from backend.services.distribuidora.simple_planning_ors_service import (
+    SimplePlanningOrsError,
+    calculate_simple_planning_route,
+)
 from backend.services.distribuidora.simple_planning_preview_service import (
     MAX_FOLIOS,
     SimplePlanningPreviewError,
@@ -155,10 +159,20 @@ class PrepareConfirmBody(BaseModel):
     idempotency_key: str | None = Field(None, min_length=8, max_length=128)
     acknowledge_incomplete_weight: bool = False
     acknowledge_unevaluable_weight: bool = False
+    # Snapshot ORS calculado por POST /calculate-route (servidor). Opcional.
+    ors_snapshot: dict[str, Any] | None = None
 
 
 class ConfirmSessionBody(BaseModel):
     session_id: UUID
+
+
+class CalculateRouteBody(BaseModel):
+    company_id: int = Field(default=COMPANY_ID, ge=1)
+    office_id: int = Field(default=OFFICE_ID, ge=1)
+    truck_id: int = Field(..., ge=1)
+    document_ids: list[int] = Field(..., min_length=1, max_length=MAX_FOLIOS)
+    camion: str | None = Field(None, max_length=64)
 
 
 @router.post("/preview")
@@ -216,6 +230,43 @@ def post_simple_planning_assign_preview(
     return report
 
 
+@router.post("/calculate-route")
+def post_simple_planning_calculate_route(
+    body: CalculateRouteBody,
+    user: dict = Depends(require_simple_planning_access),
+):
+    """
+    ORS con orden preservado para simple_planning.
+    Scope empresa/oficina + OC activas; coordenadas desde bsale.clients.
+    No abre ``/planificacion/ors-routes`` a capability-only.
+    """
+    _validate_scope(user, body.company_id, body.office_id)
+    try:
+        return calculate_simple_planning_route(
+            user_id=_user_id(user),
+            company_id=int(body.company_id),
+            office_id=int(body.office_id),
+            truck_id=int(body.truck_id),
+            document_ids=list(body.document_ids),
+            camion=body.camion,
+        )
+    except SimplePlanningOrsError as exc:
+        raise HTTPException(
+            status_code=exc.http_status,
+            detail={
+                "message": str(exc),
+                "code": exc.code,
+                **(exc.details or {}),
+            },
+        ) from exc
+    except Exception:
+        logger.exception("simple_planning_calculate_route_failed")
+        raise HTTPException(
+            status_code=503,
+            detail="No se pudo calcular la ruta ORS",
+        ) from None
+
+
 @router.post("/prepare-confirm")
 def post_simple_planning_prepare_confirm(
     body: PrepareConfirmBody,
@@ -236,6 +287,7 @@ def post_simple_planning_prepare_confirm(
             idempotency_key=body.idempotency_key,
             acknowledge_incomplete_weight=bool(body.acknowledge_incomplete_weight),
             acknowledge_unevaluable_weight=bool(body.acknowledge_unevaluable_weight),
+            ors_snapshot=body.ors_snapshot,
         )
     except SimplePlanningConfirmError as exc:
         raise HTTPException(
