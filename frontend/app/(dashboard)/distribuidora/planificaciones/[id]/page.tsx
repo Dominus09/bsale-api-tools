@@ -1,14 +1,11 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import Link from "next/link"
 import { useParams } from "next/navigation"
-import { ArrowLeft, Loader2, Wrench } from "lucide-react"
+import { Loader2 } from "lucide-react"
 
 import {
-  downloadDispatchPlanBillingExcel,
   refreshDispatchPlanCommercialMargin,
-  repairDispatchPlanSnapshot,
   type DispatchPlanDashboard,
   type DispatchPlanSummary,
 } from "@/lib/api"
@@ -20,9 +17,6 @@ import {
   logFrontendPlanDebug,
   trackPlanPageRender,
 } from "@/lib/planificacion-fetch"
-import { dispatchPlanOperationalLabel } from "@/lib/dispatch-plan-operational-status"
-import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 
 function emptyDashboardFromPlan(plan: DispatchPlanSummary): DispatchPlanDashboard {
@@ -64,7 +58,6 @@ export default function PlanificacionDetallePage() {
   const [headerLoading, setHeaderLoading] = useState(true)
   const [dashboardLoading, setDashboardLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState<string | null>(null)
   const [refreshBusy, setRefreshBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
 
@@ -184,89 +177,6 @@ export default function PlanificacionDetallePage() {
 
   return (
     <div className="space-y-4 p-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <Button asChild variant="ghost" size="sm" className="-ml-2 mb-2 h-8 text-xs">
-            <Link href="/distribuidora/planificaciones">
-              <ArrowLeft className="mr-1 size-3.5" aria-hidden />
-              Planificaciones
-            </Link>
-          </Button>
-          {headerLoading && !displayPlan ? (
-            <Loader2 className="size-5 animate-spin text-muted-foreground" />
-          ) : displayPlan ? (
-            <>
-              <p className="font-mono text-xs text-muted-foreground">
-                {displayPlan.planning_code ?? `PLAN-${displayPlan.id}`}
-              </p>
-              <h1 className="text-[24px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[28px]">
-                Detalle de despacho
-              </h1>
-              <div className="mt-1 flex flex-wrap gap-1.5">
-                <Badge variant="secondary">
-                  {dispatchPlanOperationalLabel(displayPlan.status)}
-                </Badge>
-                {displayPlan.planning_origin ? (
-                  <Badge variant="outline">
-                    {displayPlan.planning_origin === "simple_list"
-                      ? "Lista / Excel"
-                      : "ORS tradicional"}
-                  </Badge>
-                ) : null}
-              </div>
-            </>
-          ) : null}
-        </div>
-        {displayPlan ? (
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={!!busy}
-              onClick={() =>
-                void (async () => {
-                  setBusy("excel")
-                  try {
-                    await downloadDispatchPlanBillingExcel(planId)
-                    setMsg("Excel descargado desde snapshot congelado.")
-                  } catch (e: unknown) {
-                    setMsg(e instanceof Error ? e.message : "Error Excel")
-                  } finally {
-                    setBusy(null)
-                  }
-                })()
-              }
-            >
-              Excel facturación
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={!!busy}
-              onClick={() =>
-                void (async () => {
-                  setBusy("repair")
-                  try {
-                    await repairDispatchPlanSnapshot(planId)
-                    await reloadDashboard()
-                    setMsg("Snapshot reparado (solo campos vacíos).")
-                  } catch (e: unknown) {
-                    setMsg(e instanceof Error ? e.message : "Error reparación")
-                  } finally {
-                    setBusy(null)
-                  }
-                })()
-              }
-            >
-              <Wrench className="mr-1 size-3.5" aria-hidden />
-              Reparar snapshot
-            </Button>
-          </div>
-        ) : null}
-      </div>
-
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
       {msg ? (
         <Alert>

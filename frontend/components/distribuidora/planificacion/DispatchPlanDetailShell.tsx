@@ -1,21 +1,33 @@
 "use client"
 
 /**
- * Cabecera compacta + pestañas del detalle de despacho (ORS y simple_list).
- * Conserva componentes existentes; reorganiza la información.
+ * Detalle de despacho — cabecera compacta + 5 pestañas grandes.
+ * Solo reorganiza presentación; reutiliza paneles y acciones existentes.
  */
 
 import Link from "next/link"
 import { useCallback, useState } from "react"
-import { Loader2, RefreshCw } from "lucide-react"
+import {
+  ArrowLeft,
+  LayoutDashboard,
+  Loader2,
+  Map,
+  PackageCheck,
+  RefreshCw,
+  Truck,
+  Wallet,
+  Wrench,
+} from "lucide-react"
 
 import {
   DISPATCH_PLAN_PICKING_NO_CONFIRMED_MESSAGE,
   DISPATCH_PLAN_PICKING_WAIT_MESSAGE,
+  downloadDispatchPlanBillingExcel,
   generateDispatchPlanPicking,
   getDispatchPlanInvoicedDocuments,
   getDispatchPlanPickingCliente,
   getDispatchPlanPickingProducto,
+  repairDispatchPlanSnapshot,
   type DispatchPlanDashboard,
   type DispatchPlanInvoicedRow,
   type DispatchPlanPickingClientResponse,
@@ -32,11 +44,11 @@ import {
 import { DispatchPlanDriverAssign } from "@/components/distribuidora/planificacion/DispatchPlanDriverAssign"
 import { DispatchPlanOrdersWeightTable } from "@/components/distribuidora/planificacion/DispatchPlanOrdersWeightTable"
 import { formatClp } from "@/lib/ors-map-ui"
-import { dispatchPlanOperationalLabel } from "@/lib/dispatch-plan-operational-status"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { cn } from "@/lib/utils"
 
 type Props = {
   planId: number
@@ -48,12 +60,29 @@ type Props = {
   refreshBusy?: boolean
 }
 
-function Meta({ label, value, sub }: { label: string; value: string; sub?: string }) {
+function KpiCard({
+  label,
+  value,
+  sub,
+}: {
+  label: string
+  value: string
+  sub?: string
+}) {
   return (
-    <div className="min-w-0">
-      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</p>
-      <p className="truncate text-sm font-semibold tabular-nums">{value}</p>
-      {sub ? <p className="text-[11px] text-muted-foreground">{sub}</p> : null}
+    <div className="rounded-lg border border-border/70 bg-card/80 px-4 py-3.5">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="mt-1 text-lg font-semibold tabular-nums leading-tight sm:text-xl">{value}</p>
+      {sub ? <p className="mt-1 text-[12px] text-muted-foreground">{sub}</p> : null}
+    </div>
+  )
+}
+
+function CompactStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0 rounded-md border border-border/60 bg-muted/15 px-3 py-2.5">
+      <p className="text-[11px] text-muted-foreground">{label}</p>
+      <p className="truncate text-sm font-medium tabular-nums">{value}</p>
     </div>
   )
 }
@@ -148,311 +177,479 @@ export function DispatchPlanDetailShell({
     }
   }
 
-  const originLabel =
-    plan.planning_origin === "simple_list" ? "Lista / Excel" : "ORS tradicional"
-  const routeCoverage = costs?.route_coverage
   const routeCalculated = plan.ors_metrics_calculated !== false
-  const routeLabel =
-    plan.ors_metrics_calculated === false
-      ? "Ruta no calculada"
-      : routeCoverage === "partial"
-        ? "Ruta parcial"
-        : plan.ors_metrics_calculated
-          ? "Ruta completa"
-          : "—"
-
+  const routeCoverage = costs?.route_coverage
   const ocCount = inv.total_orders
   const clients = ls?.kpis?.clients_from_oc ?? ls?.kpis?.clients ?? "—"
   const weightKg = ls?.weight?.weight_total_kg ?? plan.weight_total_kg
   const cobertura = ls?.weight?.cobertura_pct ?? plan.weight_cobertura_pct
   const pickingSales = ls?.kpis?.picking_sales_clp
-  const pickingStatus = ls?.picking?.has_snapshot
+  const pickingStatusLabel = ls?.picking?.has_snapshot
     ? `Picking generado${ls.picking.version != null ? ` v${ls.picking.version}` : ""}`
     : "Picking pendiente"
   const cuadraturaLabel =
     dashboard.cuadratura?.label ||
     (dashboard.cuadratura?.started ? "Cuadratura iniciada" : "Cuadratura no iniciada")
-  const amountsBasis =
-    inv.amounts_basis_label_es || "Total documento (con IVA)"
+  const amountsBasis = inv.amounts_basis_label_es || "Total documento (con IVA)"
+  const planCode = plan.planning_code ?? `PLAN-${plan.id}`
+  const planTitle = plan.planning_name ?? plan.route_name ?? "Despacho"
+  const planDate = plan.planning_date?.slice(0, 10) ?? plan.created_at?.slice(0, 10) ?? "—"
+  const driverLabel =
+    plan.driver_name ||
+    (plan.driver_user_id ? `Chofer #${plan.driver_user_id}` : "Sin chofer")
+  const truckLabel = plan.truck_name || "Sin camión"
+  const invoicingStatus = `${inv.confirmed.count} fact. · ${inv.probable.count} prob. · ${inv.pending.count} pend.`
 
   return (
-    <div className="space-y-4">
-      <section className="rounded-xl border border-border/80 bg-card/60 p-4">
+    <div className="space-y-3 sm:space-y-4">
+      {/* Cabecera compacta (~90–115px) */}
+      <header className="space-y-1.5">
+        <Button asChild variant="ghost" size="sm" className="-ml-2 h-8 px-2 text-xs">
+          <Link href="/distribuidora/planificaciones">
+            <ArrowLeft className="mr-1 size-3.5" aria-hidden />
+            Volver a Planificaciones
+          </Link>
+        </Button>
+
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="font-mono text-xs text-muted-foreground">
-              {plan.planning_code ?? `PLAN-${plan.id}`}
-            </p>
-            <h2 className="text-lg font-semibold leading-tight">
-              {plan.planning_name ?? plan.route_name}
-            </h2>
+          <div className="min-w-0 flex-1 space-y-0.5">
+            <h1 className="break-words text-xl font-semibold leading-snug tracking-tight sm:text-2xl">
+              <span className="font-mono text-[0.85em] text-muted-foreground">{planCode}</span>
+              <span className="text-muted-foreground"> · </span>
+              <span>{planTitle}</span>
+            </h1>
             <p className="text-sm text-muted-foreground">
-              {plan.truck_name} ·{" "}
-              {plan.planning_date?.slice(0, 10) ?? plan.created_at?.slice(0, 10)} · {originLabel}
+              {truckLabel} · {planDate} · {driverLabel}
             </p>
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              <Badge variant="secondary">{dispatchPlanOperationalLabel(plan.status)}</Badge>
-              <Badge variant="outline">{routeLabel}</Badge>
-              {ls?.operational_status_label ? (
-                <Badge variant="outline">{ls.operational_status_label}</Badge>
-              ) : null}
-              <Badge variant={dashboard.cuadratura?.started ? "outline" : "secondary"}>
-                {cuadraturaLabel}
-              </Badge>
-            </div>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Button asChild size="sm" variant="secondary">
-              <Link href={`/distribuidora/planificaciones/${planId}/mapa`}>Mapa entregas</Link>
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={!!refreshBusy || dashboardLoading}
-              onClick={() => void onRefreshCommercial()}
-            >
-              {refreshBusy ? (
-                <Loader2 className="mr-1 size-3.5 animate-spin" />
-              ) : (
-                <RefreshCw className="mr-1 size-3.5" />
+          <div className="flex flex-wrap gap-1.5">
+            <Badge variant={ls?.picking?.has_snapshot ? "outline" : "secondary"}>
+              {pickingStatusLabel}
+            </Badge>
+            <Badge variant={dashboard.cuadratura?.started ? "outline" : "secondary"}>
+              {cuadraturaLabel}
+            </Badge>
+          </div>
+        </div>
+      </header>
+
+      <Tabs value={tab} onValueChange={onTabChange} className="w-full gap-0">
+        <div className="overflow-x-auto overscroll-x-contain [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <TabsList
+            className={cn(
+              "flex h-auto min-h-[50px] w-full min-w-[640px] gap-1 rounded-lg border border-border/70",
+              "bg-card/80 p-1 text-muted-foreground",
+            )}
+          >
+            <TabsTrigger
+              value="resumen"
+              className={cn(
+                "h-11 flex-1 gap-2 rounded-md px-3 text-sm font-medium",
+                "data-[state=active]:bg-primary data-[state=active]:text-primary-foreground",
+                "data-[state=active]:shadow-none dark:data-[state=active]:bg-primary",
+                "dark:data-[state=active]:text-primary-foreground",
               )}
-              Actualizar datos comerciales
-            </Button>
-          </div>
+            >
+              <LayoutDashboard className="size-4 shrink-0" aria-hidden />
+              Resumen
+            </TabsTrigger>
+            <TabsTrigger
+              value="ruta"
+              className={cn(
+                "h-11 flex-1 gap-2 rounded-md px-3 text-sm font-medium",
+                "data-[state=active]:bg-primary data-[state=active]:text-primary-foreground",
+                "data-[state=active]:shadow-none dark:data-[state=active]:bg-primary",
+                "dark:data-[state=active]:text-primary-foreground",
+              )}
+            >
+              <Map className="size-4 shrink-0" aria-hidden />
+              Ruta y costos
+            </TabsTrigger>
+            <TabsTrigger
+              value="picking"
+              className={cn(
+                "h-11 flex-1 gap-2 rounded-md px-3 text-sm font-medium",
+                "data-[state=active]:bg-primary data-[state=active]:text-primary-foreground",
+                "data-[state=active]:shadow-none dark:data-[state=active]:bg-primary",
+                "dark:data-[state=active]:text-primary-foreground",
+              )}
+            >
+              <PackageCheck className="size-4 shrink-0" aria-hidden />
+              Picking y carga
+            </TabsTrigger>
+            <TabsTrigger
+              value="chofer"
+              className={cn(
+                "h-11 flex-1 gap-2 rounded-md px-3 text-sm font-medium",
+                "data-[state=active]:bg-primary data-[state=active]:text-primary-foreground",
+                "data-[state=active]:shadow-none dark:data-[state=active]:bg-primary",
+                "dark:data-[state=active]:text-primary-foreground",
+              )}
+            >
+              <Truck className="size-4 shrink-0" aria-hidden />
+              Chofer y auditoría
+            </TabsTrigger>
+            <TabsTrigger
+              value="cierre"
+              className={cn(
+                "h-11 flex-1 gap-2 rounded-md px-3 text-sm font-medium",
+                "data-[state=active]:bg-primary data-[state=active]:text-primary-foreground",
+                "data-[state=active]:shadow-none dark:data-[state=active]:bg-primary",
+                "dark:data-[state=active]:text-primary-foreground",
+              )}
+            >
+              <Wallet className="size-4 shrink-0" aria-hidden />
+              Cierre de ruta y cuadratura
+            </TabsTrigger>
+          </TabsList>
         </div>
 
-        <div className="mt-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 border-t border-border/50 pt-3">
-          <Meta label="OC / clientes" value={`${ocCount} · ${clients}`} sub={originLabel} />
-          <Meta
-            label="Venta OC"
-            value={formatClp(inv.total_oc_amount_clp)}
-            sub="Órdenes del plan"
-          />
-          <Meta
-            label="Venta facturada"
-            value={formatClp(inv.confirmed.amount_clp)}
-            sub={`${inv.confirmed.count} docs · ${amountsBasis}`}
-          />
-          <Meta
-            label="Venta picking"
-            value={pickingSales != null ? formatClp(pickingSales) : "—"}
-            sub={pickingStatus}
-          />
-          <Meta
-            label="Margen comercial"
-            value={
-              margin?.visible && margin.commercial_margin_clp != null
-                ? formatClp(margin.commercial_margin_clp)
-                : margin?.restricted
-                  ? "Restringido"
-                  : "—"
-            }
-            sub={
-              margin?.cost_basis
-                ? `variant_cost · ${margin.cost_basis}`
-                : margin?.partial
-                  ? "Parcial / incompleto"
-                  : "No descuenta NC autom."
-            }
-          />
-          <Meta
-            label="Peso / chofer"
-            value={
-              weightKg != null
-                ? `${Number(weightKg).toLocaleString("es-CL", { maximumFractionDigits: 1 })} kg`
-                : "—"
-            }
-            sub={[
-              cobertura != null
-                ? `Cobertura ${Number(cobertura).toLocaleString("es-CL", {
-                    maximumFractionDigits: 0,
-                  })}%`
-                : null,
-              plan.driver_name ||
-                (plan.driver_user_id ? `Chofer #${plan.driver_user_id}` : "Chofer pendiente"),
-            ]
-              .filter(Boolean)
-              .join(" · ")}
-          />
-        </div>
-
-        {costs?.note ? (
-          <Alert className="mt-3 border-amber-500/30 bg-amber-500/5">
-            <AlertTitle className="text-sm">Ruta / transporte</AlertTitle>
-            <AlertDescription className="text-xs">{costs.note}</AlertDescription>
-          </Alert>
-        ) : null}
-      </section>
-
-      <Tabs value={tab} onValueChange={onTabChange} className="w-full">
-        <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1">
-          <TabsTrigger value="resumen">Resumen</TabsTrigger>
-          <TabsTrigger value="ruta">Ruta y costos</TabsTrigger>
-          <TabsTrigger value="picking">Picking y carga</TabsTrigger>
-          <TabsTrigger value="chofer">Chofer y auditoría</TabsTrigger>
-          <TabsTrigger value="cierre">Cierre de ruta y cuadratura</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="resumen" className="mt-4 space-y-4">
+        {/* ——— RESUMEN ——— */}
+        <TabsContent
+          value="resumen"
+          forceMount
+          className="mt-4 space-y-4 focus-visible:outline-none data-[state=inactive]:hidden"
+        >
           {dashboardLoading ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" /> Actualizando…
             </div>
           ) : null}
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              disabled={!!busy || dashboardLoading}
-              onClick={() => void onReloadDashboard()}
-            >
-              Actualizar facturación
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={!!busy}
-              onClick={() =>
-                void (async () => {
-                  setBusy("inv")
-                  try {
-                    const r = await getDispatchPlanInvoicedDocuments(planId)
-                    setReviewItems(r.items)
-                    onMessage(
-                      `Facturación: ${r.summary.confirmed} confirmadas, ${r.summary.probable} probables, ${r.summary.missing} pendientes.`,
-                    )
-                  } catch (e: unknown) {
-                    onMessage(e instanceof Error ? e.message : "Error")
-                  } finally {
-                    setBusy(null)
+
+          <section className="space-y-3">
+            <h2 className="text-base font-semibold sm:text-lg">Indicadores comerciales</h2>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <KpiCard
+                label="Venta OC"
+                value={formatClp(inv.total_oc_amount_clp)}
+                sub={`${ocCount} órdenes · ${amountsBasis}`}
+              />
+              <KpiCard
+                label="Venta facturada real"
+                value={formatClp(inv.confirmed.amount_clp)}
+                sub={`${inv.confirmed.count} docs · ${amountsBasis}`}
+              />
+              <KpiCard
+                label="Venta picking"
+                value={pickingSales != null ? formatClp(pickingSales) : "—"}
+                sub={pickingStatusLabel}
+              />
+              <KpiCard
+                label="Margen comercial"
+                value={
+                  margin?.visible && margin.commercial_margin_clp != null
+                    ? formatClp(margin.commercial_margin_clp)
+                    : margin?.restricted
+                      ? "Restringido"
+                      : "—"
+                }
+                sub={
+                  margin?.cost_basis
+                    ? `Neto · ${margin.cost_basis}`
+                    : margin?.partial
+                      ? "Parcial / incompleto"
+                      : "No descuenta NC autom."
+                }
+              />
+            </div>
+            {costs?.note ? (
+              <Alert className="border-amber-500/30 bg-amber-500/5">
+                <AlertTitle className="text-sm">Ruta / transporte</AlertTitle>
+                <AlertDescription className="text-xs">{costs.note}</AlertDescription>
+              </Alert>
+            ) : null}
+            {margin?.visible && margin.calculated_at ? (
+              <p className="text-[12px] text-muted-foreground">
+                Margen comercial vivo · calculado {margin.calculated_at}
+                {margin.cost_basis ? ` · base costo: ${margin.cost_basis}` : ""}
+                {margin.cost_coverage
+                  ? ` · costos ${margin.cost_coverage.lines_with_cost ?? "—"}/${margin.cost_coverage.lines_total ?? "—"} líneas`
+                  : ""}
+                {" · "}no es margen neto definitivo (NC no descontadas automáticamente).
+              </p>
+            ) : null}
+          </section>
+
+          <section className="space-y-3">
+            <h2 className="text-base font-semibold sm:text-lg">Estado documental y logístico</h2>
+            <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+              <CompactStat label="OC y clientes" value={`${ocCount} · ${clients}`} />
+              <CompactStat
+                label="Peso / cobertura"
+                value={
+                  weightKg != null
+                    ? `${Number(weightKg).toLocaleString("es-CL", { maximumFractionDigits: 1 })} kg${
+                        cobertura != null
+                          ? ` · ${Number(cobertura).toLocaleString("es-CL", {
+                              maximumFractionDigits: 0,
+                            })}%`
+                          : ""
+                      }`
+                    : "—"
+                }
+              />
+              <CompactStat label="Facturación" value={invoicingStatus} />
+              <CompactStat label="Picking" value={pickingStatusLabel} />
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-base font-semibold sm:text-lg">Órdenes y documentos</h2>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={!!busy || dashboardLoading}
+                  onClick={() => void onReloadDashboard()}
+                >
+                  Actualizar facturación
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!!busy}
+                  onClick={() =>
+                    void (async () => {
+                      setBusy("inv")
+                      try {
+                        const r = await getDispatchPlanInvoicedDocuments(planId)
+                        setReviewItems(r.items)
+                        onMessage(
+                          `Facturación: ${r.summary.confirmed} confirmadas, ${r.summary.probable} probables, ${r.summary.missing} pendientes.`,
+                        )
+                      } catch (e: unknown) {
+                        onMessage(e instanceof Error ? e.message : "Error")
+                      } finally {
+                        setBusy(null)
+                      }
+                    })()
                   }
-                })()
-              }
-            >
-              Revisar facturación
-            </Button>
-          </div>
-          <DispatchPlanInvoicingDashboard data={dashboard} />
-          {reviewItems?.length ? (
-            <div className="space-y-2">
-              <p className="text-sm font-medium">Detalle documental</p>
-              <DispatchPlanInvoicedItemsTable items={reviewItems} />
+                >
+                  Revisar facturación
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!!refreshBusy || dashboardLoading}
+                  onClick={() => void onRefreshCommercial()}
+                >
+                  {refreshBusy ? (
+                    <Loader2 className="mr-1 size-3.5 animate-spin" />
+                  ) : (
+                    <RefreshCw className="mr-1 size-3.5" />
+                  )}
+                  Actualizar datos comerciales
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={!!busy}
+                  onClick={() =>
+                    void (async () => {
+                      setBusy("excel")
+                      try {
+                        await downloadDispatchPlanBillingExcel(planId)
+                        onMessage("Excel descargado desde snapshot congelado.")
+                      } catch (e: unknown) {
+                        onMessage(e instanceof Error ? e.message : "Error Excel")
+                      } finally {
+                        setBusy(null)
+                      }
+                    })()
+                  }
+                >
+                  Excel de facturación
+                </Button>
+              </div>
             </div>
-          ) : null}
-          {margin?.visible && margin.calculated_at ? (
-            <p className="text-[11px] text-muted-foreground">
-              Margen comercial vivo · calculado {margin.calculated_at}
-              {margin.cost_basis ? ` · base costo: ${margin.cost_basis}` : ""}
-              {margin.cost_coverage
-                ? ` · costos ${margin.cost_coverage.lines_with_cost ?? "—"}/${margin.cost_coverage.lines_total ?? "—"} líneas`
-                : ""}
-              {" · "}no es margen neto definitivo (NC no descontadas automáticamente).
-            </p>
-          ) : null}
-          {dashboard.plan_orders?.length ? (
-            <div className="space-y-2">
-              <p className="text-sm font-medium">Órdenes / peso congelado</p>
-              <DispatchPlanOrdersWeightTable orders={dashboard.plan_orders} />
+            <DispatchPlanInvoicingDashboard data={dashboard} />
+            {reviewItems?.length ? (
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Detalle documental</p>
+                <DispatchPlanInvoicedItemsTable items={reviewItems} />
+              </div>
+            ) : null}
+            {dashboard.plan_orders?.length ? (
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Órdenes / peso congelado</p>
+                <DispatchPlanOrdersWeightTable orders={dashboard.plan_orders} />
+              </div>
+            ) : null}
+            <div className="border-t border-border/50 pt-3">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 text-xs text-muted-foreground"
+                disabled={!!busy}
+                onClick={() =>
+                  void (async () => {
+                    setBusy("repair")
+                    try {
+                      await repairDispatchPlanSnapshot(planId)
+                      await onReloadDashboard()
+                      onMessage("Snapshot reparado (solo campos vacíos).")
+                    } catch (e: unknown) {
+                      onMessage(e instanceof Error ? e.message : "Error reparación")
+                    } finally {
+                      setBusy(null)
+                    }
+                  })()
+                }
+              >
+                <Wrench className="mr-1 size-3.5" aria-hidden />
+                Reparar snapshot (administrativo)
+              </Button>
             </div>
-          ) : null}
+          </section>
         </TabsContent>
 
-        <TabsContent value="ruta" className="mt-4 space-y-3">
-          {!routeCalculated ? (
-            <Alert className="border-amber-500/30 bg-amber-500/5">
-              <AlertTitle className="text-sm">Ruta no calculada</AlertTitle>
-              <AlertDescription className="text-xs">
-                Este despacho no tiene métricas ORS. No se inventan km, duración ni costo de
-                transporte. Las rutas históricas no se alteran.
-              </AlertDescription>
-            </Alert>
-          ) : null}
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 text-sm">
-            <div className="rounded-md border px-3 py-2">
-              <p className="text-[11px] text-muted-foreground">Km</p>
-              <p className="font-semibold tabular-nums">
-                {!routeCalculated ? "Ruta no calculada" : Number(plan.km_total ?? 0).toFixed(1)}
-              </p>
-              {routeCoverage === "partial" ? (
-                <p className="text-[11px] text-amber-700 dark:text-amber-300">Solo paradas con geo</p>
-              ) : null}
+        {/* ——— RUTA ——— */}
+        <TabsContent
+          value="ruta"
+          forceMount
+          className="mt-4 space-y-4 focus-visible:outline-none data-[state=inactive]:hidden"
+        >
+          <h2 className="text-base font-semibold sm:text-lg">Ruta y costos</h2>
+          <p className="text-xs text-muted-foreground">
+            {truckLabel} · {planDate} · {driverLabel}
+          </p>
+
+          <section className="space-y-3 rounded-lg border border-border/70 bg-card/50 p-4">
+            <h3 className="text-sm font-semibold">Mapa y cobertura</h3>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button asChild variant="secondary" size="sm">
+                <Link href={`/distribuidora/planificaciones/${planId}/mapa`}>
+                  Abrir mapa de entregas
+                </Link>
+              </Button>
+              {costs?.clients_pending != null && Number(costs.clients_pending) > 0 ? (
+                <p className="text-sm text-amber-800 dark:text-amber-200">
+                  Clientes sin georreferencia: {costs.clients_pending}
+                  {costs.clients_total != null ? ` de ${costs.clients_total}` : ""}
+                </p>
+              ) : (
+                <p className="text-sm text-muted-foreground">Cobertura geo disponible según ORS.</p>
+              )}
             </div>
-            <div className="rounded-md border px-3 py-2">
-              <p className="text-[11px] text-muted-foreground">Duración</p>
-              <p className="font-semibold tabular-nums">
-                {!routeCalculated || plan.duration_min == null
-                  ? "Ruta no calculada"
-                  : `${Math.round(Number(plan.duration_min))} min`}
-              </p>
+          </section>
+
+          <section className="space-y-3">
+            <h3 className="text-sm font-semibold">Métricas de ruta</h3>
+            {!routeCalculated ? (
+              <Alert className="border-amber-500/30 bg-amber-500/5">
+                <AlertTitle className="text-sm">Ruta no calculada</AlertTitle>
+                <AlertDescription className="text-sm">
+                  Este despacho no tiene métricas ORS. No se inventan km, duración ni costo de
+                  transporte.
+                </AlertDescription>
+              </Alert>
+            ) : null}
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <KpiCard
+                label="Kilómetros"
+                value={
+                  !routeCalculated ? "Ruta no calculada" : Number(plan.km_total ?? 0).toFixed(1)
+                }
+                sub={
+                  routeCoverage === "partial" ? "Solo paradas con geo" : undefined
+                }
+              />
+              <KpiCard
+                label="Duración"
+                value={
+                  !routeCalculated || plan.duration_min == null
+                    ? "Ruta no calculada"
+                    : `${Math.round(Number(plan.duration_min))} min`
+                }
+              />
+              <KpiCard
+                label="Costo de transporte"
+                value={
+                  !routeCalculated
+                    ? "Ruta no calculada"
+                    : formatClp(plan.total_route_cost_clp ?? 0)
+                }
+              />
+              <KpiCard
+                label="Después del transporte"
+                value={
+                  margin?.net_operational_clp == null
+                    ? "No disponible"
+                    : formatClp(margin.net_operational_clp)
+                }
+                sub="Requiere margen comercial y ruta ORS completa"
+              />
             </div>
-            <div className="rounded-md border px-3 py-2">
-              <p className="text-[11px] text-muted-foreground">Costo ruta</p>
-              <p className="font-semibold tabular-nums">
-                {!routeCalculated
-                  ? "Ruta no calculada"
-                  : formatClp(plan.total_route_cost_clp ?? 0)}
-              </p>
-            </div>
-            <div className="rounded-md border px-3 py-2">
-              <p className="text-[11px] text-muted-foreground">Después del transporte</p>
-              <p className="font-semibold tabular-nums">
-                {margin?.net_operational_clp == null
-                  ? "No disponible"
-                  : formatClp(margin.net_operational_clp)}
-              </p>
-              <p className="text-[11px] text-muted-foreground">
-                Requiere margen comercial y ruta ORS completa
-              </p>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button asChild variant="secondary" size="sm">
-              <Link href={`/distribuidora/planificaciones/${planId}/mapa`}>
-                Abrir mapa de entregas
-              </Link>
-            </Button>
-          </div>
-          {costs?.clients_pending != null && Number(costs.clients_pending) > 0 ? (
-            <p className="text-xs text-amber-800 dark:text-amber-200">
-              Clientes sin georreferencia: {costs.clients_pending}
-              {costs.clients_total != null ? ` de ${costs.clients_total}` : ""}
-            </p>
-          ) : null}
+          </section>
         </TabsContent>
 
-        <TabsContent value="picking" className="mt-4 space-y-6">
-          <DispatchPlanPickingClientePanel
-            planId={planId}
-            pickingReady={pickingReady}
-            blockedMessage={pickingBlockedMessage}
-            data={pickingClient}
-            loading={pickingClientLoading}
-            onGenerate={(opts) => void generatePicking(opts)}
-            onRefresh={() => void refreshPickingFromDb()}
-            onMessage={onMessage}
-          />
-          <DispatchPlanPickingProductoPanel
-            planId={planId}
-            pickingReady={pickingReady}
-            blockedMessage={pickingBlockedMessage}
-            data={pickingProduct}
-            loading={pickingProductLoading}
-            onRefresh={() => void refreshPickingFromDb()}
-            onMessage={onMessage}
-          />
-          <DispatchPlanPickingAssignmentPanel
-            planId={planId}
-            planStatus={dashboard.plan.status}
-            planningCode={dashboard.plan.planning_code}
-            onMessage={onMessage}
-            onReloadDashboard={onReloadDashboard}
-          />
+        {/* ——— PICKING ——— */}
+        <TabsContent
+          value="picking"
+          forceMount
+          className="mt-4 space-y-5 focus-visible:outline-none data-[state=inactive]:hidden"
+        >
+          <h2 className="text-base font-semibold sm:text-lg">Picking y carga</h2>
+          <p className="text-xs text-muted-foreground">
+            {truckLabel} · {pickingStatusLabel}
+          </p>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <section className="space-y-2 rounded-lg border border-border/70 bg-card/50 p-4">
+              <h3 className="text-sm font-semibold">Picking clientes</h3>
+              <DispatchPlanPickingClientePanel
+                planId={planId}
+                pickingReady={pickingReady}
+                blockedMessage={pickingBlockedMessage}
+                data={pickingClient}
+                loading={pickingClientLoading}
+                onGenerate={(opts) => void generatePicking(opts)}
+                onRefresh={() => void refreshPickingFromDb()}
+                onMessage={onMessage}
+              />
+            </section>
+            <section className="space-y-2 rounded-lg border border-border/70 bg-card/50 p-4">
+              <h3 className="text-sm font-semibold">Picking productos</h3>
+              <DispatchPlanPickingProductoPanel
+                planId={planId}
+                pickingReady={pickingReady}
+                blockedMessage={pickingBlockedMessage}
+                data={pickingProduct}
+                loading={pickingProductLoading}
+                onRefresh={() => void refreshPickingFromDb()}
+                onMessage={onMessage}
+              />
+            </section>
+          </div>
+
+          <section className="space-y-2 rounded-lg border border-border/70 bg-card/40 p-4">
+            <h3 className="text-sm font-semibold">Asignación y carga</h3>
+            <DispatchPlanPickingAssignmentPanel
+              planId={planId}
+              planStatus={dashboard.plan.status}
+              planningCode={dashboard.plan.planning_code}
+              onMessage={onMessage}
+              onReloadDashboard={onReloadDashboard}
+            />
+          </section>
         </TabsContent>
 
-        <TabsContent value="chofer" className="mt-4 space-y-4">
+        {/* ——— CHOFER ——— */}
+        <TabsContent
+          value="chofer"
+          forceMount
+          className="mt-4 space-y-4 focus-visible:outline-none data-[state=inactive]:hidden"
+        >
+          <h2 className="text-base font-semibold sm:text-lg">Chofer y auditoría</h2>
+          <p className="text-xs text-muted-foreground">
+            {planCode} · {truckLabel} · {planDate}
+          </p>
           <DispatchPlanDriverAssign
             planId={planId}
             planningOrigin={plan.planning_origin}
@@ -460,20 +657,23 @@ export function DispatchPlanDetailShell({
               void onReloadDashboard()
             }}
           />
-          <p className="text-xs text-muted-foreground">
-            La cuadratura y el cierre de ruta están en la pestaña «Cierre de ruta y cuadratura».
-          </p>
         </TabsContent>
 
-        <TabsContent value="cierre" className="mt-4 space-y-4">
-          <div className="space-y-1">
-            <h3 className="text-sm font-semibold">Cierre de ruta y cuadratura</h3>
-            <p className="text-xs text-muted-foreground">
-              Datos del cierre de ruta. No sustituyen la venta OC ni la venta facturada del
-              resumen comercial.
-            </p>
-          </div>
-          <DispatchPlanCuadraturaPanel planId={planId} onMessage={onMessage} />
+        {/* ——— CIERRE ——— */}
+        <TabsContent
+          value="cierre"
+          forceMount
+          className="mt-4 space-y-4 focus-visible:outline-none data-[state=inactive]:hidden"
+        >
+          <DispatchPlanCuadraturaPanel
+            planId={planId}
+            onMessage={onMessage}
+            contextLine={{
+              driver: driverLabel,
+              truck: truckLabel,
+              planCode,
+            }}
+          />
         </TabsContent>
       </Tabs>
     </div>

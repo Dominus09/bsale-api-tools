@@ -58,6 +58,12 @@ type DispatchPlanCuadraturaPanelProps = {
   planId: number
   onMessage: (msg: string) => void
   showPlanLink?: boolean
+  /** Línea compacta de contexto cuando se embebe en el detalle (sin repetir KPIs comerciales). */
+  contextLine?: {
+    driver?: string
+    truck?: string
+    planCode?: string
+  }
 }
 
 function parseClpInput(raw: string): number {
@@ -89,6 +95,7 @@ export function DispatchPlanCuadraturaPanel({
   planId,
   onMessage,
   showPlanLink = false,
+  contextLine,
 }: DispatchPlanCuadraturaPanelProps) {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -218,35 +225,42 @@ export function DispatchPlanCuadraturaPanel({
       .filter((d) => (d.medio_pago || "pendiente") === "pendiente")
       .reduce((a, d) => a + Math.round(Number(d.monto_clp) || 0), 0)
 
+  const driverCtx =
+    contextLine?.driver || String(hdr.driver_name || hdr.driver_label || "—")
+  const truckCtx = contextLine?.truck || String(hdr.truck_name || "—")
+
   return (
-    <div className="space-y-8">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="space-y-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge className={cn("font-normal", statusBadge.className)}>
-              {statusBadge.emoji} {statusBadge.label}
+    <div className="space-y-6">
+      <div className="space-y-1.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <h2 className="text-base font-semibold sm:text-lg">Cierre de ruta y cuadratura</h2>
+          <Badge className={cn("font-normal", statusBadge.className)}>
+            {statusBadge.emoji} {statusBadge.label}
+          </Badge>
+          {data.picking_version != null ? (
+            <span className="text-xs text-muted-foreground">
+              Picking v{data.picking_version} congelado
+            </span>
+          ) : null}
+          {isClosed ? (
+            <Badge variant="outline" className="gap-1 font-normal">
+              <Lock className="size-3" />
+              Cerrada
             </Badge>
-            {data.picking_version != null ? (
-              <span className="text-xs text-muted-foreground">
-                Picking v{data.picking_version} congelado
-              </span>
-            ) : null}
-            {isClosed ? (
-              <Badge variant="outline" className="gap-1 font-normal">
-                <Lock className="size-3" />
-                Cerrada
-              </Badge>
-            ) : null}
-          </div>
-          {showPlanLink ? (
-            <Link
-              href={`/distribuidora/planificaciones/${planId}`}
-              className="text-xs text-primary hover:underline"
-            >
-              Ver planificación completa
-            </Link>
           ) : null}
         </div>
+        <p className="text-sm text-muted-foreground">
+          {driverCtx} · {truckCtx} · {documents.length} documentos · Venta documentada{" "}
+          {formatClp(ventaPicking)}
+        </p>
+        {showPlanLink ? (
+          <Link
+            href={`/distribuidora/planificaciones/${planId}`}
+            className="text-xs text-primary hover:underline"
+          >
+            Ver planificación completa
+          </Link>
+        ) : null}
       </div>
 
       {!cuadraturaStarted ? (
@@ -254,51 +268,15 @@ export function DispatchPlanCuadraturaPanel({
           <AlertTriangle className="size-4" />
           <AlertTitle>Cuadratura no iniciada</AlertTitle>
           <AlertDescription className="text-xs">
-            Aún no hay registro de cierre de ruta. Los montos comerciales son referencia del
-            despacho (no cobro registrado). Guardar inicia el cierre; no se crea al abrir esta
-            página.
+            Aún no hay registro de cierre de ruta. Guardar inicia el cierre; no se crea al abrir
+            esta página. Venta facturada ≠ dinero recibido.
           </AlertDescription>
         </Alert>
       ) : null}
 
-      {/* A. Resumen del despacho */}
-      <section className="space-y-3 rounded-lg border bg-muted/10 p-4">
-        <h3 className="text-sm font-semibold tracking-tight">A. Resumen del despacho</h3>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
-          <MetaField
-            label="Planificación"
-            value={String(hdr.planning_number || hdr.planning_name || `Plan ${planId}`)}
-          />
-          <MetaField label="Camión" value={String(hdr.truck_name || "—")} />
-          <MetaField
-            label="Chofer"
-            value={String(hdr.driver_name || hdr.driver_label || "—")}
-          />
-          <MetaField label="Fecha" value={String(hdr.delivery_date || "—")} />
-          <MetaField label="Documentos" value={String(documents.length)} />
-          <MetaField label="Venta documentada" value={formatClp(ventaPicking)} />
-          <MetaField label="Estado de cierre" value={statusBadge.label} />
-          <MetaField
-            label="Base montos"
-            value={data.ventas.amounts_basis_label_es || "Total documento (con IVA)"}
-          />
-        </div>
-        <div className="grid gap-2 sm:grid-cols-3">
-          <ReadOnlyAmount label="Venta OC (referencia)" value={data.ventas.venta_oc_clp} />
-          <ReadOnlyAmount
-            label="Venta facturada (referencia)"
-            value={data.ventas.venta_facturada_clp}
-          />
-          <ReadOnlyAmount label="Venta picking (documentada)" value={ventaPicking} />
-        </div>
-        <p className="text-[11px] text-muted-foreground">
-          Venta facturada ≠ dinero recibido. No se mezclan en el cierre.
-        </p>
-      </section>
-
-      {/* B. Control documental */}
-      <section className="space-y-3">
-        <h3 className="text-sm font-semibold tracking-tight">B. Control documental</h3>
+      {/* A. Control documental */}
+      <section className="space-y-3 rounded-lg border border-border/60 bg-card/40 p-4">
+        <h3 className="text-sm font-semibold tracking-tight">A. Control documental</h3>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
           <StatCard label="Documentos en ruta" value={String(documents.length)} />
           <StatCard label="Con medio registrado" value={String(docsEntregados)} />
@@ -312,10 +290,10 @@ export function DispatchPlanCuadraturaPanel({
         </p>
       </section>
 
-      {/* C. Registro de cobranzas */}
+      {/* B. Registro de cobranzas (ancho completo) */}
       <section className="space-y-2">
         <div>
-          <h3 className="text-sm font-semibold tracking-tight">C. Registro de cobranzas</h3>
+          <h3 className="text-sm font-semibold tracking-tight">B. Registro de cobranzas</h3>
           <p className="text-xs text-muted-foreground">
             Modelo actual: un medio por documento. La UI ya reserva columnas para pago mixto
             (E4); la persistencia multi-medio no está activa.
@@ -404,9 +382,9 @@ export function DispatchPlanCuadraturaPanel({
         </div>
       </section>
 
-      {/* D. Resumen de dinero */}
-      <section className="space-y-2">
-        <h3 className="text-sm font-semibold tracking-tight">D. Resumen de dinero</h3>
+      {/* C. Resumen del dinero */}
+      <section className="space-y-2 rounded-lg border border-border/60 bg-card/40 p-4">
+        <h3 className="text-sm font-semibold tracking-tight">C. Resumen del dinero</h3>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {MEDIOS_PAGO.filter((m) => m !== "pendiente").map((m) => (
             <ReadOnlyAmount
@@ -423,8 +401,92 @@ export function DispatchPlanCuadraturaPanel({
         </div>
       </section>
 
-      <EditableSection
-        title="Notas de crédito"
+      {/* D. Arqueo de efectivo */}
+      <section className="space-y-2">
+        <h3 className="text-sm font-semibold tracking-tight">D. Arqueo de efectivo</h3>
+        <p className="text-xs text-muted-foreground">
+          Compare el contado solo contra documentos marcados como Efectivo (no contra venta
+          facturada).
+        </p>
+        <div className="grid gap-2 sm:grid-cols-3">
+          <ReadOnlyAmount
+            label="Efectivo esperado (documental)"
+            value={resultado.total_efectivo_documental_clp ?? 0}
+          />
+          <ReadOnlyAmount
+            label="Efectivo contado"
+            value={resultado.total_efectivo_contado_clp ?? 0}
+          />
+          <ReadOnlyAmount label="Diferencia efectivo" value={cashDiff} />
+        </div>
+        <div className="overflow-x-auto rounded-lg border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Denominación</TableHead>
+                <TableHead className="w-28">Cantidad</TableHead>
+                <TableHead className="text-right">Subtotal</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {normalizeCashCount(cashCount).map((row, idx) => (
+                <TableRow key={row.denominacion_clp}>
+                  <TableCell className="font-mono text-xs">
+                    {formatClp(row.denominacion_clp)}
+                  </TableCell>
+                  <TableCell>
+                    <Input
+                      disabled={isClosed}
+                      inputMode="numeric"
+                      value={row.cantidad ? String(row.cantidad) : ""}
+                      onChange={(e) => {
+                        const qty = Math.max(0, parseInt(e.target.value || "0", 10) || 0)
+                        setCashCount((rows) =>
+                          rows.map((r, i) =>
+                            i === idx
+                              ? {
+                                  ...r,
+                                  cantidad: qty,
+                                  subtotal_clp: r.denominacion_clp * qty,
+                                }
+                              : r,
+                          ),
+                        )
+                      }}
+                      className="h-8"
+                    />
+                  </TableCell>
+                  <TableCell className="text-right font-mono text-xs">
+                    {formatClp(row.subtotal_clp)}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+        <ReadOnlyAmount
+          label="Total efectivo contado"
+          value={resultado.total_efectivo_contado_clp ?? 0}
+        />
+      </section>
+
+      {cashDiff !== 0 ? (
+        <Alert variant="destructive">
+          <AlertTriangle className="size-4" />
+          <AlertTitle>Diferencia de efectivo</AlertTitle>
+          <AlertDescription>
+            Documentos en efectivo: {formatClp(resultado.total_efectivo_documental_clp ?? 0)} ·
+            Contado: {formatClp(resultado.total_efectivo_contado_clp ?? 0)} · Diferencia:{" "}
+            {formatClp(cashDiff)}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {/* E. Observaciones y excepciones */}
+      <section className="space-y-4 rounded-lg border border-border/60 bg-card/40 p-4">
+        <h3 className="text-sm font-semibold tracking-tight">E. Observaciones y excepciones</h3>
+        <EditableSection
+          title="Notas de crédito"
         hint="Descuentan de la venta ajustada. Use NC cuando corresponda descontar valor por no entrega/devolución."
         disabled={isClosed}
         onAdd={() => setCreditNotes((r) => [...r, emptyCreditNoteV2Row()])}
@@ -592,90 +654,28 @@ export function DispatchPlanCuadraturaPanel({
         </datalist>
       </EditableSection>
 
-      {/* E. Arqueo de efectivo */}
-      <section className="space-y-2">
-        <h3 className="text-sm font-semibold tracking-tight">E. Arqueo de efectivo</h3>
-        <p className="text-xs text-muted-foreground">
-          Compare el contado solo contra documentos marcados como Efectivo (no contra venta
-          facturada).
-        </p>
-        <div className="grid gap-2 sm:grid-cols-3">
-          <ReadOnlyAmount
-            label="Efectivo esperado (documental)"
-            value={resultado.total_efectivo_documental_clp ?? 0}
+        <div className="space-y-2 border-t border-border/50 pt-3">
+          <Label className="text-sm font-semibold">
+            Observaciones
+            {obsRequired ? <span className="text-destructive"> *</span> : null}
+          </Label>
+          <Textarea
+            disabled={isClosed}
+            value={observacion}
+            onChange={(e) => setObservacion(e.target.value)}
+            placeholder={
+              obsRequired
+                ? "Obligatorio: explique diferencia general y/o de efectivo"
+                : "Opcional"
+            }
+            rows={3}
           />
-          <ReadOnlyAmount
-            label="Efectivo contado"
-            value={resultado.total_efectivo_contado_clp ?? 0}
-          />
-          <ReadOnlyAmount label="Diferencia efectivo" value={cashDiff} />
         </div>
-        <div className="overflow-x-auto rounded-lg border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Denominación</TableHead>
-                <TableHead className="w-28">Cantidad</TableHead>
-                <TableHead className="text-right">Subtotal</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {normalizeCashCount(cashCount).map((row, idx) => (
-                <TableRow key={row.denominacion_clp}>
-                  <TableCell className="font-mono text-xs">
-                    {formatClp(row.denominacion_clp)}
-                  </TableCell>
-                  <TableCell>
-                    <Input
-                      disabled={isClosed}
-                      inputMode="numeric"
-                      value={row.cantidad ? String(row.cantidad) : ""}
-                      onChange={(e) => {
-                        const qty = Math.max(0, parseInt(e.target.value || "0", 10) || 0)
-                        setCashCount((rows) =>
-                          rows.map((r, i) =>
-                            i === idx
-                              ? {
-                                  ...r,
-                                  cantidad: qty,
-                                  subtotal_clp: r.denominacion_clp * qty,
-                                }
-                              : r,
-                          ),
-                        )
-                      }}
-                      className="h-8"
-                    />
-                  </TableCell>
-                  <TableCell className="text-right font-mono text-xs">
-                    {formatClp(row.subtotal_clp)}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-        <ReadOnlyAmount
-          label="Total efectivo contado"
-          value={resultado.total_efectivo_contado_clp ?? 0}
-        />
       </section>
-
-      {cashDiff !== 0 ? (
-        <Alert variant="destructive">
-          <AlertTriangle className="size-4" />
-          <AlertTitle>Diferencia de efectivo</AlertTitle>
-          <AlertDescription>
-            Documentos en efectivo: {formatClp(resultado.total_efectivo_documental_clp ?? 0)} ·
-            Contado: {formatClp(resultado.total_efectivo_contado_clp ?? 0)} · Diferencia:{" "}
-            {formatClp(cashDiff)}
-          </AlertDescription>
-        </Alert>
-      ) : null}
 
       {/* F. Cierre */}
       <section className="space-y-4 rounded-lg border-2 border-primary/30 bg-primary/5 p-4">
-        <h3 className="text-sm font-semibold tracking-tight">F. Cierre</h3>
+        <h3 className="text-sm font-semibold tracking-tight">F. Cierre de cuadratura</h3>
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           <ReadOnlyAmount label="Venta picking" value={ventaPicking} />
           <ReadOnlyAmount label="(−) Notas crédito" value={-resultado.notas_credito_clp} />
@@ -696,24 +696,6 @@ export function DispatchPlanCuadraturaPanel({
               {formatClp(resultado.diferencia_general_clp ?? resultado.diferencia_clp)}
             </p>
           </div>
-        </div>
-
-        <div className="space-y-2">
-          <Label className="text-sm font-semibold">
-            Observaciones
-            {obsRequired ? <span className="text-destructive"> *</span> : null}
-          </Label>
-          <Textarea
-            disabled={isClosed}
-            value={observacion}
-            onChange={(e) => setObservacion(e.target.value)}
-            placeholder={
-              obsRequired
-                ? "Obligatorio: explique diferencia general y/o de efectivo"
-                : "Opcional"
-            }
-            rows={3}
-          />
         </div>
 
         <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
@@ -779,14 +761,6 @@ export function DispatchPlanCuadraturaPanel({
   )
 }
 
-function MetaField({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0">
-      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</p>
-      <p className="truncate text-sm font-medium">{value}</p>
-    </div>
-  )
-}
 
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
