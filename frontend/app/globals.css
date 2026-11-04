@@ -440,3 +440,39 @@ body {
   overscroll-behavior-x: contain;
 }
 
+/* ---------------------------------------------------------------------------
+   Select nativo de choferes (solo clase .driver-chofer-native-select).
+   Chrome/Windows: el popup de <option> hereda mal el tema y deja texto
+   claro sobre fondo blanco. color-scheme + colores explícitos corrigen
+   el desplegable sin tocar otros formularios.
+--------------------------------------------------------------------------- */
+.dark .driver-chofer-native-select {
+  color-scheme: dark;
+  background-color: rgb(27 31 39);
+  color: rgb(244 245 247);
+  border-color: rgb(52 59 70);
+}
+
+.dark .driver-chofer-native-select:focus-visible {
+  outline: 2px solid rgb(224 73 94);
+  outline-offset: 2px;
+}
+
+.dark .driver-chofer-native-select:disabled {
+  opacity: 0.55;
+  color: rgb(174 183 196);
+  cursor: not-allowed;
+}
+
+.dark .driver-chofer-native-select option {
+  background-color: rgb(27 31 39);
+  color: rgb(244 245 247);
+}
+
+.dark .driver-chofer-native-select option:checked,
+.dark .driver-chofer-native-select option:hover,
+.dark .driver-chofer-native-select option:focus {
+  background-color: rgb(36 41 51);
+  color: rgb(255 255 255);
+}
+

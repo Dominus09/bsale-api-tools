@@ -198,7 +198,7 @@ export function DispatchPlanDriverAssign({
             <Label htmlFor={`driver-${planId}`}>Chofer</Label>
             <select
               id={`driver-${planId}`}
-              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+              className="driver-chofer-native-select flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
               value={driverUserId}
               onChange={(e) => setDriverUserId(e.target.value)}
               disabled={busy || Boolean(listError)}

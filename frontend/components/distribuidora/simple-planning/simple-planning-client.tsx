@@ -1323,7 +1323,7 @@ export function SimplePlanningClient() {
                       <Label htmlFor="confirm-driver">Chofer responsable</Label>
                       <select
                         id="confirm-driver"
-                        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
+                        className="driver-chofer-native-select flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm"
                         value={confirmDriverUserId}
                         onChange={(e) => setConfirmDriverUserId(e.target.value)}
                         disabled={confirmBusy}
