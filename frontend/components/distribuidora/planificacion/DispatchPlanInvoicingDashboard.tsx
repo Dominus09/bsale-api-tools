@@ -79,55 +79,84 @@ export function DispatchPlanInvoicingDashboard({
       {margin?.visible ? (
         <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-4 py-3">
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Resultado operativo neto (camión)
+            Margen comercial
+            {margin.live ? " (actualizado)" : ""}
+            {margin.partial ? " · parcial" : ""}
           </p>
           {margin.unavailable || margin.commercial_margin_clp == null ? (
             <p className="mt-2 text-sm text-amber-800 dark:text-amber-200">
               {margin.message ??
-                "Margen comercial no disponible: faltan costos de variante en Bsale. No se muestra un margen estimado."}
+                "Margen comercial no disponible: faltan costos de variante. No se inventa un margen."}
             </p>
           ) : (
-            <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4 text-sm">
+            <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 text-sm">
               {margin.oc_sales_clp != null ? (
                 <div>
-                  <span className="text-muted-foreground">Venta OC (plan)</span>
+                  <span className="text-muted-foreground">Venta OC</span>
                   <p className="font-semibold tabular-nums">
                     {formatClp(margin.oc_sales_clp)}
                   </p>
-                  <p className="text-[11px] text-muted-foreground">
-                    No es venta facturada
-                  </p>
+                  <p className="text-[11px] text-muted-foreground">Planificado</p>
                 </div>
               ) : null}
               <div>
-                <span className="text-muted-foreground">Margen comercial facturado</span>
+                <span className="text-muted-foreground">Venta facturada neta</span>
+                <p className="font-semibold tabular-nums">
+                  {formatClp(margin.invoiced_revenue_clp ?? 0)}
+                </p>
+                <p className="text-[11px] text-muted-foreground">Docs vigentes</p>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Costo mercadería</span>
+                <p className="font-semibold tabular-nums">
+                  {margin.invoiced_cost_clp == null
+                    ? "No disponible"
+                    : formatClp(margin.invoiced_cost_clp)}
+                </p>
+                {margin.cost_coverage?.lines_total != null ? (
+                  <p className="text-[11px] text-muted-foreground">
+                    Costos {margin.cost_coverage.lines_with_cost ?? 0}/
+                    {margin.cost_coverage.lines_total} líneas
+                  </p>
+                ) : null}
+              </div>
+              <div>
+                <span className="text-muted-foreground">Margen comercial $</span>
                 <p className="font-semibold tabular-nums">
                   {formatClp(margin.commercial_margin_clp ?? 0)}
+                  {margin.partial ? " (parcial)" : ""}
+                </p>
+                {margin.commercial_margin_pct != null ? (
+                  <p className="text-[11px] text-muted-foreground">
+                    {margin.commercial_margin_pct}% sobre venta neta
+                  </p>
+                ) : null}
+              </div>
+              <div>
+                <span className="text-muted-foreground">Costo transporte</span>
+                <p className="font-semibold tabular-nums">
+                  {margin.route_cost_clp == null
+                    ? "No disponible"
+                    : formatClp(margin.route_cost_clp)}
                 </p>
                 <p className="text-[11px] text-muted-foreground">
-                  Venta {formatClp(margin.invoiced_revenue_clp ?? 0)} − costo{" "}
-                  {formatClp(margin.invoiced_cost_clp ?? 0)}
+                  {margin.route_coverage === "partial"
+                    ? "Ruta parcial — no es costo final"
+                    : margin.ors_metrics_calculated === false
+                      ? "Sin ORS"
+                      : margin.cost_basis
+                        ? `Base: ${margin.cost_basis}`
+                        : "ORS completo"}
                 </p>
               </div>
               <div>
-                <span className="text-muted-foreground">Costo logístico ruta</span>
-                <p className="font-semibold tabular-nums">
-                  {margin.route_cost_clp == null
-                    ? "No calculado"
-                    : formatClp(margin.route_cost_clp)}
-                </p>
-                {margin.ors_metrics_calculated === false ? (
-                  <p className="text-[11px] text-muted-foreground">Sin ORS en este plan</p>
-                ) : null}
-              </div>
-              <div className="lg:col-span-2">
-                <span className="text-muted-foreground">Resultado post-transporte</span>
+                <span className="text-muted-foreground">Después del transporte</span>
                 {margin.net_operational_clp == null ? (
                   <>
                     <p className="font-semibold text-muted-foreground">No disponible</p>
                     <p className="text-[11px] text-muted-foreground">
                       {margin.message ??
-                        "Requiere margen comercial y costos de ruta ORS calculados."}
+                        "Requiere margen comercial y ruta completa calculada."}
                     </p>
                   </>
                 ) : (
@@ -143,13 +172,20 @@ export function DispatchPlanInvoicingDashboard({
                       {formatClp(margin.net_operational_clp)}
                     </p>
                     <p className="text-[11px] text-muted-foreground">
-                      Fuente: {margin.source ?? "variant_cost"} — solo documentos confirmados
+                      Solo con ruta ORS completa
                     </p>
                   </>
                 )}
               </div>
             </div>
           )}
+          {margin.calculated_at ? (
+            <p className="mt-2 text-[11px] text-muted-foreground">
+              Calculado {margin.calculated_at}
+              {margin.cost_basis ? ` · criterio costo: ${margin.cost_basis}` : ""}
+              {margin.source ? ` · fuente: ${margin.source}` : ""}
+            </p>
+          ) : null}
         </div>
       ) : margin?.restricted ? (
         <p className="rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">

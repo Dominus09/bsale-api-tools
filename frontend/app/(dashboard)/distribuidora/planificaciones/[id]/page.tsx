@@ -7,14 +7,12 @@ import { ArrowLeft, Loader2, Wrench } from "lucide-react"
 
 import {
   downloadDispatchPlanBillingExcel,
+  refreshDispatchPlanCommercialMargin,
   repairDispatchPlanSnapshot,
   type DispatchPlanDashboard,
   type DispatchPlanSummary,
 } from "@/lib/api"
-import { DispatchPlanDetailTabs } from "@/components/distribuidora/planificacion/DispatchPlanDetailTabs"
-import { DispatchPlanDriverAssign } from "@/components/distribuidora/planificacion/DispatchPlanDriverAssign"
-import { DispatchPlanLoadSummaryBlock } from "@/components/distribuidora/planificacion/DispatchPlanLoadSummary"
-import { DispatchPlanOrdersWeightTable } from "@/components/distribuidora/planificacion/DispatchPlanOrdersWeightTable"
+import { DispatchPlanDetailShell } from "@/components/distribuidora/planificacion/DispatchPlanDetailShell"
 import {
   fetchDispatchPlanDashboardDeduped,
   fetchDispatchPlanHeaderDeduped,
@@ -23,7 +21,6 @@ import {
   trackPlanPageRender,
 } from "@/lib/planificacion-fetch"
 import { dispatchPlanOperationalLabel } from "@/lib/dispatch-plan-operational-status"
-import { formatClp } from "@/lib/ors-map-ui"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -68,6 +65,7 @@ export default function PlanificacionDetallePage() {
   const [dashboardLoading, setDashboardLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  const [refreshBusy, setRefreshBusy] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
 
   const abortRef = useRef<AbortController | null>(null)
@@ -164,6 +162,20 @@ export default function PlanificacionDetallePage() {
     }
   }
 
+  const refreshCommercial = async () => {
+    if (!Number.isFinite(planId) || planId <= 0) return
+    setRefreshBusy(true)
+    try {
+      await refreshDispatchPlanCommercialMargin(planId)
+      await reloadDashboard({ include_margin: true })
+      setMsg("Datos comerciales actualizados desde PostgreSQL (margen vivo persistido).")
+    } catch (e: unknown) {
+      setMsg(e instanceof Error ? e.message : "No se pudo actualizar margen comercial")
+    } finally {
+      setRefreshBusy(false)
+    }
+  }
+
   if (!Number.isFinite(planId) || planId <= 0) {
     return <p className="p-6 text-sm text-destructive">ID de plan inválido</p>
   }
@@ -171,7 +183,7 @@ export default function PlanificacionDetallePage() {
   const displayPlan = dashboard?.plan ?? plan
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-4 p-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <Button asChild variant="ghost" size="sm" className="-ml-2 mb-2 h-8 text-xs">
@@ -187,26 +199,26 @@ export default function PlanificacionDetallePage() {
               <p className="font-mono text-xs text-muted-foreground">
                 {displayPlan.planning_code ?? `PLAN-${displayPlan.id}`}
               </p>
-              <h1 className="text-[28px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[32px] sm:leading-9 font-semibold">
-                {displayPlan.planning_name ?? displayPlan.route_name}
+              <h1 className="text-[24px] font-semibold leading-8 tracking-[-0.02em] text-lq-ink sm:text-[28px]">
+                Detalle de despacho
               </h1>
-              <p className="text-sm text-muted-foreground">
-                {displayPlan.truck_name} ·{" "}
-                {displayPlan.planning_date?.slice(0, 10) ?? displayPlan.created_at?.slice(0, 10)}
-              </p>
-              <Badge variant="secondary" className="mt-2">
-                {dispatchPlanOperationalLabel(displayPlan.status)}
-              </Badge>
+              <div className="mt-1 flex flex-wrap gap-1.5">
+                <Badge variant="secondary">
+                  {dispatchPlanOperationalLabel(displayPlan.status)}
+                </Badge>
+                {displayPlan.planning_origin ? (
+                  <Badge variant="outline">
+                    {displayPlan.planning_origin === "simple_list"
+                      ? "Lista / Excel"
+                      : "ORS tradicional"}
+                  </Badge>
+                ) : null}
+              </div>
             </>
           ) : null}
         </div>
         {displayPlan ? (
           <div className="flex flex-wrap gap-2">
-            <Button asChild size="sm" className="h-10">
-              <Link href={`/distribuidora/planificaciones/${planId}/mapa`}>
-                🗺️ Mapa de entregas
-              </Link>
-            </Button>
             <Button
               type="button"
               variant="outline"
@@ -270,48 +282,15 @@ export default function PlanificacionDetallePage() {
         </div>
       ) : displayPlan ? (
         <>
-          <div className="grid gap-3 sm:grid-cols-3 text-sm">
-            <div className="rounded-md border px-3 py-2">
-              <span className="text-muted-foreground">Km ORS</span>
-              <p className="font-semibold tabular-nums">
-                {displayPlan.ors_metrics_calculated === false
-                  ? "No disponible"
-                  : Number(displayPlan.km_total ?? 0).toFixed(1)}
-              </p>
-            </div>
-            <div className="rounded-md border px-3 py-2">
-              <span className="text-muted-foreground">Costo ruta</span>
-              <p className="font-semibold tabular-nums">
-                {displayPlan.ors_metrics_calculated === false
-                  ? "No disponible"
-                  : formatClp(displayPlan.total_route_cost_clp ?? 0)}
-              </p>
-            </div>
-            <div className="rounded-md border px-3 py-2">
-              <span className="text-muted-foreground">Tripulación</span>
-              <p className="font-semibold">
-                {displayPlan.driver_name ||
-                  (displayPlan.driver_user_id
-                    ? `Usuario #${displayPlan.driver_user_id}`
-                    : "Chofer pendiente")}{" "}
-                / {displayPlan.assistant_count ?? 0} peoneta(s)
-              </p>
-            </div>
-          </div>
-
-          <DispatchPlanDriverAssign
-            planId={planId}
-            onAssigned={() => {
-              void reloadDashboard()
-            }}
-          />
-
           {dashboard?.degraded ? (
-            <Alert variant="default" className="border-amber-200 bg-amber-50/80 dark:border-amber-900 dark:bg-amber-950/30">
+            <Alert
+              variant="default"
+              className="border-amber-200 bg-amber-50/80 dark:border-amber-900 dark:bg-amber-950/30"
+            >
               <AlertTitle>Facturación parcial</AlertTitle>
               <AlertDescription className="text-sm">
                 El encabezado del plan cargó correctamente, pero facturación o métricas no
-                estuvieron disponibles. Puede usar los botones inferiores para reintentar.
+                estuvieron disponibles. Use «Actualizar datos comerciales» o reintente.
               </AlertDescription>
             </Alert>
           ) : null}
@@ -322,24 +301,15 @@ export default function PlanificacionDetallePage() {
               Cargando facturación y métricas…
             </div>
           ) : dashboard ? (
-            <>
-            <DispatchPlanLoadSummaryBlock dashboard={dashboard} />
-            {dashboard.plan_orders?.length ? (
-              <div className="space-y-2">
-                <p className="text-sm font-medium">Órdenes del plan</p>
-                <DispatchPlanOrdersWeightTable orders={dashboard.plan_orders} />
-              </div>
-            ) : null}
-            <DispatchPlanDetailTabs
+            <DispatchPlanDetailShell
               planId={planId}
               dashboard={dashboard}
               dashboardLoading={dashboardLoading}
-              pickingReady={Boolean(dashboard.picking?.ready)}
-              pickingReason={dashboard.picking?.reason}
               onReloadDashboard={reloadDashboard}
+              onRefreshCommercial={refreshCommercial}
               onMessage={setMsg}
+              refreshBusy={refreshBusy}
             />
-            </>
           ) : null}
         </>
       ) : !headerLoading ? (

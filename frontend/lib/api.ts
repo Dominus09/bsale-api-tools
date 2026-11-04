@@ -1956,11 +1956,14 @@ export type DispatchPlanSummary = {
   assistant_count?: number
   driver_name?: string | null
   driver_user_id?: number | null
-  km_total?: number
-  total_route_cost_clp?: number
+  km_total?: number | null
+  duration_min?: number | null
+  total_route_cost_clp?: number | null
   planning_origin?: string | null
   /** false = no interpretar km/costos 0 como métricas ORS reales */
   ors_metrics_calculated?: boolean | null
+  weight_total_kg?: number | null
+  weight_cobertura_pct?: number | null
   final_margin_clp?: number | null
   net_operational_clp?: number | null
   order_count?: number
@@ -2296,6 +2299,11 @@ export type SimplePlanningOrsSnapshot = {
   truck_id: number
   document_ids: number[]
   all_document_ids?: number[]
+  route_coverage?: "full" | "partial" | "none" | string | null
+  clients_total?: number | null
+  clients_georef?: number | null
+  clients_pending?: number | null
+  km_scope?: string | null
   distance_km?: number | null
   duration_min?: number | null
   liters_estimated?: number | null
@@ -2306,11 +2314,24 @@ export type SimplePlanningOrsSnapshot = {
   toll_cost_clp?: number
   extras_cost_clp?: number
   total_route_cost_clp?: number
-  route_geometry?: { type?: string; coordinates?: [number, number][] } | null
+  route_geometry?: {
+    type?: string
+    coordinates?: [number, number][]
+    quillotana_route_meta?: Record<string, unknown>
+  } | null
   preserve_order?: boolean
   calculated_at?: string
   depot?: { lat: number; lng: number } | null
   stop_coords?: { document_id: number; lat: number; lng: number }[]
+  pending_clients?: {
+    client_id?: number | null
+    client_name?: string | null
+    address?: string | null
+    municipality?: string | null
+    oc_document_ids?: number[]
+    folios?: (number | null)[]
+    missing_georef_reason?: string | null
+  }[]
 }
 
 export type SimplePlanningCalculateRouteResult = {
@@ -2319,14 +2340,23 @@ export type SimplePlanningCalculateRouteResult = {
   preserve_order?: boolean
   truck_id: number
   route_fingerprint?: string
+  route_coverage?: "full" | "partial" | "none" | string | null
+  clients_total?: number | null
+  clients_georef?: number | null
+  clients_pending?: number | null
+  km_scope?: string | null
   stops_georef_count?: number
   stops_pending_count?: number
   stops_pending_georef?: {
-    document_id: number
+    document_id?: number
+    client_id?: number | null
     folio?: number | null
     client_name?: string | null
     address?: string | null
     municipality?: string | null
+    oc_document_ids?: number[]
+    folios?: (number | null)[]
+    missing_georef_reason?: string | null
   }[]
   stops?: {
     document_id: number
@@ -2343,7 +2373,11 @@ export type SimplePlanningCalculateRouteResult = {
   depot?: { lat: number; lng: number } | null
   distance_km?: number | null
   duration_min?: number | null
-  geometry?: { type?: string; coordinates?: [number, number][] } | null
+  geometry?: {
+    type?: string
+    coordinates?: [number, number][]
+    quillotana_route_meta?: Record<string, unknown>
+  } | null
   liters_estimated?: number | null
   fuel_cost_clp?: number | null
   crew_cost_clp?: number | null
@@ -2485,7 +2519,14 @@ export type DispatchPlanLoadSummary = {
     extras_clp: number | null
     route_total_clp: number | null
     km_total?: number | null
+    duration_min?: number | null
+    liters_estimated?: number | null
     ors_metrics_calculated?: boolean
+    route_coverage?: "full" | "partial" | "none" | string | null
+    clients_total?: number | null
+    clients_georef?: number | null
+    clients_pending?: number | null
+    km_scope?: string | null
     note?: string | null
   }
   ors_metrics_calculated?: boolean
@@ -2550,15 +2591,25 @@ export type DispatchPlanDashboard = {
     restricted?: boolean
     unavailable?: boolean
     partial?: boolean
+    live?: boolean
     message?: string
     oc_sales_clp?: number | null
     commercial_margin_clp?: number | null
+    commercial_margin_pct?: number | null
     invoiced_revenue_clp?: number
     invoiced_cost_clp?: number | null
     route_cost_clp?: number | null
     net_operational_clp?: number | null
     ors_metrics_calculated?: boolean | null
+    route_coverage?: "full" | "partial" | "none" | string | null
     source?: string
+    cost_basis?: string | null
+    cost_coverage?: {
+      lines_with_cost?: number | null
+      lines_total?: number | null
+    } | null
+    calculated_at?: string | null
+    historical_commercial_margin_clp?: number | null
   } | null
   picking: {
     client_endpoint: string
@@ -2618,6 +2669,24 @@ export async function repairDispatchPlanSnapshot(planId: number): Promise<unknow
     throw new Error(msg || "Error al reparar snapshot")
   }
   return res.json()
+}
+
+/** Recalcula margen comercial vivo y persiste indicadores (acción explícita). */
+export async function refreshDispatchPlanCommercialMargin(
+  planId: number,
+): Promise<Record<string, unknown>> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/refresh-commercial-margin`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+    },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al actualizar datos comerciales")
+  }
+  return res.json() as Promise<Record<string, unknown>>
 }
 
 export type DispatchPlanInvoicedRow = {
