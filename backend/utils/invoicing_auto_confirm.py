@@ -99,14 +99,17 @@ def invoicing_summary_counts(items: list[dict[str, Any]]) -> dict[str, int]:
     excluded = 0
     for x in items:
         fulfillment = x.get("fulfillment_status")
+        # Factura previa al plan NO se excluye: cuenta como confirmada para picking/margen.
         if fulfillment in (
-            "excluded_preexisting_invoice",
             "excluded_cancelled_order",
         ) or x.get("excluded_reason") in (
-            "already_invoiced_before_planning",
             "cancelled_order",
         ) or x.get("billing_status") == "cancelled":
             excluded += 1
+            continue
+        # Compat: payloads antiguos con excluded_preexisting_invoice → tratar como confirmada
+        if fulfillment == "excluded_preexisting_invoice":
+            confirmed += 1
             continue
         st = x.get("status")
         if st == STATUS_CONFIRMED:

@@ -17,17 +17,17 @@ from backend.services.distribuidora.oc_operational_status import (
     BILLING_INVOICED_PARTIAL_CN,
     BILLING_PENDING,
     BILLING_PROBABLE,
+    DISPATCH_CLOSED,
     DISPATCH_COMPLETED,
     DISPATCH_EXCLUDED,
-    EXCLUDED_REASON_ALREADY_INVOICED,
     EXCLUDED_REASON_CANCELLED_ORDER,
     FULFILL_BY_INVOICE,
     FULFILL_EXCLUDED_CANCELLED,
-    FULFILL_EXCLUDED_PREEXISTING,
     FULFILL_PENDING,
     FULFILL_UNRESOLVED,
     blocks_planning_admission,
     build_operational_status,
+    is_fulfillment_excluded,
     plan_progress_counts,
 )
 
@@ -184,20 +184,23 @@ def test_8_factura_previa_bloquea_admision():
     assert blocks_planning_admission(st) is True
 
 
-def test_9_factura_previa_detectada_despues_excluye():
+def test_9_factura_previa_en_plan_cuenta_como_cumplida():
+    """Factura emitida antes del plan: válida para docs/picking/margen (no excluida)."""
     st = resolve_oc_operational_status_from_parts(
         _oc(),
         [_edge(100, 200, 6, number=1, issued=TS_BEFORE)],
         planned_at=TS_PLAN,
         in_plan=True,
     )
-    assert st.fulfillment_status == FULFILL_EXCLUDED_PREEXISTING
-    assert st.excluded_reason == EXCLUDED_REASON_ALREADY_INVOICED
-    assert st.dispatch_status == DISPATCH_EXCLUDED
+    assert st.fulfillment_status == FULFILL_BY_INVOICE
+    assert st.completion_source == "invoice_preexisting"
+    assert st.excluded_reason is None
+    assert st.dispatch_status == DISPATCH_CLOSED
+    assert is_fulfillment_excluded(st.fulfillment_status) is False
 
 
-def test_10_11_12_excluida_fuera_peso_denominador_margen():
-    excluded = resolve_oc_operational_status_from_parts(
+def test_10_11_12_preexistente_en_denominador_margen():
+    preexisting = resolve_oc_operational_status_from_parts(
         _oc(100, 1),
         [_edge(100, 200, 6, issued=TS_BEFORE)],
         planned_at=TS_PLAN,
@@ -215,21 +218,21 @@ def test_10_11_12_excluida_fuera_peso_denominador_margen():
         planned_at=TS_PLAN,
         in_plan=True,
     )
-    # 10: excluida no aporta a eligible (proxy peso/capacidad)
-    assert excluded.fulfillment_status == FULFILL_EXCLUDED_PREEXISTING
+    # 10: factura previa aporta a eligible/completed (no sale del denominador)
+    assert preexisting.fulfillment_status == FULFILL_BY_INVOICE
+    assert preexisting.completion_source == "invoice_preexisting"
 
-    prog = plan_progress_counts([excluded, completed, pending])
-    # 11: excluded fuera del denominador
-    assert prog["eligible_planned_orders"] == 2
-    assert prog["excluded_orders"] == 1
-    assert prog["completed_orders"] == 1
+    prog = plan_progress_counts([preexisting, completed, pending])
+    assert prog["eligible_planned_orders"] == 3
+    assert prog["excluded_orders"] == 0
+    assert prog["completed_orders"] == 2
     assert prog["pending_orders"] == 1
-    assert prog["completion_percent"] == 50.0
-    # 12: mientras haya pending, margen bloqueado; excluded no bloquea sola
+    assert prog["completion_percent"] == round(100.0 * 2 / 3, 2)
+    # 12: mientras haya pending, margen bloqueado
     assert prog["margin_blocked"] is True
 
-    prog2 = plan_progress_counts([excluded, completed])
-    assert prog2["eligible_planned_orders"] == 1
+    prog2 = plan_progress_counts([preexisting, completed])
+    assert prog2["eligible_planned_orders"] == 2
     assert prog2["completion_percent"] == 100.0
     assert prog2["margin_blocked"] is False
     assert prog2["fully_complete"] is True
@@ -339,7 +342,7 @@ def test_20_planificacion_llega_100():
         )
         for i in range(5)
     ]
-    # una excluida no impide 100 %
+    # Factura previa también cuenta como cumplida (no baja el %)
     rows.append(
         resolve_oc_operational_status_from_parts(
             _oc(200, 200),
@@ -348,10 +351,19 @@ def test_20_planificacion_llega_100():
             in_plan=True,
         )
     )
+    # Anulada sí queda fuera del denominador
+    rows.append(
+        resolve_oc_operational_status_from_parts(
+            _oc(300, 300, state=1),
+            [],
+            planned_at=TS_PLAN,
+            in_plan=True,
+        )
+    )
     prog = plan_progress_counts(rows)
     assert prog["excluded_orders"] == 1
-    assert prog["eligible_planned_orders"] == 5
-    assert prog["completed_orders"] == 5
+    assert prog["eligible_planned_orders"] == 6
+    assert prog["completed_orders"] == 6
     assert prog["completion_percent"] == 100.0
     assert prog["fully_complete"] is True
     assert prog["margin_blocked"] is False

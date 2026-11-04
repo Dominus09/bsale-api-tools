@@ -115,12 +115,26 @@ def freeze_orders_weight(
         peso = w.get("peso_total_kg", 0.0)
         row["peso_total_kg"] = peso
         row["weight_kg"] = peso
-        row["cantidad_productos"] = w.get("cantidad_productos", 0)
+        row["cantidad_productos"] = w.get(
+            "cantidad_productos", w.get("productos_totales", 0)
+        )
         row["cantidad_unidades"] = w.get("cantidad_unidades", 0.0)
         row["cantidad_cajas"] = w.get("cantidad_cajas", 0.0)
-        row["productos_sin_peso"] = w.get("productos_sin_peso", 0)
-        row["cobertura_logistica"] = w.get("cobertura_logistica", 0.0)
-        row["porcentaje_cobertura_peso"] = w.get("porcentaje_cobertura_peso", 0.0)
+        row["productos_sin_peso"] = w.get(
+            "productos_sin_peso", w.get("missing_products", 0)
+        )
+        # calculate_order_weights_batch usa porcentaje_cobertura / coverage_percent;
+        # _fetch_weights_extended usa cobertura_logistica. Unificar sin inventar.
+        cov = w.get("cobertura_logistica")
+        if cov is None:
+            cov = w.get("porcentaje_cobertura_peso")
+        if cov is None:
+            cov = w.get("porcentaje_cobertura")
+        if cov is None:
+            cov = w.get("coverage_percent")
+        cov_f = float(cov or 0)
+        row["cobertura_logistica"] = cov_f
+        row["porcentaje_cobertura_peso"] = cov_f
         row["peso_calculated_at"] = w.get("peso_calculated_at") or now
         row["weight_frozen"] = True
         out.append(row)
@@ -179,7 +193,11 @@ def aggregate_plan_weight(
     productos = sum(int(o.get("cantidad_productos") or 0) for o in orders)
     unidades = sum(float(o.get("cantidad_unidades") or 0) for o in orders)
     sin_peso = sum(int(o.get("productos_sin_peso") or 0) for o in orders)
-    coverages = [float(o.get("cobertura_logistica") or 0) for o in orders if o.get("cobertura_logistica")]
+    coverages = [
+        float(o.get("cobertura_logistica") or 0)
+        for o in orders
+        if o.get("cobertura_logistica") is not None
+    ]
     avg_coverage = round(sum(coverages) / len(coverages), 1) if coverages else 0.0
     cap = int(truck_max_weight_kg) if truck_max_weight_kg else None
     util_pct = None

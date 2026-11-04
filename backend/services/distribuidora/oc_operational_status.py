@@ -27,17 +27,20 @@ DISPATCH_EXCLUDED = "excluded"
 FULFILL_PENDING = "pending"
 FULFILL_BY_PICKING = "fulfilled_by_picking"
 FULFILL_BY_INVOICE = "fulfilled_by_invoice"
-FULFILL_EXCLUDED_PREEXISTING = "excluded_preexisting_invoice"
+FULFILL_EXCLUDED_PREEXISTING = "excluded_preexisting_invoice"  # legacy label; ya no se usa para bloquear
 FULFILL_EXCLUDED_CANCELLED = "excluded_cancelled_order"
 FULFILL_UNRESOLVED = "unresolved"
+
+COMPLETION_SOURCE_INVOICE = "invoice"
+COMPLETION_SOURCE_INVOICE_PREEXISTING = "invoice_preexisting"
+COMPLETION_SOURCE_PICKING = "picking"
 
 EXCLUDED_REASON_ALREADY_INVOICED = "already_invoiced_before_planning"
 EXCLUDED_REASON_CANCELLED_ORDER = "cancelled_order"
 
-# Precedencia canónica: CANCELLED > CONFIRMED INVOICE > PROBABLE > PENDING
-FULFILL_EXCLUDED_STATUSES = frozenset(
-    {FULFILL_EXCLUDED_PREEXISTING, FULFILL_EXCLUDED_CANCELLED}
-)
+# Solo anuladas salen del denominador operativo (picking/margen/docs).
+# Factura previa al plan SÍ cuenta como documento confirmado para despacho.
+FULFILL_EXCLUDED_STATUSES = frozenset({FULFILL_EXCLUDED_CANCELLED})
 
 INVOICE_DOC_TYPES = frozenset({1, 6})
 CREDIT_NOTE_DOC_TYPE = 9
@@ -58,7 +61,7 @@ FULFILL_LABELS_ES = {
     FULFILL_PENDING: "Pendiente",
     FULFILL_BY_PICKING: "Completada",
     FULFILL_BY_INVOICE: "Completada",
-    FULFILL_EXCLUDED_PREEXISTING: "Excluida: ya estaba facturada",
+    FULFILL_EXCLUDED_PREEXISTING: "Facturada antes de planificar (válida para picking)",
     FULFILL_EXCLUDED_CANCELLED: "Excluida: orden anulada",
     FULFILL_UNRESOLVED: "Revisión necesaria",
 }
@@ -280,33 +283,48 @@ def resolve_plan_fulfillment(
             DISPATCH_EXCLUDED,
         )
 
-    if force_excluded or (
-        closed
-        and planned_at is not None
-        and _invoice_predates_planning(chain, planned_at)
-    ):
+    # Anulada forzada (p.ej. override admin): sí fuera del denominador.
+    if force_excluded:
         return (
-            FULFILL_EXCLUDED_PREEXISTING,
-            EXCLUDED_REASON_ALREADY_INVOICED,
+            FULFILL_EXCLUDED_CANCELLED,
+            EXCLUDED_REASON_CANCELLED_ORDER,
             None,
             DISPATCH_EXCLUDED,
         )
 
     if has_picking and closed:
-        return FULFILL_BY_PICKING, None, "picking", DISPATCH_COMPLETED
+        return FULFILL_BY_PICKING, None, COMPLETION_SOURCE_PICKING, DISPATCH_COMPLETED
 
     if closed and planned_at is not None:
         issued = earliest_confirmed_invoice_issued_at(chain)
+        if issued is not None and issued < planned_at:
+            # Factura previa: válida para picking/margen/documentos del plan.
+            # No tratar como "pendiente" ni sacar del denominador.
+            return (
+                FULFILL_BY_INVOICE,
+                None,
+                COMPLETION_SOURCE_INVOICE_PREEXISTING,
+                DISPATCH_CLOSED,
+            )
         if issued is not None and issued >= planned_at:
-            return FULFILL_BY_INVOICE, None, "invoice", DISPATCH_COMPLETED
+            return (
+                FULFILL_BY_INVOICE,
+                None,
+                COMPLETION_SOURCE_INVOICE,
+                DISPATCH_COMPLETED,
+            )
         if issued is None and chain.confirmed_invoices:
-            # Cadena confirmada sin timestamp usable: tratar como cumplimiento
-            # documental (no exigir picking extra).
-            return FULFILL_BY_INVOICE, None, "invoice", DISPATCH_COMPLETED
+            # Cadena confirmada sin timestamp usable: cumplimiento documental.
+            return (
+                FULFILL_BY_INVOICE,
+                None,
+                COMPLETION_SOURCE_INVOICE,
+                DISPATCH_COMPLETED,
+            )
 
     if closed:
         # Facturada fuera de contexto temporal claro → cerrada, no pending.
-        return FULFILL_BY_INVOICE, None, "invoice", DISPATCH_CLOSED
+        return FULFILL_BY_INVOICE, None, COMPLETION_SOURCE_INVOICE, DISPATCH_CLOSED
 
     if billing == BILLING_PROBABLE:
         return FULFILL_UNRESOLVED, None, None, DISPATCH_PLANNED if planned_at else DISPATCH_PENDING
