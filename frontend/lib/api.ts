@@ -2119,9 +2119,17 @@ export type SimplePlanningPreviewItem = {
   }[]
   weight?: {
     peso_total_kg?: number | null
+    known_weight_kg?: number | null
     coverage_percent?: number | null
     quality?: string | null
     missing_products?: number | null
+    label?: string | null
+    weight_total_determined?: boolean
+    products_without_weight?: {
+      variant_id?: number | null
+      code?: string | null
+      description?: string | null
+    }[]
   }
   billing_status?: string | null
   billing_label?: string | null
@@ -2151,6 +2159,11 @@ export type SimplePlanningAssignPreview = {
       known_weight_kg?: number
       estimated_weight_kg?: number
       unavailable_order_count?: number
+      incomplete_order_count?: number
+      unevaluable_order_count?: number
+      requires_incomplete_weight_ack?: boolean
+      requires_unevaluable_weight_ack?: boolean
+      weight_total_determined?: boolean
       truck_max_weight_kg?: number | null
       utilization_pct?: number | null
       overloaded?: boolean
@@ -2283,6 +2296,8 @@ export async function postSimplePlanningPrepareConfirm(body: {
   dispatch_name?: string | null
   driver_name?: string | null
   idempotency_key?: string | null
+  acknowledge_incomplete_weight?: boolean
+  acknowledge_unevaluable_weight?: boolean
   assignments: {
     folio: string | number
     truck_id: number
@@ -2294,6 +2309,18 @@ export async function postSimplePlanningPrepareConfirm(body: {
   idempotent?: boolean
   session?: { session_id: string; plan_session_id?: string; truck_id?: number }
   confirmed_plan_id?: number
+  capacity?: {
+    known_weight_kg?: number
+    incomplete_order_count?: number
+    unevaluable_order_count?: number
+    requires_incomplete_weight_ack?: boolean
+    requires_unevaluable_weight_ack?: boolean
+  }
+  weight_acknowledgement?: {
+    incomplete_weight?: boolean
+    unevaluable_weight?: boolean
+    does_not_authorize_route_departure?: boolean
+  }
 }> {
   const res = await fetch(`${API_URL}/distribuidora/simple-planning/prepare-confirm`, {
     method: "POST",

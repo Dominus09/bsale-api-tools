@@ -28,6 +28,14 @@ import {
   hasSimplePlanningAccess,
 } from "@/lib/permissions"
 import {
+  applyBulkTruckAssignment,
+  clearFolioSelection,
+  filterByMunicipality,
+  toggleFolioInSelection,
+  uniqueMunicipalities,
+  visibleAssignableFolios,
+} from "@/lib/simple-planning-bulk-assign"
+import {
   parseFoliosFromText,
   parseFoliosFromXlsxFile,
   uniqueClientCount,
@@ -70,7 +78,9 @@ const STATUS_LABEL: Record<string, string> = {
   already_planned: "Ya planificada",
   pending_invoice: "Facturación pendiente",
   partial_invoice: "Facturación parcial",
-  insufficient_weight: "Peso insuficiente",
+  incomplete_weight_coverage: "Cobertura de peso incompleta",
+  weight_unevaluable: "Capacidad total aún no verificable",
+  insufficient_weight: "Cobertura de peso incompleta",
   duplicate_in_list: "Duplicada",
   invalid_folio: "Folio inválido",
 }
@@ -123,6 +133,9 @@ export function SimplePlanningClient() {
   const [trucks, setTrucks] = useState<DistribuidoraTruck[]>([])
   const [selectedTruckIds, setSelectedTruckIds] = useState<number[]>([])
   const [assignmentByFolio, setAssignmentByFolio] = useState<Record<string, number>>({})
+  const [selectedFolios, setSelectedFolios] = useState<Set<string>>(() => clearFolioSelection())
+  const [municipalityFilter, setMunicipalityFilter] = useState<string>("__all__")
+  const [bulkTruckId, setBulkTruckId] = useState<string>("")
   const [planningDate, setPlanningDate] = useState(tomorrowISO)
   const [dispatchName, setDispatchName] = useState("")
   const [assignPreview, setAssignPreview] = useState<SimplePlanningAssignPreview | null>(null)
@@ -131,8 +144,19 @@ export function SimplePlanningClient() {
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [confirmTruckId, setConfirmTruckId] = useState<number | null>(null)
   const [confirmAck, setConfirmAck] = useState(false)
+  const [ackIncompleteWeight, setAckIncompleteWeight] = useState(false)
+  const [ackUnevaluableWeight, setAckUnevaluableWeight] = useState(false)
   const [truckConfirm, setTruckConfirm] = useState<Record<number, TruckConfirmState>>({})
   const confirmingRef = useRef(false)
+
+  const invalidateAssignAndConfirm = useCallback(() => {
+    setAssignPreview(null)
+    setTruckConfirm({})
+    setConfirmOpen(false)
+    setConfirmAck(false)
+    setAckIncompleteWeight(false)
+    setAckUnevaluableWeight(false)
+  }, [])
 
   const companyId = getStoredCompanyId() ?? 1
 
@@ -163,6 +187,25 @@ export function SimplePlanningClient() {
       ),
     [previewItems],
   )
+
+  const municipalities = useMemo(
+    () => uniqueMunicipalities(previewItems),
+    [previewItems],
+  )
+
+  const filteredPreviewItems = useMemo(
+    () => filterByMunicipality(previewItems, municipalityFilter),
+    [previewItems, municipalityFilter],
+  )
+
+  const visibleAssignable = useMemo(
+    () => visibleAssignableFolios(filteredPreviewItems),
+    [filteredPreviewItems],
+  )
+
+  const allVisibleSelected =
+    visibleAssignable.length > 0 &&
+    visibleAssignable.every((f) => selectedFolios.has(String(f)))
 
   const applyParse = useCallback((result: FolioParseResult, sourceLabel?: string) => {
     setParseInfo(result)
@@ -213,6 +256,9 @@ export function SimplePlanningClient() {
       setStep("preview")
       setAssignPreview(null)
       setAssignmentByFolio({})
+      setSelectedFolios(clearFolioSelection())
+      setMunicipalityFilter("__all__")
+      setTruckConfirm({})
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al consultar OC")
     } finally {
@@ -234,6 +280,45 @@ export function SimplePlanningClient() {
       else next[key] = truckId
       return next
     })
+    invalidateAssignAndConfirm()
+  }
+
+  const applyBulkAssign = () => {
+    if (!selectedFolios.size) {
+      setError("Selecciona al menos una OC")
+      return
+    }
+    if (!bulkTruckId) {
+      setError("Elige un camión para la asignación masiva")
+      return
+    }
+    if (selectedTruckIds.length < 1) {
+      setError("Selecciona camiones del catálogo antes de asignar")
+      return
+    }
+    const truckId = Number(bulkTruckId)
+    if (!selectedTruckIds.includes(truckId)) {
+      setError("El camión elegido no está en la selección del catálogo")
+      return
+    }
+    const assignableSet = new Set(visibleAssignable.map(String))
+    const blockedSelected = [...selectedFolios].filter((f) => !assignableSet.has(f))
+    const validSelected = [...selectedFolios]
+      .map(Number)
+      .filter((f) => Number.isFinite(f) && assignableSet.has(String(f)))
+    if (!validSelected.length) {
+      setError("Las OC seleccionadas no son asignables (bloqueadas o filtradas)")
+      return
+    }
+    setAssignmentByFolio((prev) =>
+      applyBulkTruckAssignment(prev, validSelected, truckId),
+    )
+    invalidateAssignAndConfirm()
+    setError(
+      blockedSelected.length
+        ? `Asignadas ${validSelected.length} OC. ${blockedSelected.length} omitidas (no asignables).`
+        : null,
+    )
   }
 
   /** Prefiere huellas del assign-preview (más frescas) sobre el preview inicial. */
@@ -327,6 +412,8 @@ export function SimplePlanningClient() {
   const openConfirm = (truckId: number) => {
     setConfirmTruckId(truckId)
     setConfirmAck(false)
+    setAckIncompleteWeight(false)
+    setAckUnevaluableWeight(false)
     setConfirmOpen(true)
   }
 
@@ -354,6 +441,8 @@ export function SimplePlanningClient() {
         dispatch_name: dispatchName.trim() || null,
         driver_name: null,
         idempotency_key: idempotencyKey,
+        acknowledge_incomplete_weight: ackIncompleteWeight,
+        acknowledge_unevaluable_weight: ackUnevaluableWeight,
         assignments: all,
       })
       if (prepared.status === "already_confirmed" && prepared.confirmed_plan_id) {
@@ -404,8 +493,10 @@ export function SimplePlanningClient() {
       const msg = e instanceof Error ? e.message : "Error al confirmar"
       const isDrift =
         e instanceof SimplePlanningApiError && e.code === "fingerprint_drift"
-      const isWeight =
-        e instanceof SimplePlanningApiError && e.code === "weight_unavailable"
+      const needsWeightAck =
+        e instanceof SimplePlanningApiError &&
+        (e.code === "weight_incomplete_ack_required" ||
+          e.code === "weight_unevaluable_ack_required")
       const sessionObsolete =
         e instanceof SimplePlanningApiError && Boolean(e.sessionObsolete)
       setTruckConfirm((prev) => ({
@@ -417,9 +508,7 @@ export function SimplePlanningClient() {
           msg +
             " La sesión de confirmación quedó obsoleta: vuelve a previsualizar la asignación.",
         )
-      } else if (isWeight) {
-        setConfirmOpen(false)
-        setConfirmAck(false)
+      } else if (needsWeightAck) {
         setError(msg)
       } else {
         setError(msg)
@@ -617,10 +706,91 @@ export function SimplePlanningClient() {
       {previewItems.length > 0 ? (
         <section className="space-y-3">
           <h2 className="text-lg font-medium">Resultado preview</h2>
+
+          <div className="flex flex-wrap items-end gap-3 rounded-lg border bg-muted/20 p-3">
+            <div className="space-y-1">
+              <Label className="text-xs">Filtro comuna</Label>
+              <Select
+                value={municipalityFilter}
+                onValueChange={(v) => setMunicipalityFilter(v)}
+              >
+                <SelectTrigger className="h-8 w-[180px]">
+                  <SelectValue placeholder="Todas" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">Todas las comunas</SelectItem>
+                  {municipalities.map((m) => (
+                    <SelectItem key={m} value={m}>
+                      {m}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="text-sm">
+              <span className="font-medium">{selectedFolios.size}</span>
+              <span className="text-muted-foreground"> OC seleccionadas</span>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Camión masivo</Label>
+              <Select value={bulkTruckId || undefined} onValueChange={setBulkTruckId}>
+                <SelectTrigger className="h-8 w-[160px]">
+                  <SelectValue placeholder="Elegir camión" />
+                </SelectTrigger>
+                <SelectContent>
+                  {selectedTruckIds.map((tid) => {
+                    const t = trucks.find((x) => x.id === tid)
+                    return (
+                      <SelectItem key={tid} value={String(tid)}>
+                        {t?.name || `Camión ${tid}`}
+                      </SelectItem>
+                    )
+                  })}
+                </SelectContent>
+              </Select>
+            </div>
+            <Button
+              size="sm"
+              onClick={applyBulkAssign}
+              disabled={!selectedFolios.size || !bulkTruckId || !selectedTruckIds.length}
+            >
+              Asignar seleccionadas
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setSelectedFolios(clearFolioSelection())}
+              disabled={!selectedFolios.size}
+            >
+              Limpiar selección
+            </Button>
+          </div>
+
           <div className="overflow-x-auto rounded-lg border">
             <table className="w-full min-w-[1100px] text-left text-sm">
               <thead className="border-b bg-muted/50 text-xs uppercase text-muted-foreground">
                 <tr>
+                  <th className="px-2 py-2">
+                    <Checkbox
+                      checked={allVisibleSelected}
+                      onCheckedChange={(v) => {
+                        if (v === true) {
+                          setSelectedFolios((prev) => {
+                            const next = new Set(prev)
+                            for (const f of visibleAssignable) next.add(String(f))
+                            return next
+                          })
+                        } else {
+                          setSelectedFolios((prev) => {
+                            const next = new Set(prev)
+                            for (const f of visibleAssignable) next.delete(String(f))
+                            return next
+                          })
+                        }
+                      }}
+                      aria-label="Seleccionar todas las visibles"
+                    />
+                  </th>
                   <th className="px-2 py-2">OC</th>
                   <th className="px-2 py-2">Cliente</th>
                   <th className="px-2 py-2">Comuna / dirección</th>
@@ -634,13 +804,14 @@ export function SimplePlanningClient() {
                 </tr>
               </thead>
               <tbody>
-                {previewItems.map((item, idx) => {
+                {filteredPreviewItems.map((item, idx) => {
                   const folio = item.folio
                   const canAssign =
                     folio != null &&
                     !item.blocking &&
                     item.status !== "not_found" &&
-                    item.status !== "duplicate_in_list"
+                    item.status !== "duplicate_in_list" &&
+                    item.status !== "cancelled_or_replaced"
                   const products = (item.products || [])
                     .slice(0, 4)
                     .map(
@@ -652,6 +823,7 @@ export function SimplePlanningClient() {
                     (item.products || []).length > 4
                       ? ` (+${(item.products || []).length - 4})`
                       : ""
+                  const missing = item.weight?.products_without_weight || []
                   return (
                     <tr
                       key={`${item.folio ?? item.input}-${idx}`}
@@ -660,6 +832,21 @@ export function SimplePlanningClient() {
                         item.blocking && "bg-destructive/5",
                       )}
                     >
+                      <td className="px-2 py-2">
+                        {canAssign ? (
+                          <Checkbox
+                            checked={selectedFolios.has(String(folio))}
+                            onCheckedChange={(v) =>
+                              setSelectedFolios((prev) =>
+                                toggleFolioInSelection(prev, Number(folio), v === true),
+                              )
+                            }
+                            aria-label={`Seleccionar OC ${folio}`}
+                          />
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </td>
                       <td className="px-2 py-2 font-mono">
                         {folio ?? item.input ?? "—"}
                         {item.audit_oc?.suggested ? (
@@ -692,11 +879,29 @@ export function SimplePlanningClient() {
                         {more}
                       </td>
                       <td className="px-2 py-2 text-xs">
-                        <div>{fmtKg(item.weight?.peso_total_kg)}</div>
-                        <div className="text-muted-foreground">
-                          {fmtPct(item.weight?.coverage_percent)} ·{" "}
-                          {item.weight?.quality || "—"}
+                        <div>
+                          Peso conocido:{" "}
+                          {fmtKg(item.weight?.known_weight_kg ?? item.weight?.peso_total_kg)}
                         </div>
+                        <div className="text-muted-foreground">
+                          {item.weight?.label ||
+                            STATUS_LABEL[item.weight?.quality || ""] ||
+                            item.weight?.quality ||
+                            "—"}
+                          {item.weight?.coverage_percent != null
+                            ? ` · ${fmtPct(item.weight.coverage_percent)}`
+                            : ""}
+                        </div>
+                        {missing.length ? (
+                          <div className="mt-1 text-amber-800 dark:text-amber-200">
+                            Productos sin peso registrado:{" "}
+                            {missing
+                              .slice(0, 3)
+                              .map((p) => p.description || p.code || p.variant_id)
+                              .join(", ")}
+                            {missing.length > 3 ? ` (+${missing.length - 3})` : ""}
+                          </div>
+                        ) : null}
                       </td>
                       <td className="px-2 py-2 text-xs">
                         {item.invoice_count != null
@@ -743,8 +948,9 @@ export function SimplePlanningClient() {
                         )}
                       </td>
                       <td className="px-2 py-2 text-xs text-amber-800 dark:text-amber-200">
-                        {(item.warnings || []).join(", ") ||
-                          (item.blocking ? "bloqueante" : "")}
+                        {(item.warnings || [])
+                          .map((w) => STATUS_LABEL[w] || w)
+                          .join(", ") || (item.blocking ? "bloqueante" : "")}
                       </td>
                     </tr>
                   )
@@ -832,13 +1038,13 @@ export function SimplePlanningClient() {
               const cap = tr.capacity
               const clients = uniqueClientCount(tr.orders || [])
               const st = truckConfirm[tr.truck_id]
-              const weightBlocked = (cap?.unavailable_order_count ?? 0) > 0
               const driftBlocked = (assignPreview.fingerprint_drifts || []).length > 0
+              const needsIncompleteAck = (cap?.incomplete_order_count ?? 0) > 0
+              const needsUnevaluableAck = (cap?.unevaluable_order_count ?? 0) > 0
               const blocked =
                 Boolean(tr.blocking) ||
                 Boolean(cap?.blocking) ||
                 Boolean(tr.truck_missing) ||
-                weightBlocked ||
                 driftBlocked ||
                 !cap?.capacity_known
               return (
@@ -872,23 +1078,40 @@ export function SimplePlanningClient() {
                     <dt className="text-muted-foreground">Utilización</dt>
                     <dd>{fmtPct(cap?.utilization_pct)}</dd>
                   </dl>
-                  {weightBlocked ? (
-                    <p className="text-xs text-destructive">
-                      Hay OC con peso insuficiente / sin cobertura confiable. No se puede
-                      confirmar hasta completar pesos o quitar esas OC.
+                  <p className="text-xs text-muted-foreground">
+                    Peso conocido: {fmtKg(cap?.known_weight_kg)}
+                    {cap?.weight_total_determined === false
+                      ? " · total real aún no determinado"
+                      : ""}
+                  </p>
+                  {needsIncompleteAck || needsUnevaluableAck ? (
+                    <p className="text-xs text-amber-800 dark:text-amber-200">
+                      {needsUnevaluableAck
+                        ? "Capacidad total aún no verificable — revisión manual al confirmar. "
+                        : ""}
+                      {needsIncompleteAck
+                        ? "Cobertura de peso incompleta — aceptación explícita al confirmar. "
+                        : ""}
+                      No autoriza salida a ruta.
                     </p>
                   ) : null}
                   {(tr.warnings || []).length || (cap?.warnings || []).length ? (
                     <p className="text-xs text-amber-800 dark:text-amber-200">
                       {[...(tr.warnings || []), ...(cap?.warnings || [])]
+                        .filter(
+                          (w, i, arr) =>
+                            w !== "orders_with_unavailable_weight" && arr.indexOf(w) === i,
+                        )
                         .map((w) =>
-                          w === "orders_with_unavailable_weight"
-                            ? "OC con peso no confiable"
-                            : w === "truck_overloaded"
-                              ? "Camión sobrecargado"
-                              : w === "truck_capacity_unknown"
-                                ? "Capacidad del camión desconocida"
-                                : w,
+                          w === "incomplete_weight_coverage"
+                            ? "Cobertura de peso incompleta"
+                            : w === "weight_capacity_unevaluable"
+                              ? "Capacidad total aún no verificable"
+                              : w === "truck_overloaded"
+                                ? "Camión sobrecargado (peso conocido)"
+                                : w === "truck_capacity_unknown"
+                                  ? "Capacidad del camión desconocida"
+                                  : w,
                         )
                         .join(" · ")}
                     </p>
@@ -958,12 +1181,16 @@ export function SimplePlanningClient() {
             <div className="space-y-2 text-sm">
               {(() => {
                 const cap = confirmTruckBlock.capacity
+                const needsIncomplete = (cap?.incomplete_order_count ?? 0) > 0
+                const needsUnevaluable = (cap?.unevaluable_order_count ?? 0) > 0
                 const dialogBlocked =
                   Boolean(confirmTruckBlock.blocking) ||
                   Boolean(cap?.blocking) ||
-                  (cap?.unavailable_order_count ?? 0) > 0 ||
                   !cap?.capacity_known ||
                   (assignPreview?.fingerprint_drifts || []).length > 0
+                const weightAckOk =
+                  (!needsIncomplete || ackIncompleteWeight) &&
+                  (!needsUnevaluable || ackUnevaluableWeight)
                 return (
                   <>
                     <p>
@@ -974,31 +1201,62 @@ export function SimplePlanningClient() {
                       {confirmTruckBlock.order_count ?? 0} OC · fecha {planningDate || "—"}
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      Utilización {fmtPct(cap?.utilization_pct)} · peso asignado{" "}
-                      {fmtKg(cap?.assigned_weight_kg)}
+                      Utilización {fmtPct(cap?.utilization_pct)} · peso conocido{" "}
+                      {fmtKg(cap?.known_weight_kg)}
+                      {cap?.weight_total_determined === false
+                        ? " (total real no determinado)"
+                        : ""}
                     </p>
                     {dialogBlocked ? (
                       <Alert variant="destructive">
                         <AlertTriangle className="h-4 w-4" />
                         <AlertTitle>Confirmación bloqueada</AlertTitle>
                         <AlertDescription>
-                          Hay bloqueos de capacidad, peso o fingerprint. Cierra este diálogo,
+                          Hay bloqueos de capacidad o fingerprint. Cierra este diálogo,
                           corrige el preview y vuelve a previsualizar la asignación.
                         </AlertDescription>
                       </Alert>
                     ) : (
-                      <label className="flex items-start gap-2 text-sm">
-                        <Checkbox
-                          checked={confirmAck}
-                          onCheckedChange={(v) => setConfirmAck(v === true)}
-                          disabled={confirmBusy}
-                        />
-                        <span>
-                          Confirmo expresamente este despacho. Entiendo que no debo reintentar
-                          si la página se recarga a mitad de proceso sin revisar el listado de
-                          planificaciones.
-                        </span>
-                      </label>
+                      <div className="space-y-2">
+                        {needsIncomplete ? (
+                          <label className="flex items-start gap-2 text-sm">
+                            <Checkbox
+                              checked={ackIncompleteWeight}
+                              onCheckedChange={(v) => setAckIncompleteWeight(v === true)}
+                              disabled={confirmBusy}
+                            />
+                            <span>
+                              Acepto planificar con cobertura de peso incompleta (productos
+                              sin peso registrado). No autoriza salida a ruta.
+                            </span>
+                          </label>
+                        ) : null}
+                        {needsUnevaluable ? (
+                          <label className="flex items-start gap-2 text-sm">
+                            <Checkbox
+                              checked={ackUnevaluableWeight}
+                              onCheckedChange={(v) => setAckUnevaluableWeight(v === true)}
+                              disabled={confirmBusy}
+                            />
+                            <span>
+                              Revisión manual expresa: hay OC sin peso usable; la capacidad
+                              total aún no es verificable. No autoriza salida a ruta.
+                            </span>
+                          </label>
+                        ) : null}
+                        <label className="flex items-start gap-2 text-sm">
+                          <Checkbox
+                            checked={confirmAck}
+                            onCheckedChange={(v) => setConfirmAck(v === true)}
+                            disabled={confirmBusy || !weightAckOk}
+                          />
+                          <span>
+                            Confirmo expresamente este despacho. Entiendo que no debo
+                            reintentar si la página se recarga a mitad de proceso sin revisar
+                            el listado de planificaciones.
+                          </span>
+                        </label>
+                      </div>
                     )}
                     {confirmState?.message && confirmState.status !== "ok" ? (
                       <p className="text-xs text-destructive">{confirmState.message}</p>
@@ -1019,9 +1277,12 @@ export function SimplePlanningClient() {
                 confirmBusy ||
                 Boolean(confirmTruckBlock?.blocking) ||
                 Boolean(confirmTruckBlock?.capacity?.blocking) ||
-                (confirmTruckBlock?.capacity?.unavailable_order_count ?? 0) > 0 ||
                 !confirmTruckBlock?.capacity?.capacity_known ||
-                (assignPreview?.fingerprint_drifts || []).length > 0
+                (assignPreview?.fingerprint_drifts || []).length > 0 ||
+                ((confirmTruckBlock?.capacity?.incomplete_order_count ?? 0) > 0 &&
+                  !ackIncompleteWeight) ||
+                ((confirmTruckBlock?.capacity?.unevaluable_order_count ?? 0) > 0 &&
+                  !ackUnevaluableWeight)
               }
             >
               {confirmBusy ? (
