@@ -2037,13 +2037,30 @@ export async function getDispatchPlanHeader(
   return res.json() as Promise<{ plan: DispatchPlanSummary }>
 }
 
+export type DispatchDriverDiagnostics = {
+  requirements_summary_es?: string
+  eligible_count?: number
+  note_es?: string
+  ineligible_near_misses?: {
+    user_id: number
+    display_name?: string
+    missing?: string[]
+    missing_labels?: string[]
+  }[]
+}
+
 export async function listAvailableDispatchDrivers(params?: {
   company_id?: number
   office_id?: number
-}): Promise<{ items: DispatchPlanDriverOption[] }> {
+  diagnostics?: boolean
+}): Promise<{
+  items: DispatchPlanDriverOption[]
+  diagnostics?: DispatchDriverDiagnostics
+}> {
   const qs = new URLSearchParams()
   if (params?.company_id) qs.set("company_id", String(params.company_id))
   if (params?.office_id) qs.set("office_id", String(params.office_id))
+  if (params?.diagnostics) qs.set("diagnostics", "1")
   const res = await fetch(
     `${API_URL}/distribuidora/dispatch-plans/available-drivers${qs.toString() ? `?${qs}` : ""}`,
     { headers: getAuthHeaders() },
@@ -2051,6 +2068,35 @@ export async function listAvailableDispatchDrivers(params?: {
   if (!res.ok) {
     const msg = await res.text().catch(() => "")
     throw new Error(msg || "Error al listar choferes")
+  }
+  return res.json()
+}
+
+export async function getDispatchDriverEligibility(
+  userId: number,
+  params?: { company_id?: number; office_id?: number },
+): Promise<{
+  user_id: number
+  eligible: boolean
+  display_name?: string
+  missing?: string[]
+  missing_labels?: string[]
+  requirements_summary_es?: string
+  has_pwa?: boolean
+  has_chofer_profile?: boolean
+}> {
+  const qs = new URLSearchParams()
+  if (params?.company_id) qs.set("company_id", String(params.company_id))
+  if (params?.office_id) qs.set("office_id", String(params.office_id))
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/driver-eligibility/${userId}${
+      qs.toString() ? `?${qs}` : ""
+    }`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al diagnosticar chofer")
   }
   return res.json()
 }
@@ -2409,6 +2455,7 @@ export async function postSimplePlanningPrepareConfirm(body: {
   truck_id: number
   dispatch_name?: string | null
   driver_name?: string | null
+  driver_user_id: number
   idempotency_key?: string | null
   acknowledge_incomplete_weight?: boolean
   acknowledge_unevaluable_weight?: boolean

@@ -167,6 +167,7 @@ class AssignDriverBody(BaseModel):
 def list_available_drivers(
     company_id: int | None = Query(None, ge=1),
     office_id: int | None = Query(None, ge=1),
+    diagnostics: bool = Query(False),
     user: dict = Depends(require_staff_user),
 ):
     from backend.services.distribuidora import dispatch_plan_driver_service as driver_svc
@@ -178,13 +179,39 @@ def list_available_drivers(
     ):
         raise HTTPException(status_code=403, detail="Sin permiso para listar choferes")
     try:
-        items = driver_svc.list_available_drivers(
-            company_id=company_id, office_id=office_id
+        payload = driver_svc.list_available_drivers(
+            company_id=company_id,
+            office_id=office_id,
+            include_diagnostics=bool(diagnostics),
         )
-        return {"items": items}
+        return payload
     except Exception as exc:
         log_error("GET /dispatch-plans/available-drivers", exc)
         raise HTTPException(status_code=503, detail="No se pudieron listar choferes") from exc
+
+
+@router.get("/driver-eligibility/{user_id}")
+def get_driver_eligibility(
+    user_id: int,
+    company_id: int | None = Query(None, ge=1),
+    office_id: int | None = Query(None, ge=1),
+    user: dict = Depends(require_staff_user),
+):
+    """Requisitos pendientes de un usuario para ser chofer elegible (admin)."""
+    from backend.services.distribuidora import dispatch_plan_driver_service as driver_svc
+
+    if not (
+        driver_svc.can_assign_dispatch_driver(user)
+        or is_simple_planning_capability_only(user)
+    ):
+        raise HTTPException(status_code=403, detail="Sin permiso para diagnosticar choferes")
+    try:
+        return driver_svc.diagnose_driver_eligibility(
+            int(user_id), company_id=company_id, office_id=office_id
+        )
+    except Exception as exc:
+        log_error("GET /dispatch-plans/driver-eligibility", exc)
+        raise HTTPException(status_code=503, detail="No se pudo diagnosticar elegibilidad") from exc
 
 
 @router.get("/mine-as-driver")

@@ -87,6 +87,89 @@ def _load_user_row(cur, user_id: int) -> dict[str, Any] | None:
     return dict(zip(cols, row))
 
 
+DRIVER_REQUIREMENT_LABELS_ES = {
+    "user_inactive": "Usuario desactivado",
+    "pwa_required": "Falta acceso PWA explícito (app.user_apps)",
+    "chofer_profile_required": "Falta perfil operacional chofer activo",
+    "company_not_allowed": "Sin empresa autorizada para el despacho",
+    "office_not_allowed": "Sin oficina autorizada para el despacho",
+    "scope_unavailable": "No se pudo verificar alcance multiapp",
+    "user_not_found": "Usuario inexistente",
+}
+
+
+def _eligibility_from_scope(
+    row: dict[str, Any],
+    scope: Any,
+    *,
+    company_id: int | None = None,
+    office_id: int | None = None,
+) -> tuple[bool, list[str]]:
+    missing: list[str] = []
+    if not bool(row.get("active")):
+        missing.append("user_inactive")
+    if scope.load_failed:
+        missing.append("scope_unavailable")
+        return False, missing
+    if APP_PWA not in scope.apps:
+        missing.append("pwa_required")
+    if "chofer" not in scope.profiles:
+        missing.append("chofer_profile_required")
+    if company_id is not None and scope.company_ids is not None:
+        if int(company_id) not in scope.company_ids:
+            missing.append("company_not_allowed")
+    if company_id is not None and office_id is not None and scope.offices:
+        if (int(company_id), int(office_id)) not in scope.offices:
+            missing.append("office_not_allowed")
+    return (len(missing) == 0), missing
+
+
+def diagnose_driver_eligibility(
+    user_id: int,
+    *,
+    company_id: int | None = None,
+    office_id: int | None = None,
+) -> dict[str, Any]:
+    """Diagnóstico de elegibilidad para administración (sin ampliar permisos)."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        row = _load_user_row(cur, int(user_id))
+        cur.close()
+    finally:
+        conn.close()
+    if not row:
+        return {
+            "user_id": int(user_id),
+            "eligible": False,
+            "missing": ["user_not_found"],
+            "missing_labels": [DRIVER_REQUIREMENT_LABELS_ES["user_not_found"]],
+            "requirements_summary_es": "Activo + PWA explícita + perfil chofer",
+        }
+    scope = load_multiapp_scope(int(user_id))
+    ok, missing = _eligibility_from_scope(
+        row, scope, company_id=company_id, office_id=office_id
+    )
+    return {
+        "user_id": int(user_id),
+        "display_name": _display_name(row),
+        "active": bool(row.get("active")),
+        "eligible": ok,
+        "has_pwa": APP_PWA in scope.apps and not scope.load_failed,
+        "has_chofer_profile": "chofer" in scope.profiles and not scope.load_failed,
+        "missing": missing,
+        "missing_labels": [DRIVER_REQUIREMENT_LABELS_ES.get(m, m) for m in missing],
+        "requirements_summary_es": (
+            "Activo + PWA explícita + perfil chofer"
+            + (
+                " + empresa/oficina del despacho"
+                if company_id is not None or office_id is not None
+                else ""
+            )
+        ),
+    }
+
+
 def assert_user_is_eligible_driver(
     cur,
     user_id: int,
@@ -98,46 +181,23 @@ def assert_user_is_eligible_driver(
     row = _load_user_row(cur, user_id)
     if not row:
         raise DriverAssignError("Usuario inexistente", code="user_not_found", http_status=404)
-    if not bool(row.get("active")):
-        raise DriverAssignError(
-            "Usuario desactivado",
-            code="user_inactive",
-            http_status=409,
-        )
     scope = load_multiapp_scope(int(user_id))
-    if scope.load_failed:
+    ok, missing = _eligibility_from_scope(
+        row, scope, company_id=company_id, office_id=office_id
+    )
+    if not ok:
+        code = missing[0]
+        if code == "scope_unavailable":
+            status = 503
+        elif code in ("company_not_allowed", "office_not_allowed"):
+            status = 403
+        else:
+            status = 409
         raise DriverAssignError(
-            "No se pudo verificar alcance multiapp del chofer",
-            code="scope_unavailable",
-            http_status=503,
+            DRIVER_REQUIREMENT_LABELS_ES.get(code, "Chofer no elegible"),
+            code=code,
+            http_status=status,
         )
-    if APP_PWA not in scope.apps:
-        # Legacy sin filas apps: PWA nunca implícita.
-        raise DriverAssignError(
-            "El usuario no tiene acceso PWA explícito",
-            code="pwa_required",
-            http_status=409,
-        )
-    if "chofer" not in scope.profiles:
-        raise DriverAssignError(
-            "El usuario no tiene perfil operacional chofer activo",
-            code="chofer_profile_required",
-            http_status=409,
-        )
-    if company_id is not None and scope.company_ids is not None:
-        if int(company_id) not in scope.company_ids:
-            raise DriverAssignError(
-                "Chofer no autorizado para la empresa del despacho",
-                code="company_not_allowed",
-                http_status=403,
-            )
-    if company_id is not None and office_id is not None and scope.offices:
-        if (int(company_id), int(office_id)) not in scope.offices:
-            raise DriverAssignError(
-                "Chofer no autorizado para la oficina del despacho",
-                code="office_not_allowed",
-                http_status=403,
-            )
     return {
         **row,
         "display_name": _display_name(row),
@@ -150,8 +210,13 @@ def list_available_drivers(
     *,
     company_id: int | None = None,
     office_id: int | None = None,
-) -> list[dict[str, Any]]:
-    """Choferes PWA activos (cat_apps + user_operational_profiles)."""
+    include_diagnostics: bool = False,
+) -> dict[str, Any]:
+    """Choferes PWA activos (user_apps + user_operational_profiles).
+
+    Causa frecuente de lista vacía: usuario con rol ERP operativo pero sin
+    fila app.user_apps(pwa) y/o sin perfil chofer. El rol ERP no basta.
+    """
     conn = get_connection()
     try:
         cur = conn.cursor()
@@ -186,8 +251,65 @@ def list_available_drivers(
                     "display_name": eligible.get("display_name"),
                 }
             )
+
+        diagnostics: dict[str, Any] = {
+            "requirements_summary_es": (
+                "Usuario activo + app PWA explícita + perfil operacional chofer. "
+                "El rol ERP (p. ej. operativo) no habilita el selector por sí solo."
+            ),
+            "eligible_count": len(out),
+        }
+        if include_diagnostics:
+            cur.execute(
+                """
+                SELECT DISTINCT u.id, u.email, u.nombre_usuario, u.active
+                FROM bsale.users u
+                WHERE u.active IS TRUE
+                  AND (
+                    EXISTS (
+                      SELECT 1 FROM app.user_apps ua
+                      WHERE ua.user_id = u.id AND ua.app_code = 'pwa'
+                    )
+                    OR EXISTS (
+                      SELECT 1 FROM app.user_operational_profiles up
+                      WHERE up.user_id = u.id AND up.profile_code = 'chofer'
+                    )
+                  )
+                ORDER BY lower(COALESCE(u.nombre_usuario, u.email))
+                LIMIT 100
+                """
+            )
+            dcols = [d[0] for d in cur.description]
+            near: list[dict[str, Any]] = []
+            eligible_ids = {int(x["user_id"]) for x in out}
+            for r in cur.fetchall():
+                drow = dict(zip(dcols, r))
+                uid = int(drow["id"])
+                if uid in eligible_ids:
+                    continue
+                scope = load_multiapp_scope(uid)
+                _ok, missing = _eligibility_from_scope(
+                    drow, scope, company_id=company_id, office_id=office_id
+                )
+                if not missing:
+                    continue
+                near.append(
+                    {
+                        "user_id": uid,
+                        "display_name": _display_name(drow),
+                        "missing": missing,
+                        "missing_labels": [
+                            DRIVER_REQUIREMENT_LABELS_ES.get(m, m) for m in missing
+                        ],
+                    }
+                )
+            diagnostics["ineligible_near_misses"] = near
+            diagnostics["note_es"] = (
+                "Si creó un chofer y no aparece, revise en Admin → Usuarios que tenga "
+                "PWA + perfil chofer (no solo rol operativo ERP)."
+            )
         cur.close()
-        return out
+        return {"items": out, "diagnostics": diagnostics}
     finally:
         conn.close()
 

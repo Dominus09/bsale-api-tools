@@ -34,6 +34,10 @@ export function DispatchPlanDriverAssign({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
+  const [diagNote, setDiagNote] = useState<string | null>(null)
+  const [nearMisses, setNearMisses] = useState<
+    { display_name?: string; missing_labels?: string[] }[]
+  >([])
 
   async function reload() {
     setLoading(true)
@@ -42,11 +46,13 @@ export function DispatchPlanDriverAssign({
       const [driverInfo, available] = await Promise.all([
         getDispatchPlanDriver(planId),
         canAssign
-          ? listAvailableDispatchDrivers()
+          ? listAvailableDispatchDrivers({ diagnostics: true })
           : Promise.resolve({ items: [] as DispatchPlanDriverOption[] }),
       ])
       setInfo(driverInfo)
       setDrivers(available.items)
+      setDiagNote(available.diagnostics?.note_es || available.diagnostics?.requirements_summary_es || null)
+      setNearMisses(available.diagnostics?.ineligible_near_misses || [])
       if (driverInfo.driver_user_id) {
         setDriverUserId(String(driverInfo.driver_user_id))
       }
@@ -145,6 +151,12 @@ export function DispatchPlanDriverAssign({
                 </option>
               ))}
             </select>
+            {!drivers.length ? (
+              <p className="text-[11px] text-amber-800 dark:text-amber-200">
+                Sin choferes elegibles. Se requiere usuario activo + PWA + perfil chofer
+                (el rol ERP operativo no basta).
+              </p>
+            ) : null}
           </div>
           <div className="space-y-1">
             <Label htmlFor={`reason-${planId}`}>Motivo</Label>
@@ -164,6 +176,19 @@ export function DispatchPlanDriverAssign({
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
       {msg ? <p className="text-sm text-muted-foreground">{msg}</p> : null}
+      {diagNote ? <p className="text-[11px] text-muted-foreground">{diagNote}</p> : null}
+      {nearMisses.length ? (
+        <div className="rounded-md border border-dashed px-2 py-1.5 text-[11px] text-muted-foreground">
+          <p className="font-medium">Usuarios cercanos no elegibles</p>
+          <ul className="mt-1 list-inside list-disc">
+            {nearMisses.slice(0, 6).map((n, i) => (
+              <li key={i}>
+                {n.display_name || "Usuario"}: {(n.missing_labels || []).join("; ") || "requisito pendiente"}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {info?.history?.length ? (
         <div className="space-y-1">
