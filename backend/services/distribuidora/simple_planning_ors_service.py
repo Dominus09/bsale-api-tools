@@ -177,12 +177,44 @@ def _load_stops_from_db(
             "municipality": row.get("municipality"),
         }
         if lat is None or lng is None:
-            pending.append({**base, "has_georef": False, "lat": None, "lng": None})
+            pending.append(
+                {
+                    **base,
+                    "has_georef": False,
+                    "lat": None,
+                    "lng": None,
+                    "missing_georef_reason": "client_lat_lon_null",
+                }
+            )
             continue
         try:
             lat_f, lng_f = float(lat), float(lng)
         except (TypeError, ValueError):
-            pending.append({**base, "has_georef": False, "lat": None, "lng": None})
+            pending.append(
+                {
+                    **base,
+                    "has_georef": False,
+                    "lat": None,
+                    "lng": None,
+                    "missing_georef_reason": "client_lat_lon_invalid",
+                }
+            )
+            continue
+        # 0,0 y fuera de rango Chile operativo: no inventar parada.
+        if (
+            (lat_f == 0.0 and lng_f == 0.0)
+            or not (-56.0 <= lat_f <= -17.0)
+            or not (-76.0 <= lng_f <= -66.0)
+        ):
+            pending.append(
+                {
+                    **base,
+                    "has_georef": False,
+                    "lat": None,
+                    "lng": None,
+                    "missing_georef_reason": "client_lat_lon_out_of_range",
+                }
+            )
             continue
         geo_rows.append({**base, "has_georef": True, "lat": lat_f, "lng": lng_f})
 
@@ -247,15 +279,33 @@ def calculate_simple_planning_route(
         ],
     )
 
+    pending_clients = _consolidate_pending_clients(pending)
+    clients_georef = len(stops_geo)
+    clients_pending = len(pending_clients)
+    clients_total = clients_georef + clients_pending
+    if clients_georef <= 0:
+        route_coverage = "none"
+    elif clients_pending > 0:
+        route_coverage = "partial"
+    else:
+        route_coverage = "full"
+
     base_out: dict[str, Any] = {
         "ok": False,
         "ors_metrics_calculated": False,
         "preserve_order": True,
         "truck_id": int(truck_id),
         "route_fingerprint": fingerprint,
-        "stops_georef_count": len(stops_geo),
-        "stops_pending_georef": pending,
-        "stops_pending_count": len(pending),
+        "route_coverage": route_coverage,
+        "clients_total": clients_total,
+        "clients_georef": clients_georef,
+        "clients_pending": clients_pending,
+        "stops_georef_count": clients_georef,
+        "stops_pending_georef": pending_clients,
+        "stops_pending_count": clients_pending,
+        "km_scope": "georeferenced_stops_only" if route_coverage == "partial" else (
+            "full_dispatch" if route_coverage == "full" else None
+        ),
         "stops": stops_geo,
         "depot": {"lat": BODEGA_LAT, "lng": BODEGA_LNG},
         "distance_km": None,
@@ -272,8 +322,8 @@ def calculate_simple_planning_route(
 
     if len(stops_geo) < 1:
         base_out["message"] = (
-            "Sin paradas georreferenciadas: el mapa muestra marcadores pendientes; "
-            "kilómetros y costos no disponibles."
+            f"Georreferenciados: 0 de {clients_total} clientes. "
+            "Kilómetros y costos no disponibles."
         )
         return base_out
 
@@ -333,13 +383,34 @@ def calculate_simple_planning_route(
     if total_clp is None:
         total_clp = int(row.get("fuel_cost_clp") or 0) + int(row.get("crew_cost_clp") or 0)
 
+    geometry = row.get("geometry")
+    if isinstance(geometry, dict):
+        # Miembros GeoJSON extranjeros: cobertura sin migración ni romper LineString.
+        geometry = {
+            **geometry,
+            "quillotana_route_meta": {
+                "route_coverage": route_coverage,
+                "clients_total": clients_total,
+                "clients_georef": clients_georef,
+                "clients_pending": clients_pending,
+                "km_scope": base_out["km_scope"],
+            },
+        }
+
+    coverage_msg = (
+        f"Ruta parcial: {clients_georef} de {clients_total} clientes georreferenciados. "
+        "Km/costos solo del recorrido calculado (no representan todo el despacho)."
+        if route_coverage == "partial"
+        else None
+    )
+
     return {
         **base_out,
         "ok": True,
         "ors_metrics_calculated": True,
         "distance_km": row.get("distance_km"),
         "duration_min": row.get("duration_min"),
-        "geometry": row.get("geometry"),
+        "geometry": geometry,
         "stops_ordered": row.get("stops_ordered"),
         "liters_estimated": row.get("liters_estimated"),
         "fuel_cost_clp": row.get("fuel_cost_clp"),
@@ -348,17 +419,18 @@ def calculate_simple_planning_route(
         "cost_breakdown": serialize_row(bd) if isinstance(bd, dict) else bd,
         "diesel_price_per_liter": round(float(diesel_clp), 2),
         "depot": row.get("depot") or depot_base(),
-        "message": (
-            f"{len(pending)} parada(s) sin coordenadas excluidas del cálculo ORS."
-            if pending
-            else None
-        ),
-        # Snapshot seguro para vincular a sesión (sin confiar en el FE).
+        "message": coverage_msg,
+        # Snapshot: métricas solo del backend (prepare/confirm las recalculan).
         "ors_snapshot": {
             "route_fingerprint": fingerprint,
             "truck_id": int(truck_id),
             "document_ids": [int(s["document_id"]) for s in stops_geo],
             "all_document_ids": [int(x) for x in document_ids],
+            "route_coverage": route_coverage,
+            "clients_total": clients_total,
+            "clients_georef": clients_georef,
+            "clients_pending": clients_pending,
+            "km_scope": base_out["km_scope"],
             "distance_km": row.get("distance_km"),
             "duration_min": row.get("duration_min"),
             "liters_estimated": row.get("liters_estimated"),
@@ -369,7 +441,7 @@ def calculate_simple_planning_route(
             "toll_cost_clp": 0,
             "extras_cost_clp": 0,
             "total_route_cost_clp": int(total_clp) if total_clp is not None else 0,
-            "route_geometry": row.get("geometry"),
+            "route_geometry": geometry,
             "preserve_order": True,
             "calculated_at": base_out["calculated_at"],
             "depot": {"lat": BODEGA_LAT, "lng": BODEGA_LNG},
@@ -381,8 +453,77 @@ def calculate_simple_planning_route(
                 }
                 for s in stops_geo
             ],
+            "pending_clients": pending_clients,
         },
     }
+
+
+def _consolidate_pending_clients(pending: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Agrupa OC sin geo por cliente+dirección; motivo explícito."""
+    out: list[dict[str, Any]] = []
+    seen: dict[tuple[Any, str], int] = {}
+    for row in pending:
+        key = (row.get("client_id"), (row.get("address") or "").strip().lower())
+        idx = seen.get(key)
+        if idx is not None:
+            stop = out[idx]
+            stop.setdefault("oc_document_ids", [])
+            if row.get("document_id") not in stop["oc_document_ids"]:
+                stop["oc_document_ids"].append(row["document_id"])
+            stop.setdefault("folios", [])
+            if row.get("folio") not in stop["folios"]:
+                stop["folios"].append(row.get("folio"))
+            continue
+        seen[key] = len(out)
+        out.append(
+            {
+                **row,
+                "oc_document_ids": [row["document_id"]],
+                "folios": [row.get("folio")],
+                "missing_georef_reason": "client_lat_lon_null",
+            }
+        )
+    return out
+
+
+def recompute_ors_snapshot_for_session(
+    *,
+    user_id: int,
+    company_id: int,
+    office_id: int,
+    truck_id: int,
+    document_ids: list[int],
+    camion: str | None = None,
+    client_hint_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    """
+    Recalcula ORS en servidor. Ignora km/costos enviados por el frontend.
+    Si ``client_hint_fingerprint`` no coincide, la asignación cambió → error.
+    """
+    result = calculate_simple_planning_route(
+        user_id=int(user_id),
+        company_id=int(company_id),
+        office_id=int(office_id),
+        truck_id=int(truck_id),
+        document_ids=[int(x) for x in document_ids],
+        camion=camion,
+    )
+    snap = result.get("ors_snapshot") if result.get("ok") else None
+    if not snap:
+        raise SimplePlanningOrsError(
+            result.get("message") or "No se pudo recalcular la ruta ORS en servidor",
+            code="ors_recompute_failed",
+            http_status=409,
+        )
+    if client_hint_fingerprint and str(client_hint_fingerprint) != str(
+        snap.get("route_fingerprint")
+    ):
+        raise SimplePlanningOrsError(
+            "La ruta previa ya no coincide con OC/coordenadas actuales; recalcule.",
+            code="ors_snapshot_stale",
+            http_status=409,
+        )
+    return snap
 
 
 def validate_ors_snapshot_for_orders(

@@ -38,9 +38,41 @@ def _ors_metrics_calculated(plan: dict[str, Any]) -> bool:
     return bool(raw)
 
 
+def _route_coverage_meta(plan: dict[str, Any]) -> dict[str, Any]:
+    geom = plan.get("route_geometry")
+    if isinstance(geom, str):
+        try:
+            import json
+
+            geom = json.loads(geom)
+        except Exception:
+            geom = None
+    meta = {}
+    if isinstance(geom, dict):
+        raw = geom.get("quillotana_route_meta")
+        if isinstance(raw, dict):
+            meta = raw
+    coverage = meta.get("route_coverage")
+    if not coverage:
+        if plan.get("ors_metrics_calculated") is False:
+            coverage = "none"
+        elif plan.get("ors_metrics_calculated") is True:
+            coverage = "full"
+        else:
+            coverage = None
+    return {
+        "route_coverage": coverage,
+        "clients_total": meta.get("clients_total"),
+        "clients_georef": meta.get("clients_georef"),
+        "clients_pending": meta.get("clients_pending"),
+        "km_scope": meta.get("km_scope"),
+    }
+
+
 def _cost_block(plan: dict[str, Any]) -> dict[str, Any]:
     """Costos de ruta: si ORS no calculó, exponer null (no cero real)."""
     calculated = _ors_metrics_calculated(plan)
+    cov = _route_coverage_meta(plan)
     if not calculated:
         return {
             "fuel_clp": None,
@@ -53,8 +85,16 @@ def _cost_block(plan: dict[str, Any]) -> dict[str, Any]:
             "duration_min": None,
             "liters_estimated": None,
             "ors_metrics_calculated": False,
+            "route_coverage": "none",
             "note": "Métricas ORS no calculadas (planificación simple_list)",
+            **{k: cov[k] for k in ("clients_total", "clients_georef", "clients_pending", "km_scope")},
         }
+    note = None
+    if cov.get("route_coverage") == "partial":
+        note = (
+            "Ruta parcial: km/costos solo de paradas georreferenciadas; "
+            "no representan el despacho completo."
+        )
     return {
         "fuel_clp": int(plan.get("fuel_cost_clp") or 0),
         "crew_clp": int(plan.get("crew_cost_clp") or 0),
@@ -66,6 +106,9 @@ def _cost_block(plan: dict[str, Any]) -> dict[str, Any]:
         "duration_min": plan.get("duration_min"),
         "liters_estimated": plan.get("liters_estimated"),
         "ors_metrics_calculated": True,
+        "route_coverage": cov.get("route_coverage") or "full",
+        "note": note,
+        **{k: cov[k] for k in ("clients_total", "clients_georef", "clients_pending", "km_scope")},
     }
 
 

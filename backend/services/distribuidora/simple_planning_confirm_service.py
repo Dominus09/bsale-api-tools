@@ -29,6 +29,8 @@ from backend.services.distribuidora.simple_planning_assignment_service import (
     validate_truck_capacity,
 )
 from backend.services.distribuidora.simple_planning_ors_service import (
+    SimplePlanningOrsError,
+    recompute_ors_snapshot_for_session,
     validate_ors_snapshot_for_orders,
 )
 from backend.services.distribuidora.simple_planning_preview_service import (
@@ -396,20 +398,28 @@ def prepare_confirm_session(
     ordered_doc_ids = [int(o["document_id"]) for o in orders_payload]
     validated_ors = None
     if ors_snapshot:
-        validated_ors = validate_ors_snapshot_for_orders(
-            ors_snapshot,
-            truck_id=int(truck_id),
-            ordered_document_ids=ordered_doc_ids,
-            company_id=int(company_id),
-            office_id=int(office_id),
-        )
-        if validated_ors is None:
-            raise SimplePlanningConfirmError(
-                "La ruta ORS ya no coincide con las OC/coordenadas actuales; "
-                "recalcule la ruta antes de confirmar.",
-                code="ors_snapshot_stale",
-                http_status=409,
+        # Seguridad: NUNCA persistir km/costos del frontend. Recalcular en servidor.
+        hint_fp = None
+        if isinstance(ors_snapshot, dict):
+            hint_fp = ors_snapshot.get("route_fingerprint")
+        truck_meta = truck_block.get("truck") or {}
+        try:
+            validated_ors = recompute_ors_snapshot_for_session(
+                user_id=int(user_id),
+                company_id=int(company_id),
+                office_id=int(office_id),
+                truck_id=int(truck_id),
+                document_ids=ordered_doc_ids,
+                camion=(truck_meta.get("name") if isinstance(truck_meta, dict) else None),
+                client_hint_fingerprint=str(hint_fp) if hint_fp else None,
             )
+        except SimplePlanningOrsError as exc:
+            raise SimplePlanningConfirmError(
+                str(exc),
+                code=exc.code,
+                http_status=exc.http_status,
+                details=exc.details,
+            ) from exc
 
     get_conn = conn_factory or get_connection
     conn = get_conn()
