@@ -94,9 +94,28 @@ def build_load_summary(
     manual_confirmed = max(0, confirmed_n - auto_n)
 
     pk = picking_kpis or {}
-    stops = int(pk.get("stops") or picking_meta.get("stops_count") if picking_meta else 0)
-    if not stops and confirmed_n:
-        stops = confirmed_n
+    order_rows = orders or []
+    oc_count = int(invoicing_block.get("total_orders") or len(order_rows) or 0)
+    oc_clients = len(
+        {
+            (o.get("client_id"), (o.get("address") or "").strip().lower())
+            for o in order_rows
+            if o.get("client_id") is not None or (o.get("client_name") or "").strip()
+        }
+    )
+    if not oc_clients and oc_count:
+        oc_clients = oc_count
+
+    picking_stops = int(
+        pk.get("stops") or (picking_meta.get("stops_count") if picking_meta else 0) or 0
+    )
+    picking_clients = int(pk.get("clients") or 0)
+    picking_docs = int(pk.get("documents") or 0)
+
+    # KPIs principales: preferir facturación confirmada / OC del plan;
+    # no usar 0 de picking como si no hubiera clientes/documentos.
+    clients_kpi = picking_clients or picking_stops or oc_clients
+    documents_kpi = picking_docs or confirmed_n or oc_count
 
     oc_total_clp = int(
         round(float(invoicing_block.get("total_oc_amount_clp") or 0))
@@ -131,8 +150,13 @@ def build_load_summary(
             "sello": (header or {}).get("sello") or "",
         },
         "kpis": {
-            "clients": int(pk.get("clients") or stops),
-            "documents": int(pk.get("documents") or stops),
+            "clients": clients_kpi,
+            "documents": documents_kpi,
+            "clients_from_oc": oc_clients,
+            "clients_from_picking": picking_clients or None,
+            "documents_from_invoices": confirmed_n,
+            "documents_from_picking": picking_docs or None,
+            "oc_count": oc_count,
             "oc_total_amount_clp": oc_total_clp,
             "confirmed_sales_clp": confirmed_sales_clp,
             "picking_sales_clp": picking_sales_clp,

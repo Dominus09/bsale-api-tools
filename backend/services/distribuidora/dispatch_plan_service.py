@@ -666,12 +666,18 @@ def compute_plan_margin(
         t1 = log_repo_start(plan_id, "compute_plan_commercial_margin")
         cm = compute_plan_commercial_margin(cur, plan_id)
         log_repo_end(plan_id, "compute_plan_commercial_margin", t1)
-        route_cost = int(plan.get("total_route_cost_clp") or 0)
-        net_op = (
-            int(cm.commercial_margin_clp) - route_cost
-            if cm.commercial_margin_clp is not None
-            else None
-        )
+        ors_ok = plan.get("ors_metrics_calculated")
+        if ors_ok is False:
+            # simple_list sin ORS: no inventar resultado post-transporte con costo 0.
+            route_cost = None
+            net_op = None
+        else:
+            route_cost = int(plan.get("total_route_cost_clp") or 0)
+            net_op = (
+                int(cm.commercial_margin_clp) - route_cost
+                if cm.commercial_margin_clp is not None
+                else None
+            )
         t2 = log_repo_start(plan_id, "repo.update_plan_margin")
         repo.update_plan_margin(
             cur,
@@ -686,23 +692,32 @@ def compute_plan_margin(
         )
         log_repo_end(plan_id, "repo.update_plan_margin", t2)
         conn.commit()
-        return cm, route_cost, net_op
+        return cm, route_cost, net_op, ors_ok
 
     if stage_run:
         with dashboard_connection(plan_id, stage_run) as (cur, conn):
-            cm, route_cost, net_op = _compute(cur, conn)
+            cm, route_cost, net_op, ors_ok = _compute(cur, conn)
     else:
         conn = get_connection()
         try:
             cur = conn.cursor()
-            cm, route_cost, net_op = _compute(cur, conn)
+            cm, route_cost, net_op, ors_ok = _compute(cur, conn)
             cur.close()
         finally:
             conn.close()
     out = cm.as_dict()
     out["route_cost_clp"] = route_cost
     out["net_operational_clp"] = net_op
+    out["ors_metrics_calculated"] = ors_ok
     out["dispatch_plan_id"] = plan_id
+    if ors_ok is False:
+        out["route_cost_unavailable_reason"] = (
+            "Ruta ORS no calculada (planning_origin=simple_list sin Calcular ruta)."
+        )
+        if out.get("commercial_margin_clp") is not None and not out.get("message"):
+            out["message"] = (
+                "Margen comercial disponible; resultado post-transporte pendiente de ORS."
+            )
     return out
 
 
@@ -1037,6 +1052,7 @@ def _build_plan_dashboard(
     )
     margin_block: dict[str, Any] | None = None
     show_margin = has_margin_view_access({"role": user_role})
+    oc_sales_clp = int(round(total_oc_amount))
     if can_calc_margin:
         if stage_run:
             stage_run.log_stage("margin", "load_margin")
@@ -1060,27 +1076,64 @@ def _build_plan_dashboard(
                 "message": "No se pudo calcular margen (costos o migración pendiente).",
             }
         if show_margin:
+            route_cost = margin_data.get("route_cost_clp")
+            net_op = margin_data.get("net_operational_clp")
+            msg = margin_data.get("message")
+            if plan.get("ors_metrics_calculated") is False:
+                route_cost = None
+                net_op = None
+                if not msg:
+                    msg = (
+                        "Margen comercial desde facturas; costos de ruta no calculados "
+                        "(sin ORS)."
+                    )
+                elif "post-transporte" not in str(msg):
+                    msg = f"{msg} Costos de ruta: no calculados (sin ORS)."
             margin_block = {
                 "visible": True,
+                "oc_sales_clp": oc_sales_clp,
                 "commercial_margin_clp": margin_data.get("commercial_margin_clp"),
                 "invoiced_revenue_clp": margin_data.get("invoiced_revenue_clp"),
                 "invoiced_cost_clp": margin_data.get("invoiced_cost_clp"),
-                "route_cost_clp": margin_data.get("route_cost_clp"),
-                "net_operational_clp": margin_data.get("net_operational_clp"),
+                "route_cost_clp": route_cost,
+                "net_operational_clp": net_op,
+                "ors_metrics_calculated": plan.get("ors_metrics_calculated"),
                 "source": margin_data.get("source"),
                 "partial": margin_data.get("partial"),
                 "unavailable": margin_data.get("commercial_margin_clp") is None,
-                "message": margin_data.get("message"),
+                "message": msg,
             }
         else:
             margin_block = {"visible": False, "restricted": True}
-    elif plan.get("commercial_margin_clp") is not None and show_margin:
+    elif include_margin and show_margin and inv_summary["confirmed"] == 0:
         margin_block = {
             "visible": True,
+            "oc_sales_clp": oc_sales_clp,
+            "commercial_margin_clp": None,
+            "invoiced_revenue_clp": 0,
+            "route_cost_clp": None,
+            "net_operational_clp": None,
+            "unavailable": True,
+            "partial": True,
+            "message": (
+                "Sin documentos facturados confirmados asociados al plan; "
+                "no se calcula margen comercial (la venta OC no es venta facturada)."
+            ),
+        }
+    elif plan.get("commercial_margin_clp") is not None and show_margin:
+        route_cost = plan.get("total_route_cost_clp")
+        net_op = plan.get("net_operational_clp") or plan.get("final_margin_clp")
+        if plan.get("ors_metrics_calculated") is False:
+            route_cost = None
+            net_op = None
+        margin_block = {
+            "visible": True,
+            "oc_sales_clp": oc_sales_clp,
             "commercial_margin_clp": plan.get("commercial_margin_clp"),
             "invoiced_revenue_clp": plan.get("invoiced_sales_clp"),
-            "route_cost_clp": plan.get("total_route_cost_clp"),
-            "net_operational_clp": plan.get("net_operational_clp") or plan.get("final_margin_clp"),
+            "route_cost_clp": route_cost,
+            "net_operational_clp": net_op,
+            "ors_metrics_calculated": plan.get("ors_metrics_calculated"),
             "source": plan.get("margin_computation_source"),
             "partial": False,
             "message": "Margen almacenado.",
@@ -1262,17 +1315,15 @@ def _invoicing_payload_from_rows(
                         if st.evidence_source == "direct_related"
                         else "indirect_related"
                     )
-            if st.fulfillment_status == FULFILL_EXCLUDED_PREEXISTING:
-                exclusions.append(
-                    {
-                        "oc_document_id": oid,
-                        "oc_number": x.get("oc_number"),
-                        "excluded_reason": st.excluded_reason,
-                        "billing_label_es": st.billing_label_es,
-                        "confirmed_invoice": st.confirmed_invoice,
-                        "message": "Excluida: ya estaba facturada antes de la planificación",
-                    }
-                )
+            if st.completion_source == "invoice_preexisting" or (
+                st.fulfillment_status == FULFILL_EXCLUDED_PREEXISTING
+            ):
+                # Informativo: factura anterior al plan; sigue siendo documento válido.
+                x["invoice_predates_planning"] = True
+                if not x.get("status") or x.get("status") == "missing":
+                    if st.confirmed_invoice:
+                        x["status"] = "confirmed"
+                        x["is_invoiced_confirmed"] = True
             elif st.fulfillment_status == FULFILL_EXCLUDED_CANCELLED:
                 exclusions.append(
                     {
@@ -2444,8 +2495,11 @@ def build_picking_product_excel_bytes(
 
 def repair_order_snapshots(plan_id: int) -> dict[str, Any]:
     """
-    Rellena solo campos vacíos en órdenes ya guardadas (fix planes históricos con Excel incompleto).
-    No sobrescribe valores ya congelados.
+    Rellena campos vacíos en órdenes ya guardadas (fix planes históricos).
+
+    Idempotente: no cambia OC del plan ni recrea el despacho.
+    También corrige ``cobertura_logistica=0`` con peso conocido cuando el freeze
+    histórico usó una clave distinta (coverage_percent / porcentaje_cobertura).
     """
     conn = get_connection()
     try:
@@ -2455,7 +2509,12 @@ def repair_order_snapshots(plan_id: int) -> dict[str, Any]:
             raise ValueError("Plan sin órdenes")
         enriched = _enrich_orders_snapshot(cur, orders)
         needs_weight = any(o.get("peso_total_kg") is None for o in orders)
-        if needs_weight:
+        needs_coverage_fix = any(
+            float(o.get("peso_total_kg") or 0) > 0
+            and float(o.get("cobertura_logistica") or 0) <= 0
+            for o in orders
+        )
+        if needs_weight or needs_coverage_fix:
             plan = repo.get_plan_by_id(cur, plan_id) or {}
             now = datetime.now(timezone.utc)
             frozen = freeze_orders_weight(cur, enriched, calculated_at=now)
@@ -2471,14 +2530,19 @@ def repair_order_snapshots(plan_id: int) -> dict[str, Any]:
                 truck_max_weight_kg=truck_max,
                 calculated_at=now,
             )
-            if plan.get("weight_total_kg") is None:
+            if plan.get("weight_total_kg") is None or (
+                needs_coverage_fix
+                and float(plan.get("weight_cobertura_pct") or 0) <= 0
+            ):
                 repo.update_plan_weight_snapshot(cur, plan_id, weight_fields)
-            cur.execute(
-                "DELETE FROM distribuidora.dispatch_plan_stop_snapshots WHERE dispatch_plan_id = %s",
-                (plan_id,),
-            )
-            repo.insert_plan_stop_snapshots(cur, plan_id, stops)
+            if needs_weight:
+                cur.execute(
+                    "DELETE FROM distribuidora.dispatch_plan_stop_snapshots WHERE dispatch_plan_id = %s",
+                    (plan_id,),
+                )
+                repo.insert_plan_stop_snapshots(cur, plan_id, stops)
             for o in frozen:
+                new_cov = float(o.get("cobertura_logistica") or 0)
                 cur.execute(
                     """
                     UPDATE distribuidora.dispatch_plan_orders
@@ -2487,7 +2551,12 @@ def repair_order_snapshots(plan_id: int) -> dict[str, Any]:
                         cantidad_unidades = COALESCE(cantidad_unidades, %s),
                         cantidad_cajas = COALESCE(cantidad_cajas, %s),
                         productos_sin_peso = COALESCE(productos_sin_peso, %s),
-                        cobertura_logistica = COALESCE(cobertura_logistica, %s),
+                        cobertura_logistica = CASE
+                            WHEN (cobertura_logistica IS NULL OR cobertura_logistica = 0)
+                                 AND %s > 0
+                            THEN %s
+                            ELSE COALESCE(cobertura_logistica, %s)
+                        END,
                         peso_calculated_at = COALESCE(peso_calculated_at, %s)
                     WHERE dispatch_plan_id = %s AND oc_document_id = %s
                     """,
@@ -2497,7 +2566,9 @@ def repair_order_snapshots(plan_id: int) -> dict[str, Any]:
                         o.get("cantidad_unidades"),
                         o.get("cantidad_cajas"),
                         o.get("productos_sin_peso"),
-                        o.get("cobertura_logistica"),
+                        new_cov,
+                        new_cov,
+                        new_cov,
                         o.get("peso_calculated_at"),
                         plan_id,
                         int(o["oc_document_id"]),

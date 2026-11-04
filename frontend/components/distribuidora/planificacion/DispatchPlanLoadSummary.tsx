@@ -79,8 +79,26 @@ export function DispatchPlanLoadSummaryBlock({ dashboard, className }: Props) {
       </div>
 
       <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-        <KpiCell label="Clientes" value={String(k.clients)} />
-        <KpiCell label="Documentos" value={String(k.documents)} />
+        <KpiCell
+          label="Clientes (OC del plan)"
+          value={String(k.clients_from_oc ?? k.clients)}
+          sub={
+            k.clients_from_picking != null
+              ? `Picking: ${k.clients_from_picking}`
+              : ls.picking.has_snapshot
+                ? undefined
+                : "Sin picking aún"
+          }
+        />
+        <KpiCell
+          label="Docs facturados"
+          value={String(k.documents_from_invoices ?? k.documents)}
+          sub={
+            k.documents_from_picking != null
+              ? `En picking: ${k.documents_from_picking}`
+              : `${k.oc_count ?? inv.confirmed_total ?? "—"} OC en plan`
+          }
+        />
         <KpiCell
           label="Venta OC (plan)"
           value={formatClp(k.oc_total_amount_clp ?? inv.oc_total_amount_clp ?? k.sales_total_clp)}
@@ -93,7 +111,11 @@ export function DispatchPlanLoadSummaryBlock({ dashboard, className }: Props) {
         />
         <KpiCell
           label="Venta picking"
-          value={formatClp(k.picking_sales_clp ?? 0)}
+          value={
+            ls.picking.has_snapshot
+              ? formatClp(k.picking_sales_clp ?? 0)
+              : "—"
+          }
           sub={ls.picking.has_snapshot ? "Docs en snapshot" : "Sin picking aún"}
         />
         <KpiCell label="Productos distintos" value={String(k.distinct_products)} />

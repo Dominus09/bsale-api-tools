@@ -88,6 +88,17 @@ export function DispatchPlanInvoicingDashboard({
             </p>
           ) : (
             <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4 text-sm">
+              {margin.oc_sales_clp != null ? (
+                <div>
+                  <span className="text-muted-foreground">Venta OC (plan)</span>
+                  <p className="font-semibold tabular-nums">
+                    {formatClp(margin.oc_sales_clp)}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground">
+                    No es venta facturada
+                  </p>
+                </div>
+              ) : null}
               <div>
                 <span className="text-muted-foreground">Margen comercial facturado</span>
                 <p className="font-semibold tabular-nums">
@@ -101,24 +112,41 @@ export function DispatchPlanInvoicingDashboard({
               <div>
                 <span className="text-muted-foreground">Costo logístico ruta</span>
                 <p className="font-semibold tabular-nums">
-                  {formatClp(margin.route_cost_clp ?? 0)}
+                  {margin.route_cost_clp == null
+                    ? "No calculado"
+                    : formatClp(margin.route_cost_clp)}
                 </p>
+                {margin.ors_metrics_calculated === false ? (
+                  <p className="text-[11px] text-muted-foreground">Sin ORS en este plan</p>
+                ) : null}
               </div>
               <div className="lg:col-span-2">
-                <span className="text-muted-foreground">Resultado operativo neto</span>
-                <p
-                  className={cn(
-                    "text-lg font-semibold tabular-nums",
-                    (margin.net_operational_clp ?? 0) >= 0
-                      ? "text-emerald-700 dark:text-emerald-400"
-                      : "text-red-600 dark:text-red-300",
-                  )}
-                >
-                  {formatClp(margin.net_operational_clp ?? 0)}
-                </p>
-                <p className="text-[11px] text-muted-foreground">
-                  Fuente: {margin.source ?? "variant_cost"} — solo documentos confirmados
-                </p>
+                <span className="text-muted-foreground">Resultado post-transporte</span>
+                {margin.net_operational_clp == null ? (
+                  <>
+                    <p className="font-semibold text-muted-foreground">No disponible</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {margin.message ??
+                        "Requiere margen comercial y costos de ruta ORS calculados."}
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p
+                      className={cn(
+                        "text-lg font-semibold tabular-nums",
+                        margin.net_operational_clp >= 0
+                          ? "text-emerald-700 dark:text-emerald-400"
+                          : "text-red-600 dark:text-red-300",
+                      )}
+                    >
+                      {formatClp(margin.net_operational_clp)}
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">
+                      Fuente: {margin.source ?? "variant_cost"} — solo documentos confirmados
+                    </p>
+                  </>
+                )}
               </div>
             </div>
           )}

@@ -2368,6 +2368,11 @@ export type DispatchPlanLoadSummary = {
   kpis: {
     clients: number
     documents: number
+    clients_from_oc?: number
+    clients_from_picking?: number | null
+    documents_from_invoices?: number
+    documents_from_picking?: number | null
+    oc_count?: number
     /** Venta OC total del plan (todas las órdenes). */
     oc_total_amount_clp?: number
     /** Venta facturada/confirmada (related + auto). */
@@ -2465,11 +2470,13 @@ export type DispatchPlanDashboard = {
     unavailable?: boolean
     partial?: boolean
     message?: string
+    oc_sales_clp?: number | null
     commercial_margin_clp?: number | null
     invoiced_revenue_clp?: number
     invoiced_cost_clp?: number | null
-    route_cost_clp?: number
+    route_cost_clp?: number | null
     net_operational_clp?: number | null
+    ors_metrics_calculated?: boolean | null
     source?: string
   } | null
   picking: {
