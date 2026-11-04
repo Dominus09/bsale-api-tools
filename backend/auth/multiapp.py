@@ -92,23 +92,56 @@ def _user_id(user: dict[str, Any] | None) -> int | None:
         return None
 
 
-def load_multiapp_scope(user_id: int | None) -> MultiAppScope:
-    """Carga apps/perfiles/oficinas. Seguro si faltan tablas o no hay BD local."""
+def _load_user_company_ids_on_cur(cur, user_id: int) -> list[int] | None:
+    """Lee ``app.user_companies`` en el cursor dado.
+
+    None = sin filas (no restringir). Lista = empresas explícitas.
+    """
+    if not _table_exists(cur, "app", "user_companies"):
+        return None
+    cur.execute(
+        """
+        SELECT company_id
+        FROM app.user_companies
+        WHERE user_id = %s
+        ORDER BY company_id
+        """,
+        (int(user_id),),
+    )
+    ids = [int(r[0]) for r in cur.fetchall()]
+    return ids or None
+
+
+def load_multiapp_scope(
+    user_id: int | None,
+    *,
+    cur: Any | None = None,
+    always_load_companies: bool = False,
+) -> MultiAppScope:
+    """Carga apps/perfiles/oficinas. Seguro si faltan tablas o no hay BD local.
+
+    ``cur``: reutilizar cursor abierto (evita conexión anidada en listados).
+    ``always_load_companies``: leer ``user_companies`` aunque AUTH_EMIT_* esté off
+    (necesario para elegibilidad de choferes).
+    """
     if user_id is None:
         return MultiAppScope()
+    owns_conn = cur is None
     conn = None
+    local_cur = cur
     try:
-        conn = get_connection()
-        cur = conn.cursor()
-        has_apps = _table_exists(cur, "app", "user_apps")
-        has_profiles = _table_exists(cur, "app", "user_operational_profiles")
-        has_offices = _table_exists(cur, "app", "user_offices")
-        has_caps = _table_exists(cur, "app", "user_erp_capabilities")
+        if local_cur is None:
+            conn = get_connection()
+            local_cur = conn.cursor()
+        has_apps = _table_exists(local_cur, "app", "user_apps")
+        has_profiles = _table_exists(local_cur, "app", "user_operational_profiles")
+        has_offices = _table_exists(local_cur, "app", "user_offices")
+        has_caps = _table_exists(local_cur, "app", "user_erp_capabilities")
         tables_ready = has_apps  # mínimo para multiapp
         apps: set[str] = set()
         apps_rows_present = False
         if has_apps:
-            cur.execute(
+            local_cur.execute(
                 """
                 SELECT app_code, active
                 FROM app.user_apps
@@ -116,14 +149,14 @@ def load_multiapp_scope(user_id: int | None) -> MultiAppScope:
                 """,
                 (int(user_id),),
             )
-            rows = cur.fetchall()
+            rows = local_cur.fetchall()
             apps_rows_present = bool(rows)
             for code, active in rows:
                 if active and str(code) in KNOWN_APPS:
                     apps.add(str(code))
         profiles: set[str] = set()
         if has_profiles:
-            cur.execute(
+            local_cur.execute(
                 """
                 SELECT profile_code
                 FROM app.user_operational_profiles
@@ -131,13 +164,13 @@ def load_multiapp_scope(user_id: int | None) -> MultiAppScope:
                 """,
                 (int(user_id),),
             )
-            for (code,) in cur.fetchall():
+            for (code,) in local_cur.fetchall():
                 c = str(code)
                 if c in OPERATIONAL_PROFILES:
                     profiles.add(c)
         erp_capabilities: set[str] = set()
         if has_caps:
-            cur.execute(
+            local_cur.execute(
                 """
                 SELECT capability_code
                 FROM app.user_erp_capabilities
@@ -145,13 +178,13 @@ def load_multiapp_scope(user_id: int | None) -> MultiAppScope:
                 """,
                 (int(user_id),),
             )
-            for (code,) in cur.fetchall():
+            for (code,) in local_cur.fetchall():
                 c = str(code).strip().lower()
                 if c in ERP_CAPABILITIES:
                     erp_capabilities.add(c)
         offices: set[tuple[int, int]] = set()
         if has_offices:
-            cur.execute(
+            local_cur.execute(
                 """
                 SELECT company_id, office_id
                 FROM app.user_offices
@@ -159,10 +192,14 @@ def load_multiapp_scope(user_id: int | None) -> MultiAppScope:
                 """,
                 (int(user_id),),
             )
-            for company_id, office_id in cur.fetchall():
+            for company_id, office_id in local_cur.fetchall():
                 offices.add((int(company_id), int(office_id)))
-        cur.close()
-        company_ids = load_user_company_ids(int(user_id))
+        if always_load_companies:
+            company_ids = _load_user_company_ids_on_cur(local_cur, int(user_id))
+        else:
+            company_ids = load_user_company_ids(int(user_id))
+        if owns_conn and local_cur is not None:
+            local_cur.close()
         return MultiAppScope(
             apps=frozenset(apps),
             profiles=frozenset(profiles),

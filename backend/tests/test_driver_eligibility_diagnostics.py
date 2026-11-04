@@ -46,3 +46,41 @@ def test_pwa_chofer_eligible():
     )
     assert ok is True
     assert missing == []
+
+
+def test_office_filter_rejects_wrong_company_pair():
+    """Chofer con Bodega Central (3,1) no aparece si el UI filtra Minimarkets (1,1)."""
+    ok, missing = svc._eligibility_from_scope(
+        {"id": 16, "active": True},
+        MultiAppScope(
+            tables_ready=True,
+            apps_rows_present=True,
+            apps=frozenset({APP_PWA}),
+            profiles=frozenset({"chofer"}),
+            company_ids=(3,),
+            offices=frozenset({(3, 1)}),
+        ),
+        company_id=1,
+        office_id=1,
+    )
+    assert ok is False
+    assert "company_not_allowed" in missing
+    assert "office_not_allowed" not in missing
+
+
+def test_spa_bodega_central_eligible():
+    ok, missing = svc._eligibility_from_scope(
+        {"id": 16, "active": True},
+        MultiAppScope(
+            tables_ready=True,
+            apps_rows_present=True,
+            apps=frozenset({APP_PWA}),
+            profiles=frozenset({"chofer"}),
+            company_ids=(3,),
+            offices=frozenset({(3, 1)}),
+        ),
+        company_id=3,
+        office_id=1,
+    )
+    assert ok is True
+    assert missing == []

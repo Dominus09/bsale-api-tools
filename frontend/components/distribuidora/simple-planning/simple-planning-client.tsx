@@ -13,7 +13,6 @@ import {
 
 import {
   getDistribuidoraTrucks,
-  getStoredCompanyId,
   listAvailableDispatchDrivers,
   postSimplePlanningAssignPreview,
   postSimplePlanningConfirm,
@@ -71,10 +70,17 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 
+/** Alineado a backend ``oc_source_resolver`` (La Quillotana SPA / Bodega Central). */
+const DISTRIBUIDORA_COMPANY_ID = 3
+const DISTRIBUIDORA_OFFICE_ID = 1
+
+/** Oficinas Bsale de company_id=3 (bsale_id). */
 const OFFICE_OPTIONS = [
-  { id: 1, label: "Oficina 1" },
-  { id: 2, label: "Oficina 2" },
-  { id: 3, label: "Oficina 3" },
+  { id: 1, label: "Bodega Central" },
+  { id: 2, label: "Bodega 1" },
+  { id: 3, label: "Supermercado La Quillotana" },
+  { id: 4, label: "Quillotana I" },
+  { id: 5, label: "Quillotana II" },
 ]
 
 const STATUS_LABEL: Record<string, string> = {
@@ -126,7 +132,7 @@ export function SimplePlanningClient() {
   const canOpenOcAudit = hasManagementAccess(staff)
 
   const [step, setStep] = useState<Step>("input")
-  const [officeId, setOfficeId] = useState(1)
+  const [officeId, setOfficeId] = useState(DISTRIBUIDORA_OFFICE_ID)
   const [pasteText, setPasteText] = useState("")
   const [parseInfo, setParseInfo] = useState<FolioParseResult | null>(null)
   const [fileName, setFileName] = useState<string | null>(null)
@@ -155,6 +161,9 @@ export function SimplePlanningClient() {
   const [confirmDriverUserId, setConfirmDriverUserId] = useState("")
   const [availableDrivers, setAvailableDrivers] = useState<DispatchPlanDriverOption[]>([])
   const [driversNote, setDriversNote] = useState<string | null>(null)
+  const [driverNearMisses, setDriverNearMisses] = useState<
+    { user_id?: number; display_name?: string; missing_labels?: string[] }[]
+  >([])
   const [truckConfirm, setTruckConfirm] = useState<Record<number, TruckConfirmState>>({})
   const [orsByTruck, setOrsByTruck] = useState<Record<number, SimplePlanningOrsSnapshot | null>>(
     {},
@@ -171,7 +180,10 @@ export function SimplePlanningClient() {
     setAckUnevaluableWeight(false)
   }, [])
 
-  const companyId = getStoredCompanyId() ?? 1
+  // Planificación simplificada opera sobre OCs de La Quillotana SPA (company_id=3).
+  // No usar getStoredCompanyId() aquí: el selector global suele quedar en Minimarkets (1)
+  // y el filtro de choferes exige (company_id, office_id) exactos en app.user_offices.
+  const companyId = DISTRIBUIDORA_COMPANY_ID
 
   useEffect(() => {
     let cancelled = false
@@ -445,9 +457,11 @@ export function SimplePlanningClient() {
             r.diagnostics?.requirements_summary_es ||
             null,
         )
+        setDriverNearMisses(r.diagnostics?.ineligible_near_misses || [])
       })
       .catch(() => {
         setAvailableDrivers([])
+        setDriverNearMisses([])
         setDriversNote("No se pudieron cargar choferes elegibles.")
       })
   }
@@ -1324,9 +1338,25 @@ export function SimplePlanningClient() {
                       {!availableDrivers.length ? (
                         <p className="text-[11px] text-amber-800 dark:text-amber-200">
                           {driversNote ||
-                            "Sin choferes elegibles (activo + PWA + perfil chofer)."}
+                            "Sin choferes elegibles (activo + PWA + perfil chofer + empresa/oficina del despacho)."}
                         </p>
                       ) : null}
+                      {driverNearMisses.length ? (
+                        <ul className="mt-1 list-inside list-disc text-[11px] text-muted-foreground">
+                          {driverNearMisses.slice(0, 6).map((n) => (
+                            <li key={n.user_id ?? n.display_name}>
+                              {n.display_name || "Usuario"}
+                              {n.user_id != null ? ` (#${n.user_id})` : ""}:{" "}
+                              {(n.missing_labels || []).join("; ") ||
+                                "requisito pendiente"}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      <p className="text-[10px] text-muted-foreground">
+                        Filtro despacho: empresa {companyId} · oficina {officeId}{" "}
+                        (Bodega Central = 1).
+                      </p>
                     </div>
                     {dialogBlocked ? (
                       <Alert variant="destructive">

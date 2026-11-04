@@ -43,8 +43,8 @@ def test_assert_user_requires_pwa_and_chofer(monkeypatch):
     cur.description = [("id",), ("email",), ("role",), ("active",), ("nombre_usuario",)]
     monkeypatch.setattr(
         svc,
-        "load_multiapp_scope",
-        lambda _uid: _scope(apps={APP_ERP}, profiles=set()),
+        "_driver_scope",
+        lambda _cur, _uid: _scope(apps={APP_ERP}, profiles=set()),
     )
     with pytest.raises(svc.DriverAssignError) as ei:
         svc.assert_user_is_eligible_driver(cur, 9)
@@ -52,8 +52,8 @@ def test_assert_user_requires_pwa_and_chofer(monkeypatch):
 
     monkeypatch.setattr(
         svc,
-        "load_multiapp_scope",
-        lambda _uid: _scope(apps={APP_PWA}, profiles={"vendedor"}),
+        "_driver_scope",
+        lambda _cur, _uid: _scope(apps={APP_PWA}, profiles={"vendedor"}),
     )
     with pytest.raises(svc.DriverAssignError) as ei2:
         svc.assert_user_is_eligible_driver(cur, 9)
@@ -66,8 +66,8 @@ def test_assert_user_company_office(monkeypatch):
     cur.description = [("id",), ("email",), ("role",), ("active",), ("nombre_usuario",)]
     monkeypatch.setattr(
         svc,
-        "load_multiapp_scope",
-        lambda _uid: _scope(
+        "_driver_scope",
+        lambda _cur, _uid: _scope(
             apps={APP_PWA},
             profiles={"chofer"},
             company_ids=(3,),

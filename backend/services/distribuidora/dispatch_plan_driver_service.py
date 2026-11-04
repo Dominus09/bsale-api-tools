@@ -120,8 +120,17 @@ def _eligibility_from_scope(
             missing.append("company_not_allowed")
     if company_id is not None and office_id is not None and scope.offices:
         if (int(company_id), int(office_id)) not in scope.offices:
-            missing.append("office_not_allowed")
+            # Evitar ruido si ya falló la empresa.
+            if "company_not_allowed" not in missing:
+                missing.append("office_not_allowed")
     return (len(missing) == 0), missing
+
+
+def _driver_scope(cur, user_id: int):
+    """Alcance multiapp en el mismo cursor (sin conexión anidada) + empresas siempre."""
+    return load_multiapp_scope(
+        int(user_id), cur=cur, always_load_companies=True
+    )
 
 
 def diagnose_driver_eligibility(
@@ -135,39 +144,57 @@ def diagnose_driver_eligibility(
     try:
         cur = conn.cursor()
         row = _load_user_row(cur, int(user_id))
+        if not row:
+            cur.close()
+            return {
+                "user_id": int(user_id),
+                "eligible": False,
+                "missing": ["user_not_found"],
+                "missing_labels": [DRIVER_REQUIREMENT_LABELS_ES["user_not_found"]],
+                "requirements_summary_es": "Activo + PWA explícita + perfil chofer",
+            }
+        scope = _driver_scope(cur, int(user_id))
+        ok, missing = _eligibility_from_scope(
+            row, scope, company_id=company_id, office_id=office_id
+        )
         cur.close()
-    finally:
-        conn.close()
-    if not row:
         return {
             "user_id": int(user_id),
-            "eligible": False,
-            "missing": ["user_not_found"],
-            "missing_labels": [DRIVER_REQUIREMENT_LABELS_ES["user_not_found"]],
-            "requirements_summary_es": "Activo + PWA explícita + perfil chofer",
+            "display_name": _display_name(row),
+            "active": bool(row.get("active")),
+            "eligible": ok,
+            "has_pwa": APP_PWA in scope.apps and not scope.load_failed,
+            "has_chofer_profile": "chofer" in scope.profiles and not scope.load_failed,
+            "apps": sorted(scope.apps) if not scope.load_failed else [],
+            "profiles": sorted(scope.profiles) if not scope.load_failed else [],
+            "company_ids": (
+                list(scope.company_ids)
+                if scope.company_ids is not None and not scope.load_failed
+                else None
+            ),
+            "offices": (
+                [
+                    {"company_id": c, "office_id": o}
+                    for c, o in sorted(scope.offices)
+                ]
+                if not scope.load_failed
+                else []
+            ),
+            "filter_company_id": company_id,
+            "filter_office_id": office_id,
+            "missing": missing,
+            "missing_labels": [DRIVER_REQUIREMENT_LABELS_ES.get(m, m) for m in missing],
+            "requirements_summary_es": (
+                "Activo + PWA explícita + perfil chofer"
+                + (
+                    " + empresa/oficina del despacho"
+                    if company_id is not None or office_id is not None
+                    else ""
+                )
+            ),
         }
-    scope = load_multiapp_scope(int(user_id))
-    ok, missing = _eligibility_from_scope(
-        row, scope, company_id=company_id, office_id=office_id
-    )
-    return {
-        "user_id": int(user_id),
-        "display_name": _display_name(row),
-        "active": bool(row.get("active")),
-        "eligible": ok,
-        "has_pwa": APP_PWA in scope.apps and not scope.load_failed,
-        "has_chofer_profile": "chofer" in scope.profiles and not scope.load_failed,
-        "missing": missing,
-        "missing_labels": [DRIVER_REQUIREMENT_LABELS_ES.get(m, m) for m in missing],
-        "requirements_summary_es": (
-            "Activo + PWA explícita + perfil chofer"
-            + (
-                " + empresa/oficina del despacho"
-                if company_id is not None or office_id is not None
-                else ""
-            )
-        ),
-    }
+    finally:
+        conn.close()
 
 
 def assert_user_is_eligible_driver(
@@ -181,7 +208,7 @@ def assert_user_is_eligible_driver(
     row = _load_user_row(cur, user_id)
     if not row:
         raise DriverAssignError("Usuario inexistente", code="user_not_found", http_status=404)
-    scope = load_multiapp_scope(int(user_id))
+    scope = _driver_scope(cur, int(user_id))
     ok, missing = _eligibility_from_scope(
         row, scope, company_id=company_id, office_id=office_id
     )
@@ -287,7 +314,7 @@ def list_available_drivers(
                 uid = int(drow["id"])
                 if uid in eligible_ids:
                     continue
-                scope = load_multiapp_scope(uid)
+                scope = _driver_scope(cur, uid)
                 _ok, missing = _eligibility_from_scope(
                     drow, scope, company_id=company_id, office_id=office_id
                 )
