@@ -78,6 +78,9 @@ class MultiAppScope:
     tables_ready: bool = False
     # True si falló la lectura de alcance (BD caída / error). Nunca autorizar en positivo.
     load_failed: bool = False
+    # Lectura de empresas/oficinas falló: fail-closed si el caller filtra por ellas.
+    companies_unverified: bool = False
+    offices_unverified: bool = False
 
 
 def _user_id(user: dict[str, Any] | None) -> int | None:
@@ -125,8 +128,8 @@ def load_multiapp_scope(
     cuando falle un SELECT (p. ej. permiso denegado en ``user_companies``).
 
     ``always_load_companies``: leer ``user_companies`` aunque AUTH_EMIT_* esté off
-    (necesario para elegibilidad de choferes). Un fallo al leer empresas no
-    invalida apps/perfiles/oficinas ya cargados.
+    (elegibilidad de choferes). Si la lectura falla: ``companies_unverified``
+    (fail-closed al filtrar por empresa); no se omite el control.
     """
     if user_id is None:
         return MultiAppScope()
@@ -191,35 +194,52 @@ def load_multiapp_scope(
                 if c in ERP_CAPABILITIES:
                     erp_capabilities.add(c)
         offices: set[tuple[int, int]] = set()
+        offices_unverified = False
         if has_offices:
-            local_cur.execute(
-                """
-                SELECT company_id, office_id
-                FROM app.user_offices
-                WHERE user_id = %s
-                """,
-                (int(user_id),),
-            )
-            for company_id, office_id in local_cur.fetchall():
-                offices.add((int(company_id), int(office_id)))
+            try:
+                local_cur.execute(
+                    """
+                    SELECT company_id, office_id
+                    FROM app.user_offices
+                    WHERE user_id = %s
+                    """,
+                    (int(user_id),),
+                )
+                for company_id, office_id in local_cur.fetchall():
+                    offices.add((int(company_id), int(office_id)))
+            except Exception:
+                logger.warning(
+                    "load_multiapp_scope offices unverified user_id=%s",
+                    user_id,
+                    exc_info=True,
+                )
+                if savepoint:
+                    local_cur.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                    local_cur.execute(f"SAVEPOINT {savepoint}")
+                offices = set()
+                offices_unverified = True
         company_ids: list[int] | None
+        companies_unverified = False
         try:
             if always_load_companies:
                 company_ids = _load_user_company_ids_on_cur(local_cur, int(user_id))
             else:
                 company_ids = load_user_company_ids(int(user_id))
         except Exception:
-            # Permiso/tabla de empresas no debe tumbar todo el alcance ni
-            # abortar la transacción del caller (cursor compartido).
+            # No tumbar TX padre; fail-closed si el caller exige empresa.
             logger.warning(
-                "load_multiapp_scope company_ids degraded user_id=%s",
+                "load_multiapp_scope companies unverified user_id=%s",
                 user_id,
                 exc_info=True,
             )
             if savepoint:
                 local_cur.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
                 local_cur.execute(f"SAVEPOINT {savepoint}")
-            company_ids = None
+            if always_load_companies:
+                company_ids = []
+                companies_unverified = True
+            else:
+                company_ids = None
         if savepoint:
             local_cur.execute(f"RELEASE SAVEPOINT {savepoint}")
             savepoint = None
@@ -233,6 +253,8 @@ def load_multiapp_scope(
             offices=frozenset(offices),
             apps_rows_present=apps_rows_present,
             tables_ready=tables_ready,
+            companies_unverified=companies_unverified,
+            offices_unverified=offices_unverified,
         )
     except Exception:
         logger.exception("load_multiapp_scope failed user_id=%s", user_id)

@@ -1986,6 +1986,10 @@ export type DispatchPlanDriverInfo = {
   plan_id: number
   planning_date?: string
   status?: string
+  planning_origin?: string | null
+  /** Desde sesión simple_list vinculada; ausente en ORS histórico. */
+  company_id?: number | null
+  office_id?: number | null
   driver_user_id?: number | null
   driver_name?: string | null
   assistant_count?: number | null

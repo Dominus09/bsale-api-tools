@@ -115,6 +115,17 @@ def _eligibility_from_scope(
         missing.append("pwa_required")
     if "chofer" not in scope.profiles:
         missing.append("chofer_profile_required")
+    # Fail-closed: sin poder verificar empresa/oficina exigidas, no autorizar.
+    if company_id is not None and getattr(scope, "companies_unverified", False):
+        missing.append("scope_unavailable")
+        return False, missing
+    if (
+        company_id is not None
+        and office_id is not None
+        and getattr(scope, "offices_unverified", False)
+    ):
+        missing.append("scope_unavailable")
+        return False, missing
     if company_id is not None and scope.company_ids is not None:
         if int(company_id) not in scope.company_ids:
             missing.append("company_not_allowed")
@@ -124,6 +135,41 @@ def _eligibility_from_scope(
             if "company_not_allowed" not in missing:
                 missing.append("office_not_allowed")
     return (len(missing) == 0), missing
+
+
+def resolve_plan_company_office(cur, plan_id: int) -> tuple[int | None, int | None]:
+    """Empresa/oficina del despacho cuando existe sesión simple_list vinculada.
+
+    ORS / planes sin sesión → (None, None): el caller no debe forzar SPA.
+    """
+    from backend.auth.staff_session import _table_exists
+
+    try:
+        if not _table_exists(cur, "distribuidora", "simple_planning_sessions"):
+            return None, None
+        cur.execute(
+            """
+            SELECT company_id, office_id
+            FROM distribuidora.simple_planning_sessions
+            WHERE confirmed_plan_id = %s
+            ORDER BY updated_at DESC NULLS LAST, created_at DESC
+            LIMIT 1
+            """,
+            (int(plan_id),),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None, None
+        return int(row[0]), int(row[1])
+    except Exception:
+        logger.exception("resolve_plan_company_office failed plan_id=%s", plan_id)
+        try:
+            conn = getattr(cur, "connection", None)
+            if conn is not None:
+                conn.rollback()
+        except Exception:
+            pass
+        return None, None
 
 
 def _driver_scope(_cur, user_id: int):
@@ -411,11 +457,16 @@ def get_plan_driver(plan_id: int) -> dict[str, Any]:
                     "active": bool(row.get("active")),
                 }
         history = _list_driver_events(cur, int(plan_id))
+        company_id, office_id = resolve_plan_company_office(cur, int(plan_id))
+        origin = str(plan.get("planning_origin") or "").strip().lower() or None
         cur.close()
         return {
             "plan_id": int(plan_id),
             "planning_date": plan.get("planning_date"),
             "status": plan.get("status"),
+            "planning_origin": origin,
+            "company_id": company_id,
+            "office_id": office_id,
             "driver_user_id": int(driver_user_id) if driver_user_id is not None else None,
             "driver_name": plan.get("driver_name"),
             "assistant_count": plan.get("assistant_count"),

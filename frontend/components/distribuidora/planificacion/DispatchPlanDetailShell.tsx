@@ -455,8 +455,7 @@ export function DispatchPlanDetailShell({
         <TabsContent value="chofer" className="mt-4 space-y-4">
           <DispatchPlanDriverAssign
             planId={planId}
-            companyId={3}
-            officeId={1}
+            planningOrigin={plan.planning_origin}
             onAssigned={() => {
               void onReloadDashboard()
             }}

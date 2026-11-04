@@ -87,11 +87,52 @@ def test_shared_cursor_survives_user_companies_permission_denied(monkeypatch):
     assert APP_PWA in scope.apps
     assert "chofer" in scope.profiles
     assert (3, 1) in scope.offices
-    assert scope.company_ids is None  # degradado, no fatal
+    # Fail-closed: sin poder verificar empresas → tupla vacía + flag.
+    assert scope.companies_unverified is True
+    assert scope.company_ids == ()
 
     # Cursor no abortado: otra sentencia debe funcionar.
     cur.execute("SELECT 1 FROM information_schema.tables WHERE table_schema = %s", ("app",))
     assert cur.fetchone() is not None
+
+
+def test_fail_closed_unverified_companies_not_eligible():
+    """Con filtro de empresa, companies_unverified ⇒ no elegible."""
+    ok, missing = svc._eligibility_from_scope(
+        {"id": 16, "active": True},
+        MultiAppScope(
+            tables_ready=True,
+            apps_rows_present=True,
+            apps=frozenset({APP_PWA}),
+            profiles=frozenset({"chofer"}),
+            company_ids=(),
+            companies_unverified=True,
+            offices=frozenset({(3, 1)}),
+        ),
+        company_id=3,
+        office_id=1,
+    )
+    assert ok is False
+    assert "scope_unavailable" in missing
+
+
+def test_fail_closed_unverified_offices_not_eligible():
+    ok, missing = svc._eligibility_from_scope(
+        {"id": 16, "active": True},
+        MultiAppScope(
+            tables_ready=True,
+            apps_rows_present=True,
+            apps=frozenset({APP_PWA}),
+            profiles=frozenset({"chofer"}),
+            company_ids=(3,),
+            offices=frozenset(),
+            offices_unverified=True,
+        ),
+        company_id=3,
+        office_id=1,
+    )
+    assert ok is False
+    assert "scope_unavailable" in missing
 
 
 def test_list_available_drivers_does_not_503_when_scope_uses_own_connection(monkeypatch):

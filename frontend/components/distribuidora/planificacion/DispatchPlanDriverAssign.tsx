@@ -15,25 +15,34 @@ import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
-/** Bodega Central / La Quillotana SPA — mismo alcance que planificación simplificada. */
-const DEFAULT_COMPANY_ID = 3
-const DEFAULT_OFFICE_ID = 1
+/** Solo fallback para planificación simplificada SPA / Bodega Central. */
+const SIMPLE_LIST_COMPANY_ID = 3
+const SIMPLE_LIST_OFFICE_ID = 1
 
 type Props = {
   planId: number
   canAssign?: boolean
-  /** Empresa del despacho (preferir la del plan; default SPA). */
-  companyId?: number
-  /** Oficina del despacho (preferir la del plan; default Bodega Central). */
-  officeId?: number
+  /** Si el padre conoce el origen (simple_list | ors). */
+  planningOrigin?: string | null
   onAssigned?: () => void
+}
+
+function resolveScope(info: DispatchPlanDriverInfo | null, planningOrigin?: string | null) {
+  if (info?.company_id != null && info?.office_id != null) {
+    return { companyId: info.company_id, officeId: info.office_id }
+  }
+  const origin = (info?.planning_origin || planningOrigin || "").toLowerCase()
+  if (origin === "simple_list") {
+    return { companyId: SIMPLE_LIST_COMPANY_ID, officeId: SIMPLE_LIST_OFFICE_ID }
+  }
+  // ORS / desconocido: sin filtro de empresa-oficina (solo PWA+chofer).
+  return { companyId: undefined as number | undefined, officeId: undefined as number | undefined }
 }
 
 export function DispatchPlanDriverAssign({
   planId,
   canAssign = true,
-  companyId = DEFAULT_COMPANY_ID,
-  officeId = DEFAULT_OFFICE_ID,
+  planningOrigin = null,
   onAssigned,
 }: Props) {
   const [info, setInfo] = useState<DispatchPlanDriverInfo | null>(null)
@@ -49,6 +58,7 @@ export function DispatchPlanDriverAssign({
   const [nearMisses, setNearMisses] = useState<
     { user_id?: number; display_name?: string; email?: string; missing_labels?: string[] }[]
   >([])
+  const [scopeLabel, setScopeLabel] = useState<string>("")
 
   async function reload() {
     setLoading(true)
@@ -70,10 +80,17 @@ export function DispatchPlanDriverAssign({
         return
       }
 
+      const scope = resolveScope(driverInfo, planningOrigin)
+      setScopeLabel(
+        scope.companyId != null && scope.officeId != null
+          ? `empresa ${scope.companyId} · oficina ${scope.officeId}`
+          : "sin filtro empresa/oficina (ORS / contexto no vinculado)",
+      )
+
       try {
         const available = await listAvailableDispatchDrivers({
-          company_id: companyId,
-          office_id: officeId,
+          company_id: scope.companyId,
+          office_id: scope.officeId,
           diagnostics: true,
         })
         setDrivers(available.items || [])
@@ -101,7 +118,7 @@ export function DispatchPlanDriverAssign({
     if (!Number.isFinite(planId) || planId <= 0) return
     void reload()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [planId, companyId, officeId, canAssign])
+  }, [planId, canAssign, planningOrigin])
 
   async function onSubmit() {
     const uid = Number(driverUserId)
@@ -116,12 +133,13 @@ export function DispatchPlanDriverAssign({
     setBusy(true)
     setError(null)
     setMsg(null)
+    const scope = resolveScope(info, planningOrigin)
     try {
       const res = await assignDispatchPlanDriver(planId, {
         driver_user_id: uid,
         reason: reason.trim(),
-        company_id: companyId,
-        office_id: officeId,
+        company_id: scope.companyId,
+        office_id: scope.officeId,
       })
       const conflictN = res.same_day_conflicts?.length ?? 0
       setMsg(
@@ -211,9 +229,9 @@ export function DispatchPlanDriverAssign({
                 No hay choferes habilitados para esta empresa y oficina.
               </p>
             ) : null}
-            <p className="text-[10px] text-muted-foreground">
-              Filtro: empresa {companyId} · oficina {officeId}
-            </p>
+            {scopeLabel ? (
+              <p className="text-[10px] text-muted-foreground">Filtro: {scopeLabel}</p>
+            ) : null}
           </div>
           <div className="space-y-1">
             <Label htmlFor={`reason-${planId}`}>Motivo</Label>
@@ -246,10 +264,6 @@ export function DispatchPlanDriverAssign({
               </li>
             ))}
           </ul>
-          <p className="mt-1.5 text-[10px]">
-            Corregir en Admin → Usuarios y Accesos: activar app PWA + perfil operacional
-            «chofer» (+ empresa/oficina del despacho). El rol ERP «operativo» no alcanza.
-          </p>
         </div>
       ) : null}
 
