@@ -240,15 +240,80 @@ def picking_warnings_from_stops(stops: list[dict[str, Any]]) -> list[str]:
     return warnings
 
 
+def _style_sheet(ws, *, money_cols: set[str] | None = None, text_cols: set[str] | None = None) -> None:
+    from openpyxl.styles import Alignment, Font, numbers
+    from openpyxl.utils import get_column_letter
+
+    money_cols = money_cols or set()
+    text_cols = text_cols or set()
+    if ws.max_row < 1:
+        return
+    headers = {cell.value: cell.column for cell in ws[1] if cell.value}
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+    bold = Font(bold=True)
+    for cell in ws[1]:
+        cell.font = bold
+        cell.alignment = Alignment(wrap_text=True, vertical="center")
+    for name, col_idx in headers.items():
+        letter = get_column_letter(col_idx)
+        max_len = len(str(name or ""))
+        for row in ws.iter_rows(min_row=2, min_col=col_idx, max_col=col_idx):
+            val = row[0].value
+            if val is None:
+                continue
+            max_len = max(max_len, min(len(str(val)), 48))
+            if name in money_cols and isinstance(val, (int, float)):
+                row[0].number_format = '#,##0'
+            if name in text_cols:
+                row[0].number_format = numbers.FORMAT_TEXT
+                row[0].value = str(val)
+        ws.column_dimensions[letter].width = max(12, min(max_len + 2, 42))
+    ws.print_title_rows = "1:1"
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToPage = True
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+
+
 def build_picking_client_excel(
     plan_id: int,
     header: dict[str, Any],
     clients: list[dict[str, Any]],
 ) -> tuple[bytes, str]:
-    rows = [
+    from backend.utils.picking_presentation import enrich_client_presentation
+
+    presented = enrich_client_presentation(clients)
+    # Hoja legible (bodega/chofer). Conserva orden de entrega.
+    present_rows = [
+        {
+            "Parada": c.get("stop_number"),
+            "orden_ruta": c.get("route_order"),
+            "Comuna": c.get("display_commune") or c.get("city"),
+            "Sector": c.get("display_sector") or "",
+            "Cliente": c.get("client_name"),
+            "Nombre fantasía": c.get("fantasy_name"),
+            "Dirección": c.get("address"),
+            "Teléfono": c.get("phone"),
+            "Nº documento": (
+                str(c.get("document_number")) if c.get("document_number") is not None else ""
+            ),
+            "Tipo documento": c.get("document_type"),
+            "Forma de pago (documento)": c.get("payment_method"),
+            "Vendedor": c.get("seller_name"),
+            "Observaciones": c.get("observations"),
+            "Total documento": c.get("document_total"),
+        }
+        for c in presented
+    ]
+    # Hoja técnica compatible con integraciones existentes.
+    tech_rows = [
         {
             "orden_ruta": c.get("route_order"),
+            "parada_visible": c.get("stop_number"),
             "ciudad": c.get("city"),
+            "comuna": c.get("display_commune"),
+            "sector": c.get("display_sector"),
             "cliente": c.get("client_name"),
             "nombre_fantasia": c.get("fantasy_name"),
             "direccion": c.get("address"),
@@ -264,11 +329,22 @@ def build_picking_client_excel(
             "origen": c.get("relation_source"),
             "inclusion": c.get("inclusion"),
         }
-        for c in clients
+        for c in presented
     ]
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        pd.DataFrame(rows).to_excel(writer, sheet_name="Picking cliente", index=False)
+        pd.DataFrame(present_rows).to_excel(writer, sheet_name="Picking cliente", index=False)
+        _style_sheet(
+            writer.sheets["Picking cliente"],
+            money_cols={"Total documento"},
+            text_cols={"Nº documento", "Teléfono"},
+        )
+        pd.DataFrame(tech_rows).to_excel(writer, sheet_name="Datos técnicos", index=False)
+        _style_sheet(
+            writer.sheets["Datos técnicos"],
+            money_cols={"total_documento"},
+            text_cols={"numero_documento", "celular"},
+        )
         meta = pd.DataFrame(
             [
                 {"campo": k, "valor": v}
@@ -292,22 +368,63 @@ def build_picking_product_excel(
     header: dict[str, Any],
     items: list[dict[str, Any]],
 ) -> tuple[bytes, str]:
-    rows = [
-        {
-            "sucursal_bodega": i.get("sucursal_bodega"),
-            "unidades": i.get("unidades"),
-            "tipo_producto": i.get("tipo_producto"),
-            "cajas": i.get("cajas"),
-            "sin_unidad_caja": "Sí" if i.get("sin_unidad_caja") else "",
-            "producto_variante": i.get("display_name") or i.get("producto_variante"),
-            "codigo_barras": i.get("codigo_barras"),
-            "total_monto": i.get("total_monto"),
-        }
-        for i in items
-    ]
+    from backend.utils.picking_presentation import commercial_pack_label
+
+    present_rows = []
+    tech_rows = []
+    for i in items:
+        pack = commercial_pack_label(
+            units_per_box=i.get("units_per_box_efectivo") or i.get("units_per_box"),
+            unidades=i.get("unidades"),
+        )
+        present_rows.append(
+            {
+                "Categoría": i.get("tipo_producto"),
+                "Producto": i.get("display_name") or i.get("producto_variante"),
+                "Código de barras": (
+                    str(i.get("codigo_barras")) if i.get("codigo_barras") is not None else ""
+                ),
+                "Cantidad solicitada": i.get("unidades"),
+                "Presentación comercial": pack or "",
+                "Cajas (ref. units_per_box)": i.get("cajas") if not i.get("sin_unidad_caja") else "",
+                "Sin unidad caja": "Sí" if i.get("sin_unidad_caja") else "",
+                "Cantidad preparada": "",
+                "Cantidad cargada": "",
+                "Diferencia / faltante": "",
+                "Bodega": i.get("sucursal_bodega"),
+                "Total": i.get("total_monto"),
+                "Camión": header.get("truck_name"),
+                "Planificación": header.get("planning_number"),
+            }
+        )
+        tech_rows.append(
+            {
+                "sucursal_bodega": i.get("sucursal_bodega"),
+                "unidades": i.get("unidades"),
+                "tipo_producto": i.get("tipo_producto"),
+                "cajas": i.get("cajas"),
+                "sin_unidad_caja": "Sí" if i.get("sin_unidad_caja") else "",
+                "units_per_box": i.get("units_per_box"),
+                "presentacion_comercial": pack,
+                "producto_variante": i.get("display_name") or i.get("producto_variante"),
+                "codigo_barras": i.get("codigo_barras"),
+                "total_monto": i.get("total_monto"),
+            }
+        )
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-        pd.DataFrame(rows).to_excel(writer, sheet_name="Picking producto", index=False)
+        pd.DataFrame(present_rows).to_excel(writer, sheet_name="Picking producto", index=False)
+        _style_sheet(
+            writer.sheets["Picking producto"],
+            money_cols={"Total"},
+            text_cols={"Código de barras"},
+        )
+        pd.DataFrame(tech_rows).to_excel(writer, sheet_name="Datos técnicos", index=False)
+        _style_sheet(
+            writer.sheets["Datos técnicos"],
+            money_cols={"total_monto"},
+            text_cols={"codigo_barras"},
+        )
         pd.DataFrame(
             [{"campo": k, "valor": v} for k, v in header.items() if k != "plan_id"]
         ).to_excel(writer, sheet_name="Encabezado", index=False)

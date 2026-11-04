@@ -9,8 +9,10 @@ import {
   formatOperativeBoxes,
   normalizeCityKey,
   normalizePickingCategory,
+  parseCommuneSector,
   productLineLabel,
   stablePickingKpiLine,
+  visibleStopNumber,
 } from "@/lib/picking-display"
 import {
   createPdfLogoDocState,
@@ -388,11 +390,16 @@ export async function exportDispatchPlanPickingClientePdf(params: {
   let lastCityKey = ""
   let total = 0
   let rowIdx = 0
+  const minRouteOrder = params.clients.reduce((min, c) => {
+    const ro = Number(c.route_order)
+    return Number.isFinite(ro) ? Math.min(min, ro) : min
+  }, 0)
 
   for (const c of params.clients) {
-    const cityKey = normalizeCityKey(c.city)
-    const cityLabel = displayCityLabel(c.city)
-    if (cityKey && cityKey !== lastCityKey && mode !== "compact") {
+    const geo = parseCommuneSector(c.city)
+    const cityKey = geo.communeKey || normalizeCityKey(c.city)
+    const cityLabel = geo.headerLabel || displayCityLabel(c.city)
+    if (cityKey && cityKey !== lastCityKey) {
       if (y > bottomY - 8) {
         doc.addPage()
         y = drawBrandedHeader(
@@ -408,7 +415,12 @@ export async function exportDispatchPlanPickingClientePdf(params: {
       }
       doc.setFont("helvetica", "bold")
       doc.setFontSize(fontSize + 0.3)
-      doc.text(cityLabel, x0, y + 2.5)
+      doc.text(geo.displayCommune || cityLabel, x0, y + 2.5)
+      if (geo.displaySector) {
+        doc.setFont("helvetica", "normal")
+        doc.setFontSize(fontSize)
+        doc.text(`Sector: ${geo.displaySector}`, x0 + 40, y + 2.5)
+      }
       doc.setFont("helvetica", "normal")
       doc.setFontSize(fontSize)
       y += 4
@@ -419,9 +431,12 @@ export async function exportDispatchPlanPickingClientePdf(params: {
     const tel = clientPhone(c)
     const amt = Number(c.document_total) || 0
     total += amt
+    const stopNo = visibleStopNumber(c.route_order, minRouteOrder)
     const cellTexts = [
-      String(c.route_order ?? ""),
-      cityLabel,
+      String(stopNo),
+      geo.displaySector
+        ? `${geo.displayCommune} (${geo.displaySector})`
+        : geo.displayCommune || cityLabel,
       c.client_name || "",
       c.fantasy_name || "",
       tel,
@@ -503,11 +518,14 @@ export async function exportDispatchPlanPickingProductoPdf(params: {
 
   const cols = fitColumns(
     [
-      { key: "Producto", w: 92 },
-      { key: "Código barra", w: 32 },
-      { key: "Unidades", w: 18, align: "center" },
-      { key: "Cajas", w: 16, align: "center" },
-      { key: "Monto", w: 22, align: "right" },
+      { key: "Producto", w: 70 },
+      { key: "Código barra", w: 28 },
+      { key: "Solic.", w: 14, align: "center" },
+      { key: "Pres. com.", w: 18, align: "center" },
+      { key: "Prep.", w: 14, align: "center" },
+      { key: "Carg.", w: 14, align: "center" },
+      { key: "Dif.", w: 12, align: "center" },
+      { key: "Monto", w: 18, align: "right" },
     ],
     contentWidth(pageW),
   )
@@ -583,13 +601,21 @@ export async function exportDispatchPlanPickingProductoPdf(params: {
     totalMonto += m
 
     const label = productLineLabel(item)
-    const boxesStr =
-      item.sin_unidad_caja && boxes === 0 ? "—" : formatOperativeBoxes(boxes)
+    const upb = Number(item.units_per_box_efectivo ?? item.units_per_box) || 0
+    const packLabel =
+      upb > 0
+        ? `${u > 0 ? Math.round((u / upb) * 100) / 100 : "—"}×SEC${Number.isInteger(upb) ? upb : upb}`
+        : item.sin_unidad_caja
+          ? "s/caja"
+          : "—"
     const cellTexts = [
       label,
       item.codigo_barras || "—",
       String(Math.round(u)),
-      boxesStr,
+      packLabel,
+      "",
+      "",
+      "",
       formatClp(m),
     ]
 
