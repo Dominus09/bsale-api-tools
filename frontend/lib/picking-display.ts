@@ -69,16 +69,93 @@ export function clientPhone(row: DispatchPlanPickingClientRow): string {
   return (row.phone || "").trim()
 }
 
-/** Clave de agrupación: trim, espacios colapsados, sin distinguir mayúsculas. */
-export function normalizeCityKey(city?: string | null): string {
-  if (!city?.trim()) return ""
-  return city.trim().replace(/\s+/g, " ").toLowerCase()
+const COMMUNE_CANONICAL: Record<string, string> = {
+  quellon: "Quellón",
 }
 
-/** Etiqueta visible de ciudad (trim + espacios simples, conserva capitalización). */
-export function displayCityLabel(city?: string | null): string {
+const SECTOR_TOKENS = new Set([
+  "rural",
+  "urbano",
+  "urbana",
+  "norte",
+  "sur",
+  "oriente",
+  "poniente",
+  "centro",
+])
+
+function stripAccents(value: string): string {
+  return value.normalize("NFD").replace(/\p{M}/gu, "")
+}
+
+function titleEs(value: string): string {
+  return value
+    .split(" ")
+    .filter(Boolean)
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase())
+    .join(" ")
+}
+
+/** Clave de agrupación: sin acentos, minúsculas, espacios colapsados. */
+export function normalizeCityKey(city?: string | null): string {
   if (!city?.trim()) return ""
-  return city.trim().replace(/\s+/g, " ")
+  return stripAccents(city).trim().replace(/\s+/g, " ").toLowerCase()
+}
+
+export type CommuneSector = {
+  communeKey: string
+  displayCommune: string
+  displaySector: string
+  headerLabel: string
+}
+
+/** Separa comuna/sector solo para presentación (no altera datos fuente). */
+export function parseCommuneSector(city?: string | null): CommuneSector {
+  const label = (city || "").trim().replace(/\s+/g, " ")
+  if (!label) {
+    return { communeKey: "", displayCommune: "", displaySector: "", headerLabel: "" }
+  }
+  const parts = label.split(" ")
+  let sector = ""
+  let communeParts = parts
+  const last = stripAccents(parts[parts.length - 1] || "").toLowerCase()
+  if (parts.length >= 2 && SECTOR_TOKENS.has(last)) {
+    sector = parts[parts.length - 1]
+    communeParts = parts.slice(0, -1)
+  }
+  const communeRaw = communeParts.join(" ").trim() || label
+  let key = normalizeCityKey(communeRaw)
+  for (const tok of SECTOR_TOKENS) {
+    if (key.endsWith(` ${tok}`)) {
+      key = key.slice(0, -(tok.length + 1)).trim()
+      if (!sector) sector = tok
+    }
+  }
+  const displayCommune = COMMUNE_CANONICAL[key] || titleEs(communeRaw)
+  const displaySector = sector ? titleEs(sector) : ""
+  return {
+    communeKey: key,
+    displayCommune,
+    displaySector,
+    headerLabel: displaySector ? `${displayCommune} · ${displaySector}` : displayCommune,
+  }
+}
+
+/** Etiqueta visible de ciudad (comuna canónica + sector si aplica). */
+export function displayCityLabel(city?: string | null): string {
+  const parsed = parseCommuneSector(city)
+  return parsed.headerLabel || (city || "").trim().replace(/\s+/g, " ")
+}
+
+/** Numeración visible 1..N aunque route_order interno empiece en 0. */
+export function visibleStopNumber(
+  routeOrder: number | null | undefined,
+  minRouteOrder = 0,
+): number {
+  const ro = Number(routeOrder)
+  if (!Number.isFinite(ro)) return 1
+  if (minRouteOrder <= 0) return ro - minRouteOrder + 1
+  return ro >= 1 ? ro : ro + 1
 }
 
 export type CityGroupedRow<T> = {
