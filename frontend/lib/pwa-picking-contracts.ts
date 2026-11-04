@@ -11,7 +11,7 @@ import type {
 import type { DriverDeliveryCardData } from "@/components/distribuidora/pwa/driver-delivery-card"
 import type { WarehousePickingCardData } from "@/components/distribuidora/pwa/warehouse-picking-card"
 import {
-  commercialBoxEquivLabel,
+  formatCommercialBoxesCell,
   parseCommuneSector,
   productLineLabel,
   visibleStopNumber,
@@ -30,8 +30,8 @@ export function toWarehouseCards(
       category: it.tipo_producto,
       branchLabel: it.sucursal_bodega || "Centro de despacho",
       requestedUnits: units,
-      commercialPackLabel: commercialBoxEquivLabel(it),
-      preparedUnits: null, // física — PWA futura
+      commercialPackLabel: formatCommercialBoxesCell(it),
+      preparedUnits: null, // control físico — PWA futura
       loadedUnits: null,
       truckName: header.truck_name,
       planningCode: header.planning_number,

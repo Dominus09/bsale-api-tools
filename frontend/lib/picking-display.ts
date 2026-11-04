@@ -16,41 +16,56 @@ export function formatOperativeBoxes(value: number): string {
   return value.toFixed(2)
 }
 
+function roundBoxes(n: number): number {
+  return Math.round(n * 100) / 100
+}
+
 /** Cantidades operativas: conserva fracciones; no redondea a entero arbitrario. */
 export function formatPickingQuantity(value: number | null | undefined): string {
   const n = Number(value)
   if (!Number.isFinite(n)) return "—"
-  const rounded = Math.round(n * 100) / 100
+  const rounded = roundBoxes(n)
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2)
 }
 
-/** Equivalencia comercial de cajas (SEC), distinta de cajas físicas preparadas/cargadas. */
-export function commercialBoxEquivLabel(row: {
+/**
+ * Equivalencia comercial en cajas (número), usando units_per_box confiable.
+ * No implica bulto físico precintado. null = no disponible.
+ */
+export function commercialBoxesValue(row: {
   units_per_box?: number | null
   units_per_box_efectivo?: number | null
   unidades?: number | null
   sin_unidad_caja?: boolean | null
-}): string {
+  cajas_efectivas?: number | null
+  cajas?: number | null
+}): number | null {
+  if (row.cajas_efectivas != null && Number.isFinite(Number(row.cajas_efectivas))) {
+    return roundBoxes(Number(row.cajas_efectivas))
+  }
   const upb = Number(row.units_per_box_efectivo ?? row.units_per_box) || 0
   const units = Number(row.unidades) || 0
-  if (upb <= 0) return row.sin_unidad_caja ? "s/caja" : "—"
-  const packs = units > 0 ? Math.round((units / upb) * 100) / 100 : null
-  const sec = Number.isInteger(upb) ? String(upb) : String(upb)
-  if (packs == null) return `SEC${sec}`
-  const packsLabel = Number.isInteger(packs) ? String(packs) : packs.toFixed(2)
-  return `${packsLabel} × SEC${sec}`
+  if (upb > 0 && units > 0) return roundBoxes(units / upb)
+  if (row.sin_unidad_caja) return null
+  const raw = Number(row.cajas)
+  if (Number.isFinite(raw) && raw > 0) return roundBoxes(raw)
+  return null
+}
+
+/** Celda «Cajas»: número o «n/d» si no hay equivalencia verificable. */
+export function formatCommercialBoxesCell(row: Parameters<typeof commercialBoxesValue>[0]): string {
+  const v = commercialBoxesValue(row)
+  if (v == null) return "n/d"
+  return formatPickingQuantity(v)
+}
+
+/** @deprecated Preferir formatCommercialBoxesCell (solo número). */
+export function commercialBoxEquivLabel(row: Parameters<typeof commercialBoxesValue>[0]): string {
+  return formatCommercialBoxesCell(row)
 }
 
 export function effectiveBoxes(row: DispatchPlanPickingProductRow): number {
-  if (row.cajas_efectivas != null) return roundBoxes(Number(row.cajas_efectivas) || 0)
-  const u = Number(row.unidades) || 0
-  const upb = Number(row.units_per_box_efectivo ?? row.units_per_box) || 0
-  if (upb > 0 && u > 0) return roundBoxes(u / upb)
-  return row.sin_unidad_caja ? 0 : roundBoxes(Number(row.cajas) || 0)
-}
-
-function roundBoxes(n: number): number {
-  return Math.round(n * 100) / 100
+  return commercialBoxesValue(row) ?? 0
 }
 
 export function categoryStatsFromItems(

@@ -3,10 +3,10 @@ import {
   categoryStatsFromItems,
   clientDeliveryNotes,
   clientPhone,
-  commercialBoxEquivLabel,
+  commercialBoxesValue,
   countDistinctClients,
   displayCityLabel,
-  effectiveBoxes,
+  formatCommercialBoxesCell,
   formatOperativeBoxes,
   formatPickingQuantity,
   normalizePickingCategory,
@@ -52,9 +52,10 @@ type PdfCol = {
 }
 
 function layoutForRowCount(n: number): LayoutMode {
-  if (n <= 12) return "comfortable"
-  if (n > 28) return "compact"
-  return "normal"
+  // Operación típica ~30; excepcional 35–40. Priorizar legibilidad.
+  if (n <= 30) return "comfortable"
+  if (n <= 40) return "normal"
+  return "compact"
 }
 
 function planLabel(header: DispatchPlanPickingHeader): string {
@@ -188,7 +189,10 @@ function drawCellText(
     const ty = y + pad + (i + 1) * lineH - 0.5
     const tx =
       align === "right" ? x + col.w - pad : align === "center" ? x + col.w / 2 : x + pad
-    doc.text(lines[i] || "—", tx, ty, {
+    // Celda vacía ("") permanece en blanco — p.ej. columna Control para escritura manual.
+    const piece = lines[i] ?? ""
+    if (piece === "" && text === "") continue
+    doc.text(piece || "—", tx, ty, {
       align: align === "right" ? "right" : align === "center" ? "center" : "left",
     })
   }
@@ -436,7 +440,7 @@ export async function buildDispatchPlanPickingProductoPdf(params: {
   generatedAt?: string | null
 }): Promise<import("jspdf").jsPDF> {
   const { jsPDF } = await import("jspdf")
-  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "letter" })
+  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" })
   const pageW = doc.internal.pageSize.getWidth()
   const pageH = doc.internal.pageSize.getHeight()
   const logo = await loadQuillotanaLogoForPdf()
@@ -447,22 +451,21 @@ export async function buildDispatchPlanPickingProductoPdf(params: {
     planningNumber: planLabel(params.header),
   }
   const mode = layoutForRowCount(params.items.length)
-  const fontSize = mode === "comfortable" ? 6.8 : mode === "compact" ? 5.4 : 6.2
-  const lineH = fontSize * 0.4
+  const fontSize = mode === "comfortable" ? 7.2 : mode === "compact" ? 5.8 : 6.6
+  const lineH = fontSize * 0.42
   const bottomY = pageH - MARGIN.bottom - 5
   const x0 = MARGIN.left
 
-  // Formato bodega: sucursal, cantidad, equivalencia comercial SEC, espacios prep/carga físicas.
+  // Unidades + Cajas (número) + una sola columna Control vacía para anotación manual.
   const cols = fitColumns(
     [
       { key: "Sucursal", w: 22 },
-      { key: "Producto", w: 48 },
-      { key: "Código", w: 24 },
-      { key: "Cantidad", w: 14, align: "center" },
-      { key: "Equiv. cajas", w: 18, align: "center" },
-      { key: "Prep.", w: 12, align: "center" },
-      { key: "Carg.", w: 12, align: "center" },
-      { key: "Monto", w: 16, align: "right" },
+      { key: "Producto", w: 52 },
+      { key: "Código", w: 26 },
+      { key: "Unidades", w: 16, align: "center" },
+      { key: "Cajas", w: 14, align: "center" },
+      { key: "Control", w: 22, align: "center" },
+      { key: "Monto", w: 18, align: "right" },
     ],
     contentWidth(pageW),
   )
@@ -479,18 +482,18 @@ export async function buildDispatchPlanPickingProductoPdf(params: {
     logoState,
   )
 
-  doc.setFontSize(6.2)
+  doc.setFontSize(6.4)
   doc.setTextColor(70, 70, 70)
   doc.text(
-    "Equiv. cajas = presentación comercial SEC (no implica cajas físicas cargadas). Prep./Carg. = control físico en bodega.",
+    "Cajas = equivalencia comercial (units_per_box). No implica bulto físico. Control = espacio en blanco para anotar a mano.",
     MARGIN.left,
     y,
     { maxWidth: contentWidth(pageW) },
   )
   doc.setTextColor(0, 0, 0)
-  y += 4
+  y += 4.5
 
-  const headH = mode === "compact" ? 4.2 : 5
+  const headH = mode === "compact" ? 4.5 : 5.5
   const drawHead = () => {
     doc.setFontSize(fontSize)
     y = drawTableHeader(doc, cols, x0, y + headH, fontSize, headH)
@@ -533,7 +536,7 @@ export async function buildDispatchPlanPickingProductoPdf(params: {
       doc.setFont("helvetica", "normal")
       doc.setFontSize(fontSize)
       doc.text(
-        `${stats.skus} SKU · ${formatPickingQuantity(stats.units)} u · equiv. ${formatOperativeBoxes(stats.boxes)} cajas · ${formatClp(stats.monto)}`,
+        `${stats.skus} SKU · ${formatPickingQuantity(stats.units)} u · ${formatOperativeBoxes(stats.boxes)} cajas · ${formatClp(stats.monto)}`,
         x0 + 1.5,
         y + 6.4,
       )
@@ -541,27 +544,28 @@ export async function buildDispatchPlanPickingProductoPdf(params: {
     }
 
     const u = Number(item.unidades) || 0
-    const boxes = effectiveBoxes(item)
+    const boxes = commercialBoxesValue(item)
     const m = Number(item.total_monto) || 0
     totalUnits += u
-    totalBoxes += boxes
+    if (boxes != null) totalBoxes += boxes
     totalMonto += m
 
+    // Altura mínima generosa en Control para escritura a mano.
+    const controlMinH = 7.5
     const cellTexts = [
       item.sucursal_bodega || "Centro de despacho",
       productLineLabel(item),
       item.codigo_barras || "—",
       formatPickingQuantity(u),
-      commercialBoxEquivLabel(item),
-      "", // preparación física — no inventar
-      "", // carga física — no inventar
+      formatCommercialBoxesCell(item),
+      "",
       formatClp(m),
     ]
 
-    let maxRowH = lineH + 2.2
+    let maxRowH = Math.max(lineH + 2.5, controlMinH)
     for (let i = 0; i < cols.length; i++) {
       const lines = doc.splitTextToSize(cellTexts[i], cols[i].w - 2.5) as string[]
-      maxRowH = Math.max(maxRowH, lineH * lines.length + 2.2)
+      maxRowH = Math.max(maxRowH, lineH * lines.length + 2.5)
     }
 
     if (y + maxRowH > bottomY) {
@@ -596,7 +600,7 @@ export async function buildDispatchPlanPickingProductoPdf(params: {
   doc.setFont("helvetica", "bold")
   doc.setFontSize(7.5)
   doc.text(
-    `Totales: ${formatPickingQuantity(totalUnits)} unidades · equiv. ${formatOperativeBoxes(totalBoxes)} cajas · ${formatClp(totalMonto)}`,
+    `Totales: ${formatPickingQuantity(totalUnits)} unidades · ${formatOperativeBoxes(totalBoxes)} cajas · ${formatClp(totalMonto)}`,
     MARGIN.left,
     Math.min(y + 4, bottomY),
   )

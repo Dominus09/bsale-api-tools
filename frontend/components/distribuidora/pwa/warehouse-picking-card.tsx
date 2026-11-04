@@ -47,14 +47,12 @@ export function WarehousePickingCard({ item, className }: Props) {
         Código: {item.barcode || "—"}
       </p>
       <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-        <dt className="text-muted-foreground">Cantidad</dt>
-        <dd className="tabular-nums font-medium">{item.requestedUnits} unidades</dd>
-        <dt className="text-muted-foreground">Equiv. cajas SEC</dt>
-        <dd>{item.commercialPackLabel || "Sin presentación SEC confiable"}</dd>
-        <dt className="text-muted-foreground">Preparado (físico)</dt>
-        <dd>{item.preparedUnits == null ? "pendiente" : item.preparedUnits}</dd>
-        <dt className="text-muted-foreground">Cargado (físico)</dt>
-        <dd>{item.loadedUnits == null ? "pendiente" : item.loadedUnits}</dd>
+        <dt className="text-muted-foreground">Unidades</dt>
+        <dd className="tabular-nums font-medium">{item.requestedUnits}</dd>
+        <dt className="text-muted-foreground">Cajas</dt>
+        <dd className="tabular-nums">{item.commercialPackLabel || "n/d"}</dd>
+        <dt className="text-muted-foreground">Control</dt>
+        <dd>{item.preparedUnits == null ? "—" : item.preparedUnits}</dd>
         {diff != null ? (
           <>
             <dt className="text-muted-foreground">Diferencia</dt>

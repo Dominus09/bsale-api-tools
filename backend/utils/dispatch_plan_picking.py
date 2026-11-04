@@ -379,6 +379,22 @@ def build_picking_product_excel(
             units_per_box=i.get("units_per_box_efectivo") or i.get("units_per_box"),
             unidades=i.get("unidades"),
         )
+        # Cajas = número de equivalencia comercial; Control vacío para anotación manual.
+        cajas_val = ""
+        if pack:
+            # pack es "N × SECk" o None — para Excel usar solo el número de cajas.
+            try:
+                upb = float(i.get("units_per_box_efectivo") or i.get("units_per_box") or 0)
+                u = float(i.get("unidades") or 0)
+                if upb > 0 and u > 0:
+                    boxes = round(u / upb, 2)
+                    cajas_val = int(boxes) if float(boxes).is_integer() else boxes
+                else:
+                    cajas_val = "n/d"
+            except (TypeError, ValueError):
+                cajas_val = "n/d"
+        elif i.get("sin_unidad_caja"):
+            cajas_val = "n/d"
         present_rows.append(
             {
                 "Sucursal origen": i.get("sucursal_bodega"),
@@ -387,13 +403,9 @@ def build_picking_product_excel(
                 "Código de barras": (
                     str(i.get("codigo_barras")) if i.get("codigo_barras") is not None else ""
                 ),
-                "Cantidad": i.get("unidades"),
-                "Equiv. cajas (SEC)": pack or "",
-                "Cajas ref. units_per_box": i.get("cajas") if not i.get("sin_unidad_caja") else "",
-                "Sin unidad caja": "Sí" if i.get("sin_unidad_caja") else "",
-                "Cantidad preparada (física)": "",
-                "Cantidad cargada (física)": "",
-                "Diferencia / faltante": "",
+                "Unidades": i.get("unidades"),
+                "Cajas": cajas_val,
+                "Control": "",
                 "Total": i.get("total_monto"),
                 "Camión": header.get("truck_name"),
                 "Nº picking": header.get("planning_number"),
