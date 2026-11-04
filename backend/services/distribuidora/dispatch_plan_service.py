@@ -652,11 +652,39 @@ def update_dispatch_plan_status(plan_id: int, status: str) -> dict[str, Any]:
     return data
 
 
+def _route_coverage_from_plan(plan: dict[str, Any]) -> str | None:
+    """full | partial | none | None (legacy sin meta)."""
+    geom = plan.get("route_geometry")
+    if isinstance(geom, str):
+        try:
+            import json as _json
+
+            geom = _json.loads(geom)
+        except Exception:
+            geom = None
+    if isinstance(geom, dict):
+        meta = geom.get("quillotana_route_meta")
+        if isinstance(meta, dict) and meta.get("route_coverage"):
+            return str(meta["route_coverage"])
+    if plan.get("ors_metrics_calculated") is False:
+        return "none"
+    if plan.get("ors_metrics_calculated") is True:
+        return "full"
+    return None
+
+
 def compute_plan_margin(
     plan_id: int,
     *,
     stage_run: DashboardStageRun | None = None,
+    persist: bool = False,
 ) -> dict[str, Any]:
+    """
+    Margen comercial desde documentos actuales en PostgreSQL.
+
+    ``persist=False`` (default en dashboard): no altera el snapshot histórico del plan.
+    ``persist=True``: acción explícita «Actualizar datos comerciales».
+    """
     def _compute(cur: Any, conn: Any) -> dict[str, Any]:
         t0 = log_repo_start(plan_id, "repo.get_plan_by_id")
         plan = repo.get_plan_by_id(cur, plan_id)
@@ -667,8 +695,9 @@ def compute_plan_margin(
         cm = compute_plan_commercial_margin(cur, plan_id)
         log_repo_end(plan_id, "compute_plan_commercial_margin", t1)
         ors_ok = plan.get("ors_metrics_calculated")
-        if ors_ok is False:
-            # simple_list sin ORS: no inventar resultado post-transporte con costo 0.
+        coverage = _route_coverage_from_plan(plan)
+        # Solo resultado post-transporte con ruta completa y métricas ORS.
+        if ors_ok is False or coverage in ("none", "partial"):
             route_cost = None
             net_op = None
         else:
@@ -678,43 +707,66 @@ def compute_plan_margin(
                 if cm.commercial_margin_clp is not None
                 else None
             )
-        t2 = log_repo_start(plan_id, "repo.update_plan_margin")
-        repo.update_plan_margin(
-            cur,
-            plan_id,
-            invoiced_sales_clp=cm.invoiced_revenue_clp,
-            commercial_margin_clp=cm.commercial_margin_clp,
-            final_margin_clp=net_op if net_op is not None else None,
-            net_operational_clp=net_op,
-            margin_computation_source=cm.source,
-            margin_lines_with_cost=cm.lines_with_cost,
-            margin_lines_total=cm.lines_total,
-        )
-        log_repo_end(plan_id, "repo.update_plan_margin", t2)
-        conn.commit()
-        return cm, route_cost, net_op, ors_ok
+        if persist:
+            t2 = log_repo_start(plan_id, "repo.update_plan_margin")
+            repo.update_plan_margin(
+                cur,
+                plan_id,
+                invoiced_sales_clp=cm.invoiced_revenue_clp,
+                commercial_margin_clp=cm.commercial_margin_clp,
+                final_margin_clp=net_op if net_op is not None else None,
+                net_operational_clp=net_op,
+                margin_computation_source=cm.source,
+                margin_lines_with_cost=cm.lines_with_cost,
+                margin_lines_total=cm.lines_total,
+            )
+            log_repo_end(plan_id, "repo.update_plan_margin", t2)
+            conn.commit()
+        return cm, route_cost, net_op, ors_ok, coverage, plan
 
     if stage_run:
         with dashboard_connection(plan_id, stage_run) as (cur, conn):
-            cm, route_cost, net_op, ors_ok = _compute(cur, conn)
+            cm, route_cost, net_op, ors_ok, coverage, plan = _compute(cur, conn)
     else:
         conn = get_connection()
         try:
             cur = conn.cursor()
-            cm, route_cost, net_op, ors_ok = _compute(cur, conn)
+            cm, route_cost, net_op, ors_ok, coverage, plan = _compute(cur, conn)
             cur.close()
         finally:
             conn.close()
+    from datetime import datetime, timezone as _tz
+
     out = cm.as_dict()
     out["route_cost_clp"] = route_cost
     out["net_operational_clp"] = net_op
     out["ors_metrics_calculated"] = ors_ok
+    out["route_coverage"] = coverage
     out["dispatch_plan_id"] = plan_id
-    if ors_ok is False:
+    out["calculated_at"] = datetime.now(_tz.utc).isoformat()
+    out["persisted"] = bool(persist)
+    out["historical_commercial_margin_clp"] = plan.get("commercial_margin_clp")
+    out["cost_basis"] = (
+        "variant_cost_average_net_x_tax_factor"
+        if out.get("source") in ("variant_cost", "variant_cost_partial")
+        else out.get("source")
+    )
+    out["cost_coverage"] = {
+        "lines_with_cost": out.get("lines_with_cost"),
+        "lines_total": out.get("lines_total"),
+    }
+    if coverage == "partial":
+        out["route_cost_unavailable_reason"] = (
+            "Ruta parcial: km/costos ORS no representan todas las entregas; "
+            "no se calcula resultado post-transporte."
+        )
+    elif ors_ok is False:
         out["route_cost_unavailable_reason"] = (
             "Ruta ORS no calculada (planning_origin=simple_list sin Calcular ruta)."
         )
-        if out.get("commercial_margin_clp") is not None and not out.get("message"):
+        if out.get("commercial_margin_clp") is not None and not (
+            out.get("message") or ""
+        ).strip():
             out["message"] = (
                 "Margen comercial disponible; resultado post-transporte pendiente de ORS."
             )
@@ -1062,7 +1114,10 @@ def _build_plan_dashboard(
                 planning_id=plan_id,
                 query="compute_plan_margin",
             ):
-                margin_data = compute_plan_margin(plan_id, stage_run=stage_run)
+                # Lectura viva: no persistir (separado del snapshot histórico).
+                margin_data = compute_plan_margin(
+                    plan_id, stage_run=stage_run, persist=False
+                )
         except Exception as exc:
             log_plan_detail_debug(
                 endpoint,
@@ -1079,29 +1134,54 @@ def _build_plan_dashboard(
             route_cost = margin_data.get("route_cost_clp")
             net_op = margin_data.get("net_operational_clp")
             msg = margin_data.get("message")
-            if plan.get("ors_metrics_calculated") is False:
+            coverage = margin_data.get("route_coverage") or _route_coverage_from_plan(
+                plan
+            )
+            if plan.get("ors_metrics_calculated") is False or coverage == "partial":
                 route_cost = None
                 net_op = None
-                if not msg:
+                if coverage == "partial" and not msg:
+                    msg = (
+                        "Margen comercial desde facturas; ruta parcial — "
+                        "sin resultado post-transporte."
+                    )
+                elif plan.get("ors_metrics_calculated") is False and not msg:
                     msg = (
                         "Margen comercial desde facturas; costos de ruta no calculados "
                         "(sin ORS)."
                     )
-                elif "post-transporte" not in str(msg):
-                    msg = f"{msg} Costos de ruta: no calculados (sin ORS)."
+            margin_pct = None
+            rev = margin_data.get("invoiced_revenue_clp")
+            cm_val = margin_data.get("commercial_margin_clp")
+            if (
+                cm_val is not None
+                and rev
+                and int(rev) > 0
+                and not margin_data.get("partial")
+            ):
+                margin_pct = round(100.0 * float(cm_val) / float(rev), 2)
             margin_block = {
                 "visible": True,
+                "live": True,
                 "oc_sales_clp": oc_sales_clp,
                 "commercial_margin_clp": margin_data.get("commercial_margin_clp"),
+                "commercial_margin_pct": margin_pct,
                 "invoiced_revenue_clp": margin_data.get("invoiced_revenue_clp"),
                 "invoiced_cost_clp": margin_data.get("invoiced_cost_clp"),
                 "route_cost_clp": route_cost,
                 "net_operational_clp": net_op,
                 "ors_metrics_calculated": plan.get("ors_metrics_calculated"),
+                "route_coverage": coverage,
                 "source": margin_data.get("source"),
+                "cost_basis": margin_data.get("cost_basis"),
+                "cost_coverage": margin_data.get("cost_coverage"),
+                "calculated_at": margin_data.get("calculated_at"),
+                "historical_commercial_margin_clp": margin_data.get(
+                    "historical_commercial_margin_clp"
+                ),
                 "partial": margin_data.get("partial"),
                 "unavailable": margin_data.get("commercial_margin_clp") is None,
-                "message": msg,
+                "message": msg or margin_data.get("route_cost_unavailable_reason"),
             }
         else:
             margin_block = {"visible": False, "restricted": True}

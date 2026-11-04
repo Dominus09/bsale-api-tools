@@ -456,6 +456,31 @@ def patch_plan_status(
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
+@router.post("/{plan_id}/refresh-commercial-margin")
+def refresh_commercial_margin(
+    plan_id: int,
+    user: dict = Depends(require_staff_user),
+):
+    """
+    Recalcula margen comercial desde documentos actuales y opcionalmente
+    persiste el resultado en el plan (acción explícita del usuario).
+    """
+    from backend.auth.permissions import has_margin_view_access
+
+    _deny_plan_if_out_of_scope(user, plan_id)
+    if not has_margin_view_access(user):
+        raise HTTPException(status_code=403, detail="Sin permiso de márgenes")
+    try:
+        return svc.compute_plan_margin(plan_id, persist=True)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as exc:
+        log_error("POST /dispatch-plans/refresh-commercial-margin", exc, planning_id=plan_id)
+        raise HTTPException(
+            status_code=503, detail="No se pudo actualizar el margen comercial"
+        ) from exc
+
+
 @router.get("/{plan_id}/invoiced-documents")
 def get_invoiced_documents(plan_id: int, user: dict = Depends(require_staff_user)):
     """Facturación vinculada (equivalente operacional a /facturacion)."""
