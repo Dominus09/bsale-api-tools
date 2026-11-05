@@ -92,6 +92,7 @@ def test_confirm_rejects_legacy_session_without_driver(monkeypatch):
             },
             "truck": {"id": 2, "name": "Camion", "active": True},
             "weight_acknowledgement": {},
+            "assistant_count": 0,
             # sin driver_user_id → sesión antigua
         },
     }
@@ -177,6 +178,7 @@ def test_confirm_rolls_back_when_driver_becomes_ineligible(monkeypatch):
             "weight_acknowledgement": {},
             "driver_user_id": 55,
             "driver_name": "Chofer",
+            "assistant_count": 1,
         },
     }
     conn = _Conn({sid: row})

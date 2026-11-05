@@ -1954,6 +1954,8 @@ export type DispatchPlanSummary = {
   status: DispatchPlanStatus
   driver_count?: number
   assistant_count?: number
+  /** true = assistant_count informado explícitamente (migración 054). */
+  peonetas_recorded?: boolean | null
   driver_name?: string | null
   driver_user_id?: number | null
   km_total?: number | null
@@ -1993,6 +1995,7 @@ export type DispatchPlanDriverInfo = {
   driver_user_id?: number | null
   driver_name?: string | null
   assistant_count?: number | null
+  peonetas_recorded?: boolean | null
   driver_pending?: boolean
   driver?: (DispatchPlanDriverOption & { active?: boolean }) | null
   history?: {
@@ -2462,6 +2465,8 @@ export async function postSimplePlanningPrepareConfirm(body: {
   dispatch_name?: string | null
   driver_name?: string | null
   driver_user_id: number
+  /** Cant. peonetas del camión (0..10). Requerido. */
+  assistant_count: number
   idempotency_key?: string | null
   acknowledge_incomplete_weight?: boolean
   acknowledge_unevaluable_weight?: boolean
@@ -2529,6 +2534,8 @@ export type DispatchPlanLoadSummary = {
     driver_label?: string
     assistant_label?: string
     assistant_names?: string[]
+    assistant_count?: number
+    peonetas_recorded?: boolean
     route_name: string
     communes?: string
     sello?: string
@@ -2911,6 +2918,8 @@ export type DispatchPlanPickingHeader = {
   driver_label: string
   assistant_label: string
   assistant_names?: string[]
+  assistant_count?: number
+  peonetas_recorded?: boolean
   sello: string
   load_kpis?: {
     clients: number

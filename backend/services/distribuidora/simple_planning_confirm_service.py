@@ -33,6 +33,11 @@ from backend.services.distribuidora.simple_planning_ors_service import (
     recompute_ors_snapshot_for_session,
     validate_ors_snapshot_for_orders,
 )
+from backend.services.distribuidora.peonetas import (
+    PeonetasValidationError,
+    mark_peonetas_recorded,
+    parse_peonetas_count,
+)
 from backend.services.distribuidora.simple_planning_preview_service import (
     SimplePlanningPreviewError,
     STATUS_FOUND_AVAILABLE,
@@ -286,6 +291,7 @@ def prepare_confirm_session(
     dispatch_name: str | None,
     driver_name: str | None,
     driver_user_id: int | None = None,
+    assistant_count: Any = None,
     assignments: list[dict[str, Any]],
     idempotency_key: str | None = None,
     acknowledge_incomplete_weight: bool = False,
@@ -297,7 +303,8 @@ def prepare_confirm_session(
 ) -> dict[str, Any]:
     """Valida un camión + OC y crea sesión server-side (no confirma).
 
-    Para planificación simplificada se exige ``driver_user_id`` elegible (PWA+chofer).
+    Para planificación simplificada se exige ``driver_user_id`` elegible (PWA+chofer)
+    y cantidad numérica de peonetas (``assistant_count``, incl. 0).
     No equivale a autorización de salida a ruta.
     """
     if int(truck_id) <= 0:
@@ -310,6 +317,14 @@ def prepare_confirm_session(
             code="driver_required",
             http_status=400,
         )
+    try:
+        peonetas_count = parse_peonetas_count(assistant_count)
+    except PeonetasValidationError as exc:
+        raise SimplePlanningConfirmError(
+            str(exc),
+            code=exc.code,
+            http_status=400,
+        ) from exc
 
     for row in assignments:
         if _int((row or {}).get("truck_id")) != int(truck_id):
@@ -514,6 +529,8 @@ def prepare_confirm_session(
                     "ors_snapshot": validated_ors,
                     "driver_user_id": int(driver_user_id),
                     "driver_name": resolved_driver_name,
+                    "assistant_count": peonetas_count,
+                    "peonetas_recorded": True,
                 },
                 "status": "open",
                 "expires_at": now + timedelta(minutes=SESSION_TTL_MINUTES),
@@ -806,13 +823,24 @@ def confirm_simple_planning_session(
             or f"Simple camión {session['truck_id']}"
         )
         try:
+            peonetas_count = parse_peonetas_count(
+                (payload or {}).get("assistant_count")
+            )
+        except PeonetasValidationError as exc:
+            raise SimplePlanningConfirmError(
+                "Sesión sin cantidad de peonetas válida; prepare-confirm debe "
+                "incluir assistant_count",
+                code=exc.code,
+                http_status=409,
+            ) from exc
+        try:
             confirmed = confirm(
                 plan_session_id=str(session["plan_session_id"]),
                 truck_id=int(session["truck_id"]),
                 route_name=dispatch_name,
                 planning_name=dispatch_name,
                 driver_count=1,
-                assistant_count=0,
+                assistant_count=peonetas_count,
                 driver_cost_clp=int(ors_snap.get("crew_cost_clp") or 0) if ors_ok else 0,
                 assistant_cost_clp=0,
                 diesel_price_per_liter=(
@@ -943,6 +971,11 @@ def confirm_simple_planning_session(
             WHERE id = %s
             """,
             (int(payload_driver_id), driver_display, int(plan_id)),
+        )
+        # Bandera aditiva (054): distingue 0 informado vs histórico no informado.
+        # Sin la columna, assistant_count ya quedó en el INSERT del plan.
+        mark_peonetas_recorded(
+            cur, plan_id=int(plan_id), assistant_count=peonetas_count
         )
         events_repo.insert_order_event(
             cur,

@@ -46,6 +46,7 @@ import {
 import { DispatchPlanDriverAssign } from "@/components/distribuidora/planificacion/DispatchPlanDriverAssign"
 import { DispatchPlanOrdersWeightTable } from "@/components/distribuidora/planificacion/DispatchPlanOrdersWeightTable"
 import { formatClp } from "@/lib/ors-map-ui"
+import { formatPeonetasDisplay } from "@/lib/peonetas-display"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -244,6 +245,10 @@ export function DispatchPlanDetailShell({
   const driverLabel =
     plan.driver_name ||
     (plan.driver_user_id ? `Chofer #${plan.driver_user_id}` : "Sin chofer")
+  const peonetasLabel = formatPeonetasDisplay({
+    assistant_count: plan.assistant_count,
+    peonetas_recorded: plan.peonetas_recorded,
+  })
   const truckLabel = plan.truck_name || "Sin camión"
   const invoicingStatus = `${inv.confirmed.count} fact. · ${inv.probable.count} prob. · ${inv.pending.count} pend.`
 
@@ -266,7 +271,8 @@ export function DispatchPlanDetailShell({
               <span>{planTitle}</span>
             </h1>
             <p className="text-sm text-muted-foreground">
-              {truckLabel} · {planDate} · {driverLabel}
+              {truckLabel} · {planDate} · Chofer: {driverLabel} · Peonetas:{" "}
+              {peonetasLabel}
             </p>
           </div>
           <div className="flex flex-wrap gap-1.5">

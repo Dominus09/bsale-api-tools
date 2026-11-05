@@ -114,6 +114,8 @@ type TruckConfirmState = {
   sessionId?: string
   /** Nombre del chofer elegido en prepare-confirm (solo presentación). */
   driverName?: string | null
+  /** Cant. peonetas informada al confirmar (solo presentación). */
+  peonetasCount?: number | null
 }
 
 function tomorrowISO(): string {
@@ -168,6 +170,7 @@ export function SimplePlanningClient() {
   const [ackUnevaluableWeight, setAckUnevaluableWeight] = useState(false)
   const [confirmDispatchName, setConfirmDispatchName] = useState("")
   const [confirmDriverUserId, setConfirmDriverUserId] = useState("")
+  const [confirmPeonetas, setConfirmPeonetas] = useState("0")
   const [availableDrivers, setAvailableDrivers] = useState<DispatchPlanDriverOption[]>([])
   const [driversNote, setDriversNote] = useState<string | null>(null)
   const [driverNearMisses, setDriverNearMisses] = useState<
@@ -514,6 +517,7 @@ export function SimplePlanningClient() {
     setAckUnevaluableWeight(false)
     setConfirmDispatchName(dispatchName.trim())
     setConfirmDriverUserId("")
+    setConfirmPeonetas("0")
     setConfirmOpen(true)
     void listAvailableDispatchDrivers({
       company_id: companyId,
@@ -543,6 +547,16 @@ export function SimplePlanningClient() {
       setError("Seleccione un chofer responsable antes de confirmar")
       return
     }
+    const peonetasRaw = confirmPeonetas.trim()
+    if (!/^\d+$/.test(peonetasRaw)) {
+      setError("Cant. de peonetas debe ser un entero no negativo (0, 1, 2…)")
+      return
+    }
+    const peonetasCount = Number(peonetasRaw)
+    if (!Number.isInteger(peonetasCount) || peonetasCount < 0 || peonetasCount > 10) {
+      setError("Cant. de peonetas debe ser un entero entre 0 y 10")
+      return
+    }
     confirmingRef.current = true
     const truckId = confirmTruckId
     setTruckConfirm((prev) => ({
@@ -566,6 +580,7 @@ export function SimplePlanningClient() {
         dispatch_name: confirmDispatchName.trim() || dispatchName.trim() || null,
         driver_name: driverOpt?.display_name || null,
         driver_user_id: driverUid,
+        assistant_count: peonetasCount,
         idempotency_key: idempotencyKey,
         acknowledge_incomplete_weight: ackIncompleteWeight,
         acknowledge_unevaluable_weight: ackUnevaluableWeight,
@@ -582,6 +597,7 @@ export function SimplePlanningClient() {
             message: "Ya confirmado (idempotente)",
             sessionId: prepared.session?.session_id,
             driverName,
+            peonetasCount,
           },
         }))
         setConfirmOpen(false)
@@ -597,6 +613,7 @@ export function SimplePlanningClient() {
           message: "Confirmando despacho…",
           sessionId,
           driverName,
+          peonetasCount,
         },
       }))
       const confirmed = await postSimplePlanningConfirm({ session_id: sessionId })
@@ -616,6 +633,7 @@ export function SimplePlanningClient() {
             : "Despacho confirmado",
           sessionId,
           driverName,
+          peonetasCount,
         },
       }))
       setConfirmOpen(false)
@@ -1472,6 +1490,11 @@ export function SimplePlanningClient() {
                                           : driverLabel}
                                       </span>
                                     </div>
+                                    {st?.status === "ok" && st.peonetasCount != null ? (
+                                      <div className="text-xs font-medium">
+                                        Peonetas: {st.peonetasCount}
+                                      </div>
+                                    ) : null}
                                   </div>
                                   {st?.status === "ok" ? (
                                     <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600" />
@@ -1549,6 +1572,9 @@ export function SimplePlanningClient() {
                                       {st.planningCode || `PLAN-${st.planId}`}
                                       {st.message ? ` · ${st.message}` : ""}
                                       {st.driverName ? ` · Chofer: ${st.driverName}` : ""}
+                                      {st.peonetasCount != null
+                                        ? ` · Peonetas: ${st.peonetasCount}`
+                                        : ""}
                                     </p>
                                     <Button
                                       asChild
@@ -1807,6 +1833,24 @@ export function SimplePlanningClient() {
                         (Bodega Central = 1).
                       </p>
                     </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="confirm-peonetas">Cant. de peonetas</Label>
+                      <Input
+                        id="confirm-peonetas"
+                        type="number"
+                        inputMode="numeric"
+                        min={0}
+                        max={10}
+                        step={1}
+                        className="h-9"
+                        value={confirmPeonetas}
+                        onChange={(e) => setConfirmPeonetas(e.target.value)}
+                        disabled={confirmBusy}
+                      />
+                      <p className="text-[10px] text-muted-foreground">
+                        Entero ≥ 0 (0 = sin peonetas). Máx. 10 por el esquema actual.
+                      </p>
+                    </div>
                     {dialogBlocked ? (
                       <Alert variant="destructive">
                         <AlertTriangle className="h-4 w-4" />
@@ -1875,6 +1919,8 @@ export function SimplePlanningClient() {
               disabled={
                 !confirmAck ||
                 !confirmDriverUserId ||
+                !/^\d+$/.test(confirmPeonetas.trim()) ||
+                Number(confirmPeonetas) > 10 ||
                 confirmBusy ||
                 Boolean(confirmTruckBlock?.blocking) ||
                 Boolean(confirmTruckBlock?.capacity?.blocking) ||

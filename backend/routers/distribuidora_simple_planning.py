@@ -156,6 +156,9 @@ class PrepareConfirmBody(BaseModel):
     dispatch_name: str | None = Field(None, max_length=128)
     driver_name: str | None = Field(None, max_length=128)
     driver_user_id: int = Field(..., ge=1)
+    # Cant. peonetas del camión (reusa assistant_count). 0 = ninguna; requerido.
+    # techo 10 = CHECK histórico en dispatch_plan (021), no un límite de negocio nuevo.
+    assistant_count: int = Field(..., ge=0, le=10)
     assignments: list[AssignmentRow] = Field(..., min_length=1, max_length=MAX_FOLIOS)
     idempotency_key: str | None = Field(None, min_length=8, max_length=128)
     acknowledge_incomplete_weight: bool = False
@@ -285,6 +288,7 @@ def post_simple_planning_prepare_confirm(
             dispatch_name=body.dispatch_name,
             driver_name=body.driver_name,
             driver_user_id=int(body.driver_user_id),
+            assistant_count=body.assistant_count,
             assignments=[a.model_dump() for a in body.assignments],
             idempotency_key=body.idempotency_key,
             acknowledge_incomplete_weight=bool(body.acknowledge_incomplete_weight),

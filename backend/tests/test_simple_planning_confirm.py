@@ -170,6 +170,7 @@ def test_prepare_blocks_unknown_capacity(monkeypatch):
             truck_id=2,
             dispatch_name="Sur",
             driver_user_id=55,
+            assistant_count=0,
             driver_name=None,
             assignments=[{"folio": 1, "truck_id": 2}],
             conn_factory=lambda: (_ for _ in ()).throw(RuntimeError("no db")),
@@ -193,6 +194,7 @@ def test_prepare_blocks_overload(monkeypatch):
             truck_id=2,
             dispatch_name="Sur",
             driver_user_id=55,
+            assistant_count=0,
             driver_name="Juan",
             assignments=[
                 {"folio": 1, "truck_id": 2},
@@ -219,6 +221,7 @@ def test_prepare_requires_ack_for_unevaluable_weight(monkeypatch):
             truck_id=2,
             dispatch_name=None,
             driver_user_id=55,
+            assistant_count=0,
             driver_name=None,
             assignments=[{"folio": 3, "truck_id": 2}],
             conn_factory=lambda: (_ for _ in ()).throw(RuntimeError("no db")),
@@ -252,6 +255,7 @@ def test_prepare_allows_partial_weight_with_ack(monkeypatch):
         truck_id=2,
         dispatch_name=None,
         driver_user_id=55,
+        assistant_count=0,
             driver_name=None,
         assignments=[{"folio": 4, "truck_id": 2}],
         acknowledge_incomplete_weight=True,
@@ -309,6 +313,7 @@ def test_prepare_and_confirm_happy_path(monkeypatch):
         truck_id=2,
         dispatch_name="Norte",
         driver_user_id=55,
+        assistant_count=0,
         driver_name="Ana",
         assignments=[
             {"folio": 10, "truck_id": 2, "expected_fingerprint": _fp(10)},
@@ -378,6 +383,9 @@ def test_prepare_and_confirm_happy_path(monkeypatch):
     assert result["wrote"] is True
     assert result["ors_metrics_calculated"] is False
     assert confirmed_calls and len(confirmed_calls[0]["orders"]) == 2
+    assert confirmed_calls[0]["assistant_count"] == 0
+    assert inserted["row"]["payload"]["assistant_count"] == 0
+    assert inserted["row"]["payload"]["peonetas_recorded"] is True
     assert any(m.get("status") == "confirmed" for m in marks)
 
 
@@ -497,6 +505,7 @@ def test_prepare_fingerprint_drift_message_includes_folio(monkeypatch):
             truck_id=2,
             dispatch_name=None,
             driver_user_id=55,
+            assistant_count=0,
             driver_name=None,
             assignments=[
                 {
@@ -662,7 +671,8 @@ def test_confirm_rolls_back_on_mid_transaction_error(monkeypatch):
                     "document_id": 70,
                     "identity_fingerprint": _fp(70),
                 }
-            ]
+            ],
+            "assistant_count": 0,
         },
         "truck_id": 2,
         "company_id": 3,

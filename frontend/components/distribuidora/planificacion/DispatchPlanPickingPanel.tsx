@@ -40,14 +40,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { formatPeonetasDisplay } from "@/lib/peonetas-display"
 import { cn } from "@/lib/utils"
 
 function PickingHeaderBlock({ header }: { header: DispatchPlanPickingHeader }) {
   const chofer = header.driver_name || header.driver_label || "—"
-  const peonetas =
-    header.assistant_names?.length
-      ? header.assistant_names.join(", ")
-      : header.assistant_label
+  const peonetas = header.assistant_names?.length
+    ? header.assistant_names.join(", ")
+    : header.assistant_label && header.assistant_label !== "0 peonetas"
+      ? header.assistant_label
+      : formatPeonetasDisplay({
+          assistant_count: header.assistant_count,
+          peonetas_recorded: header.peonetas_recorded,
+        })
   return (
     <div className="grid gap-2 rounded-lg border border-border/70 bg-muted/20 p-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
       <div>
@@ -67,8 +72,8 @@ function PickingHeaderBlock({ header }: { header: DispatchPlanPickingHeader }) {
         <p className="font-medium">{chofer}</p>
       </div>
       <div>
-        <span className="text-muted-foreground">Peoneta(s)</span>
-        <p className="font-medium">{peonetas || "—"}</p>
+        <span className="text-muted-foreground">Peonetas</span>
+        <p className="font-medium">{peonetas || "No informado"}</p>
       </div>
       <div className="sm:col-span-2">
         <span className="text-muted-foreground">Ruta / comunas</span>

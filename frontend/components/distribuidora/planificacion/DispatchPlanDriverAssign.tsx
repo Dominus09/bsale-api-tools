@@ -10,6 +10,7 @@ import {
   type DispatchPlanDriverInfo,
   type DispatchPlanDriverOption,
 } from "@/lib/api"
+import { formatPeonetasDisplay } from "@/lib/peonetas-display"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
@@ -184,12 +185,14 @@ export function DispatchPlanDriverAssign({
 
       <p className="text-sm">
         {info?.driver?.display_name || info?.driver_name || "Sin chofer vinculado"}
-        {info?.assistant_count != null ? (
-          <span className="text-muted-foreground">
-            {" "}
-            · {info.assistant_count} peoneta(s)
-          </span>
-        ) : null}
+        <span className="text-muted-foreground">
+          {" "}
+          · Peonetas:{" "}
+          {formatPeonetasDisplay({
+            assistant_count: info?.assistant_count,
+            peonetas_recorded: info?.peonetas_recorded,
+          })}
+        </span>
       </p>
 
       {canAssign ? (

@@ -470,6 +470,9 @@ def get_plan_driver(plan_id: int) -> dict[str, Any]:
             "driver_user_id": int(driver_user_id) if driver_user_id is not None else None,
             "driver_name": plan.get("driver_name"),
             "assistant_count": plan.get("assistant_count"),
+            "peonetas_recorded": bool(plan.get("peonetas_recorded"))
+            if "peonetas_recorded" in plan
+            else None,
             "driver_pending": driver_user_id is None,
             "driver": driver,
             "history": history,

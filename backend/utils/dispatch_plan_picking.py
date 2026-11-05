@@ -78,9 +78,22 @@ def build_picking_header_dict(
     driver_name: str = "",
     assistant_names: list[str] | None = None,
 ) -> dict[str, Any]:
+    from backend.services.distribuidora.peonetas import format_peonetas_display
+
     assistants = assistant_names or []
     driver_n = int(plan.get("driver_count") or 1)
     assistant_n = int(plan.get("assistant_count") or 0)
+    peonetas_label = format_peonetas_display(
+        assistant_count=assistant_n,
+        peonetas_recorded=plan.get("peonetas_recorded"),
+    )
+    if assistants:
+        assistant_label = ", ".join(assistants)
+    elif peonetas_label == "No informado":
+        assistant_label = "No informado"
+    else:
+        n = int(peonetas_label) if peonetas_label.isdigit() else assistant_n
+        assistant_label = f"{n} peoneta{'s' if n != 1 else ''}"
     return {
         "plan_id": plan_id,
         "planning_number": plan.get("planning_code") or f"PLAN-{plan_id}",
@@ -95,12 +108,10 @@ def build_picking_header_dict(
         "truck_name": plan.get("truck_name") or plan.get("route_name") or "",
         "driver_name": driver_name,
         "driver_label": driver_name or f"{driver_n} chofer{'es' if driver_n != 1 else ''}",
-        "assistant_label": (
-            ", ".join(assistants)
-            if assistants
-            else f"{assistant_n} peoneta{'s' if assistant_n != 1 else ''}"
-        ),
+        "assistant_label": assistant_label,
         "assistant_names": assistants,
+        "assistant_count": assistant_n,
+        "peonetas_recorded": bool(plan.get("peonetas_recorded")),
         "sello": sello,
     }
 

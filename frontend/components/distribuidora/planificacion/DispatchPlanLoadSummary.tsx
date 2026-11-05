@@ -2,6 +2,7 @@
 
 import type { DispatchPlanDashboard, DispatchPlanLoadSummary } from "@/lib/api"
 import { formatClp } from "@/lib/ors-map-ui"
+import { formatPeonetasDisplay } from "@/lib/peonetas-display"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 
@@ -66,7 +67,12 @@ export function DispatchPlanLoadSummaryBlock({ dashboard, className }: Props) {
             {h.driver_name || h.driver_label || "—"}
             <span className="mx-2 text-muted-foreground">·</span>
             <span className="text-muted-foreground">Peonetas:</span>{" "}
-            {h.assistant_label || "—"}
+            {h.assistant_label && h.assistant_label !== "0 peonetas"
+              ? h.assistant_label
+              : formatPeonetasDisplay({
+                  assistant_count: h.assistant_count,
+                  peonetas_recorded: h.peonetas_recorded,
+                })}
           </p>
           <p className="text-xs text-muted-foreground">
             {h.route_name}
