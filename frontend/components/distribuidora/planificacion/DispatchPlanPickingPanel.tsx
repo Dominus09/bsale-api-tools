@@ -1,7 +1,7 @@
 "use client"
 
-import { Fragment, useCallback, useMemo, useState } from "react"
-import { Download, FileText, Loader2, RefreshCw } from "lucide-react"
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react"
+import { ChevronLeft, ChevronRight, Download, FileText, Loader2, RefreshCw } from "lucide-react"
 
 import {
   downloadDispatchPlanPickingClienteExcel,
@@ -19,18 +19,35 @@ import {
   groupRowsByCity,
   normalizePickingCategory,
 } from "@/lib/picking-display"
+import {
+  filterPickingProductRows,
+  paginatePickingProductRows,
+  PICKING_PRODUCT_PAGE_SIZE,
+  summarizePickingProductRows,
+  uniquePickingProductCategories,
+} from "@/lib/picking-product-table"
 import { formatClp } from "@/lib/ors-map-ui"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 
 function PickingHeaderBlock({ header }: { header: DispatchPlanPickingHeader }) {
   const chofer = header.driver_name || header.driver_label || "—"
   const peonetas =
-    header.assistant_names?.length ? header.assistant_names.join(", ") : header.assistant_label
+    header.assistant_names?.length
+      ? header.assistant_names.join(", ")
+      : header.assistant_label
   return (
     <div className="grid gap-2 rounded-lg border border-border/70 bg-muted/20 p-3 text-xs sm:grid-cols-2 lg:grid-cols-4">
       <div>
@@ -344,9 +361,36 @@ export function DispatchPlanPickingProductoPanel({
   onMessage,
 }: ProductPanelProps) {
   const [busy, setBusy] = useState<string | null>(null)
+  const [query, setQuery] = useState("")
+  const [category, setCategory] = useState<string>("__all__")
+  const [page, setPage] = useState(1)
+
+  const allItems = data?.items || []
+  const categories = useMemo(
+    () => uniquePickingProductCategories(allItems),
+    [allItems],
+  )
+  const filtered = useMemo(
+    () => filterPickingProductRows(allItems, { query, category }),
+    [allItems, query, category],
+  )
+  const pageData = useMemo(
+    () => paginatePickingProductRows(filtered, page, PICKING_PRODUCT_PAGE_SIZE),
+    [filtered, page],
+  )
+  const summary = useMemo(() => summarizePickingProductRows(allItems), [allItems])
+
+  useEffect(() => {
+    setPage(1)
+  }, [query, category, data?.version, data?.picking_id, allItems.length])
+
+  useEffect(() => {
+    if (page !== pageData.page) setPage(pageData.page)
+  }, [page, pageData.page])
 
   const runExport = useCallback(
     async (kind: "xlsx" | "pdf") => {
+      // Exportación SIEMPRE del picking completo (no la página filtrada).
       if (!data?.header || !data.items?.length) {
         onMessage("Cargue el picking antes de exportar.")
         return
@@ -358,7 +402,7 @@ export function DispatchPlanPickingProductoPanel({
             version: data.version,
             pickingId: data.picking_id,
           })
-          onMessage("Excel de picking producto descargado.")
+          onMessage("Excel de picking producto descargado (completo).")
         } else {
           await exportDispatchPlanPickingProductoPdf({
             header: data.header,
@@ -366,7 +410,7 @@ export function DispatchPlanPickingProductoPanel({
             version: data.version,
             generatedAt: data.generated_at,
           })
-          onMessage("PDF de picking producto generado.")
+          onMessage("PDF de picking producto generado (completo).")
         }
       } catch (e: unknown) {
         onMessage(e instanceof Error ? e.message : "Error al exportar")
@@ -414,7 +458,7 @@ export function DispatchPlanPickingProductoPanel({
           ) : (
             <Download className="mr-1 size-3.5" />
           )}
-          Excel
+          Excel completo
         </Button>
         <Button
           type="button"
@@ -428,7 +472,7 @@ export function DispatchPlanPickingProductoPanel({
           ) : (
             <FileText className="mr-1 size-3.5" />
           )}
-          PDF
+          PDF completo
         </Button>
       </div>
 
@@ -474,14 +518,45 @@ export function DispatchPlanPickingProductoPanel({
 
       {data?.items?.length ? (
         <>
-          <p className="text-xs text-muted-foreground">
-            {data.totals?.lines ?? data.items.length} líneas · {data.totals?.unidades ?? 0}{" "}
-            u ·{" "}
-            {data.totals?.cajas ??
-              data.items.reduce((s, r) => s + effectiveBoxes(r), 0)}{" "}
-            cajas ·{" "}
-            {formatClp(data.totals?.total_monto_clp ?? 0)}
-          </p>
+          <div className="rounded-md border bg-muted/15 px-3 py-2 text-xs">
+            <p className="font-medium">
+              Resumen · {summary.skus} SKU · {summary.units} u · {summary.boxes} cajas eq. ·{" "}
+              {formatClp(data.totals?.total_monto_clp ?? summary.monto)}
+            </p>
+            <p className="mt-0.5 text-muted-foreground">
+              Vista paginada ({PICKING_PRODUCT_PAGE_SIZE}/página). PDF/Excel exportan el
+              listado completo, no solo la página visible.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="min-w-[180px] flex-1 space-y-1">
+              <Label className="text-[11px]">Buscar producto / código</Label>
+              <Input
+                className="h-8"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Nombre o código de barras"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-[11px]">Categoría / tipo</Label>
+              <Select value={category} onValueChange={setCategory}>
+                <SelectTrigger className="h-8 w-[180px]">
+                  <SelectValue placeholder="Todas" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">Todas</SelectItem>
+                  {categories.map((c) => (
+                    <SelectItem key={c} value={c}>
+                      {c}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
           <div className="overflow-x-auto rounded-md border">
             <table className="w-full min-w-[720px] text-left text-xs">
               <thead className="bg-muted/50 text-[11px] uppercase text-muted-foreground">
@@ -496,10 +571,15 @@ export function DispatchPlanPickingProductoPanel({
                 </tr>
               </thead>
               <tbody>
-                {data.items.map((row, idx) => (
-                  <tr key={idx} className="border-t border-border/50">
+                {pageData.rows.map((row, idx) => (
+                  <tr
+                    key={`${row.codigo_barras || row.producto_variante || "r"}-${pageData.from + idx}`}
+                    className="border-t border-border/50"
+                  >
                     <td className="px-2 py-1.5">{row.sucursal_bodega}</td>
-                    <td className="px-2 py-1.5">{normalizePickingCategory(row.tipo_producto)}</td>
+                    <td className="px-2 py-1.5">
+                      {normalizePickingCategory(row.tipo_producto)}
+                    </td>
                     <td className="px-2 py-1.5 font-medium">
                       {row.display_name || row.producto_variante}
                     </td>
@@ -521,8 +601,56 @@ export function DispatchPlanPickingProductoPanel({
                     </td>
                   </tr>
                 ))}
+                {!pageData.rows.length ? (
+                  <tr>
+                    <td
+                      colSpan={7}
+                      className="px-3 py-6 text-center text-muted-foreground"
+                    >
+                      Sin productos para el filtro actual.
+                    </td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+            <p className="text-muted-foreground">
+              Mostrando {pageData.from}–{pageData.to} de {pageData.total} productos
+              {filtered.length !== allItems.length
+                ? ` (filtrados de ${allItems.length})`
+                : ""}
+            </p>
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-8"
+                disabled={pageData.page <= 1}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
+                <ChevronLeft className="mr-1 size-3.5" />
+                Anterior
+              </Button>
+              <span className="tabular-nums text-muted-foreground">
+                {pageData.page}/{pageData.totalPages}
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-8"
+                disabled={pageData.page >= pageData.totalPages}
+                onClick={() =>
+                  setPage((p) => Math.min(pageData.totalPages, p + 1))
+                }
+              >
+                Siguiente
+                <ChevronRight className="ml-1 size-3.5" />
+              </Button>
+            </div>
           </div>
         </>
       ) : data && data.ready !== false ? (
