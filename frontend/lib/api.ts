@@ -3305,6 +3305,8 @@ export type DispatchPlanLoadBatch = {
   name: string
   description?: string | null
   presentation_role?: "priority" | "consolidated" | "supplemental" | null
+  is_reserved_supplemental?: boolean
+  display_description?: string | null
   created_at?: string
   updated_at?: string
 }

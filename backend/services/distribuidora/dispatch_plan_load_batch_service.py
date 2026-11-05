@@ -44,6 +44,10 @@ def _staff_label(user: dict[str, Any] | None) -> str | None:
 
 
 def ensure_default_load_batch(plan_id: int) -> dict[str, Any]:
+    """Garantiza al menos un batch. Con org anticipada lista → 4 grupos predeterminados.
+
+    Si el plan ya tiene batches (históricos), no modifica ni completa faltantes.
+    """
     conn = get_connection()
     try:
         cur = conn.cursor()
@@ -51,15 +55,30 @@ def ensure_default_load_batch(plan_id: int) -> dict[str, Any]:
             raise ValueError("Plan no encontrado")
         batches = batch_repo.list_load_batches(cur, plan_id)
         if not batches:
-            batch_repo.insert_load_batch(
-                cur,
-                plan_id=plan_id,
-                name="Picking 1",
-                description=None,
-                sort_order=1,
+            from backend.repositories.distribuidora import (
+                dispatch_plan_order_load_repo as org_repo,
             )
-            conn.commit()
-            batches = batch_repo.list_load_batches(cur, plan_id)
+            from backend.services.distribuidora.dispatch_plan_load_organization_service import (
+                ensure_predefined_load_batches,
+            )
+
+            if org_repo.organization_columns_ready(cur) and org_repo.assignments_table_ready(
+                cur
+            ):
+                batches, created = ensure_predefined_load_batches(cur, plan_id)
+                if created:
+                    conn.commit()
+                    batches = batch_repo.list_load_batches(cur, plan_id)
+            else:
+                batch_repo.insert_load_batch(
+                    cur,
+                    plan_id=plan_id,
+                    name="Picking 1",
+                    description=None,
+                    sort_order=1,
+                )
+                conn.commit()
+                batches = batch_repo.list_load_batches(cur, plan_id)
         cur.close()
     finally:
         conn.close()

@@ -395,12 +395,11 @@ export function DispatchPlanLoadOrganizationPanel({
         <div className="min-w-0 space-y-1">
           <h3 className="text-sm font-semibold">Organizar carga</h3>
           <p className="max-w-3xl text-xs text-muted-foreground">
-            Agrupe clientes para facilitar la descarga física. La decisión es manual: un
-            grupo prioritario suele ser 1–2 clientes; el resto de la ruta puede ir en un
-            grupo consolidado. No se altera el orden de entrega. El campo{" "}
-            <code className="text-[10px]">sort_order</code> ordena la preparación en UI;
-            el tipo prioritario/consolidado guía la descarga temprana — no confundir con
-            orden de estiba (aún no modelado).
+            Despachos nuevos traen cuatro grupos: Grupo 1 y Grupo 2 (prioritarios, 1–2
+            clientes), Grupo consolidado y Grupo adicional (vacío, reservado para OC de
+            última hora). La asignación es manual; grupos vacíos no bloquean marcar
+            organización completa si todas las OC originales están asignadas. No se altera
+            el orden de entrega.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -750,7 +749,9 @@ export function DispatchPlanLoadOrganizationPanel({
                         <div className="text-xs text-muted-foreground">
                           {g.draft_client_count} clientes · {g.oc_count} OC
                           {role === "supplemental"
-                            ? " · mercadería posterior al picking original"
+                            ? g.draft_client_count === 0 && g.oc_count === 0
+                              ? " · reservado para pedidos de última hora"
+                              : " · mercadería posterior al picking original"
                             : ""}
                         </div>
                       </div>
@@ -767,7 +768,9 @@ export function DispatchPlanLoadOrganizationPanel({
                             : role === "consolidated"
                               ? "Consolidado"
                               : role === "supplemental"
-                                ? "OC adicionales"
+                                ? g.draft_client_count === 0 && g.oc_count === 0
+                                  ? "Reservado última hora"
+                                  : "Adicional"
                                 : "Sin tipo"}
                         </Badge>
                         {batch && role !== "supplemental" ? (
@@ -938,10 +941,17 @@ export function DispatchPlanLoadOrganizationPanel({
                     docRecon?.has_picking && ready && planComplete,
                   )
                   const role = b.presentation_role
+                  const docsInGroup = gstat?.documents_assigned ?? 0
+                  const groupEmpty = docsInGroup === 0
+                  const canExportThis =
+                    canExportGroup && !groupEmpty
                   return (
                     <div
                       key={`pick-${b.id}`}
-                      className="space-y-2 rounded-md border bg-muted/15 p-3 text-xs"
+                      className={cn(
+                        "space-y-2 rounded-md border bg-muted/15 p-3 text-xs",
+                        role === "supplemental" && groupEmpty && "border-dashed border-violet-400/50",
+                      )}
                     >
                       <div className="font-medium">
                         {b.name}
@@ -950,16 +960,23 @@ export function DispatchPlanLoadOrganizationPanel({
                           : role === "consolidated"
                             ? " · consolidado"
                             : role === "supplemental"
-                              ? " · OC adicionales"
+                              ? groupEmpty
+                                ? " · reservado última hora"
+                                : " · adicional"
                               : ""}
                       </div>
                       <p className="text-muted-foreground">
-                        {gstat
-                          ? `${gstat.documents_assigned} factura(s)/boleta(s) conciliadas`
-                          : "Sin estado de conciliación"}
-                        {canExportGroup
-                          ? " · listo para exportar (completo)"
-                          : " · pendiente / incompleto"}
+                        {groupEmpty
+                          ? role === "supplemental"
+                            ? "Sin documentos: no se genera PDF/Excel (reservado para OC tardías)."
+                            : "Grupo vacío: no se genera PDF/Excel."
+                          : gstat
+                            ? `${docsInGroup} factura(s)/boleta(s) conciliadas`
+                            : "Sin estado de conciliación"}
+                        {!groupEmpty &&
+                          (canExportThis
+                            ? " · listo para exportar (completo)"
+                            : " · pendiente / incompleto")}
                       </p>
                       <div className="flex flex-wrap gap-1">
                         <Button
@@ -967,7 +984,7 @@ export function DispatchPlanLoadOrganizationPanel({
                           size="sm"
                           variant="secondary"
                           className="h-7 text-[11px]"
-                          disabled={busy != null || !canExportGroup}
+                          disabled={busy != null || !canExportThis}
                           onClick={() => void exportGroupProducto(b, "pdf")}
                         >
                           {busy === `export-${b.id}-pdf` ? (
@@ -984,7 +1001,7 @@ export function DispatchPlanLoadOrganizationPanel({
                           size="sm"
                           variant="secondary"
                           className="h-7 text-[11px]"
-                          disabled={busy != null || !canExportGroup}
+                          disabled={busy != null || !canExportThis}
                           onClick={() => void exportGroupProducto(b, "xlsx")}
                         >
                           {busy === `export-${b.id}-xlsx` ? (

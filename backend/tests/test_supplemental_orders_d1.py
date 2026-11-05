@@ -8,7 +8,10 @@ import pytest
 
 from backend.services.distribuidora import dispatch_plan_supplemental_order_service as svc
 from backend.services.distribuidora.dispatch_plan_load_organization_service import (
+    RESERVED_SUPPLEMENTAL_GROUP_NAME,
     encode_supplemental_batch_description,
+    ensure_predefined_load_batches,
+    find_reserved_supplemental_batch,
     parse_batch_presentation_role,
     parse_supplemental_seq,
 )
@@ -201,14 +204,14 @@ def test_add_creates_supplemental_group(monkeypatch):
         regenerate_picking=False,
     )
     assert out["added"] is True
-    assert out["supplemental_group"]["name"] == "OC adicionales 01"
-    assert created["name"] == "OC adicionales 01"
+    assert out["supplemental_group"]["name"] == RESERVED_SUPPLEMENTAL_GROUP_NAME
+    assert created["name"] == RESERVED_SUPPLEMENTAL_GROUP_NAME
     assert parse_batch_presentation_role(created["description"]) == "supplemental"
     assert upserts and upserts[0]["load_batch_id"] == 99
     assert out["client_same_route_exceptions"]
     assert events[0]["action"] == svc.ACTION_ADD_SUPPLEMENTAL
     assert out["verification"]["oc_count"] == 1
-    assert out["verification"]["supplemental_group_name"] == "OC adicionales 01"
+    assert out["verification"]["supplemental_group_name"] == RESERVED_SUPPLEMENTAL_GROUP_NAME
     assert 900 in out["verification"]["oc_numbers"]
 
 
@@ -373,10 +376,185 @@ def test_add_two_ocs_success_message_names_group(monkeypatch):
         regenerate_picking=False,
     )
     assert out["added"] is True
-    assert out["message_es"].startswith("2 OC incorporadas correctamente a OC adicionales 01")
+    assert out["message_es"].startswith(
+        f"2 OC incorporadas correctamente a {RESERVED_SUPPLEMENTAL_GROUP_NAME}"
+    )
     assert out["verification"]["oc_count"] == 2
     assert set(out["verification"]["oc_numbers"]) == {70566, 70567}
     assert out["supplemental_group"]["load_batch_id"] == 50
+
+
+def test_ensure_predefined_batches_idempotent(monkeypatch):
+    import backend.services.distribuidora.dispatch_plan_load_organization_service as los
+
+    cur = MagicMock()
+    inserts: list[dict] = []
+
+    def _list_batches(_cur, _plan_id):
+        if not inserts:
+            return []
+        return [
+            {
+                "id": i + 1,
+                "name": s["name"],
+                "description": "role=x",
+                "sort_order": s["sort_order"],
+            }
+            for i, s in enumerate(los.PREDEFINED_LOAD_GROUPS)
+        ]
+
+    def _ins(_cur, **kw):
+        inserts.append(kw)
+        return {"id": len(inserts), **kw}
+
+    monkeypatch.setattr(los.batch_repo, "list_load_batches", _list_batches)
+    monkeypatch.setattr(los.batch_repo, "insert_load_batch", _ins)
+
+    _batches, created = ensure_predefined_load_batches(cur, 10)
+    assert created is True
+    assert len(inserts) == 4
+    assert [i["name"] for i in inserts] == [
+        "Grupo 1",
+        "Grupo 2",
+        "Grupo consolidado",
+        "Grupo adicional",
+    ]
+    batches2, created2 = ensure_predefined_load_batches(cur, 10)
+    assert created2 is False
+    assert len(inserts) == 4
+    assert len(batches2) == 4
+    found = find_reserved_supplemental_batch(
+        [
+            {
+                "id": 4,
+                "name": "Grupo adicional",
+                "description": encode_supplemental_batch_description(1, "nota"),
+            }
+        ]
+    )
+    assert found is not None
+    assert found["name"] == "Grupo adicional"
+
+
+def test_add_reuses_existing_grupo_adicional(monkeypatch):
+    plan_id = 88
+    locked = {
+        "id": plan_id,
+        "status": "picking_generated",
+        "load_organization_status": "organized",
+        "load_organization_version": 2,
+    }
+    conn = MagicMock()
+    cur = MagicMock()
+    conn.cursor.return_value = cur
+    monkeypatch.setattr(svc, "get_connection", lambda: conn)
+    monkeypatch.setattr(svc.org_repo, "lock_plan_for_organization", lambda *_a, **_k: locked)
+    monkeypatch.setattr(svc, "_cuadratura_blocks_add", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        svc.plan_repo,
+        "get_plan_by_id",
+        lambda *_a, **_k: {"id": plan_id, "truck_max_weight_kg": 5000},
+    )
+    monkeypatch.setattr(
+        svc,
+        "_capacity_for_plan_plus_ocs",
+        lambda *_a, **_k: {
+            "capacity_known": True,
+            "overloaded": False,
+            "blocking": False,
+            "unevaluable_order_count": 0,
+            "incomplete_order_count": 0,
+            "additional_known_weight_kg": 10,
+        },
+    )
+    monkeypatch.setattr(svc, "resolve_operational_statuses_batch", lambda *_a, **_k: {})
+    monkeypatch.setattr(svc.plan_repo, "list_plan_orders", lambda *_a, **_k: [])
+    monkeypatch.setattr(svc.org_repo, "assignments_table_ready", lambda *_c: True)
+    existing_supp = {
+        "id": 40,
+        "name": RESERVED_SUPPLEMENTAL_GROUP_NAME,
+        "description": encode_supplemental_batch_description(1, "Reservado"),
+        "sort_order": 4,
+    }
+    monkeypatch.setattr(
+        svc.batch_repo,
+        "list_load_batches",
+        lambda *_a, **_k: [
+            {"id": 1, "sort_order": 1, "name": "Grupo 1", "description": "role=priority"},
+            {"id": 2, "sort_order": 2, "name": "Grupo 2", "description": "role=priority"},
+            {"id": 3, "sort_order": 3, "name": "Grupo consolidado", "description": "role=consolidated"},
+            existing_supp,
+        ],
+    )
+    inserts = []
+    monkeypatch.setattr(
+        svc.batch_repo,
+        "insert_load_batch",
+        lambda *_a, **kw: inserts.append(kw) or kw,
+    )
+    monkeypatch.setattr(svc.batch_repo, "max_route_order", lambda *_a, **_k: 10)
+    monkeypatch.setattr(
+        svc.plan_svc,
+        "_enrich_orders_snapshot",
+        lambda *_a, **_k: [
+            {"oc_document_id": 55, "oc_number": 100, "client_id": 9, "client_name": "X"}
+        ],
+    )
+    monkeypatch.setattr(
+        "backend.services.order_weight_service.fetch_weights_by_document_ids",
+        lambda *_a, **_k: {},
+    )
+    monkeypatch.setattr(svc.plan_repo, "insert_plan_orders", lambda *_a, **_k: None)
+    monkeypatch.setattr(svc.org_repo, "list_order_assignments", lambda *_a, **_k: [])
+    upserts = []
+    monkeypatch.setattr(
+        svc.org_repo,
+        "upsert_order_assignment",
+        lambda *_a, **kw: upserts.append(kw) or kw,
+    )
+    monkeypatch.setattr(
+        svc.org_repo,
+        "update_organization_meta",
+        lambda *_a, **_k: {
+            "load_organization_version": 3,
+            "load_organization_status": "organized",
+        },
+    )
+    monkeypatch.setattr(svc.batch_repo, "insert_order_event", lambda *_a, **_k: 1)
+    monkeypatch.setattr(svc.batch_repo, "plan_has_current_picking", lambda *_a, **_k: False)
+    monkeypatch.setattr(svc.plan_svc, "get_dispatch_plan", lambda *_a, **_k: {"id": plan_id})
+    monkeypatch.setattr(
+        svc,
+        "preview_supplemental_orders",
+        lambda *_a, **_k: {
+            "can_add": True,
+            "uses_supplemental_group": True,
+            "has_picking": False,
+            "already_in_plan": [],
+        },
+    )
+    monkeypatch.setattr(
+        svc,
+        "assess_oc_invoicing_for_picking",
+        lambda *_a, **_k: {
+            "items": [],
+            "ready_oc_document_ids": [],
+            "pending_invoice_oc_document_ids": [55],
+            "any_invoiced": False,
+            "all_invoiced": False,
+            "picking_pending_invoice": True,
+        },
+    )
+    out = svc.add_supplemental_orders_to_plan(
+        plan_id,
+        oc_document_ids=[55],
+        reason="Tarde",
+        user={"email": "a@b.cl"},
+    )
+    assert inserts == []
+    assert out["supplemental_group"]["load_batch_id"] == 40
+    assert out["supplemental_group"]["name"] == RESERVED_SUPPLEMENTAL_GROUP_NAME
+    assert upserts[0]["load_batch_id"] == 40
 
 
 def test_capacity_marks_incomplete_new_oc_explicitly(monkeypatch):

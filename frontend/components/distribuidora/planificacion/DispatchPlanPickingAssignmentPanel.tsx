@@ -834,10 +834,11 @@ export function DispatchPlanPickingAssignmentPanel({
               <Alert className="border-sky-200 bg-sky-50/70 dark:border-sky-900 dark:bg-sky-950/30">
                 <AlertTitle>Grupo suplementario</AlertTitle>
                 <AlertDescription className="text-sm">
-                  Con organización completa, las OC nuevas forman un grupo «OC adicionales»
-                  sin rehacer el picking físico de los grupos originales. El picking de
-                  productos del suplemento exige facturación vigente. El nombre propuesto
-                  en vista previa no implica que el grupo ya exista hasta confirmar.
+                  Con organización completa, las OC nuevas se asignan al «Grupo adicional»
+                  (reservado para última hora), sin rehacer el picking físico de los grupos
+                  originales. No se crea un grupo nuevo por cada incorporación. El picking
+                  de productos del suplemento exige facturación vigente. La vista previa no
+                  incorpora OC hasta confirmar.
                 </AlertDescription>
               </Alert>
             ) : addPreview?.warning ? (

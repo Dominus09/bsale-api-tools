@@ -87,6 +87,73 @@ ROLE_PREFIX_PRIORITY = "role=priority"
 ROLE_PREFIX_CONSOLIDATED = "role=consolidated"
 ROLE_PREFIX_SUPPLEMENTAL = "role=supplemental"
 
+# Despachos nuevos con organización anticipada: cuatro grupos fijos (sin auto-asignar OC).
+RESERVED_SUPPLEMENTAL_GROUP_NAME = "Grupo adicional"
+PREDEFINED_LOAD_GROUPS: tuple[dict[str, Any], ...] = (
+    {
+        "name": "Grupo 1",
+        "role": "priority",
+        "sort_order": 1,
+        "note": "Clientes prioritarios (recomendado 1–2 por grupo)",
+    },
+    {
+        "name": "Grupo 2",
+        "role": "priority",
+        "sort_order": 2,
+        "note": "Clientes prioritarios (recomendado 1–2 por grupo)",
+    },
+    {
+        "name": "Grupo consolidado",
+        "role": "consolidated",
+        "sort_order": 3,
+        "note": "Clientes restantes de la ruta",
+    },
+    {
+        "name": RESERVED_SUPPLEMENTAL_GROUP_NAME,
+        "role": "supplemental:1",
+        "sort_order": 4,
+        "note": "Reservado para pedidos de última hora",
+    },
+)
+
+
+def ensure_predefined_load_batches(cur, plan_id: int) -> tuple[list[dict[str, Any]], bool]:
+    """Crea los 4 grupos estándar solo si el plan aún no tiene ningún batch.
+
+    Idempotente: reabrir / refrescar / reintentar no duplica.
+    Planes con grupos ya creados (históricos, PLAN-00079, etc.) no se modifican.
+    """
+    batches = batch_repo.list_load_batches(cur, plan_id)
+    if batches:
+        return batches, False
+    for spec in PREDEFINED_LOAD_GROUPS:
+        batch_repo.insert_load_batch(
+            cur,
+            plan_id=plan_id,
+            name=str(spec["name"]),
+            description=encode_batch_description(str(spec["role"]), spec.get("note")),
+            sort_order=int(spec["sort_order"]),
+        )
+    return batch_repo.list_load_batches(cur, plan_id), True
+
+
+def find_reserved_supplemental_batch(
+    batches: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Prefiere «Grupo adicional»; si no, el primer batch role=supplemental."""
+    supplemental = [
+        b
+        for b in batches
+        if parse_batch_presentation_role(b.get("description")) == "supplemental"
+    ]
+    if not supplemental:
+        return None
+    for b in supplemental:
+        if str(b.get("name") or "").strip().lower() == RESERVED_SUPPLEMENTAL_GROUP_NAME.lower():
+            return b
+    supplemental.sort(key=lambda x: (int(x.get("sort_order") or 0), int(x["id"])))
+    return supplemental[0]
+
 
 def parse_batch_presentation_role(description: str | None) -> str | None:
     """Rol visual prioritario|consolidado|supplemental persistido en description."""
@@ -443,7 +510,21 @@ def get_load_organization(plan_id: int) -> dict[str, Any]:
                 }
             )
 
-        batches = batch_repo.list_load_batches(cur, plan_id)
+        batches, created_defaults = ensure_predefined_load_batches(cur, plan_id)
+        if created_defaults:
+            org_repo.insert_organization_event(
+                cur,
+                plan_id=plan_id,
+                action="load_organization_defaults",
+                user_name=None,
+                payload={
+                    "groups": [g["name"] for g in PREDEFINED_LOAD_GROUPS],
+                    "note_es": "Grupos predeterminados creados (idempotente).",
+                },
+            )
+            conn.commit()
+            batches = batch_repo.list_load_batches(cur, plan_id)
+
         orders = org_repo.list_plan_orders_for_organization(cur, plan_id)
         assignments = org_repo.list_order_assignments(cur, plan_id)
         by_oc = {
@@ -468,8 +549,14 @@ def get_load_organization(plan_id: int) -> dict[str, Any]:
         enriched_batches = []
         for b in batches:
             item = dict(b)
-            item["presentation_role"] = parse_batch_presentation_role(b.get("description"))
+            role = parse_batch_presentation_role(b.get("description"))
+            item["presentation_role"] = role
             item["display_description"] = strip_batch_role_description(b.get("description")) or None
+            item["is_reserved_supplemental"] = (
+                role == "supplemental"
+                and str(b.get("name") or "").strip().lower()
+                == RESERVED_SUPPLEMENTAL_GROUP_NAME.lower()
+            )
             enriched_batches.append(item)
         group_summaries = build_group_summaries(
             clients, enriched_batches, variants_by_oc=variants_by_oc
@@ -488,13 +575,18 @@ def get_load_organization(plan_id: int) -> dict[str, Any]:
                 "group_summaries": group_summaries,
                 "assignments": assignments,
                 "completeness": completeness,
+                "predefined_groups_created": created_defaults,
                 "guidance": {
                     "manual_only": True,
                     "priority_max_clients_suggested": 2,
+                    "empty_groups_ok": True,
                     "sort_default": "venta_desc",
                     "note_es": (
-                        "La agrupación es manual. Priorice 1–2 clientes por grupo "
-                        "cuando haya mucha variedad de SKU; consolide el resto de la ruta."
+                        "Grupos predeterminados: Grupo 1 y Grupo 2 (prioritarios, "
+                        "1–2 clientes), Grupo consolidado y Grupo adicional "
+                        "(reservado para OC de última hora). La asignación es manual; "
+                        "grupos vacíos no impiden marcar organización completa si "
+                        "todas las OC originales están asignadas."
                     ),
                 },
             }

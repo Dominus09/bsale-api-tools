@@ -16,7 +16,9 @@ from backend.repositories.distribuidora import dispatch_plan_order_load_repo as 
 from backend.repositories.distribuidora import dispatch_plan_repo as plan_repo
 from backend.services.distribuidora import dispatch_plan_service as plan_svc
 from backend.services.distribuidora.dispatch_plan_load_organization_service import (
+    RESERVED_SUPPLEMENTAL_GROUP_NAME,
     encode_supplemental_batch_description,
+    find_reserved_supplemental_batch,
     parse_batch_presentation_role,
     parse_supplemental_seq,
 )
@@ -466,6 +468,32 @@ def _next_supplemental_seq(batches: list[dict[str, Any]]) -> int:
     return max_seq + 1
 
 
+def _resolve_supplemental_target(
+    cur, plan_id: int, batches: list[dict[str, Any]]
+) -> tuple[dict[str, Any], int, bool]:
+    """Reutiliza «Grupo adicional» (o el suplementario existente). Crea solo si no hay ninguno.
+
+    Returns: (batch, seq, created_now)
+    """
+    existing = find_reserved_supplemental_batch(batches)
+    if existing:
+        seq = parse_supplemental_seq(existing.get("description")) or 1
+        return existing, seq, False
+    seq = _next_supplemental_seq(batches)
+    sort_order = max((int(b.get("sort_order") or 0) for b in batches), default=0) + 1
+    desc = encode_supplemental_batch_description(
+        seq, "Reservado para pedidos de última hora"
+    )
+    created = batch_repo.insert_load_batch(
+        cur,
+        plan_id=plan_id,
+        name=RESERVED_SUPPLEMENTAL_GROUP_NAME,
+        description=desc,
+        sort_order=sort_order,
+    )
+    return created, seq, True
+
+
 def _find_existing_assignment_batch(
     cur, plan_id: int, oc_ids: list[int]
 ) -> dict[str, Any] | None:
@@ -542,8 +570,17 @@ def preview_supplemental_orders(
         novel = [i for i in oc_ids if i not in existing]
 
         batches = batch_repo.list_load_batches(cur, plan_id)
-        next_seq = _next_supplemental_seq(batches)
-        proposed_name = f"OC adicionales {next_seq:02d}"
+        reserved = find_reserved_supplemental_batch(batches)
+        next_seq = (
+            parse_supplemental_seq(reserved.get("description"))
+            if reserved
+            else _next_supplemental_seq(batches)
+        ) or 1
+        proposed_name = (
+            str(reserved.get("name") or RESERVED_SUPPLEMENTAL_GROUP_NAME)
+            if reserved
+            else RESERVED_SUPPLEMENTAL_GROUP_NAME
+        )
         uses_supplemental = org_status == "organized"
         invoicing = assess_oc_invoicing_for_picking(cur, novel or oc_ids)
 
@@ -570,6 +607,10 @@ def preview_supplemental_orders(
             "proposed_supplemental_group_name": (
                 proposed_name if uses_supplemental else None
             ),
+            "proposed_supplemental_group_id": (
+                int(reserved["id"]) if uses_supplemental and reserved else None
+            ),
+            "proposed_supplemental_reused": bool(uses_supplemental and reserved),
             "proposed_supplemental_seq": next_seq if uses_supplemental else None,
             "oc_document_ids": oc_ids,
             "already_in_plan": already,
@@ -584,9 +625,12 @@ def preview_supplemental_orders(
                 capacity.get("requires_unevaluable_weight_ack")
             ),
             "note_es": (
-                "Con organización completa se crea un grupo suplementario; "
-                "los grupos originales no se modifican. "
-                "El picking de productos del suplemento requiere facturación vigente."
+                (
+                    f"Las OC irán al grupo «{proposed_name}»"
+                    + (" (ya existente)." if reserved else " (se creará si falta).")
+                    + " Los grupos originales no se modifican. "
+                    "El picking de productos del suplemento requiere facturación vigente."
+                )
                 if uses_supplemental
                 else "Plan legacy/draft: se conserva el flujo clásico sin grupo suplementario automático."
             ),
@@ -731,18 +775,8 @@ def add_supplemental_orders_to_plan(
                     http_status=409,
                 )
             batches = batch_repo.list_load_batches(cur, plan_id)
-            seq = _next_supplemental_seq(batches)
-            name = f"OC adicionales {seq:02d}"
-            sort_order = max((int(b.get("sort_order") or 0) for b in batches), default=0) + 1
-            desc = encode_supplemental_batch_description(
-                seq, "Grupo suplementario F3-D (OC de última hora)."
-            )
-            supplemental_batch = batch_repo.insert_load_batch(
-                cur,
-                plan_id=plan_id,
-                name=name,
-                description=desc,
-                sort_order=sort_order,
+            supplemental_batch, seq, _created_supp = _resolve_supplemental_target(
+                cur, plan_id, batches
             )
 
         # Insertar solo OC nuevas.
