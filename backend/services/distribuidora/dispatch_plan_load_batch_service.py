@@ -355,6 +355,16 @@ def reconcile_document_load_assignments(
                 unassigned += 1
             else:
                 by_batch[int(bid)] = by_batch.get(int(bid), 0) + 1
+        # Completitud: UNIQUE evita duplicados, no omisiones. Export por grupo
+        # solo es “completo” si todo documento del picking tiene lote.
+        assignment_complete = bool(assignments) and unassigned == 0
+        hard_conflicts = [
+            c
+            for c in (result.get("conflicts") or [])
+            if c.get("code") == "invoice_spans_groups"
+        ]
+        if hard_conflicts:
+            assignment_complete = False
         for b in batches:
             bid = int(b["id"])
             n = by_batch.get(bid, 0)
@@ -364,7 +374,7 @@ def reconcile_document_load_assignments(
                     "name": b.get("name"),
                     "sort_order": b.get("sort_order"),
                     "documents_assigned": n,
-                    "picking_export_ready": n > 0,
+                    "picking_export_ready": bool(n > 0 and assignment_complete),
                 }
             )
         picking_row = picking_repo.get_picking_row(cur, plan_id, current_only=True)
@@ -380,10 +390,11 @@ def reconcile_document_load_assignments(
             "dispatch_plan_id": plan_id,
             "has_picking": bool(picking_row),
             "picking_version": int(picking_row["version"]) if picking_row else None,
+            **result,
             "documents_total": len(assignments),
             "documents_unassigned": unassigned,
+            "document_assignment_complete": assignment_complete,
             "groups": group_status,
-            **result,
         }
     )
 
@@ -602,14 +613,55 @@ def add_order_to_plan(
     )
 
 
+def assess_document_assignment_completeness(cur, plan_id: int) -> dict[str, Any]:
+    """Detecta omisiones (docs sin lote) además de la UNIQUE anti-duplicado."""
+    assignments = batch_repo.list_document_assignments(cur, plan_id)
+    unassigned_ids = [
+        int(a["related_document_id"])
+        for a in assignments
+        if a.get("load_batch_id") is None
+    ]
+    total = len(assignments)
+    complete = total > 0 and len(unassigned_ids) == 0
+    return {
+        "documents_total": total,
+        "documents_unassigned": len(unassigned_ids),
+        "unassigned_related_document_ids": unassigned_ids,
+        "document_assignment_complete": complete,
+    }
+
+
+def assert_group_export_complete(plan_id: int) -> dict[str, Any]:
+    """Bloquea export por grupo si hay documentos del picking sin asignar."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        status = assess_document_assignment_completeness(cur, plan_id)
+        cur.close()
+    finally:
+        conn.close()
+    if not status["document_assignment_complete"]:
+        pending = status["documents_unassigned"]
+        raise ValueError(
+            "Exportación por grupo incompleta: hay "
+            f"{pending} documento(s) del picking sin load_batch_id. "
+            "Concilie o asigne manualmente antes de descargar; "
+            "una descarga parcial no se presenta como completa."
+        )
+    return status
+
+
 def filter_picking_by_load_batch(
     picking_payload: dict[str, Any],
     plan_id: int,
     load_batch_id: int,
+    *,
+    require_complete: bool = False,
 ) -> dict[str, Any]:
     conn = get_connection()
     try:
         cur = conn.cursor()
+        completeness = assess_document_assignment_completeness(cur, plan_id)
         rel_ids = batch_repo.related_document_ids_for_batch(cur, plan_id, load_batch_id)
         batch_row = None
         for b in batch_repo.list_load_batches(cur, plan_id):
@@ -628,6 +680,14 @@ def filter_picking_by_load_batch(
 
     if not batch_row:
         raise ValueError("Grupo de picking no encontrado")
+    if require_complete and not completeness["document_assignment_complete"]:
+        pending = completeness["documents_unassigned"]
+        raise ValueError(
+            "Exportación por grupo incompleta: hay "
+            f"{pending} documento(s) del picking sin load_batch_id. "
+            "Concilie o asigne manualmente antes de descargar; "
+            "una descarga parcial no se presenta como completa."
+        )
 
     rel_set = set(rel_ids)
     clients = [
@@ -658,6 +718,9 @@ def filter_picking_by_load_batch(
     out["header"] = header
     out["load_batch_id"] = load_batch_id
     out["load_batch_name"] = batch_row["name"]
+    out["document_assignment_complete"] = completeness["document_assignment_complete"]
+    out["documents_unassigned"] = completeness["documents_unassigned"]
+    out["documents_total"] = completeness["documents_total"]
     if "totals" in out and out["totals"]:
         out["totals"] = {
             **out["totals"],

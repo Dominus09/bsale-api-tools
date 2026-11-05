@@ -3065,6 +3065,11 @@ export type DispatchPlanPickingProductResponse = {
     total_monto_clp: number
   }
   degraded?: boolean
+  load_batch_id?: number | null
+  load_batch_name?: string | null
+  document_assignment_complete?: boolean
+  documents_unassigned?: number
+  documents_total?: number
 }
 
 export const DISPATCH_PLAN_PICKING_WAIT_MESSAGE =
@@ -3174,6 +3179,7 @@ export type DocumentLoadReconciliationResponse = {
   picking_version?: number | null
   documents_total?: number
   documents_unassigned?: number
+  document_assignment_complete?: boolean
   reconciled?: number
   already_assigned?: number
   pending?: number

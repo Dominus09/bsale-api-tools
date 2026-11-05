@@ -2643,6 +2643,12 @@ def build_picking_product_excel_bytes(
     picking_id: int | None = None,
     load_batch_id: int | None = None,
 ) -> tuple[bytes, str]:
+    if load_batch_id is not None:
+        from backend.services.distribuidora import (
+            dispatch_plan_load_batch_service as batch_svc,
+        )
+
+        batch_svc.assert_group_export_complete(plan_id)
     data = get_picking_by_product(
         plan_id,
         validate=False,

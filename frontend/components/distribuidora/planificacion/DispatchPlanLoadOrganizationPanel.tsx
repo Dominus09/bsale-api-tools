@@ -141,7 +141,17 @@ export function DispatchPlanLoadOrganizationPanel({ planId, onMessage }: Props) 
     async (batch: DispatchPlanLoadBatch, kind: "pdf" | "xlsx") => {
       setBusy(`export-${batch.id}-${kind}`)
       try {
-        await refreshDocRecon()
+        const recon = await refreshDocRecon()
+        if (
+          recon &&
+          (recon.document_assignment_complete === false ||
+            (recon.documents_unassigned ?? 0) > 0)
+        ) {
+          onMessage(
+            `Exportación por grupo incompleta: ${recon.documents_unassigned ?? 0} documento(s) sin asignar. No se descarga un parcial como completo.`,
+          )
+          return
+        }
         if (kind === "xlsx") {
           await downloadDispatchPlanPickingProductoExcel(planId, {
             loadBatchId: batch.id,
@@ -152,6 +162,15 @@ export function DispatchPlanLoadOrganizationPanel({ planId, onMessage }: Props) 
         const data = await getDispatchPlanPickingProducto(planId, {
           loadBatchId: batch.id,
         })
+        if (
+          data.document_assignment_complete === false ||
+          (data.documents_unassigned ?? 0) > 0
+        ) {
+          onMessage(
+            `Exportación por grupo incompleta: ${data.documents_unassigned ?? 0} documento(s) sin asignar.`,
+          )
+          return
+        }
         if (!data.header || !data.items?.length) {
           onMessage(
             `Sin productos para «${batch.name}». Concilié documentos o use la asignación avanzada.`,
@@ -885,6 +904,16 @@ export function DispatchPlanLoadOrganizationPanel({ planId, onMessage }: Props) 
                     (g) => g.load_batch_id === b.id,
                   )
                   const ready = Boolean(gstat?.picking_export_ready)
+                  const planComplete =
+                    docRecon?.document_assignment_complete === true ||
+                    ((docRecon?.documents_unassigned ?? 0) === 0 &&
+                      (docRecon?.documents_total ?? 0) > 0 &&
+                      !(docRecon?.conflicts || []).some(
+                        (c) => c.code === "invoice_spans_groups",
+                      ))
+                  const canExportGroup = Boolean(
+                    docRecon?.has_picking && ready && planComplete,
+                  )
                   const role = b.presentation_role
                   return (
                     <div
@@ -903,7 +932,9 @@ export function DispatchPlanLoadOrganizationPanel({ planId, onMessage }: Props) 
                         {gstat
                           ? `${gstat.documents_assigned} factura(s)/boleta(s) conciliadas`
                           : "Sin estado de conciliación"}
-                        {ready ? " · listo para exportar" : " · pendiente"}
+                        {canExportGroup
+                          ? " · listo para exportar (completo)"
+                          : " · pendiente / incompleto"}
                       </p>
                       <div className="flex flex-wrap gap-1">
                         <Button
@@ -911,7 +942,7 @@ export function DispatchPlanLoadOrganizationPanel({ planId, onMessage }: Props) 
                           size="sm"
                           variant="secondary"
                           className="h-7 text-[11px]"
-                          disabled={busy != null || !docRecon?.has_picking}
+                          disabled={busy != null || !canExportGroup}
                           onClick={() => void exportGroupProducto(b, "pdf")}
                         >
                           {busy === `export-${b.id}-pdf` ? (
@@ -926,7 +957,7 @@ export function DispatchPlanLoadOrganizationPanel({ planId, onMessage }: Props) 
                           size="sm"
                           variant="secondary"
                           className="h-7 text-[11px]"
-                          disabled={busy != null || !docRecon?.has_picking}
+                          disabled={busy != null || !canExportGroup}
                           onClick={() => void exportGroupProducto(b, "xlsx")}
                         >
                           {busy === `export-${b.id}-xlsx` ? (

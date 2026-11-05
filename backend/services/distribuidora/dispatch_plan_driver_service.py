@@ -20,6 +20,37 @@ logger = logging.getLogger(__name__)
 ACTION_ASSIGN_DRIVER = "assign_driver"
 ACTION_UPDATE_PEONETAS = "update_peonetas"
 
+PEONETAS_RATE_SOURCE_SNAPSHOT = "dispatch_plan.assistant_cost_clp"
+PEONETAS_RATE_SOURCE_SETTINGS = "logistics_cost_settings.assistant_cost_clp_per_trip"
+
+
+def resolve_peonetas_unit_rate_clp(
+    plan_assistant_cost_clp: Any,
+    settings_rate: int,
+) -> tuple[int, str]:
+    """Tarifa unitaria (CLP/peoneta/viaje).
+
+    ``dispatch_plan.assistant_cost_clp`` es snapshot de tarifa unitaria (no el
+    gasto total de la dotación). Si está congelada (>0) prevalece sobre la
+    configuración vigente.
+    """
+    frozen = int(plan_assistant_cost_clp or 0)
+    if frozen > 0:
+        return frozen, PEONETAS_RATE_SOURCE_SNAPSHOT
+    return int(settings_rate), PEONETAS_RATE_SOURCE_SETTINGS
+
+
+def resolve_driver_unit_rate_clp(
+    plan_driver_cost_clp: Any,
+    settings_rate: int,
+) -> int:
+    """Tarifa unitaria chofer congelada en el plan si >0; si no, settings."""
+    frozen = int(plan_driver_cost_clp or 0)
+    if frozen > 0:
+        return frozen
+    return int(settings_rate)
+
+
 ASSIGNABLE_PLAN_STATUSES = frozenset(
     {
         "planned",
@@ -467,7 +498,10 @@ def get_plan_driver(plan_id: int) -> dict[str, Any]:
         from backend.services.distribuidora.peonetas import format_peonetas_display
 
         settings = get_logistics_cost_settings()
-        rate = int(round(settings.assistant_cost_clp_per_trip))
+        settings_rate = int(round(settings.assistant_cost_clp_per_trip))
+        rate, rate_source = resolve_peonetas_unit_rate_clp(
+            plan.get("assistant_cost_clp"), settings_rate
+        )
         recorded = (
             bool(plan.get("peonetas_recorded"))
             if "peonetas_recorded" in plan
@@ -494,7 +528,7 @@ def get_plan_driver(plan_id: int) -> dict[str, Any]:
             ),
             "peonetas_unit_cost_clp": rate,
             "peonetas_cost_clp": peonetas_cost,
-            "peonetas_cost_source": "logistics_cost_settings.assistant_cost_clp_per_trip",
+            "peonetas_cost_source": rate_source,
             "driver_pending": driver_user_id is None,
             "driver": driver,
             "history": history,
@@ -556,6 +590,8 @@ def _list_peonetas_events(cur, plan_id: int) -> list[dict[str, Any]]:
                 "reason": row.get("reason"),
                 "previous_assistant_count": payload.get("previous_assistant_count"),
                 "new_assistant_count": payload.get("new_assistant_count"),
+                "peonetas_unit_cost_clp": payload.get("peonetas_unit_cost_clp"),
+                "peonetas_unit_cost_source": payload.get("peonetas_unit_cost_source"),
                 "peonetas_cost_clp": payload.get("peonetas_cost_clp"),
                 "cost_delta_clp": payload.get("cost_delta_clp"),
                 "margin_updated": payload.get("margin_updated"),
@@ -573,10 +609,13 @@ def update_peonetas_on_plan(
 ) -> dict[str, Any]:
     """Actualiza cantidad de peonetas (assistant_count) con auditoría y costo.
 
-    Tarifa: ``logistics_cost_settings.assistant_cost_clp_per_trip`` (verificada).
-    Si el plan tiene métricas ORS completas, recalcula crew/total_route y margen.
-    Si no (p. ej. simple_list sin ORS), persiste peonetas y expone costo unitario
-    sin inventar km/combustible ni margen post-transporte.
+    ``assistant_cost_clp`` del plan = tarifa unitaria congelada (CLP/peoneta/viaje).
+    Precedencia: snapshot del plan si >0; si no, ``assistant_cost_clp_per_trip``.
+    Al cambiar solo la cantidad se conserva la tarifa histórica (incl. count=0).
+
+    Con ORS completo: recalcula crew/total vía ``compute_route_costs`` (sin sumar
+    deltas) y margen con ``compute_plan_margin``. Sin ORS: persiste cantidad y
+    tarifa aplicable sin inventar margen post-transporte.
     """
     from backend.services.distribuidora.dispatch_plan_access import (
         user_can_assign_driver_on_plan,
@@ -613,8 +652,8 @@ def update_peonetas_on_plan(
         actor.get("email") or actor.get("nombre_usuario") or actor.get("id") or "staff"
     )
     settings = get_logistics_cost_settings()
-    rate = int(round(settings.assistant_cost_clp_per_trip))
-    driver_rate = int(round(settings.driver_cost_clp_per_trip))
+    settings_assistant_rate = int(round(settings.assistant_cost_clp_per_trip))
+    settings_driver_rate = int(round(settings.driver_cost_clp_per_trip))
 
     conn = get_connection()
     try:
@@ -645,6 +684,13 @@ def update_peonetas_on_plan(
                 http_status=409,
             )
 
+        rate, rate_source = resolve_peonetas_unit_rate_clp(
+            plan.get("assistant_cost_clp"), settings_assistant_rate
+        )
+        driver_rate = resolve_driver_unit_rate_clp(
+            plan.get("driver_cost_clp"), settings_driver_rate
+        )
+
         prev_count = int(plan.get("assistant_count") or 0)
         prev_recorded = bool(plan.get("peonetas_recorded")) if "peonetas_recorded" in plan else False
         if prev_recorded and prev_count == new_count:
@@ -656,6 +702,7 @@ def update_peonetas_on_plan(
                 "peonetas_recorded": True,
                 "peonetas_cost_clp": new_count * rate,
                 "peonetas_unit_cost_clp": rate,
+                "peonetas_unit_cost_source": rate_source,
             }
 
         prev_peonetas_cost = prev_count * rate if prev_recorded or prev_count > 0 else 0
@@ -694,7 +741,7 @@ def update_peonetas_on_plan(
                 settings=settings,
             )
             new_crew = int(breakdown.crew_cost_clp)
-            # Preservar ferry/toll/extras del plan; reemplazar crew en total.
+            # Preservar ferry/toll/extras del plan; reemplazar crew en total (no delta).
             fuel = int(plan.get("fuel_cost_clp") or breakdown.fuel_cost_clp or 0)
             ferry = int(plan.get("ferry_cost_clp") or 0)
             toll = int(plan.get("toll_cost_clp") or 0)
@@ -721,6 +768,7 @@ def update_peonetas_on_plan(
                 ),
             )
         else:
+            # Congela tarifa unitaria aplicable; no inventa km/combustible/margen.
             cur.execute(
                 """
                 UPDATE distribuidora.dispatch_plan
@@ -745,10 +793,12 @@ def update_peonetas_on_plan(
                 "previous_peonetas_recorded": prev_recorded,
                 "new_assistant_count": new_count,
                 "peonetas_unit_cost_clp": rate,
+                "peonetas_unit_cost_source": rate_source,
                 "peonetas_cost_clp": new_peonetas_cost,
                 "previous_peonetas_cost_clp": prev_peonetas_cost,
                 "cost_delta_clp": cost_delta,
                 "ors_metrics_calculated": ors_ok,
+                "margin_updated": False,  # se actualiza tras commit si ORS ok
                 "crew_cost_clp": new_crew,
                 "total_route_cost_clp": new_total,
                 "actor_user_id": actor.get("id") or actor.get("uid"),
@@ -777,6 +827,11 @@ def update_peonetas_on_plan(
         except Exception:
             logger.exception("margin_recompute_after_peonetas plan_id=%s", plan_id)
 
+    rate_note = (
+        "tarifa histórica del despacho"
+        if rate_source == PEONETAS_RATE_SOURCE_SNAPSHOT
+        else "tarifa configurada vigente"
+    )
     return {
         "status": "updated",
         "plan_id": int(plan_id),
@@ -784,6 +839,7 @@ def update_peonetas_on_plan(
         "peonetas_recorded": True,
         "previous_assistant_count": prev_count,
         "peonetas_unit_cost_clp": rate,
+        "peonetas_unit_cost_source": rate_source,
         "peonetas_cost_clp": new_peonetas_cost,
         "previous_peonetas_cost_clp": prev_peonetas_cost,
         "cost_delta_clp": cost_delta,
@@ -795,7 +851,7 @@ def update_peonetas_on_plan(
             None
             if ors_ok
             else (
-                "Costo de peonetas calculado con tarifa configurada; "
+                f"Costo de peonetas con {rate_note}; "
                 "el margen post-transporte no se actualiza porque este plan "
                 "no tiene métricas ORS completas."
             )

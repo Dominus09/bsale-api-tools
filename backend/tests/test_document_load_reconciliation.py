@@ -143,3 +143,66 @@ def test_reconcile_respects_manual_assignment(monkeypatch):
     assert out["reconciled"] == 0
     assert upserts == []
     assert any(c.get("code") == "manual_differs_from_oc_group" for c in out["conflicts"])
+
+
+def test_assess_detects_omissions_not_just_duplicates(monkeypatch):
+    """UNIQUE evita doble grupo; la completitud exige cero omisiones."""
+    monkeypatch.setattr(
+        svc.batch_repo,
+        "list_document_assignments",
+        lambda _c, _pid: [
+            {"related_document_id": 1, "load_batch_id": 100},
+            {"related_document_id": 2, "load_batch_id": None},
+        ],
+    )
+    status = svc.assess_document_assignment_completeness(_Cur(), 79)
+    assert status["documents_total"] == 2
+    assert status["documents_unassigned"] == 1
+    assert status["document_assignment_complete"] is False
+    assert status["unassigned_related_document_ids"] == [2]
+
+
+class _Conn:
+    def __init__(self, cur):
+        self._cur = cur
+
+    def cursor(self):
+        return self._cur
+
+    def close(self):
+        return None
+
+
+def test_assert_group_export_complete_blocks_partial(monkeypatch):
+    monkeypatch.setattr(
+        svc.batch_repo,
+        "list_document_assignments",
+        lambda _c, _pid: [
+            {"related_document_id": 1, "load_batch_id": 100},
+            {"related_document_id": 2, "load_batch_id": None},
+        ],
+    )
+    cur = _Cur()
+    cur.close = lambda: None  # type: ignore[attr-defined]
+    monkeypatch.setattr(svc, "get_connection", lambda: _Conn(cur))
+    try:
+        svc.assert_group_export_complete(79)
+        raise AssertionError("debía fallar por omisiones")
+    except ValueError as exc:
+        assert "incompleta" in str(exc).lower()
+
+
+def test_assert_group_export_complete_ok_when_all_assigned(monkeypatch):
+    monkeypatch.setattr(
+        svc.batch_repo,
+        "list_document_assignments",
+        lambda _c, _pid: [
+            {"related_document_id": 1, "load_batch_id": 100},
+            {"related_document_id": 2, "load_batch_id": 200},
+        ],
+    )
+    cur = _Cur()
+    cur.close = lambda: None  # type: ignore[attr-defined]
+    monkeypatch.setattr(svc, "get_connection", lambda: _Conn(cur))
+    status = svc.assert_group_export_complete(79)
+    assert status["document_assignment_complete"] is True
