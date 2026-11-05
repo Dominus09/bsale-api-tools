@@ -1142,11 +1142,37 @@ class CuadraturaSaveBody(BaseModel):
     credit_notes_v2: list[CuadraturaCreditNoteV2Row] = Field(default_factory=list)
     not_loaded_v2: list[CuadraturaNotLoadedV2Row] = Field(default_factory=list)
     cash_count: list[CuadraturaCashCountRow] = Field(default_factory=list)
+    expected_picking_version: int | None = Field(
+        None, ge=1, description="Versión adoptada esperada (concurrencia F3-D3)."
+    )
+    adopted_picking_version: int | None = Field(
+        None, ge=1, description="Alias de expected_picking_version."
+    )
 
 
 class CuadraturaCloseBody(BaseModel):
     observacion: str | None = None
     closed_by: str | None = None
+
+
+class CuadraturaAdoptPickingBody(BaseModel):
+    expected_available_version: int | None = Field(
+        None, ge=1, description="Versión vigente que el cliente pretende adoptar."
+    )
+
+
+def _raise_cuadratura_error(exc: Exception) -> None:
+    from backend.services.distribuidora.dispatch_plan_cuadratura_service import (
+        CuadraturaConflictError,
+    )
+
+    if isinstance(exc, CuadraturaConflictError):
+        raise HTTPException(
+            status_code=int(exc.http_status or 409),
+            detail={"message": str(exc), "code": exc.code, **(exc.details or {})},
+        ) from exc
+    if isinstance(exc, ValueError):
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/{plan_id}/cuadratura")
@@ -1165,8 +1191,9 @@ def get_cuadratura(plan_id: int, user: dict = Depends(require_staff_user)):
 def put_cuadratura(
     plan_id: int,
     body: CuadraturaSaveBody,
-    _ops: dict = Depends(require_erp_ops_staff),
+    user: dict = Depends(require_erp_ops_staff),
 ):
+    _deny_plan_if_out_of_scope(user, plan_id)
     try:
         payload = body.model_dump(exclude_none=True)
         if body.documents is not None:
@@ -1183,29 +1210,61 @@ def put_cuadratura(
         if body.not_loaded:
             payload["not_loaded"] = [r.model_dump() for r in body.not_loaded]
         return cuad_svc.save_dispatch_plan_cuadratura(plan_id, payload)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as exc:
+        try:
+            _raise_cuadratura_error(exc)
+        except HTTPException:
+            raise
         log_error("PUT /dispatch-plans/cuadratura", exc)
         raise HTTPException(status_code=500, detail="Error al guardar cuadratura") from exc
+
+
+@router.post("/{plan_id}/cuadratura/adopt-picking")
+def adopt_cuadratura_picking(
+    plan_id: int,
+    body: CuadraturaAdoptPickingBody | None = None,
+    user: dict = Depends(require_erp_ops_staff),
+):
+    _deny_plan_if_out_of_scope(user, plan_id)
+    try:
+        data = body.model_dump(exclude_none=True) if body else {}
+        return cuad_svc.adopt_cuadratura_picking(
+            plan_id,
+            user=user,
+            expected_available_version=data.get("expected_available_version"),
+        )
+    except Exception as exc:
+        try:
+            _raise_cuadratura_error(exc)
+        except HTTPException:
+            raise
+        log_error("POST /dispatch-plans/cuadratura/adopt-picking", exc)
+        raise HTTPException(
+            status_code=500, detail="Error al adoptar picking en cuadratura"
+        ) from exc
 
 
 @router.post("/{plan_id}/cuadratura/close")
 def close_cuadratura(
     plan_id: int,
     body: CuadraturaCloseBody | None = None,
-    _ops: dict = Depends(require_erp_ops_staff),
+    user: dict = Depends(require_erp_ops_staff),
 ):
+    _deny_plan_if_out_of_scope(user, plan_id)
     try:
         data = body.model_dump() if body else {}
         return cuad_svc.close_dispatch_plan_cuadratura(
             plan_id,
-            closed_by=data.get("closed_by"),
+            closed_by=data.get("closed_by") or (
+                user.get("email") or user.get("name") or user.get("sub")
+            ),
             observacion=data.get("observacion"),
         )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as exc:
+        try:
+            _raise_cuadratura_error(exc)
+        except HTTPException:
+            raise
         log_error("POST /dispatch-plans/cuadratura/close", exc)
         raise HTTPException(status_code=500, detail="Error al cerrar cuadratura") from exc
 

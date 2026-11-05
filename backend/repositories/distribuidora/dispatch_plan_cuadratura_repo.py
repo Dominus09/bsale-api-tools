@@ -146,6 +146,24 @@ def upsert_cuadratura(
     )
 
 
+def lock_cuadratura_row(cur, plan_id: int) -> dict[str, Any] | None:
+    """FOR UPDATE de la fila de cuadratura (si existe)."""
+    if not _table_exists(cur):
+        return None
+    cur.execute(
+        """
+        SELECT dispatch_plan_id
+        FROM distribuidora.dispatch_plan_cuadratura
+        WHERE dispatch_plan_id = %s
+        FOR UPDATE
+        """,
+        (int(plan_id),),
+    )
+    if not cur.fetchone():
+        return None
+    return get_cuadratura_row(cur, plan_id)
+
+
 def upsert_cuadratura_v2(
     cur,
     *,
@@ -161,13 +179,23 @@ def upsert_cuadratura_v2(
     resultado_cache: dict[str, Any],
     closed_at: Any = None,
     closed_by: str | None = None,
+    update_closed: bool = False,
 ) -> None:
+    """Persiste cuadratura v2.
+
+    ``picking_id`` / ``picking_version`` = versión **adoptada** (F3-D3).
+    Por defecto no limpia ``closed_at`` en saves ordinarios (``update_closed=False``).
+    """
     if not _table_exists(cur) or not _column_exists(cur, "schema_version"):
         return
     has_cash = _column_exists(cur, "cash_count")
     cash_sql = ", cash_count" if has_cash else ""
     cash_val = ", %s::jsonb" if has_cash else ""
     cash_upd = ", cash_count = EXCLUDED.cash_count" if has_cash else ""
+    if update_closed:
+        closed_upd = ", closed_at = EXCLUDED.closed_at, closed_by = EXCLUDED.closed_by"
+    else:
+        closed_upd = ""
     params: list[Any] = [
         int(plan_id),
         status,
@@ -219,9 +247,7 @@ def upsert_cuadratura_v2(
             picking_id = EXCLUDED.picking_id,
             picking_version = EXCLUDED.picking_version,
             observacion = EXCLUDED.observacion,
-            resultado_cache = EXCLUDED.resultado_cache,
-            closed_at = EXCLUDED.closed_at,
-            closed_by = EXCLUDED.closed_by,
+            resultado_cache = EXCLUDED.resultado_cache{closed_upd},
             updated_at = NOW()
         """,
         tuple(params),
