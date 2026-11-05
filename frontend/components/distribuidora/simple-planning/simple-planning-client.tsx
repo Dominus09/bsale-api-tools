@@ -1,12 +1,16 @@
 "use client"
 
 import Link from "next/link"
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   FileSpreadsheet,
   Loader2,
+  PanelLeftClose,
+  PanelLeftOpen,
   Truck,
   Upload,
 } from "lucide-react"
@@ -168,6 +172,12 @@ export function SimplePlanningClient() {
   const [orsByTruck, setOrsByTruck] = useState<Record<number, SimplePlanningOrsSnapshot | null>>(
     {},
   )
+  /** Solo presentación: contrae el panel de ingreso sin borrar OC. */
+  const [inputPanelCollapsed, setInputPanelCollapsed] = useState(false)
+  /** Filas con detalle de productos expandido (clave estable folio/input+idx). */
+  const [expandedProductRows, setExpandedProductRows] = useState<Set<string>>(
+    () => new Set(),
+  )
   const confirmingRef = useRef(false)
 
   const invalidateAssignAndConfirm = useCallback(() => {
@@ -284,6 +294,8 @@ export function SimplePlanningClient() {
       setSelectedFolios(clearFolioSelection())
       setMunicipalityFilter("__all__")
       setTruckConfirm({})
+      setExpandedProductRows(new Set())
+      setInputPanelCollapsed(true)
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al consultar OC")
     } finally {
@@ -304,6 +316,48 @@ export function SimplePlanningClient() {
     () => truckIdsFromAssignments(assignmentByFolio),
     [assignmentByFolio],
   )
+
+  const previewStats = useMemo(() => {
+    const recovered = previewItems.filter(
+      (i) =>
+        i.status !== "not_found" &&
+        i.status !== "invalid_folio" &&
+        i.status !== "duplicate_in_list",
+    )
+    let knownKg = 0
+    let withWeight = 0
+    let coverageSum = 0
+    let coverageN = 0
+    for (const item of recovered) {
+      const kw = item.weight?.known_weight_kg ?? item.weight?.peso_total_kg
+      if (kw != null && Number.isFinite(Number(kw))) {
+        knownKg += Number(kw)
+        withWeight += 1
+      }
+      const cov = item.weight?.coverage_percent
+      if (cov != null && Number.isFinite(Number(cov))) {
+        coverageSum += Number(cov)
+        coverageN += 1
+      }
+    }
+    const avgCoverage = coverageN > 0 ? coverageSum / coverageN : null
+    const incomplete =
+      recovered.length === 0
+        ? "sin datos"
+        : withWeight < recovered.length || (avgCoverage != null && avgCoverage < 99.5)
+          ? "cobertura incompleta"
+          : "cobertura completa"
+    return {
+      recovered: recovered.length,
+      clients: uniqueClientCount(recovered),
+      trucksAssigned: assignedTruckIds.length,
+      knownKg,
+      withWeight,
+      totalForWeight: recovered.length,
+      avgCoverage,
+      coverageLabel: incomplete,
+    }
+  }, [previewItems, assignedTruckIds])
 
   const setOcTruck = (folio: number, truckId: number | null) => {
     setAssignmentByFolio((prev) => {
@@ -599,50 +653,92 @@ export function SimplePlanningClient() {
   const confirmState = confirmTruckId != null ? truckConfirm[confirmTruckId] : undefined
   const confirmBusy =
     confirmState?.status === "preparing" || confirmState?.status === "confirming"
+  const hasPreview = previewItems.length > 0
+
+  const toggleProductRow = (rowKey: string) => {
+    setExpandedProductRows((prev) => {
+      const next = new Set(prev)
+      if (next.has(rowKey)) next.delete(rowKey)
+      else next.add(rowKey)
+      return next
+    })
+  }
 
   return (
-    <div className="mx-auto flex w-full max-w-7xl flex-col gap-6 p-4 md:p-6">
-      <header className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Planificación simplificada</h1>
-        <p className="text-sm text-muted-foreground">
-          Ingreso por lista de OC o Excel → preview → asignación a camiones → confirmación
-          por vehículo. Sin optimizador ORS. El chofer se asigna después desde el detalle del
-          despacho.
-        </p>
-        <div className="flex flex-wrap gap-2 pt-2 text-xs text-muted-foreground">
-          <span
-            className={cn(
-              "rounded px-2 py-0.5",
-              step === "input" ? "bg-primary/10 text-primary" : "bg-muted",
-            )}
-          >
-            1. OC
-          </span>
-          <span
-            className={cn(
-              "rounded px-2 py-0.5",
-              step === "preview" ? "bg-primary/10 text-primary" : "bg-muted",
-            )}
-          >
-            2. Preview
-          </span>
-          <span
-            className={cn(
-              "rounded px-2 py-0.5",
-              step === "assign" ? "bg-primary/10 text-primary" : "bg-muted",
-            )}
-          >
-            3. Camiones
-          </span>
-          <span
-            className={cn(
-              "rounded px-2 py-0.5",
-              step === "done" || step === "confirm" ? "bg-primary/10 text-primary" : "bg-muted",
-            )}
-          >
-            4. Confirmar
-          </span>
+    <div className="mx-auto flex w-full max-w-[1520px] flex-col gap-4 px-4 py-4 md:gap-5 md:px-6 md:py-5">
+      <header className="space-y-2">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0 space-y-1">
+            <h1 className="text-xl font-semibold tracking-tight md:text-2xl">
+              Planificación simplificada
+            </h1>
+            <p className="max-w-3xl text-sm text-muted-foreground">
+              Ingreso de OC, vista previa, asignación de camiones y confirmación.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-1.5 text-xs text-muted-foreground">
+            {(
+              [
+                ["input", "1. OC"],
+                ["preview", "2. Preview"],
+                ["assign", "3. Camiones"],
+                ["confirm", "4. Confirmar"],
+              ] as const
+            ).map(([key, label]) => {
+              const active =
+                key === "confirm"
+                  ? step === "done" || step === "confirm"
+                  : step === key
+              return (
+                <span
+                  key={key}
+                  className={cn(
+                    "rounded px-2 py-0.5",
+                    active ? "bg-primary/10 text-primary" : "bg-muted",
+                  )}
+                >
+                  {label}
+                </span>
+              )
+            })}
+          </div>
         </div>
+        <section className="grid gap-3 rounded-lg border bg-card p-3 sm:grid-cols-3 md:p-3.5">
+          <div className="space-y-1.5">
+            <Label className="text-xs">Oficina</Label>
+            <Select value={String(officeId)} onValueChange={(v) => setOfficeId(Number(v))}>
+              <SelectTrigger className="h-9">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {OFFICE_OPTIONS.map((o) => (
+                  <SelectItem key={o.id} value={String(o.id)}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Fecha de planificación</Label>
+            <Input
+              type="date"
+              className="h-9"
+              value={planningDate}
+              onChange={(e) => setPlanningDate(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs">Nombre del despacho</Label>
+            <Input
+              className="h-9"
+              value={dispatchName}
+              onChange={(e) => setDispatchName(e.target.value)}
+              placeholder="Ej. Ruta Melinka"
+              maxLength={128}
+            />
+          </div>
+        </section>
       </header>
 
       {error ? (
@@ -653,604 +749,787 @@ export function SimplePlanningClient() {
         </Alert>
       ) : null}
 
-      <section className="grid gap-4 rounded-lg border bg-card p-4 md:grid-cols-3">
-        <div className="space-y-2">
-          <Label>Oficina</Label>
-          <Select value={String(officeId)} onValueChange={(v) => setOfficeId(Number(v))}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {OFFICE_OPTIONS.map((o) => (
-                <SelectItem key={o.id} value={String(o.id)}>
-                  {o.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-2">
-          <Label>Fecha de planificación</Label>
-          <Input
-            type="date"
-            value={planningDate}
-            onChange={(e) => setPlanningDate(e.target.value)}
-          />
-        </div>
-        <div className="space-y-2">
-          <Label>Nombre despacho (opcional)</Label>
-          <Input
-            value={dispatchName}
-            onChange={(e) => setDispatchName(e.target.value)}
-            placeholder="Ej. Ruta norte Excel"
-            maxLength={128}
-          />
-        </div>
-      </section>
-
-      <section className="grid gap-4 md:grid-cols-2">
-        <div className="space-y-2 rounded-lg border p-4">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <FileSpreadsheet className="h-4 w-4" /> Pegar números de OC
-          </div>
-          <p className="text-xs text-muted-foreground">Una OC por fila (como en Excel).</p>
-          <Textarea
-            value={pasteText}
-            onChange={(e) => onPasteChange(e.target.value)}
-            rows={10}
-            placeholder={"70625\n70626\n70630"}
-            className="font-mono text-sm"
-          />
-        </div>
-        <div className="space-y-2 rounded-lg border p-4">
-          <div className="flex items-center gap-2 text-sm font-medium">
-            <Upload className="h-4 w-4" /> Importar .xlsx
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Solo lectura local: no se sube el archivo. Columna OC/folio o primera columna.
-            Máx. 2 MB / 200 filas útiles.
-          </p>
-          <Input
-            type="file"
-            accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            disabled={parseBusy}
-            onChange={(e) => void onFile(e.target.files?.[0] ?? null)}
-          />
-          {fileName ? (
-            <p className="text-xs text-muted-foreground">Archivo: {fileName}</p>
-          ) : null}
-          {parseBusy ? (
-            <p className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Loader2 className="h-3 w-3 animate-spin" /> Leyendo…
-            </p>
-          ) : null}
-        </div>
-      </section>
-
-      {parseInfo ? (
-        <div className="rounded-lg border bg-muted/30 px-4 py-3 text-sm">
-          <span className="font-medium">{parseInfo.folios.length}</span> OC únicas listas
-          {parseInfo.skippedEmpty ? (
-            <span className="text-muted-foreground">
-              {" "}
-              · {parseInfo.skippedEmpty} filas vacías omitidas
-            </span>
-          ) : null}
-          {parseInfo.issues.length ? (
-            <ul className="mt-2 max-h-28 list-disc overflow-auto pl-5 text-xs text-amber-800 dark:text-amber-200">
-              {parseInfo.issues.slice(0, 12).map((iss, i) => (
-                <li key={`${iss.kind}-${i}`}>{iss.message}</li>
-              ))}
-              {parseInfo.issues.length > 12 ? (
-                <li>… y {parseInfo.issues.length - 12} más</li>
-              ) : null}
-            </ul>
-          ) : null}
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Button onClick={() => void runPreview()} disabled={previewBusy || !parseInfo.folios.length}>
-              {previewBusy ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Consultando…
-                </>
-              ) : (
-                "Consultar OC (preview)"
-              )}
-            </Button>
-          </div>
-        </div>
-      ) : null}
-
-      {previewItems.length > 0 ? (
-        <section className="space-y-3">
-          <h2 className="text-lg font-medium">Resultado preview</h2>
-
-          <div className="flex flex-wrap items-end gap-3 rounded-lg border bg-muted/20 p-3">
-            <div className="space-y-1">
-              <Label className="text-xs">Filtro comuna</Label>
-              <Select
-                value={municipalityFilter}
-                onValueChange={(v) => setMunicipalityFilter(v)}
-              >
-                <SelectTrigger className="h-8 w-[180px]">
-                  <SelectValue placeholder="Todas" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__all__">Todas las comunas</SelectItem>
-                  {municipalities.map((m) => (
-                    <SelectItem key={m} value={m}>
-                      {m}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="text-sm">
-              <span className="font-medium">{selectedFolios.size}</span>
-              <span className="text-muted-foreground"> OC seleccionadas</span>
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Camión masivo</Label>
-              <Select value={bulkTruckId || undefined} onValueChange={setBulkTruckId}>
-                <SelectTrigger className="h-8 w-[220px]">
-                  <SelectValue placeholder="Elegir camión" />
-                </SelectTrigger>
-                <SelectContent>
-                  {trucks.map((t) => (
-                    <SelectItem key={t.id} value={String(t.id)}>
-                      {formatTruckSelectLabel(t, trucks)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <Button
-              size="sm"
-              onClick={applyBulkAssign}
-              disabled={!selectedFolios.size || !bulkTruckId || trucks.length === 0}
-            >
-              Asignar seleccionadas
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setSelectedFolios(clearFolioSelection())}
-              disabled={!selectedFolios.size}
-            >
-              Limpiar selección
-            </Button>
-          </div>
-
-          <div className="overflow-x-auto rounded-lg border">
-            <table className="w-full min-w-[1100px] text-left text-sm">
-              <thead className="border-b bg-muted/50 text-xs uppercase text-muted-foreground">
-                <tr>
-                  <th className="px-2 py-2">
-                    <Checkbox
-                      checked={allVisibleSelected}
-                      onCheckedChange={(v) => {
-                        if (v === true) {
-                          setSelectedFolios((prev) => {
-                            const next = new Set(prev)
-                            for (const f of visibleAssignable) next.add(String(f))
-                            return next
-                          })
-                        } else {
-                          setSelectedFolios((prev) => {
-                            const next = new Set(prev)
-                            for (const f of visibleAssignable) next.delete(String(f))
-                            return next
-                          })
-                        }
-                      }}
-                      aria-label="Seleccionar todas las visibles"
-                    />
-                  </th>
-                  <th className="px-2 py-2">OC</th>
-                  <th className="px-2 py-2">Cliente</th>
-                  <th className="px-2 py-2">Comuna / dirección</th>
-                  <th className="px-2 py-2">Productos</th>
-                  <th className="px-2 py-2">Peso / cobertura</th>
-                  <th className="px-2 py-2">Docs</th>
-                  <th className="px-2 py-2">Facturación</th>
-                  <th className="px-2 py-2">Planificación</th>
-                  <th className="px-2 py-2">Camión</th>
-                  <th className="px-2 py-2">Avisos</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredPreviewItems.map((item, idx) => {
-                  const folio = item.folio
-                  const canAssign =
-                    folio != null &&
-                    !item.blocking &&
-                    item.status !== "not_found" &&
-                    item.status !== "duplicate_in_list" &&
-                    item.status !== "cancelled_or_replaced"
-                  const products = (item.products || [])
-                    .slice(0, 4)
-                    .map(
-                      (p) =>
-                        `${p.quantity ?? "?"}× ${p.description || p.code || "producto"}`,
-                    )
-                    .join("; ")
-                  const more =
-                    (item.products || []).length > 4
-                      ? ` (+${(item.products || []).length - 4})`
-                      : ""
-                  const missing = item.weight?.products_without_weight || []
-                  return (
-                    <tr
-                      key={`${item.folio ?? item.input}-${idx}`}
-                      className={cn(
-                        "border-b align-top",
-                        item.blocking && "bg-destructive/5",
-                      )}
-                    >
-                      <td className="px-2 py-2">
-                        {canAssign ? (
-                          <Checkbox
-                            checked={selectedFolios.has(String(folio))}
-                            onCheckedChange={(v) =>
-                              setSelectedFolios((prev) =>
-                                toggleFolioInSelection(prev, Number(folio), v === true),
-                              )
-                            }
-                            aria-label={`Seleccionar OC ${folio}`}
-                          />
-                        ) : (
-                          <span className="text-xs text-muted-foreground">—</span>
-                        )}
-                      </td>
-                      <td className="px-2 py-2 font-mono">
-                        {folio ?? item.input ?? "—"}
-                        {item.audit_oc?.suggested ? (
-                          <div className="text-xs">
-                            {canOpenOcAudit ? (
-                              <Link
-                                className="text-primary underline"
-                                href={`/distribuidora/auditoria-oc?folio=${encodeURIComponent(String(folio ?? item.input ?? ""))}`}
-                              >
-                                Auditoría OC
-                              </Link>
-                            ) : (
-                              <span className="text-muted-foreground">
-                                OC no hallada — pedir a gerencia/adm revisar en
-                                Auditoría OC
-                              </span>
-                            )}
-                          </div>
-                        ) : null}
-                      </td>
-                      <td className="px-2 py-2">{item.client?.client_name || "—"}</td>
-                      <td className="px-2 py-2">
-                        <div>{item.client?.municipality || "—"}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {item.client?.address || ""}
-                        </div>
-                      </td>
-                      <td className="max-w-[220px] px-2 py-2 text-xs">
-                        {products || "—"}
-                        {more}
-                      </td>
-                      <td className="px-2 py-2 text-xs">
-                        <div>
-                          Peso conocido:{" "}
-                          {fmtKg(item.weight?.known_weight_kg ?? item.weight?.peso_total_kg)}
-                        </div>
-                        <div className="text-muted-foreground">
-                          {item.weight?.label ||
-                            STATUS_LABEL[item.weight?.quality || ""] ||
-                            item.weight?.quality ||
-                            "—"}
-                          {item.weight?.coverage_percent != null
-                            ? ` · ${fmtPct(item.weight.coverage_percent)}`
-                            : ""}
-                        </div>
-                        {missing.length ? (
-                          <div className="mt-1 text-amber-800 dark:text-amber-200">
-                            Productos sin peso registrado:{" "}
-                            {missing
-                              .slice(0, 3)
-                              .map((p) => p.description || p.code || p.variant_id)
-                              .join(", ")}
-                            {missing.length > 3 ? ` (+${missing.length - 3})` : ""}
-                          </div>
-                        ) : null}
-                      </td>
-                      <td className="px-2 py-2 text-xs">
-                        {item.invoice_count != null
-                          ? item.invoice_count
-                          : Array.isArray(item.invoices)
-                            ? item.invoices.length
-                            : "—"}
-                      </td>
-                      <td className="px-2 py-2 text-xs">
-                        {item.billing_label || item.billing_status || "—"}
-                      </td>
-                      <td className="px-2 py-2 text-xs">
-                        {STATUS_LABEL[item.status] || item.status}
-                      </td>
-                      <td className="px-2 py-2">
-                        {canAssign ? (
-                          <Select
-                            value={
-                              assignmentByFolio[String(folio)] != null
-                                ? String(assignmentByFolio[String(folio)])
-                                : "__none__"
-                            }
-                            onValueChange={(v) =>
-                              setOcTruck(Number(folio), v === "__none__" ? null : Number(v))
-                            }
-                          >
-                            <SelectTrigger className="h-8 w-[200px]">
-                              <SelectValue placeholder="—" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="__none__">Sin asignar</SelectItem>
-                              {trucks.map((t) => (
-                                <SelectItem key={t.id} value={String(t.id)}>
-                                  {formatTruckSelectLabel(t, trucks)}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <span className="text-xs text-muted-foreground">—</span>
-                        )}
-                      </td>
-                      <td className="px-2 py-2 text-xs text-amber-800 dark:text-amber-200">
-                        {(item.warnings || [])
-                          .map((w) => STATUS_LABEL[w] || w)
-                          .join(", ") || (item.blocking ? "bloqueante" : "")}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="space-y-3 rounded-lg border p-4">
-            <div className="flex items-center gap-2 text-sm font-medium">
-              <Truck className="h-4 w-4" /> Asignación
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Elige el camión directamente en cada OC o con asignación masiva. El resumen por
-              camión se arma solo con los vehículos que tengan órdenes. Una OC no puede ir a
-              dos camiones en la misma operación.
-            </p>
-            {assignedTruckIds.length ? (
-              <p className="text-xs text-muted-foreground">
-                Camiones con OC:{" "}
-                {assignedTruckIds.map((tid) => truckLabel(tid)).join(" · ")}
-              </p>
-            ) : (
-              <p className="text-xs text-muted-foreground">
-                Aún no hay OC asignadas a un camión.
-              </p>
-            )}
-            <Button
-              onClick={() => void runAssignPreview()}
-              disabled={assignBusy || assignedTruckIds.length === 0}
-            >
-              {assignBusy ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Calculando asignación…
-                </>
-              ) : (
-                "Previsualizar asignación (assign-preview)"
-              )}
-            </Button>
-          </div>
-        </section>
-      ) : null}
-
-      {assignPreview?.trucks?.length ? (
-        <section className="space-y-3">
-          <h2 className="text-lg font-medium">Resumen por camión</h2>
-          {(assignPreview.request_duplicate_folios || []).length ? (
-            <Alert variant="destructive">
-              <AlertTitle>OC duplicadas en la solicitud</AlertTitle>
-              <AlertDescription>
-                {(assignPreview.request_duplicate_folios || []).join(", ")}
-              </AlertDescription>
-            </Alert>
-          ) : null}
-          {(assignPreview.fingerprint_drifts || []).length ? (
-            <Alert variant="destructive">
-              <AlertTitle>OC modificadas después del preview</AlertTitle>
-              <AlertDescription>
-                {(assignPreview.fingerprint_drifts as { folio?: number; detail?: string }[])
-                  .map((d) => d.detail || (d.folio != null ? `OC ${d.folio}` : null))
-                  .filter(Boolean)
-                  .join(" · ")}
-                {" "}
-                Actualiza el listado (preview) y vuelve a previsualizar la asignación.
-              </AlertDescription>
-            </Alert>
-          ) : null}
-          <div className="grid gap-4 lg:grid-cols-2">
-            {assignPreview.trucks
-              .filter((tr) => (tr.order_count ?? tr.orders?.length ?? 0) > 0)
-              .map((tr) => {
-              const cap = tr.capacity
-              const clients = uniqueClientCount(tr.orders || [])
-              const st = truckConfirm[tr.truck_id]
-              const driftBlocked = (assignPreview.fingerprint_drifts || []).length > 0
-              const needsIncompleteAck = (cap?.incomplete_order_count ?? 0) > 0
-              const needsUnevaluableAck = (cap?.unevaluable_order_count ?? 0) > 0
-              const blocked =
-                Boolean(tr.blocking) ||
-                Boolean(cap?.blocking) ||
-                Boolean(tr.truck_missing) ||
-                driftBlocked ||
-                !cap?.capacity_known
-              const catalogTruck = trucks.find((t) => t.id === tr.truck_id)
-              const title = truckLabel(tr.truck_id, catalogTruck || (tr.truck as DistribuidoraTruck))
-              return (
-                <div
-                  key={tr.truck_id}
-                  className={cn(
-                    "space-y-2 rounded-lg border p-4",
-                    blocked && "border-destructive/40",
-                  )}
+      <div className="grid gap-4 lg:grid-cols-[minmax(280px,320px)_minmax(0,1fr)]">
+        <aside className="min-w-0 rounded-lg border bg-card p-3 md:p-4 lg:sticky lg:top-4 lg:self-start">
+          <div className="space-y-3">
+            {hasPreview ? (
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-medium">Ingreso de OC</p>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5"
+                  onClick={() => setInputPanelCollapsed((v) => !v)}
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <div className="font-medium">{title}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {tr.order_count ?? 0} OC · {clients} clientes
-                      </div>
-                    </div>
-                    {st?.status === "ok" ? (
-                      <CheckCircle2 className="h-5 w-5 text-emerald-600" />
-                    ) : null}
-                  </div>
-                  <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-                    <dt className="text-muted-foreground">Peso conocido</dt>
-                    <dd>{fmtKg(cap?.known_weight_kg)}</dd>
-                    <dt className="text-muted-foreground">Peso estimado</dt>
-                    <dd>{fmtKg(cap?.estimated_weight_kg)}</dd>
-                    <dt className="text-muted-foreground">Capacidad máx.</dt>
-                    <dd>{fmtKg(cap?.truck_max_weight_kg)}</dd>
-                    <dt className="text-muted-foreground">Utilización</dt>
-                    <dd>{fmtPct(cap?.utilization_pct)}</dd>
-                  </dl>
-                  <p className="text-xs text-muted-foreground">
-                    Peso conocido: {fmtKg(cap?.known_weight_kg)}
-                    {cap?.weight_total_determined === false
-                      ? " · total real aún no determinado"
-                      : ""}
-                  </p>
-                  {needsIncompleteAck || needsUnevaluableAck ? (
-                    <p className="text-xs text-amber-800 dark:text-amber-200">
-                      {needsUnevaluableAck
-                        ? "Capacidad total aún no verificable — revisión manual al confirmar. "
-                        : ""}
-                      {needsIncompleteAck
-                        ? "Cobertura de peso incompleta — aceptación explícita al confirmar. "
-                        : ""}
-                      No autoriza salida a ruta.
-                    </p>
-                  ) : null}
-                  {(tr.warnings || []).length || (cap?.warnings || []).length ? (
-                    <p className="text-xs text-amber-800 dark:text-amber-200">
-                      {[...(tr.warnings || []), ...(cap?.warnings || [])]
-                        .filter(
-                          (w, i, arr) =>
-                            w !== "orders_with_unavailable_weight" && arr.indexOf(w) === i,
-                        )
-                        .map((w) =>
-                          w === "incomplete_weight_coverage"
-                            ? "Cobertura de peso incompleta"
-                            : w === "weight_capacity_unevaluable"
-                              ? "Capacidad total aún no verificable"
-                              : w === "truck_overloaded"
-                                ? "Camión sobrecargado (peso conocido)"
-                                : w === "truck_capacity_unknown"
-                                  ? "Capacidad del camión desconocida"
-                                  : w,
-                        )
-                        .join(" · ")}
-                    </p>
-                  ) : null}
-                  <div
-                    className={cn(
-                      confirmOpen && "pointer-events-none select-none opacity-60",
-                    )}
-                    aria-hidden={confirmOpen || undefined}
-                  >
-                    <SimplePlanningTruckMap
-                      companyId={companyId}
-                      officeId={officeId}
-                      truckId={tr.truck_id}
-                      truckName={title}
-                      orders={tr.orders || []}
-                      orsSnapshot={orsByTruck[tr.truck_id] || null}
-                      onOrsSnapshot={(snap) => {
-                        if (confirmOpen) return
-                        setOrsByTruck((prev) => ({ ...prev, [tr.truck_id]: snap }))
-                      }}
-                    />
-                  </div>
-                  {tr.picking_preview?.products_consolidated?.length ? (
-                    <details className="text-xs">
-                      <summary className="cursor-pointer font-medium">
-                        Picking preliminar (desde OC, no definitivo)
-                      </summary>
-                      <ul className="mt-1 max-h-32 list-disc overflow-auto pl-4">
-                        {tr.picking_preview.products_consolidated.slice(0, 40).map((p, i) => (
-                          <li key={i}>
-                            {p.quantity}× {p.description || p.code || "ítem"}
-                          </li>
-                        ))}
-                      </ul>
-                      <p className="mt-1 text-muted-foreground">
-                        El picking definitivo depende de boletas/facturas tras confirmar.
-                      </p>
-                    </details>
-                  ) : null}
-                  {st?.status === "ok" && st.planId ? (
-                    <div className="space-y-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-4">
-                      <div className="space-y-1">
-                        <p className="text-base font-semibold text-emerald-800 dark:text-emerald-200">
-                          ¡Despacho confirmado!
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          {st.planningCode || `PLAN-${st.planId}`}
-                          {st.message ? ` · ${st.message}` : ""}
-                        </p>
-                      </div>
-                      <Button
-                        asChild
-                        size="lg"
-                        className="h-12 w-full bg-[var(--lq-brand)] text-base font-semibold text-white hover:bg-[var(--lq-brand-strong)]"
-                      >
-                        <Link href={`/distribuidora/planificaciones/${st.planId}`}>
-                          Abrir despacho{" "}
-                          {st.planningCode || `PLAN-${String(st.planId).padStart(5, "0")}`}
-                        </Link>
-                      </Button>
-                    </div>
-                  ) : st?.status === "error" ? (
-                    <div className="space-y-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3">
-                      <p className="text-sm font-medium text-destructive">Confirmación fallida</p>
-                      <p className="text-xs text-destructive">{st.message}</p>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={blocked}
-                        onClick={() => openConfirm(tr.truck_id)}
-                      >
-                        Reintentar confirmación
-                      </Button>
-                    </div>
+                  {inputPanelCollapsed ? (
+                    <>
+                      <PanelLeftOpen className="h-3.5 w-3.5" /> Editar OC
+                    </>
                   ) : (
-                    <div className="space-y-2">
-                      {st?.status === "preparing" || st?.status === "confirming" ? (
-                        <p className="text-xs text-muted-foreground">{st.message || "Procesando…"}</p>
-                      ) : (
-                        <p className="text-xs text-muted-foreground">Pendiente de confirmación</p>
-                      )}
+                    <>
+                      <PanelLeftClose className="h-3.5 w-3.5" /> Contraer
+                    </>
+                  )}
+                </Button>
+              </div>
+            ) : (
+              <p className="text-sm font-medium">Ingreso de OC</p>
+            )}
+
+            {inputPanelCollapsed && hasPreview ? (
+              <div className="rounded-md border border-dashed bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">
+                  {parseInfo?.folios.length ?? 0}
+                </span>{" "}
+                folios únicos cargados. El contenido se conserva al contraer.
+              </div>
+            ) : (
+              <>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <FileSpreadsheet className="h-4 w-4 shrink-0" /> Pegar números de OC
+                  </div>
+                  <p className="text-xs text-muted-foreground">Una OC por fila (como en Excel).</p>
+                  <Textarea
+                    value={pasteText}
+                    onChange={(e) => onPasteChange(e.target.value)}
+                    placeholder={"70625\n70626\n70630"}
+                    className="min-h-[220px] max-h-[360px] resize-y overflow-y-auto font-mono text-sm md:min-h-[240px]"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <Upload className="h-4 w-4 shrink-0" /> Importar .xlsx
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Solo lectura local: no se sube el archivo. Columna OC/folio o primera
+                    columna. Máx. 2 MB / 200 filas útiles.
+                  </p>
+                  <Input
+                    type="file"
+                    accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    disabled={parseBusy}
+                    onChange={(e) => void onFile(e.target.files?.[0] ?? null)}
+                  />
+                  {fileName ? (
+                    <p className="text-xs text-muted-foreground">Archivo: {fileName}</p>
+                  ) : null}
+                  {parseBusy ? (
+                    <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" /> Leyendo…
+                    </p>
+                  ) : null}
+                </div>
+                {parseInfo ? (
+                  <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                    <span className="font-medium">{parseInfo.folios.length}</span> folios
+                    únicos
+                    {parseInfo.skippedEmpty ? (
+                      <span className="text-muted-foreground">
+                        {" "}
+                        · {parseInfo.skippedEmpty} vacías omitidas
+                      </span>
+                    ) : null}
+                    {parseInfo.issues.length ? (
+                      <ul className="mt-2 max-h-24 list-disc overflow-auto pl-4 text-xs text-amber-800 dark:text-amber-200">
+                        {parseInfo.issues.slice(0, 12).map((iss, i) => (
+                          <li key={`${iss.kind}-${i}`}>{iss.message}</li>
+                        ))}
+                        {parseInfo.issues.length > 12 ? (
+                          <li>… y {parseInfo.issues.length - 12} más</li>
+                        ) : null}
+                      </ul>
+                    ) : null}
+                    <div className="mt-3">
                       <Button
-                        size="sm"
-                        disabled={blocked || st?.status === "preparing" || st?.status === "confirming"}
-                        onClick={() => openConfirm(tr.truck_id)}
+                        className="w-full"
+                        onClick={() => void runPreview()}
+                        disabled={previewBusy || !parseInfo.folios.length}
                       >
-                        Preparar confirmación
+                        {previewBusy ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Consultando…
+                          </>
+                        ) : (
+                          "Consultar OC"
+                        )}
                       </Button>
                     </div>
-                  )}
-                </div>
-              )
-            })}
+                  </div>
+                ) : null}
+              </>
+            )}
           </div>
-          <p className="text-xs text-muted-foreground">
-            Tras confirmar: revisa facturación y picking en el detalle del plan. Asigna chofer
-            ahí (módulo 3B.3.2). No se crean cargas ni se certifica mercadería automáticamente.
-          </p>
-        </section>
-      ) : null}
+        </aside>
+
+        <div className="min-w-0 space-y-4">
+          {!hasPreview ? (
+            <section className="rounded-lg border border-dashed bg-muted/15 px-4 py-6 text-sm text-muted-foreground">
+              <p className="font-medium text-foreground">Vista previa de OC</p>
+              <p className="mt-1 max-w-xl text-xs leading-relaxed md:text-sm">
+                Pega o importa los números de OC a la izquierda y pulsa Consultar OC. Aquí
+                aparecerán indicadores, filtros, la tabla de asignación y el resumen por
+                camión. Las comunas distintas (p. ej. Quellón junto a Melinka) se mantienen
+                visibles y filtrables; no se excluyen automáticamente.
+              </p>
+            </section>
+          ) : (
+            <section className="space-y-3">
+              <div className="flex flex-wrap gap-x-4 gap-y-1 rounded-lg border bg-muted/20 px-3 py-2 text-xs md:text-[13px]">
+                <span>
+                  <span className="text-muted-foreground">OC recuperadas </span>
+                  <span className="font-semibold tabular-nums">{previewStats.recovered}</span>
+                </span>
+                <span>
+                  <span className="text-muted-foreground">Clientes </span>
+                  <span className="font-semibold tabular-nums">{previewStats.clients}</span>
+                </span>
+                <span>
+                  <span className="text-muted-foreground">Camiones asignados </span>
+                  <span className="font-semibold tabular-nums">
+                    {previewStats.trucksAssigned}
+                  </span>
+                </span>
+                <span>
+                  <span className="text-muted-foreground">Peso conocido </span>
+                  <span className="font-semibold tabular-nums">
+                    {fmtKg(previewStats.knownKg)}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {" "}
+                    ({previewStats.withWeight}/{previewStats.totalForWeight} OC)
+                  </span>
+                </span>
+                <span>
+                  <span className="text-muted-foreground">Cobertura </span>
+                  <span className="font-semibold">{previewStats.coverageLabel}</span>
+                  {previewStats.avgCoverage != null ? (
+                    <span className="text-muted-foreground">
+                      {" "}
+                      · media {fmtPct(previewStats.avgCoverage)}
+                    </span>
+                  ) : null}
+                </span>
+              </div>
+
+              <div className="flex flex-wrap items-end gap-3 rounded-lg border bg-card p-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">Filtro comuna</Label>
+                  <Select
+                    value={municipalityFilter}
+                    onValueChange={(v) => setMunicipalityFilter(v)}
+                  >
+                    <SelectTrigger className="h-8 w-[200px]">
+                      <SelectValue placeholder="Todas" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__all__">Todas las comunas</SelectItem>
+                      {municipalities.map((m) => (
+                        <SelectItem key={m} value={m}>
+                          {m}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="text-sm">
+                  <span className="font-medium">{selectedFolios.size}</span>
+                  <span className="text-muted-foreground"> OC seleccionadas</span>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Camión masivo</Label>
+                  <Select value={bulkTruckId || undefined} onValueChange={setBulkTruckId}>
+                    <SelectTrigger className="h-8 w-[220px]">
+                      <SelectValue placeholder="Elegir camión" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {trucks.map((t) => (
+                        <SelectItem key={t.id} value={String(t.id)}>
+                          {formatTruckSelectLabel(t, trucks)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={applyBulkAssign}
+                  disabled={!selectedFolios.size || !bulkTruckId || trucks.length === 0}
+                >
+                  Asignar seleccionadas
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setSelectedFolios(clearFolioSelection())}
+                  disabled={!selectedFolios.size}
+                >
+                  Limpiar selección
+                </Button>
+              </div>
+
+              <div className="overflow-x-auto rounded-lg border">
+                <table className="w-full min-w-[980px] text-left text-sm xl:min-w-0">
+                  <thead className="border-b bg-muted/50 text-xs uppercase text-muted-foreground">
+                    <tr>
+                      <th className="w-10 px-2 py-2">
+                        <Checkbox
+                          checked={allVisibleSelected}
+                          onCheckedChange={(v) => {
+                            if (v === true) {
+                              setSelectedFolios((prev) => {
+                                const next = new Set(prev)
+                                for (const f of visibleAssignable) next.add(String(f))
+                                return next
+                              })
+                            } else {
+                              setSelectedFolios((prev) => {
+                                const next = new Set(prev)
+                                for (const f of visibleAssignable) next.delete(String(f))
+                                return next
+                              })
+                            }
+                          }}
+                          aria-label="Seleccionar todas las visibles"
+                        />
+                      </th>
+                      <th className="w-[88px] px-2 py-2">OC</th>
+                      <th className="min-w-[140px] px-2 py-2">Cliente</th>
+                      <th className="w-[120px] px-2 py-2">Comuna</th>
+                      <th className="w-[120px] px-2 py-2">Productos</th>
+                      <th className="w-[130px] px-2 py-2">Peso / cob.</th>
+                      <th className="w-[120px] px-2 py-2">Facturación</th>
+                      <th className="w-[170px] px-2 py-2">Camión</th>
+                      <th className="min-w-[120px] px-2 py-2">Avisos</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredPreviewItems.map((item, idx) => {
+                      const folio = item.folio
+                      const rowKey = `${item.folio ?? item.input}-${idx}`
+                      const canAssign =
+                        folio != null &&
+                        !item.blocking &&
+                        item.status !== "not_found" &&
+                        item.status !== "duplicate_in_list" &&
+                        item.status !== "cancelled_or_replaced"
+                      const productList = item.products || []
+                      const productCount = productList.length
+                      const expanded = expandedProductRows.has(rowKey)
+                      const missing = item.weight?.products_without_weight || []
+                      const municipality = item.client?.municipality || "—"
+                      return (
+                        <Fragment key={rowKey}>
+                          <tr
+                            className={cn(
+                              "border-b align-middle",
+                              item.blocking && "bg-destructive/5",
+                            )}
+                          >
+                            <td className="px-2 py-1.5">
+                              {canAssign ? (
+                                <Checkbox
+                                  checked={selectedFolios.has(String(folio))}
+                                  onCheckedChange={(v) =>
+                                    setSelectedFolios((prev) =>
+                                      toggleFolioInSelection(
+                                        prev,
+                                        Number(folio),
+                                        v === true,
+                                      ),
+                                    )
+                                  }
+                                  aria-label={`Seleccionar OC ${folio}`}
+                                />
+                              ) : (
+                                <span className="text-xs text-muted-foreground">—</span>
+                              )}
+                            </td>
+                            <td className="px-2 py-1.5 font-mono text-xs md:text-sm">
+                              {folio ?? item.input ?? "—"}
+                              {item.audit_oc?.suggested ? (
+                                <div className="mt-0.5 text-[11px] font-sans normal-case">
+                                  {canOpenOcAudit ? (
+                                    <Link
+                                      className="text-primary underline"
+                                      href={`/distribuidora/auditoria-oc?folio=${encodeURIComponent(String(folio ?? item.input ?? ""))}`}
+                                    >
+                                      Auditoría OC
+                                    </Link>
+                                  ) : (
+                                    <span className="text-muted-foreground">
+                                      Pedir revisión en Auditoría OC
+                                    </span>
+                                  )}
+                                </div>
+                              ) : null}
+                            </td>
+                            <td className="px-2 py-1.5">
+                              <div
+                                className="truncate font-medium"
+                                title={item.client?.client_name || undefined}
+                              >
+                                {item.client?.client_name || "—"}
+                              </div>
+                              <div className="truncate text-[11px] text-muted-foreground">
+                                {STATUS_LABEL[item.status] || item.status}
+                              </div>
+                            </td>
+                            <td className="px-2 py-1.5">
+                              <div className="truncate font-medium" title={municipality}>
+                                {municipality}
+                              </div>
+                              {item.client?.address ? (
+                                <div
+                                  className="truncate text-[11px] text-muted-foreground"
+                                  title={item.client.address}
+                                >
+                                  {item.client.address}
+                                </div>
+                              ) : null}
+                            </td>
+                            <td className="px-2 py-1.5">
+                              {productCount > 0 ? (
+                                <button
+                                  type="button"
+                                  className="inline-flex items-center gap-1 rounded border bg-background px-1.5 py-0.5 text-xs hover:bg-muted"
+                                  onClick={() => toggleProductRow(rowKey)}
+                                  aria-expanded={expanded}
+                                >
+                                  {expanded ? (
+                                    <ChevronDown className="h-3 w-3" />
+                                  ) : (
+                                    <ChevronRight className="h-3 w-3" />
+                                  )}
+                                  {productCount} producto{productCount === 1 ? "" : "s"}
+                                </button>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">—</span>
+                              )}
+                            </td>
+                            <td className="px-2 py-1.5 text-xs">
+                              <div className="tabular-nums">
+                                {fmtKg(
+                                  item.weight?.known_weight_kg ??
+                                    item.weight?.peso_total_kg,
+                                )}
+                              </div>
+                              <div className="text-muted-foreground">
+                                {item.weight?.coverage_percent != null
+                                  ? fmtPct(item.weight.coverage_percent)
+                                  : item.weight?.label ||
+                                    STATUS_LABEL[item.weight?.quality || ""] ||
+                                    "—"}
+                              </div>
+                              {missing.length ? (
+                                <div className="mt-0.5 text-[11px] text-amber-800 dark:text-amber-200">
+                                  {missing.length} sin peso
+                                </div>
+                              ) : null}
+                            </td>
+                            <td className="px-2 py-1.5 text-xs">
+                              <div>
+                                {item.billing_label || item.billing_status || "—"}
+                              </div>
+                              <div className="text-muted-foreground">
+                                docs{" "}
+                                {item.invoice_count != null
+                                  ? item.invoice_count
+                                  : Array.isArray(item.invoices)
+                                    ? item.invoices.length
+                                    : "—"}
+                              </div>
+                            </td>
+                            <td className="px-2 py-1.5">
+                              {canAssign ? (
+                                <Select
+                                  value={
+                                    assignmentByFolio[String(folio)] != null
+                                      ? String(assignmentByFolio[String(folio)])
+                                      : "__none__"
+                                  }
+                                  onValueChange={(v) =>
+                                    setOcTruck(
+                                      Number(folio),
+                                      v === "__none__" ? null : Number(v),
+                                    )
+                                  }
+                                >
+                                  <SelectTrigger className="h-8 w-full min-w-[140px]">
+                                    <SelectValue placeholder="—" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="__none__">Sin asignar</SelectItem>
+                                    {trucks.map((t) => (
+                                      <SelectItem key={t.id} value={String(t.id)}>
+                                        {formatTruckSelectLabel(t, trucks)}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">—</span>
+                              )}
+                            </td>
+                            <td className="px-2 py-1.5 text-xs text-amber-800 dark:text-amber-200">
+                              {(item.warnings || [])
+                                .map((w) => STATUS_LABEL[w] || w)
+                                .join(", ") || (item.blocking ? "bloqueante" : "")}
+                            </td>
+                          </tr>
+                          {expanded ? (
+                            <tr className="border-b bg-muted/25">
+                              <td colSpan={9} className="px-3 py-2">
+                                <div className="max-h-48 overflow-y-auto rounded border bg-background p-2">
+                                  <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                                    Productos OC {folio ?? item.input ?? ""}
+                                  </p>
+                                  <ul className="columns-1 gap-x-6 text-xs sm:columns-2 xl:columns-3">
+                                    {productList.map((p, pi) => (
+                                      <li
+                                        key={`${p.variant_id ?? p.code ?? pi}-${pi}`}
+                                        className="mb-1 break-inside-avoid"
+                                      >
+                                        <span className="tabular-nums font-medium">
+                                          {p.quantity ?? "?"}×
+                                        </span>{" "}
+                                        {p.description || p.code || "producto"}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                  {missing.length ? (
+                                    <p className="mt-2 text-[11px] text-amber-800 dark:text-amber-200">
+                                      Sin peso:{" "}
+                                      {missing
+                                        .map(
+                                          (p) =>
+                                            p.description || p.code || p.variant_id,
+                                        )
+                                        .join(", ")}
+                                    </p>
+                                  ) : null}
+                                </div>
+                              </td>
+                            </tr>
+                          ) : null}
+                        </Fragment>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3 rounded-lg border p-3">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <Truck className="h-4 w-4" /> Asignación
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {assignedTruckIds.length
+                    ? `Camiones con OC: ${assignedTruckIds.map((tid) => truckLabel(tid)).join(" · ")}`
+                    : "Aún no hay OC asignadas a un camión."}
+                </p>
+                <Button
+                  className="sm:ml-auto"
+                  onClick={() => void runAssignPreview()}
+                  disabled={assignBusy || assignedTruckIds.length === 0}
+                >
+                  {assignBusy ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Calculando…
+                    </>
+                  ) : (
+                    "Previsualizar asignación"
+                  )}
+                </Button>
+              </div>
+
+              {assignPreview?.trucks?.length ? (
+                <div className="space-y-3">
+                  <h2 className="text-base font-medium">Resumen por camión</h2>
+                  {(assignPreview.request_duplicate_folios || []).length ? (
+                    <Alert variant="destructive">
+                      <AlertTitle>OC duplicadas en la solicitud</AlertTitle>
+                      <AlertDescription>
+                        {(assignPreview.request_duplicate_folios || []).join(", ")}
+                      </AlertDescription>
+                    </Alert>
+                  ) : null}
+                  {(assignPreview.fingerprint_drifts || []).length ? (
+                    <Alert variant="destructive">
+                      <AlertTitle>OC modificadas después del preview</AlertTitle>
+                      <AlertDescription>
+                        {(
+                          assignPreview.fingerprint_drifts as {
+                            folio?: number
+                            detail?: string
+                          }[]
+                        )
+                          .map((d) =>
+                            d.detail || (d.folio != null ? `OC ${d.folio}` : null),
+                          )
+                          .filter(Boolean)
+                          .join(" · ")}{" "}
+                        Actualiza el listado (preview) y vuelve a previsualizar la
+                        asignación.
+                      </AlertDescription>
+                    </Alert>
+                  ) : null}
+                  <div className="flex flex-col gap-3">
+                    {assignPreview.trucks
+                      .filter((tr) => (tr.order_count ?? tr.orders?.length ?? 0) > 0)
+                      .map((tr) => {
+                        const cap = tr.capacity
+                        const clients = uniqueClientCount(tr.orders || [])
+                        const st = truckConfirm[tr.truck_id]
+                        const driftBlocked =
+                          (assignPreview.fingerprint_drifts || []).length > 0
+                        const needsIncompleteAck =
+                          (cap?.incomplete_order_count ?? 0) > 0
+                        const needsUnevaluableAck =
+                          (cap?.unevaluable_order_count ?? 0) > 0
+                        const blocked =
+                          Boolean(tr.blocking) ||
+                          Boolean(cap?.blocking) ||
+                          Boolean(tr.truck_missing) ||
+                          driftBlocked ||
+                          !cap?.capacity_known
+                        const catalogTruck = trucks.find((t) => t.id === tr.truck_id)
+                        const title = truckLabel(
+                          tr.truck_id,
+                          catalogTruck || (tr.truck as DistribuidoraTruck),
+                        )
+                        const plate =
+                          (
+                            catalogTruck as
+                              | (DistribuidoraTruck & { plate?: string })
+                              | undefined
+                          )?.plate || null
+                        const warnText = [
+                          ...(tr.warnings || []),
+                          ...(cap?.warnings || []),
+                        ]
+                          .filter(
+                            (w, i, arr) =>
+                              w !== "orders_with_unavailable_weight" &&
+                              arr.indexOf(w) === i,
+                          )
+                          .map((w) =>
+                            w === "incomplete_weight_coverage"
+                              ? "Cobertura de peso incompleta"
+                              : w === "weight_capacity_unevaluable"
+                                ? "Capacidad total aún no verificable"
+                                : w === "truck_overloaded"
+                                  ? "Camión sobrecargado (peso conocido)"
+                                  : w === "truck_capacity_unknown"
+                                    ? "Capacidad del camión desconocida"
+                                    : w,
+                          )
+                          .join(" · ")
+                        return (
+                          <div
+                            key={tr.truck_id}
+                            className={cn(
+                              "rounded-lg border p-3 md:p-4",
+                              blocked && "border-destructive/40",
+                            )}
+                          >
+                            <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                              <div className="min-w-0 flex-1 space-y-2">
+                                <div className="flex items-start gap-2">
+                                  <div className="min-w-0">
+                                    <div className="font-medium">
+                                      {title}
+                                      {plate ? (
+                                        <span className="ml-2 text-xs font-normal text-muted-foreground">
+                                          · {plate}
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                    <div className="text-xs text-muted-foreground">
+                                      {tr.order_count ?? 0} OC · {clients} clientes
+                                    </div>
+                                  </div>
+                                  {st?.status === "ok" ? (
+                                    <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600" />
+                                  ) : null}
+                                </div>
+                                <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-3 lg:grid-cols-5">
+                                  <div>
+                                    <dt className="text-muted-foreground">Peso conocido</dt>
+                                    <dd className="font-medium tabular-nums">
+                                      {fmtKg(cap?.known_weight_kg)}
+                                    </dd>
+                                  </div>
+                                  <div>
+                                    <dt className="text-muted-foreground">Capacidad máx.</dt>
+                                    <dd className="font-medium tabular-nums">
+                                      {fmtKg(cap?.truck_max_weight_kg)}
+                                    </dd>
+                                  </div>
+                                  <div>
+                                    <dt className="text-muted-foreground">
+                                      Utilización (peso conocido)
+                                    </dt>
+                                    <dd className="font-medium tabular-nums">
+                                      {fmtPct(cap?.utilization_pct)}
+                                    </dd>
+                                  </div>
+                                  <div>
+                                    <dt className="text-muted-foreground">Cobertura</dt>
+                                    <dd className="font-medium">
+                                      {cap?.weight_total_determined === false
+                                        ? "incompleta / no total"
+                                        : needsIncompleteAck
+                                          ? "incompleta"
+                                          : "completa"}
+                                    </dd>
+                                  </div>
+                                  <div>
+                                    <dt className="text-muted-foreground">Peso estimado</dt>
+                                    <dd className="tabular-nums">
+                                      {fmtKg(cap?.estimated_weight_kg)}
+                                    </dd>
+                                  </div>
+                                </dl>
+                                {needsIncompleteAck || needsUnevaluableAck ? (
+                                  <p className="text-xs text-amber-800 dark:text-amber-200">
+                                    {needsUnevaluableAck
+                                      ? "Capacidad total aún no verificable — revisión manual al confirmar. "
+                                      : ""}
+                                    {needsIncompleteAck
+                                      ? "Cobertura de peso incompleta — aceptación explícita al confirmar. "
+                                      : ""}
+                                    No autoriza salida a ruta. La utilización no es
+                                    validación definitiva si la cobertura es incompleta.
+                                  </p>
+                                ) : null}
+                                {warnText ? (
+                                  <p className="text-xs text-amber-800 dark:text-amber-200">
+                                    {warnText}
+                                  </p>
+                                ) : null}
+                              </div>
+                              <div className="flex w-full shrink-0 flex-col gap-2 xl:w-[280px]">
+                                {st?.status === "ok" && st.planId ? (
+                                  <div className="space-y-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3">
+                                    <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-200">
+                                      ¡Despacho confirmado!
+                                    </p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {st.planningCode || `PLAN-${st.planId}`}
+                                      {st.message ? ` · ${st.message}` : ""}
+                                    </p>
+                                    <Button
+                                      asChild
+                                      className="h-10 w-full bg-[var(--lq-brand)] font-semibold text-white hover:bg-[var(--lq-brand-strong)]"
+                                    >
+                                      <Link
+                                        href={`/distribuidora/planificaciones/${st.planId}`}
+                                      >
+                                        Abrir despacho{" "}
+                                        {st.planningCode ||
+                                          `PLAN-${String(st.planId).padStart(5, "0")}`}
+                                      </Link>
+                                    </Button>
+                                  </div>
+                                ) : st?.status === "error" ? (
+                                  <div className="space-y-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3">
+                                    <p className="text-sm font-medium text-destructive">
+                                      Confirmación fallida
+                                    </p>
+                                    <p className="text-xs text-destructive">{st.message}</p>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      disabled={blocked}
+                                      onClick={() => openConfirm(tr.truck_id)}
+                                    >
+                                      Reintentar confirmación
+                                    </Button>
+                                  </div>
+                                ) : (
+                                  <>
+                                    {st?.status === "preparing" ||
+                                    st?.status === "confirming" ? (
+                                      <p className="text-xs text-muted-foreground">
+                                        {st.message || "Procesando…"}
+                                      </p>
+                                    ) : (
+                                      <p className="text-xs text-muted-foreground">
+                                        Pendiente de confirmación (chofer en este paso)
+                                      </p>
+                                    )}
+                                    <Button
+                                      size="sm"
+                                      disabled={
+                                        blocked ||
+                                        st?.status === "preparing" ||
+                                        st?.status === "confirming"
+                                      }
+                                      onClick={() => openConfirm(tr.truck_id)}
+                                    >
+                                      Preparar confirmación
+                                    </Button>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                            <div
+                              className={cn(
+                                "mt-3",
+                                confirmOpen &&
+                                  "pointer-events-none select-none opacity-60",
+                              )}
+                              aria-hidden={confirmOpen || undefined}
+                            >
+                              <SimplePlanningTruckMap
+                                companyId={companyId}
+                                officeId={officeId}
+                                truckId={tr.truck_id}
+                                truckName={title}
+                                orders={tr.orders || []}
+                                orsSnapshot={orsByTruck[tr.truck_id] || null}
+                                onOrsSnapshot={(snap) => {
+                                  if (confirmOpen) return
+                                  setOrsByTruck((prev) => ({
+                                    ...prev,
+                                    [tr.truck_id]: snap,
+                                  }))
+                                }}
+                              />
+                            </div>
+                            {tr.picking_preview?.products_consolidated?.length ? (
+                              <details className="mt-2 text-xs">
+                                <summary className="cursor-pointer font-medium">
+                                  Picking preliminar (desde OC, no definitivo)
+                                </summary>
+                                <ul className="mt-1 max-h-32 list-disc overflow-auto pl-4">
+                                  {tr.picking_preview.products_consolidated
+                                    .slice(0, 40)
+                                    .map((p, i) => (
+                                      <li key={i}>
+                                        {p.quantity}× {p.description || p.code || "ítem"}
+                                      </li>
+                                    ))}
+                                </ul>
+                              </details>
+                            ) : null}
+                          </div>
+                        )
+                      })}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Tras confirmar: revisa facturación y picking en el detalle del plan. El
+                    chofer se elige al preparar la confirmación. No se crean rutas ni se
+                    certifica mercadería automáticamente.
+                  </p>
+                </div>
+              ) : null}
+            </section>
+          )}
+        </div>
+      </div>
 
       <Dialog
         open={confirmOpen}
