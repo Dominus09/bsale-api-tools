@@ -658,10 +658,10 @@ export function DispatchPlanDetailShell({
               </section>
 
               <section className="space-y-2 rounded-lg border border-border/70 bg-card/40 p-4">
-                <h3 className="text-sm font-semibold">Asignación documental (post-factura)</h3>
+                <h3 className="text-sm font-semibold">OC adicionales y herramientas</h3>
                 <p className="text-xs text-muted-foreground">
-                  Asigna boletas/facturas ya emitidas a grupos de picking. La organización
-                  anticipada por OC está arriba.
+                  Agregar OC al plan e historial. Si el plan usa organización anticipada, la
+                  tabla antigua de lotes queda bajo «Asignación documental avanzada».
                 </p>
                 <DispatchPlanPickingAssignmentPanel
                   planId={planId}

@@ -3449,6 +3449,7 @@ export type DispatchPlanPickingAssignmentsResponse = {
   has_picking: boolean
   picking_version?: number | null
   picking_id?: number | null
+  document_reconciliation?: DocumentLoadReconciliationResponse
 }
 
 export type DispatchPlanOrderSearchHit = {

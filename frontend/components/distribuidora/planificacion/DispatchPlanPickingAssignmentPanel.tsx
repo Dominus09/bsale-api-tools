@@ -1,12 +1,23 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { FileText, Loader2, Plus, RefreshCw, Save, Trash2 } from "lucide-react"
+import {
+  AlertTriangle,
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Save,
+  Trash2,
+} from "lucide-react"
 
 import {
   addDispatchPlanOrder,
   createDispatchPlanLoadBatch,
   deleteDispatchPlanLoadBatch,
+  getDispatchPlanLoadOrganization,
   getDispatchPlanPickingAssignments,
   getDispatchPlanPickingCliente,
   getDispatchPlanPickingProducto,
@@ -19,6 +30,7 @@ import {
   type DispatchPlanOrderEvent,
   type DispatchPlanOrderSearchHit,
   type DispatchPlanStatus,
+  type DocumentLoadReconciliationResponse,
 } from "@/lib/api"
 import {
   exportDispatchPlanPickingClientePdf,
@@ -97,16 +109,29 @@ export function DispatchPlanPickingAssignmentPanel({
   const [pendingAdd, setPendingAdd] = useState<DispatchPlanOrderSearchHit | null>(null)
   const [addReason, setAddReason] = useState("")
   const [showRegenerateDialog, setShowRegenerateDialog] = useState(false)
+  const [showManualSaveDialog, setShowManualSaveDialog] = useState(false)
+  const [orgStatus, setOrgStatus] = useState<string>("legacy")
+  const [docRecon, setDocRecon] = useState<DocumentLoadReconciliationResponse | null>(
+    null,
+  )
+  const [advancedOpen, setAdvancedOpen] = useState(false)
 
   const canAddOrders = planStatus !== "dispatched" && planStatus !== "delivered"
+  const organized =
+    orgStatus === "organized" || Boolean(docRecon?.organization_ready)
+  const needsAdvancedReview =
+    (docRecon?.documents_unassigned ?? 0) > 0 ||
+    (docRecon?.conflicts?.length ?? 0) > 0 ||
+    docRecon?.document_assignment_complete === false
 
   const loadAll = useCallback(async () => {
     setLoading(true)
     try {
-      const [data, log, preview] = await Promise.all([
+      const [data, log, preview, org] = await Promise.all([
         getDispatchPlanPickingAssignments(planId),
         getDispatchPlanPickingRegenerationLog(planId),
         previewAddDispatchPlanOrder(planId),
+        getDispatchPlanLoadOrganization(planId).catch(() => null),
       ])
       setBatches(data.batches)
       setAssignments(data.assignments)
@@ -119,6 +144,13 @@ export function DispatchPlanPickingAssignmentPanel({
       setPickingVersion(data.picking_version ?? null)
       setEvents(log.items)
       setAddPreview(preview)
+      setDocRecon(
+        (data.document_reconciliation as DocumentLoadReconciliationResponse | undefined) ??
+          null,
+      )
+      if (org) {
+        setOrgStatus(String(org.load_organization_status || "legacy"))
+      }
     } catch (e: unknown) {
       onMessage(e instanceof Error ? e.message : "Error al cargar asignaciones")
     } finally {
@@ -130,14 +162,27 @@ export function DispatchPlanPickingAssignmentPanel({
     void loadAll()
   }, [loadAll])
 
+  useEffect(() => {
+    if (needsAdvancedReview && organized) {
+      // Solo sugiere; no abre solo (apertura explícita).
+    }
+  }, [needsAdvancedReview, organized])
+
   const dirty = useMemo(() => {
     return assignments.some(
       (a) => (draftAssignments[a.related_document_id] ?? null) !== (a.load_batch_id ?? null),
     )
   }, [assignments, draftAssignments])
 
-  const saveAssignments = async () => {
+  const changedManualCount = useMemo(() => {
+    return assignments.filter(
+      (a) => (draftAssignments[a.related_document_id] ?? null) !== (a.load_batch_id ?? null),
+    ).length
+  }, [assignments, draftAssignments])
+
+  const persistAssignments = async () => {
     setBusy("save")
+    setShowManualSaveDialog(false)
     try {
       const payload = assignments.map((a) => ({
         related_document_id: a.related_document_id,
@@ -154,12 +199,19 @@ export function DispatchPlanPickingAssignmentPanel({
           data.assignments.map((a) => [a.related_document_id, a.load_batch_id]),
         ),
       )
-      onMessage("Asignaciones guardadas.")
+      onMessage(
+        "Asignaciones manuales guardadas. La conciliación automática no las sobrescribe.",
+      )
     } catch (e: unknown) {
       onMessage(e instanceof Error ? e.message : "Error al guardar")
     } finally {
       setBusy(null)
     }
+  }
+
+  const requestSaveAssignments = () => {
+    if (!dirty) return
+    setShowManualSaveDialog(true)
   }
 
   const createBatch = async () => {
@@ -317,24 +369,11 @@ export function DispatchPlanPickingAssignmentPanel({
     )
   }
 
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h2 className="text-sm font-semibold">Lotes físicos de carga</h2>
-          <p className="text-xs text-muted-foreground">
-            {dispatchPlanVersionLabel(planningCode ?? null, planId, pickingVersion)}
-            {hasPicking
-              ? " · picking generado · asocie documentos a un lote físico si corresponde"
-              : " · sin picking persistido"}
-          </p>
-        </div>
-        <Button type="button" variant="outline" size="sm" onClick={() => void loadAll()}>
-          <RefreshCw className="mr-1 size-3.5" />
-          Actualizar
-        </Button>
-      </div>
+  const showLegacyBatchUi = !organized
+  const showAdvancedBody = !organized || advancedOpen
 
+  const batchesAndDocsSection = (
+    <>
       <section className="space-y-3 rounded-lg border p-4">
         <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Pickings configurables
@@ -367,30 +406,37 @@ export function DispatchPlanPickingAssignmentPanel({
                   </Button>
                 ) : null}
               </div>
-              <div className="flex flex-wrap gap-1">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  className="h-7 text-[11px]"
-                  disabled={!!busy || !hasPicking}
-                  onClick={() => void exportBatchPdf(b, "cliente")}
-                >
-                  <FileText className="mr-1 size-3" />
-                  PDF cliente
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  className="h-7 text-[11px]"
-                  disabled={!!busy || !hasPicking}
-                  onClick={() => void exportBatchPdf(b, "producto")}
-                >
-                  <FileText className="mr-1 size-3" />
-                  PDF producto
-                </Button>
-              </div>
+              {/* PDF por lote: en planes organizados se usan los de Organización de carga */}
+              {showLegacyBatchUi ? (
+                <div className="flex flex-wrap gap-1">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="h-7 text-[11px]"
+                    disabled={!!busy || !hasPicking}
+                    onClick={() => void exportBatchPdf(b, "cliente")}
+                  >
+                    <FileText className="mr-1 size-3" />
+                    PDF cliente
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="h-7 text-[11px]"
+                    disabled={!!busy || !hasPicking}
+                    onClick={() => void exportBatchPdf(b, "producto")}
+                  >
+                    <FileText className="mr-1 size-3" />
+                    PDF producto
+                  </Button>
+                </div>
+              ) : (
+                <p className="text-[11px] text-muted-foreground">
+                  Exportes por grupo: sección Organización de carga.
+                </p>
+              )}
             </div>
           ))}
         </div>
@@ -422,7 +468,7 @@ export function DispatchPlanPickingAssignmentPanel({
               type="button"
               size="sm"
               disabled={!!busy}
-              onClick={() => void saveAssignments()}
+              onClick={() => requestSaveAssignments()}
             >
               <Save className="mr-1 size-3.5" />
               Guardar asignaciones
@@ -436,9 +482,8 @@ export function DispatchPlanPickingAssignmentPanel({
         ) : (
           <div className="space-y-2">
             <p className="text-[11px] text-muted-foreground">
-              «Pendiente de lote» = documento en el picking generado, aún sin lote físico de
-              carga (<code className="text-[10px]">load_batch_id</code> vacío). No implica
-              falta de picking.
+              Cambio manual de lote: la conciliación automática no lo sobrescribe. Confirme
+              explícitamente al guardar.
             </p>
             <div className="overflow-x-auto rounded-md border">
               <Table>
@@ -494,7 +539,54 @@ export function DispatchPlanPickingAssignmentPanel({
           </div>
         )}
       </section>
+    </>
+  )
 
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="text-sm font-semibold">
+            {organized ? "Herramientas operativas" : "Lotes físicos de carga"}
+          </h2>
+          <p className="text-xs text-muted-foreground">
+            {dispatchPlanVersionLabel(planningCode ?? null, planId, pickingVersion)}
+            {hasPicking
+              ? " · picking generado"
+              : " · sin picking persistido"}
+            {organized ? " · organización anticipada activa" : null}
+          </p>
+        </div>
+        <Button type="button" variant="outline" size="sm" onClick={() => void loadAll()}>
+          <RefreshCw className="mr-1 size-3.5" />
+          Actualizar
+        </Button>
+      </div>
+
+      {organized ? (
+        <Alert className="border-border/80 bg-muted/20">
+          <AlertTitle className="text-sm">Organización anticipada en uso</AlertTitle>
+          <AlertDescription className="space-y-2 text-xs">
+            <p>
+              Los grupos y PDF/Excel de productos por grupo están en «Organización de
+              carga». Aquí puede agregar OC al plan o abrir la asignación documental
+              avanzada solo si necesita excepciones.
+            </p>
+            {needsAdvancedReview ? (
+              <p className="flex items-start gap-1.5 text-amber-800 dark:text-amber-200">
+                <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                Hay documentos sin lote o conflictos de conciliación
+                {(docRecon?.documents_unassigned ?? 0) > 0
+                  ? ` (${docRecon?.documents_unassigned} pendientes)`
+                  : ""}
+                . Revise en asignación avanzada.
+              </p>
+            ) : null}
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {/* Agregar OC: siempre visible (operativo) */}
       <section className="space-y-3 rounded-lg border p-4">
         <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Agregar OC al plan
@@ -548,7 +640,9 @@ export function DispatchPlanPickingAssignmentPanel({
                   <TableBody>
                     {searchHits.map((h) => (
                       <TableRow key={h.oc_document_id}>
-                        <TableCell className="font-mono text-xs">{h.oc_number ?? h.oc_document_id}</TableCell>
+                        <TableCell className="font-mono text-xs">
+                          {h.oc_number ?? h.oc_document_id}
+                        </TableCell>
                         <TableCell className="text-xs">{h.client_name ?? "—"}</TableCell>
                         <TableCell className="text-right text-xs tabular-nums">
                           {formatClp(Number(h.oc_total_amount ?? 0))}
@@ -587,6 +681,39 @@ export function DispatchPlanPickingAssignmentPanel({
           </>
         )}
       </section>
+
+      {organized ? (
+        <div className="rounded-lg border border-dashed border-border/80">
+          <button
+            type="button"
+            className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left text-sm font-medium hover:bg-muted/30"
+            onClick={() => setAdvancedOpen((v) => !v)}
+            aria-expanded={advancedOpen}
+          >
+            <span className="flex items-center gap-2">
+              {advancedOpen ? (
+                <ChevronDown className="size-4" />
+              ) : (
+                <ChevronRight className="size-4" />
+              )}
+              Asignación documental avanzada
+              {needsAdvancedReview ? (
+                <Badge variant="outline" className="text-[10px]">
+                  Revisar
+                </Badge>
+              ) : null}
+            </span>
+            <span className="text-xs font-normal text-muted-foreground">
+              {advancedOpen ? "Ocultar" : "Abrir explícitamente"}
+            </span>
+          </button>
+          {showAdvancedBody ? (
+            <div className="space-y-6 border-t px-4 py-4">{batchesAndDocsSection}</div>
+          ) : null}
+        </div>
+      ) : (
+        batchesAndDocsSection
+      )}
 
       <section className="space-y-2">
         <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -629,7 +756,8 @@ export function DispatchPlanPickingAssignmentPanel({
             <AlertDialogTitle>Regenerar pickings</AlertDialogTitle>
             <AlertDialogDescription>
               Esta planificación ya posee pickings generados. Agregar nuevas órdenes obligará a
-              regenerar los documentos (nueva versión).
+              regenerar los documentos (nueva versión completa). No crea un picking
+              suplementario solo de la OC añadida.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -640,6 +768,25 @@ export function DispatchPlanPickingAssignmentPanel({
               }}
             >
               Regenerar
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={showManualSaveDialog} onOpenChange={setShowManualSaveDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirmar asignación manual</AlertDialogTitle>
+            <AlertDialogDescription>
+              Va a guardar {changedManualCount} cambio(s) manual(es) de lote. Esto no se
+              sobrescribe en silencio por la conciliación automática OC→grupo. Use solo para
+              excepciones auditables.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void persistAssignments()}>
+              Guardar manualmente
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -892,8 +892,8 @@ export function DispatchPlanLoadOrganizationPanel({ planId, onMessage }: Props) 
                       ))}
                     </ul>
                     <p className="mt-1 text-xs">
-                      Use «Asignación documental post-factura» para resolver
-                      excepciones.
+                      Abra «Asignación documental avanzada» (más abajo) para
+                      resolver excepciones de forma explícita.
                     </p>
                   </AlertDescription>
                 </Alert>
