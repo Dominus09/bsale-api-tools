@@ -140,6 +140,12 @@ def list_plan_orders_for_organization(cur, plan_id: int) -> list[dict[str, Any]]
                o.client_name,
                o.oc_total_amount,
                o.route_order,
+               o.peso_total_kg,
+               o.cantidad_productos,
+               o.cantidad_unidades,
+               o.cantidad_cajas,
+               o.productos_sin_peso,
+               o.cobertura_logistica,
                a.load_batch_id,
                b.name AS load_batch_name
         FROM distribuidora.dispatch_plan_orders o
@@ -157,6 +163,77 @@ def list_plan_orders_for_organization(cur, plan_id: int) -> list[dict[str, Any]]
         return []
     # Si la tabla de assignments no existe, la JOIN falla — caller valida schema.
     return [_row_dict(cur, r) for r in cur.fetchall()]
+
+
+def list_oc_variant_ids_for_plan(cur, plan_id: int) -> dict[int, list[int]]:
+    """Variantes por OC del plan (para SKU distintos sin doble conteo)."""
+    cur.execute(
+        """
+        SELECT o.oc_document_id, dd.variant_id
+        FROM distribuidora.dispatch_plan_orders o
+        INNER JOIN distribuidora.document_details dd
+          ON dd.document_id = o.oc_document_id
+        WHERE o.dispatch_plan_id = %s
+          AND dd.variant_id IS NOT NULL
+        """,
+        (plan_id,),
+    )
+    out: dict[int, list[int]] = {}
+    for oc_id, variant_id in cur.fetchall():
+        out.setdefault(int(oc_id), []).append(int(variant_id))
+    return out
+
+
+def list_oc_box_coverage_for_plan(cur, plan_id: int) -> dict[int, dict[str, Any]]:
+    """Cajas equivalentes solo donde units_per_box es confiable (snapshot de peso)."""
+    cur.execute(
+        """
+        SELECT o.oc_document_id,
+               COUNT(l.*) AS lines_n,
+               COUNT(*) FILTER (
+                 WHERE l.units_per_box IS NOT NULL AND l.units_per_box > 0
+               ) AS lines_with_box,
+               COALESCE(
+                 SUM(
+                   CASE
+                     WHEN l.units_per_box IS NOT NULL AND l.units_per_box > 0
+                     THEN l.cantidad_cajas
+                     ELSE NULL
+                   END
+                 ),
+                 0
+               ) AS cajas_known,
+               COALESCE(
+                 SUM(
+                   CASE
+                     WHEN l.units_per_box IS NOT NULL AND l.units_per_box > 0
+                     THEN l.cantidad_unitaria
+                     ELSE 0
+                   END
+                 ),
+                 0
+               ) AS units_with_box,
+               COALESCE(SUM(l.cantidad_unitaria), 0) AS units_all
+        FROM distribuidora.dispatch_plan_orders o
+        INNER JOIN distribuidora.order_weight_snapshots s
+          ON s.document_id = o.oc_document_id
+        INNER JOIN distribuidora.order_weight_snapshot_lines l
+          ON l.snapshot_id = s.id
+        WHERE o.dispatch_plan_id = %s
+        GROUP BY o.oc_document_id
+        """,
+        (plan_id,),
+    )
+    out: dict[int, dict[str, Any]] = {}
+    for row in cur.fetchall():
+        out[int(row[0])] = {
+            "lines_n": int(row[1] or 0),
+            "lines_with_box": int(row[2] or 0),
+            "cajas_known": float(row[3] or 0),
+            "units_with_box": float(row[4] or 0),
+            "units_all": float(row[5] or 0),
+        }
+    return out
 
 
 def replace_order_assignments(

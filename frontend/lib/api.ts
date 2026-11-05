@@ -3199,8 +3199,128 @@ export type DispatchPlanLoadBatch = {
   sort_order: number
   name: string
   description?: string | null
+  presentation_role?: "priority" | "consolidated" | null
   created_at?: string
   updated_at?: string
+}
+
+export type LoadOrganizationClientRow = {
+  client_id?: number | null
+  client_name: string
+  oc_count: number
+  folios: number[]
+  oc_document_ids: number[]
+  venta_oc_clp: number
+  sku_distinct: number
+  units: number
+  cajas_equivalentes?: number | null
+  cajas_partial?: boolean
+  peso_conocido_kg: number
+  peso_coverage_percent?: number | null
+  load_batch_id?: number | null
+  load_batch_name?: string | null
+  limitations?: string[]
+}
+
+export type LoadOrganizationGroupSummary = {
+  load_batch_id: number
+  name?: string | null
+  description?: string | null
+  sort_order?: number | null
+  presentation_role?: "priority" | "consolidated" | null
+  priority_review_warning?: boolean
+  client_count: number
+  clients: {
+    client_id?: number | null
+    client_name?: string | null
+    oc_count?: number
+    venta_oc_clp?: number
+    sku_distinct?: number
+  }[]
+  oc_count: number
+  venta_oc_clp: number
+  sku_distinct: number
+  units: number
+  cajas_equivalentes?: number | null
+  peso_conocido_kg: number
+  peso_coverage_incomplete?: boolean
+}
+
+export type DispatchPlanLoadOrganizationResponse = {
+  dispatch_plan_id: number
+  schema_ready: boolean
+  load_organization_status: "legacy" | "draft" | "organized" | string
+  load_organization_version: number
+  load_organization_updated_at?: string | null
+  batches: DispatchPlanLoadBatch[]
+  orders: {
+    oc_document_id: number
+    oc_number?: number | null
+    client_id?: number | null
+    client_name?: string | null
+    oc_total_amount?: number | null
+    load_batch_id?: number | null
+  }[]
+  clients: LoadOrganizationClientRow[]
+  group_summaries: LoadOrganizationGroupSummary[]
+  assignments: {
+    oc_document_id: number
+    load_batch_id: number
+    client_id?: number | null
+  }[]
+  completeness: {
+    total_orders: number
+    assigned_orders: number
+    unassigned_orders: number
+    is_complete: boolean
+    missing?: unknown[]
+  }
+  message?: string
+  guidance?: {
+    manual_only?: boolean
+    priority_max_clients_suggested?: number
+    note_es?: string
+  }
+}
+
+export async function getDispatchPlanLoadOrganization(
+  planId: number,
+): Promise<DispatchPlanLoadOrganizationResponse> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/load-organization`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) {
+    throw new Error(await res.text().catch(() => "Error al cargar organización de carga"))
+  }
+  return res.json()
+}
+
+export async function saveDispatchPlanLoadOrganization(
+  planId: number,
+  body: {
+    assignments: { oc_document_id: number; load_batch_id: number }[]
+    organization_version: number
+    mark_organized?: boolean
+    allow_split_client?: boolean
+  },
+): Promise<DispatchPlanLoadOrganizationResponse> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/load-organization`,
+    {
+      method: "PUT",
+      headers: getAuthHeaders(),
+      body: JSON.stringify(body),
+    },
+  )
+  if (res.status === 409) {
+    const detail = await res.text().catch(() => "Conflicto de versión")
+    throw new Error(detail || "Conflicto de concurrencia: recargue e intente de nuevo")
+  }
+  if (!res.ok) {
+    throw new Error(await res.text().catch(() => "Error al guardar organización de carga"))
+  }
+  return res.json()
 }
 
 export type DispatchPlanDocumentAssignment = {

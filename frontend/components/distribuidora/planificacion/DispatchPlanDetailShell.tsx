@@ -36,6 +36,7 @@ import {
 import { DispatchPlanInvoicingDashboard } from "@/components/distribuidora/planificacion/DispatchPlanInvoicingDashboard"
 import { DispatchPlanCuadraturaPanel } from "@/components/distribuidora/planificacion/DispatchPlanCuadraturaPanel"
 import { DispatchPlanPickingAssignmentPanel } from "@/components/distribuidora/planificacion/DispatchPlanPickingAssignmentPanel"
+import { DispatchPlanLoadOrganizationPanel } from "@/components/distribuidora/planificacion/DispatchPlanLoadOrganizationPanel"
 import { DispatchPlanInvoicedItemsTable } from "@/components/distribuidora/planificacion/DispatchPlanInvoicedItemsTable"
 import {
   DispatchPlanPickingClientePanel,
@@ -617,7 +618,18 @@ export function DispatchPlanDetailShell({
               </div>
 
               <section className="space-y-2 rounded-lg border border-border/70 bg-card/40 p-4">
-                <h3 className="text-sm font-semibold">Asignación y carga</h3>
+                <DispatchPlanLoadOrganizationPanel
+                  planId={planId}
+                  onMessage={onMessage}
+                />
+              </section>
+
+              <section className="space-y-2 rounded-lg border border-border/70 bg-card/40 p-4">
+                <h3 className="text-sm font-semibold">Asignación documental (post-factura)</h3>
+                <p className="text-xs text-muted-foreground">
+                  Asigna boletas/facturas ya emitidas a grupos de picking. La organización
+                  anticipada por OC está arriba.
+                </p>
                 <DispatchPlanPickingAssignmentPanel
                   planId={planId}
                   planStatus={dashboard.plan.status}

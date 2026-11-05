@@ -83,6 +83,254 @@ def organization_completeness(
     }
 
 
+ROLE_PREFIX_PRIORITY = "role=priority"
+ROLE_PREFIX_CONSOLIDATED = "role=consolidated"
+
+
+def parse_batch_presentation_role(description: str | None) -> str | None:
+    """Rol visual prioritario|consolidado persistido en description (sin migración)."""
+    text = (description or "").strip().lower()
+    if not text:
+        return None
+    first = text.splitlines()[0].strip()
+    if first.startswith(ROLE_PREFIX_PRIORITY):
+        return "priority"
+    if first.startswith(ROLE_PREFIX_CONSOLIDATED):
+        return "consolidated"
+    return None
+
+
+def encode_batch_description(role: str | None, note: str | None) -> str | None:
+    note_clean = (note or "").strip()
+    if role == "priority":
+        prefix = ROLE_PREFIX_PRIORITY
+    elif role == "consolidated":
+        prefix = ROLE_PREFIX_CONSOLIDATED
+    else:
+        return note_clean or None
+    if not note_clean:
+        return prefix
+    # Evita duplicar el prefijo si el usuario ya lo incluyó.
+    if note_clean.lower().startswith(prefix):
+        return note_clean
+    return f"{prefix}\n{note_clean}"
+
+
+def _num(v: Any) -> float | None:
+    if v is None:
+        return None
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return None
+    if n != n:  # NaN
+        return None
+    return n
+
+
+def build_client_rows(
+    orders: list[dict[str, Any]],
+    *,
+    variants_by_oc: dict[int, list[int]] | None = None,
+    boxes_by_oc: dict[int, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Agrega métricas por cliente (todas las OC del cliente juntas)."""
+    variants_by_oc = variants_by_oc or {}
+    boxes_by_oc = boxes_by_oc or {}
+    by_client: dict[Any, dict[str, Any]] = {}
+
+    for o in orders:
+        cid = o.get("client_id")
+        key = cid if cid is not None else f"name:{o.get('client_name') or 'sin-cliente'}"
+        row = by_client.get(key)
+        if row is None:
+            row = {
+                "client_id": cid,
+                "client_name": o.get("client_name") or "Sin nombre",
+                "oc_count": 0,
+                "folios": [],
+                "oc_document_ids": [],
+                "venta_oc_clp": 0.0,
+                "sku_distinct": 0,
+                "units": 0.0,
+                "cajas_equivalentes": None,
+                "cajas_partial": False,
+                "peso_conocido_kg": 0.0,
+                "peso_coverage_percent": None,
+                "load_batch_id": None,
+                "load_batch_name": None,
+                "limitations": [],
+                "_variants": set(),
+                "_coverages": [],
+                "_cajas_sum": 0.0,
+                "_cajas_lines": 0,
+                "_cajas_with": 0,
+                "_has_cajas": False,
+            }
+            by_client[key] = row
+
+        oc_id = int(o["oc_document_id"])
+        row["oc_count"] += 1
+        if o.get("oc_number") is not None:
+            row["folios"].append(int(o["oc_number"]))
+        row["oc_document_ids"].append(oc_id)
+        venta = _num(o.get("oc_total_amount")) or 0.0
+        row["venta_oc_clp"] += venta
+        units = _num(o.get("cantidad_unidades"))
+        if units is None:
+            units = 0.0
+            if "units_missing" not in row["limitations"]:
+                row["limitations"].append("units_missing")
+        row["units"] += units
+        peso = _num(o.get("peso_total_kg")) or 0.0
+        row["peso_conocido_kg"] += peso
+        cov = _num(o.get("cobertura_logistica"))
+        if cov is not None:
+            row["_coverages"].append(cov)
+
+        variants = variants_by_oc.get(oc_id) or []
+        if variants:
+            row["_variants"].update(variants)
+        else:
+            # Fallback snapshot: cantidad_productos ≈ líneas, no necesariamente SKU únicos.
+            qp = o.get("cantidad_productos")
+            if qp is not None and "sku_estimado_por_lineas" not in row["limitations"]:
+                row["limitations"].append("sku_estimado_por_lineas")
+            # No sumamos líneas entre OC (doble conteo); solo si no hay variantes.
+
+        box = boxes_by_oc.get(oc_id)
+        if box:
+            row["_has_cajas"] = True
+            row["_cajas_sum"] += float(box.get("cajas_known") or 0)
+            row["_cajas_lines"] += int(box.get("lines_n") or 0)
+            row["_cajas_with"] += int(box.get("lines_with_box") or 0)
+            if int(box.get("lines_with_box") or 0) < int(box.get("lines_n") or 0):
+                row["cajas_partial"] = True
+        else:
+            snap_cajas = _num(o.get("cantidad_cajas"))
+            if snap_cajas is not None and snap_cajas > 0:
+                row["_has_cajas"] = True
+                row["_cajas_sum"] += snap_cajas
+                if "cajas_desde_snapshot_plan" not in row["limitations"]:
+                    row["limitations"].append("cajas_desde_snapshot_plan")
+            elif "cajas_no_disponibles" not in row["limitations"]:
+                row["limitations"].append("cajas_no_disponibles")
+
+        batch_id = o.get("load_batch_id")
+        if batch_id is not None:
+            row["load_batch_id"] = int(batch_id)
+            row["load_batch_name"] = o.get("load_batch_name")
+
+    clients: list[dict[str, Any]] = []
+    for row in by_client.values():
+        variants: set[int] = row.pop("_variants")
+        coverages: list[float] = row.pop("_coverages")
+        cajas_sum = row.pop("_cajas_sum")
+        cajas_lines = row.pop("_cajas_lines")
+        cajas_with = row.pop("_cajas_with")
+        has_cajas = row.pop("_has_cajas")
+        if variants:
+            row["sku_distinct"] = len(variants)
+            row["limitations"] = [
+                x for x in row["limitations"] if x != "sku_estimado_por_lineas"
+            ]
+        else:
+            # Sin detalles de variantes: no inventar SKU ni sumar líneas entre OC.
+            row["sku_distinct"] = 0
+        if has_cajas:
+            row["cajas_equivalentes"] = round(cajas_sum, 2)
+            if cajas_lines > 0 and cajas_with < cajas_lines:
+                row["cajas_partial"] = True
+                if "cajas_parciales" not in row["limitations"]:
+                    row["limitations"].append("cajas_parciales")
+        if coverages:
+            row["peso_coverage_percent"] = round(sum(coverages) / len(coverages), 1)
+            if any(c < 99.5 for c in coverages):
+                if "peso_cobertura_incompleta" not in row["limitations"]:
+                    row["limitations"].append("peso_cobertura_incompleta")
+        elif row["peso_conocido_kg"] <= 0:
+            if "peso_no_disponible" not in row["limitations"]:
+                row["limitations"].append("peso_no_disponible")
+        row["folios"] = sorted(set(row["folios"]))
+        row["oc_document_ids"] = sorted(set(row["oc_document_ids"]))
+        row["venta_oc_clp"] = round(float(row["venta_oc_clp"]), 2)
+        row["units"] = round(float(row["units"]), 2)
+        row["peso_conocido_kg"] = round(float(row["peso_conocido_kg"]), 3)
+        clients.append(row)
+
+    clients.sort(key=lambda c: (-float(c["venta_oc_clp"]), str(c["client_name"])))
+    return clients
+
+
+def build_group_summaries(
+    clients: list[dict[str, Any]],
+    batches: list[dict[str, Any]],
+    *,
+    variants_by_oc: dict[int, list[int]] | None = None,
+) -> list[dict[str, Any]]:
+    """Resumen por grupo con SKU distintos consolidados (sin sumar por cliente)."""
+    variants_by_oc = variants_by_oc or {}
+    by_batch_clients: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for c in clients:
+        bid = c.get("load_batch_id")
+        if bid is None:
+            continue
+        by_batch_clients[int(bid)].append(c)
+
+    summaries: list[dict[str, Any]] = []
+    for b in batches:
+        bid = int(b["id"])
+        members = by_batch_clients.get(bid, [])
+        role = parse_batch_presentation_role(b.get("description"))
+        variant_set: set[int] = set()
+        for c in members:
+            for oc_id in c.get("oc_document_ids") or []:
+                variant_set.update(variants_by_oc.get(int(oc_id), []))
+        client_count = len(members)
+        priority_review = role == "priority" and client_count > 2
+        cajas_vals = [
+            float(c["cajas_equivalentes"])
+            for c in members
+            if c.get("cajas_equivalentes") is not None
+        ]
+        summaries.append(
+            {
+                "load_batch_id": bid,
+                "name": b.get("name"),
+                "description": b.get("description"),
+                "sort_order": b.get("sort_order"),
+                "presentation_role": role,
+                "priority_review_warning": priority_review,
+                "client_count": client_count,
+                "clients": [
+                    {
+                        "client_id": c.get("client_id"),
+                        "client_name": c.get("client_name"),
+                        "oc_count": c.get("oc_count"),
+                        "venta_oc_clp": c.get("venta_oc_clp"),
+                        "sku_distinct": c.get("sku_distinct"),
+                    }
+                    for c in members
+                ],
+                "oc_count": sum(int(c.get("oc_count") or 0) for c in members),
+                "venta_oc_clp": round(sum(float(c.get("venta_oc_clp") or 0) for c in members), 2),
+                "sku_distinct": len(variant_set),
+                "units": round(sum(float(c.get("units") or 0) for c in members), 2),
+                "cajas_equivalentes": round(sum(cajas_vals), 2) if cajas_vals else None,
+                "peso_conocido_kg": round(
+                    sum(float(c.get("peso_conocido_kg") or 0) for c in members), 3
+                ),
+                "peso_coverage_incomplete": any(
+                    "peso_cobertura_incompleta" in (c.get("limitations") or [])
+                    or "peso_no_disponible" in (c.get("limitations") or [])
+                    for c in members
+                ),
+            }
+        )
+    summaries.sort(key=lambda g: (int(g.get("sort_order") or 0), int(g["load_batch_id"])))
+    return summaries
+
+
 def get_load_organization(plan_id: int) -> dict[str, Any]:
     conn = get_connection()
     try:
@@ -106,6 +354,8 @@ def get_load_organization(plan_id: int) -> dict[str, Any]:
                     "load_organization_version": 0,
                     "batches": batches,
                     "orders": [],
+                    "clients": [],
+                    "group_summaries": [],
                     "assignments": [],
                     "completeness": {
                         "total_orders": 0,
@@ -128,6 +378,29 @@ def get_load_organization(plan_id: int) -> dict[str, Any]:
             int(a["oc_document_id"]): int(a["load_batch_id"]) for a in assignments
         }
         completeness = organization_completeness(orders, by_oc)
+
+        variants_by_oc: dict[int, list[int]] = {}
+        boxes_by_oc: dict[int, dict[str, Any]] = {}
+        try:
+            variants_by_oc = org_repo.list_oc_variant_ids_for_plan(cur, plan_id)
+        except Exception:  # noqa: BLE001 — métrica opcional
+            variants_by_oc = {}
+        try:
+            boxes_by_oc = org_repo.list_oc_box_coverage_for_plan(cur, plan_id)
+        except Exception:  # noqa: BLE001
+            boxes_by_oc = {}
+
+        clients = build_client_rows(
+            orders, variants_by_oc=variants_by_oc, boxes_by_oc=boxes_by_oc
+        )
+        enriched_batches = []
+        for b in batches:
+            item = dict(b)
+            item["presentation_role"] = parse_batch_presentation_role(b.get("description"))
+            enriched_batches.append(item)
+        group_summaries = build_group_summaries(
+            clients, enriched_batches, variants_by_oc=variants_by_oc
+        )
         cur.close()
         return serialize_value(
             {
@@ -136,10 +409,21 @@ def get_load_organization(plan_id: int) -> dict[str, Any]:
                 "load_organization_status": meta["load_organization_status"],
                 "load_organization_version": meta["load_organization_version"],
                 "load_organization_updated_at": meta.get("load_organization_updated_at"),
-                "batches": batches,
+                "batches": enriched_batches,
                 "orders": orders,
+                "clients": clients,
+                "group_summaries": group_summaries,
                 "assignments": assignments,
                 "completeness": completeness,
+                "guidance": {
+                    "manual_only": True,
+                    "priority_max_clients_suggested": 2,
+                    "sort_default": "venta_desc",
+                    "note_es": (
+                        "La agrupación es manual. Priorice 1–2 clientes por grupo "
+                        "cuando haya mucha variedad de SKU; consolide el resto de la ruta."
+                    ),
+                },
             }
         )
     finally:

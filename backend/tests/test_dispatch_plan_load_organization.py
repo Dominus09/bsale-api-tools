@@ -135,6 +135,12 @@ def _apply_schema(conn):
             client_name TEXT,
             oc_total_amount NUMERIC(18,2),
             route_order INTEGER,
+            peso_total_kg NUMERIC(18,3),
+            cantidad_productos INTEGER,
+            cantidad_unidades NUMERIC(18,2),
+            cantidad_cajas NUMERIC(18,2),
+            productos_sin_peso INTEGER,
+            cobertura_logistica NUMERIC(8,2),
             UNIQUE (dispatch_plan_id, oc_document_id)
         )
         """

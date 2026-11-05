@@ -18,6 +18,7 @@ import {
 import { DispatchPlanInvoicingDashboard } from "@/components/distribuidora/planificacion/DispatchPlanInvoicingDashboard"
 import { DispatchPlanCuadraturaPanel } from "@/components/distribuidora/planificacion/DispatchPlanCuadraturaPanel"
 import { DispatchPlanPickingAssignmentPanel } from "@/components/distribuidora/planificacion/DispatchPlanPickingAssignmentPanel"
+import { DispatchPlanLoadOrganizationPanel } from "@/components/distribuidora/planificacion/DispatchPlanLoadOrganizationPanel"
 import { DispatchPlanInvoicedItemsTable } from "@/components/distribuidora/planificacion/DispatchPlanInvoicedItemsTable"
 import {
   DispatchPlanPickingClientePanel,
@@ -257,7 +258,8 @@ export function DispatchPlanDetailTabs({
         />
       </TabsContent>
 
-      <TabsContent value="asignacion-pickings" className="mt-4">
+      <TabsContent value="asignacion-pickings" className="mt-4 space-y-4">
+        <DispatchPlanLoadOrganizationPanel planId={planId} onMessage={onMessage} />
         <DispatchPlanPickingAssignmentPanel
           planId={planId}
           planStatus={dashboard.plan.status}
