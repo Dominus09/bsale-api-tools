@@ -827,8 +827,9 @@ def get_load_batches(plan_id: int, user: dict = Depends(require_staff_user)):
 def post_load_batch(
     plan_id: int,
     body: LoadBatchBody,
-    _ops: dict = Depends(require_erp_ops_staff),
+    user: dict = Depends(require_erp_ops_staff),
 ):
+    _deny_plan_if_out_of_scope(user, plan_id)
     try:
         return batch_svc.create_load_batch(
             plan_id, name=body.name, description=body.description
@@ -842,8 +843,9 @@ def put_load_batch(
     plan_id: int,
     batch_id: int,
     body: LoadBatchUpdateBody,
-    _ops: dict = Depends(require_erp_ops_staff),
+    user: dict = Depends(require_erp_ops_staff),
 ):
+    _deny_plan_if_out_of_scope(user, plan_id)
     try:
         return batch_svc.update_load_batch(
             plan_id,
@@ -860,8 +862,9 @@ def put_load_batch(
 def delete_load_batch(
     plan_id: int,
     batch_id: int,
-    _ops: dict = Depends(require_erp_ops_staff),
+    user: dict = Depends(require_erp_ops_staff),
 ):
+    _deny_plan_if_out_of_scope(user, plan_id)
     try:
         return batch_svc.delete_load_batch(plan_id, batch_id)
     except ValueError as e:
@@ -881,8 +884,9 @@ def get_picking_assignments(plan_id: int, user: dict = Depends(require_staff_use
 def put_picking_assignments(
     plan_id: int,
     body: PickingAssignmentsBody,
-    _ops: dict = Depends(require_erp_ops_staff),
+    user: dict = Depends(require_erp_ops_staff),
 ):
+    _deny_plan_if_out_of_scope(user, plan_id)
     try:
         return batch_svc.save_picking_assignments(
             plan_id, [a.model_dump() for a in body.assignments]

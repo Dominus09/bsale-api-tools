@@ -25,6 +25,7 @@ import {
   exportDispatchPlanPickingProductoPdf,
 } from "@/lib/dispatch-plan-picking-pdf"
 import { dispatchPlanVersionLabel } from "@/lib/dispatch-plan-operational-status"
+import { stripBatchRoleDescription } from "@/lib/load-organization-ui"
 import { formatClp } from "@/lib/ors-map-ui"
 import {
   AlertDialog,
@@ -347,8 +348,10 @@ export function DispatchPlanPickingAssignmentPanel({
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <p className="font-semibold">{b.name}</p>
-                  {b.description ? (
-                    <p className="text-muted-foreground">{b.description}</p>
+                  {stripBatchRoleDescription(b.description) ? (
+                    <p className="text-muted-foreground">
+                      {stripBatchRoleDescription(b.description)}
+                    </p>
                   ) : null}
                 </div>
                 {batches.length > 1 ? (

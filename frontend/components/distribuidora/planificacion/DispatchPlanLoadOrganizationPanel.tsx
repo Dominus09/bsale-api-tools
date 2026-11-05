@@ -209,10 +209,8 @@ export function DispatchPlanLoadOrganizationPanel({ planId, onMessage }: Props) 
     try {
       await updateDispatchPlanLoadBatch(planId, id, {
         name,
-        description: encodeBatchRoleDescription(
-          batch.presentation_role,
-          stripBatchRoleDescription(batch.description),
-        ),
+        // Solo nota humana: el backend conserva role=* existente.
+        description: stripBatchRoleDescription(batch.description) || undefined,
       })
       setRenameId("")
       setRenameValue("")
@@ -468,7 +466,10 @@ export function DispatchPlanLoadOrganizationPanel({ planId, onMessage }: Props) 
                         />
                       </td>
                       <td className="px-2 py-1.5">
-                        <div className="font-medium" title={c.client_name}>
+                        <div
+                          className="max-w-[220px] truncate font-medium"
+                          title={c.client_name}
+                        >
                           {c.client_name}
                         </div>
                         {limits.length ? (

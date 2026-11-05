@@ -6,7 +6,9 @@ from backend.services.distribuidora.dispatch_plan_load_organization_service impo
     build_client_rows,
     build_group_summaries,
     encode_batch_description,
+    merge_description_preserving_role,
     parse_batch_presentation_role,
+    strip_batch_role_description,
 )
 
 
@@ -14,8 +16,30 @@ def test_parse_and_encode_batch_role():
     assert parse_batch_presentation_role("role=priority") == "priority"
     assert parse_batch_presentation_role("role=consolidated\nnota") == "consolidated"
     assert parse_batch_presentation_role("solo nota") is None
+    assert parse_batch_presentation_role(None) is None
     assert encode_batch_description("priority", "A") == "role=priority\nA"
     assert encode_batch_description("consolidated", None) == "role=consolidated"
+    assert strip_batch_role_description("role=priority\nZona norte") == "Zona norte"
+    assert "role=" not in (strip_batch_role_description("role=priority\nZona norte") or "")
+
+
+def test_rename_and_note_edit_preserve_role():
+    existing = "role=priority\nDescarga rápida"
+    # Actualización solo de nota humana (sin prefijo) no pierde el tipo.
+    merged = merge_description_preserving_role(existing, "Nueva nota operativa")
+    assert merged == "role=priority\nNueva nota operativa"
+    assert parse_batch_presentation_role(merged) == "priority"
+    assert strip_batch_role_description(merged) == "Nueva nota operativa"
+    # Cambio explícito de rol
+    to_cons = merge_description_preserving_role(existing, "role=consolidated\nResto")
+    assert parse_batch_presentation_role(to_cons) == "consolidated"
+    # Histórico sin clasificación
+    hist = merge_description_preserving_role("Picking 1", "Actualizado")
+    assert parse_batch_presentation_role(hist) is None
+    assert hist == "Actualizado"
+    # Vaciar nota conserva role
+    keep = merge_description_preserving_role(existing, "")
+    assert keep == "role=priority"
 
 
 def test_client_rows_keep_multi_oc_together_and_distinct_sku():

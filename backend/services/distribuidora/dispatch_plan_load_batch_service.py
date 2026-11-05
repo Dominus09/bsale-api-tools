@@ -118,15 +118,27 @@ def update_load_batch(
     nm = (name or "").strip()
     if not nm:
         raise ValueError("El nombre del picking es obligatorio.")
+    from backend.services.distribuidora.dispatch_plan_load_organization_service import (
+        merge_description_preserving_role,
+    )
+
     conn = get_connection()
     try:
         cur = conn.cursor()
+        existing_rows = [
+            b for b in batch_repo.list_load_batches(cur, plan_id) if int(b["id"]) == batch_id
+        ]
+        if not existing_rows:
+            raise ValueError("Grupo de picking no encontrado")
+        merged_description = merge_description_preserving_role(
+            existing_rows[0].get("description"), description
+        )
         row = batch_repo.update_load_batch(
             cur,
             plan_id=plan_id,
             batch_id=batch_id,
             name=nm,
-            description=description,
+            description=merged_description,
             sort_order=sort_order,
         )
         if not row:

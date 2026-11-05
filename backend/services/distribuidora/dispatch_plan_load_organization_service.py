@@ -100,8 +100,22 @@ def parse_batch_presentation_role(description: str | None) -> str | None:
     return None
 
 
+def strip_batch_role_description(description: str | None) -> str:
+    """Quita el prefijo técnico role=* para mostrar o re-guardar notas humanas."""
+    text = (description or "").strip()
+    if not text:
+        return ""
+    lines = text.splitlines()
+    first = lines[0].strip().lower()
+    if first.startswith(ROLE_PREFIX_PRIORITY) or first.startswith(
+        ROLE_PREFIX_CONSOLIDATED
+    ):
+        return "\n".join(lines[1:]).strip()
+    return text
+
+
 def encode_batch_description(role: str | None, note: str | None) -> str | None:
-    note_clean = (note or "").strip()
+    note_clean = strip_batch_role_description(note)
     if role == "priority":
         prefix = ROLE_PREFIX_PRIORITY
     elif role == "consolidated":
@@ -110,10 +124,30 @@ def encode_batch_description(role: str | None, note: str | None) -> str | None:
         return note_clean or None
     if not note_clean:
         return prefix
-    # Evita duplicar el prefijo si el usuario ya lo incluyó.
-    if note_clean.lower().startswith(prefix):
-        return note_clean
     return f"{prefix}\n{note_clean}"
+
+
+def merge_description_preserving_role(
+    existing: str | None, incoming: str | None
+) -> str | None:
+    """Conserva role= del batch si el cliente actualiza solo la nota/nombre vía description.
+
+    - Si ``incoming`` trae role=, se respeta.
+    - Si no, se reutiliza el role de ``existing`` (planes ya clasificados).
+    - Descripciones históricas sin role siguen sin clasificación.
+    """
+    incoming_role = parse_batch_presentation_role(incoming)
+    if incoming_role:
+        return encode_batch_description(
+            incoming_role, strip_batch_role_description(incoming)
+        )
+    existing_role = parse_batch_presentation_role(existing)
+    note = (
+        strip_batch_role_description(incoming)
+        if incoming is not None
+        else strip_batch_role_description(existing)
+    )
+    return encode_batch_description(existing_role, note)
 
 
 def _num(v: Any) -> float | None:
@@ -397,6 +431,7 @@ def get_load_organization(plan_id: int) -> dict[str, Any]:
         for b in batches:
             item = dict(b)
             item["presentation_role"] = parse_batch_presentation_role(b.get("description"))
+            item["display_description"] = strip_batch_role_description(b.get("description")) or None
             enriched_batches.append(item)
         group_summaries = build_group_summaries(
             clients, enriched_batches, variants_by_oc=variants_by_oc

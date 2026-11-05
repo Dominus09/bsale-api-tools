@@ -28,7 +28,7 @@ export function encodeBatchRoleDescription(
   role: "priority" | "consolidated" | null | undefined,
   note?: string | null,
 ): string | undefined {
-  const clean = (note || "").trim()
+  const clean = stripBatchRoleDescription(note)
   if (role === "priority") {
     return clean ? `role=priority\n${clean}` : "role=priority"
   }
