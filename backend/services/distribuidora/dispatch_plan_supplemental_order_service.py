@@ -24,6 +24,10 @@ from backend.services.distribuidora.oc_document_chain_resolver import (
     resolve_operational_statuses_batch,
 )
 from backend.services.distribuidora.oc_operational_status import (
+    BILLING_CANCELLED,
+    BILLING_INVOICED_FULL_CN,
+    BILLING_PENDING,
+    BILLING_PROBABLE,
     admission_block_message,
     blocks_planning_admission,
 )
@@ -83,6 +87,55 @@ def _admission_block_payload(status) -> dict[str, Any]:
         "billing_label_es": status.billing_label_es,
         "confirmed_invoice": inv,
         "invoice_number": inv.get("number"),
+    }
+
+
+def _oc_ready_for_product_picking(status) -> bool:
+    """Factura/boleta confirmada usable; no inventa picking sobre OC pendientes."""
+    if status is None:
+        return False
+    if not status.confirmed_invoice:
+        return False
+    billing = str(status.billing_status or "")
+    if billing in {
+        BILLING_PENDING,
+        BILLING_CANCELLED,
+        BILLING_PROBABLE,
+        BILLING_INVOICED_FULL_CN,
+    }:
+        return False
+    return True
+
+
+def assess_oc_invoicing_for_picking(cur, oc_ids: list[int]) -> dict[str, Any]:
+    status_map = resolve_operational_statuses_batch(cur, oc_ids)
+    items: list[dict[str, Any]] = []
+    ready_ids: list[int] = []
+    pending_ids: list[int] = []
+    for oc_id in oc_ids:
+        st = status_map.get(int(oc_id))
+        ready = _oc_ready_for_product_picking(st)
+        inv = (st.confirmed_invoice if st else None) or {}
+        row = {
+            "oc_document_id": int(oc_id),
+            "billing_status": (st.billing_status if st else BILLING_PENDING),
+            "billing_label_es": (st.billing_label_es if st else "Pendiente por facturar"),
+            "ready_for_product_picking": ready,
+            "confirmed_invoice_id": inv.get("document_id"),
+            "invoice_number": inv.get("number"),
+        }
+        items.append(row)
+        if ready:
+            ready_ids.append(int(oc_id))
+        else:
+            pending_ids.append(int(oc_id))
+    return {
+        "items": items,
+        "ready_oc_document_ids": ready_ids,
+        "pending_invoice_oc_document_ids": pending_ids,
+        "any_invoiced": bool(ready_ids),
+        "all_invoiced": bool(oc_ids) and not pending_ids,
+        "picking_pending_invoice": bool(pending_ids),
     }
 
 
@@ -361,6 +414,7 @@ def preview_supplemental_orders(
         next_seq = _next_supplemental_seq(batches)
         proposed_name = f"OC adicionales {next_seq:02d}"
         uses_supplemental = org_status == "organized"
+        invoicing = assess_oc_invoicing_for_picking(cur, novel or oc_ids)
 
         cur.close()
     finally:
@@ -390,6 +444,8 @@ def preview_supplemental_orders(
             "already_in_plan": already,
             "novel_oc_document_ids": novel,
             "capacity": capacity,
+            "invoicing": invoicing,
+            "picking_pending_invoice": bool(invoicing.get("picking_pending_invoice")),
             "requires_incomplete_weight_ack": bool(
                 capacity.get("requires_incomplete_weight_ack")
             ),
@@ -399,7 +455,7 @@ def preview_supplemental_orders(
             "note_es": (
                 "Con organización completa se crea un grupo suplementario; "
                 "los grupos originales no se modifican. "
-                "El picking de productos del suplemento requiere facturación (F3-D2)."
+                "El picking de productos del suplemento requiere facturación vigente."
                 if uses_supplemental
                 else "Plan legacy/draft: se conserva el flujo clásico sin grupo suplementario automático."
             ),
@@ -420,7 +476,7 @@ def add_supplemental_orders_to_plan(
     """Incorpora OC de forma atómica. Si organized → grupo suplementario + asignaciones.
 
     Idempotente: reintento con las mismas OC ya en el mismo grupo supplemental → unchanged.
-    ``regenerate_picking`` queda para F3-D2 (por defecto False en D1).
+    F3-D2: regenera picking versionado solo si hay facturación usable (o flag explícito).
     """
     reason_n = (reason or "").strip()
     if len(reason_n) < 3:
@@ -676,35 +732,76 @@ def add_supplemental_orders_to_plan(
         conn.close()
 
     picking_result = None
+    reconciliation = None
     has_picking = False
+    invoicing: dict[str, Any] = {
+        "items": [],
+        "ready_oc_document_ids": [],
+        "pending_invoice_oc_document_ids": list(novel),
+        "any_invoiced": False,
+        "all_invoiced": False,
+        "picking_pending_invoice": True,
+    }
     conn2 = get_connection()
     try:
         cur2 = conn2.cursor()
         has_picking = batch_repo.plan_has_current_picking(cur2, plan_id)
+        invoicing = assess_oc_invoicing_for_picking(cur2, novel)
         cur2.close()
     finally:
         conn2.close()
 
-    # F3-D2: nueva versión global + conciliación; export por grupo aísla el suplemento.
-    if regenerate_picking and has_picking:
-        picking_result = plan_svc.generate_plan_picking(
-            plan_id,
-            validate=False,
-            include_probable=False,
-            regenerated_by=actor,
-            regeneration_reason=reason_n or "OC adicionales",
-            regeneration_action=ACTION_ADD_SUPPLEMENTAL,
-        )
-        try:
-            from backend.services.distribuidora import (
-                dispatch_plan_load_batch_service as batch_svc,
+    # F3-D2: versionar picking global solo con docs facturados (no inventar suplemento).
+    auto_regen = bool(has_picking and uses_supplemental and invoicing.get("any_invoiced"))
+    force_regen = bool(has_picking and regenerate_picking)
+    should_regen = auto_regen or force_regen
+    if should_regen:
+        if not invoicing.get("any_invoiced") and force_regen and uses_supplemental:
+            # Flag explícito sin facturas: no generar picking ficticio del suplemento.
+            logger.info(
+                "supplemental_skip_regen_no_invoice plan_id=%s ocs=%s",
+                plan_id,
+                novel,
             )
+        else:
+            picking_result = plan_svc.generate_plan_picking(
+                plan_id,
+                validate=False,
+                include_probable=False,
+                regenerated_by=actor,
+                regeneration_reason=reason_n or "OC adicionales",
+                regeneration_action=ACTION_ADD_SUPPLEMENTAL,
+            )
+            try:
+                from backend.services.distribuidora import (
+                    dispatch_plan_load_batch_service as batch_svc,
+                )
 
-            batch_svc.reconcile_document_load_assignments(
-                plan_id, overwrite_manual=False
-            )
-        except Exception:
-            logger.exception("reconcile_after_supplemental plan_id=%s", plan_id)
+                reconciliation = batch_svc.reconcile_document_load_assignments(
+                    plan_id, overwrite_manual=False
+                )
+            except Exception:
+                logger.exception("reconcile_after_supplemental plan_id=%s", plan_id)
+
+    supplemental_picking_ready = bool(
+        uses_supplemental
+        and supplemental_batch
+        and invoicing.get("any_invoiced")
+        and picking_result
+        and reconciliation
+        and reconciliation.get("document_assignment_complete")
+    )
+    msg = (
+        f"OC agregadas correctamente al grupo {supplemental_batch.get('name')}."
+        if supplemental_batch
+        else "OC agregadas al plan (sin grupo suplementario: plan no organized)."
+    )
+    if invoicing.get("picking_pending_invoice"):
+        msg += " Picking de productos del suplemento pendiente de facturación."
+    elif supplemental_picking_ready:
+        msg += " Picking suplementario listo (exportar por grupo)."
+    elif picking_result:
+        msg += " Picking general versionado; revise conciliación documental."
 
     return serialize_value(
         {
@@ -725,16 +822,14 @@ def add_supplemental_orders_to_plan(
             "client_same_route_exceptions": client_same_route_exceptions,
             "capacity": capacity,
             "weight_ack": weight_ack,
+            "invoicing": invoicing,
             "picking": picking_result,
             "picking_updated": bool(picking_result),
-            "message_es": (
-                f"OC agregadas correctamente al grupo {supplemental_batch.get('name')}."
-                if supplemental_batch
-                else "OC agregadas al plan (sin grupo suplementario: plan no organized)."
-            ),
-            "picking_ready": bool(
-                picking_result and uses_supplemental and supplemental_batch
-            ),
+            "document_reconciliation": reconciliation,
+            "message_es": msg,
+            "picking_ready": supplemental_picking_ready,
+            "supplemental_picking_ready": supplemental_picking_ready,
+            "picking_pending_invoice": bool(invoicing.get("picking_pending_invoice")),
             "plan": plan_svc.get_dispatch_plan(plan_id),
         }
     )

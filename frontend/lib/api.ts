@@ -3304,7 +3304,7 @@ export type DispatchPlanLoadBatch = {
   sort_order: number
   name: string
   description?: string | null
-  presentation_role?: "priority" | "consolidated" | null
+  presentation_role?: "priority" | "consolidated" | "supplemental" | null
   created_at?: string
   updated_at?: string
 }
@@ -3332,7 +3332,7 @@ export type LoadOrganizationGroupSummary = {
   name?: string | null
   description?: string | null
   sort_order?: number | null
-  presentation_role?: "priority" | "consolidated" | null
+  presentation_role?: "priority" | "consolidated" | "supplemental" | null
   priority_review_warning?: boolean
   client_count: number
   clients: {
@@ -3575,15 +3575,70 @@ export async function searchDispatchPlanOrders(
   return res.json()
 }
 
-export async function previewAddDispatchPlanOrder(planId: number): Promise<{
+export type SupplementalAddPreview = {
   dispatch_plan_id: number
   can_add: boolean
   blocked_reason?: string | null
   has_picking: boolean
   warning?: string | null
-}> {
+  plan_status?: string
+  load_organization_status?: string
+  uses_supplemental_group?: boolean
+  proposed_supplemental_group_name?: string | null
+  proposed_supplemental_seq?: number | null
+  oc_document_ids?: number[]
+  already_in_plan?: number[]
+  novel_oc_document_ids?: number[]
+  capacity?: {
+    capacity_known?: boolean
+    overloaded?: boolean
+    utilization_pct?: number | null
+    known_weight_kg?: number
+    truck_max_weight_kg?: number | null
+    incomplete_order_count?: number
+    unevaluable_order_count?: number
+    requires_incomplete_weight_ack?: boolean
+    requires_unevaluable_weight_ack?: boolean
+    warnings?: string[]
+    new_orders?: Array<{
+      oc_document_id: number
+      weight_quality?: string
+      known_weight_kg?: number | null
+      cantidad_unidades?: number | null
+    }>
+  }
+  invoicing?: {
+    any_invoiced?: boolean
+    all_invoiced?: boolean
+    picking_pending_invoice?: boolean
+    pending_invoice_oc_document_ids?: number[]
+    ready_oc_document_ids?: number[]
+    items?: Array<{
+      oc_document_id: number
+      billing_status?: string
+      billing_label_es?: string
+      ready_for_product_picking?: boolean
+      invoice_number?: number | null
+    }>
+  }
+  picking_pending_invoice?: boolean
+  requires_incomplete_weight_ack?: boolean
+  requires_unevaluable_weight_ack?: boolean
+  note_es?: string
+}
+
+export async function previewAddDispatchPlanOrder(
+  planId: number,
+  opts?: { ocDocumentId?: number; ocDocumentIds?: number[] },
+): Promise<SupplementalAddPreview> {
+  const qs = new URLSearchParams()
+  if (opts?.ocDocumentId != null) qs.set("oc_document_id", String(opts.ocDocumentId))
+  for (const id of opts?.ocDocumentIds || []) {
+    qs.append("oc_document_ids", String(id))
+  }
+  const q = qs.toString()
   const res = await fetch(
-    `${API_URL}/distribuidora/dispatch-plans/${planId}/orders/add-preview`,
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/orders/add-preview${q ? `?${q}` : ""}`,
     { headers: getAuthHeaders() },
   )
   if (!res.ok) throw new Error(await res.text().catch(() => "Error al validar plan"))
@@ -3592,13 +3647,38 @@ export async function previewAddDispatchPlanOrder(planId: number): Promise<{
 
 export async function addDispatchPlanOrder(
   planId: number,
-  body: { oc_document_id: number; regenerate_picking?: boolean; reason?: string },
+  body: {
+    oc_document_id?: number
+    oc_document_ids?: number[]
+    regenerate_picking?: boolean
+    reason?: string
+    acknowledge_incomplete_weight?: boolean
+    acknowledge_unevaluable_weight?: boolean
+  },
 ): Promise<{
   added?: boolean
   requires_regenerate?: boolean
   warning?: string | null
   picking?: unknown
   plan?: { plan: DispatchPlanSummary }
+  message_es?: string
+  supplemental_group?: {
+    load_batch_id?: number
+    name?: string
+    seq?: number
+    presentation_role?: string
+  } | null
+  picking_ready?: boolean
+  supplemental_picking_ready?: boolean
+  picking_pending_invoice?: boolean
+  picking_updated?: boolean
+  client_same_route_exceptions?: Array<{
+    client_id?: number
+    client_name?: string
+    message_es?: string
+  }>
+  capacity?: SupplementalAddPreview["capacity"]
+  invoicing?: SupplementalAddPreview["invoicing"]
 }> {
   const res = await fetch(
     `${API_URL}/distribuidora/dispatch-plans/${planId}/orders/add`,
@@ -3608,7 +3688,20 @@ export async function addDispatchPlanOrder(
       body: JSON.stringify(body),
     },
   )
-  if (!res.ok) throw new Error(await res.text().catch(() => "Error al agregar OC"))
+  if (!res.ok) {
+    const raw = await res.text().catch(() => "")
+    try {
+      const parsed = JSON.parse(raw) as {
+        detail?: string | { message?: string; code?: string }
+      }
+      const d = parsed.detail
+      if (typeof d === "string") throw new Error(d)
+      if (d && typeof d === "object" && d.message) throw new Error(d.message)
+    } catch (e) {
+      if (e instanceof Error && e.message && !e.message.startsWith("{")) throw e
+    }
+    throw new Error(raw || "Error al agregar OC")
+  }
   return res.json()
 }
 

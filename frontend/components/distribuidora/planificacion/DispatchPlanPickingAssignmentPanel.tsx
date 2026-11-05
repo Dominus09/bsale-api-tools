@@ -31,7 +31,9 @@ import {
   type DispatchPlanOrderSearchHit,
   type DispatchPlanStatus,
   type DocumentLoadReconciliationResponse,
+  type SupplementalAddPreview,
 } from "@/lib/api"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   exportDispatchPlanPickingClientePdf,
   exportDispatchPlanPickingProductoPdf,
@@ -100,15 +102,13 @@ export function DispatchPlanPickingAssignmentPanel({
   const [newBatchDesc, setNewBatchDesc] = useState("")
   const [searchQ, setSearchQ] = useState("")
   const [searchHits, setSearchHits] = useState<DispatchPlanOrderSearchHit[]>([])
-  const [addPreview, setAddPreview] = useState<{
-    can_add: boolean
-    has_picking: boolean
-    warning?: string | null
-    blocked_reason?: string | null
-  } | null>(null)
-  const [pendingAdd, setPendingAdd] = useState<DispatchPlanOrderSearchHit | null>(null)
+  const [addPreview, setAddPreview] = useState<SupplementalAddPreview | null>(null)
+  const [selectedHits, setSelectedHits] = useState<DispatchPlanOrderSearchHit[]>([])
+  const [impactPreview, setImpactPreview] = useState<SupplementalAddPreview | null>(null)
   const [addReason, setAddReason] = useState("")
-  const [showRegenerateDialog, setShowRegenerateDialog] = useState(false)
+  const [ackIncomplete, setAckIncomplete] = useState(false)
+  const [ackUnevaluable, setAckUnevaluable] = useState(false)
+  const [showConfirmAddDialog, setShowConfirmAddDialog] = useState(false)
   const [showManualSaveDialog, setShowManualSaveDialog] = useState(false)
   const [orgStatus, setOrgStatus] = useState<string>("legacy")
   const [docRecon, setDocRecon] = useState<DocumentLoadReconciliationResponse | null>(
@@ -268,46 +268,103 @@ export function DispatchPlanPickingAssignmentPanel({
     }
   }
 
-  const requestAddOrder = (hit: DispatchPlanOrderSearchHit) => {
+  const selectedIds = useMemo(
+    () => selectedHits.map((h) => h.oc_document_id),
+    [selectedHits],
+  )
+
+  const refreshImpactPreview = useCallback(
+    async (ids: number[]) => {
+      if (!ids.length) {
+        setImpactPreview(null)
+        setAckIncomplete(false)
+        setAckUnevaluable(false)
+        return
+      }
+      try {
+        const p = await previewAddDispatchPlanOrder(planId, { ocDocumentIds: ids })
+        setImpactPreview(p)
+        if (!p.requires_incomplete_weight_ack) setAckIncomplete(false)
+        if (!p.requires_unevaluable_weight_ack) setAckUnevaluable(false)
+      } catch (e: unknown) {
+        onMessage(e instanceof Error ? e.message : "Error al previsualizar OC")
+      }
+    },
+    [planId, onMessage],
+  )
+
+  const toggleSelectHit = (hit: DispatchPlanOrderSearchHit) => {
+    setSelectedHits((prev) => {
+      const exists = prev.some((x) => x.oc_document_id === hit.oc_document_id)
+      const next = exists
+        ? prev.filter((x) => x.oc_document_id !== hit.oc_document_id)
+        : [...prev, hit]
+      void refreshImpactPreview(next.map((x) => x.oc_document_id))
+      return next
+    })
+  }
+
+  const requestConfirmAdd = () => {
     if (!canAddOrders) {
       onMessage("No se pueden agregar órdenes a un plan despachado.")
       return
     }
-    setPendingAdd(hit)
-    if (addPreview?.has_picking) {
-      setShowRegenerateDialog(true)
-    } else {
-      void confirmAddOrder(hit, false)
+    if (!selectedIds.length) {
+      onMessage("Seleccione al menos una OC.")
+      return
     }
+    if (addReason.trim().length < 3) {
+      onMessage("Indique un motivo de incorporación (mín. 3 caracteres).")
+      return
+    }
+    const p = impactPreview
+    if (p?.requires_incomplete_weight_ack && !ackIncomplete) {
+      onMessage("Confirme el control de peso incompleto para continuar.")
+      return
+    }
+    if (p?.requires_unevaluable_weight_ack && !ackUnevaluable) {
+      onMessage("Confirme el control de peso no evaluable para continuar.")
+      return
+    }
+    if (p && p.can_add === false) {
+      onMessage(p.blocked_reason || "No se pueden agregar las OC seleccionadas.")
+      return
+    }
+    setShowConfirmAddDialog(true)
   }
 
-  const confirmAddOrder = async (
-    hit: DispatchPlanOrderSearchHit,
-    regenerate: boolean,
-  ) => {
+  const confirmAddOrders = async () => {
     setBusy("add")
-    setShowRegenerateDialog(false)
+    setShowConfirmAddDialog(false)
+    const usesSupp = Boolean(
+      impactPreview?.uses_supplemental_group || organized,
+    )
+    const legacyNeedsRegen = Boolean(
+      (impactPreview?.has_picking || addPreview?.has_picking) && !usesSupp,
+    )
     try {
       const r = await addDispatchPlanOrder(planId, {
-        oc_document_id: hit.oc_document_id,
-        regenerate_picking: regenerate,
-        reason: addReason.trim() || undefined,
+        oc_document_ids: selectedIds,
+        regenerate_picking: legacyNeedsRegen,
+        reason: addReason.trim(),
+        acknowledge_incomplete_weight: ackIncomplete,
+        acknowledge_unevaluable_weight: ackUnevaluable,
       })
       if (r.requires_regenerate) {
-        setPendingAdd(hit)
-        setShowRegenerateDialog(true)
+        onMessage(
+          "El plan legacy requiere regenerar pickings. Confirme de nuevo tras revisar.",
+        )
         return
       }
       if (r.added) {
-        onMessage(
-          regenerate
-            ? `OC agregada y picking regenerado (v${(r.picking as { version?: number })?.version ?? "?"}).`
-            : "OC agregada al plan.",
-        )
+        onMessage(r.message_es || "OC agregadas al plan.")
         setSearchHits([])
         setSearchQ("")
+        setSelectedHits([])
+        setImpactPreview(null)
         setAddReason("")
-        setPendingAdd(null)
+        setAckIncomplete(false)
+        setAckUnevaluable(false)
         await loadAll()
         await onReloadDashboard?.()
       }
@@ -600,7 +657,16 @@ export function DispatchPlanPickingAssignmentPanel({
           </Alert>
         ) : (
           <>
-            {addPreview?.warning ? (
+            {organized ? (
+              <Alert className="border-sky-200 bg-sky-50/70 dark:border-sky-900 dark:bg-sky-950/30">
+                <AlertTitle>Grupo suplementario</AlertTitle>
+                <AlertDescription className="text-sm">
+                  Con organización completa, las OC nuevas forman un grupo «OC adicionales»
+                  sin rehacer el picking físico de los grupos originales. El picking de
+                  productos del suplemento exige facturación vigente.
+                </AlertDescription>
+              </Alert>
+            ) : addPreview?.warning ? (
               <Alert className="border-amber-200 bg-amber-50/80 dark:border-amber-900 dark:bg-amber-950/30">
                 <AlertTitle>Pickings existentes</AlertTitle>
                 <AlertDescription className="text-sm">{addPreview.warning}</AlertDescription>
@@ -631,43 +697,99 @@ export function DispatchPlanPickingAssignmentPanel({
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-10" />
                       <TableHead>OC</TableHead>
                       <TableHead>Cliente</TableHead>
                       <TableHead className="text-right">Monto</TableHead>
-                      <TableHead />
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {searchHits.map((h) => (
-                      <TableRow key={h.oc_document_id}>
-                        <TableCell className="font-mono text-xs">
-                          {h.oc_number ?? h.oc_document_id}
-                        </TableCell>
-                        <TableCell className="text-xs">{h.client_name ?? "—"}</TableCell>
-                        <TableCell className="text-right text-xs tabular-nums">
-                          {formatClp(Number(h.oc_total_amount ?? 0))}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            className="h-7 text-xs"
-                            disabled={!!busy}
-                            onClick={() => requestAddOrder(h)}
-                          >
-                            Agregar
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {searchHits.map((h) => {
+                      const checked = selectedIds.includes(h.oc_document_id)
+                      return (
+                        <TableRow key={h.oc_document_id}>
+                          <TableCell>
+                            <Checkbox
+                              checked={checked}
+                              onCheckedChange={() => toggleSelectHit(h)}
+                              aria-label={`Seleccionar OC ${h.oc_number ?? h.oc_document_id}`}
+                            />
+                          </TableCell>
+                          <TableCell className="font-mono text-xs">
+                            {h.oc_number ?? h.oc_document_id}
+                          </TableCell>
+                          <TableCell className="text-xs">{h.client_name ?? "—"}</TableCell>
+                          <TableCell className="text-right text-xs tabular-nums">
+                            {formatClp(Number(h.oc_total_amount ?? 0))}
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
                   </TableBody>
                 </Table>
               </div>
             ) : null}
+            {impactPreview ? (
+              <div className="space-y-2 rounded-md border bg-muted/20 p-3 text-xs">
+                {impactPreview.uses_supplemental_group ? (
+                  <p>
+                    Grupo a crear:{" "}
+                    <span className="font-medium">
+                      {impactPreview.proposed_supplemental_group_name || "OC adicionales"}
+                    </span>
+                  </p>
+                ) : null}
+                {impactPreview.capacity ? (
+                  <p>
+                    Peso conocido proyectado:{" "}
+                    {Number(impactPreview.capacity.known_weight_kg ?? 0).toFixed(1)} kg
+                    {impactPreview.capacity.truck_max_weight_kg != null
+                      ? ` / ${impactPreview.capacity.truck_max_weight_kg} kg`
+                      : ""}
+                    {impactPreview.capacity.utilization_pct != null
+                      ? ` (${impactPreview.capacity.utilization_pct}% uso)`
+                      : ""}
+                    {impactPreview.capacity.overloaded ? " — sobrecarga conocida" : ""}
+                  </p>
+                ) : null}
+                {impactPreview.picking_pending_invoice ? (
+                  <p className="text-amber-800 dark:text-amber-200">
+                    Algunas OC aún no tienen factura/boleta usable: el picking de productos
+                    del suplemento quedará pendiente de facturación.
+                  </p>
+                ) : null}
+                {impactPreview.blocked_reason ? (
+                  <p className="text-destructive">{impactPreview.blocked_reason}</p>
+                ) : null}
+                {impactPreview.requires_incomplete_weight_ack ? (
+                  <label className="flex items-start gap-2">
+                    <Checkbox
+                      checked={ackIncomplete}
+                      onCheckedChange={(v) => setAckIncomplete(v === true)}
+                    />
+                    <span>
+                      Confirmo control operacional con cobertura de peso incompleta (no
+                      autoriza salida a ruta).
+                    </span>
+                  </label>
+                ) : null}
+                {impactPreview.requires_unevaluable_weight_ack ? (
+                  <label className="flex items-start gap-2">
+                    <Checkbox
+                      checked={ackUnevaluable}
+                      onCheckedChange={(v) => setAckUnevaluable(v === true)}
+                    />
+                    <span>
+                      Confirmo control operacional con OC sin peso usable (no autoriza
+                      salida a ruta).
+                    </span>
+                  </label>
+                ) : null}
+              </div>
+            ) : null}
             <div className="space-y-1">
               <Label htmlFor="add-reason" className="text-xs">
-                Motivo (opcional, recomendado si regenera pickings)
+                Motivo de incorporación (obligatorio)
               </Label>
               <Textarea
                 id="add-reason"
@@ -678,6 +800,14 @@ export function DispatchPlanPickingAssignmentPanel({
                 placeholder="Ej. OC urgente ingresada 15:00"
               />
             </div>
+            <Button
+              type="button"
+              size="sm"
+              disabled={!!busy || selectedIds.length === 0}
+              onClick={requestConfirmAdd}
+            >
+              Revisar e incorporar ({selectedIds.length})
+            </Button>
           </>
         )}
       </section>
@@ -750,24 +880,43 @@ export function DispatchPlanPickingAssignmentPanel({
         )}
       </section>
 
-      <AlertDialog open={showRegenerateDialog} onOpenChange={setShowRegenerateDialog}>
+      <AlertDialog open={showConfirmAddDialog} onOpenChange={setShowConfirmAddDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Regenerar pickings</AlertDialogTitle>
-            <AlertDialogDescription>
-              Esta planificación ya posee pickings generados. Agregar nuevas órdenes obligará a
-              regenerar los documentos (nueva versión completa). No crea un picking
-              suplementario solo de la OC añadida.
+            <AlertDialogTitle>Confirmar incorporación de OC</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-2 text-sm text-muted-foreground">
+                <p>
+                  Se incorporarán {selectedIds.length} OC
+                  {impactPreview?.proposed_supplemental_group_name
+                    ? ` al grupo «${impactPreview.proposed_supplemental_group_name}»`
+                    : ""}
+                  .
+                </p>
+                {impactPreview?.uses_supplemental_group ? (
+                  <p>
+                    Los grupos originales y sus pickings físicos no se rehacen. Si hay
+                    facturación, se versiona el picking general y el export de productos del
+                    suplemento usa solo las cantidades nuevas.
+                  </p>
+                ) : (
+                  <p>
+                    Plan sin organización completa: se conserva el flujo clásico (puede
+                    regenerar el picking vigente).
+                  </p>
+                )}
+                {impactPreview?.picking_pending_invoice ? (
+                  <p>
+                    No se declarará picking de productos listo mientras falte facturación.
+                  </p>
+                ) : null}
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setPendingAdd(null)}>Cancelar</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                if (pendingAdd) void confirmAddOrder(pendingAdd, true)
-              }}
-            >
-              Regenerar
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void confirmAddOrders()}>
+              Confirmar
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

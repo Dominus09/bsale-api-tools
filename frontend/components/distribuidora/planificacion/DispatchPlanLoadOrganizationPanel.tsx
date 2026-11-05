@@ -729,6 +729,7 @@ export function DispatchPlanLoadOrganizationPanel({ planId, onMessage }: Props) 
                       "space-y-2 rounded-lg border p-3",
                       role === "priority" && "border-sky-500/40 bg-sky-500/5",
                       role === "consolidated" && "border-border bg-muted/10",
+                      role === "supplemental" && "border-violet-500/40 bg-violet-500/5",
                       g.draft_priority_warning && "border-amber-500/50",
                     )}
                   >
@@ -737,17 +738,28 @@ export function DispatchPlanLoadOrganizationPanel({ planId, onMessage }: Props) 
                         <div className="font-medium">{g.name || `Grupo #${g.load_batch_id}`}</div>
                         <div className="text-xs text-muted-foreground">
                           {g.draft_client_count} clientes · {g.oc_count} OC
+                          {role === "supplemental"
+                            ? " · mercadería posterior al picking original"
+                            : ""}
                         </div>
                       </div>
                       <div className="flex flex-wrap gap-1">
-                        <Badge variant={role === "priority" ? "default" : "outline"}>
+                        <Badge
+                          variant={
+                            role === "priority" || role === "supplemental"
+                              ? "default"
+                              : "outline"
+                          }
+                        >
                           {role === "priority"
                             ? "Prioritario"
                             : role === "consolidated"
                               ? "Consolidado"
-                              : "Sin tipo"}
+                              : role === "supplemental"
+                                ? "OC adicionales"
+                                : "Sin tipo"}
                         </Badge>
-                        {batch ? (
+                        {batch && role !== "supplemental" ? (
                           <>
                             <Button
                               type="button"
@@ -926,7 +938,9 @@ export function DispatchPlanLoadOrganizationPanel({ planId, onMessage }: Props) 
                           ? " · prioritario"
                           : role === "consolidated"
                             ? " · consolidado"
-                            : ""}
+                            : role === "supplemental"
+                              ? " · OC adicionales"
+                              : ""}
                       </div>
                       <p className="text-muted-foreground">
                         {gstat
@@ -950,7 +964,9 @@ export function DispatchPlanLoadOrganizationPanel({ planId, onMessage }: Props) 
                           ) : (
                             <FileText className="mr-1 size-3" />
                           )}
-                          PDF productos
+                          {role === "supplemental"
+                            ? "PDF productos adicionales"
+                            : "PDF productos"}
                         </Button>
                         <Button
                           type="button"
@@ -965,7 +981,9 @@ export function DispatchPlanLoadOrganizationPanel({ planId, onMessage }: Props) 
                           ) : (
                             <Download className="mr-1 size-3" />
                           )}
-                          Excel productos
+                          {role === "supplemental"
+                            ? "Excel productos adicionales"
+                            : "Excel productos"}
                         </Button>
                       </div>
                     </div>
