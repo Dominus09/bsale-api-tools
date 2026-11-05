@@ -85,10 +85,11 @@ def organization_completeness(
 
 ROLE_PREFIX_PRIORITY = "role=priority"
 ROLE_PREFIX_CONSOLIDATED = "role=consolidated"
+ROLE_PREFIX_SUPPLEMENTAL = "role=supplemental"
 
 
 def parse_batch_presentation_role(description: str | None) -> str | None:
-    """Rol visual prioritario|consolidado persistido en description (sin migración)."""
+    """Rol visual prioritario|consolidado|supplemental persistido en description."""
     text = (description or "").strip().lower()
     if not text:
         return None
@@ -97,6 +98,26 @@ def parse_batch_presentation_role(description: str | None) -> str | None:
         return "priority"
     if first.startswith(ROLE_PREFIX_CONSOLIDATED):
         return "consolidated"
+    if first.startswith(ROLE_PREFIX_SUPPLEMENTAL):
+        return "supplemental"
+    return None
+
+
+def parse_supplemental_seq(description: str | None) -> int | None:
+    """Lee seq=N del prefijo ``role=supplemental;seq=N``."""
+    text = (description or "").strip().lower()
+    if not text:
+        return None
+    first = text.splitlines()[0].strip()
+    if not first.startswith(ROLE_PREFIX_SUPPLEMENTAL):
+        return None
+    for part in first.split(";"):
+        part = part.strip()
+        if part.startswith("seq="):
+            try:
+                return int(part.split("=", 1)[1])
+            except (TypeError, ValueError):
+                return None
     return None
 
 
@@ -107,8 +128,10 @@ def strip_batch_role_description(description: str | None) -> str:
         return ""
     lines = text.splitlines()
     first = lines[0].strip().lower()
-    if first.startswith(ROLE_PREFIX_PRIORITY) or first.startswith(
-        ROLE_PREFIX_CONSOLIDATED
+    if (
+        first.startswith(ROLE_PREFIX_PRIORITY)
+        or first.startswith(ROLE_PREFIX_CONSOLIDATED)
+        or first.startswith(ROLE_PREFIX_SUPPLEMENTAL)
     ):
         return "\n".join(lines[1:]).strip()
     return text
@@ -120,11 +143,26 @@ def encode_batch_description(role: str | None, note: str | None) -> str | None:
         prefix = ROLE_PREFIX_PRIORITY
     elif role == "consolidated":
         prefix = ROLE_PREFIX_CONSOLIDATED
+    elif role == "supplemental" or (isinstance(role, str) and role.startswith("supplemental")):
+        # role puede ser "supplemental" o "supplemental:2"
+        seq = 1
+        if isinstance(role, str) and ":" in role:
+            try:
+                seq = int(role.split(":", 1)[1])
+            except (TypeError, ValueError):
+                seq = 1
+        prefix = f"{ROLE_PREFIX_SUPPLEMENTAL};seq={seq}"
     else:
         return note_clean or None
     if not note_clean:
         return prefix
     return f"{prefix}\n{note_clean}"
+
+
+def encode_supplemental_batch_description(seq: int, note: str | None = None) -> str:
+    return encode_batch_description(f"supplemental:{int(seq)}", note) or (
+        f"{ROLE_PREFIX_SUPPLEMENTAL};seq={int(seq)}"
+    )
 
 
 def merge_description_preserving_role(

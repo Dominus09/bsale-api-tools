@@ -131,9 +131,12 @@ class LoadOrganizationBody(BaseModel):
 
 
 class AddOrderToPlanBody(BaseModel):
-    oc_document_id: int
+    oc_document_id: int | None = Field(None, ge=1)
+    oc_document_ids: list[int] = Field(default_factory=list)
     regenerate_picking: bool = False
     reason: str | None = Field(None, max_length=500)
+    acknowledge_incomplete_weight: bool = False
+    acknowledge_unevaluable_weight: bool = False
 
 
 def _deny_plan_if_out_of_scope(user: dict, plan_id: int) -> None:
@@ -995,10 +998,19 @@ def search_orders_for_plan(
 
 
 @router.get("/{plan_id}/orders/add-preview")
-def preview_add_order(plan_id: int, user: dict = Depends(require_staff_user)):
+def preview_add_order(
+    plan_id: int,
+    oc_document_id: int | None = Query(None, ge=1),
+    oc_document_ids: list[int] | None = Query(None),
+    user: dict = Depends(require_staff_user),
+):
     _deny_plan_if_out_of_scope(user, plan_id)
     try:
-        return batch_svc.preview_add_order(plan_id)
+        return batch_svc.preview_add_order(
+            plan_id,
+            oc_document_id=oc_document_id,
+            oc_document_ids=oc_document_ids,
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
@@ -1009,16 +1021,34 @@ def add_order_to_plan(
     body: AddOrderToPlanBody,
     user: dict = Depends(require_erp_ops_staff),
 ):
+    from backend.services.distribuidora.dispatch_plan_supplemental_order_service import (
+        SupplementalOrderError,
+    )
+
+    _deny_plan_if_out_of_scope(user, plan_id)
     try:
         return batch_svc.add_order_to_plan(
             plan_id,
             oc_document_id=body.oc_document_id,
+            oc_document_ids=body.oc_document_ids,
             regenerate_picking=body.regenerate_picking,
             reason=body.reason,
             user=user,
+            acknowledge_incomplete_weight=body.acknowledge_incomplete_weight,
+            acknowledge_unevaluable_weight=body.acknowledge_unevaluable_weight,
         )
+    except SupplementalOrderError as e:
+        raise HTTPException(
+            status_code=int(e.http_status or 400),
+            detail={"message": str(e), "code": e.code, **(e.details or {})},
+        ) from e
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        detail = str(e)
+        status = 400
+        low = detail.lower()
+        if "sobrecarga" in low or "cuadratura" in low or "capacidad" in low:
+            status = 409
+        raise HTTPException(status_code=status, detail=detail) from e
 
 
 @router.get("/{plan_id}/picking-regeneration-log")

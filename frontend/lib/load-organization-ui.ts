@@ -43,7 +43,11 @@ export function stripBatchRoleDescription(description?: string | null): string {
   if (!text) return ""
   const lines = text.split(/\r?\n/)
   const first = lines[0]?.trim().toLowerCase() || ""
-  if (first.startsWith("role=priority") || first.startsWith("role=consolidated")) {
+  if (
+    first.startsWith("role=priority") ||
+    first.startsWith("role=consolidated") ||
+    first.startsWith("role=supplemental")
+  ) {
     return lines.slice(1).join("\n").trim()
   }
   return text

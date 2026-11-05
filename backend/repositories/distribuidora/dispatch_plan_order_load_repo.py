@@ -236,6 +236,35 @@ def list_oc_box_coverage_for_plan(cur, plan_id: int) -> dict[int, dict[str, Any]
     return out
 
 
+def upsert_order_assignment(
+    cur,
+    *,
+    plan_id: int,
+    oc_document_id: int,
+    load_batch_id: int,
+    client_id: int | None = None,
+    assigned_by: str | None = None,
+) -> dict[str, Any]:
+    """Inserta o actualiza una sola OC→grupo sin tocar el resto del plan."""
+    cur.execute(
+        """
+        INSERT INTO distribuidora.dispatch_plan_order_load_assignments (
+            dispatch_plan_id, oc_document_id, load_batch_id, client_id, assigned_by
+        )
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (dispatch_plan_id, oc_document_id) DO UPDATE
+        SET load_batch_id = EXCLUDED.load_batch_id,
+            client_id = COALESCE(EXCLUDED.client_id, dispatch_plan_order_load_assignments.client_id),
+            assigned_by = COALESCE(EXCLUDED.assigned_by, dispatch_plan_order_load_assignments.assigned_by),
+            assigned_at = NOW()
+        RETURNING id, dispatch_plan_id, oc_document_id, load_batch_id,
+                  client_id, assigned_at, assigned_by
+        """,
+        (plan_id, int(oc_document_id), int(load_batch_id), client_id, assigned_by),
+    )
+    return _row_dict(cur, cur.fetchone())
+
+
 def replace_order_assignments(
     cur,
     *,

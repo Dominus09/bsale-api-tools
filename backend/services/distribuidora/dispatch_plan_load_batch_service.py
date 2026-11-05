@@ -491,7 +491,24 @@ def list_picking_regeneration_log(plan_id: int, *, limit: int = 50) -> dict[str,
     return serialize_value({"dispatch_plan_id": plan_id, "items": items})
 
 
-def preview_add_order(plan_id: int) -> dict[str, Any]:
+def preview_add_order(
+    plan_id: int,
+    *,
+    oc_document_ids: list[int] | None = None,
+    oc_document_id: int | None = None,
+) -> dict[str, Any]:
+    """Preview de incorporación; delega a F3-D cuando hay OC candidatas."""
+    from backend.services.distribuidora.dispatch_plan_supplemental_order_service import (
+        preview_supplemental_orders,
+    )
+
+    ids = list(oc_document_ids or [])
+    if oc_document_id is not None:
+        ids.append(int(oc_document_id))
+    if ids:
+        return preview_supplemental_orders(plan_id, oc_document_ids=ids)
+
+    # Sin OC: solo estado/picking (compat UI antigua).
     conn = get_connection()
     try:
         cur = conn.cursor()
@@ -508,7 +525,9 @@ def preview_add_order(plan_id: int) -> dict[str, Any]:
     if has_picking:
         warning = (
             "Esta planificación ya posee pickings generados. "
-            "Agregar nuevas órdenes obligará a regenerar los documentos."
+            "En planes con organización completa se crea un grupo suplementario; "
+            "la regeneración global versiona el picking sin rehacer físicamente "
+            "los grupos originales."
         )
     return serialize_value(
         {
@@ -528,16 +547,35 @@ def preview_add_order(plan_id: int) -> dict[str, Any]:
 def add_order_to_plan(
     plan_id: int,
     *,
-    oc_document_id: int,
+    oc_document_id: int | None = None,
+    oc_document_ids: list[int] | None = None,
     regenerate_picking: bool = False,
     reason: str | None = None,
     user: dict[str, Any] | None = None,
+    acknowledge_incomplete_weight: bool = False,
+    acknowledge_unevaluable_weight: bool = False,
 ) -> dict[str, Any]:
-    preview = preview_add_order(plan_id)
-    if not preview.get("can_add"):
-        raise ValueError(preview.get("blocked_reason") or "No se puede agregar la orden.")
+    """Punto de entrada F3-D / legacy. Preferir ``oc_document_ids``."""
+    from backend.services.distribuidora.dispatch_plan_supplemental_order_service import (
+        add_supplemental_orders_to_plan,
+        preview_supplemental_orders,
+    )
+
+    ids: list[int] = []
+    if oc_document_ids:
+        ids.extend(int(x) for x in oc_document_ids)
+    if oc_document_id is not None:
+        ids.append(int(oc_document_id))
+    ids = sorted(set(ids))
+    if not ids:
+        raise ValueError("Indique al menos una OC.")
+
+    preview = preview_supplemental_orders(plan_id, oc_document_ids=ids)
+    uses_supp = bool(preview.get("uses_supplemental_group"))
     has_picking = bool(preview.get("has_picking"))
-    if has_picking and not regenerate_picking:
+
+    # Legacy con picking: exigir confirmación de regeneración (comportamiento previo).
+    if has_picking and not regenerate_picking and not uses_supp:
         return serialize_value(
             {
                 **preview,
@@ -546,71 +584,21 @@ def add_order_to_plan(
             }
         )
 
-    conn = get_connection()
-    try:
-        cur = conn.cursor()
-        plan = plan_repo.get_plan_by_id(cur, plan_id)
-        if not plan:
-            raise ValueError("Plan no encontrado")
-        cur.execute(
-            """
-            SELECT 1 FROM distribuidora.dispatch_plan_orders
-            WHERE dispatch_plan_id = %s AND oc_document_id = %s
-            """,
-            (plan_id, oc_document_id),
-        )
-        if cur.fetchone():
-            raise ValueError("La OC ya pertenece a este plan.")
-        status_map = resolve_operational_statuses_batch(cur, [oc_document_id])
-        oc_status = status_map.get(int(oc_document_id))
-        if oc_status is not None and blocks_planning_admission(oc_status):
-            detail = _admission_block_payload(oc_status)
-            raise ValueError(
-                f"{detail['message']} "
-                f"(factura={detail.get('invoice_number')}, "
-                f"estado={detail.get('billing_label_es')})"
-            )
-        route_order = batch_repo.max_route_order(cur, plan_id) + 1
-        order = {"oc_document_id": oc_document_id, "route_order": route_order}
-        enriched = plan_svc._enrich_orders_snapshot(cur, [order])
-        plan_repo.insert_plan_orders(cur, plan_id, enriched)
-        oc_row = enriched[0]
-        batch_repo.insert_order_event(
-            cur,
-            plan_id=plan_id,
-            action="add_order",
-            user_name=_staff_label(user),
-            reason=reason,
-            oc_document_id=oc_document_id,
-            oc_number=int(oc_row["oc_number"]) if oc_row.get("oc_number") else None,
-            payload={"route_order": route_order},
-        )
-        conn.commit()
-        cur.close()
-    finally:
-        conn.close()
-
-    picking_result = None
-    if has_picking and regenerate_picking:
-        picking_result = plan_svc.generate_plan_picking(
-            plan_id,
-            validate=False,
-            include_probable=False,
-            regenerated_by=_staff_label(user),
-            regeneration_reason=reason or "Orden agregada al plan",
-            regeneration_action="add_order",
-        )
-
-    return serialize_value(
-        {
-            "dispatch_plan_id": plan_id,
-            "added": True,
-            "oc_document_id": oc_document_id,
-            "requires_regenerate": False,
-            "picking": picking_result,
-            "plan": plan_svc.get_dispatch_plan(plan_id),
-        }
+    # Organized: D1 no exige regenerate; D2 puede pedirlo para versionar picking.
+    result = add_supplemental_orders_to_plan(
+        plan_id,
+        oc_document_ids=ids,
+        reason=reason or "OC adicional",
+        user=user,
+        acknowledge_incomplete_weight=acknowledge_incomplete_weight,
+        acknowledge_unevaluable_weight=acknowledge_unevaluable_weight,
+        regenerate_picking=bool(regenerate_picking),
     )
+
+    # Compat campo singular.
+    if result.get("oc_document_ids") and len(result["oc_document_ids"]) == 1:
+        result = {**result, "oc_document_id": result["oc_document_ids"][0]}
+    return result
 
 
 def assess_document_assignment_completeness(cur, plan_id: int) -> dict[str, Any]:
