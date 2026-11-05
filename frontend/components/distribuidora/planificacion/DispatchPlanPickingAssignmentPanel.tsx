@@ -133,6 +133,8 @@ export function DispatchPlanPickingAssignmentPanel({
   )
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [lastAddResult, setLastAddResult] = useState<LastAddVerification | null>(null)
+  const [lastAddError, setLastAddError] = useState<string | null>(null)
+  const [confirmInFlight, setConfirmInFlight] = useState(false)
 
   const canAddOrders = planStatus !== "dispatched" && planStatus !== "delivered"
   const organized =
@@ -352,8 +354,27 @@ export function DispatchPlanPickingAssignmentPanel({
   }
 
   const confirmAddOrders = async () => {
+    // Capturar payload antes de cualquier setState (diálogo/Radix no debe vaciar la solicitud).
+    const ids = [...selectedIds]
+    const reason = addReason.trim()
+    const ackInc = ackIncomplete
+    const ackUneval = ackUnevaluable
+    const hitsSnapshot = [...selectedHits]
+    if (!ids.length) {
+      const msg = "No hay OC seleccionadas para incorporar."
+      setLastAddError(msg)
+      onMessage(msg)
+      return
+    }
+    if (reason.length < 3) {
+      const msg = "Indique un motivo de incorporación (mín. 3 caracteres)."
+      setLastAddError(msg)
+      onMessage(msg)
+      return
+    }
     setBusy("add")
-    setShowConfirmAddDialog(false)
+    setConfirmInFlight(true)
+    setLastAddError(null)
     const usesSupp = Boolean(
       impactPreview?.uses_supplemental_group || organized,
     )
@@ -362,16 +383,17 @@ export function DispatchPlanPickingAssignmentPanel({
     )
     try {
       const r = await addDispatchPlanOrder(planId, {
-        oc_document_ids: selectedIds,
+        oc_document_ids: ids,
         regenerate_picking: legacyNeedsRegen,
-        reason: addReason.trim(),
-        acknowledge_incomplete_weight: ackIncomplete,
-        acknowledge_unevaluable_weight: ackUnevaluable,
+        reason,
+        acknowledge_incomplete_weight: ackInc,
+        acknowledge_unevaluable_weight: ackUneval,
       })
       if (r.requires_regenerate) {
-        onMessage(
-          "El plan legacy requiere regenerar pickings. Confirme de nuevo tras revisar.",
-        )
+        const msg =
+          "El plan legacy requiere regenerar pickings. Confirme de nuevo tras revisar."
+        setLastAddError(msg)
+        onMessage(msg)
         return
       }
       if (r.added) {
@@ -381,15 +403,20 @@ export function DispatchPlanPickingAssignmentPanel({
             ? v.oc_numbers
             : r.oc_numbers?.length
               ? r.oc_numbers
-              : selectedHits
+              : hitsSnapshot
                   .map((h) => h.oc_number)
                   .filter((n): n is number => n != null)
+        const groupName = v?.supplemental_group_name ?? r.supplemental_group?.name
+        const ocCount = v?.oc_count ?? r.oc_document_ids?.length ?? ids.length
+        const defaultMsg = groupName
+          ? `${ocCount} OC incorporadas correctamente a ${groupName}.`
+          : `${ocCount} OC incorporadas correctamente al plan.`
         const verification: LastAddVerification = {
-          message: r.message_es || "OC agregadas al plan.",
+          message: r.message_es || defaultMsg,
           ocNumbers: ocNums,
-          groupName: v?.supplemental_group_name ?? r.supplemental_group?.name,
+          groupName,
           groupId: v?.supplemental_group_id ?? r.supplemental_group?.load_batch_id,
-          ocCount: v?.oc_count ?? r.oc_document_ids?.length ?? selectedIds.length,
+          ocCount,
           additionalKnownKg:
             v?.additional_known_weight_kg ??
             r.capacity?.additional_known_weight_kg ??
@@ -407,6 +434,8 @@ export function DispatchPlanPickingAssignmentPanel({
           cuadraturaNote: v?.cuadratura_note_es ?? null,
         }
         setLastAddResult(verification)
+        setLastAddError(null)
+        setShowConfirmAddDialog(false)
         onMessage(verification.message)
         setSearchHits([])
         setSearchQ("")
@@ -418,17 +447,50 @@ export function DispatchPlanPickingAssignmentPanel({
         await loadAll()
         await onReloadDashboard?.()
         await onSupplementalOrdersChanged?.()
-      } else {
-        onMessage(
+      } else if (r.supplemental_group || r.oc_document_ids?.length) {
+        // Reintento idempotente: ya estaban incorporadas.
+        const groupName = r.supplemental_group?.name
+        const msg =
           r.message_es ||
-            "La incorporación no persistió cambios (posible reintento o rechazo). Revise el historial.",
-        )
+          r.note_es ||
+          (groupName
+            ? `Las OC ya estaban en «${groupName}». No se duplicaron.`
+            : "Las OC ya estaban en el plan. No se duplicaron.")
+        setLastAddResult({
+          message: msg,
+          ocNumbers: r.oc_numbers || [],
+          groupName: groupName ?? null,
+          groupId: r.supplemental_group?.load_batch_id ?? null,
+          ocCount: r.oc_document_ids?.length ?? ids.length,
+          additionalKnownKg: r.capacity?.additional_known_weight_kg ?? null,
+          billingLabels: [],
+          pickingVersion: null,
+          pickingUpdated: false,
+          pickingPendingInvoice: Boolean(r.picking_pending_invoice),
+          cuadraturaNote: null,
+        })
+        setLastAddError(null)
+        setShowConfirmAddDialog(false)
+        onMessage(msg)
+        await loadAll()
+        await onReloadDashboard?.()
+        await onSupplementalOrdersChanged?.()
+      } else {
+        const msg =
+          r.message_es ||
+          "La incorporación no persistió cambios. Revise el historial o reintente."
+        setLastAddError(msg)
+        onMessage(msg)
       }
     } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Error al agregar OC"
       setLastAddResult(null)
-      onMessage(e instanceof Error ? e.message : "Error al agregar OC")
+      setLastAddError(msg)
+      onMessage(msg)
+      // Mantener el diálogo abierto para que el error sea visible junto a Confirmar.
     } finally {
       setBusy(null)
+      setConfirmInFlight(false)
     }
   }
 
@@ -705,6 +767,12 @@ export function DispatchPlanPickingAssignmentPanel({
         <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Agregar OC al plan
         </h3>
+        {lastAddError ? (
+          <Alert variant="destructive">
+            <AlertTitle>Incorporación no completada</AlertTitle>
+            <AlertDescription className="text-sm">{lastAddError}</AlertDescription>
+          </Alert>
+        ) : null}
         {lastAddResult ? (
           <Alert className="border-emerald-200 bg-emerald-50/80 dark:border-emerald-900 dark:bg-emerald-950/30">
             <AlertTitle>Incorporación verificada en servidor</AlertTitle>
@@ -1026,7 +1094,7 @@ export function DispatchPlanPickingAssignmentPanel({
               disabled={!!busy || selectedIds.length === 0}
               onClick={requestConfirmAdd}
             >
-              Revisar e incorporar ({selectedIds.length})
+              Revisar incorporación ({selectedIds.length})
             </Button>
           </>
         )}
@@ -1100,12 +1168,22 @@ export function DispatchPlanPickingAssignmentPanel({
         )}
       </section>
 
-      <AlertDialog open={showConfirmAddDialog} onOpenChange={setShowConfirmAddDialog}>
+      <AlertDialog
+        open={showConfirmAddDialog}
+        onOpenChange={(open) => {
+          if (confirmInFlight) return
+          setShowConfirmAddDialog(open)
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Confirmar incorporación de OC</AlertDialogTitle>
+            <AlertDialogTitle>Confirmar incorporación definitiva</AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-2 text-sm text-muted-foreground">
+                <p>
+                  Esta acción enviará la solicitud al servidor. La vista previa no incorpora
+                  OC ni crea grupos.
+                </p>
                 <p>
                   Se incorporarán {selectedIds.length} OC
                   {impactPreview?.proposed_supplemental_group_name
@@ -1130,19 +1208,35 @@ export function DispatchPlanPickingAssignmentPanel({
                     No se declarará picking de productos listo mientras falte facturación.
                   </p>
                 ) : null}
+                {lastAddError ? (
+                  <p className="text-destructive">{lastAddError}</p>
+                ) : null}
+                {confirmInFlight ? (
+                  <p className="flex items-center gap-2">
+                    <Loader2 className="size-3.5 animate-spin" />
+                    Enviando incorporación al servidor…
+                  </p>
+                ) : null}
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancelar</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={(e) => {
-                e.preventDefault()
-                void confirmAddOrders()
-              }}
+            <AlertDialogCancel disabled={confirmInFlight}>Cancelar</AlertDialogCancel>
+            {/* Button explícito: AlertDialogAction de Radix puede cerrar sin await del POST. */}
+            <Button
+              type="button"
+              disabled={confirmInFlight || busy === "add"}
+              onClick={() => void confirmAddOrders()}
             >
-              Confirmar
-            </AlertDialogAction>
+              {confirmInFlight ? (
+                <>
+                  <Loader2 className="mr-2 size-3.5 animate-spin" />
+                  Confirmando…
+                </>
+              ) : (
+                "Confirmar incorporación definitiva"
+              )}
+            </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

@@ -302,7 +302,7 @@ def _capacity_for_plan_plus_ocs(
 
     from backend.services.order_weight_service import fetch_weights_by_document_ids
 
-    snaps = fetch_weights_by_document_ids(new_oc_ids)
+    snaps = fetch_weights_by_document_ids(new_oc_ids, cur=cur)
     meta_by_id = _oc_meta_for_capacity(cur, [int(x) for x in new_oc_ids])
     new_details: list[dict[str, Any]] = []
     additional_known = 0.0
@@ -755,7 +755,7 @@ def add_supplemental_orders_to_plan(
         # Adjuntar peso desde snapshot si falta en enrich.
         from backend.services.order_weight_service import fetch_weights_by_document_ids
 
-        snaps = fetch_weights_by_document_ids(novel)
+        snaps = fetch_weights_by_document_ids(novel, cur=cur)
         for row in enriched:
             oc_id = int(row["oc_document_id"])
             w = snaps.get(oc_id)
@@ -922,13 +922,17 @@ def add_supplemental_orders_to_plan(
         and reconciliation
         and reconciliation.get("document_assignment_complete")
     )
-    msg = (
-        f"OC agregadas correctamente al grupo {supplemental_batch.get('name')}."
-        if supplemental_batch
-        else "OC agregadas al plan (sin grupo suplementario: plan no organized)."
-    )
+    n_added = len(novel)
+    group_name = supplemental_batch.get("name") if supplemental_batch else None
+    if group_name:
+        msg = f"{n_added} OC incorporadas correctamente a {group_name}."
+    else:
+        msg = (
+            f"{n_added} OC incorporadas correctamente al plan "
+            "(sin grupo suplementario: plan no organized)."
+        )
     if invoicing.get("picking_pending_invoice"):
-        msg += " Picking de productos del suplemento pendiente de facturación."
+        msg += " Picking definitivo pendiente de facturación."
     elif supplemental_picking_ready:
         msg += " Picking suplementario listo (exportar por grupo)."
     elif picking_result:

@@ -261,6 +261,124 @@ def test_capacity_new_orders_expose_individual_weight(monkeypatch):
     assert cap["requires_incomplete_weight_ack"] is True
 
 
+def test_add_two_ocs_success_message_names_group(monkeypatch):
+    plan_id = 79
+    locked = {
+        "id": plan_id,
+        "status": "picking_generated",
+        "load_organization_status": "organized",
+        "load_organization_version": 3,
+    }
+    conn = MagicMock()
+    cur = MagicMock()
+    conn.cursor.return_value = cur
+    monkeypatch.setattr(svc, "get_connection", lambda: conn)
+    monkeypatch.setattr(svc.org_repo, "lock_plan_for_organization", lambda *_a, **_k: locked)
+    monkeypatch.setattr(svc, "_cuadratura_blocks_add", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        svc.plan_repo,
+        "get_plan_by_id",
+        lambda *_a, **_k: {"id": plan_id, "truck_id": 1, "truck_max_weight_kg": 7600},
+    )
+    monkeypatch.setattr(
+        svc,
+        "_capacity_for_plan_plus_ocs",
+        lambda *_a, **_k: {
+            "capacity_known": True,
+            "overloaded": False,
+            "blocking": False,
+            "unevaluable_order_count": 0,
+            "incomplete_order_count": 1,
+            "additional_known_weight_kg": 119.9,
+            "known_weight_kg": 5324,
+        },
+    )
+    monkeypatch.setattr(svc, "resolve_operational_statuses_batch", lambda *_a, **_k: {})
+    monkeypatch.setattr(svc.plan_repo, "list_plan_orders", lambda *_a, **_k: [])
+    monkeypatch.setattr(svc.org_repo, "assignments_table_ready", lambda *_c: True)
+    monkeypatch.setattr(
+        svc.batch_repo,
+        "list_load_batches",
+        lambda *_a, **_k: [
+            {"id": 1, "sort_order": 1, "name": "consolidado", "description": "role=consolidated"},
+            {"id": 2, "sort_order": 2, "name": "grupo 1", "description": "role=priority"},
+        ],
+    )
+    monkeypatch.setattr(
+        svc.batch_repo,
+        "insert_load_batch",
+        lambda _cur, **kw: {
+            "id": 50,
+            "name": kw["name"],
+            "description": kw["description"],
+            "sort_order": kw["sort_order"],
+        },
+    )
+    monkeypatch.setattr(svc.batch_repo, "max_route_order", lambda *_a, **_k: 25)
+    monkeypatch.setattr(
+        svc.plan_svc,
+        "_enrich_orders_snapshot",
+        lambda *_a, **_k: [
+            {"oc_document_id": 3959592, "oc_number": 70566, "client_id": 1, "client_name": "A"},
+            {"oc_document_id": 3959595, "oc_number": 70567, "client_id": 2, "client_name": "B"},
+        ],
+    )
+    monkeypatch.setattr(
+        "backend.services.order_weight_service.fetch_weights_by_document_ids",
+        lambda *_a, **_k: {},
+    )
+    monkeypatch.setattr(svc.plan_repo, "insert_plan_orders", lambda *_a, **_k: None)
+    monkeypatch.setattr(svc.org_repo, "list_order_assignments", lambda *_a, **_k: [])
+    monkeypatch.setattr(svc.org_repo, "upsert_order_assignment", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        svc.org_repo,
+        "update_organization_meta",
+        lambda *_a, **_k: {
+            "load_organization_version": 4,
+            "load_organization_status": "organized",
+        },
+    )
+    monkeypatch.setattr(svc.batch_repo, "insert_order_event", lambda *_a, **_k: 1)
+    monkeypatch.setattr(svc.batch_repo, "plan_has_current_picking", lambda *_a, **_k: True)
+    monkeypatch.setattr(svc.plan_svc, "get_dispatch_plan", lambda *_a, **_k: {"id": plan_id})
+    monkeypatch.setattr(
+        svc,
+        "preview_supplemental_orders",
+        lambda *_a, **_k: {
+            "can_add": True,
+            "uses_supplemental_group": True,
+            "has_picking": True,
+            "already_in_plan": [],
+        },
+    )
+    monkeypatch.setattr(
+        svc,
+        "assess_oc_invoicing_for_picking",
+        lambda *_a, **_k: {
+            "items": [],
+            "ready_oc_document_ids": [],
+            "pending_invoice_oc_document_ids": [3959592, 3959595],
+            "any_invoiced": False,
+            "all_invoiced": False,
+            "picking_pending_invoice": True,
+        },
+    )
+
+    out = svc.add_supplemental_orders_to_plan(
+        plan_id,
+        oc_document_ids=[3959592, 3959595],
+        reason="Prueba dos OC",
+        user={"email": "op@x.cl"},
+        acknowledge_incomplete_weight=True,
+        regenerate_picking=False,
+    )
+    assert out["added"] is True
+    assert out["message_es"].startswith("2 OC incorporadas correctamente a OC adicionales 01")
+    assert out["verification"]["oc_count"] == 2
+    assert set(out["verification"]["oc_numbers"]) == {70566, 70567}
+    assert out["supplemental_group"]["load_batch_id"] == 50
+
+
 def test_capacity_marks_incomplete_new_oc_explicitly(monkeypatch):
     cur = MagicMock()
     cur.fetchall.side_effect = [

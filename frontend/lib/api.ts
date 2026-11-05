@@ -3681,6 +3681,8 @@ export async function addDispatchPlanOrder(
   picking?: unknown
   plan?: { plan: DispatchPlanSummary }
   message_es?: string
+  note_es?: string
+  status?: string
   oc_document_ids?: number[]
   oc_numbers?: number[]
   supplemental_group?: {
@@ -3715,27 +3717,53 @@ export async function addDispatchPlanOrder(
   capacity?: SupplementalAddPreview["capacity"]
   invoicing?: SupplementalAddPreview["invoicing"]
 }> {
-  const res = await fetch(
-    `${API_URL}/distribuidora/dispatch-plans/${planId}/orders/add`,
-    {
-      method: "POST",
-      headers: getAuthHeaders(),
-      body: JSON.stringify(body),
-    },
-  )
+  let res: Response
+  try {
+    res = await fetch(
+      `${API_URL}/distribuidora/dispatch-plans/${planId}/orders/add`,
+      {
+        method: "POST",
+        headers: getAuthHeaders(),
+        body: JSON.stringify(body),
+      },
+    )
+  } catch (e: unknown) {
+    const net = toNetworkAwareError(e)
+    throw net instanceof Error ? net : new Error(NETWORK_ERROR_MESSAGE)
+  }
   if (!res.ok) {
     const raw = await res.text().catch(() => "")
+    const status = res.status
     try {
       const parsed = JSON.parse(raw) as {
-        detail?: string | { message?: string; code?: string }
+        detail?:
+          | string
+          | { message?: string; code?: string; blocked_reason?: string }
+          | Array<{ msg?: string; message?: string }>
       }
       const d = parsed.detail
-      if (typeof d === "string") throw new Error(d)
-      if (d && typeof d === "object" && d.message) throw new Error(d.message)
+      if (typeof d === "string") {
+        throw new Error(`Error ${status}: ${d}`)
+      }
+      if (Array.isArray(d) && d.length) {
+        const parts = d.map((x) => x.msg || x.message || JSON.stringify(x))
+        throw new Error(`Error ${status}: ${parts.join("; ")}`)
+      }
+      if (d && typeof d === "object" && !Array.isArray(d)) {
+        const msg =
+          d.message ||
+          d.blocked_reason ||
+          (d.code ? `Código ${d.code}` : null)
+        if (msg) throw new Error(`Error ${status}: ${msg}`)
+      }
     } catch (e) {
       if (e instanceof Error && e.message && !e.message.startsWith("{")) throw e
     }
-    throw new Error(raw || "Error al agregar OC")
+    throw new Error(
+      raw
+        ? `Error ${status}: ${raw.slice(0, 400)}`
+        : `Error ${status} al agregar OC`,
+    )
   }
   return res.json()
 }

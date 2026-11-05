@@ -1543,34 +1543,51 @@ def ensure_order_weights(
     )
 
 
-def fetch_weights_by_document_ids(document_ids: list[int]) -> dict[int, dict[str, Any]]:
+def _weights_dict_from_rows(rows: list) -> dict[int, dict[str, Any]]:
+    out: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        peso = float(row[1]) if row[1] is not None else None
+        out[int(row[0])] = {
+            "peso_total_kg": peso,
+            "productos_sin_peso": int(row[2] or 0),
+            "porcentaje_cobertura": float(row[3] or 0),
+            "porcentaje_cobertura_peso": float(row[3] or 0),
+            "weight_kg": peso,
+            "productos_manuales": int(row[4] or 0),
+            "productos_estimados": int(row[5] or 0),
+            "productos_totales": int(row[6] or 0),
+            "productos_con_peso": int(row[7] or 0),
+            "calculated_at": _serialize(row[8]),
+            "cantidad_unidades": float(row[9] or 0),
+            "cantidad_cajas": float(row[10] or 0),
+        }
+    return out
+
+
+def fetch_weights_by_document_ids(
+    document_ids: list[int],
+    *,
+    cur=None,
+) -> dict[int, dict[str, Any]]:
+    """Lee snapshots de peso. Si ``cur`` se pasa, reutiliza esa conexión (evita nested pool)."""
     if not document_ids:
         return {}
+    ids = list(dict.fromkeys(int(x) for x in document_ids))
+    if cur is not None:
+        if not _table_exists(cur, "order_weight_snapshots"):
+            return {}
+        cur.execute(_WEIGHTS_BY_DOCS_SQL, (ids,))
+        return _weights_dict_from_rows(list(cur.fetchall()))
+
     conn = get_connection()
     try:
-        cur = conn.cursor()
-        if not _table_exists(cur, "order_weight_snapshots"):
-            cur.close()
+        own = conn.cursor()
+        if not _table_exists(own, "order_weight_snapshots"):
+            own.close()
             return {}
-        cur.execute(_WEIGHTS_BY_DOCS_SQL, (list(dict.fromkeys(int(x) for x in document_ids)),))
-        out: dict[int, dict[str, Any]] = {}
-        for row in cur.fetchall():
-            peso = float(row[1]) if row[1] is not None else None
-            out[int(row[0])] = {
-                "peso_total_kg": peso,
-                "productos_sin_peso": int(row[2] or 0),
-                "porcentaje_cobertura": float(row[3] or 0),
-                "porcentaje_cobertura_peso": float(row[3] or 0),
-                "weight_kg": peso,
-                "productos_manuales": int(row[4] or 0),
-                "productos_estimados": int(row[5] or 0),
-                "productos_totales": int(row[6] or 0),
-                "productos_con_peso": int(row[7] or 0),
-                "calculated_at": _serialize(row[8]),
-                "cantidad_unidades": float(row[9] or 0),
-                "cantidad_cajas": float(row[10] or 0),
-            }
-        cur.close()
+        own.execute(_WEIGHTS_BY_DOCS_SQL, (ids,))
+        out = _weights_dict_from_rows(list(own.fetchall()))
+        own.close()
         return out
     finally:
         conn.close()
