@@ -77,12 +77,25 @@ def _apply_schema(conn):
     cur.execute("DROP TABLE IF EXISTS distribuidora.dispatch_plan_orders CASCADE")
     cur.execute("DROP TABLE IF EXISTS distribuidora.dispatch_plan_load_batches CASCADE")
     cur.execute("DROP TABLE IF EXISTS distribuidora.dispatch_plan CASCADE")
+    cur.execute("DROP TABLE IF EXISTS distribuidora.trucks CASCADE")
+    # Stub mínimo: get_plan_by_id hace LEFT JOIN a trucks.
+    cur.execute(
+        """
+        CREATE TABLE distribuidora.trucks (
+            id BIGSERIAL PRIMARY KEY,
+            name TEXT,
+            plate TEXT,
+            max_weight_kg NUMERIC
+        )
+        """
+    )
     cur.execute(
         """
         CREATE TABLE distribuidora.dispatch_plan (
             id BIGSERIAL PRIMARY KEY,
             status TEXT NOT NULL DEFAULT 'planned',
             planning_code TEXT,
+            truck_id BIGINT REFERENCES distribuidora.trucks(id),
             load_organization_status TEXT NOT NULL DEFAULT 'legacy'
                 CHECK (load_organization_status IN ('legacy', 'draft', 'organized')),
             load_organization_version INTEGER NOT NULL DEFAULT 0,
@@ -234,13 +247,26 @@ def test_pg_save_reload_and_client_default(monkeypatch):
         plan_id, batch_ids = _seed_plan_18_clients(conn)
         g1, g2, g3, foreign = batch_ids
 
-        import backend.db as dbmod
-
-        monkeypatch.setattr(dbmod, "get_connection", _connect)
+        # A–C: lotes creados en plan sintético sin facturas ni picking.
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT to_regclass('distribuidora.dispatch_plan_pickings') IS NOT NULL"
+        )
+        # En este esquema aislado no existe picking: los 3 grupos bastan.
+        assert cur.fetchone()[0] is False
+        cur.execute(
+            "SELECT COUNT(*) FROM distribuidora.dispatch_plan_load_batches "
+            "WHERE dispatch_plan_id=%s",
+            (plan_id,),
+        )
+        assert int(cur.fetchone()[0]) == 3
+        cur.close()
 
         from backend.services.distribuidora import (
             dispatch_plan_load_organization_service as svc,
         )
+
+        monkeypatch.setattr(svc, "get_connection", _connect)
 
         # Agrupar: clientes 1-6 → G1, 7-12 → G2, 13-18 → G3 (manteniendo multi-OC juntos)
         cur = conn.cursor()
@@ -327,12 +353,11 @@ def test_pg_unique_oc_and_concurrency(monkeypatch):
         plan_id, batch_ids = _seed_plan_18_clients(conn)
         g1 = batch_ids[0]
 
-        import backend.db as dbmod
-
-        monkeypatch.setattr(dbmod, "get_connection", _connect)
         from backend.services.distribuidora import (
             dispatch_plan_load_organization_service as svc,
         )
+
+        monkeypatch.setattr(svc, "get_connection", _connect)
 
         cur = conn.cursor()
         cur.execute(
@@ -402,12 +427,11 @@ def test_pg_legacy_plan_untouched_until_opt_in(monkeypatch):
         conn.commit()
         cur.close()
 
-        import backend.db as dbmod
-
-        monkeypatch.setattr(dbmod, "get_connection", _connect)
         from backend.services.distribuidora import (
             dispatch_plan_load_organization_service as svc,
         )
+
+        monkeypatch.setattr(svc, "get_connection", _connect)
 
         meta = svc.get_load_organization(plan_id)
         assert meta["load_organization_status"] == "legacy"

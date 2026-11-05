@@ -3,8 +3,14 @@
 -- No ejecutar contra analytics/productivo desde el agente.
 --
 -- Reutiliza dispatch_plan_load_batches como contenedor de grupos.
+-- IMPORTANTE: dispatch_plan_load_batches NO exige picking ni documentos facturados.
+--   Se pueden crear Grupo 1..N en un plan confirmado sin facturas y sin picking.
+--   La tabla histórica dispatch_plan_document_load_assignments sigue siendo
+--   post-factura (related_document_id); esta migración agrega la vía pre-factura
+--   por oc_document_id canónico.
 -- Nueva relación canónica: OC (document_id) → grupo del MISMO plan.
 -- Planes existentes quedan en load_organization_status='legacy' (sin bloqueo de picking).
+-- Borrar un load_batch con asignaciones OC activas queda RESTRICT (sin pérdida silenciosa).
 
 ALTER TABLE distribuidora.dispatch_plan
     ADD COLUMN IF NOT EXISTS load_organization_status TEXT NOT NULL DEFAULT 'legacy';

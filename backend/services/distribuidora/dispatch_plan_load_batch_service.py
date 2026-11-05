@@ -142,6 +142,14 @@ def delete_load_batch(plan_id: int, batch_id: int) -> dict[str, Any]:
     conn = get_connection()
     try:
         cur = conn.cursor()
+        # Fase F: no borrar un grupo con OC pre-factura asignadas (RESTRICT en 053).
+        if batch_repo.count_order_load_assignments_for_batch(
+            cur, plan_id=plan_id, batch_id=batch_id
+        ):
+            raise ValueError(
+                "No se puede eliminar el grupo: tiene OC asignadas en la organización "
+                "de carga. Reasigne o quite las OC antes de eliminar."
+            )
         if not batch_repo.delete_load_batch(cur, plan_id=plan_id, batch_id=batch_id):
             raise ValueError("Grupo de picking no encontrado")
         conn.commit()

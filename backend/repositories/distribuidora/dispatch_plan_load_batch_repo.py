@@ -88,6 +88,33 @@ def update_load_batch(
     return _row_dict(cur, row) if row else None
 
 
+def count_order_load_assignments_for_batch(
+    cur, *, plan_id: int, batch_id: int
+) -> int:
+    """Cuenta OC pre-factura en el grupo. 0 si la tabla 053 aún no existe."""
+    cur.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = 'distribuidora'
+              AND table_name = 'dispatch_plan_order_load_assignments'
+        )
+        """
+    )
+    if not cur.fetchone()[0]:
+        return 0
+    cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM distribuidora.dispatch_plan_order_load_assignments
+        WHERE dispatch_plan_id = %s AND load_batch_id = %s
+        """,
+        (plan_id, batch_id),
+    )
+    return int(cur.fetchone()[0] or 0)
+
+
 def delete_load_batch(cur, *, plan_id: int, batch_id: int) -> bool:
     cur.execute(
         """
