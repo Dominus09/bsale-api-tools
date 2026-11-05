@@ -294,7 +294,10 @@ export function DispatchPlanLoadOrganizationPanel({ planId, onMessage }: Props) 
           <p className="max-w-3xl text-xs text-muted-foreground">
             Agrupe clientes para facilitar la descarga física. La decisión es manual: un
             grupo prioritario suele ser 1–2 clientes; el resto de la ruta puede ir en un
-            grupo consolidado. No se altera el orden de entrega.
+            grupo consolidado. No se altera el orden de entrega. El campo{" "}
+            <code className="text-[10px]">sort_order</code> ordena la preparación en UI;
+            el tipo prioritario/consolidado guía la descarga temprana — no confundir con
+            orden de estiba (aún no modelado).
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">

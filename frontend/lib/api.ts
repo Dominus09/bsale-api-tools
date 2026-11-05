@@ -2158,6 +2158,8 @@ export type SimplePlanningPreviewItem = {
   warnings?: string[]
   document_id?: number | null
   identity_fingerprint?: string | null
+  /** Monto total de la OC vigente (Bsale/PostgreSQL). No es monto de factura. */
+  total_amount?: number | null
   client?: {
     client_id?: number | null
     client_name?: string | null

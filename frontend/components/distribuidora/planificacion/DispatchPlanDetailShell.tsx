@@ -6,7 +6,8 @@
  */
 
 import Link from "next/link"
-import { useCallback, useState } from "react"
+import { useSearchParams } from "next/navigation"
+import { useCallback, useEffect, useState } from "react"
 import {
   ArrowLeft,
   LayoutDashboard,
@@ -108,6 +109,7 @@ export function DispatchPlanDetailShell({
     DISPATCH_PLAN_PICKING_NO_CONFIRMED_MESSAGE ||
     DISPATCH_PLAN_PICKING_WAIT_MESSAGE
 
+  const searchParams = useSearchParams()
   const [tab, setTab] = useState("resumen")
   /** Montaje diferido: evita API/carga pesada hasta la 1ª visita; luego se conserva el estado. */
   const [visitedTabs, setVisitedTabs] = useState<Record<string, boolean>>({
@@ -175,13 +177,35 @@ export function DispatchPlanDetailShell({
     [planId, pickingReady, onMessage, onReloadDashboard],
   )
 
-  const onTabChange = (value: string) => {
-    setTab(value)
-    setVisitedTabs((prev) => (prev[value] ? prev : { ...prev, [value]: true }))
-    if ((value === "picking" || value === "picking-cliente") && !pickingClientLoaded) {
-      void refreshPickingFromDb().catch(() => undefined)
+  const onTabChange = useCallback(
+    (value: string) => {
+      setTab(value)
+      setVisitedTabs((prev) => (prev[value] ? prev : { ...prev, [value]: true }))
+      if ((value === "picking" || value === "picking-cliente") && !pickingClientLoaded) {
+        void refreshPickingFromDb().catch(() => undefined)
+      }
+    },
+    [pickingClientLoaded, refreshPickingFromDb],
+  )
+
+  useEffect(() => {
+    const raw = (searchParams.get("tab") || "").trim().toLowerCase()
+    const allowed = new Set(["resumen", "ruta", "picking", "chofer", "cierre"])
+    if (raw && allowed.has(raw)) {
+      onTabChange(raw)
     }
-  }
+    const panel = (searchParams.get("panel") || "").trim().toLowerCase()
+    if (panel === "organizar" || raw === "picking") {
+      const t = window.setTimeout(() => {
+        document.getElementById("organizar-carga")?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        })
+      }, 350)
+      return () => window.clearTimeout(t)
+    }
+    return undefined
+  }, [searchParams, onTabChange])
 
   const tabPanelClass =
     "mt-4 space-y-4 focus-visible:outline-none data-[state=inactive]:hidden"
@@ -617,7 +641,10 @@ export function DispatchPlanDetailShell({
                 </section>
               </div>
 
-              <section className="space-y-2 rounded-lg border border-border/70 bg-card/40 p-4">
+              <section
+                id="organizar-carga"
+                className="scroll-mt-4 space-y-2 rounded-lg border border-border/70 bg-card/40 p-4"
+              >
                 <DispatchPlanLoadOrganizationPanel
                   planId={planId}
                   onMessage={onMessage}

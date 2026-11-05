@@ -45,11 +45,14 @@ import {
   visibleAssignableFolios,
 } from "@/lib/simple-planning-bulk-assign"
 import {
+  draftTruckStatsFromAssignments,
   parseFoliosFromText,
   parseFoliosFromXlsxFile,
+  sumOcVentaClp,
   uniqueClientCount,
   type FolioParseResult,
 } from "@/lib/simple-planning-folios"
+import { formatClp } from "@/lib/ors-map-ui"
 import { useAuthMe } from "@/lib/use-auth-me"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -109,6 +112,8 @@ type TruckConfirmState = {
   planId?: number
   planningCode?: string
   sessionId?: string
+  /** Nombre del chofer elegido en prepare-confirm (solo presentación). */
+  driverName?: string | null
 }
 
 function tomorrowISO(): string {
@@ -351,6 +356,7 @@ export function SimplePlanningClient() {
       recovered: recovered.length,
       clients: uniqueClientCount(recovered),
       trucksAssigned: assignedTruckIds.length,
+      ventaOcClp: sumOcVentaClp(recovered),
       knownKg,
       withWeight,
       totalForWeight: recovered.length,
@@ -358,6 +364,16 @@ export function SimplePlanningClient() {
       coverageLabel: incomplete,
     }
   }, [previewItems, assignedTruckIds])
+
+  const draftTruckStats = useMemo(
+    () =>
+      draftTruckStatsFromAssignments(
+        previewItems,
+        assignmentByFolio,
+        uniqueClientCount,
+      ),
+    [previewItems, assignmentByFolio],
+  )
 
   const setOcTruck = (folio: number, truckId: number | null) => {
     setAssignmentByFolio((prev) => {
@@ -556,6 +572,7 @@ export function SimplePlanningClient() {
         ors_snapshot: orsByTruck[truckId] || null,
         assignments: all,
       })
+      const driverName = driverOpt?.display_name || null
       if (prepared.status === "already_confirmed" && prepared.confirmed_plan_id) {
         setTruckConfirm((prev) => ({
           ...prev,
@@ -564,6 +581,7 @@ export function SimplePlanningClient() {
             planId: prepared.confirmed_plan_id,
             message: "Ya confirmado (idempotente)",
             sessionId: prepared.session?.session_id,
+            driverName,
           },
         }))
         setConfirmOpen(false)
@@ -578,6 +596,7 @@ export function SimplePlanningClient() {
           status: "confirming",
           message: "Confirmando despacho…",
           sessionId,
+          driverName,
         },
       }))
       const confirmed = await postSimplePlanningConfirm({ session_id: sessionId })
@@ -596,6 +615,7 @@ export function SimplePlanningClient() {
             ? "Confirmado (reintento seguro)"
             : "Despacho confirmado",
           sessionId,
+          driverName,
         },
       }))
       setConfirmOpen(false)
@@ -665,14 +685,14 @@ export function SimplePlanningClient() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1520px] flex-col gap-4 px-4 py-4 md:gap-5 md:px-6 md:py-5">
+    <div className="mx-auto flex w-full max-w-none flex-col gap-4 px-2 py-4 sm:px-3 md:gap-5 md:px-4 md:py-5 xl:px-5">
       <header className="space-y-2">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0 space-y-1">
             <h1 className="text-xl font-semibold tracking-tight md:text-2xl">
               Planificación simplificada
             </h1>
-            <p className="max-w-3xl text-sm text-muted-foreground">
+            <p className="max-w-4xl text-sm text-muted-foreground">
               Ingreso de OC, vista previa, asignación de camiones y confirmación.
             </p>
           </div>
@@ -703,6 +723,34 @@ export function SimplePlanningClient() {
             })}
           </div>
         </div>
+        <ol className="flex flex-wrap items-center gap-x-1.5 gap-y-1 rounded-lg border bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground md:text-xs">
+          {(
+            [
+              { label: "Planificación", state: "current" as const },
+              { label: "Organizar carga", state: "next" as const },
+              { label: "Facturación", state: "later" as const },
+              { label: "Picking definitivo", state: "later" as const },
+            ]
+          ).map((stage, i, arr) => (
+            <li key={stage.label} className="inline-flex items-center gap-1.5">
+              <span
+                className={cn(
+                  "rounded px-1.5 py-0.5 font-medium",
+                  stage.state === "current" && "bg-primary/15 text-primary",
+                  stage.state === "next" && "bg-sky-500/10 text-sky-900 dark:text-sky-200",
+                  stage.state === "later" && "bg-muted text-muted-foreground",
+                )}
+              >
+                {stage.label}
+                {stage.state === "later" ? " (después)" : ""}
+              </span>
+              {i < arr.length - 1 ? <span aria-hidden>→</span> : null}
+            </li>
+          ))}
+        </ol>
+        <p className="text-[11px] text-muted-foreground">
+          «Organización completa» en carga no genera picking definitivo facturado.
+        </p>
         <section className="grid gap-3 rounded-lg border bg-card p-3 sm:grid-cols-3 md:p-3.5">
           <div className="space-y-1.5">
             <Label className="text-xs">Oficina</Label>
@@ -749,8 +797,8 @@ export function SimplePlanningClient() {
         </Alert>
       ) : null}
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(280px,320px)_minmax(0,1fr)]">
-        <aside className="min-w-0 rounded-lg border bg-card p-3 md:p-4 lg:sticky lg:top-4 lg:self-start">
+      <div className="grid gap-3 lg:grid-cols-[minmax(220px,260px)_minmax(0,1fr)] xl:gap-4">
+        <aside className="min-w-0 rounded-lg border bg-card p-3 md:p-3.5 lg:sticky lg:top-4 lg:self-start">
           <div className="space-y-3">
             {hasPreview ? (
               <div className="flex items-center justify-between gap-2">
@@ -886,6 +934,12 @@ export function SimplePlanningClient() {
                   <span className="font-semibold tabular-nums">{previewStats.clients}</span>
                 </span>
                 <span>
+                  <span className="text-muted-foreground">Venta OC </span>
+                  <span className="font-semibold tabular-nums">
+                    {formatClp(previewStats.ventaOcClp)}
+                  </span>
+                </span>
+                <span>
                   <span className="text-muted-foreground">Camiones asignados </span>
                   <span className="font-semibold tabular-nums">
                     {previewStats.trucksAssigned}
@@ -970,7 +1024,7 @@ export function SimplePlanningClient() {
               </div>
 
               <div className="overflow-x-auto rounded-lg border">
-                <table className="w-full min-w-[980px] text-left text-sm xl:min-w-0">
+                <table className="w-full min-w-[1100px] text-left text-sm 2xl:min-w-0">
                   <thead className="border-b bg-muted/50 text-xs uppercase text-muted-foreground">
                     <tr>
                       <th className="w-10 px-2 py-2">
@@ -997,6 +1051,7 @@ export function SimplePlanningClient() {
                       <th className="w-[88px] px-2 py-2">OC</th>
                       <th className="min-w-[140px] px-2 py-2">Cliente</th>
                       <th className="w-[120px] px-2 py-2">Comuna</th>
+                      <th className="w-[110px] px-2 py-2 text-right">Venta OC</th>
                       <th className="w-[120px] px-2 py-2">Productos</th>
                       <th className="w-[130px] px-2 py-2">Peso / cob.</th>
                       <th className="w-[120px] px-2 py-2">Facturación</th>
@@ -1089,6 +1144,12 @@ export function SimplePlanningClient() {
                                 </div>
                               ) : null}
                             </td>
+                            <td className="px-2 py-1.5 text-right tabular-nums text-xs md:text-sm">
+                              {item.total_amount != null &&
+                              Number.isFinite(Number(item.total_amount))
+                                ? formatClp(Number(item.total_amount))
+                                : "—"}
+                            </td>
                             <td className="px-2 py-1.5">
                               {productCount > 0 ? (
                                 <button
@@ -1180,7 +1241,7 @@ export function SimplePlanningClient() {
                           </tr>
                           {expanded ? (
                             <tr className="border-b bg-muted/25">
-                              <td colSpan={9} className="px-3 py-2">
+                              <td colSpan={10} className="px-3 py-2">
                                 <div className="max-h-48 overflow-y-auto rounded border bg-background p-2">
                                   <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                                     Productos OC {folio ?? item.input ?? ""}
@@ -1244,6 +1305,48 @@ export function SimplePlanningClient() {
                 </Button>
               </div>
 
+              {draftTruckStats.length && !assignPreview?.trucks?.length ? (
+                <div className="space-y-2">
+                  <h2 className="text-base font-medium">Totales por camión (borrador)</h2>
+                  <p className="text-xs text-muted-foreground">
+                    Se actualizan al cambiar la asignación. Pulse «Previsualizar asignación»
+                    para validar capacidad, mapa, picking preliminar y confirmar.
+                  </p>
+                  <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                    {draftTruckStats.map((d) => (
+                      <div key={d.truckId} className="rounded-lg border p-3 text-xs">
+                        <div className="font-medium">{truckLabel(d.truckId)}</div>
+                        <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1">
+                          <div>
+                            <dt className="text-muted-foreground">Venta OC</dt>
+                            <dd className="font-medium tabular-nums">
+                              {formatClp(d.ventaOcClp)}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt className="text-muted-foreground">OC / clientes</dt>
+                            <dd className="tabular-nums">
+                              {d.ocCount} · {d.clients}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt className="text-muted-foreground">Peso conocido</dt>
+                            <dd className="tabular-nums">{fmtKg(d.knownKg)}</dd>
+                          </div>
+                          <div>
+                            <dt className="text-muted-foreground">Cobertura media</dt>
+                            <dd>{d.avgCoverage != null ? fmtPct(d.avgCoverage) : "—"}</dd>
+                          </div>
+                        </dl>
+                        <p className="mt-2 text-[11px] text-muted-foreground">
+                          Chofer: pendiente de seleccionar
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
               {assignPreview?.trucks?.length ? (
                 <div className="space-y-3">
                   <h2 className="text-base font-medium">Resumen por camión</h2>
@@ -1281,6 +1384,7 @@ export function SimplePlanningClient() {
                       .map((tr) => {
                         const cap = tr.capacity
                         const clients = uniqueClientCount(tr.orders || [])
+                        const ventaOcClp = sumOcVentaClp(tr.orders || [])
                         const st = truckConfirm[tr.truck_id]
                         const driftBlocked =
                           (assignPreview.fingerprint_drifts || []).length > 0
@@ -1299,6 +1403,11 @@ export function SimplePlanningClient() {
                           tr.truck_id,
                           catalogTruck || (tr.truck as DistribuidoraTruck),
                         )
+                        const driverLabel =
+                          st?.driverName?.trim() ||
+                          (st?.status === "ok"
+                            ? "Chofer registrado en el plan"
+                            : "pendiente de seleccionar")
                         const plate =
                           (
                             catalogTruck as
@@ -1349,12 +1458,38 @@ export function SimplePlanningClient() {
                                     <div className="text-xs text-muted-foreground">
                                       {tr.order_count ?? 0} OC · {clients} clientes
                                     </div>
+                                    <div className="mt-1 text-xs font-medium">
+                                      Chofer:{" "}
+                                      <span
+                                        className={cn(
+                                          !st?.driverName && st?.status !== "ok"
+                                            ? "text-amber-800 dark:text-amber-200"
+                                            : "text-foreground",
+                                        )}
+                                      >
+                                        {st?.driverName
+                                          ? st.driverName
+                                          : driverLabel}
+                                      </span>
+                                    </div>
                                   </div>
                                   {st?.status === "ok" ? (
                                     <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-600" />
                                   ) : null}
                                 </div>
-                                <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-3 lg:grid-cols-5">
+                                <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-3 lg:grid-cols-6">
+                                  <div>
+                                    <dt className="text-muted-foreground">Venta total OC</dt>
+                                    <dd className="font-medium tabular-nums">
+                                      {formatClp(ventaOcClp)}
+                                    </dd>
+                                  </div>
+                                  <div>
+                                    <dt className="text-muted-foreground">OC / clientes</dt>
+                                    <dd className="font-medium tabular-nums">
+                                      {tr.order_count ?? 0} · {clients}
+                                    </dd>
+                                  </div>
                                   <div>
                                     <dt className="text-muted-foreground">Peso conocido</dt>
                                     <dd className="font-medium tabular-nums">
@@ -1385,12 +1520,6 @@ export function SimplePlanningClient() {
                                           : "completa"}
                                     </dd>
                                   </div>
-                                  <div>
-                                    <dt className="text-muted-foreground">Peso estimado</dt>
-                                    <dd className="tabular-nums">
-                                      {fmtKg(cap?.estimated_weight_kg)}
-                                    </dd>
-                                  </div>
                                 </dl>
                                 {needsIncompleteAck || needsUnevaluableAck ? (
                                   <p className="text-xs text-amber-800 dark:text-amber-200">
@@ -1419,11 +1548,19 @@ export function SimplePlanningClient() {
                                     <p className="text-xs text-muted-foreground">
                                       {st.planningCode || `PLAN-${st.planId}`}
                                       {st.message ? ` · ${st.message}` : ""}
+                                      {st.driverName ? ` · Chofer: ${st.driverName}` : ""}
                                     </p>
                                     <Button
                                       asChild
                                       className="h-10 w-full bg-[var(--lq-brand)] font-semibold text-white hover:bg-[var(--lq-brand-strong)]"
                                     >
+                                      <Link
+                                        href={`/distribuidora/planificaciones/${st.planId}?tab=picking&panel=organizar`}
+                                      >
+                                        Organizar carga
+                                      </Link>
+                                    </Button>
+                                    <Button asChild size="sm" variant="outline" className="w-full">
                                       <Link
                                         href={`/distribuidora/planificaciones/${st.planId}`}
                                       >
@@ -1432,6 +1569,10 @@ export function SimplePlanningClient() {
                                           `PLAN-${String(st.planId).padStart(5, "0")}`}
                                       </Link>
                                     </Button>
+                                    <p className="text-[11px] text-muted-foreground">
+                                      Abre Picking y carga → organización F2. Si 053 no está
+                                      aplicada, la función queda deshabilitada con explicación.
+                                    </p>
                                   </div>
                                 ) : st?.status === "error" ? (
                                   <div className="space-y-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3">
@@ -1457,7 +1598,7 @@ export function SimplePlanningClient() {
                                       </p>
                                     ) : (
                                       <p className="text-xs text-muted-foreground">
-                                        Pendiente de confirmación (chofer en este paso)
+                                        Chofer: pendiente de seleccionar (en el siguiente paso)
                                       </p>
                                     )}
                                     <Button
@@ -1469,7 +1610,7 @@ export function SimplePlanningClient() {
                                       }
                                       onClick={() => openConfirm(tr.truck_id)}
                                     >
-                                      Preparar confirmación
+                                      Preparar confirmación y seleccionar chofer
                                     </Button>
                                   </>
                                 )}
@@ -1500,29 +1641,44 @@ export function SimplePlanningClient() {
                               />
                             </div>
                             {tr.picking_preview?.products_consolidated?.length ? (
-                              <details className="mt-2 text-xs">
-                                <summary className="cursor-pointer font-medium">
-                                  Picking preliminar (desde OC, no definitivo)
-                                </summary>
-                                <ul className="mt-1 max-h-32 list-disc overflow-auto pl-4">
-                                  {tr.picking_preview.products_consolidated
-                                    .slice(0, 40)
-                                    .map((p, i) => (
-                                      <li key={i}>
-                                        {p.quantity}× {p.description || p.code || "ítem"}
-                                      </li>
-                                    ))}
-                                </ul>
-                              </details>
+                              <div className="mt-3 rounded-lg border border-dashed bg-muted/20 p-3 text-xs">
+                                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                                  <p className="font-semibold">
+                                    Picking preliminar (desde OC, no definitivo)
+                                  </p>
+                                  <span className="text-[11px] text-muted-foreground">
+                                    {tr.picking_preview.products_consolidated.length} SKU
+                                    consolidados
+                                  </span>
+                                </div>
+                                <p className="mt-1 text-[11px] text-muted-foreground">
+                                  Vista de productos según líneas de OC. No es el picking
+                                  final facturado; no altera documentos ni cantidades.
+                                </p>
+                                <details className="mt-2">
+                                  <summary className="cursor-pointer font-medium text-foreground">
+                                    Ver listado preliminar
+                                  </summary>
+                                  <ul className="mt-1 max-h-36 list-disc overflow-auto pl-4">
+                                    {tr.picking_preview.products_consolidated
+                                      .slice(0, 40)
+                                      .map((p, i) => (
+                                        <li key={i}>
+                                          {p.quantity}× {p.description || p.code || "ítem"}
+                                        </li>
+                                      ))}
+                                  </ul>
+                                </details>
+                              </div>
                             ) : null}
                           </div>
                         )
                       })}
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    Tras confirmar: revisa facturación y picking en el detalle del plan. El
-                    chofer se elige al preparar la confirmación. No se crean rutas ni se
-                    certifica mercadería automáticamente.
+                    Tras confirmar: use «Organizar carga» para agrupar OC en el plan. La
+                    facturación y el picking definitivo siguen en el detalle del despacho. El
+                    chofer se elige solo al preparar la confirmación.
                   </p>
                 </div>
               ) : null}

@@ -18,6 +18,88 @@ export type FolioParseResult = {
   skippedEmpty: number
 }
 
+/** Suma montos de OC (una fila = una OC). No agrega por cliente. */
+export function sumOcVentaClp(
+  items: { total_amount?: number | null }[] | null | undefined,
+): number {
+  let sum = 0
+  for (const item of items || []) {
+    const n = Number(item.total_amount)
+    if (Number.isFinite(n)) sum += n
+  }
+  return sum
+}
+
+export type TruckAssignmentDraftStats = {
+  truckId: number
+  orders: { folio?: number | null; total_amount?: number | null; client?: unknown; weight?: { known_weight_kg?: number | null; peso_total_kg?: number | null; coverage_percent?: number | null } | null }[]
+  ocCount: number
+  clients: number
+  ventaOcClp: number
+  knownKg: number
+  avgCoverage: number | null
+  withWeight: number
+}
+
+/** Totales locales por camión desde asignación draft (sin assign-preview). */
+export function draftTruckStatsFromAssignments<
+  T extends {
+    folio?: number | null
+    total_amount?: number | null
+    client?: { client_id?: number | null; client_name?: string | null } | null
+    weight?: {
+      known_weight_kg?: number | null
+      peso_total_kg?: number | null
+      coverage_percent?: number | null
+    } | null
+  },
+>(
+  items: T[],
+  assignmentByFolio: Record<string, number>,
+  uniqueClients: (orders: T[]) => number,
+): TruckAssignmentDraftStats[] {
+  const byTruck = new Map<number, T[]>()
+  for (const item of items) {
+    const folio = item.folio
+    if (folio == null) continue
+    const truckId = assignmentByFolio[String(folio)]
+    if (truckId == null || !Number.isFinite(truckId)) continue
+    const list = byTruck.get(truckId) || []
+    list.push(item)
+    byTruck.set(truckId, list)
+  }
+  const out: TruckAssignmentDraftStats[] = []
+  for (const [truckId, orders] of [...byTruck.entries()].sort((a, b) => a[0] - b[0])) {
+    let knownKg = 0
+    let withWeight = 0
+    let coverageSum = 0
+    let coverageN = 0
+    for (const o of orders) {
+      const kw = o.weight?.known_weight_kg ?? o.weight?.peso_total_kg
+      if (kw != null && Number.isFinite(Number(kw))) {
+        knownKg += Number(kw)
+        withWeight += 1
+      }
+      const cov = o.weight?.coverage_percent
+      if (cov != null && Number.isFinite(Number(cov))) {
+        coverageSum += Number(cov)
+        coverageN += 1
+      }
+    }
+    out.push({
+      truckId,
+      orders,
+      ocCount: orders.length,
+      clients: uniqueClients(orders),
+      ventaOcClp: sumOcVentaClp(orders),
+      knownKg,
+      avgCoverage: coverageN > 0 ? coverageSum / coverageN : null,
+      withWeight,
+    })
+  }
+  return out
+}
+
 function cleanRaw(raw: unknown): string {
   if (raw == null) return ""
   let s = String(raw).replace(/\u00a0/g, " ").trim()
