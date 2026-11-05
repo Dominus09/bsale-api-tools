@@ -52,6 +52,8 @@ import { cn } from "@/lib/utils"
 type Props = {
   planId: number
   onMessage: (msg: string) => void
+  /** Incrementar tras incorporar OC suplementarias para refrescar grupos sin F5. */
+  refreshToken?: number
 }
 
 function fmtNum(n: number | null | undefined, digits = 1): string {
@@ -80,7 +82,11 @@ function limitationLabel(code: string): string {
   }
 }
 
-export function DispatchPlanLoadOrganizationPanel({ planId, onMessage }: Props) {
+export function DispatchPlanLoadOrganizationPanel({
+  planId,
+  onMessage,
+  refreshToken = 0,
+}: Props) {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
   const [data, setData] = useState<DispatchPlanLoadOrganizationResponse | null>(null)
@@ -197,6 +203,11 @@ export function DispatchPlanLoadOrganizationPanel({ planId, onMessage }: Props) 
   useEffect(() => {
     void load()
   }, [load])
+
+  useEffect(() => {
+    if (!refreshToken) return
+    void load()
+  }, [refreshToken, load])
 
   const schemaReady = Boolean(data?.schema_ready)
   const clients = data?.clients || []

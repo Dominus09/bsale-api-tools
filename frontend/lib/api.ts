@@ -3600,11 +3600,30 @@ export type SupplementalAddPreview = {
     requires_incomplete_weight_ack?: boolean
     requires_unevaluable_weight_ack?: boolean
     warnings?: string[]
+    plan_known_weight_kg?: number
+    additional_known_weight_kg?: number
+    projected_known_weight_kg?: number
+    plan_incomplete_order_count?: number
+    plan_unevaluable_order_count?: number
+    new_incomplete_order_count?: number
+    new_unevaluable_order_count?: number
+    new_orders_weight_incomplete?: boolean
+    weight_coverage_warnings?: string[]
     new_orders?: Array<{
       oc_document_id: number
+      oc_number?: number | null
+      client_name?: string | null
+      oc_total_amount?: number | null
+      sku_distinct?: number
+      cantidad_unidades?: number | null
+      cantidad_cajas?: number | null
+      cajas_equivalentes_confiables?: number | null
       weight_quality?: string
       known_weight_kg?: number | null
-      cantidad_unidades?: number | null
+      coverage_percent?: number
+      productos_sin_peso?: number
+      weight_complete?: boolean
+      weight_label_es?: string
     }>
   }
   invoicing?: {
@@ -3662,6 +3681,8 @@ export async function addDispatchPlanOrder(
   picking?: unknown
   plan?: { plan: DispatchPlanSummary }
   message_es?: string
+  oc_document_ids?: number[]
+  oc_numbers?: number[]
   supplemental_group?: {
     load_batch_id?: number
     name?: string
@@ -3672,6 +3693,20 @@ export async function addDispatchPlanOrder(
   supplemental_picking_ready?: boolean
   picking_pending_invoice?: boolean
   picking_updated?: boolean
+  picking_version?: number | null
+  verification?: {
+    oc_document_ids?: number[]
+    oc_numbers?: number[]
+    oc_count?: number
+    supplemental_group_id?: number | null
+    supplemental_group_name?: string | null
+    additional_known_weight_kg?: number | null
+    billing_labels_es?: string[]
+    picking_pending_invoice?: boolean
+    picking_updated?: boolean
+    picking_version?: number | null
+    cuadratura_note_es?: string | null
+  }
   client_same_route_exceptions?: Array<{
     client_id?: number
     client_name?: string

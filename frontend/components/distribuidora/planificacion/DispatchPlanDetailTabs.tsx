@@ -71,6 +71,7 @@ export function DispatchPlanDetailTabs({
     probable: number
     missing: number
   } | null>(null)
+  const [orgRefreshToken, setOrgRefreshToken] = useState(0)
 
   const refreshPickingFromDb = useCallback(async () => {
     const [pc, pp] = await Promise.all([
@@ -259,13 +260,25 @@ export function DispatchPlanDetailTabs({
       </TabsContent>
 
       <TabsContent value="asignacion-pickings" className="mt-4 space-y-4">
-        <DispatchPlanLoadOrganizationPanel planId={planId} onMessage={onMessage} />
+        <DispatchPlanLoadOrganizationPanel
+          planId={planId}
+          onMessage={onMessage}
+          refreshToken={orgRefreshToken}
+        />
         <DispatchPlanPickingAssignmentPanel
           planId={planId}
           planStatus={dashboard.plan.status}
           planningCode={dashboard.plan.planning_code}
           onMessage={onMessage}
           onReloadDashboard={onReloadDashboard}
+          onSupplementalOrdersChanged={async () => {
+            setOrgRefreshToken((n) => n + 1)
+            try {
+              await refreshPickingFromDb()
+            } catch {
+              /* picking puede quedar pendiente de facturación */
+            }
+          }}
         />
       </TabsContent>
 

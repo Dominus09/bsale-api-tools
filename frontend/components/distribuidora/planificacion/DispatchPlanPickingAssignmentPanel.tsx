@@ -73,12 +73,28 @@ import {
 } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 
+type LastAddVerification = {
+  message: string
+  ocNumbers: number[]
+  groupName?: string | null
+  groupId?: number | null
+  ocCount: number
+  additionalKnownKg?: number | null
+  billingLabels: string[]
+  pickingVersion?: number | null
+  pickingUpdated: boolean
+  pickingPendingInvoice: boolean
+  cuadraturaNote?: string | null
+}
+
 type DispatchPlanPickingAssignmentPanelProps = {
   planId: number
   planStatus?: DispatchPlanStatus
   planningCode?: string | null
   onMessage: (msg: string) => void
   onReloadDashboard?: () => Promise<void>
+  /** Tras incorporación exitosa: refrescar organizador de carga y pickings. */
+  onSupplementalOrdersChanged?: () => void | Promise<void>
 }
 
 export function DispatchPlanPickingAssignmentPanel({
@@ -87,6 +103,7 @@ export function DispatchPlanPickingAssignmentPanel({
   planningCode,
   onMessage,
   onReloadDashboard,
+  onSupplementalOrdersChanged,
 }: DispatchPlanPickingAssignmentPanelProps) {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
@@ -115,6 +132,7 @@ export function DispatchPlanPickingAssignmentPanel({
     null,
   )
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [lastAddResult, setLastAddResult] = useState<LastAddVerification | null>(null)
 
   const canAddOrders = planStatus !== "dispatched" && planStatus !== "delivered"
   const organized =
@@ -357,7 +375,39 @@ export function DispatchPlanPickingAssignmentPanel({
         return
       }
       if (r.added) {
-        onMessage(r.message_es || "OC agregadas al plan.")
+        const v = r.verification
+        const ocNums =
+          v?.oc_numbers?.length
+            ? v.oc_numbers
+            : r.oc_numbers?.length
+              ? r.oc_numbers
+              : selectedHits
+                  .map((h) => h.oc_number)
+                  .filter((n): n is number => n != null)
+        const verification: LastAddVerification = {
+          message: r.message_es || "OC agregadas al plan.",
+          ocNumbers: ocNums,
+          groupName: v?.supplemental_group_name ?? r.supplemental_group?.name,
+          groupId: v?.supplemental_group_id ?? r.supplemental_group?.load_batch_id,
+          ocCount: v?.oc_count ?? r.oc_document_ids?.length ?? selectedIds.length,
+          additionalKnownKg:
+            v?.additional_known_weight_kg ??
+            r.capacity?.additional_known_weight_kg ??
+            null,
+          billingLabels: v?.billing_labels_es?.length
+            ? v.billing_labels_es
+            : (r.invoicing?.items || []).map(
+                (it) => it.billing_label_es || it.billing_status || "—",
+              ),
+          pickingVersion: v?.picking_version ?? r.picking_version ?? null,
+          pickingUpdated: Boolean(v?.picking_updated ?? r.picking_updated),
+          pickingPendingInvoice: Boolean(
+            v?.picking_pending_invoice ?? r.picking_pending_invoice,
+          ),
+          cuadraturaNote: v?.cuadratura_note_es ?? null,
+        }
+        setLastAddResult(verification)
+        onMessage(verification.message)
         setSearchHits([])
         setSearchQ("")
         setSelectedHits([])
@@ -367,8 +417,15 @@ export function DispatchPlanPickingAssignmentPanel({
         setAckUnevaluable(false)
         await loadAll()
         await onReloadDashboard?.()
+        await onSupplementalOrdersChanged?.()
+      } else {
+        onMessage(
+          r.message_es ||
+            "La incorporación no persistió cambios (posible reintento o rechazo). Revise el historial.",
+        )
       }
     } catch (e: unknown) {
+      setLastAddResult(null)
       onMessage(e instanceof Error ? e.message : "Error al agregar OC")
     } finally {
       setBusy(null)
@@ -648,6 +705,54 @@ export function DispatchPlanPickingAssignmentPanel({
         <h3 className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Agregar OC al plan
         </h3>
+        {lastAddResult ? (
+          <Alert className="border-emerald-200 bg-emerald-50/80 dark:border-emerald-900 dark:bg-emerald-950/30">
+            <AlertTitle>Incorporación verificada en servidor</AlertTitle>
+            <AlertDescription className="space-y-1 text-sm">
+              <p>{lastAddResult.message}</p>
+              <ul className="list-inside list-disc text-xs">
+                <li>
+                  Folios:{" "}
+                  {lastAddResult.ocNumbers.length
+                    ? lastAddResult.ocNumbers.join(", ")
+                    : "—"}{" "}
+                  ({lastAddResult.ocCount} OC)
+                </li>
+                {lastAddResult.groupName ? (
+                  <li>
+                    Grupo: {lastAddResult.groupName}
+                    {lastAddResult.groupId != null ? ` (id ${lastAddResult.groupId})` : ""}
+                  </li>
+                ) : null}
+                <li>
+                  Peso conocido adicional:{" "}
+                  {lastAddResult.additionalKnownKg != null
+                    ? `${Number(lastAddResult.additionalKnownKg).toFixed(1)} kg`
+                    : "—"}
+                </li>
+                <li>
+                  Facturación:{" "}
+                  {lastAddResult.billingLabels.length
+                    ? lastAddResult.billingLabels.join("; ")
+                    : lastAddResult.pickingPendingInvoice
+                      ? "Pendiente de facturación"
+                      : "—"}
+                </li>
+                <li>
+                  Picking:{" "}
+                  {lastAddResult.pickingUpdated
+                    ? `actualizado${lastAddResult.pickingVersion != null ? ` (v${lastAddResult.pickingVersion})` : ""}`
+                    : lastAddResult.pickingPendingInvoice
+                      ? "definitivo no actualizado (pendiente de facturación)"
+                      : "sin nueva versión"}
+                </li>
+                {lastAddResult.cuadraturaNote ? (
+                  <li>{lastAddResult.cuadraturaNote}</li>
+                ) : null}
+              </ul>
+            </AlertDescription>
+          </Alert>
+        ) : null}
         {!canAddOrders ? (
           <Alert>
             <AlertTitle>Plan despachado</AlertTitle>
@@ -663,7 +768,8 @@ export function DispatchPlanPickingAssignmentPanel({
                 <AlertDescription className="text-sm">
                   Con organización completa, las OC nuevas forman un grupo «OC adicionales»
                   sin rehacer el picking físico de los grupos originales. El picking de
-                  productos del suplemento exige facturación vigente.
+                  productos del suplemento exige facturación vigente. El nombre propuesto
+                  en vista previa no implica que el grupo ya exista hasta confirmar.
                 </AlertDescription>
               </Alert>
             ) : addPreview?.warning ? (
@@ -729,35 +835,149 @@ export function DispatchPlanPickingAssignmentPanel({
                 </Table>
               </div>
             ) : null}
+            {selectedHits.length > 0 && impactPreview?.capacity?.new_orders?.length ? (
+              <div className="overflow-x-auto rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>OC</TableHead>
+                      <TableHead>Cliente</TableHead>
+                      <TableHead className="text-right">Venta</TableHead>
+                      <TableHead className="text-right">SKU</TableHead>
+                      <TableHead className="text-right">Unid.</TableHead>
+                      <TableHead className="text-right">Cajas eq.</TableHead>
+                      <TableHead className="text-right">Peso OC</TableHead>
+                      <TableHead className="text-right">Cobertura</TableHead>
+                      <TableHead className="text-right">Sin peso</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {impactPreview.capacity.new_orders.map((row) => {
+                      const hit = selectedHits.find(
+                        (h) => h.oc_document_id === row.oc_document_id,
+                      )
+                      return (
+                        <TableRow key={row.oc_document_id}>
+                          <TableCell className="font-mono text-xs">
+                            {row.oc_number ?? hit?.oc_number ?? row.oc_document_id}
+                          </TableCell>
+                          <TableCell className="text-xs">
+                            {row.client_name ?? hit?.client_name ?? "—"}
+                          </TableCell>
+                          <TableCell className="text-right text-xs tabular-nums">
+                            {formatClp(
+                              Number(row.oc_total_amount ?? hit?.oc_total_amount ?? 0),
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right text-xs tabular-nums">
+                            {row.sku_distinct ?? "—"}
+                          </TableCell>
+                          <TableCell className="text-right text-xs tabular-nums">
+                            {row.cantidad_unidades != null
+                              ? Number(row.cantidad_unidades).toFixed(0)
+                              : "—"}
+                          </TableCell>
+                          <TableCell className="text-right text-xs tabular-nums">
+                            {row.cajas_equivalentes_confiables != null
+                              ? Number(row.cajas_equivalentes_confiables).toFixed(1)
+                              : "—"}
+                          </TableCell>
+                          <TableCell className="text-right text-xs tabular-nums">
+                            {row.weight_label_es ||
+                              (row.weight_complete
+                                ? `${Number(row.known_weight_kg ?? 0).toFixed(1)} kg`
+                                : "Peso incompleto")}
+                          </TableCell>
+                          <TableCell className="text-right text-xs tabular-nums">
+                            {row.coverage_percent != null
+                              ? `${Number(row.coverage_percent).toFixed(0)}%`
+                              : "—"}
+                          </TableCell>
+                          <TableCell className="text-right text-xs tabular-nums">
+                            {row.productos_sin_peso ?? "—"}
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            ) : null}
             {impactPreview ? (
               <div className="space-y-2 rounded-md border bg-muted/20 p-3 text-xs">
                 {impactPreview.uses_supplemental_group ? (
                   <p>
-                    Grupo a crear:{" "}
+                    Grupo propuesto (aún no creado):{" "}
                     <span className="font-medium">
                       {impactPreview.proposed_supplemental_group_name || "OC adicionales"}
                     </span>
                   </p>
                 ) : null}
                 {impactPreview.capacity ? (
-                  <p>
-                    Peso conocido proyectado:{" "}
-                    {Number(impactPreview.capacity.known_weight_kg ?? 0).toFixed(1)} kg
-                    {impactPreview.capacity.truck_max_weight_kg != null
-                      ? ` / ${impactPreview.capacity.truck_max_weight_kg} kg`
-                      : ""}
-                    {impactPreview.capacity.utilization_pct != null
-                      ? ` (${impactPreview.capacity.utilization_pct}% uso)`
-                      : ""}
-                    {impactPreview.capacity.overloaded ? " — sobrecarga conocida" : ""}
-                  </p>
+                  <div className="space-y-1">
+                    <p>
+                      Peso conocido actual del camión:{" "}
+                      {Number(
+                        impactPreview.capacity.plan_known_weight_kg ??
+                          Math.max(
+                            0,
+                            Number(impactPreview.capacity.known_weight_kg ?? 0) -
+                              Number(
+                                impactPreview.capacity.additional_known_weight_kg ?? 0,
+                              ),
+                          ),
+                      ).toFixed(1)}{" "}
+                      kg
+                    </p>
+                    <p>
+                      Peso conocido adicional:{" "}
+                      {Number(
+                        impactPreview.capacity.additional_known_weight_kg ?? 0,
+                      ).toFixed(1)}{" "}
+                      kg
+                    </p>
+                    <p>
+                      Nuevo peso conocido proyectado:{" "}
+                      {Number(
+                        impactPreview.capacity.projected_known_weight_kg ??
+                          impactPreview.capacity.known_weight_kg ??
+                          0,
+                      ).toFixed(1)}{" "}
+                      kg
+                      {impactPreview.capacity.truck_max_weight_kg != null
+                        ? ` / ${impactPreview.capacity.truck_max_weight_kg} kg máx.`
+                        : ""}
+                      {impactPreview.capacity.utilization_pct != null
+                        ? ` (${impactPreview.capacity.utilization_pct}% uso conocido)`
+                        : ""}
+                      {impactPreview.capacity.overloaded ? " — sobrecarga conocida" : ""}
+                    </p>
+                    {impactPreview.capacity.new_orders_weight_incomplete ? (
+                      <p className="text-amber-800 dark:text-amber-200">
+                        Una o más OC nuevas tienen peso incompleto (no se asume 0 kg).
+                      </p>
+                    ) : null}
+                    {(impactPreview.capacity.plan_incomplete_order_count ?? 0) > 0 ||
+                    (impactPreview.capacity.plan_unevaluable_order_count ?? 0) > 0 ? (
+                      <p className="text-amber-800 dark:text-amber-200">
+                        El plan ya tenía cobertura de peso incompleta en OC existentes
+                        (no es necesariamente de las OC nuevas).
+                      </p>
+                    ) : null}
+                  </div>
                 ) : null}
                 {impactPreview.picking_pending_invoice ? (
                   <p className="text-amber-800 dark:text-amber-200">
-                    Algunas OC aún no tienen factura/boleta usable: el picking de productos
-                    del suplemento quedará pendiente de facturación.
+                    Algunas OC aún no tienen factura/boleta usable: el picking definitivo
+                    de productos del suplemento quedará pendiente de facturación. La OC
+                    igual se verá en el grupo suplementario.
                   </p>
-                ) : null}
+                ) : (
+                  <p className="text-muted-foreground">
+                    Con facturación vigente se versionará el picking general y se
+                    conciliará el documento al grupo suplementario.
+                  </p>
+                )}
                 {impactPreview.blocked_reason ? (
                   <p className="text-destructive">{impactPreview.blocked_reason}</p>
                 ) : null}
@@ -768,8 +988,8 @@ export function DispatchPlanPickingAssignmentPanel({
                       onCheckedChange={(v) => setAckIncomplete(v === true)}
                     />
                     <span>
-                      Confirmo control operacional con cobertura de peso incompleta (no
-                      autoriza salida a ruta).
+                      Confirmo control operacional con cobertura de peso incompleta en el
+                      despacho (no autoriza salida a ruta).
                     </span>
                   </label>
                 ) : null}
@@ -915,7 +1135,12 @@ export function DispatchPlanPickingAssignmentPanel({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancelar</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void confirmAddOrders()}>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                void confirmAddOrders()
+              }}
+            >
               Confirmar
             </AlertDialogAction>
           </AlertDialogFooter>

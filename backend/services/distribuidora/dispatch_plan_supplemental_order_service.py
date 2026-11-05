@@ -207,6 +207,74 @@ def _weight_bucket_from_snapshot(w: dict[str, Any] | None) -> tuple[str, float |
     return "unevaluable", peso
 
 
+def _weight_label_es(
+    bucket: str, peso: float | None, *, coverage: float, sin_peso: int
+) -> str:
+    if bucket == "known" and peso is not None:
+        return f"{round(peso, 3)} kg"
+    if bucket == "partial" and peso is not None:
+        return f"Peso incompleto ({round(peso, 3)} kg conocidos)"
+    return "Peso incompleto"
+
+
+def _oc_meta_for_capacity(cur, oc_ids: list[int]) -> dict[int, dict[str, Any]]:
+    """Número OC, cliente, venta, SKU y unidades (lectura; no inventa peso)."""
+    if not oc_ids:
+        return {}
+    cur.execute(
+        """
+        SELECT
+            d.document_id,
+            d.number,
+            d.total_amount,
+            d.client_id,
+            COALESCE(
+                NULLIF(BTRIM(c.nombre_fantasia), ''),
+                NULLIF(BTRIM(c.company), ''),
+                CONCAT_WS(
+                    ' ',
+                    NULLIF(BTRIM(c.first_name), ''),
+                    NULLIF(BTRIM(c.last_name), '')
+                )
+            ) AS client_name
+        FROM distribuidora.documents d
+        LEFT JOIN bsale.clients c
+            ON c.company_id = d.company_id AND c.bsale_id = d.client_id
+        WHERE d.document_id = ANY(%s)
+          AND d.company_id = 3
+        """,
+        (list(oc_ids),),
+    )
+    by_id: dict[int, dict[str, Any]] = {}
+    for row in cur.fetchall():
+        by_id[int(row[0])] = {
+            "oc_number": int(row[1]) if row[1] is not None else None,
+            "oc_total_amount": float(row[2]) if row[2] is not None else None,
+            "client_id": int(row[3]) if row[3] is not None else None,
+            "client_name": (row[4] or None),
+        }
+    cur.execute(
+        """
+        SELECT
+            document_id,
+            COUNT(DISTINCT variant_id)::int AS sku_distinct,
+            COALESCE(SUM(quantity), 0) AS units
+        FROM distribuidora.document_details
+        WHERE document_id = ANY(%s)
+        GROUP BY document_id
+        """,
+        (list(oc_ids),),
+    )
+    for row in cur.fetchall():
+        meta = by_id.setdefault(int(row[0]), {})
+        meta["sku_distinct"] = int(row[1] or 0)
+        try:
+            meta["cantidad_unidades"] = float(row[2] or 0)
+        except (TypeError, ValueError):
+            meta["cantidad_unidades"] = None
+    return by_id
+
+
 def _capacity_for_plan_plus_ocs(
     cur,
     plan_id: int,
@@ -215,49 +283,85 @@ def _capacity_for_plan_plus_ocs(
     truck_max: int | None,
 ) -> dict[str, Any]:
     existing = plan_repo.list_plan_orders(cur, plan_id)
-    known = 0.0
+    new_set = set(int(x) for x in new_oc_ids)
+    plan_known = 0.0
     estimated = 0.0
-    incomplete = 0
-    unevaluable = 0
+    plan_incomplete = 0
+    plan_unevaluable = 0
     for o in existing:
-        if int(o["oc_document_id"]) in set(new_oc_ids):
+        if int(o["oc_document_id"]) in new_set:
             continue  # reintento: no doble contar
         bucket, peso = _weight_bucket_from_order_row(o)
         if bucket == "known" and peso is not None:
-            known += peso
+            plan_known += peso
         elif bucket == "partial" and peso is not None:
-            known += peso
-            incomplete += 1
+            plan_known += peso
+            plan_incomplete += 1
         else:
-            unevaluable += 1
+            plan_unevaluable += 1
 
     from backend.services.order_weight_service import fetch_weights_by_document_ids
 
     snaps = fetch_weights_by_document_ids(new_oc_ids)
+    meta_by_id = _oc_meta_for_capacity(cur, [int(x) for x in new_oc_ids])
     new_details: list[dict[str, Any]] = []
+    additional_known = 0.0
+    new_incomplete = 0
+    new_unevaluable = 0
     for oc_id in new_oc_ids:
-        bucket, peso = _weight_bucket_from_snapshot(snaps.get(int(oc_id)))
-        units = None
-        if snaps.get(int(oc_id)):
+        snap = snaps.get(int(oc_id)) or {}
+        bucket, peso = _weight_bucket_from_snapshot(snap if snap else None)
+        meta = meta_by_id.get(int(oc_id)) or {}
+        try:
+            cov = float(
+                snap.get("porcentaje_cobertura_peso")
+                or snap.get("porcentaje_cobertura")
+                or 0
+            )
+        except (TypeError, ValueError):
+            cov = 0.0
+        sin = int(snap.get("productos_sin_peso") or 0)
+        units = meta.get("cantidad_unidades")
+        if units is None and snap:
             try:
-                units = float(snaps[int(oc_id)].get("cantidad_unidades") or 0) or None
+                units = float(snap.get("cantidad_unidades") or 0) or None
             except (TypeError, ValueError):
                 units = None
-        new_details.append(
-            {
-                "oc_document_id": int(oc_id),
-                "weight_quality": bucket,
-                "known_weight_kg": peso,
-                "cantidad_unidades": units,
-            }
-        )
+        try:
+            cajas = float(snap.get("cantidad_cajas")) if snap.get("cantidad_cajas") is not None else None
+        except (TypeError, ValueError):
+            cajas = None
+        # Cajas solo si el snapshot las trae; no inventar equivalencia.
+        cajas_confiables = cajas if cajas is not None and cajas > 0 else None
+        detail = {
+            "oc_document_id": int(oc_id),
+            "oc_number": meta.get("oc_number"),
+            "client_id": meta.get("client_id"),
+            "client_name": meta.get("client_name"),
+            "oc_total_amount": meta.get("oc_total_amount"),
+            "sku_distinct": int(meta.get("sku_distinct") or 0),
+            "cantidad_unidades": units,
+            "cantidad_cajas": cajas_confiables,
+            "cajas_equivalentes_confiables": cajas_confiables,
+            "weight_quality": bucket,
+            "known_weight_kg": peso,
+            "coverage_percent": cov,
+            "productos_sin_peso": sin,
+            "weight_complete": bucket == "known",
+            "weight_label_es": _weight_label_es(bucket, peso, coverage=cov, sin_peso=sin),
+        }
+        new_details.append(detail)
         if bucket == "known" and peso is not None:
-            known += peso
+            additional_known += peso
         elif bucket == "partial" and peso is not None:
-            known += peso
-            incomplete += 1
+            additional_known += peso
+            new_incomplete += 1
         else:
-            unevaluable += 1
+            new_unevaluable += 1
+
+    known = plan_known + additional_known
+    incomplete = plan_incomplete + new_incomplete
+    unevaluable = plan_unevaluable + new_unevaluable
 
     capacity = validate_truck_capacity(
         known_weight_kg=known,
@@ -267,6 +371,33 @@ def _capacity_for_plan_plus_ocs(
         truck_max_weight_kg=truck_max,
     )
     capacity["new_orders"] = new_details
+    capacity["plan_known_weight_kg"] = round(plan_known, 3)
+    capacity["additional_known_weight_kg"] = round(additional_known, 3)
+    capacity["projected_known_weight_kg"] = round(known, 3)
+    capacity["plan_incomplete_order_count"] = plan_incomplete
+    capacity["plan_unevaluable_order_count"] = plan_unevaluable
+    capacity["new_incomplete_order_count"] = new_incomplete
+    capacity["new_unevaluable_order_count"] = new_unevaluable
+    capacity["new_orders_weight_incomplete"] = (new_incomplete + new_unevaluable) > 0
+    capacity["weight_coverage_warnings"] = list(capacity.get("warnings") or [])
+    if plan_incomplete or plan_unevaluable:
+        capacity["weight_coverage_warnings"] = list(
+            dict.fromkeys(
+                [
+                    *(capacity.get("weight_coverage_warnings") or []),
+                    "plan_existing_weight_incomplete",
+                ]
+            )
+        )
+    if new_incomplete or new_unevaluable:
+        capacity["weight_coverage_warnings"] = list(
+            dict.fromkeys(
+                [
+                    *(capacity.get("weight_coverage_warnings") or []),
+                    "new_oc_weight_incomplete",
+                ]
+            )
+        )
     return capacity
 
 
@@ -803,12 +934,59 @@ def add_supplemental_orders_to_plan(
     elif picking_result:
         msg += " Picking general versionado; revise conciliación documental."
 
+    oc_numbers: list[int] = []
+    for row in enriched:
+        n = row.get("oc_number")
+        if n is not None:
+            try:
+                oc_numbers.append(int(n))
+            except (TypeError, ValueError):
+                pass
+    picking_version = None
+    if isinstance(picking_result, dict):
+        picking_version = (
+            picking_result.get("version")
+            or picking_result.get("picking_version")
+            or (picking_result.get("picking") or {}).get("version")
+        )
+    billing_labels = [
+        str(it.get("billing_label_es") or it.get("billing_status") or "")
+        for it in (invoicing.get("items") or [])
+    ]
+    verification = {
+        "oc_document_ids": novel,
+        "oc_numbers": oc_numbers,
+        "oc_count": len(novel),
+        "supplemental_group_id": (
+            int(supplemental_batch["id"]) if supplemental_batch else None
+        ),
+        "supplemental_group_name": (
+            supplemental_batch.get("name") if supplemental_batch else None
+        ),
+        "additional_known_weight_kg": capacity.get("additional_known_weight_kg"),
+        "billing_labels_es": billing_labels,
+        "picking_pending_invoice": bool(invoicing.get("picking_pending_invoice")),
+        "picking_updated": bool(picking_result),
+        "picking_version": picking_version,
+        "cuadratura_note_es": (
+            "Hay una nueva versión de picking; la cuadratura abierta debe detectarla "
+            "sin adopción automática."
+            if picking_result
+            else (
+                "Sin nueva versión de picking: facturación pendiente o no regenerada."
+                if invoicing.get("picking_pending_invoice")
+                else None
+            )
+        ),
+    }
+
     return serialize_value(
         {
             "status": "added",
             "dispatch_plan_id": plan_id,
             "added": True,
             "oc_document_ids": novel,
+            "oc_numbers": oc_numbers,
             "supplemental_group": (
                 {
                     "load_batch_id": int(supplemental_batch["id"]),
@@ -825,11 +1003,13 @@ def add_supplemental_orders_to_plan(
             "invoicing": invoicing,
             "picking": picking_result,
             "picking_updated": bool(picking_result),
+            "picking_version": picking_version,
             "document_reconciliation": reconciliation,
             "message_es": msg,
             "picking_ready": supplemental_picking_ready,
             "supplemental_picking_ready": supplemental_picking_ready,
             "picking_pending_invoice": bool(invoicing.get("picking_pending_invoice")),
+            "verification": verification,
             "plan": plan_svc.get_dispatch_plan(plan_id),
         }
     )

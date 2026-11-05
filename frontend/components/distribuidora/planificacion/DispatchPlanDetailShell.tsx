@@ -127,6 +127,7 @@ export function DispatchPlanDetailShell({
   const [pickingProductLoading, setPickingProductLoading] = useState(false)
   const [pickingClientLoaded, setPickingClientLoaded] = useState(false)
   const [reviewItems, setReviewItems] = useState<DispatchPlanInvoicedRow[] | null>(null)
+  const [orgRefreshToken, setOrgRefreshToken] = useState(0)
 
   const refreshPickingFromDb = useCallback(async () => {
     const [pc, pp] = await Promise.all([
@@ -654,6 +655,7 @@ export function DispatchPlanDetailShell({
                 <DispatchPlanLoadOrganizationPanel
                   planId={planId}
                   onMessage={onMessage}
+                  refreshToken={orgRefreshToken}
                 />
               </section>
 
@@ -669,6 +671,14 @@ export function DispatchPlanDetailShell({
                   planningCode={dashboard.plan.planning_code}
                   onMessage={onMessage}
                   onReloadDashboard={onReloadDashboard}
+                  onSupplementalOrdersChanged={async () => {
+                    setOrgRefreshToken((n) => n + 1)
+                    try {
+                      await refreshPickingFromDb()
+                    } catch {
+                      /* loadAll del panel ya avisó; picking puede quedar pendiente */
+                    }
+                  }}
                 />
               </section>
             </>

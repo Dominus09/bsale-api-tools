@@ -207,3 +207,79 @@ def test_add_creates_supplemental_group(monkeypatch):
     assert upserts and upserts[0]["load_batch_id"] == 99
     assert out["client_same_route_exceptions"]
     assert events[0]["action"] == svc.ACTION_ADD_SUPPLEMENTAL
+    assert out["verification"]["oc_count"] == 1
+    assert out["verification"]["supplemental_group_name"] == "OC adicionales 01"
+    assert 900 in out["verification"]["oc_numbers"]
+
+
+def test_capacity_new_orders_expose_individual_weight(monkeypatch):
+    plan_id = 79
+    cur = MagicMock()
+    # _oc_meta_for_capacity: documents then details
+    cur.fetchall.side_effect = [
+        [(3959592, 70566, 56925, 2087, "Galpón de lata")],
+        [(3959592, 1, 10)],
+    ]
+    monkeypatch.setattr(
+        svc.plan_repo,
+        "list_plan_orders",
+        lambda *_a, **_k: [
+            {
+                "oc_document_id": 1,
+                "peso_total_kg": 5204.0,
+                "cobertura_logistica": 82.0,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "backend.services.order_weight_service.fetch_weights_by_document_ids",
+        lambda *_a, **_k: {
+            3959592: {
+                "peso_total_kg": 48.0,
+                "porcentaje_cobertura": 100.0,
+                "productos_sin_peso": 0,
+                "cantidad_unidades": 10,
+                "cantidad_cajas": 1.0,
+            }
+        },
+    )
+    cap = svc._capacity_for_plan_plus_ocs(
+        cur, plan_id, new_oc_ids=[3959592], truck_max=7600
+    )
+    assert cap["plan_known_weight_kg"] == 5204.0
+    assert cap["additional_known_weight_kg"] == 48.0
+    assert cap["projected_known_weight_kg"] == 5252.0
+    assert len(cap["new_orders"]) == 1
+    row = cap["new_orders"][0]
+    assert row["oc_number"] == 70566
+    assert row["weight_complete"] is True
+    assert row["known_weight_kg"] == 48.0
+    assert "48" in row["weight_label_es"]
+    assert row["sku_distinct"] == 1
+    assert cap["new_orders_weight_incomplete"] is False
+    assert cap["plan_incomplete_order_count"] == 1
+    assert cap["requires_incomplete_weight_ack"] is True
+
+
+def test_capacity_marks_incomplete_new_oc_explicitly(monkeypatch):
+    cur = MagicMock()
+    cur.fetchall.side_effect = [
+        [(10, 100, 1000, 1, "Cli")],
+        [(10, 2, 5)],
+    ]
+    monkeypatch.setattr(svc.plan_repo, "list_plan_orders", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        "backend.services.order_weight_service.fetch_weights_by_document_ids",
+        lambda *_a, **_k: {
+            10: {
+                "peso_total_kg": 12.0,
+                "porcentaje_cobertura": 50.0,
+                "productos_sin_peso": 2,
+            }
+        },
+    )
+    cap = svc._capacity_for_plan_plus_ocs(cur, 1, new_oc_ids=[10], truck_max=1000)
+    assert cap["new_orders"][0]["weight_complete"] is False
+    assert "Peso incompleto" in cap["new_orders"][0]["weight_label_es"]
+    assert cap["new_orders_weight_incomplete"] is True
+    assert cap["additional_known_weight_kg"] == 12.0
