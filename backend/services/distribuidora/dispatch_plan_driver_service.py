@@ -18,6 +18,7 @@ from backend.repositories.distribuidora import dispatch_plan_repo as plan_repo
 logger = logging.getLogger(__name__)
 
 ACTION_ASSIGN_DRIVER = "assign_driver"
+ACTION_UPDATE_PEONETAS = "update_peonetas"
 
 ASSIGNABLE_PLAN_STATUSES = frozenset(
     {
@@ -457,8 +458,25 @@ def get_plan_driver(plan_id: int) -> dict[str, Any]:
                     "active": bool(row.get("active")),
                 }
         history = _list_driver_events(cur, int(plan_id))
+        peonetas_history = _list_peonetas_events(cur, int(plan_id))
         company_id, office_id = resolve_plan_company_office(cur, int(plan_id))
         origin = str(plan.get("planning_origin") or "").strip().lower() or None
+        from backend.services.distribuidora.logistics_cost_service import (
+            get_logistics_cost_settings,
+        )
+        from backend.services.distribuidora.peonetas import format_peonetas_display
+
+        settings = get_logistics_cost_settings()
+        rate = int(round(settings.assistant_cost_clp_per_trip))
+        recorded = (
+            bool(plan.get("peonetas_recorded"))
+            if "peonetas_recorded" in plan
+            else None
+        )
+        count = int(plan.get("assistant_count") or 0)
+        peonetas_cost = None
+        if recorded is True or count > 0:
+            peonetas_cost = count * rate
         cur.close()
         return {
             "plan_id": int(plan_id),
@@ -470,12 +488,18 @@ def get_plan_driver(plan_id: int) -> dict[str, Any]:
             "driver_user_id": int(driver_user_id) if driver_user_id is not None else None,
             "driver_name": plan.get("driver_name"),
             "assistant_count": plan.get("assistant_count"),
-            "peonetas_recorded": bool(plan.get("peonetas_recorded"))
-            if "peonetas_recorded" in plan
-            else None,
+            "peonetas_recorded": recorded,
+            "peonetas_label": format_peonetas_display(
+                assistant_count=count, peonetas_recorded=recorded
+            ),
+            "peonetas_unit_cost_clp": rate,
+            "peonetas_cost_clp": peonetas_cost,
+            "peonetas_cost_source": "logistics_cost_settings.assistant_cost_clp_per_trip",
             "driver_pending": driver_user_id is None,
             "driver": driver,
             "history": history,
+            "peonetas_history": peonetas_history,
+            "peonetas_editable": str(plan.get("status") or "") in ASSIGNABLE_PLAN_STATUSES,
         }
     finally:
         conn.close()
@@ -508,6 +532,275 @@ def _list_driver_events(cur, plan_id: int) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def _list_peonetas_events(cur, plan_id: int) -> list[dict[str, Any]]:
+    rows = events_repo.list_order_events(cur, int(plan_id), limit=100)
+    out = []
+    for row in rows:
+        if str(row.get("action") or "") != ACTION_UPDATE_PEONETAS:
+            continue
+        payload = row.get("payload") or {}
+        if isinstance(payload, str):
+            import json
+
+            try:
+                payload = json.loads(payload)
+            except Exception:
+                payload = {}
+        out.append(
+            {
+                "id": row.get("id"),
+                "created_at": row.get("created_at"),
+                "actor_name": row.get("user_name"),
+                "reason": row.get("reason"),
+                "previous_assistant_count": payload.get("previous_assistant_count"),
+                "new_assistant_count": payload.get("new_assistant_count"),
+                "peonetas_cost_clp": payload.get("peonetas_cost_clp"),
+                "cost_delta_clp": payload.get("cost_delta_clp"),
+                "margin_updated": payload.get("margin_updated"),
+            }
+        )
+    return out
+
+
+def update_peonetas_on_plan(
+    *,
+    plan_id: int,
+    assistant_count: Any,
+    reason: str,
+    actor: dict[str, Any],
+) -> dict[str, Any]:
+    """Actualiza cantidad de peonetas (assistant_count) con auditoría y costo.
+
+    Tarifa: ``logistics_cost_settings.assistant_cost_clp_per_trip`` (verificada).
+    Si el plan tiene métricas ORS completas, recalcula crew/total_route y margen.
+    Si no (p. ej. simple_list sin ORS), persiste peonetas y expone costo unitario
+    sin inventar km/combustible ni margen post-transporte.
+    """
+    from backend.services.distribuidora.dispatch_plan_access import (
+        user_can_assign_driver_on_plan,
+    )
+    from backend.services.distribuidora.logistics_cost_service import (
+        compute_route_costs,
+        get_logistics_cost_settings,
+    )
+    from backend.services.distribuidora.peonetas import (
+        PeonetasValidationError,
+        mark_peonetas_recorded,
+        parse_peonetas_count,
+    )
+
+    reason_n = (reason or "").strip()
+    if len(reason_n) < 3:
+        raise DriverAssignError(
+            "Motivo obligatorio (mínimo 3 caracteres)",
+            code="reason_required",
+        )
+    try:
+        new_count = parse_peonetas_count(assistant_count)
+    except PeonetasValidationError as exc:
+        raise DriverAssignError(str(exc), code=exc.code) from exc
+
+    if not user_can_assign_driver_on_plan(actor, int(plan_id)):
+        raise DriverAssignError(
+            "Sin permiso para modificar peonetas",
+            code="forbidden",
+            http_status=403,
+        )
+
+    actor_name = str(
+        actor.get("email") or actor.get("nombre_usuario") or actor.get("id") or "staff"
+    )
+    settings = get_logistics_cost_settings()
+    rate = int(round(settings.assistant_cost_clp_per_trip))
+    driver_rate = int(round(settings.driver_cost_clp_per_trip))
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, status, assistant_count, driver_count, peonetas_recorded,
+                   crew_cost_clp, assistant_cost_clp, driver_cost_clp,
+                   total_route_cost_clp, fuel_cost_clp, ferry_cost_clp, toll_cost_clp,
+                   extras_cost_clp, km_total, duration_min, truck_id,
+                   ors_metrics_calculated, planning_origin
+            FROM distribuidora.dispatch_plan
+            WHERE id = %s
+            FOR UPDATE
+            """,
+            (int(plan_id),),
+        )
+        row = cur.fetchone()
+        if not row:
+            raise DriverAssignError("Plan no encontrado", code="plan_not_found", http_status=404)
+        cols = [d[0] for d in cur.description]
+        plan = dict(zip(cols, row))
+        status = str(plan.get("status") or "")
+        if status not in ASSIGNABLE_PLAN_STATUSES:
+            raise DriverAssignError(
+                f"Plan en estado '{status}' no admite cambio de peonetas",
+                code="plan_not_assignable",
+                http_status=409,
+            )
+
+        prev_count = int(plan.get("assistant_count") or 0)
+        prev_recorded = bool(plan.get("peonetas_recorded")) if "peonetas_recorded" in plan else False
+        if prev_recorded and prev_count == new_count:
+            conn.commit()
+            return {
+                "status": "unchanged",
+                "plan_id": int(plan_id),
+                "assistant_count": new_count,
+                "peonetas_recorded": True,
+                "peonetas_cost_clp": new_count * rate,
+                "peonetas_unit_cost_clp": rate,
+            }
+
+        prev_peonetas_cost = prev_count * rate if prev_recorded or prev_count > 0 else 0
+        new_peonetas_cost = new_count * rate
+        cost_delta = new_peonetas_cost - prev_peonetas_cost
+
+        ors_ok = plan.get("ors_metrics_calculated") is True
+        margin_updated = False
+        new_crew = None
+        new_total = None
+
+        if ors_ok and plan.get("km_total") is not None and plan.get("duration_min") is not None:
+            truck = None
+            if plan.get("truck_id") is not None:
+                cur.execute(
+                    "SELECT id, name, km_per_liter, fuel_type FROM distribuidora.trucks WHERE id = %s",
+                    (int(plan["truck_id"]),),
+                )
+                trow = cur.fetchone()
+                if trow:
+                    truck = {
+                        "id": trow[0],
+                        "name": trow[1],
+                        "km_per_liter": trow[2],
+                        "fuel_type": trow[3],
+                    }
+            breakdown = compute_route_costs(
+                distance_km=float(plan["km_total"]),
+                duration_min=float(plan["duration_min"]),
+                truck=truck,
+                truck_id=int(plan["truck_id"]) if plan.get("truck_id") else None,
+                driver_count=int(plan.get("driver_count") or 1),
+                assistant_count=new_count,
+                driver_cost_clp_per_trip=driver_rate,
+                assistant_cost_clp_per_trip=rate,
+                settings=settings,
+            )
+            new_crew = int(breakdown.crew_cost_clp)
+            # Preservar ferry/toll/extras del plan; reemplazar crew en total.
+            fuel = int(plan.get("fuel_cost_clp") or breakdown.fuel_cost_clp or 0)
+            ferry = int(plan.get("ferry_cost_clp") or 0)
+            toll = int(plan.get("toll_cost_clp") or 0)
+            extras = int(plan.get("extras_cost_clp") or 0)
+            new_total = fuel + ferry + toll + extras + new_crew
+            cur.execute(
+                """
+                UPDATE distribuidora.dispatch_plan
+                SET assistant_count = %s,
+                    assistant_cost_clp = %s,
+                    driver_cost_clp = %s,
+                    crew_cost_clp = %s,
+                    total_route_cost_clp = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+                """,
+                (
+                    new_count,
+                    rate,
+                    driver_rate,
+                    new_crew,
+                    new_total,
+                    int(plan_id),
+                ),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE distribuidora.dispatch_plan
+                SET assistant_count = %s,
+                    assistant_cost_clp = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+                """,
+                (new_count, rate, int(plan_id)),
+            )
+
+        mark_peonetas_recorded(cur, plan_id=int(plan_id), assistant_count=new_count)
+
+        events_repo.insert_order_event(
+            cur,
+            plan_id=int(plan_id),
+            action=ACTION_UPDATE_PEONETAS,
+            user_name=actor_name,
+            reason=reason_n,
+            payload={
+                "previous_assistant_count": prev_count,
+                "previous_peonetas_recorded": prev_recorded,
+                "new_assistant_count": new_count,
+                "peonetas_unit_cost_clp": rate,
+                "peonetas_cost_clp": new_peonetas_cost,
+                "previous_peonetas_cost_clp": prev_peonetas_cost,
+                "cost_delta_clp": cost_delta,
+                "ors_metrics_calculated": ors_ok,
+                "crew_cost_clp": new_crew,
+                "total_route_cost_clp": new_total,
+                "actor_user_id": actor.get("id") or actor.get("uid"),
+                "source": "chofer_auditoria",
+            },
+        )
+        conn.commit()
+        cur.close()
+    except DriverAssignError:
+        conn.rollback()
+        raise
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    if ors_ok:
+        try:
+            from backend.services.distribuidora.dispatch_plan_service import (
+                compute_plan_margin,
+            )
+
+            compute_plan_margin(int(plan_id), persist=True)
+            margin_updated = True
+        except Exception:
+            logger.exception("margin_recompute_after_peonetas plan_id=%s", plan_id)
+
+    return {
+        "status": "updated",
+        "plan_id": int(plan_id),
+        "assistant_count": new_count,
+        "peonetas_recorded": True,
+        "previous_assistant_count": prev_count,
+        "peonetas_unit_cost_clp": rate,
+        "peonetas_cost_clp": new_peonetas_cost,
+        "previous_peonetas_cost_clp": prev_peonetas_cost,
+        "cost_delta_clp": cost_delta,
+        "crew_cost_clp": new_crew,
+        "total_route_cost_clp": new_total,
+        "margin_updated": margin_updated,
+        "ors_metrics_calculated": ors_ok,
+        "cost_note_es": (
+            None
+            if ors_ok
+            else (
+                "Costo de peonetas calculado con tarifa configurada; "
+                "el margen post-transporte no se actualiza porque este plan "
+                "no tiene métricas ORS completas."
+            )
+        ),
+    }
 
 
 def assign_driver_to_plan(

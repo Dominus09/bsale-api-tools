@@ -7,9 +7,11 @@ import {
   assignDispatchPlanDriver,
   getDispatchPlanDriver,
   listAvailableDispatchDrivers,
+  updateDispatchPlanPeonetas,
   type DispatchPlanDriverInfo,
   type DispatchPlanDriverOption,
 } from "@/lib/api"
+import { formatClp } from "@/lib/ors-map-ui"
 import { formatPeonetasDisplay } from "@/lib/peonetas-display"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -50,6 +52,8 @@ export function DispatchPlanDriverAssign({
   const [drivers, setDrivers] = useState<DispatchPlanDriverOption[]>([])
   const [driverUserId, setDriverUserId] = useState<string>("")
   const [reason, setReason] = useState("")
+  const [peonetasInput, setPeonetasInput] = useState("")
+  const [peonetasReason, setPeonetasReason] = useState("")
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [listError, setListError] = useState<string | null>(null)
@@ -72,6 +76,16 @@ export function DispatchPlanDriverAssign({
         setDriverUserId(String(driverInfo.driver_user_id))
       } else {
         setDriverUserId("")
+      }
+      if (driverInfo.peonetas_recorded === true && driverInfo.assistant_count != null) {
+        setPeonetasInput(String(driverInfo.assistant_count))
+      } else if (
+        driverInfo.assistant_count != null &&
+        Number(driverInfo.assistant_count) > 0
+      ) {
+        setPeonetasInput(String(driverInfo.assistant_count))
+      } else {
+        setPeonetasInput("")
       }
 
       if (!canAssign) {
@@ -153,6 +167,49 @@ export function DispatchPlanDriverAssign({
       onAssigned?.()
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo asignar")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function onSavePeonetas() {
+    const raw = peonetasInput.trim()
+    if (!/^\d+$/.test(raw)) {
+      setError("Cant. de peonetas debe ser un entero (no vacío).")
+      return
+    }
+    const n = Number(raw)
+    if (!Number.isInteger(n) || n < 0 || n > 10) {
+      setError("Cant. de peonetas debe estar entre 0 y 10.")
+      return
+    }
+    if (peonetasReason.trim().length < 3) {
+      setError("Indique un motivo para el cambio de peonetas (mín. 3 caracteres)")
+      return
+    }
+    setBusy(true)
+    setError(null)
+    setMsg(null)
+    try {
+      const res = await updateDispatchPlanPeonetas(planId, {
+        assistant_count: n,
+        reason: peonetasReason.trim(),
+      })
+      const costNote =
+        res.peonetas_cost_clp != null
+          ? ` · costo ${formatClp(res.peonetas_cost_clp)}`
+          : ""
+      const deltaNote =
+        res.cost_delta_clp != null ? ` · Δ ${formatClp(res.cost_delta_clp)}` : ""
+      setMsg(
+        `Peonetas ${res.status}: ${n}${costNote}${deltaNote}` +
+          (res.cost_note_es ? ` · ${res.cost_note_es}` : ""),
+      )
+      setPeonetasReason("")
+      await reload()
+      onAssigned?.()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo guardar peonetas")
     } finally {
       setBusy(false)
     }
@@ -251,6 +308,82 @@ export function DispatchPlanDriverAssign({
           </Button>
         </div>
       ) : null}
+
+      <div className="space-y-2 border-t border-border/60 pt-3">
+        <p className="text-sm font-medium">Cantidad de peonetas</p>
+        <p className="text-xs text-muted-foreground">
+          Actual:{" "}
+          {formatPeonetasDisplay({
+            assistant_count: info?.assistant_count,
+            peonetas_recorded: info?.peonetas_recorded,
+          })}
+          {info?.peonetas_unit_cost_clp != null
+            ? ` · tarifa ${formatClp(info.peonetas_unit_cost_clp)} / peoneta`
+            : ""}
+          {info?.peonetas_cost_clp != null
+            ? ` · costo ${formatClp(info.peonetas_cost_clp)}`
+            : info?.peonetas_recorded
+              ? ""
+              : " · costo pendiente hasta informar cantidad"}
+        </p>
+        {canAssign && info?.peonetas_editable !== false ? (
+          <div className="grid gap-3 sm:grid-cols-[120px_1fr_auto] sm:items-end">
+            <div className="space-y-1">
+              <Label htmlFor={`peonetas-${planId}`}>Cantidad</Label>
+              <Input
+                id={`peonetas-${planId}`}
+                type="number"
+                inputMode="numeric"
+                min={0}
+                max={10}
+                step={1}
+                className="h-9"
+                value={peonetasInput}
+                onChange={(e) => setPeonetasInput(e.target.value)}
+                placeholder="0–10"
+                disabled={busy}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor={`peonetas-reason-${planId}`}>Motivo</Label>
+              <Input
+                id={`peonetas-reason-${planId}`}
+                value={peonetasReason}
+                onChange={(e) => setPeonetasReason(e.target.value)}
+                placeholder="Ajuste operativo…"
+                disabled={busy}
+              />
+            </div>
+            <Button
+              type="button"
+              onClick={() => void onSavePeonetas()}
+              disabled={busy || !/^\d+$/.test(peonetasInput.trim())}
+            >
+              {busy ? <Loader2 className="size-4 animate-spin" /> : "Guardar peonetas"}
+            </Button>
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            {info?.peonetas_editable === false
+              ? "El estado del despacho no permite modificar peonetas."
+              : "Sin permiso de edición."}
+          </p>
+        )}
+        {info?.peonetas_history?.length ? (
+          <ul className="max-h-28 space-y-1 overflow-auto text-xs text-muted-foreground">
+            {info.peonetas_history.map((h) => (
+              <li key={h.id}>
+                {(h.created_at || "").toString().slice(0, 19)} ·{" "}
+                {h.previous_assistant_count ?? "—"} → {h.new_assistant_count ?? "—"}
+                {h.cost_delta_clp != null
+                  ? ` · Δ ${formatClp(h.cost_delta_clp)}`
+                  : ""}{" "}
+                · {h.actor_name || "?"} · {h.reason || ""}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
       {msg ? <p className="text-sm text-muted-foreground">{msg}</p> : null}

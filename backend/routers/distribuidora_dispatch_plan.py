@@ -181,6 +181,12 @@ class AssignDriverBody(BaseModel):
     office_id: int | None = Field(None, ge=1)
 
 
+class UpdatePeonetasBody(BaseModel):
+    # CHECK DB: assistant_count 0..10
+    assistant_count: int = Field(..., ge=0, le=10)
+    reason: str = Field(..., min_length=3, max_length=500)
+
+
 @router.get("/available-drivers")
 def list_available_drivers(
     company_id: int | None = Query(None, ge=1),
@@ -363,6 +369,34 @@ def assign_plan_driver(
     except Exception as exc:
         log_error("POST /dispatch-plans/assign-driver", exc, planning_id=plan_id)
         raise HTTPException(status_code=503, detail="No se pudo asignar chofer") from exc
+
+
+@router.post("/{plan_id}/peonetas")
+def update_plan_peonetas(
+    plan_id: int,
+    body: UpdatePeonetasBody,
+    user: dict = Depends(require_staff_user),
+):
+    """Actualiza cantidad de peonetas del despacho (assistant_count + peonetas_recorded)."""
+    from backend.services.distribuidora import dispatch_plan_driver_service as driver_svc
+
+    if not user_can_assign_driver_on_plan(user, plan_id):
+        raise HTTPException(status_code=403, detail="Sin permiso para modificar peonetas")
+    try:
+        return driver_svc.update_peonetas_on_plan(
+            plan_id=plan_id,
+            assistant_count=body.assistant_count,
+            reason=body.reason,
+            actor=user,
+        )
+    except driver_svc.DriverAssignError as exc:
+        raise HTTPException(
+            status_code=exc.http_status,
+            detail={"message": str(exc), "code": exc.code},
+        ) from exc
+    except Exception as exc:
+        log_error("POST /dispatch-plans/peonetas", exc, planning_id=plan_id)
+        raise HTTPException(status_code=503, detail="No se pudo actualizar peonetas") from exc
 
 
 @router.get("/{plan_id}/driver-access/{driver_user_id}")
