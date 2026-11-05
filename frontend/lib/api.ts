@@ -3772,6 +3772,58 @@ export type DispatchPlanCuadraturaCashCountRow = {
   subtotal_clp: number
 }
 
+export type CuadraturaPickingUpdateDiff = {
+  documents_added?: Array<{
+    related_document_id?: number | null
+    document_number?: number | null
+    oc_document_id?: number | null
+    client_name?: string
+    monto_clp?: number
+  }>
+  documents_removed?: Array<{
+    related_document_id?: number | null
+    document_number?: number | null
+    monto_clp?: number
+    has_financial_work?: boolean
+  }>
+  documents_modified?: Array<{
+    related_document_id?: number | null
+    document_number?: number | null
+    monto_adopted_clp?: number
+    monto_proposed_clp?: number
+    delta_clp?: number
+  }>
+  documents_removed_with_financial_work?: unknown[]
+  added_count?: number
+  removed_count?: number
+  modified_count?: number
+  venta_adopted_clp?: number
+  venta_proposed_clp?: number
+  venta_delta_clp?: number
+  has_changes?: boolean
+  blocks_auto_drop?: boolean
+}
+
+export type CuadraturaPickingUpdate = {
+  pending?: boolean
+  adopted_picking_id?: number | null
+  adopted_picking_version?: number | null
+  available_picking_id?: number | null
+  available_picking_version?: number | null
+  adoption_needs_review?: boolean
+  version_drift?: boolean
+  documents_added_count?: number
+  documents_removed_count?: number
+  documents_modified_count?: number
+  venta_adopted_clp?: number
+  venta_available_clp?: number
+  venta_delta_clp?: number
+  diff?: CuadraturaPickingUpdateDiff
+  write_blocked?: boolean
+  close_blocked?: boolean
+  message_es?: string | null
+}
+
 export type DispatchPlanCuadraturaResponse = {
   dispatch_plan_id: number
   schema_version?: number
@@ -3781,6 +3833,14 @@ export type DispatchPlanCuadraturaResponse = {
   picking_ready?: boolean
   picking_id?: number | null
   picking_version?: number | null
+  adopted_picking_id?: number | null
+  adopted_picking_version?: number | null
+  available_picking_id?: number | null
+  available_picking_version?: number | null
+  adoption_needs_review?: boolean
+  adoption_source?: string
+  write_blocked_by_picking_update?: boolean
+  picking_update?: CuadraturaPickingUpdate | null
   /** Cabecera del picking (plan, camión, chofer, fecha, sello). */
   header?: DispatchPlanPickingHeader | Record<string, unknown>
   ventas: {
@@ -3842,6 +3902,7 @@ export type DispatchPlanCuadraturaResponse = {
     motivo: string
   }[]
   legacy?: Record<string, unknown>
+  adopt_status?: string
 }
 
 export type CuadraturaListItem = {
@@ -3874,6 +3935,20 @@ export async function getDispatchPlanCuadratura(
   return res.json() as Promise<DispatchPlanCuadraturaResponse>
 }
 
+function _cuadraturaErrorMessage(raw: string, fallback: string): string {
+  try {
+    const parsed = JSON.parse(raw) as {
+      detail?: string | { message?: string; code?: string }
+    }
+    const d = parsed.detail
+    if (typeof d === "string") return d
+    if (d && typeof d === "object" && d.message) return d.message
+  } catch {
+    /* keep raw */
+  }
+  return raw || fallback
+}
+
 export async function putDispatchPlanCuadratura(
   planId: number,
   body: {
@@ -3887,6 +3962,8 @@ export async function putDispatchPlanCuadratura(
     efectivo_clp?: number
     cheque_clp?: number
     debito_clp?: number
+    expected_picking_version?: number | null
+    adopted_picking_version?: number | null
     credit_notes?: DispatchPlanCuadraturaResponse["credit_notes"]
     not_loaded?: DispatchPlanCuadraturaResponse["not_loaded"]
   },
@@ -3898,7 +3975,26 @@ export async function putDispatchPlanCuadratura(
   })
   if (!res.ok) {
     const msg = await res.text().catch(() => "")
-    throw new Error(msg || "Error al guardar cuadratura")
+    throw new Error(_cuadraturaErrorMessage(msg, "Error al guardar cuadratura"))
+  }
+  return res.json() as Promise<DispatchPlanCuadraturaResponse>
+}
+
+export async function adoptDispatchPlanCuadraturaPicking(
+  planId: number,
+  body?: { expected_available_version?: number | null },
+): Promise<DispatchPlanCuadraturaResponse> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/cuadratura/adopt-picking`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: JSON.stringify(body ?? {}),
+    },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(_cuadraturaErrorMessage(msg, "Error al adoptar picking"))
   }
   return res.json() as Promise<DispatchPlanCuadraturaResponse>
 }
@@ -3914,7 +4010,7 @@ export async function closeDispatchPlanCuadratura(
   })
   if (!res.ok) {
     const msg = await res.text().catch(() => "")
-    throw new Error(msg || "Error al cerrar cuadratura")
+    throw new Error(_cuadraturaErrorMessage(msg, "Error al cerrar cuadratura"))
   }
   return res.json() as Promise<DispatchPlanCuadraturaResponse>
 }

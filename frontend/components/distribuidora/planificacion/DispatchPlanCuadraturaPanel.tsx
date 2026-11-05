@@ -5,6 +5,7 @@ import Link from "next/link"
 import { AlertTriangle, Loader2, Lock, Plus, Save, Trash2 } from "lucide-react"
 
 import {
+  adoptDispatchPlanCuadraturaPicking,
   closeDispatchPlanCuadratura,
   getDispatchPlanCuadratura,
   putDispatchPlanCuadratura,
@@ -100,6 +101,8 @@ export function DispatchPlanCuadraturaPanel({
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [closing, setClosing] = useState(false)
+  const [adopting, setAdopting] = useState(false)
+  const [showDiffDetails, setShowDiffDetails] = useState(false)
   const [data, setData] = useState<DispatchPlanCuadraturaResponse | null>(null)
   const [documents, setDocuments] = useState<CuadraturaDocumentRow[]>([])
   const [creditNotes, setCreditNotes] = useState<CuadraturaCreditNoteV2Row[]>([])
@@ -111,6 +114,11 @@ export function DispatchPlanCuadraturaPanel({
   const isClosed = Boolean(data?.closed_at)
   const cuadraturaStarted = Boolean(data?.cuadratura_started ?? data?.persisted)
   const ventaPicking = data?.ventas.venta_picking_clp ?? 0
+  const pickingUpdate = data?.picking_update
+  const updatePending = Boolean(
+    pickingUpdate?.pending || data?.write_blocked_by_picking_update,
+  )
+  const writeBlocked = isClosed || updatePending
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -161,9 +169,18 @@ export function DispatchPlanCuadraturaPanel({
     credit_notes_v2: creditNotes,
     not_loaded_v2: notLoaded,
     cash_count: normalizeCashCount(cashCount),
+    expected_picking_version:
+      data?.adopted_picking_version ?? data?.picking_version ?? undefined,
   })
 
   const save = async () => {
+    if (updatePending) {
+      onMessage(
+        pickingUpdate?.message_es ||
+          "Hay una actualización documental pendiente. Adopte el picking antes de guardar.",
+      )
+      return
+    }
     if (obsRequired && !observacion.trim()) {
       onMessage("Debe ingresar una observación cuando hay diferencia general o de efectivo.")
       return
@@ -180,7 +197,41 @@ export function DispatchPlanCuadraturaPanel({
     }
   }
 
+  const adoptPicking = async () => {
+    if (isClosed) {
+      onMessage("Cuadratura cerrada: no se puede adoptar otra versión.")
+      return
+    }
+    setAdopting(true)
+    try {
+      const res = await adoptDispatchPlanCuadraturaPicking(planId, {
+        expected_available_version:
+          pickingUpdate?.available_picking_version ??
+          data?.available_picking_version ??
+          undefined,
+      })
+      onMessage(
+        res.adopt_status === "unchanged"
+          ? "El picking vigente ya estaba adoptado."
+          : `Picking v${res.adopted_picking_version ?? res.picking_version ?? "?"} adoptado.`,
+      )
+      setShowDiffDetails(false)
+      await load()
+    } catch (e: unknown) {
+      onMessage(e instanceof Error ? e.message : "Error al adoptar picking")
+    } finally {
+      setAdopting(false)
+    }
+  }
+
   const closeCuadratura = async () => {
+    if (updatePending) {
+      onMessage(
+        pickingUpdate?.message_es ||
+          "No se puede cerrar con actualización documental pendiente.",
+      )
+      return
+    }
     if (obsRequired && !observacion.trim()) {
       onMessage("No se puede cerrar sin observación cuando hay diferencia.")
       return
@@ -237,9 +288,9 @@ export function DispatchPlanCuadraturaPanel({
           <Badge className={cn("font-normal", statusBadge.className)}>
             {statusBadge.emoji} {statusBadge.label}
           </Badge>
-          {data.picking_version != null ? (
+          {data.adopted_picking_version != null || data.picking_version != null ? (
             <span className="text-xs text-muted-foreground">
-              Picking v{data.picking_version} congelado
+              Picking adoptado v{data.adopted_picking_version ?? data.picking_version}
             </span>
           ) : null}
           {isClosed ? (
@@ -262,6 +313,98 @@ export function DispatchPlanCuadraturaPanel({
           </Link>
         ) : null}
       </div>
+
+      {updatePending && !isClosed ? (
+        <Alert className="border-amber-300 bg-amber-50/90 dark:border-amber-900 dark:bg-amber-950/40">
+          <AlertTriangle className="size-4" />
+          <AlertTitle>Actualización documental pendiente</AlertTitle>
+          <AlertDescription className="space-y-3 text-sm">
+            <p>
+              Picking adoptado v{pickingUpdate?.adopted_picking_version ?? "—"}
+              {" · "}
+              Picking disponible v{pickingUpdate?.available_picking_version ?? "—"}
+              {" · "}
+              {pickingUpdate?.documents_added_count ?? 0} documento(s) nuevo(s)
+              {" · "}
+              Δ venta{" "}
+              {formatClp(Number(pickingUpdate?.venta_delta_clp ?? 0))}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Los totales oficiales siguen en el alcance adoptado. La lectura no adopta
+              automáticamente. Guarde o cierre solo después de revisar y adoptar.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setShowDiffDetails((v) => !v)}
+              >
+                {showDiffDetails ? "Ocultar diferencias" : "Revisar diferencias"}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={adopting}
+                onClick={() => void adoptPicking()}
+              >
+                {adopting ? (
+                  <Loader2 className="mr-1 size-3.5 animate-spin" />
+                ) : null}
+                Adoptar picking
+                {pickingUpdate?.available_picking_version != null
+                  ? ` v${pickingUpdate.available_picking_version}`
+                  : ""}
+              </Button>
+            </div>
+            {showDiffDetails ? (
+              <div className="space-y-2 rounded-md border bg-background/70 p-3 text-xs">
+                {(pickingUpdate?.diff?.documents_added || []).length ? (
+                  <div>
+                    <p className="font-medium">Agregados</p>
+                    <ul className="list-disc pl-4">
+                      {(pickingUpdate?.diff?.documents_added || []).map((d) => (
+                        <li key={`add-${d.related_document_id ?? d.document_number}`}>
+                          id {d.related_document_id ?? "—"} / folio {d.document_number ?? "—"}{" "}
+                          · {d.client_name || "—"} · {formatClp(Number(d.monto_clp || 0))}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {(pickingUpdate?.diff?.documents_removed || []).length ? (
+                  <div>
+                    <p className="font-medium">Retirados</p>
+                    <ul className="list-disc pl-4">
+                      {(pickingUpdate?.diff?.documents_removed || []).map((d) => (
+                        <li key={`rm-${d.related_document_id ?? d.document_number}`}>
+                          id {d.related_document_id ?? "—"} / folio {d.document_number ?? "—"}{" "}
+                          · {formatClp(Number(d.monto_clp || 0))}
+                          {d.has_financial_work ? " · con pago/obs (requiere resolución)" : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {(pickingUpdate?.diff?.documents_modified || []).length ? (
+                  <div>
+                    <p className="font-medium">Montos modificados</p>
+                    <ul className="list-disc pl-4">
+                      {(pickingUpdate?.diff?.documents_modified || []).map((d) => (
+                        <li key={`mod-${d.related_document_id ?? d.document_number}`}>
+                          id {d.related_document_id ?? "—"}:{" "}
+                          {formatClp(Number(d.monto_adopted_clp || 0))} →{" "}
+                          {formatClp(Number(d.monto_proposed_clp || 0))}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       {!cuadraturaStarted ? (
         <Alert className="border-amber-500/40 bg-amber-500/10">
@@ -326,7 +469,7 @@ export function DispatchPlanCuadraturaPanel({
                     </TableCell>
                     <TableCell>
                       <Select
-                        disabled={isClosed}
+                        disabled={writeBlocked}
                         value={doc.medio_pago || "pendiente"}
                         onValueChange={(v) =>
                           setDocuments((rows) =>
@@ -362,7 +505,7 @@ export function DispatchPlanCuadraturaPanel({
                     </TableCell>
                     <TableCell>
                       <Input
-                        disabled={isClosed}
+                        disabled={writeBlocked}
                         value={doc.observacion || ""}
                         onChange={(e) =>
                           setDocuments((rows) =>
@@ -436,7 +579,7 @@ export function DispatchPlanCuadraturaPanel({
                   </TableCell>
                   <TableCell>
                     <Input
-                      disabled={isClosed}
+                      disabled={writeBlocked}
                       inputMode="numeric"
                       value={row.cantidad ? String(row.cantidad) : ""}
                       onChange={(e) => {
@@ -488,7 +631,7 @@ export function DispatchPlanCuadraturaPanel({
         <EditableSection
           title="Notas de crédito"
         hint="Descuentan de la venta ajustada. Use NC cuando corresponda descontar valor por no entrega/devolución."
-        disabled={isClosed}
+        disabled={writeBlocked}
         onAdd={() => setCreditNotes((r) => [...r, emptyCreditNoteV2Row()])}
       >
         {creditNotes.length === 0 ? (
@@ -500,7 +643,7 @@ export function DispatchPlanCuadraturaPanel({
               className="grid gap-2 rounded-md border border-border/60 p-2 sm:grid-cols-[1fr_1fr_110px_1fr_36px] sm:items-center"
             >
               <Input
-                disabled={isClosed}
+                disabled={writeBlocked}
                 placeholder="N° documento"
                 value={row.documento}
                 onChange={(e) =>
@@ -510,7 +653,7 @@ export function DispatchPlanCuadraturaPanel({
                 }
               />
               <Input
-                disabled={isClosed}
+                disabled={writeBlocked}
                 placeholder="N° nota crédito"
                 value={row.nota_credito}
                 onChange={(e) =>
@@ -520,7 +663,7 @@ export function DispatchPlanCuadraturaPanel({
                 }
               />
               <Input
-                disabled={isClosed}
+                disabled={writeBlocked}
                 inputMode="numeric"
                 placeholder="Monto"
                 value={row.monto ? String(row.monto) : ""}
@@ -533,7 +676,7 @@ export function DispatchPlanCuadraturaPanel({
                 }
               />
               <Input
-                disabled={isClosed}
+                disabled={writeBlocked}
                 placeholder="Observación"
                 value={row.observacion}
                 onChange={(e) =>
@@ -561,7 +704,7 @@ export function DispatchPlanCuadraturaPanel({
       <EditableSection
         title="No cargados (control operacional)"
         hint="Solo registro de productos faltantes. El descuento monetario va en Notas de crédito."
-        disabled={isClosed}
+        disabled={writeBlocked}
         onAdd={() => setNotLoaded((r) => [...r, emptyNotLoadedV2Row()])}
       >
         {notLoaded.length === 0 ? (
@@ -574,7 +717,7 @@ export function DispatchPlanCuadraturaPanel({
             >
               <div className="space-y-1">
                 <Input
-                  disabled={isClosed}
+                  disabled={writeBlocked}
                   placeholder="Producto o código de barras"
                   list={`cuadratura-products-${planId}`}
                   value={row.producto}
@@ -598,7 +741,7 @@ export function DispatchPlanCuadraturaPanel({
                 ) : null}
               </div>
               <Input
-                disabled={isClosed}
+                disabled={writeBlocked}
                 inputMode="decimal"
                 placeholder="Cant."
                 value={row.cantidad ? String(row.cantidad) : ""}
@@ -611,7 +754,7 @@ export function DispatchPlanCuadraturaPanel({
                 }
               />
               <Input
-                disabled={isClosed}
+                disabled={writeBlocked}
                 placeholder="Motivo"
                 value={row.motivo}
                 onChange={(e) =>
@@ -660,7 +803,7 @@ export function DispatchPlanCuadraturaPanel({
             {obsRequired ? <span className="text-destructive"> *</span> : null}
           </Label>
           <Textarea
-            disabled={isClosed}
+            disabled={writeBlocked}
             value={observacion}
             onChange={(e) => setObservacion(e.target.value)}
             placeholder={
@@ -716,7 +859,12 @@ export function DispatchPlanCuadraturaPanel({
 
         {!isClosed ? (
           <div className="flex flex-wrap gap-2 pt-2">
-            <Button type="button" variant="secondary" onClick={() => void save()} disabled={saving || closing}>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => void save()}
+              disabled={saving || closing || writeBlocked}
+            >
               {saving ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Save className="mr-2 size-4" />}
               Guardar borrador
             </Button>
@@ -725,7 +873,7 @@ export function DispatchPlanCuadraturaPanel({
               size="lg"
               className="min-w-[200px] font-semibold shadow-md"
               onClick={() => void closeCuadratura()}
-              disabled={saving || closing}
+              disabled={saving || closing || writeBlocked}
             >
               {closing ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Lock className="mr-2 size-4" />}
               Cerrar cuadratura
