@@ -1,6 +1,6 @@
 /** Filtrado y paginación visual del picking de productos (sin mutar datos). */
 
-export const PICKING_PRODUCT_PAGE_SIZE = 15
+export const PICKING_PRODUCT_PAGE_SIZE = 20
 
 /** Forma mínima compatible con DispatchPlanPickingProductRow (sin acoplar a @/lib/api). */
 export type PickingProductTableRow = {

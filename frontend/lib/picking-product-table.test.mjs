@@ -32,17 +32,17 @@ describe("picking-product-table", () => {
     assert.equal(uniquePickingProductCategories(items).includes("BEBIDAS"), true)
   })
 
-  it("paginates 15 rows and reports range", () => {
-    assert.equal(PICKING_PRODUCT_PAGE_SIZE, 15)
+  it("paginates 20 rows and reports range", () => {
+    assert.equal(PICKING_PRODUCT_PAGE_SIZE, 20)
     const page1 = paginatePickingProductRows(items, 1)
-    assert.equal(page1.rows.length, 15)
+    assert.equal(page1.rows.length, 20)
     assert.equal(page1.from, 1)
-    assert.equal(page1.to, 15)
+    assert.equal(page1.to, 20)
     assert.equal(page1.total, 40)
-    const page3 = paginatePickingProductRows(items, 3)
-    assert.equal(page3.rows.length, 10)
-    assert.equal(page3.from, 31)
-    assert.equal(page3.to, 40)
+    const page2 = paginatePickingProductRows(items, 2)
+    assert.equal(page2.rows.length, 20)
+    assert.equal(page2.from, 21)
+    assert.equal(page2.to, 40)
   })
 
   it("summarizes without inventing boxes", () => {
