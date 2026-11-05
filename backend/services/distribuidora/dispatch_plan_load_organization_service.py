@@ -604,4 +604,19 @@ def save_load_organization(
     finally:
         conn.close()
 
+    # Tras organización completa (o guardado), intentar OC→factura→grupo si hay picking.
+    try:
+        from backend.services.distribuidora import (
+            dispatch_plan_load_batch_service as batch_svc,
+        )
+
+        batch_svc.reconcile_document_load_assignments(plan_id, overwrite_manual=False)
+    except Exception:
+        # No bloquear el guardado de organización por conciliación documental.
+        import logging
+
+        logging.getLogger(__name__).exception(
+            "document_batch_reconcile_after_organization plan_id=%s", plan_id
+        )
+
     return get_load_organization(plan_id)

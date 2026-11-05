@@ -172,6 +172,10 @@ def delete_load_batch(plan_id: int, batch_id: int) -> dict[str, Any]:
 
 
 def _sync_assignments_from_picking(cur, plan_id: int) -> None:
+    """Crea filas de asignación documental desde el picking actual.
+
+    No inventa ``load_batch_id``: eso lo hace ``_reconcile_document_batches_from_oc``.
+    """
     row = picking_repo.get_picking_row(cur, plan_id, current_only=True)
     if not row:
         return
@@ -189,12 +193,211 @@ def _sync_assignments_from_picking(cur, plan_id: int) -> None:
         )
 
 
+def _reconcile_document_batches_from_oc(
+    cur,
+    plan_id: int,
+    *,
+    overwrite_manual: bool = False,
+) -> dict[str, Any]:
+    """Asigna facturas/boletas del picking al grupo de su OC canónica.
+
+    Fuente: ``dispatch_plan_order_load_assignments`` (organización anticipada).
+    No divide facturas. Si un mismo documento tributario quedaría en dos grupos
+    distintos, lo deja sin lote y reporta conflicto.
+    Solo rellena ``load_batch_id`` vacío salvo ``overwrite_manual``.
+    """
+    from backend.repositories.distribuidora import (
+        dispatch_plan_order_load_repo as org_repo,
+    )
+
+    if not org_repo.assignments_table_ready(cur):
+        return {
+            "reconciled": 0,
+            "already_assigned": 0,
+            "pending": 0,
+            "conflicts": [],
+            "organization_ready": False,
+            "note_es": "Migración 053 no disponible: no hay OC→grupo.",
+        }
+
+    oc_to_batch: dict[int, int] = {}
+    for row in org_repo.list_order_assignments(cur, plan_id):
+        oc_id = int(row["oc_document_id"])
+        batch_id = int(row["load_batch_id"])
+        prev = oc_to_batch.get(oc_id)
+        if prev is not None and prev != batch_id:
+            # Datos inconsistentes; no auto-asignar esa OC.
+            oc_to_batch.pop(oc_id, None)
+            continue
+        oc_to_batch[oc_id] = batch_id
+
+    assignments = batch_repo.list_document_assignments(cur, plan_id)
+    # Detectar documento tributario con OCs en grupos distintos (payloads múltiples).
+    doc_batches: dict[int, set[int]] = {}
+    doc_ocs: dict[int, set[int]] = {}
+    for a in assignments:
+        rel = int(a["related_document_id"])
+        oc = a.get("oc_document_id")
+        if oc is None:
+            continue
+        batch = oc_to_batch.get(int(oc))
+        if batch is None:
+            continue
+        doc_batches.setdefault(rel, set()).add(batch)
+        doc_ocs.setdefault(rel, set()).add(int(oc))
+
+    conflicts: list[dict[str, Any]] = []
+    conflict_docs: set[int] = set()
+    for rel, batches in doc_batches.items():
+        if len(batches) > 1:
+            conflict_docs.add(rel)
+            conflicts.append(
+                {
+                    "related_document_id": rel,
+                    "oc_document_ids": sorted(doc_ocs.get(rel) or []),
+                    "load_batch_ids": sorted(batches),
+                    "code": "invoice_spans_groups",
+                    "message_es": (
+                        f"Documento {rel} relaciona OC de grupos distintos "
+                        f"{sorted(batches)}. Requiere resolución auditada; "
+                        "no se asigna automáticamente."
+                    ),
+                }
+            )
+
+    reconciled = 0
+    already = 0
+    pending = 0
+    for a in assignments:
+        rel = int(a["related_document_id"])
+        current = a.get("load_batch_id")
+        if rel in conflict_docs:
+            pending += 1
+            continue
+        oc = a.get("oc_document_id")
+        if oc is None:
+            pending += 1
+            continue
+        target = oc_to_batch.get(int(oc))
+        if target is None:
+            pending += 1
+            continue
+        if current is not None and int(current) == int(target):
+            already += 1
+            continue
+        if current is not None and not overwrite_manual:
+            # Asignación manual distinta: respetar.
+            if int(current) != int(target):
+                conflicts.append(
+                    {
+                        "related_document_id": rel,
+                        "oc_document_id": int(oc),
+                        "current_load_batch_id": int(current),
+                        "suggested_load_batch_id": int(target),
+                        "code": "manual_differs_from_oc_group",
+                        "message_es": (
+                            f"Documento {rel} tiene lote manual {current}; "
+                            f"la OC sugiere grupo {target}."
+                        ),
+                    }
+                )
+            already += 1
+            continue
+        batch_repo.upsert_document_assignment(
+            cur,
+            plan_id=plan_id,
+            related_document_id=rel,
+            load_batch_id=int(target),
+            oc_document_id=int(oc),
+            document_number=int(a["document_number"]) if a.get("document_number") else None,
+            client_name=a.get("client_name"),
+            document_total=float(a["document_total"]) if a.get("document_total") is not None else None,
+        )
+        reconciled += 1
+
+    return {
+        "reconciled": reconciled,
+        "already_assigned": already,
+        "pending": pending,
+        "conflicts": conflicts,
+        "organization_ready": bool(oc_to_batch),
+        "oc_group_count": len(oc_to_batch),
+    }
+
+
+def reconcile_document_load_assignments(
+    plan_id: int,
+    *,
+    overwrite_manual: bool = False,
+) -> dict[str, Any]:
+    """Sincroniza picking → filas documentales y concilia OC→grupo→factura."""
+    ensure_default_load_batch(plan_id)
+    conn = get_connection()
+    assignments: list[dict[str, Any]] = []
+    picking_row = None
+    unassigned = 0
+    group_status: list[dict[str, Any]] = []
+    result: dict[str, Any] = {}
+    try:
+        cur = conn.cursor()
+        if not plan_repo.get_plan_by_id(cur, plan_id):
+            raise ValueError("Plan no encontrado")
+        _sync_assignments_from_picking(cur, plan_id)
+        result = _reconcile_document_batches_from_oc(
+            cur, plan_id, overwrite_manual=overwrite_manual
+        )
+        assignments = batch_repo.list_document_assignments(cur, plan_id)
+        batches = batch_repo.list_load_batches(cur, plan_id)
+        by_batch: dict[int, int] = {}
+        for a in assignments:
+            bid = a.get("load_batch_id")
+            if bid is None:
+                unassigned += 1
+            else:
+                by_batch[int(bid)] = by_batch.get(int(bid), 0) + 1
+        for b in batches:
+            bid = int(b["id"])
+            n = by_batch.get(bid, 0)
+            group_status.append(
+                {
+                    "load_batch_id": bid,
+                    "name": b.get("name"),
+                    "sort_order": b.get("sort_order"),
+                    "documents_assigned": n,
+                    "picking_export_ready": n > 0,
+                }
+            )
+        picking_row = picking_repo.get_picking_row(cur, plan_id, current_only=True)
+        conn.commit()
+        cur.close()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return serialize_value(
+        {
+            "dispatch_plan_id": plan_id,
+            "has_picking": bool(picking_row),
+            "picking_version": int(picking_row["version"]) if picking_row else None,
+            "documents_total": len(assignments),
+            "documents_unassigned": unassigned,
+            "groups": group_status,
+            **result,
+        }
+    )
+
+
 def get_picking_assignments(plan_id: int) -> dict[str, Any]:
     ensure_default_load_batch(plan_id)
     conn = get_connection()
     try:
         cur = conn.cursor()
         _sync_assignments_from_picking(cur, plan_id)
+        # Conciliación automática al consultar: rellena lotes vacíos desde OC→grupo.
+        reconciliation = _reconcile_document_batches_from_oc(
+            cur, plan_id, overwrite_manual=False
+        )
         batches = batch_repo.list_load_batches(cur, plan_id)
         assignments = batch_repo.list_document_assignments(cur, plan_id)
         has_picking = batch_repo.plan_has_current_picking(cur, plan_id)
@@ -211,6 +414,7 @@ def get_picking_assignments(plan_id: int) -> dict[str, Any]:
             "has_picking": has_picking,
             "picking_version": int(picking_row["version"]) if picking_row else None,
             "picking_id": int(picking_row["id"]) if picking_row else None,
+            "document_reconciliation": reconciliation,
         }
     )
 

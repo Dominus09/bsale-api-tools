@@ -752,6 +752,7 @@ def export_picking_producto(
     plan_id: int,
     version: int | None = Query(None, ge=1),
     picking_id: int | None = Query(None, ge=1),
+    load_batch_id: int | None = Query(None, ge=1),
     user: dict = Depends(require_staff_user),
 ):
     _deny_plan_if_out_of_scope(user, plan_id)
@@ -760,6 +761,7 @@ def export_picking_producto(
             plan_id,
             version=version,
             picking_id=picking_id,
+            load_batch_id=load_batch_id,
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -768,6 +770,22 @@ def export_picking_producto(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
     )
+
+
+@router.post("/{plan_id}/document-load-reconciliation")
+def post_document_load_reconciliation(
+    plan_id: int,
+    overwrite_manual: bool = Query(False),
+    user: dict = Depends(require_erp_ops_staff),
+):
+    """Concilia facturas/boletas del picking con grupos OC (organización anticipada)."""
+    _deny_plan_if_out_of_scope(user, plan_id)
+    try:
+        return batch_svc.reconcile_document_load_assignments(
+            plan_id, overwrite_manual=bool(overwrite_manual)
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @router.get("/{plan_id}/picking-by-client")

@@ -1,17 +1,30 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { AlertTriangle, Loader2, Plus, RefreshCw, Save } from "lucide-react"
+import {
+  AlertTriangle,
+  Download,
+  FileText,
+  Loader2,
+  Plus,
+  RefreshCw,
+  Save,
+} from "lucide-react"
 
 import {
   createDispatchPlanLoadBatch,
+  downloadDispatchPlanPickingProductoExcel,
   getDispatchPlanLoadOrganization,
+  getDispatchPlanPickingProducto,
+  postDispatchPlanDocumentLoadReconciliation,
   saveDispatchPlanLoadOrganization,
   updateDispatchPlanLoadBatch,
   type DispatchPlanLoadBatch,
   type DispatchPlanLoadOrganizationResponse,
+  type DocumentLoadReconciliationResponse,
   type LoadOrganizationClientRow,
 } from "@/lib/api"
+import { exportDispatchPlanPickingProductoPdf } from "@/lib/dispatch-plan-picking-pdf"
 import { formatClp } from "@/lib/ors-map-ui"
 import {
   clientSelectionKey,
@@ -78,6 +91,9 @@ export function DispatchPlanLoadOrganizationPanel({ planId, onMessage }: Props) 
   const [newName, setNewName] = useState("")
   const [newRole, setNewRole] = useState<"priority" | "consolidated">("priority")
   const [renameId, setRenameId] = useState<string>("")
+  const [docRecon, setDocRecon] = useState<DocumentLoadReconciliationResponse | null>(
+    null,
+  )
   const [renameValue, setRenameValue] = useState("")
 
   const applyResponse = useCallback((res: DispatchPlanLoadOrganizationResponse) => {
@@ -90,17 +106,74 @@ export function DispatchPlanLoadOrganizationPanel({ planId, onMessage }: Props) 
     setSelected(new Set())
   }, [])
 
+  const refreshDocRecon = useCallback(async () => {
+    try {
+      const recon = await postDispatchPlanDocumentLoadReconciliation(planId)
+      setDocRecon(recon)
+      return recon
+    } catch {
+      setDocRecon(null)
+      return null
+    }
+  }, [planId])
+
   const load = useCallback(async () => {
     setLoading(true)
     try {
       const res = await getDispatchPlanLoadOrganization(planId)
       applyResponse(res)
+      if (
+        res.load_organization_status === "organized" ||
+        res.completeness?.is_complete
+      ) {
+        await refreshDocRecon()
+      } else {
+        setDocRecon(null)
+      }
     } catch (e) {
       onMessage(e instanceof Error ? e.message : "Error al cargar organización")
     } finally {
       setLoading(false)
     }
-  }, [planId, applyResponse, onMessage])
+  }, [planId, applyResponse, onMessage, refreshDocRecon])
+
+  const exportGroupProducto = useCallback(
+    async (batch: DispatchPlanLoadBatch, kind: "pdf" | "xlsx") => {
+      setBusy(`export-${batch.id}-${kind}`)
+      try {
+        await refreshDocRecon()
+        if (kind === "xlsx") {
+          await downloadDispatchPlanPickingProductoExcel(planId, {
+            loadBatchId: batch.id,
+          })
+          onMessage(`Excel productos — ${batch.name} (completo del grupo).`)
+          return
+        }
+        const data = await getDispatchPlanPickingProducto(planId, {
+          loadBatchId: batch.id,
+        })
+        if (!data.header || !data.items?.length) {
+          onMessage(
+            `Sin productos para «${batch.name}». Concilié documentos o use la asignación avanzada.`,
+          )
+          return
+        }
+        await exportDispatchPlanPickingProductoPdf({
+          header: data.header,
+          items: data.items,
+          warnings: data.warnings,
+          version: data.version,
+          generatedAt: data.generated_at,
+        })
+        onMessage(`PDF productos — ${batch.name} generado.`)
+      } catch (e: unknown) {
+        onMessage(e instanceof Error ? e.message : "Error al exportar grupo")
+      } finally {
+        setBusy(null)
+      }
+    },
+    [planId, onMessage, refreshDocRecon],
+  )
 
   useEffect(() => {
     void load()
@@ -739,6 +812,135 @@ export function DispatchPlanLoadOrganizationPanel({ planId, onMessage }: Props) 
                   Cree grupos para comenzar. No hay asignación automática por monto.
                 </p>
               ) : null}
+            </div>
+
+            <div className="space-y-3 rounded-lg border border-border/80 p-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <h4 className="text-sm font-semibold">
+                    Picking de productos por grupo
+                  </h4>
+                  <p className="text-xs text-muted-foreground">
+                    Usa facturas/boletas conciliadas con la OC de cada grupo (no el
+                    consolidado del camión). El PDF completo del camión sigue en la
+                    pestaña Picking.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={busy != null}
+                  onClick={() => void refreshDocRecon().then((r) => {
+                    if (r) {
+                      onMessage(
+                        `Conciliación: ${r.reconciled ?? 0} asignados · ${r.documents_unassigned ?? 0} pendientes`,
+                      )
+                    }
+                  })}
+                >
+                  <RefreshCw className="mr-1 size-3.5" />
+                  Conciliar documentos
+                </Button>
+              </div>
+              {docRecon ? (
+                <p className="text-xs text-muted-foreground">
+                  Docs: {docRecon.documents_total ?? 0} · asignados a grupo:{" "}
+                  {(docRecon.documents_total ?? 0) -
+                    (docRecon.documents_unassigned ?? 0)}{" "}
+                  · pendientes: {docRecon.documents_unassigned ?? 0}
+                  {docRecon.picking_version != null
+                    ? ` · picking v${docRecon.picking_version}`
+                    : " · sin picking persistido"}
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Marque la organización completa y regenere el picking para habilitar
+                  exportaciones por grupo.
+                </p>
+              )}
+              {docRecon?.conflicts?.length ? (
+                <Alert className="border-amber-300 bg-amber-50/80 dark:border-amber-900 dark:bg-amber-950/30">
+                  <AlertTriangle className="size-4" />
+                  <AlertTitle className="text-sm">Conflictos de conciliación</AlertTitle>
+                  <AlertDescription>
+                    <ul className="mt-1 list-inside list-disc text-xs">
+                      {docRecon.conflicts.slice(0, 6).map((c) => (
+                        <li key={`${c.related_document_id}-${c.code}`}>
+                          {c.message_es ||
+                            `Documento ${c.related_document_id}: ${c.code}`}
+                        </li>
+                      ))}
+                    </ul>
+                    <p className="mt-1 text-xs">
+                      Use «Asignación documental post-factura» para resolver
+                      excepciones.
+                    </p>
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+              <div className="grid gap-2 sm:grid-cols-2">
+                {batches.map((b) => {
+                  const gstat = docRecon?.groups?.find(
+                    (g) => g.load_batch_id === b.id,
+                  )
+                  const ready = Boolean(gstat?.picking_export_ready)
+                  const role = b.presentation_role
+                  return (
+                    <div
+                      key={`pick-${b.id}`}
+                      className="space-y-2 rounded-md border bg-muted/15 p-3 text-xs"
+                    >
+                      <div className="font-medium">
+                        {b.name}
+                        {role === "priority"
+                          ? " · prioritario"
+                          : role === "consolidated"
+                            ? " · consolidado"
+                            : ""}
+                      </div>
+                      <p className="text-muted-foreground">
+                        {gstat
+                          ? `${gstat.documents_assigned} factura(s)/boleta(s) conciliadas`
+                          : "Sin estado de conciliación"}
+                        {ready ? " · listo para exportar" : " · pendiente"}
+                      </p>
+                      <div className="flex flex-wrap gap-1">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          className="h-7 text-[11px]"
+                          disabled={busy != null || !docRecon?.has_picking}
+                          onClick={() => void exportGroupProducto(b, "pdf")}
+                        >
+                          {busy === `export-${b.id}-pdf` ? (
+                            <Loader2 className="mr-1 size-3 animate-spin" />
+                          ) : (
+                            <FileText className="mr-1 size-3" />
+                          )}
+                          PDF productos
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          className="h-7 text-[11px]"
+                          disabled={busy != null || !docRecon?.has_picking}
+                          onClick={() => void exportGroupProducto(b, "xlsx")}
+                        >
+                          {busy === `export-${b.id}-xlsx` ? (
+                            <Loader2 className="mr-1 size-3 animate-spin" />
+                          ) : (
+                            <Download className="mr-1 size-3" />
+                          )}
+                          Excel productos
+                        </Button>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
             </div>
           </div>
         </>

@@ -1996,6 +1996,11 @@ export type DispatchPlanDriverInfo = {
   driver_name?: string | null
   assistant_count?: number | null
   peonetas_recorded?: boolean | null
+  peonetas_label?: string | null
+  peonetas_unit_cost_clp?: number | null
+  peonetas_cost_clp?: number | null
+  peonetas_cost_source?: string | null
+  peonetas_editable?: boolean
   driver_pending?: boolean
   driver?: (DispatchPlanDriverOption & { active?: boolean }) | null
   history?: {
@@ -2007,6 +2012,17 @@ export type DispatchPlanDriverInfo = {
     previous_driver_name?: string | null
     new_driver_user_id?: number | null
     new_driver_name?: string | null
+  }[]
+  peonetas_history?: {
+    id: number
+    created_at?: string
+    actor_name?: string | null
+    reason?: string | null
+    previous_assistant_count?: number | null
+    new_assistant_count?: number | null
+    peonetas_cost_clp?: number | null
+    cost_delta_clp?: number | null
+    margin_updated?: boolean | null
   }[]
 }
 
@@ -2148,6 +2164,35 @@ export async function assignDispatchPlanDriver(
   if (!res.ok) {
     const msg = await res.text().catch(() => "")
     throw new Error(msg || "Error al asignar chofer")
+  }
+  return res.json()
+}
+
+export async function updateDispatchPlanPeonetas(
+  planId: number,
+  body: { assistant_count: number; reason: string },
+): Promise<{
+  status: string
+  plan_id: number
+  assistant_count: number
+  peonetas_recorded?: boolean
+  peonetas_cost_clp?: number | null
+  peonetas_unit_cost_clp?: number | null
+  cost_delta_clp?: number | null
+  margin_updated?: boolean
+  cost_note_es?: string | null
+}> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/peonetas`,
+    {
+      method: "POST",
+      headers: getAuthHeaders(),
+      body: JSON.stringify(body),
+    },
+  )
+  if (!res.ok) {
+    const msg = await res.text().catch(() => "")
+    throw new Error(msg || "Error al actualizar peonetas")
   }
   return res.json()
 }
@@ -3083,11 +3128,12 @@ export async function listDispatchPlanPickings(
 async function downloadDispatchPlanPickingExport(
   planId: number,
   kind: "cliente" | "producto",
-  opts?: { version?: number; pickingId?: number },
+  opts?: { version?: number; pickingId?: number; loadBatchId?: number },
 ): Promise<void> {
   const qs = new URLSearchParams()
   if (opts?.version != null) qs.set("version", String(opts.version))
   if (opts?.pickingId != null) qs.set("picking_id", String(opts.pickingId))
+  if (opts?.loadBatchId != null) qs.set("load_batch_id", String(opts.loadBatchId))
   const res = await fetch(
     `${API_URL}/distribuidora/dispatch-plans/${planId}/picking-${kind}/export?${qs}`,
     { headers: getAuthHeaders() },
@@ -3110,16 +3156,58 @@ async function downloadDispatchPlanPickingExport(
 
 export async function downloadDispatchPlanPickingClienteExcel(
   planId: number,
-  opts?: { version?: number; pickingId?: number },
+  opts?: { version?: number; pickingId?: number; loadBatchId?: number },
 ): Promise<void> {
   return downloadDispatchPlanPickingExport(planId, "cliente", opts)
 }
 
 export async function downloadDispatchPlanPickingProductoExcel(
   planId: number,
-  opts?: { version?: number; pickingId?: number },
+  opts?: { version?: number; pickingId?: number; loadBatchId?: number },
 ): Promise<void> {
   return downloadDispatchPlanPickingExport(planId, "producto", opts)
+}
+
+export type DocumentLoadReconciliationResponse = {
+  dispatch_plan_id: number
+  has_picking?: boolean
+  picking_version?: number | null
+  documents_total?: number
+  documents_unassigned?: number
+  reconciled?: number
+  already_assigned?: number
+  pending?: number
+  organization_ready?: boolean
+  conflicts?: {
+    related_document_id: number
+    code?: string
+    message_es?: string
+    load_batch_ids?: number[]
+    oc_document_ids?: number[]
+  }[]
+  groups?: {
+    load_batch_id: number
+    name?: string | null
+    sort_order?: number | null
+    documents_assigned: number
+    picking_export_ready: boolean
+  }[]
+}
+
+export async function postDispatchPlanDocumentLoadReconciliation(
+  planId: number,
+  opts?: { overwriteManual?: boolean },
+): Promise<DocumentLoadReconciliationResponse> {
+  const qs = new URLSearchParams()
+  if (opts?.overwriteManual) qs.set("overwrite_manual", "true")
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/document-load-reconciliation?${qs}`,
+    { method: "POST", headers: getAuthHeaders() },
+  )
+  if (!res.ok) {
+    throw new Error(await res.text().catch(() => "Error al conciliar documentos por grupo"))
+  }
+  return res.json()
 }
 
 export async function getDispatchPlanPickingCliente(

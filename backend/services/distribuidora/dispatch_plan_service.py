@@ -2453,6 +2453,17 @@ def generate_plan_picking(
         conn.close()
 
     mark_picking_generated(plan_id)
+    # Tras nueva versión: sincronizar docs del picking y conciliar OC→grupo→factura.
+    try:
+        from backend.services.distribuidora import (
+            dispatch_plan_load_batch_service as batch_svc,
+        )
+
+        batch_svc.reconcile_document_load_assignments(plan_id, overwrite_manual=False)
+    except Exception:
+        logger.exception(
+            "document_batch_reconcile_after_picking plan_id=%s", plan_id
+        )
     row = _resolve_picking_row(plan_id, picking_id=new_picking_id)
     if not row:
         raise ValueError("Picking persistido no encontrado tras generar")
@@ -2630,19 +2641,35 @@ def build_picking_product_excel_bytes(
     *,
     version: int | None = None,
     picking_id: int | None = None,
+    load_batch_id: int | None = None,
 ) -> tuple[bytes, str]:
     data = get_picking_by_product(
-        plan_id, validate=False, version=version, picking_id=picking_id
+        plan_id,
+        validate=False,
+        version=version,
+        picking_id=picking_id,
+        load_batch_id=load_batch_id,
     )
     if not data.get("ready"):
         raise ValueError(data.get("reason") or "Picking producto no disponible")
     header = data.get("header") or fetch_picking_header(plan_id)
     items = data.get("items") or []
+    if load_batch_id is not None and not items:
+        raise ValueError(
+            "Sin productos para este grupo: faltan documentos conciliados al lote "
+            "o el picking aún no está listo para exportación por grupo."
+        )
     ver = data.get("version")
     base, _ = build_picking_product_excel(plan_id, header, items)
     if ver is not None:
         slug = _slug_filename_part(str(header.get("truck_name")))
-        fname = f"picking_producto_{slug}_v{ver}.xlsx"
+        batch_slug = ""
+        lb = header.get("load_batch") or {}
+        if isinstance(lb, dict) and lb.get("name"):
+            batch_slug = f"_{_slug_filename_part(str(lb['name']))}"
+        elif load_batch_id is not None:
+            batch_slug = f"_grupo{int(load_batch_id)}"
+        fname = f"picking_producto_{slug}{batch_slug}_v{ver}.xlsx"
         return base, fname
     return build_picking_product_excel(plan_id, header, items)
 
