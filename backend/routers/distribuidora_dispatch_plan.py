@@ -14,6 +14,12 @@ from pydantic import BaseModel, Field
 from backend.services.distribuidora import dispatch_plan_service as svc
 from backend.services.distribuidora import dispatch_plan_cuadratura_service as cuad_svc
 from backend.services.distribuidora import dispatch_plan_load_batch_service as batch_svc
+from backend.services.distribuidora import (
+    dispatch_plan_load_organization_service as load_org_svc,
+)
+from backend.services.distribuidora.dispatch_plan_load_organization_service import (
+    LoadOrganizationConflictError,
+)
 from backend.auth.permissions import (
     is_simple_planning_capability_only,
     require_erp_ops_staff,
@@ -110,6 +116,18 @@ class PickingAssignmentItem(BaseModel):
 
 class PickingAssignmentsBody(BaseModel):
     assignments: list[PickingAssignmentItem] = Field(default_factory=list)
+
+
+class OrderLoadAssignmentItem(BaseModel):
+    oc_document_id: int = Field(..., ge=1, description="document_id canónico Bsale/ERP")
+    load_batch_id: int = Field(..., ge=1)
+
+
+class LoadOrganizationBody(BaseModel):
+    assignments: list[OrderLoadAssignmentItem] = Field(default_factory=list)
+    organization_version: int = Field(..., ge=0)
+    mark_organized: bool = False
+    allow_split_client: bool = False
 
 
 class AddOrderToPlanBody(BaseModel):
@@ -869,6 +887,39 @@ def put_picking_assignments(
         return batch_svc.save_picking_assignments(
             plan_id, [a.model_dump() for a in body.assignments]
         )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.get("/{plan_id}/load-organization")
+def get_load_organization(plan_id: int, user: dict = Depends(require_staff_user)):
+    """Organización anticipada OC→grupo (pre-factura). No altera picking ni facturas."""
+    _deny_plan_if_out_of_scope(user, plan_id)
+    try:
+        return load_org_svc.get_load_organization(plan_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@router.put("/{plan_id}/load-organization")
+def put_load_organization(
+    plan_id: int,
+    body: LoadOrganizationBody,
+    user: dict = Depends(require_erp_ops_staff),
+):
+    """Guarda asignaciones pre-factura. Atómico, idempotente, con versión optimista."""
+    _deny_plan_if_out_of_scope(user, plan_id)
+    try:
+        return load_org_svc.save_load_organization(
+            plan_id,
+            assignments=[a.model_dump() for a in body.assignments],
+            organization_version=body.organization_version,
+            mark_organized=body.mark_organized,
+            allow_split_client=body.allow_split_client,
+            user=user,
+        )
+    except LoadOrganizationConflictError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
