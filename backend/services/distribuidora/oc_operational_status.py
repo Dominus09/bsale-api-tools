@@ -441,7 +441,25 @@ def plan_progress_counts(statuses: list[OcOperationalStatus]) -> dict[str, Any]:
 
 
 def blocks_planning_admission(status: OcOperationalStatus) -> bool:
+    """Alta de una planificación nueva.
+
+    Una OC ya facturada no vuelve a entrar a un despacho que se está creando.
+    No usar esta regla en la incorporación suplementaria de un despacho existente.
+    """
     return (not status.planning_eligible) or status.dispatch_closed
+
+
+def blocks_supplemental_admission(status: OcOperationalStatus) -> bool:
+    """Incorporación a un despacho ya existente.
+
+    La factura previa es esperable (OC tardía ya documentada). Siguen bloqueadas
+    la anulación y la nota de crédito total, que no dejan mercadería despachable.
+    """
+    return status.billing_status in (
+        BILLING_CANCELLED,
+        BILLING_INVOICED_FULL_CN,
+        BILLING_INVOICED_CN_UNSPECIFIED,
+    )
 
 
 def is_predespacho_pending_row(
@@ -481,6 +499,39 @@ ADMISSION_BLOCK_MESSAGE_CANCELLED = (
 
 
 def admission_block_message(status: OcOperationalStatus) -> str:
+    """Mensaje de una planificación nueva. No reutilizarlo en OC adicionales."""
     if status.billing_status == BILLING_CANCELLED:
         return ADMISSION_BLOCK_MESSAGE_CANCELLED
     return ADMISSION_BLOCK_MESSAGE
+
+
+def supplemental_admission_block(status: OcOperationalStatus) -> tuple[str, str] | None:
+    """Código y motivo si la OC no puede entrar como adicional. None si la facturación lo permite."""
+    billing = status.billing_status
+    if billing == BILLING_CANCELLED:
+        return (
+            "oc_cancelled",
+            "Esta orden está anulada y no se incorpora al despacho.",
+        )
+    if billing == BILLING_INVOICED_FULL_CN:
+        return (
+            "oc_fully_credited",
+            "Nota de crédito total: no queda mercadería facturada para incorporar.",
+        )
+    if billing == BILLING_INVOICED_CN_UNSPECIFIED:
+        return (
+            "oc_credit_note_unspecified",
+            "La nota de crédito no permite determinar si queda mercadería despachable.",
+        )
+    invoices = []
+    if status.chain is not None:
+        invoices = list(status.chain.confirmed_invoice_ids)
+    elif status.confirmed_invoice and status.confirmed_invoice.get("document_id") is not None:
+        invoices = [int(status.confirmed_invoice["document_id"])]
+    distinct = sorted({int(x) for x in invoices})
+    if len(distinct) > 1:
+        return (
+            "invoice_ambiguous",
+            "La OC tiene más de una factura confirmada y no se puede vincular un documento inequívoco.",
+        )
+    return None

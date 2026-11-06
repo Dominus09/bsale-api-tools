@@ -31,7 +31,10 @@ from backend.services.distribuidora.oc_operational_status import (
     BILLING_PENDING,
     BILLING_PROBABLE,
     admission_block_message,
-    blocks_planning_admission,
+    supplemental_admission_block,
+)
+from backend.services.distribuidora.dispatch_plan_oc_guard import (
+    find_blocking_oc_assignments,
 )
 from backend.services.distribuidora.simple_planning_assignment_service import (
     validate_truck_capacity,
@@ -81,6 +84,7 @@ def _staff_label(user: dict[str, Any] | None) -> str | None:
 
 
 def _admission_block_payload(status) -> dict[str, Any]:
+    """Conservado para diagnósticos de planificación nueva. El alta suplementaria no lo usa."""
     inv = status.confirmed_invoice or {}
     return {
         "blocked": True,
@@ -90,6 +94,348 @@ def _admission_block_payload(status) -> dict[str, Any]:
         "confirmed_invoice": inv,
         "invoice_number": inv.get("number"),
     }
+
+
+def _oc_folio(status, oc_id: int) -> int | None:
+    if status is not None and status.chain is not None and status.chain.oc_number is not None:
+        return int(status.chain.oc_number)
+    inv = (status.confirmed_invoice if status is not None else None) or {}
+    number = inv.get("oc_number")
+    if number is not None:
+        try:
+            return int(number)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _rejection(
+    *,
+    oc_document_id: int,
+    oc_number: int | None,
+    code: str,
+    message: str,
+    invoice_number: int | None = None,
+) -> dict[str, Any]:
+    return {
+        "oc_document_id": int(oc_document_id),
+        "oc_number": oc_number,
+        "folio": oc_number if oc_number is not None else int(oc_document_id),
+        "conflict": code,
+        "code": code,
+        "message": message,
+        "invoice_number": invoice_number,
+        "saved": False,
+        "rollback": "complete",
+    }
+
+
+def format_supplemental_rejections(rejections: list[dict[str, Any]]) -> str:
+    lines = [
+        "No se incorporó ninguna OC. La transacción no se confirmó (rollback completo)."
+    ]
+    for row in rejections:
+        folio = row.get("oc_number") or row.get("oc_document_id")
+        lines.append(
+            f"OC {folio}: tipo={row.get('conflict') or row.get('code')}; "
+            f"motivo={row.get('message')}"
+        )
+    return " ".join(lines)
+
+
+def _cursor_is_live(cur) -> bool:
+    return "psycopg2" in (type(cur).__module__ or "")
+
+
+def _confirmed_invoice_ids(status) -> list[int]:
+    if status is None:
+        return []
+    if status.chain is not None:
+        return sorted({int(x) for x in status.chain.confirmed_invoice_ids})
+    inv = status.confirmed_invoice or {}
+    if inv.get("document_id") is None:
+        return []
+    return [int(inv["document_id"])]
+
+
+def _invoice_number(status) -> int | None:
+    inv = (status.confirmed_invoice if status is not None else None) or {}
+    number = inv.get("number")
+    if number is None and status is not None and status.chain and status.chain.confirmed_invoices:
+        number = status.chain.confirmed_invoices[0].number
+    try:
+        return int(number) if number is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def collect_supplemental_admission_rejections(
+    cur,
+    plan_id: int,
+    oc_ids: list[int],
+    status_map: dict[int, Any],
+) -> list[dict[str, Any]]:
+    """Reglas de incorporación suplementaria. No aplica el bloqueo de planificación nueva.
+
+    Una OC facturada es válida. Se rechazan anulación, NC total, empresa/oficina
+    ajenas, otro despacho, factura ambigua o ya asignada, y duplicado en el lote.
+    """
+    rejections: list[dict[str, Any]] = []
+    invoice_owners: dict[int, list[int]] = {}
+
+    for oc_id in oc_ids:
+        status = status_map.get(int(oc_id))
+        folio = _oc_folio(status, int(oc_id))
+        if status is None:
+            if _cursor_is_live(cur):
+                rejections.append(
+                    _rejection(
+                        oc_document_id=int(oc_id),
+                        oc_number=folio,
+                        code="oc_status_unknown",
+                        message="No se pudo resolver el estado documental de la OC.",
+                    )
+                )
+            continue
+        blocked = supplemental_admission_block(status)
+        if blocked:
+            code, message = blocked
+            rejections.append(
+                _rejection(
+                    oc_document_id=int(oc_id),
+                    oc_number=folio or (
+                        int(status.chain.oc_number)
+                        if status.chain is not None and status.chain.oc_number is not None
+                        else None
+                    ),
+                    code=code,
+                    message=message,
+                    invoice_number=_invoice_number(status),
+                )
+            )
+            continue
+        inv_ids = _confirmed_invoice_ids(status)
+        if len(inv_ids) == 1:
+            invoice_owners.setdefault(inv_ids[0], []).append(int(oc_id))
+
+    for invoice_id, owners in invoice_owners.items():
+        if len(owners) < 2:
+            continue
+        for oc_id in owners:
+            status = status_map.get(int(oc_id))
+            rejections.append(
+                _rejection(
+                    oc_document_id=int(oc_id),
+                    oc_number=_oc_folio(status, int(oc_id)),
+                    code="invoice_shared_in_batch",
+                    message=(
+                        f"La factura {invoice_id} está vinculada a más de una OC "
+                        "del mismo alta y no se puede asignar a un solo grupo."
+                    ),
+                    invoice_number=_invoice_number(status),
+                )
+            )
+
+    if not _cursor_is_live(cur):
+        return rejections
+
+    rejections.extend(
+        _scope_rejections_live(cur, plan_id, oc_ids, status_map, invoice_owners)
+    )
+    return rejections
+
+
+def _schema_missing(exc: BaseException) -> bool:
+    pgcode = getattr(exc, "pgcode", None)
+    if pgcode == "42P01":
+        return True
+    return "does not exist" in str(exc)
+
+
+def _query_rows(cur, sql: str, params: tuple):
+    """Ejecuta dentro de un savepoint para no abortar el alta si el esquema no está."""
+    cur.execute("SAVEPOINT supplemental_scope_q")
+    try:
+        cur.execute(sql, params)
+        rows = cur.fetchall() or []
+        cur.execute("RELEASE SAVEPOINT supplemental_scope_q")
+        return rows
+    except Exception:
+        cur.execute("ROLLBACK TO SAVEPOINT supplemental_scope_q")
+        cur.execute("RELEASE SAVEPOINT supplemental_scope_q")
+        raise
+
+
+def _scope_rejections_live(
+    cur,
+    plan_id: int,
+    oc_ids: list[int],
+    status_map: dict[int, Any],
+    invoice_owners: dict[int, list[int]],
+) -> list[dict[str, Any]]:
+    from backend.services.distribuidora.oc_document_chain_resolver import (
+        COMPANY_ID_DEFAULT,
+        OFFICE_ID_DEFAULT,
+    )
+
+    out: list[dict[str, Any]] = []
+    try:
+        rows = _query_rows(
+            cur,
+            """
+            SELECT document_id, number, company_id, office_id, COALESCE(state, 0)
+            FROM distribuidora.documents
+            WHERE document_id = ANY(%s)
+            """,
+            (list(oc_ids),),
+        )
+    except Exception as exc:
+        if _schema_missing(exc):
+            return []
+        logger.exception("supplemental_scope_documents_failed plan_id=%s", plan_id)
+        return [
+            _rejection(
+                oc_document_id=int(oc_ids[0]),
+                oc_number=None,
+                code="oc_scope_unverified",
+                message="No se pudo verificar empresa, oficina y vigencia de las OC.",
+            )
+        ]
+
+    found: dict[int, tuple] = {}
+    for row in rows:
+        found[int(row[0])] = row
+    for oc_id in oc_ids:
+        status = status_map.get(int(oc_id))
+        row = found.get(int(oc_id))
+        folio = int(row[1]) if row and row[1] is not None else _oc_folio(status, int(oc_id))
+        if row is None:
+            out.append(
+                _rejection(
+                    oc_document_id=int(oc_id),
+                    oc_number=folio,
+                    code="oc_not_found",
+                    message="La OC no existe en los documentos de la empresa.",
+                )
+            )
+            continue
+        company_id = int(row[2]) if row[2] is not None else None
+        office_id = int(row[3]) if row[3] is not None else None
+        state = int(row[4] or 0)
+        if company_id != COMPANY_ID_DEFAULT or office_id != OFFICE_ID_DEFAULT:
+            out.append(
+                _rejection(
+                    oc_document_id=int(oc_id),
+                    oc_number=folio,
+                    code="oc_wrong_company_or_office",
+                    message=(
+                        f"Empresa/oficina {company_id}/{office_id} no corresponde "
+                        f"a {COMPANY_ID_DEFAULT}/{OFFICE_ID_DEFAULT}."
+                    ),
+                )
+            )
+        if state != 0:
+            out.append(
+                _rejection(
+                    oc_document_id=int(oc_id),
+                    oc_number=folio,
+                    code="oc_cancelled_or_replaced",
+                    message="El documento está anulado o reemplazado (state distinto de 0).",
+                )
+            )
+
+    try:
+        cur.execute("SAVEPOINT supplemental_scope_q")
+        try:
+            conflicts = find_blocking_oc_assignments(
+                cur, list(oc_ids), exclude_plan_id=int(plan_id)
+            )
+            cur.execute("RELEASE SAVEPOINT supplemental_scope_q")
+        except Exception:
+            cur.execute("ROLLBACK TO SAVEPOINT supplemental_scope_q")
+            cur.execute("RELEASE SAVEPOINT supplemental_scope_q")
+            raise
+    except Exception as exc:
+        logger.exception("supplemental_scope_plans_failed plan_id=%s", plan_id)
+        conflicts = []
+        if not _schema_missing(exc):
+            out.append(
+                _rejection(
+                    oc_document_id=int(oc_ids[0]),
+                    oc_number=None,
+                    code="oc_scope_unverified",
+                    message="No se pudo verificar si la OC ya está en otro despacho.",
+                )
+            )
+    for sample in conflicts:
+        oc_id = int(sample.get("oc_document_id"))
+        status = status_map.get(oc_id)
+        out.append(
+            _rejection(
+                oc_document_id=oc_id,
+                oc_number=_oc_folio(status, oc_id),
+                code="oc_on_other_plan",
+                message=(
+                    "Ya está en el despacho "
+                    f"{sample.get('planning_code') or sample.get('dispatch_plan_id')} "
+                    f"(estado={sample.get('status')})."
+                ),
+            )
+        )
+
+    invoice_ids = list(invoice_owners.keys())
+    if not invoice_ids:
+        return out
+    try:
+        assigned = _query_rows(
+            cur,
+            """
+            SELECT a.related_document_id, a.dispatch_plan_id, a.load_batch_id,
+                   p.planning_code, b.name
+            FROM distribuidora.dispatch_plan_document_load_assignments a
+            JOIN distribuidora.dispatch_plan p ON p.id = a.dispatch_plan_id
+            LEFT JOIN distribuidora.dispatch_plan_load_batches b ON b.id = a.load_batch_id
+            WHERE a.related_document_id = ANY(%s)
+            """,
+            (invoice_ids,),
+        )
+    except Exception as exc:
+        if _schema_missing(exc):
+            return out
+        logger.exception("supplemental_scope_invoices_failed plan_id=%s", plan_id)
+        return out + [
+            _rejection(
+                oc_document_id=int(oc_ids[0]),
+                oc_number=None,
+                code="oc_scope_unverified",
+                message="No se pudo verificar si la factura ya está asignada a un grupo.",
+            )
+        ]
+    for related_id, other_plan, _batch_id, code, batch_name in assigned:
+        owners = invoice_owners.get(int(related_id), [])
+        for oc_id in owners:
+            status = status_map.get(int(oc_id))
+            if int(other_plan) != int(plan_id):
+                conflict = "invoice_on_other_plan"
+                message = (
+                    f"La factura ya está asignada al despacho {code or other_plan}."
+                )
+            else:
+                conflict = "invoice_crosses_groups"
+                message = (
+                    "La factura ya está asignada al grupo "
+                    f"«{batch_name or _batch_id}» de este despacho."
+                )
+            out.append(
+                _rejection(
+                    oc_document_id=int(oc_id),
+                    oc_number=_oc_folio(status, int(oc_id)),
+                    code=conflict,
+                    message=message,
+                    invoice_number=_invoice_number(status),
+                )
+            )
+    return out
 
 
 def _oc_ready_for_product_picking(status) -> bool:
@@ -583,6 +929,13 @@ def preview_supplemental_orders(
         )
         uses_supplemental = org_status == "organized"
         invoicing = assess_oc_invoicing_for_picking(cur, novel or oc_ids)
+        admission = collect_supplemental_admission_rejections(
+            cur, plan_id, novel or oc_ids, 
+            resolve_operational_statuses_batch(cur, novel or oc_ids),
+        )
+        if admission and can_add:
+            can_add = False
+            blocked_reason = format_supplemental_rejections(admission)
 
         cur.close()
     finally:
@@ -721,16 +1074,6 @@ def add_supplemental_orders_to_plan(
         )
 
         status_map = resolve_operational_statuses_batch(cur, oc_ids)
-        for oc_id in oc_ids:
-            oc_status = status_map.get(int(oc_id))
-            if oc_status is not None and blocks_planning_admission(oc_status):
-                detail = _admission_block_payload(oc_status)
-                raise SupplementalOrderError(
-                    f"OC {oc_id}: {detail['message']}",
-                    code="oc_not_admissible",
-                    http_status=409,
-                    details=detail,
-                )
 
         existing_ids = {
             int(o["oc_document_id"]) for o in plan_repo.list_plan_orders(cur, plan_id)
@@ -759,10 +1102,55 @@ def add_supplemental_orders_to_plan(
                         "note_es": "Reintento idempotente: OC ya estaban en el grupo suplementario.",
                     }
                 )
+            dup = [
+                _rejection(
+                    oc_document_id=int(oc_id),
+                    oc_number=_oc_folio(status_map.get(int(oc_id)), int(oc_id)),
+                    code="oc_duplicate",
+                    message="Ya pertenece a este despacho y no está en el grupo suplementario.",
+                )
+                for oc_id in already
+            ]
             raise SupplementalOrderError(
-                f"OC ya pertenecen al plan: {already}",
+                format_supplemental_rejections(dup),
                 code="oc_duplicate",
                 http_status=409,
+                details={"rejections": dup, "saved": False, "rollback": "complete"},
+            )
+
+        if already and novel:
+            dup = [
+                _rejection(
+                    oc_document_id=int(oc_id),
+                    oc_number=_oc_folio(status_map.get(int(oc_id)), int(oc_id)),
+                    code="oc_duplicate",
+                    message=(
+                        "Ya pertenece a este despacho. "
+                        "No se incorporó ninguna OC del lote."
+                    ),
+                )
+                for oc_id in already
+            ]
+            raise SupplementalOrderError(
+                format_supplemental_rejections(dup),
+                code="oc_duplicate",
+                http_status=409,
+                details={"rejections": dup, "saved": False, "rollback": "complete"},
+            )
+
+        rejections = collect_supplemental_admission_rejections(
+            cur, plan_id, novel, status_map
+        )
+        if rejections:
+            raise SupplementalOrderError(
+                format_supplemental_rejections(rejections),
+                code=str(rejections[0].get("code") or "oc_not_admissible"),
+                http_status=409,
+                details={
+                    "rejections": rejections,
+                    "saved": False,
+                    "rollback": "complete",
+                },
             )
 
         supplemental_batch = None
