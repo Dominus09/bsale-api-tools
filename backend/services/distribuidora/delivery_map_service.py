@@ -211,16 +211,51 @@ def get_delivery_map(plan_id: int) -> dict[str, Any]:
         )
         rows = [dict(r) for r in cur.fetchall()]
 
+        # Ubicaciones internas verificadas (P3): prioridad solo con client_id confiable.
+        verified_by_client: dict[int, tuple[float, float]] = {}
+        client_ids = sorted(
+            {
+                int(r["client_id"])
+                for r in rows
+                if r.get("client_id") is not None
+            }
+        )
+        if client_ids:
+            cur.execute(
+                """
+                SELECT to_regclass('distribuidora.client_verified_locations') IS NOT NULL
+                """
+            )
+            if cur.fetchone()[0]:
+                cur.execute(
+                    """
+                    SELECT client_id, latitude, longitude
+                    FROM distribuidora.client_verified_locations
+                    WHERE client_id = ANY(%s)
+                    """,
+                    (client_ids,),
+                )
+                for vr in cur.fetchall():
+                    coords_v = _valid_coords(vr["latitude"], vr["longitude"])
+                    if coords_v:
+                        verified_by_client[int(vr["client_id"])] = coords_v
+
         grouped: dict[str, dict[str, Any]] = {}
         for row in rows:
             key = _customer_key(row.get("client_id"), row.get("client_name"))
+            verified = None
+            if row.get("client_id") is not None:
+                verified = verified_by_client.get(int(row["client_id"]))
             coords = (
-                _valid_coords(row.get("order_lat"), row.get("order_lng"))
+                verified
+                or _valid_coords(row.get("order_lat"), row.get("order_lng"))
                 or _valid_coords(row.get("rutero_lat"), row.get("rutero_lng"))
                 or _valid_coords(row.get("client_lat"), row.get("client_lng"))
             )
             coord_source = None
-            if _valid_coords(row.get("order_lat"), row.get("order_lng")):
+            if verified:
+                coord_source = "client_verified_locations"
+            elif _valid_coords(row.get("order_lat"), row.get("order_lng")):
                 coord_source = "dispatch_plan_orders.lat/lng"
             elif _valid_coords(row.get("rutero_lat"), row.get("rutero_lng")):
                 coord_source = "bsale.rutero (operacional/sync)"

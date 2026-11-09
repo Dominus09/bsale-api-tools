@@ -27,52 +27,32 @@ from backend.utils.json_safe import serialize_value
 
 FUTURE_CONTRACTS = {
     "facade_photo": {
-        "status": "not_implemented",
-        "phase": "P3+",
+        "status": "implemented_pending_r2",
+        "phase": "P3",
         "storage": "cloudflare_r2_private",
         "note_es": (
-            "Fotografía permanente de fachada: subida privada a R2, "
-            "asociada a client_id del despacho; requiere validación administrativa."
+            "Fotografía de fachada: metadatos en PG + bytes en R2 privado. "
+            "Requiere R2_* en Coolify y migración 055."
         ),
-        "fields_planned": [
-            "client_id",
-            "object_key",
-            "content_type",
-            "captured_at",
-            "captured_by_user_id",
-            "validation_status",
-        ],
     },
     "gps_correction_proposal": {
-        "status": "not_implemented",
-        "phase": "P3+",
+        "status": "implemented",
+        "phase": "P3",
         "note_es": (
-            "Propuesta de corrección GPS del cliente: lat/lng + evidencia; "
-            "no escribe en bsale.clients hasta aprobación admin."
+            "Propuesta GPS del chofer: no escribe bsale.clients; "
+            "aprobación ERP publica client_verified_locations."
         ),
-        "fields_planned": [
-            "client_id",
-            "proposed_lat",
-            "proposed_lng",
-            "accuracy_m",
-            "evidence_object_key",
-            "proposed_by_user_id",
-            "admin_validation_status",
-        ],
     },
     "admin_validation": {
-        "status": "not_implemented",
-        "phase": "P3+",
-        "note_es": "Cola administrativa para aprobar foto de fachada y GPS propuesto.",
+        "status": "implemented",
+        "phase": "P3",
+        "note_es": "Cola ERP: ubicaciones de clientes pendientes.",
     },
     "delivery_evidence_photo": {
         "status": "not_implemented",
-        "phase": "P3+",
+        "phase": "P4+",
         "storage": "cloudflare_r2_private",
-        "note_es": (
-            "Evidencia fotográfica de entrega por documento/parada. "
-            "Sin buckets, migraciones ni eventos de entrega en P2."
-        ),
+        "note_es": "Evidencia de entrega: fuera de P3.",
     },
 }
 
@@ -774,45 +754,67 @@ def get_client_ficha_for_driver(plan_id: int, customer_key: str) -> dict[str, An
             }
         )
 
+    from backend.services.distribuidora import client_location_service as loc_svc
+
+    client_payload = {
+        "customer_key": key,
+        "client_id": client.get("client_id"),
+        "client_name": client.get("client_name"),
+        "fantasy_name": client.get("fantasy_name") or "",
+        "rut": client.get("rut"),
+        "seller_name": client.get("seller_name"),
+        "sellers": client.get("sellers") or [],
+        "address": client.get("address") or "",
+        "city": client.get("city") or "",
+        "phone": client.get("phone") or "",
+        "observations": client.get("observations") or "",
+        "latitude": client.get("latitude"),
+        "longitude": client.get("longitude"),
+        "has_coordinates": bool(client.get("has_coordinates")),
+        "coordinates_source": client.get("coordinates_source"),
+        "route_order": client.get("route_order"),
+        "load_groups": client.get("load_groups") or [],
+        "facade_photo": None,
+        "facade_photo_placeholder": True,
+    }
+    try:
+        client_payload = loc_svc.enrich_client_location_fields(client_payload)
+    except Exception:
+        # Ficha no debe caerse si 055/R2 aún no están listos.
+        client_payload.setdefault(
+            "location_registration",
+            {"status": "unknown", "label_es": "Estado no disponible", "can_register": False},
+        )
+
     navigation: dict[str, Any]
-    if client.get("has_coordinates") and client.get("latitude") is not None:
-        lat = float(client["latitude"])
-        lng = float(client["longitude"])
+    if client_payload.get("has_coordinates") and client_payload.get("latitude") is not None:
+        lat = float(client_payload["latitude"])
+        lng = float(client_payload["longitude"])
         navigation = build_client_navigation(
             lat,
             lng,
-            city=client.get("city"),
-            client_name=client.get("client_name"),
+            city=client_payload.get("city"),
+            client_name=client_payload.get("client_name"),
         )
     else:
         navigation = {"available": False}
+
+    try:
+        p3_status = loc_svc.schema_status()
+    except Exception:
+        p3_status = {
+            "tables_ready": False,
+            "r2": {"configured": False},
+            "note_es": "Estado P3 no disponible",
+        }
 
     return serialize_value(
         {
             "dispatch_plan_id": int(plan_id),
             "customer_key": key,
-            "client": {
-                "customer_key": key,
-                "client_id": client.get("client_id"),
-                "client_name": client.get("client_name"),
-                "fantasy_name": client.get("fantasy_name") or "",
-                "rut": client.get("rut"),
-                "seller_name": client.get("seller_name"),
-                "sellers": client.get("sellers") or [],
-                "address": client.get("address") or "",
-                "city": client.get("city") or "",
-                "phone": client.get("phone") or "",
-                "observations": client.get("observations") or "",
-                "latitude": client.get("latitude"),
-                "longitude": client.get("longitude"),
-                "has_coordinates": bool(client.get("has_coordinates")),
-                "coordinates_source": client.get("coordinates_source"),
-                "route_order": client.get("route_order"),
-                "load_groups": client.get("load_groups") or [],
-                "facade_photo": None,
-                "facade_photo_placeholder": True,
-            },
+            "client": client_payload,
             "navigation": navigation,
+            "p3": p3_status,
             "documents": documents_out,
             "document_count": len(documents_out),
             "units_total": client.get("units_total") or 0,

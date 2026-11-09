@@ -1,14 +1,16 @@
-"""PWA operativa — lectura de despachos del chofer autenticado.
+"""PWA operativa — despachos del chofer autenticado.
 
 No exige app ERP. Ownership estricto por ``dispatch_plan.driver_user_id``.
-P2: clientes, ficha, documentos/productos y mapa inicial (solo lectura).
+P2: lectura. P3: propuesta GPS + foto fachada (sin aprobar).
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from pydantic import BaseModel, Field
 
 from backend.auth.multiapp import require_pwa_profiles
+from backend.services.distribuidora import client_location_service as loc_svc
 from backend.services.distribuidora import dispatch_plan_driver_service as driver_svc
 from backend.services.distribuidora import dispatch_plan_pwa_driver_read_service as read_svc
 from backend.utils.json_safe import serialize_value
@@ -124,3 +126,103 @@ def get_future_contracts(
 ):
     _uid(user)
     return read_svc.get_future_contracts()
+
+
+class LocationProposalBody(BaseModel):
+    latitude: float
+    longitude: float
+    accuracy_m: float | None = None
+    captured_at: str | None = None
+    confirm_low_accuracy: bool = False
+    confirm_significant_move: bool = False
+    facade_photo_id: int | None = Field(None, ge=1)
+    idempotency_key: str | None = Field(None, max_length=120)
+
+
+class FacadePrepareBody(BaseModel):
+    content_type: str = "image/jpeg"
+    idempotency_key: str | None = Field(None, max_length=120)
+
+
+class FacadeConfirmBody(BaseModel):
+    photo_id: int = Field(..., ge=1)
+
+
+@router.get("/p3/status")
+def p3_status(user: dict = Depends(require_pwa_profiles("chofer"))):
+    _uid(user)
+    return loc_svc.schema_status()
+
+
+@router.post("/despachos/{plan_id}/clientes/{customer_key:path}/ubicacion")
+def propose_client_location(
+    plan_id: int,
+    customer_key: str,
+    body: LocationProposalBody,
+    user: dict = Depends(require_pwa_profiles("chofer")),
+):
+    """Propuesta GPS del chofer. No aprueba ni escribe bsale.clients."""
+    return loc_svc.propose_location(
+        user=user,
+        plan_id=int(plan_id),
+        customer_key=customer_key,
+        latitude=float(body.latitude),
+        longitude=float(body.longitude),
+        accuracy_m=body.accuracy_m,
+        captured_at=body.captured_at,
+        confirm_low_accuracy=bool(body.confirm_low_accuracy),
+        confirm_significant_move=bool(body.confirm_significant_move),
+        facade_photo_id=body.facade_photo_id,
+        idempotency_key=body.idempotency_key,
+    )
+
+
+@router.post("/despachos/{plan_id}/clientes/{customer_key:path}/foto-fachada/prepare")
+def prepare_facade_photo(
+    plan_id: int,
+    customer_key: str,
+    body: FacadePrepareBody,
+    user: dict = Depends(require_pwa_profiles("chofer")),
+):
+    return loc_svc.prepare_facade_upload(
+        user=user,
+        plan_id=int(plan_id),
+        customer_key=customer_key,
+        content_type=body.content_type,
+        idempotency_key=body.idempotency_key,
+    )
+
+
+@router.post("/despachos/{plan_id}/clientes/{customer_key:path}/foto-fachada/confirm")
+def confirm_facade_photo(
+    plan_id: int,
+    customer_key: str,
+    body: FacadeConfirmBody,
+    user: dict = Depends(require_pwa_profiles("chofer")),
+):
+    return loc_svc.confirm_facade_upload(
+        user=user,
+        plan_id=int(plan_id),
+        customer_key=customer_key,
+        photo_id=int(body.photo_id),
+    )
+
+
+@router.post("/despachos/{plan_id}/clientes/{customer_key:path}/foto-fachada")
+async def upload_facade_photo(
+    plan_id: int,
+    customer_key: str,
+    file: UploadFile = File(...),
+    idempotency_key: str | None = Form(None),
+    user: dict = Depends(require_pwa_profiles("chofer")),
+):
+    """Subida multipart vía API (alternativa a URL firmada)."""
+    data = await file.read()
+    return loc_svc.upload_facade_bytes(
+        user=user,
+        plan_id=int(plan_id),
+        customer_key=customer_key,
+        content_type=file.content_type or "image/jpeg",
+        data=data,
+        idempotency_key=idempotency_key,
+    )

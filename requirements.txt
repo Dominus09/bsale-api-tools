@@ -9,6 +9,7 @@ cffi
 pyjwt
 python-jose[cryptography]
 python-multipart
+boto3
 pandas
 openpyxl
 pdfplumber

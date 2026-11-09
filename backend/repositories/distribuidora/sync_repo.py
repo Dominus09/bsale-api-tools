@@ -128,6 +128,11 @@ DISTRIBUIDORA_SCHEMA_FILES: tuple[str, ...] = (
     "050_dispatch_plan_planning_origin.sql",
     "051_simple_planning_sessions.sql",
     "052_dispatch_plan_driver_user.sql",
+    # Ya presentes en disco; registrar para runner explícito (idempotente).
+    "053_dispatch_plan_order_load_assignments.sql",
+    "054_dispatch_plan_peonetas_recorded.sql",
+    # P3 GPS + fachada (R2). Aplicar solo vía apply_distribuidora_schema.
+    "055_client_location_photos.sql",
 )
 
 _ENSURE_SCHEMA_NOOP_WARNED = False
