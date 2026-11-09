@@ -2,7 +2,7 @@
  * Precache: offline + manifest + iconos.
  * NUNCA cachea /api-upstream, /login ni respuestas autenticadas.
  */
-const VERSION = "lq-pwa-v1";
+const VERSION = "lq-pwa-v2-icons";
 const STATIC_CACHE = `${VERSION}-static`;
 const OFFLINE_URL = "/offline";
 const PRECACHE = [
