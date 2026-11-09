@@ -80,6 +80,74 @@ export type DriverDespacho = {
   client_count?: number | null
 }
 
+export type LoadGroupRef = {
+  load_batch_id?: number | null
+  name?: string | null
+  sort_order?: number | null
+}
+
+export type DriverClientCard = {
+  customer_key: string
+  client_id?: number | null
+  client_name?: string | null
+  fantasy_name?: string | null
+  city?: string | null
+  address?: string | null
+  document_count: number
+  units_total: number
+  load_groups: LoadGroupRef[]
+  has_coordinates: boolean
+  route_order?: number | null
+}
+
+export type DriverProduct = {
+  description: string
+  producto?: string
+  variante?: string
+  product_id?: number | null
+  variant_id?: number | null
+  sku_code?: number | null
+  codigo_barras?: string | null
+  unidades?: number | null
+  cajas_equivalentes?: number | null
+  units_per_box?: number | null
+  sin_unidad_caja?: boolean
+  load_group?: LoadGroupRef | null
+}
+
+export type DriverDocument = {
+  related_document_id?: number | null
+  document_number?: number | null
+  document_type?: string | null
+  document_total?: number | null
+  oc_document_id?: number | null
+  oc_number?: number | null
+  payment_method?: string | null
+  units?: number | null
+  load_group?: LoadGroupRef | null
+  products: DriverProduct[]
+  product_count: number
+}
+
+export type DriverMapMarker = {
+  customer_key: string
+  client_id?: number | null
+  client_name?: string | null
+  address?: string | null
+  city?: string | null
+  latitude: number
+  longitude: number
+  coordinates_source?: string | null
+  document_count: number
+  units_total: number
+  load_groups: LoadGroupRef[]
+  distance_m?: number | null
+  navigation?: {
+    google_maps_url?: string
+    geo_uri?: string
+  }
+}
+
 export async function listMyDespachos(): Promise<{
   items: DriverDespacho[]
   count: number
@@ -92,7 +160,93 @@ export async function getMyDespacho(planId: number): Promise<{
   plan: DriverDespacho
   driver_user_id: number
   read_only: boolean
+  nav?: { mapa?: boolean; clientes?: boolean; ficha?: boolean; note_es?: string }
   nav_placeholders?: { mapa?: boolean; clientes?: boolean; note_es?: string }
 }> {
   return apiFetch(`/distribuidora/pwa/driver/despachos/${planId}`)
+}
+
+export async function listMyClientes(
+  planId: number,
+  q?: string,
+): Promise<{
+  items: DriverClientCard[]
+  count: number
+  summary?: {
+    clients?: number
+    documents?: number
+    with_coordinates?: number
+    without_coordinates?: number
+  }
+  picking_ready?: boolean
+  picking_reason?: string | null
+}> {
+  const qs = q?.trim() ? `?q=${encodeURIComponent(q.trim())}` : ""
+  return apiFetch(`/distribuidora/pwa/driver/despachos/${planId}/clientes${qs}`)
+}
+
+export async function getMyCliente(
+  planId: number,
+  customerKey: string,
+): Promise<{
+  customer_key: string
+  client: {
+    customer_key: string
+    client_id?: number | null
+    client_name?: string | null
+    fantasy_name?: string | null
+    address?: string | null
+    city?: string | null
+    phone?: string | null
+    observations?: string | null
+    latitude?: number | null
+    longitude?: number | null
+    has_coordinates?: boolean
+    coordinates_source?: string | null
+    route_order?: number | null
+    load_groups?: LoadGroupRef[]
+    facade_photo?: string | null
+    facade_photo_placeholder?: boolean
+  }
+  navigation?: {
+    available: boolean
+    latitude?: number
+    longitude?: number
+    google_maps_url?: string
+    geo_uri?: string
+  }
+  documents: DriverDocument[]
+  document_count: number
+  units_total: number
+}> {
+  return apiFetch(
+    `/distribuidora/pwa/driver/despachos/${planId}/clientes/${encodeURIComponent(customerKey)}`,
+  )
+}
+
+export async function getMyMapa(
+  planId: number,
+  origin?: { lat: number; lng: number },
+): Promise<{
+  markers: DriverMapMarker[]
+  count: number
+  summary: {
+    clients: number
+    with_coordinates: number
+    without_coordinates: number
+  }
+  empty_state?: { code?: string; message_es?: string } | null
+  device_location?: {
+    requested?: boolean
+    latitude?: number | null
+    longitude?: number | null
+    tracking_persistent?: boolean
+    note_es?: string
+  }
+}> {
+  const qs =
+    origin != null
+      ? `?origin_lat=${encodeURIComponent(String(origin.lat))}&origin_lng=${encodeURIComponent(String(origin.lng))}`
+      : ""
+  return apiFetch(`/distribuidora/pwa/driver/despachos/${planId}/mapa${qs}`)
 }

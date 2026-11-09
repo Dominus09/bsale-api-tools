@@ -24,11 +24,11 @@ export default function DespachoDetailPage() {
         const data = await getMyDespacho(planId)
         if (cancelled) return
         setPlan(data.plan)
-        setNote(data.nav_placeholders?.note_es || null)
+        setNote(data.nav?.note_es || data.nav_placeholders?.note_es || null)
       } catch (err) {
         if (cancelled) return
-        if (err instanceof ApiError && err.status === 404) {
-          setError("Despacho no encontrado o no asignado a tu usuario.")
+        if (err instanceof ApiError && (err.status === 404 || err.status === 403)) {
+          setError("Despacho no encontrado o no autorizado para tu usuario.")
         } else {
           setError(err instanceof ApiError ? err.message : "Error al cargar")
         }
@@ -41,14 +41,7 @@ export default function DespachoDetailPage() {
   }, [planId])
 
   if (error) {
-    return (
-      <div className="stack-gap">
-        <Link href="/despachos" className="muted">
-          ← Volver
-        </Link>
-        <div className="banner banner-error">{error}</div>
-      </div>
-    )
+    return <div className="banner banner-error">{error}</div>
   }
 
   if (!plan) {
@@ -57,9 +50,6 @@ export default function DespachoDetailPage() {
 
   return (
     <div className="stack-gap">
-      <Link href="/despachos" className="muted">
-        ← Mis despachos
-      </Link>
       <div className="card">
         <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
           <h2>{plan.planning_code || `Plan #${plan.id}`}</h2>
@@ -95,18 +85,14 @@ export default function DespachoDetailPage() {
         </div>
       </div>
 
-      <div className="card">
-        <h2 style={{ fontSize: "1rem" }}>Próximamente</h2>
-        <p className="muted">
-          {note || "Mapa y fichas de cliente se habilitarán en fases posteriores."}
-        </p>
-        <button type="button" className="btn btn-ghost" disabled style={{ marginTop: 8 }}>
-          Mapa (P3)
-        </button>
-        <button type="button" className="btn btn-ghost" disabled style={{ marginTop: 8 }}>
-          Clientes (P2)
-        </button>
-      </div>
+      {note ? <div className="banner banner-info">{note}</div> : null}
+
+      <Link href={`/despachos/${planId}/clientes`} className="btn btn-primary" style={{ textAlign: "center" }}>
+        Ver clientes
+      </Link>
+      <Link href={`/despachos/${planId}/mapa`} className="btn btn-ghost" style={{ textAlign: "center" }}>
+        Abrir mapa
+      </Link>
     </div>
   )
 }
