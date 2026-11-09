@@ -12,7 +12,7 @@
  *   los gestiona la caché HTTP normal del navegador).
  * Para invalidar todo en un despliegue futuro, subir VERSION.
  */
-const VERSION = "lq-erp-v1";
+const VERSION = "lq-erp-v2-icons";
 const STATIC_CACHE = `${VERSION}-static`;
 const OFFLINE_URL = "/offline";
 const PRECACHE = [
