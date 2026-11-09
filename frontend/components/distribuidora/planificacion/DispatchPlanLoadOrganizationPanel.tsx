@@ -54,6 +54,16 @@ type Props = {
   onMessage: (msg: string) => void
   /** Incrementar tras incorporar OC suplementarias para refrescar grupos sin F5. */
   refreshToken?: number
+  /** Tabla OC→grupo y acciones de distribución. */
+  showOrganizationControls?: boolean
+  /** Exports PDF/Excel por grupo y conciliación documental. */
+  showGroupPickingExports?: boolean
+  /** Tras guardar OC movidas con conflicto documental. */
+  onDocumentConflicts?: (payload: {
+    conflicts: DocumentLoadReconciliationResponse["conflicts"]
+    recon: DocumentLoadReconciliationResponse
+    movedOcDocumentIds: number[]
+  }) => void
 }
 
 function fmtNum(n: number | null | undefined, digits = 1): string {
@@ -86,6 +96,9 @@ export function DispatchPlanLoadOrganizationPanel({
   planId,
   onMessage,
   refreshToken = 0,
+  showOrganizationControls = true,
+  showGroupPickingExports = true,
+  onDocumentConflicts,
 }: Props) {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
@@ -349,13 +362,16 @@ export function DispatchPlanLoadOrganizationPanel({
 
   const save = async (markOrganized: boolean) => {
     if (!data || !schemaReady) return
+    const movedOcDocumentIds: number[] = []
     const assignments: { oc_document_id: number; load_batch_id: number }[] = []
     for (const c of data.clients) {
       const key = clientSelectionKey(c)
       const batchId = draftByClient[key]
+      const prevBatch = c.load_batch_id ?? null
       if (batchId == null) continue
       for (const ocId of c.oc_document_ids) {
         assignments.push({ oc_document_id: ocId, load_batch_id: batchId })
+        if (prevBatch !== batchId) movedOcDocumentIds.push(ocId)
       }
     }
     setBusy(markOrganized ? "organize" : "save")
@@ -371,6 +387,25 @@ export function DispatchPlanLoadOrganizationPanel({
           ? "Organización marcada como completa"
           : "Distribución guardada (borrador)",
       )
+      const recon = await refreshDocRecon()
+      if (recon && movedOcDocumentIds.length && onDocumentConflicts) {
+        const movedSet = new Set(movedOcDocumentIds)
+        const relevant = (recon.conflicts || []).filter((c) => {
+          if (c.code !== "manual_differs_from_oc_group") return false
+          if (c.oc_document_id != null && movedSet.has(Number(c.oc_document_id))) {
+            return true
+          }
+          const ocs = c.oc_document_ids || []
+          return ocs.some((id) => movedSet.has(Number(id)))
+        })
+        if (relevant.length) {
+          onDocumentConflicts({
+            conflicts: relevant,
+            recon,
+            movedOcDocumentIds: [...movedSet],
+          })
+        }
+      }
     } catch (e) {
       onMessage(e instanceof Error ? e.message : "Error al guardar")
       if (e instanceof Error && /versión|concurrencia|409/i.test(e.message)) {
@@ -391,35 +426,37 @@ export function DispatchPlanLoadOrganizationPanel({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0 space-y-1">
-          <h3 className="text-sm font-semibold">Organizar carga</h3>
-          <p className="max-w-3xl text-xs text-muted-foreground">
-            Despachos nuevos traen cuatro grupos: Grupo 1 y Grupo 2 (prioritarios, 1–2
-            clientes), Grupo consolidado y Grupo adicional (vacío, reservado para OC de
-            última hora). La asignación es manual; grupos vacíos no bloquean marcar
-            organización completa si todas las OC originales están asignadas. No se altera
-            el orden de entrega.
-          </p>
+      {showOrganizationControls ? (
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0 space-y-1">
+            <h3 className="text-sm font-semibold">Organizar carga</h3>
+            <p className="max-w-3xl text-xs text-muted-foreground">
+              Despachos nuevos traen cuatro grupos: Grupo 1 y Grupo 2 (prioritarios, 1–2
+              clientes), Grupo consolidado y Grupo adicional (vacío, reservado para OC de
+              última hora). La asignación es manual; grupos vacíos no bloquean marcar
+              organización completa si todas las OC originales están asignadas. No se altera
+              el orden de entrega.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline">
+              {data?.load_organization_status || "legacy"}
+              {data != null ? ` · v${data.load_organization_version}` : ""}
+            </Badge>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => void load()}
+              disabled={busy != null}
+            >
+              <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Actualizar
+            </Button>
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="outline">
-            {data?.load_organization_status || "legacy"}
-            {data != null ? ` · v${data.load_organization_version}` : ""}
-          </Badge>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => void load()}
-            disabled={busy != null}
-          >
-            <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Actualizar
-          </Button>
-        </div>
-      </div>
+      ) : null}
 
-      {!schemaReady ? (
+      {!schemaReady && showOrganizationControls ? (
         <Alert>
           <AlertTriangle className="h-4 w-4" />
           <AlertTitle>Migración 053 pendiente</AlertTitle>
@@ -430,7 +467,7 @@ export function DispatchPlanLoadOrganizationPanel({
         </Alert>
       ) : null}
 
-      {schemaReady ? (
+      {schemaReady && showOrganizationControls ? (
         <>
           <div className="flex flex-wrap items-end gap-2 rounded-lg border bg-muted/15 p-3">
             <div className="space-y-1">
@@ -858,17 +895,20 @@ export function DispatchPlanLoadOrganizationPanel({
                 </p>
               ) : null}
             </div>
+          </div>
+        </>
+      ) : null}
 
+      {schemaReady && showGroupPickingExports ? (
             <div className="space-y-3 rounded-lg border border-border/80 p-3">
               <div className="flex flex-wrap items-start justify-between gap-2">
                 <div>
                   <h4 className="text-sm font-semibold">
-                    Picking de productos por grupo
+                    Documentos y exports por grupo
                   </h4>
                   <p className="text-xs text-muted-foreground">
-                    Usa facturas/boletas conciliadas con la OC de cada grupo (no el
-                    consolidado del camión). El PDF completo del camión sigue en la
-                    pestaña Picking.
+                    Facturas/boletas conciliadas con la OC de cada grupo. El PDF
+                    completo del camión está arriba en esta misma etapa.
                   </p>
                 </div>
                 <Button
@@ -907,7 +947,13 @@ export function DispatchPlanLoadOrganizationPanel({
               {docRecon?.conflicts?.length ? (
                 <Alert className="border-amber-300 bg-amber-50/80 dark:border-amber-900 dark:bg-amber-950/30">
                   <AlertTriangle className="size-4" />
-                  <AlertTitle className="text-sm">Conflictos de conciliación</AlertTitle>
+                  <AlertTitle className="text-sm">
+                    {(docRecon.conflicts || []).filter(
+                      (c) => c.code === "manual_differs_from_oc_group",
+                    ).length
+                      ? `${(docRecon.conflicts || []).filter((c) => c.code === "manual_differs_from_oc_group").length} documentos siguen asociados a otro grupo`
+                      : "Conflictos de conciliación"}
+                  </AlertTitle>
                   <AlertDescription>
                     <ul className="mt-1 list-inside list-disc text-xs">
                       {docRecon.conflicts.slice(0, 6).map((c) => (
@@ -918,8 +964,9 @@ export function DispatchPlanLoadOrganizationPanel({
                       ))}
                     </ul>
                     <p className="mt-1 text-xs">
-                      Abra «Asignación documental avanzada» (más abajo) para
-                      resolver excepciones de forma explícita.
+                      Use «Revisar traslado de documentos» tras mover OC, o la etapa
+                      «OC adicionales» → asignación documental avanzada para
+                      excepciones cruzadas.
                     </p>
                   </AlertDescription>
                 </Alert>
@@ -1019,8 +1066,6 @@ export function DispatchPlanLoadOrganizationPanel({
                 })}
               </div>
             </div>
-          </div>
-        </>
       ) : null}
     </div>
   )

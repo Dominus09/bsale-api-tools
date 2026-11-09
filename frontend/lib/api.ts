@@ -3190,6 +3190,9 @@ export type DocumentLoadReconciliationResponse = {
     message_es?: string
     load_batch_ids?: number[]
     oc_document_ids?: number[]
+    oc_document_id?: number
+    current_load_batch_id?: number
+    suggested_load_batch_id?: number
   }[]
   groups?: {
     load_batch_id: number
@@ -3212,6 +3215,85 @@ export async function postDispatchPlanDocumentLoadReconciliation(
   )
   if (!res.ok) {
     throw new Error(await res.text().catch(() => "Error al conciliar documentos por grupo"))
+  }
+  return res.json()
+}
+
+export type DocumentLoadReassignmentMove = {
+  related_document_id: number
+  oc_document_id: number
+  from_load_batch_id?: number | null
+  to_load_batch_id: number
+  from_load_batch_name?: string | null
+  to_load_batch_name?: string | null
+  document_number?: number | null
+  client_name?: string | null
+}
+
+export type DocumentLoadReassignmentPreview = {
+  dispatch_plan_id: number
+  plan_status?: string
+  blocked?: boolean
+  blocked_reason_es?: string | null
+  can_apply?: boolean
+  has_picking?: boolean
+  picking_version?: number | null
+  moves: DocumentLoadReassignmentMove[]
+  hard_conflicts?: DocumentLoadReconciliationResponse["conflicts"]
+  warnings_es?: string[]
+  effects_es?: string[]
+  scope_oc_document_ids?: number[]
+  scope_related_document_ids?: number[]
+  message_es?: string
+  applied?: boolean
+  reconciled?: number
+  idempotent?: boolean
+  audit?: Record<string, unknown>
+}
+
+export async function previewDocumentLoadReassignment(
+  planId: number,
+  body: { oc_document_ids?: number[]; related_document_ids?: number[] },
+): Promise<DocumentLoadReassignmentPreview> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/document-load-reassignment/preview`,
+    {
+      method: "POST",
+      headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({
+        oc_document_ids: body.oc_document_ids || [],
+        related_document_ids: body.related_document_ids || [],
+      }),
+    },
+  )
+  if (!res.ok) {
+    throw new Error(await res.text().catch(() => "Error al previsualizar traslado documental"))
+  }
+  return res.json()
+}
+
+export async function applyDocumentLoadReassignment(
+  planId: number,
+  body: {
+    oc_document_ids?: number[]
+    related_document_ids?: number[]
+    confirm: boolean
+  },
+): Promise<DocumentLoadReassignmentPreview> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/dispatch-plans/${planId}/document-load-reassignment/apply`,
+    {
+      method: "POST",
+      headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({
+        oc_document_ids: body.oc_document_ids || [],
+        related_document_ids: body.related_document_ids || [],
+        confirm: Boolean(body.confirm),
+      }),
+    },
+  )
+  if (!res.ok) {
+    throw new Error(await res.text().catch(() => "Error al aplicar traslado documental"))
   }
   return res.json()
 }

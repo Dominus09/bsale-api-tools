@@ -1,20 +1,23 @@
 "use client"
 
 /**
- * Detalle de despacho — cabecera compacta + 5 pestañas grandes.
+ * Detalle de despacho — navegación por etapas operativas.
  * Solo reorganiza presentación; reutiliza paneles y acciones existentes.
  */
 
 import Link from "next/link"
 import { useSearchParams } from "next/navigation"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   ArrowLeft,
+  ClipboardList,
   LayoutDashboard,
   Loader2,
   Map,
   PackageCheck,
+  PlusCircle,
   RefreshCw,
+  Route,
   Truck,
   Wallet,
   Wrench,
@@ -33,11 +36,13 @@ import {
   type DispatchPlanInvoicedRow,
   type DispatchPlanPickingClientResponse,
   type DispatchPlanPickingProductResponse,
+  type DocumentLoadReconciliationResponse,
 } from "@/lib/api"
 import { DispatchPlanInvoicingDashboard } from "@/components/distribuidora/planificacion/DispatchPlanInvoicingDashboard"
 import { DispatchPlanCuadraturaPanel } from "@/components/distribuidora/planificacion/DispatchPlanCuadraturaPanel"
 import { DispatchPlanPickingAssignmentPanel } from "@/components/distribuidora/planificacion/DispatchPlanPickingAssignmentPanel"
 import { DispatchPlanLoadOrganizationPanel } from "@/components/distribuidora/planificacion/DispatchPlanLoadOrganizationPanel"
+import { DocumentLoadReassignmentDialog } from "@/components/distribuidora/planificacion/DocumentLoadReassignmentDialog"
 import { DispatchPlanInvoicedItemsTable } from "@/components/distribuidora/planificacion/DispatchPlanInvoicedItemsTable"
 import {
   DispatchPlanPickingClientePanel,
@@ -52,6 +57,22 @@ import { Badge } from "@/components/ui/badge"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
+
+type StageId =
+  | "resumen"
+  | "organizar"
+  | "picking"
+  | "ruta"
+  | "oc-adicionales"
+  | "chofer"
+  | "cierre"
+
+type StageVisualStatus =
+  | "pendiente"
+  | "completo"
+  | "revision"
+  | "conflicto"
+  | "soporte"
 
 type Props = {
   planId: number
@@ -90,6 +111,37 @@ function CompactStat({ label, value }: { label: string; value: string }) {
   )
 }
 
+function stageStatusBadge(status: StageVisualStatus) {
+  switch (status) {
+    case "completo":
+      return (
+        <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-800 dark:text-emerald-200">
+          Completo
+        </span>
+      )
+    case "revision":
+      return (
+        <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-900 dark:text-amber-100">
+          Requiere revisión
+        </span>
+      )
+    case "conflicto":
+      return (
+        <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-[10px] font-medium text-red-800 dark:text-red-200">
+          Conflicto documental
+        </span>
+      )
+    case "soporte":
+      return null
+    default:
+      return (
+        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+          Pendiente
+        </span>
+      )
+  }
+}
+
 export function DispatchPlanDetailShell({
   planId,
   dashboard,
@@ -111,7 +163,7 @@ export function DispatchPlanDetailShell({
     DISPATCH_PLAN_PICKING_WAIT_MESSAGE
 
   const searchParams = useSearchParams()
-  const [tab, setTab] = useState("resumen")
+  const [tab, setTab] = useState<StageId>("resumen")
   /** Montaje diferido: evita API/carga pesada hasta la 1ª visita; luego se conserva el estado. */
   const [visitedTabs, setVisitedTabs] = useState<Record<string, boolean>>({
     resumen: true,
@@ -128,6 +180,16 @@ export function DispatchPlanDetailShell({
   const [pickingClientLoaded, setPickingClientLoaded] = useState(false)
   const [reviewItems, setReviewItems] = useState<DispatchPlanInvoicedRow[] | null>(null)
   const [orgRefreshToken, setOrgRefreshToken] = useState(0)
+  const [docConflictBanner, setDocConflictBanner] = useState<{
+    count: number
+    fromBatchIds: number[]
+    toBatchIds: number[]
+    movedOcDocumentIds: number[]
+    relatedDocumentIds: number[]
+    hasPicking: boolean
+    pickingVersion: number | null
+  } | null>(null)
+  const [reassignmentOpen, setReassignmentOpen] = useState(false)
 
   const refreshPickingFromDb = useCallback(async () => {
     const [pc, pp] = await Promise.all([
@@ -158,7 +220,7 @@ export function DispatchPlanDetailShell({
           header: r.header,
           items: r.items ?? [],
           warnings: r.warnings,
-          totals: r.totals,
+          totals: undefined,
         })
         setPickingClientLoaded(true)
         if (r.ready) {
@@ -181,9 +243,10 @@ export function DispatchPlanDetailShell({
 
   const onTabChange = useCallback(
     (value: string) => {
-      setTab(value)
-      setVisitedTabs((prev) => (prev[value] ? prev : { ...prev, [value]: true }))
-      if ((value === "picking" || value === "picking-cliente") && !pickingClientLoaded) {
+      const next = value as StageId
+      setTab(next)
+      setVisitedTabs((prev) => (prev[next] ? prev : { ...prev, [next]: true }))
+      if ((next === "picking" || next === "organizar") && !pickingClientLoaded) {
         void refreshPickingFromDb().catch(() => undefined)
       }
     },
@@ -192,28 +255,68 @@ export function DispatchPlanDetailShell({
 
   useEffect(() => {
     const raw = (searchParams.get("tab") || "").trim().toLowerCase()
-    const allowed = new Set(["resumen", "ruta", "picking", "chofer", "cierre"])
-    if (raw && allowed.has(raw)) {
-      onTabChange(raw)
-    }
     const panel = (searchParams.get("panel") || "").trim().toLowerCase()
-    if (panel === "organizar" || raw === "picking") {
-      const t = window.setTimeout(() => {
-        document.getElementById("organizar-carga")?.scrollIntoView({
-          behavior: "smooth",
-          block: "start",
-        })
-      }, 350)
-      return () => window.clearTimeout(t)
+    const alias: Record<string, StageId> = {
+      resumen: "resumen",
+      ruta: "ruta",
+      picking: "picking",
+      chofer: "chofer",
+      cierre: "cierre",
+      organizar: "organizar",
+      "oc-adicionales": "oc-adicionales",
+      oc: "oc-adicionales",
     }
-    return undefined
+    if (panel === "organizar") {
+      onTabChange("organizar")
+      return
+    }
+    if (raw && alias[raw]) {
+      onTabChange(alias[raw])
+    }
   }, [searchParams, onTabChange])
+
+  const handleDocumentConflicts = useCallback(
+    (payload: {
+      conflicts: DocumentLoadReconciliationResponse["conflicts"]
+      recon: DocumentLoadReconciliationResponse
+      movedOcDocumentIds: number[]
+    }) => {
+      const conflictRows = payload.conflicts || []
+      const fromBatchIds = [
+        ...new Set(
+          conflictRows
+            .map((c) => c.current_load_batch_id)
+            .filter((n): n is number => n != null),
+        ),
+      ]
+      const toBatchIds = [
+        ...new Set(
+          conflictRows
+            .map((c) => c.suggested_load_batch_id)
+            .filter((n): n is number => n != null),
+        ),
+      ]
+      const relatedDocumentIds = [
+        ...new Set(conflictRows.map((c) => Number(c.related_document_id))),
+      ]
+      setDocConflictBanner({
+        count: relatedDocumentIds.length,
+        fromBatchIds,
+        toBatchIds,
+        movedOcDocumentIds: payload.movedOcDocumentIds,
+        relatedDocumentIds,
+        hasPicking: Boolean(payload.recon.has_picking),
+        pickingVersion: payload.recon.picking_version ?? null,
+      })
+    },
+    [],
+  )
 
   const tabPanelClass =
     "mt-4 space-y-4 focus-visible:outline-none data-[state=inactive]:hidden"
 
   const navCardClass = cn(
-    "h-[68px] min-w-[120px] flex-1 flex-col gap-1 rounded-xl border px-2 py-2",
+    "h-auto min-h-[68px] min-w-[108px] flex-1 flex-col gap-1 rounded-xl border px-2 py-2",
     "bg-card text-muted-foreground shadow-none",
     "border-border/70 hover:border-border hover:bg-muted/40",
     "transition-[background-color,border-color,color] duration-150",
@@ -252,10 +355,52 @@ export function DispatchPlanDetailShell({
   })
   const truckLabel = plan.truck_name || "Sin camión"
   const invoicingStatus = `${inv.confirmed.count} fact. · ${inv.probable.count} prob. · ${inv.pending.count} pend.`
+  const planStatusLabel = String(plan.status || "—")
+
+  const stageStatuses = useMemo(() => {
+    const orgStatus = String(
+      (ls as { load_organization_status?: string } | null | undefined)
+        ?.load_organization_status || "",
+    )
+    const orgComplete = orgStatus === "organized"
+    const pickingComplete = Boolean(ls?.picking?.has_snapshot)
+    const hasDocConflict = Boolean(docConflictBanner?.count)
+    const routeOk = routeCalculated
+    return {
+      resumen: "soporte" as StageVisualStatus,
+      organizar: hasDocConflict
+        ? ("conflicto" as StageVisualStatus)
+        : orgComplete
+          ? ("completo" as StageVisualStatus)
+          : ("pendiente" as StageVisualStatus),
+      picking: hasDocConflict
+        ? ("conflicto" as StageVisualStatus)
+        : pickingComplete
+          ? ("completo" as StageVisualStatus)
+          : ("pendiente" as StageVisualStatus),
+      ruta: routeOk ? ("completo" as StageVisualStatus) : ("pendiente" as StageVisualStatus),
+      "oc-adicionales": "soporte" as StageVisualStatus,
+      chofer: plan.driver_user_id ? ("completo" as StageVisualStatus) : ("pendiente" as StageVisualStatus),
+      cierre: dashboard.cuadratura?.started
+        ? ("completo" as StageVisualStatus)
+        : ("pendiente" as StageVisualStatus),
+    }
+  }, [ls, docConflictBanner, routeCalculated, plan.driver_user_id, dashboard.cuadratura?.started])
+
+  const primaryStages: { id: StageId; label: string; icon: typeof LayoutDashboard }[] = [
+    { id: "resumen", label: "Resumen", icon: LayoutDashboard },
+    { id: "organizar", label: "Organizar carga", icon: ClipboardList },
+    { id: "picking", label: "Picking y documentos", icon: PackageCheck },
+    { id: "ruta", label: "Orden de ruta", icon: Route },
+    { id: "oc-adicionales", label: "OC adicionales", icon: PlusCircle },
+  ]
+  const supportStages: { id: StageId; label: string; icon: typeof Truck }[] = [
+    { id: "chofer", label: "Chofer", icon: Truck },
+    { id: "cierre", label: "Cuadratura", icon: Wallet },
+  ]
 
   return (
     <div className="space-y-3 sm:space-y-4">
-      {/* Cabecera compacta (~90–115px) */}
       <header className="space-y-1.5">
         <Button asChild variant="ghost" size="sm" className="-ml-2 h-8 px-2 text-xs">
           <Link href="/distribuidora/planificaciones">
@@ -277,6 +422,7 @@ export function DispatchPlanDetailShell({
             </p>
           </div>
           <div className="flex flex-wrap gap-1.5">
+            <Badge variant="outline">Estado: {planStatusLabel}</Badge>
             <Badge variant={ls?.picking?.has_snapshot ? "outline" : "secondary"}>
               {pickingStatusLabel}
             </Badge>
@@ -287,35 +433,69 @@ export function DispatchPlanDetailShell({
         </div>
       </header>
 
+      {docConflictBanner ? (
+        <Alert className="border-amber-500/40 bg-amber-500/5">
+          <AlertTitle className="text-sm">
+            {docConflictBanner.count} documento
+            {docConflictBanner.count === 1 ? "" : "s"} siguen asociados a otro grupo
+          </AlertTitle>
+          <AlertDescription className="space-y-2 text-xs">
+            <p>
+              Sus OC fueron movidas
+              {docConflictBanner.fromBatchIds.length
+                ? ` (lotes ${docConflictBanner.fromBatchIds.join(", ")} → ${docConflictBanner.toBatchIds.join(", ") || "nuevo grupo"})`
+                : ""}
+              . El sistema no sabe si Bodega ya preparó físicamente la mercadería.
+              {docConflictBanner.hasPicking
+                ? ` Hay picking generado${docConflictBanner.pickingVersion != null ? ` v${docConflictBanner.pickingVersion}` : ""}; las exportaciones por grupo pueden quedar desactualizadas.`
+                : ""}
+            </p>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => setReassignmentOpen(true)}
+            >
+              Revisar traslado de documentos
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
       <Tabs value={tab} onValueChange={onTabChange} className="w-full gap-0">
-        <div className="overflow-x-auto overscroll-x-contain [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <TabsList
-            className={cn(
-              "flex h-auto w-full min-w-max gap-2.5 bg-transparent p-0",
-              "rounded-none border-0 shadow-none sm:min-w-0 sm:gap-3",
-            )}
-          >
-            <TabsTrigger value="resumen" className={navCardClass}>
-              <LayoutDashboard aria-hidden />
-              <span className="text-sm font-medium leading-tight">Resumen</span>
-            </TabsTrigger>
-            <TabsTrigger value="ruta" className={navCardClass}>
-              <Map aria-hidden />
-              <span className="text-sm font-medium leading-tight">Ruta</span>
-            </TabsTrigger>
-            <TabsTrigger value="picking" className={navCardClass}>
-              <PackageCheck aria-hidden />
-              <span className="text-sm font-medium leading-tight">Picking</span>
-            </TabsTrigger>
-            <TabsTrigger value="chofer" className={navCardClass}>
-              <Truck aria-hidden />
-              <span className="text-sm font-medium leading-tight">Chofer</span>
-            </TabsTrigger>
-            <TabsTrigger value="cierre" className={navCardClass}>
-              <Wallet aria-hidden />
-              <span className="text-sm font-medium leading-tight">Cuadratura</span>
-            </TabsTrigger>
-          </TabsList>
+        <div className="sticky top-0 z-20 -mx-1 border-b border-border/60 bg-background/95 px-1 py-2 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+          <div className="overflow-x-auto overscroll-x-contain [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <TabsList
+              className={cn(
+                "flex h-auto w-full min-w-max gap-2 bg-transparent p-0",
+                "rounded-none border-0 shadow-none sm:min-w-0 sm:gap-2.5",
+              )}
+            >
+              {primaryStages.map((s) => {
+                const Icon = s.icon
+                return (
+                  <TabsTrigger key={s.id} value={s.id} className={navCardClass}>
+                    <Icon aria-hidden />
+                    <span className="text-sm font-medium leading-tight">{s.label}</span>
+                    {stageStatusBadge(stageStatuses[s.id])}
+                  </TabsTrigger>
+                )
+              })}
+              {supportStages.map((s) => {
+                const Icon = s.icon
+                return (
+                  <TabsTrigger
+                    key={s.id}
+                    value={s.id}
+                    className={cn(navCardClass, "opacity-90")}
+                  >
+                    <Icon aria-hidden />
+                    <span className="text-sm font-medium leading-tight">{s.label}</span>
+                    {stageStatusBadge(stageStatuses[s.id])}
+                  </TabsTrigger>
+                )
+              })}
+            </TabsList>
+          </div>
         </div>
 
         {/* ——— RESUMEN ——— */}
@@ -409,7 +589,6 @@ export function DispatchPlanDetailShell({
               <div className="flex flex-wrap gap-2">
                 <Button
                   type="button"
-                  variant="secondary"
                   size="sm"
                   disabled={!!busy || dashboardLoading}
                   onClick={() => void onReloadDashboard()}
@@ -484,12 +663,6 @@ export function DispatchPlanDetailShell({
                 <DispatchPlanInvoicedItemsTable items={reviewItems} />
               </div>
             ) : null}
-            {dashboard.plan_orders?.length ? (
-              <div className="space-y-2">
-                <p className="text-sm font-medium">Órdenes / peso congelado</p>
-                <DispatchPlanOrdersWeightTable orders={dashboard.plan_orders} />
-              </div>
-            ) : null}
             <div className="border-t border-border/50 pt-3">
               <Button
                 type="button"
@@ -519,15 +692,105 @@ export function DispatchPlanDetailShell({
           </section>
         </TabsContent>
 
-        {/* ——— RUTA ——— */}
+        {/* ——— ORGANIZAR CARGA ——— */}
+        <TabsContent
+          value="organizar"
+          forceMount={visitedTabs.organizar ? true : undefined}
+          className={tabPanelClass}
+        >
+          {visitedTabs.organizar ? (
+            <>
+              <div className="space-y-1">
+                <h2 className="text-base font-semibold sm:text-lg">Organizar carga</h2>
+                <p className="text-xs text-muted-foreground">
+                  Asigne OC a grupos. Acción principal: guardar distribución. Los PDF de
+                  picking por grupo están en la etapa «Picking y documentos».
+                </p>
+              </div>
+              <DispatchPlanLoadOrganizationPanel
+                planId={planId}
+                onMessage={onMessage}
+                refreshToken={orgRefreshToken}
+                showOrganizationControls={true}
+                showGroupPickingExports={false}
+                onDocumentConflicts={handleDocumentConflicts}
+              />
+            </>
+          ) : null}
+        </TabsContent>
+
+        {/* ——— PICKING Y DOCUMENTOS ——— */}
+        <TabsContent
+          value="picking"
+          forceMount={visitedTabs.picking ? true : undefined}
+          className={cn(tabPanelClass, "space-y-5")}
+        >
+          {visitedTabs.picking ? (
+            <>
+              <div className="space-y-1">
+                <h2 className="text-base font-semibold sm:text-lg">Picking y documentos</h2>
+                <p className="text-xs text-muted-foreground">
+                  {truckLabel} · {pickingStatusLabel}. Acción principal: generar o
+                  actualizar picking. Exports por grupo debajo.
+                </p>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                <section className="space-y-2 rounded-lg border border-border/70 bg-card/50 p-4">
+                  <h3 className="text-sm font-semibold">Picking clientes</h3>
+                  <DispatchPlanPickingClientePanel
+                    planId={planId}
+                    pickingReady={pickingReady}
+                    blockedMessage={pickingBlockedMessage}
+                    data={pickingClient}
+                    loading={pickingClientLoading}
+                    onGenerate={async (opts) => {
+                      await generatePicking(opts)
+                    }}
+                    onRefresh={async () => {
+                      await refreshPickingFromDb()
+                    }}
+                    onMessage={onMessage}
+                  />
+                </section>
+                <section className="space-y-2 rounded-lg border border-border/70 bg-card/50 p-4">
+                  <h3 className="text-sm font-semibold">Picking productos</h3>
+                  <DispatchPlanPickingProductoPanel
+                    planId={planId}
+                    pickingReady={pickingReady}
+                    blockedMessage={pickingBlockedMessage}
+                    data={pickingProduct}
+                    loading={pickingProductLoading}
+                    onRefresh={async () => {
+                      await refreshPickingFromDb()
+                    }}
+                    onMessage={onMessage}
+                  />
+                </section>
+              </div>
+
+              <section className="space-y-2 rounded-lg border border-border/70 bg-card/40 p-4">
+                <DispatchPlanLoadOrganizationPanel
+                  planId={planId}
+                  onMessage={onMessage}
+                  refreshToken={orgRefreshToken}
+                  showOrganizationControls={false}
+                  showGroupPickingExports={true}
+                />
+              </section>
+            </>
+          ) : null}
+        </TabsContent>
+
+        {/* ——— ORDEN DE RUTA ——— */}
         <TabsContent
           value="ruta"
-          forceMount={Boolean(visitedTabs.ruta)}
+          forceMount={visitedTabs.ruta ? true : undefined}
           className={tabPanelClass}
         >
           {visitedTabs.ruta ? (
             <>
-              <h2 className="text-base font-semibold sm:text-lg">Ruta y costos</h2>
+              <h2 className="text-base font-semibold sm:text-lg">Orden de ruta</h2>
               <p className="text-xs text-muted-foreground">
                 {truckLabel} · {planDate} · {driverLabel}
               </p>
@@ -535,8 +798,9 @@ export function DispatchPlanDetailShell({
               <section className="space-y-3 rounded-lg border border-border/70 bg-card/50 p-4">
                 <h3 className="text-sm font-semibold">Mapa y cobertura</h3>
                 <div className="flex flex-wrap items-center gap-3">
-                  <Button asChild variant="secondary" size="sm">
+                  <Button asChild size="sm">
                     <Link href={`/distribuidora/planificaciones/${planId}/mapa`}>
+                      <Map className="mr-1.5 size-3.5" aria-hidden />
                       Abrir mapa de entregas
                     </Link>
                   </Button>
@@ -603,84 +867,46 @@ export function DispatchPlanDetailShell({
                   />
                 </div>
               </section>
+
+              {dashboard.plan_orders?.length ? (
+                <section className="space-y-2">
+                  <h3 className="text-sm font-semibold">Secuencia / peso congelado</h3>
+                  <DispatchPlanOrdersWeightTable orders={dashboard.plan_orders} />
+                </section>
+              ) : null}
             </>
           ) : null}
         </TabsContent>
 
-        {/* ——— PICKING ——— */}
+        {/* ——— OC ADICIONALES ——— */}
         <TabsContent
-          value="picking"
-          forceMount={Boolean(visitedTabs.picking)}
-          className={cn(tabPanelClass, "space-y-5")}
+          value="oc-adicionales"
+          forceMount={visitedTabs["oc-adicionales"] ? true : undefined}
+          className={tabPanelClass}
         >
-          {visitedTabs.picking ? (
+          {visitedTabs["oc-adicionales"] ? (
             <>
-              <h2 className="text-base font-semibold sm:text-lg">Picking y carga</h2>
-              <p className="text-xs text-muted-foreground">
-                {truckLabel} · {pickingStatusLabel}
-              </p>
-
-              <div className="grid gap-4 lg:grid-cols-2">
-                <section className="space-y-2 rounded-lg border border-border/70 bg-card/50 p-4">
-                  <h3 className="text-sm font-semibold">Picking clientes</h3>
-                  <DispatchPlanPickingClientePanel
-                    planId={planId}
-                    pickingReady={pickingReady}
-                    blockedMessage={pickingBlockedMessage}
-                    data={pickingClient}
-                    loading={pickingClientLoading}
-                    onGenerate={(opts) => void generatePicking(opts)}
-                    onRefresh={() => void refreshPickingFromDb()}
-                    onMessage={onMessage}
-                  />
-                </section>
-                <section className="space-y-2 rounded-lg border border-border/70 bg-card/50 p-4">
-                  <h3 className="text-sm font-semibold">Picking productos</h3>
-                  <DispatchPlanPickingProductoPanel
-                    planId={planId}
-                    pickingReady={pickingReady}
-                    blockedMessage={pickingBlockedMessage}
-                    data={pickingProduct}
-                    loading={pickingProductLoading}
-                    onRefresh={() => void refreshPickingFromDb()}
-                    onMessage={onMessage}
-                  />
-                </section>
-              </div>
-
-              <section
-                id="organizar-carga"
-                className="scroll-mt-4 space-y-2 rounded-lg border border-border/70 bg-card/40 p-4"
-              >
-                <DispatchPlanLoadOrganizationPanel
-                  planId={planId}
-                  onMessage={onMessage}
-                  refreshToken={orgRefreshToken}
-                />
-              </section>
-
-              <section className="space-y-2 rounded-lg border border-border/70 bg-card/40 p-4">
-                <h3 className="text-sm font-semibold">OC adicionales y herramientas</h3>
+              <div className="space-y-1">
+                <h2 className="text-base font-semibold sm:text-lg">OC adicionales</h2>
                 <p className="text-xs text-muted-foreground">
-                  Agregar OC al plan e historial. Si el plan usa organización anticipada, la
-                  tabla antigua de lotes queda bajo «Asignación documental avanzada».
+                  Incorporar OC al plan, historial y asignación documental avanzada.
                 </p>
-                <DispatchPlanPickingAssignmentPanel
-                  planId={planId}
-                  planStatus={dashboard.plan.status}
-                  planningCode={dashboard.plan.planning_code}
-                  onMessage={onMessage}
-                  onReloadDashboard={onReloadDashboard}
-                  onSupplementalOrdersChanged={async () => {
-                    setOrgRefreshToken((n) => n + 1)
-                    try {
-                      await refreshPickingFromDb()
-                    } catch {
-                      /* loadAll del panel ya avisó; picking puede quedar pendiente */
-                    }
-                  }}
-                />
-              </section>
+              </div>
+              <DispatchPlanPickingAssignmentPanel
+                planId={planId}
+                planStatus={dashboard.plan.status}
+                planningCode={dashboard.plan.planning_code}
+                onMessage={onMessage}
+                onReloadDashboard={onReloadDashboard}
+                onSupplementalOrdersChanged={async () => {
+                  setOrgRefreshToken((n) => n + 1)
+                  try {
+                    await refreshPickingFromDb()
+                  } catch {
+                    /* loadAll del panel ya avisó; picking puede quedar pendiente */
+                  }
+                }}
+              />
             </>
           ) : null}
         </TabsContent>
@@ -688,7 +914,7 @@ export function DispatchPlanDetailShell({
         {/* ——— CHOFER ——— */}
         <TabsContent
           value="chofer"
-          forceMount={Boolean(visitedTabs.chofer)}
+          forceMount={visitedTabs.chofer ? true : undefined}
           className={tabPanelClass}
         >
           {visitedTabs.chofer ? (
@@ -711,7 +937,7 @@ export function DispatchPlanDetailShell({
         {/* ——— CIERRE ——— */}
         <TabsContent
           value="cierre"
-          forceMount={Boolean(visitedTabs.cierre)}
+          forceMount={visitedTabs.cierre ? true : undefined}
           className={tabPanelClass}
         >
           {visitedTabs.cierre ? (
@@ -727,6 +953,20 @@ export function DispatchPlanDetailShell({
           ) : null}
         </TabsContent>
       </Tabs>
+
+      <DocumentLoadReassignmentDialog
+        open={reassignmentOpen}
+        onOpenChange={setReassignmentOpen}
+        planId={planId}
+        planStatus={planStatusLabel}
+        banner={docConflictBanner}
+        onMessage={onMessage}
+        onApplied={() => {
+          setDocConflictBanner(null)
+          setOrgRefreshToken((n) => n + 1)
+          void onReloadDashboard()
+        }}
+      />
     </div>
   )
 }
