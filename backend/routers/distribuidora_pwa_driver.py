@@ -110,15 +110,11 @@ def get_my_mapa(
     user: dict = Depends(require_pwa_profiles("chofer")),
 ):
     read_svc.enforce_driver_plan_read_access(user, int(plan_id))
-    if (origin_lat is None) ^ (origin_lng is None):
-        raise HTTPException(
-            status_code=400,
-            detail="origin_lat y origin_lng deben enviarse juntos",
-        )
+    lat, lng = read_svc.validate_origin_coords(origin_lat, origin_lng)
     return read_svc.get_map_for_driver(
         int(plan_id),
-        origin_lat=origin_lat,
-        origin_lng=origin_lng,
+        origin_lat=lat,
+        origin_lng=lng,
     )
 
 

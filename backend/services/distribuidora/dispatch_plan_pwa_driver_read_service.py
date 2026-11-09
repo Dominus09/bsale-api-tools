@@ -150,6 +150,49 @@ def _num(v: Any) -> float | None:
         return None
 
 
+def validate_origin_coords(
+    origin_lat: float | None,
+    origin_lng: float | None,
+) -> tuple[float | None, float | None]:
+    """Valida origen GPS opcional. No altera autorización del plan.
+
+    - Ambos omitidos → (None, None)
+    - Solo uno → 400
+    - NaN / infinito / fuera de rango → 400
+    """
+    if origin_lat is None and origin_lng is None:
+        return None, None
+    if origin_lat is None or origin_lng is None:
+        raise HTTPException(
+            status_code=400,
+            detail="origin_lat y origin_lng deben enviarse juntos",
+        )
+    try:
+        lat = float(origin_lat)
+        lng = float(origin_lng)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="origin_lat y origin_lng deben ser números finitos",
+        ) from exc
+    if not math.isfinite(lat) or not math.isfinite(lng):
+        raise HTTPException(
+            status_code=400,
+            detail="origin_lat y origin_lng deben ser números finitos (no NaN ni infinito)",
+        )
+    if not (-90.0 <= lat <= 90.0):
+        raise HTTPException(
+            status_code=400,
+            detail="origin_lat debe estar entre -90 y 90",
+        )
+    if not (-180.0 <= lng <= 180.0):
+        raise HTTPException(
+            status_code=400,
+            detail="origin_lng debe estar entre -180 y 180",
+        )
+    return lat, lng
+
+
 def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     r = 6371000.0
     p1, p2 = math.radians(lat1), math.radians(lat2)

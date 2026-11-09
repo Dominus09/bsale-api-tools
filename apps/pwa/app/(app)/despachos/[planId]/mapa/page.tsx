@@ -130,7 +130,12 @@ export default function MapaPage() {
 
       {!loading && markers.length > 0 ? (
         <>
-          <DeliveryMap markers={markers} userLocation={userLoc} onSelect={onSelect} />
+          <DeliveryMap
+            markers={markers}
+            userLocation={userLoc}
+            onSelect={onSelect}
+            clientesHref={`/despachos/${planId}/clientes`}
+          />
           <div className="stack-gap">
             <p className="muted" style={{ margin: 0 }}>
               {markers.length} marcador{markers.length === 1 ? "" : "es"}
