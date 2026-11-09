@@ -293,6 +293,121 @@ def test_scoped_overwrite_only_touches_selected_ocs(monkeypatch):
     assert dry["dry_run"] is True
 
 
+def test_apply_persists_audit_event_and_rolls_back_on_error(monkeypatch):
+    """apply usa dispatch_plan_order_events (037); error ⇒ rollback completo."""
+    grupo1, consolidado = 11, 13
+    moves = [
+        {
+            "related_document_id": 10,
+            "oc_document_id": 1,
+            "from_load_batch_id": grupo1,
+            "to_load_batch_id": consolidado,
+            "document_number": 100,
+            "client_name": "A",
+        }
+    ]
+    preview = {
+        "blocked": False,
+        "hard_conflicts": [],
+        "moves": moves,
+        "warnings_es": [],
+    }
+    monkeypatch.setattr(svc, "preview_document_load_reassignment", lambda *a, **k: preview)
+    monkeypatch.setattr(svc, "ensure_default_load_batch", lambda *_a, **_k: None)
+
+    events: list[dict] = []
+    upserts: list[dict] = []
+    committed = {"ok": False}
+
+    class _CurApply:
+        def close(self):
+            return None
+
+    class _ConnApply:
+        def cursor(self):
+            return _CurApply()
+
+        def commit(self):
+            committed["ok"] = True
+
+        def rollback(self):
+            committed["ok"] = False
+            upserts.clear()
+            events.clear()
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(svc, "get_connection", lambda: _ConnApply())
+    monkeypatch.setattr(
+        svc.plan_repo,
+        "get_plan_by_id",
+        lambda *_a, **_k: {
+            "id": 82,
+            "status": "picking_generated",
+            "load_organization_version": 7,
+        },
+    )
+    monkeypatch.setattr(svc, "_sync_assignments_from_picking", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        svc,
+        "_reconcile_document_batches_from_oc",
+        lambda *_a, **_k: {"reconciled": 1, "moves": moves, "conflicts": []},
+    )
+    monkeypatch.setattr(
+        svc.picking_repo,
+        "get_picking_row",
+        lambda *_a, **_k: {"id": 55, "version": 2},
+    )
+
+    def _insert_event(_cur, **kw):
+        events.append(kw)
+        return 901
+
+    monkeypatch.setattr(svc.batch_repo, "insert_order_event", _insert_event)
+
+    out = svc.apply_document_load_reassignment(
+        82,
+        oc_document_ids=[1],
+        related_document_ids=[10],
+        confirm=True,
+        user={"email": "ops@quillotana.cl"},
+    )
+    assert out["applied"] is True
+    assert committed["ok"] is True
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["action"] == "document_load_reassignment"
+    assert ev["user_name"] == "ops@quillotana.cl"
+    assert ev["payload"]["organization_version"] == 7
+    assert ev["payload"]["moves"][0]["from_load_batch_id"] == grupo1
+    assert ev["payload"]["moves"][0]["to_load_batch_id"] == consolidado
+    assert out["audit"]["persisted"] is True
+    assert out["audit"]["event_id"] == 901
+
+    # Error tras mutaciones: rollback deja sin eventos ni commit.
+    events.clear()
+    committed["ok"] = False
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("fallo simulado")
+
+    monkeypatch.setattr(svc.batch_repo, "insert_order_event", _boom)
+    try:
+        svc.apply_document_load_reassignment(
+            82,
+            oc_document_ids=[1],
+            related_document_ids=[10],
+            confirm=True,
+            user={"email": "ops@quillotana.cl"},
+        )
+        raise AssertionError("debía fallar")
+    except RuntimeError:
+        pass
+    assert committed["ok"] is False
+    assert events == []
+
+
 def test_assess_detects_omissions_not_just_duplicates(monkeypatch):
     """UNIQUE evita doble grupo; la completitud exige cero omisiones."""
     monkeypatch.setattr(

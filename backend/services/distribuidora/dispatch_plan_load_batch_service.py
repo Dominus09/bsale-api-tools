@@ -650,13 +650,50 @@ def apply_document_load_reassignment(
             )
         picking_row = picking_repo.get_picking_row(cur, plan_id, current_only=True)
         actor = _staff_label(user)
-        # Auditoría liviana en resultado (sin tabla nueva / sin migración).
+        org_version = plan.get("load_organization_version")
+        moves = list(result.get("moves") or [])
+        audit_payload = {
+            "result": "applied",
+            "reconciled": result.get("reconciled"),
+            "oc_document_ids": sorted(scope_ocs) if scope_ocs else [],
+            "related_document_ids": sorted(apply_rels),
+            "organization_version": (
+                int(org_version) if org_version is not None else None
+            ),
+            "moves": [
+                {
+                    "related_document_id": m.get("related_document_id"),
+                    "oc_document_id": m.get("oc_document_id"),
+                    "from_load_batch_id": m.get("from_load_batch_id"),
+                    "to_load_batch_id": m.get("to_load_batch_id"),
+                    "document_number": m.get("document_number"),
+                    "client_name": m.get("client_name"),
+                }
+                for m in moves
+            ],
+        }
+        # Persistencia en infraestructura existente (037): sin migración nueva.
+        event_id = batch_repo.insert_order_event(
+            cur,
+            plan_id=plan_id,
+            action="document_load_reassignment",
+            user_name=actor,
+            reason="Traslado documental selectivo OC→grupo confirmado",
+            picking_id=int(picking_row["id"]) if picking_row else None,
+            picking_version=int(picking_row["version"]) if picking_row else None,
+            payload=audit_payload,
+        )
         audit = {
+            "event_id": event_id,
             "action": "document_load_reassignment",
             "actor": actor,
+            "dispatch_plan_id": plan_id,
             "related_document_ids": sorted(apply_rels),
             "oc_document_ids": sorted(scope_ocs) if scope_ocs else [],
+            "organization_version": audit_payload["organization_version"],
+            "moves": audit_payload["moves"],
             "reconciled": result.get("reconciled"),
+            "persisted": True,
         }
         conn.commit()
         cur.close()
