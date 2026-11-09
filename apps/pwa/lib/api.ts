@@ -102,6 +102,7 @@ export type DriverClientCard = {
 
 export type DriverProduct = {
   description: string
+  name_short?: string
   producto?: string
   variante?: string
   product_id?: number | null
@@ -112,6 +113,8 @@ export type DriverProduct = {
   cajas_equivalentes?: number | null
   units_per_box?: number | null
   sin_unidad_caja?: boolean
+  equivalence_status?: "verified" | "pending_validation" | string
+  equivalence_label?: string | null
   load_group?: LoadGroupRef | null
 }
 
@@ -123,6 +126,7 @@ export type DriverDocument = {
   oc_document_id?: number | null
   oc_number?: number | null
   payment_method?: string | null
+  seller_name?: string | null
   units?: number | null
   load_group?: LoadGroupRef | null
   products: DriverProduct[]
@@ -195,6 +199,9 @@ export async function getMyCliente(
     client_id?: number | null
     client_name?: string | null
     fantasy_name?: string | null
+    rut?: string | null
+    seller_name?: string | null
+    sellers?: string[]
     address?: string | null
     city?: string | null
     phone?: string | null
@@ -210,9 +217,15 @@ export async function getMyCliente(
   }
   navigation?: {
     available: boolean
-    latitude?: number
-    longitude?: number
+    destination_latitude?: number
+    destination_longitude?: number
+    destination_label?: string | null
     google_maps_url?: string
+    google_maps_place_url?: string
+    google_maps_directions_url?: string
+    likely_no_road_route?: boolean
+    warning_es?: string | null
+    note_es?: string
     geo_uri?: string
   }
   documents: DriverDocument[]

@@ -359,3 +359,24 @@ input {
   text-align: left;
   cursor: pointer;
 }
+
+.doc-toggle {
+  display: block;
+  width: 100%;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 0;
+  cursor: pointer;
+}
+
+.doc-summary {
+  margin: 6px 0 4px;
+  font-size: 0.88rem;
+}
+
+.doc-card {
+  padding-bottom: 14px;
+}

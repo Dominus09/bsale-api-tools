@@ -254,22 +254,118 @@ def _oc_number_by_oc_id(plan_id: int) -> dict[int, Any]:
         conn.close()
 
 
+_ISLAND_CITY_HINTS = (
+    "melinka",
+    "achao",
+    "quellón",
+    "quellon",
+    "castro",
+    "dalcahue",
+    "curaco",
+    "quinchao",
+    "chaulínec",
+    "chaulinec",
+)
+
+
+def likely_island_destination(city: str | None, lat: float | None) -> bool:
+    c = (city or "").strip().lower()
+    if c and any(h in c for h in _ISLAND_CITY_HINTS):
+        return True
+    if lat is not None and math.isfinite(lat) and lat < -43.5:
+        return True
+    return False
+
+
+def build_client_navigation(
+    lat: float,
+    lng: float,
+    *,
+    city: str | None = None,
+    client_name: str | None = None,
+) -> dict[str, Any]:
+    """Enlaces Google Maps con destino = coords del cliente (nunca el GPS del chofer)."""
+    if not math.isfinite(lat) or not math.isfinite(lng):
+        raise ValueError("Coordenadas de destino inválidas")
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lng <= 180.0):
+        raise ValueError("Coordenadas de destino fuera de rango")
+    query = f"{lat},{lng}"
+    # Codificar coma como %2C para Maps URLs api=1
+    encoded = query.replace(",", "%2C")
+    place = f"https://www.google.com/maps/search/?api=1&query={encoded}"
+    directions = (
+        f"https://www.google.com/maps/dir/?api=1&destination={encoded}&travelmode=driving"
+    )
+    island = likely_island_destination(city, lat)
+    return {
+        "available": True,
+        "destination_latitude": lat,
+        "destination_longitude": lng,
+        "destination_label": client_name or None,
+        "google_maps_place_url": place,
+        "google_maps_directions_url": directions,
+        # Destino insular: preferir marcador exacto (evitar ruta continental engañosa).
+        "google_maps_url": place if island else directions,
+        "likely_no_road_route": island,
+        "warning_es": (
+            "Destino insular o sin ruta terrestre continua. Se muestra la ubicación exacta; "
+            "la ruta vehicular de Google puede detenerse en el continente (p. ej. Ancud)."
+            if island
+            else None
+        ),
+        "note_es": (
+            "El destino son las coordenadas del cliente del despacho. "
+            "No se usa tu GPS como destino."
+        ),
+        "geo_uri": f"geo:{lat},{lng}",
+    }
+
+
+def _short_product_name(row: dict[str, Any]) -> str:
+    raw = (
+        row.get("display_name")
+        or row.get("producto_variante")
+        or row.get("producto")
+        or row.get("variante")
+        or ""
+    )
+    text = re.sub(r"\s+", " ", str(raw)).strip()
+    if len(text) <= 72:
+        return text
+    return text[:69].rstrip() + "…"
+
+
 def _product_payload(row: dict[str, Any], *, load_group: dict[str, Any] | None) -> dict[str, Any]:
+    """Producto para ficha. Cajas solo con units_per_box estructurado (no parsear SEC del nombre)."""
     sin_caja = bool(row.get("sin_unidad_caja"))
-    cajas = row.get("cajas")
+    upb = row.get("units_per_box_efectivo")
+    if upb is None:
+        upb = row.get("units_per_box")
+    try:
+        upb_f = float(upb) if upb is not None else 0.0
+    except (TypeError, ValueError):
+        upb_f = 0.0
+    cajas = row.get("cajas_efectivas")
+    if cajas is None:
+        cajas = row.get("cajas")
     cajas_out = None
-    if not sin_caja and cajas is not None:
+    if not sin_caja and upb_f > 0 and cajas is not None:
         try:
             cajas_val = float(cajas)
             if cajas_val > 0:
                 cajas_out = cajas_val
         except (TypeError, ValueError):
             cajas_out = None
-    return {
-        "description": row.get("producto_variante")
+    verified = cajas_out is not None and upb_f > 0 and not sin_caja
+    description = (
+        row.get("producto_variante")
         or row.get("display_name")
         or row.get("producto")
-        or "",
+        or ""
+    )
+    return {
+        "description": description,
+        "name_short": _short_product_name(row),
         "producto": row.get("producto") or "",
         "variante": row.get("variante") or "",
         "product_id": row.get("product_id"),
@@ -278,10 +374,42 @@ def _product_payload(row: dict[str, Any], *, load_group: dict[str, Any] | None) 
         "codigo_barras": row.get("codigo_barras"),
         "unidades": _num(row.get("unidades")),
         "cajas_equivalentes": cajas_out,
-        "units_per_box": None if sin_caja else row.get("units_per_box"),
-        "sin_unidad_caja": sin_caja,
+        "units_per_box": upb_f if upb_f > 0 and not sin_caja else None,
+        "sin_unidad_caja": sin_caja or upb_f <= 0,
+        "equivalence_status": "verified" if verified else "pending_validation",
+        "equivalence_label": None if verified else "Equivalencia por validar",
         "load_group": load_group,
     }
+
+
+def _client_commercial_by_ids(client_ids: list[int]) -> dict[int, dict[str, Any]]:
+    """RUT comercial y vendedor maestro desde bsale.clients (company_id=3)."""
+    ids = sorted({int(x) for x in client_ids if x is not None})
+    if not ids:
+        return {}
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT bsale_id, code, rut_clean, vendedor
+            FROM bsale.clients
+            WHERE company_id = 3
+              AND bsale_id = ANY(%s)
+            """,
+            (ids,),
+        )
+        out: dict[int, dict[str, Any]] = {}
+        for bsale_id, code, rut_clean, vendedor in cur.fetchall():
+            rut = (rut_clean or "").strip() or (code or "").strip() or None
+            out[int(bsale_id)] = {
+                "rut": rut,
+                "vendedor_master": (vendedor or "").strip() or None,
+            }
+        cur.close()
+        return out
+    finally:
+        conn.close()
 
 
 def _build_client_index(plan_id: int) -> dict[str, Any]:
@@ -336,6 +464,9 @@ def _build_client_index(plan_id: int) -> dict[str, Any]:
                 "city": stop.get("city") or "",
                 "phone": "",
                 "observations": "",
+                "rut": None,
+                "sellers": [],
+                "_sellers": set(),
                 "latitude": stop.get("latitude"),
                 "longitude": stop.get("longitude"),
                 "has_coordinates": bool(stop.get("has_coordinates")),
@@ -392,6 +523,9 @@ def _build_client_index(plan_id: int) -> dict[str, Any]:
                 "city": row.get("city") or "",
                 "phone": row.get("phone") or "",
                 "observations": row.get("observations") or "",
+                "rut": None,
+                "sellers": [],
+                "_sellers": set(),
                 "latitude": _num(row.get("lat")),
                 "longitude": _num(row.get("lng")),
                 "has_coordinates": _num(row.get("lat")) is not None
@@ -422,6 +556,9 @@ def _build_client_index(plan_id: int) -> dict[str, Any]:
             c["observations"] = row.get("observations") or ""
         if c.get("client_id") is None and row.get("client_id") is not None:
             c["client_id"] = row.get("client_id")
+        seller = (row.get("seller_name") or "").strip()
+        if seller:
+            c.setdefault("_sellers", set()).add(seller)
         ro = row.get("route_order")
         if ro is not None and (c.get("route_order") is None or int(ro) < int(c["route_order"])):
             c["route_order"] = int(ro)
@@ -449,6 +586,7 @@ def _build_client_index(plan_id: int) -> dict[str, Any]:
             "oc_document_id": oc_id,
             "oc_number": oc_number,
             "payment_method": row.get("payment_method") or "",
+            "seller_name": seller or None,
             "units": units,
             "load_group": load_group,
             "relation_source": row.get("relation_source"),
@@ -469,6 +607,10 @@ def _build_client_index(plan_id: int) -> dict[str, Any]:
         if row.get("document_number") is not None:
             c["_folios"].append(str(row.get("document_number")))
 
+    master = _client_commercial_by_ids(
+        [int(c["client_id"]) for c in clients.values() if c.get("client_id") is not None]
+    )
+
     # Clientes solo en mapa (sin picking aún): cards con OCs, sin facturas.
     for key, c in clients.items():
         stop = stop_by_key.get(key)
@@ -483,6 +625,18 @@ def _build_client_index(plan_id: int) -> dict[str, Any]:
             ros = [o.get("route_order") for o in orders if o.get("route_order") is not None]
             if ros:
                 c["route_order"] = min(int(x) for x in ros)
+
+        cid = c.get("client_id")
+        if cid is not None and int(cid) in master:
+            m = master[int(cid)]
+            c["rut"] = m.get("rut")
+            # Vendedor del documento/OC prevalece; maestro solo si no hay sellers de picking.
+            if not c.get("_sellers") and m.get("vendedor_master"):
+                c.setdefault("_sellers", set()).add(m["vendedor_master"])
+
+        sellers = sorted(c.pop("_sellers", set()) or [])
+        c["sellers"] = sellers
+        c["seller_name"] = ", ".join(sellers) if sellers else None
 
         c["load_groups"].sort(
             key=lambda g: (
@@ -505,6 +659,8 @@ def _build_client_index(plan_id: int) -> dict[str, Any]:
                     c.get("address"),
                     c.get("city"),
                     c.get("phone"),
+                    c.get("rut"),
+                    c.get("seller_name"),
                     " ".join(c.get("_folios") or []),
                     " ".join(str(x) for x in (c.get("_oc_ids") or [])),
                     " ".join(g.get("name") or "" for g in c.get("load_groups") or []),
@@ -606,28 +762,28 @@ def get_client_ficha_for_driver(plan_id: int, customer_key: str) -> dict[str, An
             products_raw = plan_svc.compute_picking_products_for_related_documents(
                 int(plan_id), [int(rel)]
             )
-        products = [
-            _product_payload(p, load_group=doc.get("load_group")) for p in products_raw
-        ]
+        doc_group = doc.get("load_group")
+        # No repetir grupo en cada línea si todo el documento comparte el mismo.
+        products = [_product_payload(p, load_group=None) for p in products_raw]
         documents_out.append(
             {
                 **doc,
+                "load_group": doc_group,
                 "products": products,
                 "product_count": len(products),
             }
         )
 
-    navigation = None
+    navigation: dict[str, Any]
     if client.get("has_coordinates") and client.get("latitude") is not None:
         lat = float(client["latitude"])
         lng = float(client["longitude"])
-        navigation = {
-            "available": True,
-            "latitude": lat,
-            "longitude": lng,
-            "google_maps_url": f"https://www.google.com/maps/dir/?api=1&destination={lat},{lng}",
-            "geo_uri": f"geo:{lat},{lng}",
-        }
+        navigation = build_client_navigation(
+            lat,
+            lng,
+            city=client.get("city"),
+            client_name=client.get("client_name"),
+        )
     else:
         navigation = {"available": False}
 
@@ -640,6 +796,9 @@ def get_client_ficha_for_driver(plan_id: int, customer_key: str) -> dict[str, An
                 "client_id": client.get("client_id"),
                 "client_name": client.get("client_name"),
                 "fantasy_name": client.get("fantasy_name") or "",
+                "rut": client.get("rut"),
+                "seller_name": client.get("seller_name"),
+                "sellers": client.get("sellers") or [],
                 "address": client.get("address") or "",
                 "city": client.get("city") or "",
                 "phone": client.get("phone") or "",
@@ -659,7 +818,15 @@ def get_client_ficha_for_driver(plan_id: int, customer_key: str) -> dict[str, An
             "units_total": client.get("units_total") or 0,
             "future_contracts": FUTURE_CONTRACTS,
             "read_only": True,
-            "sources": bundle["sources"],
+            "sources": {
+                **bundle["sources"],
+                "rut": "bsale.clients.code / rut_clean (company_id=3)",
+                "seller": "dispatch_plan_picking_clients.seller_name (documento/OC)",
+                "boxes": (
+                    "units_per_box estructurado (variants/products_master); "
+                    "sin inferir SEC del nombre"
+                ),
+            },
         }
     )
 
@@ -697,12 +864,12 @@ def get_map_for_driver(
                     for g in (c.get("load_groups") or [])
                 ],
                 "distance_m": dist,
-                "navigation": {
-                    "google_maps_url": (
-                        f"https://www.google.com/maps/dir/?api=1&destination={lat},{lng}"
-                    ),
-                    "geo_uri": f"geo:{lat},{lng}",
-                },
+                "navigation": build_client_navigation(
+                    lat,
+                    lng,
+                    city=c.get("city"),
+                    client_name=c.get("client_name"),
+                ),
             }
         )
     if origin_lat is not None and origin_lng is not None:

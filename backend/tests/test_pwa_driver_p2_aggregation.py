@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from backend.services.distribuidora import dispatch_plan_pwa_driver_read_service as svc
 
 
@@ -141,6 +143,11 @@ def test_build_client_index_merges_groups_and_docs(monkeypatch):
         "_oc_number_by_oc_id",
         lambda plan_id: {100: 70001, 101: 70566, 200: 70002},
     )
+    monkeypatch.setattr(
+        svc,
+        "_client_commercial_by_ids",
+        lambda ids: {10: {"rut": "11.111.111-1", "vendedor_master": None}},
+    )
 
     bundle = svc._build_client_index(79)
     assert bundle["summary"]["clients"] == 2
@@ -185,7 +192,11 @@ def test_build_client_index_merges_groups_and_docs(monkeypatch):
     assert ficha["documents"][1]["oc_number"] == 70566
     assert ficha["documents"][1]["products"][0]["cajas_equivalentes"] == 1
     assert ficha["client"]["facade_photo_placeholder"] is True
+    assert ficha["client"]["rut"] == "11.111.111-1"
+    assert "client_id" in ficha["client"]  # interno no se muestra en UI; sigue en API
     assert ficha["navigation"]["available"] is True
+    assert ficha["navigation"]["destination_latitude"] == pytest.approx(-41.8)
+    assert "destination=-41.8%2C-73.8" in ficha["navigation"]["google_maps_directions_url"]
 
     mapa = svc.get_map_for_driver(79, origin_lat=-41.8, origin_lng=-73.8)
     assert mapa["count"] == 1
