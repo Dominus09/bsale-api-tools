@@ -825,6 +825,50 @@ def post_document_load_reconciliation(
         raise HTTPException(status_code=400, detail=str(e)) from e
 
 
+class DocumentLoadReassignmentBody(BaseModel):
+    oc_document_ids: list[int] = Field(default_factory=list)
+    related_document_ids: list[int] = Field(default_factory=list)
+    confirm: bool = False
+
+
+@router.post("/{plan_id}/document-load-reassignment/preview")
+def post_document_load_reassignment_preview(
+    plan_id: int,
+    body: DocumentLoadReassignmentBody,
+    user: dict = Depends(require_erp_ops_staff),
+):
+    """Vista previa de traslado documental selectivo (sin escritura)."""
+    _deny_plan_if_out_of_scope(user, plan_id)
+    try:
+        return batch_svc.preview_document_load_reassignment(
+            plan_id,
+            oc_document_ids=list(body.oc_document_ids or []),
+            related_document_ids=list(body.related_document_ids or []),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@router.post("/{plan_id}/document-load-reassignment/apply")
+def post_document_load_reassignment_apply(
+    plan_id: int,
+    body: DocumentLoadReassignmentBody,
+    user: dict = Depends(require_erp_ops_staff),
+):
+    """Aplica traslado documental selectivo con confirmación explícita."""
+    _deny_plan_if_out_of_scope(user, plan_id)
+    try:
+        return batch_svc.apply_document_load_reassignment(
+            plan_id,
+            oc_document_ids=list(body.oc_document_ids or []),
+            related_document_ids=list(body.related_document_ids or []),
+            confirm=bool(body.confirm),
+            user=user,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 @router.get("/{plan_id}/picking-by-client")
 def picking_by_client(
     plan_id: int,

@@ -219,6 +219,80 @@ def test_plan82_style_move_oc_to_consolidado_keeps_docs_until_overwrite(monkeypa
     assert {u["related_document_id"] for u in upserts} == {3975261, 3975263, 3975294}
 
 
+def test_scoped_overwrite_only_touches_selected_ocs(monkeypatch):
+    """Overwrite selectivo: no reescribe asignaciones ajenas al alcance."""
+    grupo1, consolidado, otro = 11, 13, 99
+    ocs = [
+        {"oc_document_id": 1, "load_batch_id": consolidado},
+        {"oc_document_id": 2, "load_batch_id": consolidado},
+        {"oc_document_id": 3, "load_batch_id": consolidado},
+    ]
+    docs = [
+        {
+            "related_document_id": 10,
+            "oc_document_id": 1,
+            "load_batch_id": grupo1,
+            "document_number": 1,
+            "client_name": "A",
+            "document_total": 1,
+        },
+        {
+            "related_document_id": 20,
+            "oc_document_id": 2,
+            "load_batch_id": grupo1,
+            "document_number": 2,
+            "client_name": "B",
+            "document_total": 2,
+        },
+        {
+            "related_document_id": 30,
+            "oc_document_id": 3,
+            "load_batch_id": otro,
+            "document_number": 3,
+            "client_name": "C",
+            "document_total": 3,
+        },
+    ]
+    monkeypatch.setattr(
+        "backend.repositories.distribuidora.dispatch_plan_order_load_repo.assignments_table_ready",
+        lambda _c: True,
+    )
+    monkeypatch.setattr(
+        "backend.repositories.distribuidora.dispatch_plan_order_load_repo.list_order_assignments",
+        lambda _c, _pid: ocs,
+    )
+    monkeypatch.setattr(svc.batch_repo, "list_document_assignments", lambda _c, _pid: docs)
+    upserts: list[dict] = []
+    monkeypatch.setattr(
+        svc.batch_repo,
+        "upsert_document_assignment",
+        lambda _c, **kw: upserts.append(kw),
+    )
+
+    out = svc._reconcile_document_batches_from_oc(
+        _Cur(),
+        82,
+        overwrite_manual=True,
+        scope_oc_document_ids={1, 2},
+    )
+    assert out["reconciled"] == 2
+    assert {u["related_document_id"] for u in upserts} == {10, 20}
+    assert all(u["load_batch_id"] == consolidado for u in upserts)
+    # Doc 30 (OC 3) fuera de alcance: intacto.
+    assert 30 not in {u["related_document_id"] for u in upserts}
+
+    dry = svc._reconcile_document_batches_from_oc(
+        _Cur(),
+        82,
+        overwrite_manual=True,
+        scope_related_document_ids={10},
+        dry_run=True,
+    )
+    assert dry["reconciled"] == 1
+    assert dry["moves"][0]["related_document_id"] == 10
+    assert dry["dry_run"] is True
+
+
 def test_assess_detects_omissions_not_just_duplicates(monkeypatch):
     """UNIQUE evita doble grupo; la completitud exige cero omisiones."""
     monkeypatch.setattr(

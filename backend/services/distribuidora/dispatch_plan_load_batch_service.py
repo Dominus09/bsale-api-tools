@@ -19,6 +19,10 @@ from backend.services.distribuidora.oc_operational_status import (
 from backend.utils.json_safe import serialize_value
 
 BLOCKED_ADD_ORDER_STATUSES = frozenset({"dispatched", "delivered"})
+# Reasignación documental: no tocar despachos ya cerrados operativamente.
+BLOCKED_DOC_REASSIGN_STATUSES = frozenset(
+    {"closed", "squared", "dispatched", "delivered", "cancelled"}
+)
 
 
 def _admission_block_payload(status) -> dict[str, Any]:
@@ -217,6 +221,9 @@ def _reconcile_document_batches_from_oc(
     plan_id: int,
     *,
     overwrite_manual: bool = False,
+    scope_oc_document_ids: set[int] | None = None,
+    scope_related_document_ids: set[int] | None = None,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """Asigna facturas/boletas del picking al grupo de su OC canónica.
 
@@ -224,6 +231,10 @@ def _reconcile_document_batches_from_oc(
     No divide facturas. Si un mismo documento tributario quedaría en dos grupos
     distintos, lo deja sin lote y reporta conflicto.
     Solo rellena ``load_batch_id`` vacío salvo ``overwrite_manual``.
+
+    Con ``scope_oc_document_ids`` / ``scope_related_document_ids``, el overwrite
+    manual solo aplica a esos documentos (nunca global a docs ajenos).
+    ``dry_run`` calcula movimientos/conflictos sin persistir.
     """
     from backend.repositories.distribuidora import (
         dispatch_plan_order_load_repo as org_repo,
@@ -235,9 +246,19 @@ def _reconcile_document_batches_from_oc(
             "already_assigned": 0,
             "pending": 0,
             "conflicts": [],
+            "moves": [],
             "organization_ready": False,
             "note_es": "Migración 053 no disponible: no hay OC→grupo.",
         }
+
+    scope_ocs = (
+        {int(x) for x in scope_oc_document_ids} if scope_oc_document_ids else None
+    )
+    scope_rels = (
+        {int(x) for x in scope_related_document_ids}
+        if scope_related_document_ids
+        else None
+    )
 
     oc_to_batch: dict[int, int] = {}
     for row in org_repo.list_order_assignments(cur, plan_id):
@@ -284,9 +305,19 @@ def _reconcile_document_batches_from_oc(
                 }
             )
 
+    def _in_scope(rel: int, oc: int | None) -> bool:
+        if scope_ocs is None and scope_rels is None:
+            return True
+        if scope_rels is not None and rel in scope_rels:
+            return True
+        if scope_ocs is not None and oc is not None and int(oc) in scope_ocs:
+            return True
+        return False
+
     reconciled = 0
     already = 0
     pending = 0
+    moves: list[dict[str, Any]] = []
     for a in assignments:
         rel = int(a["related_document_id"])
         current = a.get("load_batch_id")
@@ -304,9 +335,15 @@ def _reconcile_document_batches_from_oc(
         if current is not None and int(current) == int(target):
             already += 1
             continue
-        if current is not None and not overwrite_manual:
-            # Asignación manual distinta: respetar.
-            if int(current) != int(target):
+        scoped = _in_scope(rel, int(oc))
+        # Con alcance activo, no tocar documentos ajenos (ni vacíos).
+        if (scope_ocs is not None or scope_rels is not None) and not scoped:
+            already += 1
+            continue
+        allow_overwrite = bool(overwrite_manual) and scoped
+        if current is not None and not allow_overwrite:
+            # Asignación manual distinta: respetar (fuera de alcance o sin confirmación).
+            if int(current) != int(target) and scoped:
                 conflicts.append(
                     {
                         "related_document_id": rel,
@@ -321,6 +358,21 @@ def _reconcile_document_batches_from_oc(
                     }
                 )
             already += 1
+            continue
+        moves.append(
+            {
+                "related_document_id": rel,
+                "oc_document_id": int(oc),
+                "from_load_batch_id": int(current) if current is not None else None,
+                "to_load_batch_id": int(target),
+                "document_number": (
+                    int(a["document_number"]) if a.get("document_number") else None
+                ),
+                "client_name": a.get("client_name"),
+            }
+        )
+        if dry_run:
+            reconciled += 1
             continue
         batch_repo.upsert_document_assignment(
             cur,
@@ -339,8 +391,12 @@ def _reconcile_document_batches_from_oc(
         "already_assigned": already,
         "pending": pending,
         "conflicts": conflicts,
+        "moves": moves,
         "organization_ready": bool(oc_to_batch),
         "oc_group_count": len(oc_to_batch),
+        "dry_run": bool(dry_run),
+        "scope_oc_document_ids": sorted(scope_ocs) if scope_ocs else None,
+        "scope_related_document_ids": sorted(scope_rels) if scope_rels else None,
     }
 
 
@@ -414,6 +470,218 @@ def reconcile_document_load_assignments(
             "documents_unassigned": unassigned,
             "document_assignment_complete": assignment_complete,
             "groups": group_status,
+        }
+    )
+
+
+def preview_document_load_reassignment(
+    plan_id: int,
+    *,
+    oc_document_ids: list[int] | None = None,
+    related_document_ids: list[int] | None = None,
+) -> dict[str, Any]:
+    """Vista previa de traslado documental selectivo (sin escritura)."""
+    scope_ocs = {int(x) for x in (oc_document_ids or []) if x is not None}
+    scope_rels = {int(x) for x in (related_document_ids or []) if x is not None}
+    if not scope_ocs and not scope_rels:
+        raise ValueError("Indique OC o documentos a revisar.")
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        plan = plan_repo.get_plan_by_id(cur, plan_id)
+        if not plan:
+            raise ValueError("Plan no encontrado")
+        status = str(plan.get("status") or "")
+        blocked = status in BLOCKED_DOC_REASSIGN_STATUSES
+        _sync_assignments_from_picking(cur, plan_id)
+        # dry_run + overwrite para listar moves potenciales sin persistir;
+        # los conflictos hard (invoice_spans) siguen bloqueando.
+        result = _reconcile_document_batches_from_oc(
+            cur,
+            plan_id,
+            overwrite_manual=True,
+            scope_oc_document_ids=scope_ocs or None,
+            scope_related_document_ids=scope_rels or None,
+            dry_run=True,
+        )
+        picking_row = picking_repo.get_picking_row(cur, plan_id, current_only=True)
+        hard = [
+            c
+            for c in (result.get("conflicts") or [])
+            if c.get("code") == "invoice_spans_groups"
+        ]
+        # Con overwrite scoped dry_run no deberían quedar manual_differs en alcance.
+        can_apply = (not blocked) and (not hard) and bool(result.get("moves"))
+        batch_names = {
+            int(b["id"]): b.get("name") for b in batch_repo.list_load_batches(cur, plan_id)
+        }
+        conn.rollback()  # preview nunca confirma
+        cur.close()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    moves = []
+    for m in result.get("moves") or []:
+        moves.append(
+            {
+                **m,
+                "from_load_batch_name": batch_names.get(m.get("from_load_batch_id")),
+                "to_load_batch_name": batch_names.get(m.get("to_load_batch_id")),
+            }
+        )
+
+    warning_parts = [
+        "Mover registros documentales no implica mover mercadería física en Bodega.",
+        "El sistema no puede verificar si la preparación física ya ocurrió.",
+    ]
+    if picking_row:
+        warning_parts.append(
+            f"Existe picking v{int(picking_row['version'])}: se conservan versiones "
+            "históricas; las exportaciones por grupo deben regenerarse/descargarse de nuevo."
+        )
+
+    return serialize_value(
+        {
+            "dispatch_plan_id": plan_id,
+            "plan_status": status,
+            "blocked": blocked,
+            "blocked_reason_es": (
+                f"El plan está en estado «{status}»; no se permite reasignar documentos."
+                if blocked
+                else None
+            ),
+            "can_apply": can_apply,
+            "has_picking": bool(picking_row),
+            "picking_version": int(picking_row["version"]) if picking_row else None,
+            "moves": moves,
+            "hard_conflicts": hard,
+            "warnings_es": warning_parts,
+            "effects_es": [
+                "Se actualiza documento→grupo al lote sugerido por la OC.",
+                "No se duplican documentos en dos grupos.",
+                "No se modifican cuadraturas ni se crean cantidades adicionales.",
+                "Documentos fuera del alcance seleccionado no se tocan.",
+            ],
+            "scope_oc_document_ids": sorted(scope_ocs) if scope_ocs else [],
+            "scope_related_document_ids": sorted(scope_rels) if scope_rels else [],
+            "message_es": (
+                f"{len(moves)} documento(s) se alinearán al grupo de su OC."
+                if moves
+                else "No hay documentos pendientes de traslado en el alcance indicado."
+            ),
+        }
+    )
+
+
+def apply_document_load_reassignment(
+    plan_id: int,
+    *,
+    oc_document_ids: list[int] | None = None,
+    related_document_ids: list[int] | None = None,
+    confirm: bool = False,
+    user: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Aplica traslado documental selectivo con overwrite solo en alcance."""
+    if not confirm:
+        raise ValueError("Se requiere confirmación explícita (confirm=true).")
+    scope_ocs = {int(x) for x in (oc_document_ids or []) if x is not None}
+    scope_rels = {int(x) for x in (related_document_ids or []) if x is not None}
+    if not scope_ocs and not scope_rels:
+        raise ValueError("Indique OC o documentos a trasladar.")
+
+    preview = preview_document_load_reassignment(
+        plan_id,
+        oc_document_ids=list(scope_ocs) or None,
+        related_document_ids=list(scope_rels) or None,
+    )
+    if preview.get("blocked"):
+        raise ValueError(preview.get("blocked_reason_es") or "Plan bloqueado")
+    if preview.get("hard_conflicts"):
+        raise ValueError(
+            "Hay facturas vinculadas a OC de grupos distintos; resolución manual requerida."
+        )
+    if not preview.get("moves"):
+        return serialize_value(
+            {
+                **preview,
+                "applied": False,
+                "reconciled": 0,
+                "idempotent": True,
+                "message_es": "Nada que aplicar (idempotente).",
+            }
+        )
+
+    # Persistir solo docs del preview (doble filtro por related_document_id).
+    apply_rels = {int(m["related_document_id"]) for m in preview["moves"]}
+    ensure_default_load_batch(plan_id)
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        plan = plan_repo.get_plan_by_id(cur, plan_id)
+        if not plan:
+            raise ValueError("Plan no encontrado")
+        status = str(plan.get("status") or "")
+        if status in BLOCKED_DOC_REASSIGN_STATUSES:
+            raise ValueError(
+                f"El plan está en estado «{status}»; no se permite reasignar documentos."
+            )
+        _sync_assignments_from_picking(cur, plan_id)
+        result = _reconcile_document_batches_from_oc(
+            cur,
+            plan_id,
+            overwrite_manual=True,
+            scope_oc_document_ids=scope_ocs or None,
+            scope_related_document_ids=apply_rels,
+            dry_run=False,
+        )
+        hard = [
+            c
+            for c in (result.get("conflicts") or [])
+            if c.get("code") == "invoice_spans_groups"
+        ]
+        if hard:
+            conn.rollback()
+            raise ValueError(
+                "Conflicto cruzado detectado al aplicar; no se persistió ningún cambio."
+            )
+        picking_row = picking_repo.get_picking_row(cur, plan_id, current_only=True)
+        actor = _staff_label(user)
+        # Auditoría liviana en resultado (sin tabla nueva / sin migración).
+        audit = {
+            "action": "document_load_reassignment",
+            "actor": actor,
+            "related_document_ids": sorted(apply_rels),
+            "oc_document_ids": sorted(scope_ocs) if scope_ocs else [],
+            "reconciled": result.get("reconciled"),
+        }
+        conn.commit()
+        cur.close()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    return serialize_value(
+        {
+            "dispatch_plan_id": plan_id,
+            "applied": True,
+            "idempotent": False,
+            "has_picking": bool(picking_row),
+            "picking_version": int(picking_row["version"]) if picking_row else None,
+            "reconciled": result.get("reconciled"),
+            "moves": result.get("moves") or [],
+            "conflicts": result.get("conflicts") or [],
+            "audit": audit,
+            "message_es": (
+                f"Traslado aplicado: {result.get('reconciled') or 0} documento(s). "
+                "No se alteró el picking histórico ni la cuadratura."
+            ),
+            "warnings_es": preview.get("warnings_es") or [],
         }
     )
 
