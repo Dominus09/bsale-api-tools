@@ -1319,7 +1319,12 @@ def delivery_map_set_stop_status(
     body: DeliveryStopStatusBody,
     user: dict = Depends(require_staff_user),
 ):
-    """Marca parada cliente como delivered/pending (persiste en order_events)."""
+    """Marca parada cliente como delivered/pending (persiste en order_events).
+
+    Requiere el mismo alcance de lectura que GET delivery-map (capability-only /
+    vínculo explícito). P1 no habilita escritura PWA-chofer en este endpoint.
+    """
+    _deny_plan_if_out_of_scope(user, plan_id)
     from backend.services.distribuidora import delivery_map_service as dmap
 
     try:

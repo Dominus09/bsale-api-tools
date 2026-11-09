@@ -479,6 +479,36 @@ def require_pwa_profiles(*allowed_profiles: str):
     return _dep
 
 
+def require_erp_or_pwa_app(
+    authorization: BearerDep = None,
+    request: Request = None,
+) -> dict[str, Any]:
+    """JWT válido con acceso ERP o PWA (p. ej. ``GET /auth/me``).
+
+    No otorga ERP a cuentas PWA-only: solo permite leer el perfil.
+    """
+    user = require_authenticated_staff(authorization)
+    scope = get_scope(user)
+    if scope.load_failed:
+        raise HTTPException(
+            status_code=503,
+            detail="No se pudo verificar autorización multiaplicación",
+        )
+    if has_app_access(scope, APP_ERP) or has_app_access(scope, APP_PWA):
+        return user
+    path = request.url.path if request is not None else "-"
+    logger.warning(
+        "[AUTH_MULTIAPP] deny erp_or_pwa user_id=%s path=%s apps=%s",
+        user.get("id"),
+        path,
+        sorted(scope.apps),
+    )
+    raise HTTPException(
+        status_code=403,
+        detail="Sin acceso ERP ni PWA para esta cuenta",
+    )
+
+
 def scope_public_dict(user: dict[str, Any]) -> dict[str, Any]:
     """Fragmento seguro para ``/auth/me`` (sin objetos internos)."""
     enriched = attach_multiapp_scope(user)

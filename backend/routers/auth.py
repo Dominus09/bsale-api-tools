@@ -28,7 +28,7 @@ from backend.auth.staff_session import (
 )
 from backend.client_rut import require_valid_rut, city_is_melinka
 from backend.db import get_connection
-from backend.utils.auth_staff import require_staff_user
+from backend.auth.multiapp import require_erp_or_pwa_app
 from backend.utils.catalog_admin_rut import is_catalog_admin_rut
 from backend.utils.catalog_client import lookup_catalog_client
 
@@ -195,6 +195,6 @@ def login(data: LoginRequest, request: Request):
 
 
 @auth_router.get("/me")
-def auth_me(user: dict = Depends(require_staff_user)):
-    """Perfil staff + permisos efectivos (depuración de accesos)."""
+def auth_me(user: dict = Depends(require_erp_or_pwa_app)):
+    """Perfil + apps/perfiles. ERP o PWA (sin otorgar ERP a PWA-only)."""
     return build_auth_me_response(user)

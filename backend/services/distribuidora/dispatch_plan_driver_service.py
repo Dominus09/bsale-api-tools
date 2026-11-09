@@ -994,20 +994,41 @@ def assign_driver_to_plan(
 
 
 def list_plans_for_driver_user(driver_user_id: int, *, limit: int = 50) -> list[dict[str, Any]]:
-    """Despachos operativos visibles para el chofer autenticado (prep PWA)."""
+    """Despachos operativos del chofer (solo ``driver_user_id``; nunca por nombre)."""
     conn = get_connection()
     try:
         cur = conn.cursor()
         cur.execute(
             """
             SELECT
-                id, planning_code, planning_name, planning_date, truck_id,
-                truck_name, route_name, status, driver_user_id, driver_name,
-                confirmed_at
-            FROM distribuidora.dispatch_plan
-            WHERE driver_user_id = %s
-              AND status = ANY(%s)
-            ORDER BY planning_date DESC, id DESC
+                dp.id,
+                dp.planning_code,
+                dp.planning_name,
+                dp.planning_date,
+                dp.truck_id,
+                dp.truck_name,
+                t.plate AS truck_plate,
+                dp.route_name,
+                dp.status,
+                dp.driver_user_id,
+                dp.driver_name,
+                dp.confirmed_at,
+                (
+                    SELECT COUNT(*)::int
+                    FROM distribuidora.dispatch_plan_orders o
+                    WHERE o.dispatch_plan_id = dp.id
+                ) AS order_count,
+                (
+                    SELECT COUNT(DISTINCT o.client_id)::int
+                    FROM distribuidora.dispatch_plan_orders o
+                    WHERE o.dispatch_plan_id = dp.id
+                      AND o.client_id IS NOT NULL
+                ) AS client_count
+            FROM distribuidora.dispatch_plan dp
+            LEFT JOIN distribuidora.trucks t ON t.id = dp.truck_id
+            WHERE dp.driver_user_id = %s
+              AND dp.status = ANY(%s)
+            ORDER BY dp.planning_date DESC, dp.id DESC
             LIMIT %s
             """,
             (
@@ -1020,6 +1041,59 @@ def list_plans_for_driver_user(driver_user_id: int, *, limit: int = 50) -> list[
         rows = [dict(zip(cols, r)) for r in cur.fetchall()]
         cur.close()
         return rows
+    finally:
+        conn.close()
+
+
+def get_plan_summary_for_driver(
+    driver_user_id: int, plan_id: int
+) -> dict[str, Any] | None:
+    """Ficha read-only si y solo si el plan está asignado al chofer."""
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                dp.id,
+                dp.planning_code,
+                dp.planning_name,
+                dp.planning_date,
+                dp.truck_id,
+                dp.truck_name,
+                t.plate AS truck_plate,
+                dp.route_name,
+                dp.status,
+                dp.driver_user_id,
+                dp.driver_name,
+                dp.confirmed_at,
+                (
+                    SELECT COUNT(*)::int
+                    FROM distribuidora.dispatch_plan_orders o
+                    WHERE o.dispatch_plan_id = dp.id
+                ) AS order_count,
+                (
+                    SELECT COUNT(DISTINCT o.client_id)::int
+                    FROM distribuidora.dispatch_plan_orders o
+                    WHERE o.dispatch_plan_id = dp.id
+                      AND o.client_id IS NOT NULL
+                ) AS client_count
+            FROM distribuidora.dispatch_plan dp
+            LEFT JOIN distribuidora.trucks t ON t.id = dp.truck_id
+            WHERE dp.id = %s
+              AND dp.driver_user_id = %s
+              AND dp.status = ANY(%s)
+            LIMIT 1
+            """,
+            (int(plan_id), int(driver_user_id), list(SAME_DAY_ACTIVE_STATUSES)),
+        )
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            return None
+        cols = [d[0] for d in cur.description]
+        cur.close()
+        return dict(zip(cols, row))
     finally:
         conn.close()
 
