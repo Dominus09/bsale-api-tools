@@ -15,30 +15,28 @@ export type NavigationLinks = {
 }
 
 /**
- * Solo destinos donde NO hay evidencia de ruta vehicular continua verificada.
- * Quellón, Castro, Ancud y el resto de Chiloé continental/insular con red
- * vial NO deben disparar advertencia por el solo hecho de estar en una isla.
+ * Destinos con tratamiento especial solo cuando el nombre identifica Melinka
+ * (o localidades del archipiélago de las Guaitecas asociadas a esa ruta).
+ * NO usar latitud sola: coords australes fuera de Melinka no deben clasificarse
+ * como sin ruta terrestre continua.
  */
-const NO_CONTINUOUS_ROAD_CITY_HINTS = [
-  "melinka",
-  "repollal",
-  "isla Ascensión", // defensive; normalized lowercase below
-  "ascensión",
-  "ascension",
-]
+const MELINKA_CITY_HINTS = ["melinka", "repollal"]
 
+export function isMelinkaDestination(city?: string | null): boolean {
+  const c = (city || "").trim().toLowerCase()
+  if (!c) return false
+  return MELINKA_CITY_HINTS.some((h) => c.includes(h))
+}
+
+/**
+ * True solo con identificación confiable de Melinka/Guaitecas por ciudad.
+ * Latitud NO se usa como proxy de “isla / sin ruta”.
+ */
 export function likelyUnverifiedRoadDestination(
   city?: string | null,
-  lat?: number | null,
+  _lat?: number | null,
 ): boolean {
-  const c = (city || "").trim().toLowerCase()
-  if (c && NO_CONTINUOUS_ROAD_CITY_HINTS.some((h) => c.includes(h.toLowerCase()))) {
-    return true
-  }
-  // Melinka ~ -43.89. Latitudes más australes que -43.85 (sur de Quellón ~ -43.1)
-  // sin ciudad conocida: tratar como ruta no verificada (archipiélago austral).
-  if (lat != null && Number.isFinite(lat) && lat < -43.85) return true
-  return false
+  return isMelinkaDestination(city)
 }
 
 /** @deprecated Prefer likelyUnverifiedRoadDestination — nombre histórico. */
@@ -68,7 +66,14 @@ export function buildGoogleMapsNavigation(opts: {
   const encoded = encodeURIComponent(query)
   const place = `https://www.google.com/maps/search/?api=1&query=${encoded}`
   const directions = `https://www.google.com/maps/dir/?api=1&destination=${encoded}&travelmode=driving`
-  const unverified = likelyUnverifiedRoadDestination(opts.city, lat)
+  const melinka = isMelinkaDestination(opts.city)
+  const cityKnown = Boolean((opts.city || "").trim())
+
+  // Sin evidencia confiable de conectividad vial (p. ej. sin ciudad): abrir
+  // ubicación exacta, sin afirmar que el destino sea insular o imposible.
+  // Melinka (identificado por nombre): misma UX de ubicación exacta + aviso acotado.
+  // Quellón/Castro/Ancud y resto con ciudad conocida no-Melinka: directions.
+  const preferExactLocation = melinka || !cityKnown
 
   return {
     available: true,
@@ -77,11 +82,10 @@ export function buildGoogleMapsNavigation(opts: {
     destination_label: opts.clientName || null,
     google_maps_place_url: place,
     google_maps_directions_url: directions,
-    // Sin afirmación de “isla”: si no hay ruta verificada, abrir destino exacto.
-    google_maps_url: unverified ? place : directions,
-    likely_no_road_route: unverified,
-    warning_es: unverified
-      ? "Ruta vehicular continua no verificada hacia este destino (p. ej. Melinka). Se abre la ubicación exacta; la ruta de Google puede detenerse en el continente."
+    google_maps_url: preferExactLocation ? place : directions,
+    likely_no_road_route: preferExactLocation,
+    warning_es: melinka
+      ? "Destino Melinka: no hay verificación de ruta vehicular continua. Se abre la ubicación exacta."
       : null,
     note_es:
       "Destino = coordenadas del cliente del despacho. No se usa tu GPS como destino.",

@@ -166,7 +166,7 @@ export default function ClienteFichaPage() {
               target="_blank"
               rel="noopener noreferrer"
             >
-              {nav.likely_no_road_route ? "Abrir ubicación exacta" : "Abrir navegación"}
+              {nav.likely_no_road_route ? "Ver ubicación exacta" : "Abrir navegación"}
             </a>
             {nav.likely_no_road_route && nav.google_maps_directions_url ? (
               <a
