@@ -14,25 +14,39 @@ export type NavigationLinks = {
   note_es: string
 }
 
-const ISLAND_CITY_HINTS = [
+/**
+ * Solo destinos donde NO hay evidencia de ruta vehicular continua verificada.
+ * Quellón, Castro, Ancud y el resto de Chiloé continental/insular con red
+ * vial NO deben disparar advertencia por el solo hecho de estar en una isla.
+ */
+const NO_CONTINUOUS_ROAD_CITY_HINTS = [
   "melinka",
-  "achao",
-  "quellón",
-  "quellon",
-  "castro",
-  "dalcahue",
-  "curaco",
-  "quinchao",
-  "chaulínec",
-  "chaulinec",
+  "repollal",
+  "isla Ascensión", // defensive; normalized lowercase below
+  "ascensión",
+  "ascension",
 ]
 
-export function likelyIslandDestination(city?: string | null, lat?: number | null): boolean {
+export function likelyUnverifiedRoadDestination(
+  city?: string | null,
+  lat?: number | null,
+): boolean {
   const c = (city || "").trim().toLowerCase()
-  if (c && ISLAND_CITY_HINTS.some((h) => c.includes(h))) return true
-  // Melinka ~ -43.89; Ancud ~ -41.87. Latitudes más australes que -43.5 suelen ser islas del archipiélago.
-  if (lat != null && Number.isFinite(lat) && lat < -43.5) return true
+  if (c && NO_CONTINUOUS_ROAD_CITY_HINTS.some((h) => c.includes(h.toLowerCase()))) {
+    return true
+  }
+  // Melinka ~ -43.89. Latitudes más australes que -43.85 (sur de Quellón ~ -43.1)
+  // sin ciudad conocida: tratar como ruta no verificada (archipiélago austral).
+  if (lat != null && Number.isFinite(lat) && lat < -43.85) return true
   return false
+}
+
+/** @deprecated Prefer likelyUnverifiedRoadDestination — nombre histórico. */
+export function likelyIslandDestination(
+  city?: string | null,
+  lat?: number | null,
+): boolean {
+  return likelyUnverifiedRoadDestination(city, lat)
 }
 
 export function buildGoogleMapsNavigation(opts: {
@@ -54,7 +68,7 @@ export function buildGoogleMapsNavigation(opts: {
   const encoded = encodeURIComponent(query)
   const place = `https://www.google.com/maps/search/?api=1&query=${encoded}`
   const directions = `https://www.google.com/maps/dir/?api=1&destination=${encoded}&travelmode=driving`
-  const island = likelyIslandDestination(opts.city, lat)
+  const unverified = likelyUnverifiedRoadDestination(opts.city, lat)
 
   return {
     available: true,
@@ -63,12 +77,13 @@ export function buildGoogleMapsNavigation(opts: {
     destination_label: opts.clientName || null,
     google_maps_place_url: place,
     google_maps_directions_url: directions,
-    google_maps_url: island ? place : directions,
-    likely_no_road_route: island,
-    warning_es: island
-      ? "Destino insular o sin ruta terrestre continua. Se muestra la ubicación exacta; la ruta vehicular de Google puede detenerse en el continente (p. ej. Ancud)."
+    // Sin afirmación de “isla”: si no hay ruta verificada, abrir destino exacto.
+    google_maps_url: unverified ? place : directions,
+    likely_no_road_route: unverified,
+    warning_es: unverified
+      ? "Ruta vehicular continua no verificada hacia este destino (p. ej. Melinka). Se abre la ubicación exacta; la ruta de Google puede detenerse en el continente."
       : null,
     note_es:
-      "El destino son las coordenadas del cliente del despacho. No se usa tu GPS como destino.",
+      "Destino = coordenadas del cliente del despacho. No se usa tu GPS como destino.",
   }
 }

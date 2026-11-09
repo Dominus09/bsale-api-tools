@@ -4,6 +4,7 @@ import Link from "next/link"
 import { useParams } from "next/navigation"
 import { useEffect, useState } from "react"
 import { ApiError, getMyCliente } from "@/lib/api"
+import { formatRutDisplay } from "@/lib/format-rut"
 
 function money(n: number | null | undefined) {
   if (n == null || Number.isNaN(n)) return "—"
@@ -109,7 +110,7 @@ export default function ClienteFichaPage() {
 
         <div className="meta-row">
           <span className="muted">RUT</span>
-          <span>{c.rut || "—"}</span>
+          <span>{formatRutDisplay(c.rut) || "—"}</span>
         </div>
         <div className="meta-row">
           <span className="muted">Vendedor</span>
@@ -135,15 +136,6 @@ export default function ClienteFichaPage() {
             )}
           </span>
         </div>
-        <div className="meta-row">
-          <span className="muted">GPS</span>
-          <span>
-            {c.has_coordinates
-              ? `${Number(c.latitude).toFixed(5)}, ${Number(c.longitude).toFixed(5)}`
-              : "Sin coordenadas verificables"}
-          </span>
-        </div>
-
         {(c.load_groups || []).length > 0 ? (
           <div className="group-row" style={{ marginTop: 10 }}>
             {(c.load_groups || []).map((g) => (
@@ -162,11 +154,11 @@ export default function ClienteFichaPage() {
 
         {nav?.available && nav.google_maps_url ? (
           <div className="stack-gap" style={{ marginTop: 12 }}>
-            {nav.warning_es ? <div className="banner banner-info">{nav.warning_es}</div> : null}
-            <p className="muted" style={{ margin: 0, fontSize: "0.8rem" }}>
-              Destino: {nav.destination_latitude}, {nav.destination_longitude}
-              {nav.note_es ? ` · ${nav.note_es}` : ""}
-            </p>
+            {nav.warning_es ? (
+              <p className="muted" style={{ margin: 0, fontSize: "0.78rem", lineHeight: 1.35 }}>
+                {nav.warning_es}
+              </p>
+            ) : null}
             <a
               className="btn btn-primary"
               style={{ textAlign: "center" }}
@@ -174,17 +166,17 @@ export default function ClienteFichaPage() {
               target="_blank"
               rel="noopener noreferrer"
             >
-              {nav.likely_no_road_route ? "Ver ubicación exacta" : "Abrir navegación"}
+              {nav.likely_no_road_route ? "Abrir ubicación exacta" : "Abrir navegación"}
             </a>
             {nav.likely_no_road_route && nav.google_maps_directions_url ? (
               <a
                 className="btn btn-ghost"
-                style={{ textAlign: "center" }}
+                style={{ textAlign: "center", fontSize: "0.85rem" }}
                 href={nav.google_maps_directions_url}
                 target="_blank"
                 rel="noopener noreferrer"
               >
-                Intentar ruta vehicular (puede ser imprecisa)
+                Intentar ruta vehicular
               </a>
             ) : null}
           </div>
