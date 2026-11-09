@@ -72,6 +72,26 @@ def app_client(monkeypatch):
         "backend.services.distribuidora.dispatch_plan_driver_service.get_plan_summary_for_driver",
         _summary,
     )
+    monkeypatch.setattr(
+        "backend.services.distribuidora.dispatch_plan_driver_service.driver_has_access_to_plan",
+        lambda driver_id, plan_id: plan_owner.get(int(plan_id)) == int(driver_id),
+    )
+    monkeypatch.setattr(
+        "backend.services.distribuidora.dispatch_plan_driver_service.resolve_plan_company_office",
+        lambda _cur, plan_id: (None, None),
+    )
+
+    class _FakeConn:
+        def cursor(self):
+            return self
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "backend.services.distribuidora.dispatch_plan_pwa_driver_read_service.get_connection",
+        lambda: _FakeConn(),
+    )
 
     # capability-only deny for POST scope tests
     readable: set[int] = set()

@@ -1,7 +1,7 @@
 """PWA operativa — lectura de despachos del chofer autenticado.
 
 No exige app ERP. Ownership estricto por ``dispatch_plan.driver_user_id``.
-P1: solo lectura (lista + ficha resumen). Sin mapa/GPS/fotos/escrituras.
+P2: clientes, ficha, documentos/productos y mapa inicial (solo lectura).
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.auth.multiapp import require_pwa_profiles
 from backend.services.distribuidora import dispatch_plan_driver_service as driver_svc
+from backend.services.distribuidora import dispatch_plan_pwa_driver_read_service as read_svc
 from backend.utils.json_safe import serialize_value
 
 router = APIRouter(
@@ -32,14 +33,25 @@ def list_my_despachos(
     limit: int = Query(50, ge=1, le=200),
     user: dict = Depends(require_pwa_profiles("chofer")),
 ):
-    """Mis despachos: solo filas con ``driver_user_id`` = usuario JWT."""
+    """Mis despachos: solo filas con ``driver_user_id`` = usuario JWT + SPA vigente."""
     uid = _uid(user)
     items = driver_svc.list_plans_for_driver_user(uid, limit=limit)
+    visible: list[dict] = []
+    for row in items:
+        try:
+            read_svc.enforce_driver_plan_read_access(user, int(row["id"]))
+            visible.append(row)
+        except HTTPException as exc:
+            if exc.status_code in (403, 503):
+                continue
+            if exc.status_code == 404:
+                continue
+            raise
     return serialize_value(
         {
-            "items": items,
+            "items": visible,
             "driver_user_id": uid,
-            "count": len(items),
+            "count": len(visible),
         }
     )
 
@@ -49,8 +61,8 @@ def get_my_despacho(
     plan_id: int,
     user: dict = Depends(require_pwa_profiles("chofer")),
 ):
-    """Ficha read-only. Plan ajeno → 404 (sin filtrar existencia)."""
-    uid = _uid(user)
+    """Ficha read-only. Plan ajeno / oficina revocada → 404/403."""
+    uid = read_svc.enforce_driver_plan_read_access(user, int(plan_id))
     row = driver_svc.get_plan_summary_for_driver(uid, int(plan_id))
     if row is None:
         raise HTTPException(status_code=404, detail="Despacho no encontrado")
@@ -59,10 +71,60 @@ def get_my_despacho(
             "plan": row,
             "driver_user_id": uid,
             "read_only": True,
-            "nav_placeholders": {
-                "mapa": False,
-                "clientes": False,
-                "note_es": "Mapa y fichas de cliente en fases posteriores.",
+            "nav": {
+                "mapa": True,
+                "clientes": True,
+                "ficha": True,
+                "note_es": "Mapa, clientes y ficha de entrega (solo lectura).",
             },
+            "future_contracts": read_svc.FUTURE_CONTRACTS,
         }
     )
+
+
+@router.get("/despachos/{plan_id}/clientes")
+def list_my_clientes(
+    plan_id: int,
+    q: str | None = Query(None, description="Buscar por cliente o folio"),
+    user: dict = Depends(require_pwa_profiles("chofer")),
+):
+    read_svc.enforce_driver_plan_read_access(user, int(plan_id))
+    return read_svc.list_clients_for_driver(int(plan_id), q=q)
+
+
+@router.get("/despachos/{plan_id}/clientes/{customer_key:path}")
+def get_my_cliente(
+    plan_id: int,
+    customer_key: str,
+    user: dict = Depends(require_pwa_profiles("chofer")),
+):
+    read_svc.enforce_driver_plan_read_access(user, int(plan_id))
+    return read_svc.get_client_ficha_for_driver(int(plan_id), customer_key)
+
+
+@router.get("/despachos/{plan_id}/mapa")
+def get_my_mapa(
+    plan_id: int,
+    origin_lat: float | None = Query(None),
+    origin_lng: float | None = Query(None),
+    user: dict = Depends(require_pwa_profiles("chofer")),
+):
+    read_svc.enforce_driver_plan_read_access(user, int(plan_id))
+    if (origin_lat is None) ^ (origin_lng is None):
+        raise HTTPException(
+            status_code=400,
+            detail="origin_lat y origin_lng deben enviarse juntos",
+        )
+    return read_svc.get_map_for_driver(
+        int(plan_id),
+        origin_lat=origin_lat,
+        origin_lng=origin_lng,
+    )
+
+
+@router.get("/futuro/contratos")
+def get_future_contracts(
+    user: dict = Depends(require_pwa_profiles("chofer")),
+):
+    _uid(user)
+    return read_svc.get_future_contracts()
