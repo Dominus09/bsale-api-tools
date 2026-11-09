@@ -7632,3 +7632,60 @@ export async function postCommercialSimulator(body: {
   if (!res.ok) throw new Error("Error en simulador comercial")
   return res.json()
 }
+
+export type ClientLocationPendingItem = {
+  id: number
+  client_id: number
+  customer_key?: string
+  dispatch_plan_id: number
+  proposed_lat: number
+  proposed_lng: number
+  accuracy_m?: number | null
+  previous_lat?: number | null
+  previous_lng?: number | null
+  previous_source?: string | null
+  distance_from_previous_m?: number | null
+  proposed_by_user_id: number
+  captured_at?: string | null
+  created_at?: string | null
+  facade_url?: string | null
+  facade_object_key?: string | null
+}
+
+export async function getClientLocationsPending(
+  limit = 100,
+): Promise<{ items: ClientLocationPendingItem[]; tables_ready?: boolean; message_es?: string }> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/client-locations/pending?limit=${limit}`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) throw new Error(await res.text().catch(() => "Error al listar ubicaciones"))
+  return res.json()
+}
+
+export async function reviewClientLocationProposal(
+  proposalId: number,
+  body: { approve: boolean; note?: string },
+): Promise<{ message_es?: string }> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/client-locations/proposals/${proposalId}/review`,
+    {
+      method: "POST",
+      headers: { ...getAuthHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  )
+  if (!res.ok) throw new Error(await res.text().catch(() => "Error al revisar propuesta"))
+  return res.json()
+}
+
+export async function getClientLocationHistory(
+  clientId: number,
+): Promise<{ items: unknown[]; verified?: unknown; pending?: unknown }> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/client-locations/clients/${clientId}/history`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) throw new Error(await res.text().catch(() => "Error al cargar historial"))
+  return res.json()
+}

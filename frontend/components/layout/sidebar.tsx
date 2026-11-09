@@ -162,6 +162,11 @@ const navSections: { title: string; items: NavItem[] }[] = [
       { href: "/operaciones/mapa", label: "Mapa operacional", icon: MapPin },
       { href: "/operaciones/incidencias", label: "Incidencias", icon: AlertTriangle },
       { href: "/operaciones/georreferencias", label: "Georreferencias", icon: Crosshair },
+      {
+        href: "/operaciones/ubicaciones-chofer",
+        label: "Ubicaciones chofer",
+        icon: MapPin,
+      },
       { href: "/orders", label: "Pedidos", icon: Package },
       { href: "#", label: "Stock", icon: Warehouse, disabled: true },
     ],
