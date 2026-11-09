@@ -7,43 +7,38 @@ import test from "node:test"
 import {
   classifyMapFailure,
   classifyMapInitError,
+  classifyMapTimeout,
 } from "./map-errors.ts"
 
-test("fallo de estilo (crítico) antes de load", () => {
-  const c = classifyMapFailure(new Error("Failed to load style from openfreemap"), {
+test("GPU / WebGL → fatal", () => {
+  const c = classifyMapFailure(new Error("GPUInitializationError: WebGL2 unavailable"), {
     styleLoaded: false,
   })
   assert.equal(c.kind, "fatal")
-  assert.equal(c.code, "map_style_unavailable")
-  assert.match(c.messageEs, /lista de clientes/i)
+  assert.equal(c.code, "map_gpu_unavailable")
 })
 
-test("fallo recuperable de tiles tras load", () => {
+test("fallo de tiles recuperable (no destruir mapa)", () => {
   const c = classifyMapFailure(new Error("Failed to fetch tile"), {
-    styleLoaded: true,
+    styleLoaded: false,
     sourceId: "openmaptiles",
   })
   assert.equal(c.kind, "recoverable")
-  assert.equal(c.code, "map_tiles_degraded")
   assert.match(c.messageEs, /lista de clientes/i)
 })
 
-test("tile error con sourceId → recoverable", () => {
-  const c = classifyMapFailure("AJAXError: tile 503", {
-    styleLoaded: false,
-    sourceId: "basemap",
-  })
+test("aviso genérico pre-load ya no es fatal", () => {
+  const c = classifyMapFailure("boom", { styleLoaded: false })
   assert.equal(c.kind, "recoverable")
 })
 
-test("mapa no disponible con acceso a lista de clientes", () => {
-  const c = classifyMapInitError(new Error("WebGL not supported / maplibre init"))
+test("timeout sin estilo → fatal con acceso a lista", () => {
+  const c = classifyMapTimeout()
   assert.equal(c.kind, "fatal")
   assert.match(c.messageEs, /lista de clientes/i)
 })
 
-test("error genérico pre-load es fatal", () => {
-  const c = classifyMapFailure("boom", { styleLoaded: false })
+test("init error → fatal", () => {
+  const c = classifyMapInitError(new Error("maplibre construct failed"))
   assert.equal(c.kind, "fatal")
-  assert.equal(c.code, "map_unavailable")
 })

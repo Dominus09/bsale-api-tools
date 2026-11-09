@@ -4,7 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 3001",
-    "build": "next build --webpack && node scripts/copy-standalone-assets.cjs",
+    "prebuild": "node scripts/copy-maplibre-worker.cjs",
+    "build": "node scripts/copy-maplibre-worker.cjs && next build --webpack && node scripts/copy-standalone-assets.cjs",
+    "test:map": "node --experimental-strip-types --test lib/map-errors.test.mjs lib/navigation.test.mjs",
     "start": "node .next/standalone/server.js",
     "lint": "eslint ."
   },

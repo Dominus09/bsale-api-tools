@@ -11,7 +11,10 @@ export type ClassifiedMapFailure = {
 function textOf(err: unknown): string {
   if (err == null) return ""
   if (typeof err === "string") return err
-  if (err instanceof Error) return err.message || String(err)
+  if (err instanceof Error) {
+    const name = err.name || ""
+    return `${name} ${err.message || ""}`.trim()
+  }
   if (typeof err === "object" && "message" in err) {
     return String((err as { message?: unknown }).message || "")
   }
@@ -19,25 +22,58 @@ function textOf(err: unknown): string {
 }
 
 /**
- * Distingue fallos que impiden ver el mapa de errores de tile recuperables.
- * `styleLoaded` = true después del evento `load` / estilo listo.
+ * Errores de MapLibre durante carga de estilo/tiles suelen ser recuperables.
+ * Solo marcar fatal ante fallo de GPU/init o timeout sin estilo listo.
  */
 export function classifyMapFailure(
   err: unknown,
-  opts?: { styleLoaded?: boolean; sourceId?: string | null },
+  opts?: { styleLoaded?: boolean; sourceId?: string | null; phase?: string },
 ): ClassifiedMapFailure {
   const styleLoaded = Boolean(opts?.styleLoaded)
   const sourceId = opts?.sourceId || ""
+  const phase = opts?.phase || ""
   const raw = textOf(err)
   const lower = raw.toLowerCase()
 
-  const looksLikeTile =
-    Boolean(sourceId) ||
-    /tile|tiles|raster|vector tile|ajax|networkerror|failed to fetch|load tile|404|503/.test(
+  if (
+    /gpuinitialization|webgl2|webgl not|failed to initialize|no webgl|context lost/.test(
       lower,
     )
+  ) {
+    return {
+      kind: "fatal",
+      code: "map_gpu_unavailable",
+      messageEs:
+        "Este dispositivo no pudo iniciar el mapa (WebGL). Usa la lista de clientes para documentos y productos.",
+    }
+  }
 
-  if (styleLoaded || looksLikeTile) {
+  if (phase === "timeout" && !styleLoaded) {
+    return {
+      kind: "fatal",
+      code: "map_style_timeout",
+      messageEs:
+        "El mapa tardó demasiado en cargar. Reintenta o continúa por la lista de clientes.",
+    }
+  }
+
+  if (phase === "init") {
+    return {
+      kind: "fatal",
+      code: "map_init_failed",
+      messageEs:
+        "No se pudo inicializar el mapa. Usa la lista de clientes para consultar el despacho.",
+    }
+  }
+
+  // Cualquier error de red/tiles/sprites/glyphs con o sin estilo → degradado, no destruir mapa.
+  if (
+    styleLoaded ||
+    sourceId ||
+    /tile|tiles|sprite|glyph|ajax|network|failed to fetch|404|503|load/.test(lower) ||
+    phase === "style" ||
+    phase === "source"
+  ) {
     return {
       kind: "recoverable",
       code: "map_tiles_degraded",
@@ -46,24 +82,19 @@ export function classifyMapFailure(
     }
   }
 
-  if (/style|openfreemap|stylesheet|webgl|maplibre|inicial|init|construct/.test(lower)) {
-    return {
-      kind: "fatal",
-      code: "map_style_unavailable",
-      messageEs:
-        "No se pudo cargar el mapa (estilo o proveedor). Usa la lista de clientes para consultar documentos y productos.",
-    }
-  }
-
+  // Antes de load, errores genéricos: degradar (evitar falsos fatales por worker/style parcial).
   return {
-    kind: "fatal",
-    code: "map_unavailable",
+    kind: "recoverable",
+    code: "map_load_warning",
     messageEs:
-      "El mapa no está disponible en este momento. Puedes continuar por la lista de clientes.",
+      "Hubo un aviso al cargar el mapa. Si no ves el mapa, reintenta o usa la lista de clientes.",
   }
 }
 
 export function classifyMapInitError(err: unknown): ClassifiedMapFailure {
-  const raw = textOf(err) || "init_failed"
-  return classifyMapFailure(raw, { styleLoaded: false })
+  return classifyMapFailure(err, { styleLoaded: false, phase: "init" })
+}
+
+export function classifyMapTimeout(): ClassifiedMapFailure {
+  return classifyMapFailure("timeout", { styleLoaded: false, phase: "timeout" })
 }
