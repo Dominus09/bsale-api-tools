@@ -214,6 +214,29 @@ export async function getMyCliente(
     load_groups?: LoadGroupRef[]
     facade_photo?: string | null
     facade_photo_placeholder?: boolean
+    location_registration?: {
+      status?: string
+      label_es?: string
+      can_register?: boolean
+      pending_proposal_id?: number | null
+      verified?: boolean
+      previous_lat?: number | null
+      previous_lng?: number | null
+      proposed_lat?: number | null
+      proposed_lng?: number | null
+    }
+    facade?: {
+      has_photo?: boolean
+      photo_id?: number | null
+      status?: string | null
+      url?: string | null
+      is_current_approved?: boolean
+    }
+  }
+  p3?: {
+    tables_ready?: boolean
+    r2?: { configured?: boolean; note_es?: string | null }
+    gps_warn_accuracy_m?: number
   }
   navigation?: {
     available: boolean
@@ -235,6 +258,57 @@ export async function getMyCliente(
   return apiFetch(
     `/distribuidora/pwa/driver/despachos/${planId}/clientes/${encodeURIComponent(customerKey)}`,
   )
+}
+
+export async function proposeClientLocation(
+  planId: number,
+  customerKey: string,
+  body: {
+    latitude: number
+    longitude: number
+    accuracy_m?: number | null
+    captured_at?: string
+    confirm_low_accuracy?: boolean
+    confirm_significant_move?: boolean
+    facade_photo_id?: number | null
+    idempotency_key?: string
+  },
+): Promise<Record<string, unknown>> {
+  return apiFetch(
+    `/distribuidora/pwa/driver/despachos/${planId}/clientes/${encodeURIComponent(customerKey)}/ubicacion`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  )
+}
+
+export async function uploadFacadePhoto(
+  planId: number,
+  customerKey: string,
+  file: Blob,
+  opts?: { idempotency_key?: string; contentType?: string },
+): Promise<Record<string, unknown>> {
+  const fd = new FormData()
+  const type = opts?.contentType || (file.type || "image/jpeg")
+  fd.append("file", file, "fachada.jpg")
+  if (opts?.idempotency_key) fd.append("idempotency_key", opts.idempotency_key)
+  const res = await fetch(
+    `${getApiBase()}/distribuidora/pwa/driver/despachos/${planId}/clientes/${encodeURIComponent(customerKey)}/foto-fachada`,
+    {
+      method: "POST",
+      headers: { ...authHeaders() },
+      body: fd,
+    },
+  )
+  if (isUnauthorized(res.status)) {
+    clearSession()
+    if (typeof window !== "undefined") window.location.href = "/login?expired=1"
+    throw new ApiError(401, "Sesión expirada")
+  }
+  if (!res.ok) throw new ApiError(res.status, await parseError(res))
+  return res.json()
 }
 
 export async function getMyMapa(

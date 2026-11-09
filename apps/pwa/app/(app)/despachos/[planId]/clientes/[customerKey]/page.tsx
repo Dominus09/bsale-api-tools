@@ -5,6 +5,7 @@ import { useParams } from "next/navigation"
 import { useEffect, useState } from "react"
 import { ApiError, getMyCliente } from "@/lib/api"
 import { formatRutDisplay } from "@/lib/format-rut"
+import { ClientLocationCapture } from "@/components/client-location-capture"
 
 function money(n: number | null | undefined) {
   if (n == null || Number.isNaN(n)) return "—"
@@ -31,6 +32,7 @@ export default function ClienteFichaPage() {
   const [error, setError] = useState<string | null>(null)
   const [openDocs, setOpenDocs] = useState<Record<string, boolean>>({})
   const [openSku, setOpenSku] = useState<Record<string, boolean>>({})
+  const [reloadToken, setReloadToken] = useState(0)
 
   useEffect(() => {
     if (!Number.isFinite(planId) || planId < 1 || !customerKey) {
@@ -65,7 +67,7 @@ export default function ClienteFichaPage() {
     return () => {
       cancelled = true
     }
-  }, [planId, customerKey])
+  }, [planId, customerKey, reloadToken])
 
   if (error) {
     return (
@@ -99,15 +101,6 @@ export default function ClienteFichaPage() {
           </p>
         ) : null}
 
-        <div className="facade-ph" aria-hidden>
-          {c.facade_photo ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={c.facade_photo} alt="Fachada" />
-          ) : (
-            <span>Sin foto de fachada</span>
-          )}
-        </div>
-
         <div className="meta-row">
           <span className="muted">RUT</span>
           <span>{formatRutDisplay(c.rut) || "—"}</span>
@@ -115,14 +108,6 @@ export default function ClienteFichaPage() {
         <div className="meta-row">
           <span className="muted">Vendedor</span>
           <span>{c.seller_name || "—"}</span>
-        </div>
-        <div className="meta-row">
-          <span className="muted">Dirección</span>
-          <span>{c.address || "—"}</span>
-        </div>
-        <div className="meta-row">
-          <span className="muted">Sector</span>
-          <span>{c.city || "—"}</span>
         </div>
         <div className="meta-row">
           <span className="muted">Teléfono</span>
@@ -151,41 +136,29 @@ export default function ClienteFichaPage() {
             Obs.: {c.observations}
           </p>
         ) : null}
-
-        {nav?.available && nav.google_maps_url ? (
-          <div className="stack-gap" style={{ marginTop: 12 }}>
-            {nav.warning_es ? (
-              <p className="muted" style={{ margin: 0, fontSize: "0.78rem", lineHeight: 1.35 }}>
-                {nav.warning_es}
-              </p>
-            ) : null}
-            <a
-              className="btn btn-primary"
-              style={{ textAlign: "center" }}
-              href={nav.google_maps_url}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              {nav.likely_no_road_route ? "Ver ubicación exacta" : "Abrir navegación"}
-            </a>
-            {nav.likely_no_road_route && nav.google_maps_directions_url ? (
-              <a
-                className="btn btn-ghost"
-                style={{ textAlign: "center", fontSize: "0.85rem" }}
-                href={nav.google_maps_directions_url}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                Intentar ruta vehicular
-              </a>
-            ) : null}
-          </div>
-        ) : (
-          <button type="button" className="btn btn-ghost" disabled style={{ marginTop: 12 }}>
-            Sin destino GPS válido
-          </button>
-        )}
       </div>
+
+      <ClientLocationCapture
+        planId={planId}
+        customerKey={customerKey}
+        address={c.address}
+        city={c.city}
+        latitude={c.latitude}
+        longitude={c.longitude}
+        coordinatesSource={c.coordinates_source}
+        locationRegistration={c.location_registration}
+        facade={c.facade}
+        facadePhoto={c.facade_photo}
+        navigationUrl={nav?.available ? nav.google_maps_url || null : null}
+        warnAccuracyM={data.p3?.gps_warn_accuracy_m}
+        onChanged={() => setReloadToken((n) => n + 1)}
+      />
+
+      {nav?.warning_es ? (
+        <p className="muted" style={{ margin: 0, fontSize: "0.78rem" }}>
+          {nav.warning_es}
+        </p>
+      ) : null}
 
       <div>
         <h3 style={{ margin: "0 0 8px", fontSize: "1rem" }}>
