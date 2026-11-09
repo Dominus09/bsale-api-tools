@@ -1,1 +1,11 @@
 /Untitled
+node_modules/
+.next/
+**/node_modules/
+**/.next/
+apps/pwa/.env
+apps/pwa/.env.local
+__pycache__/
+*.pyc
+.venv/
+venv/
