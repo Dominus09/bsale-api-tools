@@ -145,6 +145,80 @@ def test_reconcile_respects_manual_assignment(monkeypatch):
     assert any(c.get("code") == "manual_differs_from_oc_group" for c in out["conflicts"])
 
 
+def test_plan82_style_move_oc_to_consolidado_keeps_docs_until_overwrite(monkeypatch):
+    """Caso PLAN-00082: OC en consolidado (13), facturas aún en Grupo 1 (11).
+
+    Tras mover OC, ``save_load_organization`` concilia con overwrite_manual=False,
+    por lo que los documentos permanecen en el lote previo y reportan conflicto.
+    Con overwrite_manual=True se alinean al grupo de la OC.
+    """
+    grupo1, consolidado = 11, 13
+    ocs = [
+        {"oc_document_id": 3975069, "load_batch_id": consolidado},  # 70745
+        {"oc_document_id": 3975063, "load_batch_id": consolidado},  # 70744
+        {"oc_document_id": 3975259, "load_batch_id": consolidado},  # 70756
+    ]
+    docs = [
+        {
+            "related_document_id": 3975261,
+            "oc_document_id": 3975069,
+            "load_batch_id": grupo1,
+            "document_number": 51818,
+            "client_name": "puñadito de dulzura",
+            "document_total": 344043,
+        },
+        {
+            "related_document_id": 3975263,
+            "oc_document_id": 3975063,
+            "load_batch_id": grupo1,
+            "document_number": 51819,
+            "client_name": "Romeo Alfa",
+            "document_total": 155033,
+        },
+        {
+            "related_document_id": 3975294,
+            "oc_document_id": 3975259,
+            "load_batch_id": grupo1,
+            "document_number": 51820,
+            "client_name": "Nayi's 2",
+            "document_total": 75580,
+        },
+    ]
+    monkeypatch.setattr(
+        "backend.repositories.distribuidora.dispatch_plan_order_load_repo.assignments_table_ready",
+        lambda _c: True,
+    )
+    monkeypatch.setattr(
+        "backend.repositories.distribuidora.dispatch_plan_order_load_repo.list_order_assignments",
+        lambda _c, _pid: ocs,
+    )
+    monkeypatch.setattr(svc.batch_repo, "list_document_assignments", lambda _c, _pid: docs)
+
+    upserts: list[dict] = []
+
+    def _upsert(_cur, **kw):
+        upserts.append(kw)
+
+    monkeypatch.setattr(svc.batch_repo, "upsert_document_assignment", _upsert)
+
+    blocked = svc._reconcile_document_batches_from_oc(_Cur(), 82, overwrite_manual=False)
+    assert blocked["reconciled"] == 0
+    assert upserts == []
+    assert len(blocked["conflicts"]) == 3
+    assert all(c.get("code") == "manual_differs_from_oc_group" for c in blocked["conflicts"])
+    assert {c["current_load_batch_id"] for c in blocked["conflicts"]} == {grupo1}
+    assert {c["suggested_load_batch_id"] for c in blocked["conflicts"]} == {consolidado}
+    for c in blocked["conflicts"]:
+        assert f"lote manual {grupo1}" in c["message_es"]
+        assert f"sugiere grupo {consolidado}" in c["message_es"]
+
+    fixed = svc._reconcile_document_batches_from_oc(_Cur(), 82, overwrite_manual=True)
+    assert fixed["reconciled"] == 3
+    assert fixed["conflicts"] == []
+    assert {u["load_batch_id"] for u in upserts} == {consolidado}
+    assert {u["related_document_id"] for u in upserts} == {3975261, 3975263, 3975294}
+
+
 def test_assess_detects_omissions_not_just_duplicates(monkeypatch):
     """UNIQUE evita doble grupo; la completitud exige cero omisiones."""
     monkeypatch.setattr(
