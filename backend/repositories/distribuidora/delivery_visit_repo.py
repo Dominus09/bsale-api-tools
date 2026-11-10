@@ -62,28 +62,39 @@ def admin_void_columns_ready(cur) -> bool:
 
 
 def _not_admin_voided_sql(cur) -> str:
-    """Filtro SQL: excluye solo anulaciones administrativas auditadas (058).
+    """Filtro SQL: excluye solo anulaciones administrativas completas (058).
 
-    Requiere voided_at IS NOT NULL y admin_classification = 'voided_admin'.
-    pilot_test solo (sin void) NO salta el bloqueo operativo.
+    pilot_test / duplicate_pending_review son informativos y NO excluyen.
     """
     if not admin_void_columns_ready(cur):
         return ""
     return """
           AND NOT (
-              voided_at IS NOT NULL
-              AND COALESCE(admin_classification, 'operational') = 'voided_admin'
+              COALESCE(admin_classification, 'operational') = 'voided_admin'
+              AND voided_at IS NOT NULL
+              AND voided_by_user_id IS NOT NULL
+              AND voided_by_user_id > 0
+              AND void_reason IS NOT NULL
+              AND length(btrim(void_reason)) > 0
           )
     """
 
 
 def is_admin_voided_row(row: dict[str, Any] | None) -> bool:
-    """True solo con anulación administrativa auditada (voided_at + voided_admin)."""
+    """True solo con anulación administrativa completa y auditada."""
     if not row:
+        return False
+    if str(row.get("admin_classification") or "") != "voided_admin":
         return False
     if row.get("voided_at") is None:
         return False
-    return str(row.get("admin_classification") or "") == "voided_admin"
+    try:
+        actor = int(row.get("voided_by_user_id"))
+    except (TypeError, ValueError):
+        return False
+    if actor <= 0:
+        return False
+    return len(str(row.get("void_reason") or "").strip()) > 0
 
 
 def get_active_visit(

@@ -180,9 +180,24 @@ def _visit_public(row: dict[str, Any]) -> dict[str, Any]:
         "closure_review_status": row.get("closure_review_status"),
         "admin_classification": row.get("admin_classification") or "operational",
         "voided_at": row.get("voided_at"),
+        "voided_by_user_id": row.get("voided_by_user_id"),
         "void_reason": row.get("void_reason"),
         "void_ticket_ref": row.get("void_ticket_ref"),
         "admin_voided": visit_repo.is_admin_voided_row(row),
+        "history_label_es": (
+            "ANULADA"
+            if visit_repo.is_admin_voided_row(row)
+            else (
+                "PRUEBA"
+                if str(row.get("admin_classification") or "") == "pilot_test"
+                else (
+                    "REVISIÓN ADMIN"
+                    if str(row.get("admin_classification") or "")
+                    == "duplicate_pending_review"
+                    else None
+                )
+            )
+        ),
         "version": int(row.get("version") or 1),
         "idempotency_key": row.get("idempotency_key"),
     }
@@ -764,6 +779,14 @@ def _require_own_open_visit(
         raise HTTPException(status_code=404, detail="Visita no pertenece al despacho")
     if int(row["driver_user_id"]) != uid:
         raise HTTPException(status_code=403, detail="Visita de otro chofer")
+    if visit_repo.is_admin_voided_row(row):
+        raise _http_409(
+            ERR_VISIT_CLOSED_NOT_EDITABLE,
+            "Visita anulada administrativamente; no editable",
+            visit_id=int(visit_id),
+            visit_status=str(row.get("status") or ""),
+            admin_voided=True,
+        )
     if row.get("status") != "in_progress":
         raise _http_409(
             ERR_VISIT_CLOSED_NOT_EDITABLE,

@@ -137,6 +137,8 @@ DISTRIBUIDORA_SCHEMA_FILES: tuple[str, ...] = (
     "056_delivery_visits_evidence.sql",
     # P4 complemento: guards de cierre / conformidad.
     "057_delivery_visit_closure_guards.sql",
+    # Anulación administrativa auditada. Aplicar solo con autorización explícita.
+    "058_delivery_visit_admin_void.sql",
 )
 
 _ENSURE_SCHEMA_NOOP_WARNED = False

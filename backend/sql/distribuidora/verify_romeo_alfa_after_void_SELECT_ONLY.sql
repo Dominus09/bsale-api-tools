@@ -21,11 +21,27 @@ WHERE dispatch_plan_id = 82
   AND status IN ('completed', 'partial', 'not_delivered')
   AND ended_at IS NOT NULL
   AND NOT (
-      voided_at IS NOT NULL
-      AND COALESCE(admin_classification, 'operational') = 'voided_admin'
+      COALESCE(admin_classification, 'operational') = 'voided_admin'
+      AND voided_at IS NOT NULL
+      AND voided_by_user_id IS NOT NULL
+      AND voided_by_user_id > 0
+      AND void_reason IS NOT NULL
+      AND length(btrim(void_reason)) > 0
   );
 -- Esperado: 0  → chofer puede iniciar visita operativa nueva
--- Nota: pilot_test SIN voided_at seguiría contando aquí (no salta el bloqueo).
+-- Nota: pilot_test / duplicate_pending_review SIN void completo siguen bloqueando.
+
+-- Integridad CHECK: voided_admin incompleto no debería existir tras 058
+SELECT id, admin_classification, voided_at, voided_by_user_id, void_reason
+FROM distribuidora.delivery_visits
+WHERE id IN (1, 3)
+  AND admin_classification = 'voided_admin'
+  AND (
+      voided_at IS NULL
+      OR voided_by_user_id IS NULL OR voided_by_user_id <= 0
+      OR void_reason IS NULL OR length(btrim(void_reason)) = 0
+  );
+-- Esperado: 0 filas
 
 SELECT visit_id, action, payload->>'ticket' AS ticket, created_at
 FROM distribuidora.delivery_visit_events

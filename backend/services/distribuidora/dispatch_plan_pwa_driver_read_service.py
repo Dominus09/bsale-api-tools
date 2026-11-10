@@ -1137,9 +1137,20 @@ def resolve_visit_attention_rows(
     }
     valid_close = {"completed", "partial", "not_delivered"}
 
-    def _voided(admin_class: Any, voided_at: Any) -> bool:
-        # Solo anulación auditada; pilot_test sin voided_at sigue contando/bloqueando.
-        return voided_at is not None and str(admin_class or "") == "voided_admin"
+    def _voided(
+        admin_class: Any,
+        voided_at: Any,
+        voided_by: Any = None,
+        void_reason: Any = None,
+    ) -> bool:
+        # Solo anulación completa; pilot_test/duplicate_pending_review son informativos.
+        if str(admin_class or "") != "voided_admin" or voided_at is None:
+            return False
+        try:
+            actor = int(voided_by) if voided_by is not None else 0
+        except (TypeError, ValueError):
+            actor = 0
+        return actor > 0 and len(str(void_reason or "").strip()) > 0
 
     by_key: dict[str, list[tuple[int, str, Any]]] = {}
     for row in rows:
@@ -1149,7 +1160,9 @@ def resolve_visit_attention_rows(
         ended_at = row[3]
         admin_class = row[4] if len(row) > 4 else None
         voided_at = row[5] if len(row) > 5 else None
-        if _voided(admin_class, voided_at):
+        voided_by = row[6] if len(row) > 6 else None
+        void_reason = row[7] if len(row) > 7 else None
+        if _voided(admin_class, voided_at, voided_by, void_reason):
             continue  # no cuentan para estado operativo
         key = str(customer_key or "")
         if not key:
@@ -1238,7 +1251,8 @@ def _visit_attention_by_customer(plan_id: int) -> dict[str, dict[str, Any]]:
             cur.execute(
                 """
                 SELECT customer_key, id, status, ended_at,
-                       admin_classification, voided_at
+                       admin_classification, voided_at,
+                       voided_by_user_id, void_reason
                 FROM distribuidora.delivery_visits
                 WHERE dispatch_plan_id = %s
                 ORDER BY customer_key, id
