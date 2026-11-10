@@ -27,6 +27,7 @@ export default function EntregaFirmaPage() {
   const [confirmEnd, setConfirmEnd] = useState(false)
   const [report, setReport] = useState<WhatsappReportResponse | null>(null)
   const [closed, setClosed] = useState(false)
+  const [detailOpen, setDetailOpen] = useState(false)
 
   const detail = session.visitDetail
   const lines = detail?.lines || []
@@ -34,43 +35,64 @@ export default function EntregaFirmaPage() {
   const cols = detail?.collections || []
   const existingConf = detail?.conformity
 
-  const summaryLines = useMemo(() => {
-    const out: string[] = []
-    out.push(`Cliente: ${session.clientName}`)
+  const { compactLines, detailLines } = useMemo(() => {
+    const compact: string[] = []
+    const full: string[] = []
+    compact.push(`Cliente: ${session.clientName}`)
+    let totalAmt = 0
     for (const d of docs) {
-      out.push(
-        `${d.document_type || "Doc"} ${d.document_number ?? "—"} · ${moneyCLP(
-          typeof d.document_total === "number" ? d.document_total : null,
-        )} · estado ${d.result_status || "—"}`,
+      const tot = typeof d.document_total === "number" ? d.document_total : 0
+      totalAmt += tot
+      compact.push(
+        `${d.document_type || "Doc"} ${d.document_number ?? "—"} · ${moneyCLP(tot)} · ${d.result_status || "—"}`,
       )
     }
+    compact.push(`Totales documentos: ${moneyCLP(totalAmt)}`)
+    let fullN = 0
+    let partialN = 0
+    let noneN = 0
     for (const ln of lines) {
       const planned = Number(ln.planned_units || 0)
       const delivered = Number(ln.delivered_units || 0)
+      if (delivered >= planned) fullN += 1
+      else if (delivered <= 0) noneN += 1
+      else partialN += 1
       const undel = Math.max(0, planned - delivered)
-      const name = String(ln.product_name || "Producto")
-      let s = `${name}: ${delivered}/${planned} un.`
-      if (undel > 0) {
-        s += ` · faltante ${undel}`
-        if (ln.undelivered_reason) s += ` (${ln.undelivered_reason})`
-        if (ln.undelivered_note) s += ` · ${ln.undelivered_note}`
-      }
-      out.push(s)
+      let s = `${ln.product_name || "Producto"}: ${delivered}/${planned}`
+      if (undel > 0 && ln.undelivered_reason) s += ` · ${ln.undelivered_reason}`
+      full.push(s)
     }
+    compact.push(
+      `Líneas: ${fullN} completas · ${partialN} parciales · ${noneN} no entregadas`,
+    )
+    const byMethod = new Map<string, number>()
+    let pendingSum = 0
     for (const c of cols) {
       const method = String(c.method || "—")
-      const declared = moneyCLP(
-        typeof c.declared_amount === "number" ? c.declared_amount : null,
+      const declared =
+        typeof c.declared_amount === "number" ? c.declared_amount : 0
+      byMethod.set(method, (byMethod.get(method) || 0) + declared)
+      if (method === "pending") pendingSum += declared
+      else if (typeof c.pending_balance === "number") {
+        pendingSum += Math.max(0, c.pending_balance)
+      }
+      full.push(
+        `Cobranza ${method}: ${moneyCLP(declared)}${c.note ? ` · ${c.note}` : ""}`,
       )
-      const pending = moneyCLP(
-        typeof c.pending_balance === "number" ? c.pending_balance : null,
-      )
-      out.push(`Cobranza ${method}: recibido ${declared} · saldo ${pending}`)
     }
-    if (!docs.length) out.push("Sin documentos registrados en la visita")
-    if (!lines.length) out.push("Sin líneas de cantidad guardadas")
-    return out
+    for (const [method, amt] of byMethod) {
+      compact.push(`Cobranza ${method}: ${moneyCLP(amt)}`)
+    }
+    if (byMethod.size === 0) compact.push("Sin cobranza declarada")
+    compact.push(`Saldo pendiente (declarado): ${moneyCLP(pendingSum)}`)
+    if (!docs.length) compact.push("Sin documentos registrados")
+    if (!lines.length) compact.push("Sin líneas guardadas")
+    return { compactLines: compact, detailLines: full }
   }, [session.clientName, docs, lines, cols])
+
+  const summaryLines = detailOpen
+    ? [...compactLines, "— Detalle —", ...detailLines]
+    : compactLines
 
   async function onFinalize() {
     const visit = session.activeVisit
@@ -211,15 +233,17 @@ export default function EntregaFirmaPage() {
           {existingConf?.refused ? " · negativa a firmar" : ""}.
         </div>
       ) : (
-        <DeliverySignaturePad
-          planId={planId}
-          visitId={session.activeVisit.id}
-          summaryLines={summaryLines}
-          onDone={() => {
-            setConformityOk(true)
-            session.reload()
-          }}
-        />
+                <DeliverySignaturePad
+                  planId={planId}
+                  visitId={session.activeVisit.id}
+                  summaryLines={summaryLines}
+                  detailOpen={detailOpen}
+                  onToggleDetail={() => setDetailOpen((v) => !v)}
+                  onDone={() => {
+                    setConformityOk(true)
+                    session.reload()
+                  }}
+                />
       )}
 
       {confirmEnd ? (

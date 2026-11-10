@@ -2,23 +2,29 @@
 
 import { useEffect, useRef, useState } from "react"
 import { ApiError, submitVisitConformity } from "@/lib/api"
-import { receptorNameIsValid, resolveReceptorName } from "@/lib/receptor-name"
+import {
+  receptorNameIsValid,
+  resolveReceptorNameFromForm,
+} from "@/lib/receptor-name"
 
 type Props = {
   planId: number
   visitId: number
   summaryLines: string[]
+  summaryCompact?: boolean
+  onToggleDetail?: () => void
+  detailOpen?: boolean
   onDone: () => void
 }
 
 /**
- * Hotfix iOS: Safari Autofill / QuickType puede pintar el nombre en el DOM
- * sin disparar onChange de React. Al enviar se leía el state vacío y el backend
- * respondía "Nombre del receptor requerido". Se lee el valor del input en submit.
+ * Hotfix iOS: Autofill puede pintar el nombre sin onChange.
+ * Submit resuelve: ref DOM → FormData → state.
  */
 export function DeliverySignaturePad(props: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const nameRef = useRef<HTMLInputElement | null>(null)
+  const formRef = useRef<HTMLFormElement | null>(null)
   const drawing = useRef(false)
   const [name, setName] = useState("")
   const [refuse, setRefuse] = useState(false)
@@ -46,7 +52,11 @@ export function DeliverySignaturePad(props: Props) {
   }, [])
 
   function syncNameFromDom(): string {
-    const resolved = resolveReceptorName(nameRef.current?.value, name)
+    const resolved = resolveReceptorNameFromForm(
+      nameRef.current,
+      name,
+      formRef.current,
+    )
     if (resolved !== name) setName(resolved)
     return resolved
   }
@@ -101,7 +111,8 @@ export function DeliverySignaturePad(props: Props) {
     })
   }
 
-  async function submit() {
+  async function submit(e?: React.FormEvent) {
+    e?.preventDefault()
     setBusy(true)
     setErr(null)
     try {
@@ -141,15 +152,15 @@ export function DeliverySignaturePad(props: Props) {
       })
       setErr(null)
       props.onDone()
-    } catch (e) {
-      setErr(e instanceof ApiError ? e.message : "No se pudo guardar conformidad")
+    } catch (err) {
+      setErr(err instanceof ApiError ? err.message : "No se pudo guardar conformidad")
     } finally {
       setBusy(false)
     }
   }
 
   return (
-    <div className="stack-gap">
+    <form ref={formRef} className="stack-gap" onSubmit={(ev) => void submit(ev)}>
       <div className="card" style={{ padding: 12 }}>
         <strong style={{ fontSize: "0.9rem" }}>Resumen a confirmar</strong>
         <ul style={{ margin: "8px 0 0", paddingLeft: 18, fontSize: "0.85rem" }}>
@@ -157,6 +168,16 @@ export function DeliverySignaturePad(props: Props) {
             <li key={`${i}-${l.slice(0, 24)}`}>{l}</li>
           ))}
         </ul>
+        {props.onToggleDetail ? (
+          <button
+            type="button"
+            className="btn btn-ghost btn-compact"
+            style={{ marginTop: 8 }}
+            onClick={props.onToggleDetail}
+          >
+            {props.detailOpen ? "Ocultar detalle" : "Ver detalle"}
+          </button>
+        ) : null}
       </div>
 
       <label className="field">
@@ -240,10 +261,10 @@ export function DeliverySignaturePad(props: Props) {
         </>
       )}
 
-      <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void submit()}>
+      <button type="submit" className="btn btn-primary" disabled={busy}>
         {busy ? "Guardando…" : refuse ? "Registrar negativa" : "Confirmar conformidad"}
       </button>
       {err ? <div className="banner banner-error">{err}</div> : null}
-    </div>
+    </form>
   )
 }

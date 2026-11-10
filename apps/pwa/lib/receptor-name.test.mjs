@@ -1,12 +1,12 @@
 import assert from "node:assert/strict"
 import { describe, it } from "node:test"
-import { createRequire } from "node:module"
 
-// TS helpers compiled via strip-types experimentally — reimplement mirror for node:test
-function resolveReceptorName(domValue, stateValue) {
+function resolveReceptorName(domValue, stateValue, formDataValue) {
   const dom = String(domValue ?? "").trim()
-  const state = String(stateValue ?? "").trim()
-  return dom || state
+  if (dom) return dom
+  const fromForm = String(formDataValue ?? "").trim()
+  if (fromForm) return fromForm
+  return String(stateValue ?? "").trim()
 }
 
 function receptorNameIsValid(name, refused) {
@@ -19,12 +19,16 @@ describe("resolveReceptorName (hotfix iOS autofill)", () => {
     assert.equal(resolveReceptorName("Juan Pérez", ""), "Juan Pérez")
   })
 
-  it("usa state si DOM vacío", () => {
-    assert.equal(resolveReceptorName("", "Ana"), "Ana")
+  it("usa FormData si DOM vacío y state vacío", () => {
+    assert.equal(resolveReceptorName("", "", "Ana López"), "Ana López")
   })
 
-  it("prioriza DOM no vacío sobre state", () => {
-    assert.equal(resolveReceptorName(" DOM ", "state"), "DOM")
+  it("prioriza DOM sobre FormData y state", () => {
+    assert.equal(resolveReceptorName(" DOM ", "state", "form"), "DOM")
+  })
+
+  it("prioriza FormData sobre state", () => {
+    assert.equal(resolveReceptorName("", "state", " form "), "form")
   })
 
   it("valida longitud mínima salvo negativa", () => {
@@ -32,6 +36,12 @@ describe("resolveReceptorName (hotfix iOS autofill)", () => {
     assert.equal(receptorNameIsValid("Ana", false), true)
     assert.equal(receptorNameIsValid("", true), true)
   })
-})
 
-void createRequire
+  it("simula iPhone: visible en DOM, state vacío → submit OK", () => {
+    const state = ""
+    const domVisible = "Receptor iPhone"
+    const resolved = resolveReceptorName(domVisible, state, null)
+    assert.equal(receptorNameIsValid(resolved, false), true)
+    assert.equal(resolved, "Receptor iPhone")
+  })
+})
