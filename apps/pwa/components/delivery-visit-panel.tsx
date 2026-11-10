@@ -4,7 +4,9 @@ import { useMemo, useState } from "react"
 import {
   ApiError,
   type DeliveryVisit,
+  declareVisitCollection,
   finalizeDeliveryVisit,
+  generateVisitWhatsappReport,
   startDeliveryVisit,
 } from "@/lib/api"
 
@@ -14,6 +16,7 @@ type Props = {
   clientName: string
   documentCount: number
   documentTotalLabel: string
+  documentTotalAmount?: number
   p4Ready: boolean
   p4Note?: string | null
   activeVisit: DeliveryVisit | null
@@ -58,6 +61,10 @@ export function DeliveryVisitPanel(props: Props) {
   )
   const [endReason, setEndReason] = useState("closed_store")
   const [endNote, setEndNote] = useState("")
+  const [payMethod, setPayMethod] = useState("cash")
+  const [payAmount, setPayAmount] = useState("")
+  const [lastClosedId, setLastClosedId] = useState<number | null>(null)
+  const [reportText, setReportText] = useState<string | null>(null)
 
   const visit = props.activeVisit
   const inProgress = visit?.status === "in_progress"
@@ -143,6 +150,7 @@ export function DeliveryVisitPanel(props: Props) {
         return
       }
       setConfirmEnd(false)
+      setLastClosedId(res.visit.id)
       setInfo(res.note_es || "Entrega finalizada.")
       props.onChanged()
     } catch (e) {
@@ -225,7 +233,65 @@ export function DeliveryVisitPanel(props: Props) {
       ) : null}
 
       {inProgress && !confirmStart ? (
-        <div style={{ marginTop: 10 }}>
+        <div style={{ marginTop: 10 }} className="stack-gap">
+          <div className="card" style={{ padding: 12 }}>
+            <strong style={{ fontSize: "0.9rem" }}>Cobranza declarada</strong>
+            <p className="muted" style={{ margin: "4px 0 8px", fontSize: "0.78rem" }}>
+              No es recibo oficial ni verificación contable.
+            </p>
+            <label className="field">
+              Método
+              <select value={payMethod} onChange={(e) => setPayMethod(e.target.value)}>
+                <option value="cash">Efectivo recibido</option>
+                <option value="transfer_declared">Transferencia informada</option>
+                <option value="credit">Crédito autorizado</option>
+                <option value="partial">Cobranza parcial</option>
+                <option value="pending">Pago pendiente</option>
+                <option value="not_applicable">No corresponde cobranza</option>
+              </select>
+            </label>
+            <label className="field">
+              Monto declarado
+              <input
+                inputMode="decimal"
+                value={payAmount}
+                onChange={(e) => setPayAmount(e.target.value)}
+                placeholder={
+                  props.documentTotalAmount != null
+                    ? String(props.documentTotalAmount)
+                    : "0"
+                }
+              />
+            </label>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={busy}
+              onClick={() => {
+                void (async () => {
+                  if (!visit) return
+                  setBusy(true)
+                  setErr(null)
+                  try {
+                    const amt = payAmount.trim() ? Number(payAmount) : null
+                    await declareVisitCollection(props.planId, visit.id, {
+                      method: payMethod,
+                      document_amount: props.documentTotalAmount ?? null,
+                      declared_amount: amt,
+                    })
+                    setInfo("Cobranza declarada (auditada).")
+                  } catch (e) {
+                    setErr(e instanceof ApiError ? e.message : "Error cobranza")
+                  } finally {
+                    setBusy(false)
+                  }
+                })()
+              }}
+            >
+              Guardar cobranza
+            </button>
+          </div>
+
           {!confirmEnd ? (
             <button
               type="button"
@@ -299,6 +365,56 @@ export function DeliveryVisitPanel(props: Props) {
               </div>
             </div>
           )}
+        </div>
+      ) : null}
+
+      {lastClosedId && !inProgress ? (
+        <div style={{ marginTop: 10 }} className="stack-gap">
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={busy}
+            onClick={() => {
+              void (async () => {
+                setBusy(true)
+                setErr(null)
+                try {
+                  const res = await generateVisitWhatsappReport(
+                    props.planId,
+                    lastClosedId,
+                    { client_name: props.clientName },
+                  )
+                  setReportText(res.report_text)
+                  setInfo(
+                    res.share.note_es ||
+                      "Reporte listo. Confirme el envío manualmente en WhatsApp.",
+                  )
+                  if (typeof window !== "undefined" && res.share.whatsapp_url) {
+                    window.open(res.share.whatsapp_url, "_blank", "noopener,noreferrer")
+                  }
+                } catch (e) {
+                  setErr(e instanceof ApiError ? e.message : "Error reporte")
+                } finally {
+                  setBusy(false)
+                }
+              })()
+            }}
+          >
+            Compartir reporte por WhatsApp
+          </button>
+          {reportText ? (
+            <pre
+              style={{
+                whiteSpace: "pre-wrap",
+                fontSize: "0.78rem",
+                margin: 0,
+                maxHeight: 180,
+                overflow: "auto",
+              }}
+            >
+              {reportText}
+            </pre>
+          ) : null}
         </div>
       ) : null}
 

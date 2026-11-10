@@ -532,3 +532,475 @@ def finalize_visit(
             ),
         }
     )
+
+
+UNDELIVERED_REASONS = frozenset(
+    {
+        "physical_shortage",
+        "damaged",
+        "customer_rejection",
+        "prep_error",
+        "other",
+    }
+)
+COLLECTION_METHODS = frozenset(
+    {
+        "cash",
+        "transfer_declared",
+        "transfer_verified",
+        "credit",
+        "partial",
+        "pending",
+        "not_applicable",
+    }
+)
+
+
+def _require_own_open_visit(
+    cur, *, user: dict[str, Any], plan_id: int, visit_id: int
+) -> dict[str, Any]:
+    uid = read_svc.enforce_driver_plan_read_access(user, int(plan_id))
+    row = visit_repo.get_visit(cur, int(visit_id))
+    if not row:
+        raise HTTPException(status_code=404, detail="Visita no encontrada")
+    if int(row["dispatch_plan_id"]) != int(plan_id):
+        raise HTTPException(status_code=404, detail="Visita no pertenece al despacho")
+    if int(row["driver_user_id"]) != uid:
+        raise HTTPException(status_code=403, detail="Visita de otro chofer")
+    if row.get("status") != "in_progress":
+        raise HTTPException(status_code=409, detail="Visita cerrada; no editable")
+    return row
+
+
+def save_document_lines(
+    *,
+    user: dict[str, Any],
+    plan_id: int,
+    visit_id: int,
+    related_document_id: int,
+    oc_document_id: int | None,
+    document_number: int | None,
+    document_type: str | None,
+    document_total: float | None,
+    result_status: str,
+    notes: str | None,
+    lines: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Persiste cantidades entregadas por documento. No muta document_details/Bsale."""
+    if result_status not in {"pending", "full", "partial", "none", "skipped"}:
+        raise HTTPException(status_code=400, detail="result_status inválido")
+    if not lines:
+        raise HTTPException(status_code=400, detail="Se requieren líneas")
+
+    normalized: list[dict[str, Any]] = []
+    for raw in lines:
+        try:
+            planned = float(raw.get("planned_units") or 0)
+            delivered = float(raw.get("delivered_units") or 0)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="Cantidades inválidas") from exc
+        if planned < 0 or delivered < 0:
+            raise HTTPException(status_code=400, detail="Cantidades negativas no permitidas")
+        if delivered > planned:
+            raise HTTPException(
+                status_code=400,
+                detail="Entregado no puede superar lo planificado",
+            )
+        undelivered = round(planned - delivered, 6)
+        reason = (raw.get("undelivered_reason") or "").strip() or None
+        note = (raw.get("undelivered_note") or "").strip() or None
+        if undelivered > 0:
+            if reason not in UNDELIVERED_REASONS:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Motivo de no entrega requerido por línea",
+                )
+            if reason == "other" and not note:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Observación obligatoria cuando el motivo es 'other'",
+                )
+        else:
+            reason = None
+            note = None
+        normalized.append(
+            {
+                "variant_id": raw.get("variant_id"),
+                "sku_code": (raw.get("sku_code") or None),
+                "product_name": (raw.get("product_name") or None),
+                "planned_units": planned,
+                "delivered_units": delivered,
+                "undelivered_units": undelivered,
+                "undelivered_reason": reason,
+                "undelivered_note": note,
+            }
+        )
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        if not visit_repo.tables_ready(cur):
+            raise HTTPException(status_code=503, detail="Migración 056 pendiente")
+        visit = _require_own_open_visit(
+            cur, user=user, plan_id=int(plan_id), visit_id=int(visit_id)
+        )
+        uid = int(visit["driver_user_id"])
+        doc = visit_repo.upsert_document_result(
+            cur,
+            visit_id=int(visit_id),
+            related_document_id=int(related_document_id),
+            oc_document_id=int(oc_document_id) if oc_document_id is not None else None,
+            document_number=document_number,
+            document_type=document_type,
+            document_total=document_total,
+            result_status=result_status,
+            notes=(notes or "").strip() or None,
+        )
+        saved_lines = visit_repo.replace_line_results(
+            cur,
+            visit_id=int(visit_id),
+            document_result_id=int(doc["id"]),
+            lines=normalized,
+        )
+        visit_repo.insert_event(
+            cur,
+            visit_id=int(visit_id),
+            action="document_lines_saved",
+            actor_user_id=uid,
+            payload={
+                "related_document_id": int(related_document_id),
+                "line_count": len(saved_lines),
+                "result_status": result_status,
+            },
+        )
+        conn.commit()
+        cur.close()
+    except HTTPException:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=500, detail=f"No se pudieron guardar líneas: {exc}"
+        ) from exc
+    finally:
+        conn.close()
+
+    return serialize_value(
+        {
+            "document_result": doc,
+            "lines": saved_lines,
+            "persisted": True,
+            "note_es": "Cantidades guardadas sin modificar Bsale ni picking histórico.",
+        }
+    )
+
+
+def declare_collection(
+    *,
+    user: dict[str, Any],
+    plan_id: int,
+    visit_id: int,
+    document_result_id: int | None,
+    method: str,
+    document_amount: float | None,
+    declared_amount: float | None,
+    note: str | None,
+) -> dict[str, Any]:
+    """Declaración de cobro del chofer. No genera recibo ni movimiento contable."""
+    method_n = (method or "").strip()
+    if method_n not in COLLECTION_METHODS:
+        raise HTTPException(status_code=400, detail="Método de cobranza inválido")
+    if method_n == "transfer_verified":
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "transfer_verified solo vía verificación administrativa; "
+                "el chofer declara transfer_declared"
+            ),
+        )
+
+    doc_amt = float(document_amount) if document_amount is not None else None
+    decl = float(declared_amount) if declared_amount is not None else None
+    if decl is not None and decl < 0:
+        raise HTTPException(status_code=400, detail="Monto declarado inválido")
+    pending = None
+    if doc_amt is not None and decl is not None:
+        pending = round(doc_amt - decl, 2)
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        if not visit_repo.tables_ready(cur):
+            raise HTTPException(status_code=503, detail="Migración 056 pendiente")
+        visit = _require_own_open_visit(
+            cur, user=user, plan_id=int(plan_id), visit_id=int(visit_id)
+        )
+        uid = int(visit["driver_user_id"])
+        row = visit_repo.insert_collection(
+            cur,
+            visit_id=int(visit_id),
+            document_result_id=(
+                int(document_result_id) if document_result_id is not None else None
+            ),
+            method=method_n,
+            document_amount=doc_amt,
+            declared_amount=decl,
+            verified_amount=None,
+            pending_balance=pending,
+            note=(note or "").strip() or None,
+            created_by_user_id=uid,
+        )
+        visit_repo.insert_event(
+            cur,
+            visit_id=int(visit_id),
+            action="collection_declared",
+            actor_user_id=uid,
+            payload={"method": method_n, "declared_amount": decl},
+        )
+        conn.commit()
+        cur.close()
+    except HTTPException:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=500, detail=f"No se pudo declarar cobranza: {exc}"
+        ) from exc
+    finally:
+        conn.close()
+
+    return serialize_value(
+        {
+            "collection": row,
+            "persisted": True,
+            "note_es": (
+                "Declaración auditada. No es recibo oficial ni cuadratura Bsale."
+            ),
+        }
+    )
+
+
+def build_whatsapp_report(
+    *,
+    user: dict[str, Any],
+    plan_id: int,
+    visit_id: int,
+    client_name: str | None = None,
+    planning_code: str | None = None,
+) -> dict[str, Any]:
+    """Texto compartible solo desde registros confirmados. Sin coords/firma/RUT completo."""
+    uid = read_svc.enforce_driver_plan_read_access(user, int(plan_id))
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        if not visit_repo.tables_ready(cur):
+            raise HTTPException(status_code=503, detail="Migración 056 pendiente")
+        visit = visit_repo.get_visit(cur, int(visit_id))
+        if not visit:
+            raise HTTPException(status_code=404, detail="Visita no encontrada")
+        if int(visit["dispatch_plan_id"]) != int(plan_id):
+            raise HTTPException(status_code=404, detail="Visita no pertenece al despacho")
+        if int(visit["driver_user_id"]) != uid:
+            raise HTTPException(status_code=403, detail="Visita de otro chofer")
+        if visit.get("status") == "in_progress":
+            raise HTTPException(
+                status_code=409,
+                detail="Finalize la visita antes de generar el reporte compartible",
+            )
+
+        docs = visit_repo.list_document_results(cur, int(visit_id))
+        lines = visit_repo.list_line_results(cur, int(visit_id))
+        cols = visit_repo.list_collections(cur, int(visit_id))
+
+        folios = []
+        for d in docs:
+            dtype = d.get("document_type") or "Doc"
+            num = d.get("document_number")
+            folios.append(f"{dtype} {num}" if num is not None else str(dtype))
+
+        delivered = sum(float(x.get("delivered_units") or 0) for x in lines)
+        pending_u = sum(float(x.get("undelivered_units") or 0) for x in lines)
+        declared = sum(
+            float(c.get("declared_amount") or 0)
+            for c in cols
+            if c.get("declared_amount") is not None
+        )
+        pending_bal = sum(
+            float(c.get("pending_balance") or 0)
+            for c in cols
+            if c.get("pending_balance") is not None
+        )
+
+        status_es = {
+            "completed": "Entrega completa",
+            "partial": "Entrega parcial",
+            "not_delivered": "No entregada",
+            "cancelled": "Cancelada",
+        }.get(str(visit.get("status")), str(visit.get("status")))
+
+        pub = _visit_public(visit)
+        text_lines = [
+            "Grupo La Quillotana — Reporte de entrega",
+            f"Plan: {planning_code or plan_id}",
+            f"Cliente: {client_name or visit.get('customer_key')}",
+            f"Chofer id: {uid}",
+            f"Inicio: {pub.get('started_at_local') or pub.get('started_at') or '—'}",
+            f"Término: {pub.get('ended_at_local') or pub.get('ended_at') or '—'}",
+            f"Estado: {status_es}",
+        ]
+        if visit.get("result_reason"):
+            text_lines.append(f"Motivo: {visit.get('result_reason')}")
+        if visit.get("result_note"):
+            text_lines.append(f"Obs.: {visit.get('result_note')}")
+        text_lines.append(
+            f"Documentos: {', '.join(folios) if folios else 'sin detalle guardado'}"
+        )
+        text_lines.append(f"Unidades entregadas: {delivered:g}")
+        text_lines.append(f"Unidades pendientes: {pending_u:g}")
+        text_lines.append(f"Cobranza declarada: {declared:,.0f}".replace(",", "."))
+        text_lines.append(f"Saldo pendiente decl.: {pending_bal:,.0f}".replace(",", "."))
+        text_lines.append("Firma/evidencia: ver ERP (no incluida en este texto)")
+        text_lines.append(
+            "Nota: mensaje generado para compartir; confirme el envío manualmente."
+        )
+        report_text = "\n".join(text_lines)
+        payload = {
+            "visit_id": int(visit_id),
+            "status": visit.get("status"),
+            "folios": folios,
+            "delivered_units": delivered,
+            "pending_units": pending_u,
+            "declared_collection": declared,
+            "pending_balance": pending_bal,
+            "omitted": ["signature", "photos", "precise_gps", "full_rut"],
+        }
+        snap = visit_repo.insert_report_snapshot(
+            cur,
+            visit_id=int(visit_id),
+            report_text=report_text,
+            payload=payload,
+            generated_by_user_id=uid,
+        )
+        visit_repo.insert_event(
+            cur,
+            visit_id=int(visit_id),
+            action="report_snapshot_generated",
+            actor_user_id=uid,
+            payload={"snapshot_id": int(snap["id"])},
+        )
+        conn.commit()
+        cur.close()
+    except HTTPException:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=500, detail=f"No se pudo generar reporte: {exc}"
+        ) from exc
+    finally:
+        conn.close()
+
+    return serialize_value(
+        {
+            "report_text": report_text,
+            "snapshot_id": int(snap["id"]),
+            "share": {
+                "whatsapp_url": (
+                    "https://wa.me/?text="
+                    + __import__("urllib.parse").parse.quote(report_text)
+                ),
+                "delivery_claimed": False,
+                "note_es": (
+                    "Solo abre la ventana de compartir. No afirma entrega a WhatsApp."
+                ),
+            },
+            "persisted": True,
+            "mode": "online_only",
+        }
+    )
+
+
+def list_visits_for_erp(
+    *, user: dict[str, Any], limit: int = 100
+) -> dict[str, Any]:
+    """Visibilidad operativa. Sin mutaciones de stock/financieras."""
+    from backend.auth.multiapp import get_scope
+
+    scope = get_scope(user)
+    if scope.load_failed or getattr(scope, "companies_unverified", False):
+        raise HTTPException(
+            status_code=503, detail="No se pudo verificar empresas autorizadas"
+        )
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        if not visit_repo.tables_ready(cur):
+            cur.close()
+            return serialize_value(
+                {
+                    "tables_ready": False,
+                    "items": [],
+                    "message_es": "Migración 056 pendiente",
+                    "mode": "online_only",
+                }
+            )
+        # Si el alcance limita empresas, filtrar por la primera autorizada
+        # cuando hay una sola; si hay varias, listar todas y filtrar en Python.
+        rows = visit_repo.list_recent_visits(cur, limit=max(1, min(int(limit), 200)))
+        cur.close()
+    finally:
+        conn.close()
+
+    allowed = scope.company_ids
+    items = []
+    for r in rows:
+        cid = int(r["company_id"])
+        if allowed is not None and cid not in allowed:
+            continue
+        items.append(
+            {
+                **_visit_public(r),
+                "declared_collected": float(r.get("declared_collected") or 0),
+                "pending_balance_sum": float(r.get("pending_balance_sum") or 0),
+            }
+        )
+
+    by_status: dict[str, int] = {}
+    for it in items:
+        st = str(it.get("status") or "?")
+        by_status[st] = by_status.get(st, 0) + 1
+
+    return serialize_value(
+        {
+            "tables_ready": True,
+            "items": items,
+            "summary": by_status,
+            "mode": "online_only",
+            "note_es": (
+                "Solo visibilidad. Sin descuento de stock, devoluciones ni cierre "
+                "financiero automático."
+            ),
+        }
+    )

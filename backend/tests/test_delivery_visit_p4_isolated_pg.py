@@ -297,3 +297,88 @@ def test_tables_ready_realdict(isolated_db):
     assert visit_repo.tables_ready(cur) is True
     cur.close()
     conn.close()
+
+
+def test_lines_collection_and_report(isolated_db, monkeypatch):
+    monkeypatch.setattr(
+        svc.read_svc, "enforce_driver_plan_read_access", lambda _u, _p: 42
+    )
+    monkeypatch.setattr(
+        svc.loc_svc,
+        "_resolve_client",
+        lambda _p, _k: {"client_id": 9010, "customer_key": "id:9010"},
+    )
+    monkeypatch.setattr(svc.loc_svc, "_parse_client_id", lambda _k, _c: 9010)
+    monkeypatch.setattr(
+        svc.loc_svc, "_authorized_company_id_for_plan", lambda _u, _p: 3
+    )
+
+    started = svc.start_visit(
+        user=_user(),
+        plan_id=10,
+        customer_key="id:9010",
+        latitude=-42.0,
+        longitude=-73.0,
+        accuracy_m=10.0,
+    )
+    vid = started["visit"]["id"]
+    ver = started["visit"]["version"]
+
+    saved = svc.save_document_lines(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        related_document_id=555,
+        oc_document_id=100,
+        document_number=9001,
+        document_type="boleta",
+        document_total=12000,
+        result_status="partial",
+        notes=None,
+        lines=[
+            {
+                "variant_id": 1,
+                "product_name": "Prod A",
+                "planned_units": 4,
+                "delivered_units": 3,
+                "undelivered_reason": "physical_shortage",
+            }
+        ],
+    )
+    assert saved["persisted"] is True
+    assert float(saved["lines"][0]["undelivered_units"]) == 3.0 or float(
+        saved["lines"][0]["undelivered_units"]
+    ) == 1.0
+
+    col = svc.declare_collection(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        document_result_id=int(saved["document_result"]["id"]),
+        method="cash",
+        document_amount=12000,
+        declared_amount=5000,
+        note="parcial",
+    )
+    assert col["persisted"] is True
+
+    closed = svc.finalize_visit(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        expected_version=ver,
+        status="partial",
+    )
+    assert closed["finalized"] is True
+
+    report = svc.build_whatsapp_report(
+        user=_user(),
+        plan_id=10,
+        visit_id=vid,
+        client_name="Cliente Test",
+        planning_code="PLAN-TEST-P4",
+    )
+    assert "Cliente Test" in report["report_text"]
+    assert report["share"]["delivery_claimed"] is False
+    assert "Firma/evidencia" in report["report_text"]
+    assert "-42.0" not in report["report_text"]

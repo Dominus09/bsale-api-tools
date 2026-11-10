@@ -165,3 +165,194 @@ def insert_event(
     if isinstance(row, dict) or hasattr(row, "keys"):
         return int(row["id"])
     return int(row[0])
+
+
+def upsert_document_result(cur, **kw) -> dict[str, Any]:
+    cur.execute(
+        """
+        INSERT INTO distribuidora.delivery_document_results (
+            visit_id, related_document_id, oc_document_id, document_number,
+            document_type, document_total, result_status, notes
+        ) VALUES (
+            %(visit_id)s, %(related_document_id)s, %(oc_document_id)s,
+            %(document_number)s, %(document_type)s, %(document_total)s,
+            %(result_status)s, %(notes)s
+        )
+        ON CONFLICT (visit_id, related_document_id)
+            WHERE related_document_id IS NOT NULL
+        DO UPDATE SET
+            oc_document_id = EXCLUDED.oc_document_id,
+            document_number = EXCLUDED.document_number,
+            document_type = EXCLUDED.document_type,
+            document_total = EXCLUDED.document_total,
+            result_status = EXCLUDED.result_status,
+            notes = EXCLUDED.notes,
+            updated_at = NOW()
+        RETURNING *
+        """,
+        kw,
+    )
+    return _row(cur, cur.fetchone())
+
+
+def replace_line_results(
+    cur,
+    *,
+    visit_id: int,
+    document_result_id: int,
+    lines: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    cur.execute(
+        """
+        DELETE FROM distribuidora.delivery_line_results
+        WHERE document_result_id = %s
+        """,
+        (int(document_result_id),),
+    )
+    out: list[dict[str, Any]] = []
+    for line in lines:
+        cur.execute(
+            """
+            INSERT INTO distribuidora.delivery_line_results (
+                visit_id, document_result_id, variant_id, sku_code, product_name,
+                planned_units, delivered_units, undelivered_units,
+                undelivered_reason, undelivered_note
+            ) VALUES (
+                %(visit_id)s, %(document_result_id)s, %(variant_id)s, %(sku_code)s,
+                %(product_name)s, %(planned_units)s, %(delivered_units)s,
+                %(undelivered_units)s, %(undelivered_reason)s, %(undelivered_note)s
+            )
+            RETURNING *
+            """,
+            {
+                "visit_id": int(visit_id),
+                "document_result_id": int(document_result_id),
+                **line,
+            },
+        )
+        out.append(_row(cur, cur.fetchone()))
+    return out
+
+
+def list_document_results(cur, visit_id: int) -> list[dict[str, Any]]:
+    cur.execute(
+        """
+        SELECT * FROM distribuidora.delivery_document_results
+        WHERE visit_id = %s
+        ORDER BY id
+        """,
+        (int(visit_id),),
+    )
+    rows = cur.fetchall() or []
+    return [_row(cur, r) for r in rows]
+
+
+def list_line_results(cur, visit_id: int) -> list[dict[str, Any]]:
+    cur.execute(
+        """
+        SELECT * FROM distribuidora.delivery_line_results
+        WHERE visit_id = %s
+        ORDER BY id
+        """,
+        (int(visit_id),),
+    )
+    rows = cur.fetchall() or []
+    return [_row(cur, r) for r in rows]
+
+
+def insert_collection(cur, **kw) -> dict[str, Any]:
+    cur.execute(
+        """
+        INSERT INTO distribuidora.delivery_collections (
+            visit_id, document_result_id, method, document_amount,
+            declared_amount, verified_amount, pending_balance, note,
+            created_by_user_id
+        ) VALUES (
+            %(visit_id)s, %(document_result_id)s, %(method)s, %(document_amount)s,
+            %(declared_amount)s, %(verified_amount)s, %(pending_balance)s,
+            %(note)s, %(created_by_user_id)s
+        )
+        RETURNING *
+        """,
+        kw,
+    )
+    return _row(cur, cur.fetchone())
+
+
+def list_collections(cur, visit_id: int) -> list[dict[str, Any]]:
+    cur.execute(
+        """
+        SELECT * FROM distribuidora.delivery_collections
+        WHERE visit_id = %s
+        ORDER BY id
+        """,
+        (int(visit_id),),
+    )
+    rows = cur.fetchall() or []
+    return [_row(cur, r) for r in rows]
+
+
+def insert_report_snapshot(cur, **kw) -> dict[str, Any]:
+    cur.execute(
+        """
+        INSERT INTO distribuidora.delivery_report_snapshots (
+            visit_id, report_text, payload, generated_by_user_id
+        ) VALUES (
+            %(visit_id)s, %(report_text)s, %(payload)s, %(generated_by_user_id)s
+        )
+        RETURNING *
+        """,
+        {
+            **kw,
+            "payload": Json(kw.get("payload") or {}),
+        },
+    )
+    return _row(cur, cur.fetchone())
+
+
+def list_recent_visits(
+    cur, *, limit: int = 100, company_id: int | None = None
+) -> list[dict[str, Any]]:
+    if company_id is not None:
+        cur.execute(
+            """
+            SELECT v.*,
+                   (
+                     SELECT COALESCE(SUM(c.declared_amount), 0)
+                     FROM distribuidora.delivery_collections c
+                     WHERE c.visit_id = v.id
+                   ) AS declared_collected,
+                   (
+                     SELECT COALESCE(SUM(c.pending_balance), 0)
+                     FROM distribuidora.delivery_collections c
+                     WHERE c.visit_id = v.id
+                   ) AS pending_balance_sum
+            FROM distribuidora.delivery_visits v
+            WHERE v.company_id = %s
+            ORDER BY v.started_at DESC, v.id DESC
+            LIMIT %s
+            """,
+            (int(company_id), int(limit)),
+        )
+    else:
+        cur.execute(
+            """
+            SELECT v.*,
+                   (
+                     SELECT COALESCE(SUM(c.declared_amount), 0)
+                     FROM distribuidora.delivery_collections c
+                     WHERE c.visit_id = v.id
+                   ) AS declared_collected,
+                   (
+                     SELECT COALESCE(SUM(c.pending_balance), 0)
+                     FROM distribuidora.delivery_collections c
+                     WHERE c.visit_id = v.id
+                   ) AS pending_balance_sum
+            FROM distribuidora.delivery_visits v
+            ORDER BY v.started_at DESC, v.id DESC
+            LIMIT %s
+            """,
+            (int(limit),),
+        )
+    rows = cur.fetchall() or []
+    return [_row(cur, r) for r in rows]

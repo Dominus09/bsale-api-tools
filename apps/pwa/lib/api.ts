@@ -360,6 +360,83 @@ export async function finalizeDeliveryVisit(
   )
 }
 
+export async function saveVisitDocumentLines(
+  planId: number,
+  visitId: number,
+  body: {
+    related_document_id: number
+    oc_document_id?: number | null
+    document_number?: number | null
+    document_type?: string | null
+    document_total?: number | null
+    result_status: string
+    notes?: string | null
+    lines: Array<{
+      variant_id?: number | null
+      sku_code?: string | null
+      product_name?: string | null
+      planned_units: number
+      delivered_units: number
+      undelivered_reason?: string | null
+      undelivered_note?: string | null
+    }>
+  },
+): Promise<Record<string, unknown>> {
+  return apiFetch(
+    `/distribuidora/pwa/driver/despachos/${planId}/visitas/${visitId}/documentos`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  )
+}
+
+export async function declareVisitCollection(
+  planId: number,
+  visitId: number,
+  body: {
+    document_result_id?: number | null
+    method: string
+    document_amount?: number | null
+    declared_amount?: number | null
+    note?: string | null
+  },
+): Promise<Record<string, unknown>> {
+  return apiFetch(
+    `/distribuidora/pwa/driver/despachos/${planId}/visitas/${visitId}/cobranza`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  )
+}
+
+export async function generateVisitWhatsappReport(
+  planId: number,
+  visitId: number,
+  body?: { client_name?: string; planning_code?: string },
+): Promise<{
+  report_text: string
+  snapshot_id: number
+  share: {
+    whatsapp_url: string
+    delivery_claimed: boolean
+    note_es?: string
+  }
+  persisted?: boolean
+}> {
+  return apiFetch(
+    `/distribuidora/pwa/driver/despachos/${planId}/visitas/${visitId}/reporte-whatsapp`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    },
+  )
+}
+
 export async function proposeClientLocation(
   planId: number,
   customerKey: string,

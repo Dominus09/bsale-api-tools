@@ -99,3 +99,48 @@ def test_local_santiago_formats():
     local = svc._local_santiago(dt)
     assert local is not None
     assert "-03:00" in local or "-04:00" in local
+
+
+def test_save_lines_rejects_over_delivery(monkeypatch):
+    monkeypatch.setattr(
+        svc.read_svc, "enforce_driver_plan_read_access", lambda _u, _p: 7
+    )
+    with pytest.raises(HTTPException) as ei:
+        svc.save_document_lines(
+            user={"id": 7},
+            plan_id=1,
+            visit_id=1,
+            related_document_id=99,
+            oc_document_id=None,
+            document_number=1,
+            document_type="boleta",
+            document_total=1000,
+            result_status="partial",
+            notes=None,
+            lines=[
+                {
+                    "planned_units": 2,
+                    "delivered_units": 3,
+                    "product_name": "X",
+                }
+            ],
+        )
+    assert ei.value.status_code == 400
+
+
+def test_declare_collection_blocks_transfer_verified(monkeypatch):
+    monkeypatch.setattr(
+        svc.read_svc, "enforce_driver_plan_read_access", lambda _u, _p: 7
+    )
+    with pytest.raises(HTTPException) as ei:
+        svc.declare_collection(
+            user={"id": 7},
+            plan_id=1,
+            visit_id=1,
+            document_result_id=None,
+            method="transfer_verified",
+            document_amount=1000,
+            declared_amount=1000,
+            note=None,
+        )
+    assert ei.value.status_code == 403

@@ -246,6 +246,97 @@ def finalize_delivery_visit(
     )
 
 
+class DeliveryLineBody(BaseModel):
+    variant_id: int | None = None
+    sku_code: str | None = Field(None, max_length=64)
+    product_name: str | None = Field(None, max_length=240)
+    planned_units: float = Field(..., ge=0)
+    delivered_units: float = Field(..., ge=0)
+    undelivered_reason: str | None = Field(None, max_length=64)
+    undelivered_note: str | None = Field(None, max_length=500)
+
+
+class SaveDocumentLinesBody(BaseModel):
+    related_document_id: int = Field(..., ge=1)
+    oc_document_id: int | None = Field(None, ge=1)
+    document_number: int | None = None
+    document_type: str | None = Field(None, max_length=64)
+    document_total: float | None = None
+    result_status: str = Field("partial", max_length=32)
+    notes: str | None = Field(None, max_length=1000)
+    lines: list[DeliveryLineBody]
+
+
+class DeclareCollectionBody(BaseModel):
+    document_result_id: int | None = Field(None, ge=1)
+    method: str = Field(..., max_length=32)
+    document_amount: float | None = None
+    declared_amount: float | None = None
+    note: str | None = Field(None, max_length=500)
+
+
+class WhatsAppReportBody(BaseModel):
+    client_name: str | None = Field(None, max_length=200)
+    planning_code: str | None = Field(None, max_length=64)
+
+
+@router.post("/despachos/{plan_id}/visitas/{visit_id}/documentos")
+def save_visit_document_lines(
+    plan_id: int,
+    visit_id: int,
+    body: SaveDocumentLinesBody,
+    user: dict = Depends(require_pwa_profiles("chofer")),
+):
+    return visit_svc.save_document_lines(
+        user=user,
+        plan_id=int(plan_id),
+        visit_id=int(visit_id),
+        related_document_id=int(body.related_document_id),
+        oc_document_id=body.oc_document_id,
+        document_number=body.document_number,
+        document_type=body.document_type,
+        document_total=body.document_total,
+        result_status=body.result_status,
+        notes=body.notes,
+        lines=[ln.model_dump() for ln in body.lines],
+    )
+
+
+@router.post("/despachos/{plan_id}/visitas/{visit_id}/cobranza")
+def declare_visit_collection(
+    plan_id: int,
+    visit_id: int,
+    body: DeclareCollectionBody,
+    user: dict = Depends(require_pwa_profiles("chofer")),
+):
+    return visit_svc.declare_collection(
+        user=user,
+        plan_id=int(plan_id),
+        visit_id=int(visit_id),
+        document_result_id=body.document_result_id,
+        method=body.method,
+        document_amount=body.document_amount,
+        declared_amount=body.declared_amount,
+        note=body.note,
+    )
+
+
+@router.post("/despachos/{plan_id}/visitas/{visit_id}/reporte-whatsapp")
+def generate_whatsapp_report(
+    plan_id: int,
+    visit_id: int,
+    body: WhatsAppReportBody,
+    user: dict = Depends(require_pwa_profiles("chofer")),
+):
+    return visit_svc.build_whatsapp_report(
+        user=user,
+        plan_id=int(plan_id),
+        visit_id=int(visit_id),
+        client_name=body.client_name,
+        planning_code=body.planning_code,
+    )
+
+
 @router.post("/despachos/{plan_id}/clientes/{customer_key:path}/ubicacion")
 def propose_client_location(
     plan_id: int,
