@@ -22,6 +22,9 @@ type Props = {
   activeVisit: DeliveryVisit | null
   latestVisit?: DeliveryVisit | null
   lastClosedVisit?: DeliveryVisit | null
+  /** Si false, no ofrecer "nueva visita" tras cierre válido. */
+  allowCreateAfterClose?: boolean
+  blockNote?: string | null
   onChanged: () => void
 }
 
@@ -245,7 +248,12 @@ export function DeliveryVisitStart(props: Props) {
           >
             Ver resultado
           </button>
-          {!confirmNewAfterClosed ? (
+          {props.allowCreateAfterClose === false ? (
+            <div className="banner banner-info" style={{ fontSize: "0.82rem" }}>
+              {props.blockNote ||
+                "No se puede iniciar otra visita normal: ya hay un cierre válido para este cliente en el despacho."}
+            </div>
+          ) : !confirmNewAfterClosed ? (
             <button
               type="button"
               className="btn btn-ghost"

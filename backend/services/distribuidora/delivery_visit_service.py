@@ -327,6 +327,22 @@ def start_visit(
                 }
             )
 
+        # Bloqueo: no abrir visita normal tras cierre válido del mismo plan+cliente.
+        # cancelled no bloquea (permite reintento). Reprogramación legítima = flujo admin futuro.
+        prior_closed = visit_repo.get_last_closed_visit(
+            cur, plan_id=int(plan_id), customer_key=key
+        )
+        blocking = {"completed", "partial", "not_delivered"}
+        if prior_closed and str(prior_closed.get("status") or "") in blocking:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Este cliente ya tiene una visita finalizada en este despacho. "
+                    "Consulte el resultado histórico; no se inicia otra visita normal. "
+                    f"(visita #{prior_closed.get('id')} · {prior_closed.get('status')})"
+                ),
+            )
+
         row = visit_repo.insert_visit(
             cur,
             company_id=company_id,

@@ -188,6 +188,13 @@ export default function ClienteFichaPage() {
         activeVisit={data.active_visit || null}
         latestVisit={data.latest_visit || data.active_visit || null}
         lastClosedVisit={data.last_closed_visit || null}
+        allowCreateAfterClose={
+          data.capabilities?.create_new_visit_after_close ??
+          !["completed", "partial", "not_delivered"].includes(
+            String(data.last_closed_visit?.status || ""),
+          )
+        }
+        blockNote={data.capabilities?.note_es || null}
         onChanged={() => setReloadToken((n) => n + 1)}
       />
 
