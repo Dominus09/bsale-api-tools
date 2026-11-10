@@ -1131,6 +1131,143 @@ def list_visits_for_erp(
     )
 
 
+def get_visit_detail_for_erp(
+    *, user: dict[str, Any], visit_id: int
+) -> dict[str, Any]:
+    """Detalle ERP con URLs R2 firmadas (TTL corto). Sin exponer object_key."""
+    from backend.auth.multiapp import get_scope
+    from backend.repositories.distribuidora import client_location_repo as loc_repo
+
+    scope = get_scope(user)
+    if scope.load_failed or getattr(scope, "companies_unverified", False):
+        raise HTTPException(
+            status_code=503, detail="No se pudo verificar empresas autorizadas"
+        )
+
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        if not visit_repo.tables_ready(cur):
+            raise HTTPException(status_code=503, detail="Migración 056 pendiente")
+        visit = visit_repo.get_visit(cur, int(visit_id))
+        if not visit:
+            raise HTTPException(status_code=404, detail="Visita no encontrada")
+        company_id = int(visit["company_id"])
+        allowed = scope.company_ids
+        if allowed is not None and company_id not in allowed:
+            raise HTTPException(status_code=404, detail="Visita no encontrada")
+
+        evidence = visit_repo.list_evidence(cur, int(visit_id))
+        conf = visit_repo.get_conformity(cur, int(visit_id))
+        docs = visit_repo.list_document_results(cur, int(visit_id))
+        lines = visit_repo.list_line_results(cur, int(visit_id))
+        cols = visit_repo.list_collections(cur, int(visit_id))
+
+        facade_out = None
+        client_id = visit.get("client_id")
+        if client_id is not None:
+            try:
+                facade = loc_repo.get_current_facade(cur, int(client_id))
+            except Exception:
+                facade = None
+            if facade and int(facade.get("company_id") or -1) == company_id:
+                furl = None
+                if facade.get("upload_confirmed") and facade.get("object_key"):
+                    try:
+                        furl = storage.presign_get(
+                            object_key=str(facade["object_key"]), expires_in=300
+                        )
+                    except Exception:
+                        furl = None
+                facade_out = {
+                    "kind": "facade",
+                    "label_es": "Fotografía de fachada (maestro cliente)",
+                    "photo_id": int(facade["id"]),
+                    "validation_status": facade.get("validation_status"),
+                    "upload_confirmed": bool(facade.get("upload_confirmed")),
+                    "url": furl,
+                    "expires_in_sec": 300 if furl else None,
+                    "note_es": (
+                        "Fachada del cliente, no es evidencia de esta visita."
+                    ),
+                }
+        cur.close()
+    finally:
+        conn.close()
+
+    evid_out: list[dict[str, Any]] = []
+    for e in evidence:
+        if int(e.get("company_id") or -1) != company_id:
+            continue
+        url = None
+        if e.get("upload_confirmed") and e.get("object_key"):
+            try:
+                url = storage.presign_get(
+                    object_key=str(e["object_key"]), expires_in=300
+                )
+            except Exception:
+                url = None
+        kind = str(e.get("evidence_kind") or "other")
+        evid_out.append(
+            {
+                "id": int(e["id"]),
+                "kind": "incident_evidence",
+                "evidence_kind": kind,
+                "label_es": f"Evidencia de incidencia ({kind})",
+                "validation_status": e.get("validation_status"),
+                "upload_confirmed": bool(e.get("upload_confirmed")),
+                "exception_note": e.get("exception_note"),
+                "captured_at": e.get("captured_at"),
+                "has_gps": e.get("capture_lat") is not None
+                and e.get("capture_lng") is not None,
+                "url": url,
+                "expires_in_sec": 300 if url else None,
+            }
+        )
+
+    conf_out = None
+    if conf:
+        surl = None
+        if (
+            conf.get("signature_object_key")
+            and not conf.get("invalidated_at")
+            and not conf.get("refused")
+        ):
+            try:
+                surl = storage.presign_get(
+                    object_key=str(conf["signature_object_key"]), expires_in=300
+                )
+            except Exception:
+                surl = None
+        conf_out = {
+            "refused": bool(conf.get("refused")),
+            "refuse_reason": conf.get("refuse_reason"),
+            "receptor_name": conf.get("receptor_name"),
+            "invalidated_at": conf.get("invalidated_at"),
+            "signed_at": conf.get("signed_at"),
+            "signature_url": surl,
+            "expires_in_sec": 300 if surl else None,
+            "valid": not bool(conf.get("invalidated_at")),
+        }
+
+    return serialize_value(
+        {
+            "visit": _visit_public(visit),
+            "documents": docs,
+            "lines": lines,
+            "collections": cols,
+            "facade_photo": facade_out,
+            "incident_evidence": evid_out,
+            "conformity": conf_out,
+            "mode": "online_only",
+            "note_es": (
+                "URLs firmadas de corta duración. Bucket privado; "
+                "acceso filtrado por empresa autorizada."
+            ),
+        }
+    )
+
+
 def get_visit_detail(
     *, user: dict[str, Any], plan_id: int, visit_id: int
 ) -> dict[str, Any]:

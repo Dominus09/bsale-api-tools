@@ -7728,3 +7728,45 @@ export async function getDeliveryVisitsErp(
   if (!res.ok) throw new Error(await res.text().catch(() => "Error al listar visitas"))
   return res.json()
 }
+
+export type DeliveryVisitErpMediaItem = {
+  id?: number
+  kind: string
+  evidence_kind?: string
+  label_es?: string
+  validation_status?: string | null
+  upload_confirmed?: boolean
+  exception_note?: string | null
+  captured_at?: string | null
+  has_gps?: boolean
+  url?: string | null
+  expires_in_sec?: number | null
+  note_es?: string
+  photo_id?: number
+}
+
+export type DeliveryVisitErpDetail = {
+  visit: DeliveryVisitErpItem
+  facade_photo?: DeliveryVisitErpMediaItem | null
+  incident_evidence?: DeliveryVisitErpMediaItem[]
+  conformity?: {
+    refused?: boolean
+    refuse_reason?: string | null
+    receptor_name?: string | null
+    signature_url?: string | null
+    expires_in_sec?: number | null
+    valid?: boolean
+  } | null
+  note_es?: string
+}
+
+export async function getDeliveryVisitErpDetail(
+  visitId: number,
+): Promise<DeliveryVisitErpDetail> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/delivery-visits/${visitId}`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) throw new Error(await res.text().catch(() => "Error al cargar detalle"))
+  return res.json()
+}

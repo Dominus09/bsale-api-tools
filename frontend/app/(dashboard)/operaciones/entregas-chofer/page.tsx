@@ -6,11 +6,24 @@
  */
 
 import { useCallback, useEffect, useState } from "react"
-import { Loader2, RefreshCw } from "lucide-react"
+import { Eye, Loader2, RefreshCw } from "lucide-react"
 
-import { getDeliveryVisitsErp, type DeliveryVisitErpItem } from "@/lib/api"
+import {
+  getDeliveryVisitErpDetail,
+  getDeliveryVisitsErp,
+  type DeliveryVisitErpDetail,
+  type DeliveryVisitErpItem,
+  type DeliveryVisitErpMediaItem,
+} from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 
 const STATUS_ES: Record<string, string> = {
   in_progress: "En atención",
@@ -27,6 +40,52 @@ const CONFORMITY_ES: Record<string, string> = {
   invalidated: "Firma invalidada",
 }
 
+function MediaBlock({
+  title,
+  item,
+}: {
+  title: string
+  item: DeliveryVisitErpMediaItem | null | undefined
+}) {
+  if (!item) {
+    return (
+      <div className="rounded border p-3 text-sm text-muted-foreground">
+        {title}: sin foto
+      </div>
+    )
+  }
+  return (
+    <div className="space-y-2 rounded border p-3">
+      <div className="text-sm font-medium">{item.label_es || title}</div>
+      <div className="text-xs text-muted-foreground">
+        Estado: {item.validation_status || "—"}
+        {item.has_gps != null ? ` · GPS: ${item.has_gps ? "sí" : "no"}` : ""}
+        {item.expires_in_sec ? ` · URL ~${item.expires_in_sec}s` : ""}
+      </div>
+      {item.note_es ? (
+        <p className="text-xs text-amber-700 dark:text-amber-400">{item.note_es}</p>
+      ) : null}
+      {item.exception_note ? (
+        <p className="text-xs text-muted-foreground">Excepción: {item.exception_note}</p>
+      ) : null}
+      {item.url ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={item.url}
+          alt={item.label_es || title}
+          className="max-h-[70vh] w-full rounded object-contain bg-muted/30"
+        />
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          {item.upload_confirmed === false
+            ? "Carga no confirmada / excepción sin imagen."
+            : "Sin URL firmada disponible."}
+        </p>
+      )}
+    </div>
+  )
+}
+
 export default function EntregasChoferPage() {
   const [items, setItems] = useState<DeliveryVisitErpItem[]>([])
   const [summary, setSummary] = useState<Record<string, number>>({})
@@ -34,6 +93,12 @@ export default function EntregasChoferPage() {
   const [error, setError] = useState<string | null>(null)
   const [tablesReady, setTablesReady] = useState(true)
   const [note, setNote] = useState<string | null>(null)
+
+  const [detailOpen, setDetailOpen] = useState(false)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailError, setDetailError] = useState<string | null>(null)
+  const [detail, setDetail] = useState<DeliveryVisitErpDetail | null>(null)
+  const [selected, setSelected] = useState<DeliveryVisitErpItem | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -54,6 +119,22 @@ export default function EntregasChoferPage() {
   useEffect(() => {
     void load()
   }, [load])
+
+  async function openDetail(it: DeliveryVisitErpItem) {
+    setSelected(it)
+    setDetailOpen(true)
+    setDetail(null)
+    setDetailError(null)
+    setDetailLoading(true)
+    try {
+      const res = await getDeliveryVisitErpDetail(it.id)
+      setDetail(res)
+    } catch (e) {
+      setDetailError(e instanceof Error ? e.message : "Error al cargar detalle")
+    } finally {
+      setDetailLoading(false)
+    }
+  }
 
   return (
     <div className="space-y-4 p-4 sm:p-6">
@@ -125,6 +206,7 @@ export default function EntregasChoferPage() {
                 <th className="p-2">Cobranza decl.</th>
                 <th className="p-2">Firma</th>
                 <th className="p-2">Evidencias</th>
+                <th className="p-2">Detalle</th>
               </tr>
             </thead>
             <tbody>
@@ -172,12 +254,99 @@ export default function EntregasChoferPage() {
                       "—"}
                   </td>
                   <td className="p-2">{it.evidence_count ?? 0}</td>
+                  <td className="p-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void openDetail(it)}
+                    >
+                      <Eye className="mr-1 h-3.5 w-3.5" />
+                      Ver
+                    </Button>
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
+
+      <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
+        <DialogContent className="max-h-[90vh] w-[min(96vw,720px)] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              Entrega #{selected?.id} · {selected?.customer_key}
+            </DialogTitle>
+            <DialogDescription>
+              Fotos privadas con URL firmada. Fachada ≠ evidencia de visita.
+            </DialogDescription>
+          </DialogHeader>
+
+          {detailLoading ? (
+            <div className="flex items-center gap-2 text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Cargando detalle…
+            </div>
+          ) : null}
+          {detailError ? (
+            <Alert variant="destructive">
+              <AlertTitle>Error</AlertTitle>
+              <AlertDescription>{detailError}</AlertDescription>
+            </Alert>
+          ) : null}
+
+          {detail ? (
+            <div className="space-y-3">
+              {detail.note_es ? (
+                <p className="text-xs text-muted-foreground">{detail.note_es}</p>
+              ) : null}
+
+              <MediaBlock title="Fachada del cliente" item={detail.facade_photo} />
+
+              <div className="space-y-2">
+                <h3 className="text-sm font-medium">Evidencias de incidencia</h3>
+                {(detail.incident_evidence || []).length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Sin evidencias de visita.</p>
+                ) : (
+                  (detail.incident_evidence || []).map((ev) => (
+                    <MediaBlock
+                      key={ev.id || `${ev.evidence_kind}-${ev.captured_at}`}
+                      title={ev.label_es || "Evidencia"}
+                      item={ev}
+                    />
+                  ))
+                )}
+              </div>
+
+              <div className="space-y-2 rounded border p-3">
+                <div className="text-sm font-medium">Conformidad / firma</div>
+                {detail.conformity?.refused ? (
+                  <p className="text-sm">
+                    Negativa a firmar
+                    {detail.conformity.refuse_reason
+                      ? `: ${detail.conformity.refuse_reason}`
+                      : ""}
+                  </p>
+                ) : detail.conformity?.signature_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={detail.conformity.signature_url}
+                    alt="Firma del receptor"
+                    className="max-h-48 w-full rounded object-contain bg-muted/30"
+                  />
+                ) : (
+                  <p className="text-sm text-muted-foreground">Sin firma visualizable.</p>
+                )}
+                {detail.conformity?.receptor_name ? (
+                  <p className="text-xs text-muted-foreground">
+                    Receptor: {detail.conformity.receptor_name}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

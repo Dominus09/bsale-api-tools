@@ -26,3 +26,12 @@ def list_visits(
     user: dict = Depends(require_app("erp")),
 ):
     return visit_svc.list_visits_for_erp(user=user, limit=limit)
+
+
+@router.get("/{visit_id}")
+def get_visit(
+    visit_id: int,
+    user: dict = Depends(require_app("erp")),
+):
+    """Detalle + URLs firmadas de evidencia/fachada (bucket privado)."""
+    return visit_svc.get_visit_detail_for_erp(user=user, visit_id=int(visit_id))
