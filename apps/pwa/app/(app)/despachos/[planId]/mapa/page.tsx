@@ -2,13 +2,18 @@
 
 import Link from "next/link"
 import { useParams } from "next/navigation"
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { DeliveryMap } from "@/components/delivery-map"
 import { ApiError, getMyMapa, type DriverMapMarker } from "@/lib/api"
 import { moneyCLP } from "@/lib/delivery-flow"
+import { formatDistanceM } from "@/lib/geo"
+import { asAmount } from "@/lib/money-display"
+
 type UserLoc = { lat: number; lng: number; accuracy: number | null }
 
 const GEO_PREF_KEY = "pwa.mapa.liveGps"
+
+type SortMode = "near" | "route"
 
 export default function MapaPage() {
   const params = useParams()
@@ -21,7 +26,9 @@ export default function MapaPage() {
   const [geoNote, setGeoNote] = useState<string | null>(null)
   const [liveGps, setLiveGps] = useState(false)
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
+  const [sortMode, setSortMode] = useState<SortMode>("route")
   const watchRef = useRef<number | null>(null)
+  const originalOrderRef = useRef<string[]>([])
 
   const loadMap = useCallback(
     async (origin?: UserLoc | null) => {
@@ -36,7 +43,11 @@ export default function MapaPage() {
           planId,
           origin ? { lat: origin.lat, lng: origin.lng } : undefined,
         )
-        setMarkers(data.markers || [])
+        const items = data.markers || []
+        setMarkers(items)
+        if (originalOrderRef.current.length === 0) {
+          originalOrderRef.current = items.map((m) => m.customer_key)
+        }
         setEmptyMsg(data.empty_state?.message_es || null)
         setError(null)
       } catch (err) {
@@ -57,8 +68,8 @@ export default function MapaPage() {
   const stopWatch = useCallback(() => {
     if (watchRef.current != null && navigator.geolocation) {
       navigator.geolocation.clearWatch(watchRef.current)
-      watchRef.current = null
     }
+    watchRef.current = null
   }, [])
 
   const startWatch = useCallback(() => {
@@ -112,7 +123,6 @@ export default function MapaPage() {
     return () => stopWatch()
   }, [loadMap, startWatch, stopWatch])
 
-  // Primera fijación GPS: una sola recarga para ordenar por proximidad (sin tracking al servidor).
   const orderedOnce = useRef(false)
   useEffect(() => {
     if (!userLoc || orderedOnce.current) return
@@ -120,24 +130,51 @@ export default function MapaPage() {
     void loadMap(userLoc)
   }, [userLoc, loadMap])
 
-  const selected = markers.find((m) => m.customer_key === selectedKey) || null
+  const displayMarkers = useMemo(() => {
+    const list = [...markers]
+    if (sortMode === "near") {
+      list.sort((a, b) => {
+        const da = a.distance_m
+        const db = b.distance_m
+        if (da == null && db == null) return 0
+        if (da == null) return 1
+        if (db == null) return -1
+        return da - db
+      })
+      return list
+    }
+    const order = originalOrderRef.current
+    if (order.length) {
+      list.sort((a, b) => {
+        const ia = order.indexOf(a.customer_key)
+        const ib = order.indexOf(b.customer_key)
+        return (ia < 0 ? 9999 : ia) - (ib < 0 ? 9999 : ib)
+      })
+    }
+    return list
+  }, [markers, sortMode])
+
+  const selected = displayMarkers.find((m) => m.customer_key === selectedKey) || null
   const fichaHref = selected
     ? `/despachos/${planId}/clientes/${encodeURIComponent(selected.customer_key)}`
     : null
+  const amount = asAmount(selected?.amount_total)
+  const distLabel = formatDistanceM(selected?.distance_m)
 
   return (
     <div className="stack-gap">
-      <div>
-        <h2 style={{ margin: "0 0 4px", fontSize: "1.15rem" }}>Mapa</h2>
-        <p className="muted" style={{ margin: 0 }}>
-          Coordenadas de clientes · ubicación propia solo en este dispositivo
-        </p>
-      </div>
-
-      <div className="btn-row">
+      <div className="despacho-hero-head">
+        <div>
+          <h2 className="section-title" style={{ marginBottom: 2 }}>
+            Mapa del despacho
+          </h2>
+          <p className="muted" style={{ margin: 0, fontSize: "0.8rem" }}>
+            {displayMarkers.length} cliente{displayMarkers.length === 1 ? "" : "s"} con GPS
+          </p>
+        </div>
         <button
           type="button"
-          className={`btn ${liveGps ? "btn-secondary" : "btn-primary"}`}
+          className={`btn btn-compact ${liveGps ? "btn-secondary" : "btn-primary"}`}
           onClick={() => {
             if (liveGps) {
               stopWatch()
@@ -153,16 +190,31 @@ export default function MapaPage() {
             }
           }}
         >
-          {liveGps ? "Desactivar mi ubicación" : "Activar mi ubicación"}
+          {liveGps ? "GPS on" : "Mi GPS"}
         </button>
       </div>
-      {userLoc ? (
-        <p className="muted" style={{ margin: 0 }}>
-          Precisión aprox.{" "}
-          {userLoc.accuracy != null ? `${Math.round(userLoc.accuracy)} m` : "—"}
-          {liveGps ? " · en vivo" : ""}
-        </p>
-      ) : null}
+
+      <div className="filter-chips" role="group" aria-label="Orden del mapa">
+        <button
+          type="button"
+          className={`filter-chip${sortMode === "near" ? " active" : ""}`}
+          onClick={() => {
+            setSortMode("near")
+            if (userLoc) void loadMap(userLoc)
+            else startWatch()
+          }}
+        >
+          Ordenar: Más cercano
+        </button>
+        <button
+          type="button"
+          className={`filter-chip${sortMode === "route" ? " active" : ""}`}
+          onClick={() => setSortMode("route")}
+        >
+          Orden de ruta
+        </button>
+      </div>
+
       {geoNote ? <div className="banner banner-info">{geoNote}</div> : null}
       {error ? <div className="banner banner-error">{error}</div> : null}
 
@@ -182,49 +234,57 @@ export default function MapaPage() {
       ) : null}
 
       {markers.length > 0 ? (
-        <>
+        <div className="map-stage">
           <DeliveryMap
-            markers={markers}
+            markers={displayMarkers}
             userLocation={userLoc}
+            selectedKey={selectedKey}
             onSelect={(key) => setSelectedKey(key)}
             clientesHref={`/despachos/${planId}/clientes`}
           />
-          <p className="muted" style={{ margin: 0 }}>
-            {markers.length} marcador{markers.length === 1 ? "" : "es"}
-            {userLoc ? " · cercanos primero" : ""}
-            . Pulse un pin para ver la ficha.
-          </p>
 
           {selected ? (
             <div className="map-sheet" role="dialog" aria-label="Cliente seleccionado">
-              <strong style={{ fontSize: "1.05rem" }}>
-                {selected.client_name || "Cliente"}
-              </strong>
-              <p className="muted" style={{ margin: "4px 0 8px" }}>
+              <div className="map-sheet-handle" aria-hidden />
+              <div className="despacho-hero-head">
+                <h3 className="map-sheet-title">{selected.client_name || "Cliente"}</h3>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-compact"
+                  onClick={() => setSelectedKey(null)}
+                  aria-label="Cerrar"
+                >
+                  ✕
+                </button>
+              </div>
+              <p className="muted" style={{ margin: "4px 0 0", fontSize: "0.85rem" }}>
                 {[selected.address, selected.city].filter(Boolean).join(", ") || "Sin dirección"}
               </p>
-              <div className="meta-row">
-                <span className="muted">Documentos</span>
-                <span>{selected.document_count}</span>
-              </div>
-              <div className="meta-row">
-                <span className="muted">Monto</span>
-                <span>
-                  {typeof selected.amount_total === "number"
-                    ? moneyCLP(selected.amount_total)
-                    : "Monto no disponible"}
+              <div className="map-sheet-meta">
+                {distLabel ? <span className="pill">{distLabel}</span> : null}
+                <span className="pill">
+                  {selected.document_count} doc{selected.document_count === 1 ? "" : "s"}
                 </span>
+                <span className="pill">
+                  {amount != null ? moneyCLP(amount) : "Monto —"}
+                </span>
+                <span
+                  className={`pill${
+                    selected.attention_status && selected.attention_status !== "pending"
+                      ? " pill-ok"
+                      : ""
+                  }`}
+                >
+                  {selected.attention_label_es || "Pendiente"}
+                </span>
+                <span className="pill pill-ok">GPS disponible</span>
               </div>
-              <div className="meta-row">
-                <span className="muted">Estado</span>
-                <span>{selected.attention_label_es || "Pendiente"}</span>
-              </div>
-              <p className="muted" style={{ fontSize: "0.75rem", margin: "6px 0 10px" }}>
-                Coordenadas precargadas · no implica GPS verificado en terreno
-              </p>
-              <div className="btn-row">
+              {(selected.observations || "").trim() ? (
+                <div className="obs-block">Obs: {(selected.observations || "").trim()}</div>
+              ) : null}
+              <div className="btn-row" style={{ marginTop: 12 }}>
                 {fichaHref ? (
-                  <Link href={fichaHref} className="btn btn-primary" style={{ textAlign: "center" }}>
+                  <Link href={fichaHref} className="btn btn-secondary" style={{ textAlign: "center" }}>
                     Ver ficha
                   </Link>
                 ) : null}
@@ -233,26 +293,17 @@ export default function MapaPage() {
                     href={selected.navigation.google_maps_url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="btn btn-secondary"
+                    className="btn btn-primary"
                     style={{ textAlign: "center" }}
                   >
                     Navegar
                   </a>
                 ) : null}
               </div>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                style={{ marginTop: 8 }}
-                onClick={() => setSelectedKey(null)}
-              >
-                Cerrar
-              </button>
             </div>
           ) : null}
-        </>
+        </div>
       ) : null}
-
     </div>
   )
 }

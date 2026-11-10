@@ -202,6 +202,8 @@ export type DriverMapMarker = {
   client_name?: string | null
   address?: string | null
   city?: string | null
+  observations?: string | null
+  route_order?: number | null
   latitude: number
   longitude: number
   coordinates_source?: string | null
@@ -322,6 +324,7 @@ export async function getMyCliente(
   documents: DriverDocument[]
   document_count: number
   units_total: number
+  amount_total?: number | null
   p4?: {
     tables_ready?: boolean
     mode?: string

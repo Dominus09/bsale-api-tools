@@ -14,21 +14,43 @@ type Props = {
   markers: DriverMapMarker[]
   userLocation?: { lat: number; lng: number; accuracy?: number | null } | null
   onSelect?: (customerKey: string) => void
+  selectedKey?: string | null
   clientesHref: string
 }
 
-const STYLE_URL = "https://tiles.openfreemap.org/styles/liberty"
+const STYLE_URL = "https://tiles.openfreemap.org/styles/dark"
 const WORKER_URL = "/maplibre-gl-worker.mjs"
 const LOAD_TIMEOUT_MS = 20000
 
-export function DeliveryMap({ markers, userLocation, onSelect, clientesHref }: Props) {
+function stopNumber(m: DriverMapMarker, index: number): number {
+  if (typeof m.route_order === "number" && Number.isFinite(m.route_order) && m.route_order > 0) {
+    return Math.trunc(m.route_order)
+  }
+  return index + 1
+}
+
+export function DeliveryMap({
+  markers,
+  userLocation,
+  onSelect,
+  selectedKey,
+  clientesHref,
+}: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const mapRef = useRef<import("maplibre-gl").Map | null>(null)
+  const markerRefs = useRef<import("maplibre-gl").Marker[]>([])
+  const userMarkerRef = useRef<import("maplibre-gl").Marker | null>(null)
+  const MarkerCtorRef = useRef<typeof import("maplibre-gl").Marker | null>(null)
   const styleLoadedRef = useRef(false)
+  const onSelectRef = useRef(onSelect)
   const [retryToken, setRetryToken] = useState(0)
   const [fatal, setFatal] = useState<ClassifiedMapFailure | null>(null)
   const [degraded, setDegraded] = useState<ClassifiedMapFailure | null>(null)
   const [booting, setBooting] = useState(true)
+
+  useEffect(() => {
+    onSelectRef.current = onSelect
+  }, [onSelect])
 
   const retry = useCallback(() => {
     setFatal(null)
@@ -42,6 +64,8 @@ export function DeliveryMap({ markers, userLocation, onSelect, clientesHref }: P
     let map: import("maplibre-gl").Map | null = null
     let timeoutId: ReturnType<typeof setTimeout> | null = null
     styleLoadedRef.current = false
+    markerRefs.current = []
+    userMarkerRef.current = null
 
     const onError = (e: { error?: Error; sourceId?: string }) => {
       if (cancelled) return
@@ -65,7 +89,6 @@ export function DeliveryMap({ markers, userLocation, onSelect, clientesHref }: P
         await import("maplibre-gl/dist/maplibre-gl.css")
         if (cancelled || !containerRef.current) return
 
-        // v6 + webpack/Next: import.meta.url del worker no resuelve; servir desde /public.
         if (typeof ml.setWorkerUrl === "function") {
           ml.setWorkerUrl(`${window.location.origin}${WORKER_URL}`)
         }
@@ -74,6 +97,7 @@ export function DeliveryMap({ markers, userLocation, onSelect, clientesHref }: P
         const Marker = ml.Marker
         const NavigationControl = ml.NavigationControl
         const LngLatBounds = ml.LngLatBounds
+        MarkerCtorRef.current = Marker
 
         const first = markers[0]
         const center: [number, number] = first
@@ -116,41 +140,38 @@ export function DeliveryMap({ markers, userLocation, onSelect, clientesHref }: P
           const bounds = new LngLatBounds()
           let hasBound = false
 
-          for (const m of markers) {
+          markers.forEach((m, index) => {
             const el = document.createElement("button")
             el.type = "button"
-            const st = String(m.attention_status || "pending")
-            const tone =
-              st === "in_progress"
-                ? "map-marker-active"
-                : st === "completed"
-                  ? "map-marker-done"
-                  : st === "partial" || st === "not_delivered"
-                    ? "map-marker-issue"
-                    : "map-marker-pending"
-            el.className = `map-marker ${tone}`
+            el.className = "map-marker map-marker-pending"
+            el.textContent = String(stopNumber(m, index))
             el.setAttribute(
               "aria-label",
               `${m.client_name || "Cliente"} · ${m.attention_label_es || "Pendiente"}`,
             )
-            el.addEventListener("click", () => onSelect?.(m.customer_key))
-            new Marker({ element: el }).setLngLat([m.longitude, m.latitude]).addTo(map)
+            el.addEventListener("click", (ev) => {
+              ev.stopPropagation()
+              onSelectRef.current?.(m.customer_key)
+            })
+            const marker = new Marker({ element: el }).setLngLat([m.longitude, m.latitude]).addTo(map!)
+            markerRefs.current.push(marker)
             bounds.extend([m.longitude, m.latitude])
             hasBound = true
-          }
+          })
 
           if (userLocation) {
             const el = document.createElement("div")
             el.className = "map-user"
-            new Marker({ element: el })
+            el.setAttribute("aria-label", "Mi ubicación")
+            userMarkerRef.current = new Marker({ element: el })
               .setLngLat([userLocation.lng, userLocation.lat])
-              .addTo(map)
+              .addTo(map!)
             bounds.extend([userLocation.lng, userLocation.lat])
             hasBound = true
           }
 
           if (hasBound && markers.length > 1) {
-            map.fitBounds(bounds, { padding: 48, maxZoom: 14 })
+            map.fitBounds(bounds, { padding: 56, maxZoom: 14 })
           } else if (markers.length === 1) {
             map.setCenter([markers[0].longitude, markers[0].latitude])
             map.setZoom(13)
@@ -174,6 +195,22 @@ export function DeliveryMap({ markers, userLocation, onSelect, clientesHref }: P
     return () => {
       cancelled = true
       if (timeoutId) clearTimeout(timeoutId)
+      for (const mk of markerRefs.current) {
+        try {
+          mk.remove()
+        } catch {
+          /* ignore */
+        }
+      }
+      markerRefs.current = []
+      if (userMarkerRef.current) {
+        try {
+          userMarkerRef.current.remove()
+        } catch {
+          /* ignore */
+        }
+        userMarkerRef.current = null
+      }
       if (map) {
         try {
           map.off("error", onError)
@@ -188,7 +225,52 @@ export function DeliveryMap({ markers, userLocation, onSelect, clientesHref }: P
       }
       mapRef.current = null
     }
-  }, [markers, userLocation, onSelect, retryToken])
+    // Solo remount por markers / retry; GPS se actualiza aparte.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [markers, retryToken])
+
+  useEffect(() => {
+    const map = mapRef.current
+    const Marker = MarkerCtorRef.current
+    if (!map || !styleLoadedRef.current || !Marker) return
+    if (!userLocation) {
+      if (userMarkerRef.current) {
+        try {
+          userMarkerRef.current.remove()
+        } catch {
+          /* ignore */
+        }
+        userMarkerRef.current = null
+      }
+      return
+    }
+    if (userMarkerRef.current) {
+      userMarkerRef.current.setLngLat([userLocation.lng, userLocation.lat])
+      return
+    }
+    const el = document.createElement("div")
+    el.className = "map-user"
+    el.setAttribute("aria-label", "Mi ubicación")
+    userMarkerRef.current = new Marker({ element: el })
+      .setLngLat([userLocation.lng, userLocation.lat])
+      .addTo(map)
+  }, [userLocation])
+
+  useEffect(() => {
+    // Resaltar pin seleccionado sin recrear el mapa.
+    markerRefs.current.forEach((mk, i) => {
+      const el = mk.getElement()
+      if (!el) return
+      const key = markers[i]?.customer_key
+      if (key && key === selectedKey) {
+        el.style.transform = "scale(1.15)"
+        el.style.boxShadow = "0 0 0 3px rgba(196,41,60,0.45), 0 2px 8px rgba(0,0,0,0.45)"
+      } else {
+        el.style.transform = ""
+        el.style.boxShadow = ""
+      }
+    })
+  }, [selectedKey, markers])
 
   return (
     <div className="stack-gap">
@@ -224,7 +306,6 @@ export function DeliveryMap({ markers, userLocation, onSelect, clientesHref }: P
         </div>
       ) : null}
 
-      {/* Contenedor siempre montado (salvo fatal de init) para no perder el ref mid-boot. */}
       <div
         ref={containerRef}
         className="map-canvas"

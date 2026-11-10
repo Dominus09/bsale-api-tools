@@ -629,32 +629,62 @@ input {
   font-size: 0.9rem;
 }
 
+.map-stage {
+  position: relative;
+  margin: 0 -16px;
+  min-height: min(62vh, 560px);
+}
+
 .map-canvas {
   width: 100%;
-  height: min(52vh, 420px);
-  border-radius: 14px;
-  border: 1px solid var(--border);
+  height: min(62vh, 560px);
+  border-radius: 0;
+  border: none;
   overflow: hidden;
+  background: #0e1117;
 }
 
 .map-marker {
-  width: 18px;
-  height: 18px;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
   border: 2px solid #fff;
   background: var(--accent);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
   padding: 0;
   cursor: pointer;
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
 }
 
 .map-user {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
-  background: #3ecf8e;
+  background: #3b82f6;
   border: 2px solid #fff;
-  box-shadow: 0 0 0 6px rgba(62, 207, 142, 0.25);
+  box-shadow:
+    0 0 0 6px rgba(59, 130, 246, 0.28),
+    0 2px 8px rgba(0, 0, 0, 0.4);
+  position: relative;
+}
+
+.map-user::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-bottom: 8px solid #3b82f6;
+  transform: translate(-50%, -130%) rotate(0deg);
 }
 
 .linkish {
@@ -1108,19 +1138,17 @@ input {
 .obs-block {
   margin-top: 10px;
   padding: 10px 12px;
-  border-radius: 10px;
-  background: rgba(196, 41, 60, 0.1);
-  border: 1px solid rgba(196, 41, 60, 0.28);
+  border-radius: 12px;
+  background: #14171d;
+  border: 1px solid var(--border);
   white-space: pre-wrap;
-  font-size: 0.9rem;
+  font-size: 0.86rem;
   line-height: 1.35;
+  color: var(--text);
 }
 
 .obs-block.obs-empty {
-  background: var(--surface-2);
-  border-color: var(--border);
   color: var(--muted);
-  font-size: 0.82rem;
 }
 
 .qty-doc {
@@ -1142,26 +1170,114 @@ input {
 }
 
 .map-sheet {
-  position: sticky;
-  bottom: 0;
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
   z-index: 5;
-  margin: 0 -4px;
-  padding: 14px 14px calc(14px + env(safe-area-inset-bottom));
-  background: var(--surface);
+  padding: 14px 14px calc(12px + env(safe-area-inset-bottom, 0px));
+  background: rgba(23, 25, 31, 0.96);
   border: 1px solid var(--border);
-  border-radius: 16px 16px 0 0;
-  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35);
+  border-radius: 18px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(10px);
 }
 
-.map-marker-pending {
-  background: #64748b;
+.map-sheet-handle {
+  width: 42px;
+  height: 4px;
+  border-radius: 999px;
+  background: #3a3f4a;
+  margin: 0 auto 10px;
 }
-.map-marker-active {
-  background: var(--info);
+
+.map-sheet-title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 750;
+  color: var(--accent);
 }
-.map-marker-done {
-  background: var(--ok);
+
+.map-sheet-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
 }
+
+.map-marker-pending,
+.map-marker-active,
+.map-marker-done,
 .map-marker-issue {
-  background: var(--warn);
+  background: var(--accent);
+}
+
+.client-card-name {
+  margin: 0;
+  font-size: 1.02rem;
+  font-weight: 750;
+  color: var(--accent);
+  letter-spacing: -0.01em;
+}
+
+.client-stop {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  background: rgba(196, 41, 60, 0.16);
+  border: 1px solid rgba(196, 41, 60, 0.4);
+  color: #ffb4bc;
+  font-size: 0.75rem;
+  font-weight: 750;
+  margin-right: 8px;
+}
+
+.filter-chips {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.filter-chip {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.filter-chip.active {
+  background: rgba(196, 41, 60, 0.18);
+  border-color: rgba(196, 41, 60, 0.55);
+  color: #fff;
+}
+
+.ficha-compact-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.ficha-compact-row:last-child {
+  border-bottom: none;
+}
+
+.ficha-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
 }

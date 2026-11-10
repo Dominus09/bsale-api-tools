@@ -1324,6 +1324,8 @@ def get_map_for_driver(
                 "client_name": c.get("client_name"),
                 "address": c.get("address") or "",
                 "city": c.get("city") or "",
+                "observations": c.get("observations") or "",
+                "route_order": c.get("route_order"),
                 "latitude": lat,
                 "longitude": lng,
                 "coordinates_source": c.get("coordinates_source"),
@@ -1353,7 +1355,13 @@ def get_map_for_driver(
     if origin_lat is not None and origin_lng is not None:
         markers.sort(key=lambda m: (m.get("distance_m") is None, m.get("distance_m") or 0))
     else:
-        markers.sort(key=lambda m: str(m.get("client_name") or ""))
+        markers.sort(
+            key=lambda m: (
+                m.get("route_order") is None,
+                int(m.get("route_order") or 10_000),
+                str(m.get("client_name") or ""),
+            )
+        )
 
     return serialize_value(
         {

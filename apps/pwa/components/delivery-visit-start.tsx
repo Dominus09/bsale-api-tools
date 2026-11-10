@@ -60,7 +60,6 @@ export function DeliveryVisitStart(props: Props) {
   const router = useRouter()
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  const [confirmStart, setConfirmStart] = useState(false)
   const [confirmNewAfterClosed, setConfirmNewAfterClosed] = useState(false)
 
   const recovery = useMemo(
@@ -103,7 +102,6 @@ export function DeliveryVisitStart(props: Props) {
             idempotency_key: idem,
           }
       await startDeliveryVisit(props.planId, props.customerKey, body)
-      setConfirmStart(false)
       setConfirmNewAfterClosed(false)
       props.onChanged()
       router.push(buildEntregaHref(props.planId, props.customerKey, "documentos"))
@@ -185,56 +183,18 @@ export function DeliveryVisitStart(props: Props) {
 
       {/* Visita normal activa (sin cierre válido previo). */}
       {canResume && recovery.active ? (
-        <div className="stack-gap">
-          {!confirmStart ? (
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={busy}
-              onClick={() => setConfirmStart(true)}
-            >
-              Retomar entrega
-            </button>
-          ) : (
-            <div className="stack-gap">
-              <p style={{ margin: 0, fontSize: "0.85rem" }}>
-                Continúa la visita #{recovery.active.id} en curso. No crea otra.
-              </p>
-              <div className="btn-row">
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  disabled={busy}
-                  onClick={() => void onStart()}
-                >
-                  {busy ? "Guardando…" : "Retomar circuito"}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  disabled={busy}
-                  onClick={() => setConfirmStart(false)}
-                >
-                  Cancelar
-                </button>
-              </div>
-            </div>
-          )}
-          {!confirmStart ? (
-            <button
-              type="button"
-              className="btn btn-ghost"
-              disabled={busy}
-              onClick={() =>
-                router.push(
-                  buildEntregaHref(props.planId, props.customerKey, "documentos"),
-                )
-              }
-            >
-              Ir al circuito de entrega
-            </button>
-          ) : null}
-        </div>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={busy}
+          onClick={() =>
+            router.push(
+              buildEntregaHref(props.planId, props.customerKey, "documentos"),
+            )
+          }
+        >
+          Retomar entrega
+        </button>
       ) : null}
 
       {closedOnly && recovery.lastClosed ? (
@@ -301,44 +261,14 @@ export function DeliveryVisitStart(props: Props) {
       ) : null}
 
       {!canResume && !closedOnly && !closedWithAdminDup ? (
-        <div className="stack-gap">
-          {!confirmStart ? (
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={busy}
-              onClick={() => setConfirmStart(true)}
-            >
-              Comenzar entrega
-            </button>
-          ) : (
-            <div className="stack-gap">
-              <p style={{ margin: 0, fontSize: "0.9rem" }}>
-                <strong>{props.clientName}</strong>
-                <br />
-                {props.documentCount} documento(s) · {props.documentTotalLabel}
-              </p>
-              <div className="btn-row">
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  disabled={busy}
-                  onClick={() => void onStart()}
-                >
-                  {busy ? "Guardando…" : "Confirmar y comenzar"}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  disabled={busy}
-                  onClick={() => setConfirmStart(false)}
-                >
-                  Cancelar
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={busy}
+          onClick={() => void onStart()}
+        >
+          {busy ? "Iniciando…" : "Comenzar entrega"}
+        </button>
       ) : null}
 
       {err ? (

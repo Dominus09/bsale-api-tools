@@ -8,6 +8,7 @@ import { formatRutDisplay } from "@/lib/format-rut"
 import { moneyCLP, visitStatusLabel } from "@/lib/delivery-flow"
 import { DeliveryLocalToolsHost } from "@/components/delivery-local-tools-host"
 import { DeliveryVisitStart } from "@/components/delivery-visit-start"
+import { asAmount } from "@/lib/money-display"
 
 export default function ClienteFichaPage() {
   const params = useParams()
@@ -52,11 +53,15 @@ export default function ClienteFichaPage() {
   }, [planId, customerKey, reloadToken])
 
   const totals = useMemo(() => {
-    if (!data) return { count: 0, amount: 0 }
-    const amount = (data.documents || []).reduce(
-      (acc, d) => acc + (typeof d.document_total === "number" ? d.document_total : 0),
-      0,
-    )
+    if (!data) return { count: 0, amount: null as number | null }
+    const amount =
+      asAmount(data.amount_total) ??
+      asAmount(
+        (data.documents || []).reduce(
+          (acc, d) => acc + (typeof d.document_total === "number" ? d.document_total : 0),
+          0,
+        ),
+      )
     return { count: data.document_count || data.documents?.length || 0, amount }
   }, [data])
 
@@ -79,6 +84,7 @@ export default function ClienteFichaPage() {
   const nav = data.navigation
   const facadeUrl = c.facade?.url || c.facade_photo || null
   const locLabel = c.location_registration?.label_es || "Ubicación no disponible"
+  const gpsOk = Boolean(c.has_coordinates || c.location_registration?.verified)
   const visit = data.active_visit
   const closed = data.last_closed_visit
   const adminReview = Boolean(data.capabilities?.admin_review_pending)
@@ -92,11 +98,17 @@ export default function ClienteFichaPage() {
     : visit?.status === "in_progress" && !adminReview
       ? "En atención"
       : visitStatusLabel(operationalStatus)
+  const obs = (c.observations || "").trim()
   const backClients = `/despachos/${planId}/clientes`
+  const loadGroup =
+    (c.load_groups || [])[0]?.name ||
+    ((c.load_groups || [])[0]?.load_batch_id
+      ? `Grupo ${(c.load_groups || [])[0]?.load_batch_id}`
+      : null)
 
   return (
     <div className="stack-gap">
-      <Link href={backClients} className="muted">
+      <Link href={backClients} className="muted" style={{ fontSize: "0.85rem" }}>
         ← Clientes
       </Link>
 
@@ -106,77 +118,88 @@ export default function ClienteFichaPage() {
             type="button"
             className="facade-thumb"
             onClick={() => facadeUrl && setLightbox(facadeUrl)}
-            aria-label={facadeUrl ? "Ampliar fachada" : "Sin fachada"}
+            aria-label={facadeUrl ? "Ampliar fachada" : "Local"}
             disabled={!facadeUrl}
           >
             {facadeUrl ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src={facadeUrl} alt="" />
             ) : (
-              "Sin foto"
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
+                <path d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1v-9.5Z" />
+              </svg>
             )}
           </button>
           <div className="ficha-head-main">
-            <h2>{c.client_name || "Sin nombre"}</h2>
+            <h2 className="client-card-name" style={{ fontSize: "1.15rem" }}>
+              {c.client_name || "Sin nombre"}
+            </h2>
             {c.fantasy_name ? (
-              <p className="muted" style={{ margin: "0 0 6px", fontSize: "0.85rem" }}>
+              <p className="muted" style={{ margin: "2px 0 8px", fontSize: "0.82rem" }}>
                 {c.fantasy_name}
               </p>
             ) : null}
-            <div className="meta-row">
-              <span className="muted">RUT</span>
-              <span>{formatRutDisplay(c.rut) || "—"}</span>
-            </div>
-            <div className="meta-row">
-              <span className="muted">Vendedor</span>
-              <span>{c.seller_name || "—"}</span>
-            </div>
-            <div className="meta-row">
-              <span className="muted">Teléfono</span>
-              <span>
-                {c.phone ? (
-                  <a href={`tel:${c.phone}`} style={{ color: "var(--accent)" }}>
-                    {c.phone}
-                  </a>
-                ) : (
-                  "—"
-                )}
-              </span>
-            </div>
-            <div className="meta-row">
-              <span className="muted">Dirección</span>
-              <span style={{ textAlign: "right" }}>
-                {[c.address, c.city].filter(Boolean).join(", ") || "—"}
+            <div className="ficha-summary" style={{ marginTop: 0 }}>
+              <span className="pill">RUT {formatRutDisplay(c.rut) || "—"}</span>
+              <span className={`pill${gpsOk ? " pill-ok" : ""}`}>
+                {gpsOk ? "GPS disponible" : locLabel}
               </span>
             </div>
           </div>
         </div>
 
-        <div className="ficha-summary">
-          <span className={`pill${c.location_registration?.verified ? " pill-ok" : ""}`}>
-            GPS · {locLabel}
+        <div className="ficha-compact-row">
+          <span className="muted">Teléfono</span>
+          <span>
+            {c.phone ? (
+              <a href={`tel:${c.phone}`} style={{ color: "var(--accent)", fontWeight: 650 }}>
+                {c.phone}
+              </a>
+            ) : (
+              "—"
+            )}
           </span>
-          <span className="pill">
-            {totals.count} doc. · {moneyCLP(totals.amount)}
-          </span>
-          <span
-            className={`pill${
-              operationalStatus && operationalStatus !== "cancelled"
-                ? " pill-ok"
-                : ""
-            }`}
-          >
-            Visita · {operationalLabel}
-          </span>
-          {(c.load_groups || []).map((g) => (
-            <span key={`${g.load_batch_id}-${g.name}`} className="pill">
-              {g.name || `Grupo ${g.load_batch_id}`}
-            </span>
-          ))}
+        </div>
+        <div className="ficha-compact-row">
+          <span className="muted">Dirección</span>
+          <span style={{ textAlign: "right" }}>{c.address || "—"}</span>
+        </div>
+        <div className="ficha-compact-row">
+          <span className="muted">Ciudad</span>
+          <span>{c.city || "—"}</span>
         </div>
 
-        <div className={c.observations?.trim() ? "obs-block" : "obs-block obs-empty"}>
-          {c.observations?.trim() || "Sin observaciones"}
+        <div className={obs ? "obs-block" : "obs-block obs-empty"}>
+          {obs ? `Obs: ${obs}` : "Sin observaciones"}
+        </div>
+
+        <div className="ficha-kpi-grid">
+          <div className="kpi">
+            <span className="kpi-label">Monto</span>
+            <span className="kpi-value" style={{ fontSize: "0.92rem" }}>
+              {totals.amount != null ? moneyCLP(totals.amount) : "—"}
+            </span>
+          </div>
+          <div className="kpi">
+            <span className="kpi-label">Docs</span>
+            <span className="kpi-value">{totals.count}</span>
+          </div>
+          <div className="kpi">
+            <span className="kpi-label">Grupo</span>
+            <span className="kpi-value" style={{ fontSize: "0.78rem" }}>
+              {loadGroup || "—"}
+            </span>
+          </div>
+        </div>
+
+        <div className="group-row" style={{ marginTop: 10 }}>
+          <span
+            className={`pill${
+              operationalStatus && operationalStatus !== "cancelled" ? " pill-ok" : ""
+            }`}
+          >
+            {operationalLabel}
+          </span>
         </div>
       </div>
 
@@ -191,7 +214,7 @@ export default function ClienteFichaPage() {
         customerKey={customerKey}
         clientName={c.client_name || "Cliente"}
         documentCount={totals.count}
-        documentTotalLabel={moneyCLP(totals.amount)}
+        documentTotalLabel={totals.amount != null ? moneyCLP(totals.amount) : "—"}
         p4Ready={Boolean(data.p4?.tables_ready)}
         p4Note={data.p4?.note_es}
         activeVisit={data.active_visit || null}
@@ -207,12 +230,6 @@ export default function ClienteFichaPage() {
         onChanged={() => setReloadToken((n) => n + 1)}
       />
 
-      <p className="muted" style={{ margin: 0, fontSize: "0.8rem" }}>
-        GPS, fachada, cómo llegar e historial están en el menú lateral. La entrega se
-        registra en pantallas por etapas.
-      </p>
-
-      {/* P3: montado en modo menú (sin paneles grandes en el cuerpo). */}
       <DeliveryLocalToolsHost
         planId={planId}
         customerKey={customerKey}
