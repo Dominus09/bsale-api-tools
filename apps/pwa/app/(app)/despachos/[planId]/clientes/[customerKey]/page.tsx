@@ -192,6 +192,7 @@ export default function ClienteFichaPage() {
         documentCount={totals.count}
         documentTotalLabel={money(totals.amount)}
         documentTotalAmount={totals.amount}
+        documents={data.documents || []}
         p4Ready={Boolean(data.p4?.tables_ready)}
         p4Note={data.p4?.note_es}
         activeVisit={data.active_visit || null}
