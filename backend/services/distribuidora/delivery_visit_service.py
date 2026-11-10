@@ -801,8 +801,12 @@ def build_whatsapp_report(
     visit_id: int,
     client_name: str | None = None,
     planning_code: str | None = None,
+    driver_name: str | None = None,
 ) -> dict[str, Any]:
     """Texto compartible solo desde registros confirmados. Sin coords/firma/RUT completo."""
+    from backend.services.distribuidora import delivery_whatsapp_report as wa_report
+    from backend.services.distribuidora import dispatch_plan_driver_service as driver_svc
+
     uid = read_svc.enforce_driver_plan_read_access(user, int(plan_id))
     conn = get_connection()
     try:
@@ -825,68 +829,60 @@ def build_whatsapp_report(
         docs = visit_repo.list_document_results(cur, int(visit_id))
         lines = visit_repo.list_line_results(cur, int(visit_id))
         cols = visit_repo.list_collections(cur, int(visit_id))
+        try:
+            evid_n = visit_repo.count_evidence(cur, int(visit_id))
+        except Exception:
+            evid_n = 0
+        try:
+            conformity = visit_repo.get_conformity(cur, int(visit_id))
+        except Exception:
+            conformity = None
 
-        folios = []
-        for d in docs:
-            dtype = d.get("document_type") or "Doc"
-            num = d.get("document_number")
-            folios.append(f"{dtype} {num}" if num is not None else str(dtype))
+        resolved_plan_code = planning_code
+        resolved_driver = driver_name
+        try:
+            summary = driver_svc.get_plan_summary_for_driver(uid, int(plan_id))
+            if summary:
+                resolved_plan_code = resolved_plan_code or summary.get("planning_code")
+                resolved_driver = resolved_driver or summary.get("driver_name")
+        except Exception:
+            pass
+        if not resolved_driver:
+            resolved_driver = (
+                str(user.get("name") or user.get("email") or f"Chofer {uid}").strip()
+            )
 
-        delivered = sum(float(x.get("delivered_units") or 0) for x in lines)
-        pending_u = sum(float(x.get("undelivered_units") or 0) for x in lines)
-        declared = sum(
-            float(c.get("declared_amount") or 0)
-            for c in cols
-            if c.get("declared_amount") is not None
-        )
-        pending_bal = sum(
-            float(c.get("pending_balance") or 0)
-            for c in cols
-            if c.get("pending_balance") is not None
-        )
+        has_sig = None
+        refused = None
+        if conformity:
+            if conformity.get("signature_object_key") and not conformity.get("refused"):
+                has_sig = True
+            elif conformity.get("refused"):
+                has_sig = False
+                refused = True
+            else:
+                has_sig = False
 
-        status_es = {
-            "completed": "Entrega completa",
-            "partial": "Entrega parcial",
-            "not_delivered": "No entregada",
-            "cancelled": "Cancelada",
-        }.get(str(visit.get("status")), str(visit.get("status")))
-
-        pub = _visit_public(visit)
-        text_lines = [
-            "Grupo La Quillotana — Reporte de entrega",
-            f"Plan: {planning_code or plan_id}",
-            f"Cliente: {client_name or visit.get('customer_key')}",
-            f"Chofer id: {uid}",
-            f"Inicio: {pub.get('started_at_local') or pub.get('started_at') or '—'}",
-            f"Término: {pub.get('ended_at_local') or pub.get('ended_at') or '—'}",
-            f"Estado: {status_es}",
-        ]
-        if visit.get("result_reason"):
-            text_lines.append(f"Motivo: {visit.get('result_reason')}")
-        if visit.get("result_note"):
-            text_lines.append(f"Obs.: {visit.get('result_note')}")
-        text_lines.append(
-            f"Documentos: {', '.join(folios) if folios else 'sin detalle guardado'}"
+        report_data = wa_report.visit_row_to_report_data(
+            visit,
+            docs=docs,
+            lines=lines,
+            cols=cols,
+            planning_code=resolved_plan_code or str(plan_id),
+            client_name=client_name,
+            driver_name=resolved_driver,
+            has_evidence=True if evid_n > 0 else False,
+            has_signature=has_sig,
+            signature_refused=refused,
         )
-        text_lines.append(f"Unidades entregadas: {delivered:g}")
-        text_lines.append(f"Unidades pendientes: {pending_u:g}")
-        text_lines.append(f"Cobranza declarada: {declared:,.0f}".replace(",", "."))
-        text_lines.append(f"Saldo pendiente decl.: {pending_bal:,.0f}".replace(",", "."))
-        text_lines.append("Firma/evidencia: ver ERP (no incluida en este texto)")
-        text_lines.append(
-            "Nota: mensaje generado para compartir; confirme el envío manualmente."
-        )
-        report_text = "\n".join(text_lines)
+        bundle = wa_report.build_report_bundle(report_data, demo=False)
+        report_text = bundle["report_text"]
         payload = {
             "visit_id": int(visit_id),
-            "status": visit.get("status"),
-            "folios": folios,
-            "delivered_units": delivered,
-            "pending_units": pending_u,
-            "declared_collection": declared,
-            "pending_balance": pending_bal,
-            "omitted": ["signature", "photos", "precise_gps", "full_rut"],
+            "template_key": bundle["template_key"],
+            "demo": False,
+            "omitted": bundle["omitted"],
+            "report_data_keys": sorted(report_data.keys()),
         }
         snap = visit_repo.insert_report_snapshot(
             cur,
@@ -900,7 +896,7 @@ def build_whatsapp_report(
             visit_id=int(visit_id),
             action="report_snapshot_generated",
             actor_user_id=uid,
-            payload={"snapshot_id": int(snap["id"])},
+            payload={"snapshot_id": int(snap["id"]), "template_key": bundle["template_key"]},
         )
         conn.commit()
         cur.close()
@@ -923,20 +919,42 @@ def build_whatsapp_report(
 
     return serialize_value(
         {
-            "report_text": report_text,
+            **bundle,
             "snapshot_id": int(snap["id"]),
-            "share": {
-                "whatsapp_url": (
-                    "https://wa.me/?text="
-                    + __import__("urllib.parse").parse.quote(report_text)
-                ),
-                "delivery_claimed": False,
-                "note_es": (
-                    "Solo abre la ventana de compartir. No afirma entrega a WhatsApp."
-                ),
-            },
             "persisted": True,
             "mode": "online_only",
+            "adapter": {
+                "kind": "manual_share_v1",
+                "official_api_ready": False,
+                "note_es": (
+                    "Adaptador futuro para API oficial; hoy solo compartir manual."
+                ),
+            },
+        }
+    )
+
+
+def list_demo_whatsapp_reports(*, user: dict[str, Any]) -> dict[str, Any]:
+    """Modo prueba familiar: solo textos ficticios en memoria. Sin escritura productiva."""
+    from backend.services.distribuidora import delivery_whatsapp_report as wa_report
+
+    _uid(user)
+    scenarios = wa_report.demo_scenarios()
+    return serialize_value(
+        {
+            "demo": True,
+            "writes_production": False,
+            "count": len(scenarios),
+            "scenarios": scenarios,
+            "note_es": (
+                "Datos ficticios para evaluar el aspecto del mensaje. "
+                "No modifica planes, cobranzas, inventario ni evidencias reales. "
+                "No incluye enlaces de invitación a grupos."
+            ),
+            "adapter": {
+                "kind": "manual_share_v1",
+                "official_api_ready": False,
+            },
         }
     )
 

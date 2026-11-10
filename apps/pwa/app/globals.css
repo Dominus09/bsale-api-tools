@@ -633,3 +633,16 @@ input {
 .doc-card {
   padding-bottom: 14px;
 }
+
+.report-pre {
+  white-space: pre-wrap;
+  font-size: 0.78rem;
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  line-height: 1.35;
+}

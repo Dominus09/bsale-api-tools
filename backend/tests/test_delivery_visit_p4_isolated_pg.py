@@ -377,8 +377,12 @@ def test_lines_collection_and_report(isolated_db, monkeypatch):
         visit_id=vid,
         client_name="Cliente Test",
         planning_code="PLAN-TEST-P4",
+        driver_name="Chofer Test",
     )
     assert "Cliente Test" in report["report_text"]
+    assert "ENTREGA PARCIAL" in report["report_text"] or "PARCIAL" in report["header"]
     assert report["share"]["delivery_claimed"] is False
-    assert "Firma/evidencia" in report["report_text"]
+    assert report["share"]["auto_send"] is False
+    assert "Pago verificado: no" in report["report_text"]
     assert "-42.0" not in report["report_text"]
+    assert "group_invite_link" in report["omitted"]

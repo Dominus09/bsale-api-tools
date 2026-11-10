@@ -413,20 +413,32 @@ export async function declareVisitCollection(
   )
 }
 
-export async function generateVisitWhatsappReport(
-  planId: number,
-  visitId: number,
-  body?: { client_name?: string; planning_code?: string },
-): Promise<{
+export type WhatsappReportResponse = {
   report_text: string
-  snapshot_id: number
+  snapshot_id?: number
+  template_key?: string
+  header?: string
+  demo?: boolean
   share: {
     whatsapp_url: string
     delivery_claimed: boolean
     note_es?: string
+    auto_send?: boolean
+    states?: {
+      report_generated?: boolean
+      share_requested?: boolean
+      delivery_verified?: boolean
+    }
   }
   persisted?: boolean
-}> {
+  omitted?: string[]
+}
+
+export async function generateVisitWhatsappReport(
+  planId: number,
+  visitId: number,
+  body?: { client_name?: string; planning_code?: string; driver_name?: string },
+): Promise<WhatsappReportResponse> {
   return apiFetch(
     `/distribuidora/pwa/driver/despachos/${planId}/visitas/${visitId}/reporte-whatsapp`,
     {
@@ -435,6 +447,25 @@ export async function generateVisitWhatsappReport(
       body: JSON.stringify(body || {}),
     },
   )
+}
+
+export async function listDemoWhatsappReports(): Promise<{
+  demo: boolean
+  writes_production: boolean
+  count: number
+  note_es?: string
+  scenarios: Array<{
+    scenario_key: string
+    title_es: string
+    report_text: string
+    header?: string
+    template_key?: string
+    demo?: boolean
+    share: WhatsappReportResponse["share"]
+    writes_production?: boolean
+  }>
+}> {
+  return apiFetch(`/distribuidora/pwa/driver/reportes-whatsapp/demo`)
 }
 
 export async function proposeClientLocation(

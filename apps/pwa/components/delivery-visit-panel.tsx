@@ -4,11 +4,13 @@ import { useMemo, useState } from "react"
 import {
   ApiError,
   type DeliveryVisit,
+  type WhatsappReportResponse,
   declareVisitCollection,
   finalizeDeliveryVisit,
   generateVisitWhatsappReport,
   startDeliveryVisit,
 } from "@/lib/api"
+import { WhatsappSharePanel } from "@/components/whatsapp-share-panel"
 
 type Props = {
   planId: number
@@ -64,7 +66,7 @@ export function DeliveryVisitPanel(props: Props) {
   const [payMethod, setPayMethod] = useState("cash")
   const [payAmount, setPayAmount] = useState("")
   const [lastClosedId, setLastClosedId] = useState<number | null>(null)
-  const [reportText, setReportText] = useState<string | null>(null)
+  const [report, setReport] = useState<WhatsappReportResponse | null>(null)
 
   const visit = props.activeVisit
   const inProgress = visit?.status === "in_progress"
@@ -151,8 +153,18 @@ export function DeliveryVisitPanel(props: Props) {
       }
       setConfirmEnd(false)
       setLastClosedId(res.visit.id)
-      setInfo(res.note_es || "Entrega finalizada.")
+      setReport(null)
+      setInfo(res.note_es || "Entrega finalizada. Puede generar el reporte WhatsApp.")
       props.onChanged()
+      // Auto-generar texto del reporte (no envía). Fallo no bloquea el cierre.
+      try {
+        const wa = await generateVisitWhatsappReport(props.planId, res.visit.id, {
+          client_name: props.clientName,
+        })
+        setReport(wa)
+      } catch {
+        // El cierre ya persistió; el chofer puede regenerar manualmente.
+      }
     } catch (e) {
       if (!navigator.onLine) {
         setErr("Sin conexión. No se finaliza hasta confirmar con el servidor.")
@@ -369,52 +381,39 @@ export function DeliveryVisitPanel(props: Props) {
       ) : null}
 
       {lastClosedId && !inProgress ? (
-        <div style={{ marginTop: 10 }} className="stack-gap">
-          <button
-            type="button"
-            className="btn btn-secondary"
-            disabled={busy}
-            onClick={() => {
-              void (async () => {
-                setBusy(true)
-                setErr(null)
-                try {
-                  const res = await generateVisitWhatsappReport(
-                    props.planId,
-                    lastClosedId,
-                    { client_name: props.clientName },
-                  )
-                  setReportText(res.report_text)
-                  setInfo(
-                    res.share.note_es ||
-                      "Reporte listo. Confirme el envío manualmente en WhatsApp.",
-                  )
-                  if (typeof window !== "undefined" && res.share.whatsapp_url) {
-                    window.open(res.share.whatsapp_url, "_blank", "noopener,noreferrer")
-                  }
-                } catch (e) {
-                  setErr(e instanceof ApiError ? e.message : "Error reporte")
-                } finally {
-                  setBusy(false)
-                }
-              })()
+        <div style={{ marginTop: 10 }} className="card">
+          <strong style={{ fontSize: "0.95rem" }}>Resumen y WhatsApp</strong>
+          <p className="muted" style={{ margin: "6px 0 10px", fontSize: "0.8rem" }}>
+            Cierre persistido. Compartir no reabre ni duplica la visita.
+          </p>
+          <WhatsappSharePanel
+            reportText={report?.report_text || null}
+            share={report?.share}
+            header={report?.header}
+            busy={busy}
+            generateLabel="Generar / regenerar reporte"
+            onGenerate={async () => {
+              setBusy(true)
+              setErr(null)
+              try {
+                const res = await generateVisitWhatsappReport(
+                  props.planId,
+                  lastClosedId,
+                  { client_name: props.clientName },
+                )
+                setReport(res)
+                setInfo(
+                  res.share.note_es ||
+                    "Reporte listo. Confirme el envío manualmente en WhatsApp.",
+                )
+              } catch (e) {
+                setErr(e instanceof ApiError ? e.message : "Error reporte")
+                throw e
+              } finally {
+                setBusy(false)
+              }
             }}
-          >
-            Compartir reporte por WhatsApp
-          </button>
-          {reportText ? (
-            <pre
-              style={{
-                whiteSpace: "pre-wrap",
-                fontSize: "0.78rem",
-                margin: 0,
-                maxHeight: 180,
-                overflow: "auto",
-              }}
-            >
-              {reportText}
-            </pre>
-          ) : null}
+          />
         </div>
       ) : null}
 

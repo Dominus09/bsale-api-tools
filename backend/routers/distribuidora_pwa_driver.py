@@ -278,6 +278,15 @@ class DeclareCollectionBody(BaseModel):
 class WhatsAppReportBody(BaseModel):
     client_name: str | None = Field(None, max_length=200)
     planning_code: str | None = Field(None, max_length=64)
+    driver_name: str | None = Field(None, max_length=120)
+
+
+@router.get("/reportes-whatsapp/demo")
+def list_demo_whatsapp_reports(
+    user: dict = Depends(require_pwa_profiles("chofer")),
+):
+    """Escenarios ficticios para prueba familiar. Sin escritura productiva."""
+    return visit_svc.list_demo_whatsapp_reports(user=user)
 
 
 @router.post("/despachos/{plan_id}/visitas/{visit_id}/documentos")
@@ -334,6 +343,7 @@ def generate_whatsapp_report(
         visit_id=int(visit_id),
         client_name=body.client_name,
         planning_code=body.planning_code,
+        driver_name=body.driver_name,
     )
 
 

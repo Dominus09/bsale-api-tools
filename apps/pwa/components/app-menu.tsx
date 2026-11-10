@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import { useEffect, useState } from "react"
 import { clearSession } from "@/lib/auth"
 import { useLocalTools } from "@/components/local-tools-context"
@@ -99,6 +100,22 @@ export function AppMenu() {
                   Abra la ficha de un cliente para usar GPS, fachada y navegación.
                 </p>
               )}
+            </section>
+
+            <section className="drawer-section">
+              <h3>Pruebas</h3>
+              <div className="drawer-actions">
+                <Link
+                  className="drawer-item"
+                  href="/pruebas/reportes-whatsapp"
+                  onClick={() => setOpen(false)}
+                >
+                  🧪 Reportes WhatsApp (ficticios)
+                </Link>
+              </div>
+              <p className="muted drawer-note">
+                Solo demostración. No escribe entregas reales ni usa enlaces de grupo.
+              </p>
             </section>
 
             <section className="drawer-section">

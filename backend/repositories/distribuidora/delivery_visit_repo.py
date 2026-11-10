@@ -310,6 +310,35 @@ def insert_report_snapshot(cur, **kw) -> dict[str, Any]:
     return _row(cur, cur.fetchone())
 
 
+def count_evidence(cur, visit_id: int) -> int:
+    cur.execute(
+        """
+        SELECT COUNT(*) AS n
+        FROM distribuidora.delivery_evidence
+        WHERE visit_id = %s AND upload_confirmed = TRUE
+        """,
+        (int(visit_id),),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return 0
+    if isinstance(row, dict) or hasattr(row, "keys"):
+        return int(row["n"] or 0)
+    return int(row[0] or 0)
+
+
+def get_conformity(cur, visit_id: int) -> dict[str, Any] | None:
+    cur.execute(
+        """
+        SELECT * FROM distribuidora.delivery_conformity
+        WHERE visit_id = %s
+        """,
+        (int(visit_id),),
+    )
+    r = cur.fetchone()
+    return _row(cur, r) if r else None
+
+
 def list_recent_visits(
     cur, *, limit: int = 100, company_id: int | None = None
 ) -> list[dict[str, Any]]:
