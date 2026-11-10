@@ -80,6 +80,18 @@ export default function ClienteFichaPage() {
   const facadeUrl = c.facade?.url || c.facade_photo || null
   const locLabel = c.location_registration?.label_es || "Ubicación no disponible"
   const visit = data.active_visit
+  const closed = data.last_closed_visit
+  const adminReview = Boolean(data.capabilities?.admin_review_pending)
+  const operationalStatus = adminReview
+    ? closed?.status
+    : visit?.status === "in_progress"
+      ? "in_progress"
+      : closed?.status || data.latest_visit?.status || visit?.status
+  const operationalLabel = adminReview
+    ? `${visitStatusLabel(closed?.status)} · revisión admin`
+    : visit?.status === "in_progress" && !adminReview
+      ? "En atención"
+      : visitStatusLabel(operationalStatus)
   const backClients = `/despachos/${planId}/clientes`
 
   return (
@@ -149,15 +161,12 @@ export default function ClienteFichaPage() {
           </span>
           <span
             className={`pill${
-              visit?.status === "in_progress" || data.latest_visit?.status
+              operationalStatus && operationalStatus !== "cancelled"
                 ? " pill-ok"
                 : ""
             }`}
           >
-            Visita ·{" "}
-            {visit?.status === "in_progress"
-              ? "En atención"
-              : visitStatusLabel(data.latest_visit?.status || visit?.status)}
+            Visita · {operationalLabel}
           </span>
           {(c.load_groups || []).map((g) => (
             <span key={`${g.load_batch_id}-${g.name}`} className="pill">

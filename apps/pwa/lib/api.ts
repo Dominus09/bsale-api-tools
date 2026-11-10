@@ -141,6 +141,11 @@ export type DriverClientCard = {
   load_groups: LoadGroupRef[]
   has_coordinates: boolean
   route_order?: number | null
+  visit_id?: number | null
+  visit_status?: string | null
+  attention_status?: string | null
+  attention_label_es?: string | null
+  admin_review_pending?: boolean
 }
 
 export type DriverProduct = {
@@ -327,7 +332,10 @@ export async function getMyCliente(
   last_closed_visit?: DeliveryVisit | null
   capabilities?: {
     start_delivery_visit?: boolean
+    resume_active_visit?: boolean
     create_new_visit_after_close?: boolean
+    admin_review_pending?: boolean
+    operational_visit_id?: number | null
     mode?: string
     note_es?: string | null
   }

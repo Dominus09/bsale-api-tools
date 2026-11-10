@@ -840,27 +840,41 @@ def list_clients_for_driver(plan_id: int, *, q: str | None = None) -> dict[str, 
     query = (q or "").strip().lower()
     if query:
         items = [c for c in items if query in (c.get("search_text") or "")]
-    cards = [
-        {
-            "customer_key": c["customer_key"],
-            "client_id": c.get("client_id"),
-            "client_name": c.get("client_name"),
-            "fantasy_name": c.get("fantasy_name") or "",
-            "city": c.get("city") or "",
-            "address": c.get("address") or "",
-            "observations": c.get("observations") or "",
-            "document_count": c.get("document_count") or 0,
-            "units_total": c.get("units_total") or 0,
-            "amount_total": c.get("amount_total"),
-            "load_groups": [
-                {"load_batch_id": g.get("load_batch_id"), "name": g.get("name")}
-                for g in (c.get("load_groups") or [])
-            ],
-            "has_coordinates": bool(c.get("has_coordinates")),
-            "route_order": c.get("route_order"),
+    attention = _visit_attention_by_customer(int(plan_id))
+    cards = []
+    for c in items:
+        att = attention.get(str(c["customer_key"])) or {
+            "visit_id": None,
+            "visit_status": None,
+            "attention_status": "pending",
+            "attention_label_es": "Pendiente",
+            "admin_review_pending": False,
         }
-        for c in items
-    ]
+        cards.append(
+            {
+                "customer_key": c["customer_key"],
+                "client_id": c.get("client_id"),
+                "client_name": c.get("client_name"),
+                "fantasy_name": c.get("fantasy_name") or "",
+                "city": c.get("city") or "",
+                "address": c.get("address") or "",
+                "observations": c.get("observations") or "",
+                "document_count": c.get("document_count") or 0,
+                "units_total": c.get("units_total") or 0,
+                "amount_total": c.get("amount_total"),
+                "load_groups": [
+                    {"load_batch_id": g.get("load_batch_id"), "name": g.get("name")}
+                    for g in (c.get("load_groups") or [])
+                ],
+                "has_coordinates": bool(c.get("has_coordinates")),
+                "route_order": c.get("route_order"),
+                "visit_id": att.get("visit_id"),
+                "visit_status": att.get("visit_status"),
+                "attention_status": att.get("attention_status") or "pending",
+                "attention_label_es": att.get("attention_label_es") or "Pendiente",
+                "admin_review_pending": bool(att.get("admin_review_pending")),
+            }
+        )
     return serialize_value(
         {
             "dispatch_plan_id": int(plan_id),
@@ -1074,6 +1088,15 @@ def get_client_ficha_for_driver(plan_id: int, customer_key: str) -> dict[str, An
                 "resume_active_visit": can_resume_active,
                 "create_new_visit_after_close": can_create_new,
                 "admin_review_pending": admin_review_pending,
+                "operational_visit_id": (
+                    int(last_closed_visit["id"])
+                    if blocking_closed and last_closed_visit
+                    else (
+                        int(active_visit["id"])
+                        if has_active and active_visit
+                        else None
+                    )
+                ),
                 "mode": "online_only",
                 "note_es": note_es,
             },
@@ -1090,52 +1113,124 @@ def get_client_ficha_for_driver(plan_id: int, customer_key: str) -> dict[str, An
     )
 
 
-def _visit_attention_by_customer(plan_id: int) -> dict[str, dict[str, Any]]:
-    """Una lectura batch: estado de atención por customer_key del plan."""
-    from backend.db import get_connection
-    from backend.repositories.distribuidora import delivery_visit_repo as visit_repo
+def resolve_visit_attention_rows(
+    rows: list[tuple[Any, Any, Any, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Estado operativo por cliente a partir de filas (customer_key, id, status, ended_at).
 
+    Prioridad:
+    1) Cierre válido (completed|partial|not_delivered + ended_at) → estado operativo.
+       Si además hay in_progress, marcar admin_review_pending (no mostrar "En atención").
+    2) Solo in_progress legítima → En atención.
+    3) Otro cierre (p.ej. cancelled) → ese estado.
+    4) Sin visitas → pending.
+    """
     labels = {
         "in_progress": "En atención",
         "completed": "Finalizado",
         "partial": "Parcial",
         "not_delivered": "No entregado",
         "cancelled": "Anulado",
+        "admin_review": "Pendiente revisión admin",
     }
+    valid_close = {"completed", "partial", "not_delivered"}
+    by_key: dict[str, list[tuple[int, str, Any]]] = {}
+    for customer_key, visit_id, status, ended_at in rows:
+        key = str(customer_key or "")
+        if not key:
+            continue
+        by_key.setdefault(key, []).append(
+            (int(visit_id), str(status or ""), ended_at)
+        )
+
+    out: dict[str, dict[str, Any]] = {}
+    for key, visits in by_key.items():
+        visits_sorted = sorted(visits, key=lambda x: x[0])
+        closed_valid = [
+            v
+            for v in visits_sorted
+            if v[1] in valid_close and v[2] is not None
+        ]
+        active = [v for v in visits_sorted if v[1] == "in_progress"]
+        other_closed = [
+            v for v in visits_sorted if v[1] != "in_progress" and v not in closed_valid
+        ]
+
+        if closed_valid:
+            op = closed_valid[-1]  # último cierre válido
+            admin_pending = bool(active)
+            st = op[1]
+            label = labels.get(st, st)
+            if admin_pending:
+                label = f"{label} · revisión admin"
+            out[key] = {
+                "visit_id": op[0],
+                "visit_status": st,
+                "attention_status": st,
+                "attention_label_es": label,
+                "admin_review_pending": admin_pending,
+                "open_visit_id": active[-1][0] if active else None,
+                "operational_visit_id": op[0],
+            }
+        elif active:
+            op = active[-1]
+            out[key] = {
+                "visit_id": op[0],
+                "visit_status": "in_progress",
+                "attention_status": "in_progress",
+                "attention_label_es": labels["in_progress"],
+                "admin_review_pending": False,
+                "open_visit_id": op[0],
+                "operational_visit_id": op[0],
+            }
+        elif other_closed:
+            op = other_closed[-1]
+            st = op[1]
+            out[key] = {
+                "visit_id": op[0],
+                "visit_status": st or None,
+                "attention_status": st if st else "pending",
+                "attention_label_es": labels.get(st, "Pendiente" if not st else st),
+                "admin_review_pending": False,
+                "open_visit_id": None,
+                "operational_visit_id": op[0],
+            }
+        else:
+            out[key] = {
+                "visit_id": None,
+                "visit_status": None,
+                "attention_status": "pending",
+                "attention_label_es": "Pendiente",
+                "admin_review_pending": False,
+                "open_visit_id": None,
+                "operational_visit_id": None,
+            }
+    return out
+
+
+def _visit_attention_by_customer(plan_id: int) -> dict[str, dict[str, Any]]:
+    """Una lectura batch: estado operativo por customer_key del plan."""
+    from backend.db import get_connection
+    from backend.repositories.distribuidora import delivery_visit_repo as visit_repo
+
     conn = get_connection()
     try:
         cur = conn.cursor()
         if not visit_repo.tables_ready(cur):
             cur.close()
             return {}
-        # Prioriza in_progress; si no, la visita más reciente del cliente.
         cur.execute(
             """
-            SELECT DISTINCT ON (customer_key)
-                customer_key,
-                id,
-                status
+            SELECT customer_key, id, status, ended_at
             FROM distribuidora.delivery_visits
             WHERE dispatch_plan_id = %s
-            ORDER BY
-                customer_key,
-                CASE WHEN status = 'in_progress' THEN 0 ELSE 1 END,
-                id DESC
+            ORDER BY customer_key, id
             """,
             (int(plan_id),),
         )
         rows = cur.fetchall()
         cur.close()
-        out: dict[str, dict[str, Any]] = {}
-        for customer_key, visit_id, status in rows:
-            st = str(status or "")
-            out[str(customer_key)] = {
-                "visit_id": int(visit_id) if visit_id is not None else None,
-                "visit_status": st or None,
-                "attention_status": st if st else "pending",
-                "attention_label_es": labels.get(st, "Pendiente" if not st else st),
-            }
-        return out
+        return resolve_visit_attention_rows(list(rows))
     except Exception:
         return {}
     finally:
@@ -1167,6 +1262,7 @@ def get_map_for_driver(
             "visit_status": None,
             "attention_status": "pending",
             "attention_label_es": "Pendiente",
+            "admin_review_pending": False,
         }
         markers.append(
             {
@@ -1185,6 +1281,9 @@ def get_map_for_driver(
                 "visit_status": att.get("visit_status"),
                 "attention_status": att.get("attention_status") or "pending",
                 "attention_label_es": att.get("attention_label_es") or "Pendiente",
+                "admin_review_pending": bool(att.get("admin_review_pending")),
+                "open_visit_id": att.get("open_visit_id"),
+                "operational_visit_id": att.get("operational_visit_id"),
                 "load_groups": [
                     {"load_batch_id": g.get("load_batch_id"), "name": g.get("name")}
                     for g in (c.get("load_groups") or [])

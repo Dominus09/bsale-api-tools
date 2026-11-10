@@ -152,10 +152,14 @@ export default function EntregaIncidenciaPage() {
 
   if (session.loading) return <div className="empty">Cargando…</div>
   if (session.error) return <div className="banner banner-error">{session.error}</div>
-  if (!session.activeVisit || session.activeVisit.status !== "in_progress") {
+  if (!session.canOperateActive) {
     return (
       <div className="stack-gap">
-        <div className="banner banner-info">Visita no activa.</div>
+        <div className="banner banner-info">
+          {session.adminReviewPending
+            ? "Existe una visita anterior pendiente de revisión administrativa. Consulte el resultado desde la ficha."
+            : "Visita no activa."}
+        </div>
         <Link href={fichaHref} className="btn btn-primary">
           Ir a ficha
         </Link>

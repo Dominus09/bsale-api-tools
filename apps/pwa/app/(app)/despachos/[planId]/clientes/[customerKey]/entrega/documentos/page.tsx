@@ -122,11 +122,13 @@ export default function EntregaDocumentosPage() {
     )
   }
 
-  if (!session.activeVisit || session.activeVisit.status !== "in_progress") {
+  if (!session.canOperateActive) {
     return (
       <div className="stack-gap">
         <div className="banner banner-info">
-          No hay visita en atención. Inicie o retome desde la ficha.
+          {session.adminReviewPending
+            ? "Existe una visita anterior pendiente de revisión administrativa. Consulte el resultado desde la ficha."
+            : "No hay visita en atención. Inicie o retome desde la ficha."}
         </div>
         <Link href={fichaHref} className="btn btn-primary">
           Ir a ficha

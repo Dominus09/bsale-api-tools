@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import {
   ApiError,
   type DeliveryVisit,
@@ -8,6 +8,7 @@ import {
   getMyCliente,
   getVisitDetail,
 } from "@/lib/api"
+import { resolveVisitRecovery } from "@/lib/visit-recovery"
 
 export type VisitSession = {
   clientName: string
@@ -23,6 +24,10 @@ export type VisitSession = {
   latestVisit: DeliveryVisit | null
   /** Última visita cerrada (puede coexistir con activeVisit). */
   lastClosedVisit: DeliveryVisit | null
+  /** True si hay cierre válido + visita abierta duplicada. */
+  adminReviewPending: boolean
+  /** Solo true si la activa es operable (sin cierre válido previo). */
+  canOperateActive: boolean
   visitDetail: Awaited<ReturnType<typeof getVisitDetail>> | null
   reload: () => void
   loading: boolean
@@ -56,8 +61,15 @@ export function useVisitSession(planId: number, customerKey: string): VisitSessi
         if (cancelled) return
         setClientPayload(res)
         setError(null)
-        // Detalle del circuito: prioriza activa; si no, última cerrada.
-        const visit = res.active_visit || res.last_closed_visit || res.latest_visit
+        const recovery = resolveVisitRecovery({
+          activeVisit: res.active_visit,
+          latestVisit: res.latest_visit,
+          lastClosedVisit: res.last_closed_visit,
+        })
+        // Detalle operativo: cierre válido tiene prioridad sobre duplicada abierta.
+        const visit = recovery.adminReviewPending
+          ? recovery.lastClosed || recovery.latest
+          : recovery.active || recovery.lastClosed || recovery.latest
         if (visit?.id) {
           try {
             const detail = await getVisitDetail(planId, visit.id)
@@ -93,6 +105,16 @@ export function useVisitSession(planId: number, customerKey: string): VisitSessi
     0,
   )
 
+  const recovery = useMemo(
+    () =>
+      resolveVisitRecovery({
+        activeVisit: clientPayload?.active_visit,
+        latestVisit: clientPayload?.latest_visit,
+        lastClosedVisit: clientPayload?.last_closed_visit,
+      }),
+    [clientPayload],
+  )
+
   return {
     clientName: clientPayload?.client?.client_name || "Cliente",
     client: clientPayload?.client || ({} as VisitSession["client"]),
@@ -105,6 +127,8 @@ export function useVisitSession(planId: number, customerKey: string): VisitSessi
     activeVisit: clientPayload?.active_visit || null,
     latestVisit: clientPayload?.latest_visit || clientPayload?.active_visit || null,
     lastClosedVisit: clientPayload?.last_closed_visit || null,
+    adminReviewPending: recovery.adminReviewPending,
+    canOperateActive: recovery.canResumeActive,
     visitDetail,
     reload,
     loading,

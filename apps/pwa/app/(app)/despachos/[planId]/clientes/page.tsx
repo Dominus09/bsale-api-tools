@@ -134,6 +134,19 @@ export default function ClientesPage() {
                 </span>
                 <span>{amount}</span>
               </div>
+              {c.attention_label_es ? (
+                <div className="group-row" style={{ marginTop: 6 }}>
+                  <span
+                    className={`pill${
+                      c.attention_status && c.attention_status !== "pending"
+                        ? " pill-ok"
+                        : ""
+                    }`}
+                  >
+                    {c.attention_label_es}
+                  </span>
+                </div>
+              ) : null}
 
               <div className={obs ? "obs-block" : "obs-block obs-empty"}>
                 {obs || "Sin observaciones"}

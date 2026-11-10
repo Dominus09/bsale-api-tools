@@ -248,10 +248,14 @@ export default function EntregaFirmaPage() {
     )
   }
 
-  if (!session.activeVisit || session.activeVisit.status !== "in_progress") {
+  if (!session.canOperateActive) {
     return (
       <div className="stack-gap">
-        <div className="banner banner-info">Visita no activa.</div>
+        <div className="banner banner-info">
+          {session.adminReviewPending
+            ? "Existe una visita anterior pendiente de revisión administrativa. Consulte el resultado desde la ficha."
+            : "Visita no activa."}
+        </div>
         <Link href={buildEntregaHref(planId, customerKey, "ficha")} className="btn btn-primary">
           Ir a ficha
         </Link>
