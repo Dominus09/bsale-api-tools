@@ -133,6 +133,8 @@ DISTRIBUIDORA_SCHEMA_FILES: tuple[str, ...] = (
     "054_dispatch_plan_peonetas_recorded.sql",
     # P3 GPS + fachada (R2). Aplicar solo vía apply_distribuidora_schema.
     "055_client_location_photos.sql",
+    # P4 visitas de entrega / evidencias. Aplicar solo vía runner explícito.
+    "056_delivery_visits_evidence.sql",
 )
 
 _ENSURE_SCHEMA_NOOP_WARNED = False

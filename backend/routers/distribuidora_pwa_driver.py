@@ -2,6 +2,7 @@
 
 No exige app ERP. Ownership estricto por ``dispatch_plan.driver_user_id``.
 P2: lectura. P3: propuesta GPS + foto fachada (sin aprobar).
+P4: visitas de entrega (inicio / reanudación / cierre).
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from backend.auth.multiapp import require_pwa_profiles
 from backend.services.distribuidora import client_location_service as loc_svc
+from backend.services.distribuidora import delivery_visit_service as visit_svc
 from backend.services.distribuidora import dispatch_plan_driver_service as driver_svc
 from backend.services.distribuidora import dispatch_plan_pwa_driver_read_service as read_svc
 from backend.utils.json_safe import serialize_value
@@ -77,8 +79,12 @@ def get_my_despacho(
                 "mapa": True,
                 "clientes": True,
                 "ficha": True,
-                "note_es": "Mapa, clientes y ficha de entrega (solo lectura).",
+                "note_es": (
+                    "Mapa, clientes y ficha. Puede iniciar visitas de entrega "
+                    "(P4 online)."
+                ),
             },
+            "p4": visit_svc.schema_status(),
             "future_contracts": read_svc.FUTURE_CONTRACTS,
         }
     )
@@ -152,6 +158,92 @@ class FacadeConfirmBody(BaseModel):
 def p3_status(user: dict = Depends(require_pwa_profiles("chofer"))):
     _uid(user)
     return loc_svc.schema_status()
+
+
+@router.get("/p4/status")
+def p4_status(user: dict = Depends(require_pwa_profiles("chofer"))):
+    _uid(user)
+    return visit_svc.schema_status()
+
+
+class StartVisitBody(BaseModel):
+    latitude: float | None = None
+    longitude: float | None = None
+    accuracy_m: float | None = None
+    gps_captured_at: str | None = None
+    gps_source: str | None = Field(None, max_length=40)
+    gps_exception_code: str | None = Field(None, max_length=64)
+    gps_exception_note: str | None = Field(None, max_length=500)
+    idempotency_key: str | None = Field(None, max_length=120)
+
+
+class FinalizeVisitBody(BaseModel):
+    expected_version: int = Field(..., ge=1)
+    status: str = Field(..., max_length=32)
+    result_reason: str | None = Field(None, max_length=64)
+    result_note: str | None = Field(None, max_length=1000)
+    latitude: float | None = None
+    longitude: float | None = None
+    accuracy_m: float | None = None
+    gps_captured_at: str | None = None
+    gps_source: str | None = Field(None, max_length=40)
+
+
+@router.post("/despachos/{plan_id}/clientes/{customer_key:path}/visitas/start")
+def start_delivery_visit(
+    plan_id: int,
+    customer_key: str,
+    body: StartVisitBody,
+    user: dict = Depends(require_pwa_profiles("chofer")),
+):
+    """Inicia o reanuda visita de entrega. No duplica visita activa."""
+    return visit_svc.start_visit(
+        user=user,
+        plan_id=int(plan_id),
+        customer_key=customer_key,
+        latitude=body.latitude,
+        longitude=body.longitude,
+        accuracy_m=body.accuracy_m,
+        gps_captured_at=body.gps_captured_at,
+        gps_source=body.gps_source,
+        gps_exception_code=body.gps_exception_code,
+        gps_exception_note=body.gps_exception_note,
+        idempotency_key=body.idempotency_key,
+    )
+
+
+@router.get("/despachos/{plan_id}/visitas/{visit_id}")
+def get_delivery_visit(
+    plan_id: int,
+    visit_id: int,
+    user: dict = Depends(require_pwa_profiles("chofer")),
+):
+    return visit_svc.get_visit(
+        user=user, plan_id=int(plan_id), visit_id=int(visit_id)
+    )
+
+
+@router.post("/despachos/{plan_id}/visitas/{visit_id}/finalize")
+def finalize_delivery_visit(
+    plan_id: int,
+    visit_id: int,
+    body: FinalizeVisitBody,
+    user: dict = Depends(require_pwa_profiles("chofer")),
+):
+    return visit_svc.finalize_visit(
+        user=user,
+        plan_id=int(plan_id),
+        visit_id=int(visit_id),
+        expected_version=int(body.expected_version),
+        status=body.status,
+        result_reason=body.result_reason,
+        result_note=body.result_note,
+        latitude=body.latitude,
+        longitude=body.longitude,
+        accuracy_m=body.accuracy_m,
+        gps_captured_at=body.gps_captured_at,
+        gps_source=body.gps_source,
+    )
 
 
 @router.post("/despachos/{plan_id}/clientes/{customer_key:path}/ubicacion")

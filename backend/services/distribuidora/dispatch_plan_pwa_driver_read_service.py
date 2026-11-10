@@ -809,6 +809,23 @@ def get_client_ficha_for_driver(plan_id: int, customer_key: str) -> dict[str, An
             "note_es": "Estado P3 no disponible",
         }
 
+    from backend.services.distribuidora import delivery_visit_service as visit_svc
+
+    try:
+        p4_status = visit_svc.schema_status()
+    except Exception:
+        p4_status = {
+            "tables_ready": False,
+            "mode": "online_only",
+            "note_es": "Estado P4 no disponible",
+        }
+    try:
+        active_visit = visit_svc.get_active_visit_for_client(
+            plan_id=int(plan_id), customer_key=key
+        )
+    except Exception:
+        active_visit = None
+
     return serialize_value(
         {
             "dispatch_plan_id": int(plan_id),
@@ -816,11 +833,17 @@ def get_client_ficha_for_driver(plan_id: int, customer_key: str) -> dict[str, An
             "client": client_payload,
             "navigation": navigation,
             "p3": p3_status,
+            "p4": p4_status,
+            "active_visit": active_visit,
             "documents": documents_out,
             "document_count": len(documents_out),
             "units_total": client.get("units_total") or 0,
             "future_contracts": FUTURE_CONTRACTS,
-            "read_only": True,
+            "read_only": False,
+            "capabilities": {
+                "start_delivery_visit": True,
+                "mode": "online_only",
+            },
             "sources": {
                 **bundle["sources"],
                 "rut": "bsale.clients.code / rut_clean (empresa del documento)",
