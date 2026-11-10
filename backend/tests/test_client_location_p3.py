@@ -104,3 +104,9 @@ def test_propose_blocks_name_key(monkeypatch):
             confirm_significant_move=True,
         )
     assert ei.value.status_code == 422
+
+
+def test_normalize_rejects_non_image():
+    with pytest.raises(Exception) as ei:
+        svc._normalize_facade_image(b"%PDF-1.4 fake", "image/jpeg")
+    assert ei.value.status_code == 400

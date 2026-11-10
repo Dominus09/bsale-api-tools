@@ -453,6 +453,11 @@ def prepare_facade_upload(
     content_type: str,
     idempotency_key: str | None = None,
 ) -> dict[str, Any]:
+    """URL firmada PUT (opcional). La PWA oficial usa upload multipart vía API.
+
+    El PUT directo NO valida contenido; la validación real ocurre en
+    confirm_facade_upload (descarga + Pillow + reescritura sanitizada).
+    """
     read_svc.enforce_driver_plan_read_access(user, int(plan_id))
     if not storage.is_r2_configured():
         raise HTTPException(
@@ -667,7 +672,17 @@ def confirm_facade_upload(
     customer_key: str,
     photo_id: int,
 ) -> dict[str, Any]:
+    """Confirma PUT directo: descarga el objeto, valida/sanitiza con Pillow y reescribe.
+
+    Sin esta validación, prepare+PUT permitiría registrar basura/EXIF sin pasar por
+    el upload multipart. La PWA operativa no usa esta ruta; queda endurecida por API.
+    """
     read_svc.enforce_driver_plan_read_access(user, int(plan_id))
+    if not storage.is_r2_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Almacenamiento R2 no configurado. No se pueden confirmar fotos todavía.",
+        )
     client = _resolve_client(int(plan_id), customer_key)
     client_id = _parse_client_id(customer_key, client)
     uid = int(user.get("id") or user.get("uid"))
@@ -682,12 +697,88 @@ def confirm_facade_upload(
             raise HTTPException(status_code=403, detail="Foto de otro usuario")
         if int(photo["dispatch_plan_id"]) != int(plan_id):
             raise HTTPException(status_code=403, detail="Foto de otro despacho")
-        if not storage.object_exists(str(photo["object_key"])):
+        if photo.get("upload_confirmed"):
+            conn.rollback()
+            cur.close()
+            return serialize_value(
+                {
+                    "idempotent": True,
+                    "photo": photo,
+                    "message_es": "Fotografía ya confirmada.",
+                }
+            )
+
+        object_key = str(photo["object_key"])
+        # El object_key se generó server-side con company/client; rechazar claves ajenas.
+        expected_prefix = f"operaciones/clientes/3/{client_id}/fachadas/"
+        if not object_key.startswith(expected_prefix) or ".." in object_key:
+            raise HTTPException(status_code=400, detail="Clave de objeto inválida para este cliente")
+
+        try:
+            raw, head_ctype, raw_size = storage.get_object_bytes(
+                object_key, max_bytes=MAX_PHOTO_BYTES
+            )
+        except storage.ObjectStorageNotConfigured as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        except storage.ObjectStorageError as exc:
             raise HTTPException(
                 status_code=400,
-                detail="El archivo aún no existe en R2. Complete la subida y reintente.",
+                detail=f"No se pudo leer el archivo en R2 para validarlo: {exc}",
+            ) from exc
+
+        if raw_size <= 0 or not raw:
+            raise HTTPException(status_code=400, detail="Objeto vacío en R2")
+
+        claimed = (
+            (photo.get("content_type") or head_ctype or "image/jpeg").lower().strip()
+        )
+        try:
+            data, mime, img_meta = _normalize_facade_image(raw, claimed)
+        except HTTPException as exc:
+            loc_repo.insert_audit(
+                cur,
+                client_id=client_id,
+                entity_type="facade_photo",
+                entity_id=int(photo_id),
+                action="confirm_rejected_invalid_content",
+                actor_user_id=uid,
+                dispatch_plan_id=int(plan_id),
+                payload={"object_key": object_key, "detail": str(exc.detail)},
             )
-        updated = loc_repo.confirm_facade_upload(cur, int(photo_id))
+            conn.commit()
+            raise
+
+        digest = hashlib.sha256(data).hexdigest()
+        try:
+            storage.put_bytes(object_key=object_key, body=data, content_type=mime)
+        except storage.ObjectStorageError as exc:
+            raise HTTPException(
+                status_code=502, detail=f"No se pudo reescribir la imagen sanitizada: {exc}"
+            ) from exc
+        if not storage.object_exists(object_key):
+            raise HTTPException(status_code=502, detail="Objeto sanitizado no encontrado en R2")
+
+        updated = loc_repo.confirm_facade_upload(
+            cur,
+            int(photo_id),
+            size_bytes=len(data),
+            sha256=digest,
+            content_type=mime,
+            width=img_meta.get("width"),
+            height=img_meta.get("height"),
+        )
+        if not updated:
+            # Condición de carrera: otro confirm concurrente ya marcó confirmed.
+            again = loc_repo.get_facade_photo(cur, int(photo_id))
+            conn.rollback()
+            cur.close()
+            return serialize_value(
+                {
+                    "idempotent": True,
+                    "photo": again,
+                    "message_es": "Fotografía ya confirmada.",
+                }
+            )
         loc_repo.insert_audit(
             cur,
             client_id=client_id,
@@ -696,7 +787,13 @@ def confirm_facade_upload(
             action="upload_confirmed",
             actor_user_id=uid,
             dispatch_plan_id=int(plan_id),
-            payload={"object_key": photo["object_key"]},
+            payload={
+                "object_key": object_key,
+                "size_bytes": len(data),
+                "sha256": digest,
+                "exif_stripped": bool(img_meta.get("exif_stripped")),
+                "validated_on_confirm": True,
+            },
         )
         conn.commit()
         cur.close()
@@ -711,8 +808,9 @@ def confirm_facade_upload(
 
     return serialize_value(
         {
+            "idempotent": False,
             "photo": updated,
-            "message_es": "Subida confirmada. Pendiente de validación administrativa.",
+            "message_es": "Subida confirmada y validada. Pendiente de validación administrativa.",
         }
     )
 

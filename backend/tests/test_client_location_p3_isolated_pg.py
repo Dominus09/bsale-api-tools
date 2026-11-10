@@ -269,11 +269,26 @@ def test_r2_disabled_blocks_photo(db, monkeypatch):
     cur.close()
 
 
+def _tiny_jpeg() -> bytes:
+    from io import BytesIO
+
+    from PIL import Image
+
+    img = Image.new("RGB", (32, 24), color=(20, 40, 60))
+    buf = BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return buf.getvalue()
+
+
 def test_confirm_missing_object_no_confirm(db, monkeypatch):
     from backend.services import object_storage_service as storage
 
     monkeypatch.setattr(storage, "is_r2_configured", lambda: True)
-    monkeypatch.setattr(storage, "object_exists", lambda *_a, **_k: False)
+
+    def _boom(*_a, **_k):
+        raise storage.ObjectStorageError("NoSuchKey")
+
+    monkeypatch.setattr(storage, "get_object_bytes", _boom)
     cur = db.cursor()
     photo = loc_repo.insert_facade_photo(
         cur,
@@ -312,7 +327,6 @@ def test_confirm_other_client_forbidden(db, monkeypatch):
     from backend.services import object_storage_service as storage
 
     monkeypatch.setattr(storage, "is_r2_configured", lambda: True)
-    monkeypatch.setattr(storage, "object_exists", lambda *_a, **_k: True)
     cur = db.cursor()
     photo = loc_repo.insert_facade_photo(
         cur,
@@ -340,6 +354,161 @@ def test_confirm_other_client_forbidden(db, monkeypatch):
             photo_id=int(photo["id"]),
         )
     assert ei.value.status_code == 404
+    cur.close()
+
+
+def test_confirm_rejects_fake_content_without_confirming(db, monkeypatch):
+    """Bypass prepare+PUT basura: confirm debe fallar y dejar upload_confirmed=false."""
+    from backend.services import object_storage_service as storage
+
+    monkeypatch.setattr(storage, "is_r2_configured", lambda: True)
+    monkeypatch.setattr(
+        storage,
+        "get_object_bytes",
+        lambda *_a, **_k: (b"not-a-real-image-payload", "image/jpeg", 24),
+    )
+    put_calls: list[str] = []
+    monkeypatch.setattr(
+        storage,
+        "put_bytes",
+        lambda **kw: put_calls.append(kw["object_key"]) or kw,
+    )
+    cur = db.cursor()
+    photo = loc_repo.insert_facade_photo(
+        cur,
+        client_id=1001,
+        company_id=3,
+        dispatch_plan_id=1,
+        customer_key="id:1001",
+        object_key="operaciones/clientes/3/1001/fachadas/fake.jpg",
+        content_type="image/jpeg",
+        size_bytes=24,
+        sha256=None,
+        width=None,
+        height=None,
+        captured_by_user_id=7,
+        validation_status="upload_pending",
+        upload_confirmed=False,
+        idempotency_key="p-fake",
+    )
+    db.commit()
+    photo_id = int(photo["id"])
+    with pytest.raises(HTTPException) as ei:
+        svc.confirm_facade_upload(
+            user={"id": 7},
+            plan_id=1,
+            customer_key="id:1001",
+            photo_id=photo_id,
+        )
+    assert ei.value.status_code == 400
+    assert put_calls == []
+    again = loc_repo.get_facade_photo(cur, photo_id)
+    assert again["upload_confirmed"] is False
+    cur.execute(
+        """
+        SELECT action FROM distribuidora.client_location_audit
+        WHERE entity_id = %s AND action = 'confirm_rejected_invalid_content'
+        """,
+        (photo_id,),
+    )
+    assert cur.fetchone() is not None
+    cur.close()
+
+
+def test_confirm_validates_rewrites_and_is_idempotent(db, monkeypatch):
+    from backend.services import object_storage_service as storage
+
+    jpeg = _tiny_jpeg()
+    store = {"bytes": jpeg}
+    monkeypatch.setattr(storage, "is_r2_configured", lambda: True)
+    monkeypatch.setattr(
+        storage,
+        "get_object_bytes",
+        lambda *_a, **_k: (store["bytes"], "image/jpeg", len(store["bytes"])),
+    )
+
+    def _put(**kw):
+        store["bytes"] = kw["body"]
+        return {"object_key": kw["object_key"], "size": len(kw["body"])}
+
+    monkeypatch.setattr(storage, "put_bytes", _put)
+    monkeypatch.setattr(storage, "object_exists", lambda *_a, **_k: True)
+
+    cur = db.cursor()
+    photo = loc_repo.insert_facade_photo(
+        cur,
+        client_id=1001,
+        company_id=3,
+        dispatch_plan_id=1,
+        customer_key="id:1001",
+        object_key="operaciones/clientes/3/1001/fachadas/ok.jpg",
+        content_type="image/jpeg",
+        size_bytes=len(jpeg),
+        sha256=None,
+        width=None,
+        height=None,
+        captured_by_user_id=7,
+        validation_status="upload_pending",
+        upload_confirmed=False,
+        idempotency_key="p-ok",
+    )
+    db.commit()
+    photo_id = int(photo["id"])
+    out = svc.confirm_facade_upload(
+        user={"id": 7},
+        plan_id=1,
+        customer_key="id:1001",
+        photo_id=photo_id,
+    )
+    assert out["idempotent"] is False
+    assert out["photo"]["upload_confirmed"] is True
+    assert out["photo"]["sha256"]
+    assert out["photo"]["content_type"] == "image/jpeg"
+
+    again = svc.confirm_facade_upload(
+        user={"id": 7},
+        plan_id=1,
+        customer_key="id:1001",
+        photo_id=photo_id,
+    )
+    assert again["idempotent"] is True
+    assert again["photo"]["upload_confirmed"] is True
+    cur.close()
+
+
+def test_confirm_rejects_object_key_for_other_client_prefix(db, monkeypatch):
+    from backend.services import object_storage_service as storage
+
+    monkeypatch.setattr(storage, "is_r2_configured", lambda: True)
+    cur = db.cursor()
+    photo = loc_repo.insert_facade_photo(
+        cur,
+        client_id=1001,
+        company_id=3,
+        dispatch_plan_id=1,
+        customer_key="id:1001",
+        object_key="operaciones/clientes/3/9999/fachadas/hijack.jpg",
+        content_type="image/jpeg",
+        size_bytes=10,
+        sha256=None,
+        width=None,
+        height=None,
+        captured_by_user_id=7,
+        validation_status="upload_pending",
+        upload_confirmed=False,
+        idempotency_key="p-hijack",
+    )
+    db.commit()
+    with pytest.raises(HTTPException) as ei:
+        svc.confirm_facade_upload(
+            user={"id": 7},
+            plan_id=1,
+            customer_key="id:1001",
+            photo_id=int(photo["id"]),
+        )
+    assert ei.value.status_code == 400
+    again = loc_repo.get_facade_photo(cur, int(photo["id"]))
+    assert again["upload_confirmed"] is False
     cur.close()
 
 

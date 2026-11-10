@@ -1,5 +1,5 @@
 {
-  "Comment": "CORS mínimo P3 — carga directa firmada desde la PWA. Bucket privado (sin acceso público). ERP usa <img> con URL firmada GET; no requiere CORS en el bucket.",
+  "Comment": "CORS opcional P3. Flujo oficial PWA = POST multipart a api.quillotana.cl (sin CORS R2). Esta política solo hace falta si se activa prepare+PUT firmado desde el navegador. Bucket privado. ERP <img> con GET firmado no requiere CORS.",
   "CORSRules": [
     {
       "AllowedOrigins": [

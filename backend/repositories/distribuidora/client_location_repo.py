@@ -283,7 +283,16 @@ def insert_facade_photo(cur, **kw) -> dict[str, Any]:
     return _row(cur, cur.fetchone())
 
 
-def confirm_facade_upload(cur, photo_id: int, *, size_bytes: int | None = None) -> dict[str, Any] | None:
+def confirm_facade_upload(
+    cur,
+    photo_id: int,
+    *,
+    size_bytes: int | None = None,
+    sha256: str | None = None,
+    content_type: str | None = None,
+    width: int | None = None,
+    height: int | None = None,
+) -> dict[str, Any] | None:
     cur.execute(
         """
         UPDATE distribuidora.client_facade_photos
@@ -293,11 +302,15 @@ def confirm_facade_upload(cur, photo_id: int, *, size_bytes: int | None = None) 
                 ELSE validation_status
             END,
             size_bytes = COALESCE(%s, size_bytes),
+            sha256 = COALESCE(%s, sha256),
+            content_type = COALESCE(%s, content_type),
+            width = COALESCE(%s, width),
+            height = COALESCE(%s, height),
             updated_at = NOW()
-        WHERE id = %s
+        WHERE id = %s AND upload_confirmed = FALSE
         RETURNING *
         """,
-        (size_bytes, int(photo_id)),
+        (size_bytes, sha256, content_type, width, height, int(photo_id)),
     )
     r = cur.fetchone()
     return _row(cur, r) if r else None

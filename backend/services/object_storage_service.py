@@ -118,6 +118,38 @@ def object_exists(object_key: str) -> bool:
         return False
 
 
+def get_object_bytes(object_key: str, *, max_bytes: int | None = None) -> tuple[bytes, str | None, int]:
+    """Lee bytes privados de R2. No expone credenciales al cliente."""
+    cfg = load_r2_config()
+    if not cfg:
+        raise ObjectStorageNotConfigured("R2 no configurado")
+    if not object_key or ".." in object_key or object_key.startswith("/"):
+        raise ObjectStorageError("object_key inválido")
+    client = _client(cfg)
+    try:
+        obj = client.get_object(Bucket=cfg.bucket, Key=object_key)
+    except Exception as exc:
+        raise ObjectStorageError(f"No se pudo leer objeto R2: {exc}") from exc
+    content_type = None
+    try:
+        content_type = obj.get("ContentType")
+    except Exception:
+        content_type = None
+    body_stream = obj["Body"]
+    chunks: list[bytes] = []
+    total = 0
+    limit = int(max_bytes) if max_bytes is not None else None
+    while True:
+        chunk = body_stream.read(64 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if limit is not None and total > limit:
+            raise ObjectStorageError(f"Objeto excede el tamaño máximo ({limit} bytes)")
+        chunks.append(chunk)
+    return b"".join(chunks), content_type, total
+
+
 def presign_put(
     *,
     object_key: str,
