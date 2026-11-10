@@ -7,6 +7,7 @@ export type LineOutcome = "full" | "partial" | "none" | null
 export type LineUiRow = {
   source_detail_id: number
   product_name: string
+  category_name?: string | null
   sku_code?: string | null
   barcode?: string | null
   planned: number
@@ -34,16 +35,19 @@ export function lineOutcomeLabel(outcome: LineOutcome): string {
 }
 
 export function matchesLineSearch(
-  row: Pick<LineUiRow, "product_name" | "sku_code" | "barcode" | "source_detail_id">,
+  row: Pick<
+    LineUiRow,
+    "product_name" | "category_name" | "sku_code" | "barcode" | "source_detail_id"
+  >,
   query: string,
 ): boolean {
   const q = query.trim().toLowerCase()
   if (!q) return true
   const hay = [
+    row.category_name,
     row.product_name,
     row.sku_code,
     row.barcode,
-    String(row.source_detail_id),
   ]
     .filter(Boolean)
     .join(" ")

@@ -310,34 +310,30 @@ def _short_product_name(row: dict[str, Any]) -> str:
     return text[:69].rstrip() + "…"
 
 
+def _clean_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
 def _commercial_product_name(row: dict[str, Any]) -> str:
-    """Nombre comercial: marca/producto + variante/formato. Sin inventar datos."""
-    brand = re.sub(
-        r"\s+",
-        " ",
-        str(
-            row.get("producto_marca")
-            or row.get("product_name")
-            or row.get("producto_base")
-            or ""
-        ),
-    ).strip()
-    variant = re.sub(
-        r"\s+",
-        " ",
-        str(
-            row.get("producto_variante")
-            or row.get("display_name")
-            or row.get("variante")
-            or row.get("producto")
-            or ""
-        ),
-    ).strip()
-    if brand and variant:
-        if brand.lower() in variant.lower():
+    """Nombre comercial: producto Bsale + variante/formato. Sin inventar datos."""
+    product = _clean_text(
+        row.get("producto_base")
+        or row.get("product_name")
+        or row.get("producto_marca")
+        or ""
+    )
+    variant = _clean_text(
+        row.get("producto_variante")
+        or row.get("display_name")
+        or row.get("variante")
+        or ""
+    )
+    # Evitar duplicar si la variante ya incluye el nombre del producto.
+    if product and variant:
+        if product.lower() in variant.lower():
             return variant
-        return f"{brand} — {variant}"
-    return brand or variant or "Producto"
+        return f"{product} — {variant}"
+    return product or variant or _clean_text(row.get("producto")) or "Producto"
 
 
 def _product_payload(row: dict[str, Any], *, load_group: dict[str, Any] | None) -> dict[str, Any]:
@@ -363,13 +359,14 @@ def _product_payload(row: dict[str, Any], *, load_group: dict[str, Any] | None) 
             cajas_out = None
     verified = cajas_out is not None and upb_f > 0 and not sin_caja
     commercial = _commercial_product_name(row)
-    description = (
-        row.get("producto_variante")
-        or row.get("display_name")
-        or row.get("producto")
-        or commercial
-        or ""
-    )
+    product_name = _clean_text(
+        row.get("producto_base") or row.get("product_name") or row.get("producto") or ""
+    ) or None
+    variant_name = _clean_text(
+        row.get("producto_variante") or row.get("variante") or row.get("display_name") or ""
+    ) or None
+    category_name = _clean_text(row.get("category_name") or row.get("product_type") or "") or None
+    description = variant_name or product_name or commercial or ""
     source_detail_id = row.get("source_detail_id")
     if source_detail_id is None:
         source_detail_id = row.get("detail_id")
@@ -380,12 +377,16 @@ def _product_payload(row: dict[str, Any], *, load_group: dict[str, Any] | None) 
         "description": description,
         "commercial_name": commercial,
         "name_short": _short_product_name(row),
-        "producto": row.get("producto_base") or row.get("producto") or "",
-        "variante": row.get("producto_variante") or row.get("variante") or "",
+        "category_name": category_name,
+        "product_name": product_name,
+        "variant_name": variant_name,
+        "producto": product_name or "",
+        "variante": variant_name or "",
         "product_id": row.get("product_id"),
         "variant_id": row.get("variant_id"),
         "sku_code": row.get("variant_id"),
         "codigo_barras": barcode,
+        "barcode": barcode,
         "unidades": _num(row.get("unidades")),
         "cajas_equivalentes": cajas_out,
         "units_per_box": upb_f if upb_f > 0 and not sin_caja else None,
@@ -402,17 +403,24 @@ def _product_payload(row: dict[str, Any], *, load_group: dict[str, Any] | None) 
 
 def _document_detail_lines(related_document_id: int) -> list[dict[str, Any]]:
     """Una fila por detail_id (no agrupa SKUs repetidos). Sin mutar picking."""
+    from backend.utils.picking_sql import (
+        BARCODE_EXPR,
+        BSALE_PRODUCT_JOIN,
+        VARIANTS_JOIN,
+    )
+
     conn = get_connection()
     try:
         cur = conn.cursor()
-        # Intenta enriquecer con marca/barcode Bsale; si no hay tablas, fallback local.
+        # Joins canónicos Bsale (bsale_id + company_id). Sin v.id/p.id (no existen).
         try:
             cur.execute(
-                """
+                f"""
                 SELECT
                     dd.detail_id AS source_detail_id,
                     dd.line_number,
                     dd.variant_id,
+                    p.bsale_id AS product_id,
                     COALESCE(
                         NULLIF(BTRIM(p.name), ''),
                         NULLIF(BTRIM(dd.variant_description), ''),
@@ -420,22 +428,20 @@ def _document_detail_lines(related_document_id: int) -> list[dict[str, Any]]:
                         'Producto'
                     ) AS producto,
                     NULLIF(BTRIM(p.name), '') AS producto_base,
-                    NULLIF(BTRIM(p.name), '') AS producto_marca,
                     NULLIF(BTRIM(p.name), '') AS product_name,
+                    NULLIF(BTRIM(pt.name), '') AS category_name,
+                    NULLIF(BTRIM(pt.name), '') AS product_type,
                     COALESCE(
                         NULLIF(BTRIM(dd.variant_description), ''),
                         NULLIF(BTRIM(v.description), ''),
                         NULLIF(BTRIM(dd.variant_code), '')
                     ) AS producto_variante,
                     NULLIF(BTRIM(dd.variant_code), '') AS variante,
-                    NULLIF(BTRIM(COALESCE(v.bar_code, dd.variant_code)), '')
-                        AS codigo_barras,
+                    ({BARCODE_EXPR}) AS codigo_barras,
                     dd.quantity AS unidades
                 FROM distribuidora.document_details dd
-                LEFT JOIN bsale.variants v
-                  ON v.id = dd.variant_id
-                LEFT JOIN bsale.products p
-                  ON p.id = v.product_id
+                {VARIANTS_JOIN}
+                {BSALE_PRODUCT_JOIN}
                 WHERE dd.document_id = %s
                 ORDER BY dd.line_number NULLS LAST, dd.detail_id
                 """,

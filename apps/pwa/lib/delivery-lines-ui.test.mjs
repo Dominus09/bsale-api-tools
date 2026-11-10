@@ -13,7 +13,7 @@ function lineOutcome(row) {
 function matchesLineSearch(row, query) {
   const q = query.trim().toLowerCase()
   if (!q) return true
-  const hay = [row.product_name, row.sku_code, row.barcode, String(row.source_detail_id)]
+  const hay = [row.category_name, row.product_name, row.sku_code, row.barcode]
     .filter(Boolean)
     .join(" ")
     .toLowerCase()

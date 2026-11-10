@@ -127,12 +127,16 @@ export type DriverProduct = {
   description: string
   commercial_name?: string
   name_short?: string
+  category_name?: string | null
+  product_name?: string | null
+  variant_name?: string | null
   producto?: string
   variante?: string
   product_id?: number | null
   variant_id?: number | null
   sku_code?: number | null
   codigo_barras?: string | null
+  barcode?: string | null
   unidades?: number | null
   cajas_equivalentes?: number | null
   units_per_box?: number | null

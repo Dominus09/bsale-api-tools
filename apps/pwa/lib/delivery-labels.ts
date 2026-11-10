@@ -40,29 +40,47 @@ export function lineOutcomeEs(outcome: string | null | undefined): string {
   return LINE_OUTCOME_LABEL[outcome] || outcome
 }
 
-/** Nombre comercial para UI: producto + variante, sin IDs técnicos. */
-export function commercialProductLabel(p: {
+export type ProductLabelInput = {
   commercial_name?: string | null
+  category_name?: string | null
+  product_name?: string | null
+  variant_name?: string | null
   description?: string | null
   producto?: string | null
   variante?: string | null
   name_short?: string | null
-  product_name?: string | null
-}): string {
+  codigo_barras?: string | null
+  barcode?: string | null
+}
+
+/** Título destacado: producto + formato/variante (datos verificados). */
+export function commercialProductLabel(p: ProductLabelInput): string {
+  const product = String(p.product_name || p.producto || "").trim()
+  const variant = String(
+    p.variant_name || p.variante || p.description || "",
+  ).trim()
+  if (product && variant) {
+    if (variant.toLowerCase().includes(product.toLowerCase())) return variant
+    return `${product} — ${variant}`
+  }
   if (p.commercial_name && String(p.commercial_name).trim()) {
     return String(p.commercial_name).trim()
   }
-  const prod = String(p.producto || "").trim()
-  const vari = String(p.variante || p.description || "").trim()
-  if (prod && vari && !vari.toLowerCase().includes(prod.toLowerCase())) {
-    return `${prod} — ${vari}`
-  }
   return (
-    prod ||
-    vari ||
+    product ||
+    variant ||
     String(p.description || "").trim() ||
-    String(p.product_name || "").trim() ||
     String(p.name_short || "").trim() ||
     "Producto"
   )
+}
+
+export function productCategoryLabel(p: ProductLabelInput): string | null {
+  const c = String(p.category_name || "").trim()
+  return c || null
+}
+
+export function productBarcodeLabel(p: ProductLabelInput): string | null {
+  const b = String(p.barcode || p.codigo_barras || "").trim()
+  return b || null
 }

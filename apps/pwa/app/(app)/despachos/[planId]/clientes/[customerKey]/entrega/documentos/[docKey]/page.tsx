@@ -11,7 +11,12 @@ import {
 } from "@/lib/api"
 import { DeliveryStepChrome } from "@/components/delivery-step-chrome"
 import { buildEntregaHref, docKeyFromDocument, moneyCLP } from "@/lib/delivery-flow"
-import { commercialProductLabel, lineOutcomeEs } from "@/lib/delivery-labels"
+import {
+  commercialProductLabel,
+  lineOutcomeEs,
+  productBarcodeLabel,
+  productCategoryLabel,
+} from "@/lib/delivery-labels"
 import {
   filterLines,
   lineOutcome,
@@ -54,7 +59,8 @@ function buildLines(doc: DriverDocument, savedByDetail: Map<number, Record<strin
         line_number: p.line_number ?? null,
         variant_id: p.variant_id,
         sku_code: p.sku_code != null ? String(p.sku_code) : null,
-        barcode: p.codigo_barras != null ? String(p.codigo_barras) : null,
+        barcode: productBarcodeLabel(p),
+        category_name: productCategoryLabel(p),
         product_name: commercialProductLabel(p),
         planned,
         delivered,
@@ -404,7 +410,12 @@ export default function EntregaDocumentoDetallePage() {
                     style={{ padding: 12 }}
                   >
                     <div className="client-card-head">
-                      <div className="product-name">{ln.product_name}</div>
+                      <div className="product-identity">
+                        {ln.category_name ? (
+                          <div className="product-category">{ln.category_name}</div>
+                        ) : null}
+                        <div className="product-name">{ln.product_name}</div>
+                      </div>
                       <span
                         className={`pill${
                           outcome === "full"
@@ -541,10 +552,15 @@ export default function EntregaDocumentoDetallePage() {
       {!registrable
         ? (doc.products || []).map((p, idx) => (
             <div key={`ro-${idx}`} className="card" style={{ padding: 12 }}>
-              <div className="product-name">{commercialProductLabel(p)}</div>
+              <div className="product-identity">
+                {productCategoryLabel(p) ? (
+                  <div className="product-category">{productCategoryLabel(p)}</div>
+                ) : null}
+                <div className="product-name">{commercialProductLabel(p)}</div>
+              </div>
               <div className="muted" style={{ fontSize: "0.8rem" }}>
-                {p.codigo_barras
-                  ? `Código de barras: ${p.codigo_barras}`
+                {productBarcodeLabel(p)
+                  ? `Código de barras: ${productBarcodeLabel(p)}`
                   : "Código de barras: no disponible"}
                 {typeof p.unidades === "number" ? ` · ${p.unidades} un.` : ""}
               </div>

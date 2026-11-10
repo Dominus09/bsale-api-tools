@@ -7,6 +7,11 @@ import {
   getVisitDetail,
   saveVisitDocumentLines,
 } from "@/lib/api"
+import {
+  commercialProductLabel,
+  productBarcodeLabel,
+  productCategoryLabel,
+} from "@/lib/delivery-labels"
 
 type LineDraft = {
   key: string
@@ -14,6 +19,8 @@ type LineDraft = {
   line_number?: number | null
   variant_id?: number | null
   sku_code?: string | null
+  category_name?: string | null
+  barcode?: string | null
   product_name: string
   planned: number
   delivered: number
@@ -52,7 +59,9 @@ function buildDrafts(docs: DriverDocument[]): Record<string, LineDraft[]> {
           line_number: p.line_number ?? null,
           variant_id: p.variant_id,
           sku_code: p.sku_code != null ? String(p.sku_code) : null,
-          product_name: p.name_short || p.description || p.producto || "Producto",
+          category_name: productCategoryLabel(p),
+          barcode: productBarcodeLabel(p),
+          product_name: commercialProductLabel(p),
           planned,
           delivered: planned,
           reason: "physical_shortage",
@@ -262,10 +271,20 @@ export function DeliveryQuantitiesPanel(props: Props) {
                         key={`${id}-ro-${idx}`}
                         style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}
                       >
-                        <div className="product-name">
-                          {p.name_short || p.description || p.producto || "Producto"}
+                        <div className="product-identity">
+                          {productCategoryLabel(p) ? (
+                            <div className="product-category">
+                              {productCategoryLabel(p)}
+                            </div>
+                          ) : null}
+                          <div className="product-name">
+                            {commercialProductLabel(p)}
+                          </div>
                         </div>
                         <div className="muted" style={{ fontSize: "0.8rem" }}>
+                          {productBarcodeLabel(p)
+                            ? `Código de barras: ${productBarcodeLabel(p)} · `
+                            : ""}
                           {typeof p.unidades === "number" ? `${p.unidades} un.` : "—"}
                           {" · sin detail_id (no editable)"}
                         </div>
@@ -278,11 +297,16 @@ export function DeliveryQuantitiesPanel(props: Props) {
                           key={ln.key}
                           style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}
                         >
-                          <div className="product-name">{ln.product_name}</div>
+                          <div className="product-identity">
+                            {ln.category_name ? (
+                              <div className="product-category">{ln.category_name}</div>
+                            ) : null}
+                            <div className="product-name">{ln.product_name}</div>
+                          </div>
                           <div className="muted" style={{ fontSize: "0.8rem" }}>
+                            {ln.barcode ? `Código de barras: ${ln.barcode} · ` : ""}
                             Planificado: {ln.planned} un.
                             {ln.boxesLabel ? ` · ${ln.boxesLabel}` : ""}
-                            {` · detail ${ln.source_detail_id}`}
                           </div>
                           <label className="field">
                             Entregado
