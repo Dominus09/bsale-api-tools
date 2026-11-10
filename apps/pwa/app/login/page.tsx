@@ -4,14 +4,17 @@ import { FormEvent, Suspense, useMemo, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { ApiError, fetchMe, login } from "@/lib/api"
 import { clearSession, setSession } from "@/lib/auth"
+import { BRAND, QUILLOTANA_LOGO_GRUPO_URL } from "@/lib/brand"
 
 function LoginForm() {
   const router = useRouter()
   const params = useSearchParams()
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
+  const [showPass, setShowPass] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [logoOk, setLogoOk] = useState(true)
 
   const hint = useMemo(() => {
     if (params.get("expired")) return "Tu sesión expiró. Ingresa de nuevo."
@@ -57,12 +60,29 @@ function LoginForm() {
   }
 
   return (
-    <main className="main">
-      <div className="card">
-        <h2>Quillotana Operativa</h2>
-        <p className="muted">Ingreso para choferes · app.quillotana.cl</p>
-        {hint ? <div className="banner banner-info" style={{ marginTop: 12 }}>{hint}</div> : null}
-        {error ? <div className="banner banner-error" style={{ marginTop: 12 }}>{error}</div> : null}
+    <main className="login-shell">
+      <div className="card login-card">
+        <div className="login-brand">
+          {logoOk ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              className="login-logo"
+              src={QUILLOTANA_LOGO_GRUPO_URL}
+              alt="Grupo La Quillotana"
+              onError={() => setLogoOk(false)}
+            />
+          ) : (
+            <p className="muted" style={{ margin: "0 0 8px", fontSize: "0.8rem" }}>
+              Logo no disponible en este dispositivo
+            </p>
+          )}
+          <h1>{BRAND.name}</h1>
+          <p className="login-sub">{BRAND.subtitle}</p>
+        </div>
+
+        {hint ? <div className="banner banner-info">{hint}</div> : null}
+        {error ? <div className="banner banner-error">{error}</div> : null}
+
         <form onSubmit={onSubmit} style={{ marginTop: 16 }}>
           <div className="field">
             <label htmlFor="email">Correo</label>
@@ -70,21 +90,36 @@ function LoginForm() {
               id="email"
               type="email"
               autoComplete="username"
+              inputMode="email"
+              enterKeyHint="next"
               value={email}
               onChange={(ev) => setEmail(ev.target.value)}
               required
+              disabled={busy}
             />
           </div>
           <div className="field">
             <label htmlFor="password">Contraseña</label>
-            <input
-              id="password"
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(ev) => setPassword(ev.target.value)}
-              required
-            />
+            <div className="password-wrap">
+              <input
+                id="password"
+                type={showPass ? "text" : "password"}
+                autoComplete="current-password"
+                enterKeyHint="go"
+                value={password}
+                onChange={(ev) => setPassword(ev.target.value)}
+                required
+                disabled={busy}
+              />
+              <button
+                type="button"
+                className="password-toggle"
+                onClick={() => setShowPass((v) => !v)}
+                aria-pressed={showPass}
+              >
+                {showPass ? "Ocultar" : "Mostrar"}
+              </button>
+            </div>
           </div>
           <button className="btn btn-primary" type="submit" disabled={busy}>
             {busy ? "Ingresando…" : "Ingresar"}

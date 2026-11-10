@@ -166,11 +166,9 @@ export default function ClienteFichaPage() {
           ))}
         </div>
 
-        {c.observations ? (
-          <p className="muted" style={{ marginTop: 10, marginBottom: 0, fontSize: "0.85rem" }}>
-            Obs.: {c.observations}
-          </p>
-        ) : null}
+        <div className={c.observations?.trim() ? "obs-block" : "obs-block obs-empty"}>
+          {c.observations?.trim() || "Sin observaciones"}
+        </div>
       </div>
 
       {nav?.warning_es ? (

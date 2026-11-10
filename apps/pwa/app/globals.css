@@ -1,13 +1,18 @@
 :root {
-  --bg: #0f1115;
+  /* Graphite + rojo institucional La Quillotana (ERP --lq-brand). */
+  --bg: #111318;
   --surface: #17191e;
-  --surface-2: #1e2229;
+  --surface-2: #1f222a;
   --border: #2a2f38;
-  --text: #f2f4f7;
-  --muted: #9aa3b2;
-  --accent: #3d8bfd;
-  --danger: #e35d6a;
-  --ok: #3ecf8e;
+  --text: #f4f5f7;
+  --muted: #a9b2be;
+  --accent: #c4293c;
+  --accent-strong: #a42032;
+  --danger: #b91c1c;
+  --ok: #047857;
+  --warn: #b45309;
+  --info: #1d4ed8;
+  --box-accent: #d97706;
   --radius: 14px;
   --tap: 48px;
   font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
@@ -140,7 +145,12 @@ input {
 
 .btn-primary {
   background: var(--accent);
+  border-color: var(--accent-strong);
   color: #fff;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-strong);
 }
 
 .btn-ghost {
@@ -822,4 +832,204 @@ input {
 
 .entrega-focus {
   min-height: 70dvh;
+}
+
+/* —— Login corporativo —— */
+.login-shell {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  padding-bottom: max(24px, env(safe-area-inset-bottom));
+  background:
+    radial-gradient(120% 80% at 50% -10%, rgba(196, 41, 60, 0.22), transparent 55%),
+    linear-gradient(180deg, #17191e 0%, var(--bg) 48%);
+}
+
+.login-card {
+  width: min(100%, 400px);
+  padding: 28px 20px 24px;
+}
+
+.login-brand {
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+.login-logo {
+  display: block;
+  width: min(100%, 260px);
+  height: auto;
+  margin: 0 auto 14px;
+  object-fit: contain;
+}
+
+.login-brand h1 {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.login-brand .login-sub {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.password-wrap {
+  position: relative;
+}
+
+.password-wrap input {
+  padding-right: 72px;
+}
+
+.password-toggle {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  min-height: 40px;
+  padding: 0 10px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* —— Despacho de hoy / secciones —— */
+.section-title {
+  margin: 0 0 8px;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.despacho-hero {
+  border-color: rgba(196, 41, 60, 0.45);
+  box-shadow: 0 0 0 1px rgba(196, 41, 60, 0.12);
+}
+
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.kpi {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.kpi-label {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.kpi-value {
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.details-block {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.details-block > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 14px 16px;
+  font-weight: 650;
+  min-height: var(--tap);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.details-block > summary::-webkit-details-marker {
+  display: none;
+}
+
+.details-block[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+
+.details-body {
+  padding: 12px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.obs-block {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(196, 41, 60, 0.1);
+  border: 1px solid rgba(196, 41, 60, 0.28);
+  white-space: pre-wrap;
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
+.obs-block.obs-empty {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.qty-doc {
+  font-size: 1.15rem;
+  font-weight: 750;
+}
+
+.qty-boxes {
+  margin-top: 4px;
+  color: var(--box-accent);
+  font-weight: 650;
+  font-size: 0.92rem;
+}
+
+.qty-factor {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.map-sheet {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  margin: 0 -4px;
+  padding: 14px 14px calc(14px + env(safe-area-inset-bottom));
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px 16px 0 0;
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.map-marker-pending {
+  background: #64748b;
+}
+.map-marker-active {
+  background: var(--info);
+}
+.map-marker-done {
+  background: var(--ok);
+}
+.map-marker-issue {
+  background: var(--warn);
 }

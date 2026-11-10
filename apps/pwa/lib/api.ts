@@ -116,8 +116,12 @@ export type DriverClientCard = {
   fantasy_name?: string | null
   city?: string | null
   address?: string | null
+  /** Observación operativa del cliente (p. ej. horario). */
+  observations?: string | null
   document_count: number
   units_total: number
+  /** Suma document_total (c/impuestos) sin duplicar folios; null si no hay montos. */
+  amount_total?: number | null
   load_groups: LoadGroupRef[]
   has_coordinates: boolean
   route_order?: number | null

@@ -809,25 +809,40 @@ def list_clients_for_driver(plan_id: int, *, q: str | None = None) -> dict[str, 
     query = (q or "").strip().lower()
     if query:
         items = [c for c in items if query in (c.get("search_text") or "")]
-    cards = [
-        {
-            "customer_key": c["customer_key"],
-            "client_id": c.get("client_id"),
-            "client_name": c.get("client_name"),
-            "fantasy_name": c.get("fantasy_name") or "",
-            "city": c.get("city") or "",
-            "address": c.get("address") or "",
-            "document_count": c.get("document_count") or 0,
-            "units_total": c.get("units_total") or 0,
-            "load_groups": [
-                {"load_batch_id": g.get("load_batch_id"), "name": g.get("name")}
-                for g in (c.get("load_groups") or [])
-            ],
-            "has_coordinates": bool(c.get("has_coordinates")),
-            "route_order": c.get("route_order"),
-        }
-        for c in items
-    ]
+    cards = []
+    for c in items:
+        # Monto: suma document_total (Bsale total_amount c/impuestos) una vez por documento.
+        amount = 0.0
+        amount_known = False
+        for d in c.get("documents") or []:
+            tot = d.get("document_total")
+            if tot is None:
+                continue
+            try:
+                amount += float(tot)
+                amount_known = True
+            except (TypeError, ValueError):
+                continue
+        cards.append(
+            {
+                "customer_key": c["customer_key"],
+                "client_id": c.get("client_id"),
+                "client_name": c.get("client_name"),
+                "fantasy_name": c.get("fantasy_name") or "",
+                "city": c.get("city") or "",
+                "address": c.get("address") or "",
+                "observations": c.get("observations") or "",
+                "document_count": c.get("document_count") or 0,
+                "units_total": c.get("units_total") or 0,
+                "amount_total": round(amount, 2) if amount_known else None,
+                "load_groups": [
+                    {"load_batch_id": g.get("load_batch_id"), "name": g.get("name")}
+                    for g in (c.get("load_groups") or [])
+                ],
+                "has_coordinates": bool(c.get("has_coordinates")),
+                "route_order": c.get("route_order"),
+            }
+        )
     return serialize_value(
         {
             "dispatch_plan_id": int(plan_id),

@@ -4,10 +4,10 @@ import Link from "next/link"
 import { useParams } from "next/navigation"
 import { useEffect, useMemo, useState } from "react"
 import { ApiError, listMyClientes, type DriverClientCard } from "@/lib/api"
+import { moneyCLP } from "@/lib/delivery-flow"
 
-function formatUnits(n: number | null | undefined) {
-  if (n == null || Number.isNaN(n)) return "—"
-  return Number.isInteger(n) ? String(n) : n.toFixed(2)
+function gpsLabel(has: boolean) {
+  return has ? "GPS disponible" : "Sin coordenadas"
 }
 
 export default function ClientesPage() {
@@ -65,27 +65,31 @@ export default function ClientesPage() {
     }
   }, [planId, q])
 
-  const countLabel = useMemo(() => `${items.length} cliente${items.length === 1 ? "" : "s"}`, [items.length])
+  const countLabel = useMemo(
+    () => `${items.length} cliente${items.length === 1 ? "" : "s"}`,
+    [items.length],
+  )
 
   return (
     <div className="stack-gap">
       <div>
         <h2 style={{ margin: "0 0 4px", fontSize: "1.15rem" }}>Clientes</h2>
         <p className="muted" style={{ margin: 0 }}>
-          {countLabel} · solo lectura
+          {countLabel} · documentos de consulta · circuito de entrega habilitado
         </p>
       </div>
 
       {offline ? <div className="banner banner-error">Sin conexión a internet.</div> : null}
 
       <div className="field" style={{ marginBottom: 0 }}>
-        <label htmlFor="client-search">Buscar por cliente o folio</label>
+        <label htmlFor="client-search">Buscar local, cliente, folio o dirección</label>
         <input
           id="client-search"
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Ej. Galpo, 2792373"
+          placeholder="Ej. Galpo, Quellón, 2792373"
           autoComplete="off"
+          enterKeyHint="search"
         />
       </div>
 
@@ -97,37 +101,56 @@ export default function ClientesPage() {
       ) : null}
 
       <div className="stack-gap">
-        {items.map((c) => (
-          <Link
-            key={c.customer_key}
-            href={`/despachos/${planId}/clientes/${encodeURIComponent(c.customer_key)}`}
-            className="card tap-card client-card"
-          >
-            <div className="client-card-head">
-              <h3>{c.client_name || "Sin nombre"}</h3>
-              {c.has_coordinates ? (
-                <span className="pill pill-ok">GPS</span>
-              ) : (
-                <span className="pill">Sin GPS</span>
-              )}
-            </div>
-            {c.city ? <p className="muted">{c.city}</p> : null}
-            {c.address ? <p className="muted" style={{ marginTop: 2 }}>{c.address}</p> : null}
-            <div className="client-card-meta">
-              <span>{c.document_count} doc{c.document_count === 1 ? "" : "s"}</span>
-              <span>{formatUnits(c.units_total)} un.</span>
-            </div>
-            {(c.load_groups || []).length > 0 ? (
-              <div className="group-row">
-                {(c.load_groups || []).map((g) => (
-                  <span key={`${g.load_batch_id}-${g.name}`} className="pill">
-                    {g.name || `Grupo ${g.load_batch_id}`}
-                  </span>
-                ))}
+        {items.map((c) => {
+          const obs = (c.observations || "").trim()
+          const amount =
+            typeof c.amount_total === "number" ? moneyCLP(c.amount_total) : "Monto no disponible"
+          return (
+            <Link
+              key={c.customer_key}
+              href={`/despachos/${planId}/clientes/${encodeURIComponent(c.customer_key)}`}
+              className="card tap-card client-card"
+            >
+              <div className="client-card-head">
+                <h3>{c.client_name || "Sin nombre"}</h3>
+                <span className={`pill${c.has_coordinates ? " pill-ok" : ""}`}>
+                  {gpsLabel(c.has_coordinates)}
+                </span>
               </div>
-            ) : null}
-          </Link>
-        ))}
+              {c.city ? (
+                <p style={{ margin: "4px 0 0", fontWeight: 600, fontSize: "0.92rem" }}>
+                  {c.city}
+                </p>
+              ) : null}
+              {c.address ? (
+                <p className="muted" style={{ marginTop: 2 }}>
+                  {c.address}
+                </p>
+              ) : null}
+
+              <div className="client-card-meta">
+                <span>
+                  {c.document_count} doc{c.document_count === 1 ? "" : "s"}
+                </span>
+                <span>{amount}</span>
+              </div>
+
+              <div className={obs ? "obs-block" : "obs-block obs-empty"}>
+                {obs || "Sin observaciones"}
+              </div>
+
+              {(c.load_groups || []).length > 0 ? (
+                <div className="group-row" style={{ marginTop: 8 }}>
+                  {(c.load_groups || []).map((g) => (
+                    <span key={`${g.load_batch_id}-${g.name}`} className="pill">
+                      {g.name || `Grupo ${g.load_batch_id}`}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+            </Link>
+          )
+        })}
       </div>
     </div>
   )

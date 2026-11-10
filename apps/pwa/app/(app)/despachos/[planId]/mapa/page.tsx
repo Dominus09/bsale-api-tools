@@ -1,16 +1,16 @@
 "use client"
 
 import Link from "next/link"
-import { useParams, useRouter } from "next/navigation"
-import { useCallback, useEffect, useState } from "react"
+import { useParams } from "next/navigation"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { DeliveryMap } from "@/components/delivery-map"
 import { ApiError, getMyMapa, type DriverMapMarker } from "@/lib/api"
-
 type UserLoc = { lat: number; lng: number; accuracy: number | null }
+
+const GEO_PREF_KEY = "pwa.mapa.liveGps"
 
 export default function MapaPage() {
   const params = useParams()
-  const router = useRouter()
   const planId = Number(params.planId)
   const [markers, setMarkers] = useState<DriverMapMarker[]>([])
   const [emptyMsg, setEmptyMsg] = useState<string | null>(null)
@@ -18,7 +18,9 @@ export default function MapaPage() {
   const [loading, setLoading] = useState(true)
   const [userLoc, setUserLoc] = useState<UserLoc | null>(null)
   const [geoNote, setGeoNote] = useState<string | null>(null)
-  const [permPending, setPermPending] = useState(false)
+  const [liveGps, setLiveGps] = useState(false)
+  const [selectedKey, setSelectedKey] = useState<string | null>(null)
+  const watchRef = useRef<number | null>(null)
 
   const loadMap = useCallback(
     async (origin?: UserLoc | null) => {
@@ -51,18 +53,21 @@ export default function MapaPage() {
     [planId],
   )
 
-  useEffect(() => {
-    void loadMap(null)
-  }, [loadMap])
+  const stopWatch = useCallback(() => {
+    if (watchRef.current != null && navigator.geolocation) {
+      navigator.geolocation.clearWatch(watchRef.current)
+      watchRef.current = null
+    }
+  }, [])
 
-  async function requestLocation() {
+  const startWatch = useCallback(() => {
     if (!navigator.geolocation) {
       setGeoNote("Este dispositivo no soporta geolocalización.")
       return
     }
-    setPermPending(true)
+    stopWatch()
     setGeoNote(null)
-    navigator.geolocation.getCurrentPosition(
+    watchRef.current = navigator.geolocation.watchPosition(
       (pos) => {
         const loc: UserLoc = {
           lat: pos.coords.latitude,
@@ -70,112 +75,175 @@ export default function MapaPage() {
           accuracy: pos.coords.accuracy ?? null,
         }
         setUserLoc(loc)
-        setPermPending(false)
-        void loadMap(loc)
+        setLiveGps(true)
+        try {
+          sessionStorage.setItem(GEO_PREF_KEY, "1")
+        } catch {
+          /* ignore */
+        }
+        if (pos.coords.accuracy != null && pos.coords.accuracy > 80) {
+          setGeoNote(`Señal imprecisa (~${Math.round(pos.coords.accuracy)} m).`)
+        } else {
+          setGeoNote(null)
+        }
       },
       (err) => {
-        setPermPending(false)
+        setLiveGps(false)
         setGeoNote(
           err.code === err.PERMISSION_DENIED
-            ? "Permiso de ubicación denegado."
-            : "No se pudo obtener la ubicación.",
+            ? "Permiso de ubicación denegado. Actívelo para ver su posición."
+            : "No se pudo obtener la ubicación (sin señal o timeout).",
         )
       },
-      { enableHighAccuracy: true, timeout: 12000, maximumAge: 15000 },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 },
     )
-  }
+  }, [stopWatch])
 
-  const onSelect = useCallback(
-    (customerKey: string) => {
-      router.push(`/despachos/${planId}/clientes/${encodeURIComponent(customerKey)}`)
-    },
-    [planId, router],
-  )
+  useEffect(() => {
+    void loadMap(null)
+    let pref = false
+    try {
+      pref = sessionStorage.getItem(GEO_PREF_KEY) === "1"
+    } catch {
+      pref = false
+    }
+    if (pref) startWatch()
+    return () => stopWatch()
+  }, [loadMap, startWatch, stopWatch])
+
+  // Primera fijación GPS: una sola recarga para ordenar por proximidad (sin tracking al servidor).
+  const orderedOnce = useRef(false)
+  useEffect(() => {
+    if (!userLoc || orderedOnce.current) return
+    orderedOnce.current = true
+    void loadMap(userLoc)
+  }, [userLoc, loadMap])
+
+  const selected = markers.find((m) => m.customer_key === selectedKey) || null
+  const fichaHref = selected
+    ? `/despachos/${planId}/clientes/${encodeURIComponent(selected.customer_key)}`
+    : null
 
   return (
     <div className="stack-gap">
       <div>
         <h2 style={{ margin: "0 0 4px", fontSize: "1.15rem" }}>Mapa</h2>
         <p className="muted" style={{ margin: 0 }}>
-          Solo coordenadas verificables · sin tracking permanente
+          Coordenadas de clientes · ubicación propia solo en este dispositivo
         </p>
       </div>
 
-      <button
-        type="button"
-        className="btn btn-ghost"
-        onClick={() => void requestLocation()}
-        disabled={permPending}
-      >
-        {permPending ? "Obteniendo ubicación…" : "Usar mi ubicación"}
-      </button>
+      <div className="btn-row">
+        <button
+          type="button"
+          className={`btn ${liveGps ? "btn-secondary" : "btn-primary"}`}
+          onClick={() => {
+            if (liveGps) {
+              stopWatch()
+              setLiveGps(false)
+              try {
+                sessionStorage.removeItem(GEO_PREF_KEY)
+              } catch {
+                /* ignore */
+              }
+              setGeoNote("Ubicación en vivo desactivada.")
+            } else {
+              startWatch()
+            }
+          }}
+        >
+          {liveGps ? "Desactivar mi ubicación" : "Activar mi ubicación"}
+        </button>
+      </div>
       {userLoc ? (
         <p className="muted" style={{ margin: 0 }}>
-          Precisión aprox. {userLoc.accuracy != null ? `${Math.round(userLoc.accuracy)} m` : "—"}
+          Precisión aprox.{" "}
+          {userLoc.accuracy != null ? `${Math.round(userLoc.accuracy)} m` : "—"}
+          {liveGps ? " · en vivo" : ""}
         </p>
       ) : null}
       {geoNote ? <div className="banner banner-info">{geoNote}</div> : null}
       {error ? <div className="banner banner-error">{error}</div> : null}
 
-      {loading ? <div className="empty">Cargando mapa…</div> : null}
+      {loading && markers.length === 0 ? <div className="empty">Cargando mapa…</div> : null}
 
       {!loading && !error && markers.length === 0 ? (
         <div className="card">
           <p style={{ marginTop: 0 }}>{emptyMsg || "Sin clientes georreferenciados."}</p>
-          <Link href={`/despachos/${planId}/clientes`} className="btn btn-primary" style={{ textAlign: "center" }}>
+          <Link
+            href={`/despachos/${planId}/clientes`}
+            className="btn btn-primary"
+            style={{ textAlign: "center" }}
+          >
             Ir a lista de clientes
           </Link>
         </div>
       ) : null}
 
-      {!loading && markers.length > 0 ? (
+      {markers.length > 0 ? (
         <>
           <DeliveryMap
             markers={markers}
             userLocation={userLoc}
-            onSelect={onSelect}
+            onSelect={(key) => setSelectedKey(key)}
             clientesHref={`/despachos/${planId}/clientes`}
           />
-          <div className="stack-gap">
-            <p className="muted" style={{ margin: 0 }}>
-              {markers.length} marcador{markers.length === 1 ? "" : "es"}
-              {userLoc ? " · ordenados por proximidad" : ""}
-            </p>
-            {markers.slice(0, 8).map((m) => (
-              <div key={m.customer_key} className="card tap-card" style={{ padding: 12 }}>
-                <div className="client-card-head">
-                  <button
-                    type="button"
-                    className="linkish"
-                    onClick={() => onSelect(m.customer_key)}
-                  >
-                    {m.client_name}
-                  </button>
-                  {m.distance_m != null ? (
-                    <span className="pill">
-                      {m.distance_m >= 1000
-                        ? `${(m.distance_m / 1000).toFixed(1)} km`
-                        : `${Math.round(m.distance_m)} m`}
-                    </span>
-                  ) : null}
-                </div>
-                <div className="muted">{m.address || m.city || "—"}</div>
-                {m.navigation?.google_maps_url ? (
+          <p className="muted" style={{ margin: 0 }}>
+            {markers.length} marcador{markers.length === 1 ? "" : "es"}
+            {userLoc ? " · cercanos primero" : ""}
+            . Pulse un pin para ver la ficha.
+          </p>
+
+          {selected ? (
+            <div className="map-sheet" role="dialog" aria-label="Cliente seleccionado">
+              <strong style={{ fontSize: "1.05rem" }}>
+                {selected.client_name || "Cliente"}
+              </strong>
+              <p className="muted" style={{ margin: "4px 0 8px" }}>
+                {[selected.address, selected.city].filter(Boolean).join(", ") || "Sin dirección"}
+              </p>
+              <div className="meta-row">
+                <span className="muted">Documentos</span>
+                <span>{selected.document_count}</span>
+              </div>
+              <div className="meta-row">
+                <span className="muted">Monto</span>
+                <span>Ver ficha</span>
+              </div>
+              <p className="muted" style={{ fontSize: "0.75rem", margin: "6px 0 10px" }}>
+                Coordenadas precargadas · no implica GPS verificado en terreno
+              </p>
+              <div className="btn-row">
+                {fichaHref ? (
+                  <Link href={fichaHref} className="btn btn-primary" style={{ textAlign: "center" }}>
+                    Ver ficha
+                  </Link>
+                ) : null}
+                {selected.navigation?.google_maps_url ? (
                   <a
-                    href={m.navigation.google_maps_url}
+                    href={selected.navigation.google_maps_url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="muted"
-                    style={{ color: "var(--accent)", display: "inline-block", marginTop: 6 }}
+                    className="btn btn-secondary"
+                    style={{ textAlign: "center" }}
                   >
                     Navegar
                   </a>
                 ) : null}
               </div>
-            ))}
-          </div>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                style={{ marginTop: 8 }}
+                onClick={() => setSelectedKey(null)}
+              >
+                Cerrar
+              </button>
+            </div>
+          ) : null}
         </>
       ) : null}
+
     </div>
   )
 }

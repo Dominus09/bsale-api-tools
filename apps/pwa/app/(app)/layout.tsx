@@ -14,7 +14,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             <h1>
               <Link href="/despachos">Mis despachos</Link>
             </h1>
-            <div className="muted topbar-sub">Entregas y evidencias · Chofer</div>
+            <div className="muted topbar-sub">Gestión de despachos · Chofer</div>
           </div>
           <AppMenu />
         </header>
