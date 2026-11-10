@@ -1,16 +1,21 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import {
   ApiError,
   type DeliveryVisit,
+  type DriverDocument,
   type WhatsappReportResponse,
   declareVisitCollection,
   finalizeDeliveryVisit,
   generateVisitWhatsappReport,
+  registerVisitEvidenceException,
   startDeliveryVisit,
+  uploadVisitEvidence,
 } from "@/lib/api"
 import { WhatsappSharePanel } from "@/components/whatsapp-share-panel"
+import { DeliveryQuantitiesPanel } from "@/components/delivery-quantities-panel"
+import { DeliverySignaturePad } from "@/components/delivery-signature-pad"
 
 type Props = {
   planId: number
@@ -19,6 +24,7 @@ type Props = {
   documentCount: number
   documentTotalLabel: string
   documentTotalAmount?: number
+  documents: DriverDocument[]
   p4Ready: boolean
   p4Note?: string | null
   activeVisit: DeliveryVisit | null
@@ -67,14 +73,26 @@ export function DeliveryVisitPanel(props: Props) {
   const [payAmount, setPayAmount] = useState("")
   const [lastClosedId, setLastClosedId] = useState<number | null>(null)
   const [report, setReport] = useState<WhatsappReportResponse | null>(null)
+  const [conformityOk, setConformityOk] = useState(false)
+  const [evidenceOk, setEvidenceOk] = useState(false)
+  const [exceptionNote, setExceptionNote] = useState("")
+  const fileRef = useRef<HTMLInputElement | null>(null)
 
   const visit = props.activeVisit
   const inProgress = visit?.status === "in_progress"
+  const visitId = visit?.id
 
   const startLabel = useMemo(() => {
     if (inProgress) return "Retomar entrega en curso"
     return "Comenzar entrega"
   }, [inProgress])
+
+  const summaryLines = useMemo(() => {
+    return (props.documents || []).map((d) => {
+      const n = (d.products || []).length
+      return `${d.document_type || "Doc"} ${d.document_number ?? "—"} · ${n} prod.`
+    })
+  }, [props.documents])
 
   async function onStart() {
     setBusy(true)
@@ -103,6 +121,8 @@ export function DeliveryVisitPanel(props: Props) {
           }
       const res = await startDeliveryVisit(props.planId, props.customerKey, body)
       setConfirmStart(false)
+      setConformityOk(false)
+      setEvidenceOk(false)
       setInfo(
         res.resumed
           ? "Visita en atención reanudada."
@@ -113,14 +133,59 @@ export function DeliveryVisitPanel(props: Props) {
       props.onChanged()
     } catch (e) {
       if (!navigator.onLine) {
-        setErr(
-          "Sin conexión. P4 es online-only: no se confirma entrega sin servidor.",
-        )
+        setErr("Sin conexión. P4 es online-only: no se confirma entrega sin servidor.")
       } else if (e instanceof ApiError) {
         setErr(e.message)
       } else {
         setErr("No se pudo iniciar la visita")
       }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function uploadEvidenceFile(file: File) {
+    if (!visitId) return
+    setBusy(true)
+    setErr(null)
+    try {
+      const gps = await captureGps()
+      const idem =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `ev-${Date.now()}`
+      await uploadVisitEvidence(props.planId, visitId, file, {
+        evidence_kind: endReason,
+        latitude: gps?.lat,
+        longitude: gps?.lng,
+        accuracy_m: gps?.accuracy,
+        idempotency_key: idem,
+      })
+      setEvidenceOk(true)
+      setInfo("Evidencia fotográfica guardada (visita actual).")
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Error al subir evidencia")
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function registerException() {
+    if (!visitId) return
+    setBusy(true)
+    setErr(null)
+    try {
+      const gps = await captureGps()
+      await registerVisitEvidenceException(props.planId, visitId, {
+        evidence_kind: endReason,
+        exception_note: exceptionNote,
+        latitude: gps?.lat,
+        longitude: gps?.lng,
+      })
+      setEvidenceOk(true)
+      setInfo("Excepción auditada: cierre quedará pendiente de revisión.")
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.message : "Error excepción")
     } finally {
       setBusy(false)
     }
@@ -138,14 +203,18 @@ export function DeliveryVisitPanel(props: Props) {
         status: endStatus,
         result_reason: endStatus === "not_delivered" ? endReason : null,
         result_note:
-          endStatus === "not_delivered" && endReason === "other"
-            ? endNote
+          endStatus === "not_delivered"
+            ? endNote || null
             : endNote || null,
         latitude: gps?.lat ?? null,
         longitude: gps?.lng ?? null,
         accuracy_m: gps?.accuracy ?? null,
         gps_captured_at: gps?.at,
         gps_source: gps ? "device" : undefined,
+        gps_exception_code: gps ? undefined : "gps_unavailable",
+        gps_exception_note: gps
+          ? undefined
+          : "GPS no disponible al finalizar",
       })
       if (!res.persisted) {
         setErr("El servidor no confirmó el cierre.")
@@ -154,16 +223,15 @@ export function DeliveryVisitPanel(props: Props) {
       setConfirmEnd(false)
       setLastClosedId(res.visit.id)
       setReport(null)
-      setInfo(res.note_es || "Entrega finalizada. Puede generar el reporte WhatsApp.")
+      setInfo(res.note_es || "Entrega finalizada.")
       props.onChanged()
-      // Auto-generar texto del reporte (no envía). Fallo no bloquea el cierre.
       try {
         const wa = await generateVisitWhatsappReport(props.planId, res.visit.id, {
           client_name: props.clientName,
         })
         setReport(wa)
       } catch {
-        // El cierre ya persistió; el chofer puede regenerar manualmente.
+        /* cierre ya ok */
       }
     } catch (e) {
       if (!navigator.onLine) {
@@ -183,9 +251,6 @@ export function DeliveryVisitPanel(props: Props) {
       <div className="banner banner-info" style={{ fontSize: "0.85rem" }}>
         Visitas de entrega no disponibles aún
         {props.p4Note ? `: ${props.p4Note}` : " (migración 056 pendiente)."}
-        <div className="muted" style={{ marginTop: 6 }}>
-          Modo online-only: no se simula entrega confirmada sin red.
-        </div>
       </div>
     )
   }
@@ -201,10 +266,22 @@ export function DeliveryVisitPanel(props: Props) {
         ) : null}
       </div>
 
-      {!confirmStart && !confirmEnd ? (
+      {!confirmStart && !inProgress && !lastClosedId ? (
         <button
           type="button"
           className="btn btn-primary"
+          disabled={busy}
+          onClick={() => setConfirmStart(true)}
+        >
+          {startLabel}
+        </button>
+      ) : null}
+
+      {inProgress && !confirmStart ? (
+        <button
+          type="button"
+          className="btn btn-ghost btn-compact"
+          style={{ marginBottom: 8 }}
           disabled={busy}
           onClick={() => setConfirmStart(true)}
         >
@@ -218,10 +295,6 @@ export function DeliveryVisitPanel(props: Props) {
             <strong>{props.clientName}</strong>
             <br />
             {props.documentCount} documento(s) · {props.documentTotalLabel}
-            <br />
-            <span className="muted">
-              Se capturará GPS (o excepción auditable). Online-only.
-            </span>
           </p>
           <div className="btn-row">
             <button
@@ -244,11 +317,22 @@ export function DeliveryVisitPanel(props: Props) {
         </div>
       ) : null}
 
-      {inProgress && !confirmStart ? (
-        <div style={{ marginTop: 10 }} className="stack-gap">
+      {inProgress && visitId ? (
+        <div className="stack-gap" style={{ marginTop: 12 }}>
+          <h3 style={{ margin: 0, fontSize: "0.95rem" }}>1. Cantidades por documento</h3>
+          <DeliveryQuantitiesPanel
+            planId={props.planId}
+            visitId={visitId}
+            documents={props.documents}
+            onSaved={() => {
+              setConformityOk(false)
+              props.onChanged()
+            }}
+          />
+
+          <h3 style={{ margin: "8px 0 0", fontSize: "0.95rem" }}>2. Cobranza declarada</h3>
           <div className="card" style={{ padding: 12 }}>
-            <strong style={{ fontSize: "0.9rem" }}>Cobranza declarada</strong>
-            <p className="muted" style={{ margin: "4px 0 8px", fontSize: "0.78rem" }}>
+            <p className="muted" style={{ margin: "0 0 8px", fontSize: "0.78rem" }}>
               No es recibo oficial ni verificación contable.
             </p>
             <label className="field">
@@ -268,11 +352,6 @@ export function DeliveryVisitPanel(props: Props) {
                 inputMode="decimal"
                 value={payAmount}
                 onChange={(e) => setPayAmount(e.target.value)}
-                placeholder={
-                  props.documentTotalAmount != null
-                    ? String(props.documentTotalAmount)
-                    : "0"
-                }
               />
             </label>
             <button
@@ -281,12 +360,11 @@ export function DeliveryVisitPanel(props: Props) {
               disabled={busy}
               onClick={() => {
                 void (async () => {
-                  if (!visit) return
                   setBusy(true)
                   setErr(null)
                   try {
                     const amt = payAmount.trim() ? Number(payAmount) : null
-                    await declareVisitCollection(props.planId, visit.id, {
+                    await declareVisitCollection(props.planId, visitId, {
                       method: payMethod,
                       document_amount: props.documentTotalAmount ?? null,
                       declared_amount: amt,
@@ -304,10 +382,101 @@ export function DeliveryVisitPanel(props: Props) {
             </button>
           </div>
 
+          <h3 style={{ margin: "8px 0 0", fontSize: "0.95rem" }}>3. Conformidad / incidencia</h3>
+          <label className="field">
+            Resultado previsto al finalizar
+            <select
+              value={endStatus}
+              onChange={(e) =>
+                setEndStatus(e.target.value as typeof endStatus)
+              }
+            >
+              <option value="completed">Entrega completa</option>
+              <option value="partial">Entrega parcial</option>
+              <option value="not_delivered">No entregada / incidencia</option>
+            </select>
+          </label>
+
+          {endStatus === "not_delivered" ? (
+            <div className="stack-gap">
+              <label className="field">
+                Motivo
+                <select value={endReason} onChange={(e) => setEndReason(e.target.value)}>
+                  <option value="closed_store">Local cerrado</option>
+                  <option value="not_found">Local no encontrado</option>
+                  <option value="rejected_order">Pedido rechazado</option>
+                  <option value="absent_customer">Cliente ausente</option>
+                  <option value="other">Otro</option>
+                </select>
+              </label>
+              <label className="field">
+                Observación
+                <textarea
+                  value={endNote}
+                  onChange={(e) => setEndNote(e.target.value)}
+                  rows={2}
+                />
+              </label>
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                hidden
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  if (f) void uploadEvidenceFile(f)
+                  e.target.value = ""
+                }}
+              />
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={busy}
+                onClick={() => fileRef.current?.click()}
+              >
+                {evidenceOk ? "Evidencia OK · Tomar otra" : "Tomar foto de evidencia"}
+              </button>
+              <label className="field">
+                Si falla cámara: excepción auditable
+                <textarea
+                  value={exceptionNote}
+                  onChange={(e) => setExceptionNote(e.target.value)}
+                  rows={2}
+                  placeholder="Motivo técnico (obligatorio)"
+                />
+              </label>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={busy || exceptionNote.trim().length < 8}
+                onClick={() => void registerException()}
+              >
+                Registrar excepción sin foto
+              </button>
+            </div>
+          ) : (
+            <>
+              {conformityOk ? (
+                <div className="banner banner-info">Conformidad registrada.</div>
+              ) : (
+                <DeliverySignaturePad
+                  planId={props.planId}
+                  visitId={visitId}
+                  summaryLines={summaryLines}
+                  onDone={() => {
+                    setConformityOk(true)
+                    setInfo("Conformidad guardada.")
+                  }}
+                />
+              )}
+            </>
+          )}
+
           {!confirmEnd ? (
             <button
               type="button"
-              className="btn btn-secondary"
+              className="btn btn-primary"
               disabled={busy}
               onClick={() => setConfirmEnd(true)}
             >
@@ -315,47 +484,8 @@ export function DeliveryVisitPanel(props: Props) {
             </button>
           ) : (
             <div className="stack-gap">
-              <label className="field">
-                Resultado
-                <select
-                  value={endStatus}
-                  onChange={(e) =>
-                    setEndStatus(e.target.value as typeof endStatus)
-                  }
-                >
-                  <option value="completed">Entrega completa</option>
-                  <option value="partial">Entrega parcial</option>
-                  <option value="not_delivered">No entregada</option>
-                </select>
-              </label>
-              {endStatus === "not_delivered" ? (
-                <>
-                  <label className="field">
-                    Motivo
-                    <select
-                      value={endReason}
-                      onChange={(e) => setEndReason(e.target.value)}
-                    >
-                      <option value="closed_store">Local cerrado</option>
-                      <option value="not_found">Local no encontrado</option>
-                      <option value="rejected_order">Pedido rechazado</option>
-                      <option value="absent_customer">Cliente ausente</option>
-                      <option value="other">Otro</option>
-                    </select>
-                  </label>
-                  <label className="field">
-                    Observación{endReason === "other" ? " (obligatoria)" : ""}
-                    <textarea
-                      value={endNote}
-                      onChange={(e) => setEndNote(e.target.value)}
-                      rows={2}
-                    />
-                  </label>
-                </>
-              ) : null}
               <p className="muted" style={{ margin: 0, fontSize: "0.8rem" }}>
-                Evidencia fotográfica y firma se habilitan en módulos siguientes.
-                El cierre no descuenta stock ni modifica Bsale.
+                El servidor validará cantidades, evidencia/firma y GPS. No descuenta stock.
               </p>
               <div className="btn-row">
                 <button
@@ -383,9 +513,6 @@ export function DeliveryVisitPanel(props: Props) {
       {lastClosedId && !inProgress ? (
         <div style={{ marginTop: 10 }} className="card">
           <strong style={{ fontSize: "0.95rem" }}>Resumen y WhatsApp</strong>
-          <p className="muted" style={{ margin: "6px 0 10px", fontSize: "0.8rem" }}>
-            Cierre persistido. Compartir no reabre ni duplica la visita.
-          </p>
           <WhatsappSharePanel
             reportText={report?.report_text || null}
             share={report?.share}
@@ -402,10 +529,6 @@ export function DeliveryVisitPanel(props: Props) {
                   { client_name: props.clientName },
                 )
                 setReport(res)
-                setInfo(
-                  res.share.note_es ||
-                    "Reporte listo. Confirme el envío manualmente en WhatsApp.",
-                )
               } catch (e) {
                 setErr(e instanceof ApiError ? e.message : "Error reporte")
                 throw e
