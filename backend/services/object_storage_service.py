@@ -129,12 +129,14 @@ def presign_put(
         raise ObjectStorageNotConfigured("R2 no configurado")
     client = _client(cfg)
     ttl = int(expires_in or cfg.presign_ttl_sec)
+    ctype = content_type or "image/jpeg"
+    # ContentType debe coincidir exactamente con el header Content-Type del PUT.
     url = client.generate_presigned_url(
         "put_object",
         Params={
             "Bucket": cfg.bucket,
             "Key": object_key,
-            "ContentType": content_type or "image/jpeg",
+            "ContentType": ctype,
         },
         ExpiresIn=ttl,
         HttpMethod="PUT",
@@ -142,9 +144,14 @@ def presign_put(
     return {
         "upload_url": url,
         "object_key": object_key,
-        "content_type": content_type,
+        "content_type": ctype,
         "expires_in": ttl,
         "method": "PUT",
+        "required_headers": {"Content-Type": ctype},
+        "note_es": (
+            "Envíe PUT con el mismo Content-Type firmado. "
+            "No añada headers extra (x-amz-*) no firmados."
+        ),
     }
 
 

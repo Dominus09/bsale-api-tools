@@ -26,8 +26,88 @@ ALLOWED_IMAGE_TYPES = {
 }
 MAX_PHOTO_BYTES = int(os.getenv("CLIENT_FACADE_MAX_BYTES") or str(4 * 1024 * 1024))
 GPS_WARN_ACCURACY_M = float(os.getenv("CLIENT_GPS_WARN_ACCURACY_M") or "50")
-GPS_HARD_ACCURACY_M = float(os.getenv("CLIENT_GPS_HARD_ACCURACY_M") or "250")
+# Umbral duro alto: en rural la precisión del navegador suele ser 80–400 m.
+# Por encima solo se bloquea; entre WARN y HARD se exige confirmación explícita.
+GPS_HARD_ACCURACY_M = float(os.getenv("CLIENT_GPS_HARD_ACCURACY_M") or "500")
 SIGNIFICANT_MOVE_M = float(os.getenv("CLIENT_GPS_SIGNIFICANT_MOVE_M") or "80")
+
+
+def _detect_image_mime(data: bytes) -> str | None:
+    if len(data) >= 3 and data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if len(data) >= 8 and data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def _normalize_facade_image(data: bytes, claimed_mime: str | None) -> tuple[bytes, str, dict[str, Any]]:
+    """Valida magia real, corrige orientación y elimina EXIF al re-encodear JPEG."""
+    if not data:
+        raise HTTPException(status_code=400, detail="Archivo vacío")
+    if len(data) > MAX_PHOTO_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Imagen demasiado grande (máx {MAX_PHOTO_BYTES // (1024 * 1024)} MB)",
+        )
+    detected = _detect_image_mime(data)
+    if not detected:
+        raise HTTPException(
+            status_code=400,
+            detail="El archivo no es una imagen JPEG/PNG/WebP válida",
+        )
+    claimed = (claimed_mime or "").lower().strip()
+    if claimed in ALLOWED_IMAGE_TYPES and claimed not in ("image/jpg", detected) and claimed != detected:
+        # Permitir image/jpg vs image/jpeg; rechazar PNG declarado como JPEG, etc.
+        if not (claimed in ("image/jpeg", "image/jpg") and detected == "image/jpeg"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Content-Type declarado ({claimed}) no coincide con el contenido ({detected})",
+            )
+    meta: dict[str, Any] = {"detected_mime": detected, "exif_stripped": False}
+    try:
+        from io import BytesIO
+
+        from PIL import Image, ImageOps
+    except ImportError:
+        return data, detected, meta
+
+    try:
+        img = Image.open(BytesIO(data))
+        img = ImageOps.exif_transpose(img)
+        width, height = img.size
+        meta["width"] = int(width)
+        meta["height"] = int(height)
+        # Re-encode JPEG operativo: legible y sin metadatos EXIF/GPS.
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        elif img.mode == "L":
+            img = img.convert("RGB")
+        max_side = 1600
+        w, h = img.size
+        scale = min(1.0, max_side / float(max(w, h)))
+        if scale < 1.0:
+            img = img.resize(
+                (max(1, int(w * scale)), max(1, int(h * scale))),
+                Image.Resampling.LANCZOS,
+            )
+        out = BytesIO()
+        img.save(out, format="JPEG", quality=82, optimize=True)
+        normalized = out.getvalue()
+        if len(normalized) > MAX_PHOTO_BYTES:
+            raise HTTPException(status_code=400, detail="Imagen demasiado grande tras normalizar")
+        meta["exif_stripped"] = True
+        meta["normalized_mime"] = "image/jpeg"
+        meta["width"], meta["height"] = img.size
+        return normalized, "image/jpeg", meta
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No se pudo procesar la imagen: {exc}",
+        ) from exc
 
 
 def _haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -134,6 +214,11 @@ def enrich_client_location_fields(client: dict[str, Any]) -> dict[str, Any]:
     elif pending:
         status = "pending_review"
         label = "Corrección pendiente de aprobación"
+        pend_acc = pending.get("accuracy_m")
+        if pend_acc is not None and float(pend_acc) > GPS_WARN_ACCURACY_M:
+            label = (
+                f"Corrección pendiente (GPS ±{float(pend_acc):.0f} m, baja precisión)"
+            )
     elif out.get("has_coordinates"):
         status = "unverified_existing"
         label = "Coordenadas existentes (sin verificar por chofer)"
@@ -141,12 +226,21 @@ def enrich_client_location_fields(client: dict[str, Any]) -> dict[str, Any]:
         status = "missing"
         label = "Sin registrar"
 
+    pend_acc_out = (
+        float(pending["accuracy_m"])
+        if pending and pending.get("accuracy_m") is not None
+        else None
+    )
     out["location_registration"] = {
         "status": status,
         "label_es": label,
         "can_register": True,
         "pending_proposal_id": int(pending["id"]) if pending else None,
         "verified": bool(verified),
+        "low_accuracy": bool(
+            pend_acc_out is not None and pend_acc_out > GPS_WARN_ACCURACY_M
+        ),
+        "accuracy_m": pend_acc_out,
         "previous_lat": float(pending["previous_lat"]) if pending and pending.get("previous_lat") is not None else out.get("latitude"),
         "previous_lng": float(pending["previous_lng"]) if pending and pending.get("previous_lng") is not None else out.get("longitude"),
         "proposed_lat": float(pending["proposed_lat"]) if pending else None,
@@ -307,6 +401,7 @@ def propose_location(
                 "proposed_lat": lat,
                 "proposed_lng": lng,
                 "accuracy_m": acc,
+                "low_accuracy": bool(acc is not None and acc > GPS_WARN_ACCURACY_M),
                 "previous_lat": prev_lat,
                 "previous_lng": prev_lng,
                 "distance_m": distance_m,
@@ -461,20 +556,12 @@ def upload_facade_bytes(
             status_code=503,
             detail="Almacenamiento R2 no configurado. No se pueden subir fotos todavía.",
         )
-    if not data:
-        raise HTTPException(status_code=400, detail="Archivo vacío")
-    if len(data) > MAX_PHOTO_BYTES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Imagen demasiado grande (máx {MAX_PHOTO_BYTES // (1024 * 1024)} MB)",
-        )
-    mime = (content_type or "").lower().strip() or "image/jpeg"
-    if mime not in ALLOWED_IMAGE_TYPES:
-        # Algunos navegadores envían application/octet-stream
-        if mime == "application/octet-stream":
-            mime = "image/jpeg"
-        else:
-            raise HTTPException(status_code=400, detail="Tipo de imagen no permitido")
+    claimed = (content_type or "").lower().strip() or "image/jpeg"
+    if claimed == "application/octet-stream":
+        claimed = "image/jpeg"
+    if claimed not in ALLOWED_IMAGE_TYPES and claimed != "application/octet-stream":
+        raise HTTPException(status_code=400, detail="Tipo de imagen no permitido")
+    data, mime, img_meta = _normalize_facade_image(data, claimed)
     client = _resolve_client(int(plan_id), customer_key)
     client_id = _parse_client_id(customer_key, client)
     uid = int(user.get("id") or user.get("uid"))
@@ -499,8 +586,12 @@ def upload_facade_bytes(
         object_key = storage.build_facade_object_key(
             company_id=3, client_id=client_id, ext=ext
         )
-        storage.put_bytes(object_key=object_key, body=data, content_type=mime)
+        try:
+            storage.put_bytes(object_key=object_key, body=data, content_type=mime)
+        except storage.ObjectStorageError as exc:
+            raise HTTPException(status_code=502, detail=f"Error al subir a R2: {exc}") from exc
         if not storage.object_exists(object_key):
+            # No insertar metadatos de un objeto inexistente.
             raise HTTPException(status_code=502, detail="No se confirmó el objeto en R2")
         photo = loc_repo.insert_facade_photo(
             cur,
@@ -512,8 +603,8 @@ def upload_facade_bytes(
             content_type=mime,
             size_bytes=len(data),
             sha256=digest,
-            width=None,
-            height=None,
+            width=img_meta.get("width"),
+            height=img_meta.get("height"),
             captured_by_user_id=uid,
             validation_status="pending",
             upload_confirmed=True,
@@ -527,7 +618,12 @@ def upload_facade_bytes(
             action="uploaded",
             actor_user_id=uid,
             dispatch_plan_id=int(plan_id),
-            payload={"object_key": object_key, "size_bytes": len(data), "sha256": digest},
+            payload={
+                "object_key": object_key,
+                "size_bytes": len(data),
+                "sha256": digest,
+                "exif_stripped": bool(img_meta.get("exif_stripped")),
+            },
         )
         events_repo.insert_order_event(
             cur,
@@ -670,9 +766,25 @@ def review_proposal_erp(
         if prop.get("status") != "pending":
             raise HTTPException(status_code=409, detail="La propuesta ya fue revisada")
         if int(prop["proposed_by_user_id"]) == uid:
+            # Bloqueo duro: no aprobar, no rechazar, no mutar estado.
+            loc_repo.insert_audit(
+                cur,
+                client_id=int(prop["client_id"]),
+                entity_type="location_proposal",
+                entity_id=int(prop["id"]),
+                action="self_review_denied",
+                actor_user_id=uid,
+                dispatch_plan_id=int(prop["dispatch_plan_id"]),
+                payload={
+                    "attempted_approve": bool(approve),
+                    "status_before": prop.get("status"),
+                    "status_unchanged": True,
+                },
+            )
+            conn.commit()
             raise HTTPException(
                 status_code=403,
-                detail="No puede aprobar/rechazar su propia propuesta",
+                detail="No puede aprobar ni rechazar su propia propuesta",
             )
         status = "approved" if approve else "rejected"
         updated = loc_repo.review_proposal(

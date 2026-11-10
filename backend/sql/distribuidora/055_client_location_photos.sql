@@ -69,6 +69,14 @@ CREATE INDEX IF NOT EXISTS idx_client_location_proposals_plan
     ON distribuidora.client_location_proposals (dispatch_plan_id);
 -- +go
 
+CREATE INDEX IF NOT EXISTS idx_client_location_proposals_company_status
+    ON distribuidora.client_location_proposals (company_id, status, created_at DESC);
+-- +go
+
+CREATE INDEX IF NOT EXISTS idx_client_location_proposals_client
+    ON distribuidora.client_location_proposals (client_id, created_at DESC);
+-- +go
+
 CREATE TABLE IF NOT EXISTS distribuidora.client_facade_photos (
     id BIGSERIAL PRIMARY KEY,
     client_id BIGINT NOT NULL,
@@ -150,6 +158,14 @@ CREATE TABLE IF NOT EXISTS distribuidora.client_location_audit (
 
 CREATE INDEX IF NOT EXISTS idx_client_location_audit_client
     ON distribuidora.client_location_audit (client_id, created_at DESC);
+-- +go
+
+CREATE INDEX IF NOT EXISTS idx_client_verified_locations_company
+    ON distribuidora.client_verified_locations (company_id);
+-- +go
+
+CREATE INDEX IF NOT EXISTS idx_client_facade_photos_company
+    ON distribuidora.client_facade_photos (company_id, created_at DESC);
 -- +go
 
 COMMENT ON TABLE distribuidora.client_location_proposals IS

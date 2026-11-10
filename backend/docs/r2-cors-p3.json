@@ -1,0 +1,24 @@
+{
+  "Comment": "CORS mínimo P3 — carga directa firmada desde la PWA. Bucket privado (sin acceso público). ERP usa <img> con URL firmada GET; no requiere CORS en el bucket.",
+  "CORSRules": [
+    {
+      "AllowedOrigins": [
+        "https://app.quillotana.cl"
+      ],
+      "AllowedMethods": [
+        "PUT",
+        "GET",
+        "HEAD"
+      ],
+      "AllowedHeaders": [
+        "Content-Type",
+        "Content-Length"
+      ],
+      "ExposeHeaders": [
+        "ETag",
+        "Content-Length"
+      ],
+      "MaxAgeSeconds": 3600
+    }
+  ]
+}

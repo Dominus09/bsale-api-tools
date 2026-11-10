@@ -10,6 +10,7 @@ pyjwt
 python-jose[cryptography]
 python-multipart
 boto3
+Pillow
 pandas
 openpyxl
 pdfplumber
