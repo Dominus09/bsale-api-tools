@@ -107,6 +107,7 @@ def finalize_visit(
     end_accuracy_m: float | None,
     end_gps_captured_at,
     end_gps_source: str | None,
+    closure_review_status: str | None = "verified",
 ) -> dict[str, Any] | None:
     cur.execute(
         """
@@ -120,6 +121,7 @@ def finalize_visit(
             end_accuracy_m = %s,
             end_gps_captured_at = %s,
             end_gps_source = %s,
+            closure_review_status = %s,
             version = version + 1,
             updated_at = NOW()
         WHERE id = %s
@@ -136,6 +138,7 @@ def finalize_visit(
             end_accuracy_m,
             end_gps_captured_at,
             end_gps_source,
+            closure_review_status,
             int(visit_id),
             int(expected_version),
         ),
@@ -385,3 +388,144 @@ def list_recent_visits(
         )
     rows = cur.fetchall() or []
     return [_row(cur, r) for r in rows]
+
+
+def insert_evidence(cur, **kw) -> dict[str, Any]:
+    cur.execute(
+        """
+        INSERT INTO distribuidora.delivery_evidence (
+            visit_id, company_id, evidence_kind, object_key, content_type,
+            size_bytes, sha256, captured_by_user_id, capture_lat, capture_lng,
+            capture_accuracy_m, upload_confirmed, validation_status,
+            exception_note, idempotency_key, visit_event_id
+        ) VALUES (
+            %(visit_id)s, %(company_id)s, %(evidence_kind)s, %(object_key)s,
+            %(content_type)s, %(size_bytes)s, %(sha256)s, %(captured_by_user_id)s,
+            %(capture_lat)s, %(capture_lng)s, %(capture_accuracy_m)s,
+            %(upload_confirmed)s, %(validation_status)s, %(exception_note)s,
+            %(idempotency_key)s, %(visit_event_id)s
+        )
+        RETURNING *
+        """,
+        kw,
+    )
+    return _row(cur, cur.fetchone())
+
+
+def find_evidence_by_idem(
+    cur, *, user_id: int, idempotency_key: str
+) -> dict[str, Any] | None:
+    cur.execute(
+        """
+        SELECT * FROM distribuidora.delivery_evidence
+        WHERE captured_by_user_id = %s AND idempotency_key = %s
+        ORDER BY id DESC LIMIT 1
+        """,
+        (int(user_id), idempotency_key),
+    )
+    r = cur.fetchone()
+    return _row(cur, r) if r else None
+
+
+def list_evidence(cur, visit_id: int) -> list[dict[str, Any]]:
+    cur.execute(
+        """
+        SELECT * FROM distribuidora.delivery_evidence
+        WHERE visit_id = %s
+        ORDER BY id
+        """,
+        (int(visit_id),),
+    )
+    return [_row(cur, r) for r in (cur.fetchall() or [])]
+
+
+def confirm_evidence(cur, evidence_id: int, **kw) -> dict[str, Any] | None:
+    cur.execute(
+        """
+        UPDATE distribuidora.delivery_evidence
+        SET upload_confirmed = TRUE,
+            size_bytes = COALESCE(%(size_bytes)s, size_bytes),
+            sha256 = COALESCE(%(sha256)s, sha256),
+            content_type = COALESCE(%(content_type)s, content_type),
+            validation_status = %(validation_status)s,
+            visit_event_id = COALESCE(%(visit_event_id)s, visit_event_id),
+            updated_at = NOW()
+        WHERE id = %(evidence_id)s
+        RETURNING *
+        """,
+        {"evidence_id": int(evidence_id), **kw},
+    )
+    r = cur.fetchone()
+    return _row(cur, r) if r else None
+
+
+def upsert_conformity(cur, **kw) -> dict[str, Any]:
+    cur.execute(
+        """
+        INSERT INTO distribuidora.delivery_conformity (
+            visit_id, receptor_name, signature_object_key, signature_content_type,
+            accepted_summary_sha256, summary_payload, signed_at, refused,
+            refuse_reason, gps_lat, gps_lng, gps_accuracy_m, visit_version_at_sign
+        ) VALUES (
+            %(visit_id)s, %(receptor_name)s, %(signature_object_key)s,
+            %(signature_content_type)s, %(accepted_summary_sha256)s,
+            %(summary_payload)s, %(signed_at)s, %(refused)s, %(refuse_reason)s,
+            %(gps_lat)s, %(gps_lng)s, %(gps_accuracy_m)s, %(visit_version_at_sign)s
+        )
+        ON CONFLICT (visit_id) DO UPDATE SET
+            receptor_name = EXCLUDED.receptor_name,
+            signature_object_key = EXCLUDED.signature_object_key,
+            signature_content_type = EXCLUDED.signature_content_type,
+            accepted_summary_sha256 = EXCLUDED.accepted_summary_sha256,
+            summary_payload = EXCLUDED.summary_payload,
+            signed_at = EXCLUDED.signed_at,
+            refused = EXCLUDED.refused,
+            refuse_reason = EXCLUDED.refuse_reason,
+            gps_lat = EXCLUDED.gps_lat,
+            gps_lng = EXCLUDED.gps_lng,
+            gps_accuracy_m = EXCLUDED.gps_accuracy_m,
+            visit_version_at_sign = EXCLUDED.visit_version_at_sign,
+            invalidated_at = NULL,
+            invalidate_reason = NULL,
+            updated_at = NOW()
+        RETURNING *
+        """,
+        {
+            **kw,
+            "summary_payload": Json(kw.get("summary_payload") or {}),
+        },
+    )
+    return _row(cur, cur.fetchone())
+
+
+def invalidate_conformity(
+    cur, visit_id: int, *, reason: str
+) -> dict[str, Any] | None:
+    cur.execute(
+        """
+        UPDATE distribuidora.delivery_conformity
+        SET invalidated_at = NOW(),
+            invalidate_reason = %s,
+            updated_at = NOW()
+        WHERE visit_id = %s
+          AND invalidated_at IS NULL
+        RETURNING *
+        """,
+        (reason, int(visit_id)),
+    )
+    r = cur.fetchone()
+    return _row(cur, r) if r else None
+
+
+def bump_visit_version(cur, visit_id: int) -> dict[str, Any] | None:
+    cur.execute(
+        """
+        UPDATE distribuidora.delivery_visits
+        SET version = version + 1, updated_at = NOW()
+        WHERE id = %s AND status = 'in_progress'
+        RETURNING *
+        """,
+        (int(visit_id),),
+    )
+    r = cur.fetchone()
+    return _row(cur, r) if r else None

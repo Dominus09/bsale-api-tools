@@ -82,6 +82,38 @@ def build_facade_object_key(*, company_id: int, client_id: int, ext: str = "jpg"
     )
 
 
+def build_delivery_evidence_object_key(
+    *,
+    company_id: int,
+    plan_id: int,
+    visit_id: int,
+    kind: str,
+    ext: str = "jpg",
+) -> str:
+    safe_ext = "".join(c for c in (ext or "jpg").lower() if c.isalnum())[:8] or "jpg"
+    safe_kind = "".join(c for c in (kind or "other").lower() if c.isalnum() or c == "_")[
+        :40
+    ] or "other"
+    return (
+        f"operaciones/entregas/{int(company_id)}/{int(plan_id)}/"
+        f"{int(visit_id)}/evidencias/{safe_kind}/{uuid.uuid4().hex}.{safe_ext}"
+    )
+
+
+def build_delivery_signature_object_key(
+    *,
+    company_id: int,
+    plan_id: int,
+    visit_id: int,
+    ext: str = "png",
+) -> str:
+    safe_ext = "".join(c for c in (ext or "png").lower() if c.isalnum())[:8] or "png"
+    return (
+        f"operaciones/entregas/{int(company_id)}/{int(plan_id)}/"
+        f"{int(visit_id)}/firmas/{uuid.uuid4().hex}.{safe_ext}"
+    )
+
+
 def put_bytes(
     *,
     object_key: str,

@@ -341,12 +341,15 @@ export async function finalizeDeliveryVisit(
     accuracy_m?: number | null
     gps_captured_at?: string
     gps_source?: string
+    gps_exception_code?: string
+    gps_exception_note?: string
   },
 ): Promise<{
   visit: DeliveryVisit
   finalized: boolean
   idempotent_replay?: boolean
   persisted?: boolean
+  closure_review_status?: string
   mode?: string
   note_es?: string
 }> {
@@ -447,6 +450,106 @@ export async function generateVisitWhatsappReport(
       body: JSON.stringify(body || {}),
     },
   )
+}
+
+export async function getVisitDetail(
+  planId: number,
+  visitId: number,
+): Promise<{
+  visit: DeliveryVisit
+  documents: Array<Record<string, unknown>>
+  lines: Array<Record<string, unknown>>
+  collections: Array<Record<string, unknown>>
+  evidence: Array<Record<string, unknown>>
+  conformity: Record<string, unknown> | null
+}> {
+  return apiFetch(`/distribuidora/pwa/driver/despachos/${planId}/visitas/${visitId}`)
+}
+
+export async function uploadVisitEvidence(
+  planId: number,
+  visitId: number,
+  file: Blob,
+  opts: {
+    evidence_kind: string
+    latitude?: number | null
+    longitude?: number | null
+    accuracy_m?: number | null
+    idempotency_key?: string
+  },
+): Promise<Record<string, unknown>> {
+  const fd = new FormData()
+  fd.append("file", file, "evidencia.jpg")
+  fd.append("evidence_kind", opts.evidence_kind)
+  if (opts.latitude != null) fd.append("latitude", String(opts.latitude))
+  if (opts.longitude != null) fd.append("longitude", String(opts.longitude))
+  if (opts.accuracy_m != null) fd.append("accuracy_m", String(opts.accuracy_m))
+  if (opts.idempotency_key) fd.append("idempotency_key", opts.idempotency_key)
+  const res = await fetch(
+    `${getApiBase()}/distribuidora/pwa/driver/despachos/${planId}/visitas/${visitId}/evidencia`,
+    { method: "POST", headers: { ...authHeaders() }, body: fd },
+  )
+  if (isUnauthorized(res.status)) {
+    clearSession()
+    if (typeof window !== "undefined") window.location.href = "/login?expired=1"
+    throw new ApiError(401, "Sesión expirada")
+  }
+  if (!res.ok) throw new ApiError(res.status, await parseError(res))
+  return res.json()
+}
+
+export async function registerVisitEvidenceException(
+  planId: number,
+  visitId: number,
+  body: {
+    evidence_kind: string
+    exception_note: string
+    latitude?: number | null
+    longitude?: number | null
+  },
+): Promise<Record<string, unknown>> {
+  return apiFetch(
+    `/distribuidora/pwa/driver/despachos/${planId}/visitas/${visitId}/evidencia/excepcion`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  )
+}
+
+export async function submitVisitConformity(
+  planId: number,
+  visitId: number,
+  opts: {
+    receptor_name: string
+    refused?: boolean
+    refuse_reason?: string
+    latitude?: number | null
+    longitude?: number | null
+    accuracy_m?: number | null
+    signatureBlob?: Blob | null
+  },
+): Promise<Record<string, unknown>> {
+  const fd = new FormData()
+  fd.append("receptor_name", opts.receptor_name || "")
+  fd.append("refused", opts.refused ? "true" : "false")
+  if (opts.refuse_reason) fd.append("refuse_reason", opts.refuse_reason)
+  if (opts.latitude != null) fd.append("latitude", String(opts.latitude))
+  if (opts.longitude != null) fd.append("longitude", String(opts.longitude))
+  if (opts.accuracy_m != null) fd.append("accuracy_m", String(opts.accuracy_m))
+  if (opts.signatureBlob) fd.append("signature", opts.signatureBlob, "firma.jpg")
+  const res = await fetch(
+    `${getApiBase()}/distribuidora/pwa/driver/despachos/${planId}/visitas/${visitId}/conformidad`,
+    { method: "POST", headers: { ...authHeaders() }, body: fd },
+  )
+  if (isUnauthorized(res.status)) {
+    clearSession()
+    if (typeof window !== "undefined") window.location.href = "/login?expired=1"
+    throw new ApiError(401, "Sesión expirada")
+  }
+  if (!res.ok) throw new ApiError(res.status, await parseError(res))
+  return res.json()
 }
 
 export async function listDemoWhatsappReports(): Promise<{

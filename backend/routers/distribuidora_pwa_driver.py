@@ -187,6 +187,8 @@ class FinalizeVisitBody(BaseModel):
     accuracy_m: float | None = None
     gps_captured_at: str | None = None
     gps_source: str | None = Field(None, max_length=40)
+    gps_exception_code: str | None = Field(None, max_length=64)
+    gps_exception_note: str | None = Field(None, max_length=500)
 
 
 @router.post("/despachos/{plan_id}/clientes/{customer_key:path}/visitas/start")
@@ -218,7 +220,7 @@ def get_delivery_visit(
     visit_id: int,
     user: dict = Depends(require_pwa_profiles("chofer")),
 ):
-    return visit_svc.get_visit(
+    return visit_svc.get_visit_detail(
         user=user, plan_id=int(plan_id), visit_id=int(visit_id)
     )
 
@@ -243,6 +245,8 @@ def finalize_delivery_visit(
         accuracy_m=body.accuracy_m,
         gps_captured_at=body.gps_captured_at,
         gps_source=body.gps_source,
+        gps_exception_code=body.gps_exception_code,
+        gps_exception_note=body.gps_exception_note,
     )
 
 
@@ -344,6 +348,86 @@ def generate_whatsapp_report(
         client_name=body.client_name,
         planning_code=body.planning_code,
         driver_name=body.driver_name,
+    )
+
+
+@router.post("/despachos/{plan_id}/visitas/{visit_id}/evidencia")
+async def upload_visit_evidence(
+    plan_id: int,
+    visit_id: int,
+    evidence_kind: str = Form(...),
+    latitude: float | None = Form(None),
+    longitude: float | None = Form(None),
+    accuracy_m: float | None = Form(None),
+    idempotency_key: str | None = Form(None),
+    file: UploadFile = File(...),
+    user: dict = Depends(require_pwa_profiles("chofer")),
+):
+    data = await file.read()
+    return visit_svc.upload_incident_evidence(
+        user=user,
+        plan_id=int(plan_id),
+        visit_id=int(visit_id),
+        evidence_kind=evidence_kind,
+        data=data,
+        content_type=file.content_type,
+        latitude=latitude,
+        longitude=longitude,
+        accuracy_m=accuracy_m,
+        idempotency_key=idempotency_key,
+    )
+
+
+class EvidenceExceptionBody(BaseModel):
+    evidence_kind: str = Field(..., max_length=40)
+    exception_note: str = Field(..., max_length=500)
+    latitude: float | None = None
+    longitude: float | None = None
+
+
+@router.post("/despachos/{plan_id}/visitas/{visit_id}/evidencia/excepcion")
+def register_visit_evidence_exception(
+    plan_id: int,
+    visit_id: int,
+    body: EvidenceExceptionBody,
+    user: dict = Depends(require_pwa_profiles("chofer")),
+):
+    return visit_svc.register_evidence_exception(
+        user=user,
+        plan_id=int(plan_id),
+        visit_id=int(visit_id),
+        evidence_kind=body.evidence_kind,
+        exception_note=body.exception_note,
+        latitude=body.latitude,
+        longitude=body.longitude,
+    )
+
+
+@router.post("/despachos/{plan_id}/visitas/{visit_id}/conformidad")
+async def submit_visit_conformity(
+    plan_id: int,
+    visit_id: int,
+    receptor_name: str = Form(""),
+    refused: bool = Form(False),
+    refuse_reason: str | None = Form(None),
+    latitude: float | None = Form(None),
+    longitude: float | None = Form(None),
+    accuracy_m: float | None = Form(None),
+    signature: UploadFile | None = File(None),
+    user: dict = Depends(require_pwa_profiles("chofer")),
+):
+    sig_bytes = await signature.read() if signature is not None else None
+    return visit_svc.submit_conformity(
+        user=user,
+        plan_id=int(plan_id),
+        visit_id=int(visit_id),
+        receptor_name=receptor_name,
+        signature_png=sig_bytes,
+        refused=bool(refused),
+        refuse_reason=refuse_reason,
+        latitude=latitude,
+        longitude=longitude,
+        accuracy_m=accuracy_m,
     )
 
 
