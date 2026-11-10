@@ -167,6 +167,11 @@ const navSections: { title: string; items: NavItem[] }[] = [
         label: "Ubicaciones chofer",
         icon: MapPin,
       },
+      {
+        href: "/operaciones/entregas-chofer",
+        label: "Entregas chofer",
+        icon: Package,
+      },
       { href: "/orders", label: "Pedidos", icon: Package },
       { href: "#", label: "Stock", icon: Warehouse, disabled: true },
     ],

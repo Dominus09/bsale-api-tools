@@ -29,6 +29,7 @@ from backend.routers import distribuidora_planificacion
 from backend.routers import distribuidora_dispatch_plan
 from backend.routers import distribuidora_pwa_driver
 from backend.routers import distribuidora_client_locations
+from backend.routers import distribuidora_delivery_visits_erp
 from backend.routers import distribuidora_cuadraturas
 from backend.routers import distribuidora_clients
 from backend.routers import commercial_analytics
@@ -159,6 +160,7 @@ app.include_router(distribuidora_planificacion.router)
 app.include_router(distribuidora_dispatch_plan.router)
 app.include_router(distribuidora_pwa_driver.router)
 app.include_router(distribuidora_client_locations.router)
+app.include_router(distribuidora_delivery_visits_erp.router)
 app.include_router(distribuidora_cuadraturas.router)
 app.include_router(distribuidora_planning.router)
 app.include_router(distribuidora_clients.router)

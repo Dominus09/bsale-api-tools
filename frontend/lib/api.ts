@@ -7689,3 +7689,35 @@ export async function getClientLocationHistory(
   if (!res.ok) throw new Error(await res.text().catch(() => "Error al cargar historial"))
   return res.json()
 }
+
+export type DeliveryVisitErpItem = {
+  id: number
+  company_id: number
+  dispatch_plan_id: number
+  customer_key: string
+  client_id?: number | null
+  driver_user_id: number
+  status: string
+  result_reason?: string | null
+  started_at_local?: string | null
+  ended_at_local?: string | null
+  declared_collected?: number
+  pending_balance_sum?: number
+}
+
+export async function getDeliveryVisitsErp(
+  limit = 100,
+): Promise<{
+  items: DeliveryVisitErpItem[]
+  tables_ready?: boolean
+  summary?: Record<string, number>
+  message_es?: string
+  note_es?: string
+}> {
+  const res = await fetch(
+    `${API_URL}/distribuidora/delivery-visits?limit=${limit}`,
+    { headers: getAuthHeaders() },
+  )
+  if (!res.ok) throw new Error(await res.text().catch(() => "Error al listar visitas"))
+  return res.json()
+}
