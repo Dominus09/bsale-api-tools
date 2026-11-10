@@ -69,6 +69,41 @@ def get_latest_visit(
     return _row(cur, r) if r else None
 
 
+def get_last_closed_visit(
+    cur, *, plan_id: int, customer_key: str
+) -> dict[str, Any] | None:
+    """Última visita cerrada (no in_progress). Coexiste con una activa."""
+    cur.execute(
+        """
+        SELECT *
+        FROM distribuidora.delivery_visits
+        WHERE dispatch_plan_id = %s
+          AND customer_key = %s
+          AND status <> 'in_progress'
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (int(plan_id), customer_key),
+    )
+    r = cur.fetchone()
+    return _row(cur, r) if r else None
+
+
+def list_visit_events(cur, visit_id: int, *, limit: int = 50) -> list[dict[str, Any]]:
+    """Eventos de una visita (solo lectura)."""
+    cur.execute(
+        """
+        SELECT id, visit_id, action, actor_user_id, payload, created_at
+        FROM distribuidora.delivery_visit_events
+        WHERE visit_id = %s
+        ORDER BY created_at ASC, id ASC
+        LIMIT %s
+        """,
+        (int(visit_id), max(1, min(int(limit), 200))),
+    )
+    return [_row(cur, r) for r in cur.fetchall()]
+
+
 def get_visit(cur, visit_id: int) -> dict[str, Any] | None:
     cur.execute(
         "SELECT * FROM distribuidora.delivery_visits WHERE id = %s",

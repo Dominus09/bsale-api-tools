@@ -189,6 +189,7 @@ export default function ClienteFichaPage() {
         p4Note={data.p4?.note_es}
         activeVisit={data.active_visit || null}
         latestVisit={data.latest_visit || data.active_visit || null}
+        lastClosedVisit={data.last_closed_visit || null}
         onChanged={() => setReloadToken((n) => n + 1)}
       />
 

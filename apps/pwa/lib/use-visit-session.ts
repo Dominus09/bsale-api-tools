@@ -21,6 +21,8 @@ export type VisitSession = {
   activeVisit: DeliveryVisit | null
   /** Última visita del plan/cliente (activa o cerrada). */
   latestVisit: DeliveryVisit | null
+  /** Última visita cerrada (puede coexistir con activeVisit). */
+  lastClosedVisit: DeliveryVisit | null
   visitDetail: Awaited<ReturnType<typeof getVisitDetail>> | null
   reload: () => void
   loading: boolean
@@ -54,7 +56,8 @@ export function useVisitSession(planId: number, customerKey: string): VisitSessi
         if (cancelled) return
         setClientPayload(res)
         setError(null)
-        const visit = res.active_visit || res.latest_visit
+        // Detalle del circuito: prioriza activa; si no, última cerrada.
+        const visit = res.active_visit || res.last_closed_visit || res.latest_visit
         if (visit?.id) {
           try {
             const detail = await getVisitDetail(planId, visit.id)
@@ -101,6 +104,7 @@ export function useVisitSession(planId: number, customerKey: string): VisitSessi
     documentTotal,
     activeVisit: clientPayload?.active_visit || null,
     latestVisit: clientPayload?.latest_visit || clientPayload?.active_visit || null,
+    lastClosedVisit: clientPayload?.last_closed_visit || null,
     visitDetail,
     reload,
     loading,

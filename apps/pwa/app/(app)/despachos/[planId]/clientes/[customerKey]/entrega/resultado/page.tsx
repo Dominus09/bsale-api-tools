@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { Suspense, useEffect, useState } from "react"
+import { Suspense, useEffect, useMemo, useState } from "react"
 import { useSearchParams } from "next/navigation"
 import {
   ApiError,
@@ -11,42 +11,56 @@ import {
   type WhatsappReportResponse,
 } from "@/lib/api"
 import { WhatsappSharePanel } from "@/components/whatsapp-share-panel"
-import { buildEntregaHref, visitStatusLabel } from "@/lib/delivery-flow"
+import { buildEntregaHref, moneyCLP, visitStatusLabel } from "@/lib/delivery-flow"
 import { isClosedVisitStatus } from "@/lib/finalize-visit-nav"
+import { buildResultadoSummary } from "@/lib/resultado-summary"
+import { resolveVisitRecovery } from "@/lib/visit-recovery"
 import { useDeliveryParams } from "@/lib/use-delivery-params"
 import { useVisitSession } from "@/lib/use-visit-session"
+
+type VisitDetailPayload = Awaited<ReturnType<typeof getVisitDetail>>
 
 function ResultadoInner() {
   const { planId, customerKey } = useDeliveryParams()
   const search = useSearchParams()
   const visitIdParam = Number(search.get("visitId") || 0)
   const session = useVisitSession(planId, customerKey)
-  const [visit, setVisit] = useState<DeliveryVisit | null>(null)
+  const [detail, setDetail] = useState<VisitDetailPayload | null>(null)
   const [report, setReport] = useState<WhatsappReportResponse | null>(null)
   const [busy, setBusy] = useState(false)
   const [loadingVisit, setLoadingVisit] = useState(true)
   const [err, setErr] = useState<string | null>(null)
 
+  const recovery = useMemo(
+    () =>
+      resolveVisitRecovery({
+        activeVisit: session.activeVisit,
+        latestVisit: session.latestVisit,
+        lastClosedVisit: session.lastClosedVisit,
+      }),
+    [session.activeVisit, session.latestVisit, session.lastClosedVisit],
+  )
+
   const visitId =
     (Number.isFinite(visitIdParam) && visitIdParam > 0 ? visitIdParam : 0) ||
-    session.latestVisit?.id ||
-    session.visitDetail?.visit?.id ||
+    recovery.preferredResultVisitId ||
     0
 
   useEffect(() => {
     if (!visitId) {
       setLoadingVisit(false)
+      setDetail(null)
       return
     }
     let cancelled = false
     async function load() {
       setLoadingVisit(true)
       try {
-        const detail = await getVisitDetail(planId, visitId)
+        const d = await getVisitDetail(planId, visitId)
         if (cancelled) return
-        setVisit(detail.visit)
+        setDetail(d)
         setErr(null)
-        if (isClosedVisitStatus(detail.visit?.status)) {
+        if (isClosedVisitStatus(d.visit?.status)) {
           try {
             const wa = await generateVisitWhatsappReport(planId, visitId, {
               client_name: session.clientName,
@@ -73,9 +87,21 @@ function ResultadoInner() {
     }
   }, [planId, visitId, session.clientName])
 
+  const visit: DeliveryVisit | null = detail?.visit || null
+  const summary = useMemo(
+    () =>
+      buildResultadoSummary({
+        docs: detail?.documents || [],
+        lines: detail?.lines || [],
+        collections: detail?.collections || [],
+        conformity: detail?.conformity || null,
+      }),
+    [detail],
+  )
+
   const clientsHref = `/despachos/${planId}/clientes`
   const fichaHref = buildEntregaHref(planId, customerKey, "ficha")
-  const status = visit?.status || session.latestVisit?.status
+  const status = visit?.status
   const closed = isClosedVisitStatus(status)
   const review = visit?.closure_review_status
 
@@ -87,9 +113,18 @@ function ResultadoInner() {
     return (
       <div className="stack-gap">
         <div className="banner banner-info">
-          No hay visita para mostrar. Si acaba de cerrar, vuelva a la ficha.
+          No hay visita cerrada para mostrar. Si hay una en curso, retómela desde
+          la ficha.
         </div>
-        <Link href={fichaHref} className="btn btn-primary">
+        {recovery.canResumeActive ? (
+          <Link
+            href={buildEntregaHref(planId, customerKey, "documentos")}
+            className="btn btn-primary"
+          >
+            Retomar visita activa
+          </Link>
+        ) : null}
+        <Link href={fichaHref} className="btn btn-ghost">
           Ir a ficha
         </Link>
       </div>
@@ -121,10 +156,29 @@ function ResultadoInner() {
           ) : null}
         </div>
         <p className="muted" style={{ fontSize: "0.85rem", marginTop: 10 }}>
-          Estado leído desde el servidor. Puede compartir el reporte por WhatsApp
-          manualmente. No se emitieron recibos ni se mutó Bsale.
+          Datos leídos desde el servidor (visit_id={visitId}). No se inventa el
+          cierre en el cliente.
         </p>
       </div>
+
+      {closed ? (
+        <div className="card" style={{ padding: 12 }}>
+          <strong style={{ fontSize: "0.9rem" }}>Resumen persistido</strong>
+          <ul style={{ margin: "8px 0 0", paddingLeft: 18, fontSize: "0.85rem" }}>
+            {summary.compactLines.map((line, i) => (
+              <li key={`sum-${i}`}>{line}</li>
+            ))}
+          </ul>
+          {(detail?.documents || []).map((d, i) => (
+            <div key={`doc-${i}`} className="meta-row" style={{ marginTop: 6 }}>
+              <span className="muted">
+                {d.document_type || "Doc"} {d.document_number ?? "—"}
+              </span>
+              <span>{moneyCLP(d.document_total as number | null | undefined)}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       {closed ? (
         <WhatsappSharePanel
@@ -135,7 +189,7 @@ function ResultadoInner() {
           showFamilyActions
           generateLabel="Generar / regenerar reporte"
           onGenerate={async () => {
-            if (!visitId) throw new Error("Sin visita")
+            if (!visitId) return
             setBusy(true)
             setErr(null)
             try {
@@ -152,10 +206,18 @@ function ResultadoInner() {
         />
       ) : (
         <div className="banner banner-info">
-          La visita aún no está cerrada. Continue el circuito o finalice desde
-          Firma.
+          Esta visita aún no está cerrada. Use el circuito activo o la ficha.
         </div>
       )}
+
+      {recovery.canResumeActive && recovery.active?.id !== visitId ? (
+        <Link
+          href={buildEntregaHref(planId, customerKey, "documentos")}
+          className="btn btn-secondary"
+        >
+          Retomar visita activa #{recovery.active!.id}
+        </Link>
+      ) : null}
 
       <Link href={clientsHref} className="btn btn-primary">
         Volver a lista de clientes

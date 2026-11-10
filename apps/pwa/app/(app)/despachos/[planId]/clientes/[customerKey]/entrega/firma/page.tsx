@@ -210,7 +210,7 @@ export default function EntregaFirmaPage() {
       navigateToResultado(planId, customerKey, closedId)
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) {
-        const closed = session.latestVisit
+        const closed = session.lastClosedVisit || session.latestVisit
         if (closed && isClosedVisitStatus(closed.status)) {
           setClosingMsg("La visita ya estaba cerrada. Abriendo resultado…")
           navigateToResultado(planId, customerKey, closed.id)

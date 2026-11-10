@@ -299,6 +299,7 @@ export async function getMyCliente(
   }
   active_visit?: DeliveryVisit | null
   latest_visit?: DeliveryVisit | null
+  last_closed_visit?: DeliveryVisit | null
   capabilities?: {
     start_delivery_visit?: boolean
     mode?: string
