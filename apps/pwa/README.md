@@ -27,7 +27,10 @@ npm run dev   # http://localhost:3001
 | Puerto | `3000` |
 | Dominio | `app.quillotana.cl` |
 | Build arg | `NEXT_PUBLIC_API_URL=https://api.quillotana.cl` |
+| Build arg | `NEXT_PUBLIC_OPS_WHATSAPP_INVITE_URL` (invite del grupo operativo; vacío → `wa.me`) |
 | Runtime env | `API_PROXY_TARGET=http://<hostname-interno-api>:8000` |
+
+`NEXT_PUBLIC_OPS_WHATSAPP_INVITE_URL` es **build-arg** (se incrusta en el bundle). Cambiar el grupo requiere rebuild/redeploy de la PWA; no hardcodear el enlace en el repo.
 
 `API_PROXY_TARGET` es **runtime** (no build arg). Debe ser el hostname Docker/Coolify del API en la misma red, puerto interno 8000. Sin ese valor el proxy usa DNS público (`api.quillotana.cl`) y puede fallar con `EAI_AGAIN`.
 

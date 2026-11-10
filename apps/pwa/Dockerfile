@@ -18,8 +18,12 @@ RUN npm ci --no-audit --no-fund \
   || npm install --no-audit --no-fund
 
 COPY . .
+# NEXT_PUBLIC_* se incrusta en el bundle en `next build`.
+# Coolify debe pasarlas como Build Variable / build-arg (no solo runtime).
 ARG NEXT_PUBLIC_API_URL=https://api.quillotana.cl
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+ARG NEXT_PUBLIC_OPS_WHATSAPP_INVITE_URL=
+ENV NEXT_PUBLIC_OPS_WHATSAPP_INVITE_URL=${NEXT_PUBLIC_OPS_WHATSAPP_INVITE_URL}
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 RUN npm run build

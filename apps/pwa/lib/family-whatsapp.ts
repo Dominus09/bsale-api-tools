@@ -5,7 +5,8 @@ export const FAMILY_WHATSAPP_INVITE_URL =
 /**
  * Grupo operativo autorizado (solo reportes reales).
  * Vacío → no hay destino de grupo; se usa wa.me/?text= (selector de chat).
- * Nunca reutilizar el enlace familiar aquí.
+ * Valor inyectado en build vía NEXT_PUBLIC_OPS_WHATSAPP_INVITE_URL (Coolify build-arg).
+ * Nunca hardcodear aquí el enlace operativo ni reutilizar el familiar.
  */
 export const OPERATIONAL_WHATSAPP_INVITE_URL = (
   typeof process !== "undefined"
@@ -21,39 +22,68 @@ export function buildWhatsappTextUrl(text: string): string {
 /**
  * Conserva query params existentes del invite y fija/reemplaza `text`
  * sin duplicarlo (URLSearchParams.set).
+ * Lanza si la URL base es inválida.
  */
 export function buildWhatsappInviteWithText(
   inviteUrl: string,
   message: string,
 ): string {
   const url = new URL(inviteUrl)
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new TypeError("invite URL protocol no soportado")
+  }
   url.searchParams.set("text", message)
   return url.toString()
 }
 
+/** True si el invite se puede parsear como URL http(s). */
+export function isUsableWhatsappInviteUrl(inviteUrl: string): boolean {
+  const raw = (inviteUrl || "").trim()
+  if (!raw) return false
+  try {
+    const url = new URL(raw)
+    return url.protocol === "http:" || url.protocol === "https:"
+  } catch {
+    return false
+  }
+}
+
 export type WhatsappSendMode = "demo" | "real"
+
+export type WhatsappSendDestination = "family_invite" | "ops_invite" | "wa_me"
 
 /**
  * Destino seguro según modo:
  * - demo → solo grupo familiar de pruebas
- * - real → grupo operativo si está configurado; si no, wa.me (nunca familiar)
+ * - real → grupo operativo si hay URL usable; si falta/inválida → wa.me (nunca familiar)
+ *
+ * `opsInviteUrl` permite tests sin mutar env; en producción usa
+ * OPERATIONAL_WHATSAPP_INVITE_URL (build-time NEXT_PUBLIC).
  */
 export function resolveWhatsappSendUrl(
   message: string,
   mode: WhatsappSendMode,
-): { url: string; destination: "family_invite" | "ops_invite" | "wa_me" } {
+  opsInviteUrl: string = OPERATIONAL_WHATSAPP_INVITE_URL,
+): { url: string; destination: WhatsappSendDestination } {
   if (mode === "demo") {
     return {
       url: buildWhatsappInviteWithText(FAMILY_WHATSAPP_INVITE_URL, message),
       destination: "family_invite",
     }
   }
-  if (OPERATIONAL_WHATSAPP_INVITE_URL) {
-    return {
-      url: buildWhatsappInviteWithText(OPERATIONAL_WHATSAPP_INVITE_URL, message),
-      destination: "ops_invite",
+
+  const ops = (opsInviteUrl || "").trim()
+  if (isUsableWhatsappInviteUrl(ops)) {
+    try {
+      return {
+        url: buildWhatsappInviteWithText(ops, message),
+        destination: "ops_invite",
+      }
+    } catch {
+      /* cae a wa.me */
     }
   }
+
   return {
     url: buildWhatsappTextUrl(message),
     destination: "wa_me",
