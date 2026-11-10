@@ -742,44 +742,58 @@ def save_document_lines(
                 else row_ok[0]
             )
         )
-        if details_exist:
-            cur.execute(
-                """
-                SELECT COUNT(*) AS n
-                FROM distribuidora.document_details
-                WHERE document_id = %s
-                """,
-                (int(related_document_id),),
+        if not details_exist:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "document_details no disponible; "
+                    "no se registran cantidades sobre líneas ambiguas"
+                ),
             )
-            crow = cur.fetchone()
-            n_doc = int(
-                crow["n"]
-                if isinstance(crow, dict) or hasattr(crow, "keys")
-                else crow[0] or 0
+        cur.execute(
+            """
+            SELECT COUNT(*) AS n
+            FROM distribuidora.document_details
+            WHERE document_id = %s
+            """,
+            (int(related_document_id),),
+        )
+        crow = cur.fetchone()
+        n_doc = int(
+            crow["n"]
+            if isinstance(crow, dict) or hasattr(crow, "keys")
+            else crow[0] or 0
+        )
+        if n_doc <= 0:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Documento sin detail_id confiable; "
+                    "solo lectura informativa, no se registran cantidades"
+                ),
             )
-            if n_doc > 0:
-                cur.execute(
-                    """
-                    SELECT detail_id
-                    FROM distribuidora.document_details
-                    WHERE document_id = %s
-                      AND detail_id = ANY(%s)
-                    """,
-                    (int(related_document_id), detail_ids),
-                )
-                found = {
-                    int(r["detail_id"] if isinstance(r, dict) or hasattr(r, "keys") else r[0])
-                    for r in cur.fetchall()
-                }
-                missing = [d for d in detail_ids if d not in found]
-                if missing:
-                    raise HTTPException(
-                        status_code=422,
-                        detail=(
-                            "source_detail_id no pertenece al documento: "
-                            + ", ".join(str(x) for x in missing)
-                        ),
-                    )
+        cur.execute(
+            """
+            SELECT detail_id
+            FROM distribuidora.document_details
+            WHERE document_id = %s
+              AND detail_id = ANY(%s)
+            """,
+            (int(related_document_id), detail_ids),
+        )
+        found = {
+            int(r["detail_id"] if isinstance(r, dict) or hasattr(r, "keys") else r[0])
+            for r in cur.fetchall()
+        }
+        missing = [d for d in detail_ids if d not in found]
+        if missing:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "source_detail_id no pertenece al documento: "
+                    + ", ".join(str(x) for x in missing)
+                ),
+            )
         doc = visit_repo.upsert_document_result(
             cur,
             visit_id=int(visit_id),

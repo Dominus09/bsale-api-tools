@@ -46,6 +46,7 @@ def test_completed_blocks_undelivered(monkeypatch):
         "list_line_results",
         lambda *_a, **_k: [
             {
+                "source_detail_id": 11,
                 "planned_units": 2,
                 "delivered_units": 1,
                 "undelivered_units": 1,
@@ -106,6 +107,7 @@ def test_signature_sha_mismatch_blocks_finalize(monkeypatch):
         "list_line_results",
         lambda *_a, **_k: [
             {
+                "source_detail_id": 22,
                 "planned_units": 2,
                 "delivered_units": 2,
                 "undelivered_units": 0,
@@ -150,6 +152,7 @@ def test_refused_is_pending_review_not_verified(monkeypatch):
         "list_line_results",
         lambda *_a, **_k: [
             {
+                "source_detail_id": 33,
                 "planned_units": 1,
                 "delivered_units": 1,
                 "undelivered_units": 0,
@@ -177,6 +180,50 @@ def test_refused_is_pending_review_not_verified(monkeypatch):
         expected_related_ids=[1],
     )
     assert gate["closure_review_status"] == "pending_review"
+
+
+def test_finalize_blocks_lines_without_source_detail(monkeypatch):
+    monkeypatch.setattr(
+        closure.visit_repo,
+        "list_document_results",
+        lambda *_a, **_k: [{"related_document_id": 1}],
+    )
+    monkeypatch.setattr(
+        closure.visit_repo,
+        "list_line_results",
+        lambda *_a, **_k: [
+            {
+                "planned_units": 1,
+                "delivered_units": 1,
+                "undelivered_units": 0,
+                "variant_id": 9,
+                # sin source_detail_id → ambiguo
+            }
+        ],
+    )
+    monkeypatch.setattr(closure.visit_repo, "list_evidence", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        closure.visit_repo,
+        "get_conformity",
+        lambda *_a, **_k: {
+            "signature_object_key": "k",
+            "receptor_name": "Ana",
+            "refused": False,
+            "invalidated_at": None,
+            "accepted_summary_sha256": "x",
+        },
+    )
+    with pytest.raises(HTTPException) as ei:
+        closure.assert_finalize_ready(
+            FakeCur(),
+            visit={"id": 1, "version": 1},
+            status="completed",
+            result_reason=None,
+            result_note=None,
+            has_end_gps=True,
+            expected_related_ids=[1],
+        )
+    assert "source_detail_id" in str(ei.value.detail).lower()
 
 
 def test_matching_signature_sha_allows_verified(monkeypatch):

@@ -791,17 +791,30 @@ def get_client_ficha_for_driver(plan_id: int, customer_key: str) -> dict[str, An
     for doc in client.get("documents") or []:
         rel = doc.get("related_document_id")
         products_raw: list[dict[str, Any]] = []
+        line_identity = "empty"
+        quantities_registrable = False
         if rel is not None:
-            # Entrega: líneas exactas (detail_id). Evita colapsar SKUs repetidos.
+            # Entrega: líneas exactas (detail_id). Nunca fabricar IDs.
             products_raw = _document_detail_lines(int(rel))
-            if not products_raw:
-                # Fallback lectura picking consolidada (sin source_detail_id).
+            if products_raw:
+                line_identity = "reliable"
+                quantities_registrable = True
+            else:
+                # Solo lectura: consolidado picking SIN source_detail_id.
                 products_raw = plan_svc.compute_picking_products_for_related_documents(
                     int(plan_id), [int(rel)]
                 )
+                if products_raw:
+                    line_identity = "ambiguous_display_only"
+                    quantities_registrable = False
         doc_group = doc.get("load_group")
         # No repetir grupo en cada línea si todo el documento comparte el mismo.
         products = [_product_payload(p, load_group=None) for p in products_raw]
+        if line_identity == "ambiguous_display_only":
+            # Garantizar que el fallback no invente identidad de línea.
+            for p in products:
+                p["source_detail_id"] = None
+                p["line_number"] = None
         conflict = None
         oc_id = doc.get("oc_document_id")
         if oc_id is not None and int(oc_id) in oc_groups and len(oc_groups[int(oc_id)]) > 1:
@@ -820,6 +833,8 @@ def get_client_ficha_for_driver(plan_id: int, customer_key: str) -> dict[str, An
                 "load_group": doc_group,
                 "products": products,
                 "product_count": len(products),
+                "line_identity": line_identity,
+                "quantities_registrable": quantities_registrable,
                 "group_assignment_conflict": conflict,
             }
         )

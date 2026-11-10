@@ -68,6 +68,7 @@ def _bootstrap(conn):
         "delivery_document_results",
         "delivery_visit_events",
         "delivery_visits",
+        "document_details",
         "dispatch_plan",
     ):
         cur.execute(f"DROP TABLE IF EXISTS distribuidora.{t} CASCADE")
@@ -80,6 +81,19 @@ def _bootstrap(conn):
         )
         """
     )
+    cur.execute(
+        """
+        CREATE TABLE distribuidora.document_details (
+            detail_id BIGINT PRIMARY KEY,
+            document_id BIGINT NOT NULL,
+            line_number INT,
+            variant_id BIGINT,
+            variant_description TEXT,
+            variant_code TEXT,
+            quantity NUMERIC(18, 4)
+        )
+        """
+    )
     conn.commit()
     for path in (SQL_056, SQL_057):
         raw = path.read_text(encoding="utf-8")
@@ -88,6 +102,16 @@ def _bootstrap(conn):
     conn.commit()
     cur.execute(
         "INSERT INTO distribuidora.dispatch_plan (id, planning_code) VALUES (10, 'PLAN-TEST-P4')"
+    )
+    # Documento 555 con dos líneas mismo variant (identidad distinta)
+    cur.execute(
+        """
+        INSERT INTO distribuidora.document_details
+            (detail_id, document_id, line_number, variant_id, variant_description, quantity)
+        VALUES
+            (88001, 555, 1, 1, 'Prod A', 4),
+            (88002, 555, 2, 1, 'Prod A', 2)
+        """
     )
     conn.commit()
     cur.close()

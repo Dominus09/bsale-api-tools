@@ -133,6 +133,8 @@ export type DriverDocument = {
   load_group?: LoadGroupRef | null
   products: DriverProduct[]
   product_count: number
+  line_identity?: "reliable" | "ambiguous_display_only" | "empty" | string
+  quantities_registrable?: boolean
   group_assignment_conflict?: {
     code: string
     message_es: string

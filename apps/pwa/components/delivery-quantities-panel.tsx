@@ -220,6 +220,10 @@ export function DeliveryQuantitiesPanel(props: Props) {
         const id = String(doc.related_document_id || doc.document_number || Math.random())
         const isOpen = Boolean(open[id])
         const lines = drafts[id] || []
+        const registrable = doc.quantities_registrable !== false && lines.length > 0
+        const ambiguous =
+          doc.line_identity === "ambiguous_display_only" ||
+          (doc.products || []).some((p) => p.source_detail_id == null)
         return (
           <div key={id} className="card doc-card">
             <button
@@ -235,104 +239,135 @@ export function DeliveryQuantitiesPanel(props: Props) {
                 </h3>
               </div>
               <div className="doc-summary muted">
-                {lines.length} productos ·{" "}
-                {isOpen ? "Ocultar ▲" : "Registrar cantidades ▼"}
+                {registrable
+                  ? `${lines.length} líneas · `
+                  : ambiguous
+                    ? "Solo lectura (sin detail_id) · "
+                    : "Sin líneas · "}
+                {isOpen ? "Ocultar ▲" : registrable ? "Registrar cantidades ▼" : "Ver detalle ▼"}
               </div>
             </button>
+            {ambiguous && !registrable ? (
+              <p className="muted" style={{ fontSize: "0.82rem", marginTop: 6 }} role="status">
+                Productos visibles sin identidad de línea confiable. No se registran
+                cantidades ni se puede verificar la entrega sobre líneas ambiguas.
+              </p>
+            ) : null}
 
             {isOpen ? (
               <div className="stack-gap" style={{ marginTop: 10 }}>
-                {lines.map((ln) => {
-                  const pending = Math.max(0, ln.planned - ln.delivered)
-                  return (
-                    <div key={ln.key} style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
-                      <div className="product-name">{ln.product_name}</div>
-                      <div className="muted" style={{ fontSize: "0.8rem" }}>
-                        Planificado: {ln.planned} un.
-                        {ln.boxesLabel ? ` · ${ln.boxesLabel}` : ""}
+                {!registrable
+                  ? (doc.products || []).map((p, idx) => (
+                      <div
+                        key={`${id}-ro-${idx}`}
+                        style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}
+                      >
+                        <div className="product-name">
+                          {p.name_short || p.description || p.producto || "Producto"}
+                        </div>
+                        <div className="muted" style={{ fontSize: "0.8rem" }}>
+                          {typeof p.unidades === "number" ? `${p.unidades} un.` : "—"}
+                          {" · sin detail_id (no editable)"}
+                        </div>
                       </div>
-                      <label className="field">
-                        Entregado
-                        <input
-                          inputMode="decimal"
-                          value={String(ln.delivered)}
-                          onChange={(e) => {
-                            const v = Number(e.target.value)
-                            setDrafts((all) => ({
-                              ...all,
-                              [id]: (all[id] || []).map((x) =>
-                                x.key === ln.key
-                                  ? {
-                                      ...x,
-                                      delivered: Number.isFinite(v) ? v : 0,
-                                    }
-                                  : x,
-                              ),
-                            }))
-                            setSavedDocs((s) => {
-                              const n = { ...s }
-                              delete n[id]
-                              return n
-                            })
-                          }}
-                        />
-                      </label>
-                      {pending > 0 ? (
-                        <>
+                    ))
+                  : lines.map((ln) => {
+                      const pending = Math.max(0, ln.planned - ln.delivered)
+                      return (
+                        <div
+                          key={ln.key}
+                          style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}
+                        >
+                          <div className="product-name">{ln.product_name}</div>
                           <div className="muted" style={{ fontSize: "0.8rem" }}>
-                            Pendiente: {pending}
+                            Planificado: {ln.planned} un.
+                            {ln.boxesLabel ? ` · ${ln.boxesLabel}` : ""}
+                            {` · detail ${ln.source_detail_id}`}
                           </div>
                           <label className="field">
-                            Motivo
-                            <select
-                              value={ln.reason}
-                              onChange={(e) =>
-                                setDrafts((all) => ({
-                                  ...all,
-                                  [id]: (all[id] || []).map((x) =>
-                                    x.key === ln.key
-                                      ? { ...x, reason: e.target.value }
-                                      : x,
-                                  ),
-                                }))
-                              }
-                            >
-                              {REASONS.map((r) => (
-                                <option key={r.value} value={r.value}>
-                                  {r.label}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <label className="field">
-                            Observación{ln.reason === "other" ? " *" : ""}
+                            Entregado
                             <input
-                              value={ln.note}
-                              onChange={(e) =>
+                              inputMode="decimal"
+                              value={String(ln.delivered)}
+                              onChange={(e) => {
+                                const v = Number(e.target.value)
                                 setDrafts((all) => ({
                                   ...all,
                                   [id]: (all[id] || []).map((x) =>
                                     x.key === ln.key
-                                      ? { ...x, note: e.target.value }
+                                      ? {
+                                          ...x,
+                                          delivered: Number.isFinite(v) ? v : 0,
+                                        }
                                       : x,
                                   ),
                                 }))
-                              }
+                                setSavedDocs((s) => {
+                                  const n = { ...s }
+                                  delete n[id]
+                                  return n
+                                })
+                              }}
                             />
                           </label>
-                        </>
-                      ) : null}
-                    </div>
-                  )
-                })}
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  disabled={busyDoc === id || !doc.related_document_id}
-                  onClick={() => void saveDoc(doc)}
-                >
-                  {busyDoc === id ? "Guardando…" : "Guardar cantidades del documento"}
-                </button>
+                          {pending > 0 ? (
+                            <>
+                              <div className="muted" style={{ fontSize: "0.8rem" }}>
+                                Pendiente: {pending}
+                              </div>
+                              <label className="field">
+                                Motivo
+                                <select
+                                  value={ln.reason}
+                                  onChange={(e) =>
+                                    setDrafts((all) => ({
+                                      ...all,
+                                      [id]: (all[id] || []).map((x) =>
+                                        x.key === ln.key
+                                          ? { ...x, reason: e.target.value }
+                                          : x,
+                                      ),
+                                    }))
+                                  }
+                                >
+                                  {REASONS.map((r) => (
+                                    <option key={r.value} value={r.value}>
+                                      {r.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label className="field">
+                                Observación{ln.reason === "other" ? " *" : ""}
+                                <input
+                                  value={ln.note}
+                                  onChange={(e) =>
+                                    setDrafts((all) => ({
+                                      ...all,
+                                      [id]: (all[id] || []).map((x) =>
+                                        x.key === ln.key
+                                          ? { ...x, note: e.target.value }
+                                          : x,
+                                      ),
+                                    }))
+                                  }
+                                />
+                              </label>
+                            </>
+                          ) : null}
+                        </div>
+                      )
+                    })}
+                {registrable ? (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={busyDoc === id || !doc.related_document_id}
+                    onClick={() => void saveDoc(doc)}
+                  >
+                    {busyDoc === id ? "Guardando…" : "Guardar cantidades del documento"}
+                  </button>
+                ) : null}
               </div>
             ) : null}
           </div>

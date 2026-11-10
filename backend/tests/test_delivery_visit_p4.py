@@ -194,6 +194,77 @@ def test_save_lines_rejects_duplicate_source_detail(monkeypatch):
     assert "duplicada" in str(ei.value.detail).lower()
 
 
+def test_save_lines_rejects_when_document_has_no_details(monkeypatch):
+    """Sin detail_id en BD: no fabricar ni registrar cantidades."""
+
+    class Cur:
+        def execute(self, sql, params=None):
+            self._sql = sql
+
+        def fetchone(self):
+            sql = (self._sql or "").lower()
+            if "to_regclass" in sql:
+                return {"ok": True}
+            if "count(*)" in sql:
+                return {"n": 0}
+            return None
+
+        def fetchall(self):
+            return []
+
+        def close(self):
+            return None
+
+    class Conn:
+        def cursor(self):
+            return Cur()
+
+        def commit(self):
+            return None
+
+        def rollback(self):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        svc.read_svc, "enforce_driver_plan_read_access", lambda _u, _p: 7
+    )
+    monkeypatch.setattr(svc, "get_connection", lambda: Conn())
+    monkeypatch.setattr(svc.visit_repo, "tables_ready", lambda *_a, **_k: True)
+    monkeypatch.setattr(
+        svc,
+        "_require_own_open_visit",
+        lambda *_a, **_k: {"id": 1, "driver_user_id": 7, "version": 1},
+    )
+    with pytest.raises(HTTPException) as ei:
+        svc.save_document_lines(
+            user={"id": 7},
+            plan_id=1,
+            visit_id=1,
+            related_document_id=99,
+            oc_document_id=None,
+            document_number=1,
+            document_type="boleta",
+            document_total=1000,
+            result_status="full",
+            notes=None,
+            lines=[
+                {
+                    "source_detail_id": 999001,
+                    "planned_units": 1,
+                    "delivered_units": 1,
+                    "product_name": "Inventado",
+                }
+            ],
+        )
+    assert ei.value.status_code == 422
+    assert "detail_id" in str(ei.value.detail).lower() or "confiable" in str(
+        ei.value.detail
+    ).lower()
+
+
 def test_declare_collection_blocks_transfer_verified(monkeypatch):
     monkeypatch.setattr(
         svc.read_svc, "enforce_driver_plan_read_access", lambda _u, _p: 7

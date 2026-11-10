@@ -86,6 +86,20 @@ def assert_finalize_ready(
                 detail="Debe registrar cantidades por línea antes de finalizar",
             )
 
+        ambiguous = [
+            ln
+            for ln in lines
+            if ln.get("source_detail_id") is None
+        ]
+        if ambiguous:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Hay líneas sin source_detail_id confiable; "
+                    "no se puede cerrar la entrega como verificada"
+                ),
+            )
+
         for ln in lines:
             planned = float(ln.get("planned_units") or 0)
             delivered = float(ln.get("delivered_units") or 0)
