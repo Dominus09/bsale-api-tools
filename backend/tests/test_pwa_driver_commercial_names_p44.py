@@ -83,3 +83,24 @@ def test_document_detail_lines_sql_uses_bsale_id_joins():
     assert "v.bsale_id" in src or "VARIANTS_JOIN" in src
     assert "v.id = dd.variant_id" not in src
     assert "p.id = v.product_id" not in src
+    # Factor caja estructurado en líneas registrables (no solo en picking agregado).
+    assert "v.units_per_box" in src
+
+
+def test_product_payload_exposes_verified_box_factor():
+    p = svc._product_payload(
+        {
+            "producto_base": "ROYAL GUARD",
+            "producto_variante": "RETORNABLE 1.0 LT",
+            "unidades": 60,
+            "units_per_box": 12,
+            "cajas": 5,
+            "sin_unidad_caja": False,
+            "source_detail_id": 1,
+        },
+        load_group=None,
+    )
+    assert p["units_per_box"] == 12
+    assert p["cajas_equivalentes"] == 5
+    assert p["sin_unidad_caja"] is False
+    assert p["equivalence_status"] == "verified"

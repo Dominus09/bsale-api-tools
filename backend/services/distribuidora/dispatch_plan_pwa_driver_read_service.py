@@ -438,7 +438,18 @@ def _document_detail_lines(related_document_id: int) -> list[dict[str, Any]]:
                     ) AS producto_variante,
                     NULLIF(BTRIM(dd.variant_code), '') AS variante,
                     ({BARCODE_EXPR}) AS codigo_barras,
-                    dd.quantity AS unidades
+                    dd.quantity AS unidades,
+                    v.units_per_box AS units_per_box,
+                    CASE
+                        WHEN v.units_per_box IS NOT NULL AND v.units_per_box > 0
+                        THEN ROUND(dd.quantity / v.units_per_box::numeric, 2)
+                        ELSE NULL
+                    END AS cajas,
+                    CASE
+                        WHEN v.units_per_box IS NULL OR v.units_per_box <= 0
+                        THEN TRUE
+                        ELSE FALSE
+                    END AS sin_unidad_caja
                 FROM distribuidora.document_details dd
                 {VARIANTS_JOIN}
                 {BSALE_PRODUCT_JOIN}
