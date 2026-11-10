@@ -31,16 +31,70 @@ def tables_ready(cur) -> bool:
     return bool(row[0])
 
 
+def admin_void_columns_ready(cur) -> bool:
+    """True si 058 (admin_classification / voided_at) está aplicada."""
+    cur.execute(
+        """
+        SELECT (
+            EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'distribuidora'
+                  AND table_name = 'delivery_visits'
+                  AND column_name = 'admin_classification'
+            )
+            AND EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'distribuidora'
+                  AND table_name = 'delivery_visits'
+                  AND column_name = 'voided_at'
+            )
+        ) AS ready
+        """
+    )
+    row = cur.fetchone()
+    if row is None:
+        return False
+    if isinstance(row, dict) or hasattr(row, "keys"):
+        return bool(row["ready"])
+    return bool(row[0])
+
+
+def _not_admin_voided_sql(cur) -> str:
+    """Filtro SQL: excluye anuladas / pruebas cuando exista 058."""
+    if not admin_void_columns_ready(cur):
+        return ""
+    return """
+          AND COALESCE(admin_classification, 'operational')
+              NOT IN ('voided_admin', 'pilot_test')
+          AND voided_at IS NULL
+    """
+
+
+def is_admin_voided_row(row: dict[str, Any] | None) -> bool:
+    if not row:
+        return False
+    if row.get("voided_at") is not None:
+        return True
+    return str(row.get("admin_classification") or "") in {
+        "voided_admin",
+        "pilot_test",
+    }
+
+
 def get_active_visit(
     cur, *, plan_id: int, customer_key: str
 ) -> dict[str, Any] | None:
+    void_sql = _not_admin_voided_sql(cur)
     cur.execute(
-        """
+        f"""
         SELECT *
         FROM distribuidora.delivery_visits
         WHERE dispatch_plan_id = %s
           AND customer_key = %s
           AND status = 'in_progress'
+          {void_sql}
         ORDER BY id DESC
         LIMIT 1
         """,
@@ -72,14 +126,16 @@ def get_latest_visit(
 def get_last_closed_visit(
     cur, *, plan_id: int, customer_key: str
 ) -> dict[str, Any] | None:
-    """Última visita cerrada (no in_progress). Coexiste con una activa."""
+    """Última visita cerrada operativa (no in_progress, no anulada admin)."""
+    void_sql = _not_admin_voided_sql(cur)
     cur.execute(
-        """
+        f"""
         SELECT *
         FROM distribuidora.delivery_visits
         WHERE dispatch_plan_id = %s
           AND customer_key = %s
           AND status <> 'in_progress'
+          {void_sql}
         ORDER BY id DESC
         LIMIT 1
         """,
@@ -96,15 +152,16 @@ def get_valid_closed_visit(
     customer_key: str,
     exclude_visit_id: int | None = None,
 ) -> dict[str, Any] | None:
-    """Cierre válido persistido: completed|partial|not_delivered con ended_at.
+    """Cierre válido operativo: completed|partial|not_delivered con ended_at.
 
-    No incluye cancelled ni visitas solo iniciadas.
+    Excluye cancelled, solo iniciadas y anulaciones admin / pilot_test (058).
     """
     params: list[Any] = [int(plan_id), customer_key]
     exclude_sql = ""
     if exclude_visit_id is not None:
         exclude_sql = " AND id <> %s"
         params.append(int(exclude_visit_id))
+    void_sql = _not_admin_voided_sql(cur)
     cur.execute(
         f"""
         SELECT *
@@ -113,6 +170,7 @@ def get_valid_closed_visit(
           AND customer_key = %s
           AND status IN ('completed', 'partial', 'not_delivered')
           AND ended_at IS NOT NULL
+          {void_sql}
           {exclude_sql}
         ORDER BY id DESC
         LIMIT 1

@@ -61,4 +61,9 @@
 --   closure_review_status='verified' ≠ entrega física confirmada en terreno.
 --   Solo indica que el software cerró con las reglas de evidencia/conformidad.
 
--- FIN PROPUESTA — esperar autorización antes de crear migración real.
+-- Migración ejecutable (aún requiere autorización): 058_delivery_visit_admin_void.sql
+-- Procedimiento Romeo Alfa (aún requiere autorización):
+--   void_romeo_alfa_visits_1_and_3_AWAITING_APPROVAL.sql
+-- Auditoría previa SELECT: audit_romeo_alfa_visits_1_and_3_SELECT_ONLY.sql
+--
+-- FIN PROPUESTA — esperar autorización antes de aplicar en PostgreSQL.

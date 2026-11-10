@@ -1114,16 +1114,18 @@ def get_client_ficha_for_driver(plan_id: int, customer_key: str) -> dict[str, An
 
 
 def resolve_visit_attention_rows(
-    rows: list[tuple[Any, Any, Any, Any]],
+    rows: list[tuple[Any, ...]],
 ) -> dict[str, dict[str, Any]]:
-    """Estado operativo por cliente a partir de filas (customer_key, id, status, ended_at).
+    """Estado operativo por cliente.
+
+    Filas: (customer_key, id, status, ended_at[, admin_classification[, voided_at]])
 
     Prioridad:
-    1) Cierre válido (completed|partial|not_delivered + ended_at) → estado operativo.
-       Si además hay in_progress, marcar admin_review_pending (no mostrar "En atención").
+    1) Cierre válido no anulado → estado operativo.
+       Si además hay in_progress no anulada → admin_review_pending.
     2) Solo in_progress legítima → En atención.
-    3) Otro cierre (p.ej. cancelled) → ese estado.
-    4) Sin visitas → pending.
+    3) Otro cierre no anulado (p.ej. cancelled operativo) → ese estado.
+    4) Solo anuladas / sin visitas → pending (cliente habilitado a iniciar).
     """
     labels = {
         "in_progress": "En atención",
@@ -1134,8 +1136,22 @@ def resolve_visit_attention_rows(
         "admin_review": "Pendiente revisión admin",
     }
     valid_close = {"completed", "partial", "not_delivered"}
+
+    def _voided(admin_class: Any, voided_at: Any) -> bool:
+        if voided_at is not None:
+            return True
+        return str(admin_class or "") in {"voided_admin", "pilot_test"}
+
     by_key: dict[str, list[tuple[int, str, Any]]] = {}
-    for customer_key, visit_id, status, ended_at in rows:
+    for row in rows:
+        customer_key = row[0]
+        visit_id = row[1]
+        status = row[2]
+        ended_at = row[3]
+        admin_class = row[4] if len(row) > 4 else None
+        voided_at = row[5] if len(row) > 5 else None
+        if _voided(admin_class, voided_at):
+            continue  # no cuentan para estado operativo
         key = str(customer_key or "")
         if not key:
             continue
@@ -1219,15 +1235,27 @@ def _visit_attention_by_customer(plan_id: int) -> dict[str, dict[str, Any]]:
         if not visit_repo.tables_ready(cur):
             cur.close()
             return {}
-        cur.execute(
-            """
-            SELECT customer_key, id, status, ended_at
-            FROM distribuidora.delivery_visits
-            WHERE dispatch_plan_id = %s
-            ORDER BY customer_key, id
-            """,
-            (int(plan_id),),
-        )
+        if visit_repo.admin_void_columns_ready(cur):
+            cur.execute(
+                """
+                SELECT customer_key, id, status, ended_at,
+                       admin_classification, voided_at
+                FROM distribuidora.delivery_visits
+                WHERE dispatch_plan_id = %s
+                ORDER BY customer_key, id
+                """,
+                (int(plan_id),),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT customer_key, id, status, ended_at
+                FROM distribuidora.delivery_visits
+                WHERE dispatch_plan_id = %s
+                ORDER BY customer_key, id
+                """,
+                (int(plan_id),),
+            )
         rows = cur.fetchall()
         cur.close()
         return resolve_visit_attention_rows(list(rows))

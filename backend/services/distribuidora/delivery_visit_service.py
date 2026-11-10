@@ -57,12 +57,17 @@ def _http_409(code: str, message_es: str, **extra: Any) -> HTTPException:
 
 
 def is_valid_closed_visit(row: dict[str, Any] | None) -> bool:
+    """Cierre operativo que bloquea nueva visita / retom de duplicada."""
     if not row:
+        return False
+    if visit_repo.is_admin_voided_row(row):
         return False
     return (
         str(row.get("status") or "") in VALID_CLOSE_STATUSES
         and row.get("ended_at") is not None
     )
+
+
 NOT_DELIVERED_REASONS = frozenset(
     {
         "closed_store",
@@ -173,6 +178,11 @@ def _visit_public(row: dict[str, Any]) -> dict[str, Any]:
         "gps_exception_code": row.get("gps_exception_code"),
         "gps_exception_note": row.get("gps_exception_note"),
         "closure_review_status": row.get("closure_review_status"),
+        "admin_classification": row.get("admin_classification") or "operational",
+        "voided_at": row.get("voided_at"),
+        "void_reason": row.get("void_reason"),
+        "void_ticket_ref": row.get("void_ticket_ref"),
+        "admin_voided": visit_repo.is_admin_voided_row(row),
         "version": int(row.get("version") or 1),
         "idempotency_key": row.get("idempotency_key"),
     }
